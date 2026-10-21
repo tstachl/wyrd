@@ -21,6 +21,12 @@
 # owner is root (a host-owned snapshot with no build account
 # configured), or the name is not an account name at all. Every
 # refusal names the setting to change.
+#
+# An owner with no passwd entry (stat reports the numeric id) is not
+# an account name and is refused here rather than at the home check
+# later: such an owner has no home to build under, so the run cannot
+# work either way, and the early refusal names the way out. A host
+# that names an account makes the tree's owner irrelevant.
 build_account_choice() {
   local tree_owner="$1" named="$2"
 
@@ -30,7 +36,7 @@ build_account_choice() {
       return 1
     fi
     if ! [[ "$named" =~ ^[a-zA-Z_][a-zA-Z0-9_.-]*$ ]]; then
-      echo "error: E2E_BUILD_USER is not an account name: '$named'; set E2E_BUILD_USER in the host's suite configuration to an account that exists on the host" >&2
+      echo "error: E2E_BUILD_USER is not an account name: '$named'; set E2E_BUILD_USER in the host's suite configuration to the name of a build account on the host" >&2
       return 1
     fi
     printf '%s\n' "$named"
@@ -42,7 +48,7 @@ build_account_choice() {
     return 1
   fi
   if ! [[ "$tree_owner" =~ ^[a-zA-Z_][a-zA-Z0-9_.-]*$ ]]; then
-    echo "error: the tree's owner is not an account name: '$tree_owner'; the build account cannot be resolved" >&2
+    echo "error: the tree's owner is not an account name: '$tree_owner'; an owner with no passwd entry has no home to build under — the host can name a build account with E2E_BUILD_USER" >&2
     return 1
   fi
   printf '%s\n' "$tree_owner"

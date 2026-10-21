@@ -64,7 +64,20 @@ pass "a host naming root is refused, naming the setting"
 # shellcheck disable=SC2016
 err="$(refuse thomas '$(id)')" || die "a malformed account name was allowed"
 [[ "$err" == *"E2E_BUILD_USER"* ]] || die "refusal does not name the setting: $err"
+[[ "$err" == *"not an account name"* ]] || die "refusal does not say what it refuses: $err"
 pass "a malformed account name is refused, naming the setting"
+
+# An owner with no passwd entry (stat reports the numeric id) has no
+# home to build under: refused, and the way out is named.
+err="$(refuse 1000 "")" || die "an unresolved tree owner was allowed"
+[[ "$err" == *"E2E_BUILD_USER"* ]] || die "refusal does not name the setting: $err"
+pass "an unresolved tree owner is refused, naming the setting"
+
+# A host-named account makes the tree's owner irrelevant, unresolved
+# owner and all: the build runs as the account the host named.
+out="$(build_account_choice 1000 wyrd-build)" || die "named account refused"
+[[ "$out" == "wyrd-build" ]] || die "named account ignored: got '$out'"
+pass "the host's account wins over an unresolved tree owner"
 
 # The runner takes the account from the host's variable and asks the
 # policy for it: the tree's owner alone must never decide.
