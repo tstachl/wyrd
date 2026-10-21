@@ -90,14 +90,15 @@ Lima for macOS dev iteration and as the refactor guard.)
   hands over a tree that account can build: nix copies the tree, so the
   account must be able to list it and read its files, and for a git
   checkout nix's own fetch of the repository applies its ownership
-  rules on top. Chowning the source snapshot to the build account,
+  rules on top.   Chowning the source snapshot to the build account,
   with its files readable and its directories traversable by that
-  account, satisfies all of it. The runner refuses a build that would
-  run as root — by uid, so a second name for uid 0 does not slip
-  through — naming that setting in the refusal, and it refuses by
-  name when the account cannot build the tree. When the host names no
-  account, a checkout owned by a non-root user still builds as that
-  user.
+  account, satisfies all of it. The runner refuses, by name: a build
+  that would run as root (by uid, or by the named account's own
+  primary gid), a build whose account cannot read the tree it is
+  handed, and a build whose account cannot write the home the nix
+  client caches in. When the host names no account, a checkout owned
+  by a non-root user still builds as that user.
+
 
 - **Never pipe it through `tail`.** A foreground pipe buffers everything, so
   a twenty-minute run looks like a hang. Run it detached with the output to a
