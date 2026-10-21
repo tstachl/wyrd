@@ -35,6 +35,13 @@ is transient — no drive data is affected.
 
 ### Fixed
 
+- Bump `rustls-webpki` 0.103.15 → 0.103.16, `webpki-roots` 1.0.9 →
+  1.0.10 and `webpki-root-certs` 1.0.9 → 1.0.10
+  (RUSTSEC-2026-0382: certificate verification may accept distrusted
+  intermediates; RUSTSEC-2026-0381 and RUSTSEC-2026-0383: the bundled
+  root certificates trust distrusted emSign intermediates). Patch
+  bumps only, no cascade into `rustls` or `iroh`.
+
 - MicroVM build account and repository name
   (`nostr:nevent1qqsqtdkvhcg95j7xwl647lgruml4fx3ehxf7chv897k7gmfsqx8gk4cpz9mhxue69uhkwunpwdczuap49eehgkhaz6q`):
   the microVM runner takes the account its nix builds run as from the
