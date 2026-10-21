@@ -51,11 +51,14 @@ esac
 STUB
 cat > "$STUBS/id" <<'STUB'
 #!/usr/bin/env bash
-# Fake id: -u and -gn answer for the one build account it knows.
+# Fake id: -u, -g and -gn answer for the one build account it knows.
 case "${1:-}" in
   -u)
     [[ "${2:-}" == "$FAKE_ACCOUNT" ]] || { echo "id: '$2': no such user" >&2; exit 1; }
     printf '%s\n' "$FAKE_ACCOUNT_UID" ;;
+  -g)
+    [[ "${2:-}" == "$FAKE_ACCOUNT" ]] || { echo "id: '$2': no such user" >&2; exit 1; }
+    printf '%s\n' "$FAKE_ACCOUNT_GID" ;;
   -gn)
     [[ "${2:-}" == "$FAKE_ACCOUNT" ]] || { echo "id: '$2': no such user" >&2; exit 1; }
     printf '%s\n' "$FAKE_ACCOUNT_GROUP" ;;
@@ -93,10 +96,11 @@ FAKE_TREE_OWNER=root
 FAKE_TREE_GROUP=root
 FAKE_ACCOUNT="$ACCOUNT"
 FAKE_ACCOUNT_UID=1000
+FAKE_ACCOUNT_GID=1000
 FAKE_ACCOUNT_GROUP=staff
 FAKE_CAN_BUILD=yes
 export FAKE_TREE_OWNER FAKE_TREE_GROUP FAKE_ACCOUNT FAKE_ACCOUNT_UID \
-  FAKE_ACCOUNT_GROUP FAKE_CAN_BUILD
+  FAKE_ACCOUNT_GID FAKE_ACCOUNT_GROUP FAKE_CAN_BUILD
 export PATH="$STUBS:$PATH"
 
 TREE="$TMP/tree"
@@ -221,14 +225,40 @@ FAKE_CAN_BUILD=yes
 pass "an account that cannot build the tree is refused, by name"
 
 # The probe's own verdict: a tree with an entry the account cannot
-# read is refused by the probe, not by the stub's stand-in. A dangling
-# symlink is the uid-independent way to model it: it is unreadable for
-# root as for anyone else.
+# use is refused by the probe, not by the stub's stand-in. A directory
+# without the execute bit is the uid-independent way to model it: even
+# root cannot traverse it, so the case works on the CI runner and on a
+# root shell alike.
+mkdir "$TREE/untraversable"
+chmod 0644 "$TREE/untraversable"
+err="$(refuse "$ACCOUNT")" || die "a tree with an unusable entry was allowed"
+[[ "$err" == *"cannot build the source tree"* ]] || die "the probe did not refuse an unusable entry: $err"
+rm -rf "$TREE/untraversable"
+pass "a tree with an unusable entry is refused, by the probe"
+
+# A symlink is copied as a link: its target is not read, so even a
+# link with no target is not a reason to refuse.
 ln -s "$TMP/nowhere" "$TREE/dangling"
-err="$(refuse "$ACCOUNT")" || die "a tree with an unreadable entry was allowed"
-[[ "$err" == *"cannot build the source tree"* ]] || die "the probe did not refuse an unreadable entry: $err"
+out="$(resolve "$ACCOUNT")" || die "the policy refused: $(cat "$TMP/err")"
+[[ "$out" == "$ACCOUNT 1000 staff" ]] || die "a symlink was refused: got '$out'"
 rm -f "$TREE/dangling"
-pass "a tree with an unreadable entry is refused, by the probe"
+pass "a symlink in the tree is copied, not read"
+
+# The nix client's cache is the account's home: it must be writable by
+# that account, and the refusal names the home.
+chmod 0500 "$TMP/home"
+err="$(refuse "$ACCOUNT")" || die "an account that cannot write its home was allowed"
+[[ "$err" == *"cannot write its home"* ]] || die "refusal does not name the home: $err"
+chmod 0700 "$TMP/home"
+pass "an account that cannot write its home is refused, by name"
+
+# The named account's own group must not be the privileged one: a build
+# that keeps gid 0 keeps half of the privilege the account dropped.
+FAKE_ACCOUNT_GID=0
+err="$(refuse "$ACCOUNT")" || die "gid 0 was allowed"
+[[ "$err" == *"gid 0"* ]] || die "refusal does not say what it refuses: $err"
+FAKE_ACCOUNT_GID=1000
+pass "gid 0 is refused, by gid"
 
 # The runner asks the policy for the identity, and says who the build
 # runs as in the run log.
