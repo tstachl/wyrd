@@ -287,7 +287,8 @@ FAKE_GROUP_NAME=resolvable
 pass "the build runs with the account's group by number"
 
 # The build itself runs with that gid: the runner hands it to setpriv,
-# not the name.
+# not the name. The pattern quotes the runner's own variable literally.
+# shellcheck disable=SC2016
 regid_uses="$(grep -c -- '--regid "$BUILD_GID"' "$RUNNER" || true)"
 [[ "$regid_uses" == 3 ]] || die "the runner does not build with the account's gid ($regid_uses uses)"
 pass "the runner builds with the account's gid"
