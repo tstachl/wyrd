@@ -362,8 +362,8 @@ has stabilized.
 
 Thesis: a normal person can use Wyrd as a desktop file-sync application.
 
-A cross-platform desktop application around the core, on macOS, Linux, and
-Windows: drive lifecycle (create, join, leave, device enrollment and
+A cross-platform desktop application around the core, on macOS and Linux:
+drive lifecycle (create, join, leave, device enrollment and
 removal or revocation, owner and member management, drive deletion and
 export where applicable), invitation and join flow, sharing and membership
 UX (protocol membership is not user-facing sharing: roles, removal
@@ -372,18 +372,22 @@ pause and resume, selective sync and materialization, storage usage,
 offline status, relay status, conflict indicators, settings,
 notifications, key and device management.
 
+Windows is not a target of this milestone: there is no native Windows
+filesystem integration and no Windows application, because the only credential
+reader fails closed on non-Unix builds, so a Windows build cannot open a drive.
+Windows presentation is an explicit future decision, and `docs/architecture.md`
+owns that statement.
+
 The test: a technically competent person installs the application and
 creates and manages a drive without ever learning what the `wyrd` CLI is.
 
-Conflict guarantee for v0.4, explicitly: conflicts cannot surprise or
-destroy data. Detection, clear divergence indication, both branches
-preserved, inspectable conflicts, a safe path into history, and at most
-the simplest keep-both operation. Full resolution workflows belong to
-v0.5; a first conflict must never silently discard either side.
+**Conflict handling.** v0.4 provides divergence detection, preservation of both
+branches, and inspectable conflict state. Conflict resolution authoring is
+deferred to v0.5, including keep-both semantics and conflict-name assignment.
 
 FUSE stays an implementation and presentation surface where appropriate;
 it is not the product contract. File-provider integrations are platform
-adapters. The UI talks to the Wyrd control plane, not to FUSE.
+adapters. The UI talks to the drive-owner interface, not to FUSE.
 
 ## v0.5 — Human-scale history and conflict resolution
 
