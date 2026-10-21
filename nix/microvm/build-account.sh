@@ -224,7 +224,7 @@ resolve_build_identity() { # <root> <named-account>
   # home).
   probe_rc=0
   # shellcheck disable=SC2016
-  setpriv --reuid "$BUILD_USER" --regid "$BUILD_GROUP" --init-groups \
+  setpriv --reuid "$BUILD_USER" --regid "$BUILD_GID" --init-groups \
     env HOME="$BUILD_HOME" bash -c 'shopt -s nullglob dotglob
       [[ -r "$1" && -x "$1" ]] || exit 1
       for entry in "$1"/*; do

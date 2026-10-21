@@ -52,6 +52,7 @@ cat > "$STUBS/stat" <<'STUB'
 case "${2:-}" in
   %U) printf '%s\n' "$FAKE_TREE_OWNER" ;;
   %G) printf '%s\n' "$FAKE_TREE_GROUP" ;;
+  %g) printf '%s\n' "$FAKE_TREE_GID" ;;
   *) echo "fake stat: unsupported args: $*" >&2; exit 2 ;;
 esac
 STUB
@@ -105,6 +106,7 @@ build_home() { printf '%s\n' "$TMP/home"; }
 
 FAKE_TREE_OWNER=root
 FAKE_TREE_GROUP=root
+FAKE_TREE_GID=1000
 FAKE_ACCOUNT="$ACCOUNT"
 FAKE_ACCOUNT_UID=1000
 FAKE_ACCOUNT_GID=1000
@@ -112,10 +114,13 @@ FAKE_ACCOUNT_GROUP=staff
 FAKE_CAN_BUILD=yes
 FAKE_GROUP_NAME=resolvable
 FAKE_SETPRIV_ARGV="$TMP/setpriv-argv"
-export FAKE_TREE_OWNER FAKE_TREE_GROUP FAKE_ACCOUNT FAKE_ACCOUNT_UID \
+export FAKE_TREE_OWNER FAKE_TREE_GROUP FAKE_TREE_GID FAKE_ACCOUNT FAKE_ACCOUNT_UID \
   FAKE_ACCOUNT_GID FAKE_ACCOUNT_GROUP FAKE_CAN_BUILD FAKE_GROUP_NAME \
   FAKE_SETPRIV_ARGV
 export PATH="$STUBS:$PATH"
+
+RUNNER="$ROOT/nix/microvm/run-microvm.sh"
+[[ -f "$RUNNER" ]] || die "runner missing at $RUNNER"
 
 TREE="$TMP/tree"
 mkdir -p "$TREE"
@@ -277,9 +282,15 @@ FAKE_GROUP_NAME=unresolvable
 out="$(resolve "$ACCOUNT")" || die "the policy refused: $(cat "$TMP/err")"
 [[ "$out" == "$ACCOUNT 1000 1000" ]] || die "the group was not resolved: got '$out'"
 argv="$(cat "$TMP/setpriv-argv")"
-[[ "$argv" == *"--regid 1000"* ]] || die "the build did not run with the account's gid: $argv"
+[[ "$argv" == *"--regid 1000"* ]] || die "the probe did not run with the account's gid: $argv"
 FAKE_GROUP_NAME=resolvable
 pass "the build runs with the account's group by number"
+
+# The build itself runs with that gid: the runner hands it to setpriv,
+# not the name.
+regid_uses="$(grep -c -- '--regid "$BUILD_GID"' "$RUNNER" || true)"
+[[ "$regid_uses" == 3 ]] || die "the runner does not build with the account's gid ($regid_uses uses)"
+pass "the runner builds with the account's gid"
 
 # A symlink is copied as a link: its target is not read, so even a
 # link with no target is not a reason to refuse.
@@ -299,8 +310,6 @@ pass "gid 0 is refused, by gid"
 
 # The runner asks the policy for the identity, and says who the build
 # runs as in the run log.
-RUNNER="$ROOT/nix/microvm/run-microvm.sh"
-[[ -f "$RUNNER" ]] || die "runner missing at $RUNNER"
 grep -q 'resolve_build_identity' "$RUNNER" || die "runner does not use the policy"
 grep -q 'E2E_BUILD_USER' "$RUNNER" || die "runner does not read E2E_BUILD_USER"
 grep -q 'build account:' "$RUNNER" || die "runner does not log the build account"
