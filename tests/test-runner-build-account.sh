@@ -25,6 +25,12 @@ die() { echo "  FAIL: $1" >&2; exit 1; }
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
+# The stub runs the probe as whoever runs the stub, and permission
+# bits do not restrict root, so the cases that model an unreadable
+# tree only mean something for a non-root runner. The real runner
+# always probes as the build account, which is never root.
+RUNNER_UID="$(id -u)"
+
 POLICY="$ROOT/nix/microvm/build-account.sh"
 [[ -f "$POLICY" ]] || die "build-account policy missing at $POLICY"
 # shellcheck source=/dev/null
@@ -67,9 +73,10 @@ esac
 STUB
 cat > "$STUBS/setpriv" <<'STUB'
 #!/usr/bin/env bash
-# Fake setpriv: it runs the command it is handed (the probe's shape is
-# then pinned by the probe actually running), and the stub can make it
-# fail outright to model an account that cannot open the tree.
+# Fake setpriv: it records the invocation (so the probe's shape is
+# pinned), runs the command it is handed (the probe's verdict is then
+# the stub's to read), and can fail outright to model an account that
+# cannot build the tree.
 [[ "$FAKE_CAN_BUILD" == "yes" ]] || exit 1
 while [[ "${1:-}" == -* ]]; do
   case "$1" in
@@ -78,6 +85,7 @@ while [[ "${1:-}" == -* ]]; do
     *) break ;;
   esac
 done
+printf '%s\n' "$*" >"$FAKE_SETPRIV_ARGV"
 exec "$@"
 STUB
 chmod +x "$STUBS"/*
@@ -99,8 +107,9 @@ FAKE_ACCOUNT_UID=1000
 FAKE_ACCOUNT_GID=1000
 FAKE_ACCOUNT_GROUP=staff
 FAKE_CAN_BUILD=yes
+FAKE_SETPRIV_ARGV="$TMP/setpriv-argv"
 export FAKE_TREE_OWNER FAKE_TREE_GROUP FAKE_ACCOUNT FAKE_ACCOUNT_UID \
-  FAKE_ACCOUNT_GID FAKE_ACCOUNT_GROUP FAKE_CAN_BUILD
+  FAKE_ACCOUNT_GID FAKE_ACCOUNT_GROUP FAKE_CAN_BUILD FAKE_SETPRIV_ARGV
 export PATH="$STUBS:$PATH"
 
 TREE="$TMP/tree"
@@ -226,14 +235,35 @@ pass "an account that cannot build the tree is refused, by name"
 
 # The probe's own verdict: a tree with an entry the account cannot
 # use is refused by the probe, not by the stub's stand-in. A directory
-# with no execute bit is the uid-independent way to model it: the
-# probe's traversal test fails for every uid, root included.
-mkdir "$TREE/untraversable"
-chmod 0644 "$TREE/untraversable"
-err="$(refuse "$ACCOUNT")" || die "a tree with an unusable entry was allowed"
-[[ "$err" == *"cannot read the source tree"* ]] || die "the probe did not refuse an unusable entry: $err"
-rm -rf "$TREE/untraversable"
-pass "a tree with an unusable entry is refused, by the probe"
+# with no execute bit is the way to model it — but permission bits do
+# not restrict root, so the case only means something for a non-root
+# runner (the real runner always probes as the build account, which
+# is never root).
+if [[ "$RUNNER_UID" == 0 ]]; then
+  echo "  SKIP: permission cases do not mean anything as root"
+else
+  mkdir "$TREE/untraversable"
+  chmod 0644 "$TREE/untraversable"
+  err="$(refuse "$ACCOUNT")" || die "a tree with an unusable entry was allowed"
+  [[ "$err" == *"cannot read the source tree"* ]] || die "the probe did not refuse an unusable entry: $err"
+  rm -rf "$TREE/untraversable"
+  pass "a tree with an unusable entry is refused, by the probe"
+
+  # The nix client's cache is the account's home: it must be writable
+  # by that account, and the refusal names the home.
+  chmod 0500 "$TMP/home"
+  err="$(refuse "$ACCOUNT")" || die "an account that cannot write its home was allowed"
+  [[ "$err" == *"cannot write its home"* ]] || die "refusal does not name the home: $err"
+  chmod 0700 "$TMP/home"
+  pass "an account that cannot write its home is refused, by name"
+fi
+
+# The probe's shape: it runs as the build account, with that account's
+# home, against the tree the runner was pointed at.
+argv="$(cat "$TMP/setpriv-argv")"
+[[ "$argv" == *"$TREE"* ]] || die "the probe did not run against the tree: $argv"
+[[ "$argv" == *"HOME=$TMP/home"* ]] || die "the probe did not run with the account's home: $argv"
+pass "the probe runs against the tree, with the account's home"
 
 # A symlink is copied as a link: its target is not read, so even a
 # link with no target is not a reason to refuse.
@@ -242,14 +272,6 @@ out="$(resolve "$ACCOUNT")" || die "the policy refused: $(cat "$TMP/err")"
 [[ "$out" == "$ACCOUNT 1000 staff" ]] || die "a symlink was refused: got '$out'"
 rm -f "$TREE/dangling"
 pass "a symlink in the tree is copied, not read"
-
-# The nix client's cache is the account's home: it must be writable by
-# that account, and the refusal names the home.
-chmod 0500 "$TMP/home"
-err="$(refuse "$ACCOUNT")" || die "an account that cannot write its home was allowed"
-[[ "$err" == *"cannot write its home"* ]] || die "refusal does not name the home: $err"
-chmod 0700 "$TMP/home"
-pass "an account that cannot write its home is refused, by name"
 
 # The named account's own group must not be the privileged one: a build
 # that keeps gid 0 keeps half of the privilege the account dropped.
