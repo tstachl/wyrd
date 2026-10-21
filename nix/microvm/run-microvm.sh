@@ -24,8 +24,12 @@
 # Environment:
 #   E2E_BUILD_USER  the account the nix builds run as, named by the
 #                    host's suite configuration. The tree's owner is
-#                    the fallback; a build that would run as root is
-#                    refused, never performed.
+#                    the fallback when the host names none. A build
+#                    that would run as root (by uid) is refused, never
+#                    performed, and so is a build whose account cannot
+#                    build the tree it is handed: the host's suite
+#                    configuration must hand that account a tree it can
+#                    build.
 #
 # Flow: build wyrd + three VM runners -> bridge/taps -> ephemeral ssh
 # key + e2e-env.sh into the state share -> boot virtiofsd+qemu per VM

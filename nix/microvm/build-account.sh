@@ -110,6 +110,24 @@ build_group_source() {
   printf 'tree\n'
 }
 
+# build_home <account>
+#
+# Prints the account's home directory, the nix client's cache. HOME
+# via tilde expansion, not getent: the suite unit's PATH is minimal and
+# getent is not on it (bash builtins always are). The expansion is
+# syntax, not trust: a missing passwd entry leaves a literal `~name`,
+# so the caller checks that the home exists — before the run lock and
+# before the multi-minute build — and the host's suite configuration is
+# what creates it.
+#
+# The resolution is its own function so the stub can model the host's
+# passwd entry instead of needing a real account with a real home.
+build_home() {
+  local account="$1"
+
+  eval echo "~$account"
+}
+
 # resolve_build_identity <root> <named-account>
 #
 # Resolves the identity the builds run as and sets four variables:
@@ -147,30 +165,28 @@ resolve_build_identity() { # <root> <named-account>
       ;;
   esac
 
-  # HOME via tilde expansion, not getent: the suite unit's PATH is
-  # minimal and getent is not on it (bash builtins always are). The
-  # expansion is syntax, not trust: a missing passwd entry leaves a
-  # literal `~name`, so the home is checked here — before the run lock
-  # and before the multi-minute build — and the host's suite
-  # configuration is what creates it.
-  BUILD_HOME="$(eval echo "~$BUILD_USER")"
+  BUILD_HOME="$(build_home "$BUILD_USER")"
   [[ -d "$BUILD_HOME" ]] || {
     echo "error: no home directory for build account '$BUILD_USER'; the host's suite configuration creates it" >&2
     return 1
   }
 
-  # The account must be able to open the tree it builds: for a git
-  # checkout nix's libgit2 refuses a repository the building account
-  # does not own, and for a plain snapshot the files must at least be
-  # readable. Probe the part that can be probed — that the account can
-  # open the tree — now, as that account, so a host that hands over a
-  # tree the account cannot open fails here by name instead of
-  # minutes into the build. The test runs in bash, which is on the
-  # unit's PATH, and asks for read and search permission on the tree.
+  # The account must be able to build the tree it is handed: nix
+  # copies the tree, so the account must be able to list it and read
+  # what is in it, and for a git checkout nix's own fetch of the
+  # repository applies its ownership rules on top (the reason the
+  # builds ran as the checkout's owner until the host named an
+  # account). Probe the part that can be probed — that the account can
+  # open the tree and read its entries — now, as that account, so a
+  # host that hands over a tree the account cannot build fails here by
+  # name instead of minutes into the build. The test runs in bash,
+  # which is on the unit's PATH.
   # shellcheck disable=SC2016
   if ! setpriv --reuid "$BUILD_USER" --regid "$BUILD_GROUP" --init-groups \
-    env HOME="$BUILD_HOME" bash -c '[[ -r "$1" && -x "$1" ]]' bash "$root"; then
-    echo "error: build account '$BUILD_USER' cannot open the source tree at $root; the host's suite configuration must hand that account a tree it can build" >&2
+    env HOME="$BUILD_HOME" bash -c 'shopt -s nullglob
+      [[ -r "$1" && -x "$1" ]] || exit 1
+      for entry in "$1"/*; do [[ -r "$entry" ]] || exit 1; done' bash "$root"; then
+    echo "error: build account '$BUILD_USER' cannot build the source tree at $root; the host's suite configuration must hand that account a tree it can build" >&2
     return 1
   fi
   return 0

@@ -30,14 +30,14 @@ POLICY="$ROOT/nix/microvm/build-account.sh"
 # shellcheck source=/dev/null
 source "$POLICY"
 
-# The build account is a real account on this machine, so its home
-# exists and the tilde expansion resolves: the stub models the host,
-# it does not invent a user.
-ACCOUNT="$(id -un)"
+# The build account is a fixed name the stub invents, and its home is
+# a temporary directory: the stub models the host's passwd entry
+# instead of needing a real account with a real home, so it runs the
+# same for root and for anyone else.
+ACCOUNT="wyrdbuild"
 
 # The stubs. stat reports the tree's owner and group, id resolves the
-# one build account they know, setpriv answers the "can the account
-# open the tree" probe.
+# one build account they know, setpriv runs the probe it is handed.
 STUBS="$TMP/stubs"
 mkdir -p "$STUBS"
 cat > "$STUBS/stat" <<'STUB'
@@ -64,24 +64,40 @@ esac
 STUB
 cat > "$STUBS/setpriv" <<'STUB'
 #!/usr/bin/env bash
-# Fake setpriv: the probe's exit status is the stub's to decide.
-[[ "$FAKE_CAN_OPEN" == "yes" ]] || exit 1
-exit 0
+# Fake setpriv: it runs the command it is handed (the probe's shape is
+# then pinned by the probe actually running), and the stub can make it
+# fail outright to model an account that cannot open the tree.
+[[ "$FAKE_CAN_BUILD" == "yes" ]] || exit 1
+while [[ "${1:-}" == -* ]]; do
+  case "$1" in
+    --reuid | --regid) shift 2 ;;
+    --init-groups) shift ;;
+    *) break ;;
+  esac
+done
+exec "$@"
 STUB
 chmod +x "$STUBS"/*
+
+# The host's passwd entry for the build account: a home the stub owns.
+mkdir -p "$TMP/home"
+build_home() { printf '%s\n' "$TMP/home"; }
 
 FAKE_TREE_OWNER=root
 FAKE_TREE_GROUP=root
 FAKE_ACCOUNT="$ACCOUNT"
 FAKE_ACCOUNT_UID=1000
 FAKE_ACCOUNT_GROUP=staff
-FAKE_CAN_OPEN=yes
+FAKE_CAN_BUILD=yes
 export FAKE_TREE_OWNER FAKE_TREE_GROUP FAKE_ACCOUNT FAKE_ACCOUNT_UID \
-  FAKE_ACCOUNT_GROUP FAKE_CAN_OPEN
+  FAKE_ACCOUNT_GROUP FAKE_CAN_BUILD
 export PATH="$STUBS:$PATH"
 
 TREE="$TMP/tree"
 mkdir -p "$TREE"
+# The tree has an entry: nix copies the tree, so the probe reads what
+# is in it.
+: >"$TREE/flake.nix"
 
 # resolve <named>: runs the policy against the stubbed host and
 # prints the resolved identity, or the refusal. Returns non-zero when
@@ -108,7 +124,7 @@ refuse() { # <named>
 # root-owned snapshot still builds as the named account.
 FAKE_TREE_OWNER=root
 FAKE_TREE_GROUP=root
-out="$(resolve "$ACCOUNT")"
+out="$(resolve "$ACCOUNT")" || die "the policy refused: $(cat "$TMP/err")"
 [[ "$out" == "$ACCOUNT 1000 staff" ]] || die "named account not used as claimed: got '$out'"
 pass "the host's account wins over a root-owned tree"
 
@@ -117,17 +133,33 @@ pass "the host's account wins over a root-owned tree"
 # build that keeps it keeps half of the privilege the account drops.
 FAKE_TREE_OWNER="$ACCOUNT"
 FAKE_TREE_GROUP=root
-out="$(resolve "$ACCOUNT")"
+out="$(resolve "$ACCOUNT")" || die "the policy refused: $(cat "$TMP/err")"
 [[ "$out" == "$ACCOUNT 1000 staff" ]] || die "named account took the tree's group: got '$out'"
 pass "a host-named account runs with its own primary group"
+
+# A host-named account wins over an owner stat cannot resolve: the
+# owner is irrelevant once the host names the account.
+FAKE_TREE_OWNER=UNKNOWN
+FAKE_TREE_GROUP=UNKNOWN
+out="$(resolve "$ACCOUNT")" || die "the policy refused: $(cat "$TMP/err")"
+[[ "$out" == "$ACCOUNT 1000 staff" ]] || die "named account ignored: got '$out'"
+pass "the host's account wins over an unresolved tree owner"
 
 # Without a named account the tree's owner builds, with the tree's
 # group: the ordinary checkout is unchanged.
 FAKE_TREE_OWNER="$ACCOUNT"
 FAKE_TREE_GROUP=wheel
-out="$(resolve "")"
+out="$(resolve "")" || die "the policy refused: $(cat "$TMP/err")"
 [[ "$out" == "$ACCOUNT 1000 wheel" ]] || die "tree owner not used as before: got '$out'"
 pass "the tree's owner remains the fallback, with the tree's group"
+
+# A tree whose owner resolves but whose group does not falls back to
+# the account's own group: the tree's group is not an account.
+FAKE_TREE_OWNER="$ACCOUNT"
+FAKE_TREE_GROUP=UNKNOWN
+out="$(resolve "")" || die "the policy refused: $(cat "$TMP/err")"
+[[ "$out" == "$ACCOUNT 1000 staff" ]] || die "unresolved tree group not resolved: got '$out'"
+pass "an unresolved tree group falls back to the account's own group"
 
 # A root-owned tree with no account named by the host: refused, not
 # built as root. The refusal names the setting to change.
@@ -171,16 +203,16 @@ err="$(refuse "")" || die "an unresolved tree owner was allowed"
 [[ "$err" == *"E2E_BUILD_USER"* ]] || die "refusal does not name the setting: $err"
 pass "an unresolved tree owner is refused, naming the setting"
 
-# The account must be able to open the tree it builds: refused by
+# The account must be able to build the tree it is handed: refused by
 # name when it cannot, instead of failing minutes into the build.
 FAKE_TREE_OWNER=root
 FAKE_TREE_GROUP=root
-FAKE_CAN_OPEN=no
-err="$(refuse "$ACCOUNT")" || die "an account that cannot open the tree was allowed"
-[[ "$err" == *"cannot open the source tree"* ]] || die "refusal does not say what it refuses: $err"
+FAKE_CAN_BUILD=no
+err="$(refuse "$ACCOUNT")" || die "an account that cannot build the tree was allowed"
+[[ "$err" == *"cannot build the source tree"* ]] || die "refusal does not say what it refuses: $err"
 [[ "$err" == *"tree it can build"* ]] || die "refusal does not name the host obligation: $err"
-FAKE_CAN_OPEN=yes
-pass "an account that cannot open the tree is refused, by name"
+FAKE_CAN_BUILD=yes
+pass "an account that cannot build the tree is refused, by name"
 
 # The runner asks the policy for the identity, and says who the build
 # runs as in the run log.

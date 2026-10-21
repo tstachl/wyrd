@@ -52,7 +52,11 @@ is transient — no drive data is affected.
   still work, just as root. The tree's owner remains the fallback for
   an ordinary checkout, unchanged, and a build that would run as root
   is refused with a message naming the host setting to change, never
-  performed. `gate.toml` names the repository (`[suite] repo = "wyrd"`),
+  performed — by uid, so a second name for uid 0 does not slip
+  through. A build whose account cannot build the tree it is handed is
+  refused by name too, so the host learns it has to hand over a tree
+  the build account can build instead of failing minutes into the
+  build. `gate.toml` names the repository (`[suite] repo = "wyrd"`),
   the name the host resolves to the source it is willing to build.
 
 ## [0.3.0-alpha]
