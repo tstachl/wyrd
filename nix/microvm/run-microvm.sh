@@ -125,6 +125,7 @@ fi
 if [[ "$TEARDOWN" == 0 ]]; then
   need id
   need setpriv
+  need stat
   resolve_build_identity "$ROOT" "${E2E_BUILD_USER:-}" || exit 2
   # Say who the build runs as: a launcher that drops E2E_BUILD_USER
   # (a plain sudo resets the environment) falls back to the tree's

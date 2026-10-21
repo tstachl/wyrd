@@ -191,6 +191,8 @@ resolve_build_identity() { # <root> <named-account>
       # named account's group is held to; the tree's group is the
       # tree's business, and an ordinary checkout's group is not the
       # privileged one.
+      # BUILD_GROUP is read by the runner, not here.
+      # shellcheck disable=SC2034
       BUILD_GROUP="$tree_group"
       # BUILD_GID is read by the runner, not here.
       # shellcheck disable=SC2034
