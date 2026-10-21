@@ -131,7 +131,7 @@ if [[ "$TEARDOWN" == 0 ]]; then
   # owner, and that must be visible in the run log, not inferred.
   # The identity is set by the sourced policy module.
   # shellcheck disable=SC2153
-  echo "    build account: $BUILD_USER (uid $BUILD_UID, group $BUILD_GROUP)"
+  echo "    build account: $BUILD_USER (uid $BUILD_UID, gid $BUILD_GID${BUILD_GROUP:+ $BUILD_GROUP})"
 fi
 
 # Tools per mode, checked after flag parsing so --teardown only
@@ -274,7 +274,7 @@ wait_build() { # <pid> <what>
   wait "$1" || { kill "${BUILD_PIDS[@]}" 2>/dev/null || true; die "$2"; }
 }
 BUILD_START=$(date +%s)
-setpriv --reuid "$BUILD_USER" --regid "$BUILD_GROUP" --init-groups \
+setpriv --reuid "$BUILD_USER" --regid "$BUILD_GID" --init-groups \
   env HOME="$BUILD_HOME" USER="$BUILD_USER" LOGNAME="$BUILD_USER" \
   nix build "$ROOT#packages.x86_64-linux.wyrd" --no-link --print-out-paths --print-build-logs \
   >"$BUILD_LOGS/nix-build-wyrd.out" 2>"$BUILD_LOGS/nix-build-wyrd.log" 9>&- &
@@ -282,7 +282,7 @@ BUILD_WYRD=$!
 BUILD_PIDS=("$BUILD_WYRD")
 # Pinned nak for the opacity probe (see the flake comment): same
 # no-link pattern as wyrd, so the suite never floats the registry.
-setpriv --reuid "$BUILD_USER" --regid "$BUILD_GROUP" --init-groups \
+setpriv --reuid "$BUILD_USER" --regid "$BUILD_GID" --init-groups \
   env HOME="$BUILD_HOME" USER="$BUILD_USER" LOGNAME="$BUILD_USER" \
   nix build "$ROOT#packages.x86_64-linux.nak" --no-link --print-out-paths --print-build-logs \
   >"$BUILD_LOGS/nix-build-nak.out" 2>"$BUILD_LOGS/nix-build-nak.log" 9>&- &
@@ -290,7 +290,7 @@ BUILD_NAK=$!
 BUILD_PIDS+=("$BUILD_NAK")
 declare -A BUILD_PID=()
 for role in peer-o peer-n relay; do
-  setpriv --reuid "$BUILD_USER" --regid "$BUILD_GROUP" --init-groups \
+  setpriv --reuid "$BUILD_USER" --regid "$BUILD_GID" --init-groups \
     env HOME="$BUILD_HOME" USER="$BUILD_USER" LOGNAME="$BUILD_USER" \
     nix build "$ROOT#nixosConfigurations.wyrd-$role.config.microvm.runner.qemu" \
     --no-link --print-out-paths --print-build-logs \

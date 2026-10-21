@@ -172,15 +172,17 @@ resolve_build_identity() { # <root> <named-account>
   tree_group="$(stat -c %G "$root")"
   case "$(build_group_source "$tree_group" "$host_named")" in
     account)
+      # The number, not the name: setpriv takes the number, and an
+      # account whose primary gid has no entry in the host's group
+      # database (LDAP, SSSD, a bare-gid account) still builds. The
+      # name is for the log line, and its absence is not a refusal.
       gid="$(id -g "$BUILD_USER" 2>/dev/null)" || {
         echo "error: cannot resolve the primary group of build account '$BUILD_USER' on this host; set E2E_BUILD_USER in the host's suite configuration to an account that exists on the host" >&2
         return 1
       }
       gid="$(build_gid_allowed "$gid")" || return 1
-      BUILD_GROUP="$(id -gn "$BUILD_USER" 2>/dev/null)" || {
-        echo "error: cannot resolve the primary group of build account '$BUILD_USER' on this host; set E2E_BUILD_USER in the host's suite configuration to an account that exists on the host" >&2
-        return 1
-      }
+      BUILD_GID="$gid"
+      BUILD_GROUP="$(id -gn "$BUILD_USER" 2>/dev/null || printf '%s' "$gid")"
       ;;
     tree)
       # The tree's own group, as before: an ordinary checkout is
@@ -190,6 +192,9 @@ resolve_build_identity() { # <root> <named-account>
       # tree's business, and an ordinary checkout's group is not the
       # privileged one.
       BUILD_GROUP="$tree_group"
+      # BUILD_GID is read by the runner, not here.
+      # shellcheck disable=SC2034
+      BUILD_GID="$(stat -c %g "$root")"
       ;;
   esac
 
@@ -210,10 +215,13 @@ resolve_build_identity() { # <root> <named-account>
   # over a tree the account cannot build fails here by name instead of
   # minutes into the build. The probe reads the top level only: a
   # deeper problem (a file inside the tree the account cannot read)
-  # surfaces in the build, where nix names it. The test runs in bash,
-  # which is on the unit's PATH. A symlink is copied as a link, so its
-  # target is not read; the exit code says which check failed (1 the
-  # tree, 2 the home).
+  # surfaces in the build, where nix names it. That scope is the scope
+  # of what gets copied: the runner builds a path flake
+  # (`nix build "$ROOT#..."`), so nix copies the working tree, not the
+  # repository's tracked files. The test runs in bash, which is on the
+  # unit's PATH. A symlink is copied as a link, so its target is not
+  # read; the exit code says which check failed (1 the tree, 2 the
+  # home).
   probe_rc=0
   # shellcheck disable=SC2016
   setpriv --reuid "$BUILD_USER" --regid "$BUILD_GROUP" --init-groups \

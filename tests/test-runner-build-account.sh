@@ -58,6 +58,8 @@ STUB
 cat > "$STUBS/id" <<'STUB'
 #!/usr/bin/env bash
 # Fake id: -u, -g and -gn answer for the one build account it knows.
+# The group name can be made unresolvable, the way it is on a host
+# whose group database has no entry for the account's primary gid.
 case "${1:-}" in
   -u)
     [[ "${2:-}" == "$FAKE_ACCOUNT" ]] || { echo "id: '$2': no such user" >&2; exit 1; }
@@ -67,6 +69,7 @@ case "${1:-}" in
     printf '%s\n' "$FAKE_ACCOUNT_GID" ;;
   -gn)
     [[ "${2:-}" == "$FAKE_ACCOUNT" ]] || { echo "id: '$2': no such user" >&2; exit 1; }
+    [[ "$FAKE_GROUP_NAME" == "unresolvable" ]] && { echo "id: '$2': no such group" >&2; exit 1; }
     printf '%s\n' "$FAKE_ACCOUNT_GROUP" ;;
   *) echo "fake id: unsupported args: $*" >&2; exit 2 ;;
 esac
@@ -78,6 +81,7 @@ cat > "$STUBS/setpriv" <<'STUB'
 # the stub's to read), and can fail outright to model an account that
 # cannot build the tree.
 [[ "$FAKE_CAN_BUILD" == "yes" ]] || exit 1
+printf '%s\n' "$*" >"$FAKE_SETPRIV_ARGV"
 while [[ "${1:-}" == -* ]]; do
   case "$1" in
     --reuid | --regid) shift 2 ;;
@@ -85,7 +89,6 @@ while [[ "${1:-}" == -* ]]; do
     *) break ;;
   esac
 done
-printf '%s\n' "$*" >"$FAKE_SETPRIV_ARGV"
 exec "$@"
 STUB
 chmod +x "$STUBS"/*
@@ -107,9 +110,11 @@ FAKE_ACCOUNT_UID=1000
 FAKE_ACCOUNT_GID=1000
 FAKE_ACCOUNT_GROUP=staff
 FAKE_CAN_BUILD=yes
+FAKE_GROUP_NAME=resolvable
 FAKE_SETPRIV_ARGV="$TMP/setpriv-argv"
 export FAKE_TREE_OWNER FAKE_TREE_GROUP FAKE_ACCOUNT FAKE_ACCOUNT_UID \
-  FAKE_ACCOUNT_GID FAKE_ACCOUNT_GROUP FAKE_CAN_BUILD FAKE_SETPRIV_ARGV
+  FAKE_ACCOUNT_GID FAKE_ACCOUNT_GROUP FAKE_CAN_BUILD FAKE_GROUP_NAME \
+  FAKE_SETPRIV_ARGV
 export PATH="$STUBS:$PATH"
 
 TREE="$TMP/tree"
@@ -264,6 +269,17 @@ argv="$(cat "$TMP/setpriv-argv")"
 [[ "$argv" == *"$TREE"* ]] || die "the probe did not run against the tree: $argv"
 [[ "$argv" == *"HOME=$TMP/home"* ]] || die "the probe did not run with the account's home: $argv"
 pass "the probe runs against the tree, with the account's home"
+
+# The build runs with the account's primary group by number: an
+# account whose primary gid has no entry in the host's group database
+# (LDAP, SSSD, a bare-gid account) still builds.
+FAKE_GROUP_NAME=unresolvable
+out="$(resolve "$ACCOUNT")" || die "the policy refused: $(cat "$TMP/err")"
+[[ "$out" == "$ACCOUNT 1000 1000" ]] || die "the group was not resolved: got '$out'"
+argv="$(cat "$TMP/setpriv-argv")"
+[[ "$argv" == *"--regid 1000"* ]] || die "the build did not run with the account's gid: $argv"
+FAKE_GROUP_NAME=resolvable
+pass "the build runs with the account's group by number"
 
 # A symlink is copied as a link: its target is not read, so even a
 # link with no target is not a reason to refuse.
