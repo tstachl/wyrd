@@ -226,9 +226,8 @@ pass "an account that cannot build the tree is refused, by name"
 
 # The probe's own verdict: a tree with an entry the account cannot
 # use is refused by the probe, not by the stub's stand-in. A directory
-# without the execute bit is the uid-independent way to model it: even
-# root cannot traverse it, so the case works on the CI runner and on a
-# root shell alike.
+# with no execute bit is the uid-independent way to model it: the
+# probe's traversal test fails for every uid, root included.
 mkdir "$TREE/untraversable"
 chmod 0644 "$TREE/untraversable"
 err="$(refuse "$ACCOUNT")" || die "a tree with an unusable entry was allowed"

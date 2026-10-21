@@ -184,7 +184,11 @@ resolve_build_identity() { # <root> <named-account>
       ;;
     tree)
       # The tree's own group, as before: an ordinary checkout is
-      # reached through the group it carries.
+      # reached through the group it carries. The branch did not
+      # choose this group, so it does not hold it to the gid rule the
+      # named account's group is held to; the tree's group is the
+      # tree's business, and an ordinary checkout's group is not the
+      # privileged one.
       BUILD_GROUP="$tree_group"
       ;;
   esac
