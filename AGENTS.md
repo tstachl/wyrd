@@ -85,9 +85,11 @@ Lima for macOS dev iteration and as the refactor guard.)
   host's suite configuration names it (`E2E_BUILD_USER`), because under
   the source-bound launch the tree is a host-owned snapshot — root-owned
   — and a build that ran as root would lose the runner's de-escalation
-  silently. The runner refuses a build that would run as root and names
-  that setting in the refusal; a checkout owned by a non-root user still
-  builds as that user.
+  silently. The host hands that account a tree it can build (nix
+  enforces repo ownership), and the runner refuses a build that would
+  run as root — by uid, so a second name for uid 0 does not slip
+  through — naming that setting in the refusal. A checkout owned by a
+  non-root user still builds as that user.
 
 - **Never pipe it through `tail`.** A foreground pipe buffers everything, so
   a twenty-minute run looks like a hang. Run it detached with the output to a

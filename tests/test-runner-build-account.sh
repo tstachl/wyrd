@@ -33,6 +33,14 @@ refuse() { # <tree-owner> <named>
   cat "$TMP/err"
 }
 
+# refuse_uid <uid>: the same shape for the uid check.
+refuse_uid() { # <uid>
+  if build_uid_allowed "$1" >"$TMP/out" 2>"$TMP/err"; then
+    return 1
+  fi
+  cat "$TMP/err"
+}
+
 # The host names the account: it wins over the tree's owner, so a
 # root-owned snapshot still builds as the named account.
 out="$(build_account_choice root wyrd-build)" || die "named account refused"
@@ -94,6 +102,14 @@ pass "the tree's group remains the fallback"
 # A tree group stat cannot resolve falls back to the account's own.
 [[ "$(build_group_source UNKNOWN 0)" == "account" ]] || die "unresolved tree group does not fall back"
 pass "an unresolved tree group falls back to the account's own group"
+
+# The root question is uid-based, not name-based: a second name for
+# uid 0 would pass a name check and still be a root build.
+err="$(refuse_uid 0)" || die "uid 0 was allowed"
+[[ "$err" == *"E2E_BUILD_USER"* ]] || die "refusal does not name the setting: $err"
+pass "uid 0 is refused, naming the setting"
+[[ "$(build_uid_allowed 1000)" == "1000" ]] || die "a non-root uid was refused"
+pass "a non-root uid is allowed"
 
 # The runner takes the account from the host's variable and asks the
 # policy for it: the tree's owner alone must never decide.

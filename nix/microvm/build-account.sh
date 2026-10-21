@@ -59,6 +59,24 @@ build_account_choice() {
   printf '%s\n' "$tree_owner"
 }
 
+# build_uid_allowed <uid>
+#
+# Prints the uid the build runs as. On a refusal, prints the reason
+# on stderr and returns 1: the uid is 0. The invariant this branch
+# exists to protect is uid-based, not name-based — a host whose
+# passwd carries a second name for uid 0 would pass a name check and
+# still be a root build — so the resolved uid is what decides, and the
+# name check stays only the fast path.
+build_uid_allowed() {
+  local uid="$1"
+
+  if [[ "$uid" == "0" ]]; then
+    echo "error: refusing to build as uid 0; set E2E_BUILD_USER in the host's suite configuration to a non-root build account" >&2
+    return 1
+  fi
+  printf '%s\n' "$uid"
+}
+
 # build_group_source <tree-group> <host-named>
 #
 # Prints where the build's group comes from: "account" for the build
