@@ -81,6 +81,14 @@ on a Linux KVM host (`--teardown` stops a kept run), same contract helpers, two 
 VM. `--step` runs the prefix closure over phases 1–15 (1–5 shared core, 6–15 microvm legs). Prefer it for topology, convergence, and restart evidence; use
 Lima for macOS dev iteration and as the refactor guard.)
 
+- **The microVM builds run as a build account, never as root.** The
+  host's suite configuration names it (`E2E_BUILD_USER`), because under
+  the source-bound launch the tree is a host-owned snapshot — root-owned
+  — and a build that ran as root would lose the runner's de-escalation
+  silently. The runner refuses a build that would run as root and names
+  that setting in the refusal; a checkout owned by a non-root user still
+  builds as that user.
+
 - **Never pipe it through `tail`.** A foreground pipe buffers everything, so
   a twenty-minute run looks like a hang. Run it detached with the output to a
   log (`(./lima/run-alpha.sh --keep > /tmp/lima/run.log 2>&1 &)`) and poll the

@@ -118,20 +118,27 @@ fi
 if [[ "$TEARDOWN" == 0 ]]; then
   TREE_OWNER="$(stat -c %U "$ROOT")"
   BUILD_USER="$(build_account_choice "$TREE_OWNER" "${E2E_BUILD_USER:-}")" || exit 2
-  if [[ "$BUILD_USER" == "$TREE_OWNER" ]]; then
-    # The tree's own group, as before: an ordinary checkout is reached
-    # through the group it carries.
-    BUILD_GROUP="$(stat -c %G "$ROOT")"
-  else
-    # The named account's own group: the tree's group belongs to the
-    # snapshot's owner, and a build that keeps the privileged account's
-    # group keeps half of the privilege the named account drops.
-    need id
-    BUILD_GROUP="$(id -gn "$BUILD_USER" 2>/dev/null)" || {
-      echo "error: the host named build account '$BUILD_USER', which this host cannot resolve; set E2E_BUILD_USER in the host's suite configuration to an account that exists on the host" >&2
-      exit 2
-    }
-  fi
+  # The group the build runs with. The host naming an account always
+  # takes the account's own primary group, whatever the tree carries:
+  # the tree's group belongs to the tree's owner, and a build that
+  # keeps the privileged account's group keeps half of the privilege
+  # the named account drops. Without a named account the tree's own
+  # group is used, as before.
+  HOST_NAMED=0
+  [[ -z "${E2E_BUILD_USER:-}" ]] || HOST_NAMED=1
+  TREE_GROUP="$(stat -c %G "$ROOT")"
+  case "$(build_group_source "$TREE_GROUP" "$HOST_NAMED")" in
+    account)
+      need id
+      BUILD_GROUP="$(id -gn "$BUILD_USER" 2>/dev/null)" || {
+        echo "error: cannot resolve the primary group of build account '$BUILD_USER' on this host; set E2E_BUILD_USER in the host's suite configuration to an account that exists on the host" >&2
+        exit 2
+      }
+      ;;
+    tree)
+      BUILD_GROUP="$TREE_GROUP"
+      ;;
+  esac
   # HOME via tilde expansion, not getent: the suite unit's PATH is
   # minimal and getent is not on it (bash builtins always are). The
   # expansion is syntax, not trust: a missing passwd entry leaves a
@@ -143,6 +150,10 @@ if [[ "$TEARDOWN" == 0 ]]; then
     echo "error: no home directory for build account '$BUILD_USER'; the host's suite configuration creates it" >&2
     exit 2
   }
+  # Say who the build runs as: a launcher that drops E2E_BUILD_USER
+  # (a plain sudo resets the environment) falls back to the tree's
+  # owner, and that must be visible in the run log, not inferred.
+  echo "    build account: $BUILD_USER (group $BUILD_GROUP)"
 fi
 
 # Tools per mode, checked after flag parsing so --teardown only

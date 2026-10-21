@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # nix/microvm/build-account.sh — the account the microVM runner's nix
-# builds run as. Pure policy: it resolves a name or refuses, with no
-# side effects, so the runner and its stub (tests/test-runner-build-account.sh)
-# decide the same way without the stub needing a host.
+# builds run as, and the group they run with. Pure policy: it resolves
+# a name or refuses, with no side effects, so the runner and its stub
+# (tests/test-runner-build-account.sh) decide the same way without the
+# stub needing a host.
 #
 # The host names the account (E2E_BUILD_USER), because the tree the
 # runner builds can be a host-owned snapshot: a snapshot the host owns
@@ -22,11 +23,11 @@
 # configured), or the name is not an account name at all. Every
 # refusal names the setting to change.
 #
-# An owner with no passwd entry (stat reports the numeric id) is not
-# an account name and is refused here rather than at the home check
-# later: such an owner has no home to build under, so the run cannot
-# work either way, and the early refusal names the way out. A host
-# that names an account makes the tree's owner irrelevant.
+# A tree owner stat cannot resolve is refused here rather than at the
+# home check later: stat prints the literal UNKNOWN for it (never a
+# numeric id), such an owner has no passwd entry and so no home to
+# build under, and the early refusal names the way out. A host that
+# names an account makes the tree's owner irrelevant.
 build_account_choice() {
   local tree_owner="$1" named="$2"
 
@@ -47,9 +48,41 @@ build_account_choice() {
     echo "error: refusing to build as root: the tree is owned by root and the host named no build account; set E2E_BUILD_USER in the host's suite configuration to a non-root build account" >&2
     return 1
   fi
+  if [[ "$tree_owner" == "UNKNOWN" ]]; then
+    echo "error: the tree's owner cannot be resolved on this host; set E2E_BUILD_USER in the host's suite configuration to a non-root build account" >&2
+    return 1
+  fi
   if ! [[ "$tree_owner" =~ ^[a-zA-Z_][a-zA-Z0-9_.-]*$ ]]; then
-    echo "error: the tree's owner is not an account name: '$tree_owner'; an owner with no passwd entry has no home to build under — the host can name a build account with E2E_BUILD_USER" >&2
+    echo "error: the tree's owner is not an account name: '$tree_owner'; the host can name a build account with E2E_BUILD_USER" >&2
     return 1
   fi
   printf '%s\n' "$tree_owner"
+}
+
+# build_group_source <tree-group> <host-named>
+#
+# Prints where the build's group comes from: "account" for the build
+# account's own primary group, "tree" for the group the tree carries.
+# <host-named> is 1 when the host named the account, 0 when it did
+# not.
+#
+# A host-named account always takes its own primary group, whatever
+# the tree carries: the tree's group belongs to the tree's owner, and a
+# build that keeps the privileged account's group keeps half of the
+# privilege the named account drops. Without a named account the
+# tree's group is used, as before — except when stat cannot resolve
+# it (it prints UNKNOWN), where the account's primary group is the
+# only group there is.
+build_group_source() {
+  local tree_group="$1" host_named="$2"
+
+  if [[ "$host_named" == "1" ]]; then
+    printf 'account\n'
+    return 0
+  fi
+  if [[ "$tree_group" == "UNKNOWN" ]]; then
+    printf 'account\n'
+    return 0
+  fi
+  printf 'tree\n'
 }

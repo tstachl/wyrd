@@ -67,17 +67,33 @@ err="$(refuse thomas '$(id)')" || die "a malformed account name was allowed"
 [[ "$err" == *"not an account name"* ]] || die "refusal does not say what it refuses: $err"
 pass "a malformed account name is refused, naming the setting"
 
-# An owner with no passwd entry (stat reports the numeric id) has no
-# home to build under: refused, and the way out is named.
-err="$(refuse 1000 "")" || die "an unresolved tree owner was allowed"
+# An owner stat cannot resolve (it prints the literal UNKNOWN, never a
+# numeric id) has no passwd entry and so no home to build under:
+# refused, and the way out is named.
+err="$(refuse UNKNOWN "")" || die "an unresolved tree owner was allowed"
 [[ "$err" == *"E2E_BUILD_USER"* ]] || die "refusal does not name the setting: $err"
 pass "an unresolved tree owner is refused, naming the setting"
 
 # A host-named account makes the tree's owner irrelevant, unresolved
 # owner and all: the build runs as the account the host named.
-out="$(build_account_choice 1000 wyrd-build)" || die "named account refused"
+out="$(build_account_choice UNKNOWN wyrd-build)" || die "named account refused"
 [[ "$out" == "wyrd-build" ]] || die "named account ignored: got '$out'"
 pass "the host's account wins over an unresolved tree owner"
+
+# The group: a host-named account runs with its own primary group,
+# whatever the tree carries — including when the named account owns
+# the tree, where the tree's group may be a foreign one.
+[[ "$(build_group_source staff 1)" == "account" ]] || die "named account does not take its own group"
+[[ "$(build_group_source root 1)" == "account" ]] || die "named account does not take its own group"
+pass "a host-named account runs with its own primary group"
+
+# Without a named account the tree's group is used, as before.
+[[ "$(build_group_source staff 0)" == "tree" ]] || die "tree group not used for the fallback"
+pass "the tree's group remains the fallback"
+
+# A tree group stat cannot resolve falls back to the account's own.
+[[ "$(build_group_source UNKNOWN 0)" == "account" ]] || die "unresolved tree group does not fall back"
+pass "an unresolved tree group falls back to the account's own group"
 
 # The runner takes the account from the host's variable and asks the
 # policy for it: the tree's owner alone must never decide.
@@ -90,10 +106,12 @@ pass "the runner takes the account from the host's E2E_BUILD_USER"
 # --teardown builds nothing, so it must not depend on the host naming a
 # build account: a host that never named one still has to be able to
 # stop its kept run. The derivation sits behind the teardown guard.
-guard_line="$(grep -n 'TEARDOWN" == 0' "$RUNNER" | head -1 | cut -d: -f1)"
+# The greps carry `|| true`: under `set -e` a vanished pattern would
+# abort the pipeline before the diagnosis below could print.
+guard_line="$(grep -n 'TEARDOWN" == 0' "$RUNNER" | head -1 | cut -d: -f1 || true)"
 # The pattern quotes the runner's own variable literally.
 # shellcheck disable=SC2016
-choice_line="$(grep -n 'build_account_choice "\$TREE_OWNER"' "$RUNNER" | head -1 | cut -d: -f1)"
+choice_line="$(grep -n 'build_account_choice "\$TREE_OWNER"' "$RUNNER" | head -1 | cut -d: -f1 || true)"
 [[ -n "$guard_line" && -n "$choice_line" ]] || die "the runner does not guard the build account derivation"
 (( choice_line > guard_line )) || die "the build account is derived before the teardown guard"
 pass "the build account is derived only for a run that builds"
