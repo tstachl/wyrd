@@ -85,13 +85,16 @@ Lima for macOS dev iteration and as the refactor guard.)
   host's suite configuration names it (`E2E_BUILD_USER`), because under
   the source-bound launch the tree is a host-owned snapshot — root-owned
   — and a build that ran as root would lose the runner's de-escalation
-  silently. The account must be able to build the tree it is handed:
-  nix copies the tree, so the account must be able to list it and read
-  its files, and for a git checkout nix's own fetch of the repository
-  applies its ownership rules on top. Chowning the source snapshot to
-  the build account satisfies all of it. The runner refuses a build
-  that would run as root — by uid, so a second name for uid 0 does not
-  slip through — naming that setting in the refusal, and it refuses by
+  silently. The host cannot always chown that snapshot (it may be a
+  read-only share), so it names the account the build runs as, and
+  hands over a tree that account can build: nix copies the tree, so the
+  account must be able to list it and read its files, and for a git
+  checkout nix's own fetch of the repository applies its ownership
+  rules on top. Chowning the source snapshot to the build account,
+  with its files readable and its directories traversable by that
+  account, satisfies all of it. The runner refuses a build that would
+  run as root — by uid, so a second name for uid 0 does not slip
+  through — naming that setting in the refusal, and it refuses by
   name when the account cannot build the tree. When the host names no
   account, a checkout owned by a non-root user still builds as that
   user.

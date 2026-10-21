@@ -109,13 +109,14 @@ if [[ -d /run/current-system/sw/bin ]]; then
 fi
 
 # The builds run as a build account, not as the privileged account
-# that runs the runner; devices/network stay root. nix (libgit2)
-# enforces repo ownership and ignores safe.directory, so the account
-# that builds must be able to open the tree it builds: for a git
-# checkout that means owning it, for a plain snapshot that means
-# reading it. The host names the account (E2E_BUILD_USER) and hands
+# that runs the runner; devices/network stay root. The account must be
+# able to build the tree it is handed: nix copies the tree, so the
+# account must be able to list it and read its files, and for a git
+# checkout nix's own fetch of the repository applies its ownership
+# rules on top (the reason the builds ran as the checkout's owner
+# until now). The host names the account (E2E_BUILD_USER) and hands
 # it a tree it can build; the runner resolves the identity, checks
-# that the account can open the tree, and refuses by name when it
+# that the account can build the tree, and refuses by name when it
 # cannot. A build that would run as root is refused, never performed:
 # the check is on the resolved uid, so a second name for uid 0 does
 # not slip through.

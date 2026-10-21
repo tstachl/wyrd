@@ -177,15 +177,18 @@ resolve_build_identity() { # <root> <named-account>
   # repository applies its ownership rules on top (the reason the
   # builds ran as the checkout's owner until the host named an
   # account). Probe the part that can be probed — that the account can
-  # open the tree and read its entries — now, as that account, so a
+  # list the tree and read its entries — now, as that account, so a
   # host that hands over a tree the account cannot build fails here by
   # name instead of minutes into the build. The test runs in bash,
   # which is on the unit's PATH.
   # shellcheck disable=SC2016
   if ! setpriv --reuid "$BUILD_USER" --regid "$BUILD_GROUP" --init-groups \
-    env HOME="$BUILD_HOME" bash -c 'shopt -s nullglob
+    env HOME="$BUILD_HOME" bash -c 'shopt -s nullglob dotglob
       [[ -r "$1" && -x "$1" ]] || exit 1
-      for entry in "$1"/*; do [[ -r "$entry" ]] || exit 1; done' bash "$root"; then
+      for entry in "$1"/*; do
+        [[ -r "$entry" ]] || exit 1
+        if [[ -d "$entry" ]] && ! [[ -x "$entry" ]]; then exit 1; fi
+      done' bash "$root"; then
     echo "error: build account '$BUILD_USER' cannot build the source tree at $root; the host's suite configuration must hand that account a tree it can build" >&2
     return 1
   fi

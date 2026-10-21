@@ -3,8 +3,8 @@
 # policy of nix/microvm/run-microvm.sh: the host names the account the
 # nix builds run as (E2E_BUILD_USER), the tree's owner is the
 # fallback, a build that would run as root is refused with a message
-# naming the setting to change, and the account must be able to open
-# the tree it builds.
+# naming the setting to change, and the account must be able to build
+# the tree it is handed.
 #
 # The policy is exercised behaviourally, with stat, id and setpriv
 # stubbed on PATH, so the wiring is pinned and not only the decision
@@ -81,6 +81,12 @@ chmod +x "$STUBS"/*
 
 # The host's passwd entry for the build account: a home the stub owns.
 mkdir -p "$TMP/home"
+# The real home resolution, once, before the stub replaces it: an
+# account with no passwd entry expands to the literal `~name`, which is
+# what the module's comment claims and what the home check relies on.
+real_home="$(build_home "wyrdnosuchuser")"
+[[ "$real_home" == "~wyrdnosuchuser" ]] || die "an account with no passwd entry did not expand literally: got '$real_home'"
+pass "the home resolution leaves an unknown account literal"
 build_home() { printf '%s\n' "$TMP/home"; }
 
 FAKE_TREE_OWNER=root
@@ -213,6 +219,16 @@ err="$(refuse "$ACCOUNT")" || die "an account that cannot build the tree was all
 [[ "$err" == *"tree it can build"* ]] || die "refusal does not name the host obligation: $err"
 FAKE_CAN_BUILD=yes
 pass "an account that cannot build the tree is refused, by name"
+
+# The probe's own verdict: a tree with an entry the account cannot
+# read is refused by the probe, not by the stub's stand-in. A dangling
+# symlink is the uid-independent way to model it: it is unreadable for
+# root as for anyone else.
+ln -s "$TMP/nowhere" "$TREE/dangling"
+err="$(refuse "$ACCOUNT")" || die "a tree with an unreadable entry was allowed"
+[[ "$err" == *"cannot build the source tree"* ]] || die "the probe did not refuse an unreadable entry: $err"
+rm -f "$TREE/dangling"
+pass "a tree with an unreadable entry is refused, by the probe"
 
 # The runner asks the policy for the identity, and says who the build
 # runs as in the run log.
