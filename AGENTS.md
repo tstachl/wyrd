@@ -96,9 +96,9 @@ Lima for macOS dev iteration and as the refactor guard.)
   that would run as root (by uid, or by the named account's own
   primary gid), a build whose account cannot read the tree it is
   handed, a build whose account cannot write the home the nix client
-  caches in, and a named account that does not exist on the host or
-  has no resolvable group. When the host names no account, a checkout
-  owned by a non-root user still builds as that user.
+  caches in, and a named account that does not exist on the host.
+  When the host names no account, a checkout owned by a non-root user
+  still builds as that user.
 
 
 - **Never pipe it through `tail`.** A foreground pipe buffers everything, so
