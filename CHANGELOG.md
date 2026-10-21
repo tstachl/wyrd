@@ -53,13 +53,14 @@ is transient — no drive data is affected.
   an ordinary checkout, unchanged, and a build that would run as root
   is refused with a message naming the host setting to change, never
   performed — by uid, so a second name for uid 0 does not slip
-  through, and by the account's primary gid, so a build cannot keep
-  the privileged group either. A build whose account cannot build the
-  tree it is handed — or write the home the nix client caches in — is
-  refused by name too, so the host learns it has to hand over a tree
-  the build account can build instead of failing minutes into the
-  build. `gate.toml` names the repository (`[suite] repo = "wyrd"`),
-  the name the host resolves to the source it is willing to build.
+  through, and, for the account the host names, by that account's
+  primary gid, so a build cannot keep the privileged group either. A
+  build whose account cannot read the tree it is handed — or write the
+  home the nix client caches in — is refused by name too, so the host
+  learns it has to hand over a tree the build account can read instead
+  of failing minutes into the build. `gate.toml` names the repository
+  (`[suite] repo = "wyrd"`), the name the host resolves to the source
+  it is willing to build.
 
 ## [0.3.0-alpha]
 

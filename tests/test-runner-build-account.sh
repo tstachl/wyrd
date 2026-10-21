@@ -219,8 +219,8 @@ FAKE_TREE_OWNER=root
 FAKE_TREE_GROUP=root
 FAKE_CAN_BUILD=no
 err="$(refuse "$ACCOUNT")" || die "an account that cannot build the tree was allowed"
-[[ "$err" == *"cannot build the source tree"* ]] || die "refusal does not say what it refuses: $err"
-[[ "$err" == *"tree it can build"* ]] || die "refusal does not name the host obligation: $err"
+[[ "$err" == *"cannot read the source tree"* ]] || die "refusal does not say what it refuses: $err"
+[[ "$err" == *"tree it can read"* ]] || die "refusal does not name the host obligation: $err"
 FAKE_CAN_BUILD=yes
 pass "an account that cannot build the tree is refused, by name"
 
@@ -231,7 +231,7 @@ pass "an account that cannot build the tree is refused, by name"
 mkdir "$TREE/untraversable"
 chmod 0644 "$TREE/untraversable"
 err="$(refuse "$ACCOUNT")" || die "a tree with an unusable entry was allowed"
-[[ "$err" == *"cannot build the source tree"* ]] || die "the probe did not refuse an unusable entry: $err"
+[[ "$err" == *"cannot read the source tree"* ]] || die "the probe did not refuse an unusable entry: $err"
 rm -rf "$TREE/untraversable"
 pass "a tree with an unusable entry is refused, by the probe"
 

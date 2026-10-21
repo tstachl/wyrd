@@ -205,12 +205,15 @@ resolve_build_identity() { # <root> <named-account>
   # repository applies its ownership rules on top (the reason the
   # builds ran as the checkout's owner until the host named an
   # account). Probe the part that can be probed — that the account can
-  # list the tree, read its entries, and write the home the nix client
-  # caches in — now, as that account, so a host that hands over a tree
-  # the account cannot build fails here by name instead of minutes into
-  # the build. The test runs in bash, which is on the unit's PATH. A
-  # symlink is copied as a link, so its target is not read; the exit
-  # code says which check failed (1 the tree, 2 the home).
+  # list the tree, read its top-level entries, and write the home the
+  # nix client caches in — now, as that account, so a host that hands
+  # over a tree the account cannot build fails here by name instead of
+  # minutes into the build. The probe reads the top level only: a
+  # deeper problem (a file inside the tree the account cannot read)
+  # surfaces in the build, where nix names it. The test runs in bash,
+  # which is on the unit's PATH. A symlink is copied as a link, so its
+  # target is not read; the exit code says which check failed (1 the
+  # tree, 2 the home).
   probe_rc=0
   # shellcheck disable=SC2016
   setpriv --reuid "$BUILD_USER" --regid "$BUILD_GROUP" --init-groups \
@@ -226,7 +229,7 @@ resolve_build_identity() { # <root> <named-account>
     if [[ "$probe_rc" == 2 ]]; then
       echo "error: build account '$BUILD_USER' cannot write its home $BUILD_HOME; the host's suite configuration must create it for that account" >&2
     else
-      echo "error: build account '$BUILD_USER' cannot build the source tree at $root; the host's suite configuration must hand that account a tree it can build" >&2
+      echo "error: build account '$BUILD_USER' cannot read the source tree at $root; the host's suite configuration must hand that account a tree it can read" >&2
     fi
     return 1
   fi
