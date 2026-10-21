@@ -107,62 +107,27 @@ fi
 # The builds run as a build account, not as the privileged account
 # that runs the runner; devices/network stay root. nix (libgit2)
 # enforces repo ownership and ignores safe.directory, so the account
-# that builds must be able to open the tree it builds: for an ordinary
-# checkout that is the checkout's owner, and the tree's owner remains
-# the fallback here. Under the source-bound launch the tree is a
-# host-owned snapshot — root-owned, and its owner is not a build
-# account — so the host names the account (E2E_BUILD_USER) and hands
-# it a tree it can build. A build that would run as root is refused,
-# never performed: the check is on the resolved uid, so a second name
-# for uid 0 does not slip through.
+# that builds must be able to open the tree it builds: for a git
+# checkout that means owning it, for a plain snapshot that means
+# reading it. The host names the account (E2E_BUILD_USER) and hands
+# it a tree it can build; the runner resolves the identity, checks
+# that the account can open the tree, and refuses by name when it
+# cannot. A build that would run as root is refused, never performed:
+# the check is on the resolved uid, so a second name for uid 0 does
+# not slip through.
 # --teardown builds nothing, so it must not depend on the host's build
 # account being configured: it stops a kept run on a host that never
 # named one.
 if [[ "$TEARDOWN" == 0 ]]; then
-  TREE_OWNER="$(stat -c %U "$ROOT")"
-  BUILD_USER="$(build_account_choice "$TREE_OWNER" "${E2E_BUILD_USER:-}")" || exit 2
-  # The uid decides the root question, not the name.
   need id
-  BUILD_UID="$(id -u "$BUILD_USER" 2>/dev/null)" || {
-    echo "error: cannot resolve the uid of build account '$BUILD_USER' on this host; set E2E_BUILD_USER in the host's suite configuration to an account that exists on the host" >&2
-    exit 2
-  }
-  BUILD_UID="$(build_uid_allowed "$BUILD_UID")" || exit 2
-  # The group the build runs with. The host naming an account always
-  # takes the account's own primary group, whatever the tree carries:
-  # the tree's group belongs to the tree's owner, and a build that
-  # keeps the privileged account's group keeps half of the privilege
-  # the named account drops. Without a named account the tree's own
-  # group is used, as before.
-  HOST_NAMED=0
-  [[ -z "${E2E_BUILD_USER:-}" ]] || HOST_NAMED=1
-  TREE_GROUP="$(stat -c %G "$ROOT")"
-  case "$(build_group_source "$TREE_GROUP" "$HOST_NAMED")" in
-    account)
-      BUILD_GROUP="$(id -gn "$BUILD_USER" 2>/dev/null)" || {
-        echo "error: cannot resolve the primary group of build account '$BUILD_USER' on this host; set E2E_BUILD_USER in the host's suite configuration to an account that exists on the host" >&2
-        exit 2
-      }
-      ;;
-    tree)
-      BUILD_GROUP="$TREE_GROUP"
-      ;;
-  esac
-  # HOME via tilde expansion, not getent: the suite unit's PATH is
-  # minimal and getent is not on it (bash builtins always are). The
-  # expansion is syntax, not trust: a missing passwd entry leaves a
-  # literal `~name`, so the home is checked here — before the run lock
-  # and before the multi-minute build — and the host's suite
-  # configuration is what creates it.
-  BUILD_HOME="$(eval echo "~$BUILD_USER")"
-  [[ -d "$BUILD_HOME" ]] || {
-    echo "error: no home directory for build account '$BUILD_USER'; the host's suite configuration creates it" >&2
-    exit 2
-  }
+  need setpriv
+  resolve_build_identity "$ROOT" "${E2E_BUILD_USER:-}" || exit 2
   # Say who the build runs as: a launcher that drops E2E_BUILD_USER
   # (a plain sudo resets the environment) falls back to the tree's
   # owner, and that must be visible in the run log, not inferred.
-  echo "    build account: $BUILD_USER (group $BUILD_GROUP)"
+  # The identity is set by the sourced policy module.
+  # shellcheck disable=SC2153
+  echo "    build account: $BUILD_USER (uid $BUILD_UID, group $BUILD_GROUP)"
 fi
 
 # Tools per mode, checked after flag parsing so --teardown only

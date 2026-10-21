@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
 # nix/microvm/build-account.sh — the account the microVM runner's nix
-# builds run as, and the group they run with. Pure policy: it resolves
-# a name or refuses, with no side effects, so the runner and its stub
+# builds run as, the uid it runs as, the group it runs with, and the
+# home it caches in.
+#
+# The decision functions are pure: they resolve a name or refuse, with
+# no side effects, so the runner and its stub
 # (tests/test-runner-build-account.sh) decide the same way without the
-# stub needing a host.
+# stub needing a host. resolve_build_identity ties them together and
+# reads the host (stat, id) to produce the identity; it changes
+# nothing but the four variables it sets.
 #
 # The host names the account (E2E_BUILD_USER), because the tree the
 # runner builds can be a host-owned snapshot: a snapshot the host owns
@@ -103,4 +108,70 @@ build_group_source() {
     return 0
   fi
   printf 'tree\n'
+}
+
+# resolve_build_identity <root> <named-account>
+#
+# Resolves the identity the builds run as and sets four variables:
+# BUILD_USER, BUILD_UID, BUILD_GROUP and BUILD_HOME. Reads the host
+# (stat, id) and refuses by name — message on stderr, return 1 — when
+# the identity cannot be resolved, would be root, or could not open
+# the tree it is asked to build.
+resolve_build_identity() { # <root> <named-account>
+  local root="$1" named="$2"
+  local tree_owner tree_group host_named uid
+
+  tree_owner="$(stat -c %U "$root")"
+  BUILD_USER="$(build_account_choice "$tree_owner" "$named")" || return 1
+
+  uid="$(id -u "$BUILD_USER" 2>/dev/null)" || {
+    echo "error: cannot resolve the uid of build account '$BUILD_USER' on this host; set E2E_BUILD_USER in the host's suite configuration to an account that exists on the host" >&2
+    return 1
+  }
+  # BUILD_UID is read by the runner, not here.
+  # shellcheck disable=SC2034
+  BUILD_UID="$(build_uid_allowed "$uid")" || return 1
+
+  host_named=0
+  [[ -z "$named" ]] || host_named=1
+  tree_group="$(stat -c %G "$root")"
+  case "$(build_group_source "$tree_group" "$host_named")" in
+    account)
+      BUILD_GROUP="$(id -gn "$BUILD_USER" 2>/dev/null)" || {
+        echo "error: cannot resolve the primary group of build account '$BUILD_USER' on this host; set E2E_BUILD_USER in the host's suite configuration to an account that exists on the host" >&2
+        return 1
+      }
+      ;;
+    tree)
+      BUILD_GROUP="$tree_group"
+      ;;
+  esac
+
+  # HOME via tilde expansion, not getent: the suite unit's PATH is
+  # minimal and getent is not on it (bash builtins always are). The
+  # expansion is syntax, not trust: a missing passwd entry leaves a
+  # literal `~name`, so the home is checked here — before the run lock
+  # and before the multi-minute build — and the host's suite
+  # configuration is what creates it.
+  BUILD_HOME="$(eval echo "~$BUILD_USER")"
+  [[ -d "$BUILD_HOME" ]] || {
+    echo "error: no home directory for build account '$BUILD_USER'; the host's suite configuration creates it" >&2
+    return 1
+  }
+
+  # The account must be able to open the tree it builds: for a git
+  # checkout nix's libgit2 refuses a repository the building account
+  # does not own, and for a plain snapshot the files must at least be
+  # readable. Probe the part that can be probed — that the account can
+  # open the tree — now, as that account, so a host that hands over a
+  # tree the account cannot open fails here by name instead of
+  # minutes into the build. The test runs in bash, which is on the
+  # unit's PATH, and asks for read and search permission on the tree.
+  # shellcheck disable=SC2016
+  if ! setpriv --reuid "$BUILD_USER" --regid "$BUILD_GROUP" --init-groups \
+    env HOME="$BUILD_HOME" bash -c '[[ -r "$1" && -x "$1" ]]' bash "$root"; then
+    echo "error: build account '$BUILD_USER' cannot open the source tree at $root; the host's suite configuration must hand that account a tree it can build" >&2
+    return 1
+  fi
+  return 0
 }
