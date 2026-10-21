@@ -21,6 +21,12 @@
 #                    takes the run lock, so it refuses while a suite
 #                    is active. State dirs and logs are retained.
 #
+# Environment:
+#   E2E_BUILD_USER  the account the nix builds run as, named by the
+#                    host's suite configuration. The tree's owner is
+#                    the fallback; a build that would run as root is
+#                    refused, never performed.
+#
 # Flow: build wyrd + three VM runners -> bridge/taps -> ephemeral ssh
 # key + e2e-env.sh into the state share -> boot virtiofsd+qemu per VM
 # (own cwd each: qemu uses relative socket paths) -> wait for ssh ->
@@ -49,6 +55,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # tests/alpha-microvm.sh invocation fails the same way.
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/../../tests/step-grammar.sh"
+# Which account the builds run as (pure policy, no side effects — safe
+# to source in every mode). The runner and its stub decide the same
+# way; the module header says why the host names the account.
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/build-account.sh"
 
 need() { command -v "$1" >/dev/null || { echo "error: missing host tool: $1" >&2; exit 2; }; }
 
@@ -94,12 +105,45 @@ if [[ -d /run/current-system/sw/bin ]]; then
 fi
 
 # nix (libgit2) enforces repo ownership and ignores safe.directory, so
-# the builds run as the checkout owner; devices/network stay root.
-# HOME via tilde expansion, not getent: the suite unit's PATH is
-# minimal and getent is not on it (bash builtins always are).
-BUILD_USER="$(stat -c %U "$ROOT")"
-BUILD_GROUP="$(stat -c %G "$ROOT")"
-BUILD_HOME="$(eval echo "~$BUILD_USER")"
+# the builds run as a build account, not as the privileged account that
+# runs the runner; devices/network stay root. The host names the
+# account (E2E_BUILD_USER): the tree can be a host-owned snapshot, and
+# a snapshot the host owns is root-owned, so its owner is not a build
+# account. The tree's owner remains the fallback for an ordinary
+# checkout, and a build that would run as root is refused, never
+# performed.
+# --teardown builds nothing, so it must not depend on the host's build
+# account being configured: it stops a kept run on a host that never
+# named one.
+if [[ "$TEARDOWN" == 0 ]]; then
+  TREE_OWNER="$(stat -c %U "$ROOT")"
+  BUILD_USER="$(build_account_choice "$TREE_OWNER" "${E2E_BUILD_USER:-}")" || exit 2
+  if [[ "$BUILD_USER" == "$TREE_OWNER" ]]; then
+    # The tree's own group, as before: an ordinary checkout is reached
+    # through the group it carries.
+    BUILD_GROUP="$(stat -c %G "$ROOT")"
+  else
+    # The named account's own group: the tree's group belongs to the
+    # snapshot's owner, and a build that keeps the privileged account's
+    # group keeps half of the privilege the named account drops.
+    need id
+    BUILD_GROUP="$(id -gn "$BUILD_USER" 2>/dev/null)" || {
+      echo "error: the host named build account '$BUILD_USER', which this host cannot resolve; set E2E_BUILD_USER in the host's suite configuration to an account that exists on the host" >&2
+      exit 2
+    }
+  fi
+  # HOME via tilde expansion, not getent: the suite unit's PATH is
+  # minimal and getent is not on it (bash builtins always are). The
+  # expansion is syntax, not trust: a missing passwd entry leaves a
+  # literal `~name`, so the home is checked here — before the run lock
+  # and before the multi-minute build — and the host's suite
+  # configuration is what creates it.
+  BUILD_HOME="$(eval echo "~$BUILD_USER")"
+  [[ -d "$BUILD_HOME" ]] || {
+    echo "error: no home directory for build account '$BUILD_USER'; the host's suite configuration creates it" >&2
+    exit 2
+  }
+fi
 
 # Tools per mode, checked after flag parsing so --teardown only
 # demands what it uses. Flag combos with --teardown fail loudly
@@ -232,11 +276,6 @@ mkdir -p "$RUN" "$RUN/logs" "$WORK" "$BUILD_LOGS"
 chown -R 1000:1000 "$RUN"
 
 echo "==> building wyrd + nak + 3 VM runners (parallel: wall time is the slowest, not the sum)"
-# The expansion above is syntax, not trust: a missing passwd entry
-# would leave a literal `~name`. This check lives here — not next to
-# the derivation — because `die` is defined below; calling it earlier
-# would abort with `die: command not found` instead of this message.
-[[ -d "$BUILD_HOME" ]] || die "cannot resolve a home directory for $BUILD_USER"
 # Fail fast with no orphans: the first failed wait kills the siblings
 # before dying, so a dead build never burns CPU through teardown. The
 # array is complete before any wait below runs; kill errors on reaped

@@ -70,6 +70,7 @@ jobs:
           bash tests/test-step-grammar.sh 2>&1 | tee -a /tmp/shell.log
           bash tests/test-baked-set.sh 2>&1 | tee -a /tmp/shell.log
           bash tests/test-runner-fd.sh 2>&1 | tee -a /tmp/shell.log
+          bash tests/test-runner-build-account.sh 2>&1 | tee -a /tmp/shell.log
           bash tests/test-probe-mark.sh 2>&1 | tee -a /tmp/shell.log
           bash tests/test-e2e-guard.sh 2>&1 | tee -a /tmp/shell.log
           bash tests/test-bash-syntax.sh 2>&1 | tee -a /tmp/shell.log
