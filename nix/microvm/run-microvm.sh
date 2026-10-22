@@ -21,6 +21,15 @@
 #                    takes the run lock, so it refuses while a suite
 #                    is active. State dirs and logs are retained.
 #
+# Environment:
+#   E2E_BUILD_USER  the account the nix builds run as, named by the
+#                    host's suite configuration. The tree's owner is
+#                    the fallback when the host names none. Refused by
+#                    name: a build that would run as root (by uid, or
+#                    by the account's own primary gid), and a build
+#                    whose account cannot read the tree it is handed or
+#                    write the home the nix client caches in.
+#
 # Flow: build wyrd + three VM runners -> bridge/taps -> ephemeral ssh
 # key + e2e-env.sh into the state share -> boot virtiofsd+qemu per VM
 # (own cwd each: qemu uses relative socket paths) -> wait for ssh ->
@@ -49,6 +58,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # tests/alpha-microvm.sh invocation fails the same way.
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/../../tests/step-grammar.sh"
+# Which account the builds run as (pure policy, no side effects — safe
+# to source in every mode). The runner and its stub decide the same
+# way; the module header says why the host names the account.
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/build-account.sh"
 
 need() { command -v "$1" >/dev/null || { echo "error: missing host tool: $1" >&2; exit 2; }; }
 
@@ -93,13 +107,33 @@ if [[ -d /run/current-system/sw/bin ]]; then
   export PATH="$PATH:/run/current-system/sw/bin"
 fi
 
-# nix (libgit2) enforces repo ownership and ignores safe.directory, so
-# the builds run as the checkout owner; devices/network stay root.
-# HOME via tilde expansion, not getent: the suite unit's PATH is
-# minimal and getent is not on it (bash builtins always are).
-BUILD_USER="$(stat -c %U "$ROOT")"
-BUILD_GROUP="$(stat -c %G "$ROOT")"
-BUILD_HOME="$(eval echo "~$BUILD_USER")"
+# The builds run as a build account, not as the privileged account
+# that runs the runner; devices/network stay root. The account must be
+# able to build the tree it is handed: nix copies the tree, so the
+# account must be able to list it and read its files, and for a git
+# checkout nix's own fetch of the repository applies its ownership
+# rules on top (the reason the builds ran as the checkout's owner
+# until now). The host names the account (E2E_BUILD_USER) and hands
+# it a tree it can build; the runner resolves the identity, checks
+# that the account can build the tree, and refuses by name when it
+# cannot. A build that would run as root is refused, never performed:
+# the check is on the resolved uid, so a second name for uid 0 does
+# not slip through.
+# --teardown builds nothing, so it must not depend on the host's build
+# account being configured: it stops a kept run on a host that never
+# named one.
+if [[ "$TEARDOWN" == 0 ]]; then
+  need id
+  need setpriv
+  need stat
+  resolve_build_identity "$ROOT" "${E2E_BUILD_USER:-}" || exit 2
+  # Say who the build runs as: a launcher that drops E2E_BUILD_USER
+  # (a plain sudo resets the environment) falls back to the tree's
+  # owner, and that must be visible in the run log, not inferred.
+  # The identity is set by the sourced policy module.
+  # shellcheck disable=SC2153
+  echo "    build account: $BUILD_USER (uid $BUILD_UID, gid $BUILD_GID${BUILD_GROUP:+ $BUILD_GROUP})"
+fi
 
 # Tools per mode, checked after flag parsing so --teardown only
 # demands what it uses. Flag combos with --teardown fail loudly
@@ -232,11 +266,6 @@ mkdir -p "$RUN" "$RUN/logs" "$WORK" "$BUILD_LOGS"
 chown -R 1000:1000 "$RUN"
 
 echo "==> building wyrd + nak + 3 VM runners (parallel: wall time is the slowest, not the sum)"
-# The expansion above is syntax, not trust: a missing passwd entry
-# would leave a literal `~name`. This check lives here — not next to
-# the derivation — because `die` is defined below; calling it earlier
-# would abort with `die: command not found` instead of this message.
-[[ -d "$BUILD_HOME" ]] || die "cannot resolve a home directory for $BUILD_USER"
 # Fail fast with no orphans: the first failed wait kills the siblings
 # before dying, so a dead build never burns CPU through teardown. The
 # array is complete before any wait below runs; kill errors on reaped
@@ -246,7 +275,7 @@ wait_build() { # <pid> <what>
   wait "$1" || { kill "${BUILD_PIDS[@]}" 2>/dev/null || true; die "$2"; }
 }
 BUILD_START=$(date +%s)
-setpriv --reuid "$BUILD_USER" --regid "$BUILD_GROUP" --init-groups \
+setpriv --reuid "$BUILD_USER" --regid "$BUILD_GID" --init-groups \
   env HOME="$BUILD_HOME" USER="$BUILD_USER" LOGNAME="$BUILD_USER" \
   nix build "$ROOT#packages.x86_64-linux.wyrd" --no-link --print-out-paths --print-build-logs \
   >"$BUILD_LOGS/nix-build-wyrd.out" 2>"$BUILD_LOGS/nix-build-wyrd.log" 9>&- &
@@ -254,7 +283,7 @@ BUILD_WYRD=$!
 BUILD_PIDS=("$BUILD_WYRD")
 # Pinned nak for the opacity probe (see the flake comment): same
 # no-link pattern as wyrd, so the suite never floats the registry.
-setpriv --reuid "$BUILD_USER" --regid "$BUILD_GROUP" --init-groups \
+setpriv --reuid "$BUILD_USER" --regid "$BUILD_GID" --init-groups \
   env HOME="$BUILD_HOME" USER="$BUILD_USER" LOGNAME="$BUILD_USER" \
   nix build "$ROOT#packages.x86_64-linux.nak" --no-link --print-out-paths --print-build-logs \
   >"$BUILD_LOGS/nix-build-nak.out" 2>"$BUILD_LOGS/nix-build-nak.log" 9>&- &
@@ -262,7 +291,7 @@ BUILD_NAK=$!
 BUILD_PIDS+=("$BUILD_NAK")
 declare -A BUILD_PID=()
 for role in peer-o peer-n relay; do
-  setpriv --reuid "$BUILD_USER" --regid "$BUILD_GROUP" --init-groups \
+  setpriv --reuid "$BUILD_USER" --regid "$BUILD_GID" --init-groups \
     env HOME="$BUILD_HOME" USER="$BUILD_USER" LOGNAME="$BUILD_USER" \
     nix build "$ROOT#nixosConfigurations.wyrd-$role.config.microvm.runner.qemu" \
     --no-link --print-out-paths --print-build-logs \

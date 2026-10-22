@@ -31,6 +31,37 @@ the envelope version and the ephemeral key into the AAD, so seals minted
 by older builds (including v0.2.0-alpha) are refused by design. Pairing
 is transient — no drive data is affected.
 
+## [Unreleased]
+
+### Fixed
+
+- Bump `rustls-webpki` 0.103.15 → 0.103.16, `webpki-roots` 1.0.9 →
+  1.0.10 and `webpki-root-certs` 1.0.9 → 1.0.10
+  (RUSTSEC-2026-0382: certificate verification may accept distrusted
+  intermediates; RUSTSEC-2026-0381 and RUSTSEC-2026-0383: the bundled
+  root certificates trust distrusted emSign intermediates). Patch
+  bumps only, no cascade into `rustls` or `iroh`.
+
+- MicroVM build account and repository name
+  (`nostr:nevent1qqsqtdkvhcg95j7xwl647lgruml4fx3ehxf7chv897k7gmfsqx8gk4cpz9mhxue69uhkwunpwdczuap49eehgkhaz6q`):
+  the microVM runner takes the account its nix builds run as from the
+  host's `E2E_BUILD_USER`, not from the tree it builds. Under the
+  source-bound launch that tree is a host-owned snapshot — root-owned —
+  so deriving the account from its owner would have run every build as
+  root and lost the runner's de-escalation silently: the build would
+  still work, just as root. The tree's owner remains the fallback for
+  an ordinary checkout, unchanged, and a build that would run as root
+  is refused with a message naming the host setting to change, never
+  performed — by uid, so a second name for uid 0 does not slip
+  through, and, for the account the host names, by that account's
+  primary gid, so a build cannot keep the privileged group either. A
+  build whose account cannot read the tree it is handed — or write the
+  home the nix client caches in — is refused by name too, so the host
+  learns it has to hand over a tree the build account can read instead
+  of failing minutes into the build. `gate.toml` names the repository
+  (`[suite] repo = "wyrd"`), the name the host resolves to the source
+  it is willing to build.
+
 ## [0.3.0-alpha]
 
 ### Added

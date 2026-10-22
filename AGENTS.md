@@ -81,6 +81,26 @@ on a Linux KVM host (`--teardown` stops a kept run), same contract helpers, two 
 VM. `--step` runs the prefix closure over phases 1–15 (1–5 shared core, 6–15 microvm legs). Prefer it for topology, convergence, and restart evidence; use
 Lima for macOS dev iteration and as the refactor guard.)
 
+- **The microVM builds run as a build account, never as root.** The
+  host's suite configuration names it (`E2E_BUILD_USER`), because under
+  the source-bound launch the tree is a host-owned snapshot — root-owned
+  — and a build that ran as root would lose the runner's de-escalation
+  silently. The host cannot always chown that snapshot (it may be a
+  read-only share), so it names the account the build runs as, and
+  hands over a tree that account can build: nix copies the tree, so the
+  account must be able to list it and read its files, and for a git
+  checkout nix's own fetch of the repository applies its ownership
+  rules on top.   Chowning the source snapshot to the build account,
+  with its files readable and its directories traversable by that
+  account, satisfies all of it. The runner refuses, by name: a build
+  that would run as root (by uid, or by the named account's own
+  primary gid), a build whose account cannot read the tree it is
+  handed, a build whose account cannot write the home the nix client
+  caches in, and a named account that does not exist on the host.
+  When the host names no account, a checkout owned by a non-root user
+  still builds as that user.
+
+
 - **Never pipe it through `tail`.** A foreground pipe buffers everything, so
   a twenty-minute run looks like a hang. Run it detached with the output to a
   log (`(./lima/run-alpha.sh --keep > /tmp/lima/run.log 2>&1 &)`) and poll the

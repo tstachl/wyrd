@@ -55,7 +55,7 @@ milestones = [
 # their own copy), so the path is checkout-relative.
 [review]
 prompt = ".agents/prompts/branch-review.md"
-model = "opencode-go/beam-free"
+model = "opencode-go/minimax-m3.1-flash-free"
 variant = "max"
 
 # Odin suite resource: the forced-command ssh path. The machine id comes
@@ -64,3 +64,7 @@ variant = "max"
 host = "odin"
 user = "gate-suite"
 key = "~/.ssh/id_ed25519_gate_odin"
+# The host's name for this repository. The client names a repository and
+# a revision, never a path: the host resolves the name to the source it
+# is willing to build, so the name is profile configuration.
+repo = "wyrd"
