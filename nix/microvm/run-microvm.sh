@@ -307,11 +307,17 @@ chown -R 1000:1000 "$RUN"
 # here, never truncated. The staged tree must be readable by the
 # build account, same rule as the checkout itself; an unreadable
 # tree fails loudly at the build, not silently.
-STAGED_SUBJECT=""
-SUBJECT_NARHASH=""
-SUBJECT_FLAGS=()
+  STAGED_SUBJECT=""
+  SUBJECT_NARHASH=""
+  SUBJECT_FLAGS=()
 if [[ -n "$SUBJECT_DIR" ]]; then
   echo "==> staging subject tree (bounded ingestion)"
+  # No special files: fifos, sockets, and devices cannot be hashed
+  # (nix refuses them outright) or are silently dropped by the copy
+  # (sockets under GNU tar) — either way they must not enter
+  # quietly. Refuse loudly here, listing offenders (capped).
+  SPECIAL="$(find "$SUBJECT_DIR" \( -path "$SUBJECT_DIR/.git" -o -path "$SUBJECT_DIR/target" -o -path "$SUBJECT_DIR/.direnv" -o -path "$SUBJECT_DIR/.devenv" -o -name 'result*' \) -prune -o \( -not -type f -not -type d -not -type l -print \) 2>/dev/null | head -6)"
+  [[ -z "$SPECIAL" ]] || die "subject tree has non-file entries (fifos, sockets, devices refused): $SPECIAL"
   STAGED_SUBJECT="$WORK/subject"
   rm -rf "$STAGED_SUBJECT"
   mkdir -p "$STAGED_SUBJECT"
@@ -324,6 +330,22 @@ if [[ -n "$SUBJECT_DIR" ]]; then
     || die "subject tree exceeds the byte cap (256 MiB): $SUBJECT_BYTES bytes from $SUBJECT_DIR"
   [[ "$SUBJECT_FILES" -le 20000 ]] \
     || die "subject tree exceeds the file-count cap (20000): $SUBJECT_FILES files from $SUBJECT_DIR"
+  # No symlink escapes the staged tree, and no dangling link rides
+  # along: nix records the link rather than the target (probed
+  # 2026-10-23 — retargeting leaves the narHash unchanged), so a link
+  # to /etc or /nix/store would bind a stable pin while resolving
+  # outside the pinned bytes at build time. Every link must resolve
+  # inside the staged copy and exist (readlink -m canonicalizes
+  # without touching the filesystem, so loops cannot hang this).
+  while IFS= read -r -d '' _link; do
+    _target="$(realpath -m "$_link")"
+    case "$_target" in
+      "$STAGED_SUBJECT"/*) ;;
+      *) die "subject tree links outside the staged copy: $_link -> $(readlink "$_link")" ;;
+    esac
+    [[ -e "$_target" ]] || die "subject tree has a dangling symlink: $_link -> $(readlink "$_link")"
+  done < <(find "$STAGED_SUBJECT" -type l -print0)
+  unset _link _target
   SUBJECT_NARHASH="$(nix hash path "$STAGED_SUBJECT")"
   echo "    subject: $SUBJECT_BYTES bytes, $SUBJECT_FILES files, narHash $SUBJECT_NARHASH"
   # The override resolves before pure evaluation begins; IFD denial
