@@ -57,7 +57,8 @@
         "crane": "crane",
         "microvm": "microvm",
         "nixpkgs": "nixpkgs",
-        "rust-overlay": "rust-overlay"
+        "rust-overlay": "rust-overlay",
+        "wyrdSrc": "wyrdSrc"
       }
     },
     "rust-overlay": {
@@ -95,6 +96,18 @@
         "type": "git",
         "url": "https://spectrum-os.org/git/spectrum"
       }
+    },
+    "wyrdSrc": {
+      "flake": false,
+      "locked": {
+        "path": "./nix/microvm/empty-src",
+        "type": "path"
+      },
+      "original": {
+        "path": "./nix/microvm/empty-src",
+        "type": "path"
+      },
+      "parent": []
     }
   },
   "root": "root",
