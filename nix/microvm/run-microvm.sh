@@ -299,14 +299,14 @@ chown -R 1000:1000 "$RUN"
 # Subject staging (plan step 4): a host-supplied wyrd source tree is
 # copied into the per-run work area, measured against the ingestion
 # caps, and pinned by narHash — in that order, so the hash binds the
-# measured bytes. Caps (calibrated 2026-10-23 against an 87.5 MiB /
-# 4479-file tree, excluding the paths below): 256 MiB, 20000 files.
-# Exclusions (.git, target/, result* out-links, .direnv) never enter
-# evaluation — cleanCargoSource drops them anyway — so staging them
-# would let host scratch blow the caps and poison the pin. A breach
-# fails closed here, never truncated. The staged tree must be
-# readable by the build account, same rule as the checkout itself;
-# an unreadable tree fails loudly at the build, not silently.
+# measured bytes. Caps (tracked tree on 2026-10-23: ~9 MiB / 611
+# files): 256 MiB, 20000 files. Exclusions (.git, target/, result*
+# out-links, .direnv, .devenv) never enter evaluation —
+# cleanCargoSource drops them anyway — so staging them would let host
+# scratch blow the caps and poison the pin. A breach fails closed
+# here, never truncated. The staged tree must be readable by the
+# build account, same rule as the checkout itself; an unreadable
+# tree fails loudly at the build, not silently.
 STAGED_SUBJECT=""
 SUBJECT_NARHASH=""
 SUBJECT_FLAGS=()
@@ -315,7 +315,7 @@ if [[ -n "$SUBJECT_DIR" ]]; then
   STAGED_SUBJECT="$WORK/subject"
   rm -rf "$STAGED_SUBJECT"
   mkdir -p "$STAGED_SUBJECT"
-  tar -C "$SUBJECT_DIR" --exclude=.git --exclude=target --exclude='result*' --exclude=.direnv -cf - . \
+  tar -C "$SUBJECT_DIR" --exclude=.git --exclude=target --exclude='result*' --exclude=.direnv --exclude=.devenv -cf - . \
     | tar -C "$STAGED_SUBJECT" -xf - \
     || die "subject staging copy failed"
   SUBJECT_BYTES="$(du -sb "$STAGED_SUBJECT" | cut -f1)"
