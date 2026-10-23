@@ -76,6 +76,11 @@ source "$SCRIPT_DIR/../../tests/step-grammar.sh"
 # way; the module header says why the host names the account.
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/build-account.sh"
+# Subject staging (bounded ingestion, hostile-content refusal, pin).
+# Pure functions over explicit directories; the test suite exercises
+# them without a host. See nix/microvm/stage-subject.sh.
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/stage-subject.sh"
 
 need() { command -v "$1" >/dev/null || { echo "error: missing host tool: $1" >&2; exit 2; }; }
 
@@ -296,64 +301,24 @@ mkdir -p "$RUN" "$RUN/logs" "$WORK" "$BUILD_LOGS"
 # state or every drive/cred/mount mkdir fails. sshkey stays root.
 chown -R 1000:1000 "$RUN"
 
-# Subject staging (plan step 4): a host-supplied wyrd source tree is
-# copied into the per-run work area, measured against the ingestion
-# caps, and pinned by narHash — in that order, so the hash binds the
-# measured bytes. Caps (tracked tree on 2026-10-23: ~9 MiB / 611
-# files): 256 MiB, 20000 files. Exclusions (.git, target/, result*
-# out-links, .direnv, .devenv) never enter evaluation —
-# cleanCargoSource drops them anyway — so staging them would let host
-# scratch blow the caps and poison the pin. A breach fails closed
-# here, never truncated. The staged tree must be readable by the
-# build account, same rule as the checkout itself; an unreadable
-# tree fails loudly at the build, not silently.
-  STAGED_SUBJECT=""
-  SUBJECT_NARHASH=""
-  SUBJECT_FLAGS=()
+# Subject staging (plan step 4): the contract lives in
+# nix/microvm/stage-subject.sh — bounded ingestion, hostile-content
+# refusal, and the narHash pin, in that order so the hash binds the
+# measured bytes. Staged here, evaluated by nix below; the override
+# flags are built from the staged copy and its pin.
+STAGED_SUBJECT=""
+SUBJECT_NARHASH=""
+SUBJECT_FLAGS=()
 if [[ -n "$SUBJECT_DIR" ]]; then
   echo "==> staging subject tree (bounded ingestion)"
-  # No special files: fifos, sockets, and devices cannot be hashed
-  # (nix refuses them outright) or are silently dropped by the copy
-  # (sockets under GNU tar) — either way they must not enter
-  # quietly. Refuse loudly here, listing offenders (capped).
-  SPECIAL="$(find "$SUBJECT_DIR" \( -path "$SUBJECT_DIR/.git" -o -path "$SUBJECT_DIR/target" -o -path "$SUBJECT_DIR/.direnv" -o -path "$SUBJECT_DIR/.devenv" -o -name 'result*' \) -prune -o \( -not -type f -not -type d -not -type l -print \) 2>/dev/null | head -6)"
-  [[ -z "$SPECIAL" ]] || die "subject tree has non-file entries (fifos, sockets, devices refused): $SPECIAL"
   STAGED_SUBJECT="$WORK/subject"
-  rm -rf "$STAGED_SUBJECT"
-  mkdir -p "$STAGED_SUBJECT"
-  tar -C "$SUBJECT_DIR" --exclude=.git --exclude=target --exclude='result*' --exclude=.direnv --exclude=.devenv -cf - . \
-    | tar -C "$STAGED_SUBJECT" -xf - \
-    || die "subject staging copy failed"
-  SUBJECT_BYTES="$(du -sb "$STAGED_SUBJECT" | cut -f1)"
-  SUBJECT_FILES="$(find "$STAGED_SUBJECT" -type f | wc -l)"
-  [[ "$SUBJECT_BYTES" -le 268435456 ]] \
-    || die "subject tree exceeds the byte cap (256 MiB): $SUBJECT_BYTES bytes from $SUBJECT_DIR"
-  [[ "$SUBJECT_FILES" -le 20000 ]] \
-    || die "subject tree exceeds the file-count cap (20000): $SUBJECT_FILES files from $SUBJECT_DIR"
-  # No symlink escapes the staged tree, and no dangling link rides
-  # along: nix records the link rather than the target (probed
-  # 2026-10-23 — retargeting leaves the narHash unchanged), so a link
-  # to /etc or /nix/store would bind a stable pin while resolving
-  # outside the pinned bytes at build time. Every link must resolve
-  # inside the staged copy and exist (readlink -m canonicalizes
-  # without touching the filesystem, so loops cannot hang this).
-  while IFS= read -r -d '' _link; do
-    _target="$(realpath -m "$_link")"
-    case "$_target" in
-      "$STAGED_SUBJECT"/*) ;;
-      *) die "subject tree links outside the staged copy: $_link -> $(readlink "$_link")" ;;
-    esac
-    [[ -e "$_target" ]] || die "subject tree has a dangling symlink: $_link -> $(readlink "$_link")"
-  done < <(find "$STAGED_SUBJECT" -type l -print0)
-  unset _link _target
-  SUBJECT_NARHASH="$(nix hash path "$STAGED_SUBJECT")"
+  subject_stage "$SUBJECT_DIR" "$STAGED_SUBJECT" || die "subject staging failed (see above)"
+  SUBJECT_NARHASH="$(subject_pin "$STAGED_SUBJECT")" || die "subject pinning failed (see above)"
   echo "    subject: $SUBJECT_BYTES bytes, $SUBJECT_FILES files, narHash $SUBJECT_NARHASH"
-  # The override resolves before pure evaluation begins; IFD denial
-  # and offline match the proven proof configuration. A first subject
-  # run on a cold store fails loudly naming the missing paths — warm
-  # it with a default run first, never by relaxing these flags.
-  SUBJECT_FLAGS=(--override-input wyrdSrc "path:$STAGED_SUBJECT?narHash=$SUBJECT_NARHASH"
-    --option allow-import-from-derivation false --offline)
+  # The override flags the manifest's [subject-slots] section
+  # promises (see nix/microvm/shape-manifest.sh): keep them in sync —
+  # a flag removed here must be removed there (N9).
+  subject_build_flags "$STAGED_SUBJECT" "$SUBJECT_NARHASH"
 fi
 
 echo "==> building wyrd + nak + 3 VM runners (parallel: wall time is the slowest, not the sum)"
@@ -415,12 +380,13 @@ else
   # rode in on: the host store realized it while building the
   # runner, so this is a lookup, not a sixth build — and the path
   # is identical to what the guests execute, by construction. The
-  # -wyrd-[0-9] match excludes the wyrd-deps vendored-sources
-  # package, which shares the version suffix.
+  # -wyrd-[0-9] match with the -wyrd-deps exclusion picks the built
+  # binary package, not the vendored-sources package (which shares
+  # the version suffix) nor any future -wyrd-N package.
   WYRD_OUT="$(setpriv --reuid "$BUILD_USER" --regid "$BUILD_GID" --init-groups \
     env HOME="$BUILD_HOME" USER="$BUILD_USER" LOGNAME="$BUILD_USER" \
     nix path-info -r "$(tail -n 1 "$BUILD_LOGS/nix-build-peer-o.out")" \
-    | grep -E -- '-wyrd-[0-9]' | head -n 1)"
+    | grep -E -- '-wyrd-[0-9]' | grep -v -- '-wyrd-deps' | head -n 1)"
   [[ -n "$WYRD_OUT" ]] || die "subject guest closure carries no wyrd package (see build-logs/nix-build-peer-o.log)"
 fi
 WYRD_BIN="$WYRD_OUT/bin/wyrd"

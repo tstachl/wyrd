@@ -68,11 +68,17 @@ BAKED="$(grep -hoE '"wyrd-tests/[^"]+"' "$ROOT/nix/microvm/common.nix" \
   | sed -E 's#"wyrd-tests/##; s#"$##' | sort -u | sed 's#^#tests/#')"
 
 # Harness files: evaluated or executed by the host directly (literal
-# paths, not extracted — the test asserts they exist).
+# list, not extracted — the test asserts every entry exists).
+# lima/ files are the host-side wrapper the guest suite requires
+# (alpha-lima.sh runs wrapped); step-5 review N1.
 HARNESS="flake.nix
 flake.lock
+lima/provision.sh
+lima/run-alpha.sh
+lima/wyrd-alpha.yaml
 nix/microvm/empty-src
 nix/microvm/run-microvm.sh
+nix/microvm/stage-subject.sh
 nix/microvm/build-account.sh
 nix/microvm/common.nix
 nix/microvm/peer-o.nix
@@ -85,5 +91,10 @@ nix/microvm/relay.nix"
   echo "[shape-files]"
   printf '%s\n%s\n%s\n' "$TEST_FILES" "$BAKED" "$HARNESS" | grep -E '.' | sort -u
   echo "[subject-slots]"
+  # The slot text is a claim the runner enforces: keep it in sync
+  # with the SUBJECT_FLAGS construction in run-microvm.sh (the
+  # --override-input wyrdSrc + IFD-denied + offline invocation) and
+  # the wyrdSrcFor routing in flake.nix. A flag removed there must
+  # be removed here (N9).
   echo "wyrdSrc: source-tree input (path:, narHash-pinned via --override-input); built by base-owned wyrdFor under pure eval + IFD-denied + offline; the subject tree's own flake/lockfile/modules are never evaluated and no PR Nix is evaluated anywhere"
 }
