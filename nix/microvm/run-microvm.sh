@@ -7,6 +7,7 @@
 #
 #   sudo ./nix/microvm/run-microvm.sh [--state-dir DIR] [--fresh] [--keep]
 #   sudo ./nix/microvm/run-microvm.sh [--state-dir DIR] [--step N[,N...]]
+#   sudo ./nix/microvm/run-microvm.sh [--state-dir DIR] [--subject DIR]
 #   sudo ./nix/microvm/run-microvm.sh --teardown
 #
 #   --state-dir DIR  host state root (default /var/lib/wyrd-microvm/state)
@@ -17,6 +18,18 @@
 #                    is the prefix closure, since phases build on each
 #                    other: 1-5 are the shared-core Lima steps on peer-o,
 #                    6-15 the microvm phases in tests/alpha-microvm.sh)
+#   --subject DIR    build and run a host-supplied wyrd source tree
+#                    instead of the checkout's own build (plan step 4).
+#                    DIR is staged into the per-run work area with
+#                    bounded ingestion (256 MiB, 20000 files, .git /
+#                    target / result* / .direnv excluded — none enter
+#                    evaluation), pinned by host-computed narHash, and
+#                    built under the proof preconditions (unprivileged
+#                    build user, IFD denied, offline). Combinations with
+#                    --teardown are refused. A first subject run on a
+#                    cold store fails loudly naming the missing paths:
+#                    warm it with a default run first, never by
+#                    relaxing the flags.
 #   --teardown       stop a kept run (daemons, taps, bridge) and exit;
 #                    takes the run lock, so it refuses while a suite
 #                    is active. State dirs and logs are retained.
@@ -71,6 +84,7 @@ FRESH=0
 KEEP=0
 TEARDOWN=0
 ONLY_STEP=""
+SUBJECT_DIR=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --state-dir) STATE_DIR="$2"; shift 2 ;;
@@ -80,6 +94,15 @@ while [[ $# -gt 0 ]]; do
       # An explicit but empty value is a mistake, not "all phases".
       [[ -n "${2:-}" ]] || { echo "error: --step needs at least one step" >&2; exit 2; }
       ONLY_STEP="$2"
+      shift 2
+      ;;
+    --subject)
+      # A host-supplied wyrd source tree to test instead of the
+      # checkout's own build (plan step 4). Ingestion is bounded and
+      # pinned (see the staging block); the override is refused
+      # unpinned, never silently.
+      [[ -n "${2:-}" ]] || { echo "error: --subject needs a directory" >&2; exit 2; }
+      SUBJECT_DIR="$2"
       shift 2
       ;;
     --teardown) TEARDOWN=1; shift ;;
@@ -93,6 +116,14 @@ done
 if [[ -n "$ONLY_STEP" ]]; then
   step_max 1 15 "$ONLY_STEP" >/dev/null \
     || { echo "error: --step: '$ONLY_STEP' is not a step (expected a comma list of 1-15)" >&2; exit 2; }
+fi
+
+# Resolve the subject early (against the invocation cwd, before the
+# cd to the checkout below) and refuse a non-directory here, not
+# after the multi-minute build and boot.
+if [[ -n "$SUBJECT_DIR" ]]; then
+  [[ -d "$SUBJECT_DIR" ]] || { echo "error: --subject is not a directory: $SUBJECT_DIR" >&2; exit 2; }
+  SUBJECT_DIR="$(cd "$SUBJECT_DIR" && pwd)"
 fi
 
 [[ "$EUID" == 0 ]] || { echo "error: run as root (taps, bridge, virtiofsd need it)" >&2; exit 2; }
@@ -141,7 +172,7 @@ fi
 # with --teardown is refused for the same reason (taps, bridge, and
 # daemon pattern are all host-global, so it would be ignored).
 if [[ "$TEARDOWN" == 1 ]]; then
-  [[ "$FRESH" == 0 && "$KEEP" == 0 && -z "$ONLY_STEP" ]] || { echo "error: --teardown takes no other flags" >&2; exit 2; }
+  [[ "$FRESH" == 0 && "$KEEP" == 0 && -z "$ONLY_STEP" && -z "$SUBJECT_DIR" ]] || { echo "error: --teardown takes no other flags" >&2; exit 2; }
   [[ "$STATE_DIR" == "/var/lib/wyrd-microvm/state" ]] || { echo "error: --teardown ignores --state-dir (host-global)" >&2; exit 2; }
   for t in git pgrep ps kill pkill ip flock; do need "$t"; done
 else
@@ -265,6 +296,44 @@ mkdir -p "$RUN" "$RUN/logs" "$WORK" "$BUILD_LOGS"
 # state or every drive/cred/mount mkdir fails. sshkey stays root.
 chown -R 1000:1000 "$RUN"
 
+# Subject staging (plan step 4): a host-supplied wyrd source tree is
+# copied into the per-run work area, measured against the ingestion
+# caps, and pinned by narHash — in that order, so the hash binds the
+# measured bytes. Caps (calibrated 2026-10-23 against an 87.5 MiB /
+# 4479-file tree, excluding the paths below): 256 MiB, 20000 files.
+# Exclusions (.git, target/, result* out-links, .direnv) never enter
+# evaluation — cleanCargoSource drops them anyway — so staging them
+# would let host scratch blow the caps and poison the pin. A breach
+# fails closed here, never truncated. The staged tree must be
+# readable by the build account, same rule as the checkout itself;
+# an unreadable tree fails loudly at the build, not silently.
+STAGED_SUBJECT=""
+SUBJECT_NARHASH=""
+SUBJECT_FLAGS=()
+if [[ -n "$SUBJECT_DIR" ]]; then
+  echo "==> staging subject tree (bounded ingestion)"
+  STAGED_SUBJECT="$WORK/subject"
+  rm -rf "$STAGED_SUBJECT"
+  mkdir -p "$STAGED_SUBJECT"
+  tar -C "$SUBJECT_DIR" --exclude=.git --exclude=target --exclude='result*' --exclude=.direnv -cf - . \
+    | tar -C "$STAGED_SUBJECT" -xf - \
+    || die "subject staging copy failed"
+  SUBJECT_BYTES="$(du -sb "$STAGED_SUBJECT" | cut -f1)"
+  SUBJECT_FILES="$(find "$STAGED_SUBJECT" -type f | wc -l)"
+  [[ "$SUBJECT_BYTES" -le 268435456 ]] \
+    || die "subject tree exceeds the byte cap (256 MiB): $SUBJECT_BYTES bytes from $SUBJECT_DIR"
+  [[ "$SUBJECT_FILES" -le 20000 ]] \
+    || die "subject tree exceeds the file-count cap (20000): $SUBJECT_FILES files from $SUBJECT_DIR"
+  SUBJECT_NARHASH="$(nix hash path "$STAGED_SUBJECT")"
+  echo "    subject: $SUBJECT_BYTES bytes, $SUBJECT_FILES files, narHash $SUBJECT_NARHASH"
+  # The override resolves before pure evaluation begins; IFD denial
+  # and offline match the proven proof configuration. A first subject
+  # run on a cold store fails loudly naming the missing paths — warm
+  # it with a default run first, never by relaxing these flags.
+  SUBJECT_FLAGS=(--override-input wyrdSrc "path:$STAGED_SUBJECT?narHash=$SUBJECT_NARHASH"
+    --option allow-import-from-derivation false --offline)
+fi
+
 echo "==> building wyrd + nak + 3 VM runners (parallel: wall time is the slowest, not the sum)"
 # Fail fast with no orphans: the first failed wait kills the siblings
 # before dying, so a dead build never burns CPU through teardown. The
@@ -275,12 +344,20 @@ wait_build() { # <pid> <what>
   wait "$1" || { kill "${BUILD_PIDS[@]}" 2>/dev/null || true; die "$2"; }
 }
 BUILD_START=$(date +%s)
-setpriv --reuid "$BUILD_USER" --regid "$BUILD_GID" --init-groups \
-  env HOME="$BUILD_HOME" USER="$BUILD_USER" LOGNAME="$BUILD_USER" \
-  nix build "$ROOT#packages.x86_64-linux.wyrd" --no-link --print-out-paths --print-build-logs \
-  >"$BUILD_LOGS/nix-build-wyrd.out" 2>"$BUILD_LOGS/nix-build-wyrd.log" 9>&- &
-BUILD_WYRD=$!
-BUILD_PIDS=("$BUILD_WYRD")
+# With a subject, the host wyrd build is skipped: the suite's WYRD_BIN
+# comes from the guest closure below, which is the same
+# content-addressed path both sides (stronger than building twice —
+# identity by construction, not by hoping two builds agree).
+if [[ -z "$SUBJECT_DIR" ]]; then
+  setpriv --reuid "$BUILD_USER" --regid "$BUILD_GID" --init-groups \
+    env HOME="$BUILD_HOME" USER="$BUILD_USER" LOGNAME="$BUILD_USER" \
+    nix build "$ROOT#packages.x86_64-linux.wyrd" --no-link --print-out-paths --print-build-logs \
+    >"$BUILD_LOGS/nix-build-wyrd.out" 2>"$BUILD_LOGS/nix-build-wyrd.log" 9>&- &
+  BUILD_WYRD=$!
+  BUILD_PIDS=("$BUILD_WYRD")
+else
+  BUILD_PIDS=()
+fi
 # Pinned nak for the opacity probe (see the flake comment): same
 # no-link pattern as wyrd, so the suite never floats the registry.
 setpriv --reuid "$BUILD_USER" --regid "$BUILD_GID" --init-groups \
@@ -294,21 +371,38 @@ for role in peer-o peer-n relay; do
   setpriv --reuid "$BUILD_USER" --regid "$BUILD_GID" --init-groups \
     env HOME="$BUILD_HOME" USER="$BUILD_USER" LOGNAME="$BUILD_USER" \
     nix build "$ROOT#nixosConfigurations.wyrd-$role.config.microvm.runner.qemu" \
+    "${SUBJECT_FLAGS[@]}" \
     --no-link --print-out-paths --print-build-logs \
     >"$BUILD_LOGS/nix-build-$role.out" 2>"$BUILD_LOGS/nix-build-$role.log" 9>&- &
   BUILD_PID[$role]=$!
   BUILD_PIDS+=("${BUILD_PID[$role]}")
 done
-wait_build "$BUILD_WYRD" "host build failed (see build-logs/nix-build-wyrd.log)"
+if [[ -z "$SUBJECT_DIR" ]]; then
+  wait_build "$BUILD_WYRD" "host build failed (see build-logs/nix-build-wyrd.log)"
+fi
 wait_build "$BUILD_NAK" "host nak build failed (see build-logs/nix-build-nak.log)"
 for role in peer-o peer-n relay; do
   wait_build "${BUILD_PID[$role]}" "$role runner build failed (see build-logs/nix-build-$role.log)"
 done
 BUILD_S=$(( $(date +%s) - BUILD_START ))
 echo "    builds took ${BUILD_S}s (parallel wall time)"
-WYRD_OUT="$(tail -n 1 "$BUILD_LOGS/nix-build-wyrd.out")"
+if [[ -z "$SUBJECT_DIR" ]]; then
+  WYRD_OUT="$(tail -n 1 "$BUILD_LOGS/nix-build-wyrd.out")"
+else
+  # The subject's wyrd, read out of the guest closure it already
+  # rode in on: the host store realized it while building the
+  # runner, so this is a lookup, not a sixth build — and the path
+  # is identical to what the guests execute, by construction. The
+  # -wyrd-[0-9] match excludes the wyrd-deps vendored-sources
+  # package, which shares the version suffix.
+  WYRD_OUT="$(setpriv --reuid "$BUILD_USER" --regid "$BUILD_GID" --init-groups \
+    env HOME="$BUILD_HOME" USER="$BUILD_USER" LOGNAME="$BUILD_USER" \
+    nix path-info -r "$(tail -n 1 "$BUILD_LOGS/nix-build-peer-o.out")" \
+    | grep -E -- '-wyrd-[0-9]' | head -n 1)"
+  [[ -n "$WYRD_OUT" ]] || die "subject guest closure carries no wyrd package (see build-logs/nix-build-peer-o.log)"
+fi
 WYRD_BIN="$WYRD_OUT/bin/wyrd"
-[[ -x "$WYRD_BIN" ]] || die "host build produced no wyrd binary (see build-logs/nix-build-wyrd.log)"
+[[ -x "$WYRD_BIN" ]] || die "no wyrd binary at $WYRD_BIN"
 echo "    $WYRD_BIN"
 NAK_OUT="$(tail -n 1 "$BUILD_LOGS/nix-build-nak.out")"
 NAK_BIN="$NAK_OUT/bin/nak"
