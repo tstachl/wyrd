@@ -59,7 +59,12 @@
           craneLib = (crane.mkLib pkgs).overrideToolchain toolchain;
           # The version travels with the source tree, not the flake: a
           # host-supplied wyrdSrc names its own version the same way.
-          version = (builtins.fromTOML (builtins.readFile (src + "/Cargo.toml"))).workspace.package.version;
+          # Tolerant read (N1): workspace roots carry
+          # [workspace.package], but a usable subject only promises a
+          # version somewhere standard — fall back to [package] before
+          # failing loudly at this layer (not deep inside crane).
+          manifest = builtins.fromTOML (builtins.readFile (src + "/Cargo.toml"));
+          version = manifest.workspace.package.version or manifest.package.version or (throw "wyrdSrc Cargo.toml has neither [workspace.package] nor [package] version: ${toString src}");
         in
         craneLib.buildPackage {
           pname = "wyrd";
@@ -181,8 +186,9 @@
         let
           # The wyrdSrc input is a committed placeholder FILE by
           # default (./nix/microvm/empty-src — a file, not a
-          # directory, so the cargo source filter drops it and the
-          # default package stays byte-identical). A placeholder file
+          # directory, so the cargo source filter drops it; it
+          # contributed no bytes at introduction, and later lockfile
+          # changes move the package independently of the seam). A placeholder file
           # maps to null: this flake's own build. Anything else must
           # be a host-supplied subject tree carrying Cargo.toml at
           # root (wyrdFor reads its version); anything unusable fails
@@ -204,7 +210,10 @@
             else if isPlaceholder
             then null
             else throw "wyrdSrc subject unreadable: expected a source tree with Cargo.toml at root, or the default placeholder; got ${toString wyrdSrc}";
-          microvmGuestFor = { role, wyrdSrc ? null }:
+          # microvmGuestFor takes wyrdSrc with no default (N4): an
+          # omitted argument must never silently mean the repo's own
+          # build. The single call site always passes explicitly.
+          microvmGuestFor = { role, wyrdSrc }:
             let
               wyrdPkg =
                 if wyrdSrc == null
