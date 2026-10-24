@@ -55,8 +55,8 @@ milestones = [
 # their own copy), so the path is checkout-relative.
 [review]
 prompt = ".agents/prompts/branch-review.md"
-model = "opencode-go/minimax-m3.1-flash-free"
-variant = "max"
+model = "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free"
+variant = "high"
 
 # Odin suite resource: the forced-command ssh path. The machine id comes
 # from the key entry server-side; nothing here can forge it.
