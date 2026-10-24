@@ -8,6 +8,19 @@
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    # Subject-tree input for the shape-pinned E2E gate (step 1 seam).
+    # Default: a committed empty placeholder, which the call site maps
+    # to null (this flake's own build — today's behavior, byte for
+    # byte). The host supplies a real subject with
+    # `--override-input wyrdSrc <tree>`: the override is resolved
+    # before pure evaluation begins, so everything downstream stays
+    # pure, restricted, and IFD-free. A subject.nix-style scratch file
+    # cannot serve here: flake evaluation never sees untracked files,
+    # and absolute path literals (even /nix/store) are forbidden in
+    # pure mode — the input system is the only sanctioned channel for
+    # external trees.
+    wyrdSrc.url = "path:./nix/microvm/empty-src";
+    wyrdSrc.flake = false;
     # Hardened e2e gate (issue: microvm.nix reproducible suite). Linux
     # only: vfkit on macOS lacks the 9p shares and tap/bridge
     # networking the topology needs, and Apple Silicon provides no
@@ -16,7 +29,7 @@
     microvm.inputs.nixpkgs.follows = "nixpkgs";
   };
 
-  outputs = { self, nixpkgs, crane, rust-overlay, microvm, ... }:
+  outputs = { self, nixpkgs, crane, rust-overlay, microvm, wyrdSrc, ... }:
     let
       # Product platforms. x86_64-darwin is deliberately absent even though
       # rust-toolchain.toml lists the target: no builder covers it, so it
@@ -36,7 +49,7 @@
           inherit system;
           overlays = [ (import rust-overlay) ];
         };
-      wyrdFor = system:
+      wyrdFor = system: src:
         let
           pkgs = pkgsFor system;
           inherit (pkgs) lib stdenv;
@@ -44,13 +57,21 @@
           # build compiles with the same rustc as the devenv shell.
           toolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
           craneLib = (crane.mkLib pkgs).overrideToolchain toolchain;
+          # The version travels with the source tree, not the flake: a
+          # host-supplied wyrdSrc names its own version the same way.
+          # Tolerant read (N1): workspace roots carry
+          # [workspace.package], but a usable subject only promises a
+          # version somewhere standard — fall back to [package] before
+          # failing loudly at this layer (not deep inside crane).
+          manifest = builtins.fromTOML (builtins.readFile (src + "/Cargo.toml"));
+          version = manifest.workspace.package.version or manifest.package.version or (throw "wyrdSrc Cargo.toml has neither [workspace.package] nor [package] version: ${toString src}");
         in
         craneLib.buildPackage {
           pname = "wyrd";
           inherit version;
           # The workspace exactly as Cargo sees it, from the committed
           # Cargo.lock; target/ and VCS state never enter the build.
-          src = craneLib.cleanCargoSource ./.;
+          src = craneLib.cleanCargoSource src;
           # Only the user-facing binary. Library crates ride along as its
           # dependencies; nothing else installs a binary.
           cargoExtraArgs = "-p wyrd-cli";
@@ -112,7 +133,7 @@
     in
     {
       packages = forAllSystems (system: {
-        wyrd = wyrdFor system;
+        wyrd = wyrdFor system ./.;
         wyrd-dist = distFor system;
         # Pinned relay-query tool for the microVM opacity probe
         # (tests/alpha-microvm.sh): reproducibility is the reason —
@@ -157,11 +178,48 @@
       });
       # Hardened e2e topology: two peers plus a relay, each a microVM
       # definition (see nix/microvm/). x86_64-linux only: KVM hosts
-      # are x86_64, and the guests carry the flake's wyrd package so
-      # the suite executes the same binary both sides.
+      # are x86_64. Each guest carries a wyrd package as its subject:
+      # by default this flake's build, optionally a host-supplied
+      # source tree via --override-input wyrdSrc. The subject never
+      # influences evaluation of the harness itself.
       nixosConfigurations =
         let
-          microvmGuest = role:
+          # The wyrdSrc input is a committed placeholder FILE by
+          # default (./nix/microvm/empty-src — a file, not a
+          # directory, so the cargo source filter drops it; it
+          # contributed no bytes at introduction, and later lockfile
+          # changes move the package independently of the seam). A placeholder file
+          # maps to null: this flake's own build. Anything else must
+          # be a host-supplied subject tree carrying Cargo.toml at
+          # root (wyrdFor reads its version); anything unusable fails
+          # loudly here, never silently. Only the placeholder's exact
+          # bytes map to null, and those bytes cannot build wyrd — so
+          # the fallback can never mask a real subject. (Existence
+          # probes only: readFile runs solely on paths already proven
+          # to be files, so no IO error can escape — every bad input
+          # lands on the throw below with a readable message.)
+          wyrdSrcFor =
+            let
+              hasCargo = builtins.pathExists (wyrdSrc + "/Cargo.toml");
+              isDir = builtins.pathExists (wyrdSrc + "/.");
+              isPlaceholder =
+                !isDir && builtins.readFile wyrdSrc == "empty-subject-placeholder\n";
+            in
+            if hasCargo
+            then wyrdSrc
+            else if isPlaceholder
+            then null
+            else throw "wyrdSrc subject unreadable: expected a source tree with Cargo.toml at root, or the default placeholder; got ${toString wyrdSrc}";
+          # microvmGuestFor takes wyrdSrc with no default (N4): an
+          # omitted argument must never silently mean the repo's own
+          # build. The single call site always passes explicitly.
+          microvmGuestFor = { role, wyrdSrc }:
+            let
+              wyrdPkg =
+                if wyrdSrc == null
+                then self.packages.x86_64-linux.wyrd
+                else wyrdFor "x86_64-linux" wyrdSrc;
+            in
             nixpkgs.lib.nixosSystem {
               system = "x86_64-linux";
               modules = [
@@ -169,15 +227,16 @@
                 ./nix/microvm/common.nix
                 ./nix/microvm/${role}.nix
                 # The suite executes WYRD_BIN in-guest, and the host
-                # store is not visible there — so the guests carry the
-                # same package. Same content-addressed path both
+                # store is not visible there — so the guests carry
+                # the same package. Same content-addressed path both
                 # sides, no rewriting needed.
                 ({ ... }: {
                   environment.systemPackages =
-                    [ self.packages.x86_64-linux.wyrd ];
+                    [ wyrdPkg ];
                 })
               ];
             };
+          microvmGuest = role: microvmGuestFor { inherit role; wyrdSrc = wyrdSrcFor; };
         in
         {
           wyrd-peer-o = microvmGuest "peer-o";

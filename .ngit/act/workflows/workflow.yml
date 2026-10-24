@@ -69,6 +69,8 @@ jobs:
           echo "===== e2e harness stubs =====" >> /tmp/shell.log
           bash tests/test-step-grammar.sh 2>&1 | tee -a /tmp/shell.log
           bash tests/test-baked-set.sh 2>&1 | tee -a /tmp/shell.log
+          bash tests/test-shape-manifest.sh 2>&1 | tee -a /tmp/shell.log
+          bash tests/test-stage-subject.sh 2>&1 | tee -a /tmp/shell.log
           bash tests/test-runner-fd.sh 2>&1 | tee -a /tmp/shell.log
           bash tests/test-runner-build-account.sh 2>&1 | tee -a /tmp/shell.log
           bash tests/test-probe-mark.sh 2>&1 | tee -a /tmp/shell.log
