@@ -1,166 +1,64 @@
 # AGENTS.md
 
-Decentralized, append-only, content-addressed drive system. Pre-alpha.
+Wyrd is a pre-alpha decentralized, append-only, content-addressed drive.
 
-Read `docs/architecture.md` first (one page), then the focused docs it links
-to. The README carries the vision; `docs/` carries the current design contract.
+Read `docs/architecture.md` first. The README describes the vision; `docs/` defines the current contracts.
 
-## Layout
+## Architecture
 
-- `crates/wyrd-format` — CAS, typed identities, chunking, Merkle snapshot DAG. The format contract.
-- `crates/wyrd-sync` — iroh transport, encrypted manifests, roles × materialization, two-phase content.
-- `crates/wyrd-namespace` — Provider-neutral namespace model: value types, verified-head handle, read surface. Depends on `wyrd-format` and `thiserror` only; performs no cryptography, links no transport.
-- `crates/wyrd-fuse` — Mount-free drive view (the filesystem-shaped read surface; never mounts).
-- `crates/wyrd-core` — Embeddable local node (namespace, mutations, materialization, sync control). Depends on `wyrd-format`/`wyrd-namespace`/`wyrd-sync` only; the daemon is one host for it.
-- `crates/wyrd-daemon` — Composition library: engine + view + presentation backends (FUSE adapter today; mobile file surfaces later). The composer per T16.
-- `crates/wyrd-cli` — The `wyrd` process host (binary-only): argument parsing, credential files, mount orchestration, diagnostics, exit codes over the daemon's public surface.
-- `crates/wyrd-contracts` — Cross-crate architectural contract suite: one named test per review contract, composed end to end over the public APIs. Workspace leaf over the library crates (it cannot depend on the binary-only `wyrd-cli`; the CLI's edges are pinned by contract 34's member-wide check instead), nothing depends on it.
-- `crates/wyrd-embed` — The embedder-shaped consumer: the `embedded_drive_lifecycle_needs_no_fuse_and_no_daemon` contract proves one drive's whole lifecycle runs through `wyrd-core` with no presentation, daemon, or CLI in the path (see `docs/architecture.md`, "The embedded consumer boundary"). Its production closure is pinned by contract 34: never the daemon, the CLI, or the contract suite.
-- `docs/` — agent-digestible architecture docs. `object-model.md` is the normative
-  v0 format spec; `trust.md` and `epochs.md` are the normative trust and
-  authorization contracts. Keep them current when behavior changes; stale
-  docs are worse than missing docs.
-- `devenv.nix` / `devenv.yaml` / `rust-toolchain.toml` — dev environment.
+- `wyrd-format`: content addressing, typed identities, chunking, Merkle snapshot DAG, canonical plaintext formats.
+- `wyrd-sync`: iroh transport, encryption, storage addressing, capabilities, authorization and replication.
+- `wyrd-namespace`: provider-neutral namespace and verified read surface; depends only on `wyrd-format` and `thiserror`.
+- `wyrd-core`: embeddable local node; depends on format, namespace and sync, not presentation layers.
+- `wyrd-fuse`: filesystem-shaped read surface; never mounts or authors content.
+- `wyrd-daemon`: composes the core, view and presentation backends.
+- `wyrd-cli`: binary process host over the daemon's public API.
+- `wyrd-embed`: proves the core lifecycle works without the daemon, CLI or presentation layers.
+- `wyrd-contracts`: cross-crate architectural contract tests; nothing depends on it.
 
-## Hard rules
+## Invariants
 
-- `wyrd-format` must not gain networking, async, or FUSE dependencies.
-  Allowed: blake3, hex, thiserror, fastcdc, serde (when serialization lands).
-- `wyrd-format` is the plaintext world: keys and ciphertext live in
-  `wyrd-sync`. Manifests split across the two: schema and canonical
-  plaintext representation belong to `wyrd-format`; manifest encryption,
-  storage addressing, and capability semantics belong to `wyrd-sync`.
-  Content IDs never reach vault-visible metadata.
-- Objects are immutable; never mutate stored content in place; `put` of
-  existing content is a no-op. GC does not exist — the store is
-  append-only indefinitely in v0.
-- Snapshots are never rewritten (the DAG is append-only). Snapshots are
-  signed with the author's Nostr identity key, bound to the DriveId and to
-  the membership transition that authorizes them. Nostr supplies identity
-  and signatures only — never Nostr event formats, no social-Nostr
-  requirements, and membership state is always encrypted.
-- Device identity is a Nostr public key and is immutable: rotating a Nostr
-  key means removing the old device membership and admitting the new key.
-- Crypto and sync-layer implementation is unlocked. Implementation must
-  follow `docs/trust.md` and `docs/epochs.md` as normative contracts: root
-  custody, fresh random epoch secrets, the membership state machine, and the
-  Nostr/iroh control-plane split are decided; do not relitigate them.
-- Never implement cryptographic primitives (secp256k1, BIP-340, ECDH, HKDF,
-  AEAD, CSPRNG). Use audited crates from the nostr/secp256k1 ecosystem; see
-  the Cryptographic substrate section of `docs/trust.md` (decision T11).
-- iroh dependency versions change as a set.
-- `AuthorizedSnapshot` is minted only by `wyrd-sync` authorization (contract 34's crossing-count check enforces the single call site); nothing else constructs the verification-proof token.
-- Format decisions live in the decision record at the bottom of
-  `docs/object-model.md`. Remaining open questions there are decisions to be
-  made, not assumptions to be coded around. Do not code past them silently.
+- Keep `wyrd-format` free of networking, async and FUSE dependencies. Keys, ciphertext, encryption, storage addressing and capability semantics belong in `wyrd-sync`; canonical plaintext representations belong in `wyrd-format`.
+- Content is immutable and append-only. Existing-content `put` is a no-op. There is no garbage collection in v0.
+- Snapshots are immutable, signed by the author's Nostr identity key, and bound to the DriveId and authorizing membership transition.
+- Nostr provides identity and signatures only. Do not introduce Nostr event formats or social-Nostr dependencies. Membership state is always encrypted.
+- Device identity is an immutable Nostr public key. Rotation means removing the old device membership and admitting the new key.
+- Follow `docs/trust.md` and `docs/epochs.md` as normative contracts for root custody, epoch secrets, membership transitions and the Nostr/iroh control-plane split. Do not redesign settled decisions.
+- Never implement cryptographic primitives yourself. Use audited crates; see decision T11 in `docs/trust.md`.
+- Change iroh dependency versions as a set.
+- Only `wyrd-sync` authorization may mint `AuthorizedSnapshot`. Preserve the contract-34 enforcement.
+- Content IDs must not appear in vault-visible metadata.
+- Resolve open format decisions in `docs/object-model.md` before implementing behavior that depends on them. Keep normative docs synchronized with behavior.
 
-## Commands
+## Development
 
-```
-devenv shell -- cargo check                 # workspace build/validation
-devenv shell -- cargo fast-sync             # local lane: cheap tests, one area
-devenv shell -- cargo fast-core             # (fast-format/fast-fuse/fast-sync/
-devenv shell -- cargo fast-daemon           # fast-core/fast-daemon/fast-cli/
-devenv shell -- cargo fast-all              # fast-all for the whole workspace)
-devenv shell -- cargo nextest run           # PR gate (default profile)
-devenv shell -- cargo test --workspace --doc  # doctests; nextest skips these
-devenv shell -- cargo nextest run --profile slow
-                                            # >10s live-relay tests; excluded from
-                                            # the PR gate, run by master CI
-devenv shell -- cargo test -p wyrd-cli      # CLI suite (argument parsing, exit codes)
-devenv shell                # enter the dev environment (rust, git-hooks)
-devenv shell -- gate help   # agent dev CLI: pr/issue/review/CI verbs
+Use the configured devenv and toolchain.
+
+```sh
+cargo check
+cargo fast-sync
+cargo fast-core
+cargo fast-daemon
+cargo fast-all
+cargo nextest run
+cargo test --workspace --doc
+cargo nextest run --profile slow
+cargo test -p wyrd-cli
+gate help
 ```
 
-## Running the Lima e2e suite
+Use `cargo nextest run --profile slow` for live-relay tests excluded from the default PR gate.
 
-`./lima/run-alpha.sh [--keep] [--re-share] [--step N[,N...]]` is long (minutes) and lives in a
-guest. Operate it, never babysit it blind. (The hardened gate is the
-microVM suite instead: `nix/microvm/run-microvm.sh --fresh [--keep] [--step N[,N...]]`
-on a Linux KVM host (`--teardown` stops a kept run), same contract helpers, two peers plus a relay
-VM. `--step` runs the prefix closure over phases 1–15 (1–5 shared core, 6–15 microvm legs). Prefer it for topology, convergence, and restart evidence; use
-Lima for macOS dev iteration and as the refactor guard.)
+For Lima and microVM end-to-end testing, follow the `lima-e2e` skill. Prefer the microVM suite for topology, convergence and restart evidence; use Lima for macOS development and the refactor guard.
 
-- **The microVM builds run as a build account, never as root.** The
-  host's suite configuration names it (`E2E_BUILD_USER`), because under
-  the source-bound launch the tree is a host-owned snapshot — root-owned
-  — and a build that ran as root would lose the runner's de-escalation
-  silently. The host cannot always chown that snapshot (it may be a
-  read-only share), so it names the account the build runs as, and
-  hands over a tree that account can build: nix copies the tree, so the
-  account must be able to list it and read its files, and for a git
-  checkout nix's own fetch of the repository applies its ownership
-  rules on top.   Chowning the source snapshot to the build account,
-  with its files readable and its directories traversable by that
-  account, satisfies all of it. The runner refuses, by name: a build
-  that would run as root (by uid, or by the named account's own
-  primary gid), a build whose account cannot read the tree it is
-  handed, a build whose account cannot write the home the nix client
-  caches in, and a named account that does not exist on the host.
-  When the host names no account, a checkout owned by a non-root user
-  still builds as that user.
+## Workflow
 
+- Use Conventional Commits and `pr/<name>` branches. Never commit directly to `master`.
+- Follow `docs/collaboration-workflow.md` for issue triage, review, merge and resolution.
+- Apply issue labels after creation: exactly one type (`bug`, `enhancement`, `chore`), one priority (`P0`–`P4`), and one `release:*` milestone. Use `release:backlog` for deferred work.
+- Comments should explain why or how code is used, not narrate each line.
+- Follow the `gate-workflow` skill for Gate-managed development and remote operations.
 
-- **Never pipe it through `tail`.** A foreground pipe buffers everything, so
-  a twenty-minute run looks like a hang. Run it detached with the output to a
-  log (`(./lima/run-alpha.sh --keep > /tmp/lima/run.log 2>&1 &)`) and poll the
-  log in bounded chunks (~8 minutes per poll so the session never times out).
-- `--step` takes a comma list and runs the prefix closure (steps build on
-  each other): `--step 4` runs steps 1–4, `--step 4,6` runs 1–6. An empty
-  entry or a non-step is refused; an empty value means all steps.
-- The wrapper verifies the guest share serves this checkout before building
-  (host-side: the instance yaml's recorded path, plus a guest mount check)
-  and refuses on a stale share (worktree switches orphan it). Rerun with
-  `--re-share` to re-point the instance at the current checkout instead.
-- **A repeated `FAIL:` line is a stop, not patience.** The harness exits on
-  the first failed check, so two identical polls mean the run is over —
-  read the log, pull the failing mount's stderr out of the guest
-  (`limactl shell wyrd-alpha -- grep ... "/tmp/wyrd-e2e/logs/mount-*.err"`), fix,
-  rerun. Ten identical polls have happened; none were productive.
-- **Check liveness where it lives:** the guest contract process
-  (`limactl shell wyrd-alpha -- pgrep -f alpha-lima.sh`). A host `pgrep` for
-  the wrapper matches short-lived subshells and lies about liveness.
-- `limactl shell` prints a harmless `cd: <host path>: No such file` when the
-  host cwd does not exist in the guest. It is noise; the command still runs.
-- Any background process the harness starts (mounts, the relay) inherits its
-  stdout, so a `die` that leaves one running makes the host wrapper wait on a
-  pipe that never closes. The harness reaps them in an EXIT trap; keep it that
-  way when adding steps. Order matters: the relay must be stopped before the
-  trap's bare `wait` reaps (`reap_background` in tests/alpha-lima.sh) — a new
-  background job must join that order, not just the trap.
-- The guest's drive state is under `/tmp/wyrd-e2e` (guest-local disk, never
-  the 9p share: FUSE mountpoints and drive dirs over 9p are unsupported);
-  logs per run in `/tmp/wyrd-e2e/logs`.
-- Failures here are usually product bugs, not harness bugs — the suite exists
-  to find them. Diagnose from the phase timings in the mount logs
-  (`wyrd_core=debug` is on for step 6) before touching the script.
-- Wrapper-only entry: the suite and leg scripts refuse direct
-  execution. Each wrapper mints a per-run token and hands it to its
-  child; without a matching token you get `refuse direct execution`
-  and exit 2 before anything runs. Run the wrapper, not the script.
-  The microVM orchestrator additionally requires the runner's flock
-  to be held and its owner pid to be alive (stale tokens from dead
-  or kept runs refuse). Deliberate debugging only:
-  `WYRD_E2E_UNWRAPPED=1` bypasses the check with a warning.
+## Remote publication safety
 
-## Conventions
-
-- Conventional Commits. Nothing commits to `master` directly; use `pr/<name>`
-  branches (see the gate skill).
-- Follow `docs/collaboration-workflow.md` for issue triage, PR review, merge,
-  and issue resolution. Project labels are applied after issue creation —
-  never during it (creation-time labels are permanent: no later `ngit label`
-  event retracts them):
-  exactly one type (`bug`, `enhancement`, or `chore`), one priority (`P0` to
-  `P4`), and one `release:*` milestone (`release:backlog` when the work is
-  deferred beyond the immediate roadmap; no triaged issue is ever without
-  one).
-- Comments explain how code is used, not what it does line-by-line. Keep them
-  in sync with the code.
-- Run outside an active devenv with `devenv shell -- ...`; bare commands 
-  assume you are already inside `devenv shell`.
-
-## Remote publication
-
-- After any failed, timed-out, or aborted remote publication, stop immediately. Do not retry, force, switch signer or server, use an alternate command, or delete refs without fresh explicit approval.
-- Report the exact local and remote state and ask before any further remote mutation.
+After a failed, timed-out or aborted remote publication, stop. Do not retry, force, switch signer/server, use an alternate command or delete refs without fresh explicit approval. Report the exact local and remote state before asking how to proceed.
