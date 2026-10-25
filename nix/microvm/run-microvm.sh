@@ -81,6 +81,11 @@ source "$SCRIPT_DIR/build-account.sh"
 # them without a host. See nix/microvm/stage-subject.sh.
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/stage-subject.sh"
+# Source-tree resolution (gate-handed vs git-discovered). Pure over
+# explicit arguments; the test suite exercises it without a host.
+# See nix/microvm/source-root.sh.
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/source-root.sh"
 # Privileged host operations (bridge, taps, daemon spawn and
 # teardown, boot waits) over explicit arguments; no repository reads,
 # no builds, no suite. See nix/microvm/provision-host.sh. This is
@@ -139,7 +144,11 @@ if [[ -n "$SUBJECT_DIR" ]]; then
 fi
 
 [[ "$EUID" == 0 ]] || { echo "error: run as root (taps, bridge, virtiofsd need it)" >&2; exit 2; }
-ROOT="$(git rev-parse --show-toplevel 2>/dev/null || { echo 'error: run from the wyrd checkout' >&2; exit 2; })"
+# The tree the runner builds: the gate-handed revision-bound source
+# when launched by the wrapper (GATE_SOURCE), else git discovery for
+# the dev loop. A set-but-unusable GATE_SOURCE is refused, never
+# worked around — falling back would silently unbind the build.
+ROOT="$(resolve_source_root "${GATE_SOURCE:-}")"
 cd "$ROOT"
 
 # Unit runs get a minimal closure PATH; fall back to the NixOS system

@@ -79,6 +79,7 @@ lima/wyrd-alpha.yaml
 nix/microvm/empty-src
 nix/microvm/run-microvm.sh
 nix/microvm/provision-host.sh
+nix/microvm/source-root.sh
 nix/microvm/stage-subject.sh
 nix/microvm/build-account.sh
 nix/microvm/common.nix

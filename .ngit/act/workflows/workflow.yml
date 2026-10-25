@@ -79,6 +79,7 @@ jobs:
           bash tests/test-relay-forensics.sh 2>&1 | tee -a /tmp/shell.log
           bash tests/test-topology-toml.sh 2>&1 | tee -a /tmp/shell.log
           bash tests/test-provision-host.sh 2>&1 | tee -a /tmp/shell.log
+          bash tests/test-source-root.sh 2>&1 | tee -a /tmp/shell.log
 
       # /tmp is per-job, so this log only reaches the reporter via the
       # artifact (same shape as the rust/nix combined-log uploads).
