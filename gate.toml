@@ -68,3 +68,38 @@ key = "~/.ssh/id_ed25519_gate_odin"
 # a revision, never a path: the host resolves the name to the source it
 # is willing to build, so the name is profile configuration.
 repo = "wyrd"
+
+# Declared runtime shape for the microVM e2e task: data only. The gate
+# task-topology parser reads this section, renders it canonically, and
+# hashes those bytes as the shape; nothing here is staged, copied, or
+# executed on the host. The provisioner reads the approved rendering,
+# never this file. Values must match
+# nix/microvm/{relay,peer-o,peer-n}.nix and the TAP_DEV map in
+# nix/microvm/run-microvm.sh (pinned by tests/test-topology-toml.sh).
+[topology]
+version = 1
+boxes = ["peer-o", "peer-n", "relay"]
+
+[topology.box.peer-o]
+vcpu = 4
+mem_mb = 4096
+tap = "tap-o"
+mac = "02:00:00:00:07:11"
+ip = "10.0.7.11/24"
+ssh = true
+
+[topology.box.peer-n]
+vcpu = 4
+mem_mb = 4096
+tap = "tap-n"
+mac = "02:00:00:00:07:12"
+ip = "10.0.7.12/24"
+ssh = true
+
+[topology.box.relay]
+vcpu = 2
+mem_mb = 1024
+tap = "tap-r"
+mac = "02:00:00:00:07:10"
+ip = "10.0.7.10/24"
+ssh = false
