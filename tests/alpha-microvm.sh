@@ -77,14 +77,14 @@ SSH_KEY="$STATE_DIR/sshkey"
 # confusing message): the token must match the runner-published env
 # file, and the runner's flock must be held (stale tokens from dead
 # or kept runs do not authorize a suite). See tests/e2e-guard.sh.
-e2e_require_wrapped "$STATE_DIR/e2e-env.sh" "sudo ./nix/microvm/run-microvm.sh" --check-owner-pid \
+e2e_require_wrapped "$STATE_DIR/e2e-env.sh" "./nix/microvm/run-microvm.sh (as root)" --check-owner-pid \
   || { echo "  FAIL: unwrapped orchestrator invocation refused" >&2; exit 2; }
 WYRD_BIN="${WYRD_BIN:?runner sets WYRD_BIN from the host build}"
 NAK_BIN="${NAK_BIN:?runner sets NAK_BIN from the host build}"
 RELAY_URL="${RELAY_URL:-ws://10.0.7.10:18761}"
 PEER_O="${PEER_O:-e2e@10.0.7.11}"
 PEER_N="${PEER_N:-e2e@10.0.7.12}"
-# Guest-side view of RUN (virtiofs mount): same files, guest prefix.
+# Guest-side view of RUN (virtiofs share): same files, guest prefix.
 GUEST_RUN="/mnt/wyrd-state/run"
 GUEST_TESTS="/etc/wyrd-tests"
 GUEST_ENV="/mnt/wyrd-state/e2e-env.sh"
@@ -122,13 +122,44 @@ CORE_ONLY="1"
 for (( _c = 2; _c <= CORE_MAX; _c++ )); do CORE_ONLY="$CORE_ONLY,$_c"; done
 unset _c
 
-# The orchestrator runs as root (taps, VMs), but share files belong
-# to uid 1000 (guest e2e, the only normal user) — and the credential
-# hardening refuses cross-uid opens both directions. So every host
-# wyrd invocation drops privilege to 1000 first. setpriv works with
-# numeric ids and needs no passwd entry, unlike su/runuser.
-command -v setpriv >/dev/null || die "setpriv missing on the host (util-linux)"
-as_guest() { setpriv --reuid 1000 --regid 1000 --clear-groups -- "$@"; }
+# The orchestrator runs unprivileged in the task path: the host owns
+# taps, VMs, and the state tree, and hands the suite three
+# capabilities over the environment. Nothing below names a
+# privileged program; the repository contributes the orchestration,
+# the host contributes the privilege (pinned by
+# tests/test-no-host-privilege.sh).
+#
+#   WYRD_AS_GUEST_BIN       de-escalation wrapper for host wyrd
+#                           invocations (dev loop: drops to uid
+#                           1000; task path: unset, direct exec —
+#                           the suite already runs as the owner)
+#   WYRD_PARTITION_BIN      tap partition primitive
+#                           (dev-partition.sh in the dev loop;
+#                           a host-owned binary over the task's
+#                           declared taps on Odin)
+#   WYRD_HAND_TO_GUEST_BIN  share handover for created credential
+#                           material (dev loop: hands ownership to uid 1000;
+#                           task path: unset, a no-op — files
+#                           arrive correctly owned)
+as_guest() {
+  if [[ -n "${WYRD_AS_GUEST_BIN:-}" ]]; then
+    "$WYRD_AS_GUEST_BIN" "$@"
+  else
+    "$@"
+  fi
+}
+hand_to_guest() {
+  if [[ -n "${WYRD_HAND_TO_GUEST_BIN:-}" ]]; then
+    "$WYRD_HAND_TO_GUEST_BIN" "$@"
+  else
+    :
+  fi
+}
+host_partition() { # <tap> down|up
+  [[ -n "${WYRD_PARTITION_BIN:-}" ]] \
+    || die "partition capability not provided (host must set WYRD_PARTITION_BIN)"
+  "$WYRD_PARTITION_BIN" "$@"
+}
 
 SSH="ssh -i $SSH_KEY -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o BatchMode=yes"
 # Every guest invocation carries the run token (ssh joins the
@@ -142,7 +173,7 @@ on_o() { $SSH "$PEER_O" "WYRD_E2E_TOKEN=${WYRD_E2E_TOKEN:-}" "WYRD_E2E_UNWRAPPED
 on_n() { $SSH "$PEER_N" "WYRD_E2E_TOKEN=${WYRD_E2E_TOKEN:-}" "WYRD_E2E_UNWRAPPED=${WYRD_E2E_UNWRAPPED:-0}" "$@"; }
 
 # wait_conflict_file <seconds> <file> <what> <leg-pid>: shared
-# rendezvous waiter for host-driven fault blocks (partition, kill):
+# rendezvous waiter for host-driven fault blocks (partition, crash):
 # fail fast when the awaited leg exits early instead of burning the
 # whole budget on a corpse.
 wait_conflict_file() { # <seconds> <file> <what> <leg-pid>
@@ -185,7 +216,7 @@ mkdir -p "$MC" "$MD"
 head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$MC/identity"
 printf 'e2e-%s\n' "$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')" > "$MC/passphrase"
 chmod 600 "$MC/identity" "$MC/passphrase"
-chown -R 1000:1000 "$MC" "$MD"
+hand_to_guest "$MC" "$MD"
 # Guests must carry the baked suite, the runner-written env, and a
 # working wyrd binary from the shared host store before anything else.
 on_n "test -f $GUEST_TESTS/alpha-common.sh && test -f $GUEST_ENV" \
@@ -298,7 +329,7 @@ pass "relay carries no cleartext control rumors"
 # Wave 2 (sync-convergence issue): the embedded consumer converges
 # without mounting. The owner writes a second wave through FUSE and
 # stays up serving; the member fetches it headless and reads the
-# converged state mount-free (`snapshot heads`: heads with tree
+# converged state attachment-free (`snapshot heads`: heads with tree
 # hashes, no timestamps, so the host diff is exact). Identical
 # live heads mean identical manifests, hence identical bytes by
 # CAS. Placed after the opacity checks so wave-2 control traffic
@@ -372,7 +403,7 @@ cp "$WYRD_BIN" "$UPGRADE_STAGE/top/bin/wyrd" \
 tar -czf "$RUN/upgrade-archive/$UPGRADE_NAME" -C "$UPGRADE_STAGE" top \
   || die "upgrade archive packing failed"
 rm -rf "$UPGRADE_STAGE"
-chown -R 1000:1000 "$RUN/upgrade-archive"
+hand_to_guest "$RUN/upgrade-archive"
 on_n "E2E_ENV_FILE=$GUEST_ENV bash $GUEST_TESTS/alpha-microvm-legs.sh upgrade-member $GMD $GMC $RELAY_URL" \
   >"$RUN/logs/leg-upgrade-member.out" 2>&1 &
 LEG_N=$!
@@ -407,9 +438,10 @@ fi # want_phase 9
 # --- phase: microvm 10 (relay-partition conflict) ---------------------
 # Rename half runs pre-partition (it needs convergence); the host
 # partitions only after both rename-done files land, then heals
-# after both conflict writes. Partition is host-side tap surgery
-# (tap-r is the relay's tap; see PROV_TAP in
-# nix/microvm/provision-host.sh) — the orchestrator runs as root, so no privilege dance. Done-file
+# after both conflict writes. Partition is a host capability over
+# the relay's tap (tap-r; see PROV_TAP in
+# nix/microvm/provision-host.sh): the suite names the tap and the
+# direction, the host performs the surgery. Done-file
 # rendezvous rides the shared state root, unaffected by the
 # partition. No relay query witness: the in-leg @1/@2 reads cannot
 # succeed unless the peer's announcement crossed the relay and its
@@ -440,16 +472,16 @@ wait_conflict_file 300 "$RUN/conflict-rename-owner-done" \
 wait_conflict_file 120 "$RUN/conflict-rename-member-done" \
   "member stale-handle probe never finished (see logs/leg-conflict-member.out)" "$LEG_N"
 pass "rename breaks a held handle across hosts before the partition"
-heal_tap() { ip link set tap-r up 2>/dev/null || true; }
+heal_tap() { host_partition tap-r up 2>/dev/null || true; }
 trap heal_tap EXIT
-ip link set tap-r down || die "host could not partition tap-r"
+host_partition tap-r down || die "host could not partition tap-r"
 touch "$RUN/conflict-partitioned"
 wait_conflict_file 180 "$RUN/conflict-owner-written" \
   "owner never committed under partition (see logs/leg-conflict-owner.out)" "$LEG_O"
 wait_conflict_file 180 "$RUN/conflict-member-written" \
   "member never committed under partition (see logs/leg-conflict-member.out)" "$LEG_N"
 pass "both sides commit the same path under partition"
-ip link set tap-r up || die "host could not heal tap-r"
+host_partition tap-r up || die "host could not heal tap-r"
 trap - EXIT
 touch "$RUN/conflict-healed"
 wait "$LEG_N" || die "conflict member leg failed (see logs/leg-conflict-member.out)"
@@ -528,11 +560,11 @@ if want_phase 12; then
 # (issue 22a: the vault process; issue 22b: the crash-restart
 # gate): the owner drive serves via `wyrd vault` while fresh
 # devices join and converge with plain `sync now`, then read the
-# bytes through a mount (headless reconciliation leaves file chunks
+# bytes through an attachment (headless reconciliation leaves file chunks
 # RemoteOnly by policy, so the read faults them in over the serve
 # route — the feature under review end to end).
-# The dataset is a fresh single-author drive (init, one mount
-# writing the targets, stop): v0 serving is author-bound and does
+# The dataset is a fresh single-author drive (init, one attached
+# write of the targets, stop): v0 serving is author-bound and does
 # not replicate serving authority for historical snapshots, so a
 # deep multi-author closure is only convergent when every author
 # has a live route — replication serving is deferred to v0.7. C
@@ -543,7 +575,7 @@ if want_phase 12; then
 # re-announcement and content service after the crash, each
 # peer-observed; D — admitted after the restart so its obligations
 # are fresh for serve#3's route (re-announcement reseals pending
-# obligations, never resurrects discharged ones) — proves pre-kill
+# obligations, never resurrects discharged ones) — proves pre-crash
 # content still serves; both TERM stops prove the shutdown half.
 # Drives are unmounted since phase 11, so the keystore is free for
 # the offline invites.
@@ -560,7 +592,7 @@ mkdir -p "$HO" "$HF"
 head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$HO/identity"
 printf 'e2e-%s\n' "$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')" > "$HO/passphrase"
 chmod 600 "$HO/identity" "$HO/passphrase"
-chown -R 1000:1000 "$HO" "$HF"
+hand_to_guest "$HO" "$HF"
 as_guest "$WYRD_BIN" init --identity-file "$HO/identity" --passphrase-file "$HO/passphrase" \
   "$HF" >"$RUN/logs/init-hf.out" 2>"$RUN/logs/init-hf.stderr" \
   || die "headless fresh drive init failed"
@@ -584,7 +616,7 @@ mkdir -p "$HC" "$HD"
 head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$HC/identity"
 printf 'e2e-%s\n' "$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')" > "$HC/passphrase"
 chmod 600 "$HC/identity" "$HC/passphrase"
-chown -R 1000:1000 "$HC" "$HD"
+hand_to_guest "$HC" "$HD"
 as_guest "$WYRD_BIN" device --identity-file "$HC/identity" --passphrase-file "$HC/passphrase" \
   "$HD" pairing-request "$RUN/pairing-hc.txt" >"$RUN/logs/pairing-hc.out" 2>"$RUN/logs/pairing-hc.stderr" \
   || die "headless-c pairing-request failed"
@@ -607,7 +639,7 @@ mkdir -p "$HE" "$HED"
 head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$HE/identity"
 printf 'e2e-%s\n' "$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')" > "$HE/passphrase"
 chmod 600 "$HE/identity" "$HE/passphrase"
-chown -R 1000:1000 "$HE" "$HED"
+hand_to_guest "$HE" "$HED"
 as_guest "$WYRD_BIN" device --identity-file "$HE/identity" --passphrase-file "$HE/passphrase" \
   "$HED" pairing-request "$RUN/pairing-he.txt" >"$RUN/logs/pairing-he.out" 2>"$RUN/logs/pairing-he.stderr" \
   || die "headless-e pairing-request failed"
@@ -651,7 +683,7 @@ mkdir -p "$HDD" "$HDDD"
 head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$HDD/identity"
 printf 'e2e-%s\n' "$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')" > "$HDD/passphrase"
 chmod 600 "$HDD/identity" "$HDD/passphrase"
-chown -R 1000:1000 "$HDD" "$HDDD"
+hand_to_guest "$HDD" "$HDDD"
 as_guest "$WYRD_BIN" device --identity-file "$HDD/identity" --passphrase-file "$HDD/passphrase" \
   "$HDDD" pairing-request "$RUN/pairing-hd.txt" >"$RUN/logs/pairing-hd.out" 2>"$RUN/logs/pairing-hd.stderr" \
   || die "headless-d pairing-request failed"
@@ -684,9 +716,9 @@ fi # want_phase 12
 # with a pending obligation under a host-driven relay partition
 # (tap-r surgery, same shape as phase 10); 13b kills the owner
 # mid-burst after 40 acknowledged writes. The member-first order is
-# load-bearing (see the ORDER MATTERS note below). Every kill targets the shipped
+# load-bearing (see the ORDER MATTERS note below). Every crash targets the shipped
 # binary's real process death — no test-only hooks (OD-06-A) — and
-# each leg records the fence its kill represents. Typical 6-8 min
+# each leg records the fence its crash represents. Typical 6-8 min
 # observed green; dominant budget products are the 13b burst loop
 # (~61 min) and the 13a scratch/cold/converge chain (~30 min).
 # Simultaneous exhaustion of all budgets is pathology, covered by
@@ -708,7 +740,7 @@ for _cdir in "$CO" "$CN"; do
   chmod 600 "$_cdir/identity" "$_cdir/passphrase"
 done
 unset _cdir
-chown -R 1000:1000 "$CO" "$COD" "$CN" "$CND"
+hand_to_guest "$CO" "$COD" "$CN" "$CND"
 as_guest "$WYRD_BIN" init --identity-file "$CO/identity" --passphrase-file "$CO/passphrase" \
   "$COD" >"$RUN/logs/init-crash.out" 2>"$RUN/logs/init-crash.stderr" \
   || die "crash pair drive init failed"
@@ -733,7 +765,7 @@ pass "crash pair joins on a fresh drive"
 # drive joins fresh here, so its first authorship must verify the
 # head closure — cheap on a two-snapshot history (init + cold-u),
 # ruinous after 13b's forty-burst history (observed: one closure
-# object per pass while the young mount drains, and first-minute
+# object per pass while the young attachment drains, and first-minute
 # authorship outwaits the 30s max_mutation_wait). 13b's owner-side
 # authorship is local-first at any history size, so it goes second.
 rm -f "$RUN"/crash-m-listed "$RUN"/crash-m-ready "$RUN"/crash-m-partitioned "$RUN"/crash-m-killed \
@@ -746,14 +778,14 @@ on_n "E2E_ENV_FILE=$GUEST_ENV bash $GUEST_TESTS/alpha-microvm-legs.sh crash-memb
 LEG_N=$!
 wait_conflict_file 600 "$RUN/crash-m-ready" \
   "member never localized its tree for the obligation (see logs/leg-crash-member.out)" "$LEG_N"
-heal_tap() { ip link set tap-r up 2>/dev/null || true; }
+heal_tap() { host_partition tap-r up 2>/dev/null || true; }
 trap heal_tap EXIT
-ip link set tap-r down || die "host could not partition tap-r"
+host_partition tap-r down || die "host could not partition tap-r"
 touch "$RUN/crash-m-partitioned"
 wait_conflict_file 180 "$RUN/crash-m-killed" \
   "member never died on KILL under partition (see logs/leg-crash-member.out)" "$LEG_N"
 pass "member KILL lands with the obligation pending"
-ip link set tap-r up || die "host could not heal tap-r"
+host_partition tap-r up || die "host could not heal tap-r"
 trap - EXIT
 touch "$RUN/crash-m-healed"
 wait "$LEG_N" || die "crash member leg failed (see logs/leg-crash-member.out)"
@@ -774,10 +806,10 @@ fi # want_phase 13
 
 # --- phase: microvm 14 (resource exhaustion) -----------------------------
 # Fill the exhaustion drive's filesystem to 256 MiB headroom, then
-# write through an offline mount until ENOSPC. Offline on purpose:
+# write through an offline attachment until ENOSPC. Offline on purpose:
 # exhaustion is a storage-stack property, not a sync one, and a
 # relay would only add failure modes to the wrong leg. The drive
-# lives on a fixed-size ext4 image loop-mounted IN the guest (never
+# lives on a fixed-size ext4 image loop-attached IN the guest (never
 # on the shared state dir): filling the share fills odin's root fs,
 # and at 100% every write fails everywhere — guests die on block
 # faults while set -e kills the suite silently, because a FAIL line
@@ -812,13 +844,14 @@ mkdir -p "$EC" "$ED"
 head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$EC/identity"
 printf 'e2e-%s\n' "$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')" > "$EC/passphrase"
 chmod 600 "$EC/identity" "$EC/passphrase"
-chown -R 1000:1000 "$EC" "$ED"
+hand_to_guest "$EC" "$ED"
 on_o "sudo mkfs.ext4 -q -m 0 '$GIMG'" >"$RUN/logs/mkfs-exh.out" 2>&1 \
   || die "exhaustion image mkfs failed (see logs/mkfs-exh.out)"
-on_o "sudo mount -o loop '$GIMG' '$GED' && sudo chown e2e:users '$GED'" >"$RUN/logs/mount-exh-fs.out" 2>&1 \
-  || die "exhaustion image mount failed (see logs/mount-exh-fs.out)"
+on_o "sudo mount -o loop '$GIMG' '$GED' && sudo chown e2e:users '$GED'" >"$RUN/logs/attach-exh-fs.out" 2>&1 \
+  || die "exhaustion image attach failed (see logs/attach-exh-fs.out)"
 # init and export run in-guest: the container's content is invisible
-# host-side (guest mount over the share), so as_guest can neither
+# host-side (the container is invisible on the share — a guest attachment
+# over it), so as_guest can neither
 # seed nor read it. $WYRD_BIN is the same content-addressed path on
 # both sides, so no env plumbing is needed.
 on_o "$WYRD_BIN init --identity-file '$GEC/identity' --passphrase-file '$GEC/passphrase' '$GED'" >"$RUN/logs/init-exh.out" 2>&1 \
@@ -881,9 +914,9 @@ for (( _x = 1; _x <= 24; _x++ )); do
 done
 unset _x _f _sz _fidx
 pass "exhaustion export holds only byte-complete fills plus both anchors"
-# Best-effort unmount: the loop device dies with the VM anyway and
+# Best-effort detach: the loop device dies with the VM anyway and
 # $RUN is wiped by the next --fresh; this just keeps kept runs tidy.
-on_o "sudo umount '$GED'" >"$RUN/logs/umount-exh-fs.out" 2>&1 || true
+on_o "sudo umount '$GED'" >"$RUN/logs/detach-exh-fs.out" 2>&1 || true
 rm -f "$IMG"
 fi # want_phase 14
 
@@ -921,7 +954,7 @@ for _cdir in "$UO" "$UN"; do
   chmod 600 "$_cdir/identity" "$_cdir/passphrase"
 done
 unset _cdir
-chown -R 1000:1000 "$UO" "$UOD" "$UN" "$UND"
+hand_to_guest "$UO" "$UOD" "$UN" "$UND"
 as_guest "$WYRD_BIN" init --identity-file "$UO/identity" --passphrase-file "$UO/passphrase" \
   "$UOD" >"$RUN/logs/init-uparent.out" 2>"$RUN/logs/init-uparent.stderr" \
   || die "uparent pair drive init failed"
