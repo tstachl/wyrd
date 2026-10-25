@@ -89,10 +89,10 @@ for _b in peer-o peer-n relay; do
   grep -qE "id = \"${TAP}\";" "$NIX" || die "box $_b tap disagrees with $NIX"
   grep -qE "mac = \"${MAC}\";" "$NIX" || die "box $_b mac disagrees with $NIX"
   grep -qE "address = \"${ADDR}\";" "$NIX" || die "box $_b ip disagrees with $NIX"
-  grep -qF "[${_b}]=${TAP}" "$ROOT/nix/microvm/run-microvm.sh" \
-    || die "box $_b tap missing from the TAP_DEV map"
+  grep -qF "[${_b}]=${TAP}" "$ROOT/nix/microvm/provision-host.sh" \
+    || die "box $_b tap missing from the provision TAP map"
 done
 unset _b NIX BODY VCPU MEM TAP MAC ADDR
-pass "declared facts match the nix sources and the TAP_DEV map"
+pass "declared facts match the nix sources and the provision TAP map"
 
 echo "topology-toml: $PASS checks passed"

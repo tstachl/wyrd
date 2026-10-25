@@ -43,11 +43,11 @@
 #                    whose account cannot read the tree it is handed or
 #                    write the home the nix client caches in.
 #
-# Flow: build wyrd + three VM runners -> bridge/taps -> ephemeral ssh
-# key + e2e-env.sh into the state share -> boot virtiofsd+qemu per VM
-# (own cwd each: qemu uses relative socket paths) -> wait for ssh ->
-# wait for the relay control plane -> tests/alpha-microvm.sh ->
-# report -> teardown (unless --keep).
+# Flow: build wyrd + three VM runners -> provision (bridge/taps,
+# virtiofsd+qemu per VM from identified store closures, ssh/relay
+# waits; nix/microvm/provision-host.sh, the privileged half) ->
+# ephemeral ssh key + e2e-env.sh into the state share ->
+# tests/alpha-microvm.sh -> report -> teardown (unless --keep).
 # The whole suite runs under `timeout` (120 min): a hung guest must
 # never wedge the host. Raised from 90 when the crash/exhaustion/
 # unknown-parent phases landed. Arithmetic: base phases 1-12 run
@@ -81,6 +81,13 @@ source "$SCRIPT_DIR/build-account.sh"
 # them without a host. See nix/microvm/stage-subject.sh.
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/stage-subject.sh"
+# Privileged host operations (bridge, taps, daemon spawn and
+# teardown, boot waits) over explicit arguments; no repository reads,
+# no builds, no suite. See nix/microvm/provision-host.sh. This is
+# the future host-owned unit: the split exists so the host can
+# vendor it and stop executing a checkout as root.
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/provision-host.sh"
 
 need() { command -v "$1" >/dev/null || { echo "error: missing host tool: $1" >&2; exit 2; }; }
 
@@ -185,7 +192,8 @@ else
 fi
 
 # One run at a time per host, not per state dir: taps, the bridge,
-# and SOCK_PAT are all host-global, so two runs under different
+# and the daemon socket pattern (see provision-host.sh) are all
+# host-global, so two runs under different
 # --state-dir would still reap each other's daemons and fight over
 # br-wyrd. The lock path is fixed for the same reason. Held for the
 # whole script via fd 9. The path also travels to the suite as
@@ -204,8 +212,8 @@ flock -n 9 || { echo "error: another run holds $LOCK" >&2; exit 2; }
 # Linux host this runner requires.
 E2E_TOKEN="$(head -c16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 
-BRIDGE="br-wyrd"
-NET="10.0.7"
+# Host network facts (bridge, subnet, taps) live in
+# nix/microvm/provision-host.sh now; the state layout stays here.
 RUN="$STATE_DIR/run"
 WORK="$STATE_DIR/work"
 # Build logs live outside $RUN: phase 1's guest pre-clean empties
@@ -217,73 +225,27 @@ SSH_KEY="$STATE_DIR/sshkey"
 
 die() { echo "  FAIL: $1" >&2; exit 1; }
 
-# Unique string in every daemon cmdline we start (virtiofsd
-# --socket-path and qemu -chardev path). PID files cannot work:
-# $! is the spawner subshell (dead on arrival), and kept runs are
-# strangers to the next invocation. So both the startup pre-clean
-# and the EXIT trap kill by this pattern, which cannot match
-# anything but our own daemons.
-SOCK_PAT='wyrd-.*-virtiofs-wyrd-state\.sock'
-
-kill_stale_daemons() {
-  local pids pid ppid
-  pids="$(pgrep -f "$SOCK_PAT" || true)"
-  [[ -z "$pids" ]] && return 0
-  # Supervisors first (the parents): SIGTERM stops their children
-  # cleanly instead of orphaning them into a restart loop.
-  for pid in $pids; do
-    ppid="$(ps -o ppid= -p "$pid" 2>/dev/null || true)"
-    ppid="$(echo "$ppid" | tr -d ' ')"
-    if [[ -n "$ppid" && "$ppid" != 1 && "$ppid" != "$$" ]]; then
-      kill "$ppid" 2>/dev/null || true
-    fi
-  done
-  sleep 2
-  pkill -f "$SOCK_PAT" 2>/dev/null || true
-  sleep 1
-  # Escalate: a surviving daemon (wedged qemu, respawning
-  # supervisor) must not be reported as removed below.
-  pids="$(pgrep -f "$SOCK_PAT" || true)"
-  [[ -z "$pids" ]] || pkill -KILL -f "$SOCK_PAT" 2>/dev/null || true
-  sleep 1
-  pids="$(pgrep -f "$SOCK_PAT" || true)"
-  [[ -z "$pids" ]] || { echo "  FAIL: stale daemons survive SIGKILL: $pids" >&2; return 1; }
-  return 0
-}
-
+# EXIT trap: stop the suite witness, then hand teardown to the
+# provisioner (which kills daemons and, unless --keep, removes taps
+# and the bridge). The witness dies first: it appends to $RUN/logs
+# on its own cadence and must not outlive the run (a surviving
+# logger would write a torn-down run's file, and inherit the lock
+# fd — see the 9>&- rule at its launch). LOGGER_PID is unset outside
+# a full run (--teardown mode), so the guard defaults empty under
+# set -u.
 teardown() {
-  # The availability logger dies first: it appends to $RUN/logs on
-  # its own cadence and must not outlive the run (a surviving logger
-  # would write a torn-down run's file, and inherit the lock fd —
-  # see the 9>&- rule at its launch). Unset outside a full run
-  # (--teardown mode), so the guard defaults empty under set -u.
   [[ -n "${LOGGER_PID:-}" ]] && kill "$LOGGER_PID" 2>/dev/null || true
-  if [[ "$KEEP" == 0 ]]; then
-    kill_stale_daemons
-    for t in tap-o tap-n tap-r; do ip link del "$t" 2>/dev/null || true; done
-    ip link del "$BRIDGE" 2>/dev/null || true
-  else
-    echo "kept: VMs, taps, and $BRIDGE left up (--keep)"
-  fi
+  provision_teardown "$KEEP"
 }
 trap teardown EXIT
 
-# Standalone teardown for kept runs: reuse teardown() with keeping
-# disabled, so the success line below only prints when the kills
-# and link deletions actually succeeded (kill_stale_daemons fails
-# loudly on survivors under set -e).
-# Never inline SOCK_PAT into `bash -c '...'`: pkill matches our own
-# argv and kills this shell. The variable form is safe.
+# Standalone teardown for kept runs: reuse the provisioner, so the
+# success line below only prints when the kills and link deletions
+# actually succeeded (the provisioner fails loudly on survivors).
 if [[ "$TEARDOWN" == 1 ]]; then
   echo "==> tearing down kept run"
-  KEEP=0; teardown
-  # Verify, don't claim: a surviving guest with a deleted NIC is
-  # worse than a loud failure.
-  for t in tap-o tap-n tap-r; do
-    ip link show "$t" &>/dev/null && die "tap $t survives teardown"
-  done
-  ip link show "$BRIDGE" &>/dev/null && die "$BRIDGE survives teardown"
-  echo "torn down: daemons, taps, and $BRIDGE removed ($STATE_DIR retained)"
+  provision_teardown_kept
+  echo "torn down: daemons, taps, and $PROV_BRIDGE removed ($STATE_DIR retained)"
   exit 0
 fi
 
@@ -291,15 +253,10 @@ fi
 # supervisor restart loops all leave daemons holding our sockets.
 # Idempotent: a no-op when nothing is running. Placed after the
 # definitions above; bash reads top-down.
-kill_stale_daemons
+provision_kill_stale_daemons
 
 echo "==> state dir $STATE_DIR"
-mkdir -p "$RUN" "$RUN/logs" "$WORK" "$BUILD_LOGS"
-[[ "$FRESH" == 1 ]] && rm -rf "$RUN" && mkdir -p "$RUN" "$RUN/logs"
-# The share is root-owned from the host; guest e2e (uid 1000, the
-# only normal user — numeric, no host user needed) must own the run
-# state or every drive/cred/mount mkdir fails. sshkey stays root.
-chown -R 1000:1000 "$RUN"
+provision_prepare_state "$RUN" "$WORK" "$BUILD_LOGS" "$SSH_KEY" "$STATE_DIR" "$FRESH"
 
 # Subject staging (plan step 4): the contract lives in
 # nix/microvm/stage-subject.sh — bounded ingestion, hostile-content
@@ -411,21 +368,18 @@ if [[ "$KEEP" == 1 ]]; then
   done
 fi
 
-echo "==> network: $BRIDGE ${NET}.0/24"
-ip link add "$BRIDGE" type bridge 2>/dev/null || true
-ip addr add "$NET.1/24" dev "$BRIDGE" 2>/dev/null || true
-ip link set "$BRIDGE" up
-declare -A TAP_IP=( [peer-o]=11 [peer-n]=12 [relay]=10 )
-declare -A TAP_DEV=( [peer-o]=tap-o [peer-n]=tap-n [relay]=tap-r )
+echo "==> network: $PROV_BRIDGE ${PROV_NET}.0/24"
+provision_network
 
 echo "==> ssh key + guest env"
-[[ -f "$SSH_KEY" ]] || ssh-keygen -t ed25519 -N "" -f "$SSH_KEY" -q
-cp "$SSH_KEY.pub" "$STATE_DIR/authorized_keys.pub"
+# Key, authorized_keys and run-tree ownership are provisioned with
+# the state above (provision_prepare_state); the paths stay here
+# because the suite environment below consumes them.
 {
   echo "# Generated by run-microvm.sh; sourced by the suite in guests."
   printf 'WYRD_BIN=%q\n' "$WYRD_BIN"
-  printf 'RELAY_PORT=%q\n' "18761"
-  printf 'RELAY_HOST=%q\n' "$NET.10"
+  printf 'RELAY_PORT=%q\n' "$PROV_RELAY_PORT"
+  printf 'RELAY_HOST=%q\n' "$PROV_NET.${PROV_IP[relay]}"
   printf 'RELAY_MANAGED=%q\n' "0"
   printf 'CHECKOUT=%q\n' "/etc/wyrd-tests"
   printf 'E2E_ROOT=%q\n' "/mnt/wyrd-state/run"
@@ -442,51 +396,14 @@ cp "$SSH_KEY.pub" "$STATE_DIR/authorized_keys.pub"
 echo "==> booting guests"
 BOOT_START=$(date +%s)
 for role in peer-o peer-n relay; do
-  tap="${TAP_DEV[$role]}"
-  ip link del "$tap" 2>/dev/null || true
-  # multi_queue: the microvm runner attaches with queues=<vcpu>
-  # (multiqueue); a single-queue tap fails the attach with EINVAL
-  # ("could not configure /dev/net/tun") and the guest never boots.
-  ip tuntap add dev "$tap" mode tap multi_queue
-  ip link set "$tap" up
-  ip link set "$tap" master "$BRIDGE"
-  vmdir="$WORK/vm-$role"
-  mkdir -p "$vmdir"
-  ln -sfn "${RUNNER_OUT[$role]}" "$vmdir/runner"
-  # Stale sockets from a kept run must go: a leftover .sock passes
-  # the readiness check below while no daemon listens, and qemu
-  # then dies with "Connection refused".
-  rm -f "$vmdir"/*.sock
-  # 9>&-: the lock fd must not leak into daemons. Kept daemons
-  # outlive the runner, and an inherited lock fd would hold the
-  # flock forever: no second run could ever start, and --teardown
-  # could never acquire the lock it needs to kill them.
-  ( cd "$vmdir" \
-    && ./runner/bin/virtiofsd-run > virtiofsd.log 2>&1 & ) 9>&-
-  # Wait for the socket to LISTEN, not merely exist: the file can
-  # appear before virtiofsd accepts, and qemu fails fast on refused.
-  for i in $(seq 1 30); do
-    ss -xl 2>/dev/null | grep -q "wyrd-$role-virtiofs-wyrd-state.sock" && break
-    [[ "$i" == 30 ]] && { tail -n 5 "$vmdir/virtiofsd.log"; die "$role: virtiofsd never listened"; }
-    sleep 1
-  done
-  ( cd "$vmdir" && ./runner/bin/microvm-run > qemu.log 2>&1 & ) 9>&-
-  echo "    $role up (tap $tap)"
+  provision_boot_role "$role" "${RUNNER_OUT[$role]}" "$WORK"
 done
 BOOT_S=$(( $(date +%s) - BOOT_START ))
 echo "    boot took ${BOOT_S}s (virtiofsd + qemu per guest)"
 
 echo "==> waiting for ssh"
 SSH_START=$(date +%s)
-SSH="ssh -i $SSH_KEY -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -o BatchMode=yes"
-for ip in 11 12; do
-  for i in $(seq 1 60); do
-    $SSH "e2e@$NET.$ip" true 2>/dev/null && break
-    [[ "$i" == 60 ]] && die "e2e@$NET.$ip never accepted ssh"
-    sleep 2
-  done
-  echo "    e2e@$NET.$ip reachable"
-done
+provision_wait_ssh "$SSH_KEY"
 SSH_S=$(( $(date +%s) - SSH_START ))
 echo "    ssh wait took ${SSH_S}s"
 
@@ -495,11 +412,7 @@ echo "    ssh wait took ${SSH_S}s"
 # convergence timeout. Fail fast with the real cause instead.
 echo "==> waiting for relay"
 RELAY_START=$(date +%s)
-for i in $(seq 1 30); do
-  timeout 2 bash -c "</dev/tcp/$NET.10/18761" 2>/dev/null && break
-  [[ "$i" == 30 ]] && die "relay never listened on $NET.10:18761"
-  sleep 2
-done
+provision_wait_relay
 RELAY_S=$(( $(date +%s) - RELAY_START ))
 echo "    relay control plane reachable (wait took ${RELAY_S}s)"
 echo "HOST sections: build=${BUILD_S}s boot=${BOOT_S}s ssh_wait=${SSH_S}s relay_wait=${RELAY_S}s"
@@ -531,7 +444,7 @@ availability_loop() {
     # with no stable field boundaries for the machine-classified
     # timeline this witness exists for.
     load="$(cut -d' ' -f1-3 /proc/loadavg | tr ' ' ',')"
-    if timeout 2 bash -c "</dev/tcp/$NET.10/18761" 2>/dev/null; then relay=ok; else relay=FAIL; fi
+    if timeout 2 bash -c "</dev/tcp/$PROV_NET.${PROV_IP[relay]}/$PROV_RELAY_PORT" 2>/dev/null; then relay=ok; else relay=FAIL; fi
     printf '%s load=%s relay=%s\n' "$ts" "$load" "$relay" >> "$AVAIL_LOG"
     sleep 5
   done
@@ -555,9 +468,9 @@ timeout 7200 env \
   "WYRD_E2E_TOKEN=$E2E_TOKEN" \
   "WYRD_E2E_LOCK=$LOCK" \
   "E2E_INTERVAL=${E2E_INTERVAL:-}" \
-  "RELAY_URL=ws://$NET.10:18761" \
-  "PEER_O=e2e@$NET.11" \
-  "PEER_N=e2e@$NET.12" \
+  "RELAY_URL=ws://$PROV_NET.${PROV_IP[relay]}:$PROV_RELAY_PORT" \
+  "PEER_O=e2e@$PROV_NET.${PROV_IP[peer-o]}" \
+  "PEER_N=e2e@$PROV_NET.${PROV_IP[peer-n]}" \
   bash "$ROOT/tests/alpha-microvm.sh" 9>&-
 STATUS=$?
 set -e
