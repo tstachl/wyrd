@@ -408,8 +408,8 @@ fi # want_phase 9
 # Rename half runs pre-partition (it needs convergence); the host
 # partitions only after both rename-done files land, then heals
 # after both conflict writes. Partition is host-side tap surgery
-# (tap-r is the relay's tap; see TAP_DEV in run-microvm.sh) — the
-# orchestrator runs as root, so no privilege dance. Done-file
+# (tap-r is the relay's tap; see PROV_TAP in
+# nix/microvm/provision-host.sh) — the orchestrator runs as root, so no privilege dance. Done-file
 # rendezvous rides the shared state root, unaffected by the
 # partition. No relay query witness: the in-leg @1/@2 reads cannot
 # succeed unless the peer's announcement crossed the relay and its
