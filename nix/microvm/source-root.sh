@@ -29,9 +29,9 @@ resolve_source_root() { # <gate-source-or-empty>
 
   if [[ -n "$gate_source" ]]; then
     [[ -d "$gate_source" ]] \
-      || die "GATE_SOURCE is not a directory: $gate_source (the host must hand the runner its revision-bound source tree)"
+      || die "GATE_SOURCE is not a directory: $gate_source"
     [[ -f "$gate_source/flake.nix" ]] \
-      || die "GATE_SOURCE has no flake: $gate_source (the host must hand the runner its revision-bound source tree)"
+      || die "GATE_SOURCE has no flake.nix: $gate_source"
     printf '%s\n' "$gate_source"
     return 0
   fi
