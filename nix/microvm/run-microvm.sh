@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
-# nix/microvm/run-microvm.sh — host runner for the hardened e2e gate.
-# Runs on the Linux KVM host (odin) as root: qemu tap devices, the
+# nix/microvm/run-microvm.sh — dev-loop runner for the hardened e2e gate.
+#
+# DEV LOOP ONLY: this file executes repository-controlled code as host
+# root (taps, bridge, virtiofsd, builds), which is the developer's own
+# trust domain on their own machine. It is never executed on Odin via
+# the gate task path — there the host owns the privileged operations
+# (host-owned provisioner + capability binaries) and the suite runs
+# unprivileged (see tests/alpha-microvm.sh and
+# tests/test-no-host-privilege.sh, which pins that boundary).
+# Runs on the Linux KVM host as root: qemu tap devices, the
 # virtiofsd share daemons, and the bridge all need privilege (the
 # microvm.nix virtiofsd wrapper refuses non-root, and taps attach to
 # a host bridge). One command end to end:
@@ -467,6 +475,13 @@ LOGGER_PID=$!
 echo "    host availability witness logging to logs/host-availability.log (pid $LOGGER_PID)"
 
 echo "==> running the suite"
+# Suite capabilities for the dev loop: the suite names no privileged
+# program (see tests/alpha-microvm.sh), so the dev loop — which runs
+# the suite as root on its own machine — provides the three
+# dev-only helpers under nix/microvm/dev-*.sh. On Odin the host
+# provides host-owned equivalents (or leaves the unset ones at
+# their task-path defaults); the dev helpers never execute there
+# (pinned by tests/test-no-host-privilege.sh).
 set +e
 timeout 7200 env \
   "STATE_DIR=$STATE_DIR" \
@@ -476,6 +491,9 @@ timeout 7200 env \
   "NAK_BIN=$NAK_BIN" \
   "WYRD_E2E_TOKEN=$E2E_TOKEN" \
   "WYRD_E2E_LOCK=$LOCK" \
+  "WYRD_AS_GUEST_BIN=$ROOT/nix/microvm/dev-as-guest.sh" \
+  "WYRD_PARTITION_BIN=$ROOT/nix/microvm/dev-partition.sh" \
+  "WYRD_HAND_TO_GUEST_BIN=$ROOT/nix/microvm/dev-hand-to-guest.sh" \
   "E2E_INTERVAL=${E2E_INTERVAL:-}" \
   "RELAY_URL=ws://$PROV_NET.${PROV_IP[relay]}:$PROV_RELAY_PORT" \
   "PEER_O=e2e@$PROV_NET.${PROV_IP[peer-o]}" \
