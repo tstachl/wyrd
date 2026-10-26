@@ -11,6 +11,6 @@
 # su/runuser.
 #
 # Usage: dev-as-guest.sh <cmd> [args...]
-# Provided to the suite as WYRD_AS_GUEST_BIN by run-microvm.sh.
+# Provided to the suite as GATE_AS_GUEST_BIN by run-microvm.sh.
 set -euo pipefail
 exec setpriv --reuid 1000 --regid 1000 --clear-groups -- "$@"

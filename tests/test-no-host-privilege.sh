@@ -5,8 +5,8 @@
 # No repository code executed on Odin with host privilege may name a
 # privileged program: the repository contributes orchestration (data
 # and parameters), the host contributes the privilege through
-# capabilities (WYRD_AS_GUEST_BIN, WYRD_PARTITION_BIN,
-# WYRD_HAND_TO_GUEST_BIN). Pure bash, no host, no nix: run it
+# capabilities (GATE_AS_GUEST_BIN, GATE_PARTITION_BIN,
+# GATE_HAND_TO_GUEST_BIN). Pure bash, no host, no nix: run it
 # anywhere with `bash tests/test-no-host-privilege.sh`. (Wired into
 # the CI shell-tests job alongside the other stubs.)
 #
@@ -77,16 +77,16 @@ done
 pass "task closure kills nothing (kill -0 liveness only)"
 
 # --- the capability surface is defined, not bypassed ---
-grep -q 'WYRD_AS_GUEST_BIN' "$ROOT/tests/alpha-microvm.sh" \
-  || die "as_guest capability (WYRD_AS_GUEST_BIN) missing from the suite"
-grep -q 'WYRD_PARTITION_BIN' "$ROOT/tests/alpha-microvm.sh" \
-  || die "partition capability (WYRD_PARTITION_BIN) missing from the suite"
-grep -q 'WYRD_HAND_TO_GUEST_BIN' "$ROOT/tests/alpha-microvm.sh" \
-  || die "handover capability (WYRD_HAND_TO_GUEST_BIN) missing from the suite"
+grep -q 'GATE_AS_GUEST_BIN' "$ROOT/tests/alpha-microvm.sh" \
+  || die "as_guest capability (GATE_AS_GUEST_BIN) missing from the suite"
+grep -q 'GATE_PARTITION_BIN' "$ROOT/tests/alpha-microvm.sh" \
+  || die "partition capability (GATE_PARTITION_BIN) missing from the suite"
+grep -q 'GATE_HAND_TO_GUEST_BIN' "$ROOT/tests/alpha-microvm.sh" \
+  || die "handover capability (GATE_HAND_TO_GUEST_BIN) missing from the suite"
 pass "capability surface (as-guest, partition, handover) is defined"
 
 # --- the dev loop provides every capability the suite requires ---
-for cap in WYRD_AS_GUEST_BIN WYRD_PARTITION_BIN WYRD_HAND_TO_GUEST_BIN; do
+for cap in GATE_AS_GUEST_BIN GATE_PARTITION_BIN GATE_HAND_TO_GUEST_BIN; do
   grep -q "\"$cap=" "$ROOT/nix/microvm/run-microvm.sh" \
     || die "dev loop does not provide $cap (suite would refuse)"
 done
