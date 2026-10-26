@@ -14,6 +14,11 @@
 #   subnet, ssh-user, relay-role, relay-port, roles) and the runner
 #   handoff at GATE_RUNNERS_ENV. A missing or malformed input refuses
 #   here, before any suite phase runs.
+# - Datum schema: subnet is a dotted /24 prefix (e.g. 10.0.7);
+#   relay-port is 1-65535; ssh-user is a login name; roles is
+#   `|`-separated `name tap octet ssh-flag runner` records with an
+#   ssh-flag of `ssh` or `-`. Shape violations refuse like missing
+#   files do.
 # - Runner names are task convention: the Odin task's provision builds
 #   must name the wyrd and nak builds `wyrd` and `nak`; the suite
 #   resolves them to WYRD_BIN and NAK_BIN.
@@ -55,6 +60,13 @@ SUBNET="$(policy subnet)" || exit 1
 SSH_USER="$(policy ssh-user)" || exit 1
 RELAY_ROLE="$(policy relay-role)" || exit 1
 RELAY_PORT="$(policy relay-port)" || exit 1
+# Shape, not just presence: a malformed datum would otherwise build
+# bad endpoints silently. The host validates these too when it
+# publishes them; this is the entry's fail-fast refusal.
+[[ "$SUBNET" =~ ^([0-9]{1,3}\.){2}[0-9]{1,3}$ ]] || { echo "gate-entry.sh: subnet out of bounds: $SUBNET (want dotted /24 prefix)" >&2; exit 1; }
+[[ "$SSH_USER" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || { echo "gate-entry.sh: ssh user out of bounds: $SSH_USER" >&2; exit 1; }
+[[ "$RELAY_PORT" =~ ^[0-9]{1,5}$ ]] && [ "$RELAY_PORT" -ge 1 ] && [ "$RELAY_PORT" -le 65535 ] \
+  || { echo "gate-entry.sh: relay port out of bounds: $RELAY_PORT" >&2; exit 1; }
 ROLES_FILE="$PROVISION_DIR/roles"
 [ -f "$ROLES_FILE" ] || { echo "gate-entry.sh: provision datum is missing: roles" >&2; exit 1; }
 
@@ -69,6 +81,13 @@ RUN="$STATE_DIR/run"
 # specific and names peer-o/peer-n explicitly; a task with different
 # roles needs its own entry, not a flag.
 PEER_O=""; PEER_N=""; RELAY_OCTET=""
+# Peer and relay endpoints from the published roles (name tap octet
+# ssh-flag runner, `|`-separated): every ssh role becomes a dialable
+# peer, the relay role becomes the ws URL. This entry is wyrd-task
+# specific and names peer-o/peer-n explicitly; a task with different
+# roles needs its own entry, not a flag. Glob expansion is off for
+# the split: role fields are data, never patterns.
+set -f
 while IFS= read -r record || [ -n "$record" ]; do
   # shellcheck disable=SC2086
   set -- $record
@@ -78,6 +97,7 @@ while IFS= read -r record || [ -n "$record" ]; do
   if [ "$1" = "peer-o" ] && [ "$4" = "ssh" ]; then PEER_O="$SSH_USER@$SUBNET.$3"; fi
   if [ "$1" = "peer-n" ] && [ "$4" = "ssh" ]; then PEER_N="$SSH_USER@$SUBNET.$3"; fi
 done < <(tr '|' '\n' <"$ROLES_FILE")
+set +f
 [ -n "$PEER_O" ] || { echo "gate-entry.sh: roles name no ssh peer-o" >&2; exit 1; }
 [ -n "$PEER_N" ] || { echo "gate-entry.sh: roles name no ssh peer-n" >&2; exit 1; }
 [ -n "$RELAY_OCTET" ] || { echo "gate-entry.sh: roles name no $RELAY_ROLE" >&2; exit 1; }
@@ -118,6 +138,7 @@ flock -n 9 || { echo "gate-entry.sh: another run holds $LOCK_FILE" >&2; exit 2; 
 
 export WYRD_E2E_TOKEN="$TOKEN" WYRD_E2E_LOCK="$LOCK_FILE"
 export STATE_DIR SSH_KEY WYRD_BIN NAK_BIN PEER_O PEER_N RELAY_URL
+export GATE_BATS_LIB
 export E2E_INTERVAL="${E2E_INTERVAL:-}"
 
 exec bats "$ROOT/tests/gate-entry-smoke.bats"

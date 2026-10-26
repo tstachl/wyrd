@@ -60,7 +60,7 @@ echo "$tool \$*" >>"$CALLS"
 EOF
   if [ "$tool" = bats ]; then
     cat >>"$STUBBIN/$tool" <<'EOF'
-env | grep -E '^(WYRD_|NAK_|PEER_|RELAY_|STATE_DIR|SSH_KEY|E2E_)' | sort >>"$CALLS"
+env | grep -E '^(WYRD_|NAK_|PEER_|RELAY_|STATE_DIR|SSH_KEY|E2E_|GATE_)' | sort >>"$CALLS"
 EOF
   fi
   chmod +x "$STUBBIN/$tool"
@@ -95,6 +95,9 @@ grep -q "^PEER_N=e2e@10.0.7.12$" "$CALLS" || die "peer-n endpoint assembled from
 grep -q "^RELAY_URL=ws://10.0.7.10:18761$" "$CALLS" || die "relay url assembled from relay role"
 grep -q "^WYRD_BIN=$RUNNER_BIN$" "$CALLS" || die "wyrd runner resolved from the handoff"
 grep -q "^NAK_BIN=$NAK_BIN$" "$CALLS" || die "nak runner resolved from the handoff"
+grep -q "^GATE_BATS_LIB=$FIXTURE/bats-lib$" "$CALLS" || die "bats lib handed to the suite"
+grep -q "^WYRD_E2E_LOCK=$STATE_DIR/lock$" "$CALLS" || die "provision lock handed to the suite"
+grep -q "^E2E_INTERVAL=$" "$CALLS" || die "interval default handed to the suite (empty)"
 token_env="$(grep '^WYRD_E2E_TOKEN=' "$CALLS" | cut -d= -f2-)"
 token_file="$(grep '^WYRD_E2E_TOKEN=' "$RUN_DIR/e2e-env.sh" | cut -d= -f2-)"
 [[ -n "$token_env" && "$token_env" == "$token_file" ]] || die "run token handed to the suite matches the published file"
@@ -132,5 +135,15 @@ pass "empty lock-file datum refuses"
 out="$(env -i PATH="$NOBATS:/usr/bin:/bin" GATE_TASK_PROVISION_DIR="$PROVISION_DIR" GATE_BATS_LIB="$FIXTURE/bats-lib" GATE_RUNNERS_ENV="$FIXTURE/runners.env" bash "$ENTRY" --fresh 2>/dev/null; echo "status=$?")"
 [[ "$out" == "status=1" ]] || die "missing bats refuses, got: $out"
 pass "missing bats refuses"
+
+printf 'abc' >"$PROVISION_DIR/relay-port"
+out="$(run_entry -- --fresh)"
+[[ "$out" == "status=1" ]] || die "non-numeric relay port refuses, got: $out"
+printf '18761' >"$PROVISION_DIR/relay-port"
+printf '10.0' >"$PROVISION_DIR/subnet"
+out="$(run_entry -- --fresh)"
+[[ "$out" == "status=1" ]] || die "truncated subnet refuses, got: $out"
+printf '10.0.7' >"$PROVISION_DIR/subnet"
+pass "malformed datums refuse"
 
 echo "gate-entry: $PASS checks passed"
