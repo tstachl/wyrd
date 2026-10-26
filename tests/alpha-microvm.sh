@@ -129,36 +129,36 @@ unset _c
 # the host contributes the privilege (pinned by
 # tests/test-no-host-privilege.sh).
 #
-#   WYRD_AS_GUEST_BIN       de-escalation wrapper for host wyrd
+#   GATE_AS_GUEST_BIN       de-escalation wrapper for host wyrd
 #                           invocations (dev loop: drops to uid
 #                           1000; task path: unset, direct exec —
 #                           the suite already runs as the owner)
-#   WYRD_PARTITION_BIN      tap partition primitive
+#   GATE_PARTITION_BIN      tap partition primitive
 #                           (dev-partition.sh in the dev loop;
 #                           a host-owned binary over the task's
 #                           declared taps on Odin)
-#   WYRD_HAND_TO_GUEST_BIN  share handover for created credential
+#   GATE_HAND_TO_GUEST_BIN  share handover for created credential
 #                           material (dev loop: hands ownership to uid 1000;
 #                           task path: unset, a no-op — files
 #                           arrive correctly owned)
 as_guest() {
-  if [[ -n "${WYRD_AS_GUEST_BIN:-}" ]]; then
-    "$WYRD_AS_GUEST_BIN" "$@"
+  if [[ -n "${GATE_AS_GUEST_BIN:-}" ]]; then
+    "$GATE_AS_GUEST_BIN" "$@"
   else
     "$@"
   fi
 }
 hand_to_guest() {
-  if [[ -n "${WYRD_HAND_TO_GUEST_BIN:-}" ]]; then
-    "$WYRD_HAND_TO_GUEST_BIN" "$@"
+  if [[ -n "${GATE_HAND_TO_GUEST_BIN:-}" ]]; then
+    "$GATE_HAND_TO_GUEST_BIN" "$@"
   else
     :
   fi
 }
 host_partition() { # <tap> down|up
-  [[ -n "${WYRD_PARTITION_BIN:-}" ]] \
-    || die "partition capability not provided (host must set WYRD_PARTITION_BIN)"
-  "$WYRD_PARTITION_BIN" "$@"
+  [[ -n "${GATE_PARTITION_BIN:-}" ]] \
+    || die "partition capability not provided (host must set GATE_PARTITION_BIN)"
+  "$GATE_PARTITION_BIN" "$@"
 }
 
 SSH="ssh -i $SSH_KEY -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o BatchMode=yes"

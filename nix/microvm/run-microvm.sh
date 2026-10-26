@@ -491,9 +491,9 @@ timeout 7200 env \
   "NAK_BIN=$NAK_BIN" \
   "WYRD_E2E_TOKEN=$E2E_TOKEN" \
   "WYRD_E2E_LOCK=$LOCK" \
-  "WYRD_AS_GUEST_BIN=$ROOT/nix/microvm/dev-as-guest.sh" \
-  "WYRD_PARTITION_BIN=$ROOT/nix/microvm/dev-partition.sh" \
-  "WYRD_HAND_TO_GUEST_BIN=$ROOT/nix/microvm/dev-hand-to-guest.sh" \
+  "GATE_AS_GUEST_BIN=$ROOT/nix/microvm/dev-as-guest.sh" \
+  "GATE_PARTITION_BIN=$ROOT/nix/microvm/dev-partition.sh" \
+  "GATE_HAND_TO_GUEST_BIN=$ROOT/nix/microvm/dev-hand-to-guest.sh" \
   "E2E_INTERVAL=${E2E_INTERVAL:-}" \
   "RELAY_URL=ws://$PROV_NET.${PROV_IP[relay]}:$PROV_RELAY_PORT" \
   "PEER_O=e2e@$PROV_NET.${PROV_IP[peer-o]}" \
