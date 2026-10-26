@@ -12,7 +12,8 @@
 #
 # Scope: the host-executed task closure — the files the gate task
 # runs on the host (tests/alpha-microvm.sh plus the two modules it
-# sources). Guest-executed legs (alpha-microvm-legs.sh and what they
+# sources, and the gate-path entry: tests/gate-entry.sh plus the
+# smoke suite it execs, which run as the build user on Odin). Guest-executed legs (alpha-microvm-legs.sh and what they
 # source) run as the guest user inside the VMs; guest-side sudo is
 # guest privilege, not host privilege, and stays. Dev-loop-only
 # files (nix/microvm/run-microvm.sh, provision-host.sh,
@@ -38,6 +39,8 @@ CLOSURE=(
   "$ROOT/tests/alpha-microvm.sh"
   "$ROOT/tests/e2e-guard.sh"
   "$ROOT/tests/step-grammar.sh"
+  "$ROOT/tests/gate-entry.sh"
+  "$ROOT/tests/gate-entry-smoke.bats"
 )
 for f in "${CLOSURE[@]}"; do
   [[ -f "$f" ]] || die "task closure file missing: $f"

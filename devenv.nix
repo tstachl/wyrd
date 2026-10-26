@@ -10,6 +10,7 @@ in
   languages.rust.toolchainFile = ./rust-toolchain.toml;
 
   packages = with unstable; [
+    bats
     cargo-audit
     cargo-deny
     cargo-nextest
