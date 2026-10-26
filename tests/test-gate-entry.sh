@@ -159,6 +159,12 @@ grep -q "^PEER_O=e2e@10.0.7.11$" "$CALLS" || die "peer-o still resolves with a g
 cp "$FIXTURE/roles.clean" "$PROVISION_DIR/roles"
 pass "role fields are never glob-expanded"
 
+printf 'peer-o tap-o 999 ssh runner-peer-o|peer-n tap-n 12 ssh runner-peer-n|relay tap-r 10 - runner-relay' >"$PROVISION_DIR/roles"
+out="$(run_entry -- --fresh)"
+[[ "$out" == "status=1" ]] || die "out-of-range role octet refuses, got: $out"
+cp "$FIXTURE/roles.clean" "$PROVISION_DIR/roles"
+pass "role octet range refuses"
+
 printf '10.0.7.999' >"$PROVISION_DIR/subnet"
 out="$(run_entry -- --fresh)"
 [[ "$out" == "status=1" ]] || die "out-of-range subnet octet refuses, got: $out"

@@ -90,6 +90,10 @@ PEER_O=""; PEER_N=""; RELAY_OCTET=""
 while IFS= read -r record || [ -n "$record" ]; do
   read -ra fields <<<"$record"
   [ "${#fields[@]}" -eq 5 ] || { echo "gate-entry.sh: role out of bounds: $record" >&2; exit 1; }
+  # Octets are host address parts like the subnet's: numeric, in range.
+  # The host validates on publish; this is the entry's fail-fast.
+  [[ "${fields[2]}" =~ ^[0-9]{1,3}$ ]] && [ "${fields[2]}" -ge 1 ] && [ "${fields[2]}" -le 254 ] \
+    || { echo "gate-entry.sh: role octet out of bounds: $record" >&2; exit 1; }
   if [ "${fields[0]}" = "$RELAY_ROLE" ]; then RELAY_OCTET="${fields[2]}"; fi
   case "${fields[3]}" in ssh|-) ;; *) { echo "gate-entry.sh: ssh flag out of bounds: $record" >&2; exit 1; } ;; esac
   if [ "${fields[0]}" = "peer-o" ] && [ "${fields[3]}" = "ssh" ]; then PEER_O="$SSH_USER@$SUBNET.${fields[2]}"; fi
