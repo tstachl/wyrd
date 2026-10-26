@@ -141,5 +141,9 @@ export WYRD_E2E_TOKEN="$TOKEN" WYRD_E2E_LOCK="$LOCK_FILE"
 export STATE_DIR SSH_KEY WYRD_BIN NAK_BIN PEER_O PEER_N RELAY_URL
 export GATE_BATS_LIB
 export E2E_INTERVAL="${E2E_INTERVAL:-}"
+# Step selection arrives with the fuller migration; the entry always
+# runs phase 1 (every prefix includes it) and CORE_ONLY truncates the
+# shared-core depth when set, empty runs the full core.
+export CORE_ONLY="${CORE_ONLY:-}"
 
-exec bats "$ROOT/tests/gate-entry-smoke.bats"
+exec bats "$ROOT/tests/gate-entry-smoke.bats" "$ROOT/tests/gate-phase-01.bats"
