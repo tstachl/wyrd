@@ -98,7 +98,7 @@ grep -q "^NAK_BIN=$NAK_BIN$" "$CALLS" || die "nak runner resolved from the hando
 grep -q "^GATE_BATS_LIB=$FIXTURE/bats-lib$" "$CALLS" || die "bats lib handed to the suite"
 grep -q "^WYRD_E2E_LOCK=$STATE_DIR/lock$" "$CALLS" || die "provision lock handed to the suite"
 grep -q "^E2E_INTERVAL=$" "$CALLS" || die "interval default handed to the suite (empty)"
-grep -q "^CORE_ONLY=$" "$CALLS" || die "core depth handed to the suite (empty default)"
+grep -q "^CORE_ONLY=1,2,3,4,5$" "$CALLS" || die "core depth defaults to the five-step core"
 token_env="$(grep '^WYRD_E2E_TOKEN=' "$CALLS" | cut -d= -f2-)"
 token_file="$(grep '^WYRD_E2E_TOKEN=' "$RUN_DIR/e2e-env.sh" | cut -d= -f2-)"
 [[ -n "$token_env" && "$token_env" == "$token_file" ]] || die "run token handed to the suite matches the published file"

@@ -142,8 +142,10 @@ export STATE_DIR SSH_KEY WYRD_BIN NAK_BIN PEER_O PEER_N RELAY_URL
 export GATE_BATS_LIB
 export E2E_INTERVAL="${E2E_INTERVAL:-}"
 # Step selection arrives with the fuller migration; the entry always
-# runs phase 1 (every prefix includes it) and CORE_ONLY truncates the
-# shared-core depth when set, empty runs the full core.
-export CORE_ONLY="${CORE_ONLY:-}"
+# runs phase 1 (every prefix includes it). The default mirrors
+# alpha-microvm.sh's absent-selection default (CORE_MAX=5): an empty
+# E2E_ONLY_STEP would run all six Lima steps including relay
+# convergence, which belongs to a later phase on the microvm path.
+export CORE_ONLY="${CORE_ONLY:-1,2,3,4,5}"
 
 exec bats "$ROOT/tests/gate-entry-smoke.bats" "$ROOT/tests/gate-phase-01.bats"

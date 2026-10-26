@@ -41,7 +41,6 @@ CLOSURE=(
   "$ROOT/tests/e2e-helpers.bash"
   "$ROOT/tests/step-grammar.sh"
   "$ROOT/tests/gate-entry.sh"
-  "$ROOT/tests/e2e-helpers.bash"
   "$ROOT/tests/gate-entry-smoke.bats"
   "$ROOT/tests/gate-phase-01.bats"
 )

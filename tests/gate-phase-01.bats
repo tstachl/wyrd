@@ -20,7 +20,7 @@ bats_require_minimum_version 1.5.0
 load "$BATS_TEST_DIRNAME/e2e-guard.sh"
 
 setup() {
-  for v in STATE_DIR RUN WYRD_BIN PEER_O WYRD_E2E_TOKEN WYRD_E2E_LOCK SSH_KEY GATE_BATS_LIB CORE_ONLY; do
+  for v in STATE_DIR WYRD_BIN PEER_O WYRD_E2E_TOKEN WYRD_E2E_LOCK SSH_KEY GATE_BATS_LIB CORE_ONLY; do
     [ -n "${!v+x}" ] || { echo "gate-phase-01: $v is not set (run through tests/gate-entry.sh)" >&2; return 1; }
   done
   RUN="$STATE_DIR/run"
