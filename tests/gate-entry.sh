@@ -64,6 +64,11 @@ RELAY_PORT="$(policy relay-port)" || exit 1
 # bad endpoints silently. The host validates these too when it
 # publishes them; this is the entry's fail-fast refusal.
 [[ "$SUBNET" =~ ^([0-9]{1,3}\.){2}[0-9]{1,3}$ ]] || { echo "gate-entry.sh: subnet out of bounds: $SUBNET (want dotted /24 prefix)" >&2; exit 1; }
+IFS=. read -ra _octets <<<"$SUBNET"
+for octet in "${_octets[@]}"; do
+  [ "$octet" -le 255 ] || { echo "gate-entry.sh: subnet octet out of bounds: $SUBNET" >&2; exit 1; }
+done
+unset _octets
 [[ "$SSH_USER" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || { echo "gate-entry.sh: ssh user out of bounds: $SSH_USER" >&2; exit 1; }
 [[ "$RELAY_PORT" =~ ^[0-9]{1,5}$ ]] && [ "$RELAY_PORT" -ge 1 ] && [ "$RELAY_PORT" -le 65535 ] \
   || { echo "gate-entry.sh: relay port out of bounds: $RELAY_PORT" >&2; exit 1; }
@@ -79,25 +84,17 @@ RUN="$STATE_DIR/run"
 # ssh-flag runner, `|`-separated): every ssh role becomes a dialable
 # peer, the relay role becomes the ws URL. This entry is wyrd-task
 # specific and names peer-o/peer-n explicitly; a task with different
-# roles needs its own entry, not a flag.
+# roles needs its own entry, not a flag. Fields are read into an
+# array, never word-split: role fields are data, never patterns.
 PEER_O=""; PEER_N=""; RELAY_OCTET=""
-# Peer and relay endpoints from the published roles (name tap octet
-# ssh-flag runner, `|`-separated): every ssh role becomes a dialable
-# peer, the relay role becomes the ws URL. This entry is wyrd-task
-# specific and names peer-o/peer-n explicitly; a task with different
-# roles needs its own entry, not a flag. Glob expansion is off for
-# the split: role fields are data, never patterns.
-set -f
 while IFS= read -r record || [ -n "$record" ]; do
-  # shellcheck disable=SC2086
-  set -- $record
-  [ $# -eq 5 ] || { echo "gate-entry.sh: role out of bounds: $record" >&2; exit 1; }
-  if [ "$1" = "$RELAY_ROLE" ]; then RELAY_OCTET="$3"; fi
-  case "$4" in ssh|-) ;; *) { echo "gate-entry.sh: ssh flag out of bounds: $record" >&2; exit 1; } ;; esac
-  if [ "$1" = "peer-o" ] && [ "$4" = "ssh" ]; then PEER_O="$SSH_USER@$SUBNET.$3"; fi
-  if [ "$1" = "peer-n" ] && [ "$4" = "ssh" ]; then PEER_N="$SSH_USER@$SUBNET.$3"; fi
+  read -ra fields <<<"$record"
+  [ "${#fields[@]}" -eq 5 ] || { echo "gate-entry.sh: role out of bounds: $record" >&2; exit 1; }
+  if [ "${fields[0]}" = "$RELAY_ROLE" ]; then RELAY_OCTET="${fields[2]}"; fi
+  case "${fields[3]}" in ssh|-) ;; *) { echo "gate-entry.sh: ssh flag out of bounds: $record" >&2; exit 1; } ;; esac
+  if [ "${fields[0]}" = "peer-o" ] && [ "${fields[3]}" = "ssh" ]; then PEER_O="$SSH_USER@$SUBNET.${fields[2]}"; fi
+  if [ "${fields[0]}" = "peer-n" ] && [ "${fields[3]}" = "ssh" ]; then PEER_N="$SSH_USER@$SUBNET.${fields[2]}"; fi
 done < <(tr '|' '\n' <"$ROLES_FILE")
-set +f
 [ -n "$PEER_O" ] || { echo "gate-entry.sh: roles name no ssh peer-o" >&2; exit 1; }
 [ -n "$PEER_N" ] || { echo "gate-entry.sh: roles name no ssh peer-n" >&2; exit 1; }
 [ -n "$RELAY_OCTET" ] || { echo "gate-entry.sh: roles name no $RELAY_ROLE" >&2; exit 1; }

@@ -146,4 +146,23 @@ out="$(run_entry -- --fresh)"
 printf '10.0.7' >"$PROVISION_DIR/subnet"
 pass "malformed datums refuse"
 
+# A glob character in a role field must stay literal: under word
+# splitting it would expand against the unit's working directory and
+# corrupt the field count. The runner field is unused downstream, so
+# a `*` there must leave the happy path green.
+cp "$PROVISION_DIR/roles" "$FIXTURE/roles.clean"
+printf 'peer-o tap-o 11 ssh *|peer-n tap-n 12 ssh runner-peer-n|relay tap-r 10 - runner-relay' >"$PROVISION_DIR/roles"
+: >"$CALLS"
+out="$(run_entry -- --fresh)"
+[[ "$out" == "status=0" ]] || die "glob in role field breaks parsing, got: $out ($(cat "$FIXTURE/stderr"))"
+grep -q "^PEER_O=e2e@10.0.7.11$" "$CALLS" || die "peer-o still resolves with a glob runner"
+cp "$FIXTURE/roles.clean" "$PROVISION_DIR/roles"
+pass "role fields are never glob-expanded"
+
+printf '10.0.7.999' >"$PROVISION_DIR/subnet"
+out="$(run_entry -- --fresh)"
+[[ "$out" == "status=1" ]] || die "out-of-range subnet octet refuses, got: $out"
+printf '10.0.7' >"$PROVISION_DIR/subnet"
+pass "subnet octet range refuses"
+
 echo "gate-entry: $PASS checks passed"
