@@ -88,7 +88,7 @@ run_entry() {
 : >"$CALLS"
 out="$(run_entry -- --fresh)"
 [[ "$out" == "status=0" ]] || die "happy path exits 0, got: $out ($(cat "$FIXTURE/stderr"))"
-grep -q "^bats .*/tests/gate-entry-smoke.bats .*/tests/gate-phase-01.bats .*/tests/gate-phase-02.bats .*/tests/gate-phase-03.bats .*/tests/gate-phase-04.bats$" "$CALLS" || die "driver execs bats on the smoke and phase files"
+grep -q "^bats .*/tests/gate-entry-smoke.bats .*/tests/gate-phase-01.bats .*/tests/gate-phase-02.bats .*/tests/gate-phase-03.bats .*/tests/gate-phase-04.bats .*/tests/gate-phase-05.bats$" "$CALLS" || die "driver execs bats on the smoke and phase files"
 grep -q "^flock -n 9$" "$CALLS" || die "driver holds fd 9 non-blocking (flock -n 9)"
 grep -q "^PEER_O=e2e@10.0.7.11$" "$CALLS" || die "peer-o endpoint assembled from roles+subnet"
 grep -q "^PEER_N=e2e@10.0.7.12$" "$CALLS" || die "peer-n endpoint assembled from roles+subnet"
