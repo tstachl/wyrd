@@ -141,5 +141,17 @@ export WYRD_E2E_TOKEN="$TOKEN" WYRD_E2E_LOCK="$LOCK_FILE"
 export STATE_DIR SSH_KEY WYRD_BIN NAK_BIN PEER_O PEER_N RELAY_URL
 export GATE_BATS_LIB
 export E2E_INTERVAL="${E2E_INTERVAL:-}"
+# Step selection arrives with the fuller migration; the entry always
+# runs phase 1 (every prefix includes it). The default mirrors
+# alpha-microvm.sh's absent-selection default (CORE_MAX=5): an empty
+# E2E_ONLY_STEP would run all six Lima steps including relay
+# convergence, which belongs to a later phase on the microvm path.
+# Host $RUN is shared into every guest at /mnt/wyrd-state (see
+# nix/microvm/common.nix), so $RUN/e2e-env.sh is guest-visible at
+# $GUEST_RUN/e2e-env.sh. The entry owns that translation: one export
+# here covers every phase, which must use $GUEST_ENV, never the host
+# $RUN path, for the guest-side env file.
+export GUEST_ENV="/mnt/wyrd-state/run/e2e-env.sh"
+export CORE_ONLY="${CORE_ONLY:-1,2,3,4,5}"
 
-exec bats "$ROOT/tests/gate-entry-smoke.bats"
+exec bats "$ROOT/tests/gate-entry-smoke.bats" "$ROOT/tests/gate-phase-01.bats"

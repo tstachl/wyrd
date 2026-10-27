@@ -38,9 +38,11 @@ die() { echo "  FAIL: $1" >&2; exit 1; }
 CLOSURE=(
   "$ROOT/tests/alpha-microvm.sh"
   "$ROOT/tests/e2e-guard.sh"
+  "$ROOT/tests/e2e-helpers.bash"
   "$ROOT/tests/step-grammar.sh"
   "$ROOT/tests/gate-entry.sh"
   "$ROOT/tests/gate-entry-smoke.bats"
+  "$ROOT/tests/gate-phase-01.bats"
 )
 for f in "${CLOSURE[@]}"; do
   [[ -f "$f" ]] || die "task closure file missing: $f"
@@ -50,7 +52,7 @@ pass "task closure files exist"
 # --- the closure sources only the closure ---
 while IFS= read -r line; do
   case "$line" in
-    *step-grammar.sh*|*e2e-guard.sh*) ;;
+    *step-grammar.sh*|*e2e-guard.sh*|*e2e-helpers.bash*) ;;
     *) die "task closure sources outside itself: $line" ;;
   esac
 done < <(grep -h -E '^[[:space:]]*(source|\.) ' "${CLOSURE[@]}" || true)

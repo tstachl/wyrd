@@ -85,9 +85,14 @@ RELAY_URL="${RELAY_URL:-ws://10.0.7.10:18761}"
 PEER_O="${PEER_O:-e2e@10.0.7.11}"
 PEER_N="${PEER_N:-e2e@10.0.7.12}"
 # Guest-side view of RUN (virtiofs share): same files, guest prefix.
-GUEST_RUN="/mnt/wyrd-state/run"
-GUEST_TESTS="/etc/wyrd-tests"
-GUEST_ENV="/mnt/wyrd-state/e2e-env.sh"
+# Task constants (GUEST_RUN/GUEST_TESTS/GUEST_ENV) and the peer
+# dialers (on_o/on_n) live in tests/e2e-helpers.bash, shared with the
+# gate-path bats phases so both paths dial guests identically.
+GUEST_RUN="${GUEST_RUN:-/mnt/wyrd-state/run}"
+GUEST_TESTS="${GUEST_TESTS:-/etc/wyrd-tests}"
+GUEST_ENV="${GUEST_ENV:-/mnt/wyrd-state/e2e-env.sh}"
+# shellcheck source=tests/e2e-helpers.bash
+source "$SCRIPT_DIR/e2e-helpers.bash"
 
 PASS=0
 # Host-side wall-clock accounting, same shape as the guest helper in
@@ -169,8 +174,7 @@ SSH="ssh -i $SSH_KEY -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
 # token is minted hex (see the runner), so no quoting is needed.
 # The unwrapped-bypass flag rides along too: deliberate debugging
 # must reach the legs, not die at the first one.
-on_o() { $SSH "$PEER_O" "WYRD_E2E_TOKEN=${WYRD_E2E_TOKEN:-}" "WYRD_E2E_UNWRAPPED=${WYRD_E2E_UNWRAPPED:-0}" "$@"; }
-on_n() { $SSH "$PEER_N" "WYRD_E2E_TOKEN=${WYRD_E2E_TOKEN:-}" "WYRD_E2E_UNWRAPPED=${WYRD_E2E_UNWRAPPED:-0}" "$@"; }
+# (on_o/on_n live in tests/e2e-helpers.bash, sourced above.)
 
 # wait_conflict_file <seconds> <file> <what> <leg-pid>: shared
 # rendezvous waiter for host-driven fault blocks (partition, crash):
