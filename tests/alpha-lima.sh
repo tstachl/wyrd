@@ -565,24 +565,18 @@ main() {
   if [[ -f "$E2E_ROOT/relay.pid" ]]; then
     kill -KILL "$(cat "$E2E_ROOT/relay.pid")" 2>/dev/null || true
   fi
-  # Contents-only: the top dir may live on a share whose parent is
-  # not writable (microVM virtiofs; Lima's /tmp parent allows the
-  # removal). Empty the dir, keep the dir — identical fresh slate.
-  # The run env file is spared by name: the gate path publishes
-  # e2e-env.sh into E2E_ROOT (the dev loop keeps it beside the tree,
-  # so this changes nothing there), and later phases source it from
-  # the wiped tree.
+  # Reset as root via the guest's passwordless sudo: the tree mixes
+  # host-root, host-build, guest-root and guest-user owners across
+  # runs (provisioner, relay journal timer, suite legs), and no
+  # single unprivileged user can reset it. Recreate world-writable,
+  # mirroring the host provisioner, so every party can use the fresh
+  # tree. The run env file is spared by name: later phases source it
+  # from the wiped tree.
   shopt -s nullglob dotglob
-  find "${E2E_ROOT:?}" -mindepth 1 -maxdepth 1 ! -name 'e2e-env.sh' -exec rm -rf {} +
+  sudo find "${E2E_ROOT:?}" -mindepth 1 -maxdepth 1 ! -name 'e2e-env.sh' -exec rm -rf {} +
   shopt -u nullglob dotglob
-  mkdir -p "$DRIVES" "$CREDS" "$MNTS" "$LOGDIR"
-  # World-writable trees, mirroring the host provisioner: the suite
-  # runs as the build user on the host while this pre-clean runs as
-  # a guest user, and the virtiofs share carries numeric uids
-  # straight through, so owner-only trees would lock the host side
-  # out of its own run. Harmless in the dev loop, where the runner
-  # is root throughout.
-  chmod 0777 "$DRIVES" "$CREDS" "$MNTS" "$LOGDIR"
+  sudo mkdir -p "$DRIVES" "$CREDS" "$MNTS" "$LOGDIR"
+  sudo chmod 0777 "$DRIVES" "$CREDS" "$MNTS" "$LOGDIR"
   local only="${E2E_ONLY_STEP:-}"
   # Comma list (`--step 1,4,6`): steps build on each other, so the run
   # set is the prefix closure of the selection — selecting step N runs
