@@ -68,8 +68,11 @@ setup() {
   UPGRADE_ROOT="$(dirname "$BATS_TEST_DIRNAME")"
   UPGRADE_VERSION="$(grep '^version = ' "$UPGRADE_ROOT/Cargo.toml" | head -n 1 | cut -d'"' -f2)" \
     || { echo "workspace version unreadable ($UPGRADE_ROOT/Cargo.toml)"; false; }
-  run on_o "uname -m"
-  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  # `run --separate-stderr`: arch comes from stdout only — plain
+  # `run` merges ssh's stderr (the UserKnownHostsFile=/dev/null
+  # host-key warning) into $output and would poison the case match.
+  run --separate-stderr on_o "uname -m"
+  [ "$status" -eq 0 ] || { echo "$output"; echo "$stderr" >&2; false; }
   UPGRADE_GARCH="$(printf '%s' "$output" | tr -d ' \r\n')"
   case "$UPGRADE_GARCH" in
     x86_64) UPGRADE_ARCH="x86_64" ;;
