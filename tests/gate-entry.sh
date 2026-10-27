@@ -22,9 +22,12 @@
 # - Runner names are task convention: the Odin task's provision builds
 #   must name the wyrd and nak builds `wyrd` and `nak`; the suite
 #   resolves them to WYRD_BIN and NAK_BIN.
-# - Holds the provision lock (non-blocking) for the suite's lifetime,
-#   so the e2e guard's lock check and a later teardown agree on who
-#   owns the run. Minting and locking mirror run-microvm.sh:221-230.
+# - Holds the provision lock for the suite's lifetime, so the e2e
+#   guard's lock check and a later teardown agree on who owns the
+#   run. The initial acquire retries briefly: the launcher releases
+#   its own hold only as the unit starts, so a fast unit can reach
+#   this acquire while the launcher is still exiting. Minting and
+#   locking mirror run-microvm.sh:221-230.
 # - Accepts only --fresh (the unit always passes it); anything else
 #   is a caller mistake, not a default.
 #
@@ -144,9 +147,18 @@ chmod 0644 "$RUN/e2e-env.sh"
 
 # Hold the provision lock for the suite's lifetime (mirrors
 # run-microvm.sh): a successful non-blocking acquire by anyone else
-# would mean no wrapper is alive.
+# would mean no wrapper is alive. The acquire retries briefly: the
+# launcher holds this same lock until the unit starts, so a fast
+# unit reaches here while the launcher is still exiting. A lock
+# still held past the grace below is genuinely foreign (a second
+# run got past pre-flight, or teardown wedged) and still refuses.
 exec 9>"$LOCK_FILE"
-flock -n 9 || { echo "gate-entry.sh: another run holds $LOCK_FILE" >&2; exit 2; }
+acquired=""
+for _ in $(seq 1 60); do
+  if flock -n 9 2>/dev/null; then acquired=1; break; fi
+  sleep 1
+done
+[[ -n "$acquired" ]] || { echo "gate-entry.sh: another run holds $LOCK_FILE" >&2; exit 2; }
 
 export WYRD_E2E_TOKEN="$TOKEN" WYRD_E2E_LOCK="$LOCK_FILE"
 export STATE_DIR SSH_KEY WYRD_BIN NAK_BIN PEER_O PEER_N RELAY_URL

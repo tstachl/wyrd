@@ -52,8 +52,10 @@ chmod +x "$RUNNER_BIN" "$NAK_BIN"
 printf 'wyrd=%s\nnak=%s\nlegacy=ignored\n' "$RUNNER_BIN" "$NAK_BIN" >"$FIXTURE/runners.env"
 
 # Stub host commands: record argv, and for bats the environment the
-# suite would inherit. The driver must never call ssh itself.
-for tool in bats flock ssh timeout; do
+# suite would inherit. The driver must never call ssh itself. sleep
+# is stubbed instant: the lock-acquire grace below must run fast
+# when flock never succeeds.
+for tool in bats flock ssh timeout sleep; do
   cat >"$STUBBIN/$tool" <<EOF
 #!/bin/sh
 echo "$tool \$*" >>"$CALLS"
@@ -212,5 +214,39 @@ out="$(run_entry -- --fresh)"
 [[ "$out" == "status=1" ]] || die "out-of-range subnet octet refuses, got: $out"
 printf '10.0.7' >"$PROVISION_DIR/subnet"
 pass "subnet octet range refuses"
+
+# Transient holder (the launcher releasing its hold as the unit
+# starts): the first acquires fail, then one succeeds. The entry
+# waits out the handoff instead of refusing a healthy run.
+cat >"$STUBBIN/flock" <<EOF
+#!/bin/sh
+echo "flock \$*" >>"$CALLS"
+n="\$(cat "$FIXTURE/flock-count" 2>/dev/null || echo 0)"
+n=\$((n + 1))
+echo "\$n" >"$FIXTURE/flock-count"
+if [ "\$n" -lt 3 ]; then exit 1; fi
+exit 0
+EOF
+chmod +x "$STUBBIN/flock"
+: >"$CALLS"; rm -f "$FIXTURE/flock-count"
+out="$(run_entry -- --fresh)"
+[[ "$out" == "status=0" ]] || die "transient lock holder breaks the run, got: $out ($(cat "$FIXTURE/stderr"))"
+[[ "$(grep -c "^flock -n 9$" "$CALLS")" == "3" ]] || die "entry does not retry the acquire: $(cat "$CALLS")"
+pass "transient lock holder is retried, then acquired"
+
+# Persistent holder (a genuinely foreign run): the full grace is
+# retried, then the run refuses with the cause named.
+cat >"$STUBBIN/flock" <<EOF
+#!/bin/sh
+echo "flock \$*" >>"$CALLS"
+exit 1
+EOF
+chmod +x "$STUBBIN/flock"
+: >"$CALLS"
+out="$(run_entry -- --fresh)"
+[[ "$out" == "status=2" ]] || die "held lock does not refuse, got: $out"
+grep -q "another run holds" "$FIXTURE/stderr" || die "held lock hides the cause"
+[[ "$(grep -c "^flock -n 9$" "$CALLS")" == "60" ]] || die "entry does not retry for the full grace"
+pass "held lock refuses after the acquire grace"
 
 echo "gate-entry: $PASS checks passed"
