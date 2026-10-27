@@ -30,7 +30,11 @@ setup() {
   # non-empty log line, turning the epilogue into a misleading
   # secondary failure instead of preserving the original one.
   leak_scan() { # <identity-file> <passphrase-file>
-    [[ -s "$1" && -s "$2" ]] || return 0
+    # Skip groups never minted (or only partially written) by a
+    # failed earlier phase: an empty secret would match every log
+    # line. Content-tested, not just -s: a whitespace-only partial
+    # file still yields an empty secret after command substitution.
+    [[ -n "$(cat "$1" 2>/dev/null)" && -n "$(cat "$2" 2>/dev/null)" ]] || return 0
     local f s
     for f in "$RUN"/logs/* "$STATE_DIR"/build-logs/*; do
       [[ -f "$f" ]] || continue
@@ -38,6 +42,7 @@ setup() {
         grep -qF "$s" "$f" && die "secret leaked into $(basename "$f")"
       done
     done
+    return 0
   }
   leak_scan "$RUN/creds/owner/identity" "$RUN/creds/owner/passphrase"
   leak_scan "$RUN/creds/member-n/identity" "$RUN/creds/member-n/passphrase"
