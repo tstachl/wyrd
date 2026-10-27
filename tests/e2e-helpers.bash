@@ -87,7 +87,11 @@ host_partition() { # <tap> down|up
 # wait_conflict_file <seconds> <file> <what> <leg-pid>: shared
 # rendezvous waiter for host-driven fault blocks (partition, crash):
 # fail fast when the awaited leg exits early instead of burning the
-# whole budget on a corpse.
+# whole budget on a corpse. Returns 0 on rendezvous, 1 on timeout or
+# corpse — never exits: callers die (or heal-then-die) themselves, so
+# every failure surfaces as a verdict. (An EXIT trap must never be
+# used for the heal: it replaces bats' own result reporting and turns
+# failures into missing verdicts with a passing-looking count.)
 wait_conflict_file() { # <seconds> <file> <what> <leg-pid>
   local budget="$1" f="$2" what="$3" leg="$4" i
   for ((i = 0; i < budget * 2; i++)); do
@@ -96,8 +100,9 @@ wait_conflict_file() { # <seconds> <file> <what> <leg-pid>
     # the whole budget on a corpse. The pid is per-file (the sibling
     # leg may already have finished fine); $what names the awaited
     # rendezvous and its leg log.
-    kill -0 "$leg" 2>/dev/null || die "$what (leg exited early)"
+    kill -0 "$leg" 2>/dev/null || { echo "  FAIL: $what (leg exited early)" >&2; return 1; }
     sleep 0.5
   done
-  die "$what"
+  echo "  FAIL: $what" >&2
+  return 1
 }

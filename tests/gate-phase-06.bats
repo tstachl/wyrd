@@ -14,8 +14,9 @@
 # invocation. GMD/GMC/OD/OC are recomputed here (bats runs each
 # @test in its own process, so no shell variable crosses phases).
 # Partition is the host capability GATE_PARTITION_BIN (mandatory);
-# a trap re-ups tap-r so a failure between down and up never
-# strands the relay unreachable.
+# every failure path between down and up re-ups explicitly (never
+# via an EXIT trap, which would swallow the verdict) so a failure
+# never strands the relay unreachable.
 
 bats_require_minimum_version 1.5.0
 
@@ -59,28 +60,30 @@ setup() {
     >"$RUN/logs/leg-conflict-owner.out" 2>&1 &
   LEG_O=$!
   wait_conflict_file 300 "$RUN/conflict-rename-owner-done" \
-    "owner rename leg never finished (see logs/leg-conflict-owner.out)" "$LEG_O"
+    "owner rename leg never finished (see logs/leg-conflict-owner.out)" "$LEG_O" \
+    || return 1
   wait_conflict_file 120 "$RUN/conflict-rename-member-done" \
-    "member stale-handle probe never finished (see logs/leg-conflict-member.out)" "$LEG_N"
-  # Best-effort heal: must never fail the test itself (it runs on
-  # the EXIT path) and must never die — die exits the process and
-  # cannot be caught by `|| true`. The capability was validated at
-  # entry and setup, so reachability is guaranteed; guard directly
-  # on the bin instead of routing through host_partition's die.
+    "member stale-handle probe never finished (see logs/leg-conflict-member.out)" "$LEG_N" \
+    || return 1
+  # Best-effort heal, called explicitly on every failure path below:
+  # never an EXIT trap — a test-installed EXIT trap replaces bats'
+  # own result reporting, and a failure inside the trap window then
+  # vanishes with no verdict (the suite keeps going and the plan
+  # undercounts). heal_tap itself never fails the test.
   heal_tap() {
     if [[ -n "${GATE_PARTITION_BIN:-}" ]]; then
       "$GATE_PARTITION_BIN" tap-r up 2>/dev/null || true
     fi
   }
-  trap heal_tap EXIT
-  host_partition tap-r down || die "host could not partition tap-r"
+  host_partition tap-r down || { heal_tap; echo "  FAIL: host could not partition tap-r" >&2; return 1; }
   touch "$RUN/conflict-partitioned"
   wait_conflict_file 180 "$RUN/conflict-owner-written" \
-    "owner never committed under partition (see logs/leg-conflict-owner.out)" "$LEG_O"
+    "owner never committed under partition (see logs/leg-conflict-owner.out)" "$LEG_O" \
+    || { heal_tap; return 1; }
   wait_conflict_file 180 "$RUN/conflict-member-written" \
-    "member never committed under partition (see logs/leg-conflict-member.out)" "$LEG_N"
-  host_partition tap-r up || die "host could not heal tap-r"
-  trap - EXIT
+    "member never committed under partition (see logs/leg-conflict-member.out)" "$LEG_N" \
+    || { heal_tap; return 1; }
+  host_partition tap-r up || { heal_tap; echo "  FAIL: host could not heal tap-r" >&2; return 1; }
   touch "$RUN/conflict-healed"
   wait "$LEG_N" || die "conflict member leg failed (see logs/leg-conflict-member.out)"
   wait "$LEG_O" || die "conflict owner leg failed (see logs/leg-conflict-owner.out)"
