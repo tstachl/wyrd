@@ -55,12 +55,19 @@
     # suite uid (gate-suite-build, 981 on Odin — pinned there too),
     # so host and guest agree on file ownership across the shared
     # state dir and the suite's as-guest/hand-to-guest shims stay
-    # correct no-ops on the task path. Passwordless sudo covers the
-    # suite's `sudo tc` / `sudo chown` calls plus phase 14's
+    # correct no-ops on the task path. NixOS forbids sub-1000 uids
+    # for normal users, so e2e is a system user with the interactive
+    # bits set explicitly (home, shell, wheel for the suite's
+    # passwordless sudo). Passwordless sudo covers the suite's
+    # `sudo tc` / `sudo chown` calls plus phase 14's
     # `sudo mkfs.ext4` and `sudo mount -o loop`.
     users.users.e2e = {
-      isNormalUser = true;
+      isSystemUser = true;
       uid = 981;
+      group = "users";
+      home = "/home/e2e";
+      createHome = true;
+      shell = pkgs.bashInteractive;
       extraGroups = [ "wheel" ];
     };
     # /dev/fuse is 0666 via systemd's default udev rules, and the
