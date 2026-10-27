@@ -139,7 +139,12 @@ flock -n 9 || { echo "gate-entry.sh: another run holds $LOCK_FILE" >&2; exit 2; 
 
 export WYRD_E2E_TOKEN="$TOKEN" WYRD_E2E_LOCK="$LOCK_FILE"
 export STATE_DIR SSH_KEY WYRD_BIN NAK_BIN PEER_O PEER_N RELAY_URL
-export GATE_BATS_LIB
+# The partition primitive is host-published per task (gate
+# suite-wrapper unit env); the entry refuses without it, like the
+# legacy host_partition, so fault phases fail at the gate instead
+# of stranding taps mid-run.
+: "${GATE_PARTITION_BIN:?gate-entry.sh: GATE_PARTITION_BIN is not set (host must publish the tap primitive)}"
+export GATE_BATS_LIB GATE_PARTITION_BIN
 export E2E_INTERVAL="${E2E_INTERVAL:-}"
 # Step selection arrives with the fuller migration; the entry always
 # runs phase 1 (every prefix includes it). The default mirrors
@@ -154,4 +159,4 @@ export E2E_INTERVAL="${E2E_INTERVAL:-}"
 export GUEST_ENV="/mnt/wyrd-state/run/e2e-env.sh"
 export CORE_ONLY="${CORE_ONLY:-1,2,3,4,5}"
 
-exec bats "$ROOT/tests/gate-entry-smoke.bats" "$ROOT/tests/gate-phase-01.bats" "$ROOT/tests/gate-phase-02.bats" "$ROOT/tests/gate-phase-03.bats" "$ROOT/tests/gate-phase-04.bats" "$ROOT/tests/gate-phase-05.bats"
+exec bats "$ROOT/tests/gate-entry-smoke.bats" "$ROOT/tests/gate-phase-01.bats" "$ROOT/tests/gate-phase-02.bats" "$ROOT/tests/gate-phase-03.bats" "$ROOT/tests/gate-phase-04.bats" "$ROOT/tests/gate-phase-05.bats" "$ROOT/tests/gate-phase-06.bats"
