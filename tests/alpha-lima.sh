@@ -576,6 +576,13 @@ main() {
   find "${E2E_ROOT:?}" -mindepth 1 -maxdepth 1 ! -name 'e2e-env.sh' -exec rm -rf {} +
   shopt -u nullglob dotglob
   mkdir -p "$DRIVES" "$CREDS" "$MNTS" "$LOGDIR"
+  # World-writable trees, mirroring the host provisioner: the suite
+  # runs as the build user on the host while this pre-clean runs as
+  # a guest user, and the virtiofs share carries numeric uids
+  # straight through, so owner-only trees would lock the host side
+  # out of its own run. Harmless in the dev loop, where the runner
+  # is root throughout.
+  chmod 0777 "$DRIVES" "$CREDS" "$MNTS" "$LOGDIR"
   local only="${E2E_ONLY_STEP:-}"
   # Comma list (`--step 1,4,6`): steps build on each other, so the run
   # set is the prefix closure of the selection — selecting step N runs
