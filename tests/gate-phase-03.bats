@@ -32,6 +32,7 @@ setup() {
 }
 
 @test "owner and member converge across hosts with an opaque control plane" {
+  mkdir -p "$RUN/logs"
   rm -f "$RUN/owner-done"
   OD="$GUEST_RUN/drives/owner"
   OC="$GUEST_RUN/creds/owner"
