@@ -44,12 +44,13 @@ printf 'nak packages.nak|runner-peer-o runners.peer-o|runner-peer-n runners.peer
 printf 'key' >"$STATE_DIR/sshkey"
 mkdir -p "$FIXTURE/bats-lib"
 
-RUNNER_BIN="$FIXTURE/wyrd-runner"
-NAK_BIN="$FIXTURE/nak-runner"
+RUNNER_BIN="$FIXTURE/wyrd-runner/bin/wyrd"
+NAK_BIN="$FIXTURE/nak-runner/bin/nak"
+mkdir -p "$FIXTURE/wyrd-runner/bin" "$FIXTURE/nak-runner/bin"
 printf '#!/bin/sh\nexit 0\n' >"$RUNNER_BIN"
 printf '#!/bin/sh\nexit 0\n' >"$NAK_BIN"
 chmod +x "$RUNNER_BIN" "$NAK_BIN"
-printf 'wyrd=%s\nnak=%s\nlegacy=ignored\n' "$RUNNER_BIN" "$NAK_BIN" >"$FIXTURE/runners.env"
+printf 'wyrd=%s\nnak=%s\nlegacy=ignored\n' "$FIXTURE/wyrd-runner" "$FIXTURE/nak-runner" >"$FIXTURE/runners.env"
 
 # Stub host commands: record argv, and for bats the environment the
 # suite would inherit. The driver must never call ssh itself. sleep
@@ -105,19 +106,19 @@ grep -q "^GATE_PARTITION_BIN=$FIXTURE/partition-bin$" "$CALLS" || die "tap primi
 grep -q "^WYRD_E2E_LOCK=$STATE_DIR/lock$" "$CALLS" || die "provision lock handed to the suite"
 grep -q "^E2E_INTERVAL=$" "$CALLS" || die "interval default handed to the suite (empty)"
 grep -q "^CORE_ONLY=1,2,3,4,5$" "$CALLS" || die "core depth defaults to the five-step core"
-grep -q "^GUEST_ENV=/mnt/wyrd-state/run/e2e-env.sh$" "$CALLS" || die "guest env path handed to the suite (host RUN translated)"
+grep -q "^GUEST_ENV=/mnt/wyrd-state/e2e-env.sh$" "$CALLS" || die "guest env path handed to the suite (beside the wiped run tree)"
 token_env="$(grep '^WYRD_E2E_TOKEN=' "$CALLS" | cut -d= -f2-)"
-token_file="$(grep '^WYRD_E2E_TOKEN=' "$RUN_DIR/e2e-env.sh" | cut -d= -f2-)"
+token_file="$(grep '^WYRD_E2E_TOKEN=' "$STATE_DIR/e2e-env.sh" | cut -d= -f2-)"
 [[ -n "$token_env" && "$token_env" == "$token_file" ]] || die "run token handed to the suite matches the published file"
-grep -q "^WYRD_E2E_PID=[0-9][0-9]*$" "$RUN_DIR/e2e-env.sh" || die "owner pid published in the env file"
+grep -q "^WYRD_E2E_PID=[0-9][0-9]*$" "$STATE_DIR/e2e-env.sh" || die "owner pid published in the env file"
 # Dev-loop key parity: the guest legs source this file, so every key
 # the dev loop publishes must be present with gate-path values.
-grep -q "^WYRD_BIN=$RUNNER_BIN$" "$RUN_DIR/e2e-env.sh" || die "wyrd runner published in the env file"
-grep -q "^RELAY_HOST=10.0.7.10$" "$RUN_DIR/e2e-env.sh" || die "relay host published in the env file"
-grep -q "^RELAY_PORT=18761$" "$RUN_DIR/e2e-env.sh" || die "relay port published in the env file"
-grep -q "^RELAY_MANAGED=0$" "$RUN_DIR/e2e-env.sh" || die "relay unmanaged in the env file (host-provisioned)"
-grep -q "^CHECKOUT=/etc/wyrd-tests$" "$RUN_DIR/e2e-env.sh" || die "guest tests path published in the env file"
-grep -q "^E2E_ROOT=/mnt/wyrd-state/run$" "$RUN_DIR/e2e-env.sh" || die "guest run root published in the env file"
+grep -q "^WYRD_BIN=$RUNNER_BIN$" "$STATE_DIR/e2e-env.sh" || die "wyrd runner published in the env file"
+grep -q "^RELAY_HOST=10.0.7.10$" "$STATE_DIR/e2e-env.sh" || die "relay host published in the env file"
+grep -q "^RELAY_PORT=18761$" "$STATE_DIR/e2e-env.sh" || die "relay port published in the env file"
+grep -q "^RELAY_MANAGED=0$" "$STATE_DIR/e2e-env.sh" || die "relay unmanaged in the env file (host-provisioned)"
+grep -q "^CHECKOUT=/etc/wyrd-tests$" "$STATE_DIR/e2e-env.sh" || die "guest tests path published in the env file"
+grep -q "^E2E_ROOT=/mnt/wyrd-state/run$" "$STATE_DIR/e2e-env.sh" || die "guest run root published in the env file"
 [ -z "$(grep "^ssh " "$CALLS" || true)" ] || die "driver dials nothing itself (smoke does)"
 pass "happy path assembles env, holds lock, execs bats"
 
