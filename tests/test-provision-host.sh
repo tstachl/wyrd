@@ -157,7 +157,7 @@ provision_prepare_state "$RUN" "$WORK" "$LOGS" "$KEY" "$STATEDIR" 1 \
   >/dev/null 2>&1 || die "state prep failed"
 [[ ! -e "$RUN/sentinel" ]] || die "fresh prep kept the old run"
 [[ -f "$STATEDIR/authorized_keys.pub" ]] || die "prep did not publish authorized_keys"
-grep -qF "chown -R 1000:1000 $RUN" "$CALLS" || die "prep did not hand the run tree to uid 1000"
+grep -qF "chown -R 981:981 $RUN" "$CALLS" || die "prep did not hand the run tree to the guest uid"
 if grep -q "ssh-keygen" "$CALLS"; then die "prep minted a key that already existed"; fi
 pass "state prep wipes, publishes and hands over without re-minting"
 

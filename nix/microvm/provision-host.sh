@@ -108,13 +108,14 @@ provision_teardown_kept() {
 # provision_prepare_state <run> <work> <build-logs> <ssh-key>
 # <state-dir> <fresh: 0|1>: create the state tree, optionally wipe
 # the run, ensure the ssh key and the published authorized_keys, and
-# hand the run tree to the guest account (uid 1000, the only normal
-# user — numeric, no host user needed). The key stays root-owned.
+# hand the run tree to the guest account (uid 981, pinned in
+# nix/microvm/common.nix to match the gate provision host's suite
+# uid — numeric, no host user needed). The key stays root-owned.
 provision_prepare_state() { # <run> <work> <build-logs> <ssh-key> <state-dir> <fresh>
   local run="$1" work="$2" build_logs="$3" ssh_key="$4" state_dir="$5" fresh="$6"
   mkdir -p "$run" "$run/logs" "$work" "$build_logs"
   [[ "$fresh" == 0 ]] || { rm -rf "$run"; mkdir -p "$run" "$run/logs"; }
-  chown -R 1000:1000 "$run"
+  chown -R 981:981 "$run"
   [[ -f "$ssh_key" ]] || ssh-keygen -t ed25519 -N "" -f "$ssh_key" -q
   cp "$ssh_key.pub" "$state_dir/authorized_keys.pub"
 }

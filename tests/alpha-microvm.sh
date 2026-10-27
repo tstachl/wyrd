@@ -137,15 +137,15 @@ unset _c
 # tests/test-no-host-privilege.sh).
 #
 #   GATE_AS_GUEST_BIN       de-escalation wrapper for host wyrd
-#                           invocations (dev loop: drops to uid
-#                           1000; task path: unset, direct exec —
+#                           invocations (dev loop: drops to the guest
+#                           uid; task path: unset, direct exec —
 #                           the suite already runs as the owner)
 #   GATE_PARTITION_BIN      tap partition primitive
 #                           (dev-partition.sh in the dev loop;
 #                           a host-owned binary over the task's
 #                           declared taps on Odin)
 #   GATE_HAND_TO_GUEST_BIN  share handover for created credential
-#                           material (dev loop: hands ownership to uid 1000;
+#                           material (dev loop: hands ownership to the guest uid;
 #                           task path: unset, a no-op — files
 #                           arrive correctly owned)
 # (as_guest/hand_to_guest/host_partition/wait_conflict_file/die live
@@ -184,7 +184,7 @@ GMC="$GUEST_RUN/creds/member-n"
 GMD="$GUEST_RUN/drives/member-n"
 mkdir -p "$MC" "$MD"
 # Credential bytes without python: od + tr are always present.
-# Created as root, then handed to uid 1000: the guest legs open
+# Created as root, then handed to the guest uid: the guest legs open
 # these, and cross-uid opens fail closed.
 head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$MC/identity"
 printf 'e2e-%s\n' "$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')" > "$MC/passphrase"

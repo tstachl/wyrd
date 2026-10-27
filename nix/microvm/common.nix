@@ -50,15 +50,21 @@
     security.sudo.enable = true;
     # The suite runs as e2e, mirroring the Lima guest's unprivileged
     # user: step 1's credential-hardening negatives (wrong owner,
-    # group-readable) only mean anything as non-root. Passwordless
-    # sudo covers the suite's `sudo tc` / `sudo chown` calls plus
-    # phase 14's `sudo mkfs.ext4` and `sudo mount -o loop`.
-    # /dev/fuse is 0666 via systemd's default udev rules, and the
-    # setuid fusermount wrapper below lets e2e mount.
+    # group-readable) only mean anything as non-root. The uid is
+    # pinned, not auto-allocated: it must equal the provision host's
+    # suite uid (gate-suite-build, 981 on Odin — pinned there too),
+    # so host and guest agree on file ownership across the shared
+    # state dir and the suite's as-guest/hand-to-guest shims stay
+    # correct no-ops on the task path. Passwordless sudo covers the
+    # suite's `sudo tc` / `sudo chown` calls plus phase 14's
+    # `sudo mkfs.ext4` and `sudo mount -o loop`.
     users.users.e2e = {
       isNormalUser = true;
+      uid = 981;
       extraGroups = [ "wheel" ];
     };
+    # /dev/fuse is 0666 via systemd's default udev rules, and the
+    # setuid fusermount wrapper below lets e2e mount.
     security.sudo.extraRules = [{
       users = [ "e2e" ];
       commands = [{ command = "ALL"; options = [ "NOPASSWD" ]; }];
