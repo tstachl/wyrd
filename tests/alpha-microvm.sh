@@ -3,7 +3,9 @@
 # gate. Runs on the Linux host (odin) as root; drives the two peers
 # over ssh, runs offline ops locally. Never sources alpha-common.sh:
 # its EXIT trap would reap guest pid files from the host pid
-# namespace, so the host keeps its own minimal pass/die.
+# namespace, so the host keeps its own minimal pass; die and the
+# ssh/capability shims are shared with the gate path via
+# tests/e2e-helpers.bash.
 #
 # Flow (issue: microvm.nix reproducible suite,
 # nostr:nevent1qqsfe3tgav2h5xe0sdsj5508zxdpknamd9l48tr35fxyugda23df9dcpz9mhxue69uhkwunpwdczuap49eehgcy9luf
@@ -148,6 +150,9 @@ unset _c
 #                           arrive correctly owned)
 # (as_guest/hand_to_guest/host_partition/wait_conflict_file/die live
 # in tests/e2e-helpers.bash, sourced above.)
+# shellcheck disable=SC2034
+# (SSH is consumed indirectly by on_o/on_n from
+# tests/e2e-helpers.bash, which shellcheck cannot see through.)
 SSH="ssh -i $SSH_KEY -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o BatchMode=yes"
 # Every guest invocation carries the run token (ssh joins the
 # arguments, so the assignment prefixes the remote command): legs

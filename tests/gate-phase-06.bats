@@ -62,7 +62,16 @@ setup() {
     "owner rename leg never finished (see logs/leg-conflict-owner.out)" "$LEG_O"
   wait_conflict_file 120 "$RUN/conflict-rename-member-done" \
     "member stale-handle probe never finished (see logs/leg-conflict-member.out)" "$LEG_N"
-  heal_tap() { host_partition tap-r up 2>/dev/null || true; }
+  # Best-effort heal: must never fail the test itself (it runs on
+  # the EXIT path) and must never die — die exits the process and
+  # cannot be caught by `|| true`. The capability was validated at
+  # entry and setup, so reachability is guaranteed; guard directly
+  # on the bin instead of routing through host_partition's die.
+  heal_tap() {
+    if [[ -n "${GATE_PARTITION_BIN:-}" ]]; then
+      "$GATE_PARTITION_BIN" tap-r up 2>/dev/null || true
+    fi
+  }
   trap heal_tap EXIT
   host_partition tap-r down || die "host could not partition tap-r"
   touch "$RUN/conflict-partitioned"
