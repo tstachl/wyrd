@@ -22,7 +22,7 @@ setup() {
   RUN="$STATE_DIR/run"
   load "$GATE_BATS_LIB/partition"
   load "$GATE_BATS_LIB/guest"
-  e2e_require_wrapped "$STATE_DIR/e2e-env.sh" "./tests/gate-entry.sh (gate task)" --check-owner-pid
+  e2e_require_wrapped "$RUN/e2e-env.sh" "./tests/gate-entry.sh (gate task)" --check-owner-pid
   SSH_OPTS="-i $SSH_KEY -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o BatchMode=yes"
 }
 

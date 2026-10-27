@@ -568,8 +568,12 @@ main() {
   # Contents-only: the top dir may live on a share whose parent is
   # not writable (microVM virtiofs; Lima's /tmp parent allows the
   # removal). Empty the dir, keep the dir — identical fresh slate.
+  # The run env file is spared by name: the gate path publishes
+  # e2e-env.sh into E2E_ROOT (the dev loop keeps it beside the tree,
+  # so this changes nothing there), and later phases source it from
+  # the wiped tree.
   shopt -s nullglob dotglob
-  rm -rf "${E2E_ROOT:?}/"*
+  find "${E2E_ROOT:?}" -mindepth 1 -maxdepth 1 ! -name 'e2e-env.sh' -exec rm -rf {} +
   shopt -u nullglob dotglob
   mkdir -p "$DRIVES" "$CREDS" "$MNTS" "$LOGDIR"
   local only="${E2E_ONLY_STEP:-}"

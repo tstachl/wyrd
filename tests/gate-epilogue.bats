@@ -20,7 +20,7 @@ setup() {
   done
   RUN="$STATE_DIR/run"
   source "$BATS_TEST_DIRNAME/e2e-helpers.bash"
-  e2e_require_wrapped "$STATE_DIR/e2e-env.sh" "./tests/gate-entry.sh (gate task)" --check-owner-pid
+  e2e_require_wrapped "$RUN/e2e-env.sh" "./tests/gate-entry.sh (gate task)" --check-owner-pid
 }
 
 @test "no secrets in host logs" {
