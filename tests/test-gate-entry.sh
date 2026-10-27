@@ -110,6 +110,14 @@ token_env="$(grep '^WYRD_E2E_TOKEN=' "$CALLS" | cut -d= -f2-)"
 token_file="$(grep '^WYRD_E2E_TOKEN=' "$RUN_DIR/e2e-env.sh" | cut -d= -f2-)"
 [[ -n "$token_env" && "$token_env" == "$token_file" ]] || die "run token handed to the suite matches the published file"
 grep -q "^WYRD_E2E_PID=[0-9][0-9]*$" "$RUN_DIR/e2e-env.sh" || die "owner pid published in the env file"
+# Dev-loop key parity: the guest legs source this file, so every key
+# the dev loop publishes must be present with gate-path values.
+grep -q "^WYRD_BIN=$RUNNER_BIN$" "$RUN_DIR/e2e-env.sh" || die "wyrd runner published in the env file"
+grep -q "^RELAY_HOST=10.0.7.10$" "$RUN_DIR/e2e-env.sh" || die "relay host published in the env file"
+grep -q "^RELAY_PORT=18761$" "$RUN_DIR/e2e-env.sh" || die "relay port published in the env file"
+grep -q "^RELAY_MANAGED=0$" "$RUN_DIR/e2e-env.sh" || die "relay unmanaged in the env file (host-provisioned)"
+grep -q "^CHECKOUT=/etc/wyrd-tests$" "$RUN_DIR/e2e-env.sh" || die "guest tests path published in the env file"
+grep -q "^E2E_ROOT=/mnt/wyrd-state/run$" "$RUN_DIR/e2e-env.sh" || die "guest run root published in the env file"
 [ -z "$(grep "^ssh " "$CALLS" || true)" ] || die "driver dials nothing itself (smoke does)"
 pass "happy path assembles env, holds lock, execs bats"
 
