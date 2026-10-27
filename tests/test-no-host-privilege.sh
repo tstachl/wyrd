@@ -48,6 +48,7 @@ CLOSURE=(
   "$ROOT/tests/gate-phase-04.bats"
   "$ROOT/tests/gate-phase-05.bats"
   "$ROOT/tests/gate-phase-06.bats"
+  "$ROOT/tests/gate-phase-07.bats"
 )
 for f in "${CLOSURE[@]}"; do
   [[ -f "$f" ]] || die "task closure file missing: $f"
