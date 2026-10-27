@@ -54,8 +54,13 @@ setup() {
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   run on_o "source $GUEST_ENV; test -x \"\$WYRD_BIN\""
   [ "$status" -eq 0 ] || { echo "$output"; false; }
+  # Post-mortem parity with the legacy phase: persist each wyrd
+  # invocation's captured output to $RUN/logs before asserting, so a
+  # failure leaves the same log files behind (bats merges stderr into
+  # $output, so there is one .out per step, no .stderr split).
   run as_guest "$WYRD_BIN" device --identity-file "$MC/identity" --passphrase-file "$MC/passphrase" \
     "$MD" pairing-request "$RUN/pairing-n.txt"
+  printf '%s\n' "$output" >"$RUN/logs/pairing-n.out"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   DEV="$(grep '^device ' "$RUN/pairing-n.txt" | cut -d' ' -f2)"
   KEY="$(grep '^encryption-key ' "$RUN/pairing-n.txt" | cut -d' ' -f2)"
@@ -63,9 +68,11 @@ setup() {
   run as_guest "$WYRD_BIN" member --identity-file "$RUN/creds/owner/identity" \
     --passphrase-file "$RUN/creds/owner/passphrase" "$RUN/drives/owner" \
     invite "$DEV" "$KEY" "$RUN/invitation-n"
+  printf '%s\n' "$output" >"$RUN/logs/invite-n.out"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   run as_guest "$WYRD_BIN" device --identity-file "$MC/identity" --passphrase-file "$MC/passphrase" \
     "$MD" join "$RUN/invitation-n"
+  printf '%s\n' "$output" >"$RUN/logs/join-n.out"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   # Rerun-resume cover (bound-admission-closure child 2): re-inviting
   # an admitted device resumes its catch-up instead of failing — same
@@ -75,6 +82,7 @@ setup() {
   run as_guest "$WYRD_BIN" member --identity-file "$RUN/creds/owner/identity" \
     --passphrase-file "$RUN/creds/owner/passphrase" "$RUN/drives/owner" \
     invite "$DEV" "$KEY" "$RUN/invitation-n-rerun"
+  printf '%s\n' "$output" >"$RUN/logs/invite-n-rerun.out"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [ -s "$RUN/invitation-n-rerun" ] || { echo "re-invitation file missing after rerun"; false; }
 }
