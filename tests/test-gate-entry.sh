@@ -89,6 +89,8 @@ run_entry() {
 : >"$CALLS"
 out="$(run_entry -- --fresh)"
 [[ "$out" == "status=0" ]] || die "happy path exits 0, got: $out ($(cat "$FIXTURE/stderr"))"
+# Default suite (no --step): the whole prefix — smoke, core, all
+# eleven phases, epilogue.
 grep -q "^bats .*/tests/gate-entry-smoke.bats .*/tests/gate-phase-01.bats .*/tests/gate-phase-02.bats .*/tests/gate-phase-03.bats .*/tests/gate-phase-04.bats .*/tests/gate-phase-05.bats .*/tests/gate-phase-06.bats .*/tests/gate-phase-07.bats .*/tests/gate-phase-08.bats .*/tests/gate-phase-09.bats .*/tests/gate-phase-10.bats .*/tests/gate-phase-11.bats .*/tests/gate-epilogue.bats$" "$CALLS" || die "driver execs bats on the smoke and phase files"
 grep -q "^flock -n 9$" "$CALLS" || die "driver holds fd 9 non-blocking (flock -n 9)"
 grep -q "^PEER_O=e2e@10.0.7.11$" "$CALLS" || die "peer-o endpoint assembled from roles+subnet"
@@ -133,6 +135,19 @@ out="$(run_entry -- --fresh --step 1,3)"
 grep -q "^bats .*/tests/gate-entry-smoke.bats .*/tests/gate-phase-01.bats .*/tests/gate-epilogue.bats$" "$CALLS" || die "steps 1,3 truncate to the core prefix (smoke, core, epilogue)"
 grep -q "^CORE_ONLY=1,2,3$" "$CALLS" || die "core depth truncates to the highest selected core step"
 pass "step selection runs the prefix closure with a truncated core"
+
+: >"$CALLS"
+out="$(run_entry -- --fresh --step 4)"
+[[ "$out" == "status=0" ]] || die "step run exits 0, got: $out ($(cat "$FIXTURE/stderr"))"
+grep -q "^bats .*/tests/gate-entry-smoke.bats .*/tests/gate-phase-01.bats .*/tests/gate-epilogue.bats$" "$CALLS" || die "step 4 runs core-only (smoke, core, epilogue)"
+grep -q "^CORE_ONLY=1,2,3,4$" "$CALLS" || die "core depth truncates to step 4"
+
+: >"$CALLS"
+out="$(run_entry -- --fresh --step 7,9)"
+[[ "$out" == "status=0" ]] || die "step run exits 0, got: $out ($(cat "$FIXTURE/stderr"))"
+grep -q "^bats .*/tests/gate-entry-smoke.bats .*/tests/gate-phase-01.bats .*/tests/gate-phase-02.bats .*/tests/gate-phase-03.bats .*/tests/gate-phase-04.bats .*/tests/gate-phase-05.bats .*/tests/gate-epilogue.bats$" "$CALLS" || die "steps 7,9 run the 1..9 prefix (smoke, phases 01-05, epilogue)"
+grep -q "^CORE_ONLY=1,2,3,4,5$" "$CALLS" || die "core stays full once the prefix reaches step 5"
+pass "step matrix covers core-only and mid-range multi-selections"
 
 out="$(env -i PATH="$STUBBIN:/usr/bin:/bin" GATE_BATS_LIB="$FIXTURE/bats-lib" GATE_RUNNERS_ENV="$FIXTURE/runners.env" bash "$ENTRY" --fresh 2>/dev/null; echo "status=$?")"
 [[ "$out" == "status=1" ]] || die "missing provision dir refuses, got: $out"

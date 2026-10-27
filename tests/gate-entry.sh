@@ -175,8 +175,9 @@ if [[ -n "$ONLY_STEP" ]]; then
     || { echo "gate-entry.sh: --step: '$ONLY_STEP' is not a step (expected a comma list of 1-15)" >&2; exit 1; }
 fi
 # Shared-core steps selected: the 1..N prefix truncated to the core
-# range, as the comma list the Lima script already accepts. An
-# absent selection means all five.
+# range when the highest selected step falls inside it, as the comma
+# list the Lima script already accepts. An absent selection means
+# all five.
 CORE_MAX=5
 if [[ -n "$ONLY_STEP" && "$MAX_STEP" -lt 5 ]]; then CORE_MAX="$MAX_STEP"; fi
 CORE_ONLY="1"
