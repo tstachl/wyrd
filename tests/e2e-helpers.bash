@@ -21,7 +21,13 @@
 # on_o <cmd...>: run the command on peer-o, carrying the run token
 # (and the explicit-unwrapped flag) so the guest-side guard can
 # verify the call came through a wrapper.
-on_o() { $SSH "$PEER_O" "WYRD_E2E_TOKEN=${WYRD_E2E_TOKEN:-}" "WYRD_E2E_UNWRAPPED=${WYRD_E2E_UNWRAPPED:-0}" "$@"; }
+on_o() {
+  if [[ -z "${SSH:-}" || -z "${PEER_O:-}" ]]; then echo "e2e-helpers: on_o requires SSH and PEER_O" >&2; return 1; fi
+  $SSH "$PEER_O" "WYRD_E2E_TOKEN=${WYRD_E2E_TOKEN:-}" "WYRD_E2E_UNWRAPPED=${WYRD_E2E_UNWRAPPED:-0}" "$@"
+}
 
 # on_n <cmd...>: run the command on peer-n. Same contract as on_o.
-on_n() { $SSH "$PEER_N" "WYRD_E2E_TOKEN=${WYRD_E2E_TOKEN:-}" "WYRD_E2E_UNWRAPPED=${WYRD_E2E_UNWRAPPED:-0}" "$@"; }
+on_n() {
+  if [[ -z "${SSH:-}" || -z "${PEER_N:-}" ]]; then echo "e2e-helpers: on_n requires SSH and PEER_N" >&2; return 1; fi
+  $SSH "$PEER_N" "WYRD_E2E_TOKEN=${WYRD_E2E_TOKEN:-}" "WYRD_E2E_UNWRAPPED=${WYRD_E2E_UNWRAPPED:-0}" "$@"
+}

@@ -60,7 +60,7 @@ echo "$tool \$*" >>"$CALLS"
 EOF
   if [ "$tool" = bats ]; then
     cat >>"$STUBBIN/$tool" <<'EOF'
-env | grep -E '^(WYRD_|NAK_|PEER_|RELAY_|STATE_DIR|SSH_KEY|E2E_|GATE_|CORE_)' | sort >>"$CALLS"
+env | grep -E '^(WYRD_|NAK_|PEER_|RELAY_|STATE_DIR|SSH_KEY|E2E_|GATE_|CORE_|GUEST_)' | sort >>"$CALLS"
 EOF
   fi
   chmod +x "$STUBBIN/$tool"
@@ -99,6 +99,7 @@ grep -q "^GATE_BATS_LIB=$FIXTURE/bats-lib$" "$CALLS" || die "bats lib handed to 
 grep -q "^WYRD_E2E_LOCK=$STATE_DIR/lock$" "$CALLS" || die "provision lock handed to the suite"
 grep -q "^E2E_INTERVAL=$" "$CALLS" || die "interval default handed to the suite (empty)"
 grep -q "^CORE_ONLY=1,2,3,4,5$" "$CALLS" || die "core depth defaults to the five-step core"
+grep -q "^GUEST_ENV=/mnt/wyrd-state/run/e2e-env.sh$" "$CALLS" || die "guest env path handed to the suite (host RUN translated)"
 token_env="$(grep '^WYRD_E2E_TOKEN=' "$CALLS" | cut -d= -f2-)"
 token_file="$(grep '^WYRD_E2E_TOKEN=' "$RUN_DIR/e2e-env.sh" | cut -d= -f2-)"
 [[ -n "$token_env" && "$token_env" == "$token_file" ]] || die "run token handed to the suite matches the published file"
