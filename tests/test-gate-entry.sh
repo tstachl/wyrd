@@ -79,6 +79,7 @@ run_entry() {
   env -i PATH="$STUBBIN:/usr/bin:/bin" CALLS="$CALLS" \
     GATE_TASK_PROVISION_DIR="$PROVISION_DIR" \
     GATE_BATS_LIB="$FIXTURE/bats-lib" \
+    GATE_PARTITION_BIN="$FIXTURE/partition-bin" \
     GATE_RUNNERS_ENV="$FIXTURE/runners.env" \
     "${envs[@]}" \
     bash "$ENTRY" "${args[@]}" 2>"$FIXTURE/stderr"
@@ -88,7 +89,7 @@ run_entry() {
 : >"$CALLS"
 out="$(run_entry -- --fresh)"
 [[ "$out" == "status=0" ]] || die "happy path exits 0, got: $out ($(cat "$FIXTURE/stderr"))"
-grep -q "^bats .*/tests/gate-entry-smoke.bats .*/tests/gate-phase-01.bats .*/tests/gate-phase-02.bats .*/tests/gate-phase-03.bats .*/tests/gate-phase-04.bats .*/tests/gate-phase-05.bats$" "$CALLS" || die "driver execs bats on the smoke and phase files"
+grep -q "^bats .*/tests/gate-entry-smoke.bats .*/tests/gate-phase-01.bats .*/tests/gate-phase-02.bats .*/tests/gate-phase-03.bats .*/tests/gate-phase-04.bats .*/tests/gate-phase-05.bats .*/tests/gate-phase-06.bats$" "$CALLS" || die "driver execs bats on the smoke and phase files"
 grep -q "^flock -n 9$" "$CALLS" || die "driver holds fd 9 non-blocking (flock -n 9)"
 grep -q "^PEER_O=e2e@10.0.7.11$" "$CALLS" || die "peer-o endpoint assembled from roles+subnet"
 grep -q "^PEER_N=e2e@10.0.7.12$" "$CALLS" || die "peer-n endpoint assembled from roles+subnet"
@@ -96,6 +97,7 @@ grep -q "^RELAY_URL=ws://10.0.7.10:18761$" "$CALLS" || die "relay url assembled 
 grep -q "^WYRD_BIN=$RUNNER_BIN$" "$CALLS" || die "wyrd runner resolved from the handoff"
 grep -q "^NAK_BIN=$NAK_BIN$" "$CALLS" || die "nak runner resolved from the handoff"
 grep -q "^GATE_BATS_LIB=$FIXTURE/bats-lib$" "$CALLS" || die "bats lib handed to the suite"
+grep -q "^GATE_PARTITION_BIN=$FIXTURE/partition-bin$" "$CALLS" || die "tap primitive handed to the suite"
 grep -q "^WYRD_E2E_LOCK=$STATE_DIR/lock$" "$CALLS" || die "provision lock handed to the suite"
 grep -q "^E2E_INTERVAL=$" "$CALLS" || die "interval default handed to the suite (empty)"
 grep -q "^CORE_ONLY=1,2,3,4,5$" "$CALLS" || die "core depth defaults to the five-step core"
@@ -116,6 +118,10 @@ pass "arg discipline: only --fresh"
 out="$(env -i PATH="$STUBBIN:/usr/bin:/bin" GATE_BATS_LIB="$FIXTURE/bats-lib" GATE_RUNNERS_ENV="$FIXTURE/runners.env" bash "$ENTRY" --fresh 2>/dev/null; echo "status=$?")"
 [[ "$out" == "status=1" ]] || die "missing provision dir refuses, got: $out"
 pass "missing GATE_TASK_PROVISION_DIR refuses"
+
+out="$(env -i PATH="$STUBBIN:/usr/bin:/bin" CALLS="$CALLS" GATE_TASK_PROVISION_DIR="$PROVISION_DIR" GATE_BATS_LIB="$FIXTURE/bats-lib" GATE_RUNNERS_ENV="$FIXTURE/runners.env" bash "$ENTRY" --fresh 2>/dev/null; echo "status=$?")"
+[[ "$out" == "status=1" ]] || die "missing tap primitive refuses, got: $out"
+pass "missing GATE_PARTITION_BIN refuses"
 
 printf 'nak=%s\n' "$NAK_BIN" >"$FIXTURE/runners-nowyrd.env"
 out="$(run_entry GATE_RUNNERS_ENV="$FIXTURE/runners-nowyrd.env" -- --fresh)"

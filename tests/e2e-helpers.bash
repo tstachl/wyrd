@@ -18,8 +18,22 @@
 # credential material). Both are environment-driven: when the
 # wrapper bins are set (dev loop) they delegate, otherwise (task
 # path, already running as the owner) they exec directly / no-op.
-# The partition primitive stays out: it is mandatory and fatal
-# (host must set GATE_PARTITION_BIN), and fault phases own it.
+# host_partition (tap surgery for fault phases) is mandatory and
+# fatal: the host must set GATE_PARTITION_BIN. It lives here (not
+# in the gate-owned bats helpers) because both paths name the tap
+# and direction identically; only the binary behind the env var
+# differs (dev-partition.sh vs the host-owned tap primitive).
+#
+# Also provides the harness failure primitive (die) and the
+# host-driven fault rendezvous waiter (wait_conflict_file), shared
+# so both paths fail identically. Note the semantic shift: in the
+# legacy script die aborts the whole run; in bats each @test runs
+# in its own process, so die aborts only the current test and later
+# phases cascade-fail on the missing state.
+
+# die <msg>: fail with the harness FAIL line. Legacy path: aborts
+# the script. Gate path: aborts the current @test.
+die() { echo "  FAIL: $1" >&2; exit 1; }
 
 : "${GUEST_TESTS:=/etc/wyrd-tests}"
 : "${GUEST_ENV:=/mnt/wyrd-state/e2e-env.sh}"
@@ -59,4 +73,31 @@ hand_to_guest() {
   else
     :
   fi
+}
+
+# host_partition <tap> down|up: perform tap surgery for fault
+# phases. Mandatory: refuses when the host did not provide
+# GATE_PARTITION_BIN.
+host_partition() { # <tap> down|up
+  [[ -n "${GATE_PARTITION_BIN:-}" ]] \
+    || die "partition capability not provided (host must set GATE_PARTITION_BIN)"
+  "$GATE_PARTITION_BIN" "$@"
+}
+
+# wait_conflict_file <seconds> <file> <what> <leg-pid>: shared
+# rendezvous waiter for host-driven fault blocks (partition, crash):
+# fail fast when the awaited leg exits early instead of burning the
+# whole budget on a corpse.
+wait_conflict_file() { # <seconds> <file> <what> <leg-pid>
+  local budget="$1" f="$2" what="$3" leg="$4" i
+  for ((i = 0; i < budget * 2; i++)); do
+    [[ -f "$f" ]] && return 0
+    # A dead leg never touches its file: fail fast instead of burning
+    # the whole budget on a corpse. The pid is per-file (the sibling
+    # leg may already have finished fine); $what names the awaited
+    # rendezvous and its leg log.
+    kill -0 "$leg" 2>/dev/null || die "$what (leg exited early)"
+    sleep 0.5
+  done
+  die "$what"
 }

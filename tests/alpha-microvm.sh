@@ -103,7 +103,7 @@ PASS=0
 HOST_T0=$SECONDS
 HOST_LAST_PASS=$SECONDS
 pass() { local d=$((SECONDS - HOST_LAST_PASS)); PASS=$((PASS + 1)); HOST_LAST_PASS=$SECONDS; echo "  PASS: $1 (+${d}s)"; }
-die() { echo "  FAIL: $1" >&2; exit 1; }
+# (die lives in tests/e2e-helpers.bash, sourced above.)
 
 ONLY_STEP="${MICROVM_ONLY_STEP:-}"
 # Comma list (`--step 6,10`): phases build on each other, so the run
@@ -146,13 +146,8 @@ unset _c
 #                           material (dev loop: hands ownership to uid 1000;
 #                           task path: unset, a no-op — files
 #                           arrive correctly owned)
-# (as_guest/hand_to_guest live in tests/e2e-helpers.bash, sourced above.)
-host_partition() { # <tap> down|up
-  [[ -n "${GATE_PARTITION_BIN:-}" ]] \
-    || die "partition capability not provided (host must set GATE_PARTITION_BIN)"
-  "$GATE_PARTITION_BIN" "$@"
-}
-
+# (as_guest/hand_to_guest/host_partition/wait_conflict_file/die live
+# in tests/e2e-helpers.bash, sourced above.)
 SSH="ssh -i $SSH_KEY -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o BatchMode=yes"
 # Every guest invocation carries the run token (ssh joins the
 # arguments, so the assignment prefixes the remote command): legs
@@ -162,24 +157,6 @@ SSH="ssh -i $SSH_KEY -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
 # The unwrapped-bypass flag rides along too: deliberate debugging
 # must reach the legs, not die at the first one.
 # (on_o/on_n live in tests/e2e-helpers.bash, sourced above.)
-
-# wait_conflict_file <seconds> <file> <what> <leg-pid>: shared
-# rendezvous waiter for host-driven fault blocks (partition, crash):
-# fail fast when the awaited leg exits early instead of burning the
-# whole budget on a corpse.
-wait_conflict_file() { # <seconds> <file> <what> <leg-pid>
-  local budget="$1" f="$2" what="$3" leg="$4" i
-  for ((i = 0; i < budget * 2; i++)); do
-    [[ -f "$f" ]] && return 0
-    # A dead leg never touches its file: fail fast instead of burning
-    # the whole budget on a corpse. The pid is per-file (the sibling
-    # leg may already have finished fine); $what names the awaited
-    # rendezvous and its leg log.
-    kill -0 "$leg" 2>/dev/null || die "$what (leg exited early)"
-    sleep 0.5
-  done
-  die "$what"
-}
 
 # --- phase 1: shared core on peer-o ------------------------------------
 # Always runs: every prefix starts at 1. The selection only truncates
