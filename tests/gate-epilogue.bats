@@ -24,30 +24,30 @@ setup() {
 }
 
 @test "no secrets in host logs" {
-  for f in "$RUN"/logs/* "$STATE_DIR"/build-logs/*; do
-    [[ -f "$f" ]] || continue
-    for s in "$(cat "$RUN/creds/owner/identity")" "$(cat "$RUN/creds/owner/passphrase")"; do
-      grep -qF "$s" "$f" && die "secret leaked into $(basename "$f")"
+  # Per-group scan: skip groups whose credential files are missing
+  # or empty (an earlier phase failed before minting them — the phase
+  # failure itself is the verdict). An empty secret would match every
+  # non-empty log line, turning the epilogue into a misleading
+  # secondary failure instead of preserving the original one.
+  leak_scan() { # <identity-file> <passphrase-file>
+    [[ -s "$1" && -s "$2" ]] || return 0
+    local f s
+    for f in "$RUN"/logs/* "$STATE_DIR"/build-logs/*; do
+      [[ -f "$f" ]] || continue
+      for s in "$(cat "$1")" "$(cat "$2")"; do
+        grep -qF "$s" "$f" && die "secret leaked into $(basename "$f")"
+      done
     done
-    for s in "$(cat "$RUN/creds/member-n/identity")" "$(cat "$RUN/creds/member-n/passphrase")"; do
-      grep -qF "$s" "$f" && die "secret leaked into $(basename "$f")"
-    done
-    for s in "$(cat "$RUN/creds/headless-owner/identity")" "$(cat "$RUN/creds/headless-owner/passphrase")" \
-             "$(cat "$RUN/creds/headless-c/identity")" "$(cat "$RUN/creds/headless-c/passphrase")" \
-             "$(cat "$RUN/creds/headless-e/identity")" "$(cat "$RUN/creds/headless-e/passphrase")" \
-             "$(cat "$RUN/creds/headless-d/identity")" "$(cat "$RUN/creds/headless-d/passphrase")"; do
-      grep -qF "$s" "$f" && die "secret leaked into $(basename "$f")"
-    done
-    for s in "$(cat "$RUN/creds/crash-o/identity")" "$(cat "$RUN/creds/crash-o/passphrase")" \
-             "$(cat "$RUN/creds/crash-n/identity")" "$(cat "$RUN/creds/crash-n/passphrase")"; do
-      grep -qF "$s" "$f" && die "secret leaked into $(basename "$f")"
-    done
-    for s in "$(cat "$RUN/creds/exh/identity")" "$(cat "$RUN/creds/exh/passphrase")"; do
-      grep -qF "$s" "$f" && die "secret leaked into $(basename "$f")"
-    done
-    for s in "$(cat "$RUN/creds/uparent-o/identity")" "$(cat "$RUN/creds/uparent-o/passphrase")" \
-             "$(cat "$RUN/creds/uparent-n/identity")" "$(cat "$RUN/creds/uparent-n/passphrase")"; do
-      grep -qF "$s" "$f" && die "secret leaked into $(basename "$f")"
-    done
-  done
+  }
+  leak_scan "$RUN/creds/owner/identity" "$RUN/creds/owner/passphrase"
+  leak_scan "$RUN/creds/member-n/identity" "$RUN/creds/member-n/passphrase"
+  leak_scan "$RUN/creds/headless-owner/identity" "$RUN/creds/headless-owner/passphrase"
+  leak_scan "$RUN/creds/headless-c/identity" "$RUN/creds/headless-c/passphrase"
+  leak_scan "$RUN/creds/headless-e/identity" "$RUN/creds/headless-e/passphrase"
+  leak_scan "$RUN/creds/headless-d/identity" "$RUN/creds/headless-d/passphrase"
+  leak_scan "$RUN/creds/crash-o/identity" "$RUN/creds/crash-o/passphrase"
+  leak_scan "$RUN/creds/crash-n/identity" "$RUN/creds/crash-n/passphrase"
+  leak_scan "$RUN/creds/exh/identity" "$RUN/creds/exh/passphrase"
+  leak_scan "$RUN/creds/uparent-o/identity" "$RUN/creds/uparent-o/passphrase"
+  leak_scan "$RUN/creds/uparent-n/identity" "$RUN/creds/uparent-n/passphrase"
 }
