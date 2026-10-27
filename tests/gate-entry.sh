@@ -28,10 +28,21 @@
 # - Accepts only --fresh (the unit always passes it); anything else
 #   is a caller mistake, not a default.
 #
-# Usage: gate-entry.sh --fresh
+# Usage: gate-entry.sh --fresh [--step <comma list of 1-15>]
 set -euo pipefail
 
-[[ "${1:-}" == "--fresh" && $# -eq 1 ]] || { echo "usage: gate-entry.sh --fresh" >&2; exit 2; }
+ONLY_STEP=""
+if [[ "${1:-}" == "--fresh" ]]; then
+  shift
+  if [[ "${1:-}" == "--step" ]]; then
+    ONLY_STEP="${2:-}"
+    [[ -n "$ONLY_STEP" ]] || { echo "usage: gate-entry.sh --fresh [--step <comma list of 1-15>]" >&2; exit 2; }
+    shift 2
+  fi
+  [[ $# -eq 0 ]] || { echo "usage: gate-entry.sh --fresh [--step <comma list of 1-15>]" >&2; exit 2; }
+else
+  echo "usage: gate-entry.sh --fresh [--step <comma list of 1-15>]" >&2; exit 2
+fi
 command -v bats >/dev/null || { echo "gate-entry.sh: bats is not on PATH" >&2; exit 1; }
 command -v flock >/dev/null || { echo "gate-entry.sh: flock is not on PATH" >&2; exit 1; }
 command -v ssh >/dev/null || { echo "gate-entry.sh: ssh is not on PATH" >&2; exit 1; }
@@ -146,17 +157,52 @@ export STATE_DIR SSH_KEY WYRD_BIN NAK_BIN PEER_O PEER_N RELAY_URL
 : "${GATE_PARTITION_BIN:?gate-entry.sh: GATE_PARTITION_BIN is not set (host must publish the tap primitive)}"
 export GATE_BATS_LIB GATE_PARTITION_BIN
 export E2E_INTERVAL="${E2E_INTERVAL:-}"
-# Step selection arrives with the fuller migration; the entry always
-# runs phase 1 (every prefix includes it). The default mirrors
-# alpha-microvm.sh's absent-selection default (CORE_MAX=5): an empty
-# E2E_ONLY_STEP would run all six Lima steps including relay
-# convergence, which belongs to a later phase on the microvm path.
+# Step selection (`--step 6,10`): phases build on each other, so the
+# run set is the prefix closure of the selection — selecting phase N
+# runs 1..N, never a lone dependent phase on stale state. Every
+# entry must name a real phase, so `--step 99` refuses instead of
+# passing zero checks, and the highest entry decides the prefix.
+# Grammar shared with the runner and the host orchestrator
+# (tests/step-grammar.sh). Microvm steps 1-5 are the shared core
+# inside phase 1 (truncated via CORE_ONLY); steps 6-15 are gate
+# phases 02-11 (step s lives in file number s-4). The smoke suite
+# and the leak-check epilogue always run.
+# shellcheck source=tests/step-grammar.sh
+source "$ROOT/tests/step-grammar.sh"
+MAX_STEP=0
+if [[ -n "$ONLY_STEP" ]]; then
+  MAX_STEP="$(step_max 1 15 "$ONLY_STEP")" \
+    || { echo "gate-entry.sh: --step: '$ONLY_STEP' is not a step (expected a comma list of 1-15)" >&2; exit 1; }
+fi
+# Shared-core steps selected: the 1..N prefix truncated to the core
+# range, as the comma list the Lima script already accepts. An
+# absent selection means all five.
+CORE_MAX=5
+if [[ -n "$ONLY_STEP" && "$MAX_STEP" -lt 5 ]]; then CORE_MAX="$MAX_STEP"; fi
+CORE_ONLY="1"
+for (( _c = 2; _c <= CORE_MAX; _c++ )); do CORE_ONLY="$CORE_ONLY,$_c"; done
+unset _c
+export CORE_ONLY
 # Host $RUN is shared into every guest at /mnt/wyrd-state (see
 # nix/microvm/common.nix), so $RUN/e2e-env.sh is guest-visible at
 # $GUEST_RUN/e2e-env.sh. The entry owns that translation: one export
 # here covers every phase, which must use $GUEST_ENV, never the host
 # $RUN path, for the guest-side env file.
 export GUEST_ENV="/mnt/wyrd-state/run/e2e-env.sh"
-export CORE_ONLY="${CORE_ONLY:-1,2,3,4,5}"
 
-exec bats "$ROOT/tests/gate-entry-smoke.bats" "$ROOT/tests/gate-phase-01.bats" "$ROOT/tests/gate-phase-02.bats" "$ROOT/tests/gate-phase-03.bats" "$ROOT/tests/gate-phase-04.bats" "$ROOT/tests/gate-phase-05.bats" "$ROOT/tests/gate-phase-06.bats" "$ROOT/tests/gate-phase-07.bats" "$ROOT/tests/gate-phase-08.bats" "$ROOT/tests/gate-phase-09.bats" "$ROOT/tests/gate-phase-10.bats" "$ROOT/tests/gate-phase-11.bats" "$ROOT/tests/gate-epilogue.bats"
+# The suite is the prefix closure of the selection: smoke plus phase
+# 1 (microvm 1-5, every prefix includes it) plus gate phases 02-11
+# for microvm steps 6-15 up to the highest selected step, plus the
+# leak-check epilogue (the legacy leak check runs unconditionally,
+# and its per-group guards skip unminted credentials on a truncated
+# prefix). Absent selection means the whole suite.
+SUITE=( "$ROOT/tests/gate-entry-smoke.bats" "$ROOT/tests/gate-phase-01.bats" )
+for k in 02 03 04 05 06 07 08 09 10 11; do
+  s=$((10#$k + 4))
+  if (( MAX_STEP == 0 || s <= MAX_STEP )); then
+    SUITE+=( "$ROOT/tests/gate-phase-$k.bats" )
+  fi
+done
+unset k s
+SUITE+=( "$ROOT/tests/gate-epilogue.bats" )
+exec bats "${SUITE[@]}"
