@@ -13,6 +13,13 @@
 # Provides task constants with overrideable defaults: GUEST_TESTS
 # (baked suite path in guests), GUEST_ENV (guest env file path),
 # GUEST_RUN (guest run-tree path).
+# Provides host capability shims: as_guest (de-escalated host wyrd
+# invocations) and hand_to_guest (share handover for created
+# credential material). Both are environment-driven: when the
+# wrapper bins are set (dev loop) they delegate, otherwise (task
+# path, already running as the owner) they exec directly / no-op.
+# The partition primitive stays out: it is mandatory and fatal
+# (host must set GATE_PARTITION_BIN), and fault phases own it.
 
 : "${GUEST_TESTS:=/etc/wyrd-tests}"
 : "${GUEST_ENV:=/mnt/wyrd-state/e2e-env.sh}"
@@ -30,4 +37,26 @@ on_o() {
 on_n() {
   if [[ -z "${SSH:-}" || -z "${PEER_N:-}" ]]; then echo "e2e-helpers: on_n requires SSH and PEER_N" >&2; return 1; fi
   $SSH "$PEER_N" "WYRD_E2E_TOKEN=${WYRD_E2E_TOKEN:-}" "WYRD_E2E_UNWRAPPED=${WYRD_E2E_UNWRAPPED:-0}" "$@"
+}
+
+# as_guest <cmd...>: run a host wyrd invocation de-escalated when the
+# wrapper is provided (dev loop drops to uid 1000); direct exec in
+# the task path, where the suite already runs as the owner.
+as_guest() {
+  if [[ -n "${GATE_AS_GUEST_BIN:-}" ]]; then
+    "$GATE_AS_GUEST_BIN" "$@"
+  else
+    "$@"
+  fi
+}
+
+# hand_to_guest <paths...>: hand created credential material to the
+# guest owner (dev loop hands ownership to uid 1000); a no-op in the
+# task path, where files arrive correctly owned.
+hand_to_guest() {
+  if [[ -n "${GATE_HAND_TO_GUEST_BIN:-}" ]]; then
+    "$GATE_HAND_TO_GUEST_BIN" "$@"
+  else
+    :
+  fi
 }

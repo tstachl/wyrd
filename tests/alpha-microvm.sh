@@ -146,20 +146,7 @@ unset _c
 #                           material (dev loop: hands ownership to uid 1000;
 #                           task path: unset, a no-op — files
 #                           arrive correctly owned)
-as_guest() {
-  if [[ -n "${GATE_AS_GUEST_BIN:-}" ]]; then
-    "$GATE_AS_GUEST_BIN" "$@"
-  else
-    "$@"
-  fi
-}
-hand_to_guest() {
-  if [[ -n "${GATE_HAND_TO_GUEST_BIN:-}" ]]; then
-    "$GATE_HAND_TO_GUEST_BIN" "$@"
-  else
-    :
-  fi
-}
+# (as_guest/hand_to_guest live in tests/e2e-helpers.bash, sourced above.)
 host_partition() { # <tap> down|up
   [[ -n "${GATE_PARTITION_BIN:-}" ]] \
     || die "partition capability not provided (host must set GATE_PARTITION_BIN)"
