@@ -154,4 +154,4 @@ export E2E_INTERVAL="${E2E_INTERVAL:-}"
 export GUEST_ENV="/mnt/wyrd-state/run/e2e-env.sh"
 export CORE_ONLY="${CORE_ONLY:-1,2,3,4,5}"
 
-exec bats "$ROOT/tests/gate-entry-smoke.bats" "$ROOT/tests/gate-phase-01.bats" "$ROOT/tests/gate-phase-02.bats"
+exec bats "$ROOT/tests/gate-entry-smoke.bats" "$ROOT/tests/gate-phase-01.bats" "$ROOT/tests/gate-phase-02.bats" "$ROOT/tests/gate-phase-03.bats"
