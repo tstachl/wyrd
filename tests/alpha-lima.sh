@@ -4,7 +4,7 @@
 # the Lima issue's scope 1-6; each step function locks its invariants.
 #
 # Shared helpers live in tests/alpha-common.sh (also sourced by the
-# microVM suite); this file holds the Lima steps and main.
+# microVM legs); this file holds the Lima steps and main.
 set -euo pipefail
 
 # Lima specifics: logs are collected back to the host share on exit,

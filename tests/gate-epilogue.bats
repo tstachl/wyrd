@@ -1,8 +1,8 @@
 #!/usr/bin/env bats
 # tests/gate-epilogue.bats — gate-path suite epilogue: no secrets in host logs.
 #
-# Ports the host-side leak check at the end of
-# tests/alpha-microvm.sh: scan every log the host wrote (guest logs
+# Ports the host-side leak check that used to end the legacy host
+# orchestrator: scan every log the host wrote (guest logs
 # are checked in-guest by each leg) plus the build logs beside
 # $RUN, and fail if any credential material appears. Owner secrets
 # always exist past phase 1; every later phase's credentials exist

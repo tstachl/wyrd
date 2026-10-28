@@ -90,7 +90,7 @@ if command -v flock >/dev/null; then
   export WYRD_E2E_TOKEN="abc"
   export WYRD_E2E_LOCK="$TMP/guard.lock"
   # Deterministic, no background job: hold the lock on this shell's
-  # own fd (mirroring the runner at nix/microvm/run-microvm.sh) so
+  # own fd (mirroring the host provisioner lock discipline) so
   # no scheduling barrier is needed — the guard's probe opens its
   # own file description, which conflicts with fd 9 even in the same
   # process. Closing fd 9 releases the lock outright: no sleep, no

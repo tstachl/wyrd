@@ -3,16 +3,16 @@
 # forensics wiring (the 2026-10-08 ~30s relay outages left neither
 # guest logs nor a host load record, so neither layer could be
 # classified). Pure bash, no guest, no nix: run it anywhere with
-# `bash tests/test-relay-forensics.sh`. It pins the two halves the
+# `bash tests/test-relay-forensics.sh`. It pins the guest half the
 # classification depends on: the relay guest's journal timer in
-# nix/microvm/relay.nix, and the host availability logger in
-# nix/microvm/run-microvm.sh. (Wired into the CI shell-tests job
-# alongside the other harness stubs.)
+# nix/microvm/relay.nix. (The host availability logger used to live
+# in the deleted dev-loop runner; the gate provisioner has no
+# equivalent yet — that witness belongs to the gate repo, not here.)
+# (Wired into the CI shell-tests job alongside the other harness stubs.)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RELAY_NIX="$SCRIPT_DIR/../nix/microvm/relay.nix"
-RUNNER="$SCRIPT_DIR/../nix/microvm/run-microvm.sh"
 
 PASS=0
 
@@ -78,40 +78,5 @@ printf '%s\n' "$LAST_SEG" | grep -q 'relay-journal\.ts' \
   || { echo "FAIL: relay heartbeat is not written after the dump" >&2; exit 1; }
 PASS=$((PASS + 1))
 echo "  PASS: relay heartbeat is written after the dump"
-
-# The host logger backgrounds with the lock fd closed: an orphaned
-# logger holding fd 9 would wedge the flock for every later run and
-# --teardown (the exact fd-inheritance class the e2e-guard stubs
-# pin). Without this pin the rule returns via a one-line edit.
-grep -q '9>&-' "$RUNNER" \
-  || { echo "FAIL: availability logger backgrounds without closing the lock fd" >&2; exit 1; }
-PASS=$((PASS + 1))
-echo "  PASS: availability logger closes the lock fd"
-# Self-exit when the runner is gone on an untrapped signal: the
-# runner holds the run lock for the whole run, so an acquirable lock
-# means the logger is orphaned — it must stop instead of appending
-# to a dead run's file (and double-writing beside the next run).
-grep -q 'flock -n 8' "$RUNNER" \
-  || { echo "FAIL: availability logger has no orphan self-exit" >&2; exit 1; }
-PASS=$((PASS + 1))
-echo "  PASS: availability logger exits when orphaned"
-# Per-tick open-append-close: the phase-1 guest pre-clean unlinks
-# $RUN/logs once per run, and a held fd would keep writing the
-# unlinked inode invisibly past the wipe.
-grep -q '>> "$AVAIL_LOG"' "$RUNNER" \
-  || { echo "FAIL: availability logger does not append per tick" >&2; exit 1; }
-PASS=$((PASS + 1))
-echo "  PASS: availability logger appends per tick"
-# Stopped on both exits: explicitly after a green suite, and in
-# teardown() (EXIT trap) for the failure path. A logger that
-# outlives the run writes a torn-down run's file.
-[[ "$(grep -c 'LOGGER_PID=""' "$RUNNER")" == 1 ]] \
-  || { echo "FAIL: availability logger is not cleared after the suite" >&2; exit 1; }
-PASS=$((PASS + 1))
-echo "  PASS: availability logger stops after the suite"
-grep -q 'kill "$LOGGER_PID"' "$RUNNER" \
-  || { echo "FAIL: teardown does not kill the availability logger" >&2; exit 1; }
-PASS=$((PASS + 1))
-echo "  PASS: teardown kills the availability logger"
 
 echo "relay-forensics: $PASS checks passed"

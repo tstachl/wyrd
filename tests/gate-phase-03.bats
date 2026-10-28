@@ -5,7 +5,7 @@
 # through; every assignment below is consumed at call time.)
 # tests/gate-phase-03.bats — gate-path phase 3: cross-host convergence.
 #
-# Ports tests/alpha-microvm.sh phase 3 (microvm 7): owner/member legs
+# Ports legacy microVM phase 7: owner/member legs
 # converge across hosts, then the host asserts control-plane opacity
 # (kind-1059 gift wraps only, member addressed and never authoring,
 # no bare kind-9501 rumors) and runs the wave-2 embedded-consumer

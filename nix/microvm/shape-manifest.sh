@@ -28,12 +28,11 @@ required_from() {
   } | sed -E 's#["'"'"']$##; s#^.*[/"'"'"']##' | grep -E '^[A-Za-z0-9_.-]+\.(sh|py)$' || true
 }
 
-# Guest-run scripts source each other; the host orchestrator sources
-# the shared grammar and guard and executes the orchestrator. Basenames
-# resolve to their home: tests/ for suite files, nix/microvm/ for the
-# runner and its policy module. Resolution is by existence (verified,
-# not assumed); an unresolvable basename keeps its tests/ guess so the
-# test fails loudly on the missing path instead of silently dropping it.
+# Guest-run scripts source each other; the gate entry sources the
+# shared grammar. Basenames resolve to their home: tests/ for suite
+# files. Resolution is by existence (verified, not assumed); an
+# unresolvable basename keeps its tests/ guess so the test fails
+# loudly on the missing path instead of silently dropping it.
 locate() {
   if [[ -f "$ROOT/tests/$1" ]]; then
     printf 'tests/%s\n' "$1"
@@ -44,8 +43,8 @@ locate() {
   fi
 }
 GUEST_SCRIPTS="alpha-lima.sh alpha-microvm-legs.sh alpha-common.sh"
-HOST_SCRIPTS="alpha-microvm.sh"
-HOST_SOURCED="run-microvm.sh build-account.sh"
+HOST_SCRIPTS="gate-entry.sh gate-entry-smoke.bats gate-phase-01.bats gate-phase-02.bats gate-phase-03.bats gate-phase-04.bats gate-phase-05.bats gate-phase-06.bats gate-phase-07.bats gate-phase-08.bats gate-phase-09.bats gate-phase-10.bats gate-phase-11.bats gate-epilogue.bats"
+HOST_SOURCED=""
 FILES=""
 for _s in $GUEST_SCRIPTS $HOST_SCRIPTS; do
   for _b in $(required_from "$ROOT/tests/$_s"); do
@@ -77,11 +76,6 @@ lima/provision.sh
 lima/run-alpha.sh
 lima/wyrd-alpha.yaml
 nix/microvm/empty-src
-nix/microvm/run-microvm.sh
-nix/microvm/provision-host.sh
-nix/microvm/source-root.sh
-nix/microvm/stage-subject.sh
-nix/microvm/build-account.sh
 nix/microvm/common.nix
 nix/microvm/peer-o.nix
 nix/microvm/peer-n.nix
@@ -93,8 +87,8 @@ nix/microvm/relay.nix"
   echo "[shape-files]"
   printf '%s\n%s\n%s\n' "$TEST_FILES" "$BAKED" "$HARNESS" | grep -E '.' | sort -u
   echo "[subject-slots]"
-  # The slot text is a claim the runner enforces: keep it in sync
-  # with the SUBJECT_FLAGS construction in run-microvm.sh (the
+  # The slot text is a claim the host enforces: keep it in sync
+  # with the gate provisioner's subject ingestion (the
   # --override-input wyrdSrc + IFD-denied + offline invocation) and
   # the wyrdSrcFor routing in flake.nix. A flag removed there must
   # be removed here (N9).

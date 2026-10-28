@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # tests/alpha-common.sh — shared e2e contract helpers, sourced (never
-# executed) by tests/alpha-lima.sh (single Lima guest) and
-# tests/alpha-microvm.sh (multi-host microVM run). Every assertion
+# executed) by tests/alpha-lima.sh (single Lima guest) and the
+# microVM legs (tests/alpha-microvm-legs.sh). Every assertion
 # helper here is the suite in both harnesses; steps live in the
 # harness scripts.
 #

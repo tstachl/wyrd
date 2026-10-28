@@ -5,7 +5,7 @@
 # through; every assignment below is consumed at call time.)
 # tests/gate-phase-05.bats — gate-path phase 5: fetch plane.
 #
-# Ports tests/alpha-microvm.sh phase 5 (microvm 9): blocking open,
+# Ports legacy microVM phase 9: blocking open,
 # bounded EIO, recovery, and dedupe hold across hosts
 # (fetch-member/fetch-owner legs). Runs as the build user under
 # tests/gate-entry.sh, after phases 1-4 in the same bats

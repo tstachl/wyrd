@@ -5,7 +5,7 @@
 # through; every assignment below is consumed at call time.)
 # tests/gate-phase-11.bats — gate-path phase 11: unknown parent.
 #
-# Ports tests/alpha-microvm.sh phase 11 (microvm 15): a fresh pair
+# Ports legacy microVM phase 15: a fresh pair
 # on the same topology (no third VM) — the owner publishes two
 # chained snapshots and stops before the member fetches any body;
 # with both manifests converged but neither body servable, the

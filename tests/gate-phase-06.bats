@@ -5,7 +5,7 @@
 # through; every assignment below is consumed at call time.)
 # tests/gate-phase-06.bats — gate-path phase 6: relay-partition conflict.
 #
-# Ports tests/alpha-microvm.sh phase 6 (microvm 10): the rename half
+# Ports legacy microVM phase 10: the rename half
 # runs pre-partition, the host partitions the relay's tap only after
 # both rename-done files land, then heals after both conflict
 # writes. Done-file rendezvous rides the shared state root,

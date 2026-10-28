@@ -136,8 +136,8 @@
         wyrd = wyrdFor system ./.;
         wyrd-dist = distFor system;
         # Pinned relay-query tool for the microVM opacity probe
-        # (tests/alpha-microvm.sh): reproducibility is the reason —
-        # the runner builds nak from this pin and exports NAK_BIN
+        # (gate-phase-03): reproducibility is the reason —
+        # the host builds nak from this pin and exports NAK_BIN
         # next to WYRD_BIN instead of floating nixpkgs#nak.
         nak = (pkgsFor system).nak;
         default = self.packages.${system}.wyrd;
@@ -161,7 +161,8 @@
       # assembling disk images on every PR. The closures build when a
       # microVM run needs them.
       # Suite *execution* needs KVM and runs on the maintainer's Linux
-      # host via nix/microvm/run-microvm.sh, never in CI.
+      # host via the gate task (tests/gate-entry.sh as the build user
+      # under host-owned provisioning), never in CI.
       checks = forAllSystems (system: {
         wyrd = self.packages.${system}.wyrd;
         wyrd-dist = self.packages.${system}.wyrd-dist;

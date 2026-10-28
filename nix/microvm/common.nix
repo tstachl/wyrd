@@ -9,8 +9,8 @@
   options.wyrd = {
     # Host directory shared into every guest at /mnt/wyrd-state:
     # drive dirs (stateful across runs), the runner-generated
-    # e2e-env.sh, and log collection. Must match run-microvm.sh's
-    # --state-dir default.
+    # e2e-env.sh, and log collection. Must match the host
+    # provisioner's state dir.
     stateDir = lib.mkOption {
       type = lib.types.str;
       default = "/var/lib/wyrd-microvm/state";

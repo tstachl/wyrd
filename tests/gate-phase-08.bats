@@ -5,7 +5,7 @@
 # through; every assignment below is consumed at call time.)
 # tests/gate-phase-08.bats — gate-path phase 8: headless serving.
 #
-# Ports tests/alpha-microvm.sh phase 8 (microvm 12): two headless
+# Ports legacy microVM phase 12: two headless
 # peers exchange content with neither mounting — the owner drive
 # serves via `wyrd vault` while fresh devices join and converge
 # with plain `sync now`, reading bytes through an attachment (the

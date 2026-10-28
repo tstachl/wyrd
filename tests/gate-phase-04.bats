@@ -5,7 +5,7 @@
 # through; every assignment below is consumed at call time.)
 # tests/gate-phase-04.bats — gate-path phase 4: serving restart.
 #
-# Ports tests/alpha-microvm.sh phase 4 (microvm 8): route update
+# Ports legacy microVM phase 8: route update
 # rewires fetch across hosts (restart legs), then the upgrade-rejoin
 # leg (owner upgrades its serving binary in-guest via `wyrd
 # update`, member converges on the post-upgrade set with no remount
