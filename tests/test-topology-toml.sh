@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/test-topology-toml.sh — the [topology] declaration in gate.toml
+# tests/test-topology-toml.sh — the [tasks.wyrd-gate-e2e.topology] declaration in gate.toml
 # stays schema-valid and matches the microVM sources it describes:
 # every box carries exactly the typed keys the gate task-topology
 # parser requires, values have the parser's shapes, and the facts
@@ -15,23 +15,23 @@ PASS=0
 pass() { PASS=$((PASS + 1)); echo "  PASS: $1"; }
 die() { echo "  FAIL: $1" >&2; exit 1; }
 
-# Scope everything below to the [topology] section (it is the last
-# section in gate.toml, so everything from its header on is topology).
-TOPO="$(sed -n '/^\[topology\]/,$p' "$ROOT/gate.toml")"
-[[ -n "$TOPO" ]] || die "gate.toml has no [topology] section"
+# Scope everything below to the task topology section (it is the
+# last section in gate.toml, so everything from its header on is topology).
+TOPO="$(sed -n '/^\[tasks\.wyrd-gate-e2e\.topology\]/,$p' "$ROOT/gate.toml")"
+[[ -n "$TOPO" ]] || die "gate.toml has no task topology section"
 
 printf '%s\n' "$TOPO" | grep -qx 'version = 1' \
   || die "topology version is not exactly 'version = 1'"
 pass "topology version is 1"
 
 # The declared box set is exactly the e2e trio, order-free.
-DECLARED="$(printf '%s\n' "$TOPO" | grep -oE '^\[topology\.box\.[a-z0-9-]+\]' \
-  | sed -E 's/^\[topology\.box\.//; s/\]$//' | sort -u)"
+DECLARED="$(printf '%s\n' "$TOPO" | grep -oE '^\[tasks\.wyrd-gate-e2e\.topology\.box\.[a-z0-9-]+\]' \
+  | sed -E 's/^\[tasks\.wyrd-gate-e2e\.topology\.box\.//; s/\]$//' | sort -u)"
 [[ "$(printf '%s\n' "$DECLARED" | tr '\n' ' ')" == "peer-n peer-o relay " ]] \
   || die "declared boxes are not exactly peer-o peer-n relay"
 pass "declared boxes are exactly the e2e trio"
 for _b in peer-o peer-n relay; do
-  count="$(printf '%s\n' "$TOPO" | grep -cE "^\[topology\.box\.${_b}\]$")"
+  count="$(printf '%s\n' "$TOPO" | grep -cE "^\[tasks\.wyrd-gate-e2e\.topology\.box\.${_b}\]$")"
   [[ "$count" == 1 ]] || die "box $_b declared $count times"
 done
 unset _b count
@@ -40,7 +40,7 @@ pass "no box section is duplicated or missing"
 # Per-box shape: exactly the six mandatory keys, typed values.
 # Body of one box section (header and any following header excluded).
 section_of() {
-  sed -n "/^\\[topology\\.box\\.$1\\]/,/^\\[/p" <<< "$TOPO" | sed '1d' | grep -vE '^\[' || true
+  sed -n "/^\\[tasks\\.wyrd-gate-e2e\\.topology\\.box\\.$1\\]/,/^\\[/p" <<< "$TOPO" | sed '1d' | grep -vE '^\[' || true
 }
 strip() { sed -E 's/^"//; s/"$//' <<< "$1"; }
 for _b in peer-o peer-n relay; do

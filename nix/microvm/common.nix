@@ -13,7 +13,7 @@
     # provisioner's state dir.
     stateDir = lib.mkOption {
       type = lib.types.str;
-      default = "/var/lib/wyrd-microvm/state";
+      default = "/var/lib/gate-runner/state";
       description = "Host path shared into guests at /mnt/wyrd-state.";
     };
   };
@@ -52,7 +52,7 @@
     # user: step 1's credential-hardening negatives (wrong owner,
     # group-readable) only mean anything as non-root. The uid is
     # pinned, not auto-allocated: it must equal the provision host's
-    # suite uid (gate-suite-build, 981 on Odin — pinned there too),
+    # suite uid (gate-builder, 981 on Odin — pinned there too),
     # so host and guest agree on file ownership across the shared
     # state dir and the suite's as-guest/hand-to-guest shims stay
     # correct no-ops on the task path. NixOS forbids sub-1000 uids

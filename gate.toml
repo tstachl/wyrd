@@ -58,28 +58,46 @@ prompt = ".agents/prompts/branch-review.md"
 model = "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free"
 variant = "high"
 
-# Odin suite resource: the forced-command ssh path. The machine id comes
+# Odin runner resource: the forced-command ssh path. The machine id comes
 # from the key entry server-side; nothing here can forge it.
-[suite]
+[runner]
 host = "odin"
-user = "gate-suite"
+user = "gate-runner"
 key = "~/.ssh/id_ed25519_gate_odin"
 # The host's name for this repository. The client names a repository and
 # a revision, never a path: the host resolves the name to the source it
 # is willing to build, so the name is profile configuration.
 repo = "wyrd"
 
-# Declared runtime shape for the microVM e2e task: data only. The gate
-# task-topology parser reads this section, renders it canonically, and
-# hashes those bytes as the shape; nothing here is staged, copied, or
-# executed on the host. The provisioner reads the approved rendering,
-# never this file. Values must match
+# The wyrd-gate-e2e task declaration: data only. The gate runner reads
+# this section from the staged revision (never host config): entryPoint
+# runs as the build user under the host caps, requires must resolve in
+# the runner tool closure, builds map names to flake attrpaths the host
+# builds sandboxed, and relayRole names the topology box the suite
+# waits on. Nothing here executes on the host except through the
+# provisioned microVMs; guest code is data.
+[tasks.wyrd-gate-e2e]
+entryPoint = "tests/gate-entry.sh"
+requires = ["bats", "gnutar", "diffutils", "gawk"]
+relayRole = "relay"
+
+[tasks.wyrd-gate-e2e.builds]
+wyrd = "packages.x86_64-linux.wyrd"
+nak = "packages.x86_64-linux.nak"
+runner-peer-o = "nixosConfigurations.wyrd-peer-o.config.microvm.runner.qemu"
+runner-peer-n = "nixosConfigurations.wyrd-peer-n.config.microvm.runner.qemu"
+runner-relay = "nixosConfigurations.wyrd-relay.config.microvm.runner.qemu"
+
+# Declared VM topology for the microVM e2e task: data only. The gate
+# runner reads the boxes from the staged revision, checks each against
+# the host caps (vcpu, memory, subnet), and provisions exactly them.
+# Nothing here executes on the host. Values must match
 # nix/microvm/{relay,peer-o,peer-n}.nix (pinned by tests/test-topology-toml.sh).
-[topology]
+[tasks.wyrd-gate-e2e.topology]
 version = 1
 boxes = ["peer-o", "peer-n", "relay"]
 
-[topology.box.peer-o]
+[tasks.wyrd-gate-e2e.topology.box.peer-o]
 vcpu = 4
 mem_mb = 4096
 tap = "tap-o"
@@ -87,7 +105,7 @@ mac = "02:00:00:00:07:11"
 ip = "10.0.7.11/24"
 ssh = true
 
-[topology.box.peer-n]
+[tasks.wyrd-gate-e2e.topology.box.peer-n]
 vcpu = 4
 mem_mb = 4096
 tap = "tap-n"
@@ -95,7 +113,7 @@ mac = "02:00:00:00:07:12"
 ip = "10.0.7.12/24"
 ssh = true
 
-[topology.box.relay]
+[tasks.wyrd-gate-e2e.topology.box.relay]
 vcpu = 2
 mem_mb = 1024
 tap = "tap-r"
