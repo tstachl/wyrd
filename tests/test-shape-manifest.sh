@@ -26,7 +26,7 @@ MISSING=""
 while IFS= read -r line; do
   [[ "$line" == shape-files:* || "$line" == "["* || "$line" == \#* || -z "$line" ]] && continue
   # shellcheck disable=SC2076
-  [[ "$line" =~ ^[A-Za-z0-9_./-]+\.(nix|nix\.lock|sh|py|lock|toml)$ ]] || continue
+  [[ "$line" =~ ^[A-Za-z0-9_./-]+\.(nix|nix\.lock|sh|bash|bats|py|lock|toml)$ ]] || continue
   [[ -f "$ROOT/$line" ]] || MISSING="$MISSING $line"
 done <<< "$(printf '%s\n' "$MANIFEST" | sed -n '/^\[shape-files\]/,/^\[subject-slots\]/p')"
 [[ -z "$MISSING" ]] || die "manifest lists missing files:$MISSING"
