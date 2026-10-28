@@ -78,7 +78,7 @@ repo = "wyrd"
 # provisioned microVMs; guest code is data.
 [tasks.wyrd-gate-e2e]
 entryPoint = "tests/gate-entry.sh"
-requires = ["bats", "gnutar", "diffutils", "gawk"]
+requires = ["bats", "tar", "diff", "gawk"]
 relayRole = "relay"
 
 [tasks.wyrd-gate-e2e.builds]
