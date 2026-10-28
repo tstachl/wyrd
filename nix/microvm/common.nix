@@ -46,6 +46,9 @@
       # `wyrd update` unpacks release archives by shelling out to
       # system tar: the post-upgrade convergence leg needs it in-guest.
       gnutar
+      # The upgrade archives are .tar.gz: unpacking shells out to
+      # system gzip alongside tar.
+      gzip
     ];
     security.sudo.enable = true;
     # The suite runs as e2e, mirroring the Lima guest's unprivileged
