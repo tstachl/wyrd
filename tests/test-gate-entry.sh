@@ -44,16 +44,19 @@ printf 'nak packages.nak|runner-peer-o runners.peer-o|runner-peer-n runners.peer
 printf 'key' >"$STATE_DIR/sshkey"
 mkdir -p "$FIXTURE/bats-lib"
 
-RUNNER_BIN="$FIXTURE/wyrd-runner"
-NAK_BIN="$FIXTURE/nak-runner"
+RUNNER_BIN="$FIXTURE/wyrd-runner/bin/wyrd"
+NAK_BIN="$FIXTURE/nak-runner/bin/nak"
+mkdir -p "$FIXTURE/wyrd-runner/bin" "$FIXTURE/nak-runner/bin"
 printf '#!/bin/sh\nexit 0\n' >"$RUNNER_BIN"
 printf '#!/bin/sh\nexit 0\n' >"$NAK_BIN"
 chmod +x "$RUNNER_BIN" "$NAK_BIN"
-printf 'wyrd=%s\nnak=%s\nlegacy=ignored\n' "$RUNNER_BIN" "$NAK_BIN" >"$FIXTURE/runners.env"
+printf 'wyrd=%s\nnak=%s\nlegacy=ignored\n' "$FIXTURE/wyrd-runner" "$FIXTURE/nak-runner" >"$FIXTURE/runners.env"
 
 # Stub host commands: record argv, and for bats the environment the
-# suite would inherit. The driver must never call ssh itself.
-for tool in bats flock ssh timeout; do
+# suite would inherit. The driver must never call ssh itself. sleep
+# is stubbed instant: the lock-acquire grace below must run fast
+# when flock never succeeds.
+for tool in bats flock ssh timeout sleep; do
   cat >"$STUBBIN/$tool" <<EOF
 #!/bin/sh
 echo "$tool \$*" >>"$CALLS"
@@ -108,6 +111,14 @@ token_env="$(grep '^WYRD_E2E_TOKEN=' "$CALLS" | cut -d= -f2-)"
 token_file="$(grep '^WYRD_E2E_TOKEN=' "$RUN_DIR/e2e-env.sh" | cut -d= -f2-)"
 [[ -n "$token_env" && "$token_env" == "$token_file" ]] || die "run token handed to the suite matches the published file"
 grep -q "^WYRD_E2E_PID=[0-9][0-9]*$" "$RUN_DIR/e2e-env.sh" || die "owner pid published in the env file"
+# Dev-loop key parity: the guest legs source this file, so every key
+# the dev loop publishes must be present with gate-path values.
+grep -q "^WYRD_BIN=$RUNNER_BIN$" "$RUN_DIR/e2e-env.sh" || die "wyrd runner published in the env file"
+grep -q "^RELAY_HOST=10.0.7.10$" "$RUN_DIR/e2e-env.sh" || die "relay host published in the env file"
+grep -q "^RELAY_PORT=18761$" "$RUN_DIR/e2e-env.sh" || die "relay port published in the env file"
+grep -q "^RELAY_MANAGED=0$" "$RUN_DIR/e2e-env.sh" || die "relay unmanaged in the env file (host-provisioned)"
+grep -q "^CHECKOUT=/etc/wyrd-tests$" "$RUN_DIR/e2e-env.sh" || die "guest tests path published in the env file"
+grep -q "^E2E_ROOT=/mnt/wyrd-state/run$" "$RUN_DIR/e2e-env.sh" || die "guest run root published in the env file"
 [ -z "$(grep "^ssh " "$CALLS" || true)" ] || die "driver dials nothing itself (smoke does)"
 pass "happy path assembles env, holds lock, execs bats"
 
@@ -212,5 +223,39 @@ out="$(run_entry -- --fresh)"
 [[ "$out" == "status=1" ]] || die "out-of-range subnet octet refuses, got: $out"
 printf '10.0.7' >"$PROVISION_DIR/subnet"
 pass "subnet octet range refuses"
+
+# Transient holder (the launcher releasing its hold as the unit
+# starts): the first acquires fail, then one succeeds. The entry
+# waits out the handoff instead of refusing a healthy run.
+cat >"$STUBBIN/flock" <<EOF
+#!/bin/sh
+echo "flock \$*" >>"$CALLS"
+n="\$(cat "$FIXTURE/flock-count" 2>/dev/null || echo 0)"
+n=\$((n + 1))
+echo "\$n" >"$FIXTURE/flock-count"
+if [ "\$n" -lt 3 ]; then exit 1; fi
+exit 0
+EOF
+chmod +x "$STUBBIN/flock"
+: >"$CALLS"; rm -f "$FIXTURE/flock-count"
+out="$(run_entry -- --fresh)"
+[[ "$out" == "status=0" ]] || die "transient lock holder breaks the run, got: $out ($(cat "$FIXTURE/stderr"))"
+[[ "$(grep -c "^flock -n 9$" "$CALLS")" == "3" ]] || die "entry does not retry the acquire: $(cat "$CALLS")"
+pass "transient lock holder is retried, then acquired"
+
+# Persistent holder (a genuinely foreign run): the full grace is
+# retried, then the run refuses with the cause named.
+cat >"$STUBBIN/flock" <<EOF
+#!/bin/sh
+echo "flock \$*" >>"$CALLS"
+exit 1
+EOF
+chmod +x "$STUBBIN/flock"
+: >"$CALLS"
+out="$(run_entry -- --fresh)"
+[[ "$out" == "status=2" ]] || die "held lock does not refuse, got: $out"
+grep -q "another run holds" "$FIXTURE/stderr" || die "held lock hides the cause"
+[[ "$(grep -c "^flock -n 9$" "$CALLS")" == "60" ]] || die "entry does not retry for the full grace"
+pass "held lock refuses after the acquire grace"
 
 echo "gate-entry: $PASS checks passed"
