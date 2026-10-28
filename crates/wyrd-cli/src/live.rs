@@ -72,8 +72,10 @@ pub(crate) fn install_shutdown_handler() -> Result<(), CliError> {
 
 #[cfg(not(unix))]
 pub(crate) fn install_shutdown_handler() -> Result<(), CliError> {
-    // Credential files already restrict this binary to Unix; without a
-    // handler the process dies on signal exactly as before.
+    // No Unix credential path exists on this target (see the Windows
+    // scope paragraph in `docs/architecture.md`), so no drive can be
+    // opened here; without a handler the process dies on signal
+    // exactly as before.
     Ok(())
 }
 
