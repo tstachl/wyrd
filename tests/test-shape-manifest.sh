@@ -55,6 +55,18 @@ done
 [[ -z "$UNCOVERED" ]] || die "manifest omits required files:$UNCOVERED"
 pass "manifest covers every required and baked file"
 
+# Rust workspace inputs: the gate builds packages.wyrd from the staged
+# tree, so every tracked Cargo input must be pinned. Inverse check:
+# list the tracked workspace files from git and require each in the
+# manifest (a build input the manifest drops fails the build at eval).
+UNPINNED=""
+while IFS= read -r _f; do
+  [ -n "$_f" ] || continue
+  printf '%s\n' "$MANIFEST" | grep -qxF "$_f" || UNPINNED="$UNPINNED $_f"
+done < <(git -C "$ROOT" ls-files Cargo.toml Cargo.lock rust-toolchain.toml 'crates')
+[[ -z "$UNPINNED" ]] || die "manifest omits Cargo inputs:$UNPINNED"
+pass "manifest pins every tracked Cargo input"
+
 # Subject slot declared.
 printf '%s\n' "$MANIFEST" | grep -q '^\[subject-slots\]$' || die "manifest lacks a [subject-slots] section"
 printf '%s\n' "$MANIFEST" | grep -q '^wyrdSrc:' || die "manifest lacks the wyrdSrc slot declaration"
