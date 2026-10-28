@@ -2,11 +2,11 @@
 # tests/e2e-helpers.bash — shared ssh plumbing for the e2e suites.
 #
 # Sourced, never executed: functions only, no side effects at source
-# time. Sourced by tests/alpha-microvm.sh (dev loop and legacy gate
-# path) and by the gate-path bats phases (tests/gate-phase-*.bats),
-# so both paths dial guests identically; the environment (direct
-# exec vs. wrappers, partition primitive) is what differs, and that
-# lives in the gate-owned bats helpers, not here.
+# time. Sourced by the gate-path bats phases
+# (tests/gate-phase-*.bats) and by tests/alpha-lima.sh, so both
+# paths dial guests identically; the environment (direct exec vs.
+# wrappers, partition primitive) is what differs, and that lives in
+# the gate-owned bats helpers, not here.
 #
 # Requires from the environment: SSH (the ssh command line with key
 # and options), PEER_O, PEER_N (user@host endpoints).
@@ -16,18 +16,18 @@
 # Provides host capability shims: as_guest (de-escalated host wyrd
 # invocations) and hand_to_guest (share handover for created
 # credential material). Both are environment-driven: when the
-# wrapper bins are set (dev loop) they delegate, otherwise (task
-# path, already running as the owner) they exec directly / no-op.
+# wrapper bins are set they delegate, otherwise (task path, already
+# running as the owner) they exec directly / no-op.
 # host_partition (tap surgery for fault phases) is mandatory and
 # fatal: the host must set GATE_PARTITION_BIN. It lives here (not
-# in the gate-owned bats helpers) because both paths name the tap
+# in the gate-owned bats helpers) because all callers name the tap
 # and direction identically; only the binary behind the env var
-# differs (dev-partition.sh vs the host-owned tap primitive).
+# differs (the host-owned tap primitive).
 #
 # Also provides the harness failure primitive (die) and the
 # host-driven fault rendezvous waiter (wait_conflict_file), shared
 # so both paths fail identically. Note the semantic shift: in the
-# legacy script die aborts the whole run; in bats each @test runs
+# old host script die aborted the whole run; in bats each @test runs
 # in its own process, so die aborts only the current test and later
 # phases cascade-fail on the missing state.
 

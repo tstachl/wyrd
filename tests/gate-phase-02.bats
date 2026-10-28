@@ -5,7 +5,7 @@
 # through; every assignment below is consumed at call time.)
 # tests/gate-phase-02.bats — gate-path phase 2: member-n invite/join split.
 #
-# Ports tests/alpha-microvm.sh phase 2 (microvm 6): mint member-n
+# Ports legacy microVM phase 6: mint member-n
 # credential material on the host, hand it to the guest owner,
 # verify both peers carry the baked suite and execute the shared
 # binary, then pairing-request / invite / join / re-invite on the

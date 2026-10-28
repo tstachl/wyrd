@@ -3,10 +3,9 @@
 # stays schema-valid and matches the microVM sources it describes:
 # every box carries exactly the typed keys the gate task-topology
 # parser requires, values have the parser's shapes, and the facts
-# agree with nix/microvm/{relay,peer-o,peer-n}.nix plus the TAP_DEV
-# map in nix/microvm/run-microvm.sh. The parser itself is pinned by
-# gate's own suite; this pins wyrd's declaration. Pure bash + grep,
-# no guest, no nix.
+# agree with nix/microvm/{relay,peer-o,peer-n}.nix. The parser itself
+# is pinned by gate's own suite; this pins wyrd's declaration. Pure
+# bash + grep, no guest, no nix.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -89,10 +88,8 @@ for _b in peer-o peer-n relay; do
   grep -qE "id = \"${TAP}\";" "$NIX" || die "box $_b tap disagrees with $NIX"
   grep -qE "mac = \"${MAC}\";" "$NIX" || die "box $_b mac disagrees with $NIX"
   grep -qE "address = \"${ADDR}\";" "$NIX" || die "box $_b ip disagrees with $NIX"
-  grep -qF "[${_b}]=${TAP}" "$ROOT/nix/microvm/provision-host.sh" \
-    || die "box $_b tap missing from the provision TAP map"
 done
 unset _b NIX BODY VCPU MEM TAP MAC ADDR
-pass "declared facts match the nix sources and the provision TAP map"
+pass "declared facts match the nix sources"
 
 echo "topology-toml: $PASS checks passed"

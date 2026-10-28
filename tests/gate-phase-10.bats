@@ -5,7 +5,7 @@
 # through; every assignment below is consumed at call time.)
 # tests/gate-phase-10.bats — gate-path phase 10: resource exhaustion.
 #
-# Ports tests/alpha-microvm.sh phase 10 (microvm 14): fill the
+# Ports legacy microVM phase 14: fill the
 # exhaustion drive's filesystem to 256 MiB headroom, then write
 # through an offline attachment until ENOSPC. Offline on purpose:
 # exhaustion is a storage-stack property, not a sync one, and a

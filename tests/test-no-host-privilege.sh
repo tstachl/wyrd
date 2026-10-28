@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # tests/test-no-host-privilege.sh — enumeration test for the P0
-# zero-host-privilege migration.
+# zero-host-privilege migration (complete: the legacy root-unit path
+# is deleted, so this pins the end state, not the migration).
 #
 # No repository code executed on Odin with host privilege may name a
 # privileged program: the repository contributes orchestration (data
@@ -11,21 +12,17 @@
 # the CI shell-tests job alongside the other stubs.)
 #
 # Scope: the host-executed task closure — the files the gate task
-# runs on the host (tests/alpha-microvm.sh plus the two modules it
-# sources, and the gate-path entry: tests/gate-entry.sh plus the
-# smoke suite it execs, which run as the build user on Odin). Guest-executed legs (alpha-microvm-legs.sh and what they
-# source) run as the guest user inside the VMs; guest-side sudo is
-# guest privilege, not host privilege, and stays. Dev-loop-only
-# files (nix/microvm/run-microvm.sh, provision-host.sh,
-# build-account.sh, dev-*.sh) keep their privilege openly: they run
-# as root on the developer's own machine (its own trust domain) and
-# are never executed on Odin via the task path.
+# runs on the host as the build user (tests/gate-entry.sh plus the
+# smoke suite and bats phases it execs). Guest-executed legs
+# (alpha-microvm-legs.sh and what they source) run as the guest user
+# inside the VMs; guest-side sudo is guest privilege, not host
+# privilege, and stays.
 #
-# Discipline (same precedent as tests/test-provision-host.sh): the
-# bans below match comments too, so a comment that needs one of
-# these words must be reworded, not excepted. Guest payloads are the
-# only exception: a line routing through on_o/on_n executes inside
-# the guest over ssh, where sudo/mount/chown are guest privilege.
+# Discipline: the bans below match comments too, so a comment that
+# needs one of these words must be reworded, not excepted. Guest
+# payloads are the only exception: a line routing through on_o/on_n
+# executes inside the guest over ssh, where sudo/mount/chown are
+# guest privilege.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -36,7 +33,6 @@ pass() { PASS=$((PASS + 1)); echo "  PASS: $1"; }
 die() { echo "  FAIL: $1" >&2; exit 1; }
 
 CLOSURE=(
-  "$ROOT/tests/alpha-microvm.sh"
   "$ROOT/tests/e2e-guard.sh"
   "$ROOT/tests/e2e-helpers.bash"
   "$ROOT/tests/step-grammar.sh"
@@ -93,19 +89,14 @@ done
 pass "task closure kills nothing (kill -0 liveness only)"
 
 # --- the capability surface is defined, not bypassed ---
-grep -q 'GATE_AS_GUEST_BIN' "$ROOT/tests/alpha-microvm.sh" \
-  || die "as_guest capability (GATE_AS_GUEST_BIN) missing from the suite"
-grep -q 'GATE_PARTITION_BIN' "$ROOT/tests/alpha-microvm.sh" \
-  || die "partition capability (GATE_PARTITION_BIN) missing from the suite"
-grep -q 'GATE_HAND_TO_GUEST_BIN' "$ROOT/tests/alpha-microvm.sh" \
-  || die "handover capability (GATE_HAND_TO_GUEST_BIN) missing from the suite"
+# The shims live in e2e-helpers.bash (shared by the Lima suite and
+# the gate phases); the gate entry publishes the bins the host owns.
+grep -q 'GATE_AS_GUEST_BIN' "$ROOT/tests/e2e-helpers.bash" \
+  || die "as_guest capability (GATE_AS_GUEST_BIN) missing from the shims"
+grep -q 'GATE_PARTITION_BIN' "$ROOT/tests/e2e-helpers.bash" \
+  || die "partition capability (GATE_PARTITION_BIN) missing from the shims"
+grep -q 'GATE_HAND_TO_GUEST_BIN' "$ROOT/tests/e2e-helpers.bash" \
+  || die "handover capability (GATE_HAND_TO_GUEST_BIN) missing from the shims"
 pass "capability surface (as-guest, partition, handover) is defined"
-
-# --- the dev loop provides every capability the suite requires ---
-for cap in GATE_AS_GUEST_BIN GATE_PARTITION_BIN GATE_HAND_TO_GUEST_BIN; do
-  grep -q "\"$cap=" "$ROOT/nix/microvm/run-microvm.sh" \
-    || die "dev loop does not provide $cap (suite would refuse)"
-done
-pass "dev loop provides every suite capability"
 
 echo "no-host-privilege: $PASS checks passed"

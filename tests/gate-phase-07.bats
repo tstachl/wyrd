@@ -5,7 +5,7 @@
 # through; every assignment below is consumed at call time.)
 # tests/gate-phase-07.bats — gate-path phase 7: offline reopen.
 #
-# Ports tests/alpha-microvm.sh phase 7 (microvm 11): both drives
+# Ports legacy microVM phase 11: both drives
 # reopen offline after unmount, then host-side exports prove
 # flush-committed state (cross-host writes, wave-2 files, fetched
 # cold objects) and conflict siblings survive the restart. Runs as

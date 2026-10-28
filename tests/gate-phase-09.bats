@@ -5,7 +5,7 @@
 # through; every assignment below is consumed at call time.)
 # tests/gate-phase-09.bats — gate-path phase 9: crash injection.
 #
-# Ports tests/alpha-microvm.sh phase 9 (microvm 13): two SIGKILL legs
+# Ports legacy microVM phase 13: two SIGKILL legs
 # against a fresh drive pair (the phase-6 pair is conflicted —
 # writes fail EIO there by design — so crashing on it would prove
 # nothing about the commit path). 13a kills the member with a

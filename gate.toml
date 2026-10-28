@@ -74,8 +74,7 @@ repo = "wyrd"
 # hashes those bytes as the shape; nothing here is staged, copied, or
 # executed on the host. The provisioner reads the approved rendering,
 # never this file. Values must match
-# nix/microvm/{relay,peer-o,peer-n}.nix and the TAP_DEV map in
-# nix/microvm/run-microvm.sh (pinned by tests/test-topology-toml.sh).
+# nix/microvm/{relay,peer-o,peer-n}.nix (pinned by tests/test-topology-toml.sh).
 [topology]
 version = 1
 boxes = ["peer-o", "peer-n", "relay"]

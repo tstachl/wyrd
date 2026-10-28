@@ -5,7 +5,7 @@
 # through; every assignment below is consumed at call time.)
 # tests/gate-phase-01.bats — gate-path phase 1: shared core on peer-o.
 #
-# Ports tests/alpha-microvm.sh phase 1 (microvm 1-5): the shared-core
+# Ports legacy microVM phases 1-5: the shared-core
 # Lima steps run on peer-o. Runs as the build user under
 # tests/gate-entry.sh; Odin-only (dials a real peer).
 #
@@ -33,7 +33,7 @@ setup() {
 
 @test "shared core steps run green on peer-o" {
   # Same invocation as the legacy phase 1; CORE_ONLY arrives from the
-  # entry (default 1,2,3,4,5, mirroring alpha-microvm.sh).
+  # entry (default 1,2,3,4,5, mirroring the old host orchestrator).
   run on_o "E2E_ENV_FILE=$GUEST_ENV E2E_ONLY_STEP=$CORE_ONLY bash $GUEST_TESTS/alpha-lima.sh"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
 }

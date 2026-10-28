@@ -168,15 +168,12 @@ The guest script is `tests/alpha-lima.sh`; logs land in
 `/tmp/lima/logs/`.
 
 The hardened gate is the microVM suite: two peer VMs plus a relay VM
-on a Linux KVM host, running the same shared core (`tests/alpha-*.sh`
-via `tests/alpha-common.sh`) plus multi-host convergence, serving
-restart, and shutdown legs across real guest boundaries:
-
-```bash
-sudo ./nix/microvm/run-microvm.sh --fresh   # full run on the KVM host
-sudo ./nix/microvm/run-microvm.sh --keep     # leave VMs up for debugging
-sudo ./nix/microvm/run-microvm.sh --teardown # stop a kept run (daemons, taps, bridge)
-```
+on a Linux KVM host, running the same shared core (`tests/alpha-lima.sh`
+steps 1-5 via `tests/alpha-common.sh`) plus multi-host convergence,
+serving restart, and shutdown legs across real guest boundaries.
+It runs through the gate task runner, never directly: the host
+provisions (bridge, taps, builds, boot) and runs
+`tests/gate-entry.sh` as the unprivileged build user.
 
 Linux with `/dev/kvm` is required (no nested KVM under macOS
 virtualization, and vfkit lacks the tap/bridge networking the

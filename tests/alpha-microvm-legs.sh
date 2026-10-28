@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # tests/alpha-microvm-legs.sh — per-guest legs for the microVM hardened
-# gate, executed over ssh by tests/alpha-microvm.sh (host). Baked into
-# every peer guest at /etc/wyrd-tests/; never run directly.
+# gate, executed over ssh from the host (gate phases via on_o/on_n).
+# Baked into every peer guest at /etc/wyrd-tests/; never run directly.
 #
 # Each leg is a whole mount lifecycle (start, file ops, stop) so pid
 # files never cross pid namespaces. legs report via step/pass/die from
@@ -17,7 +17,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # the run token on every ssh invocation; anything else dies here.
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/e2e-guard.sh"
-e2e_require_wrapped "$E2E_ENV_FILE" "sudo ./nix/microvm/run-microvm.sh" \
+e2e_require_wrapped "$E2E_ENV_FILE" "./tests/gate-entry.sh (gate task)" \
   || { echo "  FAIL: unwrapped legs invocation refused" >&2; exit 2; }
 # shellcheck source=/dev/null
 source /etc/wyrd-tests/alpha-common.sh

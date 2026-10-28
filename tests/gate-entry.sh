@@ -2,12 +2,12 @@
 # tests/gate-entry.sh — gate-path wrapper for the wyrd e2e suite.
 #
 # The entry point the gate provisioned unit runs: as the build user,
-# on the traversable build copy, with the GATE_* capability env. The
-# dev-loop counterpart is nix/microvm/run-microvm.sh, which owns root
-# provisioning (bridge, taps, builds, boot) on its own machine; here
-# the host already provisioned, built, booted, and waited, so this
-# wrapper only assembles the suite environment, mints the run token,
-# holds the provision lock, and execs bats on the suite files.
+# on the traversable build copy, with the GATE_* capability env.
+# Root provisioning (bridge, taps, builds, boot) belongs to the
+# host; the host already provisioned, built, booted, and waited,
+# so this wrapper only assembles the suite environment, mints the
+# run token, holds the provision lock, and execs bats on the
+# suite files.
 #
 # Contract (pinned by tests/test-gate-entry.sh):
 # - Reads, never derives: provision datum files (state-dir, lock-file,
@@ -22,16 +22,14 @@
 # - Runner names are task convention: the Odin task's provision builds
 #   must name the wyrd and nak builds `wyrd` and `nak`; the suite
 #   resolves them to WYRD_BIN and NAK_BIN.
-# - The published run env file carries dev-loop key parity
-#   (WYRD_BIN, RELAY_*, CHECKOUT, E2E_ROOT plus token, owner pid and
-#   debug passthroughs): the guest legs source it, so a key the dev
-#   loop publishes must be present here too.
+# - The published run env file carries the keys the guest legs
+#   consume (WYRD_BIN, RELAY_*, CHECKOUT, E2E_ROOT plus token, owner
+#   pid and debug passthroughs).
 # - Holds the provision lock for the suite's lifetime, so the e2e
 #   guard's lock check and a later teardown agree on who owns the
 #   run. The initial acquire retries briefly: the launcher releases
 #   its own hold only as the unit starts, so a fast unit can reach
-#   this acquire while the launcher is still exiting. Minting and
-#   locking mirror run-microvm.sh:221-230.
+#   this acquire while the launcher is still exiting.
 # - Accepts only --fresh (the unit always passes it); anything else
 #   is a caller mistake, not a default.
 #
@@ -124,8 +122,8 @@ RELAY_URL="ws://$SUBNET.$RELAY_OCTET:$RELAY_PORT"
 
 # Runner handoff: name=storepath lines the host build wrote. The names
 # are task convention (see header); unknown names are ignored, missing
-# required names refuse. The handoff names build output dirs, like the
-# dev loop's WYRD_OUT/NAK_OUT: the binaries live at $dir/bin.
+# required names refuse. The handoff names build output dirs; the
+# binaries live at $dir/bin.
 WYRD_OUT=""; NAK_OUT=""
 while IFS= read -r line || [ -n "$line" ]; do
   [ -n "$line" ] || continue
@@ -145,10 +143,9 @@ WYRD_BIN="$WYRD_OUT/bin/wyrd"; NAK_BIN="$NAK_OUT/bin/nak"
 # Written into the build-owned run tree, which the phase-1 guest
 # pre-clean spares by name (see the wipe in tests/alpha-lima.sh):
 # the file is run config minted fresh by this entry, not a run
-# artifact. Key parity with the dev loop (nix/microvm/run-microvm.sh):
-# the guest legs consume WYRD_BIN, RELAY_*, CHECKOUT and E2E_ROOT
-# from this file; a token-and-pid-only file starves them under
-# set -u. RELAY_MANAGED stays 0: the relay is host-provisioned,
+# artifact. The guest legs consume WYRD_BIN, RELAY_*, CHECKOUT and
+# E2E_ROOT from this file; a token-and-pid-only file starves them
+# under set -u. RELAY_MANAGED stays 0: the relay is host-provisioned,
 # never suite-managed.
 TOKEN="$(head -c16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 {
@@ -166,9 +163,9 @@ TOKEN="$(head -c16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 } > "$RUN/e2e-env.sh"
 chmod 0644 "$RUN/e2e-env.sh"
 
-# Hold the provision lock for the suite's lifetime (mirrors
-# run-microvm.sh): a successful non-blocking acquire by anyone else
-# would mean no wrapper is alive. The acquire retries briefly: the
+# Hold the provision lock for the suite's lifetime: a successful
+# non-blocking acquire by anyone else would mean no wrapper is
+# alive. The acquire retries briefly: the
 # launcher holds this same lock until the unit starts, so a fast
 # unit reaches here while the launcher is still exiting. A lock
 # still held past the grace below is genuinely foreign (a second
@@ -185,7 +182,7 @@ export WYRD_E2E_TOKEN="$TOKEN" WYRD_E2E_LOCK="$LOCK_FILE"
 export STATE_DIR SSH_KEY WYRD_BIN NAK_BIN PEER_O PEER_N RELAY_URL
 # The partition primitive is host-published per task (gate
 # suite-wrapper unit env); the entry refuses without it, like the
-# legacy host_partition, so fault phases fail at the gate instead
+# old host_partition, so fault phases fail at the gate instead
 # of stranding taps mid-run.
 : "${GATE_PARTITION_BIN:?gate-entry.sh: GATE_PARTITION_BIN is not set (host must publish the tap primitive)}"
 export GATE_BATS_LIB GATE_PARTITION_BIN
