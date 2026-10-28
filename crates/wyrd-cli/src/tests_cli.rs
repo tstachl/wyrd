@@ -772,3 +772,53 @@ fn invite_outcomes_render_distinctly() {
         "reruns never read as fresh admissions"
     );
 }
+
+/// The non-Unix credential refusal is deliberate, not an oversight:
+/// `read_secret_file` fails closed before opening anything, and the
+/// shutdown handler stays a no-op because no drive can be opened there
+/// at all. Canonical scope statement is the Windows paragraph in
+/// `docs/architecture.md`; `docs/cli.md` and `live.rs` point at it
+/// rather than restating it.
+#[test]
+fn credential_files_are_unix_only() {
+    // Source half: runs on every platform, so a Unix CI run still pins
+    // the refusal instead of silently skipping it.
+    const CREDENTIALS: &str = include_str!("credentials.rs");
+    assert!(
+        CREDENTIALS.contains("#[cfg(not(unix))]")
+            && CREDENTIALS.contains("credential-file protection is only implemented on Unix"),
+        "the non-Unix credential refusal must stay a fail-closed early return"
+    );
+    const LIVE: &str = include_str!("live.rs");
+    assert!(
+        LIVE.contains("#[cfg(not(unix))]")
+            && LIVE.contains("pub(crate) fn install_shutdown_handler"),
+        "the non-Unix shutdown handler must stay a deliberate no-op"
+    );
+    const ARCHITECTURE: &str = include_str!("../../../docs/architecture.md");
+    assert!(
+        ARCHITECTURE.contains("Windows is out of v0.4 entirely"),
+        "the credential scope withdrawal must stay stated in exactly one canonical place"
+    );
+    // Behavioral half: only compiles where the refusal is live. A path
+    // that does not exist proves the return precedes any open — on Unix
+    // this would be an `Io` missing-file error, here it must be the
+    // deliberate `Credential` refusal.
+    #[cfg(not(unix))]
+    {
+        let missing = std::path::PathBuf::from("definitely-not-a-credential-file");
+        let error = read_secret_file(&missing).unwrap_err();
+        assert!(
+            matches!(
+                error,
+                CliError::Credential { reason, .. }
+                    if reason == "credential-file protection is only implemented on Unix"
+            ),
+            "non-Unix refusal must be the deliberate Credential error: {error:?}"
+        );
+        assert!(
+            install_shutdown_handler().is_ok(),
+            "non-Unix shutdown handler stays infallible"
+        );
+    }
+}

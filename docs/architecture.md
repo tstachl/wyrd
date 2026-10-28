@@ -328,4 +328,9 @@ surfaces `EIO` on its deadline. Relays arrive as repeatable
 for flags and strict TOML for the file. Credential
 files are supported on Unix, must be regular files owned by the current
 user with private permissions, and are bounded and zeroized at the CLI
-boundary.
+boundary. Windows is out of v0.4 entirely: the only credential reader
+(`read_secret_file`) fails closed on non-Unix builds, so a Windows
+build cannot open a drive at all — no application, no lifecycle, no
+configuration, no export, and no native filesystem presentation.
+This paragraph is the canonical statement of that scope; everywhere
+else points here rather than restating it.
