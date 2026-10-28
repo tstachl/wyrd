@@ -134,6 +134,8 @@ where
 /// Compose a live loop plus its FUSE adapter from the node's parts:
 /// tests take the composer role `main.rs` plays in production — the
 /// backend is built from the live parts, never handed out by the node.
+/// Behind the `mount` feature with the backend it builds.
+#[cfg(feature = "mount")]
 pub(super) fn live_backend<S: ObjectStore + Send + Sync + 'static>(
     daemon: WyrdNode<DriveView<S, RuntimeMaterialization>>,
 ) -> (
@@ -151,6 +153,8 @@ where
 /// loop config, so boundary tests take the short wait here (their
 /// point is the bounded failure, not the full 30s production
 /// budget).
+/// Behind the `mount` feature with the backend it builds.
+#[cfg(feature = "mount")]
 pub(super) fn live_backend_with_mutation_wait<S: ObjectStore + Send + Sync + 'static>(
     daemon: WyrdNode<DriveView<S, RuntimeMaterialization>>,
     max_mutation_wait: Duration,

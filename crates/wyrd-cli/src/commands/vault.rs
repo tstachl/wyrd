@@ -18,7 +18,7 @@ use std::time::Duration;
 use wyrd_core::mailbox::LiveMailbox;
 use wyrd_core::vault::{observe_vault, VaultStatus};
 use wyrd_daemon::core::RuntimeMaterialization;
-use wyrd_daemon::fuse::DriveView;
+use wyrd_daemon::DriveView;
 use wyrd_daemon::{run_vault, TransportDeadlines, VaultEvent, VaultLoopEnd, VaultRun};
 use wyrd_daemon::{LiveConfig, LoopError, WyrdNode};
 use wyrd_format::FsObjectStore;

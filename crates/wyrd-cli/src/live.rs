@@ -103,6 +103,9 @@ pub(crate) fn check_startup_retention(
 /// silently stop reaching the loop — the unit test pins the override.
 /// Only the pacing moves: `--interval` shortens how long total silence
 /// may delay a pass, never any ceiling.
+/// Mount-scoped with the unit test that pins it: without the mount
+/// command no non-test caller remains, but the test still runs.
+#[cfg(any(test, feature = "mount"))]
 pub(crate) fn live_config(interval: u64) -> LiveConfig {
     let mut config = LiveConfig::for_local_sync();
     config.interval = Duration::from_secs(interval);

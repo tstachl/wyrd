@@ -1,8 +1,8 @@
 use crate::CliError;
-#[cfg(any(test, target_os = "macos"))]
+#[cfg(any(test, all(target_os = "macos", feature = "mount")))]
 use std::path::{Path, PathBuf};
 
-#[cfg(target_os = "macos")]
+#[cfg(feature = "mount")]
 pub(crate) fn macos_preflight(mountpoint: &Path) -> Result<(), CliError> {
     if let Err(reason) = check_mountpoint(mountpoint) {
         return Err(CliError::Preflight(reason));
@@ -25,7 +25,7 @@ pub(crate) fn macos_preflight(mountpoint: &Path) -> Result<(), CliError> {
 
 /// Typed outcome of the macFUSE probes, so callers branch on variants
 /// instead of matching rendered error strings.
-#[cfg(any(test, target_os = "macos"))]
+#[cfg(any(test, all(target_os = "macos", feature = "mount")))]
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum MacfuseProbe {
     Ready,
@@ -37,7 +37,7 @@ pub(crate) enum MacfuseProbe {
 
 /// Probe one bundle directory plus the kext node without rendering: the
 /// caller decides which errors are retryable across candidates.
-#[cfg(any(test, target_os = "macos"))]
+#[cfg(any(test, all(target_os = "macos", feature = "mount")))]
 pub(crate) fn probe_macfuse_runtime(bundle: &Path, dev_dir: &Path) -> MacfuseProbe {
     match std::fs::metadata(bundle) {
         Ok(metadata) if metadata.is_dir() => {}
@@ -79,7 +79,7 @@ pub(crate) fn probe_macfuse_runtime(bundle: &Path, dev_dir: &Path) -> MacfusePro
 /// installed but no candidate's runtime is usable, the last failure is
 /// reported (each later candidate was probed too, so nothing valid was
 /// skipped).
-#[cfg(any(test, target_os = "macos"))]
+#[cfg(any(test, all(target_os = "macos", feature = "mount")))]
 pub(crate) fn select_macfuse_runtime(candidates: &[(&Path, &Path)]) -> Result<PathBuf, String> {
     let mut last_reason: Option<String> = None;
     for (bundle, dev_dir) in candidates {
@@ -113,7 +113,7 @@ pub(crate) fn select_macfuse_runtime(candidates: &[(&Path, &Path)]) -> Result<Pa
 /// The mountpoint must be an existing directory before fuser sees it.
 /// Missing and unreadable are distinct: a permission or I/O failure
 /// must never report "does not exist" with a wrong remediation.
-#[cfg(any(test, target_os = "macos"))]
+#[cfg(any(test, all(target_os = "macos", feature = "mount")))]
 pub(crate) fn check_mountpoint(mountpoint: &Path) -> Result<(), String> {
     match std::fs::metadata(mountpoint) {
         Ok(metadata) if metadata.is_dir() => Ok(()),

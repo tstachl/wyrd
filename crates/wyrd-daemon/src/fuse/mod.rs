@@ -5,10 +5,10 @@
 //! `fold`, `attr`, `ops`). Behavior tests live alongside, one file
 //! per theme.
 //!
-//! The composed view type is re-exported for hosts: a process host
-//! (like `wyrd-cli`) builds its node over the same view the backend
-//! serves, through the daemon's surface — never by depending on the
-//! view crate directly.
+//! The composed view type is re-exported at the crate root
+//! (`crate::DriveView`) so hosts build over the same view without
+//! depending on the view crate directly and without needing the
+//! `mount` feature.
 
 mod backend;
 mod inode;
@@ -33,4 +33,3 @@ mod tests_want;
 mod tests_write;
 
 pub use backend::FuseBackend;
-pub use wyrd_fuse::DriveView;

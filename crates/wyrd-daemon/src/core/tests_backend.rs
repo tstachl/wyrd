@@ -5,10 +5,11 @@ use wyrd_fuse::{DriveView, ViewError};
 use std::sync::{atomic::Ordering, Arc};
 use std::time::Duration;
 
-use super::tests_harness::{
-    live_backend, scratch_drive, spawn_live_loop, NoopMailbox, SettlementFailingMailbox,
-};
+#[cfg(feature = "mount")]
+use super::tests_harness::live_backend;
+use super::tests_harness::{scratch_drive, spawn_live_loop, NoopMailbox, SettlementFailingMailbox};
 
+#[cfg(feature = "mount")]
 use crate::fuse::FuseBackend;
 
 use wyrd_core::mutation::MutationQueue;
@@ -39,6 +40,7 @@ fn wait_for_outstanding(queue: &Arc<MutationQueue>, count: usize) {
 /// suites; here the composition (shared slot, undisturbed serving)
 /// is pinned.
 
+#[cfg(feature = "mount")]
 #[test]
 fn into_live_shares_view_with_backend() {
     let (engine, dir, _) = scratch_drive();
@@ -126,6 +128,7 @@ fn a_mutation_whose_budget_expired_before_evaluation_times_out() {
 /// through the public path here (the `sync_once` wrapper marks the
 /// backlog on any pass error); the recovery path, not the failure
 /// injection, is what this pins.
+#[cfg(feature = "mount")]
 #[test]
 fn dirty_backlog_republishes_without_new_changes() {
     let (engine, dir, _) = scratch_drive();
@@ -164,6 +167,7 @@ fn dirty_backlog_republishes_without_new_changes() {
 /// the snapshot, and publishes before the submit returns. This is
 /// the slice-2 end-to-end proof — channel, commit, publication, and
 /// read-side coherence.
+#[cfg(feature = "mount")]
 #[test]
 fn mkdir_through_backend_commits_and_serves() {
     let (engine, dir, _) = scratch_drive();
@@ -285,6 +289,7 @@ fn into_live_stores_the_composition_config_budgets() {
 /// for: a commit refused at the quota surfaces as a POSIX failure, and
 /// the refusal leaves no file behind, so the boundary reads "no space"
 /// and the namespace is unchanged rather than half-applied.
+#[cfg(feature = "mount")]
 #[test]
 fn a_quota_refused_commit_reaches_the_mount_as_enospc() {
     // One ceiling, one accountant: the config and the store are built
@@ -351,6 +356,7 @@ fn a_quota_refused_commit_reaches_the_mount_as_enospc() {
 /// residual check-then-insert race keeps kernel-matching
 /// create-then-`EMFILE` semantics; this pins the deterministic
 /// saturated case.)
+#[cfg(feature = "mount")]
 #[test]
 fn create_at_saturated_table_creates_nothing() {
     let (engine, dir, _) = scratch_drive();
@@ -422,6 +428,7 @@ fn create_at_saturated_table_creates_nothing() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+#[cfg(feature = "mount")]
 #[test]
 fn queued_create_after_parent_removal_returns_enoent() {
     let (engine, dir, _) = scratch_drive();
@@ -463,6 +470,7 @@ fn queued_create_after_parent_removal_returns_enoent() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+#[cfg(feature = "mount")]
 #[test]
 fn queued_create_after_parent_becomes_a_file_returns_enotdir() {
     let (engine, dir, _) = scratch_drive();
@@ -514,6 +522,7 @@ fn queued_create_after_parent_becomes_a_file_returns_enotdir() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+#[cfg(feature = "mount")]
 #[test]
 fn queued_root_creates_keep_the_root_parent_token() {
     let (engine, dir, _) = scratch_drive();
@@ -548,6 +557,7 @@ fn queued_root_creates_keep_the_root_parent_token() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+#[cfg(feature = "mount")]
 #[test]
 fn headless_create_bootstraps_the_root_parent() {
     let (engine, dir, _) = scratch_drive();
@@ -572,6 +582,7 @@ fn headless_create_bootstraps_the_root_parent() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+#[cfg(feature = "mount")]
 #[test]
 fn queued_create_rejects_same_content_parent_replacement() {
     let (engine, dir, _) = scratch_drive();
@@ -636,6 +647,7 @@ fn queued_create_rejects_same_content_parent_replacement() {
 /// same-kind recreation mints a fresh identity instead of reusing the
 /// removed one. The FUSE-level removal tests cover the interleavings;
 /// this one covers the real publication.
+#[cfg(feature = "mount")]
 #[test]
 fn live_unlink_publishes_and_recreation_mints_a_fresh_ino() {
     let (engine, dir, _) = scratch_drive();
@@ -674,6 +686,7 @@ fn live_unlink_publishes_and_recreation_mints_a_fresh_ino() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+#[cfg(feature = "mount")]
 #[test]
 fn refused_create_stays_absent_after_reopen() {
     let (engine, dir, identity) = scratch_drive();
@@ -725,6 +738,7 @@ fn refused_create_stays_absent_after_reopen() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+#[cfg(feature = "mount")]
 #[test]
 fn queued_create_rejects_different_content_parent_replacement() {
     let (engine, dir, _) = scratch_drive();
@@ -776,6 +790,7 @@ fn queued_create_rejects_different_content_parent_replacement() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+#[cfg(feature = "mount")]
 #[test]
 fn queued_sibling_creates_share_a_parent_token() {
     let (engine, dir, _) = scratch_drive();

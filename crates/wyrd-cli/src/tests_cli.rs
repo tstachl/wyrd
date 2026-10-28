@@ -163,7 +163,9 @@ fn relay_flag_is_rejected_for_init() {
 }
 
 /// A pacing deadline past a day stops being pacing, so mount refuses
-/// it as a usage error before touching the drive.
+/// it as a usage error before touching the drive. Mount-scoped with
+/// the flag it validates.
+#[cfg(feature = "mount")]
 #[test]
 fn absurd_live_interval_is_a_usage_error() {
     let temp = TempDir::new();
@@ -188,6 +190,8 @@ fn absurd_live_interval_is_a_usage_error() {
 
 /// A zero live idle pacing would busy-spin the loop, so mount
 /// refuses it as a usage error before touching the drive.
+/// Mount-scoped with the flag it validates.
+#[cfg(feature = "mount")]
 #[test]
 fn zero_live_interval_is_a_usage_error() {
     let temp = TempDir::new();

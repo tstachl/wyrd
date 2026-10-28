@@ -10,6 +10,12 @@
 //! COLUMNS=100`) keeps terminal width, color, and paging out of the
 //! contract. Page contents embed the argv and exit code but never the
 //! binary path, so the same hash file holds on any machine.
+//!
+//! Behind the `mount` feature with the `Mount` subcommand it pins:
+//! a mount-free build has no mount pages, so the surface — and its
+//! hashes — legitimately differ. Absent by construction there, never
+//! silently passing with fewer pages.
+#![cfg(feature = "mount")]
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::process::Command;

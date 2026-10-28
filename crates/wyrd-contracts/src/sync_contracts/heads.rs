@@ -1,20 +1,29 @@
 //! Verified-head classification and mounting contracts.
+#[cfg(feature = "mount")]
 use super::harness::serving_backend;
-use crate::support::{
-    drive, mount_heads, seal_flat_drive, signed_snapshot, AnnouncedRoots, Loaded, Relay,
-    RemoteOnlyMaterialization, Rig,
-};
-use wyrd_daemon::core::{LiveConfig, LiveError, RuntimeMaterialization, WyrdNode};
+use crate::support::{drive, seal_flat_drive, signed_snapshot, AnnouncedRoots, Loaded, Rig};
+#[cfg(feature = "mount")]
+use crate::support::{mount_heads, Relay, RemoteOnlyMaterialization};
+#[cfg(feature = "mount")]
+use wyrd_daemon::core::LiveError;
+use wyrd_daemon::core::{LiveConfig, RuntimeMaterialization, WyrdNode};
+#[cfg(feature = "mount")]
 use wyrd_daemon::fuse::FuseBackend;
-use wyrd_format::{
-    BaoRoot, ContentId, Entry, MemoryObjectStore, ObjectKind, ObjectStore, Snapshot, Tree,
-};
+#[cfg(feature = "mount")]
+use wyrd_format::Snapshot;
+use wyrd_format::{BaoRoot, ContentId, Entry, MemoryObjectStore, ObjectKind, ObjectStore, Tree};
 use wyrd_fuse::{DriveView, ViewError};
+#[cfg(feature = "mount")]
 use wyrd_sync::bulk::MemoryBulkSource;
 use wyrd_sync::durable::DurableError;
-use wyrd_sync::runtime::{Engine, EngineError};
+#[cfg(feature = "mount")]
+use wyrd_sync::runtime::Engine;
+use wyrd_sync::runtime::EngineError;
+#[cfg(feature = "mount")]
+use wyrd_sync::transport::mailbox::{Delivery, Mailbox};
+#[cfg(feature = "mount")]
 use wyrd_sync::transport::mailbox::{
-    Delivery, DeliveryId, Disposition, Mailbox, MailboxEnvelope, MailboxError, SendReport,
+    DeliveryId, Disposition, MailboxEnvelope, MailboxError, SendReport,
 };
 
 /// One head per verified body; a broken signature never becomes
@@ -22,6 +31,7 @@ use wyrd_sync::transport::mailbox::{
 /// invariant 3). Possession alone mounts nothing: with no installed
 /// heads the view serves nothing even though announcements and bodies
 /// are durable — heads are derived, never implied.
+#[cfg(feature = "mount")]
 #[test]
 fn unverified_snapshots_never_become_live_fuse_heads() {
     let mut loaded = Loaded::new("keeper.txt", b"keeper");
@@ -144,17 +154,21 @@ fn only_engine_classification_mounts_the_daemon_view() {
 /// A mailbox that fails its first settlement, modeling a lost
 /// acknowledgement: the envelope stays queued (retain-on-failure),
 /// durable commits stand, and the pass aborts before republication.
+/// Mount-coupled with the retry test below.
+#[cfg(feature = "mount")]
 struct FailFirstSettle<'a, M: Mailbox> {
     inner: &'a mut M,
     armed: bool,
 }
 
+#[cfg(feature = "mount")]
 impl<'a, M: Mailbox> FailFirstSettle<'a, M> {
     fn new(inner: &'a mut M) -> Self {
         FailFirstSettle { inner, armed: true }
     }
 }
 
+#[cfg(feature = "mount")]
 impl<M: Mailbox> Mailbox for FailFirstSettle<'_, M> {
     fn send(&mut self, envelope: MailboxEnvelope) -> Result<SendReport, MailboxError> {
         self.inner.send(envelope)
@@ -200,6 +214,7 @@ fn redelivered_announcement_collapses_to_duplicate_noop() {
 /// replayed bytes commit nothing and the single head stands. The
 /// contract-suite flavor of the intake restart tests, over the
 /// public engine open path.
+#[cfg(feature = "mount")]
 #[test]
 fn redelivered_announcement_after_restart_stays_a_duplicate() {
     use wyrd_sync::runtime::MaterializationState;
@@ -261,6 +276,7 @@ fn redelivered_announcement_after_restart_stays_a_duplicate() {
 /// The next pass redelivers (duplicate), commits the announcement,
 /// fetches through the preloaded peer, and serves: recovery never
 /// waits for anything beyond the already-durable state.
+#[cfg(feature = "mount")]
 #[test]
 fn failed_pass_recovers_serving_on_retry() {
     let mut loaded = Loaded::new("keeper.txt", b"keeper");
@@ -451,6 +467,7 @@ fn partial_head_set_never_projects_mixed_validity_heads() {
 /// is the production mount path (`into_live` + `sync_once`, the
 /// composer startup sequence in `main.rs`), not just the direct
 /// `WyrdNode::refresh_live_heads` API.
+#[cfg(feature = "mount")]
 #[test]
 fn live_sync_pass_never_projects_mixed_validity_heads() {
     // Head A fully published; refresh installs it, and the live split
@@ -638,6 +655,7 @@ fn an_installed_head_survives_a_pending_successor_refresh() {
 /// contradicts its tree, the live pass errors and the previous
 /// generation keeps serving: unlike a pending closure (ordinary
 /// progress), damage is not retried into existence.
+#[cfg(feature = "mount")]
 #[test]
 fn a_damaged_head_beside_an_installed_one_fails_the_pass_closed() {
     let mut loaded = Loaded::new("keeper.txt", b"keeper");

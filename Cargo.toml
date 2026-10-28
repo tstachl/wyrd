@@ -42,7 +42,13 @@ wyrd-sync = { path = "crates/wyrd-sync" }
 wyrd-namespace = { path = "crates/wyrd-namespace" }
 wyrd-fuse = { path = "crates/wyrd-fuse" }
 wyrd-core = { path = "crates/wyrd-core" }
-wyrd-daemon = { path = "crates/wyrd-daemon" }
+# No default features here: the `mount` feature (default-on) in each of
+# `wyrd-daemon`, `wyrd-cli`, and `wyrd-contracts` re-enables the daemon's
+# mount explicitly (`wyrd-daemon/mount`), so `--no-default-features`
+# drops the whole FUSE stack instead of re-enabling it through an edge.
+# (A member-level `default-features = false` next to `workspace = true`
+# is ignored by Cargo — hence this single governing line.)
+wyrd-daemon = { path = "crates/wyrd-daemon", default-features = false }
 
 # content hashing
 blake3 = "1.8"

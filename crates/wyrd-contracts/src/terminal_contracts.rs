@@ -19,6 +19,7 @@ use wyrd_core::live::LiveConfig;
 use wyrd_core::node::WyrdNode;
 use wyrd_core::view::RuntimeMaterialization;
 use wyrd_core::want::wait_for_materialization;
+#[cfg(feature = "mount")]
 use wyrd_daemon::fuse::FuseBackend;
 use wyrd_format::{
     BaoRoot, ContentId, FetchStatus, FsObjectStore, MemoryObjectStore, ObjectKind, ObjectStore,
@@ -406,6 +407,7 @@ fn fetch_member(
 /// (`with_demand`), so the waiting reader heals in the same read
 /// when the peer serves promptly — and fails bounded `EIO` when it
 /// does not.
+#[cfg(feature = "mount")]
 #[test]
 fn quarantined_chunk_heals_from_a_live_peer_without_remount() {
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -572,6 +574,7 @@ fn scrubbed_chunk_heals_from_a_live_peer_without_a_waiter() {
 /// while the base is gone, the scrub unclaims it, the refetch
 /// heals, and the commit lands — extended content served
 /// through the same mount, no remount, no restart.
+#[cfg(feature = "mount")]
 #[test]
 fn scrubbed_append_heals_from_a_live_peer_without_remount() {
     use std::sync::atomic::{AtomicBool, Ordering};

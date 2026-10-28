@@ -1,6 +1,6 @@
-use super::tests_harness::{
-    live_backend, scratch_drive, NoopMailbox, PanicMailbox, SettlementFailingMailbox,
-};
+#[cfg(feature = "mount")]
+use super::tests_harness::live_backend;
+use super::tests_harness::{scratch_drive, NoopMailbox, PanicMailbox, SettlementFailingMailbox};
 use super::*;
 
 use std::sync::{
@@ -9,6 +9,7 @@ use std::sync::{
 };
 use std::time::Duration;
 
+#[cfg(feature = "mount")]
 use fuser::Filesystem;
 
 use wyrd_core::mutation::{MutationError, MutationKind, MutationOutcome};
@@ -109,6 +110,7 @@ fn reopen_and_read(dir: &std::path::Path, identity: &DeviceIdentitySecret, path:
 /// post-return drain executes concurrently, and the reopened drive
 /// serves the bytes. The full composer sequence in miniature — the
 /// test takes every role `main.rs` plays.
+#[cfg(feature = "mount")]
 #[test]
 fn signal_path_shutdown_preserves_dirty_handle() {
     let (engine, dir, identity) = scratch_drive();
@@ -161,6 +163,7 @@ fn signal_path_shutdown_preserves_dirty_handle() {
 /// over, but the post-return drain applies the destroy commit with
 /// local-only semantics before the close. The loop outcome itself
 /// stays an error — preservation never masks the failure.
+#[cfg(feature = "mount")]
 #[test]
 fn terminal_loop_error_preserves_dirty_handle() {
     let (engine, dir, identity) = scratch_drive();
@@ -212,6 +215,7 @@ fn terminal_loop_error_preserves_dirty_handle() {
 /// Teardown preserves every dirty handle and drops clean ones: two
 /// unflushed writes commit, a read-only handle commits nothing, and
 /// the reopened drive serves both new contents.
+#[cfg(feature = "mount")]
 #[test]
 fn teardown_preserves_every_dirty_handle_and_drops_clean() {
     let (engine, dir, identity) = scratch_drive();
@@ -266,6 +270,7 @@ fn teardown_preserves_every_dirty_handle_and_drops_clean() {
 /// transport teardown. The dirty bytes are lost (the engine state is
 /// suspect, so preservation is off the table); the reopened drive
 /// serves the pre-panic content.
+#[cfg(feature = "mount")]
 #[test]
 fn loop_thread_panic_tears_down_bounded() {
     let (engine, dir, identity) = scratch_drive();
@@ -333,6 +338,7 @@ fn loop_thread_panic_tears_down_bounded() {
 /// assertion is the reopen below: against the old order the commit
 /// refuses with `Shutdown` inside `commit_locked` and the reopened
 /// drive serves the stale bytes.
+#[cfg(feature = "mount")]
 #[test]
 fn release_after_loop_return_commits_dirty_handle() {
     let (engine, dir, identity) = scratch_drive();

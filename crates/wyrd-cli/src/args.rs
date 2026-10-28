@@ -71,6 +71,10 @@ pub(crate) enum Command {
         credentials: Credentials,
     },
     /// Mount a live projection at `mountpoint` (read-write).
+    // Behind the `mount` feature (plain comment: `///` docs would leak
+    // into the pinned `--help` surface): a mount-free build has no
+    // FUSE userspace library to mount with.
+    #[cfg(feature = "mount")]
     Mount {
         /// Directory holding the drive's keystore and object store.
         drive_dir: PathBuf,

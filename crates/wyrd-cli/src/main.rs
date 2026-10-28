@@ -24,6 +24,7 @@ pub(crate) use crate::commands::member::{
     member_list_report, member_log_report, member_status_report, render_invited,
     render_pending_lines, render_resumed,
 };
+#[cfg(feature = "mount")]
 use crate::commands::mount::mount;
 #[cfg(test)]
 pub(crate) use crate::commands::policy::{
@@ -55,6 +56,7 @@ pub(crate) use crate::live::live_config;
 pub(crate) use crate::logging::init_mount_diagnostics;
 #[cfg(test)]
 pub(crate) use crate::probes::{combine_status, TeardownStatus};
+#[cfg(feature = "mount")]
 use fuser::{Config, MountOption};
 #[cfg(test)]
 pub(crate) use std::fs;
@@ -76,7 +78,7 @@ pub(crate) use wyrd_core::status::observe;
 #[cfg(test)]
 pub(crate) use wyrd_daemon::core::RuntimeMaterialization;
 #[cfg(test)]
-pub(crate) use wyrd_daemon::fuse::DriveView;
+pub(crate) use wyrd_daemon::DriveView;
 use wyrd_daemon::LiveError;
 #[cfg(test)]
 pub(crate) use wyrd_daemon::SyncReport;
@@ -192,7 +194,7 @@ pub(crate) enum CliError {
     #[error("update verification failed: {0}")]
     Verification(String),
     #[error("macOS FUSE preflight failed: {0}")]
-    #[cfg(any(test, target_os = "macos"))]
+    #[cfg(any(test, all(target_os = "macos", feature = "mount")))]
     Preflight(String),
     #[error("FUSE mount failed: {0}")]
     Mount(#[from] std::io::Error),
@@ -313,6 +315,7 @@ fn command(args: Vec<String>) -> Result<(), CliError> {
             credentials,
             ..
         } => load_credentials(drive_dir, credentials, cli.config.as_deref())?,
+        #[cfg(feature = "mount")]
         Command::Mount {
             drive_dir,
             credentials,
@@ -394,6 +397,7 @@ fn command(args: Vec<String>) -> Result<(), CliError> {
             Engine::create(drive_dir, &passphrase, identity)?;
             Ok(())
         }
+        #[cfg(feature = "mount")]
         Command::Mount {
             drive_dir,
             mountpoint,
@@ -499,7 +503,9 @@ fn command(args: Vec<String>) -> Result<(), CliError> {
 /// the errno in the error line may be stale (observed: EOPNOTSUPP
 /// left over from an iroh socket op, ENOTTY from elsewhere). The
 /// checklist names the fix; the README carries the full procedure.
-#[cfg(target_os = "macos")]
+/// macOS- and mount-specific: without the mount there is nothing to
+/// hint at.
+#[cfg(all(target_os = "macos", feature = "mount"))]
 pub(crate) const MACOS_MOUNT_HINT: &str = "macOS hint: the errno above may be stale; check \
     the kext (ls /dev/macfuse0; if missing: load macFUSE, approve it in \
     Privacy & Security, reboot), the mount daemon (pgrep -af \
@@ -519,7 +525,10 @@ pub(crate) const MACOS_MOUNT_HINT: &str = "macOS hint: the errno above may be st
 /// The mount serves read-write: the session backend already carries
 /// the live daemon's mutation channel, so the kernel must not gate
 /// writes behind a read-only flag. The FSName keeps the volume
-/// identifiable in mount tables.
+/// identifiable in mount tables. Behind the `mount` feature with the
+/// rest of the mount path: without system libfuse there is nothing
+/// to configure a session with.
+#[cfg(feature = "mount")]
 pub(crate) fn session_config() -> Config {
     let mut config = Config::default();
     config.mount_options = vec![MountOption::FSName("wyrd".into())];

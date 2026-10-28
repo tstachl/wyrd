@@ -10,11 +10,25 @@ wyrd-format.workspace = true
 wyrd-sync.workspace = true
 wyrd-fuse.workspace = true
 wyrd-core.workspace = true
-fuser = "0.18"
+# The FUSE adapter is the first presentation backend, not a property of
+# the node (`docs/architecture.md`): it is a default-on feature so a
+# machine without system libfuse can still build and run everything
+# above the mount. Gating the dependency is not enough on its own —
+# `pub mod fuse` below is gated on the same feature, so no mount-only
+# name leaks into a mount-free build.
+fuser = { version = "0.18", optional = true }
 libc.workspace = true
 thiserror.workspace = true
 # Structured mount events the process host bridges into its diagnostics.
 tracing.workspace = true
+
+[features]
+default = ["mount"]
+# The live FUSE mount: `FuseBackend`, its `fuser::Filesystem` impl,
+# and the mount/session setup. Everything else in this crate — the
+# node composition, supervision, and vault operation — builds and
+# runs without it.
+mount = ["dep:fuser"]
 
 [dev-dependencies]
 # Downstream tests build a real `Engine` per test; enabling the fast KDF

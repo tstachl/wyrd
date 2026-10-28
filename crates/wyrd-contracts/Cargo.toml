@@ -10,13 +10,20 @@ wyrd-format.workspace = true
 wyrd-sync.workspace = true
 wyrd-fuse.workspace = true
 wyrd-core.workspace = true
-wyrd-daemon = { path = "../wyrd-daemon" }
+# The `mount` feature below re-enables the daemon's mount explicitly;
+# the workspace dependency carries no defaults (see the root manifest).
+wyrd-daemon.workspace = true
+# The mount-coupled contract tests name `fuser::Errno` and the daemon's
+# `FuseBackend`. A regular optional dependency rather than a dev-dep —
+# Cargo forbids optional dev-dependencies — gated on `mount` with the
+# daemon edge, so no `fuser` build script runs on a mount-free build.
+# The layer policy names it deliberately (see `policy_for`).
+fuser = { version = "0.18", optional = true }
 
 [dev-dependencies]
 # The contract suite builds real drives; enable the fast KDF profile so the
 # composition tests do not pay the production Argon2id cost.
 wyrd-sync = { workspace = true, features = ["insecure-fast-kdf"] }
-fuser = "0.18"
 secp256k1.workspace = true
 blake3.workspace = true
 zeroize = "1.9"
@@ -24,6 +31,15 @@ iroh.workspace = true
 tokio.workspace = true
 toml.workspace = true
 libc.workspace = true
+
+[features]
+default = ["mount"]
+# The mount-coupled contract tests: `FuseBackend`, `fuser::Errno`,
+# and the daemon's mount module. Everything else in the suite —
+# the layering, node, upgrade, policy, vault, and mount-free sync
+# contracts — builds and runs without it, which is what makes the
+# suite runnable with no system libfuse.
+mount = ["dep:fuser", "wyrd-daemon/mount"]
 
 [lints]
 workspace = true
