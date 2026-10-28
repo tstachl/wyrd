@@ -782,17 +782,18 @@ fn invite_outcomes_render_distinctly() {
 #[test]
 fn credential_files_are_unix_only() {
     // Source half: runs on every platform, so a Unix CI run still pins
-    // the refusal instead of silently skipping it.
+    // the refusal instead of silently skipping it. Placement matters:
+    // the attribute must directly guard the refusal, not merely appear
+    // somewhere in the file.
     const CREDENTIALS: &str = include_str!("credentials.rs");
     assert!(
-        CREDENTIALS.contains("#[cfg(not(unix))]")
+        CREDENTIALS.contains("#[cfg(not(unix))]\n    return Err(CliError::Credential {")
             && CREDENTIALS.contains("credential-file protection is only implemented on Unix"),
         "the non-Unix credential refusal must stay a fail-closed early return"
     );
     const LIVE: &str = include_str!("live.rs");
     assert!(
-        LIVE.contains("#[cfg(not(unix))]")
-            && LIVE.contains("pub(crate) fn install_shutdown_handler"),
+        LIVE.contains("#[cfg(not(unix))]\npub(crate) fn install_shutdown_handler"),
         "the non-Unix shutdown handler must stay a deliberate no-op"
     );
     const ARCHITECTURE: &str = include_str!("../../../docs/architecture.md");

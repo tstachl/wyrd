@@ -782,9 +782,8 @@ Both are read and hardened by wyrd code, never by clap:
   stripped; files over 4096 bytes are rejected.
 - Files are opened without following symlinks, must be regular files
   owned by the current user, and must grant nothing to group or
-  other (Unix). Credential handling is Unix-only
-  (`docs/architecture.md` owns the scope consequence: a non-Unix
-  build cannot open a drive, so Windows is out of v0.4 entirely).
+  other (Unix). Credential handling is Unix-only (see
+  `docs/architecture.md` for the scope consequence).
 - Secrets never reach logs, error text, or diagnostics — stages, ids,
   errnos, and latencies only.
 - Drive custody files are created owner-only on Unix regardless of
