@@ -137,7 +137,7 @@ fn dispatch_err(server: &OwnerServer, op: &str, path: &str) -> WireError {
 /// and a multi-version conflict. The mapping is lossless, so the
 /// interface cannot drift from the namespace model by encoding.
 #[test]
-fn wire_node_round_trips_every_variant() {
+fn interface_value_types_round_trip() {
     let file = Node::File {
         size: 11,
         executable: false,
@@ -608,7 +608,7 @@ fn freshness_starts_fresh_from_composition() {
 /// interface module); this test pins the repeatability the status
 /// contract already requires in process.
 #[test]
-fn observation_is_repeatable_without_side_effects() {
+fn interface_read_side_never_constructs_a_mailbox() {
     let (engine, dir) = scratch_drive();
     let store = wyrd_format::FsObjectStore::open(dir.clone()).unwrap();
     let mut daemon = wyrd_core::node::WyrdNode::new(engine, store).unwrap();
@@ -1239,7 +1239,7 @@ fn dead_owner_parts() -> (
 /// answer, and specifically never a success. When a pass finally
 /// runs, the same submit resolves normally.
 #[test]
-fn no_success_before_the_durability_boundary() {
+fn in_flight_request_gets_a_terminal_answer() {
     use wyrd_core::node::WyrdNode;
 
     let (engine, dir) = scratch_drive();

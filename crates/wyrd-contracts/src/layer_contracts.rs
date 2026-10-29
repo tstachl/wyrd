@@ -2869,11 +2869,11 @@ fn the_interface_is_not_a_second_engine() {
 /// The read side never constructs a mailbox: no live mailbox type,
 /// no seen store, no health sampling, no trait use beyond the test
 /// fake's implementation. The behavioral half is
-/// `observation_is_repeatable_without_side_effects` in the daemon;
+/// `interface_read_side_never_constructs_a_mailbox` in the daemon;
 /// this test is the source check that makes the status contract's
 /// rule (`status.rs:108-114`) a gate rather than a note.
 #[test]
-fn read_side_never_constructs_a_mailbox() {
+fn interface_read_side_never_constructs_a_mailbox() {
     const FORBIDDEN: &[&str] = &[
         "LiveMailbox",
         "SeenStore",
