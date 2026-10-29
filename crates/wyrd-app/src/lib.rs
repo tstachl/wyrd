@@ -21,5 +21,10 @@
 //! `tests/`, never here.
 
 pub mod host;
+pub mod run;
 
 pub use host::{open_host, HostError, HostView, OpenHost};
+pub use run::{
+    exit_code, finish_running, into_running, loop_result, telemetry_emit, HostTransport,
+    RunningHost,
+};

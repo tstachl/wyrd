@@ -50,6 +50,10 @@ pub enum HostError {
     /// Node composition over the opened store failed.
     #[error(transparent)]
     Node(#[from] NodeError),
+    /// The supervised run or the transport tail failed at the io
+    /// boundary.
+    #[error("run failed: {0}")]
+    Io(#[from] std::io::Error),
 }
 
 /// A drive the host owns: the lock held for the handle's lifetime,
@@ -57,8 +61,8 @@ pub enum HostError {
 /// without running releases the lock; running tears down in the
 /// mount's order.
 pub struct OpenHost {
-    node: WyrdNode<HostView>,
-    drive_dir: PathBuf,
+    pub(crate) node: WyrdNode<HostView>,
+    pub(crate) drive_dir: PathBuf,
 }
 
 impl OpenHost {
