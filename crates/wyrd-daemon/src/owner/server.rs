@@ -50,6 +50,18 @@ use super::wire::{
     WIRE_VERSION,
 };
 
+/// Bind the drive-directory socket: reclaim a stale entry from an
+/// unclean shutdown, then bind. The caller holds the store lock
+/// (single owner by kernel enforcement), so no competing binder
+/// races the reclaim. Failures refuse the run — an owner that
+/// cannot serve its interface never runs deaf.
+pub fn bind_listener(socket_path: &Path) -> std::io::Result<UnixListener> {
+    let _ = std::fs::remove_file(socket_path);
+    let listener = UnixListener::bind(socket_path)?;
+    listener.set_nonblocking(true)?;
+    Ok(listener)
+}
+
 /// The socket file name inside the drive directory. Beside the
 /// store, never inside it: the store reads named files, and a
 /// socket entry is not a store input. Removed on clean shutdown;
@@ -164,9 +176,8 @@ impl OwnerServer {
     /// the caller holds the store lock (single owner by kernel
     /// enforcement), so no competing binder exists.
     pub fn bind_and_serve(&self, socket_path: &Path, stop: &AtomicBool) -> std::io::Result<()> {
-        let _ = std::fs::remove_file(socket_path);
-        let listener = UnixListener::bind(socket_path)?;
-        listener.set_nonblocking(true)?;
+        let listener = bind_listener(socket_path)?;
+        self.serve_on(&listener, stop);
         self.serve_on(&listener, stop);
         let _ = std::fs::remove_file(socket_path);
         Ok(())

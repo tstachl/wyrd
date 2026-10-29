@@ -568,30 +568,60 @@ pub fn compose_headless_owner(
 }
 
 /// Run a composed headless owner to completion under `stop`: install
-/// the serving surface, supervise the live loop, wait for the first
-/// of loop return or stop trip, close admission (no presentation
-/// session exists to submit through, so the close only settles
-/// close-racers), reap the loop thread, and run the shared transport
+/// the serving surface, serve the drive-owner interface beside the
+/// drive, supervise the live loop, wait for the first of loop return
+/// or stop trip, close admission (no presentation session exists to
+/// submit through, so the close only settles close-racers), reap the
+/// loop thread, stop the interface, and run the shared transport
 /// tail under the mount's bounds. The ONLY headless run path, next
 /// to the ONLY headless composition path above.
+///
+/// `configured_relays` is the relay count the durable status
+/// observation reports: the composer owns the relay configuration,
+/// and the loop never constructs a mailbox from it. The interface
+/// serves at the drive-directory socket until the run returns; a
+/// bind failure refuses the run rather than running deaf.
 pub fn run_composed_owner<M, B>(
     composed: ComposedHeadless,
     stop: &'static AtomicBool,
     mailbox: M,
     bulk: Option<B>,
     emit: Arc<dyn Fn(VaultEvent) + Send + Sync>,
+    configured_relays: usize,
 ) -> Result<VaultOutcome, OwnerError>
 where
     M: Mailbox + Send + 'static,
     B: RoutePublishing + Send + 'static,
 {
     let ComposedHeadless {
-        live,
+        mut live,
         parts,
         drive_dir,
         serving,
         serving_id,
     } = composed;
+    live.set_configured_relays(configured_relays);
+    // The drive-owner interface serves from here: the shared
+    // projection, the loop-published slots, and the single queue,
+    // peer-checked at the drive-directory socket. The composer
+    // wires the loop's repair queues the way the mount composer
+    // wires its backend.
+    let server =
+        crate::owner::OwnerServer::new(crate::owner::OwnerHandles::from_parts(&parts).with_repair(
+            Arc::clone(live.quarantine_queue()),
+            Arc::clone(live.scrub_queue()),
+        ));
+    // Bind before spawning: an owner that cannot serve its
+    // interface refuses the run instead of running deaf. The store
+    // lock is held throughout the run, so no competing owner can
+    // race the stale-socket reclaim.
+    let socket_path = crate::owner::socket_path_for(&drive_dir);
+    let listener = crate::owner::server::bind_listener(&socket_path).map_err(OwnerError::Io)?;
+    let server_stop = Arc::new(AtomicBool::new(false));
+    let server_thread = {
+        let server_stop = Arc::clone(&server_stop);
+        std::thread::spawn(move || server.serve_on(&listener, &server_stop))
+    };
     // No presentation backend is attached yet: the parts are owned
     // but never served, the queue stays open but nobody submits, so
     // passes only ever see intake and fetch work. The queue handle
@@ -617,5 +647,13 @@ where
         stop,
         emit,
     })?;
+    // The loop is reaped; the interface stops with it. A submission
+    // admitted before the stop resolves through the teardown drain
+    // or refuses `Shutdown` at admission close — no consumer waits
+    // past this join without a terminal answer.
+    server_stop.store(true, Ordering::Relaxed);
+    if server_thread.join().is_err() {
+        tracing::warn!("owner interface thread ended unexpectedly");
+    }
     Ok(outcome)
 }

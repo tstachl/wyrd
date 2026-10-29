@@ -171,6 +171,7 @@ fn finish_with(
         Arc::new(move |event: VaultEvent| {
             sink.lock().unwrap().push(format!("{event:?}"));
         }),
+        0,
     )
     .expect("run completes")
 }

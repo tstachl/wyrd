@@ -144,6 +144,7 @@ pub(crate) fn vault(
     let open_secret = signer_keys.secret_key().clone();
     let seen_path = drive_dir.join("mailbox.seen");
     let mailbox = LiveMailbox::connect(signer_keys, open_secret, relays.clone(), seen_path)?;
+    let configured_relays = relays.len();
     // Arrival short-circuits the loop's idle wait the way it does for
     // the mount: without this, every park burns its full window even
     // as mail lands.
@@ -217,7 +218,14 @@ pub(crate) fn vault(
             );
         }
     });
-    let outcome = run_composed_owner(composed, &SHUTDOWN, mailbox, Some(bulk), emit)?;
+    let outcome = run_composed_owner(
+        composed,
+        &SHUTDOWN,
+        mailbox,
+        Some(bulk),
+        emit,
+        configured_relays,
+    )?;
     // Fold like the mount — loop first, then serving — with no
     // session in between. SIGTERM exits 0 here exactly when the loop
     // stopped clean and every transport closed: the mount's rule at

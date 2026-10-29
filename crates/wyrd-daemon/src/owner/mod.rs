@@ -28,8 +28,10 @@ pub mod server;
 mod tests_owner;
 pub mod wire;
 
-pub use server::{socket_path_for, OwnerHandles, OwnerServer};
-pub use server::{DEFAULT_MAX_READ_BYTES, MAX_FRAME_BYTES, OWNER_SOCKET_NAME, READ_DEMAND_TIMEOUT};
+pub use server::{
+    bind_listener, socket_path_for, OwnerHandles, OwnerServer, DEFAULT_MAX_READ_BYTES,
+    MAX_FRAME_BYTES, OWNER_SOCKET_NAME, READ_DEMAND_TIMEOUT,
+};
 
 pub use wire::{
     PathParams, RawRequest, SubmitParams, WireAttr, WireConvergenceState, WireDirEntry,

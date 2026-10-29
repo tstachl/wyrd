@@ -29,7 +29,7 @@ use wyrd_format::{ContentId, SnapshotId};
 use wyrd_sync::keys::DeviceIdentitySecret;
 use wyrd_sync::runtime::Engine;
 
-use crate::vault::OwnerView;
+use crate::vault::{run_composed_owner, OwnerView};
 use wyrd_sync::transport::mailbox::{
     Delivery, DeliveryId, Disposition, Mailbox, MailboxEnvelope, MailboxError, SendReport,
 };
@@ -1214,4 +1214,216 @@ fn wire_mutation_kinds_round_trip() {
         "a nested fold refuses at the wire"
     );
     assert!(identity.to_identity().is_ok());
+}
+
+// ---------------------------------------------------------------------------
+// Crash and restart answers (child 3)
+// ---------------------------------------------------------------------------
+
+/// Compose without starting the loop: the owner is down, so no pass
+/// can complete. The server still dispatches against the shared
+/// handles — the shape a consumer meets when the owner dies with
+/// requests in flight.
+fn dead_owner_parts() -> (
+    OwnerServer,
+    LiveParts<crate::vault::OwnerView>,
+    std::path::PathBuf,
+) {
+    let (parts, dir) = composed_parts();
+    let server = OwnerServer::new(OwnerHandles::from_parts(&parts));
+    (server, parts, dir)
+}
+
+/// No success before the durability boundary: a submit admitted
+/// while no pass runs stays in flight — the consumer gets no
+/// answer, and specifically never a success. When a pass finally
+/// runs, the same submit resolves normally.
+#[test]
+fn no_success_before_the_durability_boundary() {
+    use wyrd_core::node::WyrdNode;
+
+    let (engine, dir) = scratch_drive();
+    let store = wyrd_format::FsObjectStore::open(dir.clone()).unwrap();
+    let mut daemon = WyrdNode::new(engine, store).unwrap();
+    daemon.put_file("seed.txt", b"seed").unwrap();
+    daemon.refresh_live_heads().unwrap();
+    let (mut live, parts) = daemon
+        .into_live(
+            Duration::from_secs(5),
+            &wyrd_core::live::LiveConfig::default(),
+        )
+        .unwrap();
+    let server = Arc::new(OwnerServer::new(OwnerHandles::from_parts(&parts)));
+
+    // The submit blocks: admitted, unexecuted, no answer.
+    let submit = std::thread::spawn(move || {
+        server.dispatch(RawRequest {
+            v: WIRE_VERSION,
+            id: 21,
+            op: OP_SUBMIT.to_string(),
+            params: serde_json::to_value(SubmitParams {
+                kind: WireMutationKind::Mkdir {
+                    path: "late.txt".to_string(),
+                },
+            })
+            .unwrap(),
+        })
+    });
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(
+        !submit.is_finished(),
+        "no answer while no pass runs — least of all success"
+    );
+    assert_eq!(
+        parts.mutations.outstanding(),
+        1,
+        "the request is admitted but unexecuted"
+    );
+
+    // The owner restarts: one pass executes the admitted submit.
+    let mut mailbox = NoopMailbox;
+    live.sync_once(&mut mailbox, None::<&mut wyrd_sync::bulk::MemoryBulkSource>)
+        .unwrap();
+    match submit.join().unwrap().result {
+        WireResult::Ok(ok) => match *ok {
+            WireOk::Submitted { .. } => {}
+            other => panic!("unexpected submit result: {other:?}"),
+        },
+        other => panic!("submit after restart unexpectedly failed: {other:?}"),
+    }
+
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Shutdown is a terminal answer, not a hang: closing admission
+/// settles the blocked submitter with `Shutdown` instead of
+/// stranding it.
+#[test]
+fn shutdown_is_a_terminal_answer() {
+    let (server, parts, dir) = dead_owner_parts();
+    parts.mutations.shutdown();
+    let error = submit_err(
+        &server,
+        WireMutationKind::Mkdir {
+            path: "never.txt".to_string(),
+        },
+    );
+    assert_eq!(error.code, WireErrorCode::Shutdown);
+
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Absent after shutdown: an admitted but unexecuted submit that
+/// the owner never executes stays absent — the re-read finds
+/// nothing, and the consumer was never told otherwise.
+#[test]
+fn absent_without_execution_stays_absent() {
+    use wyrd_core::node::WyrdNode;
+
+    let (engine, dir) = scratch_drive();
+    let store = wyrd_format::FsObjectStore::open(dir.clone()).unwrap();
+    let mut daemon = WyrdNode::new(engine, store).unwrap();
+    daemon.put_file("seed.txt", b"seed").unwrap();
+    daemon.refresh_live_heads().unwrap();
+    let (_live, parts) = daemon
+        .into_live(
+            Duration::from_secs(5),
+            &wyrd_core::live::LiveConfig::default(),
+        )
+        .unwrap();
+    let server = Arc::new(OwnerServer::new(OwnerHandles::from_parts(&parts)));
+    let submit_server = Arc::clone(&server);
+    let submit = std::thread::spawn(move || {
+        submit_server.dispatch(RawRequest {
+            v: WIRE_VERSION,
+            id: 22,
+            op: OP_SUBMIT.to_string(),
+            params: serde_json::to_value(SubmitParams {
+                kind: WireMutationKind::Mkdir {
+                    path: "ghost.txt".to_string(),
+                },
+            })
+            .unwrap(),
+        })
+    });
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(!submit.is_finished(), "no pass runs, no answer");
+    parts.mutations.shutdown();
+    match submit.join().unwrap().result {
+        WireResult::Err(error) => assert_eq!(error.code, WireErrorCode::Shutdown),
+        other => panic!("shutdown submit unexpectedly succeeded: {other:?}"),
+    }
+    // Reconciliation after the terminal answer: the path was never
+    // created, so the verdict is absent — definite, not guessed.
+    let error = dispatch_err(&server, OP_LOOKUP, "ghost.txt");
+    assert_eq!(error.code, WireErrorCode::NotFound);
+
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// The headless run serves the interface: compose, run, and reach
+/// the drive through the socket beside it. The socket appears only
+/// while the owner runs, and the run refuses to start deaf.
+#[test]
+fn headless_run_serves_the_interface() {
+    let (engine, dir) = scratch_drive();
+    let composed =
+        crate::vault::compose_headless_owner(engine, dir.clone(), true).expect("owner composes");
+    let stop: &'static AtomicBool = Box::leak(Box::new(AtomicBool::new(false)));
+    let run_thread = std::thread::spawn(move || {
+        run_composed_owner(
+            composed,
+            stop,
+            NoopMailbox,
+            None::<wyrd_sync::bulk::MemoryBulkSource>,
+            Arc::new(|_: crate::vault::VaultEvent| {}),
+            0,
+        )
+    });
+    let socket_path = super::socket_path_for(&dir);
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !socket_path.exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the owner serves its socket while it runs"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let mut client = UnixStream::connect(&socket_path).unwrap();
+    let request = serde_json::to_value(&RawRequest {
+        v: WIRE_VERSION,
+        id: 31,
+        op: OP_READDIR.to_string(),
+        params: serde_json::to_value(PathParams {
+            path: String::new(),
+        })
+        .unwrap(),
+    })
+    .unwrap();
+    let request = serde_json::to_vec(&request).unwrap();
+    client
+        .write_all(&(request.len() as u32).to_be_bytes())
+        .unwrap();
+    client.write_all(&request).unwrap();
+    let mut len = [0u8; 4];
+    client.read_exact(&mut len).unwrap();
+    let len = u32::from_be_bytes(len) as usize;
+    let mut frame = vec![0u8; len];
+    client.read_exact(&mut frame).unwrap();
+    let response: WireResponse = serde_json::from_slice(&frame).unwrap();
+    match response.result {
+        WireResult::Ok(ok) => match *ok {
+            WireOk::Readdir { entries, .. } => {
+                assert!(entries.is_empty(), "fresh drive serves an empty root");
+            }
+            other => panic!("unexpected readdir result: {other:?}"),
+        },
+        other => panic!("readdir through the run unexpectedly failed: {other:?}"),
+    }
+    drop(client);
+
+    stop.store(true, Ordering::Relaxed);
+    let outcome = run_thread.join().unwrap().expect("the run ends clean");
+    let _ = outcome;
+    std::fs::remove_dir_all(dir).unwrap();
 }
