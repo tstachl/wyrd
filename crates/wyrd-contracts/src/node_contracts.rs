@@ -23,16 +23,20 @@ use wyrd_core::mutation::{
     FileIdentity, FoldDisposition, FoldForcerOutcome, FoldMember, MutationError, MutationKind,
     MutationOutcome,
 };
-use wyrd_core::node::WyrdNode;
+use wyrd_core::node::{NodeError, WyrdNode};
 use wyrd_core::view::{
     Attr, DirEntry, Head, NamespaceView, Node, OpenFile, RuntimeMaterialization, ViewError,
     ViewLockError,
 };
-use wyrd_format::{ContentId, FetchStatus, MemoryObjectStore, ObjectStore, StoreFailure};
+use wyrd_format::{
+    ContentId, Entry, FetchStatus, FsObjectStore, MemoryObjectStore, ObjectKind, ObjectStore,
+    StoreFailure, Tree,
+};
 use wyrd_fuse::{DriveView, ViewHead};
 use wyrd_sync::bulk::MemoryBulkSource;
+use wyrd_sync::durable::DurableError;
 use wyrd_sync::keys::DeviceIdentitySecret;
-use wyrd_sync::runtime::Engine;
+use wyrd_sync::runtime::{Engine, EngineError};
 use wyrd_sync::transport::mailbox::{
     Delivery, DeliveryId, Disposition, Mailbox, MailboxEnvelope, MailboxError, SendReport,
 };
@@ -771,4 +775,444 @@ fn quarantine_discards_real_bitrotted_bytes_through_the_loop() {
     );
     drop(parts);
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Author a snapshot through the engine behind the view's back: the
+/// bytes land in the view's store (so the closure verifies), the
+/// durable heads advance, and the installed projection stays exactly
+/// what it was. The composition boundary must heal this gap.
+fn author_behind_the_view(
+    node: &mut WyrdNode<DriveView<MemoryObjectStore, RuntimeMaterialization>>,
+    name: &str,
+    data: &[u8],
+) {
+    let (engine, view) = node.parts_mut();
+    let mut store = view.store_write().expect("the view store writes");
+    let chunk = store
+        .insert(ObjectKind::Chunk, data)
+        .expect("the chunk inserts");
+    let tree = Tree::from_entries(vec![Entry::file(
+        name,
+        data.len() as u64,
+        false,
+        vec![chunk],
+    )
+    .expect("the entry builds")])
+    .expect("the tree builds")
+    .insert_into(&mut *store)
+    .expect("the tree inserts");
+    drop(store);
+    let store = view.store_read().expect("the view store reads");
+    engine
+        .author_snapshot(&*store, tree)
+        .expect("the engine authors behind the view");
+}
+
+/// Issue 32: a reopened drive serves its namespace at composition,
+/// with no explicit refresh anywhere. The view opens empty while the
+/// engine holds durable heads; the composition boundary is where the
+/// cache is made consistent, so the first generation already serves
+/// the committed heads.
+#[test]
+fn reopened_drive_serves_its_namespace_at_composition() {
+    const PASS: &str = "composition-freshness-pass";
+    let dir = headless_dir("composition-reopen");
+    let objects = dir.join("objects");
+    let identity = DeviceIdentitySecret::generate().unwrap();
+    let engine = Engine::create(dir.clone(), PASS, identity.clone()).unwrap();
+    let mut node: WyrdNode<DriveView<_, RuntimeMaterialization>> =
+        WyrdNode::new(engine, FsObjectStore::open(objects.clone()).unwrap()).unwrap();
+    node.put_file("hello.txt", b"hello").unwrap();
+    drop(node);
+
+    // Reopen from custody with no explicit refresh: composition alone
+    // must project the durable heads.
+    let reopened = Engine::open_keystore(dir.clone(), PASS, identity).unwrap();
+    let node: WyrdNode<DriveView<_, RuntimeMaterialization>> =
+        WyrdNode::new(reopened, FsObjectStore::open(objects).unwrap()).unwrap();
+    let (_live, parts) = node
+        .into_live(Duration::from_secs(5), &LiveConfig::default())
+        .expect("composition projects the durable heads");
+    let projection = parts.projection.read().unwrap();
+    assert_serves_hello(projection.view());
+    drop(projection);
+    drop(parts);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Issue 32: one otherwise-idle pass after composition does not
+/// regress the namespace. The baseline revision is recorded after the
+/// composition refresh, so the pass sees no change past the split and
+/// leaves the served generation — still correct — alone.
+#[test]
+fn idle_pass_after_composition_does_not_regress() {
+    const PASS: &str = "composition-freshness-pass";
+    let dir = headless_dir("composition-idle");
+    let objects = dir.join("objects");
+    let identity = DeviceIdentitySecret::generate().unwrap();
+    let engine = Engine::create(dir.clone(), PASS, identity.clone()).unwrap();
+    let mut node: WyrdNode<DriveView<_, RuntimeMaterialization>> =
+        WyrdNode::new(engine, FsObjectStore::open(objects.clone()).unwrap()).unwrap();
+    node.put_file("hello.txt", b"hello").unwrap();
+    drop(node);
+
+    let reopened = Engine::open_keystore(dir.clone(), PASS, identity).unwrap();
+    let node: WyrdNode<DriveView<_, RuntimeMaterialization>> =
+        WyrdNode::new(reopened, FsObjectStore::open(objects).unwrap()).unwrap();
+    let (mut live, parts) = node
+        .into_live(Duration::from_secs(5), &LiveConfig::default())
+        .expect("composition projects the durable heads");
+    {
+        let projection = parts.projection.read().unwrap();
+        assert_serves_hello(projection.view());
+    }
+    let mut mailbox = SilentMailbox;
+    live.sync_once(&mut mailbox, None::<&mut MemoryBulkSource>)
+        .expect("the idle pass runs");
+    let projection = parts.projection.read().unwrap();
+    assert_serves_hello(projection.view());
+    drop(projection);
+    drop(parts);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Issue 32: an engine mutation through `parts_mut` is visible at
+/// composition. The unrestricted engine handle may move the revision
+/// past the installed namespace; the composition refresh runs after
+/// any such mutation, so the live view never claims the new revision
+/// while holding the old namespace.
+#[test]
+fn engine_mutation_through_parts_mut_is_visible() {
+    let dir = headless_dir("composition-parts-mut");
+    let engine = Engine::create(
+        dir.clone(),
+        "headless-test-pass",
+        DeviceIdentitySecret::generate().unwrap(),
+    )
+    .unwrap();
+    let mut node: WyrdNode<DriveView<MemoryObjectStore, RuntimeMaterialization>> =
+        WyrdNode::new(engine, MemoryObjectStore::default()).unwrap();
+    author_behind_the_view(&mut node, "behind.txt", b"behind");
+
+    let (_live, parts) = node
+        .into_live(Duration::from_secs(5), &LiveConfig::default())
+        .expect("composition heals the parts_mut gap");
+    let projection = parts.projection.read().unwrap();
+    let opened = projection
+        .view()
+        .lookup("behind.txt")
+        .expect("the engine-authored head serves at composition");
+    let file = projection.view().open_file(&opened).unwrap();
+    assert_eq!(
+        projection.view().read(&file, 0, 64).unwrap(),
+        b"behind",
+        "the live view serves the engine's revision, not the old namespace"
+    );
+    drop(projection);
+    drop(parts);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Issue 32: all-pending heads at composition stay unprojected but
+/// do not fail it. Bytes the store does not hold cannot be served,
+/// and a head mid-transfer must never blank an installed view — and
+/// a first composition has no prior projection, so the baseline is
+/// empty and `Ok`. The pending head stays observable (the next pass
+/// reports it) and installs once its closure lands.
+#[test]
+fn all_pending_heads_at_composition_stay_unprojected() {
+    let dir = headless_dir("composition-pending");
+    let engine = Engine::create(
+        dir.clone(),
+        "headless-test-pass",
+        DeviceIdentitySecret::generate().unwrap(),
+    )
+    .unwrap();
+    let mut node: WyrdNode<DriveView<_, RuntimeMaterialization>> =
+        WyrdNode::new(engine, MemoryObjectStore::default()).unwrap();
+    node.put_file("hello.txt", b"hello").unwrap();
+
+    // A second head authored from a scratch store: eligible, but its
+    // closure is still fetching from this view's perspective.
+    let mut scratch = MemoryObjectStore::default();
+    let chunk = scratch
+        .insert(ObjectKind::Chunk, b"second")
+        .expect("the chunk inserts");
+    let tree = Tree::from_entries(vec![
+        Entry::file("second.txt", 6, false, vec![chunk]).expect("the entry builds")
+    ])
+    .expect("the tree builds")
+    .insert_into(&mut scratch)
+    .expect("the tree inserts");
+    {
+        let (engine, _view) = node.parts_mut();
+        engine
+            .author_snapshot(&scratch, tree)
+            .expect("the engine authors a pending head");
+    }
+
+    let (mut live, parts) = node
+        .into_live(Duration::from_secs(5), &LiveConfig::default())
+        .expect("pending heads defer publication, they do not refuse composition");
+    {
+        let projection = parts.projection.read().unwrap();
+        assert_serves_hello(projection.view());
+        assert!(
+            projection.view().lookup("second.txt").is_err(),
+            "the unfetched head mounts nothing yet"
+        );
+    }
+    let mut mailbox = SilentMailbox;
+    let report = live
+        .sync_once(&mut mailbox, None::<&mut MemoryBulkSource>)
+        .expect("the pass runs");
+    assert_eq!(
+        report.pending_heads, 1,
+        "the unfetched head is reported, not silently converged"
+    );
+    drop(parts);
+    std::fs::remove_dir_all(dir).unwrap();
+
+    // The true all-pending case: zero publishable heads, so the
+    // baseline is empty — and still `Ok`, with the pending head
+    // reported rather than hidden.
+    let dir = headless_dir("composition-pending-all");
+    let engine = Engine::create(
+        dir.clone(),
+        "headless-test-pass",
+        DeviceIdentitySecret::generate().unwrap(),
+    )
+    .unwrap();
+    let mut node: WyrdNode<DriveView<_, RuntimeMaterialization>> =
+        WyrdNode::new(engine, MemoryObjectStore::default()).unwrap();
+    {
+        let mut scratch = MemoryObjectStore::default();
+        let chunk = scratch
+            .insert(ObjectKind::Chunk, b"second")
+            .expect("the chunk inserts");
+        let tree = Tree::from_entries(vec![
+            Entry::file("second.txt", 6, false, vec![chunk]).expect("the entry builds")
+        ])
+        .expect("the tree builds")
+        .insert_into(&mut scratch)
+        .expect("the tree inserts");
+        let (engine, _view) = node.parts_mut();
+        engine
+            .author_snapshot(&scratch, tree)
+            .expect("the engine authors a pending head");
+    }
+    let (mut live, parts) = node
+        .into_live(Duration::from_secs(5), &LiveConfig::default())
+        .expect("all-pending heads defer publication, they do not refuse composition");
+    {
+        let projection = parts.projection.read().unwrap();
+        assert!(
+            projection.view().lookup("second.txt").is_err(),
+            "no publishable head, so the baseline is empty — but composition succeeds"
+        );
+    }
+    let mut mailbox = SilentMailbox;
+    let report = live
+        .sync_once(&mut mailbox, None::<&mut MemoryBulkSource>)
+        .expect("the pass runs");
+    assert_eq!(
+        report.pending_heads, 1,
+        "the unfetched head is reported, not silently converged"
+    );
+    drop(parts);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Issue 32, OD-32-C first row: when the composition refresh fails
+/// and no trustworthy projection exists, composition is refused with
+/// the underlying error — never an `Ok` carrying an empty view that
+/// reads as "this drive has no content". The contrast at the end is
+/// the point: a genuinely empty drive composes fine, so an `Err` is
+/// observably different from an empty `Ok`.
+#[test]
+fn composition_refusal_is_distinguishable_from_an_empty_view() {
+    let dir = headless_dir("composition-refusal");
+    let engine = Engine::create(
+        dir.clone(),
+        "headless-test-pass",
+        DeviceIdentitySecret::generate().unwrap(),
+    )
+    .unwrap();
+    let mut node: WyrdNode<DriveView<MemoryObjectStore, RuntimeMaterialization>> =
+        WyrdNode::new(engine, MemoryObjectStore::default()).unwrap();
+    // Durable heads the empty view was never told about.
+    author_behind_the_view(&mut node, "behind.txt", b"behind");
+    // Simulated bitrot after durable commit: the commit watermark no
+    // longer parses, so no rebuild can be trusted and the composition
+    // may not project from it.
+    std::fs::write(dir.join("CURRENT"), b"rot").unwrap();
+
+    let err = match node.into_live(Duration::from_secs(5), &LiveConfig::default()) {
+        Err(err) => err,
+        Ok(_) => {
+            panic!("composition with no trustworthy projection is refused, never served empty")
+        }
+    };
+    assert!(
+        matches!(
+            err,
+            NodeError::Runtime(EngineError::Durable(DurableError::CorruptCurrent))
+        ),
+        "the refusal carries the underlying error: {err:?}"
+    );
+
+    // A genuinely empty drive composes fine and serves empty.
+    let empty_dir = headless_dir("composition-refusal-empty");
+    let engine = Engine::create(
+        empty_dir.clone(),
+        "headless-test-pass",
+        DeviceIdentitySecret::generate().unwrap(),
+    )
+    .unwrap();
+    let node: WyrdNode<DriveView<_, RuntimeMaterialization>> =
+        WyrdNode::new(engine, MemoryObjectStore::default()).unwrap();
+    let (_live, parts) = node
+        .into_live(Duration::from_secs(5), &LiveConfig::default())
+        .expect("an empty drive composes");
+    let projection = parts.projection.read().unwrap();
+    assert!(
+        projection.view().lookup("anything").is_err(),
+        "a fresh drive serves empty"
+    );
+    drop(projection);
+    drop(parts);
+    std::fs::remove_dir_all(dir).unwrap();
+    std::fs::remove_dir_all(empty_dir).unwrap();
+}
+
+/// Issue 32, OD-32-C second row: after a successful projection, a
+/// failing refresh retains the last successfully installed
+/// projection and surfaces the error — it never replaces good state
+/// with less trustworthy state. The view store is untouched by the
+/// durable damage, so the retained projection keeps serving.
+#[test]
+fn last_good_projection_is_retained_after_a_refresh_failure() {
+    let dir = headless_dir("composition-retained");
+    let engine = Engine::create(
+        dir.clone(),
+        "headless-test-pass",
+        DeviceIdentitySecret::generate().unwrap(),
+    )
+    .unwrap();
+    let mut node: WyrdNode<DriveView<_, RuntimeMaterialization>> =
+        WyrdNode::new(engine, MemoryObjectStore::default()).unwrap();
+    node.put_file("hello.txt", b"hello").unwrap();
+    assert_serves_hello(node.view());
+
+    std::fs::write(dir.join("CURRENT"), b"rot").unwrap();
+    let err = node
+        .refresh_live_heads()
+        .expect_err("a refresh past durable damage fails");
+    assert!(
+        matches!(err, EngineError::Durable(DurableError::CorruptCurrent)),
+        "the refresh surfaces the underlying error: {err:?}"
+    );
+    assert_serves_hello(node.view());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Issue 32, OD-32-C third row: a consumer reaching the drive through
+/// the owner can distinguish the four projection states with the
+/// facts the core already reports — no core-level degraded mode is
+/// invented. Fresh states arrive as `Ok` (empty or serving, with the
+/// engine's head count agreeing); no trustworthy projection arrives
+/// as `Err`; a retained projection arrives as a surfaced refresh
+/// error beside a still-serving view.
+#[test]
+fn a_consumer_can_observe_projection_staleness() {
+    // State 1: fresh, valid, empty. The engine holds no heads, so the
+    // empty namespace composition hands over is authoritative.
+    let dir_empty = headless_dir("composition-stale-empty");
+    let engine = Engine::create(
+        dir_empty.clone(),
+        "headless-test-pass",
+        DeviceIdentitySecret::generate().unwrap(),
+    )
+    .unwrap();
+    let node: WyrdNode<DriveView<_, RuntimeMaterialization>> =
+        WyrdNode::new(engine, MemoryObjectStore::default()).unwrap();
+    assert!(
+        node.engine().live_heads().unwrap().is_empty(),
+        "no durable heads, so empty is fresh rather than stale"
+    );
+    let (_live, parts) = node
+        .into_live(Duration::from_secs(5), &LiveConfig::default())
+        .expect("an empty drive composes");
+    assert!(
+        parts.projection.read().unwrap().view().lookup("x").is_err(),
+        "fresh empty: composition succeeds and serves nothing"
+    );
+    drop(parts);
+
+    // State 2: fresh, valid, non-empty. One durable head, served at
+    // composition with no explicit refresh.
+    let dir_full = headless_dir("composition-stale-full");
+    let engine = Engine::create(
+        dir_full.clone(),
+        "headless-test-pass",
+        DeviceIdentitySecret::generate().unwrap(),
+    )
+    .unwrap();
+    let mut node: WyrdNode<DriveView<_, RuntimeMaterialization>> =
+        WyrdNode::new(engine, MemoryObjectStore::default()).unwrap();
+    node.put_file("hello.txt", b"hello").unwrap();
+    assert_eq!(
+        node.engine().live_heads().unwrap().len(),
+        1,
+        "one durable head behind the composition"
+    );
+    let (_live, parts) = node
+        .into_live(Duration::from_secs(5), &LiveConfig::default())
+        .expect("a populated drive composes");
+    assert_serves_hello(parts.projection.read().unwrap().view());
+    drop(parts);
+
+    // State 3: no trustworthy projection. Durable heads exist behind
+    // an empty view and the refresh cannot run: composition is an
+    // `Err`, never an authoritative-looking empty view.
+    let dir_refused = headless_dir("composition-stale-refused");
+    let engine = Engine::create(
+        dir_refused.clone(),
+        "headless-test-pass",
+        DeviceIdentitySecret::generate().unwrap(),
+    )
+    .unwrap();
+    let mut node: WyrdNode<DriveView<MemoryObjectStore, RuntimeMaterialization>> =
+        WyrdNode::new(engine, MemoryObjectStore::default()).unwrap();
+    author_behind_the_view(&mut node, "behind.txt", b"behind");
+    std::fs::write(dir_refused.join("CURRENT"), b"rot").unwrap();
+    assert!(
+        node.into_live(Duration::from_secs(5), &LiveConfig::default())
+            .is_err(),
+        "no trustworthy projection: composition is refused"
+    );
+
+    // State 4: a retained last-good projection whose freshness could
+    // not be established. The refresh surfaces its error and the
+    // previously installed heads keep serving.
+    let dir_retained = headless_dir("composition-stale-retained");
+    let engine = Engine::create(
+        dir_retained.clone(),
+        "headless-test-pass",
+        DeviceIdentitySecret::generate().unwrap(),
+    )
+    .unwrap();
+    let mut node: WyrdNode<DriveView<_, RuntimeMaterialization>> =
+        WyrdNode::new(engine, MemoryObjectStore::default()).unwrap();
+    node.put_file("hello.txt", b"hello").unwrap();
+    std::fs::write(dir_retained.join("CURRENT"), b"rot").unwrap();
+    assert!(
+        node.refresh_live_heads().is_err(),
+        "freshness could not be established: the refresh surfaces its error"
+    );
+    assert_serves_hello(node.view());
+
+    for dir in [&dir_empty, &dir_full, &dir_refused, &dir_retained] {
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }

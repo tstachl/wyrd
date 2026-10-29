@@ -301,6 +301,40 @@ fn embedded_drive_lifecycle_needs_no_fuse_and_no_daemon() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// Issue 32: the embedded lifecycle needs no explicit refresh. A
+/// populated drive reopens and composes with no `refresh_live_heads`
+/// call anywhere — the composition boundary alone projects the
+/// durable heads, so the first consumer that never learned a refresh
+/// exists still reads a correct namespace.
+#[test]
+fn embedded_lifecycle_needs_no_explicit_refresh() {
+    const PASS: &str = "embedded-no-refresh-pass";
+    let dir = scratch("embedded-no-refresh");
+    let objects = dir.join("objects");
+    let identity = DeviceIdentitySecret::generate().unwrap();
+
+    let engine = Engine::create(dir.clone(), PASS, identity.clone()).unwrap();
+    let mut node: WyrdNode<EmbedView> =
+        WyrdNode::new(engine, FsObjectStore::open(objects.clone()).unwrap()).unwrap();
+    node.put_file("hello.txt", b"hello").unwrap();
+    drop(node);
+
+    // Reopen from custody and compose with no explicit refresh: the
+    // composition projects the durable heads on its own.
+    let reopened = Engine::open_keystore(dir.clone(), PASS, identity).unwrap();
+    let node: WyrdNode<EmbedView> =
+        WyrdNode::new(reopened, FsObjectStore::open(objects).unwrap()).unwrap();
+    let (_live, parts) = node
+        .into_live(Duration::from_secs(30), &LiveConfig::default())
+        .expect("composition projects the durable heads");
+    let projection = parts.projection.read().expect("projection lock");
+    assert_serves(projection.view(), "hello.txt", b"hello");
+    drop(projection);
+    drop(parts);
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 /// The neutral surface read: resolve, open, read back the authored
 /// bytes. Generic over the view so the assertion holds against the
 /// surface, not one implementation of it.
