@@ -32,7 +32,6 @@ use wyrd_format::DeviceId;
 use wyrd_format::MemoryObjectStore;
 
 #[cfg(feature = "mount")]
-#[cfg(feature = "mount")]
 use wyrd_sync::bulk::MemoryBulkSource;
 
 #[cfg(feature = "mount")]
