@@ -332,6 +332,40 @@ pub enum ProcessPosture {
     Malformed,
 }
 
+/// Which process a sidecar attributes the drive to: instance id,
+/// serving id, and recency — never aliveness, which a sidecar cannot
+/// prove. Shared by every lock-refused starter (the host's
+/// `DriveLocked` sentence) so the holder facts render one way; an
+/// absent or malformed sidecar still describes, never names. The
+/// `vault status` process section keeps its own multi-line rendering
+/// for the stopped-drive surface; this is the one-line refusal form.
+pub fn describe_holder(posture: &ProcessPosture) -> String {
+    match posture {
+        ProcessPosture::Fresh(file) => {
+            let age = now_unix().saturating_sub(file.posture_unix());
+            format!(
+                "process {} (serving {}, posture {}s ago; liveness unverified)",
+                file.instance(),
+                file.serving_id(),
+                age
+            )
+        }
+        ProcessPosture::Stale(file, age) => format!(
+            "process {} (serving {}, last recorded {}s ago; liveness unverified)",
+            file.instance(),
+            file.serving_id(),
+            age
+        ),
+        ProcessPosture::Absent => {
+            "no posture recorded (the holder never published; liveness unverified)".to_string()
+        }
+        ProcessPosture::Malformed => {
+            "posture unreadable (sidecar present but not schema v1; liveness unverified)"
+                .to_string()
+        }
+    }
+}
+
 /// Read and classify the sidecar. Opens only the sidecar path — never
 /// the store, never the lock — so a running vault's exclusivity is
 /// undisturbed by the query.
@@ -780,5 +814,36 @@ mod tests {
     #[test]
     fn freshness_threshold_is_three_posture_intervals() {
         assert_eq!(POSTURE_FRESHNESS, POSTURE_INTERVAL * 3);
+    }
+
+    #[test]
+    fn describe_holder_names_facts_never_aliveness() {
+        let dir = TempDir::new();
+        assert!(
+            describe_holder(&read_posture(&sidecar(&dir))).contains("no posture recorded"),
+            "absence describes, never names"
+        );
+        forge(&dir, now_unix(), serde_json::json!({}));
+        let fresh = describe_holder(&read_posture(&sidecar(&dir)));
+        assert!(
+            fresh.contains("0123456789abcdef0123456789abcdef")
+                && fresh.contains("liveness unverified"),
+            "fresh names the holder without claiming aliveness: {fresh}"
+        );
+        forge(
+            &dir,
+            now_unix().saturating_sub(10_000),
+            serde_json::json!({}),
+        );
+        let stale = describe_holder(&read_posture(&sidecar(&dir)));
+        assert!(
+            stale.contains("last recorded") && stale.contains("liveness unverified"),
+            "stale names the last record, never aliveness: {stale}"
+        );
+        fs::write(sidecar(&dir), b"not json").unwrap();
+        assert!(
+            describe_holder(&read_posture(&sidecar(&dir))).contains("unreadable"),
+            "malformed describes, never names"
+        );
     }
 }

@@ -13,7 +13,7 @@
 use std::path::{Path, PathBuf};
 
 use wyrd_daemon::core::RuntimeMaterialization;
-use wyrd_daemon::posture::{now_unix, read_posture, sidecar_path, ProcessPosture};
+use wyrd_daemon::posture::{describe_holder, read_posture, sidecar_path};
 use wyrd_daemon::{DriveView, NodeError, WyrdNode};
 use wyrd_format::FsObjectStore;
 use wyrd_sync::durable::DurableError;
@@ -108,33 +108,9 @@ pub fn open_host(
     Ok(OpenHost { node, drive_dir })
 }
 
-/// Which process holds the drive, read from its posture sidecar:
-/// instance id, serving id, and recency — never aliveness, which a
-/// sidecar cannot prove. No sidecar (or an unreadable one) still
-/// refuses, saying so instead of naming a process.
+/// Which process holds the drive, read from its posture sidecar and
+/// rendered by the daemon beside the reader, so every lock-refused
+/// starter names the holder one way.
 fn holder_sentence(drive_dir: &Path) -> String {
-    match read_posture(&sidecar_path(drive_dir)) {
-        ProcessPosture::Fresh(file) => {
-            let age = now_unix().saturating_sub(file.posture_unix());
-            format!(
-                "process {} (serving {}, posture {}s ago; liveness unverified)",
-                file.instance(),
-                file.serving_id(),
-                age
-            )
-        }
-        ProcessPosture::Stale(file, age) => format!(
-            "process {} (serving {}, last recorded {}s ago; liveness unverified)",
-            file.instance(),
-            file.serving_id(),
-            age
-        ),
-        ProcessPosture::Absent => {
-            "no posture recorded (the holder never published; liveness unverified)".to_string()
-        }
-        ProcessPosture::Malformed => {
-            "posture unreadable (sidecar present but not schema v1; liveness unverified)"
-                .to_string()
-        }
-    }
+    describe_holder(&read_posture(&sidecar_path(drive_dir)))
 }
