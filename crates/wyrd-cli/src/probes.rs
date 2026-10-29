@@ -2,7 +2,7 @@ use crate::CliError;
 #[cfg(any(test, all(target_os = "macos", feature = "mount")))]
 use std::path::{Path, PathBuf};
 
-#[cfg(feature = "mount")]
+#[cfg(all(target_os = "macos", feature = "mount"))]
 pub(crate) fn macos_preflight(mountpoint: &Path) -> Result<(), CliError> {
     if let Err(reason) = check_mountpoint(mountpoint) {
         return Err(CliError::Preflight(reason));

@@ -1,24 +1,38 @@
 use super::*;
 
-use wyrd_fuse::{DriveView, ViewError};
+use wyrd_fuse::DriveView;
+#[cfg(feature = "mount")]
+use wyrd_fuse::ViewError;
 
-use std::sync::{atomic::Ordering, Arc};
+#[cfg(feature = "mount")]
+use std::sync::atomic::Ordering;
+#[cfg(feature = "mount")]
+use std::sync::Arc;
 use std::time::Duration;
 
 #[cfg(feature = "mount")]
 use super::tests_harness::live_backend;
-use super::tests_harness::{scratch_drive, spawn_live_loop, NoopMailbox, SettlementFailingMailbox};
+use super::tests_harness::{scratch_drive, NoopMailbox};
+#[cfg(feature = "mount")]
+use super::tests_harness::{spawn_live_loop, SettlementFailingMailbox};
 
 #[cfg(feature = "mount")]
 use crate::fuse::FuseBackend;
 
+#[cfg(feature = "mount")]
 use wyrd_core::mutation::MutationQueue;
 
-use wyrd_format::{FsObjectStore, MemoryObjectStore};
+#[cfg(feature = "mount")]
+use wyrd_format::FsObjectStore;
+use wyrd_format::MemoryObjectStore;
 
 use wyrd_sync::bulk::MemoryBulkSource;
+#[cfg(feature = "mount")]
 use wyrd_sync::runtime::Engine;
 
+/// Mount-coupled with the queue tests below: the only callers compose
+/// a backend, so a mount-free build has no use for the waiter.
+#[cfg(feature = "mount")]
 fn wait_for_outstanding(queue: &Arc<MutationQueue>, count: usize) {
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     while queue.outstanding() < count {

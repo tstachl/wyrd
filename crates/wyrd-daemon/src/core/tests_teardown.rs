@@ -1,32 +1,47 @@
 #[cfg(feature = "mount")]
 use super::tests_harness::live_backend;
-use super::tests_harness::{scratch_drive, NoopMailbox, PanicMailbox, SettlementFailingMailbox};
+use super::tests_harness::scratch_drive;
+#[cfg(feature = "mount")]
+use super::tests_harness::NoopMailbox;
+#[cfg(feature = "mount")]
+use super::tests_harness::{PanicMailbox, SettlementFailingMailbox};
 use super::*;
 
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
-};
+#[cfg(feature = "mount")]
+use std::sync::atomic::Ordering;
+use std::sync::{atomic::AtomicBool, Arc, Mutex};
 use std::time::Duration;
 
 #[cfg(feature = "mount")]
 use fuser::Filesystem;
 
 use wyrd_core::mutation::{MutationError, MutationKind, MutationOutcome};
+#[cfg(feature = "mount")]
 use wyrd_core::view::Node;
+#[cfg(feature = "mount")]
 use wyrd_format::FsObjectStore;
 use wyrd_fuse::DriveView;
+#[cfg(feature = "mount")]
 use wyrd_sync::bulk::MemoryBulkSource;
+#[cfg(feature = "mount")]
 use wyrd_sync::keys::DeviceIdentitySecret;
+#[cfg(feature = "mount")]
 use wyrd_sync::runtime::Engine;
+#[cfg(feature = "mount")]
 use wyrd_sync::transport::mailbox::Mailbox;
 
-use crate::lifecycle::{LoopError, LoopReturn, Supervisor, WakeSignal};
+#[cfg(feature = "mount")]
+use crate::lifecycle::LoopError;
+#[cfg(feature = "mount")]
+use crate::lifecycle::LoopReturn;
+use crate::lifecycle::{Supervisor, WakeSignal};
 
-/// The composer role's view half: a live node over the drive's file
-/// store, so preservation assertions can reopen the drive from
-/// custody after teardown.
+/// Mount-coupled with the teardown tests below: the composer role's
+/// view half over a live node, so preservation assertions can reopen
+/// the drive from custody after teardown.
+#[cfg(feature = "mount")]
 type TeardownView = DriveView<FsObjectStore, RuntimeMaterialization>;
+#[cfg(feature = "mount")]
 type TeardownNode = LiveNode<TeardownView>;
 
 /// A process-latch stand-in: the composer trips one process-global
@@ -56,6 +71,8 @@ fn await_outstanding(queue: &Arc<wyrd_core::mutation::MutationQueue>, count: usi
 /// terminally), report the return on the trigger, then drain admitted
 /// mutations until the composer closes admission. Returns the
 /// supervision's join handle so the test owns the ordered teardown.
+/// Mount-coupled with the teardown tests below.
+#[cfg(feature = "mount")]
 fn spawn_teardown_loop<M: Mailbox + Send + 'static>(
     live: TeardownNode,
     mailbox: M,
@@ -86,6 +103,8 @@ fn spawn_teardown_loop<M: Mailbox + Send + 'static>(
 /// snapshot-content assertion every preservation test ends with.
 /// Success here means the bytes survived as a committed snapshot,
 /// not merely that shutdown returned cleanly.
+/// Mount-coupled with the preservation tests below.
+#[cfg(feature = "mount")]
 fn reopen_and_read(dir: &std::path::Path, identity: &DeviceIdentitySecret, path: &str) -> Vec<u8> {
     let engine =
         Engine::open_keystore(dir.to_path_buf(), "daemon-test-pass", identity.clone()).unwrap();

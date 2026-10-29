@@ -1,27 +1,41 @@
+#[cfg(feature = "mount")]
 use super::*;
-
+#[cfg(feature = "mount")]
 use wyrd_fuse::DriveView;
 
-use wyrd_format::{ContentId, FetchStatus};
+use wyrd_format::ContentId;
+#[cfg(feature = "mount")]
+use wyrd_format::FetchStatus;
+#[cfg(feature = "mount")]
 use wyrd_sync::transport::mailbox::Mailbox;
 
+#[cfg(feature = "mount")]
 use std::sync::atomic::Ordering;
+#[cfg(feature = "mount")]
 use std::sync::Arc;
+#[cfg(feature = "mount")]
 use std::time::Duration;
 
 use wyrd_core::want::WantRegistry;
 
 #[cfg(feature = "mount")]
 use super::tests_harness::live_backend;
-use super::tests_harness::{
-    scratch_drive, spawn_live_loop, NoopMailbox, QueueMailbox, SettlementFailingMailbox,
-};
+#[cfg(feature = "mount")]
+use super::tests_harness::{scratch_drive, spawn_live_loop, NoopMailbox};
+#[cfg(feature = "mount")]
+use super::tests_harness::{QueueMailbox, SettlementFailingMailbox};
 use wyrd_core::live::admit_wants;
 
-use wyrd_format::{DeviceId, MemoryObjectStore};
+#[cfg(feature = "mount")]
+use wyrd_format::DeviceId;
+#[cfg(feature = "mount")]
+use wyrd_format::MemoryObjectStore;
 
+#[cfg(feature = "mount")]
+#[cfg(feature = "mount")]
 use wyrd_sync::bulk::MemoryBulkSource;
 
+#[cfg(feature = "mount")]
 use wyrd_sync::transport::mailbox::MailboxEnvelope;
 
 /// A quota refusal arrives at `fsync`, not at `write`, and the handle

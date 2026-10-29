@@ -1,5 +1,7 @@
 use super::logging::build_mount_subscriber;
-use super::tests_harness::{reclaim, write_secret, TempDir, WithoutRustLog, JOIN_TIMEOUT};
+#[cfg(feature = "mount")]
+use super::tests_harness::{reclaim, JOIN_TIMEOUT};
+use super::tests_harness::{write_secret, TempDir, WithoutRustLog};
 use super::*;
 
 use wyrd_fuse::DriveView;
