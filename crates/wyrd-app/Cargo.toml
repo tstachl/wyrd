@@ -1,0 +1,30 @@
+[package]
+name = "wyrd-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The desktop host process: owns a drive through wyrd-core, runs the live loop under the daemon's supervision, and quits in the mount's teardown order. No presentation backend lives here; the window attaches later as a non-owner consumer."
+
+[dependencies]
+wyrd-core.workspace = true
+wyrd-daemon.workspace = true
+wyrd-format.workspace = true
+wyrd-sync.workspace = true
+# Hex-encoded serving id for the ready line, the same rendering the
+# vault prints: an identity, never trust.
+hex.workspace = true
+# Signal arming is Unix-gated like the CLI's: a host that must quit
+# cleanly needs its own latch trip, and without a handler the process
+# dies on signal exactly as before.
+libc.workspace = true
+thiserror.workspace = true
+# Structured stage logs the process host bridges into its diagnostics.
+tracing.workspace = true
+
+[dev-dependencies]
+# Host tests build a real drive per test; the fast KDF profile keeps
+# that affordable without touching production builds.
+wyrd-sync = { workspace = true, features = ["insecure-fast-kdf"] }
+
+[lints]
+workspace = true

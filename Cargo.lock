@@ -5191,6 +5191,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "wyrd-app"
+version = "0.3.0-alpha"
+dependencies = [
+ "hex",
+ "libc",
+ "thiserror 2.0.20",
+ "tracing",
+ "wyrd-core",
+ "wyrd-daemon",
+ "wyrd-format",
+ "wyrd-sync",
+]
+
+[[package]]
 name = "wyrd-cli"
 version = "0.3.0-alpha"
 dependencies = [

@@ -227,6 +227,19 @@ fn policy_for(member: &str) -> Option<MemberPolicy> {
             workspace_allow: &["wyrd-format", "wyrd-sync", "wyrd-fuse", "wyrd-core"],
             external_allow: &[],
         }),
+        // The desktop host: the owner process. It opens the store
+        // through `wyrd-sync`'s durable side only (`durable`,
+        // `runtime::Engine`, `keys` — never `transport`, `bulk`, or
+        // `serving`; that half is pinned by the host composition
+        // check), composes the node through `wyrd-core`, and
+        // supervises and tears down through `wyrd-daemon`. `hex` is
+        // the serving-id rendering, `libc` the Unix signal arming,
+        // `tracing` the stage-log facade. A GUI toolkit joins this
+        // set only under OD-06-C's exclusion rule.
+        "wyrd-app" => Some(MemberPolicy {
+            workspace_allow: &["wyrd-format", "wyrd-sync", "wyrd-core", "wyrd-daemon"],
+            external_allow: &["hex", "libc", "thiserror", "tracing"],
+        }),
         _ => None,
     }
 }
@@ -774,6 +787,10 @@ fn workspace_members_are_exact() {
         "crates/wyrd-cli",
         "crates/wyrd-contracts",
         "crates/wyrd-embed",
+        // The desktop host (06, first of the OD-8 pair): the owner
+        // process with no presentation backend. The File Provider
+        // adapter (17) is the second member and amends this list again.
+        "crates/wyrd-app",
     ]
     .into_iter()
     .map(str::to_owned)
