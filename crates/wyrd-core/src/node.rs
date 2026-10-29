@@ -399,6 +399,12 @@ where
         // engine head — and the ordering (refresh, then read the
         // revision) means an engine mutation between the two reads as
         // a mismatch the loop repairs, never as a fresh baseline.
+        //
+        // Ordering inside the refresh: materialization first, heads
+        // second, revision last. Either refresh may fail; on failure
+        // composition is refused and the node is consumed, so no
+        // half-refreshed baseline ever escapes for a consumer to
+        // observe.
         self.refresh_materialization()?;
         self.refresh_live_heads()?;
         let revision = self.engine.current();

@@ -913,6 +913,67 @@ fn engine_mutation_through_parts_mut_is_visible() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// Issue 32: all-pending heads at composition stay unprojected but
+/// do not fail it. Bytes the store does not hold cannot be served,
+/// and a head mid-transfer must never blank an installed view — and
+/// a first composition has no prior projection, so the baseline is
+/// empty and `Ok`. The pending head stays observable (the next pass
+/// reports it) and installs once its closure lands.
+#[test]
+fn all_pending_heads_at_composition_stay_unprojected() {
+    let dir = headless_dir("composition-pending");
+    let engine = Engine::create(
+        dir.clone(),
+        "headless-test-pass",
+        DeviceIdentitySecret::generate().unwrap(),
+    )
+    .unwrap();
+    let mut node: WyrdNode<DriveView<_, RuntimeMaterialization>> =
+        WyrdNode::new(engine, MemoryObjectStore::default()).unwrap();
+    node.put_file("hello.txt", b"hello").unwrap();
+
+    // A second head authored from a scratch store: eligible, but its
+    // closure is still fetching from this view's perspective.
+    let mut scratch = MemoryObjectStore::default();
+    let chunk = scratch
+        .insert(ObjectKind::Chunk, b"second")
+        .expect("the chunk inserts");
+    let tree = Tree::from_entries(vec![
+        Entry::file("second.txt", 6, false, vec![chunk]).expect("the entry builds")
+    ])
+    .expect("the tree builds")
+    .insert_into(&mut scratch)
+    .expect("the tree inserts");
+    {
+        let (engine, _view) = node.parts_mut();
+        engine
+            .author_snapshot(&scratch, tree)
+            .expect("the engine authors a pending head");
+    }
+
+    let (mut live, parts) = node
+        .into_live(Duration::from_secs(5), &LiveConfig::default())
+        .expect("pending heads defer publication, they do not refuse composition");
+    {
+        let projection = parts.projection.read().unwrap();
+        assert_serves_hello(projection.view());
+        assert!(
+            projection.view().lookup("second.txt").is_err(),
+            "the unfetched head mounts nothing yet"
+        );
+    }
+    let mut mailbox = SilentMailbox;
+    let report = live
+        .sync_once(&mut mailbox, None::<&mut MemoryBulkSource>)
+        .expect("the pass runs");
+    assert_eq!(
+        report.pending_heads, 1,
+        "the unfetched head is reported, not silently converged"
+    );
+    drop(parts);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// Issue 32, OD-32-C first row: when the composition refresh fails
 /// and no trustworthy projection exists, composition is refused with
 /// the underlying error — never an `Ok` carrying an empty view that
@@ -932,8 +993,9 @@ fn composition_refusal_is_distinguishable_from_an_empty_view() {
         WyrdNode::new(engine, MemoryObjectStore::default()).unwrap();
     // Durable heads the empty view was never told about.
     author_behind_the_view(&mut node, "behind.txt", b"behind");
-    // The durable store rots after the heads committed: no rebuild can
-    // be trusted, so the composition may not project from it.
+    // Simulated bitrot after durable commit: the commit watermark no
+    // longer parses, so no rebuild can be trusted and the composition
+    // may not project from it.
     std::fs::write(dir.join("CURRENT"), b"rot").unwrap();
 
     let err = match node.into_live(Duration::from_secs(5), &LiveConfig::default()) {
