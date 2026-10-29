@@ -1,9 +1,12 @@
 use super::logging::build_mount_subscriber;
-use super::tests_harness::{reclaim, write_secret, TempDir, WithoutRustLog, JOIN_TIMEOUT};
+#[cfg(feature = "mount")]
+use super::tests_harness::{reclaim, JOIN_TIMEOUT};
+use super::tests_harness::{write_secret, TempDir, WithoutRustLog};
 use super::*;
 
 use wyrd_fuse::DriveView;
 
+#[cfg(feature = "mount")]
 use std::sync::{Mutex, MutexGuard};
 
 /// The shutdown latch is process-global under libtest, so the two
@@ -13,8 +16,12 @@ use std::sync::{Mutex, MutexGuard};
 /// because a failed holder still releases the mount on unwind.
 /// Inert under nextest, which runs each test in its own process
 /// (see `.config/nextest.toml`), where the latch cannot cross tests.
+/// Live-mount-only, with the two ignored live-mount tests that take it.
+#[cfg(feature = "mount")]
 static LIVE_MOUNT_SERIAL: Mutex<()> = Mutex::new(());
 
+/// Live-mount-only, with the tests above.
+#[cfg(feature = "mount")]
 fn live_mount_serial() -> MutexGuard<'static, ()> {
     LIVE_MOUNT_SERIAL
         .lock()
@@ -163,6 +170,7 @@ fn mount_subscribers_route_to_their_own_files() {
 
 /// `--verbose` is a mount-only diagnostics flag: it parses on
 /// mount and stays rejected for init like the other mount flags.
+#[cfg(feature = "mount")]
 #[test]
 fn mount_accepts_a_verbose_diagnostics_flag() {
     let cli = Cli::try_parse_from([
@@ -185,6 +193,7 @@ fn mount_accepts_a_verbose_diagnostics_flag() {
 
 /// `--interval` paces the live loop's idle deadline: it defaults
 /// to the historical 5s and accepts an explicit value.
+#[cfg(feature = "mount")]
 #[test]
 fn mount_defaults_and_accepts_a_live_interval() {
     let base = [
@@ -229,6 +238,7 @@ fn live_config_carries_the_interval_to_the_loop() {
 /// The mount serves a read-write `wyrd` filesystem: the backend
 /// carries the live daemon's mutation channel, so the kernel must
 /// not gate writes behind a read-only flag.
+#[cfg(feature = "mount")]
 #[test]
 fn mount_uses_a_read_write_filesystem_name() {
     let config = session_config();
@@ -295,6 +305,7 @@ fn mount_preamble_projects_authorized_heads_without_fuse() {
 /// threads in one process; nextest isolates each test in its own):
 /// `cargo test -p wyrd-cli --bin wyrd -- --ignored`, or
 /// `cargo nextest run -p wyrd-cli --bin wyrd --run-ignored all`
+#[cfg(feature = "mount")]
 #[test]
 #[ignore = "needs kernel FUSE and local networking"]
 fn live_mount_serves_read_write_until_shutdown() {
@@ -400,6 +411,7 @@ fn live_mount_serves_read_write_until_shutdown() {
 /// `cargo nextest run -p wyrd-cli --bin wyrd --run-ignored all`.
 /// The pair must share one process (the libtest form) for the
 /// shutdown-latch serialization above to mean anything.
+#[cfg(feature = "mount")]
 #[test]
 #[ignore = "needs kernel FUSE and local networking"]
 fn live_mount_preserves_dirty_handle_across_shutdown() {
@@ -513,11 +525,13 @@ fn live_mount_preserves_dirty_handle_across_shutdown() {
 /// mount may outlive the test's tempdir (already-open handles
 /// keep working against removed paths; nothing new is served).
 /// The explicit join reports mount errors; dropping stays
-/// best-effort and never panics.
+/// best-effort and never panics. Live-mount-only, with the tests.
+#[cfg(feature = "mount")]
 struct MountGuard {
     server: Option<std::thread::JoinHandle<Result<(), CliError>>>,
 }
 
+#[cfg(feature = "mount")]
 impl MountGuard {
     fn shutdown_and_join(&mut self, context: &str) {
         SHUTDOWN.store(true, Ordering::Relaxed);
@@ -533,6 +547,7 @@ impl MountGuard {
     }
 }
 
+#[cfg(feature = "mount")]
 impl Drop for MountGuard {
     fn drop(&mut self) {
         if let Some(server) = self.server.take() {

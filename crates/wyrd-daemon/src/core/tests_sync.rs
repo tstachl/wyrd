@@ -1,26 +1,40 @@
+#[cfg(feature = "mount")]
 use super::*;
-
+#[cfg(feature = "mount")]
 use wyrd_fuse::DriveView;
 
-use wyrd_format::{ContentId, FetchStatus};
+use wyrd_format::ContentId;
+#[cfg(feature = "mount")]
+use wyrd_format::FetchStatus;
+#[cfg(feature = "mount")]
 use wyrd_sync::transport::mailbox::Mailbox;
 
+#[cfg(feature = "mount")]
 use std::sync::atomic::Ordering;
+#[cfg(feature = "mount")]
 use std::sync::Arc;
+#[cfg(feature = "mount")]
 use std::time::Duration;
 
 use wyrd_core::want::WantRegistry;
 
-use super::tests_harness::{
-    live_backend, scratch_drive, spawn_live_loop, NoopMailbox, QueueMailbox,
-    SettlementFailingMailbox,
-};
+#[cfg(feature = "mount")]
+use super::tests_harness::live_backend;
+#[cfg(feature = "mount")]
+use super::tests_harness::{scratch_drive, spawn_live_loop, NoopMailbox};
+#[cfg(feature = "mount")]
+use super::tests_harness::{QueueMailbox, SettlementFailingMailbox};
 use wyrd_core::live::admit_wants;
 
-use wyrd_format::{DeviceId, MemoryObjectStore};
+#[cfg(feature = "mount")]
+use wyrd_format::DeviceId;
+#[cfg(feature = "mount")]
+use wyrd_format::MemoryObjectStore;
 
+#[cfg(feature = "mount")]
 use wyrd_sync::bulk::MemoryBulkSource;
 
+#[cfg(feature = "mount")]
 use wyrd_sync::transport::mailbox::MailboxEnvelope;
 
 /// A quota refusal arrives at `fsync`, not at `write`, and the handle
@@ -35,6 +49,7 @@ use wyrd_sync::transport::mailbox::MailboxEnvelope;
 /// the whole reason the quota reuses `StorageFull` and reads as a smaller
 /// disk rather than a weaker promise. Pinned here so the equivalence is
 /// a fact about this code and not an assumption in a document.
+#[cfg(feature = "mount")]
 #[test]
 fn a_quota_refused_fsync_reports_enospc_and_poisons_the_handle() {
     let (engine, dir, _) = scratch_drive();
@@ -120,6 +135,7 @@ fn a_quota_refused_fsync_reports_enospc_and_poisons_the_handle() {
 /// disk, is compared); the removal-then-bookkeeping order itself is
 /// pinned at the store level by
 /// `retained_bytes_subtract_matches_durable_removal_across_reopen`.
+#[cfg(feature = "mount")]
 #[test]
 fn a_removal_below_the_ceiling_readmits_local_writes() {
     let (engine, dir, _) = scratch_drive();
@@ -247,6 +263,7 @@ fn a_removal_below_the_ceiling_readmits_local_writes() {
 
 /// The dirty-handle budget bounds the mounted surface: the 65th
 /// dirty handle's write is `ENOSPC`, and releasing one frees a slot.
+#[cfg(feature = "mount")]
 #[test]
 fn dirty_handle_budget_refuses_through_the_mount() {
     let (engine, dir, _) = scratch_drive();
@@ -305,6 +322,7 @@ fn dirty_handle_budget_refuses_through_the_mount() {
 /// the loop publishes around them. Readers pin whatever generation
 /// is current when they clone; each pinned version keeps serving
 /// its own bytes after newer generations land.
+#[cfg(feature = "mount")]
 #[test]
 fn concurrent_readers_see_atomic_generations() {
     let (engine, dir, _) = scratch_drive();
@@ -348,6 +366,7 @@ fn concurrent_readers_see_atomic_generations() {
 /// reporting `RemoteOnly` for content the engine has admitted. The
 /// gate observes the durable commit sequence, not the pass reports,
 /// so the admission's sequence advance is what forces publication.
+#[cfg(feature = "mount")]
 #[test]
 fn want_admission_publishes_without_other_changes() {
     let (engine, dir, _) = scratch_drive();
@@ -439,6 +458,7 @@ fn want_admission_cap_paces_floods_across_passes() {
 /// Poison arriving through the mailbox is consumed (acked) rather
 /// than retained: an unopenable envelope is terminal, and the
 /// serving projection is untouched by the pass.
+#[cfg(feature = "mount")]
 #[test]
 fn sync_once_discards_poison_and_keeps_serving() {
     let (engine, dir, _) = scratch_drive();
@@ -475,6 +495,7 @@ fn sync_once_discards_poison_and_keeps_serving() {
 /// error on a drive with nothing pending. This pins the wiring
 /// (source through to the shared store) on the idle path only;
 /// plan semantics belong to the sync suite.
+#[cfg(feature = "mount")]
 #[test]
 fn sync_once_accepts_idle_bulk_source() {
     let (engine, dir, _) = scratch_drive();
@@ -504,6 +525,7 @@ fn sync_once_accepts_idle_bulk_source() {
 /// shared lock) is what the loop does most; head advancement
 /// itself is the engine's classification, covered by the sync and
 /// contract suites.
+#[cfg(feature = "mount")]
 #[test]
 fn open_handles_survive_sync_republication() {
     let (engine, dir, _) = scratch_drive();
@@ -548,6 +570,7 @@ fn open_handles_survive_sync_republication() {
 /// Whether republication becomes visible depends on durable state
 /// (heads need bodies); the recovery is pinned end to end here, with
 /// broader coverage in the contracts suite.
+#[cfg(feature = "mount")]
 #[test]
 fn dirty_backlog_clears_on_clean_pass() {
     let (engine, dir, _) = scratch_drive();

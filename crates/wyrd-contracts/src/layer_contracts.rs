@@ -209,7 +209,13 @@ fn policy_for(member: &str) -> Option<MemberPolicy> {
                 "wyrd-daemon",
                 "wyrd-cli",
             ],
-            external_allow: &[],
+            // The suite itself names `fuser::Errno` in its
+            // mount-coupled tests, behind the default-on `mount`
+            // feature (see the `08` libfuse gate): the edge is in
+            // `[dependencies]` because Cargo forbids optional
+            // dev-dependencies, and the checker reads it statically
+            // either way.
+            external_allow: &["fuser"],
         }),
         // The embedder-shaped consumer: everything the embedded
         // lifecycle needs (format, transport, node, the mount-free

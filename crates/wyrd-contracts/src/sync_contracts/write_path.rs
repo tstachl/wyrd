@@ -1,24 +1,48 @@
 //! Publication, carry, manifest closure, and bootstrap contracts.
-use super::harness::{epoch3_child, serving_backend};
-use crate::support::{drive, scratch_dir, sealed_envelope, Relay, Rig};
-use wyrd_daemon::core::{LiveConfig, RuntimeMaterialization, WyrdNode};
+#[cfg(feature = "mount")]
+use super::harness::epoch3_child;
+#[cfg(feature = "mount")]
+use super::harness::serving_backend;
+#[cfg(feature = "mount")]
+use crate::support::{drive, sealed_envelope, Relay};
+use crate::support::{scratch_dir, Rig};
+#[cfg(feature = "mount")]
+use wyrd_daemon::core::LiveConfig;
+use wyrd_daemon::core::{RuntimeMaterialization, WyrdNode};
+#[cfg(feature = "mount")]
+use wyrd_format::EntryContent;
 use wyrd_format::{
-    BaoRoot, ContentId, Entry, EntryContent, Manifest, ManifestEntry, MembershipTransition,
-    MemoryObjectStore, ObjectKind, ObjectStore, SnapshotId, StorageId, Tree,
+    BaoRoot, ContentId, Entry, Manifest, ManifestEntry, MemoryObjectStore, ObjectKind, ObjectStore,
+    StorageId, Tree,
 };
+#[cfg(feature = "mount")]
+use wyrd_format::{MembershipTransition, SnapshotId};
 use wyrd_fuse::DriveView;
+#[cfg(feature = "mount")]
 use wyrd_sync::bulk::{AttemptBudget, BulkError, BulkSource, SealedManifest};
 use wyrd_sync::closure::{verify_snapshot_manifest, ClosureError};
+#[cfg(feature = "mount")]
 use wyrd_sync::control::{CapabilityPayload, Message};
 use wyrd_sync::ingest::Limits;
+#[cfg(feature = "mount")]
 use wyrd_sync::keys::capability::Capability;
-use wyrd_sync::keys::{DeviceIdentitySecret, EpochSecret};
+use wyrd_sync::keys::DeviceIdentitySecret;
+#[cfg(feature = "mount")]
+use wyrd_sync::keys::EpochSecret;
+#[cfg(feature = "mount")]
 use wyrd_sync::membership::MembershipLog;
-use wyrd_sync::runtime::{Engine, EngineError, RoutePublishing, RouteReport, RuntimeState};
+use wyrd_sync::runtime::Engine;
+#[cfg(feature = "mount")]
+use wyrd_sync::runtime::EngineError;
+#[cfg(feature = "mount")]
+use wyrd_sync::runtime::{RoutePublishing, RouteReport, RuntimeState};
+#[cfg(feature = "mount")]
 use wyrd_sync::serving::VaultSource;
+#[cfg(feature = "mount")]
 use wyrd_sync::transport::mailbox::{
     Delivery, DeliveryId, Disposition, Mailbox, MailboxEnvelope, MailboxError, SendReport,
 };
+#[cfg(feature = "mount")]
 use zeroize::Zeroizing;
 
 /// Serve one member's durable vault to another member's fetch plane:
@@ -26,10 +50,14 @@ use zeroize::Zeroizing;
 /// view, so the contract exercises the real serving maps. Routes are
 /// a no-op: the in-process peer needs no iroh naming (no-op impls
 /// keep the in-memory fakes honest about not carrying live routes).
+/// Mount-coupled with the publication tests below.
+#[cfg(feature = "mount")]
 struct VaultPeer(VaultSource);
 
+#[cfg(feature = "mount")]
 impl AttemptBudget for VaultPeer {}
 
+#[cfg(feature = "mount")]
 impl BulkSource for VaultPeer {
     fn fetch_root_manifest(
         &mut self,
@@ -64,6 +92,7 @@ impl BulkSource for VaultPeer {
     }
 }
 
+#[cfg(feature = "mount")]
 impl RoutePublishing for VaultPeer {
     fn publish_routes(&mut self, _state: &RuntimeState) -> Result<RouteReport, EngineError> {
         Ok(RouteReport::default())
@@ -73,17 +102,21 @@ impl RoutePublishing for VaultPeer {
 /// A mailbox that fails its first send, modeling a lost
 /// announcement: the authored snapshot stays durable on the author
 /// while nothing reaches the peer, and the retry converges.
+/// Mount-coupled with the publication tests below.
+#[cfg(feature = "mount")]
 struct FailFirstSend<'a, M: Mailbox> {
     inner: &'a mut M,
     armed: bool,
 }
 
+#[cfg(feature = "mount")]
 impl<'a, M: Mailbox> FailFirstSend<'a, M> {
     fn new(inner: &'a mut M) -> Self {
         FailFirstSend { inner, armed: true }
     }
 }
 
+#[cfg(feature = "mount")]
 impl<M: Mailbox> Mailbox for FailFirstSend<'_, M> {
     fn send(&mut self, envelope: MailboxEnvelope) -> Result<SendReport, MailboxError> {
         if self.armed {
@@ -109,6 +142,7 @@ impl<M: Mailbox> Mailbox for FailFirstSend<'_, M> {
 /// the authored snapshot durable on A, and the retry announces the
 /// same snapshot — convergence needs no re-authoring (`docs/epochs.md`,
 /// local write).
+#[cfg(feature = "mount")]
 #[test]
 fn daemon_write_publication_and_retry_converges_across_members() {
     // Member A: the rig's recipient engine composed as a daemon, with
@@ -244,6 +278,7 @@ fn daemon_write_publication_and_retry_converges_across_members() {
 /// rather than as a stored string. (The mirror control is the
 /// preceding fetch test: the same file is not servable there until
 /// demanded.)
+#[cfg(feature = "mount")]
 #[test]
 fn vault_role_fetches_without_explicit_demand() {
     use wyrd_core::role::{self, Role, RoleState, Transition};
@@ -340,6 +375,8 @@ fn vault_role_fetches_without_explicit_demand() {
 /// (capabilities past the admission epoch). Returns the drain
 /// report: callers draining a fresh relay see the whole backlog
 /// land, not just the capability.
+/// Mount-coupled with the publication tests below.
+#[cfg(feature = "mount")]
 fn install_capability(
     engine: &mut Engine,
     relay: &mut Relay,
@@ -392,6 +429,7 @@ fn install_capability(
 /// needs both bodies — the carry's parent must be observed — while
 /// the pre-transition snapshot alone could never serve past the
 /// epoch advance, so serving afterwards proves the carry converged.
+#[cfg(feature = "mount")]
 #[test]
 fn carry_publication_converges_across_members() {
     let mut rig = Rig::new();

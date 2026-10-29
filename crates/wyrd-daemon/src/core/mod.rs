@@ -7,21 +7,21 @@
 
 #[cfg(test)]
 mod tests_backend;
-#[cfg(test)]
+#[cfg(all(test, feature = "mount"))]
 mod tests_coalescing;
 #[cfg(test)]
 mod tests_composition;
-#[cfg(test)]
+#[cfg(all(test, feature = "mount"))]
 mod tests_handles;
 #[cfg(test)]
 mod tests_harness;
-#[cfg(test)]
+#[cfg(all(test, feature = "mount"))]
 mod tests_mount;
 #[cfg(test)]
 mod tests_mount_free;
 #[cfg(test)]
 mod tests_policy;
-#[cfg(test)]
+#[cfg(all(test, feature = "mount"))]
 mod tests_publish;
 #[cfg(test)]
 mod tests_run_loop;

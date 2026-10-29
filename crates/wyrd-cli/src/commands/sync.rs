@@ -22,7 +22,7 @@ use wyrd_core::mutation::WriteStats;
 use wyrd_core::status::{observe, SyncStatus};
 use wyrd_core::view::NamespaceView;
 use wyrd_daemon::core::RuntimeMaterialization;
-use wyrd_daemon::fuse::DriveView;
+use wyrd_daemon::DriveView;
 use wyrd_daemon::{
     install_role_dir, install_serving, LiveConfig, LiveError, LiveNode, SyncReport, WyrdNode,
 };

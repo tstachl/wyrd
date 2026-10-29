@@ -318,7 +318,11 @@ mod policy_contracts;
 mod removal_contracts;
 #[cfg(test)]
 mod serving_contracts;
-#[cfg(test)]
+/// The embedded-versus-adapter conformance suite runs the FUSE
+/// adapter side through `FuseBackend`, so it is behind the `mount`
+/// feature with the rest of the mount-coupled tests: absent by
+/// construction on a mount-free build, never silently skipped.
+#[cfg(all(test, feature = "mount"))]
 mod shared_drive_semantics;
 #[cfg(test)]
 mod support;

@@ -2,15 +2,17 @@
 //! descendants, snapshot-stable descriptors, and the open/read/head
 //! lifecycle under concurrency and head advancement.
 
+#[cfg(feature = "mount")]
 use wyrd_daemon::fuse::FuseBackend;
-use wyrd_format::{Entry, MemoryObjectStore, ObjectKind, ObjectStore, TransitionId, Tree};
+#[cfg(feature = "mount")]
+use wyrd_format::TransitionId;
+use wyrd_format::{Entry, MemoryObjectStore, ObjectKind, ObjectStore, Tree};
 use wyrd_fuse::{DriveView, Kind, Node, ViewError};
 use wyrd_sync::durable::AuthorizeSnapshot;
 
-use crate::support::{
-    device, drive, fixture_heads, mount_heads, signed_head, signed_snapshot, Loaded,
-    RemoteOnlyMaterialization,
-};
+#[cfg(feature = "mount")]
+use crate::support::{device, drive, mount_heads, signed_snapshot, Loaded};
+use crate::support::{fixture_heads, signed_head, RemoteOnlyMaterialization};
 
 /// A changed descendant never manufactures a directory path
 /// conflict: heads that both resolve `d` to a directory merge it
@@ -77,6 +79,15 @@ fn changed_descendants_never_create_directory_path_conflicts() {
 /// a head advance re-points the path at different bytes, and the
 /// descriptor keeps serving the bytes it opened with (daemon FUSE
 /// backend).
+///
+/// Mount-gated by necessity, not by topic: the test drives
+/// `FuseBackend`, whose signatures name `fuser::Errno`, so it cannot
+/// compile without the `fuser` crate. The `08` issue lists it as
+/// must-run gate-off; that tension is deliberate and recorded here
+/// and in the PR cover note. The view-level half of the same property
+/// — descriptors serving open-time captures — runs gate-off in
+/// `changed_descendants…` and `forged_snapshots…` above.
+#[cfg(feature = "mount")]
 #[test]
 fn open_fds_remain_stable_across_head_advancement() {
     let mut loaded = Loaded::new("stable.txt", b"version one");
@@ -214,6 +225,7 @@ fn forged_snapshots_are_rejected_before_fuse_head_installation() {
 /// that makes it so (projection before handle tables, never the
 /// reverse) is structural — this test pins the outcome, not the
 /// order.
+#[cfg(feature = "mount")]
 #[test]
 fn concurrent_opens_reads_and_publications_never_deadlock_or_tear() {
     use std::sync::Arc;
@@ -443,6 +455,7 @@ fn concurrent_opens_reads_and_publications_never_deadlock_or_tear() {
 /// is the generation stamp, not the pinned entries themselves —
 /// entry contents stay pinned by the daemon's in-crate
 /// directory-consistency tests.
+#[cfg(feature = "mount")]
 #[test]
 fn open_directories_pin_their_enumeration_generation() {
     let mut store = MemoryObjectStore::default();
@@ -512,6 +525,7 @@ fn open_directories_pin_their_enumeration_generation() {
 /// retire-by-path path inside `resolve_inode` is not exercised here
 /// (it is pinned in-crate); the inode-cache half of the lifecycle
 /// stays open until a cross-crate ino seam exists.
+#[cfg(feature = "mount")]
 #[test]
 fn disappeared_then_recreated_paths_serve_the_new_bytes() {
     let mut store = MemoryObjectStore::default();

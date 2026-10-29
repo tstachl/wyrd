@@ -4,6 +4,7 @@
 pub(crate) mod device;
 pub(crate) mod export;
 pub(crate) mod member;
+#[cfg(feature = "mount")]
 pub(crate) mod mount;
 pub(crate) mod policy;
 pub(crate) mod snapshot;

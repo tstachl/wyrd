@@ -1,14 +1,21 @@
+#[cfg(feature = "mount")]
 use super::*;
 
+#[cfg(feature = "mount")]
 use wyrd_fuse::DriveView;
 use wyrd_sync::{runtime::Engine, transport::mailbox::Mailbox};
 
 use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(feature = "mount")]
 use std::sync::Arc;
+#[cfg(feature = "mount")]
 use std::time::Duration;
 
-use wyrd_format::{DeviceId, DriveId, ObjectStore};
+#[cfg(feature = "mount")]
+use wyrd_format::ObjectStore;
+use wyrd_format::{DeviceId, DriveId};
 
+#[cfg(feature = "mount")]
 use wyrd_sync::bulk::MemoryBulkSource;
 use wyrd_sync::keys::{DeviceEncryptionSecret, DeviceIdentitySecret};
 use wyrd_sync::transport::mailbox::{Delivery, DeliveryId, Disposition, MailboxEnvelope};
@@ -93,6 +100,7 @@ pub(super) fn scratch_drive() -> (Engine, std::path::PathBuf, DeviceIdentitySecr
 /// Spawn the live loop on its own thread and return the stop flag
 /// and join handle. The backend half stays on the test thread, so a
 /// blocking mutation submit is completed by the loop concurrently.
+#[cfg(feature = "mount")]
 pub(super) fn spawn_live_loop<S>(
     live: LiveNode<DriveView<S, RuntimeMaterialization>>,
 ) -> (
@@ -134,6 +142,8 @@ where
 /// Compose a live loop plus its FUSE adapter from the node's parts:
 /// tests take the composer role `main.rs` plays in production — the
 /// backend is built from the live parts, never handed out by the node.
+/// Behind the `mount` feature with the backend it builds.
+#[cfg(feature = "mount")]
 pub(super) fn live_backend<S: ObjectStore + Send + Sync + 'static>(
     daemon: WyrdNode<DriveView<S, RuntimeMaterialization>>,
 ) -> (
@@ -151,6 +161,8 @@ where
 /// loop config, so boundary tests take the short wait here (their
 /// point is the bounded failure, not the full 30s production
 /// budget).
+/// Behind the `mount` feature with the backend it builds.
+#[cfg(feature = "mount")]
 pub(super) fn live_backend_with_mutation_wait<S: ObjectStore + Send + Sync + 'static>(
     daemon: WyrdNode<DriveView<S, RuntimeMaterialization>>,
     max_mutation_wait: Duration,
@@ -180,8 +192,10 @@ where
 /// intake stays empty: the loop's publish step absorbs the failure
 /// (remote delivery stalls, the local pass succeeds) instead of
 /// failing the mount — the no-relay / dead-relay posture.
+#[cfg(feature = "mount")]
 pub(super) struct SendFailingMailbox;
 
+#[cfg(feature = "mount")]
 impl Mailbox for SendFailingMailbox {
     fn send(
         &mut self,
@@ -211,8 +225,10 @@ impl Mailbox for SendFailingMailbox {
 /// A mailbox whose receive panics: the loop-thread panic path. Only
 /// `recv` panics — intake is where the loop first touches the
 /// mailbox — so the panic lands inside the supervised body.
+#[cfg(feature = "mount")]
 pub(super) struct PanicMailbox;
 
+#[cfg(feature = "mount")]
 impl Mailbox for PanicMailbox {
     fn send(
         &mut self,
@@ -278,11 +294,13 @@ impl Mailbox for SettlementFailingMailbox {
 /// A queue-backed mailbox fake: `send` enqueues, `recv` offers the
 /// front without consuming, `Ack` removes, `Retry` requeues at the
 /// back. Unknown ids are an error, matching the live adapter.
+#[cfg(feature = "mount")]
 pub(super) struct QueueMailbox {
     pub(super) queue: std::collections::VecDeque<(DeliveryId, MailboxEnvelope)>,
     pub(super) next: u64,
 }
 
+#[cfg(feature = "mount")]
 impl QueueMailbox {
     pub(super) fn new() -> Self {
         QueueMailbox {
@@ -298,6 +316,7 @@ impl QueueMailbox {
     }
 }
 
+#[cfg(feature = "mount")]
 impl Mailbox for QueueMailbox {
     fn send(
         &mut self,

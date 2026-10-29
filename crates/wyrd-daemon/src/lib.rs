@@ -8,11 +8,13 @@
 //! SAF/DocumentsProvider, iOS file provider) cannot use FUSE, so the
 //! platform surface is a pluggable backend over the same view — the
 //! same five operations, platform errors instead of POSIX ones. The
-//! FUSE adapter ([`fuse`]) is the first such backend, not a property
+//! FUSE adapter (the `fuse` module, behind the default-on `mount`
+//! feature) is the first such backend, not a property
 //! of the node. This crate's [`core`] module holds the host-side
 //! composition tests; [`lifecycle`] owns supervision.
 
 pub mod core;
+#[cfg(feature = "mount")]
 pub mod fuse;
 pub mod lifecycle;
 pub mod vault;
@@ -21,9 +23,14 @@ pub use core::{
     FailureClass, LiveConfig, LiveError, LiveNode, LiveParts, LiveSummary, NodeError,
     PendingObligations, ResourceBudgets, RuntimeMaterialization, SyncReport, WyrdNode,
 };
+// The composed view type, re-exported at the crate root so hosts build
+// their node over the same view the backend serves without depending
+// on the view crate directly — and without needing the `mount`
+// feature: the view exists whether or not any backend is compiled in.
 pub use lifecycle::{LoopError, LoopReturn, Supervisor, Wake, WakeSignal};
 pub use vault::{
     install_role_dir, install_serving, run_vault, shutdown_transport, ServeSurface,
     TransportDeadlines, TransportShutdown, VaultEvent, VaultLoopEnd, VaultObserver, VaultOutcome,
     VaultRun,
 };
+pub use wyrd_fuse::DriveView;

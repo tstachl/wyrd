@@ -1,4 +1,5 @@
 //! Conflicted drives, grafting, and owner-proof contracts.
+#[cfg(feature = "mount")]
 use super::harness::serving_backend;
 use crate::support::{
     device, drive, scratch_dir, seal_flat_drive, sealed_envelope, sign_snapshot, sign_transition,
@@ -140,6 +141,7 @@ fn conflicted_drive() -> (
 /// mutation fails `EIO` and authors no snapshot (`docs/write-path.md`,
 /// Conflicted drives). Two independent root snapshots at the same
 /// epoch and membership produce the conflict.
+#[cfg(feature = "mount")]
 #[test]
 fn conflicted_drive_rejects_mounted_writes() {
     use std::sync::atomic::{AtomicBool, Ordering};

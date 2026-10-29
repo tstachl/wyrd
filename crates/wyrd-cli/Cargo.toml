@@ -13,13 +13,20 @@ path = "src/main.rs"
 wyrd-format.workspace = true
 wyrd-sync.workspace = true
 wyrd-core.workspace = true
+# The `mount` feature below re-enables the daemon's mount explicitly;
+# the workspace dependency carries no defaults (see the root manifest).
 wyrd-daemon.workspace = true
 # Archive identity for `wyrd update`: blake3 names the artifact in
 # reports and the transaction log. The digest is an identity, never
 # trust — a locally supplied archive is verified structurally.
 blake3.workspace = true
 clap.workspace = true
-fuser = "0.18"
+# The live mount needs the FUSE userspace library, which needs system
+# libfuse at build time. It is a default-on feature for the same
+# reason as in `wyrd-daemon`: a machine without libfuse still builds
+# and runs every other subcommand. `pub mod mount` and the `Mount`
+# subcommand below are gated on the same feature.
+fuser = { version = "0.18", optional = true }
 getrandom.workspace = true
 hex.workspace = true
 libc.workspace = true
@@ -50,6 +57,14 @@ tokio.workspace = true
 # The mount-path tests name the composed view type explicitly; the
 # binary itself only ever touches it through the daemon's surface.
 wyrd-fuse.workspace = true
+
+[features]
+default = ["mount"]
+# The live FUSE mount: the `Mount` subcommand, its session setup, and
+# the daemon's FUSE backend. Everything else — every other subcommand
+# and the whole test suite around them — builds and runs without it,
+# which is what makes the workspace buildable with no system libfuse.
+mount = ["dep:fuser", "wyrd-daemon/mount"]
 
 [lints]
 workspace = true

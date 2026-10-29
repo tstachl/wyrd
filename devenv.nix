@@ -41,7 +41,18 @@ in
   # Revisit if/when we target FUSE 3 on Linux.
 
   git-hooks.hooks = {
-    clippy.enable = true;
+    # Mirrors CI (`workflow.yml`): workspace-wide, all targets (unit
+    # tests included — bare `cargo clippy` never compiles them), with
+    # warnings denied, in both feature configurations. A mount-gated
+    # test import once shipped green locally and failed CI exactly
+    # here, because the default hook checked neither test targets nor
+    # the `--no-default-features` build.
+    clippy = {
+      enable = true;
+      entry = "cargo clippy --workspace --all-targets -- -D warnings && cargo clippy --workspace --all-targets --no-default-features -- -D warnings";
+      files = "\\.rs$";
+      pass_filenames = false;
+    };
     rustfmt.enable = true;
     nixpkgs-fmt.enable = true;
     commitizen.enable = true;

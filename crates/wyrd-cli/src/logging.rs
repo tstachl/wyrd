@@ -241,6 +241,9 @@ impl tracing::field::Visit for MessageProbe {
 /// (tests sharing one test binary) reuses the installed subscriber and
 /// says so on the existing stream instead of claiming a fresh install;
 /// it still truncates and returns the caller's own log path.
+/// Mount-scoped with the diagnostics tests that pin it: without the
+/// mount command no non-test caller remains, but the tests still run.
+#[cfg(any(test, feature = "mount"))]
 pub(crate) fn init_mount_diagnostics(drive_dir: &Path, verbose: bool) -> Result<PathBuf, CliError> {
     let log_path = drive_dir.join("mount.log");
     let file = fs::File::create(&log_path).map_err(|source| CliError::Io {
