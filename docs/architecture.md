@@ -154,9 +154,17 @@ rather than a sentence a reader must trust:
    (BIP-340), never Nostr event formats. Only live-lineage eligible heads
    advance the live view; superseded, stranded, and voided forks are
    retained history (`epochs.md`).
-4. **Content IDs never reach vaults.** Vaults store ciphertext by StorageId
+4. **Content IDs never reach vaults as vault disclosure.** Vaults store ciphertext by StorageId
    and opaque encrypted manifests; they cannot decrypt contents and cannot
    determine plaintext equality from object representation (fresh nonces).
+   A vault surface — any surface readable by the keyless-replica trust position —
+   never carries ContentIds, snapshot bodies, or other member observations
+   (`docs/trust.md` disclosure matrix, keyless-replica column). A member-hosted
+   composition holds that metadata as a member, not as vault disclosure; a public
+   release drive discloses it by a deliberate, per-drive, irreversible waiver
+   (release-read v1, `docs/trust.md` public release-drive column). The
+   keyless-replica guarantee stands: a future keyless replica establishes the
+   H5/H6 boundary separately rather than inheriting any vault entry.
 5. **Every ciphertext is AEAD-bound to its version, kind, and ContentId** —
    and decryption success alone is never sufficient; the plaintext must hash
    to the expected ContentId too.

@@ -96,14 +96,18 @@ filesystem-oriented**:
 - answer: "can I prove this `StorageId` exists in my local store?" →
   stream its ciphertext;
 - never: "can I read this filesystem path?";
-- serving never exposes keys or plaintext, and never serves anything
+- serving never exposes keys, and never serves anything
   outside the content-addressed object space. An arbitrary file in
   the drive directory is not servable. The one plaintext exception is
   the signed snapshot body: authors serve it by `body_root` so peers
   can verify announcements against live content, and its root travels
   inside the same sealed announcements. It carries paths and
   `ContentId`s but no keys, and like everything else served it is
-  content-verified, never rewritten.
+  content-verified, never rewritten. This exception is scoped, not
+  general: it is the member-hosted and public release-drive disclosure
+  that `docs/architecture.md` invariant 4 names and the `docs/trust.md`
+  disclosure matrix scopes per trust position — a keyless-replica
+  position never receives it.
 
 The iroh-blobs serving `Router` lives in `wyrd-sync`'s transport layer
 (`serving::ServingEndpoint`), beside its client half
