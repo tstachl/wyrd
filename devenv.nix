@@ -49,7 +49,11 @@ in
     # the `--no-default-features` build.
     clippy = {
       enable = true;
-      entry = "cargo clippy --workspace --all-targets -- -D warnings && cargo clippy --workspace --all-targets --no-default-features -- -D warnings";
+      # `language: system` hooks exec the entry directly with no
+      # shell, so the two invocations need an explicit `bash -c`
+      # wrapper — a bare `&&` would be passed to cargo as literal
+      # argv (which is exactly how this read the first time it ran).
+      entry = "bash -c \"cargo clippy --workspace --all-targets -- -D warnings && cargo clippy --workspace --all-targets --no-default-features -- -D warnings\"";
       files = "\\.rs$";
       pass_filenames = false;
     };

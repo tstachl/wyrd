@@ -368,21 +368,39 @@ where
     /// over pending recovery would invite exactly the orphan-write
     /// the queue exists to prevent — restore the bytes (or run a
     /// member command after they arrive) and compose again.
+    ///
+    /// Composition-boundary freshness (issue `32`): the view opened
+    /// empty, and `parts_mut` may have moved the engine since, so the
+    /// baseline is refreshed unconditionally — heads and
+    /// materialization — after the carry drain and before the
+    /// revision is recorded. The loop's revision gate would otherwise
+    /// treat an unrefreshed baseline as current and never publish the
+    /// engine's heads. A refresh failure fails composition closed
+    /// with the underlying error: with no trustworthy projection
+    /// there is nothing safe to serve, and an empty view reads as
+    /// "this drive has no content".
     pub fn into_live(
         mut self,
         open_timeout: Duration,
         config: &LiveConfig,
     ) -> Result<(LiveNode<V>, LiveParts<V>), NodeError> {
-        let recovery = {
+        {
             let store = self
                 .view
                 .store_read()
                 .map_err(|error| wyrd_sync::runtime::EngineError::ObjectStore(error.to_string()))?;
-            self.engine.carry_pending(&*store)?
-        };
-        if recovery.queue_changed() {
-            self.refresh_live_heads()?;
+            self.engine.carry_pending(&*store)?;
         }
+        // The composition boundary is where the cache is made
+        // consistent: refresh both projections unconditionally, then
+        // record the baseline revision after the refresh. The
+        // conditional above is subsumed — a carry that changed queue
+        // state is visible to this refresh exactly like any other
+        // engine head — and the ordering (refresh, then read the
+        // revision) means an engine mutation between the two reads as
+        // a mismatch the loop repairs, never as a fresh baseline.
+        self.refresh_materialization()?;
+        self.refresh_live_heads()?;
         let revision = self.engine.current();
         let store = self.view.store_handle();
         LiveNode::split(
