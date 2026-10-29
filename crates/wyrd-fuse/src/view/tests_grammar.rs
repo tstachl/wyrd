@@ -320,3 +320,75 @@ fn stored_names_with_at_are_addressed_by_their_own_spelling() {
     outer_ordered.sort_by(|x, w| x.snapshot.as_bytes().cmp(w.snapshot.as_bytes()));
     assert_eq!(view.lookup("name@2").unwrap(), outer_ordered[1].node);
 }
+
+/// The floor DG-3 promises, as invariance rather than a snapshot: on a
+/// two-head drive, every read operation a v0.4 surface can perform leaves
+/// both versions addressable with their own content, the unversioned name
+/// still conflicted, and `readdir` still clean of qualified names. This is
+/// the executable form of "while unresolved": no read reduces what is
+/// addressable. The write-attempt half lives where writes live —
+/// `conflicted_file_reads_fail_with_eio` (daemon adapter) and
+/// `conflicted_drive_rejects_mounted_writes` (contracts) — and export
+/// reads named snapshots without authoring (recover tests), so this test
+/// pins the view half of the invariance without duplicating theirs.
+#[test]
+fn an_unresolved_conflict_stays_fully_addressable() {
+    let mut store = MemoryObjectStore::default();
+    let a = chunk(&mut store, b"aaa");
+    let b = chunk(&mut store, b"bbb");
+    let root_a = tree_of(
+        &mut store,
+        vec![Entry::file("f.txt", 3, false, vec![a]).unwrap()],
+    );
+    let root_b = tree_of(
+        &mut store,
+        vec![Entry::file("f.txt", 3, false, vec![b]).unwrap()],
+    );
+    let view = DriveView::new(
+        store,
+        FakeMaterialization::empty(),
+        heads(vec![snapshot(root_a), snapshot(root_b)]),
+    );
+
+    // The whole floor, checked after every operation below.
+    let assert_floor = |view: &DriveView<MemoryObjectStore, FakeMaterialization>| {
+        let first = view.open(&view.lookup("f.txt@1").unwrap()).unwrap();
+        let second = view.open(&view.lookup("f.txt@2").unwrap()).unwrap();
+        let contents = [
+            view.read(&first, 0, 8).unwrap(),
+            view.read(&second, 0, 8).unwrap(),
+        ];
+        assert!(contents.contains(&b"aaa".to_vec()));
+        assert!(contents.contains(&b"bbb".to_vec()));
+        assert_ne!(contents[0], contents[1]);
+        let node = view.lookup("f.txt").unwrap();
+        assert_eq!(view.open(&node), Err(ViewError::Conflict));
+        assert_eq!(view.stat("f.txt").unwrap().kind, Kind::Conflict);
+        let root = view.lookup("").unwrap();
+        assert!(
+            view.readdir(&root)
+                .unwrap()
+                .iter()
+                .all(|e| !e.name.contains('@')),
+            "readdir lists no qualified name"
+        );
+    };
+
+    assert_floor(&view);
+    // Open the unversioned name: conflict, and nothing else changes.
+    assert_eq!(
+        view.open(&view.lookup("f.txt").unwrap()),
+        Err(ViewError::Conflict)
+    );
+    assert_floor(&view);
+    // Stat the conflicted path.
+    assert_eq!(view.stat("f.txt").unwrap().kind, Kind::Conflict);
+    assert_floor(&view);
+    // Read both versions.
+    let first = view.open(&view.lookup("f.txt@1").unwrap()).unwrap();
+    assert_eq!(view.read(&first, 0, 8).unwrap(), b"aaa");
+    assert_floor(&view);
+    let second = view.open(&view.lookup("f.txt@2").unwrap()).unwrap();
+    assert_eq!(view.read(&second, 0, 8).unwrap(), b"bbb");
+    assert_floor(&view);
+}

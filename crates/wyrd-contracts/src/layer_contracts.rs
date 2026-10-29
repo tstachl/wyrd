@@ -1173,6 +1173,94 @@ fn headless_runs_go_through_the_daemon_composer() {
     );
 }
 
+/// Contract (DG-3): no v0.4 surface authors a conflict resolution.
+/// Scans the surface crates' production sources for the resolution
+/// primitive (`MergeSelection`, `Engine::merge_heads`); the engine
+/// library owns the primitive, the CLI's `snapshot` command is the
+/// single exempted owner-mediated caller (OD-03-C), and everything
+/// else — daemon backends, host, FUSE adapter, every other CLI
+/// command — must never name it. The behavioral half is the
+/// `an_unresolved_conflict_stays_fully_addressable` view test plus
+/// the mounted-write suites; this test is the source check that
+/// makes the deferral a gate rather than a note.
+#[test]
+fn no_surface_authors_a_conflict_resolution() {
+    let root = workspace_root();
+    let mut refs: Vec<(String, String)> = Vec::new();
+    for member in [
+        "crates/wyrd-cli/src",
+        "crates/wyrd-daemon/src",
+        "crates/wyrd-app/src",
+        "crates/wyrd-fuse/src",
+    ] {
+        let (files, errors) = collect_rs_files(&root.join(member), &root);
+        assert!(
+            errors.is_empty(),
+            "{member} source walk errors:\n- {}",
+            errors.join("\n- ")
+        );
+        refs.extend(files);
+    }
+    assert!(!refs.is_empty(), "the surface crates hold sources to check");
+    // OD-03-C's exemption, pinned to exactly one file: the CLI's
+    // snapshot command is the owner-mediated path v0.4 keeps. The
+    // check below runs on everything else; this assertion keeps the
+    // exemption from silently widening (a second exempted file) or
+    // silently lapsing (the primitive renamed out from under it).
+    let (exempt, rest): (Vec<_>, Vec<_>) = refs
+        .into_iter()
+        .partition(|(p, _)| p.ends_with("commands/snapshot.rs"));
+    assert_eq!(
+        exempt.len(),
+        1,
+        "exactly one exempted surface file: {exempt:?}"
+    );
+    let exempt_code = code_text(&exempt[0].1);
+    assert!(
+        exempt_code.contains("MergeSelection") && exempt_code.contains("merge_heads"),
+        "the exemption is live: snapshot.rs still authors through the primitive"
+    );
+    let borrowed: Vec<(&str, &str)> = rest.iter().map(|(p, t)| (p.as_str(), t.as_str())).collect();
+    let violations = check_no_surface_authors_resolutions(&borrowed);
+    assert!(
+        violations.is_empty(),
+        "resolution-authoring violations:\n- {}",
+        violations.join("\n- ")
+    );
+}
+
+/// Check that no v0.4 surface authors a conflict resolution: the
+/// resolution primitive (`MergeSelection`, `Engine::merge_heads`) is
+/// library vocabulary, and no surface module may name it. The one
+/// exemption is the CLI's `snapshot` command (OD-03-C: an
+/// owner-mediated operator action, not a presentation surface), which
+/// the caller filters out before checking — so a second surface
+/// reaching the primitive fails loudly rather than being read once.
+/// Result vocabulary is untouched: only constructing a selection or
+/// calling the merge entry point counts, not naming a snapshot id.
+/// Pure over the file set so the negative test below can prove the
+/// checker bites without touching the filesystem.
+fn check_no_surface_authors_resolutions(files: &[(&str, &str)]) -> Vec<String> {
+    const FORBIDDEN: &[&str] = &["MergeSelection", "merge_heads"];
+    let mut violations = Vec::new();
+    for (path, text) in files {
+        let code = code_text(text);
+        for (index, line) in code.lines().enumerate() {
+            for marker in FORBIDDEN {
+                if line.contains(marker) {
+                    violations.push(format!(
+                        "{path}:{} names the resolution primitive (`{marker}`): surfaces present \
+                         conflicts, they never author them (OD-03-C exempts only the CLI's \
+                         snapshot command)",
+                        index + 1
+                    ));
+                }
+            }
+        }
+    }
+    violations
+}
+
 /// Check one consumer member's transitive production closure against
 /// the embedder boundary: no process-host or suite crate reachable
 /// (`wyrd-daemon` carries `fuser`, `wyrd-cli` carries `clap`/`libc`,
@@ -2591,6 +2679,66 @@ mod policy_tests {
         assert!(
             check_owner_runs_through_daemon(&files).is_empty(),
             "outcome vocabulary is not composition"
+        );
+    }
+
+    #[test]
+    fn resolution_check_rejects_a_selection_construction() {
+        let files = [(
+            "crates/wyrd-daemon/src/fuse/backend.rs",
+            "let selection = MergeSelection::Take(id);",
+        )];
+        let violations = check_no_surface_authors_resolutions(&files);
+        assert_eq!(violations.len(), 1, "selection use: {violations:?}");
+        assert!(
+            violations[0].contains("MergeSelection"),
+            "names the marker: {violations:?}"
+        );
+    }
+
+    #[test]
+    fn resolution_check_rejects_a_merge_heads_call() {
+        let files = [(
+            "crates/wyrd-app/src/run.rs",
+            "let snapshot = engine.merge_heads(map)?;",
+        )];
+        let violations = check_no_surface_authors_resolutions(&files);
+        assert_eq!(violations.len(), 1, "merge call: {violations:?}");
+        assert!(
+            violations[0].contains("merge_heads"),
+            "names the marker: {violations:?}"
+        );
+    }
+
+    #[test]
+    fn resolution_check_ignores_comments_and_strings() {
+        let files = [
+            (
+                "crates/wyrd-fuse/src/view/drive.rs",
+                "// MergeSelection lives in the engine, not here",
+            ),
+            (
+                "crates/wyrd-cli/src/commands/mount.rs",
+                "let note = \"merge_heads resolves both parents\";",
+            ),
+        ];
+        assert!(
+            check_no_surface_authors_resolutions(&files).is_empty(),
+            "comments and strings are not authoring"
+        );
+    }
+
+    #[test]
+    fn resolution_check_passes_snapshot_id_vocabulary() {
+        // Naming a snapshot is reading history, not authoring a
+        // resolution: ids and plans stay free.
+        let files = [(
+            "crates/wyrd-cli/src/commands/snapshot.rs",
+            "fn resolve_plan(plan: &MergePlan, id: SnapshotId) {",
+        )];
+        assert!(
+            check_no_surface_authors_resolutions(&files).is_empty(),
+            "snapshot vocabulary is not authoring"
         );
     }
 }
