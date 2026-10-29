@@ -321,8 +321,8 @@ fn stored_names_with_at_are_addressed_by_their_own_spelling() {
     assert_eq!(view.lookup("name@2").unwrap(), outer_ordered[1].node);
 }
 
-/// The floor DG-3 promises, as invariance rather than a snapshot: on a
-/// two-head drive, every read operation a v0.4 surface can perform leaves
+/// The conflict floor (normative in `docs/object-model.md`), as invariance rather than
+/// a snapshot: on a two-head drive, every read operation a v0.4 surface can perform leaves
 /// both versions addressable with their own content, the unversioned name
 /// still conflicted, and `readdir` still clean of qualified names. This is
 /// the executable form of "while unresolved": no read reduces what is

@@ -1173,11 +1173,12 @@ fn headless_runs_go_through_the_daemon_composer() {
     );
 }
 
-/// Contract (DG-3): no v0.4 surface authors a conflict resolution.
+/// Contract (conflict floor): no v0.4 surface authors a conflict resolution.
 /// Scans the surface crates' production sources for the resolution
 /// primitive (`MergeSelection`, `Engine::merge_heads`); the engine
 /// library owns the primitive, the CLI's `snapshot` command is the
-/// single exempted owner-mediated caller (OD-03-C), and everything
+/// single exempted owner-mediated caller (the CLI exemption, named in the same
+/// invariant), and everything
 /// else — daemon backends, host, FUSE adapter, every other CLI
 /// command — must never name it. The behavioral half is the
 /// `an_unresolved_conflict_stays_fully_addressable` view test plus
@@ -1202,7 +1203,7 @@ fn no_surface_authors_a_conflict_resolution() {
         refs.extend(files);
     }
     assert!(!refs.is_empty(), "the surface crates hold sources to check");
-    // OD-03-C's exemption, pinned to exactly one file: the CLI's
+    // The CLI exemption, pinned to exactly one file: the CLI's
     // snapshot command is the owner-mediated path v0.4 keeps. The
     // check below runs on everything else; this assertion keeps the
     // exemption from silently widening (a second exempted file) or
@@ -1235,7 +1236,7 @@ fn no_surface_authors_a_conflict_resolution() {
 /// Check that no v0.4 surface authors a conflict resolution: the
 /// resolution primitive (`MergeSelection`, `Engine::merge_heads`) is
 /// library vocabulary, and no surface module may name it. The one
-/// exemption is the CLI's `snapshot` command (OD-03-C: an
+/// exemption is the CLI's `snapshot` command (the CLI exemption: an
 /// owner-mediated operator action, not a presentation surface), which
 /// the caller filters out before checking — so a second surface
 /// reaching the primitive fails loudly rather than being read once.
@@ -1253,7 +1254,7 @@ fn check_no_surface_authors_resolutions(files: &[(&str, &str)]) -> Vec<String> {
                 if line.contains(marker) {
                     violations.push(format!(
                         "{path}:{} names the resolution primitive (`{marker}`): surfaces present \
-                         conflicts, they never author them (OD-03-C exempts only the CLI's \
+                         conflicts, they never author them (the CLI exemption covers only the CLI's \
                          snapshot command)",
                         index + 1
                     ));
