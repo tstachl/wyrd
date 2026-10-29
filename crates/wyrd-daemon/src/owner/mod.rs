@@ -22,7 +22,14 @@
 //!   the loop's observations, and a read leaves durable state
 //!   byte-identical.
 
+pub mod auth;
+pub mod server;
+#[cfg(test)]
+mod tests_owner;
 pub mod wire;
+
+pub use server::{socket_path_for, OwnerHandles, OwnerServer};
+pub use server::{DEFAULT_MAX_READ_BYTES, MAX_FRAME_BYTES, OWNER_SOCKET_NAME, READ_DEMAND_TIMEOUT};
 
 pub use wire::{
     PathParams, RawRequest, WireAttr, WireConvergenceState, WireDirEntry, WireDrainReport,

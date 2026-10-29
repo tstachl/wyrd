@@ -868,7 +868,7 @@ pub struct WireObservation {
 /// is an explicit refusal echoing the name, not a parse failure the
 /// client cannot match to its request, and a future version adds
 /// operations without breaking this parse.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RawRequest {
     pub v: u32,
     pub id: u64,
@@ -879,7 +879,7 @@ pub struct RawRequest {
 
 /// Parameters for the path-addressed read operations (`lookup`,
 /// `stat`, `readdir`, `read`).
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PathParams {
     pub path: String,
 }
@@ -889,7 +889,7 @@ pub struct PathParams {
 /// refusals the server could parse (unknown version, unknown
 /// operation) so the client always matches the answer; an
 /// unparseable frame is the only answer without an id.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WireResponse {
     pub v: u32,
     pub id: u64,
@@ -899,7 +899,7 @@ pub struct WireResponse {
 /// Either a per-operation result or an explicit refusal. No silent
 /// success, no silent ignore: unsupported operations fail here with
 /// the name echoed in the message.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WireResult {
     #[serde(rename = "ok")]
     Ok(Box<WireOk>),
@@ -911,7 +911,7 @@ pub enum WireResult {
 /// generation and durable revision it was served from, so the
 /// consumer correlates answers with the freshness judgment instead
 /// of assuming recency.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WireOk {
     Lookup {
         node: WireNode,
@@ -948,7 +948,7 @@ pub enum WireOk {
 /// Transport-level failures (broken connection, unparseable frame)
 /// never produce one of these — a refusal is always a terminal
 /// answer to a parsed request.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WireError {
     pub code: WireErrorCode,
     pub message: String,
@@ -972,6 +972,8 @@ pub enum WireErrorCode {
     LostRepresentation,
     Store,
     TooLarge,
+    Timeout,
+    Saturated,
     Unobserved,
     Poisoned,
     Io,
