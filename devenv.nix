@@ -5,7 +5,8 @@ let
   unstable = import inputs.nixpkgs-unstable { system = pkgs.stdenv.system; };
 in
 {
-  languages.deno.enable = true;
+  languages.javascript.enable = true;
+  languages.javascript.bun.enable = true;
   languages.rust.enable = true;
   languages.rust.toolchainFile = ./rust-toolchain.toml;
 
@@ -84,7 +85,7 @@ in
     page-check = {
       enable = true;
       name = "page docs mapping";
-      entry = "deno run --allow-read page/check.ts";
+      entry = "bun run page/check.ts";
       files = "^(page/|docs/|README\\.md)";
       pass_filenames = false;
     };

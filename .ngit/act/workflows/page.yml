@@ -29,11 +29,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: denoland/setup-deno@v2
+      - uses: oven-sh/setup-bun@v2
         with:
-          deno-version: v2.x
-      - run: deno run --allow-read page/check.ts
-      - run: deno run -A npm:wrangler pages deploy page/ --project-name=wyrd-enesis-md
+          bun-version: latest
+      - run: bun run page/check.ts
+      - run: bunx --bun wrangler pages deploy page/ --project-name=wyrd-enesis-md
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

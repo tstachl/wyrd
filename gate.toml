@@ -55,7 +55,7 @@ milestones = [
 # their own copy), so the path is checkout-relative.
 [review]
 prompt = ".agents/prompts/branch-review-wyrd.md"
-model = "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free"
+model = "nvidia/nvidia/nemotron-3-ultra-550b-a55b"
 variant = "high"
 
 # Odin runner resource: the forced-command ssh path. The machine id comes

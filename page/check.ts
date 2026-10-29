@@ -7,8 +7,8 @@
 // slot before re-pinning. Copy rules (mustContain/forbids) catch the
 // present-tense-overclaim class of bug; they never rewrite copy.
 //
-// Verify:  deno run --allow-read page/check.ts
-// Re-pin:   deno run --allow-read --allow-write page/check.ts --update
+// Verify:  bun run page/check.ts
+// Re-pin:   bun run page/check.ts --update
 
 interface Back {
   file: string;
@@ -32,7 +32,7 @@ interface LockFile {
 }
 
 const root = decodeURIComponent(new URL("../", import.meta.url).pathname);
-const read = (rel: string): Promise<string> => Deno.readTextFile(root + rel);
+const read = (rel: string): Promise<string> => Bun.file(root + rel).text();
 
 // Extract a markdown section by exact heading line. Ends at the next
 // heading of equal or higher level, or end of file.
@@ -65,14 +65,14 @@ function slotBody(page: string, name: string): string | null {
 
 const map: MapFile = JSON.parse(await read("page/map.json"));
 const page = await read(map.page);
-const update = Deno.args.includes("--update");
+const update = Bun.argv.includes("--update");
 let lock: LockFile = { version: 1, hashes: {} };
 if (!update) {
   try {
     lock = JSON.parse(await read(map.lock));
   } catch {
     console.error(`missing ${map.lock}; run with --update to pin after review`);
-    Deno.exit(1);
+    process.exit(1);
   }
 }
 
@@ -133,7 +133,7 @@ for (const s of map.slots) {
           `drift under slot "${s.slot}": ${back.file} ${JSON.stringify(back.heading)} changed.`,
           ...quotedBody(body),
           ...quotedSection(text),
-          `copy rules mustContain ${JSON.stringify(s.mustContain)} forbids ${JSON.stringify(s.forbids)} — re-read the copy against the section above, then re-pin with: deno run --allow-read --allow-write page/check.ts --update`,
+          `copy rules mustContain ${JSON.stringify(s.mustContain)} forbids ${JSON.stringify(s.forbids)} — re-read the copy against the section above, then re-pin with: bun run --allow-write page/check.ts --update`,
         ].join("\n"),
       );
     }
@@ -141,12 +141,12 @@ for (const s of map.slots) {
 }
 
 if (update) {
-  await Deno.writeTextFile(root + map.lock, JSON.stringify(lock, null, 2) + "\n");
+  await Bun.write(root + map.lock, JSON.stringify(lock, null, 2) + "\n");
   console.log(`pinned ${Object.keys(lock.hashes).length} backing sections to ${map.lock}`);
-  Deno.exit(0);
+  process.exit(0);
 }
 if (failures.length > 0) {
   for (const f of failures) console.error(`page-check: ${f}`);
-  Deno.exit(1);
+  process.exit(1);
 }
 console.log(`page-check: ${map.slots.length} slots pinned, copy rules hold`);
