@@ -7,13 +7,10 @@ use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use wyrd_app::{
-    exit_code, finish_running, into_running, open_host, HostError, HostTransport, HostView,
-};
+use wyrd_app::{exit_code, open_host, ComposedHeadless, HostError, HostView};
 use wyrd_core::mutation::{MutationKind, MutationOutcome};
 use wyrd_core::node::WyrdNode;
-use wyrd_daemon::process::{SHUTDOWN_DEADLINE, TRANSPORT_SHUTDOWN_DEADLINE};
-use wyrd_daemon::{TransportDeadlines, VaultEvent};
+use wyrd_daemon::{run_composed_owner, VaultEvent};
 use wyrd_format::FsObjectStore;
 use wyrd_sync::bulk::MemoryBulkSource;
 use wyrd_sync::keys::DeviceIdentitySecret;
@@ -137,30 +134,23 @@ fn await_pending(queue: &wyrd_core::mutation::MutationQueue) {
     }
 }
 
-/// Compose a host ready to run: real drive, opened host, loopback
-/// serving bound, node split for live serving. Returns the drive dir
-/// (for reopen assertions), the running host, its submission queue,
-/// and the serving surface the run installs.
-fn compose(
+/// Compose a host ready to run through the daemon's shared owner
+/// implementation: real drive, opened host, loopback serving bound,
+/// node split for live serving. Returns the drive dir (for reopen
+/// assertions), the composed owner, and its submission queue.
+fn set_up(
     label: &str,
 ) -> (
     PathBuf,
-    wyrd_app::RunningHost,
+    ComposedHeadless,
     Arc<wyrd_core::mutation::MutationQueue>,
-    wyrd_daemon::ServingEndpoint,
-    String,
 ) {
     let dir = scratch(label);
     create_drive(dir.clone());
     let open = open_host(dir.clone(), PASS, identity()).expect("host opens");
-    let serving = open
-        .node()
-        .open_serving(&dir, true)
-        .expect("loopback serving binds");
-    let serving_id = hex::encode(serving.addr().id.as_bytes());
-    let running = into_running(open).expect("composition splits");
-    let queue = Arc::clone(&running.parts().mutations);
-    (dir, running, queue, serving, serving_id)
+    let composed = wyrd_app::compose(open, true).expect("composition splits");
+    let queue = Arc::clone(&composed.parts.mutations);
+    (dir, composed, queue)
 }
 
 /// Run a composed host to completion on the calling thread's terms:
@@ -168,30 +158,19 @@ fn compose(
 /// submits and trips the stop, then this joins it and returns the
 /// outcome for the exit-status fold.
 fn finish_with(
-    running: wyrd_app::RunningHost,
+    composed: ComposedHeadless,
     stop: &'static std::sync::atomic::AtomicBool,
-    serving: wyrd_daemon::ServingEndpoint,
-    serving_id: String,
 ) -> wyrd_daemon::VaultOutcome {
     let events = Arc::new(Mutex::new(Vec::new()));
     let sink = Arc::clone(&events);
-    finish_running(
-        running,
+    run_composed_owner(
+        composed,
         stop,
-        HostTransport {
-            mailbox: SilentMailbox,
-            bulk: Some(SilentBulk(MemoryBulkSource::default())),
-            serving,
-            serving_id,
-            deadlines: TransportDeadlines {
-                mailbox: SHUTDOWN_DEADLINE,
-                bulk: wyrd_sync::GRACEFUL_CLOSE_DEADLINE,
-                serving: TRANSPORT_SHUTDOWN_DEADLINE,
-            },
-            emit: Arc::new(move |event: VaultEvent| {
-                sink.lock().unwrap().push(format!("{event:?}"));
-            }),
-        },
+        SilentMailbox,
+        Some(SilentBulk(MemoryBulkSource::default())),
+        Arc::new(move |event: VaultEvent| {
+            sink.lock().unwrap().push(format!("{event:?}"));
+        }),
     )
     .expect("run completes")
 }
@@ -200,9 +179,9 @@ fn finish_with(
 /// the post-return drain executed it against the still-open queue.
 #[test]
 fn host_quit_preserves_a_dirty_handle() {
-    let (dir, running, queue, serving, serving_id) = compose("dirty-quit");
+    let (dir, composed, queue) = set_up("dirty-quit");
     let stop = stop_flag();
-    let run = std::thread::spawn(move || finish_with(running, stop, serving, serving_id));
+    let run = std::thread::spawn(move || finish_with(composed, stop));
     // Admit the write, prove it is pending (not yet executed), then
     // quit: whichever pass would have executed it, the drain must.
     let submitter = Arc::clone(&queue);
@@ -300,9 +279,9 @@ fn host_refusal_names_the_holding_process() {
 /// instead of blocking forever.
 #[test]
 fn host_closes_admission_only_after_its_last_submitter() {
-    let (_dir, running, queue, serving, serving_id) = compose("admission-order");
+    let (_dir, composed, queue) = set_up("admission-order");
     let stop = stop_flag();
-    let run = std::thread::spawn(move || finish_with(running, stop, serving, serving_id));
+    let run = std::thread::spawn(move || finish_with(composed, stop));
     // Admit before the stop: the drain must execute this, not the
     // admission close.
     let submitter = Arc::clone(&queue);

@@ -20,6 +20,7 @@
 //! announcement obligation, which a hand-wired barrier test cannot.
 
 use std::io;
+use std::path::PathBuf;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -27,15 +28,18 @@ use std::sync::{
 use std::time::{Duration, Instant};
 
 use wyrd_core::live::{
-    LiveConfig, LiveError, LiveNode, LiveSummary, PassHook, ServingBarrier, SyncReport,
+    LiveConfig, LiveError, LiveNode, LiveParts, LiveSummary, PassHook, QuotaCheckError,
+    ServingBarrier, SyncReport,
 };
+use wyrd_core::node::{NodeError, WyrdNode};
 use wyrd_core::view::{NamespaceView, RuntimeMaterialization};
-use wyrd_format::{DiscardRejectedRepresentation, ObjectStore};
-use wyrd_sync::runtime::RoutePublishing;
+use wyrd_format::{DiscardRejectedRepresentation, FsObjectStore, ObjectStore};
+use wyrd_sync::runtime::{Engine, EngineError, RoutePublishing};
 use wyrd_sync::serving::ServingEndpoint;
 use wyrd_sync::transport::mailbox::Mailbox;
 
 use crate::lifecycle::{LoopError, Supervisor};
+use crate::DriveView;
 
 /// What the install step reads from a bound serving surface: flush
 /// the mirror, the address announcements carry, and the barrier that
@@ -479,4 +483,139 @@ where
             })
         }
     }
+}
+
+/// The owner view every headless composer builds its node over: the
+/// same view the daemon builds its backends from, so the host serves
+/// what the backends would serve. Concrete (not generic) on purpose —
+/// every owner-mode entry point composes the same node, and the
+/// composition check that pins the host's vocabulary can name it.
+pub type OwnerView = DriveView<FsObjectStore, RuntimeMaterialization>;
+
+/// What headless owner composition can report. The engine arrives
+/// already opened (credentials live in the binaries, never here);
+/// everything downstream of the lock is this function's one copy.
+#[derive(Debug, thiserror::Error)]
+pub enum OwnerError {
+    /// The object store beside the drive failed to open.
+    #[error("object store failed: {0}")]
+    Store(String),
+    /// The durable engine half of composition failed.
+    #[error(transparent)]
+    Engine(#[from] EngineError),
+    /// Node composition over the opened store failed.
+    #[error(transparent)]
+    Node(#[from] NodeError),
+    /// A configured retention quota the store already exceeds.
+    #[error("retention quota refused at startup: {0}")]
+    Retention(#[from] QuotaCheckError),
+    /// Serving bind or the supervised run failed at the io boundary.
+    #[error("owner run failed: {0}")]
+    Io(#[from] io::Error),
+}
+
+/// A drive split for live serving with its surface bound: the loop,
+/// its backend parts, the drive the loop reads its materialization
+/// role from, and the installed serving endpoint with the ready-line
+/// id. The parts stay exposed (not dropped) so backends — and tests
+/// that submit through the live channel — can hold the queue while
+/// the run is in flight.
+pub struct ComposedHeadless {
+    /// The supervised live loop, serving not yet installed.
+    pub live: LiveNode<OwnerView>,
+    /// The backend parts: projection, wants, mutation queue.
+    pub parts: LiveParts<OwnerView>,
+    /// The drive directory the loop reads its materialization role
+    /// from.
+    pub drive_dir: PathBuf,
+    /// The bound serving endpoint, installed on the loop by the run.
+    pub serving: ServingEndpoint,
+    /// The serving id for the ready line, hex-encoded here so every
+    /// composer prints the same rendering.
+    pub serving_id: String,
+}
+
+/// Compose an opened drive for headless ownership: open the object
+/// store, refuse a quota the store already exceeds, compose the node
+/// over the daemon view with live heads refreshed, bind the serving
+/// surface (loopback for developer runs, real otherwise), and split
+/// for live serving. The ONLY headless composition path — `wyrd
+/// vault`, `wyrd-app`, and every future owner-mode entry point call
+/// this instead of assembling the steps ad hoc. Mailbox connection,
+/// bulk binding, and the emit sink stay caller-side: they are
+/// transport binding and diagnostics, not composition.
+pub fn compose_headless_owner(
+    engine: Engine,
+    drive_dir: PathBuf,
+    loopback: bool,
+) -> Result<ComposedHeadless, OwnerError> {
+    let store = FsObjectStore::open(drive_dir.clone())
+        .map_err(|error| OwnerError::Store(error.to_string()))?;
+    let config = LiveConfig::for_local_sync();
+    crate::process::check_startup_retention(&config, &store)?;
+    let mut node = WyrdNode::new(engine, store)?;
+    node.refresh_live_heads()?;
+    let serving = node.open_serving(&drive_dir, loopback)?;
+    let serving_id = hex::encode(serving.addr().id.as_bytes());
+    let (live, parts) = node.into_live(Duration::from_secs(30), &config)?;
+    Ok(ComposedHeadless {
+        live,
+        parts,
+        drive_dir,
+        serving,
+        serving_id,
+    })
+}
+
+/// Run a composed headless owner to completion under `stop`: install
+/// the serving surface, supervise the live loop, wait for the first
+/// of loop return or stop trip, close admission (no presentation
+/// session exists to submit through, so the close only settles
+/// close-racers), reap the loop thread, and run the shared transport
+/// tail under the mount's bounds. The ONLY headless run path, next
+/// to the ONLY headless composition path above.
+pub fn run_composed_owner<M, B>(
+    composed: ComposedHeadless,
+    stop: &'static AtomicBool,
+    mailbox: M,
+    bulk: Option<B>,
+    emit: Arc<dyn Fn(VaultEvent) + Send + Sync>,
+) -> Result<VaultOutcome, OwnerError>
+where
+    M: Mailbox + Send + 'static,
+    B: RoutePublishing + Send + 'static,
+{
+    let ComposedHeadless {
+        live,
+        parts,
+        drive_dir,
+        serving,
+        serving_id,
+    } = composed;
+    // No presentation backend is attached yet: the parts are owned
+    // but never served, the queue stays open but nobody submits, so
+    // passes only ever see intake and fetch work. The queue handle
+    // stays alive here (not dropped with the parts) because the
+    // runner clones it for supervision; the caller-held clone (a
+    // backend, or a test submitting through the live channel) keeps
+    // working through the run.
+    let _queue = parts.mutations.clone();
+    drop(parts);
+    let outcome = run_vault(VaultRun {
+        live,
+        drive_dir,
+        mailbox,
+        bulk,
+        serving,
+        serving_id,
+        config: LiveConfig::for_local_sync(),
+        deadlines: TransportDeadlines {
+            mailbox: crate::process::SHUTDOWN_DEADLINE,
+            bulk: wyrd_sync::GRACEFUL_CLOSE_DEADLINE,
+            serving: crate::process::TRANSPORT_SHUTDOWN_DEADLINE,
+        },
+        stop,
+        emit,
+    })?;
+    Ok(outcome)
 }

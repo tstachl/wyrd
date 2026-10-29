@@ -15,15 +15,10 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use wyrd_app::{
-    exit_code, finish_running, into_running, loop_result, open_host, telemetry_emit, HostTransport,
-};
+use wyrd_app::{compose, exit_code, loop_result, open_host, telemetry_emit};
 use wyrd_daemon::posture::PostureRecorder;
-use wyrd_daemon::process::{
-    bind_bulk_source, install_shutdown_handler, SHUTDOWN, SHUTDOWN_DEADLINE,
-    TRANSPORT_SHUTDOWN_DEADLINE,
-};
-use wyrd_daemon::{TransportDeadlines, VaultOutcome};
+use wyrd_daemon::process::{bind_bulk_source, install_shutdown_handler, SHUTDOWN};
+use wyrd_daemon::{run_composed_owner, VaultOutcome};
 use wyrd_sync::keys::DeviceIdentitySecret;
 
 fn usage() -> ! {
@@ -69,19 +64,13 @@ fn main() {
         }
     };
     install_shutdown_handler().expect("signal handler installs");
-    let serving = open
-        .node()
-        .open_serving(&drive_dir, loopback)
-        .unwrap_or_else(|error| {
-            eprintln!("serving bind failed: {error}");
-            std::process::exit(1);
-        });
-    let serving_id = hex::encode(serving.addr().id.as_bytes());
-    eprintln!("host serving: {serving_id}");
-    let running = into_running(open).unwrap_or_else(|error| {
+    // One shared composition with every other owner-mode entry
+    // point: store, retention, node, serving surface, live split.
+    let composed = compose(open, loopback).unwrap_or_else(|error| {
         eprintln!("composition refused: {error}");
         std::process::exit(1);
     });
+    eprintln!("host serving: {}", composed.serving_id);
     let signer_keys = identity.signer_keys();
     let open_secret = signer_keys.secret_key().clone();
     let seen_path = drive_dir.join("mailbox.seen");
@@ -94,33 +83,24 @@ fn main() {
     // Arrival short-circuits the loop's idle wait the way it does for
     // the vault: without this, every park burns its full window even
     // as mail lands.
-    mailbox.attach_waker(running.waker());
+    mailbox.attach_waker(Arc::clone(composed.live.waker()));
     let bulk = bind_bulk_source().unwrap_or_else(|error| {
         eprintln!("bulk bind failed: {error}");
         std::process::exit(1);
     });
     let recorder = Arc::new(
-        PostureRecorder::new(&drive_dir, serving_id.clone()).unwrap_or_else(|error| {
+        PostureRecorder::new(&drive_dir, composed.serving_id.clone()).unwrap_or_else(|error| {
             eprintln!("posture init failed: {error}");
             std::process::exit(1);
         }),
     );
     recorder.note_startup();
-    let outcome: VaultOutcome = finish_running(
-        running,
+    let outcome: VaultOutcome = run_composed_owner(
+        composed,
         &SHUTDOWN,
-        HostTransport {
-            mailbox,
-            bulk: Some(bulk),
-            serving,
-            serving_id,
-            deadlines: TransportDeadlines {
-                mailbox: SHUTDOWN_DEADLINE,
-                bulk: wyrd_sync::GRACEFUL_CLOSE_DEADLINE,
-                serving: TRANSPORT_SHUTDOWN_DEADLINE,
-            },
-            emit: telemetry_emit(Arc::clone(&recorder)),
-        },
+        mailbox,
+        Some(bulk),
+        telemetry_emit(Arc::clone(&recorder)),
     )
     .unwrap_or_else(|error| {
         eprintln!("run failed: {error}");

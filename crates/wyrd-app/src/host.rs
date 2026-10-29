@@ -1,20 +1,20 @@
 //! The host's drive-ownership path: open the keystore through the
-//! single-owner rule, compose the node over the daemon's view, and
-//! refuse a held drive with an operator sentence that names the
-//! holding process instead of retrying, deleting the lockfile, or
-//! opening a second store handle.
+//! single-owner rule and refuse a held drive with an operator
+//! sentence that names the holding process instead of retrying,
+//! deleting the lockfile, or opening a second store handle.
 //!
-//! Transport construction (mailbox, bulk, serving) and the running
-//! loop live in the run step, not here: this module names only the
-//! durable side (`durable`, `runtime::Engine`, `keys`) beside
-//! `wyrd-core` and `wyrd-daemon`. The host composition check pins
-//! that boundary.
+//! Composition (store, node, serving, live split) and the running
+//! loop live in the daemon's shared owner implementation, not here:
+//! this module names only the lock and the holder sentence (`durable`
+//! for the lock error, `keys` for the opener, the posture sidecar for
+//! the sentence) beside `wyrd-core` and `wyrd-daemon`. The host
+//! composition check pins that boundary.
 
 use std::path::{Path, PathBuf};
 
 use wyrd_daemon::core::RuntimeMaterialization;
 use wyrd_daemon::posture::{describe_holder, read_posture, sidecar_path};
-use wyrd_daemon::{DriveView, NodeError, WyrdNode};
+use wyrd_daemon::DriveView;
 use wyrd_format::FsObjectStore;
 use wyrd_sync::durable::DurableError;
 use wyrd_sync::keys::DeviceIdentitySecret;
@@ -44,28 +44,19 @@ pub enum HostError {
     /// The keystore open failed for a reason other than contention.
     #[error("cannot open drive: {0}")]
     Engine(#[from] EngineError),
-    /// The object store beside the drive failed to open.
-    #[error("object store failed: {0}")]
-    Store(String),
-    /// A configured retention quota the store already exceeds: refuse
-    /// to start with both numbers instead of refusing every write.
-    #[error("retention quota refused at startup: {0}")]
-    Retention(#[from] wyrd_core::live::QuotaCheckError),
-    /// Node composition over the opened store failed.
+    /// The shared owner composition refused the drive. Composition
+    /// is one copy in the daemon; this variant carries its verdict
+    /// without rephrasing it.
     #[error(transparent)]
-    Node(#[from] NodeError),
-    /// The supervised run or the transport tail failed at the io
-    /// boundary.
-    #[error("run failed: {0}")]
-    Io(#[from] std::io::Error),
+    Owner(#[from] wyrd_daemon::OwnerError),
 }
 
 /// A drive the host owns: the lock held for the handle's lifetime,
-/// the node composed and its live heads refreshed. Dropping this
-/// without running releases the lock; running tears down in the
-/// mount's order.
+/// with the opened engine ready for the shared composition. Dropping
+/// this without running releases the lock; composing and running
+/// tears down in the mount's order.
 pub struct OpenHost {
-    pub(crate) node: WyrdNode<HostView>,
+    pub(crate) engine: Engine,
     pub(crate) drive_dir: PathBuf,
 }
 
@@ -74,17 +65,13 @@ impl OpenHost {
     pub fn drive_dir(&self) -> &Path {
         &self.drive_dir
     }
-
-    /// The composed node, for reads before the run starts.
-    pub fn node(&self) -> &WyrdNode<HostView> {
-        &self.node
-    }
 }
 
 /// Open a drive through the host: the keystore open takes the
 /// exclusive lock (a second opener gets [`HostError::DriveLocked`],
-/// never a wait), the object store opens beside it, and the node
-/// composes over the daemon's view with live heads refreshed.
+/// never a wait). Everything downstream of the lock — store,
+/// retention, node, serving, live split — is the daemon's shared
+/// owner composition, reached through [`crate::run::compose`].
 pub fn open_host(
     drive_dir: PathBuf,
     passphrase: &str,
@@ -99,13 +86,7 @@ pub fn open_host(
         }
         result => result?,
     };
-    let store = FsObjectStore::open(drive_dir.clone())
-        .map_err(|error| HostError::Store(error.to_string()))?;
-    let config = wyrd_daemon::LiveConfig::for_local_sync();
-    wyrd_daemon::process::check_startup_retention(&config, &store)?;
-    let mut node = WyrdNode::new(engine, store)?;
-    node.refresh_live_heads()?;
-    Ok(OpenHost { node, drive_dir })
+    Ok(OpenHost { engine, drive_dir })
 }
 
 /// Which process holds the drive, read from its posture sidecar and

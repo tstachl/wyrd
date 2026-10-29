@@ -9,19 +9,12 @@ use crate::probes::TeardownStatus;
 use crate::CliError;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
 use wyrd_core::mailbox::LiveMailbox;
 use wyrd_core::vault::{observe_vault, VaultStatus};
-use wyrd_daemon::core::RuntimeMaterialization;
 use wyrd_daemon::posture;
-use wyrd_daemon::process::{
-    bind_bulk_source, check_startup_retention, install_shutdown_handler, SHUTDOWN,
-    SHUTDOWN_DEADLINE, TRANSPORT_SHUTDOWN_DEADLINE,
-};
-use wyrd_daemon::DriveView;
-use wyrd_daemon::{run_vault, TransportDeadlines, VaultEvent, VaultLoopEnd, VaultRun};
-use wyrd_daemon::{LiveConfig, LoopError, WyrdNode};
-use wyrd_format::FsObjectStore;
+use wyrd_daemon::process::{bind_bulk_source, install_shutdown_handler, SHUTDOWN};
+use wyrd_daemon::LoopError;
+use wyrd_daemon::{compose_headless_owner, run_composed_owner, VaultEvent, VaultLoopEnd};
 use wyrd_sync::durable::DurableError;
 use wyrd_sync::keys::DeviceIdentitySecret;
 use wyrd_sync::runtime::{Engine, EngineError};
@@ -132,36 +125,18 @@ pub(crate) fn vault(
         }
         result => result?,
     };
-    // Same shared budgets as mount and headless sync, through
-    // `for_local_sync` (never `Default` directly): several are
-    // correctness boundaries, and a vault-only default must never
-    // silently diverge them.
-    let config = LiveConfig::for_local_sync();
-    let store = FsObjectStore::open(drive_dir.clone())
-        .map_err(|error| CliError::Store(error.to_string()))?;
-    check_startup_retention(&config, &store)?;
     // The vault parks on this latch from its first pass to its last,
     // so arm it before composition: a signal during startup still
     // tears down instead of parking.
     install_shutdown_handler()?;
-    let mut daemon: WyrdNode<DriveView<FsObjectStore, RuntimeMaterialization>> =
-        WyrdNode::new(engine, store)?;
-    daemon.refresh_live_heads()?;
-    // A real-iroh endpoint like the mount's (never loopback): the
-    // announced route must be one a peer on another machine can dial.
-    let serving = daemon
-        .open_serving(&drive_dir, false)
-        .map_err(CliError::Serving)?;
-    let serving_id = hex::encode(serving.addr().id.as_bytes());
-    eprintln!("serving over iroh: {serving_id}");
-    tracing::info!(stage = "serving", iroh_id = %serving_id, "serving endpoint bound");
-    let (live, parts) = daemon.into_live(Duration::from_secs(30), &config)?;
-    // The headless consumer has no presentation backend: the live
-    // parts (projection handle, wants, mutations) are owned but never
-    // served — the same shape the headless composition uses. The
-    // queue stays open but nobody submits, so passes only ever see
-    // intake and fetch work.
-    drop(parts);
+    // One headless composition, shared with the desktop host: store,
+    // retention, node, serving (a real-iroh endpoint like the mount's,
+    // never loopback — the announced route must be one a peer on
+    // another machine can dial), and the live split. Transport binding
+    // below is environment, not composition.
+    let composed = compose_headless_owner(engine, drive_dir.clone(), false)?;
+    eprintln!("serving over iroh: {}", composed.serving_id);
+    tracing::info!(stage = "serving", iroh_id = %composed.serving_id, "serving endpoint bound");
     // The mailbox signs with the local identity key: open and signer
     // are the same key by construction (see the mount's inventory
     // comment — the full process graph is unchanged here).
@@ -172,7 +147,7 @@ pub(crate) fn vault(
     // Arrival short-circuits the loop's idle wait the way it does for
     // the mount: without this, every park burns its full window even
     // as mail lands.
-    mailbox.attach_waker(Arc::clone(live.waker()));
+    mailbox.attach_waker(Arc::clone(composed.live.waker()));
     let bulk = bind_bulk_source().map_err(CliError::Bulk)?;
     // The posture sidecar (22c, decision B): this process claims it
     // only now that the lock is held — a lock-refused starter never
@@ -184,12 +159,12 @@ pub(crate) fn vault(
     // Entropy failure fails the start openly (see the recorder):
     // without an instance id there is no honest posture to publish.
     let recorder = Arc::new(
-        posture::PostureRecorder::new(&drive_dir, serving_id.clone()).map_err(|source| {
-            CliError::Io {
+        posture::PostureRecorder::new(&drive_dir, composed.serving_id.clone()).map_err(
+            |source| CliError::Io {
                 path: drive_dir.clone(),
                 source,
-            }
-        })?,
+            },
+        )?,
     );
     recorder.note_startup();
     // The observer's events are the operator surface (SD-2 option A):
@@ -242,23 +217,7 @@ pub(crate) fn vault(
             );
         }
     });
-    let outcome = run_vault(VaultRun {
-        live,
-        drive_dir: drive_dir.clone(),
-        mailbox,
-        bulk: Some(bulk),
-        serving,
-        serving_id,
-        config,
-        deadlines: TransportDeadlines {
-            mailbox: SHUTDOWN_DEADLINE,
-            bulk: wyrd_sync::GRACEFUL_CLOSE_DEADLINE,
-            serving: TRANSPORT_SHUTDOWN_DEADLINE,
-        },
-        stop: &SHUTDOWN,
-        emit,
-    })
-    .map_err(CliError::Serving)?;
+    let outcome = run_composed_owner(composed, &SHUTDOWN, mailbox, Some(bulk), emit)?;
     // Fold like the mount — loop first, then serving — with no
     // session in between. SIGTERM exits 0 here exactly when the loop
     // stopped clean and every transport closed: the mount's rule at

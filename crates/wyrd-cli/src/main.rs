@@ -200,6 +200,23 @@ pub(crate) enum CliError {
     Mount(#[from] std::io::Error),
 }
 
+/// Owner composition failures map to the CLI surface that already
+/// names each cause: the daemon's `OwnerError` is the shared
+/// vocabulary, and every variant lands on the same `CliError` the
+/// hand-rolled composition mapped to before the consolidation.
+impl From<wyrd_daemon::OwnerError> for CliError {
+    fn from(error: wyrd_daemon::OwnerError) -> Self {
+        use wyrd_daemon::OwnerError as E;
+        match error {
+            E::Store(message) => CliError::Store(message),
+            E::Engine(error) => CliError::Engine(error),
+            E::Node(error) => CliError::WyrdNode(error),
+            E::Retention(error) => CliError::Quota(error),
+            E::Io(error) => CliError::Serving(error),
+        }
+    }
+}
+
 fn command(args: Vec<String>) -> Result<(), CliError> {
     // `args` carries user arguments only (main strips argv[0]); clap's
     // parse_from expects the binary name first. Help/version requests

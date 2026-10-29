@@ -1008,6 +1008,41 @@ fn fuse_dev_deps_stay_pinned() {
     );
 }
 
+/// Check that every headless owner run goes through the daemon's
+/// shared composition: `run_vault` and its input struct `VaultRun`
+/// may appear only inside `wyrd-daemon` itself. `wyrd vault`, `wyrd
+/// mount` (session path excluded — see below), `wyrd-app`, and every
+/// future owner-mode entry point compose through
+/// `compose_headless_owner` / `run_composed_owner` instead of wiring
+/// the runner ad hoc. `Supervisor::spawn_loop` is deliberately NOT
+/// in this list: the mount's session supervision is a legitimate
+/// second caller (its session join bounds destroy's submits, unlike
+/// a headless teardown), and forbidding it would force the mount
+/// through a shape that is not its own. Result and event vocabulary
+/// (`VaultOutcome`, `VaultEvent`, `VaultLoopEnd`) stays free: naming
+/// the outcome is observing the run, not owning the composition.
+/// Pure over the file set so the negative test below can prove the
+/// checker bites without touching the filesystem.
+fn check_owner_runs_through_daemon(files: &[(&str, &str)]) -> Vec<String> {
+    const FORBIDDEN: &[&str] = &["run_vault(", "VaultRun"];
+    let mut violations = Vec::new();
+    for (path, text) in files {
+        let code = code_text(text);
+        for (index, line) in code.lines().enumerate() {
+            for marker in FORBIDDEN {
+                if line.contains(marker) {
+                    violations.push(format!(
+                        "{path}:{} names the headless runner directly (`{marker}`): compose \
+                         through wyrd_daemon::compose_headless_owner / run_composed_owner instead",
+                        index + 1
+                    ));
+                }
+            }
+        }
+    }
+    violations
+}
+
 /// Check the host crate's own production sources for transport
 /// machinery: the host composes through `wyrd-core` and `wyrd-daemon`
 /// and opens through `wyrd-sync`'s durable side, so a `transport::`,
@@ -1096,6 +1131,44 @@ fn host_embeds_wyrd_core_and_links_no_transport_above_it() {
     assert!(
         violations.is_empty(),
         "host transport violations:\n- {}",
+        violations.join("\n- ")
+    );
+}
+
+/// Contract (06 follow-up): every headless owner run goes through
+/// the daemon's shared composition. Scans the CLI's and the host's
+/// production sources for direct uses of the headless runner and
+/// its input struct; `wyrd vault`, `wyrd-app`, and every future
+/// owner-mode entry point must reach `run_vault` only through
+/// `compose_headless_owner` / `run_composed_owner`. The mount's
+/// session-supervised loop is intentionally out of scope (its
+/// `spawn_loop` call bounds destroy's submits — a shape the
+/// headless check must not flatten), and so is the daemon itself.
+/// The behavioral half lives in the suites that exercise both
+/// callers end to end (`host_*` lifecycle tests for the host,
+/// vault CLI tests for the vault).
+#[test]
+fn headless_runs_go_through_the_daemon_composer() {
+    let root = workspace_root();
+    let mut refs: Vec<(String, String)> = Vec::new();
+    for member in ["crates/wyrd-cli/src", "crates/wyrd-app/src"] {
+        let (files, errors) = collect_rs_files(&root.join(member), &root);
+        assert!(
+            errors.is_empty(),
+            "{member} source walk errors:\n- {}",
+            errors.join("\n- ")
+        );
+        refs.extend(files);
+    }
+    assert!(
+        !refs.is_empty(),
+        "the composer callers hold sources to check"
+    );
+    let borrowed: Vec<(&str, &str)> = refs.iter().map(|(p, t)| (p.as_str(), t.as_str())).collect();
+    let violations = check_owner_runs_through_daemon(&borrowed);
+    assert!(
+        violations.is_empty(),
+        "owner-composition violations:\n- {}",
         violations.join("\n- ")
     );
 }
@@ -2442,6 +2515,82 @@ mod policy_tests {
         assert!(
             check_host_transport_free(&files).is_empty(),
             "the durable side is the host's own vocabulary"
+        );
+    }
+
+    #[test]
+    fn owner_composition_check_rejects_a_direct_runner_call() {
+        let files = [(
+            "crates/wyrd-cli/src/commands/vault.rs",
+            "let outcome = run_vault(run);",
+        )];
+        let violations = check_owner_runs_through_daemon(&files);
+        assert_eq!(violations.len(), 1, "direct runner call: {violations:?}");
+        assert!(
+            violations[0].contains("run_vault("),
+            "names the marker: {violations:?}"
+        );
+    }
+
+    #[test]
+    fn owner_composition_check_rejects_a_runner_struct_use() {
+        let files = [(
+            "crates/wyrd-app/src/run.rs",
+            "use wyrd_daemon::{run_vault, VaultRun};",
+        )];
+        let violations = check_owner_runs_through_daemon(&files);
+        assert_eq!(violations.len(), 1, "runner struct use: {violations:?}");
+        assert!(
+            violations[0].contains("VaultRun"),
+            "names the marker: {violations:?}"
+        );
+    }
+
+    #[test]
+    fn owner_composition_check_ignores_comments_and_strings() {
+        let files = [
+            (
+                "crates/wyrd-cli/src/commands/vault.rs",
+                "// run_vault used to live here, now shared",
+            ),
+            (
+                "crates/wyrd-app/src/run.rs",
+                "let note = \"VaultRun carries the live node\";",
+            ),
+        ];
+        assert!(
+            check_owner_runs_through_daemon(&files).is_empty(),
+            "comments and strings are not composition"
+        );
+    }
+
+    #[test]
+    fn owner_composition_check_passes_the_session_supervisor() {
+        // The mount's session-supervised loop is the legitimate
+        // second supervisor caller: its session join bounds
+        // destroy's submits, so the headless check must not fire
+        // on it. Only the headless runner is pinned here.
+        let files = [(
+            "crates/wyrd-cli/src/commands/mount.rs",
+            "let drive = supervisor.spawn_loop(live, mailbox, bulk, config, trigger_tx, on_error);",
+        )];
+        assert!(
+            check_owner_runs_through_daemon(&files).is_empty(),
+            "the session supervisor is not the headless runner"
+        );
+    }
+
+    #[test]
+    fn owner_composition_check_passes_event_vocabulary() {
+        // Naming the outcome is observing the run, not owning the
+        // composition: outcome, event, and loop-end types stay free.
+        let files = [(
+            "crates/wyrd-app/src/run.rs",
+            "fn exit_code(outcome: &VaultOutcome) -> i32 {",
+        )];
+        assert!(
+            check_owner_runs_through_daemon(&files).is_empty(),
+            "outcome vocabulary is not composition"
         );
     }
 }

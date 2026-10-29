@@ -31,9 +31,9 @@ pub use core::{
 // feature: the view exists whether or not any backend is compiled in.
 pub use lifecycle::{LoopError, LoopReturn, Supervisor, Wake, WakeSignal};
 pub use vault::{
-    install_role_dir, install_serving, run_vault, shutdown_transport, ServeSurface,
-    TransportDeadlines, TransportShutdown, VaultEvent, VaultLoopEnd, VaultObserver, VaultOutcome,
-    VaultRun,
+    compose_headless_owner, install_role_dir, install_serving, run_composed_owner, run_vault,
+    shutdown_transport, ComposedHeadless, OwnerError, OwnerView, ServeSurface, TransportDeadlines,
+    TransportShutdown, VaultEvent, VaultLoopEnd, VaultObserver, VaultOutcome, VaultRun,
 };
 // Transport vocabulary for composers: the host (`wyrd-app`) bounds its
 // run over these without spelling `wyrd_sync` transport paths, so the
