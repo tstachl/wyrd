@@ -13,10 +13,11 @@ Diff stats:!`git diff master..HEAD --stat`
 **Sandbox**
 * Never read, write, list, redirect to, or delete anything outside the repository: no `/tmp`, no home directory, no scratch checkouts, worktrees, or clones. Shell redirection (`>`, `>>`) outside the repository is forbidden — compare revisions with stdin pipes (`git show master:path | wc -l`), never scratch files. If a check needs a scratch file, put it in the worktree and delete it before posting, or skip the check and mark the claim `Unverified`. If the harness refuses a tool call, never retry it: route around it (stdin pipe, worktree scratch) or skip as `Unverified`. A refusal is information, never a fatal error — the run continues.
 * Sole exception: read-only access to `~/.cargo/registry/src/**` for vendored dependency semantics.
+* Sole write exception outside the repo: the gate-provided review body path `$GATE_REVIEW_BODY` (a tmp file outside any repo, exported by the firing command). Write only that exact path, verbatim — never derive, join, retype, or modify it. If it is unset or empty, stop and report; do not fall back to a worktree file.
 * Never touch live external systems: VMs, containers, daemons, devices, relays, or their CLIs (`limactl`, `ssh`, `~/.lima`, `/var/lib/wyrd-microvm`), not even read-only probes. Validate orchestration code by reading it against repo templates and scripts. Anything needing a live machine is `Unverified` with that reason.
 
 **Behavior**
-* Do not modify files, add tests, create probes, commit, push, or change the branch.
+* Do not modify files, add tests, create probes, commit, push, or change the branch. The single allowed write is the review body file at exactly `$GATE_REVIEW_BODY`.
 * No subagents. No web search unless a current external fact is required and not derivable from the repo.
 * Run everything in the foreground. Never background commands or redirect gate output to logs.
 * Batch read-only commands into one invocation (devenv shell setup is slow, and hung calls burn their full timeout); gate reads (`gate pr status`, `gate review show`) batch the same way.
@@ -90,17 +91,25 @@ Extract every guardrail stated in issue/PR history, plus directly applicable inv
 
 Use the smallest scope the changed boundary justifies. Validation is evidence, not a substitute for reasoning.
 
+Derive the package set from the diff first, then run only that set — never the bare workspace suite (2000+ tests; a full run that times out the session posts no review at all, which is worse than any `Unverified`):
+
+```
+git diff --name-only $(git merge-base HEAD master)..HEAD
+devenv shell -- cargo check -p <pkg> 2>&1
+devenv shell -- cargo nextest run -p <pkg> 2>&1
+devenv shell -- cargo nextest run -p <pkg> -E 'test(<path::to::module>)' 2>&1
+devenv shell -- cargo clippy -p <pkg> 2>&1
+devenv shell -- cargo fmt --check 2>&1
+```
+
+Path-to-package rule (no separate mapping to look up): `crates/<name>/**` → `-p <name>`; `nix/**`, `docs/**`, `page/**` → no cargo run; `tests/**` → gate phases (bats), never `cargo nextest`. Multi-crate diffs take an explicit `-p` list, still never bare.
+
 * **Docs/changelog-only:** no test suite or clippy unless the PR claims code behavior. Run `cargo fmt --check` when applicable.
-* **Rust source:** run each gate once (retry only after a source change or to diagnose a failure), using the smallest explicit package set from the repo's package mapping:
-```
-  devenv shell -- cargo check 2>&1
-  devenv shell -- cargo nextest run 2>&1
-  devenv shell -- cargo clippy 2>&1
-  devenv shell -- cargo fmt --check 2>&1
-```
-* nextest uses the `default` profile explicitly (`.config/nextest.toml`; there is no `pr` profile). Don't run the full workspace when the affected set is known.
-* Doctests: `cargo test -p <changed-pkg> --doc`, never `--workspace --doc` unless the change spans packages.
-* Use `--profile slow` only when the default profile is insufficient, with the narrowest relevant filter.
+* **Rust source:** run each gate once (retry only after a source change or to diagnose a failure).
+* Time-box every validation command well under the shell timeout (ten minutes at most). If a scoped run overruns or looks hung, stop it, report what it showed, and mark the claim `Unverified`.
+* Check `gate ci status` first: if CI is green on this tip, do not duplicate what CI already proved; validate only the claims CI doesn't cover (your new edge cases, the exact regression test).
+* nextest uses the `default` profile explicitly (`.config/nextest.toml`; there is no `pr` profile). Use `--profile slow` only when the default profile is insufficient, with the narrowest relevant filter.
+* Doctests: `cargo test -p <pkg> --doc`, never `--workspace --doc`.
 * Protocol, format, trust, storage, durability, recovery, or transport changes may justify broader integration coverage, but only as far as the boundary requires.
 * Existing test/e2e evidence counts only if its revision, command, profile, and boundary are established; otherwise it's context. Don't rerun expensive evidence just because it's documented.
 * Piping through `tail` is allowed for presentation only, preserving exit status (`set -o pipefail`). Report the trailing nextest `Summary` (pass/fail/skip), clippy warning/error lines, and rustfmt result as the verdict. Don't claim a pass from truncated output. Report clippy separately from rustfmt. Name skipped tests only if visible in output; never rerun to enumerate them.
@@ -138,12 +147,11 @@ Resolve PR and history → check base freshness and `--name-status` → classify
 
 ## Post
 
-Write the review body to a file in the worktree (never `/tmp`, never home —
-writing this one file is the allowed worktree write), post it with gate
-(which posts as Scout and verifies the comment landed), then delete the file:
+Write the review body to exactly `$GATE_REVIEW_BODY` (verbatim from the environment — never derive, join, retype, or modify the path), post it with gate (which posts as Scout and verifies the comment landed), then delete the file:
 
 ```
-devenv shell -- gate review post --body-file ./review-body.md
+devenv shell -- gate review post --body-file "$GATE_REVIEW_BODY"
+rm -f "$GATE_REVIEW_BODY"
 ```
 
 `gate review post` refuses an empty body and refuses when review already
