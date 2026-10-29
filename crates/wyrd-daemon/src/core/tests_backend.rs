@@ -53,7 +53,6 @@ fn wait_for_outstanding(queue: &Arc<MutationQueue>, count: usize) {
 /// intake and classification are covered by the sync and contract
 /// suites; here the composition (shared slot, undisturbed serving)
 /// is pinned.
-
 #[cfg(feature = "mount")]
 #[test]
 fn into_live_shares_view_with_backend() {
