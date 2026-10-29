@@ -548,7 +548,6 @@ mod credentials;
 mod drive_config;
 mod live;
 mod logging;
-mod posture;
 mod probes;
 mod update;
 

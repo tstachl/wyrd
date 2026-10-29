@@ -141,7 +141,10 @@ fn policy_for(member: &str) -> Option<MemberPolicy> {
         }),
         // The composer and process host: everything below, never the CLI
         // (presentation depends on the host's public surface, not the
-        // reverse) and never the contract suite.
+        // reverse) and never the contract suite. The posture sidecar
+        // (22c) lives here because every composer writes it and every
+        // lock-refused starter reads it — `serde`/`serde_json` are the
+        // sidecar schema and encoding, nothing else may use them.
         "wyrd-daemon" => Some(MemberPolicy {
             workspace_allow: &["wyrd-format", "wyrd-sync", "wyrd-fuse", "wyrd-core"],
             external_allow: &[
@@ -153,6 +156,8 @@ fn policy_for(member: &str) -> Option<MemberPolicy> {
                 "clap",
                 "nostr",
                 "nostr-sdk",
+                "serde",
+                "serde_json",
                 "thiserror",
                 "tokio",
                 "tracing",

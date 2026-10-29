@@ -17,6 +17,7 @@ pub mod core;
 #[cfg(feature = "mount")]
 pub mod fuse;
 pub mod lifecycle;
+pub mod posture;
 pub mod vault;
 
 pub use core::{

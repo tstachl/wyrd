@@ -796,7 +796,7 @@ fn vault_status_stopped_drive_shows_vault_projection_only() {
 #[test]
 fn vault_status_on_stopped_drive_marks_fresh_posture_retained() {
     let fixture = Fixture::new();
-    let recorder = super::posture::PostureRecorder::new(&fixture.drive, "aa".into()).unwrap();
+    let recorder = wyrd_daemon::posture::PostureRecorder::new(&fixture.drive, "aa".into()).unwrap();
     recorder.note_startup();
     recorder.note_ready();
     recorder.note_posture(41, 0, 7, 312);
@@ -820,7 +820,7 @@ fn vault_status_on_stopped_drive_marks_fresh_posture_retained() {
 #[test]
 fn vault_status_renders_process_beside_durable_failure() {
     let fixture = Fixture::new();
-    let recorder = super::posture::PostureRecorder::new(&fixture.drive, "aa".into()).unwrap();
+    let recorder = wyrd_daemon::posture::PostureRecorder::new(&fixture.drive, "aa".into()).unwrap();
     recorder.note_startup();
     recorder.note_ready();
     recorder.note_posture(41, 0, 7, 312);
@@ -846,7 +846,7 @@ fn vault_status_keeps_live_reading_on_prelock_failure() {
     let temp = TempDir::new();
     let drive = temp.0.join("nodrive");
     std::fs::create_dir_all(&drive).unwrap();
-    let recorder = super::posture::PostureRecorder::new(&drive, "aa".into()).unwrap();
+    let recorder = wyrd_daemon::posture::PostureRecorder::new(&drive, "aa".into()).unwrap();
     recorder.note_startup();
     recorder.note_ready();
     recorder.note_posture(41, 0, 7, 312);
@@ -893,7 +893,7 @@ fn vault_status_succeeds_while_locked_without_opening_the_store() {
     // The running vault's lock, held by "another process".
     let _held = fixture.open();
     // The sidecar the running vault would have published.
-    let recorder = super::posture::PostureRecorder::new(&fixture.drive, "aa".into()).unwrap();
+    let recorder = wyrd_daemon::posture::PostureRecorder::new(&fixture.drive, "aa".into()).unwrap();
     recorder.note_startup();
     recorder.note_ready();
     recorder.note_posture(41, 0, 7, 312);
@@ -919,11 +919,12 @@ fn vault_status_succeeds_while_locked_without_opening_the_store() {
 #[test]
 fn vault_status_shows_replacement_instance_never_inherited_readiness() {
     let fixture = Fixture::new();
-    let dead = super::posture::PostureRecorder::new(&fixture.drive, "aa".into()).unwrap();
+    let dead = wyrd_daemon::posture::PostureRecorder::new(&fixture.drive, "aa".into()).unwrap();
     dead.note_startup();
     dead.note_ready();
     dead.note_posture(41, 0, 7, 312);
-    let replacement = super::posture::PostureRecorder::new(&fixture.drive, "bb".into()).unwrap();
+    let replacement =
+        wyrd_daemon::posture::PostureRecorder::new(&fixture.drive, "bb".into()).unwrap();
     replacement.note_startup();
     let identity = read_identity(&fixture.identity_file).unwrap();
     let (report, outcome) = vault_status_report(fixture.drive.clone(), "test-pass", identity);

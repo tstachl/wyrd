@@ -8,7 +8,6 @@ use crate::live::{
     SHUTDOWN_DEADLINE, TRANSPORT_SHUTDOWN_DEADLINE,
 };
 use crate::logging::init_vault_diagnostics;
-use crate::posture;
 use crate::probes::combine_status;
 use crate::probes::TeardownStatus;
 use crate::CliError;
@@ -18,6 +17,7 @@ use std::time::Duration;
 use wyrd_core::mailbox::LiveMailbox;
 use wyrd_core::vault::{observe_vault, VaultStatus};
 use wyrd_daemon::core::RuntimeMaterialization;
+use wyrd_daemon::posture;
 use wyrd_daemon::DriveView;
 use wyrd_daemon::{run_vault, TransportDeadlines, VaultEvent, VaultLoopEnd, VaultRun};
 use wyrd_daemon::{LiveConfig, LoopError, WyrdNode};
