@@ -25,6 +25,9 @@ tracing.workspace = true
 # Host tests build a real drive per test; the fast KDF profile keeps
 # that affordable without touching production builds.
 wyrd-sync = { workspace = true, features = ["insecure-fast-kdf"] }
+# Forged holder sidecars for the refusal-naming test: fixed-schema
+# JSON beside the drive, written by the test, never by production.
+serde_json.workspace = true
 
 [lints]
 workspace = true

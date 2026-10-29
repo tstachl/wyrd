@@ -19,3 +19,7 @@
 //! developer-run binary goes through the daemon's shared plumbing, so
 //! the rule holds for every target in this crate. Test fakes live in
 //! `tests/`, never here.
+
+pub mod host;
+
+pub use host::{open_host, HostError, HostView, OpenHost};

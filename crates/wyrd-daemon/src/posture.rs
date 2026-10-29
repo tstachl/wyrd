@@ -121,6 +121,27 @@ pub struct PostureFile {
     posture_unix: u64,
 }
 
+impl PostureFile {
+    /// The holder's per-process instance id, for lock-refusal
+    /// sentences: names the holding process without opening the
+    /// store or claiming aliveness.
+    pub fn instance(&self) -> &str {
+        &self.instance
+    }
+
+    /// The serving id the holder announced, as its ready line
+    /// printed it.
+    pub fn serving_id(&self) -> &str {
+        &self.serving_id
+    }
+
+    /// When this file was written (unix seconds): the reader
+    /// derives recency from it, never aliveness.
+    pub fn posture_unix(&self) -> u64 {
+        self.posture_unix
+    }
+}
+
 /// Publishes one process's posture. The host owns the recorder the
 /// way it owns stderr: the composer reports facts through
 /// [`VaultEvent`](super::vault::VaultEvent), the recorder turns
