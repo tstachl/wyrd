@@ -47,6 +47,10 @@ pub enum HostError {
     /// The object store beside the drive failed to open.
     #[error("object store failed: {0}")]
     Store(String),
+    /// A configured retention quota the store already exceeds: refuse
+    /// to start with both numbers instead of refusing every write.
+    #[error("retention quota refused at startup: {0}")]
+    Retention(#[from] wyrd_core::live::QuotaCheckError),
     /// Node composition over the opened store failed.
     #[error(transparent)]
     Node(#[from] NodeError),
@@ -97,6 +101,8 @@ pub fn open_host(
     };
     let store = FsObjectStore::open(drive_dir.clone())
         .map_err(|error| HostError::Store(error.to_string()))?;
+    let config = wyrd_daemon::LiveConfig::for_local_sync();
+    wyrd_daemon::process::check_startup_retention(&config, &store)?;
     let mut node = WyrdNode::new(engine, store)?;
     node.refresh_live_heads()?;
     Ok(OpenHost { node, drive_dir })

@@ -51,6 +51,13 @@ impl RunningHost {
     pub fn drive_dir(&self) -> &std::path::Path {
         &self.drive_dir
     }
+
+    /// The loop's pacing signal, shared with the mailbox: arrivals
+    /// short-circuit the idle wait instead of burning the full
+    /// window every park.
+    pub fn waker(&self) -> Arc<wyrd_daemon::WakeSignal> {
+        Arc::clone(self.live.waker())
+    }
 }
 
 /// The transport the run supervises: a connected mailbox, an
@@ -205,11 +212,11 @@ pub fn telemetry_emit(recorder: Arc<PostureRecorder>) -> Arc<dyn Fn(VaultEvent) 
     })
 }
 
-/// The loop-end half of the fold, as a result: clean return carries
-/// the summary's unit, every other end carries the reason. Exists so
-/// the binary folds without re-matching the runner's vocabulary.
-pub fn loop_result(outcome: VaultOutcome) -> Result<(), String> {
-    match outcome.loop_end {
+/// The loop-end half of the fold, as a result: clean return is Ok,
+/// every other end carries the reason. Exists so the binary folds
+/// without re-matching the runner's vocabulary.
+pub fn loop_result(outcome: &VaultOutcome) -> Result<(), String> {
+    match &outcome.loop_end {
         VaultLoopEnd::Returned(Ok(_)) => Ok(()),
         VaultLoopEnd::Returned(Err(error)) => Err(match error {
             LoopError::Live(error) => format!("live loop failed: {error}"),
