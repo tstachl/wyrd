@@ -1,11 +1,9 @@
 //! The `mount` command: diagnostics, preflight, the serving
 //! endpoint, the session thread, the loop join, and the ordered
 //! teardown. Owns the mount's lifecycle end to end; the shutdown
-//! latch and teardown bounds it honors live in `crate::live`.
-use crate::live::{
-    bind_bulk_source, check_startup_retention, install_shutdown_handler, live_config, SHUTDOWN,
-    SHUTDOWN_DEADLINE, TRANSPORT_SHUTDOWN_DEADLINE,
-};
+//! latch and teardown bounds it honors live in
+//! `wyrd_daemon::process`.
+use crate::live::live_config;
 use crate::logging::init_mount_diagnostics;
 use crate::probes::combine_status;
 #[cfg(target_os = "macos")]
@@ -21,6 +19,10 @@ use std::sync::Arc;
 use std::time::Duration;
 use wyrd_core::mailbox::LiveMailbox;
 use wyrd_daemon::fuse::FuseBackend;
+use wyrd_daemon::process::{
+    bind_bulk_source, check_startup_retention, install_shutdown_handler, SHUTDOWN,
+    SHUTDOWN_DEADLINE, TRANSPORT_SHUTDOWN_DEADLINE,
+};
 use wyrd_daemon::{install_role_dir, install_serving, shutdown_transport, TransportDeadlines};
 use wyrd_daemon::{FailureClass, LiveError, LoopError, Supervisor, WyrdNode};
 use wyrd_format::FsObjectStore;
@@ -87,7 +89,7 @@ pub(crate) fn mount(
     let serving = daemon
         .open_serving(&drive_dir, false)
         .map_err(CliError::Serving)?;
-    let bulk = bind_bulk_source()?;
+    let bulk = bind_bulk_source().map_err(CliError::Bulk)?;
     tracing::info!(stage = "bulk", "bulk source bound");
     let serving_id = hex::encode(serving.addr().id.as_bytes());
     eprintln!("serving over iroh: {serving_id}");

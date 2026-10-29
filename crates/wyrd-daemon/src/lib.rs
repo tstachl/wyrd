@@ -18,6 +18,7 @@ pub mod core;
 pub mod fuse;
 pub mod lifecycle;
 pub mod posture;
+pub mod process;
 pub mod vault;
 
 pub use core::{

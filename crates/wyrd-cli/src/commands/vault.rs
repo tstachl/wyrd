@@ -3,10 +3,6 @@
 //! vault-position renderer; the dispatcher in `main.rs` calls in.
 
 use crate::drive_config::{check_vault_relays, LoadedConfig, RelayResolution};
-use crate::live::{
-    bind_bulk_source, check_startup_retention, install_shutdown_handler, SHUTDOWN,
-    SHUTDOWN_DEADLINE, TRANSPORT_SHUTDOWN_DEADLINE,
-};
 use crate::logging::init_vault_diagnostics;
 use crate::probes::combine_status;
 use crate::probes::TeardownStatus;
@@ -18,6 +14,10 @@ use wyrd_core::mailbox::LiveMailbox;
 use wyrd_core::vault::{observe_vault, VaultStatus};
 use wyrd_daemon::core::RuntimeMaterialization;
 use wyrd_daemon::posture;
+use wyrd_daemon::process::{
+    bind_bulk_source, check_startup_retention, install_shutdown_handler, SHUTDOWN,
+    SHUTDOWN_DEADLINE, TRANSPORT_SHUTDOWN_DEADLINE,
+};
 use wyrd_daemon::DriveView;
 use wyrd_daemon::{run_vault, TransportDeadlines, VaultEvent, VaultLoopEnd, VaultRun};
 use wyrd_daemon::{LiveConfig, LoopError, WyrdNode};
@@ -173,7 +173,7 @@ pub(crate) fn vault(
     // the mount: without this, every park burns its full window even
     // as mail lands.
     mailbox.attach_waker(Arc::clone(live.waker()));
-    let bulk = bind_bulk_source()?;
+    let bulk = bind_bulk_source().map_err(CliError::Bulk)?;
     // The posture sidecar (22c, decision B): this process claims it
     // only now that the lock is held — a lock-refused starter never
     // reaches here, so it can never clobber the winner's posture —
