@@ -90,17 +90,25 @@ Extract every guardrail stated in issue/PR history, plus directly applicable inv
 
 Use the smallest scope the changed boundary justifies. Validation is evidence, not a substitute for reasoning.
 
+Derive the package set from the diff first, then run only that set — never the bare workspace suite (2000+ tests; a full run that times out the session posts no review at all, which is worse than any `Unverified`):
+
+```
+git diff --name-only $(git merge-base HEAD master)..HEAD
+devenv shell -- cargo check -p <pkg> 2>&1
+devenv shell -- cargo nextest run -p <pkg> 2>&1
+devenv shell -- cargo nextest run -p <pkg> -E 'test(<path::to::module>)' 2>&1
+devenv shell -- cargo clippy -p <pkg> 2>&1
+devenv shell -- cargo fmt --check 2>&1
+```
+
+Path-to-package rule (no separate mapping to look up): `crates/<name>/**` → `-p <name>`; `nix/**`, `docs/**`, `page/**` → no cargo run; `tests/**` → gate phases (bats), never `cargo nextest`. Multi-crate diffs take an explicit `-p` list, still never bare.
+
 * **Docs/changelog-only:** no test suite or clippy unless the PR claims code behavior. Run `cargo fmt --check` when applicable.
-* **Rust source:** run each gate once (retry only after a source change or to diagnose a failure), using the smallest explicit package set from the repo's package mapping:
-```
-  devenv shell -- cargo check 2>&1
-  devenv shell -- cargo nextest run 2>&1
-  devenv shell -- cargo clippy 2>&1
-  devenv shell -- cargo fmt --check 2>&1
-```
-* nextest uses the `default` profile explicitly (`.config/nextest.toml`; there is no `pr` profile). Don't run the full workspace when the affected set is known.
-* Doctests: `cargo test -p <changed-pkg> --doc`, never `--workspace --doc` unless the change spans packages.
-* Use `--profile slow` only when the default profile is insufficient, with the narrowest relevant filter.
+* **Rust source:** run each gate once (retry only after a source change or to diagnose a failure).
+* Time-box every validation command well under the shell timeout (ten minutes at most). If a scoped run overruns or looks hung, stop it, report what it showed, and mark the claim `Unverified`.
+* Check `gate ci status` first: if CI is green on this tip, do not duplicate what CI already proved; validate only the claims CI doesn't cover (your new edge cases, the exact regression test).
+* nextest uses the `default` profile explicitly (`.config/nextest.toml`; there is no `pr` profile). Use `--profile slow` only when the default profile is insufficient, with the narrowest relevant filter.
+* Doctests: `cargo test -p <pkg> --doc`, never `--workspace --doc`.
 * Protocol, format, trust, storage, durability, recovery, or transport changes may justify broader integration coverage, but only as far as the boundary requires.
 * Existing test/e2e evidence counts only if its revision, command, profile, and boundary are established; otherwise it's context. Don't rerun expensive evidence just because it's documented.
 * Piping through `tail` is allowed for presentation only, preserving exit status (`set -o pipefail`). Report the trailing nextest `Summary` (pass/fail/skip), clippy warning/error lines, and rustfmt result as the verdict. Don't claim a pass from truncated output. Report clippy separately from rustfmt. Name skipped tests only if visible in output; never rerun to enumerate them.
