@@ -13,10 +13,11 @@ Diff stats:!`git diff master..HEAD --stat`
 **Sandbox**
 * Never read, write, list, redirect to, or delete anything outside the repository: no `/tmp`, no home directory, no scratch checkouts, worktrees, or clones. Shell redirection (`>`, `>>`) outside the repository is forbidden — compare revisions with stdin pipes (`git show master:path | wc -l`), never scratch files. If a check needs a scratch file, put it in the worktree and delete it before posting, or skip the check and mark the claim `Unverified`. If the harness refuses a tool call, never retry it: route around it (stdin pipe, worktree scratch) or skip as `Unverified`. A refusal is information, never a fatal error — the run continues.
 * Sole exception: read-only access to `~/.cargo/registry/src/**` for vendored dependency semantics.
+* Sole write exception outside the repo: the gate-provided review body path `$GATE_REVIEW_BODY` (a tmp file outside any repo, exported by the firing command). Write only that exact path, verbatim — never derive, join, retype, or modify it. If it is unset or empty, stop and report; do not fall back to a worktree file.
 * Never touch live external systems: VMs, containers, daemons, devices, relays, or their CLIs (`limactl`, `ssh`, `~/.lima`, `/var/lib/wyrd-microvm`), not even read-only probes. Validate orchestration code by reading it against repo templates and scripts. Anything needing a live machine is `Unverified` with that reason.
 
 **Behavior**
-* Do not modify files, add tests, create probes, commit, push, or change the branch.
+* Do not modify files, add tests, create probes, commit, push, or change the branch. The single allowed write is the review body file at exactly `$GATE_REVIEW_BODY`.
 * No subagents. No web search unless a current external fact is required and not derivable from the repo.
 * Run everything in the foreground. Never background commands or redirect gate output to logs.
 * Batch read-only commands into one invocation (devenv shell setup is slow, and hung calls burn their full timeout); gate reads (`gate pr status`, `gate review show`) batch the same way.
@@ -146,12 +147,11 @@ Resolve PR and history → check base freshness and `--name-status` → classify
 
 ## Post
 
-Write the review body to a file in the worktree (never `/tmp`, never home —
-writing this one file is the allowed worktree write), post it with gate
-(which posts as Scout and verifies the comment landed), then delete the file:
+Write the review body to exactly `$GATE_REVIEW_BODY` (verbatim from the environment — never derive, join, retype, or modify the path), post it with gate (which posts as Scout and verifies the comment landed), then delete the file:
 
 ```
-devenv shell -- gate review post --body-file ./review-body.md
+devenv shell -- gate review post --body-file "$GATE_REVIEW_BODY"
+rm -f "$GATE_REVIEW_BODY"
 ```
 
 `gate review post` refuses an empty body and refuses when review already
