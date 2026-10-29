@@ -1207,6 +1207,9 @@ fn no_surface_authors_a_conflict_resolution() {
     // check below runs on everything else; this assertion keeps the
     // exemption from silently widening (a second exempted file) or
     // silently lapsing (the primitive renamed out from under it).
+    // New CLI command files need no exemption handling: the partition
+    // below matches only `commands/snapshot.rs`, so any future surface
+    // that names the primitive lands in `rest` and fails the check.
     let (exempt, rest): (Vec<_>, Vec<_>) = refs
         .into_iter()
         .partition(|(p, _)| p.ends_with("commands/snapshot.rs"));

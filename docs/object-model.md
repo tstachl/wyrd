@@ -379,9 +379,9 @@ writes, stale-temp sweep on open, verify-on-read scrub.
    `docs/epochs.md`; snapshots bind to a membership transition.
 2. Manifest partition encoding details (sharding, chunked transfer of large
    manifests).
-3. Live-view conflict naming (e.g. by author id / snapshot timestamp) —
-   constrained by the conflict-resolution invariant below: the answer may
-   name versions, never author one.
+3. Live-view conflict naming (e.g. by author id / snapshot timestamp). The conflict-resolution
+   invariant below settles the authoring half — surfaces may never author a resolution; what
+   remains open here is only the naming policy.
 4. Gossip framing for snapshot announcements (candidate: iroh-gossip — the dependency stays out until this lands; announcement encoding pinned in `wyrd-sync/src/control/`).
 5. Chunk-size parameters (benchmark before the v1 freeze).
 

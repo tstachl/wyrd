@@ -392,3 +392,97 @@ fn an_unresolved_conflict_stays_fully_addressable() {
     assert_eq!(view.read(&second, 0, 8).unwrap(), b"bbb");
     assert_floor(&view);
 }
+
+/// The same floor for a kind divergence: `d` is a directory in one head
+/// and a file in the other. Every read operation leaves both versions
+/// addressable — the dir side still descends, the file side still reads —
+/// with the unversioned name still conflicted and `readdir` still clean
+/// of qualified names. Companion to
+/// `an_unresolved_conflict_stays_fully_addressable`, which pins the
+/// file-against-file shape; together they cover both divergence kinds
+/// the `conflicted_file_reads_fail_with_eio` matrix exercises.
+#[test]
+fn an_unresolved_kind_divergence_stays_fully_addressable() {
+    let mut store = MemoryObjectStore::default();
+    let a = chunk(&mut store, b"aaa");
+    let f = chunk(&mut store, b"fff");
+    let sub_a = tree_of(
+        &mut store,
+        vec![Entry::file("a.txt", 3, false, vec![a]).unwrap()],
+    );
+    let root_a = tree_of(&mut store, vec![Entry::dir("d", sub_a).unwrap()]);
+    let root_b = tree_of(
+        &mut store,
+        vec![Entry::file("d", 3, false, vec![f]).unwrap()],
+    );
+    let view = DriveView::new(
+        store,
+        FakeMaterialization::empty(),
+        heads(vec![snapshot(root_a), snapshot(root_b)]),
+    );
+
+    // Which `@N` is the dir side depends on SnapshotId byte order, so
+    // resolve it once from the conflict itself and address by role.
+    let node = view.lookup("d").unwrap();
+    let Node::Conflict { mut versions } = node else {
+        panic!("kind divergence must conflict");
+    };
+    versions.sort_by(|x, y| x.snapshot.as_bytes().cmp(y.snapshot.as_bytes()));
+    let dir_n = versions
+        .iter()
+        .position(|v| matches!(v.node, Node::Dir { .. }))
+        .map(|n| n + 1)
+        .expect("one version is a dir");
+    let file_n = if dir_n == 1 { 2 } else { 1 };
+    let dir_q = format!("d@{dir_n}");
+    let file_q = format!("d@{file_n}");
+
+    // The whole floor, checked after every operation below.
+    let assert_floor = |view: &DriveView<MemoryObjectStore, FakeMaterialization>| {
+        let dir_node = view.lookup(&dir_q).unwrap();
+        assert!(matches!(dir_node, Node::Dir { .. }));
+        assert_eq!(
+            view.lookup(&format!("{dir_q}/a.txt")).unwrap(),
+            Node::File {
+                size: 3,
+                executable: false,
+                chunks: vec![a],
+            }
+        );
+        let file_node = view.lookup(&file_q).unwrap();
+        assert!(matches!(file_node, Node::File { .. }));
+        let open = view.open(&file_node).unwrap();
+        assert_eq!(view.read(&open, 0, 8).unwrap(), b"fff");
+        let node = view.lookup("d").unwrap();
+        assert_eq!(view.open(&node), Err(ViewError::Conflict));
+        assert_eq!(view.stat("d").unwrap().kind, Kind::Conflict);
+        let root = view.lookup("").unwrap();
+        let listed = view.readdir(&root).unwrap();
+        assert!(listed.iter().any(|e| e.name == "d"));
+        assert!(
+            listed.iter().all(|e| !e.name.contains('@')),
+            "readdir lists no qualified name"
+        );
+    };
+
+    assert_floor(&view);
+    // Open the unversioned name: conflict, and nothing else changes.
+    assert_eq!(
+        view.open(&view.lookup("d").unwrap()),
+        Err(ViewError::Conflict)
+    );
+    assert_floor(&view);
+    // Stat the conflicted path.
+    assert_eq!(view.stat("d").unwrap().kind, Kind::Conflict);
+    assert_floor(&view);
+    // Descend the dir side.
+    let child = view.lookup(&format!("{dir_q}/a.txt")).unwrap();
+    let open = view.open(&child).unwrap();
+    assert_eq!(view.read(&open, 0, 8).unwrap(), b"aaa");
+    assert_floor(&view);
+    // Read the file side.
+    let file_node = view.lookup(&file_q).unwrap();
+    let open = view.open(&file_node).unwrap();
+    assert_eq!(view.read(&open, 0, 8).unwrap(), b"fff");
+    assert_floor(&view);
+}
