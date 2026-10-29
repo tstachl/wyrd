@@ -50,6 +50,11 @@
           overlays = [ (import rust-overlay) ];
         };
       wyrdFor = system: src:
+        { pname ? "wyrd"
+        , mainProgram ? "wyrd"
+        , cargoExtraArgs ? "-p wyrd-cli"
+        , description ? "Decentralized, append-only, content-addressed drive system (alpha)"
+        }:
         let
           pkgs = pkgsFor system;
           inherit (pkgs) lib stdenv;
@@ -65,46 +70,51 @@
           # failing loudly at this layer (not deep inside crane).
           manifest = builtins.fromTOML (builtins.readFile (src + "/Cargo.toml"));
           version = manifest.workspace.package.version or manifest.package.version or (throw "wyrdSrc Cargo.toml has neither [workspace.package] nor [package] version: ${toString src}");
-        in
-        craneLib.buildPackage {
-          pname = "wyrd";
-          inherit version;
-          # The workspace exactly as Cargo sees it, from the committed
-          # Cargo.lock; target/ and VCS state never enter the build.
-          src = craneLib.cleanCargoSource src;
-          # Only the user-facing binary. Library crates ride along as its
+          # One binary per package: the user-facing CLI and the
+          # developer-run desktop host (06, headless owner process for
+          # the Lima order-evidence leg). Library crates ride along as
           # dependencies; nothing else installs a binary.
-          cargoExtraArgs = "-p wyrd-cli";
-          strictDeps = true;
-          # The test suite (nextest, doctests) runs in rust-ci with the full
-          # dev environment; the distribution build only proves the binary
-          # compiles and links, including inside the Linux sandbox.
-          doCheck = false;
-          nativeBuildInputs = [ pkgs.pkg-config ];
-          # System libraries probed by build scripts (fuser's pkg-config
-          # probe) belong in buildInputs, not nativeBuildInputs: under
-          # strictDeps the pkg-config role hook only exposes host-offset
-          # deps on the unsuffixed PKG_CONFIG_PATH the probe reads.
-          buildInputs = lib.optionals stdenv.isDarwin [
-            # Build-time headers/stubs for fuser's libfuse probes
-            # (fuse.pc from nixpkgs, fuse3.pc from our own stubs:
-            # nix/macfuse3-stubs.nix, same split as devenv.nix).
-            # Mounting at runtime still needs system macFUSE, which nix
-            # cannot provide.
-            pkgs.macfuse-stubs
-            (pkgs.callPackage ./nix/macfuse3-stubs.nix { })
-          ] ++ lib.optionals stdenv.isLinux [
-            # libfuse2 headers for fuser's link probe.
-            pkgs.fuse
-          ];
-          meta = with lib; {
-            description = "Decentralized, append-only, content-addressed drive system (alpha)";
-            homepage = "https://gitworkshop.dev";
-            license = licenses.mit;
-            platforms = systems;
-            mainProgram = "wyrd";
-          };
-        };
+          binFor = pname: mainProgram: cargoExtraArgs: description:
+            craneLib.buildPackage {
+              inherit pname version cargoExtraArgs;
+              # The workspace exactly as Cargo sees it, from the committed
+              # Cargo.lock; target/ and VCS state never enter the build.
+              src = craneLib.cleanCargoSource src;
+              strictDeps = true;
+              # The test suite (nextest, doctests) runs in rust-ci with the full
+              # dev environment; the distribution build only proves the binary
+              # compiles and links, including inside the Linux sandbox.
+              doCheck = false;
+              nativeBuildInputs = [ pkgs.pkg-config ];
+              # System libraries probed by build scripts (fuser's pkg-config
+              # probe) belong in buildInputs, not nativeBuildInputs: under
+              # strictDeps the pkg-config role hook only exposes host-offset
+              # deps on the unsuffixed PKG_CONFIG_PATH the probe reads.
+              buildInputs = lib.optionals stdenv.isDarwin [
+                # Build-time headers/stubs for fuser's libfuse probes
+                # (fuse.pc from nixpkgs, fuse3.pc from our own stubs:
+                # nix/macfuse3-stubs.nix, same split as devenv.nix).
+                # Mounting at runtime still needs system macFUSE, which nix
+                # cannot provide.
+                pkgs.macfuse-stubs
+                (pkgs.callPackage ./nix/macfuse3-stubs.nix { })
+              ] ++ lib.optionals stdenv.isLinux [
+                # libfuse2 headers for fuser's link probe.
+                pkgs.fuse
+              ];
+              meta = with lib; {
+                inherit description;
+                homepage = "https://gitworkshop.dev";
+                license = licenses.mit;
+                platforms = systems;
+                inherit mainProgram;
+              };
+            };
+          # One binary per package: the CLI today, the developer-run host
+          # beside it. Callers pass a set; omitted fields default to the
+          # user-facing CLI build.
+        in
+        binFor pname mainProgram cargoExtraArgs description;
       # Deterministic release archive for one system: the tarball named in
       # .ngit/release.yaml for that system's platform tag. The release
       # procedure builds one per platform and publishes the set, so a main
@@ -133,7 +143,17 @@
     in
     {
       packages = forAllSystems (system: {
-        wyrd = wyrdFor system ./.;
+        wyrd = wyrdFor system ./. { };
+        # Developer-run desktop host (06): the headless owner process
+        # for the Lima order-evidence leg. Never distributed (07 owns
+        # the shipped artifact); the flake contract pins only that
+        # `-p wyrd-cli` stays the distribution build.
+        wyrd-app = wyrdFor system ./. {
+          pname = "wyrd-app";
+          mainProgram = "wyrd-app";
+          cargoExtraArgs = "-p wyrd-app";
+          description = "Desktop host owner process (developer-run, headless)";
+        };
         wyrd-dist = distFor system;
         # Pinned relay-query tool for the microVM opacity probe
         # (gate-phase-03): reproducibility is the reason —
@@ -219,7 +239,7 @@
               wyrdPkg =
                 if wyrdSrc == null
                 then self.packages.x86_64-linux.wyrd
-                else wyrdFor "x86_64-linux" wyrdSrc;
+                else wyrdFor "x86_64-linux" wyrdSrc { };
             in
             nixpkgs.lib.nixosSystem {
               system = "x86_64-linux";
