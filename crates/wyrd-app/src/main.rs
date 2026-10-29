@@ -74,6 +74,7 @@ fn main() {
     let signer_keys = identity.signer_keys();
     let open_secret = signer_keys.secret_key().clone();
     let seen_path = drive_dir.join("mailbox.seen");
+    let configured_relays = relays.len();
     let mailbox =
         wyrd_core::mailbox::LiveMailbox::connect(signer_keys, open_secret, relays, seen_path)
             .unwrap_or_else(|error| {
@@ -101,6 +102,7 @@ fn main() {
         mailbox,
         Some(bulk),
         telemetry_emit(Arc::clone(&recorder)),
+        configured_relays,
     )
     .unwrap_or_else(|error| {
         eprintln!("run failed: {error}");

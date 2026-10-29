@@ -168,6 +168,36 @@ use supervision::{establish_drainer, supervise, SupervisorContext, SupervisorSta
 
 pub use supervision::MailboxHealth;
 
+impl From<&MailboxHealth> for MailboxSnapshot {
+    /// Field-for-field mapping: the snapshot is the health report as
+    /// plain data, so adding a field to either side fails here until
+    /// the mapping extends. The destructure is exhaustive on purpose.
+    fn from(health: &MailboxHealth) -> Self {
+        let MailboxHealth {
+            stream_alive,
+            connected_relays,
+            total_relays,
+            saturation_recoveries,
+            supervisor_ticks,
+            relay_attached,
+            stream_recovery_attempts,
+            relay_recovery_attempts,
+            closed_subscriptions,
+        } = *health;
+        MailboxSnapshot {
+            stream_alive,
+            connected_relays,
+            total_relays,
+            saturation_recoveries,
+            supervisor_ticks,
+            relay_attached,
+            stream_recovery_attempts,
+            relay_recovery_attempts,
+            closed_subscriptions,
+        }
+    }
+}
+
 // Test-support imports: the `tests_*` modules resolve these through
 // `use super::*`. They are `#[cfg(test)]`-gated so lib builds stay
 // honest about what the adapter itself uses.
@@ -241,7 +271,8 @@ use tokio::sync::mpsc as tokio_mpsc;
 use wyrd_format::DeviceId;
 use wyrd_sync::transport::mailbox::MAX_MAILBOX_CIPHERTEXT_LEN;
 use wyrd_sync::transport::{
-    Delivery, DeliveryId, Disposition, Mailbox, MailboxEnvelope, MailboxError, SendReport,
+    Delivery, DeliveryId, Disposition, Mailbox, MailboxEnvelope, MailboxError, MailboxSnapshot,
+    SendReport,
 };
 
 use crate::wake::WakeSignal;
@@ -1061,5 +1092,14 @@ where
     /// this, never around it.
     fn shutdown(&mut self, deadline: Duration) {
         LiveMailbox::shutdown(self, deadline)
+    }
+
+    /// The supervisor's current health as plain snapshot data: the
+    /// live loop samples this per pass for the owner interface's
+    /// liveness observation. Same fields as [`health`](Self::health),
+    /// moved by value so the observation slot never borrows the
+    /// supervisor.
+    fn health_snapshot(&self) -> MailboxSnapshot {
+        MailboxSnapshot::from(&self.health())
     }
 }

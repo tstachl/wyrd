@@ -34,13 +34,15 @@ fn epoch1() -> EpochSecret {
 /// One owner engine holding epoch 1: genesis drained, self capability
 /// committed — the production shape of a drive creator one transition
 /// in, built only through public calls.
-struct Owner {
-    engine: Engine,
-    device: Device,
-    genesis: MembershipTransition,
+pub(crate) struct Owner {
+    pub(crate) engine: Engine,
+    pub(crate) device: Device,
+    pub(crate) genesis: MembershipTransition,
 }
 
-fn owner() -> Owner {
+/// Build the [`Owner`] above. Shared with the owner-interface fork
+/// test; see the struct doc for the shape.
+pub(crate) fn owner() -> Owner {
     let device = device(0x10);
     let genesis = signed_transition(
         1,
@@ -115,7 +117,9 @@ fn owner() -> Owner {
 /// Admit `newcomer` through the owner engine and join it from the
 /// sealed invitation. Returns the newcomer engine plus every envelope
 /// the owner's delivery pass sent, in send order.
-fn admit_and_collect(
+/// Admit `newcomer` through the owner engine and join it, shared
+/// with the owner-interface fork test.
+pub(crate) fn admit_and_collect(
     owner: &mut Owner,
     newcomer: &Device,
     relay: &mut Relay,
@@ -148,7 +152,7 @@ fn admit_and_collect(
 }
 
 /// A newcomer relay holding exactly these envelopes.
-fn newcomer_relay(envelopes: Vec<MailboxEnvelope>) -> Relay {
+pub(crate) fn newcomer_relay(envelopes: Vec<MailboxEnvelope>) -> Relay {
     let mut relay = Relay::new();
     relay.queue(envelopes);
     relay

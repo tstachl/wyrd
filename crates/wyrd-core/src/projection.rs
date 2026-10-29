@@ -109,3 +109,58 @@ impl<V: NamespaceView> Projection<V> {
         &self.view
     }
 }
+
+/// Which of the four consumer-distinguishable projection states the
+/// published generation is in (OD-32-C, decided): a fresh valid
+/// empty projection, a fresh valid non-empty projection, or a
+/// retained last-good generation whose freshness could not be
+/// established. The fourth state — no trustworthy projection
+/// because initial composition failed — has no slot value by
+/// construction: a failed composition never publishes, so the
+/// consumer observes it as an absent owner, not as a generation.
+///
+/// The core reports these facts; the owner exposes them. This is a
+/// judgment about the served generation, never a degraded-mode
+/// state machine: the loop does not change what it serves on the
+/// strength of this value, it only records what the last refresh
+/// established.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FreshnessState {
+    /// The published generation is valid and names no heads: a
+    /// genuinely empty drive reads the same through any consumer.
+    FreshEmpty,
+    /// The published generation is valid and names heads: the
+    /// consumer serves current state.
+    FreshNonEmpty,
+    /// A refresh established nothing, so the previous generation
+    /// keeps serving: `detail` names the refresh failure that left
+    /// it in place. The consumer serves last-good bytes under an
+    /// explicit staleness warning, never as current state.
+    RetainedLastGood {
+        /// The refresh failure rendered as text: failure class and
+        /// cause. Diagnostic only — a consumer reconciles against
+        /// served generations and revisions, never by parsing this.
+        detail: String,
+    },
+}
+
+/// The freshness judgment over one published generation: which of
+/// the states holds, and which durable revision and serving
+/// generation the judgment applies to. Written by the live loop on
+/// every publication and every retaining failure; read by the
+/// owner interface for out-of-process consumers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectionFreshness {
+    /// The judged state of the served generation.
+    pub state: FreshnessState,
+    /// The engine durable revision the judgment applies to.
+    pub revision: u64,
+    /// The serving generation the judgment applies to.
+    pub generation: u64,
+}
+
+/// The shared freshness slot: one alias so the loop, the split
+/// parts, and the owner interface name one type. Initialized at
+/// composition from the baseline heads; replaced wholesale on
+/// every judgment, never mutated in place.
+pub type SharedFreshness = Arc<RwLock<ProjectionFreshness>>;

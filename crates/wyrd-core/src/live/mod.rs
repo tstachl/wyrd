@@ -18,7 +18,7 @@ use wyrd_sync::{
     runtime::{
         Engine, EngineError, ExecuteReport, MaterializationState, RoutePublishing, TerminalState,
     },
-    transport::mailbox::Mailbox,
+    transport::mailbox::{Mailbox, MailboxSnapshot},
 };
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -34,10 +34,13 @@ use crate::mutation::{
     CommitSource, FileIdentity, FoldDisposition, FoldForcerOutcome, FoldMember, MutationBatch,
     MutationError, MutationKind, MutationOutcome, MutationQueue, WriteStats,
 };
-use crate::projection::{Projection, SharedProjection};
+use crate::projection::{
+    FreshnessState, Projection, ProjectionFreshness, SharedFreshness, SharedProjection,
+};
 use crate::quarantine::{drain_quarantine, QuarantineQueue};
 use crate::role::{Role, RoleState, Transition};
 use crate::scrub::{drain_scrub, probe_presence, ScrubQueue};
+use crate::status::{observe, SyncStatus};
 use crate::view::{Head, NamespaceView, Node, RuntimeMaterialization, ViewError};
 use crate::wake::{Wake, WakeSignal};
 use crate::want::{WantError, WantRegistry};
@@ -212,7 +215,66 @@ pub struct LiveNode<V: NamespaceView> {
     /// (scrub-cursor precedent): a restart re-sweeps from scratch.
     /// `None` before the first complete sweep.
     pub(super) vault_swept_revision: Option<u64>,
+    /// The freshness judgment over the served generation (OD-32-C):
+    /// which of the consumer-distinguishable states the published
+    /// generation is in, and which revision and generation the
+    /// judgment applies to. The loop writes it on every publication
+    /// and every retaining failure; the owner interface reads it for
+    /// out-of-process consumers. Shared with the split parts like
+    /// the projection slot.
+    pub(super) freshness: SharedFreshness,
+    /// The latest owner observation for out-of-process consumers
+    /// (OD-16-D): the durable status, the pass report, the
+    /// transport health snapshot, and the pass count they were
+    /// taken at. Written by the loop at the end of every successful
+    /// pass; `None` before the first pass completes, which the
+    /// interface reports explicitly rather than as a healthy-looking
+    /// default. Shared with the split parts like the projection slot.
+    pub(super) observation: SharedObservation,
+    /// Relays configured for this session, for the durable status
+    /// observation: `status::observe` takes the count as a parameter
+    /// precisely so it never constructs a mailbox, and the loop
+    /// passes its own count the same way. Installed by the composer
+    /// (which owns the relay configuration); zero reads fully
+    /// offline, matching the status contract.
+    pub(super) configured_relays: usize,
+    /// The last published durable status, keyed by the durable
+    /// revision and relay count it was observed at. The per-pass
+    /// observation reuses it while the revision stands still, so
+    /// idle loops skip the replay, classification, and
+    /// reconciliation reads; reports and health stay per-pass.
+    pub(super) observed_status: Option<(u64, usize, SyncStatus)>,
 }
+
+/// What the owner publishes for out-of-process consumers at the end
+/// of one successful pass: the durable sync observation, the pass's
+/// own report, and the transport health behind it, pinned to the
+/// pass count they were taken at. Plain data, moved by value into
+/// the shared slot — the slot never borrows the engine, the report,
+/// or the mailbox.
+///
+/// The status half is durable state (committed facts only); the
+/// report and health halves are run-report observations (transient
+/// by definition). Consumers must render them as two different
+/// things — a live socket is not a durable fact — and the wire
+/// types keep them in separate result objects so they cannot be
+/// merged by accident.
+#[derive(Debug, Clone)]
+pub struct OwnerObservation {
+    /// The durable sync observation at pass end.
+    pub status: SyncStatus,
+    /// The pass's own intake/fetch/publication report.
+    pub report: SyncReport,
+    /// The transport health snapshot behind the pass.
+    pub health: MailboxSnapshot,
+    /// The cumulative pass count the observation was taken at.
+    pub passes: u64,
+}
+
+/// The shared owner-observation slot: `None` until the first pass
+/// completes. One alias so the loop, the split parts, and the owner
+/// interface name one type.
+pub type SharedObservation = Arc<RwLock<Option<OwnerObservation>>>;
 
 /// The live half of a split node: everything a presentation
 /// backend needs, with no presentation type in the signatures. The
@@ -231,6 +293,13 @@ pub struct LiveParts<V: NamespaceView> {
     pub budgets: ResourceBudgets,
     /// How long a backend `open` blocks for demand before failing.
     pub open_timeout: Duration,
+    /// The freshness judgment over the served generation, shared
+    /// with the owner interface like the projection slot.
+    pub freshness: SharedFreshness,
+    /// The latest owner observation, shared with the owner
+    /// interface like the projection slot. `None` until the first
+    /// pass completes.
+    pub observation: SharedObservation,
 }
 
 impl<V> LiveNode<V>
@@ -263,6 +332,7 @@ where
         store: Arc<RwLock<V::Store>>,
         baseline: V,
         revision: u64,
+        installed_heads: usize,
         open_timeout: Duration,
         config: &LiveConfig,
     ) -> Result<(Self, LiveParts<V>), CompositionError> {
@@ -288,13 +358,6 @@ where
         // callers (mailbox intake) so every producer wakes the loop.
         let waker = Arc::new(WakeSignal::default());
         mutations.attach_waker(Arc::clone(&waker));
-        let parts = LiveParts {
-            projection: Arc::clone(&projection),
-            wants: Arc::clone(&wants),
-            mutations: Arc::clone(&mutations),
-            budgets,
-            open_timeout,
-        };
         // Baseline observability: idle lines before the first publish
         // report what the adopted generation serves.
         let observed_heads: Vec<SnapshotId> = engine
@@ -307,6 +370,40 @@ where
             })
             .unwrap_or_default();
         let published_heads = observed_heads.len();
+        // The composition judgment, from the installed baseline
+        // rather than the eligible set: the adopted generation is
+        // valid by construction, so the slot starts fresh — empty or
+        // not — at the composition revision. Heads the refresh
+        // withheld (eligible but uninstalled, closure still fetching)
+        // are not a fresh empty drive: the slot says retained with
+        // the pending count named, so no consumer mistakes an empty
+        // serving view for a genuinely empty drive. No trustworthy
+        // composition fails above, never reaches here.
+        let freshness = Arc::new(RwLock::new(ProjectionFreshness {
+            state: if installed_heads == 0 && published_heads == 0 {
+                FreshnessState::FreshEmpty
+            } else if installed_heads > 0 {
+                FreshnessState::FreshNonEmpty
+            } else {
+                FreshnessState::RetainedLastGood {
+                    detail: format!(
+                        "composition installed no heads with {published_heads} eligible: closure still fetching, serving empty baseline"
+                    ),
+                }
+            },
+            revision,
+            generation: 0,
+        }));
+        let observation = Arc::new(RwLock::new(None));
+        let parts = LiveParts {
+            projection: Arc::clone(&projection),
+            wants: Arc::clone(&wants),
+            mutations: Arc::clone(&mutations),
+            budgets,
+            open_timeout,
+            freshness: Arc::clone(&freshness),
+            observation: Arc::clone(&observation),
+        };
         Ok((
             LiveNode {
                 engine,
@@ -334,6 +431,10 @@ where
                 pass_hook: None,
                 role_dir: None,
                 vault_swept_revision: None,
+                freshness,
+                observation,
+                configured_relays: 0,
+                observed_status: None,
             },
             parts,
         ))
@@ -699,6 +800,45 @@ where
             .read()
             .map(|slot| Arc::clone(&slot))
             .map_err(|_| LiveError::Lock)
+    }
+
+    /// The current freshness judgment over the served generation:
+    /// the read-side handle for the owner interface and supervisors.
+    /// Poison fails closed like every other lock failure on this path.
+    pub fn freshness(&self) -> Result<ProjectionFreshness, LiveError> {
+        self.freshness
+            .read()
+            .map(|slot| slot.clone())
+            .map_err(|_| LiveError::Lock)
+    }
+
+    /// The latest owner observation, or `None` before the first pass
+    /// completes: the read-side handle for the owner interface. An
+    /// absent observation is an explicit state (owner reachable, no
+    /// pass yet), never a healthy-looking default.
+    pub fn observation(&self) -> Result<Option<OwnerObservation>, LiveError> {
+        self.observation
+            .read()
+            .map(|slot| slot.clone())
+            .map_err(|_| LiveError::Lock)
+    }
+
+    /// Install the relay count the durable status observation
+    /// reports. Called by the composer (which owns the relay
+    /// configuration) between split and run; zero reads fully
+    /// offline. The loop never constructs a mailbox from this — it
+    /// passes the count to `status::observe` the same way the CLI
+    /// does.
+    pub fn set_configured_relays(&mut self, relays: usize) {
+        self.configured_relays = relays;
+    }
+
+    /// The durable sync observation over the live engine: the same
+    /// `status::observe` the CLI runs against an unheld drive,
+    /// through the owner that holds it. Pure observation over
+    /// committed facts; connects to nothing, commits nothing.
+    pub fn observe_status(&self) -> Result<SyncStatus, EngineError> {
+        observe(&self.engine, self.configured_relays)
     }
 
     /// The mutation channel the backend submits through: the supervisor

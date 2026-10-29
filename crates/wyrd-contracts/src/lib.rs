@@ -313,6 +313,8 @@ mod layer_contracts;
 #[cfg(test)]
 mod node_contracts;
 #[cfg(test)]
+mod owner_contracts;
+#[cfg(test)]
 mod policy_contracts;
 #[cfg(test)]
 mod removal_contracts;
