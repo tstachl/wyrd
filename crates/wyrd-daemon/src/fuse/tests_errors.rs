@@ -279,6 +279,10 @@ fn mount_log_reports_queue_depth_and_wait_time_without_a_new_dependency() {
     // `docs/resource-limits.md` decides no metrics pipeline in v0:
     // the probe reports through `tracing` (already a dependency),
     // so pin the dependency set — a metrics crate here fails loud.
+    // `getrandom`, `hex`, `serde`, and `serde_json` are the vault
+    // posture sidecar's (22c) schema and instance identity, not
+    // metrics: the sidecar moved to this crate so every composer
+    // writes and reads it from one copy.
     let manifest = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"))
         .expect("the crate manifest reads");
     let mut in_deps = false;
@@ -304,7 +308,11 @@ fn mount_log_reports_queue_depth_and_wait_time_without_a_new_dependency() {
         deps,
         vec![
             "fuser",
+            "getrandom",
+            "hex",
             "libc",
+            "serde",
+            "serde_json",
             "thiserror",
             "tracing",
             "wyrd-core",

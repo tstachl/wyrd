@@ -7,7 +7,7 @@ use crate::args::{Cli, Command, PolicyAction, RoleAction, VaultAction};
 use crate::drive_config::{
     load_drive_config, resolve_credential_path, resolve_relays, update_request_relays,
 };
-use crate::live::{install_shutdown_handler, SHUTDOWN};
+use wyrd_daemon::process::{install_shutdown_handler, SHUTDOWN};
 // Re-exported for the `tests_*` modules, which resolve argument types
 // and credential readers through `super::*` and must stay untouched
 // by the extraction phases. Test-only: the production binary never
@@ -548,7 +548,6 @@ mod credentials;
 mod drive_config;
 mod live;
 mod logging;
-mod posture;
 mod probes;
 mod update;
 

@@ -4,10 +4,7 @@
 //! calls in. `vault` (phase 4) keeps its own status renderer.
 use crate::args::SyncAction;
 use crate::drive_config::{relay_source_line, LoadedConfig, RelayResolution, RelaySource};
-use crate::live::{
-    bind_bulk_source, check_startup_retention, install_shutdown_handler,
-    park_serving_until_shutdown, shutdown_headless_serving, SHUTDOWN_DEADLINE,
-};
+use crate::live::{park_serving_until_shutdown, shutdown_headless_serving};
 use crate::logging::init_sync_diagnostics;
 use crate::probes::combine_status;
 use crate::probes::TeardownStatus;
@@ -22,6 +19,9 @@ use wyrd_core::mutation::WriteStats;
 use wyrd_core::status::{observe, SyncStatus};
 use wyrd_core::view::NamespaceView;
 use wyrd_daemon::core::RuntimeMaterialization;
+use wyrd_daemon::process::{
+    bind_bulk_source, check_startup_retention, install_shutdown_handler, SHUTDOWN_DEADLINE,
+};
 use wyrd_daemon::DriveView;
 use wyrd_daemon::{
     install_role_dir, install_serving, LiveConfig, LiveError, LiveNode, SyncReport, WyrdNode,
@@ -1288,7 +1288,7 @@ pub(crate) fn sync_now(
     } else {
         Some(SYNC_NOW_SETTLE)
     };
-    let mut bulk = Some(bind_bulk_source()?);
+    let mut bulk = Some(bind_bulk_source().map_err(CliError::Bulk)?);
     let report = drive_quiet(&mut live, &mut mailbox, &mut bulk, settle);
     // Liveness as observed, not inferred: the run connected, so it
     // reports what the relay attachment actually did. A relay-closed

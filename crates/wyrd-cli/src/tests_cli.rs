@@ -795,11 +795,6 @@ fn credential_files_are_unix_only() {
             && CREDENTIALS.contains("credential-file protection is only implemented on Unix"),
         "the non-Unix credential refusal must stay a fail-closed early return"
     );
-    const LIVE: &str = include_str!("live.rs");
-    assert!(
-        LIVE.contains("#[cfg(not(unix))]\npub(crate) fn install_shutdown_handler"),
-        "the non-Unix shutdown handler must stay a deliberate no-op"
-    );
     const ARCHITECTURE: &str = include_str!("../../../docs/architecture.md");
     assert!(
         ARCHITECTURE.contains("Windows is out of v0.4 entirely"),

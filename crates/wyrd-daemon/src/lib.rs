@@ -17,6 +17,8 @@ pub mod core;
 #[cfg(feature = "mount")]
 pub mod fuse;
 pub mod lifecycle;
+pub mod posture;
+pub mod process;
 pub mod vault;
 
 pub use core::{
@@ -33,4 +35,11 @@ pub use vault::{
     TransportDeadlines, TransportShutdown, VaultEvent, VaultLoopEnd, VaultObserver, VaultOutcome,
     VaultRun,
 };
+// Transport vocabulary for composers: the host (`wyrd-app`) bounds its
+// run over these without spelling `wyrd_sync` transport paths, so the
+// host composition check sees only the composer surface. The daemon is
+// already transport-fluent (lifecycle, vault); this re-export moves no
+// machinery, it only names the boundary the host may touch.
 pub use wyrd_fuse::DriveView;
+pub use wyrd_sync::serving::ServingEndpoint;
+pub use wyrd_sync::transport::mailbox::Mailbox;

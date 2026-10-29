@@ -17,8 +17,21 @@ wyrd-core.workspace = true
 # `pub mod fuse` below is gated on the same feature, so no mount-only
 # name leaks into a mount-free build.
 fuser = { version = "0.18", optional = true }
+# Fresh per-process instance ids for the posture sidecar: without an
+# instance id there is no honest posture to publish.
+getrandom.workspace = true
+# Hex-encoded instance and serving ids in the sidecar: identities,
+# never trust.
+hex.workspace = true
 libc.workspace = true
 thiserror.workspace = true
+# The posture sidecar (22c) is process posture for every composer, not
+# CLI diagnostics: schema-versioned JSON beside the drive, so both the
+# writer (vault, host) and lock-refused readers live here. `serde` is
+# the schema, `serde_json` the atomic file encoding — parse-only on
+# read, fixed-schema on write.
+serde.workspace = true
+serde_json.workspace = true
 # Structured mount events the process host bridges into its diagnostics.
 tracing.workspace = true
 

@@ -38,22 +38,22 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use wyrd_daemon::vault::POSTURE_INTERVAL;
+use super::vault::POSTURE_INTERVAL;
 
 /// File name of the posture sidecar inside the drive directory.
-pub(crate) const POSTURE_FILENAME: &str = "vault.posture";
+pub const POSTURE_FILENAME: &str = "vault.posture";
 
 /// Schema version the reader accepts. A version bump means the old
 /// reader reports the file malformed (safe: unavailable, never a
 /// false claim), never a best-effort reinterpretation.
-pub(crate) const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 1;
 
 /// How old a posture may be before it reads stale: three posture
 /// intervals, so one missed write (a wedged loop, a slow pass) does
 /// not flip a live vault to stale, while a dead process goes stale
 /// promptly. Explicit and documented (`docs/cli.md`): the threshold
 /// is part of the status contract, not a tuning knob.
-pub(crate) const POSTURE_FRESHNESS: Duration = Duration::from_secs(POSTURE_INTERVAL.as_secs() * 3);
+pub const POSTURE_FRESHNESS: Duration = Duration::from_secs(POSTURE_INTERVAL.as_secs() * 3);
 
 // The threshold is a whole-seconds multiple of a whole-seconds
 // interval today; if the interval ever goes sub-second this fails
@@ -66,13 +66,13 @@ const _: () = assert!(
 
 /// Deterministic per-drive sidecar path. Reading it opens no store
 /// and takes no lock.
-pub(crate) fn sidecar_path(drive_dir: &Path) -> PathBuf {
+pub fn sidecar_path(drive_dir: &Path) -> PathBuf {
     drive_dir.join(POSTURE_FILENAME)
 }
 
 /// Seconds since the Unix epoch. Wall clock, not `Instant`: the file
 /// crosses processes, so a monotonic per-process clock cannot serve.
-pub(crate) fn now_unix() -> u64 {
+pub fn now_unix() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|elapsed| elapsed.as_secs())
@@ -85,7 +85,7 @@ pub(crate) fn now_unix() -> u64 {
 /// claims it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub(crate) enum PassVerdict {
+pub enum PassVerdict {
     Ok,
     Failed,
 }
@@ -95,7 +95,7 @@ pub(crate) enum PassVerdict {
 /// construction (serde's default), so schema evolution cannot widen
 /// what the renderer prints.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub(crate) struct PostureFile {
+pub struct PostureFile {
     schema: u32,
     /// Fresh 128-bit hex id per process (see [`PostureRecorder`]).
     instance: String,
@@ -121,13 +121,34 @@ pub(crate) struct PostureFile {
     posture_unix: u64,
 }
 
+impl PostureFile {
+    /// The holder's per-process instance id, for lock-refusal
+    /// sentences: names the holding process without opening the
+    /// store or claiming aliveness.
+    pub fn instance(&self) -> &str {
+        &self.instance
+    }
+
+    /// The serving id the holder announced, as its ready line
+    /// printed it.
+    pub fn serving_id(&self) -> &str {
+        &self.serving_id
+    }
+
+    /// When this file was written (unix seconds): the reader
+    /// derives recency from it, never aliveness.
+    pub fn posture_unix(&self) -> u64 {
+        self.posture_unix
+    }
+}
+
 /// Publishes one process's posture. The host owns the recorder the
 /// way it owns stderr: the composer reports facts through
-/// [`VaultEvent`](wyrd_daemon::vault::VaultEvent), the recorder turns
+/// [`VaultEvent`](super::vault::VaultEvent), the recorder turns
 /// the ready/posture/failure facts into sidecar generations. Every
 /// publish is best-effort — the vault never fails for its status
 /// surface.
-pub(crate) struct PostureRecorder {
+pub struct PostureRecorder {
     path: PathBuf,
     tmp: PathBuf,
     instance: String,
@@ -155,7 +176,7 @@ impl PostureRecorder {
     /// openly when the platform yields no entropy: a vault that
     /// cannot mint an instance id must not start borrowing the
     /// previous instance's posture.
-    pub(crate) fn new(drive_dir: &Path, serving_id: String) -> io::Result<Self> {
+    pub fn new(drive_dir: &Path, serving_id: String) -> io::Result<Self> {
         let mut id = [0u8; 16];
         // getrandom 0.2's error carries no std impl, so the mapping
         // names the failure statically: entropy is either available
@@ -191,12 +212,12 @@ impl PostureRecorder {
     /// starter from clobbering the winner's posture; writing at all
     /// (not waiting for ready) is what keeps a crash-then-restart
     /// from leaving the dead instance's file looking current.
-    pub(crate) fn note_startup(&self) {
+    pub fn note_startup(&self) {
         self.publish();
     }
 
     /// This process emitted ready: record it under this instance only.
-    pub(crate) fn note_ready(&self) {
+    pub fn note_ready(&self) {
         if let Ok(mut state) = self.state.lock() {
             state.ready_unix = Some(now_unix());
         }
@@ -206,7 +227,7 @@ impl PostureRecorder {
     /// One pass completed: counters advance and the last-pass verdict
     /// is `ok` — the pass ran clean, which says nothing about
     /// convergence (see [`PassVerdict`]).
-    pub(crate) fn note_posture(&self, passes: u64, errors: u64, sent: u64, uptime_secs: u64) {
+    pub fn note_posture(&self, passes: u64, errors: u64, sent: u64, uptime_secs: u64) {
         if let Ok(mut state) = self.state.lock() {
             state.passes = passes;
             state.errors = errors;
@@ -224,7 +245,7 @@ impl PostureRecorder {
     /// A pre-ready failure still publishes — under the new instance
     /// with `ready: none`, which is the truth (starting and failing),
     /// not an inherited readiness.
-    pub(crate) fn note_failure(&self, class: String, consecutive: u32) {
+    pub fn note_failure(&self, class: String, consecutive: u32) {
         if let Ok(mut state) = self.state.lock() {
             state.last_pass_unix = Some(now_unix());
             state.last_pass_verdict = Some(PassVerdict::Failed);
@@ -296,7 +317,7 @@ impl PostureRecorder {
 /// file; absent and malformed carry no facts at all — the renderer
 /// must not upgrade either into a claim.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ProcessPosture {
+pub enum ProcessPosture {
     /// Posture within [`POSTURE_FRESHNESS`]: recent, still not proof
     /// of aliveness.
     Fresh(PostureFile),
@@ -311,10 +332,44 @@ pub(crate) enum ProcessPosture {
     Malformed,
 }
 
+/// Which process a sidecar attributes the drive to: instance id,
+/// serving id, and recency — never aliveness, which a sidecar cannot
+/// prove. Shared by every lock-refused starter (the host's
+/// `DriveLocked` sentence) so the holder facts render one way; an
+/// absent or malformed sidecar still describes, never names. The
+/// `vault status` process section keeps its own multi-line rendering
+/// for the stopped-drive surface; this is the one-line refusal form.
+pub fn describe_holder(posture: &ProcessPosture) -> String {
+    match posture {
+        ProcessPosture::Fresh(file) => {
+            let age = now_unix().saturating_sub(file.posture_unix());
+            format!(
+                "process {} (serving {}, posture {}s ago; liveness unverified)",
+                file.instance(),
+                file.serving_id(),
+                age
+            )
+        }
+        ProcessPosture::Stale(file, age) => format!(
+            "process {} (serving {}, last recorded {}s ago; liveness unverified)",
+            file.instance(),
+            file.serving_id(),
+            age
+        ),
+        ProcessPosture::Absent => {
+            "no posture recorded (the holder never published; liveness unverified)".to_string()
+        }
+        ProcessPosture::Malformed => {
+            "posture unreadable (sidecar present but not schema v1; liveness unverified)"
+                .to_string()
+        }
+    }
+}
+
 /// Read and classify the sidecar. Opens only the sidecar path — never
 /// the store, never the lock — so a running vault's exclusivity is
 /// undisturbed by the query.
-pub(crate) fn read_posture(path: &Path) -> ProcessPosture {
+pub fn read_posture(path: &Path) -> ProcessPosture {
     let bytes = match fs::read(path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return ProcessPosture::Absent,
@@ -346,7 +401,7 @@ pub(crate) fn read_posture(path: &Path) -> ProcessPosture {
 /// proves no process holds the lock: a timestamp-fresh file is then
 /// retained history, and the header says so instead of agreeing with
 /// a durable section that shows a stopped drive.
-pub(crate) fn render_process_section(posture: &ProcessPosture, proven_free: bool) -> String {
+pub fn render_process_section(posture: &ProcessPosture, proven_free: bool) -> String {
     fn age_line(posture_unix: u64) -> String {
         let age = now_unix().saturating_sub(posture_unix);
         format!("{posture_unix} ({age}s ago)")
@@ -435,7 +490,31 @@ fn render_posture_facts(out: &mut String, file: &PostureFile) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests_harness::TempDir;
+    use std::env;
+
+    /// Process-unique scratch directory, auto-removed: the same
+    /// counter-isolated shape as the CLI's test harness, local to
+    /// this module so the sidecar tests do not depend on another
+    /// crate's test-only surface.
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new() -> Self {
+            static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let path =
+                env::temp_dir().join(format!("wyrd-daemon-posture-{}-{n}", std::process::id()));
+            let _ = fs::remove_dir_all(&path);
+            fs::create_dir_all(&path).unwrap();
+            TempDir(path)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
 
     fn sidecar(dir: &TempDir) -> PathBuf {
         sidecar_path(&dir.0)
@@ -735,5 +814,36 @@ mod tests {
     #[test]
     fn freshness_threshold_is_three_posture_intervals() {
         assert_eq!(POSTURE_FRESHNESS, POSTURE_INTERVAL * 3);
+    }
+
+    #[test]
+    fn describe_holder_names_facts_never_aliveness() {
+        let dir = TempDir::new();
+        assert!(
+            describe_holder(&read_posture(&sidecar(&dir))).contains("no posture recorded"),
+            "absence describes, never names"
+        );
+        forge(&dir, now_unix(), serde_json::json!({}));
+        let fresh = describe_holder(&read_posture(&sidecar(&dir)));
+        assert!(
+            fresh.contains("0123456789abcdef0123456789abcdef")
+                && fresh.contains("liveness unverified"),
+            "fresh names the holder without claiming aliveness: {fresh}"
+        );
+        forge(
+            &dir,
+            now_unix().saturating_sub(10_000),
+            serde_json::json!({}),
+        );
+        let stale = describe_holder(&read_posture(&sidecar(&dir)));
+        assert!(
+            stale.contains("last recorded") && stale.contains("liveness unverified"),
+            "stale names the last record, never aliveness: {stale}"
+        );
+        fs::write(sidecar(&dir), b"not json").unwrap();
+        assert!(
+            describe_holder(&read_posture(&sidecar(&dir))).contains("unreadable"),
+            "malformed describes, never names"
+        );
     }
 }

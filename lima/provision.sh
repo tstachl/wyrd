@@ -11,6 +11,10 @@ if [[ ! -x "$WYRD_BIN" ]]; then
   echo "provision: importing wyrd closure into the guest store"
   sudo nix-store --import < /tmp/lima/wyrd-closure.nar
 fi
+if [[ -n "${WYRD_APP_BIN:-}" && ! -x "$WYRD_APP_BIN" ]]; then
+  echo "provision: importing wyrd-app closure into the guest store"
+  sudo nix-store --import < /tmp/lima/wyrd-app-closure.nar
+fi
 "$WYRD_BIN" --version
 
 need() { command -v "$1" >/dev/null 2>&1; }
