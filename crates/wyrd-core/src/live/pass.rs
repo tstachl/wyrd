@@ -158,6 +158,100 @@ where
             }
         }
     }
+    /// Record a publication judgment: the served generation is fresh,
+    /// empty or not. Best-effort by design — a poisoned slot fails
+    /// the pass through the normal lock path, and a publication that
+    /// cannot record its own freshness must not pretend it did.
+    fn note_published(&self, installed_heads: usize, revision: u64, generation: u64) {
+        let judgment = ProjectionFreshness {
+            state: if installed_heads == 0 {
+                FreshnessState::FreshEmpty
+            } else {
+                FreshnessState::FreshNonEmpty
+            },
+            revision,
+            generation,
+        };
+        if self
+            .freshness
+            .write()
+            .map(|mut slot| *slot = judgment)
+            .is_err()
+        {
+            tracing::warn!("freshness slot poisoned at publication; serving generation unjudged");
+        }
+    }
+
+    /// Record a retaining failure: the refresh established nothing,
+    /// so the previous generation keeps serving under an explicit
+    /// staleness note. The served bytes do not change — only the
+    /// judgment does — and a later publication overwrites the note.
+    /// Best-effort like [`note_published`](Self::note_published): the
+    /// pass is already failing, and a second failure must not mask
+    /// the first.
+    fn note_retained_last_good(&self, error: &EngineError) {
+        let served = self
+            .projection
+            .read()
+            .map(|slot| (slot.revision(), slot.generation()));
+        let Ok((revision, generation)) = served else {
+            return;
+        };
+        let judgment = ProjectionFreshness {
+            state: FreshnessState::RetainedLastGood {
+                detail: error.to_string(),
+            },
+            revision,
+            generation,
+        };
+        if self
+            .freshness
+            .write()
+            .map(|mut slot| *slot = judgment)
+            .is_err()
+        {
+            tracing::warn!(
+                "freshness slot poisoned at refresh failure; serving generation unjudged"
+            );
+        }
+    }
+
+    /// Record the owner observation for out-of-process consumers:
+    /// the durable status at pass end plus this pass's report and
+    /// the transport health behind it, pinned to the pass count. The
+    /// loop is the only writer; the owner interface is the reader.
+    /// A failed status observation keeps the previous slot and logs
+    /// at warn — the freshness judgment, not this slot, tells the
+    /// consumer what to trust.
+    fn record_observation(&self, report: &SyncReport, health: MailboxSnapshot, passes: u64) {
+        match self.observe_status() {
+            Ok(status) => {
+                let observation = OwnerObservation {
+                    status,
+                    report: report.clone(),
+                    health,
+                    passes,
+                };
+                if self
+                    .observation
+                    .write()
+                    .map(|mut slot| *slot = Some(observation))
+                    .is_err()
+                {
+                    tracing::warn!(
+                        "owner observation slot poisoned; out-of-process status unrecorded"
+                    );
+                }
+            }
+            Err(error) => {
+                tracing::warn!(
+                    error = %error,
+                    "durable status observation failed; keeping previous owner observation"
+                );
+            }
+        }
+    }
+
     /// One supervised pass: drain the mailbox into the engine, run a
     /// bounded fetch plan when a bulk source is present, then publish
     /// a new serving generation when durable state advanced. Fetch
@@ -566,10 +660,25 @@ where
         let heads = self.engine.live_heads()?;
         let partition = {
             let store = self.store.read().map_err(|_| LiveError::Lock)?;
-            partition_heads(&completed_runtime, heads, &*store)?
+            match partition_heads(&completed_runtime, heads, &*store) {
+                Ok(partition) => partition,
+                Err(error) => {
+                    // The refresh established nothing: the previous
+                    // generation keeps serving, and the freshness slot
+                    // says so explicitly rather than reading fresh.
+                    self.note_retained_last_good(&error);
+                    return Err(error.into());
+                }
+            }
         };
         let pending_heads = partition.pending;
-        let heads = partition.into_publishable()?;
+        let heads = match partition.into_publishable() {
+            Ok(heads) => heads,
+            Err(error) => {
+                self.note_retained_last_good(&error);
+                return Err(error.into());
+            }
+        };
         if heads.is_empty() && pending_heads > 0 {
             // Every eligible head is still mid-fetch: keep the current
             // generation serving and try again next pass. This is
@@ -628,6 +737,11 @@ where
             let mut slot = self.projection.write().map_err(|_| LiveError::Lock)?;
             *slot = Arc::new(next);
         }
+        // Publication established a fresh generation: record the
+        // judgment the owner interface serves. An empty head set is
+        // a fresh empty drive, not a failure — the composition
+        // contract distinguishes them, and so does this slot.
+        self.note_published(installed_heads, revision, generation + 1);
         self.published_revision = revision;
         self.published_terminal = terminal;
         self.published_heads = installed_heads;
@@ -749,6 +863,13 @@ where
                     consecutive = [0; 3];
                     delay = [config.error_base_delay; 3];
                     summary.passes += 1;
+                    // Publish the owner observation for out-of-process
+                    // consumers: durable status plus this pass's report
+                    // and transport health, pinned to the pass count.
+                    // A failed observation keeps the previous slot —
+                    // staleness is the freshness slot's story, not a
+                    // reason to serve nothing.
+                    self.record_observation(&report, mailbox.health_snapshot(), summary.passes);
                     if let Some(hook) = &mut self.pass_hook {
                         hook(summary.passes, &report);
                     }

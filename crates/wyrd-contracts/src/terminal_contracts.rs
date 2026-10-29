@@ -422,6 +422,7 @@ fn quarantined_chunk_heals_from_a_live_peer_without_remount() {
         mutations,
         open_timeout,
         budgets,
+        ..
     } = &parts;
     assert_eq!(
         view_status(&parts, &chunk),
@@ -598,6 +599,7 @@ fn scrubbed_append_heals_from_a_live_peer_without_remount() {
         mutations,
         open_timeout,
         budgets,
+        ..
     } = &parts;
     let mut backend = FuseBackend::shared_with_wants(
         Arc::clone(projection),

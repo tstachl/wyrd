@@ -31,7 +31,8 @@ pub mod signer;
 
 pub use addr::{decode_node_addr, encode_node_addr, endpoint_id};
 pub use mailbox::{
-    Delivery, DeliveryId, Disposition, Mailbox, MailboxEnvelope, MailboxError, SendReport,
+    Delivery, DeliveryId, Disposition, Mailbox, MailboxEnvelope, MailboxError, MailboxSnapshot,
+    SendReport,
 };
 pub use routes::publish_recorded_routes;
 pub use signer::{SignerError, SignerSession};

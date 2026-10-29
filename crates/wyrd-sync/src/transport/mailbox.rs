@@ -319,6 +319,76 @@ pub trait Mailbox {
     /// real transport MUST override this: a silent default on a live
     /// mailbox would leak its tasks past teardown. Idempotent.
     fn shutdown(&mut self, _deadline: std::time::Duration) {}
+
+    /// A point-in-time snapshot of the transport's run health: the
+    /// same nine fields as the live mailbox's health report, as
+    /// plain data with no handle into the mailbox. The live loop
+    /// samples this per pass for the owner interface's liveness
+    /// observation (OD-16-D); the default is "unknown" — fakes and
+    /// mailboxes that cannot observe health report none, and stay
+    /// compiling without an opinion. Only a mailbox with a real
+    /// supervisor behind it overrides this.
+    fn health_snapshot(&self) -> MailboxSnapshot {
+        MailboxSnapshot::unknown()
+    }
+}
+
+/// A point-in-time snapshot of relay-transport run health, as plain
+/// data: what the drive-owner interface's liveness operation
+/// reports, sampled by the live loop per pass. Mirrors the live
+/// mailbox's health report field for field (see
+/// `wyrd_core::mailbox::MailboxHealth`); the mapping lives there,
+/// so this type never imports core. `Copy` like the health it
+/// mirrors: snapshots move by value from the loop into the
+/// observation slot, never by reference into the supervisor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MailboxSnapshot {
+    /// The notification drainer is alive: relay events can reach intake.
+    pub stream_alive: bool,
+    /// Relays currently connected.
+    pub connected_relays: usize,
+    /// Relays registered at construction.
+    pub total_relays: usize,
+    /// Saturation replays issued this session, lifetime total.
+    pub saturation_recoveries: u64,
+    /// Supervisor tick-loop iterations, lifetime total.
+    pub supervisor_ticks: u64,
+    /// A supervisor tick has observed at least one connected relay,
+    /// lifetime latch.
+    pub relay_attached: bool,
+    /// Stream-recovery loop iterations while an episode is in flight.
+    pub stream_recovery_attempts: u64,
+    /// Relay-recovery loop iterations while an episode is in flight.
+    pub relay_recovery_attempts: u64,
+    /// Relay-sent subscription closures observed, lifetime total.
+    pub closed_subscriptions: u64,
+}
+
+impl MailboxSnapshot {
+    /// No health to report: the mailbox has no supervisor behind it.
+    /// Renders as "unknown", never as a healthy-looking zero — a
+    /// consumer must be able to tell "no mailbox" from "idle but
+    /// attached" (`relay_attached` is the latch that separates them).
+    pub fn unknown() -> Self {
+        MailboxSnapshot {
+            stream_alive: false,
+            connected_relays: 0,
+            total_relays: 0,
+            saturation_recoveries: 0,
+            supervisor_ticks: 0,
+            relay_attached: false,
+            stream_recovery_attempts: 0,
+            relay_recovery_attempts: 0,
+            closed_subscriptions: 0,
+        }
+    }
+
+    /// Transport liveness: the drainer is alive and, if relays are
+    /// configured, at least one is connected. Mirrors the live
+    /// mailbox's own `is_live` over snapshot data.
+    pub fn is_live(&self) -> bool {
+        self.stream_alive && (self.total_relays == 0 || self.connected_relays > 0)
+    }
 }
 
 /// Mailbox-scoped identity for one handover: stable across re-offers
