@@ -5,9 +5,9 @@
 //!
 //! The interface forwards and never interprets: namespace reads go to
 //! the shared projection, the durable observation and liveness go to
-//! the loop-published slots, and (child 2) mutations go to the single
-//! mutation queue. See `docs/owner-interface.md` for the protocol
-//! contract; this module is its implementation.
+//! the loop-published slots, and mutations go to the single mutation
+//! queue. See `docs/owner-interface.md` for the protocol contract;
+//! this module is its implementation.
 //!
 //! Three negative invariants pin the shape, enforced in
 //! `wyrd-contracts` (not here, so the check survives this module's
@@ -32,12 +32,14 @@ pub use server::{socket_path_for, OwnerHandles, OwnerServer};
 pub use server::{DEFAULT_MAX_READ_BYTES, MAX_FRAME_BYTES, OWNER_SOCKET_NAME, READ_DEMAND_TIMEOUT};
 
 pub use wire::{
-    PathParams, RawRequest, WireAttr, WireConvergenceState, WireDirEntry, WireDrainReport,
-    WireDurabilityLevel, WireError, WireErrorCode, WireExecuteReport, WireFreshness,
+    PathParams, RawRequest, SubmitParams, WireAttr, WireConvergenceState, WireDirEntry,
+    WireDrainReport, WireDurabilityLevel, WireError, WireErrorCode, WireExecuteReport,
+    WireFileIdentity, WireFoldDisposition, WireFoldForcerOutcome, WireFoldMember, WireFreshness,
     WireFreshnessState, WireHeadClasses, WireHeadSummary, WireKind, WireLiveness,
-    WireMailboxHealth, WireMailboxView, WireMaterializationSummary, WireNode, WireObservation,
-    WireOk, WireOutboxTotals, WirePeerHandle, WirePendingObligations, WireQuarantineReport,
-    WireQueueDepth, WireReconciliationCounters, WireResponse, WireResult, WireScrubReport,
-    WireSyncReport, WireSyncStatus, OP_FRESHNESS, OP_LIVENESS, OP_LOOKUP, OP_OBSERVE, OP_READ,
-    OP_READDIR, OP_STAT, WIRE_VERSION,
+    WireMailboxHealth, WireMailboxView, WireMaterializationSummary, WireMutationError,
+    WireMutationKind, WireMutationOutcome, WireNode, WireObservation, WireOk, WireOutboxTotals,
+    WirePeerHandle, WirePendingObligations, WireQuarantineReport, WireQueueDepth,
+    WireReconciliationCounters, WireResponse, WireResult, WireScrubReport, WireSyncReport,
+    WireSyncStatus, OP_CAPTURE_PARENT, OP_FRESHNESS, OP_LIVENESS, OP_LOOKUP, OP_OBSERVE, OP_READ,
+    OP_READDIR, OP_STAT, OP_SUBMIT, WIRE_VERSION,
 };

@@ -5242,6 +5242,7 @@ dependencies = [
  "iroh",
  "libc",
  "secp256k1",
+ "serde_json",
  "tokio",
  "toml",
  "wyrd-core",

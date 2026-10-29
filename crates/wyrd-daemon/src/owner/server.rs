@@ -32,6 +32,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use wyrd_core::live::{LiveParts, SharedObservation};
+use wyrd_core::mutation::MutationQueue;
 use wyrd_core::projection::{Projection, SharedFreshness, SharedProjection};
 use wyrd_core::quarantine::QuarantineQueue;
 use wyrd_core::read::{LiveReader, ReadError};
@@ -42,9 +43,10 @@ use wyrd_core::want::{WantError, WantRegistry};
 use crate::vault::OwnerView;
 
 use super::wire::{
-    PathParams, RawRequest, WireAttr, WireDirEntry, WireError, WireErrorCode, WireFreshness,
-    WireLiveness, WireMailboxHealth, WireNode, WireOk, WireResponse, WireResult, WireSyncReport,
-    WireSyncStatus, OP_FRESHNESS, OP_LIVENESS, OP_LOOKUP, OP_OBSERVE, OP_READ, OP_READDIR, OP_STAT,
+    PathParams, RawRequest, SubmitParams, WireAttr, WireDirEntry, WireError, WireErrorCode,
+    WireFreshness, WireLiveness, WireMailboxHealth, WireMutationError, WireMutationOutcome,
+    WireNode, WireOk, WireResponse, WireResult, WireSyncReport, WireSyncStatus, OP_CAPTURE_PARENT,
+    OP_FRESHNESS, OP_LIVENESS, OP_LOOKUP, OP_OBSERVE, OP_READ, OP_READDIR, OP_STAT, OP_SUBMIT,
     WIRE_VERSION,
 };
 
@@ -90,6 +92,10 @@ pub struct OwnerHandles {
     pub projection: SharedProjection<OwnerView>,
     /// Demand the read side registers; the loop admits it each pass.
     pub wants: Arc<WantRegistry>,
+    /// The single mutation queue the submit side forwards to. The
+    /// interface interprets nothing: the queue owns admission,
+    /// ordering, and every refusal.
+    pub mutations: Arc<MutationQueue>,
     /// The freshness judgment over the served generation.
     pub freshness: SharedFreshness,
     /// The latest owner observation, if any pass completed.
@@ -113,6 +119,7 @@ impl OwnerHandles {
         OwnerHandles {
             projection: Arc::clone(&parts.projection),
             wants: Arc::clone(&parts.wants),
+            mutations: Arc::clone(&parts.mutations),
             freshness: Arc::clone(&parts.freshness),
             observation: Arc::clone(&parts.observation),
             quarantine: None,
@@ -287,6 +294,8 @@ impl OwnerServer {
             OP_OBSERVE => self.op_observe(),
             OP_LIVENESS => self.op_liveness(),
             OP_FRESHNESS => self.op_freshness(),
+            OP_SUBMIT => self.op_submit(params),
+            OP_CAPTURE_PARENT => self.op_capture_parent(params),
             unknown => Err((
                 WireErrorCode::UnsupportedOperation,
                 format!("unsupported operation {unknown:?}"),
@@ -501,6 +510,61 @@ impl OwnerServer {
         Ok(WireOk::Freshness {
             freshness: WireFreshness::from(&*slot),
         })
+    }
+
+    /// Capture the current parent-directory incarnation for a later
+    /// create: the consumer sends the token back with the operation,
+    /// and the owner re-checks it before authoring. A path with no
+    /// token refuses here — creates address paths through tokens,
+    /// never bare.
+    fn op_capture_parent(
+        &self,
+        params: serde_json::Value,
+    ) -> Result<WireOk, (WireErrorCode, String)> {
+        let params: PathParams = serde_json::from_value(params).map_err(|error| {
+            (
+                WireErrorCode::Malformed,
+                format!("bad capture-parent params: {error}"),
+            )
+        })?;
+        match self.handles.mutations.capture_parent(&params.path) {
+            Some(token) => Ok(WireOk::ParentToken {
+                token: token.wire_value(),
+            }),
+            None => Err((
+                WireErrorCode::NotFound,
+                format!("no parent to capture for {:?}", params.path),
+            )),
+        }
+    }
+
+    /// Forward one mutation to the single queue and block for its
+    /// terminal answer. The interface interprets nothing: decode
+    /// failures refuse at the wire, queue refusals carry through as
+    /// distinct outcomes, and a success means exactly what an
+    /// in-process submit's success means. A broken connection while
+    /// blocked is unconfirmed, never success and never failure
+    /// (child 3 owns that answer).
+    fn op_submit(&self, params: serde_json::Value) -> Result<WireOk, (WireErrorCode, String)> {
+        let params: SubmitParams = serde_json::from_value(params).map_err(|error| {
+            (
+                WireErrorCode::Malformed,
+                format!("bad submit params: {error}"),
+            )
+        })?;
+        let kind = params
+            .kind
+            .to_kind()
+            .map_err(|message| (WireErrorCode::Malformed, message))?;
+        match self.handles.mutations.submit(kind) {
+            Ok(outcome) => Ok(WireOk::Submitted {
+                outcome: WireMutationOutcome::from(&outcome),
+            }),
+            Err(error) => {
+                let mapped = WireMutationError::from(&error);
+                Err((mapped.code, mapped.message))
+            }
+        }
     }
 }
 

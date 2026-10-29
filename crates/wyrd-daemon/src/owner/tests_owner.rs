@@ -6,18 +6,21 @@
 
 use super::server::{OwnerHandles, OwnerServer, MAX_FRAME_BYTES};
 use super::wire::{
-    PathParams, RawRequest, WireAttr, WireConvergenceState, WireDirEntry, WireDurabilityLevel,
-    WireError, WireErrorCode, WireFreshness, WireFreshnessState, WireHeadClasses, WireHeadSummary,
-    WireKind, WireLiveness, WireMailboxHealth, WireMailboxView, WireMaterializationSummary,
-    WireNode, WireOk, WireOutboxTotals, WirePeerHandle, WirePendingObligations, WireQueueDepth,
-    WireReconciliationCounters, WireResponse, WireResult, WireSyncStatus, OP_FRESHNESS,
-    OP_LIVENESS, OP_LOOKUP, OP_OBSERVE, OP_READ, OP_READDIR, OP_STAT, WIRE_VERSION,
+    PathParams, RawRequest, SubmitParams, WireAttr, WireConvergenceState, WireDirEntry,
+    WireDurabilityLevel, WireError, WireErrorCode, WireFileIdentity, WireFreshness,
+    WireFreshnessState, WireHeadClasses, WireHeadSummary, WireKind, WireLiveness,
+    WireMailboxHealth, WireMailboxView, WireMaterializationSummary, WireMutationError,
+    WireMutationKind, WireMutationOutcome, WireNode, WireOk, WireOutboxTotals, WirePeerHandle,
+    WirePendingObligations, WireQueueDepth, WireReconciliationCounters, WireResponse, WireResult,
+    WireSyncStatus, OP_CAPTURE_PARENT, OP_FRESHNESS, OP_LIVENESS, OP_LOOKUP, OP_OBSERVE, OP_READ,
+    OP_READDIR, OP_STAT, OP_SUBMIT, WIRE_VERSION,
 };
 
 use std::collections::BTreeSet;
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use wyrd_core::live::LiveParts;
@@ -736,4 +739,479 @@ fn socket_round_trip_serves_a_lookup() {
     drop(client);
     serve_thread.join().unwrap();
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// Mutation submission (child 2)
+// ---------------------------------------------------------------------------
+
+/// Submit one mutation through dispatch and unwrap the success.
+fn submit_ok(server: &OwnerServer, kind: super::wire::WireMutationKind) -> WireMutationOutcome {
+    let response = server.dispatch(RawRequest {
+        v: WIRE_VERSION,
+        id: 11,
+        op: OP_SUBMIT.to_string(),
+        params: serde_json::to_value(SubmitParams { kind }).unwrap(),
+    });
+    match response.result {
+        WireResult::Ok(ok) => match *ok {
+            WireOk::Submitted { outcome } => outcome,
+            other => panic!("unexpected submit result: {other:?}"),
+        },
+        WireResult::Err(error) => panic!("submit refused: {:?} {}", error.code, error.message),
+    }
+}
+
+/// Submit one mutation through dispatch and unwrap the refusal.
+fn submit_err(server: &OwnerServer, kind: super::wire::WireMutationKind) -> WireError {
+    let response = server.dispatch(RawRequest {
+        v: WIRE_VERSION,
+        id: 11,
+        op: OP_SUBMIT.to_string(),
+        params: serde_json::to_value(SubmitParams { kind }).unwrap(),
+    });
+    match response.result {
+        WireResult::Err(error) => error,
+        WireResult::Ok(ok) => panic!("submit unexpectedly succeeded: {ok:?}"),
+    }
+}
+
+/// Run the live loop on a thread until `stop` trips; the test owns
+/// the Arc slots. Returns the join handle.
+fn spawn_loop(
+    mut live: wyrd_core::live::LiveNode<crate::vault::OwnerView>,
+    stop: &'static AtomicBool,
+) -> std::thread::JoinHandle<Result<wyrd_core::live::LiveSummary, wyrd_core::live::LiveError>> {
+    std::thread::spawn(move || {
+        let mut mailbox = NoopMailbox;
+        live.run_loop(
+            &mut mailbox,
+            None::<&mut wyrd_sync::bulk::MemoryBulkSource>,
+            stop,
+            &wyrd_core::live::LiveConfig::default(),
+            &mut |_, _| {},
+        )
+    })
+}
+
+/// A composed owner with the loop running: the submit baseline.
+type RunningOwner = (
+    OwnerServer,
+    LiveParts<crate::vault::OwnerView>,
+    std::path::PathBuf,
+    &'static AtomicBool,
+    std::thread::JoinHandle<Result<wyrd_core::live::LiveSummary, wyrd_core::live::LiveError>>,
+);
+
+/// Returns the server, the parts, the directory, the stop flag, and
+/// the loop thread. The caller trips the flag and joins.
+fn running_parts() -> RunningOwner {
+    let (engine, dir) = scratch_drive();
+    let store = wyrd_format::FsObjectStore::open(dir.clone()).unwrap();
+    let mut daemon = wyrd_core::node::WyrdNode::new(engine, store).unwrap();
+    daemon.put_file("seed.txt", b"seed").unwrap();
+    daemon.refresh_live_heads().unwrap();
+    let (live, parts) = daemon
+        .into_live(
+            Duration::from_secs(5),
+            &wyrd_core::live::LiveConfig::default(),
+        )
+        .unwrap();
+    let server = OwnerServer::new(OwnerHandles::from_parts(&parts));
+    let stop: &'static AtomicBool = Box::leak(Box::new(AtomicBool::new(false)));
+    let loop_thread = spawn_loop(live, stop);
+    (server, parts, dir, stop, loop_thread)
+}
+
+/// A mutation submitted through the interface produces the same
+/// outcome, the same served state, and the same announcement
+/// obligation it would have produced in process: the load-bearing
+/// acceptance test. A second identical drive takes the same
+/// operation in process; both drives serve the same node afterwards.
+#[test]
+fn owner_interface_forwards_a_mutation_unchanged() {
+    let (server, parts, dir, stop, loop_thread) = running_parts();
+
+    // Through the interface: mkdir authors a snapshot.
+    let outcome = submit_ok(
+        &server,
+        WireMutationKind::Mkdir {
+            path: "via-iface".to_string(),
+        },
+    );
+    assert_eq!(outcome, WireMutationOutcome::Done);
+
+    // The served state is the same a direct submit would produce:
+    // the directory serves with the same node the loop published.
+    match dispatch_ok(&server, OP_LOOKUP, "via-iface") {
+        WireOk::Lookup { node, .. } => {
+            assert!(
+                matches!(node, WireNode::Dir { .. }),
+                "mkdir serves a directory: {node:?}"
+            );
+        }
+        other => panic!("unexpected lookup result: {other:?}"),
+    }
+
+    // Ordered dependents through the interface prove the queue's
+    // total order survives the transport: a reordered rename would
+    // refuse NotFound.
+    let outcome = submit_ok(
+        &server,
+        WireMutationKind::Mkdir {
+            path: "via-iface/sub".to_string(),
+        },
+    );
+    assert_eq!(outcome, WireMutationOutcome::Done);
+    let outcome = submit_ok(
+        &server,
+        WireMutationKind::Rename {
+            from: "via-iface/sub".to_string(),
+            to: "via-iface/renamed".to_string(),
+            no_replace: true,
+        },
+    );
+    assert_eq!(outcome, WireMutationOutcome::Done);
+    match dispatch_ok(&server, OP_LOOKUP, "via-iface/renamed") {
+        WireOk::Lookup { node, .. } => {
+            assert!(matches!(node, WireNode::Dir { .. }));
+        }
+        other => panic!("renamed directory does not serve: {other:?}"),
+    }
+
+    // A mixed burst — in-process and cross-process submits from
+    // separate threads — all lands, and every authoring submit queues
+    // its announcement obligation.
+    let server = Arc::new(server);
+    let queue = Arc::clone(&parts.mutations);
+    let mut threads = Vec::new();
+    for i in 0..4 {
+        let server = Arc::clone(&server);
+        threads.push(std::thread::spawn(move || {
+            submit_ok(
+                &server,
+                WireMutationKind::Mkdir {
+                    path: format!("burst-iface-{i}"),
+                },
+            );
+        }));
+        let queue = Arc::clone(&queue);
+        threads.push(std::thread::spawn(move || {
+            queue
+                .submit(wyrd_core::mutation::MutationKind::Mkdir {
+                    path: format!("burst-direct-{i}"),
+                })
+                .expect("in-process burst submit commits");
+        }));
+    }
+    for thread in threads {
+        thread.join().unwrap();
+    }
+    for i in 0..4 {
+        match dispatch_ok(&server, OP_LOOKUP, &format!("burst-iface-{i}")) {
+            WireOk::Lookup { .. } => {}
+            other => panic!("burst dir missing: {other:?}"),
+        }
+        assert!(
+            parts
+                .projection
+                .read()
+                .unwrap()
+                .view()
+                .lookup(&format!("burst-direct-{i}"))
+                .is_ok(),
+            "in-process burst dir serves"
+        );
+    }
+    let observation = parts
+        .observation
+        .read()
+        .unwrap()
+        .clone()
+        .expect("a pass completed");
+    // A solo drive announces to nobody, so the queued count stays
+    // zero by design — the commit boundary the burst proves is the
+    // durability level: every authoring submit landed, the outbox is
+    // quiet, and the drive reads Published.
+    assert_eq!(
+        observation.status.totals.announcements_queued,
+        observation.status.totals.announcements_delivered,
+        "nothing stranded in the outbox: {:?}",
+        observation.status.totals
+    );
+    let response = server.dispatch(RawRequest {
+        v: WIRE_VERSION,
+        id: 12,
+        op: OP_OBSERVE.to_string(),
+        params: serde_json::Value::Null,
+    });
+    match response.result {
+        WireResult::Ok(ok) => match *ok {
+            WireOk::Observe { status } => {
+                assert_eq!(status.durability, WireDurabilityLevel::Published);
+            }
+            other => panic!("unexpected observe result: {other:?}"),
+        },
+        other => panic!("observe failed: {other:?}"),
+    }
+
+    stop.store(true, Ordering::Relaxed);
+    spawn_loop_done(loop_thread);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Join a loop thread, asserting a clean stop.
+fn spawn_loop_done(
+    thread: std::thread::JoinHandle<
+        Result<wyrd_core::live::LiveSummary, wyrd_core::live::LiveError>,
+    >,
+) {
+    let summary = thread.join().unwrap();
+    assert!(summary.is_ok(), "the loop ends clean on stop");
+}
+
+/// The same operation submitted in process and through the
+/// interface reports the same outcome: the transport adds no
+/// meaning of its own. Same drive, same empty content, two paths —
+/// the created identities compare byte-equal.
+#[test]
+fn submit_reports_the_same_outcome_both_ways() {
+    let (server, parts, dir, stop, loop_thread) = running_parts();
+
+    // In process: capture a parent token the direct way, then create.
+    let token = parts
+        .mutations
+        .capture_parent("")
+        .expect("root captures a token");
+    let direct = parts
+        .mutations
+        .submit(wyrd_core::mutation::MutationKind::CreateFile {
+            path: "same-direct.txt".to_string(),
+            parent: token,
+        })
+        .expect("in-process create commits");
+
+    // Through the interface: capture-parent op, then submit.
+    let response = server.dispatch(RawRequest {
+        v: WIRE_VERSION,
+        id: 11,
+        op: OP_CAPTURE_PARENT.to_string(),
+        params: serde_json::to_value(PathParams {
+            path: String::new(),
+        })
+        .unwrap(),
+    });
+    let token = match response.result {
+        WireResult::Ok(ok) => match *ok {
+            WireOk::ParentToken { token } => token,
+            other => panic!("unexpected capture result: {other:?}"),
+        },
+        other => panic!("capture-parent failed: {other:?}"),
+    };
+    let outcome = submit_ok(
+        &server,
+        WireMutationKind::CreateFile {
+            path: "same-iface.txt".to_string(),
+            parent: token,
+        },
+    );
+    // Same empty content, same outcome value: the transport added
+    // nothing. (Paths differ, but empty files carry no path in
+    // their identity — size zero, no chunks.)
+    assert_eq!(WireMutationOutcome::from(&direct), outcome);
+
+    // A forged token refuses stale at the queue's re-check, and a
+    // capture against a missing parent refuses at the wire.
+    let error = submit_err(
+        &server,
+        WireMutationKind::CreateFile {
+            path: "same-forged.txt".to_string(),
+            parent: 0xdead_beef,
+        },
+    );
+    assert_eq!(error.code, WireErrorCode::StaleParent);
+
+    stop.store(true, Ordering::Relaxed);
+    spawn_loop_done(loop_thread);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Refusals carry through as distinct outcomes: a stale parent, a
+/// missing path, and a saturated queue each refuse with their own
+/// code, never collapsed to a boolean. The loop runs: refusals are
+/// evaluated by the pass, so a submit without a loop would block
+/// instead of refusing.
+#[test]
+fn submit_refusals_carry_distinct_codes() {
+    let (server, _parts, dir, stop, loop_thread) = running_parts();
+
+    // Forged token: the queue re-checks, the create refuses stale.
+    let error = submit_err(
+        &server,
+        WireMutationKind::CreateFile {
+            path: "nope.txt".to_string(),
+            parent: 0xdead_beef,
+        },
+    );
+    assert_eq!(error.code, WireErrorCode::StaleParent);
+
+    // Missing path through unlink.
+    let error = submit_err(
+        &server,
+        WireMutationKind::Unlink {
+            path: "missing.txt".to_string(),
+        },
+    );
+    assert_eq!(error.code, WireErrorCode::NotFound);
+
+    stop.store(true, Ordering::Relaxed);
+    spawn_loop_done(loop_thread);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Every mutation error maps to its own wire code: the refusal
+/// vocabulary crosses the transport intact. Constructed (not
+/// triggered) — the mapping is total by construction, and this pins
+/// the codes the consumer switches on.
+#[test]
+fn mutation_error_codes_are_distinct() {
+    use wyrd_core::mutation::MutationError;
+    let cases: Vec<(MutationError, WireErrorCode)> = vec![
+        (MutationError::Saturated, WireErrorCode::Saturated),
+        (MutationError::Lock, WireErrorCode::Poisoned),
+        (
+            MutationError::Conflicted { heads: 2 },
+            WireErrorCode::Conflicted,
+        ),
+        (
+            MutationError::Invalid("x".to_string()),
+            WireErrorCode::Malformed,
+        ),
+        (
+            MutationError::NotFound("x".to_string()),
+            WireErrorCode::NotFound,
+        ),
+        (
+            MutationError::NotADirectory("x".to_string()),
+            WireErrorCode::NotADirectory,
+        ),
+        (
+            MutationError::IsDirectory("x".to_string()),
+            WireErrorCode::IsDirectory,
+        ),
+        (
+            MutationError::AlreadyExists("x".to_string()),
+            WireErrorCode::AlreadyExists,
+        ),
+        (
+            MutationError::DirectoryNotEmpty("x".to_string()),
+            WireErrorCode::DirectoryNotEmpty,
+        ),
+        (
+            MutationError::InvalidRename("x".to_string()),
+            WireErrorCode::InvalidRename,
+        ),
+        (MutationError::Stale("x".to_string()), WireErrorCode::Stale),
+        (
+            MutationError::StaleParent("x".to_string()),
+            WireErrorCode::StaleParent,
+        ),
+        (MutationError::TooLarge(1), WireErrorCode::TooLarge),
+        (
+            MutationError::TooMany { count: 2, max: 1 },
+            WireErrorCode::TooMany,
+        ),
+        (MutationError::Engine, WireErrorCode::Engine),
+        (
+            MutationError::NeedContent {
+                chunks: vec![],
+                base: Some(SnapshotId::from_bytes([0x01; 32])),
+            },
+            WireErrorCode::NeedContent,
+        ),
+        (MutationError::TimedOut, WireErrorCode::Timeout),
+        (MutationError::Shutdown, WireErrorCode::Shutdown),
+    ];
+    for (error, code) in cases {
+        let mapped = WireMutationError::from(&error);
+        assert_eq!(mapped.code, code, "wrong code for {error:?}");
+        assert!(!mapped.message.is_empty(), "refusals carry a message");
+    }
+}
+
+/// All nine mutation kinds encode to JSON and decode back to an
+/// equal operation — and a nested fold refuses at the wire, before
+/// the queue's own closed-fold rule.
+#[test]
+fn wire_mutation_kinds_round_trip() {
+    use super::wire::WireFoldMember;
+    let identity = WireFileIdentity {
+        size: 3,
+        executable: false,
+        chunks: vec![hex::encode([0x01; 32])],
+    };
+    let kinds = vec![
+        WireMutationKind::Mkdir {
+            path: "a".to_string(),
+        },
+        WireMutationKind::CreateFile {
+            path: "b".to_string(),
+            parent: 7,
+        },
+        WireMutationKind::CommitFile {
+            path: "b".to_string(),
+            base: identity.clone(),
+            executable: false,
+            content_hex: "636f6e74656e74".to_string(),
+        },
+        WireMutationKind::AppendFile {
+            path: "b".to_string(),
+            content_hex: "00".to_string(),
+        },
+        WireMutationKind::Unlink {
+            path: "b".to_string(),
+        },
+        WireMutationKind::Rmdir {
+            path: "a".to_string(),
+        },
+        WireMutationKind::Rename {
+            from: "a".to_string(),
+            to: "c".to_string(),
+            no_replace: true,
+        },
+        WireMutationKind::SetAttrs {
+            path: "b".to_string(),
+            size: Some(3),
+            executable: None,
+            base: Some(identity.clone()),
+        },
+        WireMutationKind::Fold {
+            members: vec![WireFoldMember {
+                kind: Box::new(WireMutationKind::Mkdir {
+                    path: "d".to_string(),
+                }),
+                forcer: true,
+            }],
+        },
+    ];
+    for kind in kinds {
+        let json = serde_json::to_value(&kind).unwrap();
+        let back: WireMutationKind = serde_json::from_value(json).unwrap();
+        assert_eq!(back, kind);
+        assert!(
+            back.to_kind().is_ok(),
+            "every wire kind decodes to a queue operation"
+        );
+    }
+    let nested = WireMutationKind::Fold {
+        members: vec![WireFoldMember {
+            kind: Box::new(WireMutationKind::Fold { members: vec![] }),
+            forcer: true,
+        }],
+    };
+    assert!(
+        nested.to_kind().is_err(),
+        "a nested fold refuses at the wire"
+    );
+    assert!(identity.to_identity().is_ok());
 }

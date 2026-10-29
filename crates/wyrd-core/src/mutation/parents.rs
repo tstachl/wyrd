@@ -71,6 +71,23 @@ impl FileIdentity {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ParentToken(pub(super) u64);
 
+impl ParentToken {
+    /// The raw token value for the owner interface wire: opaque to
+    /// the consumer, validated by the queue on use. Forgery buys
+    /// nothing — an unknown value fails `validate_parent` closed
+    /// and the create reports `StaleParent`.
+    pub fn wire_value(&self) -> u64 {
+        self.0
+    }
+
+    /// Rebuild from a wire value. No validation here; the queue
+    /// validates on use, and a stale or forged value refuses as
+    /// `StaleParent`, never as a wrong-directory create.
+    pub fn from_wire_value(value: u64) -> Self {
+        ParentToken(value)
+    }
+}
+
 // Parent state is part of the mutation precondition, so poisoning fails
 // closed here instead of recovering a possibly inconsistent token table.
 #[derive(Debug, Default)]

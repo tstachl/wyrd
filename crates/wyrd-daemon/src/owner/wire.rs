@@ -942,6 +942,12 @@ pub enum WireOk {
     Freshness {
         freshness: WireFreshness,
     },
+    Submitted {
+        outcome: WireMutationOutcome,
+    },
+    ParentToken {
+        token: u64,
+    },
 }
 
 /// An explicit refusal: a machine-readable code plus a human message.
@@ -974,6 +980,16 @@ pub enum WireErrorCode {
     TooLarge,
     Timeout,
     Saturated,
+    IsDirectory,
+    AlreadyExists,
+    DirectoryNotEmpty,
+    InvalidRename,
+    Stale,
+    StaleParent,
+    TooMany,
+    NeedContent,
+    Shutdown,
+    Engine,
     Unobserved,
     Poisoned,
     Io,
@@ -1113,6 +1129,311 @@ impl From<&OwnerObservation> for WireObservation {
             report: WireSyncReport::from(report),
             health: WireMailboxHealth::from(health),
             passes: *passes,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Mutation submission values (child 2)
+// ---------------------------------------------------------------------------
+
+/// The wire form of [`FileIdentity`]: the exact precondition a
+/// commit or guarded setattr sends against, and the exact identity
+/// a successful outcome reports. The consumer learns identities
+/// from lookups and outcomes, never by parsing anything else.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WireFileIdentity {
+    pub size: u64,
+    pub executable: bool,
+    pub chunks: Vec<String>,
+}
+
+impl From<&wyrd_core::mutation::FileIdentity> for WireFileIdentity {
+    fn from(identity: &wyrd_core::mutation::FileIdentity) -> Self {
+        WireFileIdentity {
+            size: identity.size(),
+            executable: identity.executable(),
+            chunks: identity
+                .chunks()
+                .iter()
+                .map(|id| hex_id(id.as_bytes()))
+                .collect(),
+        }
+    }
+}
+
+impl WireFileIdentity {
+    /// Map back to the namespace identity. Every chunk parses, or
+    /// the whole precondition fails — a half-parsed identity never
+    /// reaches the queue.
+    pub fn to_identity(&self) -> Result<wyrd_core::mutation::FileIdentity, String> {
+        let mut chunks = Vec::with_capacity(self.chunks.len());
+        for raw in &self.chunks {
+            chunks.push(ContentId::from_bytes(parse_id(raw)?));
+        }
+        Ok(wyrd_core::mutation::FileIdentity::new(
+            self.size,
+            self.executable,
+            chunks,
+        ))
+    }
+}
+
+/// One folded member: a non-`Fold` operation plus whether it is the
+/// commit-forcing event. Nesting a fold inside a fold is refused at
+/// the wire, before the queue's own closed-fold rule.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WireFoldMember {
+    pub kind: Box<WireMutationKind>,
+    pub forcer: bool,
+}
+
+/// The wire form of [`MutationKind`]: all nine operations the owner
+/// forwards verbatim to the single queue. The interface interprets
+/// nothing — the parent's precondition is captured by the consumer
+/// (`capture-parent`) and re-checked by the owner.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WireMutationKind {
+    Mkdir {
+        path: String,
+    },
+    CreateFile {
+        path: String,
+        parent: u64,
+    },
+    CommitFile {
+        path: String,
+        base: WireFileIdentity,
+        executable: bool,
+        content_hex: String,
+    },
+    AppendFile {
+        path: String,
+        content_hex: String,
+    },
+    Unlink {
+        path: String,
+    },
+    Rmdir {
+        path: String,
+    },
+    Rename {
+        from: String,
+        to: String,
+        no_replace: bool,
+    },
+    SetAttrs {
+        path: String,
+        size: Option<u64>,
+        executable: Option<bool>,
+        base: Option<WireFileIdentity>,
+    },
+    Fold {
+        members: Vec<WireFoldMember>,
+    },
+}
+
+impl WireMutationKind {
+    /// Map back to the queue operation. Hex and token failures refuse
+    /// here with a message — a half-decoded operation never reaches
+    /// the queue.
+    pub fn to_kind(&self) -> Result<wyrd_core::mutation::MutationKind, String> {
+        use wyrd_core::mutation::{FoldMember, MutationKind, ParentToken};
+        match self {
+            WireMutationKind::Mkdir { path } => Ok(MutationKind::Mkdir { path: path.clone() }),
+            WireMutationKind::CreateFile { path, parent } => Ok(MutationKind::CreateFile {
+                path: path.clone(),
+                parent: ParentToken::from_wire_value(*parent),
+            }),
+            WireMutationKind::CommitFile {
+                path,
+                base,
+                executable,
+                content_hex,
+            } => Ok(MutationKind::CommitFile {
+                path: path.clone(),
+                base: base.to_identity()?,
+                executable: *executable,
+                content: hex::decode(content_hex)
+                    .map_err(|error| format!("commit content is not hex: {error}"))?,
+            }),
+            WireMutationKind::AppendFile { path, content_hex } => Ok(MutationKind::AppendFile {
+                path: path.clone(),
+                content: hex::decode(content_hex)
+                    .map_err(|error| format!("append content is not hex: {error}"))?,
+            }),
+            WireMutationKind::Unlink { path } => Ok(MutationKind::Unlink { path: path.clone() }),
+            WireMutationKind::Rmdir { path } => Ok(MutationKind::Rmdir { path: path.clone() }),
+            WireMutationKind::Rename {
+                from,
+                to,
+                no_replace,
+            } => Ok(MutationKind::Rename {
+                from: from.clone(),
+                to: to.clone(),
+                no_replace: *no_replace,
+            }),
+            WireMutationKind::SetAttrs {
+                path,
+                size,
+                executable,
+                base,
+            } => Ok(MutationKind::SetAttrs {
+                path: path.clone(),
+                size: *size,
+                executable: *executable,
+                base: base
+                    .as_ref()
+                    .map(WireFileIdentity::to_identity)
+                    .transpose()?,
+            }),
+            WireMutationKind::Fold { members } => {
+                let mut kinds = Vec::with_capacity(members.len());
+                for member in members {
+                    if matches!(*member.kind, WireMutationKind::Fold { .. }) {
+                        return Err("a fold never nests: a member whose kind is itself a fold fails the whole submission".to_string());
+                    }
+                    kinds.push(FoldMember {
+                        kind: member.kind.to_kind()?,
+                        forcer: member.forcer,
+                    });
+                }
+                Ok(MutationKind::Fold { members: kinds })
+            }
+        }
+    }
+}
+
+/// The wire form of [`FoldForcerOutcome`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WireFoldForcerOutcome {
+    Applied(Box<WireMutationOutcome>),
+    Failed(WireMutationError),
+}
+
+/// The wire form of [`FoldDisposition`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WireFoldDisposition {
+    Committed(WireFileIdentity),
+    Done,
+    Created(WireFileIdentity),
+    Failed(WireMutationError),
+    Restored,
+}
+
+/// A mutation refusal as data: the queue's vocabulary carried
+/// through as a distinct outcome, never collapsed to a boolean. The
+/// consumer maps these to its own errors; the transport never
+/// reinterprets them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WireMutationError {
+    pub code: WireErrorCode,
+    pub message: String,
+}
+
+/// The wire form of [`MutationOutcome`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WireMutationOutcome {
+    Done,
+    Created(WireFileIdentity),
+    Committed(WireFileIdentity),
+    Fold {
+        forcer: WireFoldForcerOutcome,
+        members: Vec<WireFoldDisposition>,
+    },
+}
+
+/// The two mutation-side operations, beside the seven read
+/// operations above. `capture-parent` returns the token a create
+/// sends against; `submit` forwards one of the nine mutation kinds.
+pub const OP_SUBMIT: &str = "submit";
+pub const OP_CAPTURE_PARENT: &str = "capture-parent";
+
+/// Parameters for `submit`: one of the nine mutation kinds.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SubmitParams {
+    pub kind: WireMutationKind,
+}
+
+impl From<&wyrd_core::mutation::MutationError> for WireMutationError {
+    fn from(error: &wyrd_core::mutation::MutationError) -> Self {
+        use wyrd_core::mutation::MutationError;
+        let code = match error {
+            MutationError::Saturated => WireErrorCode::Saturated,
+            MutationError::Lock => WireErrorCode::Poisoned,
+            MutationError::Conflicted { .. } => WireErrorCode::Conflicted,
+            MutationError::Invalid(_) => WireErrorCode::Malformed,
+            MutationError::NotFound(_) => WireErrorCode::NotFound,
+            MutationError::NotADirectory(_) => WireErrorCode::NotADirectory,
+            MutationError::IsDirectory(_) => WireErrorCode::IsDirectory,
+            MutationError::AlreadyExists(_) => WireErrorCode::AlreadyExists,
+            MutationError::DirectoryNotEmpty(_) => WireErrorCode::DirectoryNotEmpty,
+            MutationError::InvalidRename(_) => WireErrorCode::InvalidRename,
+            MutationError::Stale(_) => WireErrorCode::Stale,
+            MutationError::StaleParent(_) => WireErrorCode::StaleParent,
+            MutationError::TooLarge(_) => WireErrorCode::TooLarge,
+            MutationError::TooMany { .. } => WireErrorCode::TooMany,
+            MutationError::Store(_) => WireErrorCode::Store,
+            MutationError::Engine => WireErrorCode::Engine,
+            MutationError::NeedContent { .. } => WireErrorCode::NeedContent,
+            MutationError::TimedOut => WireErrorCode::Timeout,
+            MutationError::Shutdown => WireErrorCode::Shutdown,
+        };
+        WireMutationError {
+            code,
+            message: error.to_string(),
+        }
+    }
+}
+
+impl From<&wyrd_core::mutation::FoldForcerOutcome> for WireFoldForcerOutcome {
+    fn from(outcome: &wyrd_core::mutation::FoldForcerOutcome) -> Self {
+        use wyrd_core::mutation::FoldForcerOutcome;
+        match outcome {
+            FoldForcerOutcome::Applied(inner) => {
+                WireFoldForcerOutcome::Applied(Box::new(WireMutationOutcome::from(&**inner)))
+            }
+            FoldForcerOutcome::Failed(error) => {
+                WireFoldForcerOutcome::Failed(WireMutationError::from(error))
+            }
+        }
+    }
+}
+
+impl From<&wyrd_core::mutation::FoldDisposition> for WireFoldDisposition {
+    fn from(disposition: &wyrd_core::mutation::FoldDisposition) -> Self {
+        use wyrd_core::mutation::FoldDisposition;
+        match disposition {
+            FoldDisposition::Committed(identity) => {
+                WireFoldDisposition::Committed(WireFileIdentity::from(identity))
+            }
+            FoldDisposition::Done => WireFoldDisposition::Done,
+            FoldDisposition::Created(identity) => {
+                WireFoldDisposition::Created(WireFileIdentity::from(identity))
+            }
+            FoldDisposition::Failed(error) => {
+                WireFoldDisposition::Failed(WireMutationError::from(error))
+            }
+            FoldDisposition::Restored => WireFoldDisposition::Restored,
+        }
+    }
+}
+
+impl From<&wyrd_core::mutation::MutationOutcome> for WireMutationOutcome {
+    fn from(outcome: &wyrd_core::mutation::MutationOutcome) -> Self {
+        use wyrd_core::mutation::MutationOutcome;
+        match outcome {
+            MutationOutcome::Done => WireMutationOutcome::Done,
+            MutationOutcome::Created(identity) => {
+                WireMutationOutcome::Created(WireFileIdentity::from(identity))
+            }
+            MutationOutcome::Committed(identity) => {
+                WireMutationOutcome::Committed(WireFileIdentity::from(identity))
+            }
+            MutationOutcome::Fold { forcer, members } => WireMutationOutcome::Fold {
+                forcer: WireFoldForcerOutcome::from(forcer),
+                members: members.iter().map(WireFoldDisposition::from).collect(),
+            },
         }
     }
 }
