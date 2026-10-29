@@ -972,6 +972,55 @@ fn all_pending_heads_at_composition_stay_unprojected() {
     );
     drop(parts);
     std::fs::remove_dir_all(dir).unwrap();
+
+    // The true all-pending case: zero publishable heads, so the
+    // baseline is empty — and still `Ok`, with the pending head
+    // reported rather than hidden.
+    let dir = headless_dir("composition-pending-all");
+    let engine = Engine::create(
+        dir.clone(),
+        "headless-test-pass",
+        DeviceIdentitySecret::generate().unwrap(),
+    )
+    .unwrap();
+    let mut node: WyrdNode<DriveView<_, RuntimeMaterialization>> =
+        WyrdNode::new(engine, MemoryObjectStore::default()).unwrap();
+    {
+        let mut scratch = MemoryObjectStore::default();
+        let chunk = scratch
+            .insert(ObjectKind::Chunk, b"second")
+            .expect("the chunk inserts");
+        let tree = Tree::from_entries(vec![
+            Entry::file("second.txt", 6, false, vec![chunk]).expect("the entry builds")
+        ])
+        .expect("the tree builds")
+        .insert_into(&mut scratch)
+        .expect("the tree inserts");
+        let (engine, _view) = node.parts_mut();
+        engine
+            .author_snapshot(&scratch, tree)
+            .expect("the engine authors a pending head");
+    }
+    let (mut live, parts) = node
+        .into_live(Duration::from_secs(5), &LiveConfig::default())
+        .expect("all-pending heads defer publication, they do not refuse composition");
+    {
+        let projection = parts.projection.read().unwrap();
+        assert!(
+            projection.view().lookup("second.txt").is_err(),
+            "no publishable head, so the baseline is empty — but composition succeeds"
+        );
+    }
+    let mut mailbox = SilentMailbox;
+    let report = live
+        .sync_once(&mut mailbox, None::<&mut MemoryBulkSource>)
+        .expect("the pass runs");
+    assert_eq!(
+        report.pending_heads, 1,
+        "the unfetched head is reported, not silently converged"
+    );
+    drop(parts);
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 /// Issue 32, OD-32-C first row: when the composition refresh fails
