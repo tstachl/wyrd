@@ -54,7 +54,7 @@ milestones = [
 # Prompts are vendored in the checkout (master and pr/* worktrees carry
 # their own copy), so the path is checkout-relative.
 [review]
-prompt = ".agents/prompts/branch-review.md"
+prompt = ".agents/prompts/branch-review-wyrd.md"
 model = "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free"
 variant = "high"
 
