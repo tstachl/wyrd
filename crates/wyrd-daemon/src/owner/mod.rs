@@ -1,0 +1,36 @@
+//! The drive-owner interface: the single non-owner path to a held
+//! drive (DG-1, option B). One process owns the durable store; every
+//! other local consumer — the File Provider extension first — reaches
+//! the drive through this socket interface, never by opening the store.
+//!
+//! The interface forwards and never interprets: namespace reads go to
+//! the shared projection, the durable observation and liveness go to
+//! the loop-published slots, and (child 2) mutations go to the single
+//! mutation queue. See `docs/owner-interface.md` for the protocol
+//! contract; this module is its implementation.
+//!
+//! Three negative invariants pin the shape, enforced in
+//! `wyrd-contracts` (not here, so the check survives this module's
+//! own evolution):
+//! - the interface exposes no store internals: no operation accepts
+//!   or returns a `DurableStore`, a `RuntimeState`, an `Engine`, or a
+//!   `wyrd_sync::runtime` type;
+//! - the interface is not a second engine: no call site for
+//!   `author_snapshot`, `carry_pending`, `admit_device`, or
+//!   `announce_snapshot`;
+//! - the interface never constructs a mailbox: the read side forwards
+//!   the loop's observations, and a read leaves durable state
+//!   byte-identical.
+
+pub mod wire;
+
+pub use wire::{
+    PathParams, RawRequest, WireAttr, WireConvergenceState, WireDirEntry, WireDrainReport,
+    WireDurabilityLevel, WireError, WireErrorCode, WireExecuteReport, WireFreshness,
+    WireFreshnessState, WireHeadClasses, WireHeadSummary, WireKind, WireLiveness,
+    WireMailboxHealth, WireMailboxView, WireMaterializationSummary, WireNode, WireObservation,
+    WireOk, WireOutboxTotals, WirePeerHandle, WirePendingObligations, WireQuarantineReport,
+    WireQueueDepth, WireReconciliationCounters, WireResponse, WireResult, WireScrubReport,
+    WireSyncReport, WireSyncStatus, OP_FRESHNESS, OP_LIVENESS, OP_LOOKUP, OP_OBSERVE, OP_READ,
+    OP_READDIR, OP_STAT, WIRE_VERSION,
+};

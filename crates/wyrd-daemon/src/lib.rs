@@ -17,6 +17,7 @@ pub mod core;
 #[cfg(feature = "mount")]
 pub mod fuse;
 pub mod lifecycle;
+pub mod owner;
 pub mod posture;
 pub mod process;
 pub mod vault;
