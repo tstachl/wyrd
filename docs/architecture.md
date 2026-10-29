@@ -228,6 +228,15 @@ cause an already committed mutation to be applied twice.
 - Mobile platforms, web, WASM targets
 - Windows FUSE (Windows support rides on the CAS being plain files)
 
+**Windows.** v0.4 does not include Windows. There is no native Windows
+filesystem integration, and there is no Windows application either: the only
+credential reader fails closed on non-Unix builds, so a Windows build cannot open
+a drive. Windows presentation is an explicit future decision requiring a dedicated
+presentation-surface gate **and** a credential-storage decision. No Windows
+filesystem driver or minifilter work is implied by the v0.4 desktop milestone, and
+"native" is not claimed for Windows in any sense. This paragraph is the canonical
+statement of that scope; everywhere else points here rather than restating it.
+
 ## Transport and operational invariants
 
 The iroh stack (iroh 1.1.0, iroh-blobs 0.103.0 fs-store)
@@ -362,5 +371,6 @@ boundary. Windows is out of v0.4 entirely: the only credential reader
 (`read_secret_file`) fails closed on non-Unix builds, so a Windows
 build cannot open a drive at all — no application, no lifecycle, no
 configuration, no export, and no native filesystem presentation.
-This paragraph is the canonical statement of that scope; everywhere
-else points here rather than restating it.
+The canonical statement of that scope is the Windows paragraph under
+Non-goals above; this paragraph states only the credential mechanism
+behind it.
