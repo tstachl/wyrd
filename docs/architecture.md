@@ -152,9 +152,11 @@ control plane is not implied by this architecture** and is not part of
 v0.4.
 
 **In-flight requests across an owner crash.** A request submitted by a
-non-owner consumer is either durably committed or absent; a consumer
-must never be told a mutation succeeded when the owner died before its
-durability boundary, nor left waiting without a terminal answer.
+non-owner consumer must not be reported as successful before its mutation
+crosses the durability boundary. If the owner crashes before replying,
+the consumer must receive a terminal result or be able to determine the
+request's outcome after the owner restarts. Retrying a request must not
+cause an already committed mutation to be applied twice.
 
 ## Invariants (hold everywhere, always)
 
