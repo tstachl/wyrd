@@ -28,6 +28,10 @@ default = ["mount"]
 # and the mount/session setup. Everything else in this crate — the
 # node composition, supervision, and vault operation — builds and
 # runs without it.
+# Deliberately one feature, not a mount/presentation pair: a
+# mount-free errno vocabulary would need a second POSIX-error
+# mapping, and the contract suite's errno assertions stay with the
+# mount by design (see the `08` issue's OD-08-A/B).
 mount = ["dep:fuser"]
 
 [dev-dependencies]

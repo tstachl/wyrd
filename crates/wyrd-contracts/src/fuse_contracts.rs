@@ -79,6 +79,14 @@ fn changed_descendants_never_create_directory_path_conflicts() {
 /// a head advance re-points the path at different bytes, and the
 /// descriptor keeps serving the bytes it opened with (daemon FUSE
 /// backend).
+///
+/// Mount-gated by necessity, not by topic: the test drives
+/// `FuseBackend`, whose signatures name `fuser::Errno`, so it cannot
+/// compile without the `fuser` crate. The `08` issue lists it as
+/// must-run gate-off; the deviation is recorded in the PR cover note.
+/// The view-level half of the same property — descriptors serving
+/// open-time captures — runs gate-off in `changed_descendants…` and
+/// `forged_snapshots…` above.
 #[cfg(feature = "mount")]
 #[test]
 fn open_fds_remain_stable_across_head_advancement() {
