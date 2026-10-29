@@ -1008,6 +1008,98 @@ fn fuse_dev_deps_stay_pinned() {
     );
 }
 
+/// Check the host crate's own production sources for transport
+/// machinery: the host composes through `wyrd-core` and `wyrd-daemon`
+/// and opens through `wyrd-sync`'s durable side, so a `transport::`,
+/// `bulk::`, or `serving::` path segment — or an `iroh`/`n0` crate,
+/// type, or module ident — in `crates/wyrd-app/src` is a second
+/// transport implementation starting. Matched as path segments and
+/// ident prefixes (`iroh::`, `Iroh`, `n0_`, `n0::`), so a field that
+/// merely mentions the transport (`iroh_id` in stage logs, kept
+/// comparable with the vault's) is not a violation. Comments and
+/// string literals strip first via `code_text`, the same scanner the
+/// proof-mint check uses. Pure over the file set so the negative
+/// test below can prove the checker bites without touching the
+/// filesystem.
+fn check_host_transport_free(files: &[(&str, &str)]) -> Vec<String> {
+    const FORBIDDEN: &[&str] = &[
+        "transport::",
+        "bulk::",
+        "serving::",
+        "iroh::",
+        "Iroh",
+        "n0_",
+        "n0::",
+    ];
+    let mut violations = Vec::new();
+    for (path, text) in files {
+        let code = code_text(text);
+        for (index, line) in code.lines().enumerate() {
+            for marker in FORBIDDEN {
+                if line.contains(marker) {
+                    violations.push(format!(
+                        "{path}:{} names transport machinery (`{marker}`): the host reaches \
+                         transport only through the daemon's composer vocabulary",
+                        index + 1
+                    ));
+                }
+            }
+        }
+    }
+    violations
+}
+
+/// Contract (06): the host embeds `wyrd-core` and links no transport
+/// above it. Manifest half: the host edge set names `wyrd-core` and
+/// no `iroh*`/`n0*` package. Source half: no transport path segment
+/// in the host's own production sources. The mechanical companion,
+/// run by hand and pasted into the PR: `cargo tree -p wyrd-app
+/// -e normal` reviewed against the same list — transitive `iroh`
+/// arrives only through `wyrd-core` and `wyrd-daemon`, never through
+/// a host edge.
+#[test]
+fn host_embeds_wyrd_core_and_links_no_transport_above_it() {
+    let root = workspace_root();
+    let root_manifest = read_manifest(&root);
+    let workspace_deps = workspace_dep_table(&root_manifest);
+    let manifest = read_manifest(&root.join("crates/wyrd-app"));
+    let deps = production_deps(&manifest);
+    let names: Vec<String> = deps
+        .iter()
+        .map(|(key, value)| effective_name(key, value, &workspace_deps))
+        .collect();
+    assert!(
+        names.iter().any(|name| name == "wyrd-core"),
+        "the host embeds wyrd-core, found edges: {names:?}"
+    );
+    let transport_deps: Vec<&String> = names
+        .iter()
+        .filter(|name| name.starts_with("iroh") || name.starts_with("n0"))
+        .collect();
+    assert!(
+        transport_deps.is_empty(),
+        "the host declares no transport package, found: {transport_deps:?}"
+    );
+
+    let (files, errors) = collect_rs_files(&root.join("crates/wyrd-app/src"), &root);
+    assert!(
+        errors.is_empty(),
+        "host source walk errors:\n- {}",
+        errors.join("\n- ")
+    );
+    assert!(!files.is_empty(), "the host crate holds sources to check");
+    let refs: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(p, t)| (p.as_str(), t.as_str()))
+        .collect();
+    let violations = check_host_transport_free(&refs);
+    assert!(
+        violations.is_empty(),
+        "host transport violations:\n- {}",
+        violations.join("\n- ")
+    );
+}
+
 /// Check one consumer member's transitive production closure against
 /// the embedder boundary: no process-host or suite crate reachable
 /// (`wyrd-daemon` carries `fuser`, `wyrd-cli` carries `clap`/`libc`,
@@ -2296,6 +2388,60 @@ mod policy_tests {
         assert!(
             violations.is_empty(),
             "exactly wyrd-core must pass: {violations:?}"
+        );
+    }
+
+    #[test]
+    fn host_transport_check_rejects_a_transport_path() {
+        let files = [(
+            "crates/wyrd-app/src/host.rs",
+            "use wyrd_sync::transport::mailbox::Mailbox;",
+        )];
+        let violations = check_host_transport_free(&files);
+        assert_eq!(violations.len(), 1, "transport path: {violations:?}");
+        assert!(
+            violations[0].contains("transport::"),
+            "names the marker: {violations:?}"
+        );
+    }
+
+    #[test]
+    fn host_transport_check_rejects_an_iroh_ident() {
+        let files = [(
+            "crates/wyrd-app/src/main.rs",
+            "let endpoint = IrohBulkSource::connect_default();",
+        )];
+        let violations = check_host_transport_free(&files);
+        assert_eq!(violations.len(), 1, "iroh ident: {violations:?}");
+    }
+
+    #[test]
+    fn host_transport_check_ignores_comments_and_strings() {
+        let files = [
+            (
+                "crates/wyrd-app/src/lib.rs",
+                "// the host names no wyrd_sync transport machinery",
+            ),
+            (
+                "crates/wyrd-app/src/run.rs",
+                "let note = \"serving installs on the loop\";",
+            ),
+        ];
+        assert!(
+            check_host_transport_free(&files).is_empty(),
+            "comments and strings are not transport"
+        );
+    }
+
+    #[test]
+    fn host_transport_check_passes_the_durable_side() {
+        let files = [(
+            "crates/wyrd-app/src/host.rs",
+            "use wyrd_sync::{durable::DurableError, runtime::{Engine, EngineError}};",
+        )];
+        assert!(
+            check_host_transport_free(&files).is_empty(),
+            "the durable side is the host's own vocabulary"
         );
     }
 }
