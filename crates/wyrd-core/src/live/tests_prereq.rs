@@ -836,6 +836,7 @@ where
         store,
         baseline,
         revision,
+        heads.len(),
         Duration::from_secs(30),
         config,
     )
@@ -1122,6 +1123,7 @@ fn a_quota_without_an_accountant_refuses_to_compose() {
         store,
         baseline,
         revision,
+        1,
         Duration::from_secs(30),
         &config,
     )

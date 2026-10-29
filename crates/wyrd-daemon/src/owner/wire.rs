@@ -946,7 +946,7 @@ pub enum WireOk {
         outcome: WireMutationOutcome,
     },
     ParentToken {
-        token: u64,
+        token: WireParentToken,
     },
 }
 
@@ -1179,6 +1179,38 @@ impl WireFileIdentity {
     }
 }
 
+/// A parent token on the wire: the queue counter bound to the
+/// owner instance that minted it. Tokens are meaningful only
+/// within their owning queue and process; a restart mints a new
+/// instance, and any token from a previous instance refuses as
+/// stale before reaching the queue. No durable format is involved:
+/// the binding lives and dies with the run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WireParentToken {
+    pub instance: u64,
+    pub counter: u64,
+}
+
+impl WireParentToken {
+    /// Rebuild the queue token, refusing a previous instance's
+    /// token first: a captured token must never survive the owner
+    /// that minted it and create into a replaced directory.
+    pub fn to_token(
+        &self,
+        owner_instance: u64,
+    ) -> Result<wyrd_core::mutation::ParentToken, (WireErrorCode, String)> {
+        if self.instance != owner_instance {
+            return Err((
+                WireErrorCode::StaleParent,
+                "parent token from a previous owner instance: capture again".to_string(),
+            ));
+        }
+        Ok(wyrd_core::mutation::ParentToken::from_wire_value(
+            self.counter,
+        ))
+    }
+}
+
 /// One folded member: a non-`Fold` operation plus whether it is the
 /// commit-forcing event. Nesting a fold inside a fold is refused at
 /// the wire, before the queue's own closed-fold rule.
@@ -1199,7 +1231,7 @@ pub enum WireMutationKind {
     },
     CreateFile {
         path: String,
-        parent: u64,
+        parent: WireParentToken,
     },
     CommitFile {
         path: String,
@@ -1234,16 +1266,22 @@ pub enum WireMutationKind {
 }
 
 impl WireMutationKind {
-    /// Map back to the queue operation. Hex and token failures refuse
-    /// here with a message — a half-decoded operation never reaches
-    /// the queue.
-    pub fn to_kind(&self) -> Result<wyrd_core::mutation::MutationKind, String> {
-        use wyrd_core::mutation::{FoldMember, MutationKind, ParentToken};
+    /// Map back to the queue operation. Hex, token, and nesting
+    /// failures refuse here with their own codes — a half-decoded
+    /// operation never reaches the queue. The owner instance binds
+    /// create tokens: a token minted by a previous instance refuses
+    /// as stale before any queue check runs.
+    pub fn to_kind(
+        &self,
+        owner_instance: u64,
+    ) -> Result<wyrd_core::mutation::MutationKind, (WireErrorCode, String)> {
+        use wyrd_core::mutation::{FoldMember, MutationKind};
+        let malformed = |message: String| (WireErrorCode::Malformed, message);
         match self {
             WireMutationKind::Mkdir { path } => Ok(MutationKind::Mkdir { path: path.clone() }),
             WireMutationKind::CreateFile { path, parent } => Ok(MutationKind::CreateFile {
                 path: path.clone(),
-                parent: ParentToken::from_wire_value(*parent),
+                parent: parent.to_token(owner_instance)?,
             }),
             WireMutationKind::CommitFile {
                 path,
@@ -1252,15 +1290,17 @@ impl WireMutationKind {
                 content_hex,
             } => Ok(MutationKind::CommitFile {
                 path: path.clone(),
-                base: base.to_identity()?,
+                base: base
+                    .to_identity()
+                    .map_err(|message| (WireErrorCode::Malformed, message))?,
                 executable: *executable,
                 content: hex::decode(content_hex)
-                    .map_err(|error| format!("commit content is not hex: {error}"))?,
+                    .map_err(|error| malformed(format!("commit content is not hex: {error}")))?,
             }),
             WireMutationKind::AppendFile { path, content_hex } => Ok(MutationKind::AppendFile {
                 path: path.clone(),
                 content: hex::decode(content_hex)
-                    .map_err(|error| format!("append content is not hex: {error}"))?,
+                    .map_err(|error| malformed(format!("append content is not hex: {error}")))?,
             }),
             WireMutationKind::Unlink { path } => Ok(MutationKind::Unlink { path: path.clone() }),
             WireMutationKind::Rmdir { path } => Ok(MutationKind::Rmdir { path: path.clone() }),
@@ -1285,16 +1325,17 @@ impl WireMutationKind {
                 base: base
                     .as_ref()
                     .map(WireFileIdentity::to_identity)
-                    .transpose()?,
+                    .transpose()
+                    .map_err(|message| (WireErrorCode::Malformed, message))?,
             }),
             WireMutationKind::Fold { members } => {
                 let mut kinds = Vec::with_capacity(members.len());
                 for member in members {
                     if matches!(*member.kind, WireMutationKind::Fold { .. }) {
-                        return Err("a fold never nests: a member whose kind is itself a fold fails the whole submission".to_string());
+                        return Err(malformed("a fold never nests: a member whose kind is itself a fold fails the whole submission".to_string()));
                     }
                     kinds.push(FoldMember {
-                        kind: member.kind.to_kind()?,
+                        kind: member.kind.to_kind(owner_instance)?,
                         forcer: member.forcer,
                     });
                 }

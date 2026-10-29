@@ -10,10 +10,10 @@ use super::wire::{
     WireDurabilityLevel, WireError, WireErrorCode, WireFileIdentity, WireFreshness,
     WireFreshnessState, WireHeadClasses, WireHeadSummary, WireKind, WireLiveness,
     WireMailboxHealth, WireMailboxView, WireMaterializationSummary, WireMutationError,
-    WireMutationKind, WireMutationOutcome, WireNode, WireOk, WireOutboxTotals, WirePeerHandle,
-    WirePendingObligations, WireQueueDepth, WireReconciliationCounters, WireResponse, WireResult,
-    WireSyncStatus, OP_CAPTURE_PARENT, OP_FRESHNESS, OP_LIVENESS, OP_LOOKUP, OP_OBSERVE, OP_READ,
-    OP_READDIR, OP_STAT, OP_SUBMIT, WIRE_VERSION,
+    WireMutationKind, WireMutationOutcome, WireNode, WireOk, WireOutboxTotals, WireParentToken,
+    WirePeerHandle, WirePendingObligations, WireQueueDepth, WireReconciliationCounters,
+    WireResponse, WireResult, WireSyncStatus, OP_CAPTURE_PARENT, OP_FRESHNESS, OP_LIVENESS,
+    OP_LOOKUP, OP_OBSERVE, OP_READ, OP_READDIR, OP_STAT, OP_SUBMIT, WIRE_VERSION,
 };
 
 use std::collections::BTreeSet;
@@ -507,6 +507,52 @@ fn dispatch_refuses_with_explicit_codes() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// A read at exactly the bound still fits the response frame:
+/// hex doubles the bytes, JSON adds only its quotes, and the total
+/// stays under the ceiling the transport enforces.
+#[test]
+fn largest_accepted_read_fits_the_frame() {
+    use super::server::DEFAULT_MAX_READ_BYTES;
+    use wyrd_core::node::WyrdNode;
+
+    let (engine, dir) = scratch_drive();
+    let store = wyrd_format::FsObjectStore::open(dir.clone()).unwrap();
+    let mut daemon = WyrdNode::new(engine, store).unwrap();
+    let big = vec![0xABu8; DEFAULT_MAX_READ_BYTES as usize];
+    daemon.put_file("big.bin", &big).unwrap();
+    daemon.refresh_live_heads().unwrap();
+    let (_live, parts) = daemon
+        .into_live(
+            Duration::from_secs(5),
+            &wyrd_core::live::LiveConfig::default(),
+        )
+        .unwrap();
+    let server = OwnerServer::new(OwnerHandles::from_parts(&parts));
+    match dispatch_ok(&server, OP_READ, "big.bin") {
+        WireOk::Read { bytes_hex, .. } => {
+            assert_eq!(bytes_hex.len(), big.len() * 2);
+            let response = WireResponse {
+                v: WIRE_VERSION,
+                id: 1,
+                result: WireResult::Ok(Box::new(WireOk::Read {
+                    bytes_hex,
+                    generation: 0,
+                    revision: 0,
+                })),
+            };
+            let frame = serde_json::to_vec(&response).unwrap();
+            assert!(
+                frame.len() <= MAX_FRAME_BYTES,
+                "largest accepted read fits the frame: {}",
+                frame.len()
+            );
+        }
+        other => panic!("boundary read unexpectedly failed: {other:?}"),
+    }
+
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// A file past the read bound is refused explicitly — never
 /// truncated, never streamed past the cap.
 #[test]
@@ -589,7 +635,7 @@ fn freshness_starts_fresh_from_composition() {
     match response.result {
         WireResult::Ok(ok) => match *ok {
             WireOk::Freshness { freshness } => {
-                assert_eq!(freshness.state, WireFreshnessState::FreshNonEmpty);
+                assert!(matches!(freshness.state, WireFreshnessState::FreshNonEmpty));
                 assert_eq!(freshness.generation, 0);
             }
             other => panic!("unexpected freshness result: {other:?}"),
@@ -682,6 +728,76 @@ fn interface_read_side_never_constructs_a_mailbox() {
     stop.store(true, Ordering::Relaxed);
     let summary = loop_thread.join().unwrap();
     assert!(summary.is_ok(), "the loop ends clean on stop");
+
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Shutdown completes while a client stays connected: tripping
+/// the stop flag ends the accept loop, idle connections notice
+/// within the poll interval, and the scoped join returns — no
+/// shutdown blocks past an in-flight dispatch. Covers a client
+/// holding a full request open and one stuck mid-frame.
+#[test]
+fn shutdown_completes_with_a_client_connected() {
+    let (parts, dir) = composed_parts();
+    let server = OwnerServer::new(OwnerHandles::from_parts(&parts));
+    let socket_path = dir.join("shutdown.sock");
+    let _ = std::fs::remove_file(&socket_path);
+    let stop: &'static AtomicBool = Box::leak(Box::new(AtomicBool::new(false)));
+    let serve_thread = std::thread::spawn(move || {
+        server
+            .bind_and_serve(&socket_path, stop)
+            .expect("the interface serves");
+    });
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !dir.join("shutdown.sock").exists() {
+        assert!(std::time::Instant::now() < deadline, "the socket binds");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    // A client with a completed request, connection held open.
+    let mut idle = UnixStream::connect(dir.join("shutdown.sock")).unwrap();
+    let request = serde_json::to_value(&RawRequest {
+        v: WIRE_VERSION,
+        id: 51,
+        op: OP_LOOKUP.to_string(),
+        params: serde_json::to_value(PathParams {
+            path: "hello.txt".to_string(),
+        })
+        .unwrap(),
+    })
+    .unwrap();
+    let request = serde_json::to_vec(&request).unwrap();
+    idle.write_all(&(request.len() as u32).to_be_bytes())
+        .unwrap();
+    idle.write_all(&request).unwrap();
+    let mut len = [0u8; 4];
+    idle.read_exact(&mut len).unwrap();
+
+    // A client stuck mid-frame: two bytes, never a full message.
+    let mut partial = UnixStream::connect(dir.join("shutdown.sock")).unwrap();
+    partial.write_all(&[0u8, 2]).unwrap();
+
+    stop.store(true, Ordering::Relaxed);
+    // Join with a deadline: a hung join fails the test instead of
+    // hanging the suite. The flag avoids channel calls, which the
+    // mailbox-construction contract scan would flag.
+    let joined = Arc::new(AtomicBool::new(false));
+    let joined_flag = Arc::clone(&joined);
+    std::thread::spawn(move || {
+        serve_thread.join().unwrap();
+        joined_flag.store(true, Ordering::Relaxed);
+    });
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !joined.load(Ordering::Relaxed) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "shutdown completes with clients connected"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    drop(idle);
+    drop(partial);
 
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -1020,16 +1136,24 @@ fn submit_reports_the_same_outcome_both_ways() {
     // their identity — size zero, no chunks.)
     assert_eq!(WireMutationOutcome::from(&direct), outcome);
 
-    // A forged token refuses stale at the queue's re-check, and a
-    // capture against a missing parent refuses at the wire.
+    // A token from a previous owner instance refuses stale before
+    // any queue check: flip the instance bit on an otherwise valid
+    // capture and the create must not reach the queue.
+    let mut stale = token;
+    stale.instance ^= 1;
     let error = submit_err(
         &server,
         WireMutationKind::CreateFile {
             path: "same-forged.txt".to_string(),
-            parent: 0xdead_beef,
+            parent: stale,
         },
     );
     assert_eq!(error.code, WireErrorCode::StaleParent);
+    assert!(
+        error.message.contains("previous owner instance"),
+        "the refusal names the cause: {}",
+        error.message
+    );
 
     stop.store(true, Ordering::Relaxed);
     spawn_loop_done(loop_thread);
@@ -1045,12 +1169,16 @@ fn submit_reports_the_same_outcome_both_ways() {
 fn submit_refusals_carry_distinct_codes() {
     let (server, _parts, dir, stop, loop_thread) = running_parts();
 
-    // Forged token: the queue re-checks, the create refuses stale.
+    // A forged counter refuses stale at the queue's re-check: the
+    // instance matches, but no such token was ever captured.
     let error = submit_err(
         &server,
         WireMutationKind::CreateFile {
             path: "nope.txt".to_string(),
-            parent: 0xdead_beef,
+            parent: WireParentToken {
+                instance: server.instance(),
+                counter: 0xdead_beef,
+            },
         },
     );
     assert_eq!(error.code, WireErrorCode::StaleParent);
@@ -1156,7 +1284,10 @@ fn wire_mutation_kinds_round_trip() {
         },
         WireMutationKind::CreateFile {
             path: "b".to_string(),
-            parent: 7,
+            parent: WireParentToken {
+                instance: 77,
+                counter: 7,
+            },
         },
         WireMutationKind::CommitFile {
             path: "b".to_string(),
@@ -1199,7 +1330,7 @@ fn wire_mutation_kinds_round_trip() {
         let back: WireMutationKind = serde_json::from_value(json).unwrap();
         assert_eq!(back, kind);
         assert!(
-            back.to_kind().is_ok(),
+            back.to_kind(77).is_ok(),
             "every wire kind decodes to a queue operation"
         );
     }
@@ -1210,7 +1341,7 @@ fn wire_mutation_kinds_round_trip() {
         }],
     };
     assert!(
-        nested.to_kind().is_err(),
+        nested.to_kind(77).is_err(),
         "a nested fold refuses at the wire"
     );
     assert!(identity.to_identity().is_ok());
@@ -1425,5 +1556,198 @@ fn headless_run_serves_the_interface() {
     stop.store(true, Ordering::Relaxed);
     let outcome = run_thread.join().unwrap().expect("the run ends clean");
     let _ = outcome;
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// Freshness judgments (review findings 3 and 5)
+// ---------------------------------------------------------------------------
+
+/// A mailbox whose intake fails: every pass fails before
+/// publication, so the finding-3 wrapper must record the retaining
+/// judgment for a non-partition failure.
+struct FailingMailbox;
+
+impl Mailbox for FailingMailbox {
+    fn send(&mut self, _envelope: MailboxEnvelope) -> Result<SendReport, MailboxError> {
+        Ok(SendReport { accepted: 1 })
+    }
+
+    fn recv(&mut self) -> Result<Option<Delivery>, MailboxError> {
+        Err(MailboxError::Transport("intake refused".to_string()))
+    }
+
+    fn settle(&mut self, _id: DeliveryId, _disposition: Disposition) -> Result<(), MailboxError> {
+        Ok(())
+    }
+}
+
+/// Seed one file's bytes and tree into a store and return the tree:
+/// the same bytes hash to the same identities in any store.
+fn seed_fork_bytes<S>(store: &mut S, label: &[u8], name: &str) -> wyrd_format::ContentId
+where
+    S: wyrd_format::ObjectStore,
+    S::Error: std::fmt::Debug,
+{
+    use wyrd_format::{Entry, ObjectKind, Tree};
+    let chunk = store
+        .insert(ObjectKind::Chunk, label)
+        .expect("the fork chunk inserts");
+    Tree::from_entries(vec![Entry::file(
+        name,
+        label.len() as u64,
+        false,
+        vec![chunk],
+    )
+    .expect("the entry builds")])
+    .expect("the fork tree builds")
+    .insert_into(store)
+    .expect("the fork tree inserts")
+}
+
+/// A composition that withholds eligible heads reads retained, not
+/// fresh-empty: the view serves empty while a head awaits its
+/// closure, so calling it a fresh empty drive would lie to the
+/// consumer.
+#[test]
+fn withheld_pending_projection_is_retained_not_fresh() {
+    use wyrd_core::node::WyrdNode;
+
+    let (engine, dir) = scratch_drive();
+    let store = wyrd_format::FsObjectStore::open(dir.clone()).unwrap();
+    let mut daemon: WyrdNode<crate::vault::OwnerView> = WyrdNode::new(engine, store).unwrap();
+    {
+        let (engine, _view) = daemon.parts_mut();
+        let mut objects = wyrd_format::MemoryObjectStore::default();
+        let tree = seed_fork_bytes(&mut objects, b"withheld", "withheld.txt");
+        engine
+            .author_snapshot(&objects, tree)
+            .expect("the pending head authors");
+    }
+    assert_eq!(
+        daemon.engine().live_heads().unwrap().len(),
+        1,
+        "one eligible head, closure missing"
+    );
+    daemon.refresh_live_heads().unwrap();
+    let (_live, parts) = daemon
+        .into_live(
+            Duration::from_secs(5),
+            &wyrd_core::live::LiveConfig::default(),
+        )
+        .unwrap();
+    let freshness = parts.freshness.read().unwrap().clone();
+    match freshness.state {
+        wyrd_core::projection::FreshnessState::RetainedLastGood { detail } => {
+            assert!(
+                detail.contains("closure still fetching"),
+                "the reason names the withheld projection: {detail}"
+            );
+        }
+        other => panic!("withheld heads must not read fresh: {other:?}"),
+    }
+    assert_eq!(freshness.generation, 0);
+
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// A withheld projection that completes resets to fresh on the next
+/// publication: the judgment follows the served generation, and a
+/// successful refresh clears the retained note.
+#[test]
+fn retained_freshness_resets_on_publication() {
+    use wyrd_core::node::WyrdNode;
+
+    let (engine, dir) = scratch_drive();
+    let store = wyrd_format::FsObjectStore::open(dir.clone()).unwrap();
+    let mut daemon: WyrdNode<crate::vault::OwnerView> = WyrdNode::new(engine, store).unwrap();
+    {
+        let (engine, _view) = daemon.parts_mut();
+        let mut objects = wyrd_format::MemoryObjectStore::default();
+        let tree = seed_fork_bytes(&mut objects, b"withheld", "withheld.txt");
+        engine
+            .author_snapshot(&objects, tree)
+            .expect("the pending head authors");
+    }
+    daemon.refresh_live_heads().unwrap();
+    let (mut live, parts) = daemon
+        .into_live(
+            Duration::from_secs(5),
+            &wyrd_core::live::LiveConfig::default(),
+        )
+        .unwrap();
+    assert!(matches!(
+        parts.freshness.read().unwrap().state,
+        wyrd_core::projection::FreshnessState::RetainedLastGood { .. }
+    ));
+
+    // The same bytes land in the serving view: the closure
+    // completes, and a new commit advances the durable revision, so
+    // the next pass publishes and the judgment turns fresh.
+    {
+        let view = parts.projection.read().unwrap();
+        let store = view.view().store_handle();
+        let mut store = store.write().unwrap();
+        seed_fork_bytes(&mut *store, b"withheld", "withheld.txt");
+    }
+    let mut mailbox = NoopMailbox;
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            parts
+                .mutations
+                .submit(wyrd_core::mutation::MutationKind::Mkdir {
+                    path: "trigger".to_string(),
+                })
+                .expect("the trigger mutation commits");
+        });
+        live.sync_once(&mut mailbox, None::<&mut wyrd_sync::bulk::MemoryBulkSource>)
+            .expect("the completing pass runs");
+    });
+    let freshness = parts.freshness.read().unwrap().clone();
+    assert!(matches!(
+        freshness.state,
+        wyrd_core::projection::FreshnessState::FreshNonEmpty
+    ));
+    assert_eq!(freshness.generation, 1);
+
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// A non-partition pass failure records the retaining judgment too:
+/// intake fails before any refresh runs, yet the freshness slot
+/// must not keep reading fresh.
+#[test]
+fn intake_failure_records_retained_freshness() {
+    use wyrd_core::node::WyrdNode;
+
+    let (engine, dir) = scratch_drive();
+    let store = wyrd_format::FsObjectStore::open(dir.clone()).unwrap();
+    let mut daemon: WyrdNode<crate::vault::OwnerView> = WyrdNode::new(engine, store).unwrap();
+    daemon.put_file("seed.txt", b"seed").unwrap();
+    daemon.refresh_live_heads().unwrap();
+    let (mut live, parts) = daemon
+        .into_live(
+            Duration::from_secs(5),
+            &wyrd_core::live::LiveConfig::default(),
+        )
+        .unwrap();
+    assert!(matches!(
+        parts.freshness.read().unwrap().state,
+        wyrd_core::projection::FreshnessState::FreshNonEmpty
+    ));
+
+    let mut mailbox = FailingMailbox;
+    let error = live
+        .sync_once(&mut mailbox, None::<&mut wyrd_sync::bulk::MemoryBulkSource>)
+        .expect_err("intake refusal fails the pass");
+    assert!(
+        matches!(error, wyrd_core::live::LiveError::Engine(_)),
+        "the failure is the intake error: {error:?}"
+    );
+    match &parts.freshness.read().unwrap().state {
+        wyrd_core::projection::FreshnessState::RetainedLastGood { .. } => {}
+        other => panic!("a failed pass must retain, not read fresh: {other:?}"),
+    }
+
     std::fs::remove_dir_all(dir).unwrap();
 }

@@ -61,6 +61,12 @@ pub enum WriteError<E: std::fmt::Debug> {
 pub struct WyrdNode<V: NamespaceView> {
     engine: Engine,
     view: V,
+    /// Heads the serving view currently holds, as installed by the
+    /// last composition-side install. The live split reads it for
+    /// the composition freshness judgment: an empty serving view
+    /// over known-but-uninstalled heads is withheld pending
+    /// projection, never a fresh empty drive.
+    installed_heads: usize,
 }
 
 /// Failure while composing the engine with a namespace view.
@@ -92,7 +98,11 @@ where
             RuntimeMaterialization { runtime, terminal },
             Vec::new(),
         );
-        Ok(WyrdNode { engine, view })
+        Ok(WyrdNode {
+            engine,
+            view,
+            installed_heads: 0,
+        })
     }
 
     /// The read-only namespace view backends present.
@@ -194,7 +204,8 @@ where
         // All-pending keeps the last-known-good projection: a head
         // still fetching must never blank the view a healthy head is
         // serving. (The live loop defers publication for the same
-        // reason.)
+        // reason.) The installed count stays as it was: withheld
+        // heads are not installed heads.
         if heads.is_empty() && pending > 0 {
             tracing::debug!(
                 pending,
@@ -202,6 +213,7 @@ where
             );
             return Ok(());
         }
+        self.installed_heads = heads.len();
         NamespaceView::set_heads(&mut self.view, heads.into_iter().map(Head::new).collect());
         Ok(())
     }
@@ -345,6 +357,7 @@ where
     /// would install, minus the two rebuilds.
     fn install_authored_head(&mut self, authorized: AuthorizedSnapshot) {
         NamespaceView::set_heads(&mut self.view, vec![Head::new(authorized)]);
+        self.installed_heads = 1;
     }
 
     /// Split the composed node for live serving: the engine and the
@@ -408,12 +421,14 @@ where
         self.refresh_materialization()?;
         self.refresh_live_heads()?;
         let revision = self.engine.current();
+        let installed_heads = self.installed_heads;
         let store = self.view.store_handle();
         LiveNode::split(
             self.engine,
             store,
             self.view,
             revision,
+            installed_heads,
             open_timeout,
             config,
         )

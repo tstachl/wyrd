@@ -189,7 +189,7 @@ where
     /// Best-effort like [`note_published`](Self::note_published): the
     /// pass is already failing, and a second failure must not mask
     /// the first.
-    fn note_retained_last_good(&self, error: &EngineError) {
+    fn note_retained_last_good(&self, error: &LiveError) {
         let served = self
             .projection
             .read()
@@ -223,32 +223,48 @@ where
     /// A failed status observation keeps the previous slot and logs
     /// at warn — the freshness judgment, not this slot, tells the
     /// consumer what to trust.
-    fn record_observation(&self, report: &SyncReport, health: MailboxSnapshot, passes: u64) {
-        match self.observe_status() {
-            Ok(status) => {
-                let observation = OwnerObservation {
-                    status,
-                    report: report.clone(),
-                    health,
-                    passes,
-                };
-                if self
-                    .observation
-                    .write()
-                    .map(|mut slot| *slot = Some(observation))
-                    .is_err()
-                {
-                    tracing::warn!(
-                        "owner observation slot poisoned; out-of-process status unrecorded"
-                    );
+    ///
+    /// The durable status is cached by durable revision: every fact
+    /// commit advances the revision and empty passes do not, so an
+    /// unchanged revision means provably identical durable state and
+    /// the replay, classification, and reconciliation reads are
+    /// skipped. The report and health halves are transient and
+    /// re-recorded every pass regardless.
+    fn record_observation(&mut self, report: &SyncReport, health: MailboxSnapshot, passes: u64) {
+        let revision = self.engine.current();
+        let status = match &self.observed_status {
+            Some((cached_revision, cached_relays, cached))
+                if *cached_revision == revision && *cached_relays == self.configured_relays =>
+            {
+                cached.clone()
+            }
+            _ => match self.observe_status() {
+                Ok(status) => {
+                    self.observed_status = Some((revision, self.configured_relays, status.clone()));
+                    status
                 }
-            }
-            Err(error) => {
-                tracing::warn!(
-                    error = %error,
-                    "durable status observation failed; keeping previous owner observation"
-                );
-            }
+                Err(error) => {
+                    tracing::warn!(
+                        error = %error,
+                        "durable status observation failed; keeping previous owner observation"
+                    );
+                    return;
+                }
+            },
+        };
+        let observation = OwnerObservation {
+            status,
+            report: report.clone(),
+            health,
+            passes,
+        };
+        if self
+            .observation
+            .write()
+            .map(|mut slot| *slot = Some(observation))
+            .is_err()
+        {
+            tracing::warn!("owner observation slot poisoned; out-of-process status unrecorded");
         }
     }
 
@@ -283,8 +299,14 @@ where
         <V::Store as DiscardRejectedRepresentation>::Error: std::fmt::Debug,
     {
         let report = self.sync_pass(mailbox, bulk);
-        if report.is_err() {
+        if let Err(error) = &report {
             self.dirty = true;
+            // Any failed pass leaves the previous generation serving
+            // with its freshness unestablished: record the retaining
+            // judgment for every replay, classification, intake, and
+            // fetch failure alike, not just the refresh partition.
+            // The next successful publication overwrites it.
+            self.note_retained_last_good(error);
         }
         report
     }
@@ -656,29 +678,15 @@ where
         // Per-class projection: verified heads publish, pending ones
         // wait for their closure, and a damaged head fails the pass
         // with the previous generation still serving (see
-        // `partition_heads`).
+        // `partition_heads`). The `sync_once` wrapper records the
+        // retaining judgment for every failure, including these.
         let heads = self.engine.live_heads()?;
         let partition = {
             let store = self.store.read().map_err(|_| LiveError::Lock)?;
-            match partition_heads(&completed_runtime, heads, &*store) {
-                Ok(partition) => partition,
-                Err(error) => {
-                    // The refresh established nothing: the previous
-                    // generation keeps serving, and the freshness slot
-                    // says so explicitly rather than reading fresh.
-                    self.note_retained_last_good(&error);
-                    return Err(error.into());
-                }
-            }
+            partition_heads(&completed_runtime, heads, &*store)?
         };
         let pending_heads = partition.pending;
-        let heads = match partition.into_publishable() {
-            Ok(heads) => heads,
-            Err(error) => {
-                self.note_retained_last_good(&error);
-                return Err(error.into());
-            }
-        };
+        let heads = partition.into_publishable()?;
         if heads.is_empty() && pending_heads > 0 {
             // Every eligible head is still mid-fetch: keep the current
             // generation serving and try again next pass. This is

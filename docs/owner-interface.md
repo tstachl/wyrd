@@ -48,10 +48,12 @@ Attach the serving generation and the durable revision to every
 read answer. Correlate answers with the freshness judgment. Never
 assume recency.
 
-Read whole files only. Refuse files past 64 MiB with `TooLarge`.
+Read whole files only. Refuse files past 32 MiB with `TooLarge`.
 Never truncate. Never stream past the bound. Register demand behind
 reads through the want registry. Block bounded for remote content.
-Map expiry to `Timeout`. Tell the consumer to retry.
+Map expiry to `Timeout`. Tell the consumer to retry. The hex
+encoding doubles the bytes on the wire, so the 32 MiB bound keeps
+every accepted response under the 96 MiB frame ceiling.
 
 ## Durable observation
 
@@ -91,10 +93,13 @@ distinct outcomes. Map each queue error to its own code. Never
 collapse two refusals into one. A success means exactly what an
 in-process submit means.
 
-Capture parent tokens with `capture-parent` before creates. Send
-the token back with the create. Let the owner re-check it at
-authoring time. Reject forged or retired tokens with `StaleParent`.
-Never invent a token on the consumer side.
+Capture parent tokens with `capture-parent` before creates. The
+token binds the queue counter to the owner instance that minted
+it. Send the token back with the create. Let the owner re-check
+it at authoring time. Refuse tokens from a dead instance with
+`StaleParent` before any queue check. Refuse forged counters the
+same way at the queue's re-check. Never invent a token on the
+consumer side. Never reuse a token across an owner restart.
 
 Refuse nested folds at the wire. Let the queue enforce the rest.
 Forward all nine operations verbatim.

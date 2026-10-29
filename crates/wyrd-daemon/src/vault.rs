@@ -646,14 +646,21 @@ where
         },
         stop,
         emit,
-    })?;
-    // The loop is reaped; the interface stops with it. A submission
-    // admitted before the stop resolves through the teardown drain
-    // or refuses `Shutdown` at admission close — no consumer waits
-    // past this join without a terminal answer.
+    });
+    // The loop is reaped; the interface stops with it, on success
+    // and on failure alike — an early run error never detaches a
+    // still-serving socket. A submission admitted before the stop
+    // resolves through the teardown drain or refuses `Shutdown` at
+    // admission close: no consumer waits past this join without a
+    // terminal answer.
     server_stop.store(true, Ordering::Relaxed);
     if server_thread.join().is_err() {
         tracing::warn!("owner interface thread ended unexpectedly");
     }
-    Ok(outcome)
+    // The socket belongs to the run: remove it on the way out so a
+    // later owner never inherits a stale entry and no client
+    // mistakes an absent owner for a listening one. The store lock
+    // releases with the engine drop after this return.
+    let _ = std::fs::remove_file(&socket_path);
+    outcome.map_err(OwnerError::from)
 }

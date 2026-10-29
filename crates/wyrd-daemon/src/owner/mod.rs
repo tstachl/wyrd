@@ -40,7 +40,7 @@ pub use wire::{
     WireFreshnessState, WireHeadClasses, WireHeadSummary, WireKind, WireLiveness,
     WireMailboxHealth, WireMailboxView, WireMaterializationSummary, WireMutationError,
     WireMutationKind, WireMutationOutcome, WireNode, WireObservation, WireOk, WireOutboxTotals,
-    WirePeerHandle, WirePendingObligations, WireQuarantineReport, WireQueueDepth,
+    WireParentToken, WirePeerHandle, WirePendingObligations, WireQuarantineReport, WireQueueDepth,
     WireReconciliationCounters, WireResponse, WireResult, WireScrubReport, WireSyncReport,
     WireSyncStatus, OP_CAPTURE_PARENT, OP_FRESHNESS, OP_LIVENESS, OP_LOOKUP, OP_OBSERVE, OP_READ,
     OP_READDIR, OP_STAT, OP_SUBMIT, WIRE_VERSION,

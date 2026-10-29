@@ -238,6 +238,12 @@ pub struct LiveNode<V: NamespaceView> {
     /// (which owns the relay configuration); zero reads fully
     /// offline, matching the status contract.
     pub(super) configured_relays: usize,
+    /// The last published durable status, keyed by the durable
+    /// revision and relay count it was observed at. The per-pass
+    /// observation reuses it while the revision stands still, so
+    /// idle loops skip the replay, classification, and
+    /// reconciliation reads; reports and health stay per-pass.
+    pub(super) observed_status: Option<(u64, usize, SyncStatus)>,
 }
 
 /// What the owner publishes for out-of-process consumers at the end
@@ -326,6 +332,7 @@ where
         store: Arc<RwLock<V::Store>>,
         baseline: V,
         revision: u64,
+        installed_heads: usize,
         open_timeout: Duration,
         config: &LiveConfig,
     ) -> Result<(Self, LiveParts<V>), CompositionError> {
@@ -363,15 +370,26 @@ where
             })
             .unwrap_or_default();
         let published_heads = observed_heads.len();
-        // The composition judgment: the adopted generation is valid by
-        // construction (its heads were just refreshed), so the slot
-        // starts fresh — empty or not — at the composition revision.
-        // No trustworthy composition fails above, never reaches here.
+        // The composition judgment, from the installed baseline
+        // rather than the eligible set: the adopted generation is
+        // valid by construction, so the slot starts fresh — empty or
+        // not — at the composition revision. Heads the refresh
+        // withheld (eligible but uninstalled, closure still fetching)
+        // are not a fresh empty drive: the slot says retained with
+        // the pending count named, so no consumer mistakes an empty
+        // serving view for a genuinely empty drive. No trustworthy
+        // composition fails above, never reaches here.
         let freshness = Arc::new(RwLock::new(ProjectionFreshness {
-            state: if published_heads == 0 {
+            state: if installed_heads == 0 && published_heads == 0 {
                 FreshnessState::FreshEmpty
-            } else {
+            } else if installed_heads > 0 {
                 FreshnessState::FreshNonEmpty
+            } else {
+                FreshnessState::RetainedLastGood {
+                    detail: format!(
+                        "composition installed no heads with {published_heads} eligible: closure still fetching, serving empty baseline"
+                    ),
+                }
             },
             revision,
             generation: 0,
@@ -416,6 +434,7 @@ where
                 freshness,
                 observation,
                 configured_relays: 0,
+                observed_status: None,
             },
             parts,
         ))

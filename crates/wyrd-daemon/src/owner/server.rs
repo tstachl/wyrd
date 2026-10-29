@@ -45,9 +45,9 @@ use crate::vault::OwnerView;
 use super::wire::{
     PathParams, RawRequest, SubmitParams, WireAttr, WireDirEntry, WireError, WireErrorCode,
     WireFreshness, WireLiveness, WireMailboxHealth, WireMutationError, WireMutationOutcome,
-    WireNode, WireOk, WireResponse, WireResult, WireSyncReport, WireSyncStatus, OP_CAPTURE_PARENT,
-    OP_FRESHNESS, OP_LIVENESS, OP_LOOKUP, OP_OBSERVE, OP_READ, OP_READDIR, OP_STAT, OP_SUBMIT,
-    WIRE_VERSION,
+    WireNode, WireOk, WireParentToken, WireResponse, WireResult, WireSyncReport, WireSyncStatus,
+    OP_CAPTURE_PARENT, OP_FRESHNESS, OP_LIVENESS, OP_LOOKUP, OP_OBSERVE, OP_READ, OP_READDIR,
+    OP_STAT, OP_SUBMIT, WIRE_VERSION,
 };
 
 /// Bind the drive-directory socket: reclaim a stale entry from an
@@ -79,11 +79,13 @@ pub fn socket_path_for(drive_dir: &Path) -> PathBuf {
 }
 
 /// Largest whole-file read the interface serves in one request.
-/// Bounds one request's memory: files larger than this are refused
-/// with [`WireErrorCode::TooLarge`], never truncated, never
-/// streamed past the bound. Paged reads are a future additive
-/// operation, not a silent behavior of this one.
-pub const DEFAULT_MAX_READ_BYTES: u64 = 64 << 20;
+/// Bounds one request's memory and the response frame together: the
+/// hex encoding doubles the bytes on the wire, so 32 MiB reads stay
+/// under the frame ceiling with JSON overhead to spare. Files larger
+/// than this are refused with [`WireErrorCode::TooLarge`], never
+/// truncated, never streamed past the cap. Paged reads are a future
+/// additive operation, not a silent behavior of this one.
+pub const DEFAULT_MAX_READ_BYTES: u64 = 32 << 20;
 
 /// Largest single frame (request or response) in bytes: the read
 /// bound plus JSON and hex overhead, rounded up. A frame past this
@@ -149,6 +151,18 @@ impl OwnerHandles {
     }
 }
 
+/// How long a connection read waits before re-checking the stop
+/// flag: bounded shutdown polling, not a client deadline. A slow
+/// consumer never stalls shutdown past this plus its in-flight
+/// dispatch.
+pub const CONN_POLL_INTERVAL: Duration = Duration::from_millis(250);
+
+/// How long one response write may block: large reads move tens of
+/// megabytes, so the writer gets a generous bound rather than the
+/// poll interval. A stalled writer still fails closed instead of
+/// holding its thread forever.
+pub const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// The owner-side interface server: peer-checked dispatch over the
 /// shared serving state. Holds handles, never engines: constructing
 /// one names no `DurableStore`, no `RuntimeState`, no `Engine`, and
@@ -158,6 +172,11 @@ pub struct OwnerServer {
     /// The uid that bound the server: the only peer credential ever
     /// accepted. Captured at construction from the owner process.
     owner_uid: u32,
+    /// The owner-instance identity minted at construction: parent
+    /// tokens carry it, and a token from a previous instance refuses
+    /// before reaching the queue. Fresh randomness per server, so a
+    /// restart never honors the previous run's captures.
+    instance: u64,
 }
 
 impl OwnerServer {
@@ -165,10 +184,32 @@ impl OwnerServer {
     /// process's effective uid — the owner is the process that
     /// holds the store lock, and only its own user may consume it.
     pub fn new(handles: OwnerHandles) -> Self {
+        let mut bytes = [0u8; 8];
+        let instance = getrandom::getrandom(&mut bytes)
+            .map(|()| u64::from_ne_bytes(bytes))
+            .unwrap_or_else(|_| {
+                // Entropy unavailable: pid plus clock still separates
+                // runs in practice, and a collision only risks a
+                // stale-token refusal, never a wrong-directory
+                // create — the queue re-checks every token.
+                std::process::id() as u64
+                    ^ std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|age| age.as_nanos() as u64)
+                        .unwrap_or(0)
+            });
         OwnerServer {
             handles,
             owner_uid: super::auth::owner_uid(),
+            instance,
         }
+    }
+
+    /// The owner-instance identity this server mints into tokens.
+    /// Test and diagnostic use: a consumer never needs it, since a
+    /// token from any other instance refuses on use.
+    pub fn instance(&self) -> u64 {
+        self.instance
     }
 
     /// Bind the drive-directory socket and serve until `stop` trips.
@@ -178,42 +219,55 @@ impl OwnerServer {
     pub fn bind_and_serve(&self, socket_path: &Path, stop: &AtomicBool) -> std::io::Result<()> {
         let listener = bind_listener(socket_path)?;
         self.serve_on(&listener, stop);
-        self.serve_on(&listener, stop);
         let _ = std::fs::remove_file(socket_path);
         Ok(())
     }
 
     /// Serve an already-bound listener until `stop` trips. The
     /// accept loop polls so a tripped stop ends serving without a
-    /// dummy connection: each connection gets its own thread, and
-    /// all threads share the serving handles.
+    /// dummy connection. Each connection gets its own thread under
+    /// a scoped join: all threads share the serving handles, every
+    /// read re-checks the stop flag inside the poll interval, and
+    /// the scope joins every connection before returning — no
+    /// shutdown blocks past one poll behind an in-flight dispatch.
+    /// A dispatch blocked in the queue resolves through the run's
+    /// own teardown (teardown drain or admission close), so the
+    /// join is bounded by the run, never by a silent waiter.
     pub fn serve_on(&self, listener: &UnixListener, stop: &AtomicBool) {
-        while !stop.load(Ordering::Relaxed) {
-            match listener.accept() {
-                Ok((stream, _)) => {
-                    if !self.check_peer(&stream) {
-                        continue;
-                    }
-                    // Accepted sockets inherit the listener's
-                    // non-blocking flag: serve each connection
-                    // blocking, one thread per connection, so a slow
-                    // consumer never spins the accept loop.
-                    match stream.set_nonblocking(false) {
-                        Ok(()) => self.serve_connection(stream),
-                        Err(error) => {
-                            tracing::warn!(error = %error, "owner interface connection setup failed");
+        std::thread::scope(|scope| {
+            while !stop.load(Ordering::Relaxed) {
+                match listener.accept() {
+                    Ok((stream, _)) => {
+                        if !self.check_peer(&stream) {
+                            continue;
+                        }
+                        // Accepted sockets inherit the listener's
+                        // non-blocking flag: serve each connection
+                        // blocking with timeouts, one thread per
+                        // connection, so a slow consumer never spins
+                        // the accept loop and never stalls shutdown
+                        // past the poll interval.
+                        match stream.set_nonblocking(false) {
+                            Ok(()) => {
+                                let _ = stream.set_read_timeout(Some(CONN_POLL_INTERVAL));
+                                let _ = stream.set_write_timeout(Some(WRITE_TIMEOUT));
+                                scope.spawn(move || self.serve_connection(stream, stop));
+                            }
+                            Err(error) => {
+                                tracing::warn!(error = %error, "owner interface connection setup failed");
+                            }
                         }
                     }
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                    std::thread::sleep(Duration::from_millis(25));
-                }
-                Err(error) => {
-                    tracing::warn!(error = %error, "owner interface accept failed");
-                    std::thread::sleep(Duration::from_millis(100));
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(25));
+                    }
+                    Err(error) => {
+                        tracing::warn!(error = %error, "owner interface accept failed");
+                        std::thread::sleep(Duration::from_millis(100));
+                    }
                 }
             }
-        }
+        })
     }
 
     /// The whole authentication check (OD-16-B caveat): the peer's
@@ -242,12 +296,27 @@ impl OwnerServer {
     }
 
     /// Serve one connection to close: read frames, dispatch, write
-    /// answers. Any transport failure ends the connection without a
-    /// terminal answer — the client treats the break as unconfirmed.
-    fn serve_connection(&self, mut stream: UnixStream) {
+    /// answers. Reads re-check the stop flag inside the poll
+    /// interval, so a tripped stop ends an idle connection without
+    /// waiting out a dispatch. Any transport failure ends the
+    /// connection without a terminal answer — the client treats the
+    /// break as unconfirmed.
+    fn serve_connection(&self, mut stream: UnixStream, stop: &AtomicBool) {
         loop {
             let frame = match read_frame(&mut stream) {
                 Ok(frame) => frame,
+                // A read deadline is the stop poll, not a failure:
+                // idle while stopping ends the connection, idle
+                // while serving waits for the next request.
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::TimedOut
+                        || error.kind() == std::io::ErrorKind::WouldBlock =>
+                {
+                    if stop.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    continue;
+                }
                 Err(_) => return,
             };
             let response = self.dispatch_frame(&frame);
@@ -540,7 +609,10 @@ impl OwnerServer {
         })?;
         match self.handles.mutations.capture_parent(&params.path) {
             Some(token) => Ok(WireOk::ParentToken {
-                token: token.wire_value(),
+                token: WireParentToken {
+                    instance: self.instance,
+                    counter: token.wire_value(),
+                },
             }),
             None => Err((
                 WireErrorCode::NotFound,
@@ -563,10 +635,7 @@ impl OwnerServer {
                 format!("bad submit params: {error}"),
             )
         })?;
-        let kind = params
-            .kind
-            .to_kind()
-            .map_err(|message| (WireErrorCode::Malformed, message))?;
+        let kind = params.kind.to_kind(self.instance)?;
         match self.handles.mutations.submit(kind) {
             Ok(outcome) => Ok(WireOk::Submitted {
                 outcome: WireMutationOutcome::from(&outcome),
@@ -654,7 +723,19 @@ fn read_frame(stream: &mut UnixStream) -> std::io::Result<Vec<u8>> {
 }
 
 /// Write one length-delimited frame.
+/// Write one length-delimited frame. A response past the frame
+/// ceiling never goes out: the connection closes instead, and the
+/// client treats the break as unconfirmed. The read bound keeps
+/// legitimate responses under the ceiling; this check is the
+/// backstop that makes the bound load-bearing rather than
+/// aspirational.
 fn write_frame(stream: &mut UnixStream, bytes: &[u8]) -> std::io::Result<()> {
+    if bytes.len() > MAX_FRAME_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "response exceeds frame bound",
+        ));
+    }
     let len = u32::try_from(bytes.len()).map_err(|_| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidInput,

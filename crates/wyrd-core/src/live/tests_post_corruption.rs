@@ -179,6 +179,7 @@ fn two_generation_drive(
         store,
         baseline,
         revision,
+        1,
         std::time::Duration::from_secs(30),
         &LiveConfig::default(),
     )

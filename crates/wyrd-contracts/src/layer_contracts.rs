@@ -2830,7 +2830,10 @@ fn interface_exposes_no_store_internals() {
 /// authoring, carry, admission, or announcement anywhere in the
 /// module. Forwarding a submission to the single queue is the
 /// interface's job (child 2); interpreting it is not, and these
-/// four names are the interpretation vocabulary.
+/// four names are the interpretation vocabulary. The shipped
+/// surface carries this gate; the test file is exempt by name —
+/// fixtures compose drives through the engine API exactly like any
+/// composer does, and never implement engine semantics.
 #[test]
 fn the_interface_is_not_a_second_engine() {
     const FORBIDDEN: &[&str] = &[
@@ -2840,12 +2843,17 @@ fn the_interface_is_not_a_second_engine() {
         "announce_snapshot",
     ];
     let files = owner_module_files();
-    let borrowed: Vec<(&str, &str)> = files
+    let shipped: Vec<(&str, &str)> = files
         .iter()
         .map(|(p, t)| (p.as_str(), t.as_str()))
+        .filter(|(path, _)| !path.ends_with("tests_owner.rs"))
         .collect();
+    assert!(
+        !shipped.is_empty(),
+        "the shipped surface holds sources to check"
+    );
     let mut violations = Vec::new();
-    for (path, text) in borrowed {
+    for (path, text) in shipped {
         let code = code_text(text);
         for (index, line) in code.lines().enumerate() {
             for marker in FORBIDDEN {

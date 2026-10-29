@@ -200,6 +200,7 @@ fn live_over_tree(
         store,
         baseline,
         revision,
+        heads.len(),
         Duration::from_secs(30),
         &LiveConfig::default(),
     )
