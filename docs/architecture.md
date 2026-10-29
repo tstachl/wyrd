@@ -136,6 +136,28 @@ rather than a sentence a reader must trust:
   (contract 48) prove the composition never names a presentation type
   and that restart and shutdown need no running daemon.
 
+## Drive ownership
+
+**Drive ownership.** A drive has exactly one active process owner of its
+durable store. The owner is the only process that opens that store, and
+the sole authority for mutable operations against it. All mutation flows
+through the owner's single mutation queue. Other consumers never open
+the store directly; they submit operations through the **drive-owner
+interface**, which exposes operations and not mutable store internals.
+
+**v0.4 implements the minimal local drive-owner interface** required by
+platform presentation processes. It duplicates no engine, mutation,
+durability, synchronization, or trust logic. **A generalized public
+control plane is not implied by this architecture** and is not part of
+v0.4.
+
+**In-flight requests across an owner crash.** A request submitted by a
+non-owner consumer must not be reported as successful before its mutation
+crosses the durability boundary. If the owner crashes before replying,
+the consumer must receive a terminal result or be able to determine the
+request's outcome after the owner restarts. Retrying a request must not
+cause an already committed mutation to be applied twice.
+
 ## Invariants (hold everywhere, always)
 
 1. **Objects are immutable.** ContentId = domain-separated BLAKE3 of the
