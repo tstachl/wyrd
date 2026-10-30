@@ -1,376 +1,87 @@
 # Wyrd Architecture
 
-One page. Read this, then the focused docs:
-
-- `object-model.md` — **normative v0 format spec**: identities, canonical
-  encoding, chunking, snapshot DAG, manifests, conflicts, decision record
-- `sync-and-peers.md` — transport, encrypted manifests, peer roles,
-  materialization policy, two-phase content
-- `trust.md` — **normative** trust model: Nostr identity boundary (BIP-340),
-  root custody, epoch key hierarchy, control plane, capability security
-  properties, recovery design
-- `epochs.md` — **normative** membership/epoch state machine: transition
-  validation, membership conflicts, snapshot → membership binding, snapshot
-  authorization, classification, recovery
-- `fetch-on-open.md` — **normative** demand-driven fetch design:
-  announcement endpoints, daemon serving, want channel, blocking open
-- `retry-policy.md` — retry policy (roadmap item 2): dial/transfer
-  split, provider freshness ordering, deferred cross-pass resume
-  with its evidence threshold
-- `write-path.md` — **normative** mounted write design: write session,
-  mutation queue, commit pipeline and durability ordering, namespace
-  operations, conflicted-drive policy
-- `error-conventions.md` — typed-error convention: thiserror enum per
-  boundary, fail-closed classification, raise-vs-count rule
-- `resource-limits.md` — **normative** live-operation bounds: the
-  `ResourceBudgets` table, intake computational budgets, bytes in flight,
-  disk classification, pressure signals
-- `storage-growth.md` — retention under the append-only, no-GC store:
-  the per-device amplification bound, its adversary, the retained-bytes
-  quota and what it does not cover, and which bounds wait for GC
-- `retention-constraints.md` — decision: the retention/residency
-  constraints v0.x preserves so future GC stays possible (no GC
-  algorithm, no reclamation protocol)
-- `cli.md` — `wyrd` command reference: subcommands, credential files,
-  diagnostics, exit codes
-- `upgrade-contract.md` — **normative** upgrade and migration contract:
-  compatibility levels, read-vs-write compatibility, the ten upgrade
-  invariants, what upgrades forbid, and how `wyrd-contracts` will prove them
-- `release-read.md` — **frozen** public-read subset (release-read v1):
-  the byte layouts, authorship rule, and confidentiality waiver every
-  distribution item builds on
-
-## The system in one sentence
+Status: Descriptive (overview). Authority: the contracts below win any conflict.
 
 Wyrd is an encrypted, content-addressed, append-only filesystem whose
 snapshots describe a logical drive, while individual devices materialize
 arbitrary subsets of that drive locally.
 
-## Crate map
+## Core model
+
+- **Immutable, content-addressed objects.** ContentId names the canonical
+  payload; StorageId names its ciphertext. Writing the same content twice
+  is a no-op. There is no garbage collection in v0.
+- **Logical identity vs physical storage.** Snapshots describe the drive;
+  devices hold whatever subset local policy pins. Pin/evict changes what a
+  device holds, never what the drive contains.
+- **Signed, append-only history.** Snapshots are signed by the author's
+  Nostr identity key and bound to the DriveId and the authorizing
+  membership transition. Conflicts keep both heads; there is no automatic
+  merge.
+- **Nostr is identity and signatures only.** No Nostr event formats, no
+  social-Nostr dependencies. Membership state is always encrypted.
+
+## Crate boundaries
 
 | Crate | Responsibility | Depends on |
 |---|---|---|
-| `wyrd-format` | DriveId/ContentId/StorageId/SnapshotId (distinct types), canonical encoding, chunking, Merkle trees, snapshot DAG, `ObjectStore` | blake3, hex, thiserror, fastcdc, serde — never networking, async, or FUSE |
-| `wyrd-sync` | iroh transport, snapshot announcements, encrypted manifests, fetch/evict, peer roles | `wyrd-format`, `wyrd-namespace` (verification-proof token), iroh stack, nostr crate (BIP-340, NIP-44, NIP-46) |
-| `wyrd-namespace` | Provider-neutral namespace model: value types, verified-head handle, read surface every presentation backend serves | `wyrd-format`, thiserror only — never sync, never iroh |
-| `wyrd-fuse` | Mount-free drive view: lookup, readdir, open, read, stat, conflict surfacing | `wyrd-format`, `wyrd-namespace` (namespace value model) |
-| `wyrd-core` | Embeddable local node: namespace, snapshots, mutations, materialization, sync control, and the mount-free demand-driven read surface (`read::LiveReader`: same fetch-on-open sequence as the mount, no kernel mount); no presentation, no process supervision | `wyrd-format`, `wyrd-namespace`, `wyrd-sync` |
-| `wyrd-daemon` | Composition library: engine + view, presentation backends (FUSE today; mobile file surfaces later) | `wyrd-core`, `wyrd-sync`, `wyrd-fuse`, `fuser` (mount feature, default-on) |
-| `wyrd-cli` | The `wyrd` process host: argument parsing, credential files, mount orchestration, diagnostics, exit codes | `wyrd-daemon` (+ `wyrd-core`/`wyrd-sync`/`wyrd-format` surfaces), `clap`, `fuser` (mount feature, default-on), `libc` |
-| `wyrd-embed` | The embedder-shaped consumer: one named contract driving a drive's whole embedded lifecycle, with no presentation, daemon, or CLI in the path | `wyrd-core`, `wyrd-sync`, `wyrd-format`, `wyrd-fuse` — never the daemon, the CLI, or the suite |
-| `wyrd-contracts` | Test suite: one named test per architectural contract, composed end to end | all of the above |
+| `wyrd-format` | Content addressing, typed identities, chunking, Merkle snapshot DAG, canonical plaintext formats | blake3, serde, thiserror — never networking, async, or FUSE |
+| `wyrd-sync` | iroh transport, encryption, storage addressing, capabilities, authorization, replication | `wyrd-format`, `wyrd-namespace`, iroh stack, nostr crate |
+| `wyrd-namespace` | Provider-neutral namespace and verified read surface | `wyrd-format`, thiserror only |
+| `wyrd-core` | Embeddable local node: namespace, snapshots, mutations, materialization, sync control | format, namespace, sync — never presentation |
+| `wyrd-fuse` | Filesystem-shaped read surface; never mounts or authors content | `wyrd-format`, `wyrd-namespace` |
+| `wyrd-daemon` | Composes the core, view and presentation backends | `wyrd-core`, `wyrd-fuse` |
+| `wyrd-cli` | Binary process host over the daemon's public API | `wyrd-daemon` |
+| `wyrd-embed` | Proves the core lifecycle works without daemon, CLI or presentation | `wyrd-core`, `wyrd-sync`, `wyrd-format`, `wyrd-fuse` |
+| `wyrd-contracts` | Cross-crate architectural contract tests; nothing depends on it | all of the above |
 
-Dependency arrows point downward only. `wyrd-format` must never grow a network,
-async, or FUSE dependency. `wyrd-fuse` must never link iroh — not even
-transitively through another member: the transitive half of contract 34
-pins its production-edge closure to `wyrd-format` and `wyrd-namespace`,
-so a future `wyrd-core` API can never hand a backend a transport type
-without the suite failing. The verification-proof token is minted only
-by `wyrd-sync`'s authorization — the namespace crate performs no
-cryptography — and contract 34's crossing-count check pins the single
-call site. `wyrd-daemon` is that composer: the node in
-`wyrd-core` is presentation-agnostic (mobile platforms cannot use FUSE, so the
-platform surface is a pluggable backend over the same view); the FUSE adapter
-is the first backend, not a property of the node.
+Dependency arrows point downward only. Only `wyrd-sync` authorization may
+mint `AuthorizedSnapshot`. Content IDs must not appear in vault-visible
+metadata. These edges are machine-enforced by `wyrd-contracts`, not by
+review vigilance.
 
-## Layer target (node extraction complete)
+## Runtime ownership
 
-The daemon conflated "the Wyrd local node" with "the process that runs
-the node", so it split along the dependency direction it already had:
-`wyrd-core` (the embeddable node: namespace, snapshots, mutations,
-materialization, sync control — never FUSE, argument parsing, POSIX
-errno mapping, or process supervision), `wyrd-daemon` (composition
-library: process lifecycle, supervision, services, platform
-providers), and `wyrd-cli` (the `wyrd` process host: argument
-parsing, credential files, mount orchestration, diagnostics, exit
-codes over the daemon's public surface). `wyrd-daemon` depends on
-`wyrd-core`, never the reverse; CLI and providers consume public
-surfaces only. The DAG is machine-enforced by contract 34
-(`layer_contracts.rs`) for every member — direct edges and, for the
-view crate, the transitive closure — so each extraction phase landed
-against an invariant rather than review vigilance. `nostr-sdk` inside `wyrd-core` is scoped
-to the mailbox subsystem by the same contract: control-plane framing
-lives with sync control, never ambient across the node.
-
-## The embedded consumer boundary
-
-A Wyrd drive must be operable by an in-process embedder that is not a
-mount, not the daemon process, and not the CLI: an application opens a
-drive through `wyrd-core`'s public API and runs its whole lifecycle —
-create, write, mutate, read, observe, write policy, reopen, shut down —
-with no presentation surface and no child process anywhere in the path.
-This is a contract, not a preference, and every clause is a named test
-rather than a sentence a reader must trust:
-
-- **The lifecycle composes headless.**
-  `embedded_drive_lifecycle_needs_no_fuse_and_no_daemon`
-  (`crates/wyrd-embed`) drives one drive through the whole sequence —
-  `Engine::create` → `WyrdNode::new` → direct writes → the loop-driven
-  mutation channel → stop → an `Engine::open_keystore` reopen →
-  namespace reads → a `SyncStatus`-shaped read → materialization
-  policy write → a second reopen → ordered shutdown — asserting the
-  same heads, the same durable facts, and the same durable policy
-  across each restart, with no want-registry or in-memory state
-  carried across.
-- **The embedded shutdown is one named sequence.** Stop the flag the
-  loop polls, join the loop, close admission. The same contract pins
-  that a mutation arriving after shutdown begins resolves with
-  `Shutdown` instead of blocking, and that the published generation
-  keeps serving afterwards — serving never needed the loop. The CLI
-  keeps its own, richer order; this is the path an embedder without a
-  session join owns.
-- **The boundary is a dependency fact.**
-  `consumer_link_graph_excludes_presentation` (contract 34,
-  `layer_contracts.rs`) pins the embedder's production closure — no
-  `wyrd-daemon` (which links `fuser`), no `wyrd-cli` (`clap`/`libc`),
-  no `wyrd-contracts`, and no presentation external under any reached
-  member — while `crate_dependencies_follow_the_layered_dag` pins the
-  direct edges for every member and `workspace_members_are_exact` pins
-  the set those member-wide checks run over. A presentation edge
-  reaching the embedded surface fails the suite, not a review.
-- **The node serves with no backend, over any view.**
-  `node_composes_and_serves_without_a_presentation_backend` (contract
-  35), `node_serves_over_a_view_defined_outside_the_fuse_crate`
-  (contract 36), `committed_bytes_survive_restart_without_a_running_daemon`
-  (contract 47), and `shutdown_closes_the_mutation_channel_for_both_paths`
-  (contract 48) prove the composition never names a presentation type
-  and that restart and shutdown need no running daemon.
-
-## Drive ownership
-
-**Drive ownership.** A drive has exactly one active process owner of its
-durable store. The owner is the only process that opens that store, and
-the sole authority for mutable operations against it. All mutation flows
-through the owner's single mutation queue. Other consumers never open
-the store directly; they submit operations through the **drive-owner
-interface**, which exposes operations and not mutable store internals.
-
-**v0.4 implements the minimal local drive-owner interface** required by
-platform presentation processes. It duplicates no engine, mutation,
-durability, synchronization, or trust logic. **A generalized public
-control plane is not implied by this architecture** and is not part of
-v0.4.
-
-**In-flight requests across an owner crash.** A request submitted by a
-non-owner consumer must not be reported as successful before its mutation
-crosses the durability boundary. If the owner crashes before replying,
-the consumer must receive a terminal result or be able to determine the
-request's outcome after the owner restarts. Retrying a request must not
-cause an already committed mutation to be applied twice.
-
-## Invariants (hold everywhere, always)
-
-1. **Objects are immutable.** ContentId = domain-separated BLAKE3 of the
-   canonical payload under the identity-domain context (payload-based
-   identity, `object-model.md` decision 30); StorageId = domain-separated
-   BLAKE3 of ciphertext. Both are
-   distinct Rust types — the compiler enforces the boundary. Writing the
-   same content twice is a no-op.
-2. **Deletion is a state change.** A new snapshot without the path; objects
-   remain until GC. GC does not exist yet — the store is append-only forever
-   in v0.
-3. **Snapshots are never rewritten.** The snapshot DAG is append-only; heads
-   are the drive's state; "current" is a policy over heads. Snapshots are
-   signed with the author's Nostr identity key, bound to the DriveId and to
-   the membership transition that authorizes them — Nostr cryptography
-   (BIP-340), never Nostr event formats. Only live-lineage eligible heads
-   advance the live view; superseded, stranded, and voided forks are
-   retained history (`epochs.md`).
-4. **Content IDs never reach vaults as vault disclosure.** Vaults store ciphertext by StorageId
-   and opaque encrypted manifests; they cannot decrypt contents and cannot
-   determine plaintext equality from object representation (fresh nonces).
-   A vault surface — any surface readable by the keyless-replica trust position —
-   never carries ContentIds, snapshot bodies, or other member observations
-   (`docs/trust.md` disclosure matrix, keyless-replica column). A member-hosted
-   composition holds that metadata as a member, not as vault disclosure; a public
-   release drive discloses it by a deliberate, per-drive, irreversible waiver
-   (release-read v1, `docs/trust.md` public release-drive column). The
-   keyless-replica guarantee stands: a future keyless replica establishes the
-   H5/H6 boundary separately rather than inheriting any vault entry.
-5. **Every ciphertext is AEAD-bound to its version, kind, and ContentId** —
-   and decryption success alone is never sufficient; the plaintext must hash
-   to the expected ContentId too.
-6. **Conflicts keep both heads.** No automatic merge, no lost versions; DAG
-   conflict and path conflict are distinct.
-7. **Materialization is local policy.** Pin/evict changes what a device
-   holds, never what the drive contains.
-8. **The projected namespace is the user's data only.** The mounted view
-   never introduces synthetic files, directories, or metadata entries —
-   it is a projection of the snapshot DAG, not a second metadata
-   filesystem layered on top of the drive. View controls (version
-   selection, conflict inspection, snapshot selection) are
-   path-resolution semantics or out-of-band control APIs; Wyrd's own
-   metadata lives in the internal object store, never the mounted
-   namespace.
-9. **Transport is never correctness evidence. Durable recipient state
-   is.** Relay acceptance, relay retention, retransmission, and
-   `ReconciliationRequest` delivery prove nothing about convergence.
-   A sender obligation retires only when durable recipient state
-   provides the class-specific evidence that subsumes it — the DG-3
-   forget contract in `sync-and-peers.md`.
-10. **Identity layers stay separate.** Wyrd `DeviceId`, cryptographic
-    epoch state, iroh transport endpoint identity, and relay identity
-    are distinct. A new endpoint after restart is a new transport
-    attachment, never a new member; serving endpoint identity is
-    excluded from restart equivalence (`crash-consistency.md`), and
-    device identity itself is immutable (`object-model.md`
-    decision 12).
-
-## Non-goals (for now)
-
-- Garbage collection (v0 object stores are append-only indefinitely; the
-  mailbox ack-retention protocol has landed separately as a FIFO-bounded
-  dedupe log — the retention/ack protocol line above refers to object GC,
-  which remains a later, serious design task)
-- Merging file content three-way (both heads are kept and surfaced instead)
-- Full filesystem metadata (mtimes, xattrs, ACLs, resource forks — see the
-  explicit list in `object-model.md`)
-- Mobile platforms, web, WASM targets
-- Windows FUSE (Windows support rides on the CAS being plain files)
-
-**Windows.** v0.4 does not include Windows. There is no native Windows
-filesystem integration, and there is no Windows application either: the only
-credential reader fails closed on non-Unix builds, so a Windows build cannot open
-a drive. Windows presentation is an explicit future decision requiring a dedicated
-presentation-surface gate **and** a credential-storage decision. No Windows
-filesystem driver or minifilter work is implied by the v0.4 desktop milestone, and
-"native" is not claimed for Windows in any sense. This paragraph is the canonical
-statement of that scope; everywhere else points here rather than restating it.
-
-## Transport and operational invariants
-
-The iroh stack (iroh 1.1.0, iroh-blobs 0.103.0 fs-store)
-is validated as a set: exact-pinned in the workspace `Cargo.toml` so drift
-is a deliberate edit, never silent; bump both together and run the full test suite.
-Hard-won operational rules:
-
-- Supervised tasks restart with capped exponential backoff.
-- Every event subscription has a drainer; an undrained subscription wedges
-  the sync actor.
-- The mailbox drainer listens to both SDK notification arms because
-  first-seen events surface through `Event` while resubscribe replay of
-  already-seen history arrives only as `Message`-arm `RelayMessage::Event`
-  frames; the classification is pinned by `mailbox::tests_classification`
-  and re-run first on any nostr-sdk bump.
-- Filesystem watchers declare a lag contract: on `Lagged`, backfill/reconcile
-  from state, never from the missed events.
-- Self-writes are echo-suppressed (path + hash + TTL) so the watcher never
-  re-publishes what the peer just wrote.
-- Version ordering uses the deterministic `(timestamp, author)` tiebreak —
-  for display only, never content.
-- Announcement compatibility is checked at intake against the engine's
-  hydrated announcement projection before `Fact::Announcement` is
-  durably committed. Route fields (`node_addr`) may be updated for an
-  existing snapshot — the last accepted route wins, deterministically
-  under replay; immutable announcement fields constitute a fork and are
-  rejected before commit. Replay therefore never encounters an
-  announcement conflict that intake could have detected.
-
-Crash windows are enumerated per subsystem — what is durable, visible,
-servable, and propagated, and which test pins each window — in
-[crash-consistency.md](crash-consistency.md). The standing rule: a
-crash leaves before-XOR-full state per subsystem, and the subsystems
-agree with each other on reopen.
+A drive has exactly one active process owner of its durable store. All
+mutation flows through the owner's single mutation queue; other consumers
+submit operations through the drive-owner interface, which exposes
+operations, never mutable store internals. See
+`contracts/owner-interface.md`.
 
 ## Current status
 
-Pre-alpha. `wyrd-format` implements identities, canonical codecs,
-chunking, trees, snapshots, manifests, and membership transition
-documents; `wyrd-sync` implements the membership state machine, snapshot
-authorization, epoch keys, capabilities, object sealing, escrow records,
-the control-plane message set, ingest limits, and the control-plane
-transport boundary (NIP-44 mailbox sealing, `Mailbox`/`SignerSession`
-traits) — the protocol/core layers are covered by example, conformance,
-and generative suites with commit hooks clean. The runtime pieces that
-turn those primitives into a full distributed system are still
-incomplete: durable snapshot bodies with the engine-backed live-head
-projection have landed, the engine can author and durably commit member
-snapshots (the local write path), and a drive can be created locally
-from scratch (identity, root custody, genesis membership); the daemon
-composes a live NIP-59 relay mailbox (`LiveMailbox`: kind 1059 gift
-wraps over a durable seen-event-id dedupe log, supervised with relay
-health polling and capped-backoff drainer recovery) and the `wyrd` binary
-provides local init/mount plus headless sync (`wyrd sync status`
-observes durable sync state without connecting; `wyrd sync now`
-runs the mount's sync machinery without mounting — see
-`docs/cli.md`), and local materialization policy (`wyrd policy
-pin` / `unpin` / `evict` promise and release retention per
-subtree; `wyrd policy status` / `budgets` report retention intent
-against physical presence, under the role posture the census is
-measured against — policy facts stay on the device and never alter
-a snapshot). The demand machinery for fetch-on-open has
-landed (`docs/fetch-on-open.md`): a want registry on its own lock,
-blocking `open`/`read` with a bounded deadline (`EIO` on expiry), and
-read-side chunk demand — proven against the bulk-source contract. The
-transport identity distribution that makes fetch real against peers has
-landed: announcement Bao roots, author-signed announcements, the durable
-serving vault, an Engine-owned announcement projection that gates every
-announcement at intake (route updates replace — last accepted route wins;
-immutable forks are rejected before the fact commits, so replay never
-meets a conflict intake could have detected), and the real-iroh serving
-router: a serving endpoint over the vault answers peer fetches by
-transport root, announcement `node_addr` routes publish into the fetch
-plane on every sync pass, and a serving restart's route update rewires
-serving (contract 13). Still open: the NIP-46 signer-session client
-wiring. Multi-relay pool coverage is checked in
-(`mailbox::tests_multirelay`: publication, replay/dedupe, outage with
-survivor intake, recovery); cross-implementation relay interop runs in
-the default gate (`mailbox::tests_crossimpl`: the same episode against
-a fake plus a locally-spawned real relay, with live public-relay
-policy staying opt-in (`mailbox::tests_interop`, live public relay,
-proven against relay.primal.net)). Real-world delivery failed on
-policy, not on wire
-logic: relay.damus.io ACKs gift-wrap writes but CLOSEDs every
-gift-wrap REQ as auth-required (NIP-42, which the trust decision
-forbids), and nos.lol answers no TCP from here. A relay-sent CLOSED
-used to read as an idle mailbox — connected 1/1 with no delivery ever
-arriving — so closures are now counted in health
-(`closed_subscriptions`) and warned on, with no auto-resubscribe
-(re-REQing a policy close loops forever).
-The durable announcement outbox itself has landed (queued/delivered
-facts with byte-identical sealed retries, contract-tested); what was
-open was its live-loop wiring, which has now landed too — see below.
-The live write path behind the FUSE mount has
-landed (`docs/write-path.md`): the daemon-owned mutation queue and the
-mounted write surface, namespace operations, generation-aware
-projection/caches, and append-handle semantics are merged. Remaining v0
-limitations are named in `docs/write-path.md` (whole-file rewrite model,
-`O_APPEND | O_TRUNC` refused, budgets). Garbage
-collection does not exist. `wyrd-fuse` is a
-mount-free view behind the daemon's FUSE backend. All crypto and sync
-work follows `trust.md` and `epochs.md` as normative contracts; the
-open tracking issues name what comes next.
+Pre-alpha. Protocol identity, wire format, authorization model, and
+control-plane contracts are frozen for v0; local durability semantics
+stay open where the product above them requires it. The runtime sync
+engine, durable local state, crash recovery, and the mounted write path
+have landed and are under test. Still pending: signer-client wiring,
+automatic peer repair, and garbage collection (post-v1 by contract).
+The frontier is the live network and the v0.4 desktop product.
+`ROADMAP.md` tracks the order; the status vocabulary (specified /
+implemented / tested / integrated / end-to-end verified / proposed) is
+defined in `documentation.md`.
 
-The local `wyrd` CLI mounts a live projection: a supervised
-loop drains the NIP-59 control-plane mailbox, admits FUSE demand into
-durable `Cached` materialization each pass, refreshes materialization
-facts and live heads into the serving view without remounting, then
-publishes undischarged announcement, transition, and capability
-obligations from the durable outbox (mailbox failures stall delivery,
-never the pass), and
-tears down session before transport on SIGINT/SIGTERM: unmount
-and session join first (`destroy` commits still-dirty handles against
-the still-open mutation queue, executed by the loop's post-return
-drain), then admission close, the loop join, and the mailbox, bulk
-source, and serving endpoint under bounded deadlines, with the
-fallible outcomes folded into the exit status. Bulk is
-graceful-or-abort (a wedged drain warns and aborts; it cannot fail
-the shutdown), so only loop, session, and serving outcomes can fail
-the exit. `open`/`read` on non-local content registers a want and
-blocks bounded (`docs/fetch-on-open.md`); the loop runs with a real
-iroh bulk source and publishes recorded routes each pass, and the
-mount opens the drive's serving endpoint, so a peer with a live
-announcement fetches over transport, while unavailable demand still
-surfaces `EIO` on its deadline. Relays arrive as repeatable
-`--relay` flags defaulted from the drive's `default.toml`
-(`docs/cli.md` "Drive configuration file"); parsing is clap-derive
-for flags and strict TOML for the file. Credential
-files are supported on Unix, must be regular files owned by the current
-user with private permissions, and are bounded and zeroized at the CLI
-boundary. Windows is out of v0.4 entirely: the only credential reader
-(`read_secret_file`) fails closed on non-Unix builds, so a Windows
-build cannot open a drive at all — no application, no lifecycle, no
-configuration, no export, and no native filesystem presentation.
-The canonical statement of that scope is the Windows paragraph under
-Non-goals above; this paragraph states only the credential mechanism
-behind it.
+## Contract index
+
+Normative contracts — each invariant lives in exactly one of these:
+
+- Format and identity semantics: `contracts/object-model.md`
+- Cryptographic and authorization boundaries: `contracts/trust.md`, `contracts/capability-bindings.md`
+- Membership and epoch state: `contracts/epochs.md`
+- Sync protocol, peers, materialization: `contracts/sync-and-peers.md`
+- Mutation, commit, durability ordering: `contracts/write-path.md`
+- Cross-process ownership boundary: `contracts/owner-interface.md`
+- Crash windows per subsystem: `contracts/crash-consistency.md`
+- Error taxonomy: `contracts/error-conventions.md`
+- Live-operation bounds: `contracts/resource-limits.md`
+- Retention constraints: `contracts/retention-constraints.md`
+- Compatibility guarantees: `contracts/upgrade-contract.md`
+- Update transaction: `contracts/update.md`
+- Public-read subset: `contracts/release-read.md`
+
+Subsystem workflows (subordinate to contracts): `design/` — fetch-on-open,
+peer repair, retry policy, storage growth, CLI reference.
+Platform compositions and open decisions: `platforms/`.
+Release procedure: `releases/release-process.md`.
+Past reviews (evidence, not policy): `reviews/`.
+How to change any of this: `documentation.md`.

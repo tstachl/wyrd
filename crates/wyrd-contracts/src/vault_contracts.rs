@@ -381,8 +381,8 @@ fn vault_disclosure_matches_the_agreed_trust_position() {
 
 /// Issue 33: the reconciled disclosure promise is stated in exactly
 /// one normative place. `docs/architecture.md` invariant 4 owns the
-/// sentence; `docs/trust.md` owns the per-position scope (the matrix,
-/// including the public release-drive column); `docs/fetch-on-open.md`
+/// sentence; `docs/contracts/trust.md` owns the per-position scope (the matrix,
+/// including the public release-drive column); `docs/design/fetch-on-open.md`
 /// names the serving exception it implements. The other two reference
 /// the canonical sentence — they never restate a competing
 /// vault-sees-or-does-not-see-ContentIds claim.

@@ -42,7 +42,7 @@
 //!     damaged durable store fails the projection closed and the view
 //!     keeps serving what it served before. Pins the decided v0
 //!     policy: failure ⇒ heads unchanged ⇒ error surfaced ⇒ no
-//!     automatic repair, resync, or clear (`docs/epochs.md`). The
+//!     automatic repair, resync, or clear (`docs/contracts/epochs.md`). The
 //!     projection itself is per validity class, not all-or-nothing:
 //!     verified heads install, heads still fetching wait (never
 //!     blanking a serving view), damaged heads fail — pinned by
@@ -52,10 +52,10 @@
 //!     and the two mixed-validity head contracts.
 //! 11. `authored_snapshots_mount_through_the_daemon_view` — the local
 //!     write path: a member authors a snapshot and the daemon's
-//!     classified projection serves its tree (`docs/epochs.md`).
+//!     classified projection serves its tree (`docs/contracts/epochs.md`).
 //! 12. `a_bootstrapped_drive_serves_its_first_authored_snapshot` — a
 //!     drive created by the production bootstrap (identity, root,
-//!     genesis) serves its first authored snapshot (`docs/epochs.md`).
+//!     genesis) serves its first authored snapshot (`docs/contracts/epochs.md`).
 //! 13. `a_serving_daemon_serves_a_peer_over_live_iroh` — the serving
 //!     router loopback: a real-iroh endpoint over the durable vault
 //!     serves a peer's fetch from announcement routes alone, and a
@@ -86,7 +86,7 @@
 //!     mailbox, the other drains, fetches from the author's serving
 //!     vault, and serves the file; a failed announcement leaves the
 //!     authored snapshot durable and the retry converges without
-//!     re-authoring (`docs/epochs.md`, local write).
+//!     re-authoring (`docs/contracts/epochs.md`, local write).
 //! 17. `invited_device_converges_on_ordered_catch_up` — the admission
 //!     transition plus its capability wrap drain to acceptance with
 //!     nothing held, skipped, or duplicated (P2 fresh-device discovery).
@@ -172,7 +172,7 @@
 //!     `release_build_args_exclude_insecure_fast_kdf` is the flake half:
 //!     the distribution build compiles `-p wyrd-cli` with default
 //!     features, so the shipped binary derives with the pinned KDF
-//!     table (`docs/trust.md`, recorded KDF decision).
+//!     table (`docs/contracts/trust.md`, recorded KDF decision).
 //!
 //! The node contracts (provider-neutral boundary):
 //!
@@ -189,56 +189,56 @@
 //! 37. `recovery_grafts_content_only_and_voided_transitions_never_authorize` —
 //!     recovery is eligible only onto eligible heads, and a voided
 //!     membership binding voids every snapshot on it through any
-//!     ancestry shape (`docs/epochs.md`, Layer 3).
+//!     ancestry shape (`docs/contracts/epochs.md`, Layer 3).
 //!
-//! The upgrade contracts (`docs/upgrade-contract.md`), one per invariant:
+//! The upgrade contracts (`docs/contracts/upgrade-contract.md`), one per invariant:
 //!
 //! 23. `upgrade_new_encoding_is_new_representation` — re-stored content
 //!     is a no-op under the same ContentId; later writes never touch
-//!     stored objects (`docs/upgrade-contract.md`, invariant 1).
+//!     stored objects (`docs/contracts/upgrade-contract.md`, invariant 1).
 //! 24. `upgrade_format_versions_are_carried_on_the_wire` — the commit
 //!     envelope version rides byte 0 of every commit file
-//!     (`docs/upgrade-contract.md`, invariant 2, wire half).
+//!     (`docs/contracts/upgrade-contract.md`, invariant 2, wire half).
 //! 25. `upgrade_old_objects_stay_readable` — a reopened object store
 //!     serves what it served before, with nothing rewritten
-//!     (`docs/upgrade-contract.md`, invariant 3, same-version form).
+//!     (`docs/contracts/upgrade-contract.md`, invariant 3, same-version form).
 //! 26. `upgrade_previous_release_store_replays` — the checked-in
 //!     release fixture opens and replays under the current build:
 //!     a same-build baseline today, genuine cross-release evidence
 //!     once the next cut replays the v0.2.0-alpha bytes under a newer
-//!     build (`docs/upgrade-contract.md`, invariant 3,
+//!     build (`docs/contracts/upgrade-contract.md`, invariant 3,
 //!     cross-release form).
 //! 27. `upgrade_derived_state_rebuilds_from_facts` — a fresh engine
 //!     recovers committed coverage by replay, stably across restarts
-//!     (`docs/upgrade-contract.md`, invariant 4).
+//!     (`docs/contracts/upgrade-contract.md`, invariant 4).
 //! 28. `upgrade_mixed_versions_fail_named` — a sealed control message
 //!     with a forged version fails closed with
 //!     `ControlError::UnknownVersion`
-//!     (`docs/upgrade-contract.md`, invariant 5, gate half).
+//!     (`docs/contracts/upgrade-contract.md`, invariant 5, gate half).
 //! 29. `upgrade_reads_never_mint_authority` — open, load, and
 //!     projection write no history and mint no transitions
-//!     (`docs/upgrade-contract.md`, invariant 6).
+//!     (`docs/contracts/upgrade-contract.md`, invariant 6).
 //! 30. `upgrade_old_epoch_material_stays_decryptable` — the fixture's
 //!     epoch-1..2 grant still unwraps under the current build
-//!     (`docs/upgrade-contract.md`, invariant 7).
+//!     (`docs/contracts/upgrade-contract.md`, invariant 7).
 //! 31. `upgrade_appends_never_rewrite` — a new commit appends; existing
-//!     files stay byte-identical (`docs/upgrade-contract.md`,
+//!     files stay byte-identical (`docs/contracts/upgrade-contract.md`,
 //!     invariant 8).
 //! 32. `upgrade_orphaned_temps_are_ignored` — stale `*.tmp` siblings
 //!     are walked past by open and load; the full crash boundary is
 //!     pinned in wyrd-sync's crash-matrix tests
-//!     (`docs/upgrade-contract.md`, invariant 9; orphan-ignore pinned
-//!     at `docs/crash-consistency.md:29-30`).
+//!     (`docs/contracts/upgrade-contract.md`, invariant 9; orphan-ignore pinned
+//!     at `docs/contracts/crash-consistency.md:29-30`).
 //! 33. `upgrade_unknown_refuses_loudly` — unknown envelope and control
 //!     versions and a flipped commit version refuse with their names
-//!     (`docs/upgrade-contract.md`, invariant 10).
+//!     (`docs/contracts/upgrade-contract.md`, invariant 10).
 //!
 //! Deliberately ignored until their blockers land:
 //! `upgrade_replays_previous_fact_payload_versions` (fact-payload
 //! versioning, v0.9.0) and `upgrade_full_version_matrix_synchronizes`
 //! (capability negotiation).
 //!
-//! The format-identity contract (`docs/object-model.md`, decision 30):
+//! The format-identity contract (`docs/contracts/object-model.md`, decision 30):
 //!
 //! 42. `content_identity_is_payload_based_across_framing` — ContentId
 //!     derives exclusively from the canonical payload under the
@@ -258,40 +258,40 @@
 //!     served child on top classifies
 //!     `Classification::Pending(Pendency::UnknownParent)`, and the
 //!     stall heals cleanly once the bytes arrive
-//!     (`docs/fetch-on-open.md`, body-or-manifest unavailable).
+//!     (`docs/design/fetch-on-open.md`, body-or-manifest unavailable).
 //! 45. `fold_commits_one_snapshot_for_many_members` — one
 //!     commit-forcing event's whole pending set plus itself authors a
 //!     single snapshot whose tree equals the final coherent state
-//!     (`docs/write-path.md`, DG-1).
+//!     (`docs/contracts/write-path.md`, DG-1).
 //! 46. `conflicted_drive_restores_fold_members_retryable` — a
 //!     conflicted drive refuses a fold with members and restores them:
 //!     nothing commits, the forcing handle goes terminal like any
 //!     refused commit, and every other buffered handle stays dirty and
-//!     usable (`docs/write-path.md`, DG-1 rule 6).
+//!     usable (`docs/contracts/write-path.md`, DG-1 rule 6).
 //! 47. `terminal_generation_completes_every_waiter_of_the_identity` —
 //!     three waiters registered while fetching all release on terminal
 //!     with bounded `EIO`, and the terminal identity retires from
 //!     admission even with its waiters outstanding
-//!     (`docs/peer-repair.md`, waiter invariant).
+//!     (`docs/design/peer-repair.md`, waiter invariant).
 //! 48. `a_new_waiter_after_terminal_starts_a_new_generation` —
 //!     register, drive to terminal, re-register: the identity
 //!     re-enters as pending, is re-admitted, and the second
 //!     generation fulfills verified once routes heal — while the
 //!     verdict stands until the new waiter arrives
-//!     (`docs/peer-repair.md:78-84`).
+//!     (`docs/design/peer-repair.md:78-84`).
 //! 49. `quarantine_drain_repairs_through_the_loop` — a submitted
 //!     verification failure is diagnosed, unlinked, and unclaimed
 //!     by one loop pass, reported in the pass report and never
-//!     repeated (`docs/peer-repair.md`, child 12).
+//!     repeated (`docs/design/peer-repair.md`, child 12).
 //! 50. `quarantined_identity_redemands_on_next_waiter` — after the
 //!     drain, the next waiter re-plans the identity as a fresh
 //!     fetch; without one it stays unplanned
-//!     (`docs/peer-repair.md`, OD-12-2 A).
+//!     (`docs/design/peer-repair.md`, OD-12-2 A).
 //! 51. `quarantine_discards_real_bitrotted_bytes_through_the_loop` —
 //!     the loop over a directory store with genuinely bitrotted
 //!     bytes: verify-then-delete unlinks the live file, proving
 //!     the composition contracts 49 and 50 cannot
-//!     (`docs/peer-repair.md`, child 12).
+//!     (`docs/design/peer-repair.md`, child 12).
 //! 52. `quarantined_chunk_heals_from_a_live_peer_without_remount` —
 //!     the full repair lifecycle with a real serving peer and the
 //!     real FUSE demand path: bitrot, observed rejection, discard
@@ -304,7 +304,7 @@
 //!     scrub observes the missing bytes, the drain clears the
 //!     claim, the intact `Cached` policy reconciles back to
 //!     pending, and the live peer serves the fresh fetch back to
-//!     verified `Available` (`docs/peer-repair.md`, child 13).
+//!     verified `Available` (`docs/design/peer-repair.md`, child 13).
 //! 54. `scrubbed_append_heals_from_a_live_peer_without_remount` —
 //!     the peer-served half of the write-path loss claim: an
 //!     append over a lost base commits once the refetch heals,

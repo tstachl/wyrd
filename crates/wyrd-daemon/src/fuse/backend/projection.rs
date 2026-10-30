@@ -180,7 +180,7 @@ where
     }
 
     /// The identity a mutation's `base` guard and a handle's `base`
-    /// compare: exactly what `docs/write-path.md` names as a file's
+    /// compare: exactly what `docs/contracts/write-path.md` names as a file's
     /// identity, kind aside. Derived in one place so the identity an
     /// open observes before its truncating submit and the one it
     /// re-captures afterwards are the same function of the node.

@@ -1,4 +1,4 @@
-//! The membership log state machine (see `docs/epochs.md`, Layer 1).
+//! The membership log state machine (see `docs/contracts/epochs.md`, Layer 1).
 //!
 //! A pure, deterministic module over the **observed transition set**:
 //! classification is a function of that set alone — never of arrival

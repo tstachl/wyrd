@@ -56,7 +56,7 @@ pub enum RetentionPolicy {
 /// `REMOTE_ONLY` + `PRESENT` is an ordinary state, not a
 /// contradiction. Recorded, not probed: bytes that landed in a torn
 /// batch the log ignored report `ABSENT` until refetch records them
-/// (see `docs/crash-consistency.md`), even while physically present
+/// (see `docs/contracts/crash-consistency.md`), even while physically present
 /// and readable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LocalPresence {

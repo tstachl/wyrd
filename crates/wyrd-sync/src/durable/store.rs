@@ -153,7 +153,7 @@ const DRIVE_DIR_MODE: u32 = 0o700;
 /// precondition: concurrent writers resolve last-writer-wins, and
 /// the file always holds one complete write, never a torn one.
 /// Non-Unix falls back to `File::create_new`: the mode guarantee is
-/// Unix-only (see `docs/cli.md`).
+/// Unix-only (see `docs/design/cli.md`).
 pub(crate) fn create_mode_temp(
     dir: &Path,
     name: &str,
@@ -216,7 +216,7 @@ pub fn atomic_write_mode(dir: &Path, name: &str, bytes: &[u8], mode: u32) -> std
 /// directory is left untouched, and parents above the leaf are the
 /// operator's business and keep their modes: creation hardens,
 /// opening never chmods. Non-Unix falls back to plain
-/// `create_dir_all` (see `docs/cli.md`).
+/// `create_dir_all` (see `docs/design/cli.md`).
 pub(crate) fn ensure_owner_only_dir(path: &Path) -> std::io::Result<()> {
     #[cfg(not(unix))]
     return fs::create_dir_all(path);
@@ -258,7 +258,7 @@ pub(crate) fn ensure_owner_only_dir(path: &Path) -> std::io::Result<()> {
 /// it — initializing into a pre-existing empty directory still makes
 /// it a custody directory. Never called when opening an established
 /// drive, so pre-fix drives keep their modes. Non-Unix: no-op (see
-/// `docs/cli.md`).
+/// `docs/design/cli.md`).
 pub(crate) fn restrict_dir_owner_only(
     #[cfg_attr(not(unix), allow(unused_variables))] path: &Path,
 ) -> std::io::Result<()> {
@@ -268,7 +268,7 @@ pub(crate) fn restrict_dir_owner_only(
 }
 
 /// Advisory store-ownership probe for `wyrd update`
-/// (`docs/update.md` §3): create-owner-only-if-missing, `try_lock`,
+/// (`docs/contracts/update.md` §3): create-owner-only-if-missing, `try_lock`,
 /// release immediately. Held means a live process owns the drive;
 /// Free means nothing holds it *right now* — advisory only, the
 /// verification open is the authority. Reads no state and writes

@@ -14,7 +14,7 @@
 //! [`delivery`] discharges the transition/capability catch-up
 //! outbox, and [`rotation`] mints the stale-capability replacement
 //! wraps delivery sends.
-//! Semantics follow `docs/epochs.md` ("local write"): snapshots parent
+//! Semantics follow `docs/contracts/epochs.md` ("local write"): snapshots parent
 //! onto the locally live-lineage eligible heads, bind `membership` to
 //! the canonical epoch-K transition, and set `epoch` to that
 //! transition's epoch. Failures are fail-closed: no canonical

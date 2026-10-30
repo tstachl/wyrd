@@ -13,7 +13,7 @@
 //! uses — never a historical browse. Parents are always the current
 //! eligible heads, derived inside [`author_recovery`] exactly like
 //! [`author`], so a recovery grafts content, never lineage
-//! (`docs/epochs.md`, recovery snapshots).
+//! (`docs/contracts/epochs.md`, recovery snapshots).
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
@@ -39,7 +39,7 @@ pub enum RecoveryStatus {
     AlreadyLive,
     /// A recorded mapping names the bytes but this device holds no
     /// epoch capability that decrypts them: continuous membership
-    /// never covered the content (`docs/epochs.md`, recovery).
+    /// never covered the content (`docs/contracts/epochs.md`, recovery).
     Undecryptable,
     /// No local plaintext with either no recorded mapping at all
     /// or a held mapping whose vault copy is absent, plus an absent

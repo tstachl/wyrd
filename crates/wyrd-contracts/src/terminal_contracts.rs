@@ -1,5 +1,5 @@
 //! Contracts 47-48: generation-scoped terminal fetch state with
-//! waiter completion (`docs/peer-repair.md` Part 1, first child).
+//! waiter completion (`docs/design/peer-repair.md` Part 1, first child).
 //!
 //! The generation model — what goes terminal, when, and as which
 //! verdict — is pinned engine-side in

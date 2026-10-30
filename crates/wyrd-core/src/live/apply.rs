@@ -62,7 +62,7 @@ pub(super) fn authoring_error(error: EngineError) -> MutationError {
         // re-seals under a fresh nonce and imports a second copy of
         // the same content, leaking vault bytes for no new state.
         // Fail closed per the commit-failure row
-        // (`docs/write-path.md`); the serving drain retries the
+        // (`docs/contracts/write-path.md`); the serving drain retries the
         // import.
         EngineError::Vault(VaultError::MirrorFull { .. }) => MutationError::Engine,
         // A store read the loop cannot classify: the foreign debug
@@ -285,7 +285,7 @@ where
     /// The retention ceiling with a conservative estimate of incoming
     /// bytes added: a fold's gate covers the aggregate of the whole
     /// pending set before the commit's first write
-    /// (`docs/write-path.md`, rule 6), not just the bytes already
+    /// (`docs/contracts/write-path.md`, rule 6), not just the bytes already
     /// retained. The estimate over-counts by construction — full
     /// content lengths, while dedup and chunking only reduce what the
     /// store keeps — so a fold admitted here can still only overshoot
@@ -883,7 +883,7 @@ where
     }
 
     /// Apply one commit-forcing event's whole pending set plus itself
-    /// as a single snapshot (`docs/write-path.md`, DG-1 table).
+    /// as a single snapshot (`docs/contracts/write-path.md`, DG-1 table).
     /// Members arrive first-in-first-buffered; at most one carries
     /// the forcer's privilege, and a shutdown fold carries none.
     ///

@@ -91,7 +91,7 @@ once during startup.
   once, before the live loop starts.
 - `crates/wyrd-sync/src/serving.rs:118-188` writes the durable vault and only
   asynchronously enqueues the mirror import.
-- `docs/write-path.md:291-324` requires `servable` before announcement
+- `docs/contracts/write-path.md:291-324` requires `servable` before announcement
   discharge and defines the failure behavior when serving is not ready.
 
 A peer can receive a valid announcement and attempt a fetch before the
@@ -174,7 +174,7 @@ attacker-chosen secret vector.
 - `crates/wyrd-sync/src/keys/capability/model.rs:192-230,445-499` validates
   drive, transition, recipient, registered key, and count, but not who minted
   the secrets.
-- `docs/epochs.md:254-268` deliberately permits member senders but does not
+- `docs/contracts/epochs.md:254-268` deliberately permits member senders but does not
   explain how that prevents a member from minting arbitrary secrets.
 
 For a target with a vacant epoch, the forged capability can install a
@@ -249,7 +249,7 @@ requester authorization callback in the current composition.
   vault root, including unreferenced imports and plaintext snapshot bodies.
 - `crates/wyrd-sync/src/serving.rs:484-546` shows the intended filtered
   `VaultSource`, but the production endpoint does not use it.
-- `docs/fetch-on-open.md:85-101` and `docs/trust.md:764-769` describe
+- `docs/design/fetch-on-open.md:85-101` and `docs/contracts/trust.md:764-769` describe
   membership authorization and ciphertext-only serving.
 
 This is not a claim that file chunks are readable without epoch keys. It is
@@ -306,7 +306,7 @@ optional file handle and resolves the current path. A valid descriptor can
 therefore read bytes while `fstat` or handle-based metadata returns `ENOENT`.
 
 - `crates/wyrd-daemon/src/fuse/backend.rs:1601-1639`
-- `docs/write-path.md:484-493`
+- `docs/contracts/write-path.md:484-493`
 
 New issue: `nostr:nevent1qqs9kyffalfgnaydfz7w5x3n3rwvptmmnah866ej2ydeg69u8vfys7cpz9mhxue69uhkwunpwdczuap49eehgmfdrs9`.
 
@@ -320,7 +320,7 @@ classification.
 - `crates/wyrd-core/src/live.rs:642-644,675-677,723-725,800-802,839-841,906-908`
 - `crates/wyrd-daemon/src/fuse/backend.rs:92-113`
 - `crates/wyrd-sync/src/runtime/engine/mod.rs:86-152`
-- `docs/write-path.md:375-388,533-560`
+- `docs/contracts/write-path.md:375-388,533-560`
 
 New issue: `nostr:nevent1qqsxw4vwufnyklfmvc8n0axr0cf860wr9mguwumfc200fmdn7e4lvvqpz9mhxue69uhkwunpwdczuap49eehg7pl5ed`.
 
@@ -346,7 +346,7 @@ set is delivered can remain permanently stale.
 - `crates/wyrd-sync/src/runtime/author/snapshot.rs:243-252`
 - `crates/wyrd-sync/src/runtime/author/announce.rs:53-73`
 - `crates/wyrd-sync/src/runtime/author/admission.rs:204-225`
-- `docs/sync-and-peers.md:141-145`
+- `docs/contracts/sync-and-peers.md:141-145`
 
 New issue: `nostr:nevent1qqsw0j46ekljlyr5v4whrja94sadylyvycm9wagm0pj78ksdkcygtvcpz9mhxue69uhkwunpwdczuap49eehgxk2e75`.
 
@@ -359,7 +359,7 @@ after fact and fetch work has been admitted.
 
 - `crates/wyrd-sync/src/runtime/intake/mod.rs:354-430`
 - `crates/wyrd-sync/src/runtime/author/snapshot.rs:149-164`
-- `docs/epochs.md:103-110,303-314`
+- `docs/contracts/epochs.md:103-110,303-314`
 
 New issue: `nostr:nevent1qqsq5r5fdwugvss907x9alddmxpsfk40sxpsgwrykhw42wdzzu46tlqpz9mhxue69uhkwunpwdczuap49eehg4sz3z9`.
 
@@ -370,7 +370,7 @@ descendant beyond the conflict epoch is not considered before a resolution is
 accepted, despite the permanent-freeze rule in `epochs.md`.
 
 - `crates/wyrd-sync/src/membership/chain.rs:382-423,495-560`
-- `docs/epochs.md:193-198`
+- `docs/contracts/epochs.md:193-198`
 
 New issue: `nostr:nevent1qqspa24kdh0ttfx0dhqfp2amhv8s9yg5vayvuaxszfugu5lfuam5pdcpz9mhxue69uhkwunpwdczuap49eehg5aet8m`.
 
@@ -385,7 +385,7 @@ expands a large authenticated announcement and manifest fan-out.
 - `crates/wyrd-core/src/live.rs:501-511`
 - `crates/wyrd-sync/src/runtime/plan/mod.rs:37-240`
 - `crates/wyrd-sync/src/runtime/state.rs:620-688`
-- `docs/resource-limits.md:64-73`
+- `docs/contracts/resource-limits.md:64-73`
 
 This should be included in the existing scale/performance tracking rather
 than treated as a cryptographic failure.
@@ -422,7 +422,7 @@ already covered by a broader contract.
 | Some append/truncate paths use hardcoded write limits instead of `ResourceBudgets` | `crates/wyrd-core/src/live.rs:748-752,869-876`, `crates/wyrd-daemon/src/fuse/backend.rs:1490-1503` | Low configuration drift; defaults currently match. |
 | Production paths still use `expect`/`unwrap` at some lifecycle and exhaustion boundaries | `crates/wyrd-core/src/mutation.rs:614-620`, `crates/wyrd-core/src/mailbox/mod.rs:771-775,972-987`, `crates/wyrd-cli/src/main.rs:1087-1091`, `crates/wyrd-sync/src/durable/store.rs:230-235` | Low convention and recoverability issue. |
 | A failed invite claim can be stranded before the invitation is written | `crates/wyrd-cli/src/main.rs:764-800,857-883` | Low retry/liveness issue. |
-| The format document describes envelope-byte identity while the store derives ContentId from raw payloads | `docs/object-model.md:68-94`, `crates/wyrd-format/src/store.rs:19-23`, `crates/wyrd-format/src/identity.rs:165-170` | Medium interoperability/documentation drift; the new format-contract issue is `nostr:nevent1qqsrx5gtm4fgmph6wy42e6kfxp364t4f72d40w3jpvrrz7p32xm0sjcpz9mhxue69uhkwunpwdczuap49eehgs5qqrx`. |
+| The format document describes envelope-byte identity while the store derives ContentId from raw payloads | `docs/contracts/object-model.md:68-94`, `crates/wyrd-format/src/store.rs:19-23`, `crates/wyrd-format/src/identity.rs:165-170` | Medium interoperability/documentation drift; the new format-contract issue is `nostr:nevent1qqsrx5gtm4fgmph6wy42e6kfxp364t4f72d40w3jpvrrz7p32xm0sjcpz9mhxue69uhkwunpwdczuap49eehgs5qqrx`. |
 
 ## Prior findings verified as fixed
 
@@ -458,7 +458,7 @@ not be re-filed as new defects:
 - No bulk pre-download oversize defect remains in the current iroh client;
   verified size and bounded streaming precede content buffering.
 - A lost want wakeup is a latency issue explicitly permitted by
-  `docs/fetch-on-open.md:169-172`, not a deadline violation.
+  `docs/design/fetch-on-open.md:169-172`, not a deadline violation.
 
 ## Required verification work
 

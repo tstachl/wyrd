@@ -264,7 +264,7 @@ fn conflicted_write_error_requires_explicit_resolution() {
 /// removed from the live tree, then recovered by its recorded tree
 /// id through the production authoring path. The recovered bytes
 /// mount while the superseded snapshot never re-enters the eligible
-/// set (`docs/epochs.md`, recovery).
+/// set (`docs/contracts/epochs.md`, recovery).
 #[test]
 fn recovery_grafts_historical_bytes_onto_the_live_view() {
     let (engine, dir, identity) = scratch_drive();

@@ -194,7 +194,7 @@ impl RuntimeState {
     }
 
     /// The durability level the drive reached (DG-2, normative in
-    /// `docs/write-path.md`): Working with no recorded snapshot
+    /// `docs/contracts/write-path.md`): Working with no recorded snapshot
     /// body, Committed while the drive announcement outbox is
     /// non-empty, Published once it is quiet. The predicate is
     /// drive-global — recorded bodies plus the whole outbox, not

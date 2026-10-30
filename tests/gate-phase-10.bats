@@ -82,7 +82,7 @@ setup() {
   [[ "$(cat "$RUN/export-exh/recovery.txt")" == "recovered" ]] \
     || die "exhaustion export lost the recovery anchor"
   # Fill-file inventory against the write-path commit contract
-  # (docs/write-path.md: `create` commits the empty file as its own
+  # (docs/contracts/write-path.md: `create` commits the empty file as its own
   # snapshot; a refused write commits nothing of the write; a ceiling
   # refuses at the commit boundary, never partially). The leg records
   # the first failing fill index; each file is judged by what its own

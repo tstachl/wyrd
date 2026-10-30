@@ -57,7 +57,7 @@ pub const SCHEMA_VERSION: u32 = 1;
 /// How old a posture may be before it reads stale: three posture
 /// intervals, so one missed write (a wedged loop, a slow pass) does
 /// not flip a live vault to stale, while a dead process goes stale
-/// promptly. Explicit and documented (`docs/cli.md`): the threshold
+/// promptly. Explicit and documented (`docs/design/cli.md`): the threshold
 /// is part of the status contract, not a tuning knob.
 pub const POSTURE_FRESHNESS: Duration = Duration::from_secs(POSTURE_INTERVAL.as_secs() * 3);
 
@@ -526,7 +526,7 @@ pub fn render_process_section(posture: &ProcessPosture, proven_free: bool) -> St
 /// already print, so status reveals nothing log-reading does not.
 /// Deliberately no source path: the operator passed the drive
 /// directory, the file name is fixed, and the status surface never
-/// prints filesystem paths (`docs/cli.md`).
+/// prints filesystem paths (`docs/design/cli.md`).
 fn render_posture_facts(out: &mut String, file: &PostureFile) {
     out.push_str(&format!("process: instance: {}\n", file.instance));
     if file.serving_id.is_empty() {

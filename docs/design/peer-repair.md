@@ -155,7 +155,7 @@ Decided for child 12 (OD-12-1 A, OD-12-2 A, SD-1 A):
   an `ObjectRemoved` commit), and the demand state, so no
   stale claim pretends deleted bytes still exist. Claim-clear
   precedes unlink, so a crash converges either way
-  (`docs/crash-consistency.md`, quarantine repair).
+  (`docs/contracts/crash-consistency.md`, quarantine repair).
 
 Decided for child 13 (OD-13-1 walk-every-pass, OD-13-2
 memory-only cursor, OD-13-3 clear-with-size-zero):

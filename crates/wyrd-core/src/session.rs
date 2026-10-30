@@ -1,7 +1,7 @@
 //! Per-session write budgets: the memory bound on mounted writable
 //! handles.
 //!
-//! Normative in `docs/write-path.md` (Resource bounds). A writable handle
+//! Normative in `docs/contracts/write-path.md` (Resource bounds). A writable handle
 //! buffers a dense logical file image; those buffers are memory, so the
 //! daemon budgets them explicitly and fails closed (`ENOSPC` at the POSIX
 //! boundary) rather than allocating without limit.

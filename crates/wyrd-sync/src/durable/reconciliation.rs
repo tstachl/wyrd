@@ -1,6 +1,6 @@
 //! The recipient's reconciliation view: the durable-state evidence a
 //! sender compares its outstanding control obligations against
-//! (`docs/sync-and-peers.md` DG-3). The view is a projection of
+//! (`docs/contracts/sync-and-peers.md` DG-3). The view is a projection of
 //! durable facts — committed transitions, held snapshots, installed
 //! capability epochs — never another authoritative store, and the
 //! wire statement (21b) is its transport representation, never
@@ -10,7 +10,7 @@
 //! evidence that reached the sender as an authenticated statement
 //! over durable state. A view derived from live memory proves
 //! nothing, so the retire gate refuses it here — the obligation
-//! invariant (`docs/crash-consistency.md:142-146`) as a negative
+//! invariant (`docs/contracts/crash-consistency.md:142-146`) as a negative
 //! test, before any retire path exists to misuse it.
 //!
 //! Scope, decided: the conservativeness rule is the *exact-set*

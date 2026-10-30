@@ -1,5 +1,5 @@
 //! Disclosure classification: the machine-checked half of the
-//! observation × trust-position matrix (`docs/trust.md`, section
+//! observation × trust-position matrix (`docs/contracts/trust.md`, section
 //! "Observation × trust-position matrix").
 //!
 //! Every observation struct in the diagnostics surface carries an

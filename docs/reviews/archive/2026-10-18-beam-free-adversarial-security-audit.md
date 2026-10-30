@@ -90,7 +90,7 @@ in the code actually exercised.
   (see C.1). Highest priority among hardening items.
 - Add an ownership/mode check to `ensure_owner_only_dir` for pre-existing
   directories, mirroring `read_secret_file`'s fstat discipline, or document
-  the trusted-parent-directory assumption in `docs/cli.md`.
+  the trusted-parent-directory assumption in `docs/design/cli.md`.
 - Make the mailbox's outer wire limit (`MAX_MAILBOX_RELAY_WIRE_BYTES`) and
   the SDK `RelayLimits` configuration a single named constant shared with
   the intake layer, so a future edit cannot drift them apart.

@@ -109,7 +109,7 @@ right: [..., 109, 111, 117, 110, 116]     ... m o u n t
 This directly contradicts two contracts:
 - `docs/architecture.md:222-224`: "`destroy` commits still-dirty handles
   against the still-open mutation queue".
-- `docs/write-path.md` commit-pipeline contract, and the v0.2 Ship item
+- `docs/contracts/write-path.md` commit-pipeline contract, and the v0.2 Ship item
   "correct shutdown and restart behavior".
 
 A commit that persists a **prefix** of the buffered image, and reports success,
@@ -153,7 +153,7 @@ either direction**:
 - No pull. The `Message` enum (`crates/wyrd-sync/src/control/message.rs`) has
   only `MembershipTransition`, `SnapshotAnnouncement`, `Capability`,
   `KeyRotation`. There is no request/hole-announcement message.
-- No re-push. `docs/sync-and-peers.md:157-160` describes the catch-up set as
+- No re-push. `docs/contracts/sync-and-peers.md:157-160` describes the catch-up set as
   "retried until acknowledged"; the acknowledgment in the code is the relay OK.
 - No operator signal. `SyncStatus` (`crates/wyrd-core/src/status.rs:61-79`)
   reports the peer's *own* tip, held epochs, and outbox obligations. It cannot
@@ -169,7 +169,7 @@ not the epochs the peer missed.
 This is the "History acquisition and state convergence are separate failure
 domains" clause of the DoD, and history acquisition is the half that fails.
 Critically, **it appears in no limitations list**: ROADMAP.md:204-207 names two
-known limitations and neither is this; `docs/storage-growth.md` covers retention,
+known limitations and neither is this; `docs/design/storage-growth.md` covers retention,
 not convergence.
 
 **How this could still be false:** if relay retention always exceeds peer
@@ -222,7 +222,7 @@ for its most load-bearing external dependency.
 
 **How this could still be false:** the project may hold CI or maintainer
 evidence of a passing run against a permissive relay that I could not reach.
-`docs/sync-and-peers.md:47-48` claims "every test runs against an in-memory
+`docs/contracts/sync-and-peers.md:47-48` claims "every test runs against an in-memory
 fake, never a live network", which is now stale but was true when written.
 
 **Minimal fix:** surface the relay's `OK` — log accepted/rejected/failed per
@@ -259,10 +259,10 @@ bump `Cargo.toml:14` to `0.2.0-alpha`, and add the `v0.2.0-alpha` tag.
 
 | # | Issue | Evidence |
 |---|---|---|
-| 1 | `docs/sync-and-peers.md:47-48` claims "no concrete relay pool lives in `wyrd-sync` yet — every test runs against an in-memory fake, never a live network", and `:52-55` lists "the concrete relay pool (subscription management, retry backoff, event kind/tag conventions)" as Deferred. All landed in `wyrd-core` (`LiveMailbox`, supervisor, NIP-59 gift wrap). | doc/code contradiction |
+| 1 | `docs/contracts/sync-and-peers.md:47-48` claims "no concrete relay pool lives in `wyrd-sync` yet — every test runs against an in-memory fake, never a live network", and `:52-55` lists "the concrete relay pool (subscription management, retry backoff, event kind/tag conventions)" as Deferred. All landed in `wyrd-core` (`LiveMailbox`, supervisor, NIP-59 gift wrap). | doc/code contradiction |
 | 2 | ROADMAP Phase 1 "Remaining" (`:110-112`) lists "the serving router peers dial into (real-iroh loopback in the `wyrd` binary)" as remaining. It has landed. | `crates/wyrd-sync/src/serving.rs`, `serving_contracts::a_serving_daemon_serves_a_peer_over_live_iroh`, `docs/architecture.md:194-198` |
 | 3 | ROADMAP v0.2 "Explicitly do not ship" names **recovery grafting** (`:193`), but `Engine::author_recovery_snapshot` is `pub` (`crates/wyrd-sync/src/runtime/engine/mod.rs:1196`) and three contracts pass. It has no CLI or daemon surface, so nothing ships operationally — but the primitive is in the artifact and the two roadmap statements are not reconciled. | ROADMAP `:193` vs `:144-166` |
-| 4 | `docs/sync-and-peers.md:246` claims "Corrupt objects trigger scrub/repair before ever surfacing as errors". `FetchOutcome::settled()` is `#[allow(dead_code)]` with "No production caller yet" (`crates/wyrd-sync/src/runtime/fetch/mod.rs:520-537`), and the real producer `RuntimeState::status` (`crates/wyrd-sync/src/runtime/state.rs:178-189`) never yields `FetchStatus::Corrupt`. No scrub/repair path exists. | doc/code contradiction |
+| 4 | `docs/contracts/sync-and-peers.md:246` claims "Corrupt objects trigger scrub/repair before ever surfacing as errors". `FetchOutcome::settled()` is `#[allow(dead_code)]` with "No production caller yet" (`crates/wyrd-sync/src/runtime/fetch/mod.rs:520-537`), and the real producer `RuntimeState::status` (`crates/wyrd-sync/src/runtime/state.rs:178-189`) never yields `FetchStatus::Corrupt`. No scrub/repair path exists. | doc/code contradiction |
 | 5 | `docs/architecture.md:53` says "`wyrd-fuse` must never know that iroh exists". True at source level, false at link level: `cargo tree -p wyrd-fuse -e normal` reaches `wyrd-sync` and 25 iroh crates through `wyrd-core`'s production dependency. `wyrd-fuse` source never names iroh, so behaviour is unaffected — but contract 34 checks only *direct* manifest deps, so it cannot catch a regression here. | `cargo tree` output; `crates/wyrd-contracts/src/layer_contracts.rs:9-16` |
 | 6 | Admission's lineage-closure walk is O(recorded history) in one admission and commits one obligation per closure member. Acknowledged in code (`crates/wyrd-sync/src/runtime/author/admission.rs:229-236`) but in **no** doc's limitations list. | honesty gap |
 | 7 | `crates/wyrd-core/src/mailbox/tests_interop.rs:13` documents the run command as `cargo test -p wyrd-daemon external_relay`, but the file lives in `wyrd-core`. Following the doc runs nothing. | wrong crate name |
@@ -270,7 +270,7 @@ bump `Cargo.toml:14` to `0.2.0-alpha`, and add the `v0.2.0-alpha` tag.
 | 9 | `cargo audit` reports `RUSTSEC-2024-0370` (`faster-hex` `hex_decode_unchecked` AVX2 out-of-bounds read, **unsound**) newly in the graph via `nostr → nostr-database → nostr-sdk → wyrd-core`. Exit code 0, so CI is green; no policy entry covers `unsound`. Whether Wyrd reaches the unsound function is unverified. | `cargo audit` output |
 | 10 | The microVM e2e suite — the **only** partition/heal evidence — is referenced by no CI workflow. `.ngit/act/workflows/workflow.yml` runs check/clippy/nextest/nextest-slow/doctest/audit/deny, but `grep -n 'microvm\|lima' .ngit/act/workflows/*.yml` returns nothing. AGENTS.md calls it "gated on master CI". | grep result |
 | 11 | `docs/collaboration-workflow.md` says project labels are applied *after* issue creation. The two conventions (triage-at-creation vs post-creation) differ between AGENTS.md and this doc. | `AGENTS.md` vs `docs/collaboration-workflow.md` |
-| 12 | `4877b1e..HEAD` documents (correctly, at `crates/wyrd-sync/src/control/mod.rs:31-42`) that **capabilities have no content-level dedupe**: a freshly resealed identical capability recommits a durable fact. Paced per pass (256/sender/pass) but unbounded in retention from any drive member. `docs/resource-limits.md:102` acknowledges it. Honest, but the "bounded intake" Ship item should say so in the release notes. | doc + new test `resealed_identical_capability_recommits` |
+| 12 | `4877b1e..HEAD` documents (correctly, at `crates/wyrd-sync/src/control/mod.rs:31-42`) that **capabilities have no content-level dedupe**: a freshly resealed identical capability recommits a durable fact. Paced per pass (256/sender/pass) but unbounded in retention from any drive member. `docs/contracts/resource-limits.md:102` acknowledges it. Honest, but the "bounded intake" Ship item should say so in the release notes. | doc + new test `resealed_identical_capability_recommits` |
 
 ---
 
@@ -285,20 +285,20 @@ passed*.
 
 | Ship item | Verdict | Evidence | Gap |
 |---|---|---|---|
-| multi-relay mailbox operation | **PARTIAL** | `single_relay_outage_leaves_mailbox_live_on_survivor`, `empty_relay_config_connects_and_stays_idle` (`crates/wyrd-core/src/mailbox/tests_delivery.rs`); `crates/wyrd-core/src/mailbox/mod.rs:1338-1350` per-class supervision | No multi-relay test. `--relay` is repeatable (`docs/cli.md`); `SyncStatus.mailbox.configured_relays` counts them, but nothing exercises >1 concurrently |
+| multi-relay mailbox operation | **PARTIAL** | `single_relay_outage_leaves_mailbox_live_on_survivor`, `empty_relay_config_connects_and_stays_idle` (`crates/wyrd-core/src/mailbox/tests_delivery.rs`); `crates/wyrd-core/src/mailbox/mod.rs:1338-1350` per-class supervision | No multi-relay test. `--relay` is repeatable (`docs/design/cli.md`); `SyncStatus.mailbox.configured_relays` counts them, but nothing exercises >1 concurrently |
 | relay interoperability | **UNVERIFIED** | 2 opt-in tests, both `#[ignore]`d (`tests_interop.rs:58,108`). Ran against 3 relays: 1 unreachable, 2 attach-but-no-delivery | Blocker 3. Cannot distinguish relay policy from product defect |
 | peer repair and history catch-up | **PARTIAL** | Catch-up: `admit_queues_and_delivers_newcomer_catch_up`, `invited_device_converges_on_ordered/reversed/duplicated_catch_up`, `offline_device_catch_up_accumulates_contiguously`, `two_newcomers_converge_from_one_delivery_pass` (`crates/wyrd-contracts/src/join_contracts.rs`); `crates/wyrd-sync/src/runtime/author/admission.rs:188-262`. Route repair: `reannouncements_update_routes_and_reject_forks`, `fetch_recovers_after_serving_restart_with_accumulated_failures`, Lima step 6 + microVM step 8 | Blocker 2 (no re-push, no pull, no signal). Content scrub/repair absent (NB-4) |
 | correct closure and head gating | **PASS** | `verify_head_closure` + 19-variant exhaustive `rejection_class` (`crates/wyrd-sync/src/closure.rs:495-515`, `:878-998`); `a_gated_head_mounts_only_after_its_tree_lands_and_survives_restart`, `a_damaged_head_beside_an_installed_one_fails_the_pass_closed`, `snapshot_manifest_closure_correspondence`, `a_mismatched_snapshot_manifest_never_mounts`, `partial_head_set_never_projects_mixed_validity_heads` | Could still be false if a head closure is verified against a *partially* fetched store and mis-classified `Incomplete` as healthy — refuted: `is_pending()` (`closure.rs:168-175`) makes that path no-install, and the batch policy fails closed |
 | demand-driven content acquisition | **PASS** | Want registry + bounded blocking `open`/`read`: `wait_for_materialization` (`crates/wyrd-core/src/want.rs:245-258`), deadline → `EIO` at `crates/wyrd-daemon/src/fuse/backend.rs:925-950`; Lima step 6 asserts a 20-45s bounded `ETIMEDOUT`/`EIO` on peer-down demand with the defer and timeout both present in the log | Deadlines are per-open and generous by default; a slow peer costs an open that blocks. Documented, bounded, acceptable |
-| bounded intake and resource consumption | **PASS** | Two-layer intake budget `MAX_INTAKE_COMMITS_PER_PASS`/`..._PER_SENDER_PER_PASS` (`intake/mod.rs:29-36`, `:56-74`); mailbox 96 KiB/64 KiB/256 KiB/1024/4096/65536 bounds; documented in `docs/resource-limits.md:37-57`; `bulk_ceilings_stay_bounded_and_oversize_fails_closed`, `deferred_messages_survive_queue_pressure` | Retention is unbounded by design and documented (`docs/storage-growth.md`). See NB-12 |
+| bounded intake and resource consumption | **PASS** | Two-layer intake budget `MAX_INTAKE_COMMITS_PER_PASS`/`..._PER_SENDER_PER_PASS` (`intake/mod.rs:29-36`, `:56-74`); mailbox 96 KiB/64 KiB/256 KiB/1024/4096/65536 bounds; documented in `docs/contracts/resource-limits.md:37-57`; `bulk_ceilings_stay_bounded_and_oversize_fails_closed`, `deferred_messages_survive_queue_pressure` | Retention is unbounded by design and documented (`docs/design/storage-growth.md`). See NB-12 |
 | correct shutdown and restart behavior | **FAIL** | Teardown ordering and bounds are excellent: `close.rs:13-36` (`with_deadline`, `stop_with_close`) with unit pins; `tests_teardown.rs` (6 tests), Lima step 6 90s `stop_mount`, microVM step 8 | **Blocker 1**: dirty handle truncated 26/27 at shutdown, 5/5 |
 | headless sync | **PASS** | `wyrd sync now`: `headless_loop_converges_a_real_outbox_in_staged_passes`, `headless_loop_reports_unfetchable_instead_of_spinning`, `headless_loop_discharges_without_a_route`, `headless_loop_trips_the_cap_on_permanent_send_failure` (`crates/wyrd-cli/src/tests_sync.rs:298-423`) | — |
-| sync status | **PASS** | `wyrd sync status` reads durable state only, never connects (`docs/cli.md:256-286`); `SyncStatus` (`crates/wyrd-core/src/status.rs:61-79`); `crates/wyrd-cli/src/tests_sync.rs` | Cannot report a *peer's* gap — that is Blocker 2 |
-| materialization policy | **PASS** | `policy_commits_change_no_replicated_state` contract; `wyrd pin`/`unpin`/`evict`/`cache status|policy` (`docs/cli.md`); two reported values (`sync-and-peers.md:129-132`) | `docs/resource-limits.md:56` honestly states the quota covers only the mounted write path |
+| sync status | **PASS** | `wyrd sync status` reads durable state only, never connects (`docs/design/cli.md:256-286`); `SyncStatus` (`crates/wyrd-core/src/status.rs:61-79`); `crates/wyrd-cli/src/tests_sync.rs` | Cannot report a *peer's* gap — that is Blocker 2 |
+| materialization policy | **PASS** | `policy_commits_change_no_replicated_state` contract; `wyrd pin`/`unpin`/`evict`/`cache status|policy` (`docs/design/cli.md`); two reported values (`sync-and-peers.md:129-132`) | `docs/contracts/resource-limits.md:56` honestly states the quota covers only the mounted write path |
 | reliable FUSE read/write | **PARTIAL** | Real mount on macOS/macFUSE: `live_mount_serves_read_write_until_shutdown` **passed** (read, write, re-read, clean SIGINT teardown, write survived reopen). 6 `fuse_contracts` + `concurrent_opens_reads_and_publications_never_deadlock_or_tear` | **Blocker 1** on the shutdown half |
 | E2E convergence tests | **PARTIAL** | Lima suite (`tests/alpha-lima.sh`, 6 steps) and microVM suite (`tests/alpha-microvm.sh` + legs, 10 steps incl. real `tap-r` partition/heal at step 10) are real, two-host, real-relay-process harnesses | **Not run by me** (needs Linux/KVM) and **not in CI** (NB-10) |
 | adversarial and runtime property tests | **PASS** | `membership/properties.rs`, `authorization/properties.rs`, `keys/capability/properties.rs` (proptest); `reversed_arrival_converges_to_the_same_outcome`; Phase 4 fuzzing (`crates/wyrd-sync/src/fuzz.rs`) | — |
-| operationally meaningful limits and failure behavior | **PASS** | `docs/resource-limits.md` is unusually complete and honest, including the raise-vs-count rule and disk classification; `StoreFailure::of_io` shared by both writers; per-class supervision with separate caps | — |
+| operationally meaningful limits and failure behavior | **PASS** | `docs/contracts/resource-limits.md` is unusually complete and honest, including the raise-vs-count rule and disk classification; `StoreFailure::of_io` shared by both writers; per-class supervision with separate caps | — |
 
 ### Definition of done (ROADMAP.md:197-202)
 
@@ -318,10 +318,10 @@ passed*.
 | Item | Verdict | Evidence |
 |---|---|---|
 | recovery grafting | **AMBIGUOUS** | Code + 3 passing contracts present (`engine/mod.rs:1196`), no operator surface. NB-3 |
-| mobile | **PASS (absent)** | No mobile crate; `grep -rn -i mobile crates/*/src` (non-test) → no product surface; `docs/mobile.md` is design only |
+| mobile | **PASS (absent)** | No mobile crate; `grep -rn -i mobile crates/*/src` (non-test) → no product surface; `docs/platforms/mobile.md` is design only |
 | File Provider | **PASS (absent)** | No file-provider surface |
-| sophisticated conflict UI | **PASS** | `wyrd snapshot merge --take path=@N` is CLI, documented `docs/cli.md:194-213`; no UI |
-| production telemetry platform | **PASS** | `docs/resource-limits.md:148` "No separate metrics pipeline in v0"; `tracing` is events-only, no subscriber in library crates |
+| sophisticated conflict UI | **PASS** | `wyrd snapshot merge --take path=@N` is CLI, documented `docs/design/cli.md:194-213`; no UI |
+| production telemetry platform | **PASS** | `docs/contracts/resource-limits.md:148` "No separate metrics pipeline in v0"; `tracing` is events-only, no subscriber in library crates |
 | marketplace | **PASS (absent)** | — |
 | release distribution | **PASS** | `.ngit/release.yaml` + flake `wyrd-dist` exist, but no runtime distribution surface; the roadmap assigns dogfooding to v0.3 |
 | major performance architecture | **PASS** | No `criterion`/benchmark harness (`grep -rn 'benchmark\|criterion\|perf\b'` → empty). `wide_flat_closure_verifies_and_reports_cost` deliberately *records* elapsed time without asserting (`closure.rs:1000-1063`, "wall clocks are not contracts"). The one performance-shaped item — the O(history) admission walk — is an acknowledged correctness-bound cost, not optimization |
@@ -420,7 +420,7 @@ disciplined use of `#[ignore]` I want to see.
 |---|---|---|
 | Phase 1 Remaining: "the serving router peers dial into (real-iroh loopback in the `wyrd` binary)" | Landed | **Stale** (NB-2) |
 | Phase 1 Remaining: "NIP-46 remote signing" | `SignerSession` trait (`transport/signer.rs:52`) + wire codecs only (`control/nip46.rs`, 196 lines, `SignMessageRequest`/`Response` encode/decode). Only impls are `DeviceIdentitySecret` and four test fakes. No `nostr-connect` client, no session negotiation | **Accurately remaining** |
-| Phase 1 Remaining: "bulk backpressure under live network conditions" | Fetch is single-threaded per pass (`docs/resource-limits.md:104-107`); no semaphore/concurrency limit. Mirrored queue bounds exist on the serving side (`MAX_MIRROR_QUEUE_ITEMS`/`BYTES`) | **Accurately remaining**; bounded via bytes-in-pass instead |
+| Phase 1 Remaining: "bulk backpressure under live network conditions" | Fetch is single-threaded per pass (`docs/contracts/resource-limits.md:104-107`); no semaphore/concurrency limit. Mirrored queue bounds exist on the serving side (`MAX_MIRROR_QUEUE_ITEMS`/`BYTES`) | **Accurately remaining**; bounded via bytes-in-pass instead |
 | "multi-relay mailbox supervision and relay interop coverage" listed open in `architecture.md:199` | Supervision landed (`live.rs:134-141`); multi-relay interop untested | **Partly stale** (NB-1, Ship table) |
 | v0.2 Known limitations (2 items) | Both accurate; **incomplete** — omits Blocker 2 and NB-4 | **Incomplete** |
 | `sync-and-peers.md` "Post-admission discovery" claims catch-up is "retried until acknowledged" | Acknowledgment is relay-accepted, not receipt | **Contradicted** (Blocker 2) |
@@ -436,38 +436,38 @@ Consistent. The three recovery senses are defined once
 (`ROADMAP.md:75-82`) and used correctly throughout: crash recovery is "Shipped"
 and is what the workspace actually implements; content recovery is "v0.3"; root
 recovery is "v0.7". No doc or CLI string claims v0.2 provides content or root
-recovery. `docs/epochs.md:421,425,436` uses "Recovery" for *content* grafting
-consistently with the roadmap's v0.3 assignment. `docs/cli.md:157` steers a lost
+recovery. `docs/contracts/epochs.md:421,425,436` uses "Recovery" for *content* grafting
+consistently with the roadmap's v0.3 assignment. `docs/design/cli.md:157` steers a lost
 invitation to `reissue-invitation` rather than promising recovery.
 
-One ambiguity, not an error: `docs/crash-consistency.md:169-170` uses
+One ambiguity, not an error: `docs/contracts/crash-consistency.md:169-170` uses
 "degraded recovery" for a missing escrow sidecar and "root-alone recovery" in
 the same sentence — dense but each sense is correct in context.
 
 ### 5.5 Known limitations — documented ones are honest; three are missing
 
 Accurate and admirably candid as written: the retained-bytes quota's four
-narrowings (`docs/storage-growth.md:281-338`), the interference channel
+narrowings (`docs/design/storage-growth.md:281-338`), the interference channel
 (`:299-308`), "one-way" quota (`:320-326`), and silent loss on `release`
-(`:328-338`). `docs/resource-limits.md:56` and `:104-115` are equally honest.
+(`:328-338`). `docs/contracts/resource-limits.md:56` and `:104-115` are equally honest.
 
 **Undocumented, found in code:**
 1. **Control-plane delivery is relay-accepted; a peer absent beyond relay
    retention never self-repairs, with no operator signal** (Blocker 2).
 2. **No scrub/repair for corrupt fetched content; `FetchStatus::Corrupt` has no
-   production producer** (NB-4). `docs/sync-and-peers.md:246` asserts otherwise.
+   production producer** (NB-4). `docs/contracts/sync-and-peers.md:246` asserts otherwise.
 3. **Admission's lineage-closure walk is O(recorded history)** in one admission
    (NB-6). Code acknowledges it; no doc does.
 4. Resealed identical capabilities recommit durable facts, unbounded in
-   retention (NB-12) — acknowledged in `docs/resource-limits.md:102`, should be
+   retention (NB-12) — acknowledged in `docs/contracts/resource-limits.md:102`, should be
    in the release notes.
 
 ### 5.6 Docs vs code
 
-`docs/sync-and-peers.md:47-48` ("every test runs against an in-memory fake,
+`docs/contracts/sync-and-peers.md:47-48` ("every test runs against an in-memory fake,
 never a live network") and `:52-55` ("the concrete relay pool … Deferred") are
 the most misleading, because a reader concludes no relay code exists.
-`docs/sync-and-peers.md:246` (corrupt/scrub) is contradicted by dead code.
+`docs/contracts/sync-and-peers.md:246` (corrupt/scrub) is contradicted by dead code.
 `docs/architecture.md:53` (iroh invisibility) is true only at source level.
 `ROADMAP.md:110-112` and `:193` are contradicted or unreconciled. Everything
 else I read in `trust.md`, `epochs.md`, `object-model.md`, `resource-limits.md`,
@@ -529,7 +529,7 @@ guest / Linux KVM host; not available here), `ngit` remote operations.
 4. **A Linux run of `live_mount_preserves_dirty_handle_across_shutdown`** to
    attribute Blocker 1 to Wyrd versus macFUSE.
 5. **Issue-tracker state** for the follow-ups named in code comments and docs:
-   the "intake-bound follow-up" (`docs/resource-limits.md:102`), the
+   the "intake-bound follow-up" (`docs/contracts/resource-limits.md:102`), the
    "conflict-divergence follow-up" (`tests/alpha-lima.sh:497-501`), and the two
    `storage-growth.md` open questions.
 6. **Whether relay retention is assumed to exceed peer absence anywhere.**

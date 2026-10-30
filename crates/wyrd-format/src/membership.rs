@@ -1,5 +1,5 @@
-//! The membership log's transition documents (see `docs/epochs.md`,
-//! Layer 1, and `docs/trust.md` for the exact signing construction).
+//! The membership log's transition documents (see `docs/contracts/epochs.md`,
+//! Layer 1, and `docs/contracts/trust.md` for the exact signing construction).
 //!
 //! A transition is a **sealed document, not a content-addressed object**:
 //! the log travels encrypted to the drive, so transitions have no envelope

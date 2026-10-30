@@ -208,7 +208,7 @@ pub(crate) struct WriteHandle {
     pub(super) dirty: bool,
     /// First-in-first-buffered order: stamped when the handle turns
     /// dirty, kept across later writes, so a fold applies members in
-    /// buffering order (`docs/write-path.md`, DG-1 rule 2).
+    /// buffering order (`docs/contracts/write-path.md`, DG-1 rule 2).
     pub(super) dirty_seq: u64,
     /// A fold holds this handle's taken image: writers wait on the
     /// backend's fold signal until the fold settles the handle, so no

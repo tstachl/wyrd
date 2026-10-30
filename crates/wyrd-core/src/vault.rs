@@ -36,7 +36,7 @@
 //! is not convergence, and the vault surface must not claim
 //! otherwise.
 //!
-//! Row map (matrix `docs/trust.md`, observation × trust-position):
+//! Row map (matrix `docs/contracts/trust.md`, observation × trust-position):
 //! every field below is O4 (counts). No field maps to a hidden row;
 //! the field inventory pins this mapping, and the inventory is
 //! exhaustive by construction (see `disclosure_map`).

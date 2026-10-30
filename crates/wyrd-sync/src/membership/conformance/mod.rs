@@ -1,5 +1,5 @@
 //! Conformance tests: the membership contract's test list from
-//! `docs/epochs.md` ("Conformance tests"), as named tests. Fixture
+//! `docs/contracts/epochs.md` ("Conformance tests"), as named tests. Fixture
 //! construction never uses the machine under test (see `test_util`):
 //! happy-path chains come from [`Builder`], everything else is hand-built
 //! with struct literals and signed explicitly.

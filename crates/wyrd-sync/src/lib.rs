@@ -1,6 +1,6 @@
 //! Wyrd's peer-to-peer replication layer, built on the iroh stack.
 //!
-//! Responsibilities (see `docs/sync-and-peers.md` for the design):
+//! Responsibilities (see `docs/contracts/sync-and-peers.md` for the design):
 //! - exchanging snapshot log entries and objects between peers
 //! - two-phase content arrival (metadata first, blob content lazily)
 //! - asymmetric peer roles: mirrors (hot state) and vaults (full history)

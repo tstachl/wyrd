@@ -20,7 +20,7 @@ and what is enforceable before GC are in `storage-growth.md`. (The
 append-only membership log is a second thing no live bound caps; it is
 owner-gated and grows per transition, not an amplification path.)
 
-All bounds live in one struct, [`ResourceBudgets`](../crates/wyrd-core/src/budgets.rs),
+All bounds live in one struct, [`ResourceBudgets`](../../crates/wyrd-core/src/budgets.rs),
 threaded from `LiveConfig` into the loop, the registries, and the
 backend at composition time. Defaults are the historical hardcoded
 bounds — with five intentional new ones: the per-pass admission cap
@@ -134,7 +134,7 @@ which bounds each admission by its own epoch's chain — at the cost
 of the late-joiner horizon (a newcomer admitted epochs later holds
 the old epoch keys without learning the old snapshot ids; see the
 Known v0.2 limitations in `ROADMAP.md` and
-`docs/fetch-on-open.md`). Not a v0.2
+`docs/design/fetch-on-open.md`). Not a v0.2
 blocker: it needs a long single-epoch history plus an admission,
 violates no bound in this document — and the horizon stays by
 explicit decision (OD-16-2 A), not by default: the late-joiner
@@ -182,7 +182,7 @@ the per-object term, and capping admissions caps the sum.
 ## Disk classification
 
 A full or unwritable disk is classified once, at the I/O boundary,
-by [`StoreFailure::of_io`](../crates/wyrd-format/src/store.rs) — one
+by [`StoreFailure::of_io`](../../crates/wyrd-format/src/store.rs) — one
 rule shared by the plaintext object store and the sync vault, so the
 two disk writers can never disagree on what "full" means:
 
@@ -218,7 +218,7 @@ surfaces:
   objects, `unfulfilled`, and the full fetch-failure class set
   (`transport_errors`, `deadlines`, `missing`, `invalid`,
   `unavailable_keys`, `local_failures`). The classes are kept as
-  `sync now` run output (`docs/cli.md`, "Diagnostics and exit
+  `sync now` run output (`docs/design/cli.md`, "Diagnostics and exit
   codes"): per-pass structs are the accounting, the rendered run
   report is the pressure surface, and the class counters are
   diagnostic counts — never a decomposition of `unfulfilled`.

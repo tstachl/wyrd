@@ -1,4 +1,4 @@
-//! Merkle file trees (see `docs/object-model.md`, "Files and Trees").
+//! Merkle file trees (see `docs/contracts/object-model.md`, "Files and Trees").
 //!
 //! A directory node is content addressed by the ContentId of its canonical
 //! payload encoding. Entries hold a single path *component* (dirs link to

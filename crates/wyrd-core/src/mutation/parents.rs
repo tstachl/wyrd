@@ -15,7 +15,7 @@ pub const DEFAULT_MAX_PARENT_TOKENS: usize = 4096;
 /// [`MutationError::Stale`], never a silent merge.
 ///
 /// The tuple is deliberately the full file identity (size, exec, ordered
-/// chunk ids) rather than a single content id: `docs/write-path.md` names
+/// chunk ids) rather than a single content id: `docs/contracts/write-path.md` names
 /// kind, size, exec, and content as the comparison, and the format layer
 /// does not yet expose a canonical file-node id. A cheaper id is future
 /// work; it must not weaken the comparison.

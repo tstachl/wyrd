@@ -1,5 +1,7 @@
 # Drive-owner interface (v1)
 
+Status: Normative. Scope: the cross-process operations a non-owner consumer may submit, and the durability and exactly-once behavior the owner owes in return. Authority: this interface owns the boundary; engine, mutation, durability, synchronization, and trust logic live in their own contracts and are not duplicated here.
+
 A second process uses a drive it does not own through this
 interface. One process owns the durable store. Every other local
 consumer submits operations to the owner and never opens the store.

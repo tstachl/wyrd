@@ -2,7 +2,7 @@
 //! namespace view whose heads come from the engine's classified
 //! live-head projection — the eligible-head projection of the observed
 //! DAG, never the raw announcement set, which is retained history
-//! (`docs/epochs.md`).
+//! (`docs/contracts/epochs.md`).
 //!
 //! The node is presentation-agnostic: sync supplies durable state,
 //! keys, and fetch semantics; the view supplies the read surface;

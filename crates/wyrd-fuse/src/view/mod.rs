@@ -8,7 +8,7 @@
 //! interface only — no networking, no async, no iroh. A daemon composes
 //! this view with `wyrd-sync`; the view never learns how bytes arrive.
 //!
-//! Presentation policy (v0, from `docs/sync-and-peers.md`):
+//! Presentation policy (v0, from `docs/contracts/sync-and-peers.md`):
 //!
 //! - The projected namespace is the user's data only. The view never
 //!   introduces synthetic entries — no hidden directories, no virtual

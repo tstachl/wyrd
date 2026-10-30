@@ -1,5 +1,5 @@
 //! Manifest types: the sealed bridge between ContentIds and StorageIds
-//! (see `docs/object-model.md`, "Manifests (the bridge between identity
+//! (see `docs/contracts/object-model.md`, "Manifests (the bridge between identity
 //! worlds)").
 //!
 //! A manifest is a plaintext-world document: this crate stays keyless, so

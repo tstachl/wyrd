@@ -138,7 +138,7 @@ fn conflicted_drive() -> (
 
 /// A conflicted drive rejects mounted writes: with more than one
 /// eligible live head there is no single tree to mutate, so every
-/// mutation fails `EIO` and authors no snapshot (`docs/write-path.md`,
+/// mutation fails `EIO` and authors no snapshot (`docs/contracts/write-path.md`,
 /// Conflicted drives). Two independent root snapshots at the same
 /// epoch and membership produce the conflict.
 #[cfg(feature = "mount")]
@@ -215,7 +215,7 @@ fn conflicted_drive_rejects_mounted_writes() {
 /// Contract 46: a conflicted drive refuses a fold with members and
 /// restores them: the whole fold aborts with `Conflicted`,
 /// nothing commits, and every non-forcing member is restored
-/// retryable (`docs/write-path.md`, DG-1 rule 6). Submitted straight
+/// retryable (`docs/contracts/write-path.md`, DG-1 rule 6). Submitted straight
 /// through the queue — no backend can even open a handle on a
 /// conflicted drive, so this pins the loop's refusal; the daemon
 /// putting restored images back into dirty handles is pinned at the
@@ -524,7 +524,7 @@ fn a_gated_head_mounts_only_after_its_tree_lands_and_survives_restart() {
 /// out of `live_heads()`, its paths `ENOENT` — while a child authored
 /// on top classifies `Undecided(UnknownParent)`; and the stall poisons
 /// nothing, so serving the bytes later adopts the head normally.
-/// (`docs/fetch-on-open.md`: "Snapshot body or manifest unavailable".)
+/// (`docs/design/fetch-on-open.md`: "Snapshot body or manifest unavailable".)
 #[test]
 fn body_never_arriving_leaves_the_snapshot_unadopted_and_paths_enoent() {
     let mut loaded = Loaded::new("payload", b"stalled payload");
@@ -717,8 +717,8 @@ fn body_never_arriving_leaves_the_snapshot_unadopted_and_paths_enoent() {
 }
 
 /// Recovery grafts content only, and a voided transition never
-/// authorizes — regardless of ancestry shape (`docs/epochs.md`, Layer
-/// 3; `docs/trust.md` recovery rule). Composed end to end over the
+/// authorizes — regardless of ancestry shape (`docs/contracts/epochs.md`, Layer
+/// 3; `docs/contracts/trust.md` recovery rule). Composed end to end over the
 /// public APIs: hand-signed membership transitions observe into the
 /// public [`MembershipLog`], hand-signed snapshots into the public
 /// [`SnapshotDag`], and every verdict comes out of the production
@@ -879,7 +879,7 @@ fn recovery_grafts_content_only_and_voided_transitions_never_authorize() {
 /// recorded historical tree back under the current epoch through the
 /// production authoring path. The recovery mounts with the
 /// historical bytes while the superseded snapshot stays out of the
-/// eligible set (`docs/epochs.md`, recovery; the materialization
+/// eligible set (`docs/contracts/epochs.md`, recovery; the materialization
 /// half contract 37's classifier-only coverage leaves open — no
 /// synthetic ContentIds here).
 #[test]
@@ -980,7 +980,7 @@ fn recovery_rebuilds_explicit_historical_content_and_mounts() {
 /// historical tree back under the resolution epoch through the
 /// production authoring path. The graft mounts with the historical
 /// bytes while the voided snapshot never re-enters the eligible set
-/// (`docs/epochs.md`, recovery; the voided-ancestry materialization
+/// (`docs/contracts/epochs.md`, recovery; the voided-ancestry materialization
 /// half contract 37 covers with synthetic ContentIds only).
 #[test]
 fn recovery_resurrects_bytes_from_a_voided_branch_and_mounts() {

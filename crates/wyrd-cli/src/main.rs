@@ -205,7 +205,7 @@ pub(crate) enum CliError {
 /// The supervisor wrapper maps exactly this code to its terminal
 /// status; every other failure keeps the historical exit 2, so a
 /// wrapper that treats 78 as "held" never misfires on a runtime
-/// error. Recorded in `docs/cli.md`'s exit-code list.
+/// error. Recorded in `docs/design/cli.md`'s exit-code list.
 pub const EXIT_DRIVE_LOCKED: i32 = 78;
 
 impl CliError {

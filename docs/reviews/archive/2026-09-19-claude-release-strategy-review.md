@@ -12,7 +12,7 @@ One clarifying point first: **grasp.t5.st and gitworkshop.dev are GRASP servers*
 | 4 | Update mechanics | Notify-and-manual, sequenced unmount → replace → remount | You operate a fleet of headless vault/server nodes |
 | 5 | Signing & verification | Pin the maintainer npub now; move signing to a Frostr threshold key before it's load-bearing | You have >1 maintainer, or before mainnet-grade trust matters |
 | 6 | Web presence | nsite via `ngit nsite publish`, public gateways for redundancy, a free static redirect for the memorable URL | Never need your own gateway |
-| 7 | Mobile stores | Plan Android and iOS as separate pipelines from day one in docs/mobile.md | N/A — this is architectural, decide now |
+| 7 | Mobile stores | Plan Android and iOS as separate pipelines from day one in docs/platforms/mobile.md | N/A — this is architectural, decide now |
 
 ---
 
@@ -50,7 +50,7 @@ Pin the maintainer npub in the client now — that's free, since BIP-340 verific
 
 Frostr is the nostr-native answer, and it's mature enough to adopt now rather than bolt on later. It splits a key into k-of-n shares using FROST threshold signatures, and critically, a t-of-n quorum of shares can sign together while a single compromised share doesn't leak the key, and shares can be rotated and replaced without rotating the underlying identity. The npub — your pinned trust anchor — never has to change for routine rotations (a laptop reformatted, a maintainer added). The project has shipped past prototype: a v1 suite is now live across desktop, browser, server, CLI, web, and mobile. Since you're pre-alpha, starting the release-signing key as a Frostr threshold key from day one avoids ever having to solve "how do all existing installs learn about the new key" as a live-fire problem — that alone is worth the small setup cost now.
 
-If you want to defer the Frostr dependency, a fallback is a self-describing rotation event signed by the *old* key attesting to the new one — conceptually identical to the epoch/membership transitions wyrd already models in `docs/epochs.md`. But that only works if the old key isn't already compromised, which is precisely the scenario rotation exists for — it's a weaker answer than threshold signing, not an equivalent one.
+If you want to defer the Frostr dependency, a fallback is a self-describing rotation event signed by the *old* key attesting to the new one — conceptually identical to the epoch/membership transitions wyrd already models in `docs/contracts/epochs.md`. But that only works if the old key isn't already compromised, which is precisely the scenario rotation exists for — it's a weaker answer than threshold signing, not an equivalent one.
 
 ### 6. Web presence
 
@@ -62,7 +62,7 @@ For the "first landing before any Nostr-aware software" problem specifically: a 
 
 ### 7. Mobile stores
 
-Plan this as two pipelines sharing only the build, not the trust model — decide the split now since it shapes `docs/mobile.md`'s architecture even before you write the adapters.
+Plan this as two pipelines sharing only the build, not the trust model — decide the split now since it shapes `docs/platforms/mobile.md`'s architecture even before you write the adapters.
 
 **Android** survives the transplant almost intact. Sideloading has always been an OS-level option, and Zapstore's Android client already exists specifically to let Nostr-signed, Blossom-hosted APKs be discovered and installed this way, verifying binaries before installation and letting users install software outside the control of a single platform owner, with the Android client the most mature part of the project today. Your NIP-82/Blossom scheme is directly reusable here; a Play Store listing stays optional, parallel infrastructure rather than a requirement.
 

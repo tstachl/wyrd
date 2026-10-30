@@ -1,8 +1,8 @@
 # Roadmap
 
 This file tracks the implementation order for Wyrd. The normative contracts
-live in `docs/object-model.md`, `docs/trust.md`, `docs/epochs.md`, and
-`docs/sync-and-peers.md`; this roadmap stays directional.
+live in `docs/contracts/object-model.md`, `docs/contracts/trust.md`, `docs/contracts/epochs.md`, and
+`docs/contracts/sync-and-peers.md`; this roadmap stays directional.
 
 Milestones are capability-oriented, not issue-volume-oriented. Each milestone
 names the system that must become trustworthy before the next begins. The
@@ -27,6 +27,23 @@ it; v0.4, people can use it; v0.5, people can understand its history;
 v0.6, people can use it on mobile; v0.7, infrastructure can keep it alive
 and recover it; v0.8, contracts become long-lived; v0.9, prove the whole
 thing; v1.0, ship it.
+
+## Status vocabulary
+
+A capability is never just "done". Across this file, `architecture.md`,
+and design docs, these states are distinct — do not collapse them:
+
+| Status | Meaning |
+| ------ | ------- |
+| Specified | A contract or design has been written down. |
+| Implemented | The code path exists. |
+| Tested | The behavior has automated evidence. |
+| Integrated | The relevant components are wired together. |
+| End-to-end verified | The composed workflow has passed its required test. |
+| Proposed / Open | The design or decision is not settled. |
+
+Detailed evidence lives in tests and release records. Docs communicate
+the status accurately and link to that evidence.
 
 ## Triage: placing work on the map
 
@@ -127,7 +144,7 @@ Landed:
 
 Open from this phase (status + v0.2 blocker call each — reconciled
 against `docs/architecture.md`, `README.md`, and
-`docs/sync-and-peers.md`):
+`docs/contracts/sync-and-peers.md`):
 
 - NIP-46 remote signing: absent. The `SignerSession` trait boundary
   and the `control/nip46.rs` wire codecs exist and are fake-tested;
@@ -135,7 +152,7 @@ against `docs/architecture.md`, `README.md`, and
   v0 operates with the local signer, and neither the v0.2 Ship list
   nor the definition of done below names remote signing.
 - Bulk backpressure under live network conditions: mechanism landed
-  (pass-budget fair-share across providers, `docs/fetch-on-open.md`
+  (pass-budget fair-share across providers, `docs/design/fetch-on-open.md`
   property 8) and loopback-tested; measured pressure on a live
   network is open. Not a v0.2 blocker: no operational bound is
   violated on current evidence, so the v0.2 performance entry test
@@ -163,7 +180,7 @@ serves read-write by default.
 ## Phase 3: Recovery Foundations — shipped; workflow pending
 
 Goal: land the recovery primitives the trust contract reserves the
-design for (`docs/trust.md`, Recovery). Making root recovery operational
+design for (`docs/contracts/trust.md`, Recovery). Making root recovery operational
 end to end (guardians reconstructing a lost root) is explicitly NOT in
 this phase.
 
@@ -178,7 +195,7 @@ Landed (foundations — implemented, tested, wired):
   reopen) — end to end for local custody, not for guardians
 - bootstrap custody handling: create plus reopen flows
 - recovery-snapshot flag and grafting rules, specified in
-  `docs/epochs.md` (content grafts, never lineage); the creation
+  `docs/contracts/epochs.md` (content grafts, never lineage); the creation
   workflow that mints one is unshipped (see below)
 
 Explicitly NOT landed (unimplemented, untracked — file tracking
@@ -192,7 +209,7 @@ issues before implementing):
 - owner recovery-snapshot creation workflow
 
 Until those land, root loss with all capable devices gone is
-unrecoverable — exactly as `docs/trust.md` states. Nothing here
+unrecoverable — exactly as `docs/contracts/trust.md` states. Nothing here
 should be read as operational root recovery.
 
 ## Phase 4: Hardening — shipped
@@ -249,7 +266,7 @@ invalid bytes never committed or served. Local bitrot is detected on
 read but never re-fetched — an object recorded as local stays local —
 so a bitrotted object is a permanent read error in v0.2. The repair
 loop and scrub are booked in v0.3 core below; the design, with its
-protocol invariants, is recorded in `docs/peer-repair.md`. Known history
+protocol invariants, is recorded in `docs/design/peer-repair.md`. Known history
 without a reachable provider stays visible but unfetchable, and the
 two cases fail differently: a known snapshot whose manifest chain
 cannot be materialized within the deadline fails `open()`
@@ -259,10 +276,10 @@ snapshot unadopted — a later snapshot built on it classifies
 projected namespace (`ENOENT`, never a hang). Recovery needs a new
 announcement, since v0.2 provides neither content recovery nor a
 root-recovery workflow (both book to v0.3).
-The case split is normative in `docs/fetch-on-open.md`. Control-plane
+The case split is normative in `docs/design/fetch-on-open.md`. Control-plane
 delivery is relay-accepted, not recipient-received: the outbox
 commits a `Delivered` fact only when at least one relay accepted the
-write (`SendReport`, normative in `docs/sync-and-peers.md`), and a
+write (`SendReport`, normative in `docs/contracts/sync-and-peers.md`), and a
 send no relay accepts leaves the obligation pending for a later pass
 instead of retiring it. Relay acceptance is not evidence of relay
 storage: a relay that acknowledges a write and discards it is
@@ -292,12 +309,12 @@ admission, violates no operational bound, and incremental
 checkpointing under the resource budget is the booked fix. The
 ceiling behavior and the cost shape are pinned by
 `admission_closure_cost_scales_with_history` and documented in
-`docs/resource-limits.md`.
+`docs/contracts/resource-limits.md`.
 
 Milestone decision (content recovery in v0.2): the grafting
 primitives exist at the library layer only.
 `Engine::author_recovery_snapshot` stays public because
-`wyrd-contracts` pins the normative grafting rule (`docs/epochs.md`)
+`wyrd-contracts` pins the normative grafting rule (`docs/contracts/epochs.md`)
 end to end from outside the crate; that pinning is contract
 enforcement, not a shipped workflow. Nothing in the operator surface
 (CLI, daemon, embeddable node) calls it, and the owner
@@ -320,7 +337,7 @@ semantics, restart-equivalence testing. A dedicated peer-repair loop
 and local scrub land here too: generation-scoped terminal fetch
 state with waiter completion, local quarantine with re-want, and
 fetch-failure diagnostics (design and protocol invariants in
-`docs/peer-repair.md`). This comes before editors and
+`docs/design/peer-repair.md`). This comes before editors and
 mobile behavior are built on Wyrd.
 
 Real observability, not telemetry for its own sake: sync, peer, relay,
@@ -345,7 +362,7 @@ criterion — and must never become the schedule driver for the core
 durability and recovery work above (the v0.3.0-alpha cut ships without
 the dogfood track: seeder, fetcher, manifest, and drive-distribution
 stayed out per the frame's staffing rule, and the manual flow in
-`docs/release-process.md` remains the distribution mechanism).
+`docs/releases/release-process.md` remains the distribution mechanism).
 
 ### v0.3 architecture: consolidation after the semantics stabilize
 

@@ -7,7 +7,7 @@
       "slot": "rules/s4-body",
       "backs": [
         { "file": "README.md", "heading": "### 4. Content-Verified Integrity" },
-        { "file": "docs/architecture.md", "heading": "## Current status" }
+        { "file": "docs/design/peer-repair.md", "heading": "## v0.2 behavior (shipped, tested)" }
       ],
       "mustContain": ["fully automatic repair is still being built"],
       "forbids": ["protocol repairs", "automatically repairs"]
@@ -15,8 +15,7 @@
     {
       "slot": "rules/s5-body",
       "backs": [
-        { "file": "docs/trust.md", "heading": "## What each party can know (the security boundary, stated precisely)" },
-        { "file": "docs/architecture.md", "heading": "## Invariants (hold everywhere, always)" }
+        { "file": "docs/contracts/trust.md", "heading": "## What each party can know (the security boundary, stated precisely)" }
       ],
       "mustContain": ["ciphertext, sizes, and timing"],
       "forbids": []

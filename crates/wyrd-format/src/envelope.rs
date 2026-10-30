@@ -1,4 +1,4 @@
-//! The canonical object envelope (see `docs/object-model.md`,
+//! The canonical object envelope (see `docs/contracts/object-model.md`,
 //! "Canonical encoding"). Every object has a canonical payload and a typed
 //! envelope carrying it, so the framing must stay byte-exact and
 //! inflexible:
@@ -74,7 +74,7 @@ impl Envelope {
     /// wrong magic, unsupported versions, and unknown kinds. Never accepts
     /// a version other than [`VERSION`] — newer formats arrive as additive
     /// representations (or snapshot-producing migrations), never as
-    /// in-place rewrites; see `docs/upgrade-contract.md`.
+    /// in-place rewrites; see `docs/contracts/upgrade-contract.md`.
     pub fn decode(bytes: &[u8]) -> Result<Self, EnvelopeError> {
         if bytes.len() < HEADER_LEN {
             return Err(EnvelopeError::Truncated);

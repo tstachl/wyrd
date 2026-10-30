@@ -1,6 +1,6 @@
 //! Copy-on-write tree mutation: the bridge from "a file at a path
-//! changed" to the new root tree a snapshot commits (`docs/object-model.md`,
-//! "Files and Trees"; namespace semantics in `docs/write-path.md`).
+//! changed" to the new root tree a snapshot commits (`docs/contracts/object-model.md`,
+//! "Files and Trees"; namespace semantics in `docs/contracts/write-path.md`).
 //!
 //! Every operation is a pure function of the current root and the store:
 //! it loads the tree nodes along one path, rebuilds each of them bottom
@@ -154,7 +154,7 @@ where
 /// written. Final-component symlinks are never followed; the entry itself
 /// moves.
 ///
-/// Replacement follows `docs/write-path.md`: file→file replaces,
+/// Replacement follows `docs/contracts/write-path.md`: file→file replaces,
 /// file→dir is `IsDirectory`, dir→file is `NotADirectory`, dir→empty-dir
 /// replaces, dir→non-empty-dir is `DirectoryNotEmpty`. Moving a directory
 /// into its own descendant is `InvalidRename`; identical paths are a

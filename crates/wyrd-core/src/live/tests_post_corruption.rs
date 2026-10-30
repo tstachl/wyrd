@@ -1,12 +1,12 @@
 //! Window (b): post-corruption projection (G4, OD-05-B).
 //!
-//! The rule is normative in `docs/epochs.md:557-568` — when replay or
+//! The rule is normative in `docs/contracts/epochs.md:557-568` — when replay or
 //! classification cannot produce a valid projection, Wyrd preserves
 //! the last successfully installed heads and surfaces the error, never
 //! replacing, clearing, repairing, or resynchronizing — and this
 //! module pins its crash-window direction: a damaged head in a later
 //! pass fails the pass with the previous generation still serving.
-//! `docs/crash-consistency.md` names this section and its tests; the
+//! `docs/contracts/crash-consistency.md` names this section and its tests; the
 //! rule itself lives only in `epochs.md`.
 //!
 //! The damage vector is bitrot in the object store: a tree whose

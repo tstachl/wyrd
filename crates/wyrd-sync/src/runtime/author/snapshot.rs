@@ -99,7 +99,7 @@ pub(super) fn check_recovery_owner(
 /// caller passes a recorded ContentId, never live-derived lineage —
 /// while the parents are always the current eligible heads, derived
 /// inside exactly like [`author`]. Only the current canonical owner
-/// may recover (`docs/epochs.md`, recovery authorization): a member,
+/// may recover (`docs/contracts/epochs.md`, recovery authorization): a member,
 /// a reader, or a stranger fails closed before anything commits. The
 /// body carries [`RECOVERY_FLAG`] under the signature, so every peer
 /// classifies it as recovery and never confuses it with ordinary

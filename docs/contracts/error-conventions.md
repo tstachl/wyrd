@@ -1,5 +1,7 @@
 # Error conventions
 
+Status: Normative. Scope: how fallible code reports failure across the workspace (typed errors per boundary, fail-closed classification, raise-vs-count). Authority: this document owns the convention; subsystem error types follow it.
+
 How fallible code reports failure across the workspace. Established by the
 daemon and sync `.expect()` refactors; copy this pattern for the next
 crate instead of inventing one.

@@ -67,7 +67,7 @@ pub(super) fn classify(
 /// verdicts (admission preserves owners and never voids history;
 /// a post-admission freeze is outside this path's contract;
 /// normative statement alongside the window it qualifies in
-/// `docs/crash-consistency.md`, Membership authoring).
+/// `docs/contracts/crash-consistency.md`, Membership authoring).
 pub(super) fn classify_at_epoch(
     log: &MembershipLog,
     dag: &SnapshotDag,

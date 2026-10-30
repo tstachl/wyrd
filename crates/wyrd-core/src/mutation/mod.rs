@@ -1,6 +1,6 @@
 //! The mounted-mutation channel: FUSE submits, the daemon loop executes.
 //!
-//! Normative in `docs/write-path.md`. FUSE never authors; a committing
+//! Normative in `docs/contracts/write-path.md`. FUSE never authors; a committing
 //! operation submits a [`MutationRequest`] and blocks, and the live loop
 //! is the only engine user. The queue establishes the total order of
 //! local mutations and executes them serially — admission order, with

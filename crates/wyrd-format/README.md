@@ -13,7 +13,7 @@ content-defined chunking, Merkle file trees, and the snapshot DAG.
   symlink targets) and the explicit unsupported-metadata list
 - Manifest schema and canonical plaintext encoding: a manifest is a core
   object whose ContentId is derived over its canonical plaintext like every
-  other object (decision 22 in `docs/object-model.md`)
+  other object (decision 22 in `docs/contracts/object-model.md`)
 - Snapshot DAG types: parents, heads, conflicts-as-forks
 - `ObjectStore` and its filesystem implementation(s)
 

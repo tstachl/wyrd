@@ -1,6 +1,6 @@
 # Mobile File Surfaces
 
-**Status:** Design plan. Not yet normative. Nothing in this document is a contract: normative behavior lives in `docs/object-model.md`, `docs/trust.md`, `docs/epochs.md`, and `docs/write-path.md` until a tracked issue explicitly adopts a section here.
+**Status:** Design plan. Not yet normative. Nothing in this document is a contract: normative behavior lives in `docs/contracts/object-model.md`, `docs/contracts/trust.md`, `docs/contracts/epochs.md`, and `docs/contracts/write-path.md` until a tracked issue explicitly adopts a section here.
 
 **Extraction status (2026-09):** the Phase 1 split below is done — `wyrd-core` holds `WyrdNode`, `LiveNode`/`LiveParts`, the mutation/session/projection machinery, and the relay mailbox; `wyrd-daemon` is the desktop composition library; `wyrd-cli` is the `wyrd` process host. Two deliberate deviations from the plan as written: `DriveView` stayed in `wyrd-fuse` (providers program against the `NamespaceView` trait in `wyrd-core` instead), and the moved types were renamed (`Daemon` → `WyrdNode`, `LiveDaemon` → `LiveNode`). Read `Daemon`/`LiveDaemon`/`DriveView` below as their current names; the remaining sections are future mobile work to be re-validated, not descriptions of today.
 
@@ -82,7 +82,7 @@ fsync(handle)
 release(handle)
 ```
 
-These operations are governed by the Wyrd write-path design in `docs/write-path.md` — handle identity and stability, buffered overlays, snapshot commits, stale-handle rejection, and `MutationQueue` serialization. The platform adapters must translate their native file lifecycle into those semantics rather than inventing independent write behavior.
+These operations are governed by the Wyrd write-path design in `docs/contracts/write-path.md` — handle identity and stability, buffered overlays, snapshot commits, stale-handle rejection, and `MutationQueue` serialization. The platform adapters must translate their native file lifecycle into those semantics rather than inventing independent write behavior.
 
 ## 1.3 Platform lifecycle
 
@@ -556,7 +556,7 @@ The design should prefer the simplest process model that satisfies iOS lifecycle
 
 # 11. Write path
 
-The Wyrd write path is specified in `docs/write-path.md`: FUSE implements it first, and the mobile surfaces consume that implementation rather than create platform-specific write semantics.
+The Wyrd write path is specified in `docs/contracts/write-path.md`: FUSE implements it first, and the mobile surfaces consume that implementation rather than create platform-specific write semantics.
 
 The platform adapter is responsible for translating its native lifecycle into the write-path commit sequence.
 
@@ -622,7 +622,7 @@ Candidate support:
 * rmdir;
 * basic executable-bit handling where exposed by the platform.
 
-The exclusions mirror the write-path non-goals in `docs/write-path.md`.
+The exclusions mirror the write-path non-goals in `docs/contracts/write-path.md`.
 
 The platform adapter must map unsupported operations to the same error semantics established by the Wyrd write-path contract.
 
@@ -630,9 +630,9 @@ The platform adapter must map unsupported operations to the same error semantics
 
 # 14. Handle semantics
 
-Mobile adapters inherit the Wyrd writable-handle semantics in `docs/write-path.md` — projection-tied handles, stale-handle rejection, append semantics, terminal failed commits — without modification.
+Mobile adapters inherit the Wyrd writable-handle semantics in `docs/contracts/write-path.md` — projection-tied handles, stale-handle rejection, append semantics, terminal failed commits — without modification.
 
-The exact rename/unlink behavior for an already-open writable handle must be resolved in `docs/write-path.md` before mobile writes become normative.
+The exact rename/unlink behavior for an already-open writable handle must be resolved in `docs/contracts/write-path.md` before mobile writes become normative.
 
 The mobile adapter must not choose different semantics.
 
@@ -640,7 +640,7 @@ The mobile adapter must not choose different semantics.
 
 # 15. Conflict handling
 
-Wyrd explicitly preserves conflict visibility: the conflicted-drives rule in `docs/write-path.md` applies unchanged — with more than one eligible live head, mutations fail closed.
+Wyrd explicitly preserves conflict visibility: the conflicted-drives rule in `docs/contracts/write-path.md` applies unchanged — with more than one eligible live head, mutations fail closed.
 
 A mobile file surface must not hide or silently resolve multiple eligible live heads merely because the platform expects a single filesystem view.
 
@@ -748,7 +748,7 @@ A file lock is an implementation mechanism, not the invariant itself.
 
 # 19. Durable state and announcement obligations
 
-Mobile does not change Wyrd's commit ordering: the commit pipeline, durability boundary, and announcement-obligation semantics in `docs/write-path.md` apply unchanged — later-stage failure never rolls back earlier durable state.
+Mobile does not change Wyrd's commit ordering: the commit pipeline, durability boundary, and announcement-obligation semantics in `docs/contracts/write-path.md` apply unchanged — later-stage failure never rolls back earlier durable state.
 
 The exact durable outbox recovery mechanism is shared with the main daemon design and must remain correct across mobile process termination.
 

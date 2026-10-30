@@ -90,6 +90,19 @@ in
       pass_filenames = false;
     };
 
+    # Documentation link gate: every local Markdown link must resolve
+    # (files exist, #anchors match a heading). Archived reviews are
+    # frozen evidence and exempt by design. Runs when prose or the
+    # checker itself changes; docs-only PRs run no Rust CI, so this is
+    # their mechanical check alongside review.
+    doc-links = {
+      enable = true;
+      name = "doc links";
+      entry = "bash .ngit/scripts/tests/test-doc-links.sh";
+      files = "^(docs/|README\\.md|AGENTS\\.md|CONTRIBUTING\\.md|ROADMAP\\.md|CHANGELOG\\.md|\\.ngit/scripts/tests/test-doc-links\\.sh)$";
+      pass_filenames = false;
+    };
+
     # Shell helper tests: the stub suites run when the helpers, their
     # library, or the suites themselves change, so broken ngit ceremony
     # semantics never ship green.

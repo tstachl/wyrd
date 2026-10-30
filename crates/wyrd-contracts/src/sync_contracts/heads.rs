@@ -111,7 +111,7 @@ fn unverified_snapshots_never_become_live_fuse_heads() {
 /// plane, fetches through its shared store — and the drive serves
 /// only once `refresh_live_heads` installs the engine's classified
 /// projection. Residency alone mounts nothing (architecture.md
-/// invariant 3, `docs/epochs.md`).
+/// invariant 3, `docs/contracts/epochs.md`).
 #[test]
 fn only_engine_classification_mounts_the_daemon_view() {
     let mut loaded = Loaded::new("hello.txt", b"hello");
@@ -332,7 +332,7 @@ fn failed_pass_recovers_serving_on_retry() {
 /// serving exactly what it served before: a failed refresh installs
 /// nothing, never a partial head set, never a clear.
 ///
-/// This pins the decided v0 post-corruption policy (`docs/epochs.md`,
+/// This pins the decided v0 post-corruption policy (`docs/contracts/epochs.md`,
 /// Heads: projection failure ⇒ installed heads unchanged ⇒ failure
 /// surfaced to the caller ⇒ no automatic repair, resync, or clear.
 /// The installed projection is the last known-good state, not an
@@ -861,7 +861,7 @@ fn a_pending_only_pass_still_delivers_the_durable_outbox() {
 /// tree in the local store, and the daemon's classified projection makes
 /// the drive serve it. Authorship binds the canonical membership state;
 /// the engine commits the body durably, and only the live-head projection
-/// advances the view (`architecture.md` invariant 3, `docs/epochs.md`
+/// advances the view (`architecture.md` invariant 3, `docs/contracts/epochs.md`
 /// local write).
 #[test]
 fn authored_snapshots_mount_through_the_daemon_view() {

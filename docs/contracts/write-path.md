@@ -262,7 +262,7 @@ level and no device-local journal in v0.3: steps 1-2 prepare, and
 preparation becomes durable only together with the snapshot at step 3.
 
 The four crash-consistency boundary kinds — durable, visible,
-servable, propagated (`docs/crash-consistency.md:15-20`) — are a
+servable, propagated (`docs/contracts/crash-consistency.md:15-20`) — are a
 separate axis: properties of a byte range at a point in the
 pipeline, not caller-visible levels. The two vocabularies must never
 be read as one ladder.
@@ -1189,7 +1189,7 @@ Decided: coalescing policy **A, independent of the POSIX mutation
 unit, with dirty-handle release as a forcing event**. The rejected
 alternative was **B, one snapshot per POSIX mutation** (today's
 behaviour), which leaves the fixed per-snapshot overhead term in
-`docs/storage-growth.md` unbounded. Release closes the window
+`docs/design/storage-growth.md` unbounded. Release closes the window
 because otherwise open/write/close churn defeats most of the
 coalescing and the storage-growth term stays proportional to file
 count rather than save events. No bounded idle window in v0.3: a

@@ -152,7 +152,7 @@ fn batched_materializations_commit_once() {
 /// 4 × commits. Rebuilds are counted: every demand replays the log
 /// to compare, which is the actual per-open cost and is CPU, not IO.
 ///
-/// The committed result lives in `docs/storage-growth.md` next to
+/// The committed result lives in `docs/design/storage-growth.md` next to
 /// the G21 question, with the workload, initial state, and build that
 /// produced it. A measurement showing no amplification is a valid
 /// outcome and closes the question; a measurement showing

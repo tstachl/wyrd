@@ -23,12 +23,12 @@ Read `docs/architecture.md` first. The README describes the vision; `docs/` defi
 - Snapshots are immutable, signed by the author's Nostr identity key, and bound to the DriveId and authorizing membership transition.
 - Nostr provides identity and signatures only. Do not introduce Nostr event formats or social-Nostr dependencies. Membership state is always encrypted.
 - Device identity is an immutable Nostr public key. Rotation means removing the old device membership and admitting the new key.
-- Follow `docs/trust.md` and `docs/epochs.md` as normative contracts for root custody, epoch secrets, membership transitions and the Nostr/iroh control-plane split. Do not redesign settled decisions.
-- Never implement cryptographic primitives yourself. Use audited crates; see decision T11 in `docs/trust.md`.
+- Follow `docs/contracts/trust.md` and `docs/contracts/epochs.md` as normative contracts for root custody, epoch secrets, membership transitions and the Nostr/iroh control-plane split. Do not redesign settled decisions.
+- Never implement cryptographic primitives yourself. Use audited crates; see decision T11 in `docs/contracts/trust.md`.
 - Change iroh dependency versions as a set.
 - Only `wyrd-sync` authorization may mint `AuthorizedSnapshot`. Preserve the contract-34 enforcement.
 - Content IDs must not appear in vault-visible metadata.
-- Resolve open format decisions in `docs/object-model.md` before implementing behavior that depends on them. Keep normative docs synchronized with behavior.
+- Resolve open format decisions in `docs/contracts/object-model.md` before implementing behavior that depends on them. Keep normative docs synchronized with behavior.
 
 ## Development
 

@@ -376,7 +376,7 @@ writes, stale-temp sweep on open, verify-on-read scrub.
 ## Remaining open questions
 
 1. ~~**Membership/epoch state machine**~~ — resolved: normative in
-   `docs/epochs.md`; snapshots bind to a membership transition.
+   `docs/contracts/epochs.md`; snapshots bind to a membership transition.
 2. Manifest partition encoding details (sharding, chunked transfer of large
    manifests).
 3. Live-view conflict naming (e.g. by author id / snapshot timestamp). The conflict-resolution
@@ -387,7 +387,7 @@ writes, stale-temp sweep on open, verify-on-read scrub.
 
 **Conflict-resolution invariant.** A v0 presentation surface may not author a conflict resolution.
 Authoring one parents the unselected versions into the merge's parent heads, which no v0
-surface reads back (`docs/cli.md:260-263`); while a conflict is unresolved, every version
+surface reads back (`docs/design/cli.md:260-263`); while a conflict is unresolved, every version
 stays addressable. Resolution authoring is therefore a v0.5 capability, and presenting an
 unresolved conflict must never reduce what is addressable. Authoring through `wyrd snapshot`
 is an owner-mediated operator action that v0.4 keeps, and it is not a presentation surface.

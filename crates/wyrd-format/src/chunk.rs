@@ -1,4 +1,4 @@
-//! Content-defined chunking (see `docs/object-model.md`, "Chunks").
+//! Content-defined chunking (see `docs/contracts/object-model.md`, "Chunks").
 //!
 //! Files are split so large files stream, memory stays bounded, and dedup
 //! is byte-range aware: a small edit only re-chunks from the edit point.

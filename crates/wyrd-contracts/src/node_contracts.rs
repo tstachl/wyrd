@@ -463,7 +463,7 @@ where
 }
 
 /// Contract 45: one commit-forcing event's whole pending set plus
-/// itself authors a single snapshot (`docs/write-path.md`, DG-1). Two
+/// itself authors a single snapshot (`docs/contracts/write-path.md`, DG-1). Two
 /// content members across two paths plus a namespace forcer fold into
 /// one snapshot whose tree equals the final coherent state, and the
 /// served generation advances by exactly one. Submitted straight

@@ -1032,7 +1032,7 @@ impl HeadPartition {
 /// Batch bound: one [`verify_head_closure`](wyrd_sync::closure::verify_head_closure)
 /// per classified head, each bounded by [`Limits::V0`](wyrd_sync::ingest::Limits);
 /// verification is read-only, so scanning past damage costs CPU plus
-/// the store read-guard hold (see `docs/resource-limits.md`), never
+/// the store read-guard hold (see `docs/contracts/resource-limits.md`), never
 /// acceptance.
 pub(crate) fn partition_heads<S>(
     runtime: &wyrd_sync::runtime::RuntimeState,

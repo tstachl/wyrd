@@ -30,7 +30,7 @@
 //! admitted-but-unlanded set, bounded by admissions × the protocol
 //! ingest ceiling (`Limits::V0.max_object_bytes` per object). The
 //! count knob is the byte knob's coarse handle; see
-//! `docs/resource-limits.md` for the derivation.
+//! `docs/contracts/resource-limits.md` for the derivation.
 //!
 //! This module depends only on the sibling bound owners and std: it is
 //! the `wyrd-core` coordination surface.

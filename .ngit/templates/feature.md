@@ -6,8 +6,8 @@
 
 - {{Why this is needed — the spec section, review finding, or motivating
   constraint.}}
-- {{Which docs govern the work (`docs/architecture.md`, `docs/object-model.md`,
-  `docs/trust.md`, `docs/epochs.md`) and what they currently say.}}
+- {{Which docs govern the work (`docs/architecture.md`, `docs/contracts/object-model.md`,
+  `docs/contracts/trust.md`, `docs/contracts/epochs.md`) and what they currently say.}}
 - {{Any decisions already recorded in decision records that this must not
   relitigate.}}
 

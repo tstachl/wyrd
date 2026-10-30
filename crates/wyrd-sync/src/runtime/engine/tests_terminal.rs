@@ -291,7 +291,7 @@ fn terminal_state_requires_every_eligible_representation_exhausted() {
 /// count the diagnostics surface reports is the live map size, never
 /// an accumulation. An identity driven terminal counts once; a new
 /// waiter reopening it uncounts it; a fresh engine counts zero.
-/// Pins `docs/peer-repair.md:78-79` (a terminal result completes
+/// Pins `docs/design/peer-repair.md:78-79` (a terminal result completes
 /// waiters, never a permanent identity state) into the diagnostic.
 #[test]
 fn the_terminal_generation_count_is_live_not_cumulative() {

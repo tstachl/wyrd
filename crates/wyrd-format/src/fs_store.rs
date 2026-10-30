@@ -1,5 +1,5 @@
 //! A filesystem-backed [`ObjectStore`]: crash-safe durable storage for
-//! plaintext content objects (see `docs/object-model.md`, "Files and Trees").
+//! plaintext content objects (see `docs/contracts/object-model.md`, "Files and Trees").
 //!
 //! Layout: `<dir>/objects/<kind>/<fanout>/<hex>`, where `<kind>` is the
 //! envelope kind byte (`ObjectKind::byte`, stable format constants),
@@ -71,7 +71,7 @@ pub enum FsStoreError {
     /// Stored bytes do not match the address they were read from: a
     /// foreign preimage on `insert_verified`, bitrot under the live
     /// name on `get`. Carries no identity by decision (see the
-    /// no-identity exception in `docs/error-conventions.md`): a
+    /// no-identity exception in `docs/contracts/error-conventions.md`): a
     /// `Display`/`Debug` impl cannot know which trust position
     /// renders it, so there is nothing to redact here.
     #[error("identity mismatch: stored bytes do not match their address")]

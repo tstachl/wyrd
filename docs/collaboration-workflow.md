@@ -12,7 +12,7 @@ verification target. Use a clear Conventional Commit-style subject when the
 issue maps directly to an implementation change. Implementation issues
 state their persistent-format impact in one line — which durable
 formats or protocol bytes change and what that means for
-`docs/upgrade-contract.md`, or explicitly `none`.
+`docs/contracts/upgrade-contract.md`, or explicitly `none`.
 
 ```bash
 gate issue create --subject "feat(format): path-level tree mutation" \
@@ -89,8 +89,10 @@ CI runs on `ready_for_review` only, for PRs touching the paths listed in
 the workflows under `.ngit/act/workflows/` (`workflow.yml` covers
 `crates/**`, `Cargo.toml`, `Cargo.lock`, `deny.toml`,
 `rust-toolchain.toml`, `flake.*`, the workflow itself, and
-`.ngit/scripts/*.sh`) — docs-only PRs run no CI, and drafts run none.
-The merge check below verifies the final revision is green. Work stays in
+`.ngit/scripts/*.sh`) — docs-only PRs run no Rust CI, and drafts run none.
+Docs changes are covered instead by the `doc-links` pre-commit hook, which
+link-checks every local Markdown reference on each commit. The merge check
+below verifies the final revision is green. Work stays in
 draft (from the first push's auto-draft) until it is ready.
 
 Set the PR description at creation
@@ -169,7 +171,8 @@ gate pr status
 gate ci status
 ```
 
-Docs-only PRs run no CI: merge those on green local hooks plus review.
+Docs-only PRs run no Rust CI: merge those on a green `doc-links` hook plus
+local checks plus review.
 Merge from the `master` worktree — agents never touch `master`, so merging
 needs the user or an explicit exception — then publish `master` with a
 human-signed push (gate never pushes the target):
@@ -216,7 +219,7 @@ a command that writes.
 ## 8. Releases
 
 Cutting a release follows the checklist and runbook in
-`docs/release-process.md` (version bump, changelog, fixture, gates,
+`docs/releases/release-process.md` (version bump, changelog, fixture, gates,
 tag, multi-platform build, publish), plus the ngit, suite, and docs
 lessons recorded there from the v0.2.0-alpha cut. The `release:*`
 milestone on the release issue is the tracking spine; the v0.3
