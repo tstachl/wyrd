@@ -122,6 +122,24 @@
 //!     identical-bytes redelivery across an engine restart commits
 //!     nothing: dedupe is durable, and the one head stands.
 //!
+//! The drive-ownership gate (`docs/architecture.md`, Drive ownership
+//! and invariant 3):
+//!
+//! - `drive_ownership` — one owner holds the store: a second open of
+//!   the same directory refuses with `StoreLocked`, and dropping the
+//!   holder releases the directory with nothing committed. The
+//!   gate's own acceptance command selects it by name.
+//! - `head_eligibility_is_a_composer_convention` — a stale fork
+//!   classifies superseded, yet its correctly signed body still
+//!   authorizes, wraps into a head, and serves through a directly
+//!   built view, in safe code. The bypass is named and executable,
+//!   so closing it fails this test deliberately.
+//! - `only_refresh_live_heads_installs_heads` — the negative
+//!   invariant: outside test code, heads mint only from
+//!   engine-classified material in the core composition path, view
+//!   heads are never constructed by consumers, and head sets install
+//!   only through the node composition.
+//!
 //! The shared drive-path semantics (embedded consumer versus FUSE
 //! adapter; sibling testing issue): each scenario runs through the
 //! core channel plus `LiveReader` and through `FuseBackend` over
@@ -314,6 +332,8 @@ mod layer_contracts;
 mod node_contracts;
 #[cfg(test)]
 mod owner_contracts;
+#[cfg(test)]
+mod ownership_contracts;
 #[cfg(test)]
 mod policy_contracts;
 #[cfg(test)]
