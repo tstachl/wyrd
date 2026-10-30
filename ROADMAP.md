@@ -284,10 +284,10 @@ send no relay accepts leaves the obligation pending for a later pass
 instead of retiring it. Relay acceptance is not evidence of relay
 storage: a relay that acknowledges a write and discards it is
 indistinguishable from delivery, on the sender and on the
-recipient. The remaining hole is relay retention: a
-peer absent past retention finds no event to fetch, and v0.2
-provides no re-push or pull path for control messages never
-received
+recipient. Relay retention is recovered by reconciliation, not by
+the relay: a peer absent past retention states its gap and the sender
+retransmits from its durable outbox — no relay re-push exists, and none
+is needed (normative in `docs/contracts/sync-and-peers.md`).
 (triage: nostr:nevent1qqs26a0kqnfm72p8l5c3sw2hr4mxf97r4nszm0zm7ekh7facn3h0j7gpz9mhxue69uhkwunpwdczuap49eehgrh0ugr).
 Removal bounds acquisition, not knowledge: a removed device keeps
 its local plaintext, and can keep fetching any content whose

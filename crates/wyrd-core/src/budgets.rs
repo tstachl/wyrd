@@ -96,9 +96,11 @@ pub const DEFAULT_RETAINED_BYTES_QUOTA: Option<u64> = None;
 
 /// The node-side resource bounds, threaded from the live config into
 /// the loop, the registries, and the backend at composition time.
-/// Every field has a constructor-level override for tests
-/// (`with_limit`, `with_limits`), so this struct is the production
-/// wiring, not a second enforcement point.
+/// Every field is a plain value overridden per test with struct-update
+/// syntax against [`Default::default`]; the `with_limit`/`with_limits`
+/// constructors live on the registries behind the bounds
+/// (`WantRegistry`, `MutationQueue`, `WriteBudget`), not here — so this
+/// struct is the production wiring, not a second enforcement point.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResourceBudgets {
     /// Distinct demanded identities the want registry carries at
@@ -178,5 +180,47 @@ impl Default for ResourceBudgets {
             max_open_capture_bytes: DEFAULT_MAX_OPEN_CAPTURE_BYTES,
             retained_bytes_quota: DEFAULT_RETAINED_BYTES_QUOTA,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ResourceBudgets;
+
+    /// The `resource-limits.md` pinned contract, executable: every
+    /// field of `ResourceBudgets::default()` equals the bound the
+    /// Bounds table publishes, so the doc and the default cannot
+    /// drift. Named after the KDF precedent
+    /// (`kdf_parameters_are_pinned`): a doc adjective converted into
+    /// a fact. In-crate because the registry constants are private
+    /// to their modules — the assertion has to see them, so it lives
+    /// beside the `Default` impl instead of in `wyrd-contracts`.
+    #[test]
+    fn resource_budgets_defaults_are_pinned() {
+        let budgets = ResourceBudgets::default();
+        // Want registry identities (pending + admitted).
+        assert_eq!(budgets.max_pending_wants, 4096);
+        // Want admission per sync pass.
+        assert_eq!(budgets.max_admit_per_pass, 1024);
+        // Quarantine repairs per sync pass.
+        assert_eq!(budgets.max_quarantine_per_pass, 64);
+        // Scrub probes plus scrub repairs per sync pass.
+        assert_eq!(budgets.max_scrub_per_pass, 64);
+        // Mutation queue (admitted-but-incomplete).
+        assert_eq!(budgets.max_pending_mutations, 4096);
+        // Parent create tokens (distinct retained paths).
+        assert_eq!(budgets.max_parent_tokens, 4096);
+        // Write buffer per dirty handle.
+        assert_eq!(budgets.write_per_handle_bytes, 64 * 1024 * 1024);
+        // Write buffers aggregate.
+        assert_eq!(budgets.write_aggregate_bytes, 256 * 1024 * 1024);
+        // Dirty (buffered) handles.
+        assert_eq!(budgets.write_dirty_handles, 64);
+        // Open file handles (read + write).
+        assert_eq!(budgets.max_open_handles, 4096);
+        // Open-capture bytes aggregate.
+        assert_eq!(budgets.max_open_capture_bytes, 256 * 1024 * 1024);
+        // Retained object bytes: unset, unlimited.
+        assert_eq!(budgets.retained_bytes_quota, None);
     }
 }

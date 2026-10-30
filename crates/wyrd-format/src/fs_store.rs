@@ -293,7 +293,9 @@ impl FsObjectStore {
     /// [`Self::sweep`]. Merging them would make this query delete `.tmp`
     /// debris, which no reader of a byte count expects and which would
     /// contradict the store's stated rule that only `open` removes temps.
-    /// It is on no current path, and `open` still walks the tree once.
+    /// It serves the quota and accounting path: the live config checks it
+    /// at startup, `policy` reports it, and the store and handle
+    /// accounting fold it in. `open` still walks the tree once.
     pub fn retained_bytes(&self) -> Result<u64, FsStoreError> {
         let mut total = 0u64;
         let mut stack = vec![self.objects_dir()];
