@@ -14,10 +14,19 @@ bats_require_minimum_version 1.5.0
 
 load "$BATS_TEST_DIRNAME/../harness/e2e-guard.sh"
 
+# setup_file() provisions over ssh before setup() ever runs, so the
+# ssh options live at file scope, not in setup(). The entry exports
+# every variable used below; setup() still verifies them for the
+# per-test path.
+SSH_OPTS="-i $SSH_KEY -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o BatchMode=yes"
+
 setup_file() {
   # Provision test secrets and two fresh drives once per file:
   # harness work, not service config. The module supervises; the
   # suite owns the secrets.
+  for v in SSH_KEY DRIVE_SSH; do
+    [ -n "${!v:-}" ] || { echo "drive-service: $v is not set (run through tests/drive/drive-service-entry.sh)" >&2; return 1; }
+  done
   # shellcheck disable=SC2086
   run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'set -e
     sudo mkdir -p /etc/wyrd /var/lib/wyrd/demo /var/lib/wyrd/laptop /mnt/wyrd
@@ -37,7 +46,6 @@ setup() {
   done
   RUN="$STATE_DIR/run"
   e2e_require_wrapped "$RUN/e2e-env.sh" "./tests/drive/drive-service-entry.sh (gate task)" --check-owner-pid
-  SSH_OPTS="-i $SSH_KEY -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o BatchMode=yes"
 }
 
 @test "vault and mount units are active after boot" {
