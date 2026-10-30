@@ -75,11 +75,12 @@ setup() {
   [ "$status" -eq 0 ] || { echo "$output"; touch "$RUN/FAILED"; false; }
   # The mount completes after the unit reports active, so poll
   # instead of asserting once. One sudo invocation wraps the whole
-  # poll: the mount is owner-only (an unprivileged mountpoint probe
-  # cannot even stat it), and per-check sudo would multiply any
-  # per-invocation latency across the loop.
+  # poll: the mount is owner-only, and per-check sudo would multiply
+  # any per-invocation latency across the loop. Probe with ls, not
+  # mountpoint(1): this guest's mountpoint misreports the FUSE mount
+  # (it rejects even -v), while a listing is the serving claim itself.
   # shellcheck disable=SC2086
-  run timeout 180 ssh $SSH_OPTS "$DRIVE_SSH" "sudo sh -c 'for i in \$(seq 1 12); do mountpoint -q /mnt/wyrd && break || sleep 5; done; mountpoint -q /mnt/wyrd && ls /mnt/wyrd'"
+  run timeout 180 ssh $SSH_OPTS "$DRIVE_SSH" "sudo sh -c 'for i in \$(seq 1 12); do ls /mnt/wyrd >/dev/null 2>&1 && break || sleep 5; done; ls /mnt/wyrd'"
   [ "$status" -eq 0 ] || { echo "$output"; touch "$RUN/FAILED"; false; }
 }
 
