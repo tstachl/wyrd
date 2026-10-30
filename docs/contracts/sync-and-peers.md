@@ -688,6 +688,28 @@ enter the user-facing path. Conflict version selection is a property of
 path resolution, not of the stored filesystem namespace; the projected
 namespace stays the user's data only (invariant 8 in `architecture.md`).
 
+### Evidence gates: which gate covers which claim
+
+Two legs, different claims, recorded here so no workflow silence has
+to be inferred:
+
+- **Per-merge leg (default gate):**
+  `relay_partition_produces_two_heads_and_both_survive`
+  (`crates/wyrd-sync/src/runtime/engine/tests_partition.rs`) runs on
+  every merge in the default nextest profile. It withholds the control
+  plane on both peers, authors the same path on each, heals, and asserts
+  two eligible heads, both versions readable, writes fail closed, and
+  the durable snapshot-id set only grows. `partition_leg_needs_no_privilege`
+  beside it pins the leg privilege-free (no `sudo`, KVM, interface, or
+  host-runner dependency). Verdict lives in CI/PR evidence only.
+- **Cross-host leg (manual, revision-bound):** the microVM suite phases
+  10 and 13 (`tap-r` surgery) run by hand on the KVM host at the merge
+  revision for every merge touching a divergence claim (write path,
+  closure and head gating, intake, fact log, teardown/lifecycle), and at
+  the release cut per `docs/releases/release-process.md`. Only the
+  cross-host run evidences tap-level partition, serving restart, and the
+  fetch plane; the per-merge leg never claims them.
+
 ## Operational patterns
 
 - Supervised tasks restart with capped exponential backoff
