@@ -105,31 +105,38 @@ setup() {
 }
 
 @test "held drive fails once with 78 and no retry" {
+  # Stop the vault first so the holder is the only possible
+  # contender: verifying contention while the vault still runs proves
+  # only that *someone* holds the lock. Order is the proof.
+  # shellcheck disable=SC2086
+  run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'sudo systemctl stop wyrd-vault-demo'
+  [ "$status" -eq 0 ] || { echo "$output"; touch "$RUN/FAILED"; false; }
   # The holder is a transient unit, not a background pid: precise
   # release via systemctl stop, no pattern matching anywhere. The
-  # unit's PATH is systemd's default (no util-linux), so resolve
-  # flock absolutely — a bare name fails the unit instantly and the
-  # "held" drive is held by nothing.
+  # unit's PATH is systemd's default (no util-linux, no coreutils),
+  # so resolve every binary absolutely — a bare name fails the unit
+  # instantly (exit 69) and the "held" drive is held by nothing.
   # shellcheck disable=SC2086
-  run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'command -v flock'
+  run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'command -v flock; command -v sleep'
   [ "$status" -eq 0 ] || { echo "$output"; touch "$RUN/FAILED"; false; }
-  FLOCK="$output"
+  FLOCK="$(printf '%s\n' "$output" | sed -n '1p')"
+  SLEEPCMD="$(printf '%s\n' "$output" | sed -n '2p')"
+  [ -n "$FLOCK" ] && [ -n "$SLEEPCMD" ] || { echo "could not resolve flock+sleep: $output"; touch "$RUN/FAILED"; false; }
   # shellcheck disable=SC2086
-  run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" "sudo systemd-run --unit=e2e-lockholder --property=Type=simple $FLOCK /var/lib/wyrd/demo/LOCK sleep 120"
+  run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" "sudo systemd-run --unit=e2e-lockholder --property=Type=simple $FLOCK /var/lib/wyrd/demo/LOCK $SLEEPCMD 120"
   [ "$status" -eq 0 ] || { echo "$output"; touch "$RUN/FAILED"; false; }
   # Verify the holder before asserting anything about the service: a
   # start that only queued the unit proves nothing, and an unheld
-  # "held drive" would make the refusal assertions vacuous.
+  # "held drive" would make the refusal assertions vacuous. The
+  # vault is already stopped above, so the holder is the only
+  # possible contender — a failed second-party probe proves the
+  # holder itself holds the lock, not a third party.
   # shellcheck disable=SC2086
   run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'systemctl is-active e2e-lockholder'
   [ "$status" -eq 0 ] || { echo "holder unit is not active: $output"; touch "$RUN/FAILED"; false; }
   # shellcheck disable=SC2086
   run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" "sudo $FLOCK -n /var/lib/wyrd/demo/LOCK true"
   [ "$status" -ne 0 ] || { echo "second-party non-blocking flock succeeded: nothing holds the drive"; touch "$RUN/FAILED"; false; }
-  sleep 1
-  # shellcheck disable=SC2086
-  run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'sudo systemctl stop wyrd-vault-demo'
-  [ "$status" -eq 0 ] || { echo "$output"; touch "$RUN/FAILED"; false; }
   # Clear the start-limit accounting first: boot (no identity), the
   # setup restart, and the SIGKILL restart already spent the unit's
   # StartLimitBurst budget inside one 300s window, so a bare start
