@@ -77,7 +77,7 @@ repo = "wyrd"
 # waits on. Nothing here executes on the host except through the
 # provisioned microVMs; guest code is data.
 [tasks.wyrd-gate-e2e]
-entryPoint = "tests/gate-entry.sh"
+entryPoint = "tests/gate/gate-entry.sh"
 requires = ["bats", "tar", "diff", "gawk", "gzip"]
 relayRole = "relay"
 
@@ -92,7 +92,7 @@ runner-relay = "nixosConfigurations.wyrd-relay.config.microvm.runner.qemu"
 # runner reads the boxes from the staged revision, checks each against
 # the host caps (vcpu, memory, subnet), and provisions exactly them.
 # Nothing here executes on the host. Values must match
-# nix/microvm/{relay,peer-o,peer-n}.nix (pinned by tests/test-topology-toml.sh).
+# nix/microvm/{relay,peer-o,peer-n}.nix (pinned by tests/harness/test-topology-toml.sh).
 [tasks.wyrd-gate-e2e.topology]
 version = 1
 boxes = ["peer-o", "peer-n", "relay"]

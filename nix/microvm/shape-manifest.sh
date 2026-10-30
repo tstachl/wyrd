@@ -5,7 +5,7 @@
 # shape pins (harness + suite + evaluation inputs) and the subject
 # slot declarations the host policy needs. Generated, never
 # hand-maintained: every file set below is extracted from the repo
-# the same way tests/test-baked-set.sh extracts it, so the emitter
+# the same way tests/harness/test-baked-set.sh extracts it, so the emitter
 # cannot silently drop a file the consistency test knows about.
 # Output is deterministic (sorted, unique, no timestamps) because
 # the approval hashes these bytes.
@@ -18,8 +18,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 # required_from <script>: basenames this script sources or executes.
-# Same parser as tests/test-baked-set.sh (kept in sync by
-# tests/test-shape-manifest.sh, which fails if they diverge).
+# Same parser as tests/harness/test-baked-set.sh (kept in sync by
+# tests/harness/test-shape-manifest.sh, which fails if they diverge).
 required_from() {
   {
     grep -hoE 'source[[:space:]]+[^[:space:];]+' "$1" 2>/dev/null || true
@@ -29,21 +29,27 @@ required_from() {
 }
 
 # Guest-run scripts source each other; the gate entry sources the
-# shared grammar. Basenames resolve to their home: tests/ for suite
-# files. Resolution is by existence (verified, not assumed); an
-# unresolvable basename keeps its tests/ guess so the test fails
-# loudly on the missing path instead of silently dropping it.
+# shared grammar. Basenames resolve to their home by existence
+# (verified, not assumed): tests/gate for the entry and phases,
+# tests/harness for shared helpers, tests/lima for the macOS legs,
+# tests/microvm for the guest legs. An unresolvable basename keeps a
+# tests/ guess so the test fails loudly on the missing path instead
+# of silently dropping it.
 locate() {
-  if [[ -f "$ROOT/tests/$1" ]]; then
-    printf 'tests/%s\n' "$1"
-  elif [[ -f "$ROOT/nix/microvm/$1" ]]; then
+  for _home in gate harness lima microvm; do
+    if [[ -f "$ROOT/tests/$_home/$1" ]]; then
+      printf 'tests/%s/%s\n' "$_home" "$1"
+      return 0
+    fi
+  done
+  if [[ -f "$ROOT/nix/microvm/$1" ]]; then
     printf 'nix/microvm/%s\n' "$1"
   else
     printf 'tests/%s\n' "$1"
   fi
 }
-GUEST_SCRIPTS="alpha-lima.sh alpha-microvm-legs.sh alpha-common.sh"
-HOST_SCRIPTS="gate-entry.sh gate-entry-smoke.bats gate-phase-01.bats gate-phase-02.bats gate-phase-03.bats gate-phase-04.bats gate-phase-05.bats gate-phase-06.bats gate-phase-07.bats gate-phase-08.bats gate-phase-09.bats gate-phase-10.bats gate-phase-11.bats gate-epilogue.bats"
+GUEST_SCRIPTS="lima/alpha-lima.sh microvm/alpha-microvm-legs.sh lima/alpha-common.sh"
+HOST_SCRIPTS="gate/gate-entry.sh gate/gate-entry-smoke.bats gate/gate-phase-01.bats gate/gate-phase-02.bats gate/gate-phase-03.bats gate/gate-phase-04.bats gate/gate-phase-05.bats gate/gate-phase-06.bats gate/gate-phase-07.bats gate/gate-phase-08.bats gate/gate-phase-09.bats gate/gate-phase-10.bats gate/gate-phase-11.bats gate/gate-epilogue.bats"
 HOST_SOURCED=""
 FILES=""
 for _s in $GUEST_SCRIPTS $HOST_SCRIPTS; do
@@ -71,45 +77,47 @@ Cargo.lock
 rust-toolchain.toml
 $(git -C "$ROOT" ls-files 'crates')"
 
-# Baked set: /etc/wyrd-tests/<name> entries in common.nix map back
-# to tests/<name> (same basename rule as the consistency test).
-BAKED="$(grep -hoE '"wyrd-tests/[^"]+"' "$ROOT/nix/microvm/common.nix" \
-  | sed -E 's#"wyrd-tests/##; s#"$##' | sort -u | sed 's#^#tests/#')"
+# Baked set: the repo files common.nix bakes into /etc/wyrd-tests,
+# read from the .source targets so the manifest follows the layout
+# instead of guessing it (the basename rule the consistency tests use
+# keeps matching: they suffix-match against these paths).
+BAKED="$(grep -hoE '\.source = \.\./\.\./tests/[^; ]+' "$ROOT/nix/microvm/common.nix" \
+  | sed -E 's#.*\.\./\.\./##' | sort -u)"
 
 # Harness files: evaluated or executed by the host directly (literal
 # list, not extracted — the test asserts every entry exists).
-# lima/ files are the host-side wrapper the guest suite requires
+# tests/lima/ files are the host-side wrapper the guest suite requires
 # (alpha-lima.sh runs wrapped); step-5 review N1. The gate closure
 # (entry, bats phases, helpers) is the host-executed suite: listed
 # literally because the extractor only follows source|bash|python3
 # targets and would miss the entry points themselves.
 HARNESS="flake.nix
 flake.lock
-lima/provision.sh
-lima/run-alpha.sh
-lima/wyrd-alpha.yaml
+tests/lima/provision.sh
+tests/lima/run-alpha.sh
+tests/lima/wyrd-alpha.yaml
 nix/microvm/empty-src
 nix/microvm/common.nix
 nix/microvm/peer-o.nix
 nix/microvm/peer-n.nix
 nix/microvm/relay.nix
-tests/e2e-guard.sh
-tests/e2e-helpers.bash
-tests/step-grammar.sh
-tests/gate-entry.sh
-tests/gate-entry-smoke.bats
-tests/gate-phase-01.bats
-tests/gate-phase-02.bats
-tests/gate-phase-03.bats
-tests/gate-phase-04.bats
-tests/gate-phase-05.bats
-tests/gate-phase-06.bats
-tests/gate-phase-07.bats
-tests/gate-phase-08.bats
-tests/gate-phase-09.bats
-tests/gate-phase-10.bats
-tests/gate-phase-11.bats
-tests/gate-epilogue.bats"
+tests/harness/e2e-guard.sh
+tests/harness/e2e-helpers.bash
+tests/harness/step-grammar.sh
+tests/gate/gate-entry.sh
+tests/gate/gate-entry-smoke.bats
+tests/gate/gate-phase-01.bats
+tests/gate/gate-phase-02.bats
+tests/gate/gate-phase-03.bats
+tests/gate/gate-phase-04.bats
+tests/gate/gate-phase-05.bats
+tests/gate/gate-phase-06.bats
+tests/gate/gate-phase-07.bats
+tests/gate/gate-phase-08.bats
+tests/gate/gate-phase-09.bats
+tests/gate/gate-phase-10.bats
+tests/gate/gate-phase-11.bats
+tests/gate/gate-epilogue.bats"
 
 {
   echo "# wyrd E2E shape manifest — generated by nix/microvm/shape-manifest.sh, do not hand-edit."

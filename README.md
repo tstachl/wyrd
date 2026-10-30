@@ -163,21 +163,21 @@ toolchain; the host builds the guest-arch binary and exports its
 closure):
 
 ```bash
-./lima/run-alpha.sh             # full run
-./lima/run-alpha.sh --keep      # leave the guest up for debugging
-./lima/run-alpha.sh --step 4    # run steps 1..4 (the prefix closure)
+./tests/lima/run-alpha.sh             # full run
+./tests/lima/run-alpha.sh --keep      # leave the guest up for debugging
+./tests/lima/run-alpha.sh --step 4    # run steps 1..4 (the prefix closure)
 ```
 
-The guest script is `tests/alpha-lima.sh`; logs land in
+The guest script is `tests/lima/alpha-lima.sh`; logs land in
 `/tmp/lima/logs/`.
 
 The hardened gate is the microVM suite: two peer VMs plus a relay VM
-on a Linux KVM host, running the same shared core (`tests/alpha-lima.sh`
-steps 1-5 via `tests/alpha-common.sh`) plus multi-host convergence,
+on a Linux KVM host, running the same shared core (`tests/lima/alpha-lima.sh`
+steps 1-5 via `tests/lima/alpha-common.sh`) plus multi-host convergence,
 serving restart, and shutdown legs across real guest boundaries.
 It runs through the gate task runner, never directly: the host
 provisions (bridge, taps, builds, boot) and runs
-`tests/gate-entry.sh` as the unprivileged build user.
+`tests/gate/gate-entry.sh` as the unprivileged build user.
 
 Linux with `/dev/kvm` is required (no nested KVM under macOS
 virtualization, and vfkit lacks the tap/bridge networking the

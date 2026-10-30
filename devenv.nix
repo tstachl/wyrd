@@ -120,11 +120,11 @@ in
     # bash -n parses only its first file argument, so the entry is a
     # wrapper that sweeps every staged shell script (passing them
     # straight to `bash -n` would check exactly one and report green).
-    # Pinned by tests/test-bash-syntax.sh.
+    # Pinned by tests/harness/test-bash-syntax.sh.
     bash-syntax = {
       enable = true;
       name = "bash syntax (bash -n)";
-      entry = "bash tests/check-bash-syntax.sh";
+      entry = "bash tests/harness/check-bash-syntax.sh";
       files = "\\.sh$";
       pass_filenames = true;
     };
