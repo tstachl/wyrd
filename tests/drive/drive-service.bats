@@ -33,6 +33,10 @@ setup_file() {
   # shellcheck disable=SC2086
   run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'set -e
     sudo mkdir -p /etc/wyrd /var/lib/wyrd/demo /var/lib/wyrd/laptop /mnt/wyrd
+    # sudo resolves the hostname on every invocation; the isolated
+    # guest has no DNS, so pin it or every sudo below stalls on the
+    # resolver and burns the ssh timeout instead of asserting.
+    grep -q wyrd-drive /etc/hosts || echo "127.0.0.1 wyrd-drive" | sudo tee -a /etc/hosts >/dev/null
     head -c32 /dev/urandom | sudo tee /etc/wyrd/identity >/dev/null
     sudo chmod 600 /etc/wyrd/identity
     printf e2e-test-passphrase | sudo tee /etc/wyrd/passphrase >/dev/null
@@ -69,11 +73,13 @@ setup() {
   # shellcheck disable=SC2086
   run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'systemctl is-active wyrd-vault-demo wyrd-mount-demo'
   [ "$status" -eq 0 ] || { echo "$output"; touch "$RUN/FAILED"; false; }
-  # The mount completes after the unit reports active, so poll as
-  # root (the mount is owner-only: an unprivileged mountpoint probe
-  # cannot even stat it) instead of asserting once.
+  # The mount completes after the unit reports active, so poll
+  # instead of asserting once. One sudo invocation wraps the whole
+  # poll: the mount is owner-only (an unprivileged mountpoint probe
+  # cannot even stat it), and per-check sudo would multiply any
+  # per-invocation latency across the loop.
   # shellcheck disable=SC2086
-  run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'for i in $(seq 1 12); do sudo mountpoint -q /mnt/wyrd && break || sleep 5; done; sudo mountpoint -q /mnt/wyrd && sudo ls /mnt/wyrd'
+  run timeout 180 ssh $SSH_OPTS "$DRIVE_SSH" "sudo sh -c 'for i in \$(seq 1 12); do mountpoint -q /mnt/wyrd && break || sleep 5; done; mountpoint -q /mnt/wyrd && ls /mnt/wyrd'"
   [ "$status" -eq 0 ] || { echo "$output"; touch "$RUN/FAILED"; false; }
 }
 
