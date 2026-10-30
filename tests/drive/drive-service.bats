@@ -40,14 +40,14 @@ setup_file() {
     sudo wyrd init /var/lib/wyrd/demo --identity-file /etc/wyrd/identity --passphrase-file /etc/wyrd/passphrase
     sudo wyrd init /var/lib/wyrd/laptop --identity-file /etc/wyrd/identity --passphrase-file /etc/wyrd/passphrase
     sudo systemctl restart wyrd-vault-demo wyrd-mount-demo'
-  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$status" -eq 0 ] || { echo "$output"; touch "$RUN/FAILED"; false; }
 }
 
 teardown() {
   # Failure forensics land in the log while the guest is still up:
   # the unit journal plus the full show dump for every supervised
   # unit, so a red test names its mechanism without a second run.
-  if [ "${status:-0}" -ne 0 ]; then
+  if [ -f "$RUN/FAILED" ]; then
     echo "--- forensics for failed test: $BATS_TEST_DESCRIPTION ---"
     # shellcheck disable=SC2086
     run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'systemctl --no-pager --lines=30 status wyrd-vault-demo wyrd-mount-demo e2e-lockholder; echo ===; journalctl --no-pager -u wyrd-vault-demo -u wyrd-mount-demo -u e2e-lockholder | tail -n 60'
@@ -57,6 +57,7 @@ teardown() {
 }
 
 setup() {
+  rm -f "$STATE_DIR/run/FAILED" 2>/dev/null || true
   for v in STATE_DIR DRIVE_SSH WYRD_E2E_TOKEN WYRD_E2E_LOCK SSH_KEY; do
     [ -n "${!v:-}" ] || { echo "drive-service: $v is not set (run through tests/drive/drive-service-entry.sh)" >&2; return 1; }
   done
@@ -67,39 +68,40 @@ setup() {
 @test "vault and mount units are active after boot" {
   # shellcheck disable=SC2086
   run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'systemctl is-active wyrd-vault-demo wyrd-mount-demo'
-  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$status" -eq 0 ] || { echo "$output"; touch "$RUN/FAILED"; false; }
   # The mount is owner-only (no allow_other; the unit runs as root),
   # so the serving check reads as root: it proves the mountpoint
-  # answers, not who may read it.
+  # answers, not who may read it. The mount completes after the unit
+  # reports active, so poll instead of asserting once.
   # shellcheck disable=SC2086
-  run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'mountpoint -q /mnt/wyrd && sudo ls /mnt/wyrd'
-  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'for i in $(seq 1 12); do mountpoint -q /mnt/wyrd && break || sleep 5; done; mountpoint -q /mnt/wyrd && sudo ls /mnt/wyrd'
+  [ "$status" -eq 0 ] || { echo "$output"; touch "$RUN/FAILED"; false; }
 }
 
 @test "vault comes back after SIGKILL of the supervised child" {
   # shellcheck disable=SC2086
   run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'systemctl show -p MainPID --value wyrd-vault-demo'
-  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$status" -eq 0 ] || { echo "$output"; touch "$RUN/FAILED"; false; }
   BEFORE_PID="$output"
   # shellcheck disable=SC2086
   run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" "pgrep -P $BEFORE_PID wyrd | head -n 1"
-  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$status" -eq 0 ] || { echo "$output"; touch "$RUN/FAILED"; false; }
   [ -n "$output" ] || { echo "no supervised wyrd child under wrapper pid $BEFORE_PID"; false; }
   CHILD="$output"
   # shellcheck disable=SC2086
   run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" "sudo kill -KILL $CHILD"
-  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$status" -eq 0 ] || { echo "$output"; touch "$RUN/FAILED"; false; }
   sleep 12
   # shellcheck disable=SC2086
   run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'systemctl show -p MainPID --value wyrd-vault-demo'
-  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$status" -eq 0 ] || { echo "$output"; touch "$RUN/FAILED"; false; }
   [ "$output" != "$BEFORE_PID" ] || { echo "wrapper pid unchanged after child SIGKILL ($BEFORE_PID)"; false; }
   # shellcheck disable=SC2086
   run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'systemctl is-active wyrd-vault-demo'
-  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$status" -eq 0 ] || { echo "$output"; touch "$RUN/FAILED"; false; }
   # shellcheck disable=SC2086
   run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'systemctl show -p NRestarts --value wyrd-vault-demo'
-  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$status" -eq 0 ] || { echo "$output"; touch "$RUN/FAILED"; false; }
   [ "$output" == "1" ] || { echo "expected exactly one restart, got $output"; false; }
 }
 
@@ -111,11 +113,11 @@ setup() {
   # "held" drive is held by nothing.
   # shellcheck disable=SC2086
   run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'command -v flock'
-  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$status" -eq 0 ] || { echo "$output"; touch "$RUN/FAILED"; false; }
   FLOCK="$output"
   # shellcheck disable=SC2086
   run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" "sudo systemd-run --unit=e2e-lockholder --property=Type=simple $FLOCK /var/lib/wyrd/demo/LOCK sleep 120"
-  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$status" -eq 0 ] || { echo "$output"; touch "$RUN/FAILED"; false; }
   # Verify the holder before asserting anything about the service: a
   # start that only queued the unit proves nothing, and an unheld
   # "held drive" would make the refusal assertions vacuous.
@@ -128,33 +130,33 @@ setup() {
   sleep 1
   # shellcheck disable=SC2086
   run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'sudo systemctl stop wyrd-vault-demo'
-  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$status" -eq 0 ] || { echo "$output"; touch "$RUN/FAILED"; false; }
   # shellcheck disable=SC2086
   run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'sudo systemctl start wyrd-vault-demo' || true
   sleep 12
   # shellcheck disable=SC2086
   run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'systemctl show -p ActiveState --value wyrd-vault-demo'
-  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$status" -eq 0 ] || { echo "$output"; touch "$RUN/FAILED"; false; }
   [ "$output" == "failed" ] || { echo "held-drive unit is $output, expected failed"; false; }
   # shellcheck disable=SC2086
   run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'systemctl show -p ExecMainStatus --value wyrd-vault-demo'
-  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$status" -eq 0 ] || { echo "$output"; touch "$RUN/FAILED"; false; }
   [ "$output" == "78" ] || { echo "held-drive exit is $output, expected 78"; false; }
   # shellcheck disable=SC2086
   run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'systemctl show -p NRestarts --value wyrd-vault-demo'
-  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$status" -eq 0 ] || { echo "$output"; touch "$RUN/FAILED"; false; }
   [ "$output" == "0" ] || { echo "held drive retried $output times, expected no retry"; false; }
 }
 
 @test "vault recovers once the holder releases" {
   # shellcheck disable=SC2086
   run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'sudo systemctl stop e2e-lockholder'
-  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$status" -eq 0 ] || { echo "$output"; touch "$RUN/FAILED"; false; }
   # shellcheck disable=SC2086
   run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'sudo systemctl reset-failed wyrd-vault-demo; sudo systemctl start wyrd-vault-demo'
-  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$status" -eq 0 ] || { echo "$output"; touch "$RUN/FAILED"; false; }
   sleep 8
   # shellcheck disable=SC2086
   run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'systemctl is-active wyrd-vault-demo'
-  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$status" -eq 0 ] || { echo "$output"; touch "$RUN/FAILED"; false; }
 }
