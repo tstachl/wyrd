@@ -77,6 +77,17 @@ disclosure; a public release drive discloses it by a deliberate,
 per-drive, irreversible waiver (release-read v1). The full matrix is
 `contracts/trust.md`.
 
+**Platform mechanisms stay at the boundary.** The credential contract is
+platform-neutral — secret format, failure behavior, secret lifetime, and
+zeroization — and exactly one backend implements it today: the hardened
+Unix file reader in `wyrd-cli` (`credentials.rs`), which fails closed
+elsewhere. Identity and vault logic consume secret material
+(`DeviceIdentitySecret`), never files, modes, or OS facilities; no OS
+credential store is the architecture. Before the Windows presentation
+milestone begins, the platform assumptions are audited together —
+credential loading, file locking, storage durability, process ownership,
+and filesystem presentation — rather than discovered one port at a time.
+
 ## Contract index
 
 Normative contracts — each invariant lives in exactly one of these:
