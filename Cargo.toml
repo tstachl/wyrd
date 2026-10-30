@@ -113,7 +113,7 @@ tokio = { version = "1", features = ["sync", "fs", "io-util", "rt", "macros", "n
 # Exact pins (`=`): caret drift once silently invalidated the documented
 # set, so bumps are deliberate edits here plus docs plus the full suite.
 # (iroh-gossip was dropped as an unused dependency; gossip framing for
-# snapshot announcements stays an open question in `docs/object-model.md`
+# snapshot announcements stays an open question in `docs/contracts/object-model.md`
 # and re-adds the dependency when that decision lands.)
 iroh = "=1.1.0"
 iroh-blobs = { version = "=0.103.0", default-features = false, features = ["fs-store"] }

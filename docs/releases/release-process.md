@@ -163,7 +163,7 @@ Right:
 
 ## Docs mechanics that bite during releases
 
-- `ROADMAP.md` and `docs/trust.md` sections are page-check pinned:
+- `ROADMAP.md` and `docs/contracts/trust.md` sections are page-check pinned:
   any edit drifts `map.lock.json`. Re-read the slot copy, confirm
   the mustContain phrases hold, re-pin with `--update`, verify green.
 - `CHANGELOG.md`: `ngit release publish` extracts the section

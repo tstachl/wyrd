@@ -156,7 +156,7 @@ pub trait DiscardRejectedRepresentation {
 
 /// Transient fetch status for one content object: the sync-internal
 /// fetch state machine FUSE consumes through the abstract
-/// materialization interface (`docs/sync-and-peers.md`).
+/// materialization interface (`docs/contracts/sync-and-peers.md`).
 ///
 /// This answers "can this be read right now". It is not the residency
 /// policy (`wyrd-sync`'s `RemoteOnly`/`Cached`/`Pinned` answers "what
@@ -180,7 +180,7 @@ pub enum FetchStatus {
     /// this, when terminality was established at all: a bare
     /// unreachable-without-verdict never occurs in production, because
     /// only the generation-scoped terminal evaluation mints this
-    /// variant (`docs/peer-repair.md` Part 1). A new waiter reopens the
+    /// variant (`docs/design/peer-repair.md` Part 1). A new waiter reopens the
     /// attempt as a new generation; the generation never survives a
     /// restart.
     Unavailable(u64),
@@ -196,7 +196,7 @@ pub enum FetchStatus {
 /// This exists because the store is append-only with no GC, so the only
 /// thing a device can bound about its own growth is how much it already
 /// holds — every other live bound caps one operation and is released
-/// when that operation ends (`docs/storage-growth.md`). The count
+/// when that operation ends (`docs/design/storage-growth.md`). The count
 /// tracks *retained* bytes, not bytes written: re-presenting content
 /// the store already holds adds nothing, so a session that re-authors
 /// unchanged subtrees does not climb toward the ceiling on its own.
@@ -205,7 +205,7 @@ pub enum FetchStatus {
 /// against it. It is deliberately not the device's total resident
 /// bytes (the vault and the fact log are resident but unenforced) —
 /// see the retained / resident / auxiliary terms in
-/// `docs/storage-growth.md`. One counter serves one job.
+/// `docs/design/storage-growth.md`. One counter serves one job.
 ///
 /// Removals lower the count, additions raise it, and the two sides are
 /// symmetric only in arithmetic, never in authority:

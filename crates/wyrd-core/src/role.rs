@@ -5,7 +5,7 @@
 //! read at startup by offline commands and once per pass by the live
 //! loop, and must never become a fact-log entry, affect
 //! authorization, or alter the replicated snapshot model
-//! (`docs/sync-and-peers.md`, Materialization policy vs peer role).
+//! (`docs/contracts/sync-and-peers.md`, Materialization policy vs peer role).
 //!
 //! A role is a **default**, not an override: explicit pins always mean
 //! exactly what they mean today. What the role changes is the baseline
@@ -36,7 +36,7 @@ use crate::policy::RetentionPolicy;
 use wyrd_sync::runtime::{Engine, EngineError, MaterializationState};
 
 /// What this device intends to be. Two values deliberately: they are
-/// the peer roles `docs/sync-and-peers.md` fixes, not a new axis.
+/// the peer roles `docs/contracts/sync-and-peers.md` fixes, not a new axis.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
     /// Participates in live sync, prunable. The default: a device
@@ -407,7 +407,7 @@ mod tests {
         // Exhaustive by construction: adding a third RetentionPolicy
         // variant breaks this match AND every consumer, so the CLI
         // can never silently grow the vocabulary the contract fixes
-        // at two (docs/sync-and-peers.md: CACHED collapses).
+        // at two (docs/contracts/sync-and-peers.md: CACHED collapses).
         let words: Vec<&str> = [RetentionPolicy::Pinned, RetentionPolicy::RemoteOnly]
             .iter()
             .map(|policy| match policy {

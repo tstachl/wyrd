@@ -146,7 +146,7 @@ fn write_recovery(fixture: &Fixture, name: &str, bytes: &[u8]) -> SnapshotId {
 /// A recovery-flagged head carries its marker on the tip row
 /// beside its number: the OD-15-4 audit surface. The marker audits
 /// a recovery while it is listed — once history moves past it the
-/// snapshot leaves the view (see `docs/cli.md`).
+/// snapshot leaves the view (see `docs/design/cli.md`).
 #[test]
 fn snapshot_heads_marks_recovery_tips() {
     let fixture = Fixture::new();

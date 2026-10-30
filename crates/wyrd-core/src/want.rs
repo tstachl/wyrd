@@ -1,5 +1,5 @@
 //! The want registry: demand-driven fetch state (normative in
-//! `docs/fetch-on-open.md`).
+//! `docs/design/fetch-on-open.md`).
 //!
 //! The registry is the demand state machine; the wakeup channel is
 //! merely an optimization the daemon loop can lose. Decided properties
@@ -657,7 +657,7 @@ mod tests {
     }
 
     /// Restart loss is expected and harmless: the registry is
-    /// memory-only by design (`docs/crash-consistency.md`, "Restart
+    /// memory-only by design (`docs/contracts/crash-consistency.md`, "Restart
     /// equivalence"), so dropping it — the process-death half of a
     /// restart — loses every pending demand and every admitted mark,
     /// and the fresh registry re-demands from nothing. This test pins

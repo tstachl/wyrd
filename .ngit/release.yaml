@@ -6,7 +6,7 @@
 # fetch it from a mirror, build the installer legs locally, sign, publish
 # by hand, and record the findings on the release issue for the next
 # automation pass (fully automated by v1). Full checklist with v0.2.0-alpha
-# findings: docs/release-process.md. Cutting one (the v0.1.0-alpha.1 lessons
+# findings: docs/releases/release-process.md. Cutting one (the v0.1.0-alpha.1 lessons
 # are baked into the steps; CI discipline lives in
 # docs/collaboration-workflow.md):
 #

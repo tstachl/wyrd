@@ -6,7 +6,7 @@ use super::identity::*;
 use super::preflight::*;
 use super::state::*;
 use super::supervise::*;
-/// The full `wyrd update` transaction (`docs/update.md` §§1–4):
+/// The full `wyrd update` transaction (`docs/contracts/update.md` §§1–4):
 /// converge leftovers, resolve, require quiescence, stage,
 /// preflight, early verification refusal, swap (recording
 /// `Swapped` between the renames), authoritative verify, commit

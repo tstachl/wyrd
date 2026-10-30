@@ -1,5 +1,5 @@
 //! Restart-equivalence rows: the per-surface half of the relation
-//! (`docs/crash-consistency.md`, "Restart equivalence"). Each test
+//! (`docs/contracts/crash-consistency.md`, "Restart equivalence"). Each test
 //! captures one table row before a reopen and compares after, over
 //! the shared two-device scenario with mid-flight state (drained
 //! but undelivered obligations, pinned materialization). The

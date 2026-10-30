@@ -219,7 +219,7 @@ where
     /// folding into the rebinding. Only exact paths are excluded — a
     /// writer under a renamed source still folds pre-rename and rides
     /// the subtree to the new path (its handle goes terminal at
-    /// settle), per the rename contract in `docs/write-path.md`. A
+    /// settle), per the rename contract in `docs/contracts/write-path.md`. A
     /// truncating `setattr` rebinds nothing — its same-path writers
     /// fold and lose the tie, per the write-path contract — so it
     /// filters no path.

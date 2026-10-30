@@ -1,5 +1,7 @@
 # Sync and Peers
 
+Status: Normative for the protocol contract (transport, peer roles, materialization policy, the forget contract); Descriptive for runtime wiring still in progress, marked inline. Scope: how Wyrd moves objects and snapshots between devices. Authority: this document owns the protocol-side rules; `trust.md` and `epochs.md` own authorization and membership.
+
 How Wyrd moves objects and snapshots between devices. `wyrd-sync`
 implements the protocol/core boundaries; the runtime wiring that turns
 them into a full distributed system is still in progress.
@@ -506,7 +508,7 @@ A desktop is `mirror + full`; a laptop `mirror + partial`; a phone
 are local device policy — they change what the device holds, never what the
 drive contains. The CLI surface for this is `wyrd policy` (`pin` /
 `unpin` / `evict`, plus `status` / `budgets` and the `role` they report
-against — `docs/cli.md`): policy facts stay in the device's durable
+against — `docs/design/cli.md`): policy facts stay in the device's durable
 log and are never published. The CLI reports two policy
 values, not three — fetched-by-access `CACHED` carries no retention promise
 and collapses into `REMOTE_ONLY`; only an explicit pin promises retention.
@@ -707,7 +709,7 @@ generation: every representation cooled on failure evidence, with
 the completed generation number attached. `Corrupt` projects only
 when every exhausted representation cooled on verification
 rejection. Neither survives a restart — both are memory-only attempt
-state (`docs/peer-repair.md` Part 1). A new waiter reopens the
+state (`docs/design/peer-repair.md` Part 1). A new waiter reopens the
 attempt as a new generation: the demand rides a sticky reopen note
 (an unavailable read records one and fails fast; corrupt verdicts
 complete waiters without noting — their repair is quarantine's),
@@ -731,12 +733,12 @@ kind) to the loop's quarantine drain, which emits the diagnostic,
 discards the bytes, and clears the possession claim — while the
 `Cached` policy and the waiting reader survive, so the same read
 re-demands the identity as a fresh generation
-(`docs/peer-repair.md`, child 12). Claimed-but-absent bytes take
+(`docs/design/peer-repair.md`, child 12). Claimed-but-absent bytes take
 the parallel scrub path: the read names the lost representation
 to the loop's scrub drain, which clears the stale claim without
-discarding (`docs/peer-repair.md`, child 13). Corrupt authored structure
+discarding (`docs/design/peer-repair.md`, child 13). Corrupt authored structure
 (undecodable trees, lying sizes) is not rejected bytes and still
 fails `EIO` with no repair. The rest of the repair design —
 generation-scoped terminal state, route-set policy, measurement
-before replication — is recorded in `docs/peer-repair.md`.
+before replication — is recorded in `docs/design/peer-repair.md`.
 Eviction never affects the drive — only what this device holds.

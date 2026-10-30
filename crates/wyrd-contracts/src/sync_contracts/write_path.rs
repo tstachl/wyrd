@@ -140,7 +140,7 @@ impl<M: Mailbox> Mailbox for FailFirstSend<'_, M> {
 /// mailbox; member B drains, fetches from A's serving vault, refreshes
 /// live heads, and serves the new file. A failed announcement leaves
 /// the authored snapshot durable on A, and the retry announces the
-/// same snapshot — convergence needs no re-authoring (`docs/epochs.md`,
+/// same snapshot — convergence needs no re-authoring (`docs/contracts/epochs.md`,
 /// local write).
 #[cfg(feature = "mount")]
 #[test]
@@ -699,7 +699,7 @@ fn snapshot_manifest_closure_correspondence() {
 /// A drive created without fixtures serves an authored snapshot through
 /// the daemon view: the identity, root key, and genesis membership all
 /// come from the production bootstrap, not test scaffolding
-/// (`docs/epochs.md` genesis).
+/// (`docs/contracts/epochs.md` genesis).
 #[test]
 fn a_bootstrapped_drive_serves_its_first_authored_snapshot() {
     let dir = scratch_dir("bootstrap");

@@ -143,7 +143,7 @@ impl Engine {
 
     /// The classified live-head projection: the verified snapshot bodies
     /// the authorization engine currently marks `Eligible` — live-lineage
-    /// DAG heads at the current epoch (`docs/epochs.md`). Built from
+    /// DAG heads at the current epoch (`docs/contracts/epochs.md`). Built from
     /// durable snapshot-body facts and the membership log, so it survives
     /// restarts; backends install exactly this set as the view's heads.
     /// Everything else in the DAG is retained history and never advances
@@ -327,7 +327,7 @@ impl Engine {
     /// member may author a snapshot reusing content it does not hold.
     /// Parents are the current eligible heads: a single-head drive
     /// extends its live state, and a conflicted drive resolves onto every
-    /// head (`docs/epochs.md`, local write; `docs/object-model.md`,
+    /// head (`docs/contracts/epochs.md`, local write; `docs/contracts/object-model.md`,
     /// resolution). The body is verified once and committed durably; the
     /// live-head projection picks it up on the next rebuild. Fails closed
     /// when the root is unavailable or misaddressed, the log has no
@@ -350,7 +350,7 @@ impl Engine {
     /// while the parents are always the current eligible heads, so a
     /// recovery grafts bytes without adopting a dead fork. The body
     /// carries the recovery flag under the signature
-    /// (`docs/epochs.md`, recovery snapshots). Only the current
+    /// (`docs/contracts/epochs.md`, recovery snapshots). Only the current
     /// canonical owner may recover; anyone else fails closed with
     /// [`EngineError::RecoveryNotOwner`]. Fails closed like
     /// [`Engine::author_snapshot`] otherwise.

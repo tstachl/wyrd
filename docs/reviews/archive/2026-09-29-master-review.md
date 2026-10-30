@@ -46,7 +46,7 @@ what is already tracked in ngit.
   appended to through the mount, even if the protocol allows it. The check
   is also redundant with the protocol ingest limits that `Entry::file` and
   `author_snapshot` already enforce.
-- **Spec**: `docs/write-path.md` says file size should be limited by protocol
+- **Spec**: `docs/contracts/write-path.md` says file size should be limited by protocol
   ingest limits (`Limits::V0`), not by `MAX_WRITE_BUFFER_BYTES`.
 - **Fix**: Remove the `MAX_WRITE_BUFFER_BYTES` check from `AppendFile` and
   rely on protocol ingest limits, matching `CommitFile`'s behavior. Or use

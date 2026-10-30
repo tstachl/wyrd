@@ -209,7 +209,7 @@ characters (x-only pubkeys).
 
 Membership state beyond the CLI: device identity is single-use
 within a membership chain — a removed device returns only under a
-fresh identity (`docs/epochs.md`).
+fresh identity (`docs/contracts/epochs.md`).
 
 ### `snapshot` — inspect snapshots and merge conflicted heads
 
@@ -409,7 +409,7 @@ sync now
    reads `not observed`: status never connects, so it says the
    omission out loud instead of letting silence read as healthy.
    A `durability` row reports the drive's durability level (DG-2,
-   normative in `docs/write-path.md`): `working` with no recorded
+   normative in `docs/contracts/write-path.md`): `working` with no recorded
    snapshot body, `committed` while an announcement obligation is
    queued, `published` once the outbox is quiet — from committed
    facts only, so it renders offline.
@@ -619,7 +619,7 @@ with `stop the service first`. The full sequence — converge any
 interrupted transaction, resolve, require quiescence, stage,
 preflight, swap (recording `Swapped` between the two renames),
 verify against the actual store, commit or roll back, hand back
-to the supervisor — is specified in `docs/update.md`:
+to the supervisor — is specified in `docs/contracts/update.md`:
 
 ```text
 update
@@ -724,7 +724,7 @@ eviction, and the effective `vault` role refuses eviction outright.
   advisory ceiling ("no lower than current retention"); a quota is
   an operator-selected refusal boundary, never an implicit default. The
   report names the local quota only: the refusal ceiling and the
-  receive-side ceiling required by `docs/retention-constraints.md:147-149`
+  receive-side ceiling required by `docs/contracts/retention-constraints.md:147-149`
   have no value to report until the receive-path admission gate lands.
 - `policy role set <mirror|vault>`: widen or narrow the device-local
   materialization role. What this device intends to be: `mirror`
@@ -932,7 +932,7 @@ passphrase_file = "/etc/wyrd/passphrase"
   generation-scoped, cleared by a new waiter or a restart, never a
   property of the identity. This fetch
 surface is client-position: counts by reason, never identities —
-see `docs/trust.md`'s observation × trust-position matrix
+see `docs/contracts/trust.md`'s observation × trust-position matrix
 ("Diagnostic surfaces", OD-17-6), which pins what each surface may
 show and composes with the party table.
 - `E2E_RUST_LOG` (honored by the Lima suite in `lima/run-alpha.sh`

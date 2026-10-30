@@ -27,7 +27,7 @@ fn genesis_is_valid_and_canonical() {
 }
 
 /// A genesis that carries `resolves` violates the pinned shape
-/// (`docs/epochs.md`: genesis is `prev = None` with empty `resolves`):
+/// (`docs/contracts/epochs.md`: genesis is `prev = None` with empty `resolves`):
 /// there is never a conflict at a `prev` that does not exist, so any
 /// entry is invalid, including duplicates, which fail the same intrinsic
 /// check before the resolution-shape checks run.

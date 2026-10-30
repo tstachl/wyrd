@@ -61,7 +61,7 @@ pub(crate) fn classify_open_error(drive_dir: &Path, error: EngineError) -> Verif
     }
 }
 
-/// The verification boundary (`docs/update.md` §5): open the store
+/// The verification boundary (`docs/contracts/update.md` §5): open the store
 /// with the new binary, replay durable facts through its readers,
 /// and prove it authored nothing. Prints the U4 report in every
 /// case the checks complete; operational failures print no verdict

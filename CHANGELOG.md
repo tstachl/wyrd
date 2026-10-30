@@ -14,7 +14,7 @@ envelopes it does not understand. Newer formats arrive as additive
 representations alongside the old ones — or, when a genuine break is
 unavoidable, as a snapshot-producing migration — never as in-place rewrites:
 old representations stay readable for at least one full release window (see
-`docs/upgrade-contract.md` for the full upgrade rules). Until 1.0, assume **every**
+`docs/contracts/upgrade-contract.md` for the full upgrade rules). Until 1.0, assume **every**
 alpha can change the format, the trust protocol, and the CLI: drives created
 by one alpha may not open under the next, and the release notes for each
 version say exactly what changed.
@@ -78,7 +78,7 @@ is transient — no drive data is affected.
   the announcement encoding, both signing regions, both epoch-1 key
   families, and the 129-byte release-metadata layout; every scope
   violation fails closed with no fallback to membership replay or
-  capability installation. Contract: `docs/release-read.md`.
+  capability installation. Contract: `docs/contracts/release-read.md`.
 
 - Sync-convergence wave 2
   (`nostr:nevent1qqs050vlflle96xqhm9yke5943dwr0579k86nmf29k8u935mdrhyhxqpz9mhxue69uhkwunpwdczuap49eehgy8qvr2`):
@@ -202,7 +202,7 @@ is transient — no drive data is affected.
   serving endpoint over the same vault (fetch-d shape, 0.8 s, no Phase-12 gate);
   and page-check drift/copy failures now print the slot's live copy and rules
   inline instead of an opaque slot id.
-- Bounded candidate walk (`docs/retry-policy.md`, walk-bound item of
+- Bounded candidate walk (`docs/design/retry-policy.md`, walk-bound item of
   `nostr:nevent1qqst96hdcjv8y9dj2e87rfesxaxn8lf07cxym2nkck7h4wtjgy3hzjqpz9mhxue69uhkwunpwdczuap49eehggnzphy`):
   each pass attempts at most the first three freshness-ordered
   providers (`FETCH_WALK_CAP`), so a long candidate tail can no
@@ -214,8 +214,8 @@ is transient — no drive data is affected.
   accepted limit is a live tail pinned behind three or more
   persistently stalled transfers, which waits on the
   representation's strike/burn cooldowns. Property 8 in
-  `docs/fetch-on-open.md` now states the bounded walk.
-- Bounded incremental admission catch-up (`docs/resource-limits.md`,
+  `docs/design/fetch-on-open.md` now states the bounded walk.
+- Bounded incremental admission catch-up (`docs/contracts/resource-limits.md`,
   child 1 of `nostr:nevent1qqsqufuj24ttsndlug9usn904axmy4m2sslgs2hk3u9n592sy0hlvdspz9mhxue69uhkwunpwdczuap49eehg4rsmla`):
   admitting a device no longer commits one batch proportional to
   recorded history. The admission commits one membership batch,
@@ -249,9 +249,9 @@ is transient — no drive data is affected.
   `policy evict` under `vault` refuses; narrowing away from `vault`
   requires
   `--yes` and keeps vault-effective posture until withdrawal
-  completes. Normative contract in `docs/sync-and-peers.md`
+  completes. Normative contract in `docs/contracts/sync-and-peers.md`
   (Materialization policy vs peer role).
-- Observation × trust-position matrix (`docs/trust.md`):
+- Observation × trust-position matrix (`docs/contracts/trust.md`):
   the 18 hidden/observable disclosure classes as normative rows
   over five trust positions (keyless replica, member-hosted
   composition, public relay, drive member, removed device), each
@@ -289,7 +289,7 @@ is transient — no drive data is affected.
   compile-error form; verified with E0027); a vault-all-observable
   rule rejects any hidden-row mapping on the vault projection.
 - Announcement-class reconciliation for late joiners
-  (`docs/sync-and-peers.md`):
+  (`docs/contracts/sync-and-peers.md`):
   a sender answering a reconciliation statement queues the
   recipient's missing announcements (recorded announcements minus
   evidenced snapshots, installed epochs only — synthesized
@@ -305,7 +305,7 @@ is transient — no drive data is affected.
   pending derives as queued minus (delivered ∪ reconciled) for all
   three classes. `sync status` reports announcements retired
   alongside the other classes.
-- Freshness ordering in bulk fetch (`docs/retry-policy.md`,
+- Freshness ordering in bulk fetch (`docs/design/retry-policy.md`,
   `crates/wyrd-sync/src/bulk.rs`): the candidate walk orders each
   attempt from a per-provider outcome memory — recently failed
   providers sink behind unmarked ones, stably, nobody dropped. Only
@@ -473,12 +473,12 @@ is transient — no drive data is affected.
   failure and the poisoned-lock stays-failed consequence),
   post-corruption projection (a damaged head fails the pass with
   the previous generation still serving; normative rule stays in
-  `docs/epochs.md`), and mirror-queue diagnostics (depth travels
+  `docs/contracts/epochs.md`), and mirror-queue diagnostics (depth travels
   with the not-ready report; a rejecting queue warns at the
-  default level). Inventory in `docs/crash-consistency.md`.
+  default level). Inventory in `docs/contracts/crash-consistency.md`.
 
 - Device-local durability levels (DG-2, normative in
-  `docs/write-path.md`): a completed write reports which of Working,
+  `docs/contracts/write-path.md`): a completed write reports which of Working,
   Committed, or Published it reached, indexed by the DG-1
   commit-forcing event that fired — Working before the first
   snapshot, Committed while an announcement obligation is queued,
@@ -517,7 +517,7 @@ is transient — no drive data is affected.
   after the drain's own verdict the endpoint serves the converged
   snapshot until SIGINT/SIGTERM and shuts down in mount order. No
   barrier without serving (route-less authoring unchanged);
-  `--serve` refuses `--offline`; `docs/trust.md` names both
+  `--serve` refuses `--offline`; `docs/contracts/trust.md` names both
   shipped member-hosted shapes. Bridge until `wyrd vault` exists.
 - Shed-wait attribution on `sync now` (`17-observability`, OD-17-2
   extension): pending-bound sheds carry their already-classified wait
@@ -529,7 +529,7 @@ is transient — no drive data is affected.
   design: the shed decision runs before classification to avoid
   spending verification.
 - Observation × trust-position matrix (`17-observability`, OD-17-6,
-  `docs/trust.md`): what each diagnostic surface (`sync now` run
+  `docs/contracts/trust.md`): what each diagnostic surface (`sync now` run
   output, `sync status` durable surface, debug log, durable drive
   metadata, the wire) may show and must never show, composed with
   the party table. More classification never widens a surface.
@@ -537,12 +537,12 @@ is transient — no drive data is affected.
   (`17-observability`, OD-17-1 B): per-representation verification
   identities are intentionally not persisted — deliberate
   privacy/data-minimality policy, documented in
-  `docs/peer-repair.md` with the evidence hierarchy
+  `docs/design/peer-repair.md` with the evidence hierarchy
   (`VerificationFailure` → debug log → run-report counts →
   identity-free durable metadata). The implementation distinguishes
   a single genuine rejection class, so no cause-taxonomy extension
   was warranted.
-- Dial/transfer split in bulk fetch (`docs/retry-policy.md`,
+- Dial/transfer split in bulk fetch (`docs/design/retry-policy.md`,
   roadmap item 2): each attempt now runs the dial under its own
   allowance and size discovery plus streaming under the leftover,
   with identical timeout instants and error classes — the split
@@ -600,7 +600,7 @@ is transient — no drive data is affected.
    `--archive <path>` to a second positional beside the drive
    directory, and `member reissue-invitation` shortens to `member
    reissue` — no behavior change, no aliases (pre-alpha, no
-   compatibility burden). `docs/cli.md` gains the `update`
+   compatibility burden). `docs/design/cli.md` gains the `update`
    synopsis line it was missing and annotates the pairing
    walkthrough with who performs each step and which artifact
    passes between them (`pairing-request` -> `invite` ->
@@ -773,7 +773,7 @@ is transient — no drive data is affected.
   destination equal to the previous release's directory, making the
   repoint-before-generate order machine-checked. "One live baseline"
   means one authoritative current-release fixture, not one fixture
-  total; `docs/upgrade-contract.md` invariant 3 already required the
+  total; `docs/contracts/upgrade-contract.md` invariant 3 already required the
   previous-release replay this restores.
 
 ### Changed
@@ -973,7 +973,7 @@ is transient — no drive data is affected.
   test-pinned evaluators, the shared sweep type and its two
   error-mapping helpers); a private `use` in `live` keeps the free
   items reachable through `super::*` without widening past the
-  module. `docs/write-path.md` numeric refs re-pointed at the new
+  module. `docs/contracts/write-path.md` numeric refs re-pointed at the new
   homes (including the `ConflictedHeads` → `Conflicted` rename the
   refs predated). `wyrd_core::live::X` paths preserved. No behavior
   change.
@@ -1068,7 +1068,7 @@ is transient — no drive data is affected.
   (`nostr:nevent1qqsyfxq3flw7nx0slwkvmvpuau47a9xmfsgstk5leulu297af7fvkqgpz9mhxue69uhkwunpwdczuap49eehgfncncm`,
   follow-up): sixteen single-module helpers return to private
   visibility, the `every_src_file_is_a_declared_module` pin descends
-  into `src/commands/`, `docs/cli.md` names `commands.rs`, and the new
+  into `src/commands/`, `docs/design/cli.md` names `commands.rs`, and the new
   `tests/help_contract.rs` verifies the full `--help` tree plus error
   paths against the committed `help-contract.blake3` (46 pages) inside
   the normal cargo gate. No behavior change.
@@ -1391,10 +1391,10 @@ is transient — no drive data is affected.
 - Explicit convergence-over-delivery invariants (docs only, no behavior
   change): `docs/architecture.md` gains transport-is-never-evidence
   and identity-layering invariants pointing at the DG-3 forget
-  contract and `docs/crash-consistency.md`; `docs/sync-and-peers.md`
+  contract and `docs/contracts/crash-consistency.md`; `docs/contracts/sync-and-peers.md`
   states recovery attaches to the semantic class (transitions and
   capabilities are state-essential, announcements and content objects
-  recover independently); `docs/resource-limits.md` states locally
+  recover independently); `docs/contracts/resource-limits.md` states locally
   authoritative does not mean locally unbounded.
 - Reconciliation view fact kind (`0x18`) and replay arm
   (`21a-reconciliation-fact`): the recipient's per-class durable
@@ -1404,9 +1404,9 @@ is transient — no drive data is affected.
   view, and retirement on an in-memory-only view is refused. A
   statement claiming more than the base facts hold is dropped at
   load with a warning — the claim fails closed while the store stays
-  open. Recorded in `docs/upgrade-contract.md`; no wire behavior yet
+  open. Recorded in `docs/contracts/upgrade-contract.md`; no wire behavior yet
   (21b/21c wire the statement and the retire condition).
-- Restart-equivalence relation (DG-5): `docs/crash-consistency.md`
+- Restart-equivalence relation (DG-5): `docs/contracts/crash-consistency.md`
   gains the normative predicate over durable externally meaningful
   state as a per-surface table — survives, rebuilt, lost-correctly,
   or excluded by name — where every row names its observable, its
@@ -1439,8 +1439,8 @@ is transient — no drive data is affected.
   view live and fans it out without committing — the send path never
   authors facts, so triggers advance no sequence; the live loop feeds
   it the mailbox reconnect edge. Nothing retires yet (21c). Recorded in
-  `docs/upgrade-contract.md`, `docs/object-model.md`,
-  `docs/resource-limits.md`.
+  `docs/contracts/upgrade-contract.md`, `docs/contracts/object-model.md`,
+  `docs/contracts/resource-limits.md`.
 - Reconciliation response and retire condition
   (`21c-reconciliation-response`): the sender answers each received
   statement once per lifetime (volatile answered set, restarts
@@ -1454,9 +1454,9 @@ is transient — no drive data is affected.
   past the recipient's newest evidenced install skipped). Pending
   derives as queued-minus-(delivered ∪ reconciled). Scope boundary:
   transitions and capabilities only — announcement obligations stay
-  pending, pinned by test. Recorded in `docs/upgrade-contract.md`,
-  `docs/object-model.md`, `docs/resource-limits.md`,
-  `docs/storage-growth.md`, `docs/sync-and-peers.md`.
+  pending, pinned by test. Recorded in `docs/contracts/upgrade-contract.md`,
+  `docs/contracts/object-model.md`, `docs/contracts/resource-limits.md`,
+  `docs/design/storage-growth.md`, `docs/contracts/sync-and-peers.md`.
 - Reconciliation diagnostics (`21d-reconciliation-diagnostics`):
   `sync status` gains a `reconciliation` row — statements received
   plus transitions and capabilities retired, all from committed
@@ -1469,15 +1469,15 @@ is transient — no drive data is affected.
   obligations are still owed at end of run (unresolvable
   transition, missing sealing key, a relay that accepts nothing); a scoped
   skip the pass's unscoped delivery then discharges reads zero by
-  design. Recorded in `docs/cli.md`, `docs/sync-and-peers.md`.
+  design. Recorded in `docs/design/cli.md`, `docs/contracts/sync-and-peers.md`.
 - Normative DG-3 control-message recovery / forget contract in
-  `docs/sync-and-peers.md`: retire an obligation only on durable
+  `docs/contracts/sync-and-peers.md`: retire an obligation only on durable
   evidence the recipient's state subsumes it (per-class predicates),
   recipient-originated reconciliation pull, bounded-retention
   assumption, seven normative acceptance scenarios. Qualifies the
   "relay retains every unacked envelope" sentence in
-  `docs/crash-consistency.md` and records the `*Reconciled` fact-tag
-  pattern in `docs/upgrade-contract.md`. Decision only; no behavior
+  `docs/contracts/crash-consistency.md` and records the `*Reconciled` fact-tag
+  pattern in `docs/contracts/upgrade-contract.md`. Decision only; no behavior
   change. Implementation is gated on this artefact.
 - Observability PR 1 (expose what is computed): `sync now` splits
   deferred holds by cause (unseen / status-blocked / shed), accumulates
@@ -1501,7 +1501,7 @@ is transient — no drive data is affected.
   carries count in the queue total and render on their own line, on
   no peer line. Deferral-cause attribution is pinned stable across
   redelivery and restart.
-- Normative DG-1 mutation/commit boundary table in `docs/write-path.md`:
+- Normative DG-1 mutation/commit boundary table in `docs/contracts/write-path.md`:
   one snapshot per commit-forcing event (folding all pending), dirty-handle
   release as a forcing event, namespace operations as folding forcing events,
   no idle-window commit in v0.3. Decision only; no behavior change and no
@@ -1521,8 +1521,8 @@ is transient — no drive data is affected.
   workload commits one snapshot per save (50 to 10 across the committed
   workload test) with byte-identical final content. No format impact:
   only when the snapshot boundary fires changes, not what a snapshot is.
-- Normative DG-4 retention/refusal contract in `docs/storage-growth.md`
-  with the authorization half as `docs/trust.md` T18: serving members and
+- Normative DG-4 retention/refusal contract in `docs/design/storage-growth.md`
+  with the authorization half as `docs/contracts/trust.md` T18: serving members and
   vaults may decline to retain what an authorized member authored, at the
   enforcement points the contract names (receive-path pre-admission gate;
   residency refusal after durability — announcement barrier on the
@@ -1534,7 +1534,7 @@ is transient — no drive data is affected.
   decrement), and the acceptance tests are the implementation follow-up
   gated on this artefact.
 - Retention constraints v0.x must preserve in
-  `docs/retention-constraints.md`: retention vs residency model, the
+  `docs/contracts/retention-constraints.md`: retention vs residency model, the
   transition-churn adversary, refusal semantics over the DG-4 A/B bridge,
   accounting prerequisites as contract, and what v0.3-v0.4 must not
   introduce (no eviction, no pruning, no rate limiting of durable
@@ -1542,7 +1542,7 @@ is transient — no drive data is affected.
   Decision only; no behavior change and no format impact. GC
   implementation stays post-v1.
 - Generation-scoped terminal fetch state with waiter completion
-  (`docs/peer-repair.md` Part 1, first child; OD-11-1/11-2/11-3 all
+  (`docs/design/peer-repair.md` Part 1, first child; OD-11-1/11-2/11-3 all
   option A): `FetchStatus::Unavailable` carries the completed
   generation; the engine tracks per-identity attempt generations fed
   by the representation-level strike ledgers and completes a
@@ -1608,10 +1608,10 @@ is transient — no drive data is affected.
   drives are otherwise untouched (inspect a pre-fix drive with `stat`,
   repair by hand).
 - Disambiguate the bare invariant refs in the upgrade-contracts index
-  (`crates/wyrd-contracts/src/lib.rs`) to name `docs/upgrade-contract.md`
+  (`crates/wyrd-contracts/src/lib.rs`) to name `docs/contracts/upgrade-contract.md`
   explicitly (comment only): `docs/architecture.md` now also carries ten
   invariants, so the bare counts were ambiguous. The orphan-ignore half
-  of entry 32 additionally points at `docs/crash-consistency.md`, where
+  of entry 32 additionally points at `docs/contracts/crash-consistency.md`, where
   `orphan_files_are_ignored` is pinned.
 - Correct entry 28's wording in the upgrade-contracts index and its test:
   the gate-half probe forges a sealed control version and fails closed
@@ -1715,7 +1715,7 @@ is transient — no drive data is affected.
   transition document gained a `readers_root` field and a
   `0x04 AdmitReader` change tag. **A drive created by v0.1.0-alpha.1
   does not open under this build.** Old records are refused, not
-  reinterpreted (see `docs/upgrade-contract.md`).
+  reinterpreted (see `docs/contracts/upgrade-contract.md`).
 - Bare `wyrd sync now` without `--relay` is refused with a usage error
   instead of exiting 0 with an idle intake; pass `--offline` for the
   relay-less local run.
@@ -1727,7 +1727,7 @@ is transient — no drive data is affected.
   (`WyrdNode::open_serving`), so a serving peer in v0.2 holds the
   identity, epoch keys, and live mailbox — the keyless-replica posture
   is the design target for future serving surfaces, not today's
-  composer (`docs/trust.md` T17).
+  composer (`docs/contracts/trust.md` T17).
 - Resigned identical capabilities are deduplicated at intake against the
   committed-capability projection before the per-pass fact budget is
   charged.
@@ -1764,7 +1764,7 @@ is transient — no drive data is affected.
 - Typed-error convention across daemon and sync boundaries (one
   `thiserror` enum per module; fail-closed authorization with
   restore-then-report recovery), documented in
-  `docs/error-conventions.md`.
+  `docs/contracts/error-conventions.md`.
 - Nix flake distribution: `packages.wyrd` / `apps.wyrd` (`nix build .#wyrd`,
   `nix run .#wyrd -- --help`) built from the committed `Cargo.lock` with the
   toolchain pinned in `rust-toolchain.toml`, for `aarch64-darwin`,

@@ -6,7 +6,7 @@
 //! The interface forwards and never interprets: namespace reads go to
 //! the shared projection, the durable observation and liveness go to
 //! the loop-published slots, and mutations go to the single mutation
-//! queue. See `docs/owner-interface.md` for the protocol contract;
+//! queue. See `docs/contracts/owner-interface.md` for the protocol contract;
 //! this module is its implementation.
 //!
 //! Three negative invariants pin the shape, enforced in

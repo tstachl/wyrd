@@ -274,7 +274,7 @@ pub(super) fn child(
 ///
 /// Absence and a dead or stale transport route both fall back — the
 /// transport root is author-attested routing metadata, never an
-/// availability guarantee (`docs/fetch-on-open.md`). Oversize is
+/// availability guarantee (`docs/design/fetch-on-open.md`). Oversize is
 /// representation-terminal: both routes carry the same bytes, so no
 /// route can succeed after it, and the classification propagates.
 /// A fallback that granted no budget slice changes nothing: a

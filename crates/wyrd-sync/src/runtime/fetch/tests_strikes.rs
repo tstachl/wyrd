@@ -1299,7 +1299,7 @@ fn absent_representations_do_not_strike() {
 /// does, and nothing commits — the engine holds no tree the open
 /// path could project. Trees are structural metadata (always wanted,
 /// never policy-gated), so no pin is needed: this is the plan-level
-/// half of the manifest-chain open leg (`docs/fetch-on-open.md`), staged here because the installed
+/// half of the manifest-chain open leg (`docs/design/fetch-on-open.md`), staged here because the installed
 /// plus unblocked half lives at the daemon boundary, where the same
 /// walk cannot be re-driven once the durable facts call the tree
 /// local.

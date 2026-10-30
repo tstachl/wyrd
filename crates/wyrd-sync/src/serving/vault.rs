@@ -21,7 +21,7 @@ pub enum VaultError {
     /// the readiness barrier reports not-ready until the drain
     /// catches up, and a restart rebuilds the mirror from the vault.
     /// Per-item backpressure, never a batch wedge (see
-    /// `docs/error-conventions.md`). Carries the refused transport
+    /// `docs/contracts/error-conventions.md`). Carries the refused transport
     /// root so a rejection traces to its publication.
     #[error("serving mirror queue full for {root}: {queued_bytes}/{max_bytes} bytes in {queued_items} items, rejected {rejected}")]
     MirrorFull {

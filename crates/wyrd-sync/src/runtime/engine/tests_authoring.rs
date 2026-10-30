@@ -538,7 +538,7 @@ fn announcing_a_foreign_snapshot_fails_closed() {
 /// Recovery grafts content under the current epoch, but only the
 /// current canonical owner may author it: a plain member holds the
 /// tree and the epoch material yet is refused before anything
-/// commits (`docs/epochs.md`, recovery authorization).
+/// commits (`docs/contracts/epochs.md`, recovery authorization).
 #[test]
 fn recovery_authoring_requires_the_current_owner() {
     let (mut pair, _, _) = scenario();

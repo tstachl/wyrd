@@ -1,7 +1,7 @@
 //! DG-1 pending-set coalescing over a live loop: buffered writes across
 //! handles and paths accumulate in the daemon's handle overlays, and a
 //! commit-forcing event folds the whole pending set plus itself into one
-//! snapshot (`docs/write-path.md`, DG-1 table). These tests drive the
+//! snapshot (`docs/contracts/write-path.md`, DG-1 table). These tests drive the
 //! real backend plus the real loop, so the snapshot count they assert is
 //! the authored-snapshot count: `generation()` bumps once per
 //! publication, and a quiet drive publishes exactly the snapshots its

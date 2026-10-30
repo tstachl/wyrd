@@ -1,6 +1,6 @@
 //! Snapshots: the signed DAG nodes committing a drive's tree to the exact
-//! membership state that authorizes them (see `docs/object-model.md`,
-//! "Snapshots and the DAG", and `docs/trust.md` for the signing
+//! membership state that authorizes them (see `docs/contracts/object-model.md`,
+//! "Snapshots and the DAG", and `docs/contracts/trust.md` for the signing
 //! construction).
 //!
 //! Unlike membership transitions, snapshots ARE content-addressed objects:

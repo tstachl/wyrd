@@ -323,7 +323,7 @@ pub struct SyncStatus {
     /// locally held objects.
     pub materialization: MaterializationSummary,
     /// The durability level the drive reached (DG-2, normative in
-    /// `docs/write-path.md`): Working with no recorded snapshot
+    /// `docs/contracts/write-path.md`): Working with no recorded snapshot
     /// body, Committed while the drive announcement outbox is
     /// non-empty, Published once it is quiet (drive-global, not
     /// per-snapshot). Committed facts only, like every other row —

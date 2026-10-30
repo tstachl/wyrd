@@ -1,5 +1,7 @@
 # Crash-consistency boundaries
 
+Status: Normative. Scope: the durable boundary of every subsystem that survives a restart, the crash windows between writes, and the invariant plus test pinning each window. Authority: this document owns the crash table; subsystem contracts own their write ordering.
+
 The explicit durable-boundary list for the crash-consistency audit:
 every subsystem that survives a restart, the order its writes land
 in, the crash windows between them, and the invariant plus the test
@@ -381,7 +383,7 @@ log record claims. In all three, replay or classification cannot
 produce a valid projection from the durable state — and the window
 is what the reopen does next, not the damage itself.
 
-The behavior is normative in `docs/epochs.md:557-568` and is not
+The behavior is normative in `docs/contracts/epochs.md:557-568` and is not
 restated here: Wyrd preserves the last successfully installed heads
 and surfaces the projection error to the caller. The installed
 projection is not an endorsement of the newly replayed state, a

@@ -1,5 +1,7 @@
 # Capability and message binding matrix
 
+Status: Normative. Scope: what authenticates each secret- or authority-carrying object and message, and what context it is bound to. Authority: this matrix owns the binding rows; `trust.md` owns the constructions and security properties they rest on.
+
 Review artifact for the recipient/key-substitution audit: one row per
 object and message that carries secrets or authority, stating what
 authenticates it, what context it is bound to, and the transplant

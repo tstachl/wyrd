@@ -118,7 +118,7 @@ pub struct KeyRotation {
 }
 
 /// A reconciliation request: the recipient-originated pull statement
-/// (DG-3, `docs/sync-and-peers.md`). `requester` names the device
+/// (DG-3, `docs/contracts/sync-and-peers.md`). `requester` names the device
 /// asking — it must equal the mailbox envelope's sender, the same
 /// redundant-field agreement the capability arm enforces, so the
 /// responder knows whom the set difference is for. `evidence` is the

@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use super::identity::*;
-/// Transaction phases (`docs/update.md` §4). `Committed` needs no
+/// Transaction phases (`docs/contracts/update.md` §4). `Committed` needs no
 /// variant: commit removes the state file, so a present record is
 /// always an interrupted transaction converging back or forward.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -195,7 +195,7 @@ pub(crate) fn rename_durable(from: &Path, to: &Path, exe: &Path) -> Result<(), C
 }
 
 /// Converge a leftover transaction record before starting anything
-/// new (`docs/update.md` §4 recovery rule). The rule is one line:
+/// new (`docs/contracts/update.md` §4 recovery rule). The rule is one line:
 /// only a passed verification commits — everything else rolls
 /// back to the pre-swap binary.
 ///

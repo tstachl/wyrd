@@ -127,7 +127,7 @@ No debounce or autosave timer exists in the code. Snapshots are created
 by POSIX boundaries on the authoring device:
 
 - `write` only buffers; a snapshot is created by the DG-1
-  commit-forcing events (`docs/write-path.md`, DG-1 table):
+  commit-forcing events (`docs/contracts/write-path.md`, DG-1 table):
   dirty-handle `flush` or `release`, `fsync` on a path with pending
   data, and the other listed forcing events fold the whole pending
   set into one snapshot. An `fsync` on a path with no pending data
@@ -136,7 +136,7 @@ by POSIX boundaries on the authoring device:
   behalf, so idle closes are free for two independent reasons.
 - `O_SYNC` / `O_DSYNC` never wait for a later boundary: each successful
   `write` is durable before returning, in its own durable snapshot
-  shared with any pending set (`docs/write-path.md`, DG-1 table). This
+  shared with any pending set (`docs/contracts/write-path.md`, DG-1 table). This
   is the amplification peak, and it is opt-in per handle by the
   application.
 - Each namespace operation addressed by **path** (`create`, `unlink`,
@@ -560,7 +560,7 @@ can pull.
 already retained plus a conservative estimate of the pending set's new
 retention — full image lengths, while dedup and chunking only reduce
 what the store keeps — before the commit's first write
-(`docs/write-path.md`, rule 6). An admitted fold satisfies
+(`docs/contracts/write-path.md`, rule 6). An admitted fold satisfies
 count + estimate < quota, so it lands strictly *below* the quota by the
 estimate's over-count margin; the only way back over is the rebuilt
 tree nodes the estimate deliberately omits (below its precision, by

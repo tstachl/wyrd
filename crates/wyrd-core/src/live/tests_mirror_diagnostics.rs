@@ -1,6 +1,6 @@
 //! Window (c): mirror-queue diagnostics (G4, OD-05-C option A).
 //!
-//! `docs/crash-consistency.md:200-202` requires two emissions: queue
+//! `docs/contracts/crash-consistency.md:200-202` requires two emissions: queue
 //! depth travels with the not-ready report in the pass logs, and a
 //! queue that is actually rejecting warns at the default log level.
 //! These tests capture a subscriber around the discharge-wait path

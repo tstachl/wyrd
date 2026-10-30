@@ -21,7 +21,7 @@
 //!   claim-clear structurally: the drain cannot clear a claim it
 //!   has not already reported.
 //! - Missing bytes are not corruption evidence (invariant 7 of
-//!   the peer-repair design, `docs/peer-repair.md:171`, binds
+//!   the peer-repair design, `docs/design/peer-repair.md:171`, binds
 //!   quarantine to that): the scrub queue is separate from the
 //!   quarantine queue, and a verification failure never lands here.
 //!

@@ -354,7 +354,7 @@ pub enum MutationKind {
         base: Option<FileIdentity>,
     },
     /// One commit-forcing event's whole pending set plus itself,
-    /// applied as a single snapshot (`docs/write-path.md`, DG-1
+    /// applied as a single snapshot (`docs/contracts/write-path.md`, DG-1
     /// table). Members are ordered first-in-first-buffered; exactly
     /// one member carries `forcer: true` and lends the fold its
     /// privilege (a same-path tie) and its abort rule (a failed

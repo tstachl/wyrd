@@ -6,7 +6,7 @@
 //! `state` owns the phased swap state machine (stage, swap, converge),
 //! `supervise` runs the verification child and commits or rolls back,
 //! `run` orchestrates the transaction, and `preflight` checks the
-//! staged binary before the swap. Normative in `docs/update.md`.
+//! staged binary before the swap. Normative in `docs/contracts/update.md`.
 //!
 //! Nothing here stops a process, opens a store, or takes a lock: the
 //! drive directory gets a metadata check only, so validation always

@@ -284,7 +284,7 @@ fn check_canonical(manifest: &Manifest) -> Result<(), ClosureError> {
 /// size; no unreachable mapping is admitted. The tree's own declared file
 /// size is deliberately **not** compared to the chunk list: the format
 /// permits them to disagree and makes that inconsistency the reader's job
-/// (`docs/object-model.md`), while a chunk representation's declared size is
+/// (`docs/contracts/object-model.md`), while a chunk representation's declared size is
 /// enforced authoritatively by `crate::seal::verify` when it is fetched. Work
 /// is bounded by [`Limits`] per tree and manifest and by the distinct
 /// reachable tree nodes: the walk is iterative and deduplicated, so a shared

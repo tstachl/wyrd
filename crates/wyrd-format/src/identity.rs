@@ -16,7 +16,7 @@
 //!
 //! Never construct identifiers by hashing raw bytes with a bare hash call;
 //! always go through the domain-separated derivations here. See
-//! `docs/object-model.md` for the normative contract.
+//! `docs/contracts/object-model.md` for the normative contract.
 
 use std::fmt;
 

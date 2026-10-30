@@ -85,7 +85,7 @@ fn read_blocks_on_want_until_content_arrives() {
 /// Resolution is not demand: a path no installed head contains
 /// fails fast with ENOENT and registers no want — the open deadline
 /// is never consumed waiting for an announcement that may never
-/// come (normative in `docs/fetch-on-open.md`: resolution against
+/// come (normative in `docs/design/fetch-on-open.md`: resolution against
 /// the projected namespace is not demand).
 #[test]
 fn unknown_path_is_enoent_without_registering_a_want() {
@@ -159,7 +159,7 @@ fn concurrent_reads_coalesce_into_one_want() {
 /// completes it, the demand entry is retired on expiry, and a second
 /// open re-registers rather than returning a cached error. The tree
 /// — not a chunk — is what makes this the manifest-chain leg
-/// (`docs/fetch-on-open.md`): `open()` must materialize the chain
+/// (`docs/design/fetch-on-open.md`): `open()` must materialize the chain
 /// before an FD exists, while `read()` demand is covered by the
 /// tests above.
 ///

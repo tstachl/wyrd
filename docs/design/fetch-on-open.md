@@ -105,7 +105,7 @@ filesystem-oriented**:
   `ContentId`s but no keys, and like everything else served it is
   content-verified, never rewritten. This exception is scoped, not
   general: it is the member-hosted and public release-drive disclosure
-  that `docs/architecture.md` invariant 4 names and the `docs/trust.md`
+  that `docs/architecture.md` invariant 4 names and the `docs/contracts/trust.md`
   disclosure matrix scopes per trust position — a keyless-replica
   position never receives it.
 
@@ -244,7 +244,7 @@ Decided properties:
     discovery plus streaming under the leftover, firing at the same
     instants with the same classes; attempts record phase, dial
     latency, and streamed bytes for the resume threshold
-    (`docs/retry-policy.md`).
+    (`docs/design/retry-policy.md`).
 
 ## What open() materializes vs what read() demands
 
@@ -370,13 +370,13 @@ locally held bytes that fail verification do: the read names the
 rejected representation to the loop's quarantine drain, which
 discards the bytes, clears the claim, and lets the waiting reader
 re-demand the identity as a fresh generation
-(`docs/peer-repair.md`, child 12; pinned by
+(`docs/design/peer-repair.md`, child 12; pinned by
 `rejected_read_reports_to_quarantine_and_fails_eio` in
 `crates/wyrd-daemon/src/fuse/tests_want.rs`). Claimed-but-absent
 bytes — out-of-band loss, never a verification failure — take
 the parallel path: the read names the lost representation to the
 loop's scrub drain, which clears the stale claim without
-discarding anything (`docs/peer-repair.md`, child 13; pinned by
+discarding anything (`docs/design/peer-repair.md`, child 13; pinned by
 `lost_read_reports_to_scrub_and_fails_eio` and contract 53).
 Corrupt authored structure (undecodable trees, lying sizes) is not rejected bytes —
 no refetch can repair it — and still fails `EIO` with no repair.

@@ -1,5 +1,5 @@
 //! Control-plane transport: the Nostr mailbox and the NIP-46 signer
-//! session (`docs/trust.md` "Control plane", "NIP-46 remote signing";
+//! session (`docs/contracts/trust.md` "Control plane", "NIP-46 remote signing";
 //! tracking issue: control-plane transport wiring).
 //!
 //! Two independent boundaries live here, both trait-shaped rather than

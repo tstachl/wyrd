@@ -381,8 +381,8 @@ fn vault_disclosure_matches_the_agreed_trust_position() {
 
 /// Issue 33: the reconciled disclosure promise is stated in exactly
 /// one normative place. `docs/architecture.md` invariant 4 owns the
-/// sentence; `docs/trust.md` owns the per-position scope (the matrix,
-/// including the public release-drive column); `docs/fetch-on-open.md`
+/// sentence; `docs/contracts/trust.md` owns the per-position scope (the matrix,
+/// including the public release-drive column); `docs/design/fetch-on-open.md`
 /// names the serving exception it implements. The other two reference
 /// the canonical sentence — they never restate a competing
 /// vault-sees-or-does-not-see-ContentIds claim.
@@ -397,9 +397,9 @@ fn the_disclosure_contract_is_stated_in_exactly_one_place() {
     let docs = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs");
     let architecture =
         std::fs::read_to_string(docs.join("architecture.md")).expect("architecture.md reads");
-    let trust = std::fs::read_to_string(docs.join("trust.md")).expect("trust.md reads");
-    let fetch =
-        std::fs::read_to_string(docs.join("fetch-on-open.md")).expect("fetch-on-open.md reads");
+    let trust = std::fs::read_to_string(docs.join("contracts/trust.md")).expect("trust.md reads");
+    let fetch = std::fs::read_to_string(docs.join("design/fetch-on-open.md"))
+        .expect("fetch-on-open.md reads");
 
     // The canonical sentence lives in architecture.md, exactly once,
     // and in no other normative document.

@@ -884,7 +884,7 @@ same consequence extends to a removed device: revocation ends
 acquisition of new-epoch material, not knowledge of what it already
 holds — a removed device that retained a transport root can keep
 fetching that content from any serving member that still answers
-(see `docs/cli.md`'s `remove` section).
+(see `docs/design/cli.md`'s `remove` section).
 
 ### Diagnostic surfaces: the observation × trust-position matrix (OD-17-6)
 

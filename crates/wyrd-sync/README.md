@@ -33,10 +33,10 @@ encrypted manifests, roles × materialization.
   (landed for verification-rejected bytes: the store fails reads
   closed, the view names the rejected representation, and the
   loop's quarantine drain discards, unclaims, and re-demands —
-  `docs/peer-repair.md`, child 12; landed for out-of-band loss:
+  `docs/design/peer-repair.md`, child 12; landed for out-of-band loss:
   the view names the lost representation and a bounded presence
   walk re-stats locally claimed identities, and the loop's scrub
-  drain unclaims and re-demands — `docs/peer-repair.md`, child
+  drain unclaims and re-demands — `docs/design/peer-repair.md`, child
   13; a whole-store-directory walk outside manifest claims is
   still open)
 

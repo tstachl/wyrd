@@ -552,7 +552,7 @@ fn sync_status_reports_peer_queue_convergence_materialization() {
 /// author of the live head — appears anywhere in the render. Scoped
 /// to the exact adversarial hexes, not a bare hex-run detector:
 /// snapshot and transition ids render as documented item keys
-/// (docs/cli.md names them explicitly as merge identities), and a
+/// (docs/design/cli.md names them explicitly as merge identities), and a
 /// generic detector cannot tell them apart from device ids — so the
 /// negative pins DeviceId absence precisely where the docs draw the
 /// line.
@@ -2611,9 +2611,11 @@ fn sync_now_output_contains_no_secret_bytes() {
 /// direction.
 #[test]
 fn vault_trust_position_names_the_self_reported_surface() {
-    let reference =
-        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/cli.md"))
-            .expect("the CLI reference reads");
+    let reference = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../docs/design/cli.md"
+    ))
+    .expect("the CLI reference reads");
     assert!(
         reference.contains("The vault's own surface is self-reported"),
         "the statement pins the vault surface instead of its absence"
@@ -2840,13 +2842,15 @@ fn fetch_diagnostic_lines_name_no_device_or_path() {
 /// Verification 8: the trust-position statement ships in the docs
 /// the operator reads, following the
 /// `vault_trust_position_is_documented_as_unimplemented` pattern —
-/// a grep over `docs/cli.md` that fails if the client-position
+/// a grep over `docs/design/cli.md` that fails if the client-position
 /// statement for this surface is ever dropped.
 #[test]
 fn fetch_diagnostic_states_its_trust_position() {
-    let reference =
-        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/cli.md"))
-            .expect("the CLI reference reads");
+    let reference = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../docs/design/cli.md"
+    ))
+    .expect("the CLI reference reads");
     // Whitespace-normalized: the sentence wraps across lines in
     // the source, and the pin is on the words, not the wrapping.
     let flat = reference.split_whitespace().collect::<Vec<_>>().join(" ");

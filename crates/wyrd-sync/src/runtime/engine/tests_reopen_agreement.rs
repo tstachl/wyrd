@@ -2,7 +2,7 @@
 //!
 //! The object store, the vault, and the fact log become durable together
 //! at the authoring boundary (the Committed row of the DG-2 table in
-//! `docs/write-path.md`: "the whole snapshot ... become durable
+//! `docs/contracts/write-path.md`: "the whole snapshot ... become durable
 //! together at step 3"): vault imports land before the facts that name
 //! queued announcements commit in one batch. A crash inside the commit
 //! must leave all three agreeing on reopen — the visible log names no

@@ -91,7 +91,7 @@ pub use super::author::{
 pub use super::bootstrap::PairingRequest;
 
 /// The durability level the drive reached (DG-2, normative in
-/// `docs/write-path.md`): Working before the first recorded snapshot
+/// `docs/contracts/write-path.md`): Working before the first recorded snapshot
 /// body, Committed while the drive announcement outbox is non-empty,
 /// Published once it is quiet. Drive-global — recorded bodies plus
 /// the whole outbox, not per-snapshot. Derived from committed facts

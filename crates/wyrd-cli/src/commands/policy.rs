@@ -474,7 +474,7 @@ pub(crate) fn policy_quadrant_summary(census: &ResidencyCensus) -> String {
 /// (`for_local_sync`, the same config mount runs): what the report
 /// calls effective is what the daemon enforces, not a parallel
 /// copy. Only the retention- and fetch-relevant bounds print here;
-/// the full table lives in `docs/resource-limits.md`.
+/// the full table lives in `docs/contracts/resource-limits.md`.
 pub(crate) fn policy_budgets_render(
     census: &ResidencyCensus,
     accounting: &RetentionAccounting,
@@ -519,7 +519,7 @@ pub(crate) fn policy_budgets_render(
     // into the enforced number would silently widen what a refusal
     // rejects, so they report separately and the total is labelled
     // observational. See the retained / resident / auxiliary terms in
-    // `docs/storage-growth.md`.
+    // `docs/design/storage-growth.md`.
     let total = accounting
         .retained_content
         .saturating_add(accounting.fact_log)

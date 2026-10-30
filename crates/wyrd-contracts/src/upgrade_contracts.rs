@@ -1,4 +1,4 @@
-//! Upgrade-contract invariants (`docs/upgrade-contract.md`): one named
+//! Upgrade-contract invariants (`docs/contracts/upgrade-contract.md`): one named
 //! test per invariant direction, composed end to end over the public
 //! APIs — the same single-shape rule as the rest of the suite (all
 //! contracts are `#[cfg(test)]` mods in `src/`, no `tests/` integration

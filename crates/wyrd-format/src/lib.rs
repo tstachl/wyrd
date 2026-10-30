@@ -4,7 +4,7 @@
 //! This crate is deliberately dependency-light (blake3, hex, thiserror). It
 //! must stay deterministic, offline, and embeddable: no networking, no async,
 //! no keys or encryption (this is the plaintext world), no filesystem beyond
-//! the store implementations it defines. See `docs/object-model.md` for the
+//! the store implementations it defines. See `docs/contracts/object-model.md` for the
 //! normative v0 format contract.
 //!
 //! Wire counts are `u32`: every narrowing length cast must go through the

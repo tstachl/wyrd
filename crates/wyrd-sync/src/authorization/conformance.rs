@@ -1,5 +1,5 @@
 //! Conformance tests: the snapshot contract's test list from
-//! `docs/epochs.md` ("Conformance tests", **Snapshots**), as named tests.
+//! `docs/contracts/epochs.md` ("Conformance tests", **Snapshots**), as named tests.
 
 use super::test_util::{sign_snapshot, tree_id, Fixture};
 use super::*;

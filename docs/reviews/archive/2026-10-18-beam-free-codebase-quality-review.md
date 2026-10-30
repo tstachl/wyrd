@@ -22,7 +22,7 @@ Checks actually run:
   5 skipped (2 blocked upgrade tests, 3 slow/live-relay tests).
 - Targeted source inspection of the modules named in each finding.
 
-Documented conventions used as evidence: `docs/error-conventions.md`,
+Documented conventions used as evidence: `docs/contracts/error-conventions.md`,
 `docs/architecture.md`, `AGENTS.md`, `.cargo/config.toml`, and
 `crates/wyrd-contracts/src/layer_contracts.rs`.
 

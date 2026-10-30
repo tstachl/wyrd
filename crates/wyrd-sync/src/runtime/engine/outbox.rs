@@ -56,7 +56,7 @@ impl Engine {
 
     /// Own in-scope snapshots still naming a serving route at some
     /// peer: the withdrawal-completion half of a role narrowing
-    /// (`docs/sync-and-peers.md`, role transitions). Rebuilds from
+    /// (`docs/contracts/sync-and-peers.md`, role transitions). Rebuilds from
     /// the store, so the count is committed facts only —
     /// restart-equivalent by construction, and the narrowing driver
     /// and `policy role status` observe the same value. The counting rule

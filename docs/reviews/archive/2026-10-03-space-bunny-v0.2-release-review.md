@@ -48,9 +48,9 @@ useful part of this review:
    times; both previously ignored macOS FUSE mount tests pass; the
    10-02 P0 truncation defect is fixed and I confirmed the fix by
    running the test that pins it; a systematic peer-reachable-panic
-   audit found zero. `docs/resource-limits.md`,
-  `docs/crash-consistency.md`, `docs/fetch-on-open.md`, and
-  `docs/peer-repair.md` state their own boundaries, including the ones
+   audit found zero. `docs/contracts/resource-limits.md`,
+  `docs/contracts/crash-consistency.md`, `docs/design/fetch-on-open.md`, and
+  `docs/design/peer-repair.md` state their own boundaries, including the ones
    that are unflattering.
 
 2. **The release is deliberately not cuttable.** `.ngit/release.yaml:1-8`
@@ -88,7 +88,7 @@ that is a redesign.
 | A-1 | Workspace version is still `0.1.0-alpha.1` | `Cargo.toml:15`; every member inherits it |
 | A-2 | `CHANGELOG.md` has **no `[Unreleased]` section**. Its only level-two heading is `## [0.1.0-alpha.1]` (`CHANGELOG.md:22`), and the header promises releases "rename `[Unreleased]` below to its version" (`CHANGELOG.md:6`). There is nowhere to put v0.2 notes. | `CHANGELOG.md:1-54` read in full; `ngit release publish` extracts from the section matching the version (`.ngit/release.yaml:14-16`) |
 | A-3 | `nix build .#wyrd-dist` therefore produces an **alpha.1-named** archive: `result → /nix/store/35hkrlfv…-wyrd-0.1.0-alpha.1-macos-aarch64.tar.gz`. `release.yaml` names its assets `dist/wyrd-{version}-…`, so a `v0.2.0-alpha` tag without a version bump yields an archive no v0.2 manifest would accept. | I built it; `.ngit/release.yaml:47-67` |
-| A-4 | The `## Compatibility first` header (`CHANGELOG.md:8-20`) states the general pre-1.0 rule but **does not name the one format break that actually landed** (see §2.2). An alpha.1 operator reading the v0.2 release notes would not learn that their drive will not open. | `CHANGELOG.md:8-20` vs `docs/upgrade-contract.md:158-161` |
+| A-4 | The `## Compatibility first` header (`CHANGELOG.md:8-20`) states the general pre-1.0 rule but **does not name the one format break that actually landed** (see §2.2). An alpha.1 operator reading the v0.2 release notes would not learn that their drive will not open. | `CHANGELOG.md:8-20` vs `docs/contracts/upgrade-contract.md:158-161` |
 
 A-1/A-2 were raised in the 10-02 pass as "Blocker 4" and filed against
 `chore(release): keep v0.2 distribution disabled`. I am **not**
@@ -100,7 +100,7 @@ changelog, which no prior review states).
 ### Missing CHANGELOG entries
 
 Enumerated from `git log v0.1.0-alpha.1..HEAD` (658 commits, filtered
-to `feat`) cross-checked against `docs/cli.md` §Subcommands. Every entry
+to `feat`) cross-checked against `docs/design/cli.md` §Subcommands. Every entry
 below is a capability present in the tree and absent from
 `CHANGELOG.md`. Drafted as Keep-a-Changelog bullets.
 
@@ -186,7 +186,7 @@ below is a capability present in the tree and absent from
   (`WyrdNode::open_serving`), so a serving peer in v0.2 holds the
   identity, epoch keys, and live mailbox — the keyless-replica posture
   is the design target for future serving surfaces, not today's
-  composer (`docs/trust.md` T17).
+  composer (`docs/contracts/trust.md` T17).
 - Resigned identical capabilities are deduplicated at intake against the
   committed-capability projection before the per-pass fact budget is
   charged.
@@ -236,7 +236,7 @@ is length-guarded (`from_canonical_bytes` uses a `need(pos, n)` closure
 with `checked_add`, `crates/wyrd-format/src/membership.rs:369-375`), so
 an alpha.1 transition body **fails to decode** rather than misparsing.
 
-**What that means, precisely.** `docs/upgrade-contract.md:158-161`
+**What that means, precisely.** `docs/contracts/upgrade-contract.md:158-161`
 states it: "The `v0.1.0-alpha.1` fixture went out with the reader-set
 format break: pre-v1 alphas may break compatibility, and no legacy
 transition decoder is carried for unshipped software. The next release
@@ -259,7 +259,7 @@ Under invariant 10 that fails loudly as `UnknownVersion`, not a silent
 reinterpretation, and the `CapabilitySealedReplaced` tag is the one
 deliberate forward-compatibility exception: an old node skips `0x16` and
 keeps treating the superseded bytes as the obligation
-(`docs/upgrade-contract.md:102-140`). Both directions are documented;
+(`docs/contracts/upgrade-contract.md:102-140`). Both directions are documented;
 the tag boundary is pinned by
 `the_replacement_tag_is_a_clean_upgrade_boundary`.
 
@@ -277,7 +277,7 @@ change is per-relay accounting on send.
 
 **Verdict for §2.2.** The compatibility answer an operator needs is
 "alpha.1 drives do not open; they refuse loudly; here is why." That
-answer exists in `docs/upgrade-contract.md` and in **no** release-note
+answer exists in `docs/contracts/upgrade-contract.md` and in **no** release-note
 surface, because there are no release notes (§2.1). This is finding
 A-4.
 
@@ -305,14 +305,14 @@ The real drift runs the **other** way — README overclaims.
 
 | # | Location | False or stale statement | Proposed replacement (not applied) |
 |---|---|---|---|
-| D-1 | `README.md:71` | "* **Time Travel:** Historical snapshots and previous roots can be browsed using ordinary file manipulation tools." **False.** No operator surface reads back a non-head snapshot. `docs/cli.md:210-212` says so in as many words: "the unselected versions survive only inside the merge's parent heads, **which no v0 surface reads back**." `ROADMAP.md:374-377` assigns "historical snapshots, restore of previous versions, arbitrary snapshot browsing" to **v0.5**. The mount takes no snapshot selector (`mount` args: `crates/wyrd-cli/src/main.rs:88-103`); `export` takes none (`:109-116`); `DriveView` reads only its installed head vector (`crates/wyrd-fuse/src/view/drive.rs:31-35`, `:131-140`); the `@N` grammar is conflict-version selection among *current* heads, not history (`crates/wyrd-fuse/src/view/grammar.rs:1-12`, `:66-72`). | "* **Conflict Versioning:** when concurrent publishes produce multiple heads, both versions stay reachable and the mounted view and export address them as `name@N` siblings, numbered in SnapshotId byte order. Browsing arbitrary historical snapshots and restoring previous versions is **not** available in v0.2; it is v0.5 work (`ROADMAP.md`)." |
+| D-1 | `README.md:71` | "* **Time Travel:** Historical snapshots and previous roots can be browsed using ordinary file manipulation tools." **False.** No operator surface reads back a non-head snapshot. `docs/design/cli.md:210-212` says so in as many words: "the unselected versions survive only inside the merge's parent heads, **which no v0 surface reads back**." `ROADMAP.md:374-377` assigns "historical snapshots, restore of previous versions, arbitrary snapshot browsing" to **v0.5**. The mount takes no snapshot selector (`mount` args: `crates/wyrd-cli/src/main.rs:88-103`); `export` takes none (`:109-116`); `DriveView` reads only its installed head vector (`crates/wyrd-fuse/src/view/drive.rs:31-35`, `:131-140`); the `@N` grammar is conflict-version selection among *current* heads, not history (`crates/wyrd-fuse/src/view/grammar.rs:1-12`, `:66-72`). | "* **Conflict Versioning:** when concurrent publishes produce multiple heads, both versions stay reachable and the mounted view and export address them as `name@N` siblings, numbered in SnapshotId byte order. Browsing arbitrary historical snapshots and restoring previous versions is **not** available in v0.2; it is v0.5 work (`ROADMAP.md`)." |
 | D-2 | `README.md:133` | `crates/wyrd-fuse` described as "The drive as a filesystem: live view, **time travel**, visible conflicts." Same false claim, in the crate table. | "`crates/wyrd-fuse` \| Mount-free drive view: live projection, conflict-version lookup, visible conflicts. It links no transport — not even transitively (contract 34)." |
 | D-3 | `README.md:129-137` | The Repository Layout table lists **6 crates**; the workspace has **8**. `wyrd-core` (the embeddable node) and `wyrd-namespace` (the provider-neutral value model and verification-proof token) are both missing. | Add two rows: "`crates/wyrd-namespace` \| Provider-neutral namespace model: value types, the verified-head handle, the read surface every presentation backend serves. Depends on `wyrd-format` and `thiserror` only." and "`crates/wyrd-core` \| Embeddable local node: namespace, snapshots, mutations, materialization, sync control. Never FUSE, argument parsing, errno mapping, or process supervision." |
 | D-4 | `README.md:135` and `:212` | The CLI row and the closing prose describe the binary as "`init`, `mount`, `export`". It implements **~20** subcommands (`crates/wyrd-cli/src/main.rs:79-217`): `member`, `device`, `sync`, `pin`, `unpin`, `evict`, `cache`, `snapshot`, `remove`, `set-owner`, `resolve`, `invite`, `reissue-invitation`, `join`, `pairing-request`. | "`init`, `mount`, `export`, `member`, `device`, `sync`, `pin`/`unpin`/`evict`, `cache`, `snapshot`, diagnostics, exit codes over the daemon's surface." |
 | D-5 | `README.md:83-106` (Status) | Status names the mailbox, serving router, and mount but omits the headless surface, materialization policy, membership administration, and snapshot merge — the four largest user-visible additions. This is an omission, not a falsehood. | Add one sentence: "`wyrd sync status`/`now`, `wyrd member` administration, `wyrd snapshot merge`, and `wyrd pin`/`unpin`/`evict`/`cache` are also in place." |
 | D-6 | `README.md:269-275` ("What it is not") | "peer sync is not hardened (signer-session wiring is still open and live-internet relay evidence stays opt-in)". Both halves are true, but "not hardened" directly contradicts `ROADMAP.md:203-227`, where v0.2's whole thesis is "Trustworthy live synchronization" and the Ship list is largely landed. For an alpha this is defensible caution; for a *release cut* it under-sells. | "peer sync is bounded but not yet proven at scale: signer-session (NIP-46) wiring is still open, live-public-relay runs stay opt-in hand evidence rather than a gate, and the e2e partition/heal suite is not in CI." |
-| D-7 | `docs/cli.md:13-25` | The usage block **omits `wyrd snapshot` entirely**, although the body documents it at `docs/cli.md:172-218` and `crates/wyrd-cli/src/main.rs:136` defines it. | Add the line: `wyrd snapshot --identity-file <path> --passphrase-file <path> <drive_dir> (list | heads | plan [--head <id>...] | merge [--head <id>...] [--default @N] [--take path=@N]... [--drop path]...)` |
-| D-8 | `docs/epochs.md:443`, `:536`; `crates/wyrd-fuse/README.md:10-11`; `crates/wyrd-fuse/Cargo.toml:6`; `crates/wyrd-fuse/src/lib.rs:1` | Five more places assert that superseded/stranded/voided snapshots are "visible through time travel" / that the crate is "the live view and time travel". Same false claim as D-1, in the normative epoch doc and in a crate's own front matter. | Replace "visible through time travel" with "visible through the head listing (`wyrd snapshot heads`) with their classification and reason; their contents are never projected and never served to a live view". Replace "time travel" in the `wyrd-fuse` descriptions with "conflict-version lookup". |
+| D-7 | `docs/design/cli.md:13-25` | The usage block **omits `wyrd snapshot` entirely**, although the body documents it at `docs/design/cli.md:172-218` and `crates/wyrd-cli/src/main.rs:136` defines it. | Add the line: `wyrd snapshot --identity-file <path> --passphrase-file <path> <drive_dir> (list | heads | plan [--head <id>...] | merge [--head <id>...] [--default @N] [--take path=@N]... [--drop path]...)` |
+| D-8 | `docs/contracts/epochs.md:443`, `:536`; `crates/wyrd-fuse/README.md:10-11`; `crates/wyrd-fuse/Cargo.toml:6`; `crates/wyrd-fuse/src/lib.rs:1` | Five more places assert that superseded/stranded/voided snapshots are "visible through time travel" / that the crate is "the live view and time travel". Same false claim as D-1, in the normative epoch doc and in a crate's own front matter. | Replace "visible through time travel" with "visible through the head listing (`wyrd snapshot heads`) with their classification and reason; their contents are never projected and never served to a live view". Replace "time travel" in the `wyrd-fuse` descriptions with "conflict-version lookup". |
 
 D-7 and D-8 are inside `docs/` and `crates/`, which the brief scoped to
 README/ROADMAP; I include them because they are the same defect as D-1
@@ -322,9 +322,9 @@ claim in three places (`page/index.html:587`, `:613`, `:747-753`).
 
 **Not a finding, recorded so it is not re-filed:** `README.md:41-43`
 (peer-repair fallback) and `:46` (vault metadata) now match
-`docs/peer-repair.md` and `docs/trust.md` T17 closely enough that I found
+`docs/design/peer-repair.md` and `docs/contracts/trust.md` T17 closely enough that I found
 no claim to correct. `README.md:99-101`'s relay-pool description matches
-`crates/wyrd-core/src/mailbox/mod.rs` and `docs/sync-and-peers.md:67-79`.
+`crates/wyrd-core/src/mailbox/mod.rs` and `docs/contracts/sync-and-peers.md:67-79`.
 
 ## 2.4 ROADMAP's limitations paragraph vs the StoreLocked reality
 
@@ -364,7 +364,7 @@ honour `flock` such as some NFS/CIFS mounts) is not serialized.
 Pinned by `concurrent_open_is_rejected`, and
 `lock_releases_on_drop` (`crates/wyrd-sync/src/durable/tests.rs:63-88`),
 and observed from the CLI by `sync_status_refuses_a_locked_drive`
-(`crates/wyrd-cli/src/tests_sync.rs:375-387`). `docs/cli.md:265`, `:292-294`
+(`crates/wyrd-cli/src/tests_sync.rs:375-387`). `docs/design/cli.md:265`, `:292-294`
 and `:381-384` already state the exclusive-lock behaviour correctly, so
 this is a ROADMAP-only drift.
 
@@ -381,7 +381,7 @@ the notes can point rather than restate.
    past the relay's retention finds no event to fetch, and v0.2 provides
    **no re-push and pull path** for control messages never received.
    A refused obligation retries every pass with no ceiling, no backoff, and no attempt counter.
-   Documented: `docs/sync-and-peers.md:80-97`,
+   Documented: `docs/contracts/sync-and-peers.md:80-97`,
    `ROADMAP.md:252-261`. **Operator visibility: none.** `SyncStatus`
    (`crates/wyrd-core/src/status.rs`) reports the local tip, held epochs,
    and local obligations; it structurally cannot report what a peer is
@@ -396,8 +396,8 @@ the notes can point rather than restate.
    object recorded as local stays local, so a bitrotted object is a
    permanent read error in v0.2. `FetchStatus::Corrupt` and `Unavailable`
    are vocabulary only; `status()` never returns them.
-   Documented: `ROADMAP.md:232-241`, `docs/peer-repair.md:14-32`,
-   `docs/sync-and-peers.md:296-311`.
+   Documented: `ROADMAP.md:232-241`, `docs/design/peer-repair.md:14-32`,
+   `docs/contracts/sync-and-peers.md:296-311`.
 3. **Two failure cases, split normatively** — a known snapshot whose
    manifest chain cannot be materialized within the deadline fails
    `open()` bounded (`EIO`); an announcement whose body never arrives
@@ -405,7 +405,7 @@ the notes can point rather than restate.
    classifies `UnknownParent` and its paths never enter the projected
    namespace (`ENOENT`, never a hang). **Both end-to-end legs are
    self-declared UNVERIFIED** — see finding C-4.
-   Documented: `ROADMAP.md:242-252`, `docs/fetch-on-open.md:283-311`.
+   Documented: `ROADMAP.md:242-252`, `docs/design/fetch-on-open.md:283-311`.
 4. **Admission walks the live epoch chain's ancestry in one commit.**
    O(recorded history) allocation and one call, committed with
    the admission batch; past the 65,536-record per-commit ceiling the
@@ -414,7 +414,7 @@ the notes can point rather than restate.
    re-walk superseded chains — and therefore does not learn the old
    snapshot ids for those epochs. Not a v0.2 blocker: it needs a long
    single-epoch history plus an admission and violates no bound.
-   Documented: `ROADMAP.md:262-277`, `docs/resource-limits.md:82-108`.
+   Documented: `ROADMAP.md:262-277`, `docs/contracts/resource-limits.md:82-108`.
 5. **The local store is lock-guarded, not serialized against
    non-cooperating writers** (corrected text in §2.4).
 6. **Stranded local content has no sanctioned path back** until the v0.3
@@ -438,33 +438,33 @@ the notes can point rather than restate.
    This is an availability/enumeration property, not a confidentiality
    break: the holder already holds the epoch material that makes the
    ciphertext meaningful.
-   Documented: `docs/trust.md:868-873`, `:875-917`, T17 at `:983`;
+   Documented: `docs/contracts/trust.md:868-873`, `:875-917`, T17 at `:983`;
    `crates/wyrd-sync/src/serving.rs:759-782`.
    **The removed-device residue is stated nowhere else** — not in the
-   ROADMAP limitations, not in `docs/cli.md`'s `member remove` section.
+   ROADMAP limitations, not in `docs/design/cli.md`'s `member remove` section.
    New finding, below.
 8. **Peer roles are not wired.** `vault` and `mirror` are protocol
    vocabulary; the shipped serving surface is member-hosted. No operator
    surface declares a role.
-   Documented: `README.md:77`, `docs/sync-and-peers.md:169-186`.
+   Documented: `README.md:77`, `docs/contracts/sync-and-peers.md:169-186`.
 9. **Live bulk-fetch concurrency is unbounded**; backpressure is a
    per-pass byte and admission budget, not a semaphore.
-   Documented: `docs/resource-limits.md:26-30`, `:131-142`,
+   Documented: `docs/contracts/resource-limits.md:26-30`, `:131-142`,
    `ROADMAP.md:129-134`.
 10. **The retained-bytes quota is unset by default** and, when set,
     covers only the mounted write path: fetched bytes, the vault, the
     fact log, and pre-live `put_file`/`remove` all raise the count
     without a refusal, so the device's total is not bounded by that
     number.
-    Documented: `docs/resource-limits.md:57`,
-    `docs/storage-growth.md`.
+    Documented: `docs/contracts/resource-limits.md:57`,
+    `docs/design/storage-growth.md`.
 
 **New finding from this merge:**
 
 | # | Finding | Evidence |
 |---|---|---|
-| A-5 | **Removing a device does not stop it fetching content whose transport root it already learned, and this is stated in no operator-facing doc.** The serving endpoint has no per-requester check by design (`crates/wyrd-sync/src/serving.rs:759-769`), announcement history is append-only with no cryptographic invalidation (`docs/trust.md` T17), and the removal contract explicitly scopes out the snapshot-transfer half: "The snapshot-transfer half (announcement plus bulk fetch) is out of scope" (`crates/wyrd-contracts/src/removal_contracts.rs:6-9`). `docs/trust.md` frames the accepted consequence for *members* ("a member who can name a `StorageId` can request that ciphertext from any serving member") but never for a *removed* device. `docs/cli.md`'s `member remove` section says nothing about retained content or retained routes. | as cited |
-| A-6 | **`sync now` with no `--relay` exits 0 having done nothing**, pinned as success by `sync_now_on_quiet_drive_completes` (`crates/wyrd-cli/src/tests_sync.rs:681-688`). The only signal is `warning: no --relay given; control-plane intake stays idle` on **stderr** (`crates/wyrd-cli/src/main.rs:1730-1732`). A cron or systemd unit keying on exit status cannot distinguish this from a converged sync. `docs/cli.md:320-322` documents the flag's effect but not the automation hazard. | as cited |
+| A-5 | **Removing a device does not stop it fetching content whose transport root it already learned, and this is stated in no operator-facing doc.** The serving endpoint has no per-requester check by design (`crates/wyrd-sync/src/serving.rs:759-769`), announcement history is append-only with no cryptographic invalidation (`docs/contracts/trust.md` T17), and the removal contract explicitly scopes out the snapshot-transfer half: "The snapshot-transfer half (announcement plus bulk fetch) is out of scope" (`crates/wyrd-contracts/src/removal_contracts.rs:6-9`). `docs/contracts/trust.md` frames the accepted consequence for *members* ("a member who can name a `StorageId` can request that ciphertext from any serving member") but never for a *removed* device. `docs/design/cli.md`'s `member remove` section says nothing about retained content or retained routes. | as cited |
+| A-6 | **`sync now` with no `--relay` exits 0 having done nothing**, pinned as success by `sync_now_on_quiet_drive_completes` (`crates/wyrd-cli/src/tests_sync.rs:681-688`). The only signal is `warning: no --relay given; control-plane intake stays idle` on **stderr** (`crates/wyrd-cli/src/main.rs:1730-1732`). A cron or systemd unit keying on exit status cannot distinguish this from a converged sync. `docs/design/cli.md:320-322` documents the flag's effect but not the automation hazard. | as cited |
 
 A-6 is a real automation hazard for the "operated without a mounted
 FUSE filesystem" DoD clause, which is exactly where cron lives. Cheapest
@@ -494,7 +494,7 @@ disabled") resolved it:
 - `README.md:220-224` now says "Release archives … ship with ngit
   releases — but v0.2 publishes none: distribution is explicitly out of
   scope for this milestone … so there is nothing to download yet."
-- `docs/cli.md` and the ROADMAP do not need to change; the gate is
+- `docs/design/cli.md` and the ROADMAP do not need to change; the gate is
   enforced, not merely described.
 
 So the contradiction is closed, in the direction of the ROADMAP. The
@@ -506,7 +506,7 @@ misnamed artifact if someone tagged without bumping.
 for v0.2 and I would not argue against it. Shipping four per-platform
 tarballs on top of a release whose own release notes do not exist would
 create a distribution surface with no documented compatibility story —
-which is exactly the `docs/upgrade-contract.md:158-161` break, handed to
+which is exactly the `docs/contracts/upgrade-contract.md:158-161` break, handed to
 users as a download.
 
 ## 2.7 Does the pipeline produce what the release notes will claim?
@@ -568,7 +568,7 @@ actually does, with the code path.
 
 | Behavior | Modeled? | Supervisor behavior (cited) | Assessment |
 |---|---|---|---|
-| **Retention / eviction** | **No** — store is an unbounded `Vec` (`mini_relay.rs:45`, `:409`) | **Nothing.** No code path in `mailbox/mod.rs` tracks a relay's retention, and none could: the mailbox has no cursor to lose (`:29-32`) and redelivery is expected to come from relay replay. | The documented v0.2 hole. `ROADMAP.md:256-261`, `docs/sync-and-peers.md:95`. `disconnected_peer_acquires_missed_history_over_real_relay` proves acquisition **within** retention and says so itself (`tests_catchup.rs:29-32`). Accepted limitation; see B-1. |
+| **Retention / eviction** | **No** — store is an unbounded `Vec` (`mini_relay.rs:45`, `:409`) | **Nothing.** No code path in `mailbox/mod.rs` tracks a relay's retention, and none could: the mailbox has no cursor to lose (`:29-32`) and redelivery is expected to come from relay replay. | The documented v0.2 hole. `ROADMAP.md:256-261`, `docs/contracts/sync-and-peers.md:95`. `disconnected_peer_acquires_missed_history_over_real_relay` proves acquisition **within** retention and says so itself (`tests_catchup.rs:29-32`). Accepted limitation; see B-1. |
 | **Rate limiting / `OK false` with a reason** | Yes — `reject_writes` (`:218-225`, core at `:401-412`) | `send` classifies per relay into accepted / not-accepted with the relay's verbatim message, logs `mailbox send relay outcome` at debug (`mailbox/mod.rs:1659-1668`), returns `SendReport{accepted}`; the engine keeps the obligation **pending** when `accepted == 0` (`deliver.rs:172-179`) | **Covered.** `tests_delivery.rs:190-215` (zero acceptance, recipient hears nothing, accept mode resumes), `:248-270` (engine outbox through a live refusal: `deliver_pending` returns 0, `has_pending_outbound` true, then discharges), `:310-338` (log line carries the message verbatim), `tests_mailbox.rs:458-484` (classifier with one accepted + one refused). |
 | **NIP-42 auth challenges** | Partly — `challenge_auth` sends `AUTH` after replay, before `EOSE`, **then serves normally** (`mini_relay.rs:93-98`, `:442-444`) | Warns loudly, never answers (`mailbox/mod.rs:1135-1142`) — correct: answering signs with the device key, which `trust.md` forbids | Half-covered. `tests_delivery.rs:1351` asserts via `observed_frames` that the client never emits an `AUTH` frame. **Not** modeled as the composed real episode (challenge **then** `CLOSED`, which is what `relay.damus.io` does). The two halves are each modeled; the composition is not. Low risk. |
 | **Duplicate delivery** | Yes — two relays both broadcast the same wrap | `recv` collapses on seen / poison / held before a handover is minted (`mailbox/mod.rs:1688-1693`); the drainer listens to **both** SDK arms because `Message` fires for every `EVENT` frame including resubscribe replay (`:1089-1092`, pinned by `mailbox::tests_classification`) | **Covered.** `tests_multirelay.rs:54-65` asserts two payloads delivered exactly once then `assert_quiet`. |
@@ -577,7 +577,7 @@ actually does, with the code path.
 | **Subscription limits per connection** | No — subs are keyed `(conn, sub_id)` so many are accepted | Own defense: one stable subscription id per mailbox, `CLOSE` before `REQ` (`resubscribe`, `mailbox/mod.rs:1271-1291`) | **Covered.** `tests_catchup.rs:524-535` asserts `relay.subscription_count() == 2` for two mailboxes after a resubscribe; `saturation_recoveries_keep_single_subscription` (slow profile, passed). A relay that caps subscriptions sends `CLOSED`, now counted and surfaced (`closed_subscriptions`). |
 | **Connection drop mid-subscription** | Yes — `shutdown` aborts accept + core + every connection task; the per-connection task drives socket and outbound queue in one `select!`, so the abort always closes the socket (`:298-317`, and the comment there explains exactly this) | `stream_alive` false → `recover_stream` episode (fresh drainer, `client.connect()`, resubscribe, capped backoff, unbounded attempts); zero connected for 3 ticks → `recover_relays` episode (`mailbox/mod.rs:1396-1466`) | **Covered hermetically and in the slow profile.** `relay_outage_marks_down_and_recovery_redelivers`, `unacked_and_mid_recovery_mail_survive_stream_recovery`, `same_mailbox_acquires_missed_snapshots_across_relay_restart`. Slow profile: **9/9 pass** (I ran it). |
  | **Relays that accept but silently drop** | **No** — `reject_writes` answers `OK false`; there is no mode that answers `OK true`, stores nothing, and broadcasts nothing | **Indistinguishable from success on both sides.** The sender commits `Delivered` (accepted >= 1, `deliver.rs:185`); the recipient never receives; `MailboxHealth` has no counter for "delivered but never received" | **The sharpest remaining control-plane gap.** See finding B-2. |
-| **Event size limits relay-side** | No | Not reachable: Wyrd's own outbound bytes are bounded before send (`check_outbound_size`, `deliver.rs:148`, `:727`); an inbound oversize wrap is rejected at `check_relay_event_size` (`mailbox/mod.rs:272-301`) before NIP-59 unwrap, plus the SDK wire backstop (`:269`) | **Covered on the read side** (`docs/resource-limits.md:48-49`). The write side needs no relay cooperation. |
+| **Event size limits relay-side** | No | Not reachable: Wyrd's own outbound bytes are bounded before send (`check_outbound_size`, `deliver.rs:148`, `:727`); an inbound oversize wrap is rejected at `check_relay_event_size` (`mailbox/mod.rs:272-301`) before NIP-59 unwrap, plus the SDK wire backstop (`:269`) | **Covered on the read side** (`docs/contracts/resource-limits.md:48-49`). The write side needs no relay cooperation. |
 | **`since`/`until` filter handling** | Honored relay-side — `filter.match_event` is nostr's own matcher (`mini_relay.rs:462`, `:482`) | The mailbox sends **no** time cursor; no-cursor is a deliberate decision (`mailbox/mod.rs:29-32`) | **Non-issue.** Filter semantics are the crate's, not ours. |
 
 ## 3.3 What `tests_multirelay.rs` and `tests_delivery.rs` cover
@@ -682,7 +682,7 @@ sides.** Severity: real; the sharpest remaining control-plane gap, and
 - `MiniRelay` has no mode for it: `reject_writes` answers `OK false` (`mini_relay.rs:218-225`), `Inject` broadcasts (`:414-417`). The state "acknowledged, stored, never delivered" is not expressible.
 - On success the sender commits `Fact::{Announcement,Transition,Capability}Delivered` (`deliver.rs:185`), so the obligation is **permanently retired**.
 - The recipient never receives, and `MailboxHealth` (`mailbox/mod.rs:427-466`) exposes no counter that distinguishes this from a peer that is simply absent.
-- `docs/sync-and-peers.md:80-97` is precise about relay-*acceptance* being the maximum guarantee, but it never names this case: it says "Recipient received — not guaranteed unless separately acknowledged", which reads as a missing acknowledgement, not as a relay that acknowledged and dropped.
+- `docs/contracts/sync-and-peers.md:80-97` is precise about relay-*acceptance* being the maximum guarantee, but it never names this case: it says "Recipient received — not guaranteed unless separately acknowledged", which reads as a missing acknowledgement, not as a relay that acknowledged and dropped.
 
 This is the honest limit of the "relay-accepted" contract, and it is
 inherent to the design rather than a bug. But it belongs in the release
@@ -759,7 +759,7 @@ Every install site, and what each requires:
 
 ### 4.4 Fetch-walk alternate-representation fallback, and fallback, and the tests that pin it
 
-Located at `crates/wyrd-sync/src/runtime/fetch/mod.rs`, three nested fallbacks in one pass, all fail-closed (`docs/peer-repair.md:14-32`):
+Located at `crates/wyrd-sync/src/runtime/fetch/mod.rs`, three nested fallbacks in one pass, all fail-closed (`docs/design/peer-repair.md:14-32`):
 
 1. **Across representations of one content** — `fetch::object`, walk unit is the representation, not the provider (`fetch/mod.rs:358`).
 2. **Across routes of one representation** — transport root, then storage address (`fetch_representation`, `:285-299`). Oversize is representation-terminal; a zero-slice fallback grant does not mask the primary outcome (`:280-283`).
@@ -779,12 +779,12 @@ Located at `crates/wyrd-sync/src/runtime/fetch/mod.rs`, three nested fallbacks i
 | Repeated invalid reps back off; deadline slices burn budget without striking | `repeatedly_invalid_representations_back_off` (`:473`), `deadline_slices_burn_backoff_without_striking`, `deadlines_count_per_representation_not_per_item` (`:1070`) |
 | Bounded `EIO` at the POSIX boundary on deadline | `wait_returns_on_success_and_on_deadline` (`core/src/want.rs`), `read_deadline_is_eio_and_releases_the_want` (`daemon/src/fuse/tests_want.rs`) |
 
-**C-4 — two end-to-end legs are self-declared UNVERIFIED, and the ROADMAP's limitations paragraph leans on both.** This is the most substantive finding in this section, because the limitations text says "The case split is normative in `docs/fetch-on-open.md`" — and the doc says the two legs have no test.
+**C-4 — two end-to-end legs are self-declared UNVERIFIED, and the ROADMAP's limitations paragraph leans on both.** This is the most substantive finding in this section, because the limitations text says "The case split is normative in `docs/design/fetch-on-open.md`" — and the doc says the two legs have no test.
 
-`docs/fetch-on-open.md:293-296`, on the manifest-chain case:
+`docs/design/fetch-on-open.md:293-296`, on the manifest-chain case:
 > "a manifest-chain `open()` blocking all the way to `EIO` has no dedicated test and is unverified until one lands."
 
-`docs/fetch-on-open.md:308-311`, on the body-never-arrives case:
+`docs/design/fetch-on-open.md:308-311`, on the body-never-arrives case:
 > "(No dedicated test pins the body-never-arrives adoption stall end to end; the classification half is pinned by the authorization conformance suite. Treat the end-to-end stall as unverified until such a test lands.)"
 
 Severity: this is an **evidence** gap, not a defect, and the doc is scrupulously honest about it — which is why I am reporting it as evidence rather than as a bug. But a release whose limitations paragraph is the user-facing version of those two cases, and whose own design doc says the end-to-end legs are unverified, has a DoD clause resting on unproven ground. Fix: two tests. Sketches (not code, per the brief):
@@ -804,7 +804,7 @@ Constructed from the code, ranked. For each I say whether a test exists — and 
 
 **Refuted candidate I want on the record:** *self-removal or mid-fetch membership transition invalidating an in-flight fetch*. I looked for a membership check in the fetch plan and there is none. `execute_inner` rebuilds from durable facts each outer iteration and takes its keyring from `rebuilt.keyring` (`runtime/plan/mod.rs:75-77`). So a device removed at epoch N+1 keeps fetching content sealed under epoch N, because it already holds epoch N's key.
 
-That is by design, not a gap. `docs/trust.md` states the boundary as "revocation bounds acquisition": removal stops new secrets arriving, it does not unlearn held ones. The same mechanism appears as the late-joiner horizon in `ROADMAP.md:262-271`, which is documented and tracked.
+That is by design, not a gap. `docs/contracts/trust.md` states the boundary as "revocation bounds acquisition": removal stops new secrets arriving, it does not unlearn held ones. The same mechanism appears as the late-joiner horizon in `ROADMAP.md:262-271`, which is documented and tracked.
 
 **Verdict: refuted. Not a finding, no test needed.** I record it so the next pass does not file it.
 
@@ -814,7 +814,7 @@ That is by design, not a gap. `docs/trust.md` states the boundary as "revocation
 
 **`sync now` does:** opens the keystore (`Engine::open_keystore`), composes `WyrdNode<DriveView<FsObjectStore, RuntimeMaterialization>>`, calls `refresh_live_heads()`, then `into_live(Duration::from_secs(30), &LiveConfig::for_local_sync())`, drops the presentation parts, connects `LiveMailbox` over the given relays, binds a real `IrohBulkSource`, and calls `drive_quiet`. It **does not** bind a serving endpoint, opens no FUSE session, and never reads or mounts anything (`crates/wyrd-cli/src/main.rs:1701-1785`).
 
-**Documented behavior confirmed in code:** route-less authoring. `sync_now` passes no route, so announcements carry no `node_addr` and peers see them as known-but-unfetchable until a mount publishes a route via the normal route-update path (`main.rs:1695-1700`; `docs/cli.md:324-333`).
+**Documented behavior confirmed in code:** route-less authoring. `sync_now` passes no route, so announcements carry no `node_addr` and peers see them as known-but-unfetchable until a mount publishes a route via the normal route-update path (`main.rs:1695-1700`; `docs/design/cli.md:324-333`).
 
 **The two-peer-neither-mounts scenario: they cannot converge on content.** Both announce route-less; each records the other's announcement; both report the head as unfetchable; neither can fetch. Control-plane convergence (membership, transitions, announcements, capabilities) **does** happen — that part works headlessly. Content acquisition does not.
 
@@ -822,9 +822,9 @@ That is by design, not a gap. `docs/trust.md` states the boundary as "revocation
 
 **Exit-code semantics.** `RunOutcome::{Quiet, RemoteStalled}` → `Ok(())`; `PassLimit` → `CliError::Incomplete` → exit 2 (`main.rs:1663-1671`). Automation hazards, all real:
 
-1. **`RemoteStalled` exits 0.** The run prints `completed: quiet with N unfetchable heads (known but not local)`. A cron unit keying on exit status reads success while the drive is permanently stale. `docs/cli.md:307` documents this explicitly ("automate on the `unfetchable heads` count, not the exit status") — the hazard is documented, but stdout-only automation still gets it wrong.
+1. **`RemoteStalled` exits 0.** The run prints `completed: quiet with N unfetchable heads (known but not local)`. A cron unit keying on exit status reads success while the drive is permanently stale. `docs/design/cli.md:307` documents this explicitly ("automate on the `unfetchable heads` count, not the exit status") — the hazard is documented, but stdout-only automation still gets it wrong.
 2. **`sync now` with no `--relay` exits 0 having done nothing** — pinned as success by `sync_now_on_quiet_drive_completes` (`tests_sync.rs:681-688`). The only signal is a **stderr** warning (`main.rs:1730-1732`). This is finding **A-6** and it is the one that bites cron, which is exactly where the DoD clause points.
-3. **A relay-closed subscription keeps exit 0 and is visible only on stdout.** The run prints `mailbox: degraded (1 of 1 relays connected, 1 subscription closed by relay)` *before* the report (`main.rs:1747-1764`), and `docs/cli.md:271-274` says the exit status reflects the local run only. Attachment looks healthy while intake is dead — a correct design choice (nothing auto-resubscribes a policy close) with a real automation trap.
+3. **A relay-closed subscription keeps exit 0 and is visible only on stdout.** The run prints `mailbox: degraded (1 of 1 relays connected, 1 subscription closed by relay)` *before* the report (`main.rs:1747-1764`), and `docs/design/cli.md:271-274` says the exit status reflects the local run only. Attachment looks healthy while intake is dead — a correct design choice (nothing auto-resubscribes a policy close) with a real automation trap.
 4. `sync status` cannot be mistaken for liveness: it prints "liveness visible on sync now or mount" (`main.rs:1620-1623`) and never connects.
 
 **Does `sync now` need FUSE?** No. `cargo tree -i fuser` shows `fuser` reached only from `wyrd-cli`, `wyrd-daemon`, and `wyrd-contracts`. `wyrd-sync` and `wyrd-core` reach no `fuser` at all; `wyrd-namespace` depends only on `wyrd-format`. `sync now`'s call graph never touches the FUSE adapter. (The `wyrd` binary still *links* fuser because `main.rs` also hosts `mount` — a link-graph fact, not a dependency of `sync now`.)
@@ -840,7 +840,7 @@ That is by design, not a gap. `docs/trust.md` states the boundary as "revocation
 
 Every decoder guards before slicing: `control/message.rs` (`need` with `checked_add`; `blob` caps pre-allocation at `1 << 20`), `control/{mod,bootstrap,rotation,nip46}.rs`, `keys/capability/{model,encoding}.rs`, `manifest.rs`, `tree.rs`, `snapshot.rs`, `membership.rs`, `envelope.rs`, `seal.rs`, `durable/codec.rs`. The highest-risk surface — peer-supplied `node_addr` — uses `.get(..)` throughout and re-encodes to compare against the input bytes (`transport/addr.rs:90-137`), so non-canonical spellings, duplicates, and trailing garbage all fail closed. Two 32-bit-only `usize` overflow shapes exist (`transport/addr.rs:128`, `control/bootstrap.rs:292`) that cannot fire on any supported target.
 
-**Limits and enforcement.** Read-side is thorough and each bound names its enforcer: mailbox wire 512 KiB (SDK), relay event 256 KiB (`check_relay_event_size`, `mailbox/mod.rs:272-301`), notification channel 1024, held handovers 1024, poison cache 4096, NIP-44 ciphertext 96 KiB and opened bytes 64 KiB (`MAX_MAILBOX_CIPHERTEXT_LEN`/`MAX_MAILBOX_OPEN_BYTES`), intake commits 1024/pass and 256/sender/pass, engine pending 1024, bulk `Limits::V0`, serving mirror queue 64 items / 64 MiB. All documented in `docs/resource-limits.md:37-58` with the tests named. **Untested limit: none that I could find** — the one place the honest gap sits is not a missing limit but a missing *behavior* (B-2).
+**Limits and enforcement.** Read-side is thorough and each bound names its enforcer: mailbox wire 512 KiB (SDK), relay event 256 KiB (`check_relay_event_size`, `mailbox/mod.rs:272-301`), notification channel 1024, held handovers 1024, poison cache 4096, NIP-44 ciphertext 96 KiB and opened bytes 64 KiB (`MAX_MAILBOX_CIPHERTEXT_LEN`/`MAX_MAILBOX_OPEN_BYTES`), intake commits 1024/pass and 256/sender/pass, engine pending 1024, bulk `Limits::V0`, serving mirror queue 64 items / 64 MiB. All documented in `docs/contracts/resource-limits.md:37-58` with the tests named. **Untested limit: none that I could find** — the one place the honest gap sits is not a missing limit but a missing *behavior* (B-2).
 
 ### Serving router
 
@@ -851,20 +851,20 @@ The endpoint has **no per-requester admission, by design**. `Router::builder(...
 - every request on the wire names its hash, so the (address, hash) pairs that make a lookup possible travel only inside sealed announcements, addressed to members and readers
 - the push half lands nothing: pushes through the public client never register in the mirror. Pinned behaviorally by `serving_mount_refuses_push_and_leaves_the_mirror_unchanged`, with the comment noting that upstream's `push: Disabled` in `EventMask::DEFAULT` is *not* consulted on the request path in iroh-blobs 0.103.0 — so the test, not the mask, is what carries the posture across a dependency bump
 
-**Can a non-member obtain ciphertext?** Only if they already know both a transport root and a reachable endpoint id. A non-member who knows neither cannot: roots are inside sealed announcements, and the iroh node key is a fresh ephemeral per endpoint, published only inside those sealed announcements — never inferable from the wire, and distinct from device identity (`docs/trust.md:911-914`).
+**Can a non-member obtain ciphertext?** Only if they already know both a transport root and a reachable endpoint id. A non-member who knows neither cannot: roots are inside sealed announcements, and the iroh node key is a fresh ephemeral per endpoint, published only inside those sealed announcements — never inferable from the wire, and distinct from device identity (`docs/contracts/trust.md:911-914`).
 
 **Can a removed device?** This is finding **A-5**, and it is the part no operator-facing doc states:
 
 - The endpoint cannot know who is asking, so removal cannot be enforced there. `trust.md:868-873` frames the accepted consequence for a **member** — "a member who can name a `StorageId` can request that ciphertext from any serving member" — and calls it "an availability and enumeration property, not a confidentiality break," because the holder already has the epoch material.
 - That argument was never extended to a **removed** device. Announcement history is append-only with no cryptographic invalidation (T17), so a removed device retains its old route bytes and every root it ever learned, and can keep fetching those forever.
-- It cannot learn *new* roots: announcements bound to epochs after its removal are sealed under keys it never receives, so it cannot open them. Removal bounds acquisition; it does not revoke retained knowledge. That is a coherent position — it is the standard revocation boundary, and `docs/trust.md` states the principle elsewhere ("revocation bounds acquisition").
+- It cannot learn *new* roots: announcements bound to epochs after its removal are sealed under keys it never receives, so it cannot open them. Removal bounds acquisition; it does not revoke retained knowledge. That is a coherent position — it is the standard revocation boundary, and `docs/contracts/trust.md` states the principle elsewhere ("revocation bounds acquisition").
 - The removal contract explicitly scopes out the half that would pin it: "The snapshot-transfer half (announcement plus bulk fetch) is out of scope" (`crates/wyrd-contracts/src/removal_contracts.rs:6-9`).
 
-So: **not a confidentiality break, not a defect, and not a new capability.** It is a missing sentence. The cheapest honest fix is one line in `docs/cli.md`'s `member remove` section, and one in the merged limitations list from Task A:
+So: **not a confidentiality break, not a defect, and not a new capability.** It is a missing sentence. The cheapest honest fix is one line in `docs/design/cli.md`'s `member remove` section, and one in the merged limitations list from Task A:
 
 > Removal bounds acquisition, not knowledge: a removed device keeps its local plaintext, and can keep fetching any content whose transport root it learned before removal, from any serving member that still answers. It learns no new roots — announcements bound to epochs after its removal are sealed under keys it never receives.
 
-**Against the README claim.** `README.md:46` The claim at `README.md:46` **holds**, and it matches `docs/trust.md:894-917` item for item:
+**Against the README claim.** `README.md:46` The claim at `README.md:46` **holds**, and it matches `docs/contracts/trust.md:894-917` item for item:
 
 - object kinds are a deliberate leak: the sealed header carries a cleartext `kind` byte, so a vault classifies every blob it holds
 - ciphertext sizes leak because there is no padding in v0
@@ -872,7 +872,7 @@ So: **not a confidentiality break, not a defect, and not a new capability.** It 
 - no cryptographic linkability exists between two blobs, or between a blob and a drive
 - ContentIds, paths, tree structure never appear
 
-One word could mislead. README says "vaults," but the shipped serving surface is member-hosted: it opens from a member process holding the identity, epoch keys, and live mailbox (`WyrdNode::open_serving`). `docs/trust.md:882-887` flags this itself and says the keyless replica is the posture future serving surfaces must preserve, not a description of the current composer. README:77 covers it ("the dedicated vault-peer role surface is not yet wired at runtime").
+One word could mislead. README says "vaults," but the shipped serving surface is member-hosted: it opens from a member process holding the identity, epoch keys, and live mailbox (`WyrdNode::open_serving`). `docs/contracts/trust.md:882-887` flags this itself and says the keyless replica is the posture future serving surfaces must preserve, not a description of the current composer. README:77 covers it ("the dedicated vault-peer role surface is not yet wired at runtime").
 
 **Verdict: accurate.** No correction needed.
 
@@ -909,7 +909,7 @@ busy mountpoint returns `EBUSY`, the code prints
 `server.join()` waits for a session loop the kernel never tore down.
 
 **Is it surfaced to the operator?** Partially, and this is worth
-recording precisely. `docs/cli.md:40-42` is explicit:
+recording precisely. `docs/design/cli.md:40-42` is explicit:
 
 > "A process holding a file open on the mount delays the session join
 > until it closes — unmount refuses a busy mount — so SIGINT waits for the
@@ -942,7 +942,7 @@ resolve instead of hanging the join
 
 ### 7.2 Crash windows
 
-`docs/crash-consistency.md` enumerates them and names a pinning test
+`docs/contracts/crash-consistency.md` enumerates them and names a pinning test
 for each. Every window in that document has a test; I verified the
 mapping while reading it.
 

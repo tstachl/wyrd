@@ -1,4 +1,4 @@
-//! The snapshot authorization engine (see `docs/epochs.md`, Layer 3).
+//! The snapshot authorization engine (see `docs/contracts/epochs.md`, Layer 3).
 //!
 //! A pure, deterministic classification of the observed snapshot DAG
 //! against the observed membership log: every verdict is a function of

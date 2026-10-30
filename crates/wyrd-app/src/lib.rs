@@ -3,7 +3,7 @@
 //! One owner process holds the store's exclusive lock for its lifetime,
 //! runs the live loop and the serving surface under the daemon's
 //! supervision, and quits in the mount's teardown order
-//! (`docs/cli.md:48-56`), folding every outcome into the exit status.
+//! (`docs/design/cli.md:48-56`), folding every outcome into the exit status.
 //! This crate is the owner process, not the management UI and not a
 //! platform adapter: the window attaches later as a non-owner consumer
 //! of the drive-owner interface (issue 16), and the File Provider
