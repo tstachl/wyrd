@@ -85,7 +85,6 @@ relayRole = "relay"
 img-peer-o = "images.peer-o"
 img-peer-n = "images.peer-n"
 img-relay = "images.relay"
-
 # The drive-service evidence task: one provisioned microVM guest
 # declaring a vault and a mount through services.wyrd.drives. Data
 # only, same contract as the e2e task: the gate runner reads this
@@ -110,7 +109,6 @@ runner-drive = "nixosConfigurations.wyrd-drive-vm.config.microvm.runner.qemu"
 [tasks.wyrd-drive-e2e.topology]
 version = 1
 boxes = ["drive"]
-
 [tasks.wyrd-drive-e2e.topology.box.drive]
 vcpu = 2
 mem_mb = 2048
