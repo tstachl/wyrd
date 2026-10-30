@@ -576,9 +576,11 @@ it *guarantees*: retention promises wait for the DG-4 decision, and
 the help text makes no retention claim. No liveness handle, no
 daemonization: supervision owns the pid (`systemd`/`launchd` track
 and restart it). One vault or mount per drive, enforced by the
-kernel-held store lock: a second `vault` against a held drive exits
-2 promptly, naming the drive (`another wyrd process holds ...: only
-one vault or mount per drive`). The lock dies with its process, so
+kernel-held store lock: a second opener against a held drive exits
+78 (`EX_CONFIG`, the drive-already-owned code a supervisor must not
+retry), naming the drive (`another wyrd process holds ...: only
+one vault or mount per drive`). Every other failure exits 2; a
+clean stop exits 0. The lock dies with its process, so
 a crash leaves no stale record — but a held lock proves only
 occupancy, never health or convergence. A restart mints a new
 endpoint, so the vault re-announces obligations discharged against
@@ -857,6 +859,13 @@ passphrase_file = "/etc/wyrd/passphrase"
 - `mount` initializes structured diagnostics first: events to stderr
   plus `drive_dir/mount.log`, truncated per mount (one mount, one
   log — no rotation code). Init, export, member, and device log nothing to disk.
+  A running mount publishes `drive_dir/mount.posture` beside it: the
+  vault sidecar's schema and freshness bound, minus the serving
+  endpoint a mount never has. `mount ready` on stderr marks the
+  first completed pass; `mount posture` lines follow on the posture
+  interval. The sidecar lets a supervisor read liveness-adjacent
+  facts without opening the store, the way `vault status` reads the
+  vault's.
   `vault` logs to stderr always, plus an appended operator-chosen
   file under `--log-file` — never a drive-resident default, never
   truncated: a restart must not destroy the previous run's record.

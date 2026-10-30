@@ -369,10 +369,12 @@ fn vault_log_file_appends_across_restarts() {
 }
 
 /// A second vault against a held drive is refused promptly with the
-/// drive named (issue `22b`): the kernel-held store lock is definite
-/// contention, never a stale record, and the try-lock is
-/// non-blocking, so refusal must not hang behind iroh or relay work.
-/// After the holder exits the drive opens again.
+/// drive-already-owned code and the drive named (issue `22b` and
+/// OD-34-C): the kernel-held store lock is definite contention, never
+/// a stale record, and the try-lock is non-blocking, so refusal must
+/// not hang behind iroh or relay work. The supervisor contract keys
+/// on this code alone, so it is 78 (`EX_CONFIG`), not 2. After the
+/// holder exits the drive opens again.
 #[test]
 fn vault_second_process_is_refused() {
     let fixture = Fixture::new("locked");
@@ -413,7 +415,11 @@ fn vault_second_process_is_refused() {
         &mut stderr,
     )
     .expect("stderr reads");
-    assert_eq!(status.code(), Some(2), "contention exits 2, got {status:?}");
+    assert_eq!(
+        status.code(),
+        Some(78),
+        "contention exits with the drive-already-owned code, got {status:?}"
+    );
     assert!(
         stderr.contains("another wyrd process holds")
             && stderr.contains(fixture.drive.to_str().unwrap()),

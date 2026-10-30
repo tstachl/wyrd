@@ -43,6 +43,12 @@ use super::vault::POSTURE_INTERVAL;
 /// File name of the posture sidecar inside the drive directory.
 pub const POSTURE_FILENAME: &str = "vault.posture";
 
+/// File name of the mount-mode posture sidecar. Same schema and same
+/// freshness bound as the vault sidecar (OD-34-B): a mount has no
+/// serving endpoint, so its `serving_id` field stays empty and the
+/// reader accepts that.
+pub const MOUNT_POSTURE_FILENAME: &str = "mount.posture";
+
 /// Schema version the reader accepts. A version bump means the old
 /// reader reports the file malformed (safe: unavailable, never a
 /// false claim), never a best-effort reinterpretation.
@@ -68,6 +74,12 @@ const _: () = assert!(
 /// and takes no lock.
 pub fn sidecar_path(drive_dir: &Path) -> PathBuf {
     drive_dir.join(POSTURE_FILENAME)
+}
+
+/// Deterministic per-drive mount sidecar path. Same guarantees as
+/// [`sidecar_path`]: no store open, no lock.
+pub fn mount_sidecar_path(drive_dir: &Path) -> PathBuf {
+    drive_dir.join(MOUNT_POSTURE_FILENAME)
 }
 
 /// Seconds since the Unix epoch. Wall clock, not `Instant`: the file
@@ -177,13 +189,24 @@ impl PostureRecorder {
     /// cannot mint an instance id must not start borrowing the
     /// previous instance's posture.
     pub fn new(drive_dir: &Path, serving_id: String) -> io::Result<Self> {
+        Self::at_path(sidecar_path(drive_dir), serving_id)
+    }
+
+    /// Claim the mount sidecar for a new process instance. Same
+    /// contract as [`PostureRecorder::new`], minus the serving
+    /// endpoint a mount never has: the serving id stays empty and
+    /// the reader accepts that (see [`read_posture`]).
+    pub fn new_mount(drive_dir: &Path) -> io::Result<Self> {
+        Self::at_path(mount_sidecar_path(drive_dir), String::new())
+    }
+
+    fn at_path(path: PathBuf, serving_id: String) -> io::Result<Self> {
         let mut id = [0u8; 16];
         // getrandom 0.2's error carries no std impl, so the mapping
         // names the failure statically: entropy is either available
         // or the platform is broken, and the detail adds nothing.
         getrandom::getrandom(&mut id)
             .map_err(|_| io::Error::other("platform entropy unavailable"))?;
-        let path = sidecar_path(drive_dir);
         let mut tmp = path.as_os_str().to_owned();
         tmp.push(".tmp");
         Ok(PostureRecorder {
@@ -339,21 +362,23 @@ pub enum ProcessPosture {
 /// absent or malformed sidecar still describes, never names. The
 /// `vault status` process section keeps its own multi-line rendering
 /// for the stopped-drive surface; this is the one-line refusal form.
+/// A mount-mode sidecar carries no serving id, so the rendering names
+/// the mode instead of an empty id.
 pub fn describe_holder(posture: &ProcessPosture) -> String {
     match posture {
         ProcessPosture::Fresh(file) => {
             let age = now_unix().saturating_sub(file.posture_unix());
             format!(
-                "process {} (serving {}, posture {}s ago; liveness unverified)",
+                "process {} ({}, posture {}s ago; liveness unverified)",
                 file.instance(),
-                file.serving_id(),
+                serving_sentence(file),
                 age
             )
         }
         ProcessPosture::Stale(file, age) => format!(
-            "process {} (serving {}, last recorded {}s ago; liveness unverified)",
+            "process {} ({}, last recorded {}s ago; liveness unverified)",
             file.instance(),
-            file.serving_id(),
+            serving_sentence(file),
             age
         ),
         ProcessPosture::Absent => {
@@ -363,6 +388,53 @@ pub fn describe_holder(posture: &ProcessPosture) -> String {
             "posture unreadable (sidecar present but not schema v1; liveness unverified)"
                 .to_string()
         }
+    }
+}
+
+/// The serving half of the holder sentence: the id for a vault, the
+/// mode for a mount, whose sidecar carries no serving endpoint.
+fn serving_sentence(file: &PostureFile) -> String {
+    if file.serving_id().is_empty() {
+        "mount mode, no serving endpoint".to_string()
+    } else {
+        format!("serving {}", file.serving_id())
+    }
+}
+
+/// Which process holds the drive, across both modes: read the vault
+/// and mount sidecars and describe the fresher claim (fresh beats
+/// stale, newer beats older, any claim beats none). A vault and a
+/// mount can hold one drive in sequence — never together, the lock
+/// forbids that — so the older file is the previous holder, not a
+/// second owner. Opens sidecars only: no store, no lock.
+pub fn describe_drive_holder(drive_dir: &Path) -> String {
+    let vault = read_posture(&sidecar_path(drive_dir));
+    let mount = read_posture(&mount_sidecar_path(drive_dir));
+    describe_holder(&fresher(vault, mount))
+}
+
+/// The stronger of two posture claims: fresh beats stale, and of two
+/// same-kind claims the newer write wins. Absent and malformed carry
+/// no facts, so any parsed claim outranks both.
+fn fresher(first: ProcessPosture, second: ProcessPosture) -> ProcessPosture {
+    fn rank(posture: &ProcessPosture) -> (u8, u64) {
+        match posture {
+            // Fresh first, then by recency (smaller age wins, so
+            // negate through the bound).
+            ProcessPosture::Fresh(file) => (
+                2,
+                POSTURE_FRESHNESS
+                    .as_secs()
+                    .saturating_sub(now_unix().saturating_sub(file.posture_unix())),
+            ),
+            ProcessPosture::Stale(_, age) => (1, u64::MAX.saturating_sub(*age)),
+            ProcessPosture::Absent | ProcessPosture::Malformed => (0, 0),
+        }
+    }
+    if rank(&second) > rank(&first) {
+        second
+    } else {
+        first
     }
 }
 
@@ -379,10 +451,13 @@ pub fn read_posture(path: &Path) -> ProcessPosture {
         Ok(file) => file,
         Err(_) => return ProcessPosture::Malformed,
     };
+    // An empty serving id is a mount-mode sidecar (OD-34-B): a mount
+    // has no serving endpoint, so the field stays empty by contract.
+    // A vault always writes its id, so emptiness never excuses a
+    // vault file — it only admits the mount shape.
     if file.schema != SCHEMA_VERSION
         || file.instance.len() != 32
         || file.instance.bytes().any(|byte| !byte.is_ascii_hexdigit())
-        || file.serving_id.is_empty()
     {
         return ProcessPosture::Malformed;
     }
@@ -454,7 +529,11 @@ pub fn render_process_section(posture: &ProcessPosture, proven_free: bool) -> St
 /// prints filesystem paths (`docs/cli.md`).
 fn render_posture_facts(out: &mut String, file: &PostureFile) {
     out.push_str(&format!("process: instance: {}\n", file.instance));
-    out.push_str(&format!("process: serving: {}\n", file.serving_id));
+    if file.serving_id.is_empty() {
+        out.push_str("process: serving: none (mount mode)\n");
+    } else {
+        out.push_str(&format!("process: serving: {}\n", file.serving_id));
+    }
     out.push_str(&format!("process: started: {}\n", file.started_unix));
     match file.ready_unix {
         Some(ready) => out.push_str(&format!("process: ready: {ready}\n")),
@@ -844,6 +923,87 @@ mod tests {
         assert!(
             describe_holder(&read_posture(&sidecar(&dir))).contains("unreadable"),
             "malformed describes, never names"
+        );
+    }
+
+    /// Forge a mount-mode sidecar: same schema, empty serving id.
+    fn forge_mount(dir: &TempDir, posture_unix: u64) {
+        let file = serde_json::json!({
+            "schema": 1,
+            "instance": "fedcba9876543210fedcba9876543210",
+            "serving_id": "",
+            "started_unix": posture_unix - 10,
+            "ready_unix": posture_unix - 5,
+            "last_pass_unix": posture_unix,
+            "last_pass_verdict": "ok",
+            "last_pass_class": null,
+            "last_pass_consecutive": null,
+            "passes": 7,
+            "errors": 1,
+            "sent": 2,
+            "uptime_secs": 96,
+            "posture_unix": posture_unix,
+        });
+        fs::write(
+            mount_sidecar_path(&dir.0),
+            serde_json::to_vec(&file).unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn mount_sidecar_reads_fresh_without_a_serving_id() {
+        let dir = TempDir::new();
+        let recorder = PostureRecorder::new_mount(&dir.0).unwrap();
+        recorder.note_startup();
+        recorder.note_ready();
+        recorder.note_posture(7, 1, 2, 96);
+        match read_posture(&mount_sidecar_path(&dir.0)) {
+            ProcessPosture::Fresh(file) => assert!(
+                file.serving_id().is_empty(),
+                "mount mode carries no serving endpoint"
+            ),
+            other => panic!("mount sidecar must read fresh, got {other:?}"),
+        }
+        assert!(
+            describe_holder(&read_posture(&mount_sidecar_path(&dir.0)))
+                .contains("mount mode, no serving endpoint"),
+            "the holder sentence names the mode, never an empty id"
+        );
+    }
+
+    #[test]
+    fn drive_holder_describes_the_fresher_sidecar() {
+        let dir = TempDir::new();
+        assert!(
+            describe_drive_holder(&dir.0).contains("no posture recorded"),
+            "no sidecars describes, never names"
+        );
+        forge(
+            &dir,
+            now_unix().saturating_sub(10_000),
+            serde_json::json!({}),
+        );
+        assert!(
+            describe_drive_holder(&dir.0).contains("0123456789abcdef0123456789abcdef"),
+            "a lone stale vault claim still describes the holder"
+        );
+        forge_mount(&dir, now_unix());
+        let holder = describe_drive_holder(&dir.0);
+        assert!(
+            holder.contains("fedcba9876543210fedcba9876543210") && holder.contains("mount mode"),
+            "the fresh mount outranks the stale vault: {holder}"
+        );
+    }
+
+    #[test]
+    fn render_names_mount_mode_for_an_empty_serving_id() {
+        let dir = TempDir::new();
+        forge_mount(&dir, now_unix());
+        let rendered = render_process_section(&read_posture(&mount_sidecar_path(&dir.0)), false);
+        assert!(
+            rendered.contains("process: serving: none (mount mode)"),
+            "the status surface never prints a bare empty id:\n{rendered}"
         );
     }
 }

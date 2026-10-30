@@ -27,9 +27,14 @@
     # nested KVM — the gate runs on a real Linux host (odin).
     microvm.url = "github:microvm-nix/microvm.nix";
     microvm.inputs.nixpkgs.follows = "nixpkgs";
+    # Service-module framework for the declarative drive module
+    # (34): pinned to the 26.05 release to match nixpkgs, same as
+    # every other input follows the same channel.
+    darwin.url = "github:lnl7/nix-darwin/nix-darwin-26.05";
+    darwin.inputs.nixpkgs.follows = "nixpkgs";
   };
 
-  outputs = { self, nixpkgs, crane, rust-overlay, microvm, wyrdSrc, ... }:
+  outputs = { self, nixpkgs, crane, rust-overlay, microvm, darwin, wyrdSrc, ... }:
     let
       # Product platforms. x86_64-darwin is deliberately absent even though
       # rust-toolchain.toml lists the target: no builder covers it, so it
@@ -197,6 +202,49 @@
         # the gate introduced, on the platform that runs it.
         wyrd-microvm-nak = self.packages.${system}.nak;
       });
+      # Declarative drive services (34): one module, two modes, one
+      # declaration per drive. The same file serves NixOS and
+      # nix-darwin, selected on `stdenv` inside.
+      nixosModules.wyrd-drive = import ./nix/drive/nixos.nix;
+      darwinModules.wyrd-drive = import ./nix/drive/darwin.nix;
+      nixosModules.default = self.nixosModules.wyrd-drive;
+      darwinModules.default = self.darwinModules.wyrd-drive;
+      # Module evaluation fixtures for the shell gate
+      # (tests/test-wyrd-module.sh): minimal machines declaring one
+      # vault and one mount each, evaluated but never built. The
+      # NixOS fixture joins nixosConfigurations below; the Darwin
+      # fixture is the top-level darwinConfigurations.
+      darwinConfigurations.wyrd-drive-test = darwin.lib.darwinSystem {
+        system = "aarch64-darwin";
+        modules = [
+          self.darwinModules.wyrd-drive
+          (
+            { pkgs, ... }:
+            {
+              system.stateVersion = 6;
+              services.wyrd.drives = {
+                vault-demo = {
+                  enable = true;
+                  driveDir = "/var/lib/wyrd/demo";
+                  mode = "vault";
+                  identityFile = "/etc/wyrd/identity";
+                  passphraseFile = "/etc/wyrd/passphrase";
+                  relays = [ "wss://relay.example" ];
+                  package = self.packages.aarch64-darwin.wyrd;
+                };
+                mount-demo = {
+                  enable = true;
+                  driveDir = "/var/lib/wyrd/laptop";
+                  mode = "mount";
+                  mountpoint = "/Volumes/Wyrd";
+                  identityFile = "/etc/wyrd/identity";
+                  package = self.packages.aarch64-darwin.wyrd;
+                };
+              };
+            }
+          )
+        ];
+      };
       # Hardened e2e topology: two peers plus a relay, each a microVM
       # definition (see nix/microvm/). x86_64-linux only: KVM hosts
       # are x86_64. Each guest carries a wyrd package as its subject:
@@ -263,6 +311,52 @@
           wyrd-peer-o = microvmGuest "peer-o";
           wyrd-peer-n = microvmGuest "peer-n";
           wyrd-relay = microvmGuest "relay";
+          # Module evaluation fixture for the shell gate
+          # (tests/test-wyrd-module.sh): one vault and one mount,
+          # evaluated but never built.
+          wyrd-drive-test = nixpkgs.lib.nixosSystem {
+            system = "x86_64-linux";
+            modules = [
+              self.nixosModules.wyrd-drive
+              (
+                { pkgs, ... }:
+                {
+                  nixpkgs.hostPlatform = "x86_64-linux";
+                  system.stateVersion = "26.05";
+                  # Minimal bootable-system scaffolding: the fixture is
+                  # evaluated but never built or booted (CI runs
+                  # check with --no-build). `nix flake check`
+                  # evaluates each configuration's toplevel, whose
+                  # assertions require these two options.
+                  fileSystems."/" = {
+                    device = "/dev/disk/by-label/nixos";
+                    fsType = "ext4";
+                  };
+                  boot.loader.grub.devices = [ "nodev" ];
+                  services.wyrd.drives = {
+                    vault-demo = {
+                      enable = true;
+                      driveDir = "/var/lib/wyrd/demo";
+                      mode = "vault";
+                      identityFile = "/etc/wyrd/identity";
+                      passphraseFile = "/etc/wyrd/passphrase";
+                      relays = [ "wss://relay.example" ];
+                      logFile = "/var/log/wyrd-demo.log";
+                      package = self.packages.x86_64-linux.wyrd;
+                    };
+                    mount-demo = {
+                      enable = true;
+                      driveDir = "/var/lib/wyrd/laptop";
+                      mode = "mount";
+                      mountpoint = "/mnt/wyrd";
+                      identityFile = "/etc/wyrd/identity";
+                      package = self.packages.x86_64-linux.wyrd;
+                    };
+                  };
+                }
+              )
+            ];
+          };
         };
     };
 }

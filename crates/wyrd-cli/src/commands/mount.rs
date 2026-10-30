@@ -19,6 +19,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use wyrd_core::mailbox::LiveMailbox;
 use wyrd_daemon::fuse::FuseBackend;
+use wyrd_daemon::posture::PostureRecorder;
 use wyrd_daemon::process::{
     bind_bulk_source, check_startup_retention, install_shutdown_handler, SHUTDOWN,
     SHUTDOWN_DEADLINE, TRANSPORT_SHUTDOWN_DEADLINE,
@@ -26,8 +27,96 @@ use wyrd_daemon::process::{
 use wyrd_daemon::{install_role_dir, install_serving, shutdown_transport, TransportDeadlines};
 use wyrd_daemon::{FailureClass, LiveError, LoopError, Supervisor, WyrdNode};
 use wyrd_format::FsObjectStore;
+use wyrd_sync::durable::DurableError;
 use wyrd_sync::keys::DeviceIdentitySecret;
-use wyrd_sync::runtime::Engine;
+use wyrd_sync::runtime::{Engine, EngineError};
+
+/// Mount-mode posture observer (OD-34-B): the vault's sidecar shape
+/// and freshness bound, minus the serving endpoint a mount never
+/// has. Ready on the first completed pass, posture on the interval,
+/// failures counted into the next posture line — the mount reuses
+/// the mechanism, not a second format. Shared between the node's
+/// pass hook and the loop's failure closure: both run on the loop
+/// thread, so one count each without interleaving.
+struct MountObserver {
+    recorder: Arc<PostureRecorder>,
+    started: std::time::Instant,
+    ready: bool,
+    last_posture: std::time::Instant,
+    sent: u64,
+    errors: u64,
+}
+
+impl MountObserver {
+    fn pass_completed(&mut self, passes: u64, report: &wyrd_core::live::SyncReport) {
+        self.sent += report.sent as u64;
+        if !self.ready {
+            self.ready = true;
+            self.recorder.note_ready();
+            eprintln!("mount ready");
+            tracing::info!(stage = "ready", "mount ready");
+        }
+        if self.last_posture.elapsed() >= wyrd_daemon::vault::POSTURE_INTERVAL {
+            self.last_posture = std::time::Instant::now();
+            let uptime_secs = self.started.elapsed().as_secs();
+            self.recorder
+                .note_posture(passes, self.errors, self.sent, uptime_secs);
+            eprintln!(
+                "mount posture: {passes} passes, {} errors retried, {} sends, uptime {uptime_secs}s",
+                self.errors, self.sent
+            );
+            tracing::info!(
+                stage = "posture",
+                passes,
+                errors = self.errors,
+                sent = self.sent,
+                uptime_secs,
+                "mount posture"
+            );
+        }
+    }
+
+    fn pass_failed(&mut self, error: &LiveError, consecutive: u32) {
+        self.errors += 1;
+        // `consecutive` counts failures of this error's class, not
+        // of every class combined: each class backs off and trips
+        // its cap independently.
+        let class = FailureClass::from(error);
+        eprintln!("live sync pass failed ({class:?} class, {consecutive} consecutive): {error}");
+        tracing::warn!(
+            stage = "sync",
+            class = ?class,
+            consecutive,
+            error = %error,
+            "live sync pass failed"
+        );
+    }
+
+    fn shared(
+        self,
+    ) -> (
+        Box<wyrd_core::live::PassHook>,
+        impl FnMut(&LiveError, u32) + Send + 'static,
+    ) {
+        let shared = Arc::new(std::sync::Mutex::new(self));
+        let for_hook = Arc::clone(&shared);
+        let for_errors = shared;
+        (
+            Box::new(move |passes, report| {
+                for_hook
+                    .lock()
+                    .expect("mount observer lock")
+                    .pass_completed(passes, report);
+            }),
+            move |error, consecutive| {
+                for_errors
+                    .lock()
+                    .expect("mount observer lock")
+                    .pass_failed(error, consecutive);
+            },
+        )
+    }
+}
 pub(crate) fn mount(
     drive_dir: PathBuf,
     mountpoint: PathBuf,
@@ -51,7 +140,31 @@ pub(crate) fn mount(
     let _mount_guard = mount_span.enter();
     tracing::info!(stage = "start", log = %log_path.display(), "mount diagnostics initialized");
 
-    let engine = Engine::open_keystore(drive_dir.clone(), passphrase, identity.clone())?;
+    let engine = match Engine::open_keystore(drive_dir.clone(), passphrase, identity.clone()) {
+        // Definite contention, surfaced before any serving endpoint
+        // or session thread emits anything — and named like the
+        // vault's, with the drive, so the supervisor message is one
+        // shape for both modes.
+        Err(EngineError::Durable(DurableError::StoreLocked)) => {
+            return Err(CliError::VaultLocked {
+                drive: drive_dir.clone(),
+            });
+        }
+        result => result?,
+    };
+    // The posture sidecar (OD-34-B): this mount claims it only now
+    // that the lock is held, so a lock-refused starter can never
+    // clobber the winner's posture — and announces itself as
+    // starting, never ready, so a crash-then-restart cannot leave
+    // the dead instance looking current.
+    let recorder =
+        Arc::new(
+            PostureRecorder::new_mount(&drive_dir).map_err(|source| CliError::Io {
+                path: drive_dir.clone(),
+                source,
+            })?,
+        );
+    recorder.note_startup();
     // Operational policy in one place: the loop and the serving
     // backend share this config's budgets, wired into both halves
     // by `into_live` below. Constructed through `for_local_sync`
@@ -98,6 +211,20 @@ pub(crate) fn mount(
     // The loop and the serving backend share the config's budgets
     // through `into_live` below.
     let (mut live, parts) = daemon.into_live(Duration::from_secs(30), &config)?;
+    // The mount's posture observer rides the node's pass hook and the
+    // loop's failure closure through one shared count, exactly like
+    // the vault's observer rides the daemon composer's: ready on the
+    // first completed pass, posture on the interval after.
+    let (hook, observe) = MountObserver {
+        recorder: Arc::clone(&recorder),
+        started: std::time::Instant::now(),
+        ready: false,
+        last_posture: std::time::Instant::now(),
+        sent: 0,
+        errors: 0,
+    }
+    .shared();
+    live.set_pass_hook(hook);
     // Flush the serving endpoint before announcing its address, so the
     // first seal carries a route peers can already dial. The loop owns
     // sends from here: every pass publishes undischarged announcement,
@@ -216,29 +343,7 @@ pub(crate) fn mount(
     // drain, panic-recover); the composer keeps the join handle and
     // everything it comes back with.
     let loop_trigger = trigger_tx;
-    let drive = supervisor.spawn_loop(
-        live,
-        mailbox,
-        Some(bulk),
-        config,
-        loop_trigger,
-        move |error: &LiveError, consecutive: u32| {
-            // `consecutive` counts failures of this error's class, not
-            // of every class combined: each class backs off and trips
-            // its cap independently.
-            let class = FailureClass::from(error);
-            eprintln!(
-                "live sync pass failed ({class:?} class, {consecutive} consecutive): {error}"
-            );
-            tracing::warn!(
-                stage = "sync",
-                class = ?class,
-                consecutive,
-                error = %error,
-                "live sync pass failed"
-            );
-        },
-    );
+    let drive = supervisor.spawn_loop(live, mailbox, Some(bulk), config, loop_trigger, observe);
     // Teardown trigger: the first session exit, loop return, or
     // shutdown trip starts the ordered teardown below. The wait polls
     // the process latch in slices because a signal-handler trip cannot

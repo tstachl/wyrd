@@ -13,7 +13,7 @@
 use std::path::{Path, PathBuf};
 
 use wyrd_daemon::core::RuntimeMaterialization;
-use wyrd_daemon::posture::{describe_holder, read_posture, sidecar_path};
+use wyrd_daemon::posture::describe_drive_holder;
 use wyrd_daemon::DriveView;
 use wyrd_format::FsObjectStore;
 use wyrd_sync::durable::DurableError;
@@ -89,9 +89,10 @@ pub fn open_host(
     Ok(OpenHost { engine, drive_dir })
 }
 
-/// Which process holds the drive, read from its posture sidecar and
-/// rendered by the daemon beside the reader, so every lock-refused
-/// starter names the holder one way.
+/// Which process holds the drive, read from either posture sidecar
+/// (vault or mount — a mount holder publishes only its own file)
+/// and rendered by the daemon beside the reader, so every
+/// lock-refused starter names the holder one way.
 fn holder_sentence(drive_dir: &Path) -> String {
-    describe_holder(&read_posture(&sidecar_path(drive_dir)))
+    describe_drive_holder(drive_dir)
 }
