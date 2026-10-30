@@ -16,7 +16,7 @@ PROVISION_DIR="${GATE_TASK_PROVISION_DIR:?drive-service-entry.sh: GATE_TASK_PROV
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-REV="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
+REV="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo "staged-tree (rev in task run record)")"
 echo "drive-service-entry.sh: revision under test: $REV"
 
 policy() { # <name>

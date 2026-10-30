@@ -43,6 +43,19 @@ setup_file() {
   [ "$status" -eq 0 ] || { echo "$output"; false; }
 }
 
+teardown() {
+  # Failure forensics land in the log while the guest is still up:
+  # the unit journal plus the full show dump for every supervised
+  # unit, so a red test names its mechanism without a second run.
+  if [ "${status:-0}" -ne 0 ]; then
+    echo "--- forensics for failed test: $BATS_TEST_DESCRIPTION ---"
+    # shellcheck disable=SC2086
+    run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'systemctl --no-pager --lines=30 status wyrd-vault-demo wyrd-mount-demo e2e-lockholder; echo ===; journalctl --no-pager -u wyrd-vault-demo -u wyrd-mount-demo -u e2e-lockholder | tail -n 60'
+    echo "$output"
+  fi
+  return 0
+}
+
 setup() {
   for v in STATE_DIR DRIVE_SSH WYRD_E2E_TOKEN WYRD_E2E_LOCK SSH_KEY; do
     [ -n "${!v:-}" ] || { echo "drive-service: $v is not set (run through tests/drive/drive-service-entry.sh)" >&2; return 1; }
