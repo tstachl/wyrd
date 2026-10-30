@@ -26,6 +26,10 @@ where
     /// path, the missing identity is registered as a want and the open
     /// blocks bounded (the same deadline for the whole chain), then
     /// retries. A deadline expiry is `EIO`, never a partial file.
+    ///
+    /// Test-only entry point: it passes no inode, so it skips the
+    /// binding check the kernel path runs through `open_at_with_inode`.
+    /// Production opens ride the callback op, never this.
     pub fn open_at(&self, path: &str) -> Result<FileHandle, fuser::Errno> {
         self.open_at_with_inode(path, None)
     }
