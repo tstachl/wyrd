@@ -358,6 +358,7 @@
                       mode = "mount";
                       mountpoint = "/mnt/wyrd";
                       identityFile = "/etc/wyrd/identity";
+                      passphraseFile = "/etc/wyrd/passphrase";
                       package = self.packages.x86_64-linux.wyrd;
                     };
                   };
@@ -397,6 +398,7 @@
                       mode = "mount";
                       mountpoint = "/mnt/wyrd";
                       identityFile = "/etc/wyrd/identity";
+                      passphraseFile = "/etc/wyrd/passphrase";
                       package = self.packages.x86_64-linux.wyrd;
                     };
                   };
