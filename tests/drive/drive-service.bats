@@ -17,8 +17,11 @@ load "$BATS_TEST_DIRNAME/../harness/e2e-guard.sh"
 # setup_file() provisions over ssh before setup() ever runs, so the
 # ssh options live at file scope, not in setup(). The entry exports
 # every variable used below; setup() still verifies them for the
-# per-test path.
-SSH_OPTS="-i $SSH_KEY -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o BatchMode=yes"
+# per-test path. LogLevel=ERROR silences the "Permanently added"
+# warning ssh prints to stderr on first contact: bats merges stderr
+# into $output, so the warning would corrupt exact-match assertions
+# and pid captures below.
+SSH_OPTS="-i $SSH_KEY -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o BatchMode=yes -o LogLevel=ERROR"
 
 setup_file() {
   # Provision test secrets and two fresh drives once per file:
