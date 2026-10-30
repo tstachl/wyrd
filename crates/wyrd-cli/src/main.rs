@@ -200,6 +200,30 @@ pub(crate) enum CliError {
     Mount(#[from] std::io::Error),
 }
 
+/// The drive-already-owned exit status (OD-34-C): `EX_CONFIG` from
+/// sysexits, a configuration error the supervisor must not retry.
+/// The supervisor wrapper maps exactly this code to its terminal
+/// status; every other failure keeps the historical exit 2, so a
+/// wrapper that treats 78 as "held" never misfires on a runtime
+/// error. Recorded in `docs/cli.md`'s exit-code list.
+pub const EXIT_DRIVE_LOCKED: i32 = 78;
+
+impl CliError {
+    /// Fold the error into a process exit status: the
+    /// drive-already-owned code for lock contention (direct or
+    /// wrapped in an engine error — the mount contends through the
+    /// latter), 2 for everything else.
+    pub fn exit_code(&self) -> i32 {
+        match self {
+            CliError::VaultLocked { .. } => EXIT_DRIVE_LOCKED,
+            CliError::Engine(wyrd_sync::runtime::EngineError::Durable(
+                wyrd_sync::durable::DurableError::StoreLocked,
+            )) => EXIT_DRIVE_LOCKED,
+            _ => 2,
+        }
+    }
+}
+
 /// Owner composition failures map to the CLI surface that already
 /// names each cause: the daemon's `OwnerError` is the shared
 /// vocabulary, and every variant lands on the same `CliError` the
@@ -555,7 +579,7 @@ pub(crate) fn session_config() -> Config {
 fn main() {
     if let Err(error) = command(env::args().skip(1).collect()) {
         eprintln!("error: {error}");
-        std::process::exit(2);
+        std::process::exit(error.exit_code());
     }
 }
 

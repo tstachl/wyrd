@@ -864,6 +864,109 @@ fn release_assets_cover_every_platform_tag() {
     }
 }
 
+/// Service supervision (34): one declaration names exactly one
+/// owner per drive, and the supervisor contract distinguishes the
+/// terminal lock code from restart-worthy ends on both platforms.
+/// A structural pin over the module sources, the wrapper, and the
+/// probe — the evaluation tests in `tests/test-wyrd-module.sh`
+/// prove the generated units; this proves the sources keep the
+/// load-bearing clauses. Most load-bearing: the wrapper's terminal
+/// code and the CLI's drive-locked code are the same number, read
+/// from both files, so neither side can drift alone.
+#[test]
+fn the_nix_module_declares_exactly_one_owner_per_drive() {
+    let root = workspace_root();
+    let options =
+        fs::read_to_string(root.join("nix/wyrd-drive-options.nix")).expect("options readable");
+    let nixos =
+        fs::read_to_string(root.join("nix/wyrd-drive-nixos.nix")).expect("nixos module readable");
+    let darwin =
+        fs::read_to_string(root.join("nix/wyrd-drive-darwin.nix")).expect("darwin module readable");
+    let wrapper = fs::read_to_string(root.join("nix/wyrd-supervise.py")).expect("wrapper readable");
+    let probe = fs::read_to_string(root.join("nix/wyrd-drive-probe.py")).expect("probe readable");
+    let cli = fs::read_to_string(root.join("crates/wyrd-cli/src/main.rs")).expect("cli readable");
+
+    // One mode per declaration is structural (an enum); two
+    // declarations for one drive are refused at eval with the drive
+    // path in the message, and secrets never enter the store.
+    for marker in [
+        "One owner process per drive directory",
+        "duplicateDirs",
+        "Secrets are paths, never store strings",
+        "storeSecrets",
+        "mountpoint belongs to mount mode",
+        "belongs to vault mode",
+    ] {
+        assert!(
+            options.contains(marker),
+            "the options module lost {marker:?}"
+        );
+    }
+    // The terminal code is one number on both sides of the boundary.
+    let cli_code = cli
+        .lines()
+        .find_map(|line| {
+            let rest = line
+                .trim()
+                .strip_prefix("pub const EXIT_DRIVE_LOCKED: i32 = ")?;
+            rest.strip_suffix(';')
+        })
+        .expect("the CLI names its drive-locked code");
+    let wrap_code = wrapper
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("DRIVE_LOCKED_CODE = "))
+        .expect("the wrapper names its terminal code");
+    assert_eq!(
+        cli_code, wrap_code,
+        "the wrapper's terminal code must be the CLI's drive-locked code"
+    );
+    assert!(
+        wrapper.contains("WIFEXITED") && wrapper.contains("WIFSIGNALED"),
+        "the wrapper maps the wait status, not the exit code alone"
+    );
+    // systemd restarts failures rate-limited, never the lock code;
+    // the probe refuses the switch on a foreign holder.
+    for marker in [
+        "RestartPreventExitStatus",
+        "78",
+        "Restart = \"on-failure\"",
+        "startLimitBurst",
+        "wyrd-drive-probe",
+        "--restart-status=1",
+        "MainPID",
+    ] {
+        assert!(nixos.contains(marker), "the NixOS unit lost {marker:?}");
+    }
+    // launchd restarts on zero, never on the terminal code; the
+    // probe compares against the daemon PID; readiness stays wired
+    // to the posture path.
+    for marker in [
+        "SuccessfulExit",
+        "ThrottleInterval",
+        "--restart-status=0",
+        "launchctl list",
+        "--posture-path=",
+        "wyrd-drive-probe",
+    ] {
+        assert!(darwin.contains(marker), "the darwin daemon lost {marker:?}");
+    }
+    // The probe takes the lock non-blocking and refuses with the
+    // drive and the holder facts when a foreign process holds it,
+    // while its own previous generation rolls the switch.
+    assert!(
+        probe.contains("LOCK_EX") && probe.contains("LOCK_NB"),
+        "the probe takes the lock non-blocking"
+    );
+    assert!(
+        probe.contains("return 1"),
+        "a foreign holder refuses the switch"
+    );
+    assert!(
+        probe.contains("previous generation"),
+        "the probe rolls the service's own previous generation"
+    );
+}
+
 /// The quoted strings a `name = [ ... ]` flake binding holds, in
 /// order. Structural parsing for a structural guard: the test fails
 /// closed on layout drift rather than silently reading nothing. The

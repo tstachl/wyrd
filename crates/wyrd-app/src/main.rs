@@ -60,7 +60,14 @@ fn main() {
         Ok(open) => open,
         Err(error) => {
             eprintln!("cannot start host: {error}");
-            std::process::exit(1);
+            // Lock contention is the drive-already-owned code (OD-34-C,
+            // shared with the `wyrd` binary's supervisor contract);
+            // every other open failure keeps the historical exit 1.
+            let code = match &error {
+                wyrd_app::HostError::DriveLocked { .. } => 78,
+                _ => 1,
+            };
+            std::process::exit(code);
         }
     };
     install_shutdown_handler().expect("signal handler installs");
