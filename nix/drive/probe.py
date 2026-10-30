@@ -117,9 +117,11 @@ def read_sidecar(path):
         if file.get("schema") != 1:
             return None
         instance = file["instance"]
-        if len(instance) != 32 or any(c not in "0123456789abcdef" for c in instance):
+        hexdigits = "0123456789abcdef"
+        if len(instance) != 32 or any(c not in hexdigits for c in instance):
             return None
-        return (file["posture_unix"], instance, file.get("serving_id", "") == "")
+        no_serving = file.get("serving_id", "") == ""
+        return (file["posture_unix"], instance, no_serving)
     except (KeyError, TypeError):
         return None
 
@@ -140,10 +142,12 @@ def holder_sentence(drive_dir):
         claim = read_sidecar(os.path.join(drive_dir, name))
         if claim is not None:
             posture_unix, instance, mount_mode = claim
-            claims.append((rank_claim(posture_unix), posture_unix, instance, mount_mode))
+            rank = rank_claim(posture_unix)
+            claims.append((rank, posture_unix, instance, mount_mode))
     if not claims:
         return "no posture recorded (the holder never published)"
-    _, posture_unix, instance, mount_mode = max(claims, key=lambda claim: (claim[0], claim[1]))
+    best = max(claims, key=lambda claim: (claim[0], claim[1]))
+    _, posture_unix, instance, mount_mode = best
     age = int(time.time()) - posture_unix
     if mount_mode:
         return (
@@ -158,7 +162,8 @@ def holder_sentence(drive_dir):
 
 def main(argv):
     if len(argv) != 2:
-        print("usage: wyrd-drive-probe DRIVE_DIR OWN_MAIN_PID", file=sys.stderr)
+        print("usage: wyrd-drive-probe DRIVE_DIR OWN_MAIN_PID",
+              file=sys.stderr)
         return 2
     drive_dir = argv[0]
     try:
@@ -179,7 +184,8 @@ def main(argv):
             file=sys.stderr,
         )
         return 0
-    print(f"wyrd-drive-probe: refusing switch: {drive_dir} is held", file=sys.stderr)
+    print(f"wyrd-drive-probe: refusing switch: {drive_dir} is held",
+          file=sys.stderr)
     print(f"wyrd-drive-probe: {holder_sentence(drive_dir)}", file=sys.stderr)
     return 1
 
