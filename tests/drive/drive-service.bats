@@ -92,10 +92,26 @@ setup() {
 
 @test "held drive fails once with 78 and no retry" {
   # The holder is a transient unit, not a background pid: precise
-  # release via systemctl stop, no pattern matching anywhere.
+  # release via systemctl stop, no pattern matching anywhere. The
+  # unit's PATH is systemd's default (no util-linux), so resolve
+  # flock absolutely — a bare name fails the unit instantly and the
+  # "held" drive is held by nothing.
   # shellcheck disable=SC2086
-  run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'sudo systemd-run --unit=e2e-lockholder --property=Type=simple flock /var/lib/wyrd/demo/LOCK sleep 120'
+  run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'command -v flock'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
+  FLOCK="$output"
+  # shellcheck disable=SC2086
+  run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" "sudo systemd-run --unit=e2e-lockholder --property=Type=simple $FLOCK /var/lib/wyrd/demo/LOCK sleep 120"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  # Verify the holder before asserting anything about the service: a
+  # start that only queued the unit proves nothing, and an unheld
+  # "held drive" would make the refusal assertions vacuous.
+  # shellcheck disable=SC2086
+  run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'systemctl is-active e2e-lockholder'
+  [ "$status" -eq 0 ] || { echo "holder unit is not active: $output"; false; }
+  # shellcheck disable=SC2086
+  run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" "sudo $FLOCK -n /var/lib/wyrd/demo/LOCK true"
+  [ "$status" -ne 0 ] || { echo "second-party non-blocking flock succeeded: nothing holds the drive"; false; }
   sleep 1
   # shellcheck disable=SC2086
   run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'sudo systemctl stop wyrd-vault-demo'

@@ -135,7 +135,14 @@ say "PASS: SIGKILL restarted the service (pid $PID1 -> $PID2)"
 say "assert: held drive fails once with 78 and no retry"
 python3 -c 'import fcntl, time; f = open("'"$SCRATCH"'/demo/LOCK"); fcntl.flock(f, fcntl.LOCK_EX); time.sleep(120)' >/dev/null 2>&1 &
 HOLDER=$!
-sleep 1
+# Prove the holder before asserting anything about the service: a
+# fork that died instantly would leave an unheld "held drive" and
+# make the refusal assertions vacuous.
+if python3 -c 'import fcntl; f = open("'"$SCRATCH"'/demo/LOCK"); fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)' 2>/dev/null; then
+  kill "$HOLDER" 2>/dev/null || true
+  die "second-party non-blocking flock succeeded: nothing holds the drive"
+fi
+say "holder verified (exclusive lock held)"
 launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
 sleep 2
 launchctl bootstrap "gui/$(id -u)" "$SCRATCH/vault.plist" 2>/dev/null || true
