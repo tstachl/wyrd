@@ -49,6 +49,14 @@ The one rule that keeps the system cheap to maintain:
 > Every invariant has one canonical home. Other documents may summarize
 > it, but must link to that home rather than maintain independent copies.
 
+The two exceptions prove the rule: the Windows-scope sentence and the
+vault-disclosure sentence live in `docs/architecture.md` ("Fixed scope")
+because automated contract tests pin them there
+(`credential_files_are_unix_only`,
+`the_disclosure_contract_is_stated_in_exactly_one_place`). That is their
+canonical home by test enforcement; moving them requires updating the
+tests first.
+
 ## How contracts change
 
 1. Update the normative contract before or alongside the implementation
