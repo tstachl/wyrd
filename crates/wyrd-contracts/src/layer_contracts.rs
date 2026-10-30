@@ -965,6 +965,42 @@ fn the_nix_module_declares_exactly_one_owner_per_drive() {
         probe.contains("previous generation"),
         "the probe rolls the service's own previous generation"
     );
+
+    // The freshness bound is one number in three spellings (finding
+    // 1): the two Python mirrors must agree with each other, and the
+    // Rust side must keep the three-interval relationship the
+    // mirrors document. A Python script cannot name a Rust
+    // constant, so the test pins the literals instead of sharing
+    // them.
+    let wrap_fresh = wrapper
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("POSTURE_FRESH_SECS = "))
+        .expect("the wrapper names its freshness bound");
+    let probe_fresh = probe
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("POSTURE_FRESH_SECS = "))
+        .expect("the probe names its freshness bound");
+    assert_eq!(
+        wrap_fresh, probe_fresh,
+        "supervisor and probe must share one freshness bound"
+    );
+    let daemon = fs::read_to_string(root.join("crates/wyrd-daemon/src/posture.rs"))
+        .expect("posture readable");
+    assert!(
+        daemon.contains("POSTURE_INTERVAL.as_secs() * 3"),
+        "the Rust threshold stays three posture intervals"
+    );
+
+    // The sidecar filenames are one vocabulary across the boundary
+    // (finding 3): the daemon's constants and the module's paths
+    // must name the same files.
+    for name in ["vault.posture", "mount.posture"] {
+        assert!(daemon.contains(name), "the daemon defines {name}");
+        assert!(
+            nixos.contains(name) && darwin.contains(name),
+            "both supervisors reference {name}"
+        );
+    }
 }
 
 /// The quoted strings a `name = [ ... ]` flake binding holds, in

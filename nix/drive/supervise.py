@@ -40,10 +40,14 @@ import time
 DRIVE_LOCKED_CODE = 78
 
 # A posture older than this is stale (`POSTURE_FRESHNESS` in
-# `crates/wyrd-daemon/src/posture.rs`, three posture intervals).
-# The wrapper compares file mtime, not the JSON body: the atomic
-# rename that publishes a generation sets mtime to publish time, so
-# mtime freshness implies a live writer without parsing anything.
+# `crates/wyrd-daemon/src/posture.rs`, three posture intervals),
+# duplicated here rather than imported: a Python script cannot name
+# a Rust constant, so the contract test
+# `the_nix_module_declares_exactly_one_owner_per_drive` pins all
+# three spellings to the same number instead. The wrapper compares
+# file mtime, not the JSON body: the atomic rename that publishes a
+# generation sets mtime to publish time, so mtime freshness implies
+# a live writer without parsing anything.
 POSTURE_FRESH_SECS = 180
 
 # How long to wait for the first fresh sidecar before logging the

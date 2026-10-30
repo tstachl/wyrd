@@ -30,8 +30,13 @@ import subprocess
 import sys
 import time
 
-# A posture older than this is stale; the bound is the daemon's
-# freshness threshold, not a second opinion about it.
+# A posture older than this is stale. This is the daemon's
+# freshness threshold, duplicated here rather than imported: a
+# Python script cannot name a Rust constant, so the contract test
+# `the_nix_module_declares_exactly_one_owner_per_drive` pins all
+# three spellings to the same number instead. Depends on `lsof`
+# and `ps` on PATH: the NixOS and nix-darwin modules put them
+# there; a hand run needs them installed.
 POSTURE_FRESH_SECS = 180
 
 
