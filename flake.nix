@@ -322,6 +322,17 @@
                 { pkgs, ... }:
                 {
                   nixpkgs.hostPlatform = "x86_64-linux";
+                  system.stateVersion = "26.05";
+                  # Minimal bootable-system scaffolding: the fixture is
+                  # evaluated but never built or booted (CI runs
+                  # check with --no-build). `nix flake check`
+                  # evaluates each configuration's toplevel, whose
+                  # assertions require these two options.
+                  fileSystems."/" = {
+                    device = "/dev/disk/by-label/nixos";
+                    fsType = "ext4";
+                  };
+                  boot.loader.grub.devices = [ "nodev" ];
                   services.wyrd.drives = {
                     vault-demo = {
                       enable = true;
