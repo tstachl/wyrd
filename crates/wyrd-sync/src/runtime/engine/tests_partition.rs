@@ -1,11 +1,12 @@
-//! The per-merge partition leg (OD-30-A/B, decision B/A): two admitted
+//! The per-merge partition leg (evidence-gates record in
+//! `docs/contracts/sync-and-peers.md`, Conflicts): two admitted
 //! peers, control plane withheld on both sides, same path authored on
 //! each, reachability restored, then the conflict surface plus the
 //! durable-log no-loss assertion. In-process only (MemoryRelay,
 //! MemoryMailbox, VaultSource) so it runs in the default gate with no
 //! privilege; `partition_leg_needs_no_privilege` pins that.
 //!
-//! Mechanism fidelity (OD-30-B): withholding the send path reproduces
+//! Mechanism fidelity: withholding the send path reproduces
 //! the *outcome* of `tap-r down` (peers diverge without hearing each
 //! other) while the data plane stays live through the direct serving
 //! route. The test pins the outcome half explicitly: both peers'
@@ -81,7 +82,8 @@ fn snapshot_set(device: &super::tests_harness::Device) -> BTreeSet<wyrd_format::
 /// Relay partition produces two eligible heads and neither branch is
 /// lost: the per-merge evidence for the conflict guarantee (ROADMAP
 /// conflict promise; "partition and heal" in the v0.2 Definition of
-/// Done). Verdict lives in CI/PR evidence only (OD-30-C, option A).
+/// Done). Verdict lives in CI/PR evidence only, per the evidence-gates
+/// record in `docs/contracts/sync-and-peers.md`.
 #[test]
 fn relay_partition_produces_two_heads_and_both_survive() {
     let (mut pair, _, _) = scenario();
@@ -131,7 +133,8 @@ fn relay_partition_produces_two_heads_and_both_survive() {
         assert_eq!(heads[0].snapshot().snapshot_id(), baseline_id);
     }
 
-    // Durable baseline for the no-loss assertion (OD-30-A, option B):
+    // Durable baseline for the no-loss assertion (the log must only
+    // grow: conflicts preserve both branches):
     // the union of snapshot ids plus the announcement count. Both must
     // only grow across the partition and heal.
     let mut before: BTreeSet<wyrd_format::SnapshotId> = BTreeSet::new();
@@ -297,7 +300,8 @@ fn relay_partition_produces_two_heads_and_both_survive() {
         "the refused authoring commits nothing"
     );
 
-    // No-loss over the durable log (OD-30-A, option B): every
+    // No-loss over the durable log: every
+    // pre-partition snapshot id is still present, both branches are
     // pre-partition snapshot id is still present, both branches are
     // present, and the announcement fact count never shrinks.
     let mut after: BTreeSet<wyrd_format::SnapshotId> = BTreeSet::new();
@@ -318,7 +322,9 @@ fn relay_partition_produces_two_heads_and_both_survive() {
 
 /// The leg stays runnable in the default gate: its own source must
 /// never name a privileged dependency, so a future edit cannot quietly
-/// turn the per-merge gate into one that needs the KVM host. Tokens are
+/// turn the per-merge gate into one that needs the KVM host. This is
+/// what keeps the leg in the default nextest profile rather than the
+/// slow profile or the manual suite. Tokens are
 /// spelled fragmented so this check does not match itself.
 #[test]
 fn partition_leg_needs_no_privilege() {
