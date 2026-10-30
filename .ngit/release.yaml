@@ -1,44 +1,81 @@
 # Release manifest for `ngit release publish`: with this committed, a release
-# needs nothing but a version. Release flow is manual through v0.x
-# (see dist.yml header): cut the tag, let CI build the x86_64 leg,
-# fetch it from a mirror, build the rest locally, publish by hand,
-# and record the findings on the release issue for the next
-# automation pass. Full checklist with v0.2.0-alpha findings:
-# docs/release-process.md. Cutting one (the v0.1.0-alpha.1 lessons are
-# baked into the steps; CI discipline lives in
+# needs the version plus the four installer assets below, built and evidenced
+# per this runbook. Release flow is manual through v0.x
+# (see dist.yml header): cut the tag, let CI build the linux-x86_64
+# build-input tarball (the Flatpak module source, not a release asset),
+# fetch it from a mirror, build the installer legs locally, sign, publish
+# by hand, and record the findings on the release issue for the next
+# automation pass (fully automated by v1). Full checklist with v0.2.0-alpha
+# findings: docs/release-process.md. Cutting one (the v0.1.0-alpha.1 lessons
+# are baked into the steps; CI discipline lives in
 # docs/collaboration-workflow.md):
 #
 #   1. Do the pre-tag compatibility read first: confirm the fail-closed and
 #      egress stories still hold (the codec refuses old formats loudly, the
 #      old binary still opens them, the keep-the-binary rule is documented).
 #      Tagging is the point of no return for user expectations.
-#   2. Rename the `[Unreleased]` CHANGELOG section to the version on a pr/
+#   2. Run the pre-sign gate (OD-07-D, hard, never waived): unpack
+#      crates.io fuser 0.18.0 and run `diff -rq <upstream> vendor/fuser`
+#      plus content diffs of every file it names. Acceptance is empty apart
+#      from the four divergences the Cargo.toml vendor note enumerates. No
+#      macOS binary is signed until this passes; paste the output into the
+#      release issue.
+#   3. Rename the `[Unreleased]` CHANGELOG section to the version on a pr/
 #      branch (the notes below are extracted from that exact section);
 #      merge and push master.
-#   3. Tag the release commit `v<version>` and push the tag (the version
+#   4. Green gates, revision-bound to the release tip: microVM from the
+#      gate plus Lima locally. A green run on a pre-rebase tip does not
+#      cover the rebased tip; re-run after the final rebase.
+#   5. Tag the release commit `v<version>` and push the tag (the version
 #      derives from the tag with one leading `v` stripped, so it must equal
 #      the Cargo version). Pushing the tag fires dist.yml in CI
 #      automatically: do NOT trigger it by hand as well. There is no cancel
 #      (`ci stop` ends all CI), so check `ci status` before any manual
 #      trigger, and trigger only to retry a failed run.
-#   4. Build the three local legs with explicit systems plus the gate:
-#      `build <version> --strict --remote-builders aarch64-darwin x86_64-darwin aarch64-linux`
-#      in the devenv shell (native, Rosetta, remote builder). A bare
-#      `--strict` re-attempts linux-x86_64 locally and fails without an x86
-#      builder, so name the systems. Input is pinned to the release tag in
-#      a detached worktree, never the working copy. Re-running over dist/
-#      needs the read-only hash-prefixed files deleted first (until
-#      build.sh learns `cp -f`); `--verify` needs system FUSE on macOS or
-#      the just-built binary dies in dyld (exit 134), which is an
-#      environment gap, not a broken binary.
-#   5. Fetch the linux-x86_64 tarball by its printed sha256 from any listed
-#      mirror into `dist/` under its canonical name and verify the hash
-#      matches. CI uploads with an ephemeral key, so the hash comparison is
-#      the trust anchor: never skip it. The step-4 gate passing means every
-#      archive below is present (ngit rejects partial platform coverage on
-#      the main channel).
-#   6. `ngit release publish <version>` with `--blossom-server` (or a
+#   6. Build the macOS legs locally, one `.app` bundle per arch carrying
+#      the host, wrapped in the `.dmg` this manifest names. Sign with the
+#      maintainer-held Developer ID (`codesign -s <identity> --deep --strict
+#      --options runtime`), verify with `codesign --verify --deep --strict
+#      --verbose=2` and `spctl -a -vvv -t install`, submit with
+#      `xcrun notarytool submit <dmg> --keychain-profile <profile> --wait`,
+#      and staple on success. The identity and the API key live outside the
+#      repository with the release owner (Zander); CI never holds them
+#      (CI-held credentials are the v0.8 destination). A submission merely
+#      accepted is not a notarized artifact: record the success status.
+#   7. Fetch the linux-x86_64 build-input tarball by its printed sha256 from
+#      any listed mirror into `dist/` under its canonical name and verify
+#      the hash matches. CI uploads with an ephemeral key, so the hash
+#      comparison is the trust anchor: never skip it.
+#   8. Build the Linux legs locally: `flatpak-builder --repo` from
+#      `flatpak/md.enesis.wyrd.yaml` against the verified tarball, then
+#      `flatpak build-bundle --gpg-sign <packaging key>` per arch, and
+#      verify each bundle by installing it in a clean container or VM. The
+#      bundle signature is the Linux half of the signed-artifact clause; a
+#      `.dmg` or `notarytool` run evidences nothing about Linux.
+#   9. Human-path rehearsal, the acceptance test: on each shipped platform a
+#      person with no terminal and no prior knowledge of Wyrd follows the
+#      install-create-see-add-device path (create a drive, see it in the
+#      platform's file manager, add a second device). The criterion is that
+#      they never had to open a terminal; every place they nearly had to is
+#      a packaging defect, not a documentation defect.
+#  10. `ngit release publish <version>` with `--blossom-server` (or a
 #      kind-10063 server list from the publisher), plus `--relay` as needed.
+#
+# If no signing identity is provisioned, the macOS cut does not ship as a
+# release: the honest outcome is a Linux-only cut with the macOS halves
+# deferred, not a macOS cut with the signed-artifact clause quietly waived
+# (a Definition-of-Done contract is not waivable). Developer and
+# early-adopter builds are the named fallback, not the release: an ad-hoc
+# (`codesign -s -`) or self-signed build runs fine for an informed user
+# who accepts the Gatekeeper warning and the manual override, but it fails
+# the acceptance test, which demands a notarized app a first-time user
+# installs without hunting for an override. Verify the current override
+# path (System Settings, Privacy and Security) against the shipping macOS
+# at release time; it has moved between releases. The File Provider
+# extension is the open risk: untested whether macOS loads it without a
+# real identity and provisioning profile, so test that before assuming the
+# fallback covers the file-manager path. Record whichever happens against
+# the cut with a named owner.
 #
 # The first publish also creates the `wyrd` application owned by the
 # publishing maintainer; repository maintainership alone grants no release
@@ -56,19 +93,19 @@ license: MIT
 channel: main
 release_notes: CHANGELOG.md
 assets:
-  - file: dist/wyrd-{version}-linux-x86_64.tar.gz
-    filename: wyrd-{version}-linux-x86_64.tar.gz
-    mime: application/gzip
+  - file: dist/wyrd-{version}-linux-x86_64.flatpak
+    filename: wyrd-{version}-linux-x86_64.flatpak
+    mime: application/vnd.flatpak
     platforms: [linux-x86_64]
-  - file: dist/wyrd-{version}-linux-aarch64.tar.gz
-    filename: wyrd-{version}-linux-aarch64.tar.gz
-    mime: application/gzip
+  - file: dist/wyrd-{version}-linux-aarch64.flatpak
+    filename: wyrd-{version}-linux-aarch64.flatpak
+    mime: application/vnd.flatpak
     platforms: [linux-aarch64]
-  - file: dist/wyrd-{version}-macos-aarch64.tar.gz
-    filename: wyrd-{version}-macos-aarch64.tar.gz
-    mime: application/gzip
+  - file: dist/wyrd-{version}-macos-aarch64.dmg
+    filename: wyrd-{version}-macos-aarch64.dmg
+    mime: application/x-apple-diskimage
     platforms: [macos-aarch64]
-  - file: dist/wyrd-{version}-macos-x86_64.tar.gz
-    filename: wyrd-{version}-macos-x86_64.tar.gz
-    mime: application/gzip
+  - file: dist/wyrd-{version}-macos-x86_64.dmg
+    filename: wyrd-{version}-macos-x86_64.dmg
+    mime: application/x-apple-diskimage
     platforms: [macos-x86_64]

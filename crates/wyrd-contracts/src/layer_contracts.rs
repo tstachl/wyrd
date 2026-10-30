@@ -765,6 +765,174 @@ fn flake_builds_the_binary_from_wyrd_cli() {
     );
 }
 
+/// Release-asset coverage (07): every platform the flake ships has
+/// exactly one release asset, no asset names a platform the flake
+/// does not ship, and no asset is a tarball for a platform whose
+/// delivery is an installer (macOS `.dmg`, Linux `.flatpak`). The
+/// four-tarball manifest went unnoticed because nothing compared the
+/// two lists, so this compares them structurally — not a substitute
+/// for building each installer at release time, which only the
+/// release owner can do (signing identity, notarization, bundle
+/// signing all live outside this repository).
+#[test]
+fn release_assets_cover_every_platform_tag() {
+    let root = workspace_root();
+    let flake = fs::read_to_string(root.join("flake.nix")).expect("flake.nix is readable");
+    let systems = flake_string_list(&flake, "systems");
+    assert!(
+        !systems.is_empty(),
+        "flake names no product platforms at all"
+    );
+    let platform_of: BTreeMap<&str, &str> = flake
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            let (system, tag) = line.split_once('=')?;
+            let system = system.trim().trim_matches('"');
+            let tag = tag.trim().trim_matches(|c| c == '"' || c == ';');
+            systems.contains(&system).then_some((system, tag))
+        })
+        .collect();
+    assert_eq!(
+        platform_of.len(),
+        systems.len(),
+        "every flake system maps to exactly one ngit platform tag, found: {platform_of:?}"
+    );
+
+    let manifest =
+        fs::read_to_string(root.join(".ngit/release.yaml")).expect("release.yaml is readable");
+    let assets = release_assets(&manifest);
+    assert!(!assets.is_empty(), "release.yaml names no assets at all");
+    let mut tags: Vec<&str> = assets.iter().map(|asset| asset.2).collect();
+    tags.sort_unstable();
+    let mut expected: Vec<&str> = platform_of.values().copied().collect();
+    expected.sort_unstable();
+    assert_eq!(
+        tags, expected,
+        "one asset per shipped platform, no more and no fewer"
+    );
+    let mut violations = Vec::new();
+    for (file, mime, tag) in &assets {
+        let (want_ext, want_mime) = if tag.starts_with("macos-") {
+            (".dmg", "application/x-apple-diskimage")
+        } else if tag.starts_with("linux-") {
+            (".flatpak", "application/vnd.flatpak")
+        } else {
+            violations.push(format!("{tag} names no known platform family"));
+            continue;
+        };
+        if !file.ends_with(want_ext) {
+            violations.push(format!(
+                "{tag} delivers as an installer, but its asset is {file} (want *{want_ext})"
+            ));
+        }
+        if *mime != want_mime {
+            violations.push(format!(
+                "{file} declares {mime} but the installer shape needs {want_mime}"
+            ));
+        }
+        if file.ends_with(".tar.gz") {
+            violations.push(format!(
+                "{tag} ships a tarball where the runbook promises an installer: {file}"
+            ));
+        }
+        if !file.contains("{version}") {
+            violations.push(format!("{file} is not version-templated"));
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "release-asset violations:\n- {}",
+        violations.join("\n- ")
+    );
+
+    // The Linux installer the assets promise has a manifest with the
+    // release app-id and the host as its command, each on its own
+    // line: a marker embedded in a longer line does not count.
+    // Structure only: the bundle itself builds at release time on the
+    // publisher's machine.
+    let flatpak = fs::read_to_string(root.join("flatpak/md.enesis.wyrd.yaml"))
+        .expect("the Flatpak manifest exists");
+    for marker in ["app-id: md.enesis.wyrd", "command: wyrd-app"]
+        .iter()
+        .copied()
+    {
+        assert!(
+            flatpak.lines().any(|line| line.trim() == marker),
+            "the Flatpak manifest lost {marker:?} as its own line"
+        );
+    }
+}
+
+/// The quoted strings a `name = [ ... ]` flake binding holds, in
+/// order. Structural parsing for a structural guard: the test fails
+/// closed on layout drift rather than silently reading nothing. The
+/// list may sit on one line or span several; parsing stops at `]`.
+fn flake_string_list<'a>(flake: &'a str, name: &str) -> Vec<&'a str> {
+    let mut items = Vec::new();
+    let mut inside = false;
+    for line in flake.lines() {
+        let trimmed = line.trim();
+        if !inside {
+            let rest = trimmed.strip_prefix(name).unwrap_or("");
+            let rest = rest.trim_start().strip_prefix('=').unwrap_or("");
+            if !rest.trim_start().starts_with('[') {
+                continue;
+            }
+            inside = true;
+        }
+        let mut parts = trimmed.split('"');
+        while let (Some(_), Some(quoted)) = (parts.next(), parts.next()) {
+            if !quoted.is_empty() {
+                items.push(quoted);
+            }
+        }
+        if trimmed.contains(']') {
+            break;
+        }
+    }
+    items
+}
+
+/// `(file, mime, platform)` triples from the `assets:` block of the
+/// release manifest. Each asset is a `file:` line, a `mime:` line,
+/// then its `platforms:` line; anything else in the block fails the
+/// parse loudly. Format-sensitive by design: a cosmetic reformat that
+/// moves a marker fails this guard, and that failure is the guard
+/// working, not a false positive.
+fn release_assets(manifest: &str) -> Vec<(&str, &str, &str)> {
+    let mut assets = Vec::new();
+    let mut file: Option<&str> = None;
+    let mut mime: Option<&str> = None;
+    for line in manifest.lines() {
+        let trimmed = line.trim();
+        if let Some(value) = trimmed.strip_prefix("- file: ") {
+            assert!(
+                file.is_none(),
+                "asset {file:?} never closed with its platforms"
+            );
+            file = Some(value.trim());
+        } else if let Some(value) = trimmed.strip_prefix("mime: ") {
+            assert!(mime.is_none(), "asset {file:?} declares two MIME types");
+            mime = Some(value.trim());
+        } else if let Some(value) = trimmed.strip_prefix("platforms: [") {
+            let tag = value
+                .strip_suffix(']')
+                .expect("platforms list closes on its line");
+            assets.push((
+                file.take().expect("platforms without an asset file"),
+                mime.take().expect("platforms without an asset MIME type"),
+                tag.trim(),
+            ));
+        }
+    }
+    assert!(
+        file.is_none(),
+        "the last asset never closed with its platforms"
+    );
+    assets
+}
+
 /// Contract 34 (membership half): the workspace member set is exact.
 /// Additions fail closed through the unknown-member policy; removals
 /// would silently narrow every member-wide check, so the set itself

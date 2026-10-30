@@ -26,13 +26,30 @@ license = "MIT"
 # none, so an accidental capability impl cannot compile.
 unsafe_code = "deny"
 
-# Vendored fuser 0.18.0 (vendor/fuser) with one divergence: the macOS
-# branch mounts via libfuse3, because upstream's libfuse2 probe targets
-# macFUSE 4.x and macFUSE 5.x fails that path silently. The vendored
-# crate is deliberately not a workspace member, so the workspace lints
-# above do not apply to it. Re-sync by copying crates.io 0.18.0 over
-# vendor/fuser and re-applying the build.rs divergence; drop the patch
-# once upstream moves macOS to libfuse3.
+# Vendored fuser 0.18.0 (vendor/fuser) with four divergences across five
+# files, all audited under OD-07-D before any macOS binary is signed. The crate
+# is deliberately not a workspace member, so the workspace lints above
+# do not apply to it.
+#  1. build.rs macOS branch mounts via libfuse3, because upstream's
+#     libfuse2 probe targets macFUSE 4.x and macFUSE 5.x fails that
+#     path silently. Re-apply on re-sync; drop the patch once upstream
+#     moves macOS to libfuse3.
+#  2. src/mnt/fuse3.rs session lifecycle: the session pointer is
+#     `Option`-wrapped, a failed `fuse_session_mount` destroys the
+#     session instead of leaking it, `umount_impl` unmounts and
+#     destroys on every path (upstream only ran the Linux EPERM
+#     fallback, leaking the macOS success path), and a `Drop` impl
+#     guards the forgotten-unmount case.
+#  3. src/ll/fuse_abi.rs carries `#[allow(dead_code)]` on the five
+#     never-constructed ABI mirror structs, which upstream leaves to
+#     warn.
+#  4. Comment- and whitespace-only fixes (doc typo in src/lib.rs,
+#     trailing space in CHANGELOG.md). Upstream-only scaffolding
+#     (tests/, Dockerfiles, .github, project docs) was never vendored.
+# Re-sync by copying crates.io 0.18.0 over vendor/fuser and
+# re-applying divergences 1-4; the audit command is
+# `diff -rq <crates.io 0.18.0> vendor/fuser` plus content diffs of
+# every file it names.
 [patch.crates-io]
 fuser = { path = "vendor/fuser" }
 
