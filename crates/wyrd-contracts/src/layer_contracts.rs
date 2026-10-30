@@ -868,7 +868,7 @@ fn release_assets_cover_every_platform_tag() {
 /// owner per drive, and the supervisor contract distinguishes the
 /// terminal lock code from restart-worthy ends on both platforms.
 /// A structural pin over the module sources, the wrapper, and the
-/// probe — the evaluation tests in `tests/test-wyrd-module.sh`
+/// probe — the evaluation tests in `tests/harness/test-wyrd-module.sh`
 /// prove the generated units; this proves the sources keep the
 /// load-bearing clauses. Most load-bearing: the wrapper's terminal
 /// code and the CLI's drive-locked code are the same number, read

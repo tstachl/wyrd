@@ -67,20 +67,20 @@ jobs:
         run: |
           set -o pipefail
           echo "===== e2e harness stubs =====" >> /tmp/shell.log
-          bash tests/test-step-grammar.sh 2>&1 | tee -a /tmp/shell.log
-          bash tests/test-baked-set.sh 2>&1 | tee -a /tmp/shell.log
-          bash tests/test-shape-manifest.sh 2>&1 | tee -a /tmp/shell.log
-          bash tests/test-supervise.sh 2>&1 | tee -a /tmp/shell.log
-          bash tests/test-drive-probe.sh 2>&1 | tee -a /tmp/shell.log
-          bash tests/test-wyrd-module.sh 2>&1 | tee -a /tmp/shell.log
-          bash tests/test-probe-mark.sh 2>&1 | tee -a /tmp/shell.log
-          bash tests/test-e2e-guard.sh 2>&1 | tee -a /tmp/shell.log
-          bash tests/test-bash-syntax.sh 2>&1 | tee -a /tmp/shell.log
-          bash tests/test-relay-forensics.sh 2>&1 | tee -a /tmp/shell.log
-          bash tests/test-topology-toml.sh 2>&1 | tee -a /tmp/shell.log
-          bash tests/test-gate-entry.sh 2>&1 | tee -a /tmp/shell.log
-          bash -n tests/e2e-helpers.bash 2>&1 | tee -a /tmp/shell.log
-          bash tests/test-no-host-privilege.sh 2>&1 | tee -a /tmp/shell.log
+          bash tests/harness/test-step-grammar.sh 2>&1 | tee -a /tmp/shell.log
+          bash tests/harness/test-baked-set.sh 2>&1 | tee -a /tmp/shell.log
+          bash tests/harness/test-shape-manifest.sh 2>&1 | tee -a /tmp/shell.log
+          bash tests/harness/test-supervise.sh 2>&1 | tee -a /tmp/shell.log
+          bash tests/harness/test-drive-probe.sh 2>&1 | tee -a /tmp/shell.log
+          bash tests/harness/test-wyrd-module.sh 2>&1 | tee -a /tmp/shell.log
+          bash tests/harness/test-probe-mark.sh 2>&1 | tee -a /tmp/shell.log
+          bash tests/harness/test-e2e-guard.sh 2>&1 | tee -a /tmp/shell.log
+          bash tests/harness/test-bash-syntax.sh 2>&1 | tee -a /tmp/shell.log
+          bash tests/harness/test-relay-forensics.sh 2>&1 | tee -a /tmp/shell.log
+          bash tests/harness/test-topology-toml.sh 2>&1 | tee -a /tmp/shell.log
+          bash tests/harness/test-gate-entry.sh 2>&1 | tee -a /tmp/shell.log
+          bash -n tests/harness/e2e-helpers.bash 2>&1 | tee -a /tmp/shell.log
+          bash tests/harness/test-no-host-privilege.sh 2>&1 | tee -a /tmp/shell.log
 
       # /tmp is per-job, so this log only reaches the reporter via the
       # artifact (same shape as the rust/nix combined-log uploads).

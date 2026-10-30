@@ -186,7 +186,7 @@
       # assembling disk images on every PR. The closures build when a
       # microVM run needs them.
       # Suite *execution* needs KVM and runs on the maintainer's Linux
-      # host via the gate task (tests/gate-entry.sh as the build user
+      # host via the gate task (tests/gate/gate-entry.sh as the build user
       # under host-owned provisioning), never in CI.
       checks = forAllSystems (system: {
         wyrd = self.packages.${system}.wyrd;
@@ -210,7 +210,7 @@
       nixosModules.default = self.nixosModules.wyrd-drive;
       darwinModules.default = self.darwinModules.wyrd-drive;
       # Module evaluation fixtures for the shell gate
-      # (tests/test-wyrd-module.sh): minimal machines declaring one
+      # (tests/harness/test-wyrd-module.sh): minimal machines declaring one
       # vault and one mount each, evaluated but never built. The
       # NixOS fixture joins nixosConfigurations below; the Darwin
       # fixture is the top-level darwinConfigurations.
@@ -312,7 +312,7 @@
           wyrd-peer-n = microvmGuest "peer-n";
           wyrd-relay = microvmGuest "relay";
           # Module evaluation fixture for the shell gate
-          # (tests/test-wyrd-module.sh): one vault and one mount,
+          # (tests/harness/test-wyrd-module.sh): one vault and one mount,
           # evaluated but never built.
           wyrd-drive-test = nixpkgs.lib.nixosSystem {
             system = "x86_64-linux";

@@ -85,19 +85,19 @@
     # so nothing can be fetched after boot. Paths are relative to
     # this file (nix/microvm/) into the repo's tests/.
     environment.etc = {
-      "wyrd-tests/alpha-common.sh".source = ../../tests/alpha-common.sh;
-      "wyrd-tests/alpha-lima.sh".source = ../../tests/alpha-lima.sh;
-      "wyrd-tests/alpha-microvm-legs.sh".source = ../../tests/alpha-microvm-legs.sh;
-      "wyrd-tests/alpha-lima-matrix.py".source = ../../tests/alpha-lima-matrix.py;
+      "wyrd-tests/alpha-common.sh".source = ../../tests/lima/alpha-common.sh;
+      "wyrd-tests/alpha-lima.sh".source = ../../tests/lima/alpha-lima.sh;
+      "wyrd-tests/alpha-microvm-legs.sh".source = ../../tests/microvm/alpha-microvm-legs.sh;
+      "wyrd-tests/alpha-lima-matrix.py".source = ../../tests/lima/alpha-lima-matrix.py;
       # Sourced at runtime by alpha-lima.sh (step selection); without it
       # every microVM phase 1 dies on a missing file before the first
       # check. Keep this set in sync with what the guest-run scripts
       # source — Lima runs off the share and can never catch a gap here.
-      "wyrd-tests/step-grammar.sh".source = ../../tests/step-grammar.sh;
+      "wyrd-tests/step-grammar.sh".source = ../../tests/harness/step-grammar.sh;
       # Wrapper-only entry enforcement: sourced by every suite script
       # above before anything else. Same sync rule — a missing guard
       # file fails every leg at source time.
-      "wyrd-tests/e2e-guard.sh".source = ../../tests/e2e-guard.sh;
+      "wyrd-tests/e2e-guard.sh".source = ../../tests/harness/e2e-guard.sh;
     };
 
     services.openssh = {

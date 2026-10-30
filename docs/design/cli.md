@@ -935,10 +935,10 @@ surface is client-position: counts by reason, never identities —
 see `docs/contracts/trust.md`'s observation × trust-position matrix
 ("Diagnostic surfaces", OD-17-6), which pins what each surface may
 show and composes with the party table.
-- `E2E_RUST_LOG` (honored by the Lima suite in `lima/run-alpha.sh`
-  and the microVM gate entry `tests/gate-entry.sh`)
+- `E2E_RUST_LOG` (honored by the Lima suite in `tests/lima/run-alpha.sh`
+  and the microVM gate entry `tests/gate/gate-entry.sh`)
   sets the mount's `RUST_LOG` for stuck-peer forensics, e.g.
-  `E2E_RUST_LOG=wyrd_core=debug ./lima/run-alpha.sh --keep --step 6`.
+  `E2E_RUST_LOG=wyrd_core=debug ./tests/lima/run-alpha.sh --keep --step 6`.
 - `E2E_INTERVAL` (same two runners) passes `--interval` through
   `start_mount` to every mount; unset means the binary default.
   Proven green at 2s and 5s on the microVM gate — 1s trips the
