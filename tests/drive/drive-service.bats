@@ -74,15 +74,30 @@ setup() {
   run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'systemctl is-active wyrd-vault-demo wyrd-mount-demo'
   [ "$status" -eq 0 ] || { echo "$output"; touch "$RUN/FAILED"; false; }
   # The mount completes after the unit reports active, so poll
-  # instead of asserting once. One sudo invocation wraps the whole
-  # poll, so per-check sudo latency cannot accumulate across the
-  # loop. Probe with ls, not mountpoint(1): on this guest
-  # mountpoint -q reports rc=32 (not a mountpoint) for the serving
-  # FUSE mount even as root — observed 2026-10-30, mechanism
-  # unknown — while a listing succeeds, and serving (not
-  # mount-table bookkeeping) is the claim under test.
+  # instead of asserting once. The service runs with PrivateTmp,
+  # which puts it in its own mount namespace: the FUSE mount is
+  # invisible from the host (host-side mountpoint -q says rc=32 and
+  # host stat shows a plain subdir), so probe from inside the
+  # serving process's namespace via nsenter. Absolute binary paths:
+  # sudo's secure_path is not the login PATH. Polled, since serving
+  # starts after the unit reports active.
   # shellcheck disable=SC2086
-  run timeout 180 ssh $SSH_OPTS "$DRIVE_SSH" "sudo sh -c 'for i in \$(seq 1 12); do ls /mnt/wyrd >/dev/null 2>&1 && break || sleep 5; done; ls /mnt/wyrd'"
+  run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'command -v nsenter; command -v ls'
+  [ "$status" -eq 0 ] || { echo "$output"; touch "$RUN/FAILED"; false; }
+  NSENTER="$(printf '%s\n' "$output" | sed -n '1p')"
+  LSCMD="$(printf '%s\n' "$output" | sed -n '2p')"
+  [ -n "$NSENTER" ] && [ -n "$LSCMD" ] || { echo "could not resolve nsenter+ls: $output"; touch "$RUN/FAILED"; false; }
+  # shellcheck disable=SC2086
+  run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'systemctl show -p MainPID --value wyrd-mount-demo'
+  [ "$status" -eq 0 ] || { echo "$output"; touch "$RUN/FAILED"; false; }
+  MNT_MAIN="$output"
+  # shellcheck disable=SC2086
+  run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" "pgrep -P $MNT_MAIN wyrd | head -n 1"
+  [ "$status" -eq 0 ] || { echo "$output"; touch "$RUN/FAILED"; false; }
+  [ -n "$output" ] || { echo "no supervised wyrd child under mount wrapper pid $MNT_MAIN"; touch "$RUN/FAILED"; false; }
+  MNT_CHILD="$output"
+  # shellcheck disable=SC2086
+  run timeout 180 ssh $SSH_OPTS "$DRIVE_SSH" "for i in 1 2 3 4 5 6 7 8 9 10 11 12; do sudo $NSENTER -t $MNT_CHILD -m $LSCMD /mnt/wyrd >/dev/null 2>&1 && break || sleep 5; done; sudo $NSENTER -t $MNT_CHILD -m $LSCMD /mnt/wyrd"
   [ "$status" -eq 0 ] || { echo "$output"; touch "$RUN/FAILED"; false; }
 }
 
