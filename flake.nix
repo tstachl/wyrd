@@ -361,6 +361,74 @@
               )
             ];
           };
+          # Bootable drive-service evidence guest for the system-level
+          # execution issue: the same vault+mount declaration as
+          # wyrd-drive-test, plus SSH, FUSE, and VM sizing, so the
+          # drive-service leg can boot it under KVM on odin and assert
+          # supervision behavior (active after boot, back after
+          # SIGKILL, 78-once on a held drive). Evaluated in CI like
+          # the fixture; booted only by hand on the KVM host, never
+          # in CI.
+          wyrd-drive-vm = nixpkgs.lib.nixosSystem {
+            system = "x86_64-linux";
+            modules = [
+              self.nixosModules.wyrd-drive
+              (
+                { pkgs, ... }:
+                {
+                  nixpkgs.hostPlatform = "x86_64-linux";
+                  system.stateVersion = "26.05";
+                  fileSystems."/" = {
+                    device = "/dev/disk/by-label/nixos";
+                    fsType = "ext4";
+                  };
+                  boot.loader.grub.devices = [ "nodev" ];
+                  # QEMU guest needs the FUSE module for mount mode;
+                  # the service unit already allows /dev/fuse.
+                  boot.kernelModules = [ "fuse" ];
+                  networking.hostName = "wyrd-drive-e2e";
+                  # In-guest wyrd for drive provisioning (init) and
+                  # debugging; the services reference the same package.
+                  environment.systemPackages = [
+                    self.packages.x86_64-linux.wyrd
+                  ];
+                  services.openssh = {
+                    enable = true;
+                    settings.PermitRootLogin = "yes";
+                    settings.PasswordAuthentication = true;
+                  };
+                  # Test-only credential: the guest is an ephemeral
+                  # KVM VM on the host-only network, never exposed.
+                  users.users.root.password = "wyrd-e2e";
+                  virtualisation.vmVariant = {
+                    memorySize = 2048;
+                    diskSize = 8192;
+                    graphics = false;
+                  };
+                  services.wyrd.drives = {
+                    vault-demo = {
+                      enable = true;
+                      driveDir = "/var/lib/wyrd/demo";
+                      mode = "vault";
+                      identityFile = "/etc/wyrd/identity";
+                      passphraseFile = "/etc/wyrd/passphrase";
+                      relays = [ "wss://relay.example" ];
+                      logFile = "/var/log/wyrd-demo.log";
+                      package = self.packages.x86_64-linux.wyrd;
+                    };
+                    mount-demo = {
+                      enable = true;
+                      driveDir = "/var/lib/wyrd/laptop";
+                      mode = "mount";
+                      mountpoint = "/mnt/wyrd";
+                      identityFile = "/etc/wyrd/identity";
+                      package = self.packages.x86_64-linux.wyrd;
+                    };
+                  };
+                }
+              )
+            ];
+          };
         };
       # Bootable Incus images for the gate task, one output per role.
       # Each output dir holds exactly manifest.json (gate.image/v1)

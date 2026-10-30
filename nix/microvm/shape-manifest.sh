@@ -104,6 +104,7 @@ nix/microvm/relay.nix
 tests/harness/e2e-guard.sh
 tests/harness/e2e-helpers.bash
 tests/harness/step-grammar.sh
+tests/microvm/drive-service-leg.sh
 tests/gate/gate-entry.sh
 tests/gate/gate-entry-smoke.bats
 tests/gate/gate-phase-01.bats
