@@ -397,9 +397,9 @@ fn the_disclosure_contract_is_stated_in_exactly_one_place() {
     let docs = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs");
     let architecture =
         std::fs::read_to_string(docs.join("architecture.md")).expect("architecture.md reads");
-    let trust = std::fs::read_to_string(docs.join("trust.md")).expect("trust.md reads");
-    let fetch =
-        std::fs::read_to_string(docs.join("fetch-on-open.md")).expect("fetch-on-open.md reads");
+    let trust = std::fs::read_to_string(docs.join("contracts/trust.md")).expect("trust.md reads");
+    let fetch = std::fs::read_to_string(docs.join("design/fetch-on-open.md"))
+        .expect("fetch-on-open.md reads");
 
     // The canonical sentence lives in architecture.md, exactly once,
     // and in no other normative document.

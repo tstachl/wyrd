@@ -61,6 +61,22 @@ The frontier is the live network and the v0.4 desktop product.
 implemented / tested / integrated / end-to-end verified / proposed) is
 defined in `documentation.md`.
 
+## Fixed scope
+
+Two scope statements live here, exactly once, and nowhere else.
+
+**Windows is out of v0.4 entirely.** The only credential reader fails
+closed on non-Unix builds, so a Windows build cannot open a drive — no
+application, no lifecycle, no native filesystem presentation.
+
+**Content IDs never reach vaults as vault disclosure.** The guarantee
+binds the keyless-replica position (ciphertext, sizes, and timing only —
+never plaintext, paths, or plaintext equality); a member-hosted
+composition holds that metadata as a drive member, not as vault
+disclosure; a public release drive discloses it by a deliberate,
+per-drive, irreversible waiver (release-read v1). The full matrix is
+`contracts/trust.md`.
+
 ## Contract index
 
 Normative contracts — each invariant lives in exactly one of these:
