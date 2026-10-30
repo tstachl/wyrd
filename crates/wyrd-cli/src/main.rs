@@ -452,7 +452,7 @@ fn command(args: Vec<String>) -> Result<(), CliError> {
             // instead of overflowing `Instant + Duration` in the loop.
             if !(1..=86_400).contains(&interval) {
                 return Err(CliError::Usage(format!(
-                    "--interval must be 1-86400 seconds, got {interval}"
+                    "--interval must be 1-86400 seconds (a sanity ceiling: past a day the deadline stops being pacing): got {interval}"
                 )));
             }
             mount(

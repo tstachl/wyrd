@@ -124,16 +124,26 @@ def read_sidecar(path):
         return None
 
 
+def rank_claim(posture_unix):
+    """Fresh beats stale: recency alone cannot promote a dead
+    holder over a live one. Mirrors the daemon's `fresher`."""
+    age = int(time.time()) - posture_unix
+    if age <= POSTURE_FRESH_SECS:
+        return (2, -age)
+    return (1, -age)
+
+
 def holder_sentence(drive_dir):
-    """The freshest sidecar claim, or the absence said plainly."""
+    """The fresher sidecar claim, or the absence said plainly."""
     claims = []
     for name in ("vault.posture", "mount.posture"):
         claim = read_sidecar(os.path.join(drive_dir, name))
         if claim is not None:
-            claims.append(claim)
+            posture_unix, instance, mount_mode = claim
+            claims.append((rank_claim(posture_unix), posture_unix, instance, mount_mode))
     if not claims:
         return "no posture recorded (the holder never published)"
-    posture_unix, instance, mount_mode = max(claims, key=lambda claim: claim[0])
+    _, posture_unix, instance, mount_mode = max(claims, key=lambda claim: (claim[0], claim[1]))
     age = int(time.time()) - posture_unix
     if mount_mode:
         return (
