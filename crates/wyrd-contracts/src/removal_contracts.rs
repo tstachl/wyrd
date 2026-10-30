@@ -268,3 +268,40 @@ fn removal_bounds_acquisition_and_retires_the_identity() {
         "fresh identity admits onto the removal tip"
     );
 }
+
+/// Negative invariant (OD-15-C): a role change is a device
+/// replacement. A current member admits as a reader under neither tag
+/// (`AlreadyMember`), and after removal the same device returns under
+/// neither tag either (`RetiredDevice`) — single-use identity refuses
+/// the old key, so the re-admission names a fresh device. A picker
+/// offering `change role` would offer this removal-plus-admission
+/// without saying so, which is what the invariant forbids.
+#[test]
+fn a_role_change_is_a_device_replacement() {
+    let mut owner = owner();
+    let member = device(0x20);
+    owner
+        .engine
+        .admit_device(member.id, member.encryption_key)
+        .unwrap();
+    // A current member admits as a reader under no tag.
+    assert!(matches!(
+        owner.engine.admit_reader(member.id, member.encryption_key),
+        Err(EngineError::AlreadyMember)
+    ));
+    assert!(matches!(
+        owner.engine.admit_device(member.id, member.encryption_key),
+        Err(EngineError::AlreadyMember)
+    ));
+    // Removal retires the identity for both roles: return needs a
+    // fresh device, and the lost invitation stays lost.
+    owner.engine.remove_device(member.id).unwrap();
+    assert!(matches!(
+        owner.engine.admit_reader(member.id, member.encryption_key),
+        Err(EngineError::RetiredDevice)
+    ));
+    assert!(matches!(
+        owner.engine.admit_device(member.id, member.encryption_key),
+        Err(EngineError::RetiredDevice)
+    ));
+}
