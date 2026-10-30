@@ -105,13 +105,15 @@ runner-drive = "nixosConfigurations.wyrd-drive-vm.config.microvm.runner.qemu"
 # Declared VM topology for the drive-service task: data only, same
 # shape contract as the e2e task (pinned by
 # tests/harness/test-topology-toml.sh). One box on tap-d, the next
-# free slot after the e2e trio.
+# free slot after the e2e trio. mem_mb is 2049, not 2048: QEMU hangs
+# exactly-2GiB microvm guests in ACPI init (initrd/ACPI overlap,
+# microvm-nix/microvm.nix#171); mirrors nix/microvm/drive.nix.
 [tasks.wyrd-drive-e2e.topology]
 version = 1
 boxes = ["drive"]
 [tasks.wyrd-drive-e2e.topology.box.drive]
 vcpu = 2
-mem_mb = 2048
+mem_mb = 2049
 tap = "tap-d"
 mac = "02:00:00:00:07:13"
 ip = "10.0.7.13/24"
