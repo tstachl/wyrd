@@ -61,11 +61,21 @@
 #  10. `ngit release publish <version>` with `--blossom-server` (or a
 #      kind-10063 server list from the publisher), plus `--relay` as needed.
 #
-# If no signing identity is provisioned, the macOS cut does not ship: the
-# honest outcome is a Linux-only cut with the macOS halves deferred, not a
-# macOS cut with the signed-artifact clause quietly waived (a Definition-of-
-# Done contract is not waivable). Record whichever happens against the cut
-# with a named owner.
+# If no signing identity is provisioned, the macOS cut does not ship as a
+# release: the honest outcome is a Linux-only cut with the macOS halves
+# deferred, not a macOS cut with the signed-artifact clause quietly waived
+# (a Definition-of-Done contract is not waivable). Developer and
+# early-adopter builds are the named fallback, not the release: an ad-hoc
+# (`codesign -s -`) or self-signed build runs fine for an informed user
+# who accepts the Gatekeeper warning and the manual override, but it fails
+# the acceptance test, which demands a notarized app a first-time user
+# installs without hunting for an override. Verify the current override
+# path (System Settings, Privacy and Security) against the shipping macOS
+# at release time; it has moved between releases. The File Provider
+# extension is the open risk: untested whether macOS loads it without a
+# real identity and provisioning profile, so test that before assuming the
+# fallback covers the file-manager path. Record whichever happens against
+# the cut with a named owner.
 #
 # The first publish also creates the `wyrd` application owned by the
 # publishing maintainer; repository maintainership alone grants no release
