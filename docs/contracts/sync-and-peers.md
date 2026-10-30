@@ -496,6 +496,14 @@ only verified immutable chunks behind, so resume needs no special mechanism.
 
 ## Materialization policy vs peer role
 
+This document owns the materialization vocabulary. The residency
+states (`REMOTE_ONLY`, `CACHED`, `PINNED`) are protocol vocabulary;
+the two-valued CLI rendering (`RetentionPolicy::Pinned` /
+`RetentionPolicy::RemoteOnly` in `crates/wyrd-core/src/policy.rs`,
+where fetched-by-access `CACHED` collapses into `REMOTE_ONLY`) is the
+normalization rule, owned by the policy module and pointed at from
+here — nowhere else in the doc estate may mint a third set of names.
+
 Peer role and materialization are independent parameters:
 
 - **Roles:** `vault` (replicates every object, never prunes) and `mirror`

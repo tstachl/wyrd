@@ -398,7 +398,8 @@ fn voided_branch_reference_is_voided() {
 #[test]
 fn stale_fork_becomes_superseded_when_the_log_advances() {
     // S1 and S2 are same-epoch heads; log advances; new work parents on
-    // S1 only. S2 is a stale fork: superseded, browsable, never live.
+    // S1 only. S2 is a stale fork: superseded, visible through the
+    // head listing with its classification, never live.
     let mut f = Fixture::new(1);
     let mut dag = SnapshotDag::new(f.drive);
     let base = f.owner_snapshot(Vec::new(), tree_id(1));

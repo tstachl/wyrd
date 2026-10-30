@@ -99,8 +99,9 @@ pub enum Classification {
     Eligible,
     /// Live-lineage but not an eligible head: the accepted past.
     CanonicalHistory,
-    /// Authorized stale fork below the current epoch: browsable via time
-    /// travel, never live.
+    /// Authorized stale fork below the current epoch: visible through
+    /// the head listing with its classification, never live; contents
+    /// are never projected and arbitrary historical browsing is v0.5 work.
     Superseded,
     /// Authorized same-epoch work off the live lineage: legitimate work
     /// on a doomed fork; owner recovery is the remedy. Inherited and

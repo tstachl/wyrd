@@ -64,7 +64,24 @@ while IFS= read -r _f; do
   [ -n "$_f" ] || continue
   printf '%s\n' "$MANIFEST" | grep -qxF "$_f" || UNPINNED="$UNPINNED $_f"
 done < <(git -C "$ROOT" ls-files Cargo.toml Cargo.lock rust-toolchain.toml 'crates')
-[[ -z "$UNPINNED" ]] || die "manifest omits Cargo inputs:$UNPINNED"
+[[ -z "$UNPINNED" ]] || {
+  # Self-diagnosing failure: the emitter derives its Cargo set from
+  # live `git ls-files`, so a missing line means the tree moved
+  # between the emitter run and this read, or a read degraded on the
+  # worker. Dump the read-only git state so the next occurrence
+  # points at harness concurrency vs worker I/O instead of the repo
+  # (no repo edit can fix a dynamic listing).
+  echo "diagnostics for the Cargo-inputs mismatch:" >&2
+  echo "  HEAD: $(git -C "$ROOT" log --oneline -1 2>&1 || true)" >&2
+  echo "  status: $(git -C "$ROOT" status --porcelain 2>&1 | head -20 || true)" >&2
+  echo "  ls-files count now: $(git -C "$ROOT" ls-files Cargo.toml Cargo.lock rust-toolchain.toml 'crates' 2>&1 | grep -c . || true)" >&2
+  for _f in $UNPINNED; do
+    # shellcheck disable=SC2086
+    echo "  recheck ${_f}: still listed: [$(git -C "$ROOT" ls-files -- "$_f" 2>&1 || true)]; on disk: $([[ -f "$ROOT/$_f" ]] && echo yes || echo no)" >&2
+  done
+  unset _f
+  die "manifest omits Cargo inputs:$UNPINNED"
+}
 pass "manifest pins every tracked Cargo input"
 
 # Subject slot declared.
