@@ -1540,6 +1540,171 @@ fn no_surface_authors_a_conflict_resolution() {
     );
 }
 
+/// Contract (OD-15-A, OD-15-C): no v0.4 surface offers a role choice.
+///
+/// The membership state machine has no role-change operation — roles
+/// change through removal and single-use identity names a fresh device
+/// — so a picker would sell a device replacement as a role change.
+/// v0.4 sharing is member-only: the reader role stays reachable only
+/// through the CLI's existing `member invite --reader`, and no
+/// presentation surface may render a role selector.
+///
+/// The check has two halves. The structural half pins the axis the
+/// decision turns on: the `Change` enum carries exactly the five
+/// decided kinds (no `SetRole` to hang a picker on), and the single
+/// `enum Role` in the workspace is the materialization/serving axis in
+/// `wyrd-core/src/role.rs`, not a membership role. The surface half
+/// scans the presentation crates for picker vocabulary; the CLI's
+/// `member` command is the one exempted owner-mediated path (it keeps
+/// `--reader`), so any second surface reaching for role-choice
+/// vocabulary fails loudly.
+#[test]
+fn no_v04_surface_offers_a_role_choice() {
+    let root = workspace_root();
+    // Structural half: the membership axis has no role change to pick.
+    let membership = fs::read_to_string(root.join("crates/wyrd-format/src/membership.rs"))
+        .expect("membership readable");
+    for variant in [
+        "Change::Admit(",
+        "Change::Remove(",
+        "Change::Rotate",
+        "Change::SetOwners(",
+        "Change::AdmitReader(",
+    ] {
+        assert!(
+            membership.contains(variant),
+            "the five decided change kinds stay: missing {variant}"
+        );
+    }
+    assert!(
+        !membership.contains("SetRole") && !membership.contains("ChangeRole"),
+        "no role-change variant on the membership axis"
+    );
+    let mut role_defs = Vec::new();
+    for member in [
+        "crates/wyrd-core/src",
+        "crates/wyrd-format/src",
+        "crates/wyrd-sync/src",
+    ] {
+        let (files, errors) = collect_rs_files(&root.join(member), &root);
+        assert!(
+            errors.is_empty(),
+            "{member} source walk errors:\n- {}",
+            errors.join("\n- ")
+        );
+        for (path, text) in files {
+            let code = code_text(&text);
+            for (index, line) in code.lines().enumerate() {
+                let trimmed = line.trim();
+                // Exactly `enum Role`, not `RoleState` / `RoleError` /
+                // `Transition`: the next char after `Role` must not be
+                // a name char. The single hit is the
+                // materialization/serving axis in wyrd-core/src/role.rs.
+                for marker in ["enum Role", "struct Role"] {
+                    let mut search = 0;
+                    while let Some(found) = trimmed[search..].find(marker) {
+                        let after = search + found + marker.len();
+                        let boundary = trimmed[after..]
+                            .chars()
+                            .next()
+                            .is_none_or(|c| !(c.is_alphanumeric() || c == '_'));
+                        if boundary {
+                            role_defs.push(format!("{path}:{}", index + 1));
+                            break;
+                        }
+                        search = after;
+                    }
+                }
+            }
+        }
+    }
+    assert_eq!(
+        role_defs.len(),
+        1,
+        "exactly one Role type in the workspace (the materialization axis): {role_defs:?}"
+    );
+    assert!(
+        role_defs[0].ends_with("crates/wyrd-core/src/role.rs:41")
+            || role_defs[0].contains("crates/wyrd-core/src/role.rs"),
+        "the single Role lives on the materialization axis: {:?}",
+        role_defs
+    );
+
+    // Surface half: no picker vocabulary outside the CLI member path.
+    let mut refs: Vec<(String, String)> = Vec::new();
+    for member in [
+        "crates/wyrd-app/src",
+        "crates/wyrd-daemon/src",
+        "crates/wyrd-fuse/src",
+        "crates/wyrd-cli/src",
+    ] {
+        let (files, errors) = collect_rs_files(&root.join(member), &root);
+        assert!(
+            errors.is_empty(),
+            "{member} source walk errors:\n- {}",
+            errors.join("\n- ")
+        );
+        refs.extend(files);
+    }
+    assert!(!refs.is_empty(), "the surface crates hold sources to check");
+    let (exempt, rest): (Vec<_>, Vec<_>) = refs
+        .into_iter()
+        .partition(|(p, _)| p.ends_with("commands/member.rs") || p.ends_with("args.rs"));
+    assert!(
+        !exempt.is_empty(),
+        "the CLI member exemption is live: member.rs/args.rs still carry --reader"
+    );
+    let exempt_code: String = exempt
+        .iter()
+        .map(|(_, t)| code_text(t))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        exempt_code.contains("--reader") || exempt_code.contains("reader"),
+        "the exemption is live: the CLI member path still names the reader flag"
+    );
+    let borrowed: Vec<(&str, &str)> = rest.iter().map(|(p, t)| (p.as_str(), t.as_str())).collect();
+    let violations = check_no_surface_offers_role_choice(&borrowed);
+    assert!(
+        violations.is_empty(),
+        "role-choice violations:\n- {}",
+        violations.join("\n- ")
+    );
+}
+
+/// Check that no presentation surface offers a membership role choice:
+/// picker widgets (`RolePicker`, `role_picker`, `role-choice`,
+/// `role_choice`) and a role-change primitive (`SetRole`,
+/// `ChangeRole`) are library-forbidden vocabulary outside the CLI's
+/// exempted member path. Pure over the file set so the negative tests
+/// below can prove the checker bites without touching the filesystem.
+fn check_no_surface_offers_role_choice(files: &[(&str, &str)]) -> Vec<String> {
+    const FORBIDDEN: &[&str] = &[
+        "RolePicker",
+        "role_picker",
+        "role-choice",
+        "role_choice",
+        "SetRole",
+        "ChangeRole",
+    ];
+    let mut violations = Vec::new();
+    for (path, text) in files {
+        let code = code_text(text);
+        for (index, line) in code.lines().enumerate() {
+            for marker in FORBIDDEN {
+                if line.contains(marker) {
+                    violations.push(format!(
+                        "{path}:{} names role-choice vocabulary (`{marker}`): v0.4 sharing is \
+                         member-only (the CLI --reader path is the single exemption)",
+                        index + 1
+                    ));
+                }
+            }
+        }
+    }
+    violations
+}
+
 /// Check that no v0.4 surface authors a conflict resolution: the
 /// resolution primitive (`MergeSelection`, `Engine::merge_heads`) is
 /// library vocabulary, and no surface module may name it. The one

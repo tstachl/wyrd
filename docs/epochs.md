@@ -116,6 +116,24 @@ Change application (`apply(state, changes)`), pinned semantics:
   fresh epoch secret.
 - Changes apply sequentially; `changes` is non-empty.
 
+### v0.4 product decision: member-only sharing (OD-15-A)
+
+Sharing in v0.4 is member-only. The reader role stays reachable only
+through the CLI's existing `member invite --reader`; no v0.4 surface
+offers it, mentions it, or hints at it. The protocol role set is not a
+product role: the membership state machine above has no role-change
+operation, so a picker that appeared to change a role would actually be
+replacing a device under a new identity. The invite step offers a member
+and nothing else, because it was told to.
+
+### Negative invariant (OD-15-C)
+
+No v0.4 surface may present a role choice, and no surface may present a
+role change without stating that it replaces the device identity. A
+surface that offered `change role` without saying so would offer
+something the object model cannot express: roles change through removal,
+and single-use identity means the re-admission names a fresh device.
+
 ### Validity and rootedness
 
 A transition is **valid** iff:

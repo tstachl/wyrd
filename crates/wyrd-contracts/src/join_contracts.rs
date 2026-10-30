@@ -223,6 +223,303 @@ fn reader_converges_read_only() {
     ));
 }
 
+/// Contract (OD-15-A downgrade pin): readers receive ongoing snapshot
+/// announcements. The behaviour is driven end to end in
+/// `wyrd-sync`'s `tests_reader::reader_receives_ongoing_snapshot_announcements`;
+/// this is the contract-suite placement, asserted from outside the
+/// crate that implements it: after admission catch-up, a member-authored
+/// snapshot queues the reader's announcement obligation, the reader's
+/// drain accepts it, and redelivery collapses to a duplicate (the
+/// announcement committed, not suppressed).
+#[test]
+fn readers_receive_ongoing_announcements() {
+    use wyrd_format::{Entry, MemoryObjectStore, ObjectKind, ObjectStore, Tree};
+
+    let mut owner = owner();
+    let newcomer = device(0x20);
+    let outcome = owner
+        .engine
+        .admit_reader(newcomer.id, newcomer.encryption_key)
+        .unwrap();
+    assert_eq!(outcome.transition.epoch, 2, "admission opens epoch 2");
+    let mut joined = Engine::accept_invitation(
+        scratch_dir("join-reader-ongoing"),
+        "contracts",
+        newcomer.identity.clone(),
+        newcomer.encryption.clone(),
+        &outcome.invitation,
+    )
+    .unwrap();
+    // Catch-up first: transition plus capability converge the reader
+    // onto the admission state before any snapshot exists.
+    let mut outbox = Relay::new();
+    let sent = owner.engine.deliver_pending(&mut outbox).unwrap();
+    assert!(sent >= 2, "transition plus capability at minimum");
+    let mut catch_up = Vec::new();
+    while let Some(delivery) = outbox.recv().unwrap() {
+        let id = delivery.id();
+        catch_up.push(delivery.envelope().clone());
+        outbox.settle(id, Disposition::Ack).unwrap();
+    }
+    let report = joined.drain(&mut newcomer_relay(catch_up)).unwrap();
+    assert_eq!(report.accepted, 2, "reader converges on admission");
+    assert_eq!(report.skipped, 0);
+
+    // A member-authored snapshot after admission: the obligation must
+    // name the reader, or it stays stale past admission catch-up.
+    let mut objects = MemoryObjectStore::default();
+    let chunk = objects.insert(ObjectKind::Chunk, b"ongoing").unwrap();
+    let tree = Tree::from_entries(vec![Entry::file("on.txt", 7, false, vec![chunk]).unwrap()])
+        .unwrap()
+        .insert_into(&mut objects)
+        .unwrap();
+    let authorized = owner.engine.author_snapshot(&objects, tree).unwrap();
+    let snapshot_id = authorized.snapshot().snapshot_id();
+    let pending = owner.engine.pending_announcements().unwrap();
+    assert!(
+        pending.contains(&(snapshot_id, newcomer.id)),
+        "ongoing authoring queues the announcement for the reader: {pending:?}"
+    );
+
+    // The announcement travels the production delivery path and the
+    // reader's drain accepts it.
+    let mut announcement_outbox = Relay::new();
+    let sent = owner
+        .engine
+        .announce_snapshot(&authorized, &mut announcement_outbox, None)
+        .unwrap();
+    assert!(sent >= 1, "the announcement discharges");
+    let mut envelopes = Vec::new();
+    while let Some(delivery) = announcement_outbox.recv().unwrap() {
+        let id = delivery.id();
+        envelopes.push(delivery.envelope().clone());
+        announcement_outbox.settle(id, Disposition::Ack).unwrap();
+    }
+    assert!(!envelopes.is_empty(), "delivery produced envelopes");
+    let report = joined
+        .drain(&mut newcomer_relay(envelopes.clone()))
+        .unwrap();
+    assert!(
+        report.accepted >= 1,
+        "the reader accepts the ongoing announcement: {report:?}"
+    );
+    // Redelivery of the same bytes collapses to a duplicate: the
+    // announcement committed instead of suppressing.
+    let mut redelivery = Relay::new();
+    redelivery.queue(envelopes);
+    let report = joined.drain(&mut redelivery).unwrap();
+    assert!(
+        report.duplicates >= 1,
+        "the received announcement is durable: {report:?}"
+    );
+}
+
+/// Contract (OD-15-A downgrade pin): a reader-authored announcement
+/// commits no fact. Readers hold epoch secrets and materialize, but
+/// author nothing: intake suppresses a reader-signed announcement
+/// before the compatibility gate, before staging, and before any fact
+/// commits — the verdict is memory-only and bounded. The test drives it
+/// over the public delivery path with a hand-signed reader announcement:
+/// the drain processes it, the announcement store, pending obligations,
+/// and live heads are unchanged, and redelivery suppresses again
+/// (no duplicate — nothing durable committed).
+#[test]
+fn reader_authored_announcements_commit_no_fact() {
+    use wyrd_format::membership::Admission;
+    use wyrd_format::membership::{
+        set_root, MEMBER_SET_CONTEXT, OWNER_SET_CONTEXT, READER_SET_CONTEXT,
+    };
+    use wyrd_format::{Change, MembershipTransition, SnapshotId};
+    use wyrd_sync::control::{
+        sign_announcement, CapabilityPayload, Message, SnapshotAnnouncement, TransitionPayload,
+    };
+    use wyrd_sync::keys::capability::Capability;
+    use wyrd_sync::keys::EpochSecret;
+
+    let owner_device = device(0x10);
+    let reader = device(0x22);
+    let epoch1 = EpochSecret::from_bytes([0x51; 32]);
+    let epoch2 = EpochSecret::from_bytes([0x52; 32]);
+    let genesis = signed_transition(
+        1,
+        None,
+        vec![],
+        vec![
+            Change::Admit(Admission {
+                device: owner_device.id,
+                encryption_key: owner_device.encryption_key,
+            }),
+            Change::SetOwners(vec![owner_device.id]),
+        ],
+        &[owner_device.id],
+        &[owner_device.id],
+        &owner_device,
+    );
+    // Manual epoch-2 reader admission with known secrets: the helper
+    // `signed_transition` hardcodes an empty reader set, so the
+    // transition is built directly with the reader root.
+    let mut admit = MembershipTransition::new(
+        2,
+        Some(genesis.transition_id()),
+        vec![],
+        vec![Change::AdmitReader(Admission {
+            device: reader.id,
+            encryption_key: reader.encryption_key,
+        })],
+        set_root(MEMBER_SET_CONTEXT, &[owner_device.id]).unwrap(),
+        set_root(OWNER_SET_CONTEXT, &[owner_device.id]).unwrap(),
+        set_root(READER_SET_CONTEXT, &[reader.id]).unwrap(),
+        owner_device.id,
+    )
+    .unwrap();
+    crate::support::sign_transition(&mut admit, &owner_device.signing, &drive());
+
+    let dir = scratch_dir("join-reader-suppress");
+    let mut engine = Engine::open(
+        dir,
+        drive(),
+        owner_device.id,
+        "contracts",
+        owner_device.identity.clone(),
+        owner_device.encryption.clone(),
+    )
+    .unwrap();
+    engine.add_epoch_key(1, zeroize::Zeroizing::new(epoch1.control_key(&drive(), 1)));
+    engine.add_epoch_key(2, zeroize::Zeroizing::new(epoch2.control_key(&drive(), 2)));
+    let mut relay = Relay::new();
+    relay.queue([sealed_envelope(
+        &owner_device.identity,
+        owner_device.id,
+        &epoch1,
+        1,
+        &Message::MembershipTransition(TransitionPayload {
+            transition: genesis.canonical_bytes(),
+        }),
+    )]);
+    let report = engine.drain(&mut relay).unwrap();
+    assert_eq!(report.accepted, 1, "genesis drains");
+    let cap = Capability::new(
+        drive(),
+        owner_device.id,
+        owner_device.encryption_key,
+        genesis.transition_id(),
+        1,
+        vec![epoch1.clone()],
+    )
+    .unwrap();
+    relay.queue([sealed_envelope(
+        &owner_device.identity,
+        owner_device.id,
+        &epoch1,
+        1,
+        &Message::Capability(CapabilityPayload {
+            device: owner_device.id,
+            epoch: 1,
+            wrapped: cap.wrap().unwrap().as_bytes().to_vec(),
+        }),
+    )]);
+    let report = engine.drain(&mut relay).unwrap();
+    assert_eq!(report.accepted, 1, "self capability installs epoch 1");
+    // The epoch-2 reader admission travels under epoch 1, like the
+    // rig's own admit transition.
+    relay.queue([sealed_envelope(
+        &owner_device.identity,
+        owner_device.id,
+        &epoch1,
+        1,
+        &Message::MembershipTransition(TransitionPayload {
+            transition: admit.canonical_bytes(),
+        }),
+    )]);
+    let report = engine.drain(&mut relay).unwrap();
+    assert_eq!(report.accepted, 1, "reader admission drains");
+    let tip = engine.membership_log().known_state().expect("tip");
+    assert_eq!(tip.epoch, 2);
+    assert!(
+        engine
+            .membership_log()
+            .readers_of(&tip.transition_id)
+            .expect("post state")
+            .contains(&reader.id),
+        "reader is a reader of the admission state"
+    );
+
+    // Baseline: no heads beyond genesis, no pending announcements.
+    let heads_before = engine.live_heads().unwrap();
+    let pending_before = engine.pending_announcements().unwrap();
+    assert!(
+        pending_before.is_empty(),
+        "no pending announcements before the forged send: {pending_before:?}"
+    );
+
+    // A reader-signed announcement for a snapshot the reader could
+    // never author, sealed under the epoch the reader holds.
+    let snapshot = SnapshotId::from_bytes([0xAB; 32]);
+    let mut announcement = SnapshotAnnouncement {
+        snapshot,
+        author: reader.id,
+        epoch: 2,
+        membership: tip.transition_id,
+        body_root: wyrd_format::BaoRoot::from_bytes([0x44; 32]),
+        root_manifest: wyrd_format::ContentId::from_bytes([0x55; 32]),
+        root_manifest_transport: wyrd_format::BaoRoot::from_bytes([0x66; 32]),
+        node_addr: None,
+        signature: [0; 64],
+    };
+    sign_announcement(&mut announcement, &reader.identity, &drive());
+    relay.queue([sealed_envelope(
+        &reader.identity,
+        owner_device.id,
+        &epoch2,
+        2,
+        &Message::SnapshotAnnouncement(announcement.clone()),
+    )]);
+    let report = engine.drain(&mut relay).unwrap();
+    assert!(
+        report.accepted >= 1,
+        "the forged announcement is processed: {report:?}"
+    );
+    // Nothing committed: heads, pending obligations, and the durable
+    // outbox are unchanged afterwards.
+    assert_eq!(
+        engine.live_heads().unwrap(),
+        heads_before,
+        "suppression leaves heads untouched"
+    );
+    assert_eq!(
+        engine.pending_announcements().unwrap(),
+        pending_before,
+        "suppression queues no fetch and holds nothing pending"
+    );
+    // A fresh seal of the same reader-signed bytes suppresses again
+    // instead of collapsing to a duplicate: the verdict was
+    // memory-only, so no announcement fact committed. (Identical
+    // bytes would dedupe on the message id without reprocessing;
+    // a fresh seal forces intake to judge the content again, and
+    // the reader check fires before the known-announcement gate.)
+    relay.queue([sealed_envelope(
+        &reader.identity,
+        owner_device.id,
+        &epoch2,
+        2,
+        &Message::SnapshotAnnouncement(announcement),
+    )]);
+    let report = engine.drain(&mut relay).unwrap();
+    assert!(
+        report.accepted >= 1,
+        "a suppressed announcement re-suppresses on fresh seal: {report:?}"
+    );
+    assert_eq!(
+        report.duplicates, 0,
+        "a suppressed announcement commits nothing to redeliver as duplicate: {report:?}"
+    );
+    assert_eq!(
+        engine.live_heads().unwrap(),
+        heads_before,
+        "redelivery still leaves heads untouched"
+    );
+}
+
 /// Ordered catch-up converges: transition plus capability drain to
 /// acceptance with nothing held, skipped, or duplicated.
 #[test]

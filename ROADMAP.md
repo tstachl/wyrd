@@ -366,7 +366,8 @@ A cross-platform desktop application around the core, on macOS and Linux:
 drive lifecycle (create, join, leave, device enrollment and
 removal or revocation, owner and member management, drive deletion and
 export where applicable), invitation and join flow, sharing and membership
-UX (protocol membership is not user-facing sharing: roles, removal
+UX (protocol membership is not user-facing sharing: v0.4 sharing is
+member-only with no role picker — see `docs/epochs.md` — plus removal
 consequences for materialized data, ownership transfer), sync status,
 pause and resume, selective sync and materialization, storage usage,
 offline status, relay status, conflict indicators, settings,
