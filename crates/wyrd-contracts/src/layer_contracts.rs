@@ -803,7 +803,7 @@ fn release_assets_cover_every_platform_tag() {
         fs::read_to_string(root.join(".ngit/release.yaml")).expect("release.yaml is readable");
     let assets = release_assets(&manifest);
     assert!(!assets.is_empty(), "release.yaml names no assets at all");
-    let mut tags: Vec<&str> = assets.iter().map(|asset| asset.1).collect();
+    let mut tags: Vec<&str> = assets.iter().map(|asset| asset.2).collect();
     tags.sort_unstable();
     let mut expected: Vec<&str> = platform_of.values().copied().collect();
     expected.sort_unstable();
@@ -812,18 +812,23 @@ fn release_assets_cover_every_platform_tag() {
         "one asset per shipped platform, no more and no fewer"
     );
     let mut violations = Vec::new();
-    for (file, tag) in &assets {
-        let want = if tag.starts_with("macos-") {
-            ".dmg"
+    for (file, mime, tag) in &assets {
+        let (want_ext, want_mime) = if tag.starts_with("macos-") {
+            (".dmg", "application/x-apple-diskimage")
         } else if tag.starts_with("linux-") {
-            ".flatpak"
+            (".flatpak", "application/vnd.flatpak")
         } else {
             violations.push(format!("{tag} names no known platform family"));
             continue;
         };
-        if !file.ends_with(want) {
+        if !file.ends_with(want_ext) {
             violations.push(format!(
-                "{tag} delivers as an installer, but its asset is {file} (want *{want})"
+                "{tag} delivers as an installer, but its asset is {file} (want *{want_ext})"
+            ));
+        }
+        if *mime != want_mime {
+            violations.push(format!(
+                "{file} declares {mime} but the installer shape needs {want_mime}"
             ));
         }
         if file.ends_with(".tar.gz") {
@@ -842,14 +847,19 @@ fn release_assets_cover_every_platform_tag() {
     );
 
     // The Linux installer the assets promise has a manifest with the
-    // release app-id and the host as its command. Structure only: the
-    // bundle itself builds at release time on the publisher's machine.
+    // release app-id and the host as its command, each on its own
+    // line: a marker embedded in a longer line does not count.
+    // Structure only: the bundle itself builds at release time on the
+    // publisher's machine.
     let flatpak = fs::read_to_string(root.join("flatpak/md.enesis.wyrd.yaml"))
         .expect("the Flatpak manifest exists");
-    for marker in ["app-id: md.enesis.wyrd", "command: wyrd-app"] {
+    for marker in ["app-id: md.enesis.wyrd", "command: wyrd-app"]
+        .iter()
+        .copied()
+    {
         assert!(
-            flatpak.contains(marker),
-            "the Flatpak manifest lost {marker:?}"
+            flatpak.lines().any(|line| line.trim() == marker),
+            "the Flatpak manifest lost {marker:?} as its own line"
         );
     }
 }
@@ -884,12 +894,16 @@ fn flake_string_list<'a>(flake: &'a str, name: &str) -> Vec<&'a str> {
     items
 }
 
-/// `(file, platform)` pairs from the `assets:` block of the release
-/// manifest. Each asset is a `file:` line followed by its `platforms:`
-/// line; anything else in the block fails the parse loudly.
-fn release_assets(manifest: &str) -> Vec<(&str, &str)> {
+/// `(file, mime, platform)` triples from the `assets:` block of the
+/// release manifest. Each asset is a `file:` line, a `mime:` line,
+/// then its `platforms:` line; anything else in the block fails the
+/// parse loudly. Format-sensitive by design: a cosmetic reformat that
+/// moves a marker fails this guard, and that failure is the guard
+/// working, not a false positive.
+fn release_assets(manifest: &str) -> Vec<(&str, &str, &str)> {
     let mut assets = Vec::new();
     let mut file: Option<&str> = None;
+    let mut mime: Option<&str> = None;
     for line in manifest.lines() {
         let trimmed = line.trim();
         if let Some(value) = trimmed.strip_prefix("- file: ") {
@@ -898,12 +912,16 @@ fn release_assets(manifest: &str) -> Vec<(&str, &str)> {
                 "asset {file:?} never closed with its platforms"
             );
             file = Some(value.trim());
+        } else if let Some(value) = trimmed.strip_prefix("mime: ") {
+            assert!(mime.is_none(), "asset {file:?} declares two MIME types");
+            mime = Some(value.trim());
         } else if let Some(value) = trimmed.strip_prefix("platforms: [") {
             let tag = value
                 .strip_suffix(']')
                 .expect("platforms list closes on its line");
             assets.push((
                 file.take().expect("platforms without an asset file"),
+                mime.take().expect("platforms without an asset MIME type"),
                 tag.trim(),
             ));
         }

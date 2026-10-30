@@ -26,8 +26,8 @@ license = "MIT"
 # none, so an accidental capability impl cannot compile.
 unsafe_code = "deny"
 
-# Vendored fuser 0.18.0 (vendor/fuser) with four divergences, all
-# audited under OD-07-D before any macOS binary is signed. The crate
+# Vendored fuser 0.18.0 (vendor/fuser) with four divergences across five
+# files, all audited under OD-07-D before any macOS binary is signed. The crate
 # is deliberately not a workspace member, so the workspace lints above
 # do not apply to it.
 #  1. build.rs macOS branch mounts via libfuse3, because upstream's
