@@ -284,7 +284,11 @@
           # imageGuestFor takes wyrdSrc with no default (N4): an
           # omitted argument must never silently mean the repo's own
           # build. The single call site always passes explicitly.
-          imageGuestFor = { role, wyrdSrc }:
+          # extraModules extends the guest composition for role
+          # guests that carry more than the suite (the drive-service
+          # evidence guest adds the wyrd-drive module and its
+          # declarations); the e2e trio passes none.
+          imageGuestFor = { role, wyrdSrc, extraModules ? [ ] }:
             let
               wyrdPkg =
                 if wyrdSrc == null
@@ -307,7 +311,7 @@
                   environment.systemPackages =
                     [ wyrdPkg pkgs.nak ];
                 })
-              ];
+              ] ++ extraModules;
             };
           imageGuest = role: imageGuestFor { inherit role; wyrdSrc = wyrdSrcFor; };
         in
@@ -363,48 +367,19 @@
           };
           # Bootable drive-service evidence guest for the system-level
           # execution issue: the same vault+mount declaration as
-          # wyrd-drive-test, plus SSH, FUSE, and VM sizing, so the
-          # drive-service leg can boot it under KVM on odin and assert
-          # supervision behavior (active after boot, back after
-          # SIGKILL, 78-once on a held drive). Evaluated in CI like
-          # the fixture; booted only by hand on the KVM host, never
-          # in CI.
-          wyrd-drive-vm = nixpkgs.lib.nixosSystem {
-            system = "x86_64-linux";
-            modules = [
+          # wyrd-drive-test, composed onto the microvm guest path so
+          # the gate task can provision and boot it like the e2e trio.
+          # Evaluated in CI like the fixture; booted only by the
+          # drive-service task on the KVM host, never in CI.
+          wyrd-drive-vm = imageGuestFor {
+            role = "drive";
+            wyrdSrc = wyrdSrcFor;
+            extraModules = [
               self.nixosModules.wyrd-drive
               (
-                { pkgs, ... }:
+                { ... }:
                 {
-                  nixpkgs.hostPlatform = "x86_64-linux";
                   system.stateVersion = "26.05";
-                  fileSystems."/" = {
-                    device = "/dev/disk/by-label/nixos";
-                    fsType = "ext4";
-                  };
-                  boot.loader.grub.devices = [ "nodev" ];
-                  # QEMU guest needs the FUSE module for mount mode;
-                  # the service unit already allows /dev/fuse.
-                  boot.kernelModules = [ "fuse" ];
-                  networking.hostName = "wyrd-drive-e2e";
-                  # In-guest wyrd for drive provisioning (init) and
-                  # debugging; the services reference the same package.
-                  environment.systemPackages = [
-                    self.packages.x86_64-linux.wyrd
-                  ];
-                  services.openssh = {
-                    enable = true;
-                    settings.PermitRootLogin = "yes";
-                    settings.PasswordAuthentication = true;
-                  };
-                  # Test-only credential: the guest is an ephemeral
-                  # KVM VM on the host-only network, never exposed.
-                  users.users.root.password = "wyrd-e2e";
-                  virtualisation.vmVariant = {
-                    memorySize = 2048;
-                    diskSize = 8192;
-                    graphics = false;
-                  };
                   services.wyrd.drives = {
                     vault-demo = {
                       enable = true;

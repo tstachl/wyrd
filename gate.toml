@@ -85,3 +85,36 @@ relayRole = "relay"
 img-peer-o = "images.peer-o"
 img-peer-n = "images.peer-n"
 img-relay = "images.relay"
+
+# The drive-service evidence task: one provisioned microVM guest
+# declaring a vault and a mount through services.wyrd.drives. Data
+# only, same contract as the e2e task: the gate runner reads this
+# section from the staged revision, checks the box against the host
+# caps, provisions exactly it, builds the runner sandboxed, boots,
+# waits, and runs the entryPoint as the build user. No relay box and
+# no relayRole: supervision, not convergence, is under test. requires
+# names only what the entry execs beyond the ambient base (bash, ssh,
+# flock, coreutils ride with the runner like the e2e entry relies on
+# unlisted): bats runs the suite file.
+[tasks.wyrd-drive-e2e]
+entryPoint = "tests/drive/drive-service-entry.sh"
+requires = ["bats"]
+
+[tasks.wyrd-drive-e2e.builds]
+runner-drive = "nixosConfigurations.wyrd-drive-vm.config.microvm.runner.qemu"
+
+# Declared VM topology for the drive-service task: data only, same
+# shape contract as the e2e task (pinned by
+# tests/harness/test-topology-toml.sh). One box on tap-d, the next
+# free slot after the e2e trio.
+[tasks.wyrd-drive-e2e.topology]
+version = 1
+boxes = ["drive"]
+
+[tasks.wyrd-drive-e2e.topology.box.drive]
+vcpu = 2
+mem_mb = 2048
+tap = "tap-d"
+mac = "02:00:00:00:07:13"
+ip = "10.0.7.13/24"
+ssh = true

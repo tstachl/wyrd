@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/lima/drive-service-launchd.sh — system-level evidence for the
+# tests/drive/drive-service-launchd.sh — system-level evidence for the
 # declarative drive service on macOS: the launchd daemon the module
 # generates, not a hand-written mirror. Evaluates the darwin fixture,
 # rewrites only the per-run paths (label, drive, secrets, logs, dead
@@ -14,7 +14,7 @@
 # for what this leg proves (plist shape, wrapper contract, restart
 # behavior). System-domain boot stays covered by module evaluation
 # plus the NixOS guest leg. Run from the checkout:
-#   ./tests/lima/drive-service-launchd.sh [--keep]
+#   ./tests/drive/drive-service-launchd.sh [--keep]
 set -euo pipefail
 
 KEEP=0
