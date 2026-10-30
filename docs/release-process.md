@@ -56,7 +56,12 @@ Right:
 1. Prep PR: version bump, `CHANGELOG.md ## [Unreleased]` entries,
    fresh fixture under `crates/wyrd-contracts/tests/fixtures/stores/<tag>/`, re-enabled
    replay test, upgrade-contract brought current. No gates, no tag.
-2. Confirm `nix build .#wyrd-dist` archives under the new version name.
+2. Confirm `nix build .#wyrd-dist` archives under the new version name:
+   still the Flatpak module source and the CI x86_64 leg input, not a
+   release asset. Run the pre-sign gate here too (OD-07-D, hard): unpack
+   crates.io fuser 0.18.0, `diff -rq` against `vendor/fuser`, content-diff
+   every file it names; acceptance is empty apart from the four Cargo.toml
+   divergences. No signature without it.
 3. Cut PR: flip `dist.yml` (`if: false`), drop the `release.yaml`
    banner, rename `[Unreleased]` to the version, carve the scope line
    in `ROADMAP.md`, re-pin any drifted page slots. Merge.
@@ -76,16 +81,17 @@ Right:
    comparison is the trust anchor: never skip it. Record the hash
    at once: the run log is the primary source, and the signed
    `.asc` record lands on the odin Blossom server as backup.
-7. `build.sh <version> --strict --remote-builders aarch64-darwin
-   x86_64-darwin aarch64-linux` in the devenv shell. Name the
-   systems: a bare `--strict` re-attempts linux-x86_64 locally and
-   fails without an x86 builder. Input is pinned to the release tag
-   in a detached worktree, never the working copy. Re-running over
-   `dist/` needs the read-only hash-prefixed files deleted first.
-   `--verify` needs system FUSE on macOS or the just-built binary
-   dies in dyld (exit 134): environment gap, not a broken binary.
-8. Run the linux-aarch64 artifact in the Lima guest (unpack, `--version`,
-   `init` + `sync status` on a scratch drive) before publishing.
+7. Build the installer legs from the `release.yaml` runbook: macOS
+   `.dmg` per arch (stage `.app`, sign, verify, notarize, staple), then
+   the Flatpak bundles per arch from the verified tarball. Input is
+   pinned to the release tag in a detached worktree, never the working
+   copy. Re-running over `dist/` needs the read-only hash-prefixed
+   files deleted first. `--verify` needs system FUSE on macOS or the
+   just-built binary dies in dyld (exit 134): environment gap, not a
+   broken binary.
+8. Run the linux-aarch64 Flatpak bundle in the Lima guest (install the
+   bundle, `--version`, `init` + `sync status` on a scratch drive)
+   before publishing.
 9. `ngit release publish <version>` with `--blossom-server` (plus
    `--relay` as needed), as the app owner — `--signer control`
    here; the default identity is refused fail-closed with

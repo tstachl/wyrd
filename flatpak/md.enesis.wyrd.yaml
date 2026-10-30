@@ -1,0 +1,29 @@
+# Flatpak manifest for the Linux release legs (OD-07-A, Flatpak channel).
+# Built by the publisher at release time, never in CI: `flatpak-builder`
+# needs the Flathub SDK, which no sandbox provides. The bundle wraps the
+# headless host (`wyrd-app`), the same daemon-level composition the CLI's
+# owner-mode entry points ride; the window attaches later as a non-owner
+# consumer. Drive directories stay explicit CLI-style arguments, so the
+# manifest grants no filesystem persistence beyond what the run grants.
+app-id: md.enesis.wyrd
+runtime: org.freedesktop.Platform
+runtime-version: '24.08'
+sdk: org.freedesktop.Sdk
+command: wyrd-app
+finish-args:
+  # Peer sync and relay traffic ride IP, so the sandbox must too.
+  - --share=network
+modules:
+  - name: wyrd
+    buildsystem: simple
+    # Staged by the publisher from the verified build input:
+    #   nix build .#packages.<system>.wyrd-app --out-link staging-wyrd-app
+    #   mkdir -p staging && cp staging-wyrd-app/bin/wyrd-app staging/
+    # then `flatpak-builder --repo repo builddir md.enesis.wyrd.yaml`.
+    # `type: dir` keeps the module source the exact binary CI attested,
+    # never a re-download.
+    sources:
+      - type: dir
+        path: staging
+    build-commands:
+      - install -D wyrd-app /app/bin/wyrd-app
