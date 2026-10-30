@@ -67,7 +67,12 @@ Right:
    in `ROADMAP.md`, re-pin any drifted page slots. Merge.
 4. Green gates, revision-bound to the release tip: microVM from the
    gate plus Lima locally. A green run on a pre-rebase tip does not
-   cover the rebased tip; re-run after the final rebase.
+   cover the rebased tip; re-run after the final rebase. The per-merge
+   partition leg (`relay_partition_produces_two_heads_and_both_survive`,
+   default gate) carries the milestone between cuts; the manual
+   cross-host microVM run (phases 10 and 13) is required at the cut and
+   for every merge touching a divergence claim — write path, closure
+   and head gating, intake, fact log, or teardown/lifecycle.
 4. Pre-tag compatibility read (runbook step 1 in `release.yaml`).
    Tagging is the point of no return.
 5. Tag `v<version>` on the merge commit, push the tag. This fires

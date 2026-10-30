@@ -1228,7 +1228,8 @@ mod terminal;
 // Engine behavior tests live beside the engine, one file per theme:
 // the shared two-device scenario harness plus convergence,
 // authoring, drain/resume, serving, lifecycle, materialization,
-// arrival-order/scale properties, and outbox delivery.
+// arrival-order/scale properties, outbox delivery, and the per-merge
+// partition leg.
 #[cfg(test)]
 mod tests_authoring;
 #[cfg(test)]
@@ -1249,6 +1250,8 @@ mod tests_late_joiner;
 mod tests_lifecycle;
 #[cfg(test)]
 mod tests_materialization;
+#[cfg(test)]
+mod tests_partition;
 #[cfg(test)]
 mod tests_preframing;
 #[cfg(test)]
