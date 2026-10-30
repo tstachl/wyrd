@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Switch-time conflict probe for one Wyrd drive (OD-34-C).
 
 Run by the module's activation script before the supervisor starts
