@@ -876,14 +876,14 @@ fn release_assets_cover_every_platform_tag() {
 #[test]
 fn the_nix_module_declares_exactly_one_owner_per_drive() {
     let root = workspace_root();
-    let options =
-        fs::read_to_string(root.join("nix/wyrd-drive-options.nix")).expect("options readable");
+    let options = fs::read_to_string(root.join("nix/drive/options.nix")).expect("options readable");
     let nixos =
-        fs::read_to_string(root.join("nix/wyrd-drive-nixos.nix")).expect("nixos module readable");
+        fs::read_to_string(root.join("nix/drive/nixos.nix")).expect("nixos module readable");
     let darwin =
-        fs::read_to_string(root.join("nix/wyrd-drive-darwin.nix")).expect("darwin module readable");
-    let wrapper = fs::read_to_string(root.join("nix/wyrd-supervise.py")).expect("wrapper readable");
-    let probe = fs::read_to_string(root.join("nix/wyrd-drive-probe.py")).expect("probe readable");
+        fs::read_to_string(root.join("nix/drive/darwin.nix")).expect("darwin module readable");
+    let wrapper =
+        fs::read_to_string(root.join("nix/drive/supervise.py")).expect("wrapper readable");
+    let probe = fs::read_to_string(root.join("nix/drive/probe.py")).expect("probe readable");
     let cli = fs::read_to_string(root.join("crates/wyrd-cli/src/main.rs")).expect("cli readable");
 
     // One mode per declaration is structural (an enum); two

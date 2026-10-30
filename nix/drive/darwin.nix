@@ -13,10 +13,10 @@ let
   enabled = lib.filterAttrs (_: drive: drive.enable) config.services.wyrd.drives;
 
   supervise = pkgs.writers.writePython3Bin "wyrd-supervise" { } (
-    builtins.readFile ./wyrd-supervise.py
+    builtins.readFile ./supervise.py
   );
   probe = pkgs.writers.writePython3Bin "wyrd-drive-probe" { } (
-    builtins.readFile ./wyrd-drive-probe.py
+    builtins.readFile ./probe.py
   );
 
   posturePath = drive:
@@ -45,7 +45,7 @@ let
     ++ wyrdArgs drive;
 in
 {
-  imports = [ ./wyrd-drive-options.nix ];
+  imports = [ ./options.nix ];
 
   launchd.daemons = lib.mapAttrs'
     (

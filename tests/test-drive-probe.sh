@@ -8,7 +8,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-PROBE="$ROOT/nix/wyrd-drive-probe.py"
+PROBE="$ROOT/nix/drive/probe.py"
 
 PASS=0
 pass() { PASS=$((PASS + 1)); echo "  PASS: $1"; }

@@ -205,8 +205,8 @@
       # Declarative drive services (34): one module, two modes, one
       # declaration per drive. The same file serves NixOS and
       # nix-darwin, selected on `stdenv` inside.
-      nixosModules.wyrd-drive = import ./nix/wyrd-drive-nixos.nix;
-      darwinModules.wyrd-drive = import ./nix/wyrd-drive-darwin.nix;
+      nixosModules.wyrd-drive = import ./nix/drive/nixos.nix;
+      darwinModules.wyrd-drive = import ./nix/drive/darwin.nix;
       nixosModules.default = self.nixosModules.wyrd-drive;
       darwinModules.default = self.darwinModules.wyrd-drive;
       # Module evaluation fixtures for the shell gate

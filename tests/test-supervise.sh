@@ -8,7 +8,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-WRAP="$ROOT/nix/wyrd-supervise.py"
+WRAP="$ROOT/nix/drive/supervise.py"
 
 PASS=0
 pass() { PASS=$((PASS + 1)); echo "  PASS: $1"; }
