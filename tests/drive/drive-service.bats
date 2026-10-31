@@ -24,54 +24,18 @@ load "$BATS_TEST_DIRNAME/../harness/e2e-guard.sh"
 SSH_OPTS="-i $SSH_KEY -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o BatchMode=yes -o LogLevel=ERROR"
 
 setup_file() {
-  # Wrapper and state first: setup_file runs before per-test
-  # setup(), so an unwrapped direct invocation must refuse here,
-  # before any ssh or guest mutation. Same checks as setup(),
-  # which keeps them for the per-test path.
+  # Wrapper and state first: the entry already validated datum,
+  # lock, token, provisioned the guest, and rebooted it. This
+  # re-checks the contract per file without touching the guest:
+  # provisioning and reboot live in the entry precisely so no
+  # runner-version setup_file semantics can skip them, and so an
+  # unwrapped direct bats invocation has no mutation path.
   for v in STATE_DIR DRIVE_SSH WYRD_E2E_TOKEN WYRD_E2E_LOCK SSH_KEY; do
     [ -n "${!v:-}" ] || { echo "drive-service: $v is not set (run through tests/drive/drive-service-entry.sh)" >&2; return 1; }
   done
   RUN="$STATE_DIR/run"
   [ -d "$RUN" ] || { echo "drive-service: run tree is missing at $RUN" >&2; return 1; }
   e2e_require_wrapped "$RUN/e2e-env.sh" "./tests/drive/drive-service-entry.sh (gate task)" --check-owner-pid
-  # Provision test secrets and two fresh drives: harness work, not
-  # service config. The module supervises; the suite owns the secrets.
-  # No service start here: test 1 must observe boot activation, so
-  # the only boot in this run is the reboot below, with fixtures
-  # retained on the VM disk.
-  # shellcheck disable=SC2086
-  run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'set -e
-    sudo mkdir -p /etc/wyrd /var/lib/wyrd/demo /var/lib/wyrd/laptop /mnt/wyrd
-    # sudo resolves the hostname on every invocation; the isolated
-    # guest has no DNS, so pin it or every sudo below stalls on the
-    # resolver and burns the ssh timeout instead of asserting.
-    grep -q wyrd-drive /etc/hosts || echo "127.0.0.1 wyrd-drive" | sudo tee -a /etc/hosts >/dev/null
-    head -c32 /dev/urandom | sudo tee /etc/wyrd/identity >/dev/null
-    sudo chmod 600 /etc/wyrd/identity
-    printf e2e-test-passphrase | sudo tee /etc/wyrd/passphrase >/dev/null
-    sudo chmod 600 /etc/wyrd/passphrase
-    sudo wyrd init /var/lib/wyrd/demo --identity-file /etc/wyrd/identity --passphrase-file /etc/wyrd/passphrase
-    sudo wyrd init /var/lib/wyrd/laptop --identity-file /etc/wyrd/identity --passphrase-file /etc/wyrd/passphrase'
-  [ "$status" -eq 0 ] || { echo "$output"; touch "$RUN/FAILED"; false; }
-  # Controlled boot with retained fixtures: the reboot proves the
-  # units activate at boot with secrets and drives already in place.
-  # A manual start here would mask a missing boot enablement.
-  # shellcheck disable=SC2086
-  run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'cat /proc/sys/kernel/random/boot_id'
-  [ "$status" -eq 0 ] || { echo "$output"; touch "$RUN/FAILED"; false; }
-  OLD_BOOT="$(printf '%s' "$output" | tr -d ' \n')"
-  # shellcheck disable=SC2086
-  run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'sudo systemctl reboot' || true
-  echo "drive-service: waiting for the controlled reboot (up to 300s)"
-  BOOTED=""
-  for _ in $(seq 1 60); do
-    # shellcheck disable=SC2086
-    run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'cat /proc/sys/kernel/random/boot_id' 2>/dev/null || true
-    NEW_BOOT="$(printf '%s' "$output" | tr -d ' \n' || true)"
-    if [[ -n "$NEW_BOOT" && "$NEW_BOOT" != "$OLD_BOOT" ]]; then BOOTED=1; break; fi
-    sleep 5
-  done
-  [[ -n "$BOOTED" ]] || { echo "guest did not come back with a new boot id"; touch "$RUN/FAILED"; false; }
 }
 
 teardown() {

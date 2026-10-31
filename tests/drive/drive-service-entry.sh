@@ -84,4 +84,54 @@ export WYRD_E2E_TOKEN="$TOKEN" WYRD_E2E_LOCK="$LOCK_FILE"
 export STATE_DIR SSH_KEY DRIVE_SSH
 
 command -v bats >/dev/null || { echo "drive-service-entry.sh: bats is not on PATH" >&2; exit 1; }
+command -v timeout >/dev/null || { echo "drive-service-entry.sh: timeout is not on PATH" >&2; exit 1; }
+command -v flock >/dev/null || { echo "drive-service-entry.sh: flock is not on PATH" >&2; exit 1; }
+command -v ssh >/dev/null || { echo "drive-service-entry.sh: ssh is not on PATH" >&2; exit 1; }
+echo "drive-service-entry.sh: bats $(bats --version 2>/dev/null || echo unknown)"
+SSH_OPTS="-i $SSH_KEY -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o BatchMode=yes -o LogLevel=ERROR"
+
+# The guest must answer before anything else runs: without this,
+# every later ssh fails identically and the failure looks like a
+# test defect instead of missing infrastructure.
+timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" true \
+  || { echo "drive-service-entry.sh: guest ssh is unreachable at $DRIVE_SSH" >&2; exit 1; }
+
+# Provision test secrets and two fresh drives: harness work, not
+# service config. The module supervises; the entry owns the secrets.
+# This lives here (not in bats setup_file) so it runs under plain
+# bash with no dependence on any runner's setup_file semantics, and
+# so an unwrapped direct bats invocation can never mutate the guest
+# (the bats file contains no provisioning path at all).
+# shellcheck disable=SC2086
+timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'set -e
+  sudo mkdir -p /etc/wyrd /var/lib/wyrd/demo /var/lib/wyrd/laptop /mnt/wyrd
+  # sudo resolves the hostname on every invocation; the isolated
+  # guest has no DNS, so pin it or every sudo below stalls on the
+  # resolver and burns the ssh timeout instead of asserting.
+  grep -q wyrd-drive /etc/hosts || echo "127.0.0.1 wyrd-drive" | sudo tee -a /etc/hosts >/dev/null
+  head -c32 /dev/urandom | sudo tee /etc/wyrd/identity >/dev/null
+  sudo chmod 600 /etc/wyrd/identity
+  printf e2e-test-passphrase | sudo tee /etc/wyrd/passphrase >/dev/null
+  sudo chmod 600 /etc/wyrd/passphrase
+  sudo wyrd init /var/lib/wyrd/demo --identity-file /etc/wyrd/identity --passphrase-file /etc/wyrd/passphrase
+  sudo wyrd init /var/lib/wyrd/laptop --identity-file /etc/wyrd/identity --passphrase-file /etc/wyrd/passphrase' \
+  || { echo "drive-service-entry.sh: provisioning failed" >&2; exit 1; }
+
+# Controlled boot with retained fixtures: the reboot proves the
+# units activate at boot with secrets and drives already in place.
+# A manual start here would mask a missing boot enablement.
+OLD_BOOT="$(timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'cat /proc/sys/kernel/random/boot_id')" || { echo "drive-service-entry.sh: cannot read guest boot id" >&2; exit 1; }
+timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'sudo systemctl reboot' || true
+echo "drive-service-entry.sh: waiting for the controlled reboot (up to 300s)"
+BOOTED=""
+for _ in $(seq 1 60); do
+  # shellcheck disable=SC2086
+  NEW_BOOT="$(timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'cat /proc/sys/kernel/random/boot_id' 2>/dev/null || true)"
+  NEW_BOOT="$(printf '%s' "$NEW_BOOT" | tr -d ' \n')"
+  if [[ -n "$NEW_BOOT" && "$NEW_BOOT" != "$OLD_BOOT" ]]; then BOOTED=1; break; fi
+  sleep 5
+done
+[[ -n "$BOOTED" ]] || { echo "drive-service-entry.sh: guest did not come back with a new boot id" >&2; exit 1; }
+echo "drive-service-entry.sh: guest rebooted ($OLD_BOOT -> $NEW_BOOT)"
+
 exec bats "$ROOT/tests/drive/drive-service.bats"
