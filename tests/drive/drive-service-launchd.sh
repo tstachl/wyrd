@@ -203,11 +203,18 @@ HOLDER_PID=$!
 # fork that died instantly would leave an unheld "held drive" and
 # make the refusal assertions vacuous. The vault is stopped, so a
 # failed second-party probe names the helper as the holder — no
-# third party can contend.
+# third party can contend. Poll the contention itself rather than
+# asserting once: process-exists (kill -0) races fork-vs-first-flock,
+# and only the acquired lock is load-bearing.
 if ! kill -0 "$HOLDER_PID" 2>/dev/null; then HOLDER_PID=""; die "holder died immediately after fork"; fi
-if python3 -c 'import fcntl; f = open("'"$SCRATCH"'/demo/LOCK"); fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)' 2>/dev/null; then
+HELD=""
+for _ in $(seq 1 12); do
+  if ! python3 -c 'import fcntl; f = open("'"$SCRATCH"'/demo/LOCK"); fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)' 2>/dev/null; then HELD=1; break; fi
+  sleep 2
+done
+if [[ -z "$HELD" ]]; then
   kill "$HOLDER_PID" 2>/dev/null || true; wait "$HOLDER_PID" 2>/dev/null || true; HOLDER_PID=""
-  die "second-party non-blocking flock succeeded: nothing holds the drive"
+  die "second-party non-blocking flock kept succeeding: nothing holds the drive"
 fi
 say "holder verified (exclusive lock held)"
 launchctl bootstrap "gui/$(id -u)" "$SCRATCH/vault.plist" || die "bootstrap under held drive failed"

@@ -208,9 +208,20 @@ setup() {
   # shellcheck disable=SC2086
   run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'systemctl is-active e2e-lockholder'
   [ "$status" -eq 0 ] || { echo "holder unit is not active: $output"; touch "$RUN/FAILED"; false; }
-  # shellcheck disable=SC2086
-  run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" "sudo $FLOCK -n /var/lib/wyrd/demo/LOCK true"
-  [ "$status" -ne 0 ] || { echo "second-party non-blocking flock succeeded: nothing holds the drive"; touch "$RUN/FAILED"; false; }
+  # Poll the contention itself rather than asserting once:
+  # is-active fires when the process spawns, possibly before its
+  # first flock lands. Only the acquired lock is load-bearing. A
+  # refused non-blocking flock prints nothing; ssh failures print
+  # diagnostics, so empty output plus non-zero status is the
+  # contention signal and anything else keeps polling.
+  HELD=""
+  for _ in $(seq 1 15); do
+    # shellcheck disable=SC2086
+    run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" "sudo $FLOCK -n /var/lib/wyrd/demo/LOCK true" 2>/dev/null || true
+    if [ "$status" -ne 0 ] && [ -z "$output" ]; then HELD=1; break; fi
+    sleep 2
+  done
+  [[ -n "$HELD" ]] || { echo "second-party non-blocking flock kept succeeding (last: $output)"; touch "$RUN/FAILED"; false; }
   # Clear the start-limit accounting first: boot (no identity), the
   # setup restart, and the SIGKILL restart already spent the unit's
   # StartLimitBurst budget inside one 300s window, so a bare start
