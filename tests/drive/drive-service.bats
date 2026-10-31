@@ -24,12 +24,21 @@ load "$BATS_TEST_DIRNAME/../harness/e2e-guard.sh"
 SSH_OPTS="-i $SSH_KEY -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o BatchMode=yes -o LogLevel=ERROR"
 
 setup_file() {
-  # Provision test secrets and two fresh drives once per file:
-  # harness work, not service config. The module supervises; the
-  # suite owns the secrets.
-  for v in SSH_KEY DRIVE_SSH; do
+  # Wrapper and state first: setup_file runs before per-test
+  # setup(), so an unwrapped direct invocation must refuse here,
+  # before any ssh or guest mutation. Same checks as setup(),
+  # which keeps them for the per-test path.
+  for v in STATE_DIR DRIVE_SSH WYRD_E2E_TOKEN WYRD_E2E_LOCK SSH_KEY; do
     [ -n "${!v:-}" ] || { echo "drive-service: $v is not set (run through tests/drive/drive-service-entry.sh)" >&2; return 1; }
   done
+  RUN="$STATE_DIR/run"
+  [ -d "$RUN" ] || { echo "drive-service: run tree is missing at $RUN" >&2; return 1; }
+  e2e_require_wrapped "$RUN/e2e-env.sh" "./tests/drive/drive-service-entry.sh (gate task)" --check-owner-pid
+  # Provision test secrets and two fresh drives: harness work, not
+  # service config. The module supervises; the suite owns the secrets.
+  # No service start here: test 1 must observe boot activation, so
+  # the only boot in this run is the reboot below, with fixtures
+  # retained on the VM disk.
   # shellcheck disable=SC2086
   run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'set -e
     sudo mkdir -p /etc/wyrd /var/lib/wyrd/demo /var/lib/wyrd/laptop /mnt/wyrd
@@ -42,9 +51,27 @@ setup_file() {
     printf e2e-test-passphrase | sudo tee /etc/wyrd/passphrase >/dev/null
     sudo chmod 600 /etc/wyrd/passphrase
     sudo wyrd init /var/lib/wyrd/demo --identity-file /etc/wyrd/identity --passphrase-file /etc/wyrd/passphrase
-    sudo wyrd init /var/lib/wyrd/laptop --identity-file /etc/wyrd/identity --passphrase-file /etc/wyrd/passphrase
-    sudo systemctl restart wyrd-vault-demo wyrd-mount-demo'
+    sudo wyrd init /var/lib/wyrd/laptop --identity-file /etc/wyrd/identity --passphrase-file /etc/wyrd/passphrase'
   [ "$status" -eq 0 ] || { echo "$output"; touch "$RUN/FAILED"; false; }
+  # Controlled boot with retained fixtures: the reboot proves the
+  # units activate at boot with secrets and drives already in place.
+  # A manual start here would mask a missing boot enablement.
+  # shellcheck disable=SC2086
+  run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'cat /proc/sys/kernel/random/boot_id'
+  [ "$status" -eq 0 ] || { echo "$output"; touch "$RUN/FAILED"; false; }
+  OLD_BOOT="$(printf '%s' "$output" | tr -d ' \n')"
+  # shellcheck disable=SC2086
+  run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'sudo systemctl reboot' || true
+  echo "drive-service: waiting for the controlled reboot (up to 300s)"
+  BOOTED=""
+  for _ in $(seq 1 60); do
+    # shellcheck disable=SC2086
+    run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'cat /proc/sys/kernel/random/boot_id' 2>/dev/null || true
+    NEW_BOOT="$(printf '%s' "$output" | tr -d ' \n' || true)"
+    if [[ -n "$NEW_BOOT" && "$NEW_BOOT" != "$OLD_BOOT" ]]; then BOOTED=1; break; fi
+    sleep 5
+  done
+  [[ -n "$BOOTED" ]] || { echo "guest did not come back with a new boot id"; touch "$RUN/FAILED"; false; }
 }
 
 teardown() {
@@ -56,6 +83,24 @@ teardown() {
     # shellcheck disable=SC2086
     run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'systemctl --no-pager --lines=30 status wyrd-vault-demo wyrd-mount-demo e2e-lockholder; echo ===; journalctl --no-pager -u wyrd-vault-demo -u wyrd-mount-demo -u e2e-lockholder | tail -n 60'
     echo "$output"
+    # Serving-namespace mount table: host-side mountinfo cannot see
+    # the PrivateTmp mount, so dump it from inside the mount child
+    # when one exists.
+    # Serving-namespace mount table: host-side mountinfo cannot see
+    # the PrivateTmp mount, so dump it from inside the mount child
+    # when one exists. Absolute paths: sudo does not inherit the
+    # login PATH these names resolved under.
+    # shellcheck disable=SC2086
+    run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'command -v nsenter; command -v pgrep'
+    NSENTER_T="$(printf '%s\n' "$output" | sed -n '1p')"
+    PGREP_T="$(printf '%s\n' "$output" | sed -n '2p')"
+    if [ -n "$NSENTER_T" ] && [ -n "$PGREP_T" ]; then
+      # shellcheck disable=SC2086
+      run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" "MPID=\$(systemctl show -p MainPID --value wyrd-mount-demo 2>/dev/null); CHILD=\$($PGREP_T -P \$MPID wyrd 2>/dev/null | head -n 1); if [ -n \"\$CHILD\" ]; then sudo $NSENTER_T -t \$CHILD -m cat /proc/self/mountinfo 2>/dev/null | grep -E ' mnt|fuse' || echo 'no mnt/fuse entries in serving namespace'; else echo 'no mount child to enter'; fi"
+      echo "$output"
+    else
+      echo "drive-service: could not resolve nsenter/pgrep for namespace forensics"
+    fi
   fi
   return 0
 }
@@ -96,8 +141,13 @@ setup() {
   [ "$status" -eq 0 ] || { echo "$output"; touch "$RUN/FAILED"; false; }
   [ -n "$output" ] || { echo "no supervised wyrd child under mount wrapper pid $MNT_MAIN"; touch "$RUN/FAILED"; false; }
   MNT_CHILD="$output"
+  # Serving proof in two halves: a FUSE mount entry at exactly
+  # /mnt/wyrd in the serving namespace (an unmounted directory
+  # passes an ls but has no mount-table entry), then a filesystem
+  # operation through it. Polled, since serving starts after the
+  # unit reports active.
   # shellcheck disable=SC2086
-  run timeout 180 ssh $SSH_OPTS "$DRIVE_SSH" "for i in 1 2 3 4 5 6 7 8 9 10 11 12; do sudo $NSENTER -t $MNT_CHILD -m $LSCMD /mnt/wyrd >/dev/null 2>&1 && break || sleep 5; done; sudo $NSENTER -t $MNT_CHILD -m $LSCMD /mnt/wyrd"
+  run timeout 180 ssh $SSH_OPTS "$DRIVE_SSH" "for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do sudo $NSENTER -t $MNT_CHILD -m grep -E ' /mnt/wyrd .*fuse' /proc/self/mountinfo >/dev/null 2>&1 && sudo $NSENTER -t $MNT_CHILD -m $LSCMD /mnt/wyrd >/dev/null 2>&1 && break || sleep 5; done; sudo $NSENTER -t $MNT_CHILD -m grep -E ' /mnt/wyrd .*fuse' /proc/self/mountinfo && sudo $NSENTER -t $MNT_CHILD -m $LSCMD /mnt/wyrd"
   [ "$status" -eq 0 ] || { echo "$output"; touch "$RUN/FAILED"; false; }
 }
 

@@ -2,13 +2,17 @@
 # tests/drive/drive-service-launchd.sh — system-level evidence for the
 # declarative drive service on macOS: the launchd daemon the module
 # generates, not a hand-written mirror. Evaluates the darwin fixture,
-# rewrites only the per-run paths (label, drive, secrets, logs, dead
-# relay) onto the module's argv, lints the plist, bootstraps it in
-# the user domain, and asserts the supervisor contract live: running
-# with posture after load, back with a new pid after SIGKILL of the
-# supervised child, and exactly one exit-78 with no retry against a
-# held drive. The mount daemon is generated and linted the same way
-# (its run needs macFUSE, so only the vault boots here).
+# copies each evaluated serviceConfig verbatim and rewrites only the
+# per-run fields (label, ProgramArguments paths, log paths) — a
+# module restart-policy change shows up in what runs here. Lints both
+# plists, bootstraps the vault in the user domain, and asserts the
+# supervisor contract live: running with posture after load, back with
+# a new pid after SIGKILL of the supervised child, and exactly one
+# exit-78 with no retry against a held drive (stop-first ordering so
+# the holder is the only possible contender; attempt verified by
+# LastExitStatus and unchanged run count across the throttle window).
+# The mount daemon is generated and linted the same way (its run
+# needs macFUSE, so only the vault boots here).
 #
 # No sudo: the user agent domain carries identical KeepAlive semantics
 # for what this leg proves (plist shape, wrapper contract, restart
@@ -41,9 +45,14 @@ say "revision under test: $REV"
 say "log: $LOG"
 
 LABEL="md.enesis.wyrd.e2e-vault"
+HOLDER_PID=""
 SCRATCH="$ROOT/.drive-launchd-$SHORT"
 mkdir -p "$SCRATCH"
 cleanup() {
+  # The lock holder is a background child of this shell: reap it
+  # here so a failure or interruption never leaves it holding the
+  # (deleted) scratch drive past the run.
+  if [[ -n "${HOLDER_PID:-}" ]]; then kill "$HOLDER_PID" 2>/dev/null || true; wait "$HOLDER_PID" 2>/dev/null || true; HOLDER_PID=""; fi
   say "cleanup: booting out $LABEL"
   launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
   if [[ "$KEEP" == "0" ]]; then rm -rf "$SCRATCH"; else say "kept scratch dir: $SCRATCH"; fi
@@ -124,22 +133,31 @@ for i, a in enumerate(argv):
         out.append("wss://127.0.0.1:9")
     else:
         out.append(a)
-def svc(name, args, logname):
-    return {
-        "Label": name,
-        "ProgramArguments": args,
-        "RunAtLoad": True,
-        "KeepAlive": {"SuccessfulExit": True},
-        "ThrottleInterval": 30,
-        "StandardOutPath": scratch + "/" + logname,
-        "StandardErrorPath": scratch + "/" + logname,
-        "WorkingDirectory": "/",
-    }
+def svc(name, args, logname, template):
+    # The whole evaluated serviceConfig, with only the per-run
+    # fields replaced: a module restart-policy regression must show
+    # up in what this leg runs, never be papered over by a
+    # hand-mirrored dictionary.
+    out = dict(template)
+    out["Label"] = name
+    out["ProgramArguments"] = args
+    out["StandardOutPath"] = scratch + "/" + logname
+    out["StandardErrorPath"] = scratch + "/" + logname
+    return out
 with open(scratch + "/vault.plist", "wb") as f:
-    plistlib.dump(svc(label, out, "vault.log"), f, fmt=plistlib.FMT_XML)
+    plistlib.dump(svc(label, out, "vault.log", vault), f, fmt=plistlib.FMT_XML)
 mount = daemons["md.enesis.wyrd.mount-demo"]["serviceConfig"]
+mount_argv = list(mount["ProgramArguments"])
+mount_out = []
+for a in mount_argv:
+    if a == "/var/lib/wyrd/laptop":
+        mount_out.append(scratch + "/demo")
+    elif a.startswith("/var/lib/wyrd/laptop/"):
+        mount_out.append(scratch + "/demo" + a[len("/var/lib/wyrd/laptop"):])
+    else:
+        mount_out.append(a)
 with open(scratch + "/mount.plist", "wb") as f:
-    plistlib.dump(svc(label + "-mount", list(mount["ProgramArguments"]), "mount.log"), f, fmt=plistlib.FMT_XML)
+    plistlib.dump(svc(label + "-mount", mount_out, "mount.log", mount), f, fmt=plistlib.FMT_XML)
 print("plist written for:", label)
 EOF
 plutil -lint "$SCRATCH/vault.plist" || die "generated vault plist fails lint"
@@ -165,37 +183,56 @@ for _ in $(seq 1 12); do sleep 5; PID2="$(pid_of)"; [[ "$PID2" =~ ^[0-9]+$ && "$
 say "PASS: SIGKILL restarted the service (pid $PID1 -> $PID2)"
 
 say "assert: held drive fails once with 78 and no retry"
+# Stop first: the contention proof below is only airtight if the
+# vault cannot be the contender.
+launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
+sleep 2
+PID_STOPPED="$(pid_of)"
+[[ -z "$PID_STOPPED" ]] || die "vault still running after bootout (pid $PID_STOPPED)"
 python3 -c 'import fcntl, time; f = open("'"$SCRATCH"'/demo/LOCK"); fcntl.flock(f, fcntl.LOCK_EX); time.sleep(120)' >/dev/null 2>&1 &
-HOLDER=$!
+HOLDER_PID=$!
 # Prove the holder before asserting anything about the service: a
 # fork that died instantly would leave an unheld "held drive" and
-# make the refusal assertions vacuous.
+# make the refusal assertions vacuous. The vault is stopped, so a
+# failed second-party probe names the helper as the holder — no
+# third party can contend.
+if ! kill -0 "$HOLDER_PID" 2>/dev/null; then HOLDER_PID=""; die "holder died immediately after fork"; fi
 if python3 -c 'import fcntl; f = open("'"$SCRATCH"'/demo/LOCK"); fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)' 2>/dev/null; then
-  kill "$HOLDER" 2>/dev/null || true
+  kill "$HOLDER_PID" 2>/dev/null || true; wait "$HOLDER_PID" 2>/dev/null || true; HOLDER_PID=""
   die "second-party non-blocking flock succeeded: nothing holds the drive"
 fi
 say "holder verified (exclusive lock held)"
-launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
-sleep 2
-launchctl bootstrap "gui/$(id -u)" "$SCRATCH/vault.plist" 2>/dev/null || true
+launchctl bootstrap "gui/$(id -u)" "$SCRATCH/vault.plist" || die "bootstrap under held drive failed"
 sleep 12
+print_job() { launchctl print "gui/$(id -u)/$LABEL" 2>/dev/null || true; }
+print_field() { print_job | sed -n "s/^$1 = \([0-9][0-9]*\);.*/\1/p" | head -n 1; }
 PID3="$(pid_of)"
-kill "$HOLDER" 2>/dev/null || true
 if [[ "$PID3" =~ ^[0-9]+$ ]]; then
   die "held-drive service is running (pid $PID3), expected dead with 78"
 fi
-grep -q "holds the drive" "$SCRATCH/vault.log" || die "no lock-refusal trace in the daemon log"
+E3="$(print_job | sed -n 's/.*last exit code = \([0-9][0-9]*\).*/\1/p' | head -n 1)"
+[[ "$E3" == "78" ]] || die "held-drive exit is ${E3:-unknown}, expected 78"
+R3="$(print_field "runs")"
 sleep 35
 PID4="$(pid_of)"
 [[ -z "$PID4" || "$PID4" == "-" ]] || die "held drive retried (pid $PID4), expected no retry"
+E4="$(print_job | sed -n 's/.*last exit code = \([0-9][0-9]*\).*/\1/p' | head -n 1)"
+[[ "$E4" == "78" ]] || die "held-drive exit moved to ${E4:-unknown} across the throttle window, expected a single 78"
+R4="$(print_field "runs")"
+[[ "$R4" == "$R3" ]] || die "run count moved ${R3:-?}->$R4 across the throttle window: a retry happened"
 say "PASS: held drive failed once with 78, no retry"
+# Release the holder before the recovery leg: the trap is only the
+# backstop for failure paths.
+kill "$HOLDER_PID" 2>/dev/null || true
+wait "$HOLDER_PID" 2>/dev/null || true
+HOLDER_PID=""
 # Boot out the failed instance first: bootstrapping over a loaded
 # job is refused, and a restart inside the throttle window after the
 # 78 exit can refuse too — poll past either, and fail loud with
 # launchd's own error.
 launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
 BOOT_OK=""
-for i in $(seq 1 12); do
+for _ in $(seq 1 12); do
   if launchctl bootstrap "gui/$(id -u)" "$SCRATCH/vault.plist" 2>"$SCRATCH/booterr.txt"; then BOOT_OK=1; break; fi
   sleep 5
 done
