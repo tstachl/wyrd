@@ -71,6 +71,15 @@ as_e2e() { # <role> <cmd...>
   guest_exec "$role" -- runuser -u e2e -g users -G wheel -- "$@"
 }
 
+# guest_timeout <secs> <role> <cmd...>: agent exec with a hard bound.
+# timeout cannot execute a shell function, so the bound wraps the
+# gate transport binary directly — never guest_exec/on_o/on_n
+# (pinned by tests/harness/test-timeout-discipline.sh).
+guest_timeout() { # <secs> <role> <cmd...>
+  local secs="$1"; shift
+  timeout "$secs" "$GATE_GUEST_BIN" exec "$@"
+}
+
 # guest_wyrd <role> <wyrd-args...>: run the in-image wyrd binary in a
 # guest as the suite user. WYRD_BIN is the stable in-image path the
 # entry publishes; output streams back to the caller (bats `run`

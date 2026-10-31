@@ -62,7 +62,7 @@ setup() {
   # form reads fine — observed on odin, so pin the working form.
   REQ1059='{"kinds":[1059],"limit":500}'
   REQ9501='{"kinds":[9501],"limit":500}'
-  WRAPS="$(printf '%s' "$REQ1059" | timeout 30 guest_exec peer-o -- "$NAK_BIN" req "$RELAY_URL" 2>"$RUN/logs/nak-1059.err" | grep '"kind":1059' || true)"
+  WRAPS="$(printf '%s' "$REQ1059" | guest_timeout 30 peer-o -- "$NAK_BIN" req "$RELAY_URL" 2>"$RUN/logs/nak-1059.err" | grep '"kind":1059' || true)"
   [[ -n "$WRAPS" ]] || { echo "no kind-1059 wraps on the relay: control plane never flowed (see logs/nak-1059.err)"; false; }
   [[ -z "$(printf '%s\n' "$WRAPS" | grep -v '"p"' || true)" ]] \
     || { echo "gift wraps without recipient p tags on the relay (see logs/nak-1059.err)"; false; }
@@ -93,7 +93,7 @@ setup() {
   # turns a real multi-event leak into a silent pass. Draining grep
   # plus || true keeps the failure reachable exactly when it matters.
   nak_status=0
-  RUMORS="$( { printf '%s' "$REQ9501" | timeout 30 guest_exec peer-o -- "$NAK_BIN" req "$RELAY_URL" \
+  RUMORS="$( { printf '%s' "$REQ9501" | guest_timeout 30 peer-o -- "$NAK_BIN" req "$RELAY_URL" \
     2>"$RUN/logs/nak-9501.err" || nak_status=$?; } | grep '"kind":9501' || true)"
   # The leak query's real bound is the timeout above, not limit 500: a
   # zero-result subscription depends on the relay terminating it, so

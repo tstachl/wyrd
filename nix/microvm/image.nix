@@ -63,7 +63,8 @@ let
   # build enforces is read from the vendored schema file by
   # nix/microvm/validate-manifest.py — kind const, required key set,
   # per-field types/patterns/minima/maxima. A gate-side schema change
-  # the vendored copy does not have fails the build here.
+  # the vendored copy does not have is invisible here and is caught
+  # at launch.
   validateManifest = ./validate-manifest.py;
 in
 {
