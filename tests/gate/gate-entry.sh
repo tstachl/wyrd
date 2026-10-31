@@ -30,12 +30,13 @@
 #   consume (WYRD_BIN, NAK_BIN, RELAY_*, peer IPs, CHECKOUT, E2E_ROOT
 #   plus token, owner pid and debug passthroughs). It is pushed into
 #   each peer guest; the legs address it as GUEST_ENV.
-# - Holds the provision lock for the suite's lifetime, acquired
-#   before touching guest state, so the e2e guard's lock check and a
-#   later teardown agree on who owns the run. The initial acquire
-#   retries briefly: the launcher releases its own hold only as the
-#   unit starts, so a fast unit can reach this acquire while the
-#   launcher is still exiting.
+# - Holds the provision lock before writing any run-scoped state
+#   (env file, guest prep): the token minted after it belongs to the
+#   run that holds it, so the e2e guard's lock check and a later
+#   teardown agree on who owns the run. The initial acquire retries
+#   briefly: the launcher releases its own hold only as the unit
+#   starts, so a fast unit can reach this acquire while the launcher
+#   is still exiting.
 # - Accepts only --fresh (the unit always passes it); anything else
 #   is a caller mistake, not a default.
 #
@@ -127,13 +128,30 @@ RELAY_URL="ws://$RELAY_IP:$RELAY_PORT"
 WYRD_BIN="/run/current-system/sw/bin/wyrd"
 NAK_BIN="/run/current-system/sw/bin/nak"
 
+# Hold the provision lock before writing any run-scoped state: a
+# second unit that starts while the lock is held must refuse before
+# mutating the live guests or minting a token that would invalidate
+# the first run's guard file, not after. The acquire retries briefly:
+# the launcher holds this same lock until the unit starts, so a fast
+# unit reaches here while the launcher is still exiting. A lock still
+# held past the grace below is genuinely foreign (a second run got
+# past pre-flight, or teardown wedged) and still refuses.
+exec 9>"$LOCK_FILE"
+acquired=""
+for _ in $(seq 1 60); do
+  if flock -n 9 2>/dev/null; then acquired=1; break; fi
+  sleep 1
+done
+[[ -n "$acquired" ]] || { echo "gate-entry.sh: another run holds $LOCK_FILE" >&2; exit 2; }
+
 # Run environment, published where the e2e guard parses the token
 # and pid (parsed, never sourced) and pushed into each peer guest,
 # which the legs address as GUEST_ENV. The guest legs consume
 # WYRD_BIN, NAK_BIN, RELAY_*, peer IPs, CHECKOUT and E2E_ROOT from
 # this file; a token-and-pid-only file starves them under set -u.
 # RELAY_MANAGED stays 0: the relay is host-provisioned, never
-# suite-managed.
+# suite-managed. Minted after the lock: the token must belong to
+# the run that holds it.
 E2E_ROOT="/var/lib/wyrd-e2e"
 TOKEN="$(head -c16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 {
@@ -154,21 +172,6 @@ TOKEN="$(head -c16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
   printf 'E2E_INTERVAL=%q\n' "${E2E_INTERVAL:-}"
 } > "$RUN/e2e-env.sh"
 chmod 0644 "$RUN/e2e-env.sh"
-
-# Hold the provision lock before touching guest state: a second unit
-# that starts while the lock is held must refuse before mutating the
-# live guests, not after. The acquire retries briefly: the launcher
-# holds this same lock until the unit starts, so a fast unit reaches
-# here while the launcher is still exiting. A lock still held past
-# the grace below is genuinely foreign (a second run got past
-# pre-flight, or teardown wedged) and still refuses.
-exec 9>"$LOCK_FILE"
-acquired=""
-for _ in $(seq 1 60); do
-  if flock -n 9 2>/dev/null; then acquired=1; break; fi
-  sleep 1
-done
-[[ -n "$acquired" ]] || { echo "gate-entry.sh: another run holds $LOCK_FILE" >&2; exit 2; }
 
 # Guest preparation: fresh state trees on both peers, owned by the
 # suite user the legs run as, then the env file where the legs

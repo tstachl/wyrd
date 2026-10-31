@@ -11,11 +11,13 @@
 # schema (nix/microvm/image-manifest.schema.json), so the bounds the
 # build enforces are the schema's, not a hand copy.
 #
-# The schema file is a verbatim copy of the gate repo's
+# The vendored schema file is a verbatim copy of the gate repo's
 # wrapper/image-manifest.schema.json (gate rev 53b1b7b); refresh it
-# when the gate contract moves. Staleness degrades to
-# build-pass/launch-refuse, never false green: the host provisioner
-# re-validates every manifest at launch.
+# when the gate contract moves. Bounds come from the schema file, so
+# a gate-side change the vendored copy does not have fails the build
+# here; a stale vendored copy itself degrades to
+# build-pass/launch-refuse (the host re-validates at launch), never
+# false green.
 #
 # The qcow2 comes from the same make-disk-image the upstream
 # incus-virtual-machine module uses, with an explicit virtual size:
@@ -58,42 +60,11 @@ let
   };
 
   # Schema-driven manifest validation (stdlib only): every bound the
-  # build enforces is read from nix/microvm/image-manifest.schema.json
-  # — kind const, required key set with no additional properties,
-  # per-field types, patterns, minima/maxima. A schema change the
-  # vendored copy does not have fails here, not at launch.
-  validateManifest = pkgs.writeText "validate-manifest.py" ''
-    import json, re, sys
-    manifest = json.load(open(sys.argv[1]))
-    schema = json.load(open(sys.argv[2]))
-    props = schema["properties"]
-    assert manifest.get("kind") == props["kind"]["const"], \
-        "kind is not %r" % props["kind"]["const"]
-    assert set(manifest) == set(schema["required"]), \
-        "keys are not exactly %s" % sorted(schema["required"])
-    for key in schema["required"]:
-        spec, val = props[key], manifest[key]
-        t = spec.get("type")
-        if t == "string":
-            assert isinstance(val, str), "%s is not a string" % key
-        elif t == "integer":
-            assert isinstance(val, int) and not isinstance(val, bool), \
-                "%s is not an integer" % key
-        elif t == "array":
-            assert isinstance(val, list), "%s is not an array" % key
-        else:
-            raise AssertionError("unsupported schema type for %s: %s" % (key, t))
-        if "pattern" in spec:
-            assert re.search(spec["pattern"], val), \
-                "%s does not match %s" % (key, spec["pattern"])
-        if "minimum" in spec:
-            assert val >= spec["minimum"], "%s below minimum" % key
-        if "maximum" in spec:
-            assert val <= spec["maximum"], "%s above maximum" % key
-        if "maxItems" in spec:
-            assert len(val) <= spec["maxItems"], "%s has too many items" % key
-    print("manifest matches %s" % schema["$id"])
-  '';
+  # build enforces is read from the vendored schema file by
+  # nix/microvm/validate-manifest.py — kind const, required key set,
+  # per-field types/patterns/minima/maxima. A gate-side schema change
+  # the vendored copy does not have fails the build here.
+  validateManifest = ./validate-manifest.py;
 in
 {
   config = {

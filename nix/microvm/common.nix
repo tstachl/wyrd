@@ -8,7 +8,9 @@
 # There is no ssh and no shared filesystem: the Incus agent (vsock)
 # is the only control plane. The suite reaches guests through
 # GATE_GUEST_BIN (guest_exec/push/pull); guests rendezvous with each
-# other over the test bridge (see peer_serve in alpha-common.sh).
+# other over the test bridge (see peer_signal/peer_wait in
+# alpha-common.sh; the per-guest HTTP server is the wyrd-rendezvous
+# system unit below).
 # Shape and addressing live in options.gate.box, set per role in
 # nix/microvm/{peer-o,peer-n,relay}.nix: one source for the guest
 # network config, the image metadata, and the gate.image/v1 manifest
@@ -116,17 +118,21 @@
     # Run-scoped cross-guest rendezvous: every guest serves its
     # signals dir over HTTP from boot (stdlib only), so a signal a
     # leg writes stays fetchable after that leg exits — legs never
-    # start or stop this server, and the entry never touches it.
-    # Serves signals only, never the state root: creds and drives
-    # stay off the bridge. The port matches the RENDEZVOUS_PORT the
-    # entry publishes (18770); the suite addresses signals through
-    # peer_signal/peer_wait in alpha-common.sh.
+    # start or stop this server. Serves signals only, never the
+    # state root: creds and drives stay off the bridge. The port
+    # matches the RENDEZVOUS_PORT the entry publishes (18770); the
+    # suite addresses signals through peer_signal/peer_wait in
+    # alpha-common.sh.
     systemd.services.wyrd-rendezvous = {
       wantedBy = [ "multi-user.target" ];
       serviceConfig = {
         Type = "simple";
         User = "e2e";
-        ExecStartPre = "${pkgs.coreutils}/bin/mkdir -p /var/lib/wyrd-e2e/signals";
+        # Root-owned creation path: User= applies to ExecStartPre as
+        # well, and e2e cannot create under /var/lib — so the
+        # directory setup runs privileged (the `+` prefix) while the
+        # server itself stays unprivileged.
+        ExecStartPre = "+${pkgs.coreutils}/bin/install -d -o e2e -g users -m 0755 /var/lib/wyrd-e2e/signals";
         ExecStart = "${pkgs.python3Minimal}/bin/python3 -m http.server 18770 --directory /var/lib/wyrd-e2e/signals";
         Restart = "always";
         RestartSec = "5s";

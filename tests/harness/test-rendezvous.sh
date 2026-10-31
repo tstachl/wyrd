@@ -20,10 +20,10 @@ command -v python3 >/dev/null 2>&1 || { echo "  SKIP: python3 missing"; exit 0; 
 command -v timeout >/dev/null 2>&1 || { echo "  SKIP: timeout missing"; exit 0; }
 
 FIXTURE="$(mktemp -d)"
+SERVER_PID=""
 trap 'rm -rf "$FIXTURE"; kill "$SERVER_PID" 2>/dev/null || true' EXIT
 ENV_FILE="$FIXTURE/env.sh"
 : >"$ENV_FILE"
-mkdir -p "$FIXTURE/a" "$FIXTURE/b"
 PORT=18779
 
 # Source the real peer_* functions in a subshell with a stub env, so
@@ -52,8 +52,10 @@ pass "local signal resolves without the network"
 # (stdlib http.server over the signals dir, started before the writer
 # runs and surviving it), the writer signals and exits, and a second
 # shell fetches as the peer would.
-mkdir -p "$FIXTURE/a/signals"
-python3 -m http.server "$PORT" --directory "$FIXTURE/a/signals" >/dev/null 2>&1 &
+mkdir -p "$FIXTURE/a/signals" "$FIXTURE/b/signals"
+# Bind loopback only: the fixture must not expose the host or
+# collide with a developer service on all interfaces.
+python3 -m http.server "$PORT" --bind 127.0.0.1 --directory "$FIXTURE/a/signals" >/dev/null 2>&1 &
 SERVER_PID=$!
 sleep 1
 kill -0 "$SERVER_PID" 2>/dev/null || die "loopback signal server did not start"

@@ -51,10 +51,19 @@ setup() {
 
 @test "peers serve the run rendezvous channel" {
   # The boot service exposes each peer's signals dir from boot, so a
-  # signal a leg writes stays fetchable after that leg exits. Pin it
-  # here: every cross-guest wait below depends on the writer's server.
-  run timeout 120 guest_exec peer-o -- python3 -c 'import sys,urllib.request; urllib.request.urlopen("http://127.0.0.1:18770/", timeout=5)'
-  [ "$status" -eq 0 ] || { echo "rendezvous channel down on peer-o: $output"; false; }
-  run timeout 120 guest_exec peer-n -- python3 -c 'import sys,urllib.request; urllib.request.urlopen("http://127.0.0.1:18770/", timeout=5)'
-  [ "$status" -eq 0 ] || { echo "rendezvous channel down on peer-n: $output"; false; }
+  # signal a leg writes stays fetchable after that leg exits. The
+  # unit restarts on a 5 s delay, so the check retries briefly
+  # instead of racing a restart; every cross-guest wait below
+  # depends on the writer's server.
+  for peer in peer-o peer-n; do
+    active=""
+    for ((i = 0; i < 30; i++)); do
+      run guest_exec "$peer" -- systemctl is-active wyrd-rendezvous
+      if [ "$status" -eq 0 ] && [ "$output" = "active" ]; then active=1; break; fi
+      sleep 1
+    done
+    [[ -n "$active" ]] || { echo "rendezvous unit not active on $peer"; false; }
+    run timeout 120 guest_exec "$peer" -- python3 -c 'import sys,urllib.request; urllib.request.urlopen("http://127.0.0.1:18770/", timeout=5)'
+    [ "$status" -eq 0 ] || { echo "rendezvous channel down on $peer: $output"; false; }
+  done
 }

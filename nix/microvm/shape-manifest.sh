@@ -99,6 +99,8 @@ tests/lima/wyrd-alpha.yaml
 nix/microvm/empty-src
 nix/microvm/common.nix
 nix/microvm/image.nix
+nix/microvm/image-manifest.schema.json
+nix/microvm/validate-manifest.py
 nix/microvm/peer-o.nix
 nix/microvm/peer-n.nix
 nix/microvm/relay.nix

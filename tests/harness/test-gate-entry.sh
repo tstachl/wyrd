@@ -135,6 +135,12 @@ grep -q "guest-bin push peer-o $RUN_DIR/e2e-env.sh /var/lib/wyrd-e2e/e2e-env.sh$
 grep -q "guest-bin push peer-n $RUN_DIR/e2e-env.sh /var/lib/wyrd-e2e/e2e-env.sh$" "$CALLS" || die "env pushed to peer-n"
 [ -z "$(grep -E "^(ssh|scp) " "$CALLS" || true)" ] || die "driver dials nothing itself (agent only)"
 [ -z "$(grep "PEER_O=" "$CALLS" || true)" ] || die "driver assembles no ssh-style peer endpoints"
+# Ordering: the lock is acquired before any guest mutation or env
+# write, so a second unit refuses before it can disturb the live run.
+flock_line="$(grep -n '^flock -n 9$' "$CALLS" | head -1 | cut -d: -f1)"
+guest_line="$(grep -n 'guest-bin ' "$CALLS" | head -1 | cut -d: -f1)"
+[[ -n "$flock_line" && -n "$guest_line" ]] || die "lock/guest calls missing from the trace"
+[[ "$flock_line" -lt "$guest_line" ]] || die "guest prep precedes the lock acquire"
 pass "happy path assembles env, prepares guests, holds lock, execs bats"
 
 out="$(run_entry --)"
