@@ -34,7 +34,7 @@ setup() {
   mkdir -p "$RUN/logs"
   GMD="$GUEST_RUN/drives/member-n"
   GMC="$GUEST_RUN/creds/member-n"
-  guest_exec peer-n -- rm -f "$GUEST_RUN/member-ready" "$GUEST_RUN/member-done"
+  guest_exec peer-n -- rm -f "$GUEST_RUN/signals/member-ready" "$GUEST_RUN/signals/member-done"
   OD="$GUEST_RUN/drives/owner"
   OC="$GUEST_RUN/creds/owner"
   # Legs run backgrounded with output to log files (not `run`): their
@@ -52,7 +52,7 @@ setup() {
   # across this restart (redelivery observed) and holds no duplicates.
   # Missing file means no acks yet — record 0 rather than failing here;
   # the leg fails on it if the log is still empty at the end.
-  guest_exec peer-n -- cat "$GMD/mailbox.seen" 2>/dev/null | wc -l > "$RUN/seen-after-restart" \
+  guest_exec peer-n -- cat "$GMD/mailbox.seen" 2>/dev/null | wc -l | tr -d ' ' > "$RUN/seen-after-restart" \
     || echo 0 > "$RUN/seen-after-restart"
   # Upgrade rejoin (post-upgrade convergence leg,
   # nostr:nevent1qqsr9arqyq4vjvcvtfsqrqf3r5h0wp0zju2zrf7h42uzggl950e0h8qpz9mhxue69uhkwunpwdczuap49eehg57t5zx):
@@ -63,8 +63,8 @@ setup() {
   # just-built binary under the canonical name, so resolve runs for
   # real; the true cross-version extension reuses these assertions
   # with a v0.2.0 binary (fixture-half design on the issue).
-  guest_exec peer-n -- rm -f "$GUEST_RUN/member-u-ready" "$GUEST_RUN/member-u-done"
-  guest_exec peer-o -- rm -f "$GUEST_RUN/owner-u-updated" "$GUEST_RUN/upgrade-blob.sha256"
+  guest_exec peer-n -- rm -f "$GUEST_RUN/signals/member-u-ready" "$GUEST_RUN/signals/member-u-done"
+  guest_exec peer-o -- rm -f "$GUEST_RUN/signals/owner-u-updated" "$GUEST_RUN/signals/upgrade-blob.sha256"
   UPGRADE_ROOT="$(dirname "$BATS_TEST_DIRNAME")"
   UPGRADE_VERSION="$(grep '^version = ' "$UPGRADE_ROOT/Cargo.toml" | head -n 1 | cut -d'"' -f2)" \
     || { echo "workspace version unreadable ($UPGRADE_ROOT/Cargo.toml)"; false; }

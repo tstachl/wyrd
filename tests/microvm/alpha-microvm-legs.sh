@@ -55,7 +55,7 @@ leg_converge_owner() {
   poll_until 90 converged "$MNTS/xowner/from-member.txt" "member-write-1" \
     || die "owner never converged on the member's write"
   pass "owner converges on member writes across hosts"
-  touch "$E2E_ROOT/owner-done"
+  peer_signal owner-done
   stop_mount xowner INT
   check_no_leaks "$LOGDIR/mount-xowner.err" "$(cat "$c/identity")" "$(cat "$c/passphrase")"
 }
@@ -96,7 +96,7 @@ leg_converge2_owner() {
   echo "wave2-b-bytes" > "$MNTS/xowner-w2/wave2-dir/wave2-b.txt"
   echo "owner-write-2" > "$MNTS/xowner-w2/shared.txt"
   pass "wave-2 written through the FUSE adapter"
-  touch "$E2E_ROOT/owner-w2-written"
+  peer_signal owner-w2-written
   # Release budget (review F2): 420 covers the member's three 120s
   # mount polls (360) plus a minute of headless sync rounds — the
   # normal case resolves in seconds. Deeper pathology (slow syncs
@@ -176,7 +176,7 @@ leg_converge2_member() {
   # the host diff must compare the full wave, not the prefix.
   with_creds "$c" snapshot "$d" heads >"$E2E_ROOT/wave2-member-list.txt" \
     || die "member final snapshot heads failed"
-  touch "$E2E_ROOT/member-w2-done"
+  peer_signal member-w2-done
   for sync_out in "$LOGDIR"/member-w2-sync-*.out; do
     check_no_content_ids "$sync_out"
   done
@@ -223,11 +223,11 @@ leg_restart_member() {
   poll_until 120 converged "$MNTS/xmember-r/before-restart.txt" "before-restart" \
     || die "member never converged before the restart"
   pass "member holds the pre-restart route"
-  touch "$E2E_ROOT/member-ready"
+  peer_signal member-ready
   poll_until 120 converged "$MNTS/xmember-r/after-restart.txt" "after-restart" \
     || die "member never converged after the owner's re-announcement"
   pass "re-announcement recovers the route across hosts"
-  touch "$E2E_ROOT/member-done"
+  peer_signal member-done
   stop_mount xmember-r TERM
   check_no_leaks "$LOGDIR/mount-xmember-r.err" "$(cat "$c/identity")" "$(cat "$c/passphrase")"
 }
@@ -235,13 +235,13 @@ leg_restart_member() {
 # leg_upgrade_owner <drive> <creds> <relay> <archive>: mount
 # (endpoint 1), write the pre-upgrade marker, wait for the member to
 # converge on it, then stop and upgrade the serving binary in place
-# via `wyrd update` against the host-crafted same-checkout archive
+# via `wyrd update` against the phase-crafted same-checkout archive
 # before mounting fresh (endpoint 2) with the upgraded binary: the
 # stop+update+remount IS the production upgrade (new instance over a
 # persisted route, re-announced under the live route). Write the
 # post-upgrade set; the member must converge without remounting.
 # The nix store is read-only, so the update targets a writable copy
-# of the binary on the shared state root — the swap siblings live
+# of the binary in the guest state root — the swap siblings live
 # beside the copy, and WYRD_BIN is re-exported so every later helper
 # uses the upgraded build. (Issue: post-upgrade convergence leg; the
 # true cross-version extension reuses these assertions with a v0.2.0
@@ -256,9 +256,9 @@ leg_upgrade_owner() {
   pass "member converges before the upgrade"
   stop_mount xowner-u1 INT
   check_no_leaks "$LOGDIR/mount-xowner-u1.err" "$(cat "$c/identity")" "$(cat "$c/passphrase")"
-  # Writable copy first: the shared store binary cannot be swapped
-  # in place (read-only), and the update siblings must sit beside
-  # the target executable on one filesystem.
+  # Writable copy first: the in-image binary cannot be swapped
+  # in place (read-only store), and the update siblings must sit
+  # beside the target executable on one filesystem.
   local uexe="$E2E_ROOT/wyrd-upgraded/wyrd"
   mkdir -p "$E2E_ROOT/wyrd-upgraded"
   cp "$WYRD_BIN" "$uexe"
@@ -274,17 +274,17 @@ leg_upgrade_owner() {
   # Transaction rendezvous: the member waits on this before its
   # convergence poll, so a slow update reports as a slow
   # transaction, never as a route failure.
-  touch "$E2E_ROOT/owner-u-updated"
+  peer_signal owner-u-updated
   check_no_leaks "$LOGDIR/update-owner.err" "$(cat "$c/identity")" "$(cat "$c/passphrase")"
   start_mount xowner-u2 "$c" "$d" "$MNTS/xowner-u2" --relay "$relay"
   grep -q "serving over iroh" "$LOGDIR/mount-xowner-u2.err" \
     || die "upgraded owner: serving endpoint never bound"
   echo "after-upgrade" > "$MNTS/xowner-u2/after-upgrade.txt"
   # Bulk byte-identity witness: random once, hash published over the
-  # shared root — the member proves byte-identical receipt without
-  # the suite baking the bytes.
+  # rendezvous channel — the member proves byte-identical receipt
+  # without the suite baking the bytes.
   head -c 1048576 /dev/urandom > "$MNTS/xowner-u2/payload.bin"
-  sha256sum "$MNTS/xowner-u2/payload.bin" | cut -d' ' -f1 > "$E2E_ROOT/upgrade-blob.sha256"
+  sha256sum "$MNTS/xowner-u2/payload.bin" | cut -d' ' -f1 > "$E2E_ROOT/signals/upgrade-blob.sha256"
   # Bulk budget rationale: the 1MB re-fetch over the re-announced
   # post-upgrade route legitimately takes minutes — the green pass
   # needed ~146s of a ~155s step envelope (9s margin, flaky by
@@ -308,7 +308,7 @@ leg_upgrade_member() {
   poll_until 120 converged "$MNTS/xmember-u/before-upgrade.txt" "before-upgrade" \
     || die "member never converged before the upgrade"
   pass "member holds the pre-upgrade route"
-  touch "$E2E_ROOT/member-u-ready"
+  peer_signal member-u-ready
   # The update's verify children are budgeted well above the
   # convergence poll below: wait on the owner's transaction
   # rendezvous first, so only a live route is ever polled.
@@ -324,7 +324,7 @@ leg_upgrade_member() {
   poll_until 300 blob_converged \
     || die "member payload diverged from the upgraded owner"
   pass "post-upgrade views are byte-identical"
-  touch "$E2E_ROOT/member-u-done"
+  peer_signal member-u-done
   stop_mount xmember-u TERM
   check_no_leaks "$LOGDIR/mount-xmember-u.err" "$(cat "$c/identity")" "$(cat "$c/passphrase")"
 }
@@ -333,7 +333,7 @@ leg_upgrade_member() {
 # digest. Predicate form for poll_until (exit status only, no output).
 blob_converged() {
   [[ -f "$MNTS/xmember-u/payload.bin" ]] || return 1
-  [[ "$(sha256sum "$MNTS/xmember-u/payload.bin" | cut -d' ' -f1)" == "$(cat "$E2E_ROOT/upgrade-blob.sha256")" ]]
+  [[ "$(sha256sum "$MNTS/xmember-u/payload.bin" | cut -d' ' -f1)" == "$(cat "$E2E_ROOT/signals/upgrade-blob.sha256")" ]]
 }
 
 # leg_fetch_owner <drive> <creds> <relay>: mount, publish the cold
@@ -366,7 +366,7 @@ leg_fetch_owner() {
   # trees for the later delete runs against the fresh endpoint
   # instead; same drive, same lineage, so nothing forks.
   stop_mount xowner-f INT
-  touch "$E2E_ROOT/owner-stopped"
+  peer_signal owner-stopped
   probe_mark stopped
   check_no_leaks "$LOGDIR/mount-xowner-f.err" "$(cat "$c/identity")" "$(cat "$c/passphrase")"
   peer_wait 240 member-probed-done \
@@ -393,7 +393,7 @@ leg_fetch_owner() {
   start_mount xowner-f2 "$c" "$d" "$MNTS/xowner-f2" --relay "$relay"
   probe_mark owner_remount
   echo "owner-back" > "$MNTS/xowner-f2/owner-back-1.txt"
-  touch "$E2E_ROOT/owner-back"
+  peer_signal owner-back
   # The member created its scratch file and deleted stale-1 on the
   # post-restart head; converge both before finishing, so the suite
   # never leaves a forked head behind.
@@ -412,7 +412,7 @@ leg_fetch_owner() {
   # Convergence ack: the member must not shut down until its
   # announcements have arrived here — a fast member would otherwise
   # outrun its own outbox drain and this leg could never converge.
-  touch "$E2E_ROOT/owner-converged-done"
+  peer_signal owner-converged-done
   probe_mark converged_ack
   # Ten attempts bound the member's worst case near eleven minutes
   # (10 x (60s attempt + 5s sleep)), so this wait must clear it or
@@ -501,7 +501,7 @@ leg_fetch_member() {
     || { echo "--- cold-2.got ($(wc -c <"$E2E_ROOT/cold-2.got") bytes) ---"; od -c "$E2E_ROOT/cold-2.got" | head -n 10; die "cold open returned wrong bytes"; }
   pass "single open blocks until the announced bytes arrive"
   probe_mark cold_open
-  touch "$E2E_ROOT/member-cold-done"
+  peer_signal member-cold-done
   # Manifest-only convergence: readdir pulls the manifest chain
   # without opening contents, so the member holds the announcements
   # for both stale files while their chunks are still unfetched.
@@ -509,7 +509,7 @@ leg_fetch_member() {
     || die "member never listed stale-1.txt"
   poll_until 120 bash -c "ls '$MNTS/xmember-f' | grep -qx 'stale-2.txt'" \
     || die "member never listed stale-2.txt"
-  touch "$E2E_ROOT/member-listed-done"
+  peer_signal member-listed-done
   probe_mark stale_listed
   peer_wait 180 owner-stopped \
     || die "owner never stopped for the dead-route probes"
@@ -581,7 +581,7 @@ leg_fetch_member() {
     || die "member log never named a fetch-failure class for the dead-route probes"
   pass "dead-route probes surface peer absence in the pass log"
   probe_mark failure_class
-  touch "$E2E_ROOT/member-probed-done"
+  peer_signal member-probed-done
   # Bitrot with a live claim (quarantine leg, peer-repair child
   # 12): cold-2.txt is verified local on the member — the blocking
   # open above served its bytes — so corrupting its chunk under the
@@ -627,7 +627,7 @@ leg_fetch_member() {
   # done. Without it the returned owner would heal reads 2-3
   # mid-block (repair-on-demand working as designed) and the
   # fail-closed asserts above would race the recovery they precede.
-  touch "$E2E_ROOT/member-bitrot-done"
+  peer_signal member-bitrot-done
   # The owner is back on a fresh endpoint with a new route (see
   # owner leg). Converge its head BEFORE authoring: the scratch and
   # the delete below must extend the post-restart lineage, and the
@@ -683,7 +683,7 @@ leg_fetch_member() {
     || die "scratch write never became readable"
   pass "scratch write forces tree materialization over the live route"
   probe_mark scratch
-  touch "$E2E_ROOT/member-scratch-done"
+  peer_signal member-scratch-done
   # Delete of stale-1: the scratch write above authored a head
   # whose tree object is local by construction, so this delete
   # needs nothing from the network — same local-first authorship
@@ -694,7 +694,7 @@ leg_fetch_member() {
     || die "member cannot author the delete"
   pass "member authors the delete with trees local"
   probe_mark delete
-  touch "$E2E_ROOT/member-fetch-done"
+  peer_signal member-fetch-done
   # Recovery without remount: the owner is back on a fresh endpoint
   # with a new route (see owner leg), and this mount never went
   # down. The stale-2 identity failed terminally against the dead
@@ -737,7 +737,7 @@ leg_fetch_member() {
   # the owner is genuinely stuck.
   peer_wait 120 owner-converged-done \
     || die "owner never converged the scratch and delete"
-  touch "$E2E_ROOT/member-recovered-done"
+  peer_signal member-recovered-done
   probe_mark converged_wait
   stop_mount xmember-f TERM
   # Dedupe proof over the step-8 restart's redelivery, read after the
@@ -811,9 +811,9 @@ leg_fetch_member() {
 # leg_conflict_owner <drive> <creds> <relay>: mount, drive the rename
 # half of the StaleHandle pin (rename the victim after the member
 # holds it open), then the partition half: concurrent same-file
-# commit under tap-r down, conflict assertions after heal.
+# commit with the relay down, conflict assertions after heal.
 # The rename half runs pre-partition (it needs convergence); the
-# conflict half runs post-partition-signal (shared-fs rendezvous,
+# conflict half runs post-partition-signal (bridge rendezvous,
 # no relay needed). Observed on odin: partitioned same-path commits
 # both succeed locally (single head each); after heal the two heads
 # surface as name@N versions with SnapshotId byte-order numbering,
@@ -835,19 +835,19 @@ leg_conflict_owner() {
     || die "member never opened the rename victim"
   mv "$MNTS/xowner-c/rename-victim.txt" "$MNTS/xowner-c/renamed.txt" \
     || die "owner rename failed"
-  touch "$E2E_ROOT/conflict-rename-owner-done"
+  peer_signal conflict-rename-owner-done
   peer_wait 120 conflict-rename-member-done \
     || die "member never finished the stale-handle probe"
   pass "rename committed while the member holds the victim open"
-  poll_until 180 test -f "$E2E_ROOT/conflict-partitioned" \
+  poll_until 180 test -f "$E2E_ROOT/signals/conflict-partitioned" \
     || die "host never partitioned the relay"
   conflict_assert_partitioned "$relay"
   echo "owner-conflict-1" > "$MNTS/xowner-c/conflict-c.txt"
-  touch "$E2E_ROOT/conflict-owner-written"
-  poll_until 180 test -f "$E2E_ROOT/conflict-healed" \
+  peer_signal conflict-owner-written
+  poll_until 180 test -f "$E2E_ROOT/signals/conflict-healed" \
     || die "host never healed the relay"
   conflict_assert_converged "$MNTS/xowner-c" owner
-  touch "$E2E_ROOT/conflict-owner-done"
+  peer_signal conflict-owner-done
   peer_wait 240 conflict-member-done \
     || die "member never finished the conflict assertions"
   stop_mount xowner-c INT
@@ -885,7 +885,7 @@ leg_conflict_member() {
     || die "member never converged the rename victim"
   exec 3<>"$MNTS/xmember-c/rename-victim.txt" \
     || die "member cannot hold the victim handle open"
-  touch "$E2E_ROOT/conflict-rename-member-ready"
+  peer_signal conflict-rename-member-ready
   peer_wait 120 conflict-rename-owner-done \
     || die "owner never committed the rename"
   poll_until 180 converged "$MNTS/xmember-c/renamed.txt" "victim" \
@@ -900,16 +900,16 @@ leg_conflict_member() {
   grep -q "Input/output error" "$E2E_ROOT/rename-stale.err" \
     || die "stale-handle write showed no EIO (rc $rc/$crc)"
   pass "rename breaks a held writable handle across hosts (EIO)"
-  touch "$E2E_ROOT/conflict-rename-member-done"
-  poll_until 180 test -f "$E2E_ROOT/conflict-partitioned" \
+  peer_signal conflict-rename-member-done
+  poll_until 180 test -f "$E2E_ROOT/signals/conflict-partitioned" \
     || die "host never partitioned the relay"
   conflict_assert_partitioned "$relay"
   echo "member-conflict-1" > "$MNTS/xmember-c/conflict-c.txt"
-  touch "$E2E_ROOT/conflict-member-written"
-  poll_until 180 test -f "$E2E_ROOT/conflict-healed" \
+  peer_signal conflict-member-written
+  poll_until 180 test -f "$E2E_ROOT/signals/conflict-healed" \
     || die "host never healed the relay"
   conflict_assert_converged "$MNTS/xmember-c" member
-  touch "$E2E_ROOT/conflict-member-done"
+  peer_signal conflict-member-done
   peer_wait 240 conflict-owner-done \
     || die "owner never finished the conflict assertions"
   stop_mount xmember-c TERM
@@ -1095,7 +1095,7 @@ leg_headless_setup() {
   stop_mount xhfresh INT
   check_no_leaks "$LOGDIR/mount-xhfresh.err" "$(cat "$c/identity")" "$(cat "$c/passphrase")"
   pass "single-author dataset written and unmounted"
-  touch "$E2E_ROOT/headless-setup-done"
+  peer_signal headless-setup-done
 }
 
 # leg_headless_serve <drive> <creds> <relay>: the serving half of
@@ -1130,10 +1130,10 @@ leg_headless_setup() {
 leg_headless_serve() {
   local d="$1" c="$2" relay="$3"
   step 12 "headless serving leg"
-  rm -f "$E2E_ROOT/headless-serve-ready" "$E2E_ROOT/headless-fetch-c-done" \
-    "$E2E_ROOT/headless-serve2-ready" "$E2E_ROOT/headless-fetch-e-done" \
-    "$E2E_ROOT/headless-serve-stopped" "$E2E_ROOT/headless-d-invited" \
-    "$E2E_ROOT/headless-serve3-ready" "$E2E_ROOT/headless-fetch-d-done"
+  rm -f "$E2E_ROOT/signals/headless-serve-ready" "$E2E_ROOT/signals/headless-fetch-c-done" \
+    "$E2E_ROOT/signals/headless-serve2-ready" "$E2E_ROOT/signals/headless-fetch-e-done" \
+    "$E2E_ROOT/signals/headless-serve-stopped" "$E2E_ROOT/signals/headless-d-invited" \
+    "$E2E_ROOT/signals/headless-serve3-ready" "$E2E_ROOT/signals/headless-fetch-d-done"
   mkdir -p "$PIDDIR"
   # serve#1: the vault announces with its serve route, then keeps
   # syncing. The ready line proves the first routed pass completed,
@@ -1146,7 +1146,7 @@ leg_headless_serve() {
   grep -q "serving over iroh" "$LOGDIR/headless-serve-1.err" \
     || die "serve#1 never bound its endpoint"
   pass "serve#1 reports ready with its route and keeps syncing"
-  touch "$E2E_ROOT/headless-serve-ready"
+  peer_signal headless-serve-ready
   # 22c: status against the running vault reads the sidecar without
   # opening the store — exit 0, fresh posture, ready named, durable
   # unavailable (never guessed). No last-pass verdict yet: posture
@@ -1210,7 +1210,7 @@ leg_headless_serve() {
   poll_until 300 grep -q "vault ready: serving " "$LOGDIR/headless-serve-2.err" \
     || die "serve#2 never reported ready after KILL (see headless-serve-2.err)"
   pass "serve#2 reports ready after KILL: the mirror rebuilt from the vault"
-  touch "$E2E_ROOT/headless-serve2-ready"
+  peer_signal headless-serve2-ready
   # 22c: the replacement publishes under a new instance from its
   # first write — status must name that instance with its own
   # readiness, never the dead instance's file as its own.
@@ -1250,7 +1250,7 @@ leg_headless_serve() {
   [[ "$status" == "0" ]] || die "serve#2 TERM shutdown exit $status, want clean 0"
   rm -f "$PIDDIR/headless-serve.pid"
   pass "serve#2 shuts down clean on TERM"
-  touch "$E2E_ROOT/headless-serve-stopped"
+  peer_signal headless-serve-stopped
   # 22c: drive free — durable state renders again beside serve#2's
   # retained last posture (last-recorded, explicitly not live).
   with_creds "$c" vault "$d" status >"$LOGDIR/headless-status-4.out" \
@@ -1264,7 +1264,7 @@ leg_headless_serve() {
   pass "status renders durable state beside the retained last posture"
   # The host admits D while the drive is free; serve#3 announces
   # D's fresh obligations with its own route.
-  poll_until 300 test -f "$E2E_ROOT/headless-d-invited" \
+  poll_until 300 test -f "$E2E_ROOT/signals/headless-d-invited" \
     || die "host never admitted D"
   with_creds "$c" vault "$d" --relay "$relay" \
     >"$LOGDIR/headless-serve-3.out" 2>"$LOGDIR/headless-serve-3.err" &
@@ -1272,7 +1272,7 @@ leg_headless_serve() {
   poll_until 300 grep -q "vault ready: serving " "$LOGDIR/headless-serve-3.err" \
     || die "serve#3 never reported ready (see headless-serve-3.err)"
   pass "serve#3 reports ready with D's obligations announced"
-  touch "$E2E_ROOT/headless-serve3-ready"
+  peer_signal headless-serve3-ready
   # 22c: serve#3's own instance, for the stale-transition pin below.
   with_creds "$c" vault "$d" status >"$LOGDIR/headless-status-5.out" \
     || die "vault status failed against serve#3 (see headless-status-5.out)"
@@ -1370,7 +1370,7 @@ leg_headless_fetch() {
     || die "headless mount ($tag) lost target-2.txt"
   pass "headless mount ($tag) faults the served bytes in over the serve route"
   stop_mount "xheadless-$tag" INT
-  touch "$E2E_ROOT/$done"
+  peer_signal "$done"
   check_no_content_ids "$LOGDIR/headless-fetch-$tag.out"
   check_no_leaks "$LOGDIR/headless-fetch-$tag.out" "$(cat "$c/identity")" "$(cat "$c/passphrase")"
   check_no_leaks "$LOGDIR/headless-fetch-$tag.err" "$(cat "$c/identity")" "$(cat "$c/passphrase")"
@@ -1495,7 +1495,7 @@ leg_crash_owner() {
   pass "burst survivors ($n files) are byte-complete, never torn"
   timeout 35 bash -c "echo 'after-crash' > '$MNTS/xcrash-o2/after-crash.txt'" 2>/dev/null \
     || die "post-crash write failed after remount"
-  touch "$E2E_ROOT/crash-o-back"
+  peer_signal crash-o-back
   peer_wait 180 crash-o-member-done \
     || die "witness never converged the post-crash head"
   probe_mark postcrash_converged
@@ -1526,7 +1526,7 @@ leg_steady_member() {
     || die "witness never converged the anchor write"
   pass "witness converges the anchor before the crash"
   probe_mark anchor_witnessed
-  touch "$E2E_ROOT/crash-o-steady-ready"
+  peer_signal crash-o-steady-ready
   # 300s: instrumentation shows 40 burst writes take ~200s (some
   # hit 21s when the sync engine is mid-publish), plus KILL + remount
   # + verify ~30s. The old 120s expired at burst[18].
@@ -1537,7 +1537,7 @@ leg_steady_member() {
     || die "witness never converged the post-crash head"
   probe_mark head_converged
   pass "post-crash head converges without remount"
-  touch "$E2E_ROOT/crash-o-member-done"
+  peer_signal crash-o-member-done
   stop_mount xsteady-m TERM
   check_no_leaks "$LOGDIR/mount-xsteady-m.err" "$(cat "$c/identity")" "$(cat "$c/passphrase")"
 }
@@ -1579,7 +1579,7 @@ leg_crash_member() {
   poll_until 120 bash -c "ls '$MNTS/xcrash-m' | grep -qx 'cold-u.txt'" \
     || die "member never listed the cold file"
   probe_mark cold_listed
-  touch "$E2E_ROOT/crash-m-listed"
+  peer_signal crash-m-listed
   # Body-path gate BEFORE any authorship: a held mutation gets 30s
   # (max_mutation_wait) before it fails TimedOut, and this drive
   # joined fresh — its loop is still settling while the endpoint
@@ -1617,8 +1617,8 @@ leg_crash_member() {
     || die "scratch never committed in $attempt attempts: the head tree never localized"
   pass "scratch commit localizes the head tree over the live relay (attempt $attempt)"
   probe_mark "scratch(attempts=$attempt)"
-  touch "$E2E_ROOT/crash-m-ready"
-  poll_until 180 test -f "$E2E_ROOT/crash-m-partitioned" \
+  peer_signal crash-m-ready
+  poll_until 180 test -f "$E2E_ROOT/signals/crash-m-partitioned" \
     || die "host never partitioned the relay"
   conflict_assert_partitioned "$relay"
   # Bounded retries like the scratch above: trees are local now, so
@@ -1647,10 +1647,10 @@ leg_crash_member() {
   kill -0 "$pid" 2>/dev/null && die "member mount pid survived KILL"
   rm -f "$PIDDIR/mount-xcrash-m.pid"
   fusermount3 -uz "$MNTS/xcrash-m" 2>/dev/null || true
-  touch "$E2E_ROOT/crash-m-killed"
+  peer_signal crash-m-killed
   probe_mark killed
   pass "member mount died on KILL with the obligation pending"
-  poll_until 180 test -f "$E2E_ROOT/crash-m-healed" \
+  poll_until 180 test -f "$E2E_ROOT/signals/crash-m-healed" \
     || die "host never healed the relay"
   start_mount xcrash-m2 "$c" "$d" "$MNTS/xcrash-m2" --relay "$relay"
   # The want re-demands from durable state: the pre-kill listing
@@ -1661,7 +1661,7 @@ leg_crash_member() {
     || die "cold want never re-demanded after the KILL"
   pass "admitted want survives the KILL and serves after heal"
   probe_mark cold_redemanded
-  touch "$E2E_ROOT/crash-m-done"
+  peer_signal crash-m-done
   peer_wait 300 crash-m-witness-done \
     || die "witness never converged the obligation"
   probe_mark obligation_witnessed
@@ -1691,7 +1691,7 @@ leg_steady_owner() {
     || die "member obligation never replayed after the KILL"
   probe_mark obligation_replayed
   pass "killed member's obligation replays after heal"
-  touch "$E2E_ROOT/crash-m-witness-done"
+  peer_signal crash-m-witness-done
   peer_wait 120 crash-m-done \
     || die "member leg never finished"
   probe_mark member_done
@@ -1866,14 +1866,14 @@ leg_uparent_owner() {
   stop_mount xup-o INT
   check_no_leaks "$LOGDIR/mount-xup-o.err" "$(cat "$c/identity")" "$(cat "$c/passphrase")"
   probe_mark owner_stopped
-  touch "$E2E_ROOT/uparent-owner-gone"
+  peer_signal uparent-owner-gone
   peer_wait 300 uparent-member-probed \
     || die "member never finished the unknown-parent probes"
   probe_mark member_probed
   start_mount xup-o2 "$c" "$d" "$MNTS/xup-o2" --relay "$relay"
   timeout 35 bash -c "echo 'up-3-bytes' > '$MNTS/xup-o2/up-3.txt'" 2>/dev/null \
     || die "up-3 write failed"
-  touch "$E2E_ROOT/uparent-owner-back"
+  peer_signal uparent-owner-back
   probe_mark owner_back
   peer_wait 300 uparent-member-healed \
     || die "member never healed after the bodies arrived"
@@ -1923,7 +1923,7 @@ leg_uparent_member() {
   # the loop never prefetches), and nothing opens either file before
   # the probes below, so no body can be cached before the owner is
   # down; the EIO control below still holds unconditionally.
-  touch "$E2E_ROOT/uparent-announced"
+  peer_signal uparent-announced
   peer_wait 180 uparent-owner-gone \
     || die "owner never stopped before the probes"
   probe_mark owner_gone
@@ -1977,7 +1977,7 @@ leg_uparent_member() {
     || die "withheld-body read captured bytes it must not have"
   pass "withheld parent body fails EIO bounded (control)"
   probe_mark parent_eio
-  touch "$E2E_ROOT/uparent-member-probed"
+  peer_signal uparent-member-probed
   peer_wait 300 uparent-owner-back \
     || die "owner never returned after the probes"
   probe_mark owner_back
@@ -1991,7 +1991,7 @@ leg_uparent_member() {
     || die "member never converged the post-return write"
   probe_mark postreturn_converged
   pass "post-return head converges"
-  touch "$E2E_ROOT/uparent-member-healed"
+  peer_signal uparent-member-healed
   stop_mount xup-m TERM
   check_no_leaks "$LOGDIR/mount-xup-m.err" "$(cat "$c/identity")" "$(cat "$c/passphrase")"
 }

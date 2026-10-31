@@ -70,13 +70,13 @@ setup() {
     "$GUND" join "$GUEST_RUN/invitation-uparent"
   printf '%s\n' "$output" >"$RUN/logs/join-uparent.out"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  guest_exec peer-o -- rm -f "$GUEST_RUN"/uparent-owner-gone \
-    "$GUEST_RUN"/uparent-owner-back \
-    "$GUEST_RUN"/uparent-announced "$GUEST_RUN"/up-2.err "$GUEST_RUN"/up-1.err \
+  guest_exec peer-o -- rm -f "$GUEST_RUN"/signals/uparent-owner-gone \
+    "$GUEST_RUN"/signals/uparent-owner-back \
+    "$GUEST_RUN"/signals/uparent-announced "$GUEST_RUN"/up-2.err "$GUEST_RUN"/up-1.err \
     "$GUEST_RUN"/up-2.got "$GUEST_RUN"/up-1.got "$GUEST_RUN"/up-9.err "$GUEST_RUN"/up-9.got
-  guest_exec peer-n -- rm -f "$GUEST_RUN"/uparent-member-probed \
-    "$GUEST_RUN"/uparent-member-healed \
-    "$GUEST_RUN"/uparent-announced "$GUEST_RUN"/up-2.err "$GUEST_RUN"/up-1.err \
+  guest_exec peer-n -- rm -f "$GUEST_RUN"/signals/uparent-member-probed \
+    "$GUEST_RUN"/signals/uparent-member-healed \
+    "$GUEST_RUN"/signals/uparent-announced "$GUEST_RUN"/up-2.err "$GUEST_RUN"/up-1.err \
     "$GUEST_RUN"/up-2.got "$GUEST_RUN"/up-1.got "$GUEST_RUN"/up-9.err "$GUEST_RUN"/up-9.got
   # Legs run backgrounded with output to log files (not `run`): their
   # output is voluminous and the failure names the log, as in the

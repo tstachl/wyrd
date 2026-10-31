@@ -108,21 +108,23 @@ host_partition() { # <role> down|up
 # wait_guest_file <role> <seconds> <guest-path> <what> <leg-pid>:
 # shared host-driven rendezvous waiter for guest-touched signals:
 # fail fast when the awaited leg exits early instead of burning the
-# whole budget on a corpse. Returns 0 on rendezvous, 1 on timeout or
-# corpse — never exits: callers die (or heal-then-die) themselves, so
-# every failure surfaces as a verdict. (An EXIT trap must never be
-# used for the heal: it replaces bats' own result reporting and turns
-# failures into missing verdicts with a passing-looking count.)
+# whole budget on a corpse. Polls at 1 Hz: each attempt is an agent
+# round trip, and the budgets are minutes. Returns 0 on rendezvous,
+# 1 on timeout or corpse — never exits: callers die (or heal-then-die)
+# themselves, so every failure surfaces as a verdict. (An EXIT trap
+# must never be used for the heal: it replaces bats' own result
+# reporting and turns failures into missing verdicts with a
+# passing-looking count.)
 wait_guest_file() { # <role> <seconds> <guest-path> <what> <leg-pid>
   local role="$1" budget="$2" f="$3" what="$4" leg="$5" i
-  for ((i = 0; i < budget * 2; i++)); do
+  for ((i = 0; i < budget; i++)); do
     guest_exec "$role" -- test -f "$f" >/dev/null 2>&1 && return 0
     # A dead leg never touches its file: fail fast instead of burning
     # the whole budget on a corpse. The pid is per-file (the sibling
     # leg may already have finished fine); $what names the awaited
     # rendezvous and its leg log.
     kill -0 "$leg" 2>/dev/null || { echo "  FAIL: $what (leg exited early)" >&2; return 1; }
-    sleep 0.5
+    sleep 1
   done
   echo "  FAIL: $what" >&2
   return 1

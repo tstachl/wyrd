@@ -702,13 +702,14 @@ to be inferred:
   the durable snapshot-id set only grows. `partition_leg_needs_no_privilege`
   beside it pins the leg privilege-free (no `sudo`, KVM, interface, or
   host-runner dependency). Verdict lives in CI/PR evidence only.
-- **Cross-host leg (manual, revision-bound):** the microVM suite phases
-  10 and 13 (`tap-r` surgery) run by hand on the KVM host at the merge
-  revision for every merge touching a divergence claim (write path,
-  closure and head gating, intake, fact log, teardown/lifecycle), and at
-  the release cut per `docs/releases/release-process.md`. Only the
-  cross-host run evidences tap-level partition, serving restart, and the
-  fetch plane; the per-merge leg never claims them.
+- **Cross-host leg (manual, revision-bound):** the Incus gate suite
+  (`tests/gate/gate-phase-*.bats`, partition via the `relay` role)
+  runs by hand on the KVM host at the merge revision for every merge
+  touching a divergence claim (write path, closure and head gating,
+  intake, fact log, teardown/lifecycle), and at the release cut per
+  `docs/releases/release-process.md`. Only the cross-host run
+  evidences role-addressed partition, serving restart, and the fetch
+  plane; the per-merge leg never claims them.
 
 ## Operational patterns
 

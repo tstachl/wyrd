@@ -6,9 +6,16 @@
 # (the unified Incus tarball the backend imports: metadata.yaml +
 # rootfs.img). One build gives image + shape, so the manifest can
 # never drift from the image it describes: both derive from
-# config.gate.box (see common.nix), and the derivation re-validates
-# the manifest fail-closed at build time, mirroring the host's
-# prov_load_manifest (kind, key set, types, bounds).
+# config.gate.box (see common.nix), and the derivation validates the
+# manifest fail-closed at build time against the vendored gate
+# schema (nix/microvm/image-manifest.schema.json), so the bounds the
+# build enforces are the schema's, not a hand copy.
+#
+# The schema file is a verbatim copy of the gate repo's
+# wrapper/image-manifest.schema.json (gate rev 53b1b7b); refresh it
+# when the gate contract moves. Staleness degrades to
+# build-pass/launch-refuse, never false green: the host provisioner
+# re-validates every manifest at launch.
 #
 # The qcow2 comes from the same make-disk-image the upstream
 # incus-virtual-machine module uses, with an explicit virtual size:
@@ -49,6 +56,44 @@ let
     format = "qcow2-compressed";
     copyChannel = config.system.installer.channel.enable;
   };
+
+  # Schema-driven manifest validation (stdlib only): every bound the
+  # build enforces is read from nix/microvm/image-manifest.schema.json
+  # — kind const, required key set with no additional properties,
+  # per-field types, patterns, minima/maxima. A schema change the
+  # vendored copy does not have fails here, not at launch.
+  validateManifest = pkgs.writeText "validate-manifest.py" ''
+    import json, re, sys
+    manifest = json.load(open(sys.argv[1]))
+    schema = json.load(open(sys.argv[2]))
+    props = schema["properties"]
+    assert manifest.get("kind") == props["kind"]["const"], \
+        "kind is not %r" % props["kind"]["const"]
+    assert set(manifest) == set(schema["required"]), \
+        "keys are not exactly %s" % sorted(schema["required"])
+    for key in schema["required"]:
+        spec, val = props[key], manifest[key]
+        t = spec.get("type")
+        if t == "string":
+            assert isinstance(val, str), "%s is not a string" % key
+        elif t == "integer":
+            assert isinstance(val, int) and not isinstance(val, bool), \
+                "%s is not an integer" % key
+        elif t == "array":
+            assert isinstance(val, list), "%s is not an array" % key
+        else:
+            raise AssertionError("unsupported schema type for %s: %s" % (key, t))
+        if "pattern" in spec:
+            assert re.search(spec["pattern"], val), \
+                "%s does not match %s" % (key, spec["pattern"])
+        if "minimum" in spec:
+            assert val >= spec["minimum"], "%s below minimum" % key
+        if "maximum" in spec:
+            assert val <= spec["maximum"], "%s above maximum" % key
+        if "maxItems" in spec:
+            assert len(val) <= spec["maxItems"], "%s has too many items" % key
+    print("manifest matches %s" % schema["$id"])
+  '';
 in
 {
   config = {
@@ -56,37 +101,21 @@ in
     system.build.wyrdImage =
       pkgs.runCommand "wyrd-image-${box.role}"
         {
-          nativeBuildInputs = [ pkgs.jq pkgs.gnutar pkgs.gzip ];
-          inherit manifestFile metadataFile wyrdQemuImage;
-          # Bake the expectations in, not just the values: the
-          # derivation refuses instead of shipping a manifest the
-          # host would refuse at launch.
-          passAsFile = [ ];
+          nativeBuildInputs = [ pkgs.python3Minimal pkgs.gnutar pkgs.gzip ];
+          inherit manifestFile metadataFile wyrdQemuImage validateManifest;
+          schemaFile = ./image-manifest.schema.json;
         }
         ''
           mkdir -p "$out/stage"
           cp "$manifestFile" "$out/manifest.json"
           cp "$metadataFile" "$out/stage/metadata.yaml"
           cp "${wyrdQemuImage}/nixos.qcow2" "$out/stage/rootfs.img"
-          # Build-time contract check, mirroring the host provisioner
-          # (wrapper/provision-host.sh prov_load_manifest) and the
-          # published schema (wrapper/image-manifest.schema.json):
-          # kind exact, key set exact (order-proof set difference
-          # plus arity, like the host), typed bounds. The bridge
-          # prefix itself is host policy and is checked at launch,
-          # not here.
-          jq -e '.kind == "gate.image/v1"' "$out/manifest.json" > /dev/null
-          jq -e '(([keys_unsorted[]] - ["kind","role","vcpu","memMb","mac","ip","shares"] | length) == 0) and ((keys | length) == 7)' "$out/manifest.json" > /dev/null
-          jq -e '(.vcpu | type) == "number" and (.vcpu | floor) == .vcpu and .vcpu >= 1 and .vcpu <= 64' "$out/manifest.json" > /dev/null
-          jq -e '(.memMb | type) == "number" and (.memMb | floor) == .memMb and .memMb >= 512 and .memMb <= 131072' "$out/manifest.json" > /dev/null
-          jq -e '(.role | type) == "string" and (.role | test("^[a-z0-9][a-z0-9-]{0,31}$"))' "$out/manifest.json" > /dev/null
-          jq -e '(.mac | type) == "string" and (.mac | test("^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$"))' "$out/manifest.json" > /dev/null
-          jq -e '(.ip | type) == "string" and (.ip | test("^([0-9]{1,3}\\.){3}[0-9]{1,3}/24$"))' "$out/manifest.json" > /dev/null
-          jq -e '(.shares | type) == "array" and (.shares | length) == 0' "$out/manifest.json" > /dev/null
-          # Reproducible tarball: sorted entries, fixed mtime, no
-          # gzip filename/timestamp, so equal inputs publish identical
-          # bytes (the host imports under a content-hash alias).
-          ${pkgs.gnutar}/bin/tar --sort=name --mtime=@1 \
+          python3 "$validateManifest" "$out/manifest.json" "$schemaFile"
+          # Reproducible tarball: sorted entries, fixed mtime and
+          # ownership, no gzip filename/timestamp, so equal inputs
+          # publish identical bytes (the host imports under a
+          # content-hash alias).
+          ${pkgs.gnutar}/bin/tar --sort=name --mtime=@1 --owner=0 --group=0 --numeric-owner \
             -I '${pkgs.gzip}/bin/gzip -n' -cf "$out/image.tar.gz" \
             -C "$out/stage" metadata.yaml rootfs.img
           rm -rf "$out/stage"

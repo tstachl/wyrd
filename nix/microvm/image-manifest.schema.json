@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "gate-image-manifest-v1",
+  "title": "gate task image manifest v1",
+  "description": "Single declaration of a bootable task image, shipped by the image producer next to the unified Incus tarball (image.tar.gz). Gate identifies an image build by this file's presence and kind, validates it fail-closed in prov_load_manifest, and translates it into incus init flags. Unknown kind refuses, and v1 readers refuse unknown top-level keys (so a v2-shaped manifest can never be half-read); the producer module may carry more options than v1 serializes. v1 is share-free: the agent carries control and files, so shares must be empty. Static IPs on one shared subnet: each role address runs once at a time — the host refuses IP overlap across live holders, which bounds per-role concurrency until per-run networks (v2) remove the limit.",
+  "type": "object",
+  "required": ["kind", "role", "vcpu", "memMb", "mac", "ip", "shares"],
+  "properties": {
+    "kind": {
+      "const": "gate.image/v1",
+      "description": "Manifest contract version. Anything else refuses."
+    },
+    "role": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,31}$",
+      "description": "Instance role. Instance names embed it as gate-<run>-<role>; the suite addresses it as the role."
+    },
+    "vcpu": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 64,
+      "description": "Guest vcpus, checked against the host max-vcpu ceiling at launch."
+    },
+    "memMb": {
+      "type": "integer",
+      "minimum": 512,
+      "maximum": 131072,
+      "description": "Guest memory in MiB, checked against the host max-mem ceiling at launch."
+    },
+    "mac": {
+      "type": "string",
+      "pattern": "^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$",
+      "description": "Guest NIC hardware address on the managed bridge."
+    },
+    "ip": {
+      "type": "string",
+      "pattern": "^([0-9]{1,3}\\.){3}[0-9]{1,3}/24$",
+      "description": "Guest static address with /24 suffix. Must sit inside the managed bridge's prefix; host octets 2-254."
+    },
+    "shares": {
+      "type": "array",
+      "maxItems": 0,
+      "description": "Host shares. v1 forbids them: non-empty refuses."
+    }
+  },
+  "additionalProperties": false
+}

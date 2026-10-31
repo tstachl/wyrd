@@ -30,11 +30,12 @@
 #   consume (WYRD_BIN, NAK_BIN, RELAY_*, peer IPs, CHECKOUT, E2E_ROOT
 #   plus token, owner pid and debug passthroughs). It is pushed into
 #   each peer guest; the legs address it as GUEST_ENV.
-# - Holds the provision lock for the suite's lifetime, so the e2e
-#   guard's lock check and a later teardown agree on who owns the
-#   run. The initial acquire retries briefly: the launcher releases
-#   its own hold only as the unit starts, so a fast unit can reach
-#   this acquire while the launcher is still exiting.
+# - Holds the provision lock for the suite's lifetime, acquired
+#   before touching guest state, so the e2e guard's lock check and a
+#   later teardown agree on who owns the run. The initial acquire
+#   retries briefly: the launcher releases its own hold only as the
+#   unit starts, so a fast unit can reach this acquire while the
+#   launcher is still exiting.
 # - Accepts only --fresh (the unit always passes it); anything else
 #   is a caller mistake, not a default.
 #
@@ -154,33 +155,13 @@ TOKEN="$(head -c16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 } > "$RUN/e2e-env.sh"
 chmod 0644 "$RUN/e2e-env.sh"
 
-# Guest preparation: fresh state trees on both peers, owned by the
-# suite user the legs run as, then the env file where the legs
-# address it. The full layout (drives, creds, mounts, logs) is
-# created here because only phase 1 wipes and recreates it, and
-# phase 1 runs on peer-o alone — a peer-n leg must never hit a
-# missing LOGDIR. The agent is the only transport; a guest that never
-# answers fails the run here, before the suite.
-for peer in peer-o peer-n; do
-  timeout 120 "$GUEST_BIN" exec "$peer" -- mkdir -p "$E2E_ROOT" \
-    || { echo "gate-entry.sh: guest $peer is unreachable (agent exec failed)" >&2; exit 1; }
-  timeout 120 "$GUEST_BIN" exec "$peer" -- rm -rf "$E2E_ROOT" \
-    || { echo "gate-entry.sh: guest $peer state reset failed" >&2; exit 1; }
-  timeout 120 "$GUEST_BIN" exec "$peer" -- mkdir -p "$E2E_ROOT/drives" "$E2E_ROOT/creds" "$E2E_ROOT/mnt" "$E2E_ROOT/logs" \
-    || { echo "gate-entry.sh: guest $peer state reset failed" >&2; exit 1; }
-  timeout 120 "$GUEST_BIN" exec "$peer" -- chown -R e2e:users "$E2E_ROOT" \
-    || { echo "gate-entry.sh: guest $peer state handover failed" >&2; exit 1; }
-  timeout 120 "$GUEST_BIN" push "$peer" "$RUN/e2e-env.sh" "$E2E_ROOT/e2e-env.sh" \
-    || { echo "gate-entry.sh: env push to $peer failed" >&2; exit 1; }
-done
-
-# Hold the provision lock for the suite's lifetime: a successful
-# non-blocking acquire by anyone else would mean no wrapper is
-# alive. The acquire retries briefly: the
-# launcher holds this same lock until the unit starts, so a fast
-# unit reaches here while the launcher is still exiting. A lock
-# still held past the grace below is genuinely foreign (a second
-# run got past pre-flight, or teardown wedged) and still refuses.
+# Hold the provision lock before touching guest state: a second unit
+# that starts while the lock is held must refuse before mutating the
+# live guests, not after. The acquire retries briefly: the launcher
+# holds this same lock until the unit starts, so a fast unit reaches
+# here while the launcher is still exiting. A lock still held past
+# the grace below is genuinely foreign (a second run got past
+# pre-flight, or teardown wedged) and still refuses.
 exec 9>"$LOCK_FILE"
 acquired=""
 for _ in $(seq 1 60); do
@@ -188,6 +169,24 @@ for _ in $(seq 1 60); do
   sleep 1
 done
 [[ -n "$acquired" ]] || { echo "gate-entry.sh: another run holds $LOCK_FILE" >&2; exit 2; }
+
+# Guest preparation: fresh state trees on both peers, owned by the
+# suite user the legs run as, then the env file where the legs
+# address it. The full layout (drives, creds, mounts, logs, signals)
+# is created here because only phase 1 wipes and recreates it, and
+# phase 1 runs on peer-o alone — a peer-n leg must never hit a
+# missing LOGDIR. The agent is the only transport; a guest that never
+# answers fails the run here, before the suite.
+for peer in peer-o peer-n; do
+  timeout 120 "$GUEST_BIN" exec "$peer" -- rm -rf "$E2E_ROOT" \
+    || { echo "gate-entry.sh: guest $peer is unreachable (agent exec failed)" >&2; exit 1; }
+  timeout 120 "$GUEST_BIN" exec "$peer" -- mkdir -p "$E2E_ROOT/drives" "$E2E_ROOT/creds" "$E2E_ROOT/mnt" "$E2E_ROOT/logs" "$E2E_ROOT/signals" \
+    || { echo "gate-entry.sh: guest $peer state reset failed" >&2; exit 1; }
+  timeout 120 "$GUEST_BIN" exec "$peer" -- chown -R e2e:users "$E2E_ROOT" \
+    || { echo "gate-entry.sh: guest $peer state handover failed" >&2; exit 1; }
+  timeout 120 "$GUEST_BIN" push "$peer" "$RUN/e2e-env.sh" "$E2E_ROOT/e2e-env.sh" \
+    || { echo "gate-entry.sh: env push to $peer failed" >&2; exit 1; }
+done
 
 export WYRD_E2E_TOKEN="$TOKEN" WYRD_E2E_LOCK="$LOCK_FILE"
 export STATE_DIR WYRD_BIN NAK_BIN RELAY_URL

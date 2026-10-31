@@ -152,8 +152,9 @@ Right:
   Background pipes die with ephemeral shells — open the pipe exactly
   per the skill pattern and poll the local mirror. Never touch
   odin's master worktree; verify tips with `rev-parse` after every
-  sync. Teardown with `--teardown` and confirm `tap-r` is gone.
-- microVM forensics: leg logs first (`leg-*.out`), then the matching
+  sync. Teardown with `--teardown` and confirm the run's instances
+  are gone.
+- Incus forensics: leg logs first (`leg-*.out`), then the matching
   `mount-*.err` by mtime. A leg that ends with no `die`/`FAIL` line
   is a silent `set -e` death (unguarded command substitution is the
   classic shape); everything after it, including the sibling leg's
@@ -161,8 +162,10 @@ Right:
   Non-verbose mounts log no per-request lines, so absence of errors
   proves nothing. One rerun distinguishes flake from regression;
   two identical failures are a regression until proven otherwise.
-- Only one full Lima suite at a time; odin microVM is host-global
-  behind `/var/lib/wyrd-microvm/lock`. Check both before launching.
+  The provisioner captures instance console logs at teardown; the
+  suite pulls guest logs over the agent.
+- Only one full Lima suite at a time; the odin gate task is
+  host-global behind the provision lock. Check both before launching.
 - e2e evidence is revision-bound: a green run on a pre-rebase tip
   does not cover the rebased tip.
 

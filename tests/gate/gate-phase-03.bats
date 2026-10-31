@@ -34,8 +34,8 @@ setup() {
 
 @test "owner and member converge across hosts with an opaque control plane" {
   mkdir -p "$RUN/logs"
-  guest_exec peer-o -- rm -f "$GUEST_RUN/owner-done" "$GUEST_RUN/owner-w2-written" "$GUEST_RUN"/wave2-owner-list.txt
-  guest_exec peer-n -- rm -f "$GUEST_RUN/member-w2-done" "$GUEST_RUN"/wave2-member-list.txt
+  guest_exec peer-o -- rm -f "$GUEST_RUN/signals/owner-done" "$GUEST_RUN/signals/owner-w2-written" "$GUEST_RUN"/wave2-owner-list.txt
+  guest_exec peer-n -- rm -f "$GUEST_RUN/signals/member-w2-done" "$GUEST_RUN"/wave2-member-list.txt
   OD="$GUEST_RUN/drives/owner"
   OC="$GUEST_RUN/creds/owner"
   GMD="$GUEST_RUN/drives/member-n"

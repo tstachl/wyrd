@@ -44,11 +44,11 @@ mint_pair() {
 
 @test "three headless peers exchange content with neither mounting" {
   mkdir -p "$RUN/logs"
-  guest_exec peer-o -- rm -f "$GUEST_RUN"/headless-setup-done "$GUEST_RUN"/headless-serve-ready \
-    "$GUEST_RUN"/headless-serve2-ready "$GUEST_RUN"/headless-serve-stopped \
-    "$GUEST_RUN"/headless-d-invited "$GUEST_RUN"/headless-serve3-ready
-  guest_exec peer-n -- rm -f "$GUEST_RUN"/headless-fetch-c-done "$GUEST_RUN"/headless-fetch-e-done \
-    "$GUEST_RUN"/headless-fetch-d-done
+  guest_exec peer-o -- rm -f "$GUEST_RUN"/signals/headless-setup-done "$GUEST_RUN"/signals/headless-serve-ready \
+    "$GUEST_RUN"/signals/headless-serve2-ready "$GUEST_RUN"/signals/headless-serve-stopped \
+    "$GUEST_RUN"/signals/headless-d-invited "$GUEST_RUN"/signals/headless-serve3-ready
+  guest_exec peer-n -- rm -f "$GUEST_RUN"/signals/headless-fetch-c-done "$GUEST_RUN"/signals/headless-fetch-e-done \
+    "$GUEST_RUN"/signals/headless-fetch-d-done
   GHO="$GUEST_RUN/creds/headless-owner"
   GHF="$GUEST_RUN/drives/headless-fresh"
   mint_pair peer-o "$GHO" "$GHF"
@@ -62,7 +62,7 @@ mint_pair() {
   on_o "E2E_ENV_FILE=$GUEST_ENV bash $GUEST_TESTS/alpha-microvm-legs.sh headless-setup $GHF $GHO" \
     >"$RUN/logs/leg-headless-setup.out" 2>&1 &
   LEG_HSETUP=$!
-  wait_guest_file peer-o 300 "$GUEST_RUN/headless-setup-done" \
+  wait_guest_file peer-o 300 "$GUEST_RUN/signals/headless-setup-done" \
     "setup leg never wrote the dataset (see logs/leg-headless-setup.out)" "$LEG_HSETUP" \
     || return 1
   wait "$LEG_HSETUP" || die "headless setup leg failed (see logs/leg-headless-setup.out)"
@@ -131,7 +131,7 @@ mint_pair() {
   # drive: its obligations must be fresh for serve#3's route. The
   # invite runs in-guest on the owner peer (offline keystore op); the
   # leg waits on headless-d-invited before starting serve#3.
-  wait_guest_file peer-o 1200 "$GUEST_RUN/headless-serve-stopped" \
+  wait_guest_file peer-o 1200 "$GUEST_RUN/signals/headless-serve-stopped" \
     "serve leg never stopped serve#2 (see logs/leg-headless-serve.out)" "$LEG_HS" \
     || return 1
   GHDD="$GUEST_RUN/creds/headless-d"
@@ -159,7 +159,7 @@ mint_pair() {
     "$GHDDD" join "$GUEST_RUN/invitation-hd"
   printf '%s\n' "$output" >"$RUN/logs/join-hd.out"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  guest_exec peer-o -- touch "$GUEST_RUN/headless-d-invited"
+  guest_exec peer-o -- touch "$GUEST_RUN/signals/headless-d-invited"
   on_n "E2E_ENV_FILE=$GUEST_ENV bash $GUEST_TESTS/alpha-microvm-legs.sh headless-fetch $GHDDD $GHDD $RELAY_URL d headless-serve3-ready headless-fetch-d-done" \
     >"$RUN/logs/leg-headless-fetch-d.out" 2>&1 &
   LEG_HD=$!

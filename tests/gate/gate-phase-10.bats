@@ -5,16 +5,16 @@
 # through; every assignment below is consumed at call time.)
 # tests/gate/gate-phase-10.bats — gate-path phase 10: resource exhaustion.
 #
-# Ports legacy microVM phase 14: fill the
+# Ports the legacy exhaustion leg: fill the
 # exhaustion drive's filesystem to 256 MiB headroom, then write
 # through an offline attachment until ENOSPC. Offline on purpose:
 # exhaustion is a storage-stack property, not a sync one, and a
 # relay would only add failure modes to the wrong leg. The drive
 # lives on a fixed-size ext4 image loop-attached IN the guest
-# (never on the shared state dir): filling the share fills odin's
-# root fs. init and export run in-guest (the container is invisible
-# host-side); the harness asserts the fail-closed half on the
-# exported tree. Runs as the build user under tests/gate/gate-entry.sh,
+# (never on shared state): the fill is guest-disk-local. init and
+# export run in-guest (the container is invisible host-side); the
+# harness pulls the exported tree and asserts the fail-closed half
+# on it. Runs as the build user under tests/gate/gate-entry.sh,
 # after phases 1-9 in the same bats invocation. All drive/cred
 # paths are recomputed here (bats runs each @test in its own
 # process, so no shell variable crosses phases).

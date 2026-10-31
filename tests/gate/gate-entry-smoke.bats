@@ -48,3 +48,13 @@ setup() {
   run timeout 120 guest_exec peer-n -- test -x "$NAK_BIN"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
 }
+
+@test "peers serve the run rendezvous channel" {
+  # The boot service exposes each peer's signals dir from boot, so a
+  # signal a leg writes stays fetchable after that leg exits. Pin it
+  # here: every cross-guest wait below depends on the writer's server.
+  run timeout 120 guest_exec peer-o -- python3 -c 'import sys,urllib.request; urllib.request.urlopen("http://127.0.0.1:18770/", timeout=5)'
+  [ "$status" -eq 0 ] || { echo "rendezvous channel down on peer-o: $output"; false; }
+  run timeout 120 guest_exec peer-n -- python3 -c 'import sys,urllib.request; urllib.request.urlopen("http://127.0.0.1:18770/", timeout=5)'
+  [ "$status" -eq 0 ] || { echo "rendezvous channel down on peer-n: $output"; false; }
+}

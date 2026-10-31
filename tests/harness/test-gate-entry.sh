@@ -123,12 +123,14 @@ grep -q "^E2E_ROOT=/var/lib/wyrd-e2e$" "$RUN_DIR/e2e-env.sh" || die "guest run r
 grep -q "^WYRD_PEER_O_IP=10.0.7.11$" "$RUN_DIR/e2e-env.sh" || die "peer-o ip published in the env file"
 grep -q "^WYRD_PEER_N_IP=10.0.7.12$" "$RUN_DIR/e2e-env.sh" || die "peer-n ip published in the env file"
 grep -q "^RENDEZVOUS_PORT=18770$" "$RUN_DIR/e2e-env.sh" || die "rendezvous port published in the env file"
-# Guest preparation rides the agent before the suite: fresh state
-# roots on both peers, then the env file where the legs read it.
-# (Through the timeout wrapper the entry bounds every agent call with.)
-grep -q "guest-bin exec peer-o -- mkdir -p /var/lib/wyrd-e2e$" "$CALLS" || die "peer-o state root prepared"
+# Guest preparation rides the agent after the lock and before the
+# suite: fresh state trees on both peers, then the env file where
+# the legs read it. (Through the timeout wrapper the entry bounds
+# every agent call with.)
+grep -q "guest-bin exec peer-o -- rm -rf /var/lib/wyrd-e2e$" "$CALLS" || die "peer-o state root reset"
+grep -q "guest-bin exec peer-o -- mkdir -p /var/lib/wyrd-e2e/drives" "$CALLS" || die "peer-o state layout prepared"
 grep -q "guest-bin exec peer-o -- chown -R e2e:users /var/lib/wyrd-e2e$" "$CALLS" || die "peer-o state root handed to the suite user"
-grep -q "guest-bin exec peer-n -- mkdir -p /var/lib/wyrd-e2e$" "$CALLS" || die "peer-n state root prepared"
+grep -q "guest-bin exec peer-n -- mkdir -p /var/lib/wyrd-e2e/drives" "$CALLS" || die "peer-n state layout prepared"
 grep -q "guest-bin push peer-o $RUN_DIR/e2e-env.sh /var/lib/wyrd-e2e/e2e-env.sh$" "$CALLS" || die "env pushed to peer-o"
 grep -q "guest-bin push peer-n $RUN_DIR/e2e-env.sh /var/lib/wyrd-e2e/e2e-env.sh$" "$CALLS" || die "env pushed to peer-n"
 [ -z "$(grep -E "^(ssh|scp) " "$CALLS" || true)" ] || die "driver dials nothing itself (agent only)"

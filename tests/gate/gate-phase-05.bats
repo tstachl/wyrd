@@ -5,15 +5,15 @@
 # through; every assignment below is consumed at call time.)
 # tests/gate/gate-phase-05.bats — gate-path phase 5: fetch plane.
 #
-# Ports legacy microVM phase 9: blocking open,
+# Ports the legacy fetch plane: blocking open,
 # bounded EIO, recovery, and dedupe hold across hosts
 # (fetch-member/fetch-owner legs). Runs as the build user under
 # tests/gate/gate-entry.sh, after phases 1-4 in the same bats
 # invocation. GMD/GMC/OD/OC are recomputed here (bats runs each
 # @test in its own process, so no shell variable crosses phases).
 # The phase-4 dedupe snapshot ($RUN/seen-after-restart) needs no
-# host handling here: the fetch-member leg reads it in-guest via
-# the shared state ($E2E_ROOT/seen-after-restart) itself.
+# host handling here: the entry pushed it into the member peer, and
+# the fetch-member leg reads it at its guest path itself.
 
 bats_require_minimum_version 1.5.0
 
@@ -37,13 +37,13 @@ setup() {
   OC="$GUEST_RUN/creds/owner"
   GMD="$GUEST_RUN/drives/member-n"
   GMC="$GUEST_RUN/creds/member-n"
-  guest_exec peer-o -- rm -f "$GUEST_RUN"/owner-stopped "$GUEST_RUN"/owner-converged-done "$GUEST_RUN"/owner-back
-  guest_exec peer-n -- rm -f "$GUEST_RUN"/member-cold-done "$GUEST_RUN"/member-listed-done \
-    "$GUEST_RUN"/member-scratch-done "$GUEST_RUN"/member-fetch-done \
-    "$GUEST_RUN"/member-probed-done "$GUEST_RUN"/member-recovered-done \
+  guest_exec peer-o -- rm -f "$GUEST_RUN"/signals/owner-stopped "$GUEST_RUN"/signals/owner-converged-done "$GUEST_RUN"/signals/owner-back
+  guest_exec peer-n -- rm -f "$GUEST_RUN"/signals/member-cold-done "$GUEST_RUN"/signals/member-listed-done \
+    "$GUEST_RUN"/signals/member-scratch-done "$GUEST_RUN"/signals/member-fetch-done \
+    "$GUEST_RUN"/signals/member-probed-done "$GUEST_RUN"/signals/member-recovered-done \
     "$GUEST_RUN"/cold-2.got "$GUEST_RUN"/stale-1.err "$GUEST_RUN"/stale-2.err \
     "$GUEST_RUN"/never-announced.err "$GUEST_RUN"/stale-2-recovered.got \
-    "$GUEST_RUN"/member-bitrot-done
+    "$GUEST_RUN"/signals/member-bitrot-done
   # The phase-4 dedupe snapshot was recorded host-side; the fetch
   # legs read it in-guest, so it rides the agent into the member.
   printf '%s\n' "$(cat "$RUN/seen-after-restart")" > "$RUN/seen-after-restart.push"

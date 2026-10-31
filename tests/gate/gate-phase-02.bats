@@ -5,15 +5,14 @@
 # through; every assignment below is consumed at call time.)
 # tests/gate/gate-phase-02.bats — gate-path phase 2: member-n invite/join split.
 #
-# Ports legacy microVM phase 6: mint member-n
-# credential material on the host, hand it to the guest owner,
-# verify both peers carry the baked suite and execute the shared
-# binary, then pairing-request / invite / join / re-invite on the
-# host. Runs as the build user under tests/gate/gate-entry.sh, after
-# phase 1 in the same bats invocation: the owner creds and drives
-# this phase consumes ($RUN/creds/owner, $RUN/drives/owner) are
-# created by phase 1's shared-core run on the shared state.
-# Later phases follow this file's shape.
+# Ports the legacy member-n invite/join split: mint member-n
+# credential material in-guest, verify both peers carry the baked
+# suite and execute the in-image binaries, then pairing-request /
+# invite / join / re-invite with the public material ferried
+# host-side. Runs as the build user under tests/gate/gate-entry.sh,
+# after phase 1 in the same bats invocation: the owner creds and
+# drives this phase consumes live in the owner peer from phase 1's
+# shared-core run. Later phases follow this file's shape.
 
 bats_require_minimum_version 1.5.0
 

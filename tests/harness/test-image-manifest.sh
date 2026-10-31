@@ -18,6 +18,9 @@ PASS=0
 pass() { PASS=$((PASS + 1)); echo "  PASS: $1"; }
 die() { echo "  FAIL: $1" >&2; exit 1; }
 
+FIXTURE="$(mktemp -d)"
+trap 'rm -rf "$FIXTURE"' EXIT
+
 # The retired qemu backend's declaration must be gone: a
 # [tasks.*.topology] section refuses at parse time on the host.
 grep -qE '^\[tasks\.[^]]*\.topology' "$ROOT/gate.toml" \
@@ -77,22 +80,35 @@ pass "declared facts match the test bridge addressing"
 grep -qE 'microvm\.(url|inputs)|microvm\.nixosModules|microvmGuest' "$ROOT/flake.nix" \
   && die "flake.nix still references the retired microvm input"
 pass "no microvm input in flake.nix"
-for _b in peer-o peer-n relay; do
-  grep -q "config.system.build.wyrdImage" "$ROOT/flake.nix" \
-    || die "flake.nix exposes no wyrdImage outputs"
-done
-unset _b
+grep -q "config.system.build.wyrdImage" "$ROOT/flake.nix" \
+  || die "flake.nix exposes no wyrdImage outputs"
 grep -q 'incus-virtual-machine.nix' "$ROOT/flake.nix" \
   || die "guests are not built on the incus virtual-machine module"
 pass "flake exposes wyrdImage outputs on the incus module"
 
+# The build-time check runs against the vendored gate schema, not a
+# hand copy: the derivation references the schema file, and the file
+# carries the gate contract id.
+grep -q "image-manifest.schema.json" "$ROOT/nix/microvm/image.nix" \
+  || die "image.nix does not validate against the vendored gate schema"
+[[ -f "$ROOT/nix/microvm/image-manifest.schema.json" ]] \
+  || die "vendored gate schema is missing"
+grep -q '"\$id": "gate-image-manifest-v1"' "$ROOT/nix/microvm/image-manifest.schema.json" \
+  || die "vendored schema is not the gate.image/v1 contract"
+pass "derivation validates against the vendored gate schema"
+
 # Eval cross-check when nix is available: the evaluated gate.box is
 # the manifest source (image.nix derives manifest.json from it), so
-# the nix facts above must equal what the entry would read.
+# the nix facts above must equal what the entry would read. Eval
+# failures surface with the nix error, not a bare refusal.
 if command -v nix >/dev/null 2>&1; then
   for _b in peer-o peer-n relay; do
-    role_json="$(nix eval --json ".#nixosConfigurations.wyrd-${_b}.config.gate.box" 2>/dev/null || true)"
-    [[ -n "$role_json" ]] || die "gate.box for $_b does not evaluate"
+    if ! role_json="$(nix eval --json ".#nixosConfigurations.wyrd-${_b}.config.gate.box" 2>"$FIXTURE/nix-err-$_b.txt")"; then
+      echo "gate.box eval failed for $_b:" >&2
+      cat "$FIXTURE/nix-err-$_b.txt" >&2
+      die "gate.box for $_b does not evaluate"
+    fi
+    [[ -n "$role_json" ]] || die "gate.box for $_b evaluated empty"
     echo "$role_json" | grep -q "\"role\":\"$_b\"" || die "evaluated role for $_b mismatches"
   done
   unset _b role_json

@@ -113,6 +113,26 @@
     }];
     programs.fuse.userAllowOther = true;
 
+    # Run-scoped cross-guest rendezvous: every guest serves its
+    # signals dir over HTTP from boot (stdlib only), so a signal a
+    # leg writes stays fetchable after that leg exits — legs never
+    # start or stop this server, and the entry never touches it.
+    # Serves signals only, never the state root: creds and drives
+    # stay off the bridge. The port matches the RENDEZVOUS_PORT the
+    # entry publishes (18770); the suite addresses signals through
+    # peer_signal/peer_wait in alpha-common.sh.
+    systemd.services.wyrd-rendezvous = {
+      wantedBy = [ "multi-user.target" ];
+      serviceConfig = {
+        Type = "simple";
+        User = "e2e";
+        ExecStartPre = "${pkgs.coreutils}/bin/mkdir -p /var/lib/wyrd-e2e/signals";
+        ExecStart = "${pkgs.python3Minimal}/bin/python3 -m http.server 18770 --directory /var/lib/wyrd-e2e/signals";
+        Restart = "always";
+        RestartSec = "5s";
+      };
+    };
+
     # The suite rides the image, not a share: guests have no uplink,
     # so nothing can be fetched after boot. Paths are relative to
     # this file (nix/microvm/) into the repo's tests/.

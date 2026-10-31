@@ -5,11 +5,11 @@
 # through; every assignment below is consumed at call time.)
 # tests/gate/gate-phase-06.bats — gate-path phase 6: relay-partition conflict.
 #
-# Ports legacy microVM phase 10: the rename half
-# runs pre-partition, the host partitions the relay's tap only after
-# both rename-done files land, then heals after both conflict
-# writes. Done-file rendezvous rides the shared state root,
-# unaffected by the partition. Runs as the build user under
+# Ports the legacy rename-conflict leg: the rename half
+# runs pre-partition, the host partitions the relay instance only
+# after both rename-done signals land, then heals after both conflict
+# writes. Signal rendezvous rides the peer HTTP channel, unaffected
+# by the partition (bridge traffic, not relay traffic). Runs as the
 # tests/gate/gate-entry.sh, after phases 1-5 in the same bats
 # invocation. GMD/GMC/OD/OC are recomputed here (bats runs each
 # @test in its own process, so no shell variable crosses phases).
@@ -40,18 +40,18 @@ setup() {
   OC="$GUEST_RUN/creds/owner"
   GMD="$GUEST_RUN/drives/member-n"
   GMC="$GUEST_RUN/creds/member-n"
-  guest_exec peer-o -- rm -f "$GUEST_RUN"/conflict-rename-owner-done \
-    "$GUEST_RUN"/conflict-partitioned \
-    "$GUEST_RUN"/conflict-owner-written \
-    "$GUEST_RUN"/conflict-healed "$GUEST_RUN"/conflict-owner-done \
+  guest_exec peer-o -- rm -f "$GUEST_RUN"/signals/conflict-rename-owner-done \
+    "$GUEST_RUN"/signals/conflict-partitioned \
+    "$GUEST_RUN"/signals/conflict-owner-written \
+    "$GUEST_RUN"/signals/conflict-healed "$GUEST_RUN"/signals/conflict-owner-done \
     "$GUEST_RUN/logs"/conflict-eio-write-owner.stderr \
     "$GUEST_RUN/logs"/conflict-reread-owner-1.stderr \
     "$GUEST_RUN/logs"/conflict-reread-owner-2.stderr
-  guest_exec peer-n -- rm -f "$GUEST_RUN"/conflict-rename-member-ready \
-    "$GUEST_RUN"/conflict-rename-member-done \
-    "$GUEST_RUN"/conflict-partitioned \
-    "$GUEST_RUN"/conflict-member-written \
-    "$GUEST_RUN"/conflict-healed "$GUEST_RUN"/conflict-member-done \
+  guest_exec peer-n -- rm -f "$GUEST_RUN"/signals/conflict-rename-member-ready \
+    "$GUEST_RUN"/signals/conflict-rename-member-done \
+    "$GUEST_RUN"/signals/conflict-partitioned \
+    "$GUEST_RUN"/signals/conflict-member-written \
+    "$GUEST_RUN"/signals/conflict-healed "$GUEST_RUN"/signals/conflict-member-done \
     "$GUEST_RUN/logs"/conflict-eio-write-member.stderr \
     "$GUEST_RUN/logs"/conflict-reread-member-1.stderr \
     "$GUEST_RUN/logs"/conflict-reread-member-2.stderr
@@ -64,34 +64,34 @@ setup() {
   on_o "E2E_ENV_FILE=$GUEST_ENV bash $GUEST_TESTS/alpha-microvm-legs.sh conflict-owner $OD $OC $RELAY_URL" \
     >"$RUN/logs/leg-conflict-owner.out" 2>&1 &
   LEG_O=$!
-  wait_guest_file peer-o 300 "$GUEST_RUN/conflict-rename-owner-done" \
+  wait_guest_file peer-o 300 "$GUEST_RUN/signals/conflict-rename-owner-done" \
     "owner rename leg never finished (see logs/leg-conflict-owner.out)" "$LEG_O" \
     || return 1
-  wait_guest_file peer-n 120 "$GUEST_RUN/conflict-rename-member-done" \
+  wait_guest_file peer-n 120 "$GUEST_RUN/signals/conflict-rename-member-done" \
     "member stale-handle probe never finished (see logs/leg-conflict-member.out)" "$LEG_N" \
     || return 1
   # Best-effort heal, called explicitly on every failure path below:
   # never an EXIT trap — a test-installed EXIT trap replaces bats'
   # own result reporting, and a failure inside the trap window then
   # vanishes with no verdict (the suite keeps going and the plan
-  # undercounts). heal_tap itself never fails the test.
-  heal_tap() {
+  # undercounts). heal_relay itself never fails the test.
+  heal_relay() {
     if [[ -n "${GATE_PARTITION_BIN:-}" ]]; then
       "$GATE_PARTITION_BIN" relay up 2>/dev/null || true
     fi
   }
-  host_partition relay down || { heal_tap; echo "  FAIL: host could not partition relay" >&2; return 1; }
-  guest_exec peer-o -- touch "$GUEST_RUN/conflict-partitioned"
-  guest_exec peer-n -- touch "$GUEST_RUN/conflict-partitioned"
-  wait_guest_file peer-o 180 "$GUEST_RUN/conflict-owner-written" \
+  host_partition relay down || { heal_relay; echo "  FAIL: host could not partition relay" >&2; return 1; }
+  guest_exec peer-o -- touch "$GUEST_RUN/signals/conflict-partitioned"
+  guest_exec peer-n -- touch "$GUEST_RUN/signals/conflict-partitioned"
+  wait_guest_file peer-o 180 "$GUEST_RUN/signals/conflict-owner-written" \
     "owner never committed under partition (see logs/leg-conflict-owner.out)" "$LEG_O" \
-    || { heal_tap; return 1; }
-  wait_guest_file peer-n 180 "$GUEST_RUN/conflict-member-written" \
+    || { heal_relay; return 1; }
+  wait_guest_file peer-n 180 "$GUEST_RUN/signals/conflict-member-written" \
     "member never committed under partition (see logs/leg-conflict-member.out)" "$LEG_N" \
-    || { heal_tap; return 1; }
-  host_partition relay up || { heal_tap; echo "  FAIL: host could not heal relay" >&2; return 1; }
-  guest_exec peer-o -- touch "$GUEST_RUN/conflict-healed"
-  guest_exec peer-n -- touch "$GUEST_RUN/conflict-healed"
+    || { heal_relay; return 1; }
+  host_partition relay up || { heal_relay; echo "  FAIL: host could not heal relay" >&2; return 1; }
+  guest_exec peer-o -- touch "$GUEST_RUN/signals/conflict-healed"
+  guest_exec peer-n -- touch "$GUEST_RUN/signals/conflict-healed"
   wait "$LEG_N" || die "conflict member leg failed (see logs/leg-conflict-member.out)"
   wait "$LEG_O" || die "conflict owner leg failed (see logs/leg-conflict-owner.out)"
 }
