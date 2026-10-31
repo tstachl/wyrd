@@ -26,6 +26,12 @@
 #                  0: an external relay is used, start/stop are no-ops
 #   HOST_LOGS      when set, collect_logs copies LOGDIR there on exit;
 #                  when empty, logs stay in LOGDIR for the host to pull
+#   WYRD_PEER_O_IP/WYRD_PEER_N_IP
+#                  peer addresses on the test bridge (gate path only;
+#                  empty on Lima, where every leg shares one guest)
+#   RENDEZVOUS_PORT
+#                  loopback+bridge port serving the rendezvous dir
+#                  (default 18770; gate path only)
 set -euo pipefail
 
 # shellcheck source=/dev/null
@@ -42,6 +48,84 @@ RELAY_HOST="${RELAY_HOST:-127.0.0.1}"
 RELAY_BIND="${RELAY_BIND:-127.0.0.1}"
 RELAY_MANAGED="${RELAY_MANAGED:-1}"
 HOST_LOGS="${HOST_LOGS:-}"
+RENDEZVOUS_PORT="${RENDEZVOUS_PORT:-18770}"
+# The other peer's bridge address, derived from this guest's
+# hostname: owner waits on the member, member on the owner. Empty
+# everywhere but the two gate peers (Lima runs every leg in one
+# guest; the relay never runs legs), where peer_wait degrades to a
+# local poll.
+PEER_IP=""
+case "$(hostname -s 2>/dev/null || echo unknown)" in
+  wyrd-peer-o) PEER_IP="${WYRD_PEER_N_IP:-}" ;;
+  wyrd-peer-n) PEER_IP="${WYRD_PEER_O_IP:-}" ;;
+esac
+
+# Guest-to-guest rendezvous over the test bridge. With no shared
+# filesystem, concurrent legs on different guests cannot poll each
+# other's files — instead each guest serves its $E2E_ROOT over HTTP
+# (stdlib only) and waits fetch the peer's copy, materializing it
+# locally under the same path the writer used. Only cross-guest
+# signal waits use this (same-guest coordination keeps plain local
+# files, host-observed signals are polled by the host via
+# wait_guest_file in e2e-helpers.bash, and host-to-guest signals are
+# plain touches through the agent). Independent of the relay under
+# test by design: rendezvous must not depend on the system under test.
+peer_serve() {
+  local pidf="$PIDDIR/rendezvous-http.pid" pid
+  mkdir -p "$E2E_ROOT"
+  if [[ -f "$pidf" ]] && kill -0 "$(cat "$pidf")" 2>/dev/null; then return 0; fi
+  # A previous leg's server outlives its shell only when cleanup never
+  # ran; reclaim the port rather than stacking servers.
+  if (echo > "/dev/tcp/127.0.0.1/$RENDEZVOUS_PORT") 2>/dev/null; then
+    pkill -f "http.server $RENDEZVOUS_PORT" 2>/dev/null || true
+    sleep 1
+  fi
+  nohup python3 -m http.server "$RENDEZVOUS_PORT" --directory "$E2E_ROOT" \
+    >"$LOGDIR/rendezvous-http.out" 2>&1 &
+  pid=$!
+  echo "$pid" > "$pidf"
+  # Fail fast when the server dies on startup (bad dir, no python):
+  # a missing server would turn every later peer_wait into its full
+  # budget instead of failing here.
+  sleep 1
+  kill -0 "$pid" 2>/dev/null || die "rendezvous server failed to start (see rendezvous-http.out)"
+}
+
+peer_stop() {
+  local pidf="$PIDDIR/rendezvous-http.pid"
+  [[ -f "$pidf" ]] || return 0
+  kill -TERM "$(cat "$pidf")" 2>/dev/null || true
+  rm -f "$pidf"
+}
+
+# peer_signal <name>: publish a cross-guest signal (a plain touch —
+# the per-guest server exposes it to the peer).
+peer_signal() { # <name>
+  peer_serve
+  touch "$E2E_ROOT/$1"
+}
+
+# peer_wait <seconds> <name>: wait for a cross-guest signal — a local
+# file (already signalled, or signalled by a same-guest writer as on
+# Lima) or the peer's copy fetched over HTTP and materialized at the
+# same path.
+peer_wait() { # <seconds> <name>
+  local n="$1" name="$2" i
+  peer_serve
+  for ((i = 0; i < n * 5; i++)); do
+    [[ -f "$E2E_ROOT/$name" ]] && return 0
+    if [[ -n "$PEER_IP" ]]; then
+      if timeout 10 python3 -c 'import sys,urllib.request; sys.stdout.buffer.write(urllib.request.urlopen(sys.argv[1], timeout=5).read())' \
+        "http://$PEER_IP:$RENDEZVOUS_PORT/$name" > "$E2E_ROOT/.$name.tmp" 2>/dev/null; then
+        mv "$E2E_ROOT/.$name.tmp" "$E2E_ROOT/$name"
+        return 0
+      fi
+      rm -f "$E2E_ROOT/.$name.tmp"
+    fi
+    sleep 0.2
+  done
+  return 1
+}
 
 collect_logs() {
   [[ -n "$HOST_LOGS" ]] || return 0
@@ -90,6 +174,10 @@ cleanup_mounts() {
     [[ -f "$pidf" ]] || continue
     kill -KILL "$(cat "$pidf")" 2>/dev/null || true
   done
+  # The rendezvous HTTP server is a background job of this shell too:
+  # kill it before the `wait` below, or the wait reaps forever on a
+  # server that outlives the leg.
+  peer_stop 2>/dev/null || true
   # Reap anything we killed so no zombies linger.
   wait 2>/dev/null || true
   # A just-killed mount can need a beat before the kernel releases it.

@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 # shellcheck disable=SC2034
-# (SSH/SSH_OPTS are read indirectly by on_o/on_n from
+# (GATE_GUEST_BIN and friends are read indirectly by on_o/on_n from
 # tests/harness/e2e-helpers.bash through `run`, which shellcheck cannot see
 # through; every assignment below is consumed at call time.)
 # tests/gate/gate-phase-05.bats — gate-path phase 5: fetch plane.
@@ -20,15 +20,15 @@ bats_require_minimum_version 1.5.0
 load "$BATS_TEST_DIRNAME/../harness/e2e-guard.sh"
 
 setup() {
-  for v in STATE_DIR WYRD_BIN PEER_O PEER_N RELAY_URL WYRD_E2E_TOKEN WYRD_E2E_LOCK SSH_KEY GATE_BATS_LIB CORE_ONLY GUEST_ENV; do
+  for v in STATE_DIR WYRD_BIN WYRD_E2E_TOKEN WYRD_E2E_LOCK GATE_BATS_LIB GATE_GUEST_BIN GATE_PARTITION_BIN CORE_ONLY GUEST_ENV RELAY_URL; do
     [ -n "${!v+x}" ] || { echo "gate-phase-05: $v is not set (run through tests/gate/gate-entry.sh)" >&2; return 1; }
   done
   RUN="$STATE_DIR/run"
-  [ "$GUEST_ENV" = "/mnt/wyrd-state/run/e2e-env.sh" ] || { echo "gate-phase-05: GUEST_ENV=$GUEST_ENV is not the guest-visible env file" >&2; return 1; }
+  [ "$GUEST_ENV" = "/var/lib/wyrd-e2e/e2e-env.sh" ] || { echo "gate-phase-05: GUEST_ENV=$GUEST_ENV is not the guest env file" >&2; return 1; }
+  load "$GATE_BATS_LIB/guest"
+  load "$GATE_BATS_LIB/partition"
   source "$BATS_TEST_DIRNAME/../harness/e2e-helpers.bash"
   e2e_require_wrapped "$RUN/e2e-env.sh" "./tests/gate/gate-entry.sh (gate task)" --check-owner-pid
-  SSH_OPTS="-i $SSH_KEY -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o BatchMode=yes"
-  SSH="ssh $SSH_OPTS"
 }
 
 @test "blocking open, bounded EIO, recovery, and dedupe hold across hosts" {
@@ -37,12 +37,19 @@ setup() {
   OC="$GUEST_RUN/creds/owner"
   GMD="$GUEST_RUN/drives/member-n"
   GMC="$GUEST_RUN/creds/member-n"
-  rm -f "$RUN/member-cold-done" "$RUN/member-listed-done" \
-    "$RUN/member-scratch-done" "$RUN/owner-stopped" "$RUN/member-fetch-done" \
-    "$RUN/member-probed-done" "$RUN/owner-converged-done" \
-    "$RUN/cold-2.got" "$RUN/stale-1.err" "$RUN/stale-2.err" \
-    "$RUN/never-announced.err" "$RUN/owner-back" \
-    "$RUN/member-recovered-done" "$RUN/stale-2-recovered.got"
+  guest_exec peer-o -- rm -f "$GUEST_RUN"/owner-stopped "$GUEST_RUN"/owner-converged-done "$GUEST_RUN"/owner-back
+  guest_exec peer-n -- rm -f "$GUEST_RUN"/member-cold-done "$GUEST_RUN"/member-listed-done \
+    "$GUEST_RUN"/member-scratch-done "$GUEST_RUN"/member-fetch-done \
+    "$GUEST_RUN"/member-probed-done "$GUEST_RUN"/member-recovered-done \
+    "$GUEST_RUN"/cold-2.got "$GUEST_RUN"/stale-1.err "$GUEST_RUN"/stale-2.err \
+    "$GUEST_RUN"/never-announced.err "$GUEST_RUN"/stale-2-recovered.got \
+    "$GUEST_RUN"/member-bitrot-done
+  # The phase-4 dedupe snapshot was recorded host-side; the fetch
+  # legs read it in-guest, so it rides the agent into the member.
+  printf '%s\n' "$(cat "$RUN/seen-after-restart")" > "$RUN/seen-after-restart.push"
+  guest_push peer-n "$RUN/seen-after-restart.push" "$GUEST_RUN/seen-after-restart" \
+    || { echo "seen-after-restart push failed"; false; }
+  rm -f "$RUN/seen-after-restart.push"
   # Legs run backgrounded with output to log files (not `run`): their
   # output is voluminous and the failure names the log, as in the
   # legacy phase.

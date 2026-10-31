@@ -77,7 +77,7 @@ jobs:
           bash tests/harness/test-e2e-guard.sh 2>&1 | tee -a /tmp/shell.log
           bash tests/harness/test-bash-syntax.sh 2>&1 | tee -a /tmp/shell.log
           bash tests/harness/test-relay-forensics.sh 2>&1 | tee -a /tmp/shell.log
-          bash tests/harness/test-topology-toml.sh 2>&1 | tee -a /tmp/shell.log
+          bash tests/harness/test-image-manifest.sh 2>&1 | tee -a /tmp/shell.log
           bash tests/harness/test-gate-entry.sh 2>&1 | tee -a /tmp/shell.log
           bash -n tests/harness/e2e-helpers.bash 2>&1 | tee -a /tmp/shell.log
           bash tests/harness/test-no-host-privilege.sh 2>&1 | tee -a /tmp/shell.log

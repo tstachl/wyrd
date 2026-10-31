@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 # shellcheck disable=SC2034
-# (SSH/SSH_OPTS are read indirectly by on_o/on_n from
+# (GATE_GUEST_BIN and friends are read indirectly by on_o/on_n from
 # tests/harness/e2e-helpers.bash through `run`, which shellcheck cannot see
 # through; every assignment below is consumed at call time.)
 # tests/gate/gate-phase-11.bats — gate-path phase 11: unknown parent.
@@ -22,62 +22,62 @@ bats_require_minimum_version 1.5.0
 load "$BATS_TEST_DIRNAME/../harness/e2e-guard.sh"
 
 setup() {
-  for v in STATE_DIR WYRD_BIN PEER_O PEER_N RELAY_URL WYRD_E2E_TOKEN WYRD_E2E_LOCK SSH_KEY GATE_BATS_LIB GATE_PARTITION_BIN CORE_ONLY GUEST_ENV; do
+  for v in STATE_DIR WYRD_BIN WYRD_E2E_TOKEN WYRD_E2E_LOCK GATE_BATS_LIB GATE_GUEST_BIN GATE_PARTITION_BIN CORE_ONLY GUEST_ENV RELAY_URL; do
     [ -n "${!v+x}" ] || { echo "gate-phase-11: $v is not set (run through tests/gate/gate-entry.sh)" >&2; return 1; }
   done
   RUN="$STATE_DIR/run"
-  [ "$GUEST_ENV" = "/mnt/wyrd-state/run/e2e-env.sh" ] || { echo "gate-phase-11: GUEST_ENV=$GUEST_ENV is not the guest-visible env file" >&2; return 1; }
+  [ "$GUEST_ENV" = "/var/lib/wyrd-e2e/e2e-env.sh" ] || { echo "gate-phase-11: GUEST_ENV=$GUEST_ENV is not the guest env file" >&2; return 1; }
+  load "$GATE_BATS_LIB/guest"
+  load "$GATE_BATS_LIB/partition"
   source "$BATS_TEST_DIRNAME/../harness/e2e-helpers.bash"
   e2e_require_wrapped "$RUN/e2e-env.sh" "./tests/gate/gate-entry.sh (gate task)" --check-owner-pid
-  SSH_OPTS="-i $SSH_KEY -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o BatchMode=yes"
-  SSH="ssh $SSH_OPTS"
 }
 
 @test "withheld bodies fail EIO bounded and heal" {
   mkdir -p "$RUN/logs"
-  UO="$RUN/creds/uparent-o"
-  UOD="$RUN/drives/uparent-o"
-  UN="$RUN/creds/uparent-n"
-  UND="$RUN/drives/uparent-n"
   GUO="$GUEST_RUN/creds/uparent-o"
   GUOD="$GUEST_RUN/drives/uparent-o"
   GUN="$GUEST_RUN/creds/uparent-n"
   GUND="$GUEST_RUN/drives/uparent-n"
-  mkdir -p "$UO" "$UOD" "$UN" "$UND"
-  for _cdir in "$UO" "$UN"; do
-    head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$_cdir/identity"
-    printf 'e2e-%s\n' "$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')" > "$_cdir/passphrase"
-    chmod 600 "$_cdir/identity" "$_cdir/passphrase"
-  done
-  unset _cdir
-  hand_to_guest "$UO" "$UOD" "$UN" "$UND"
+  mint_guest_creds peer-o "$GUO" "$GUOD"
+  mint_guest_creds peer-n "$GUN" "$GUND"
   # Post-mortem parity with the legacy phase: persist each wyrd
   # invocation's captured output to $RUN/logs before asserting (bats
   # merges stderr into $output, so one .out per step).
-  run as_guest "$WYRD_BIN" init --identity-file "$UO/identity" --passphrase-file "$UO/passphrase" \
-    "$UOD"
+  run guest_wyrd peer-o init --identity-file "$GUO/identity" --passphrase-file "$GUO/passphrase" \
+    "$GUOD"
   printf '%s\n' "$output" >"$RUN/logs/init-uparent.out"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  run as_guest "$WYRD_BIN" device --identity-file "$UN/identity" --passphrase-file "$UN/passphrase" \
-    "$UND" pairing-request "$RUN/pairing-uparent.txt"
+  run guest_wyrd peer-n device --identity-file "$GUN/identity" --passphrase-file "$GUN/passphrase" \
+    "$GUND" pairing-request "$GUEST_RUN/pairing-uparent.txt"
   printf '%s\n' "$output" >"$RUN/logs/pairing-uparent.out"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
+  guest_pull peer-n "$GUEST_RUN/pairing-uparent.txt" "$RUN/pairing-uparent.txt" \
+    || { echo "pairing-uparent pull failed"; false; }
   DEV_UPARENT="$(grep '^device ' "$RUN/pairing-uparent.txt" | cut -d' ' -f2)"
   KEY_UPARENT="$(grep '^encryption-key ' "$RUN/pairing-uparent.txt" | cut -d' ' -f2)"
   [[ "${#DEV_UPARENT}" == 64 && "${#KEY_UPARENT}" == 64 ]] || die "uparent-n pairing material malformed"
-  run as_guest "$WYRD_BIN" member --identity-file "$UO/identity" \
-    --passphrase-file "$UO/passphrase" "$UOD" \
-    invite "$DEV_UPARENT" "$KEY_UPARENT" "$RUN/invitation-uparent"
+  run guest_wyrd peer-o member --identity-file "$GUO/identity" \
+    --passphrase-file "$GUO/passphrase" "$GUOD" \
+    invite "$DEV_UPARENT" "$KEY_UPARENT" "$GUEST_RUN/invitation-uparent"
   printf '%s\n' "$output" >"$RUN/logs/invite-uparent.out"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  run as_guest "$WYRD_BIN" device --identity-file "$UN/identity" --passphrase-file "$UN/passphrase" \
-    "$UND" join "$RUN/invitation-uparent"
+  guest_pull peer-o "$GUEST_RUN/invitation-uparent" "$RUN/invitation-uparent" \
+    || { echo "invitation-uparent pull failed"; false; }
+  guest_push peer-n "$RUN/invitation-uparent" "$GUEST_RUN/invitation-uparent" \
+    || { echo "invitation-uparent push failed"; false; }
+  run guest_wyrd peer-n device --identity-file "$GUN/identity" --passphrase-file "$GUN/passphrase" \
+    "$GUND" join "$GUEST_RUN/invitation-uparent"
   printf '%s\n' "$output" >"$RUN/logs/join-uparent.out"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  rm -f "$RUN"/uparent-owner-gone "$RUN"/uparent-member-probed \
-    "$RUN"/uparent-owner-back "$RUN"/uparent-member-healed \
-    "$RUN"/uparent-announced "$RUN"/up-2.err "$RUN"/up-1.err \
-    "$RUN"/up-2.got "$RUN"/up-1.got "$RUN"/up-9.err "$RUN"/up-9.got
+  guest_exec peer-o -- rm -f "$GUEST_RUN"/uparent-owner-gone \
+    "$GUEST_RUN"/uparent-owner-back \
+    "$GUEST_RUN"/uparent-announced "$GUEST_RUN"/up-2.err "$GUEST_RUN"/up-1.err \
+    "$GUEST_RUN"/up-2.got "$GUEST_RUN"/up-1.got "$GUEST_RUN"/up-9.err "$GUEST_RUN"/up-9.got
+  guest_exec peer-n -- rm -f "$GUEST_RUN"/uparent-member-probed \
+    "$GUEST_RUN"/uparent-member-healed \
+    "$GUEST_RUN"/uparent-announced "$GUEST_RUN"/up-2.err "$GUEST_RUN"/up-1.err \
+    "$GUEST_RUN"/up-2.got "$GUEST_RUN"/up-1.got "$GUEST_RUN"/up-9.err "$GUEST_RUN"/up-9.got
   # Legs run backgrounded with output to log files (not `run`): their
   # output is voluminous and the failure names the log, as in the
   # legacy phase.

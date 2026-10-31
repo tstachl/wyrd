@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 # shellcheck disable=SC2034
-# (SSH/SSH_OPTS are read indirectly by on_o/on_n from
+# (GATE_GUEST_BIN and friends are read indirectly by on_o/on_n from
 # tests/harness/e2e-helpers.bash through `run`, which shellcheck cannot see
 # through; every assignment below is consumed at call time.)
 # tests/gate/gate-phase-06.bats — gate-path phase 6: relay-partition conflict.
@@ -23,15 +23,15 @@ bats_require_minimum_version 1.5.0
 load "$BATS_TEST_DIRNAME/../harness/e2e-guard.sh"
 
 setup() {
-  for v in STATE_DIR WYRD_BIN PEER_O PEER_N RELAY_URL GATE_PARTITION_BIN WYRD_E2E_TOKEN WYRD_E2E_LOCK SSH_KEY GATE_BATS_LIB CORE_ONLY GUEST_ENV; do
+  for v in STATE_DIR WYRD_BIN WYRD_E2E_TOKEN WYRD_E2E_LOCK GATE_BATS_LIB GATE_GUEST_BIN GATE_PARTITION_BIN CORE_ONLY GUEST_ENV RELAY_URL; do
     [ -n "${!v+x}" ] || { echo "gate-phase-06: $v is not set (run through tests/gate/gate-entry.sh)" >&2; return 1; }
   done
   RUN="$STATE_DIR/run"
-  [ "$GUEST_ENV" = "/mnt/wyrd-state/run/e2e-env.sh" ] || { echo "gate-phase-06: GUEST_ENV=$GUEST_ENV is not the guest-visible env file" >&2; return 1; }
+  [ "$GUEST_ENV" = "/var/lib/wyrd-e2e/e2e-env.sh" ] || { echo "gate-phase-06: GUEST_ENV=$GUEST_ENV is not the guest env file" >&2; return 1; }
+  load "$GATE_BATS_LIB/guest"
+  load "$GATE_BATS_LIB/partition"
   source "$BATS_TEST_DIRNAME/../harness/e2e-helpers.bash"
   e2e_require_wrapped "$RUN/e2e-env.sh" "./tests/gate/gate-entry.sh (gate task)" --check-owner-pid
-  SSH_OPTS="-i $SSH_KEY -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o BatchMode=yes"
-  SSH="ssh $SSH_OPTS"
 }
 
 @test "rename breaks a held handle, then both sides commit under partition" {
@@ -40,16 +40,21 @@ setup() {
   OC="$GUEST_RUN/creds/owner"
   GMD="$GUEST_RUN/drives/member-n"
   GMC="$GUEST_RUN/creds/member-n"
-  rm -f "$RUN"/conflict-rename-member-ready "$RUN"/conflict-rename-owner-done \
-    "$RUN"/conflict-rename-member-done "$RUN"/conflict-partitioned \
-    "$RUN"/conflict-owner-written "$RUN"/conflict-member-written \
-    "$RUN"/conflict-healed "$RUN"/conflict-owner-done "$RUN"/conflict-member-done \
-    "$RUN"/rename-stale.err "$RUN/logs"/conflict-eio-write-owner.stderr \
-    "$RUN/logs"/conflict-eio-write-member.stderr \
-    "$RUN/logs"/conflict-reread-owner-1.stderr \
-    "$RUN/logs"/conflict-reread-owner-2.stderr \
-    "$RUN/logs"/conflict-reread-member-1.stderr \
-    "$RUN/logs"/conflict-reread-member-2.stderr
+  guest_exec peer-o -- rm -f "$GUEST_RUN"/conflict-rename-owner-done \
+    "$GUEST_RUN"/conflict-partitioned \
+    "$GUEST_RUN"/conflict-owner-written \
+    "$GUEST_RUN"/conflict-healed "$GUEST_RUN"/conflict-owner-done \
+    "$GUEST_RUN/logs"/conflict-eio-write-owner.stderr \
+    "$GUEST_RUN/logs"/conflict-reread-owner-1.stderr \
+    "$GUEST_RUN/logs"/conflict-reread-owner-2.stderr
+  guest_exec peer-n -- rm -f "$GUEST_RUN"/conflict-rename-member-ready \
+    "$GUEST_RUN"/conflict-rename-member-done \
+    "$GUEST_RUN"/conflict-partitioned \
+    "$GUEST_RUN"/conflict-member-written \
+    "$GUEST_RUN"/conflict-healed "$GUEST_RUN"/conflict-member-done \
+    "$GUEST_RUN/logs"/conflict-eio-write-member.stderr \
+    "$GUEST_RUN/logs"/conflict-reread-member-1.stderr \
+    "$GUEST_RUN/logs"/conflict-reread-member-2.stderr
   # Legs run backgrounded with output to log files (not `run`): their
   # output is voluminous and the failure names the log, as in the
   # legacy phase.
@@ -59,10 +64,10 @@ setup() {
   on_o "E2E_ENV_FILE=$GUEST_ENV bash $GUEST_TESTS/alpha-microvm-legs.sh conflict-owner $OD $OC $RELAY_URL" \
     >"$RUN/logs/leg-conflict-owner.out" 2>&1 &
   LEG_O=$!
-  wait_conflict_file 300 "$RUN/conflict-rename-owner-done" \
+  wait_guest_file peer-o 300 "$GUEST_RUN/conflict-rename-owner-done" \
     "owner rename leg never finished (see logs/leg-conflict-owner.out)" "$LEG_O" \
     || return 1
-  wait_conflict_file 120 "$RUN/conflict-rename-member-done" \
+  wait_guest_file peer-n 120 "$GUEST_RUN/conflict-rename-member-done" \
     "member stale-handle probe never finished (see logs/leg-conflict-member.out)" "$LEG_N" \
     || return 1
   # Best-effort heal, called explicitly on every failure path below:
@@ -72,19 +77,21 @@ setup() {
   # undercounts). heal_tap itself never fails the test.
   heal_tap() {
     if [[ -n "${GATE_PARTITION_BIN:-}" ]]; then
-      "$GATE_PARTITION_BIN" tap-r up 2>/dev/null || true
+      "$GATE_PARTITION_BIN" relay up 2>/dev/null || true
     fi
   }
-  host_partition tap-r down || { heal_tap; echo "  FAIL: host could not partition tap-r" >&2; return 1; }
-  touch "$RUN/conflict-partitioned"
-  wait_conflict_file 180 "$RUN/conflict-owner-written" \
+  host_partition relay down || { heal_tap; echo "  FAIL: host could not partition relay" >&2; return 1; }
+  guest_exec peer-o -- touch "$GUEST_RUN/conflict-partitioned"
+  guest_exec peer-n -- touch "$GUEST_RUN/conflict-partitioned"
+  wait_guest_file peer-o 180 "$GUEST_RUN/conflict-owner-written" \
     "owner never committed under partition (see logs/leg-conflict-owner.out)" "$LEG_O" \
     || { heal_tap; return 1; }
-  wait_conflict_file 180 "$RUN/conflict-member-written" \
+  wait_guest_file peer-n 180 "$GUEST_RUN/conflict-member-written" \
     "member never committed under partition (see logs/leg-conflict-member.out)" "$LEG_N" \
     || { heal_tap; return 1; }
-  host_partition tap-r up || { heal_tap; echo "  FAIL: host could not heal tap-r" >&2; return 1; }
-  touch "$RUN/conflict-healed"
+  host_partition relay up || { heal_tap; echo "  FAIL: host could not heal relay" >&2; return 1; }
+  guest_exec peer-o -- touch "$GUEST_RUN/conflict-healed"
+  guest_exec peer-n -- touch "$GUEST_RUN/conflict-healed"
   wait "$LEG_N" || die "conflict member leg failed (see logs/leg-conflict-member.out)"
   wait "$LEG_O" || die "conflict owner leg failed (see logs/leg-conflict-owner.out)"
 }

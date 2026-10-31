@@ -21,12 +21,11 @@
     # external trees.
     wyrdSrc.url = "path:./nix/microvm/empty-src";
     wyrdSrc.flake = false;
-    # Hardened e2e gate (issue: microvm.nix reproducible suite). Linux
-    # only: vfkit on macOS lacks the 9p shares and tap/bridge
-    # networking the topology needs, and Apple Silicon provides no
-    # nested KVM — the gate runs on a real Linux host (odin).
-    microvm.url = "github:microvm-nix/microvm.nix";
-    microvm.inputs.nixpkgs.follows = "nixpkgs";
+    # Hardened e2e gate: two peers plus a relay as Incus VM images
+    # (see nix/microvm/). x86_64-linux only: KVM hosts are x86_64,
+    # and image assembly (disk images) builds on Linux. The subject
+    # wyrd package rides the image closure; the manifest next to the
+    # tarball declares the image's shape.
     # Service-module framework for the declarative drive module
     # (34): pinned to the 26.05 release to match nixpkgs, same as
     # every other input follows the same channel.
@@ -34,7 +33,7 @@
     darwin.inputs.nixpkgs.follows = "nixpkgs";
   };
 
-  outputs = { self, nixpkgs, crane, rust-overlay, microvm, darwin, wyrdSrc, ... }:
+  outputs = { self, nixpkgs, crane, rust-overlay, darwin, wyrdSrc, ... }:
     let
       # Product platforms. x86_64-darwin is deliberately absent even though
       # rust-toolchain.toml lists the target: no builder covers it, so it
@@ -160,10 +159,10 @@
           description = "Desktop host owner process (developer-run, headless)";
         };
         wyrd-dist = distFor system;
-        # Pinned relay-query tool for the microVM opacity probe
-        # (gate-phase-03): reproducibility is the reason —
-        # the host builds nak from this pin and exports NAK_BIN
-        # next to WYRD_BIN instead of floating nixpkgs#nak.
+        # Pinned relay-query tool for the gate opacity probe
+        # (gate-phase-03): reproducibility is the reason — the suite
+        # runs the wyrd image's own nak beside WYRD_BIN instead of
+        # floating nixpkgs#nak.
         nak = (pkgsFor system).nak;
         default = self.packages.${system}.wyrd;
       });
@@ -180,11 +179,11 @@
       # The package build plus the release archive, per system.
       # `nix flake check` builds the current system's entries; CI covers
       # linux, the maintainer's machine darwin.
-      # On x86_64-linux the microVM runners join the gate as
+      # On x86_64-linux the Incus images join the gate as
       # evaluation only (CI runs `nix flake check --no-build`): they
-      # prove the VM topology evaluates (kernel, shares, tapes) without
-      # assembling disk images on every PR. The closures build when a
-      # microVM run needs them.
+      # prove the guest configs evaluate (gate.box shape, image
+      # assembly) without assembling disk images on every PR. The
+      # images build when a gate run needs them.
       # Suite *execution* needs KVM and runs on the maintainer's Linux
       # host via the gate task (tests/gate/gate-entry.sh as the build user
       # under host-owned provisioning), never in CI.
@@ -192,15 +191,13 @@
         wyrd = self.packages.${system}.wyrd;
         wyrd-dist = self.packages.${system}.wyrd-dist;
       } // nixpkgs.lib.optionalAttrs (system == "x86_64-linux") {
-        wyrd-microvm-peer-o =
-          self.nixosConfigurations.wyrd-peer-o.config.microvm.runner.qemu;
-        wyrd-microvm-peer-n =
-          self.nixosConfigurations.wyrd-peer-n.config.microvm.runner.qemu;
-        wyrd-microvm-relay =
-          self.nixosConfigurations.wyrd-relay.config.microvm.runner.qemu;
-        # The opacity probe's relay-query tool: attest the attribute
-        # the gate introduced, on the platform that runs it.
-        wyrd-microvm-nak = self.packages.${system}.nak;
+        wyrd-image-peer-o = self.images.peer-o;
+        wyrd-image-peer-n = self.images.peer-n;
+        wyrd-image-relay = self.images.relay;
+        # The opacity probe's relay-query tool rides the images, but
+        # attest the package attribute the images resolve it from,
+        # on the platform that runs it.
+        wyrd-image-nak = self.packages.${system}.nak;
       });
       # Declarative drive services (34): one module, two modes, one
       # declaration per drive. The same file serves NixOS and
@@ -245,12 +242,12 @@
           )
         ];
       };
-      # Hardened e2e topology: two peers plus a relay, each a microVM
-      # definition (see nix/microvm/). x86_64-linux only: KVM hosts
-      # are x86_64. Each guest carries a wyrd package as its subject:
-      # by default this flake's build, optionally a host-supplied
-      # source tree via --override-input wyrdSrc. The subject never
-      # influences evaluation of the harness itself.
+      # Hardened e2e images: two peers plus a relay, each an Incus VM
+      # image definition (see nix/microvm/). x86_64-linux only: KVM
+      # hosts are x86_64. Each guest carries a wyrd package as its
+      # subject: by default this flake's build, optionally a
+      # host-supplied source tree via --override-input wyrdSrc. The
+      # subject never influences evaluation of the harness itself.
       nixosConfigurations =
         let
           # The wyrdSrc input is a committed placeholder FILE by
@@ -279,10 +276,10 @@
             else if isPlaceholder
             then null
             else throw "wyrdSrc subject unreadable: expected a source tree with Cargo.toml at root, or the default placeholder; got ${toString wyrdSrc}";
-          # microvmGuestFor takes wyrdSrc with no default (N4): an
+          # imageGuestFor takes wyrdSrc with no default (N4): an
           # omitted argument must never silently mean the repo's own
           # build. The single call site always passes explicitly.
-          microvmGuestFor = { role, wyrdSrc }:
+          imageGuestFor = { role, wyrdSrc }:
             let
               wyrdPkg =
                 if wyrdSrc == null
@@ -292,25 +289,27 @@
             nixpkgs.lib.nixosSystem {
               system = "x86_64-linux";
               modules = [
-                microvm.nixosModules.microvm
+                "${nixpkgs}/nixos/modules/virtualisation/incus-virtual-machine.nix"
                 ./nix/microvm/common.nix
                 ./nix/microvm/${role}.nix
-                # The suite executes WYRD_BIN in-guest, and the host
-                # store is not visible there — so the guests carry
-                # the same package. Same content-addressed path both
-                # sides, no rewriting needed.
-                ({ ... }: {
+                ./nix/microvm/image.nix
+                # The suite executes WYRD_BIN in-guest over the agent,
+                # and the opacity probe runs nak in-guest too — so the
+                # guests carry both packages. Stable paths
+                # (/run/current-system/sw/bin/...) serve both sides,
+                # no handoff rewriting needed.
+                ({ pkgs, ... }: {
                   environment.systemPackages =
-                    [ wyrdPkg ];
+                    [ wyrdPkg pkgs.nak ];
                 })
               ];
             };
-          microvmGuest = role: microvmGuestFor { inherit role; wyrdSrc = wyrdSrcFor; };
+          imageGuest = role: imageGuestFor { inherit role; wyrdSrc = wyrdSrcFor; };
         in
         {
-          wyrd-peer-o = microvmGuest "peer-o";
-          wyrd-peer-n = microvmGuest "peer-n";
-          wyrd-relay = microvmGuest "relay";
+          wyrd-peer-o = imageGuest "peer-o";
+          wyrd-peer-n = imageGuest "peer-n";
+          wyrd-relay = imageGuest "relay";
           # Module evaluation fixture for the shell gate
           # (tests/harness/test-wyrd-module.sh): one vault and one mount,
           # evaluated but never built.
@@ -358,5 +357,16 @@
             ];
           };
         };
+      # Bootable Incus images for the gate task, one output per role.
+      # Each output dir holds exactly manifest.json (gate.image/v1)
+      # and image.tar.gz (the unified tarball the host imports), both
+      # derived from the same gate.box options (see nix/microvm/).
+      # x86_64-linux only: KVM hosts are x86_64, and disk assembly
+      # builds on Linux (evaluation works anywhere).
+      images = {
+        peer-o = self.nixosConfigurations.wyrd-peer-o.config.system.build.wyrdImage;
+        peer-n = self.nixosConfigurations.wyrd-peer-n.config.system.build.wyrdImage;
+        relay = self.nixosConfigurations.wyrd-relay.config.system.build.wyrdImage;
+      };
     };
 }

@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 # shellcheck disable=SC2034
-# (SSH/SSH_OPTS are read indirectly by on_o/on_n from
+# (GATE_GUEST_BIN and friends are read indirectly by on_o/on_n from
 # tests/harness/e2e-helpers.bash through `run`, which shellcheck cannot see
 # through; every assignment below is consumed at call time.)
 # tests/gate/gate-phase-01.bats — gate-path phase 1: shared core on peer-o.
@@ -20,15 +20,15 @@ bats_require_minimum_version 1.5.0
 load "$BATS_TEST_DIRNAME/../harness/e2e-guard.sh"
 
 setup() {
-  for v in STATE_DIR WYRD_BIN PEER_O WYRD_E2E_TOKEN WYRD_E2E_LOCK SSH_KEY GATE_BATS_LIB CORE_ONLY GUEST_ENV; do
+  for v in STATE_DIR WYRD_BIN WYRD_E2E_TOKEN WYRD_E2E_LOCK GATE_BATS_LIB GATE_GUEST_BIN GATE_PARTITION_BIN CORE_ONLY GUEST_ENV RELAY_URL; do
     [ -n "${!v+x}" ] || { echo "gate-phase-01: $v is not set (run through tests/gate/gate-entry.sh)" >&2; return 1; }
   done
   RUN="$STATE_DIR/run"
-  [ "$GUEST_ENV" = "/mnt/wyrd-state/run/e2e-env.sh" ] || { echo "gate-phase-01: GUEST_ENV=$GUEST_ENV is not the guest-visible env file" >&2; return 1; }
+  [ "$GUEST_ENV" = "/var/lib/wyrd-e2e/e2e-env.sh" ] || { echo "gate-phase-01: GUEST_ENV=$GUEST_ENV is not the guest env file" >&2; return 1; }
+  load "$GATE_BATS_LIB/guest"
+  load "$GATE_BATS_LIB/partition"
   source "$BATS_TEST_DIRNAME/../harness/e2e-helpers.bash"
   e2e_require_wrapped "$RUN/e2e-env.sh" "./tests/gate/gate-entry.sh (gate task)" --check-owner-pid
-  SSH_OPTS="-i $SSH_KEY -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o BatchMode=yes"
-  SSH="ssh $SSH_OPTS"
 }
 
 @test "shared core steps run green on peer-o" {

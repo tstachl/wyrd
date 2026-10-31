@@ -6,8 +6,7 @@
 # No repository code executed on Odin with host privilege may name a
 # privileged program: the repository contributes orchestration (data
 # and parameters), the host contributes the privilege through
-# capabilities (GATE_AS_GUEST_BIN, GATE_PARTITION_BIN,
-# GATE_HAND_TO_GUEST_BIN). Pure bash, no host, no nix: run it
+# capabilities (GATE_GUEST_BIN, GATE_PARTITION_BIN). Pure bash, no host, no nix: run it
 # anywhere with `bash tests/harness/test-no-host-privilege.sh`. (Wired into
 # the CI shell-tests job alongside the other stubs.)
 #
@@ -21,7 +20,8 @@
 # Discipline: the bans below match comments too, so a comment that
 # needs one of these words must be reworded, not excepted. Guest
 # payloads are the only exception: a line routing through on_o/on_n
-# executes inside the guest over ssh, where sudo/mount/chown are
+# (or guest_exec, the gate-owned agent transport both route through)
+# executes inside the guest over the agent, where sudo/mount/chown are
 # guest privilege.
 set -euo pipefail
 
@@ -66,12 +66,17 @@ done < <(grep -h -E '^[[:space:]]*(source|\.) ' "${CLOSURE[@]}" || true)
 pass "task closure sources only itself"
 
 # --- no privileged program names in the closure ---
-# Words banned everywhere except guest payloads (on_o/on_n lines);
-# phrases banned everywhere (they have no guest use).
+# Words banned everywhere except guest payloads (on_o/on_n and
+# guest_exec lines — both route through the gate-owned agent
+# transport, so the named program runs in the guest, never on the
+# host); phrases banned everywhere (they have no guest use).
 WORDS="setpriv|chown|mount|umount|sudo|qemu|virtiofsd|pgrep|pkill|ssh-keygen"
 PHRASES="ip link|ip tuntap|ip addr|nix build|nix-store"
 for f in "${CLOSURE[@]}"; do
-  hits="$(grep -n -w -E "$WORDS" "$f" | grep -v 'on_o\|on_n' || true)"
+  # `GUEST_BIN" exec` is the entry's direct transport invocation (same
+  # gate-owned binary the helpers wrap); anything else naming the bin
+  # (exports, assignments) carries no privileged token.
+  hits="$(grep -n -w -E "$WORDS" "$f" | grep -v 'on_o\|on_n\|guest_exec\|GUEST_BIN" exec' || true)"
   [[ -z "$hits" ]] || die "privileged token in ${f#$ROOT/} (guest payloads excepted):\n$hits"
   phits="$(grep -n -E "$PHRASES" "$f" || true)"
   [[ -z "$phits" ]] || die "privileged operation in ${f#$ROOT/}:\n$phits"
@@ -89,14 +94,16 @@ done
 pass "task closure kills nothing (kill -0 liveness only)"
 
 # --- the capability surface is defined, not bypassed ---
-# The shims live in e2e-helpers.bash (shared by the Lima suite and
-# the gate phases); the gate entry publishes the bins the host owns.
-grep -q 'GATE_AS_GUEST_BIN' "$ROOT/tests/harness/e2e-helpers.bash" \
-  || die "as_guest capability (GATE_AS_GUEST_BIN) missing from the shims"
+# The agent transport and the partition primitive live behind
+# GATE_GUEST_BIN / GATE_PARTITION_BIN, published by the gate entry
+# and consumed through e2e-helpers.bash (on_o/on_n, host_partition,
+# wait_guest_file) and the gate-owned bats helpers the phases load.
+grep -q 'GATE_GUEST_BIN' "$ROOT/tests/harness/e2e-helpers.bash" \
+  || die "guest transport capability (GATE_GUEST_BIN) missing from the shims"
+grep -q 'GATE_GUEST_BIN' "$ROOT/tests/gate/gate-entry.sh" \
+  || die "guest transport capability (GATE_GUEST_BIN) not published by the entry"
 grep -q 'GATE_PARTITION_BIN' "$ROOT/tests/harness/e2e-helpers.bash" \
   || die "partition capability (GATE_PARTITION_BIN) missing from the shims"
-grep -q 'GATE_HAND_TO_GUEST_BIN' "$ROOT/tests/harness/e2e-helpers.bash" \
-  || die "handover capability (GATE_HAND_TO_GUEST_BIN) missing from the shims"
-pass "capability surface (as-guest, partition, handover) is defined"
+pass "capability surface (guest transport, partition) is defined"
 
 echo "no-host-privilege: $PASS checks passed"

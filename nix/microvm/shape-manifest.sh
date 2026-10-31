@@ -98,6 +98,7 @@ tests/lima/run-alpha.sh
 tests/lima/wyrd-alpha.yaml
 nix/microvm/empty-src
 nix/microvm/common.nix
+nix/microvm/image.nix
 nix/microvm/peer-o.nix
 nix/microvm/peer-n.nix
 nix/microvm/relay.nix

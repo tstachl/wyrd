@@ -3,28 +3,33 @@
 #
 # The entry point the gate provisioned unit runs: as the build user,
 # on the traversable build copy, with the GATE_* capability env.
-# Root provisioning (bridge, taps, builds, boot) belongs to the
-# host; the host already provisioned, built, booted, and waited,
-# so this wrapper only assembles the suite environment, mints the
-# run token, holds the provision lock, and execs bats on the
-# suite files.
+# Root provisioning (bridge, builds, import, boot, agent wait)
+# belongs to the host; the host already provisioned, built, booted,
+# and waited, so this wrapper only assembles the suite environment,
+# mints the run token, holds the provision lock, prepares the guests,
+# and execs bats on the suite files.
 #
 # Contract (pinned by tests/harness/test-gate-entry.sh):
 # - Reads, never derives: provision datum files (state-dir, lock-file,
-#   subnet, ssh-user, relay-role, relay-port, roles) and the runner
-#   handoff at GATE_RUNNERS_ENV. A missing or malformed input refuses
-#   here, before any suite phase runs.
-# - Datum schema: subnet is a dotted /24 prefix (e.g. 10.0.7);
-#   relay-port is 1-65535; ssh-user is a login name; roles is
-#   `|`-separated `name tap octet ssh-flag runner` records with an
-#   ssh-flag of `ssh` or `-`. Shape violations refuse like missing
-#   files do.
-# - Runner names are task convention: the Odin task's provision builds
-#   must name the wyrd and nak builds `wyrd` and `nak`; the suite
-#   resolves them to WYRD_BIN and NAK_BIN.
+#   relay-role, relay-port) and the validated image manifests at
+#   $PROVISION_DIR/manifests/<build>.json (root-written,
+#   build-user-readable). The guest IPs come from the manifests'
+#   role/ip fields — never from derived subnets or tap octets.
+#   A missing or malformed input refuses here, before any suite
+#   phase runs.
+# - Datum schema: relay-port is 1-65535; relay-role names a manifest
+#   role present in the manifests dir. Shape violations refuse like
+#   missing files do.
+# - The suite reaches guests only through GATE_GUEST_BIN (mandatory,
+#   unset refuses): guest_exec/push/pull from the gate-owned bats
+#   helpers. There is no ssh and no shared filesystem; the Incus
+#   agent carries control and files.
+# - WYRD_BIN/NAK_BIN are the stable in-image paths: the images carry
+#   both packages, so no runner handoff resolution exists.
 # - The published run env file carries the keys the guest legs
-#   consume (WYRD_BIN, RELAY_*, CHECKOUT, E2E_ROOT plus token, owner
-#   pid and debug passthroughs).
+#   consume (WYRD_BIN, NAK_BIN, RELAY_*, peer IPs, CHECKOUT, E2E_ROOT
+#   plus token, owner pid and debug passthroughs). It is pushed into
+#   each peer guest; the legs address it as GUEST_ENV.
 # - Holds the provision lock for the suite's lifetime, so the e2e
 #   guard's lock check and a later teardown agree on who owns the
 #   run. The initial acquire retries briefly: the launcher releases
@@ -50,14 +55,14 @@ else
 fi
 command -v bats >/dev/null || { echo "gate-entry.sh: bats is not on PATH" >&2; exit 1; }
 command -v flock >/dev/null || { echo "gate-entry.sh: flock is not on PATH" >&2; exit 1; }
-command -v ssh >/dev/null || { echo "gate-entry.sh: ssh is not on PATH" >&2; exit 1; }
+command -v jq >/dev/null || { echo "gate-entry.sh: jq is not on PATH" >&2; exit 1; }
 command -v timeout >/dev/null || { echo "gate-entry.sh: timeout is not on PATH" >&2; exit 1; }
 
 PROVISION_DIR="${GATE_TASK_PROVISION_DIR:?gate-entry.sh: GATE_TASK_PROVISION_DIR is not set}"
 BATS_LIB="${GATE_BATS_LIB:?gate-entry.sh: GATE_BATS_LIB is not set}"
 [ -d "$BATS_LIB" ] || { echo "gate-entry.sh: bats helpers are missing at $BATS_LIB" >&2; exit 1; }
-RUNNERS_ENV="${GATE_RUNNERS_ENV:?gate-entry.sh: GATE_RUNNERS_ENV is not set}"
-[ -f "$RUNNERS_ENV" ] || { echo "gate-entry.sh: runner handoff is missing at $RUNNERS_ENV" >&2; exit 1; }
+GUEST_BIN="${GATE_GUEST_BIN:?gate-entry.sh: GATE_GUEST_BIN is not set (host must publish the guest transport)}"
+[ -x "$GUEST_BIN" ] || { echo "gate-entry.sh: guest transport is not executable: $GUEST_BIN" >&2; exit 1; }
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 # policy <name>: the single-line provision datum. Missing or empty
@@ -72,96 +77,102 @@ policy() { # <name>
 
 STATE_DIR="$(policy state-dir)" || exit 1
 LOCK_FILE="$(policy lock-file)" || exit 1
-SUBNET="$(policy subnet)" || exit 1
-SSH_USER="$(policy ssh-user)" || exit 1
 RELAY_ROLE="$(policy relay-role)" || exit 1
 RELAY_PORT="$(policy relay-port)" || exit 1
 # Shape, not just presence: a malformed datum would otherwise build
 # bad endpoints silently. The host validates these too when it
 # publishes them; this is the entry's fail-fast refusal.
-[[ "$SUBNET" =~ ^([0-9]{1,3}\.){2}[0-9]{1,3}$ ]] || { echo "gate-entry.sh: subnet out of bounds: $SUBNET (want dotted /24 prefix)" >&2; exit 1; }
-IFS=. read -ra _octets <<<"$SUBNET"
-for octet in "${_octets[@]}"; do
-  [ "$octet" -le 255 ] || { echo "gate-entry.sh: subnet octet out of bounds: $SUBNET" >&2; exit 1; }
-done
-unset _octets
-[[ "$SSH_USER" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || { echo "gate-entry.sh: ssh user out of bounds: $SSH_USER" >&2; exit 1; }
 [[ "$RELAY_PORT" =~ ^[0-9]{1,5}$ ]] && [ "$RELAY_PORT" -ge 1 ] && [ "$RELAY_PORT" -le 65535 ] \
   || { echo "gate-entry.sh: relay port out of bounds: $RELAY_PORT" >&2; exit 1; }
-ROLES_FILE="$PROVISION_DIR/roles"
-[ -f "$ROLES_FILE" ] || { echo "gate-entry.sh: provision datum is missing: roles" >&2; exit 1; }
-
-SSH_KEY="$STATE_DIR/sshkey"
-[ -f "$SSH_KEY" ] || { echo "gate-entry.sh: ssh key is missing at $SSH_KEY (host provisions it)" >&2; exit 1; }
+[[ "$RELAY_ROLE" =~ ^[a-z0-9][a-z0-9-]{0,31}$ ]] \
+  || { echo "gate-entry.sh: relay role out of bounds: $RELAY_ROLE" >&2; exit 1; }
 RUN="$STATE_DIR/run"
 [ -d "$RUN" ] || { echo "gate-entry.sh: run tree is missing at $RUN (host provisions it)" >&2; exit 1; }
 
-# Peer and relay endpoints from the published roles (name tap octet
-# ssh-flag runner, `|`-separated): every ssh role becomes a dialable
-# peer, the relay role becomes the ws URL. This entry is wyrd-task
-# specific and names peer-o/peer-n explicitly; a task with different
-# roles needs its own entry, not a flag. Fields are read into an
-# array, never word-split: role fields are data, never patterns.
-PEER_O=""; PEER_N=""; RELAY_OCTET=""
-while IFS= read -r record || [ -n "$record" ]; do
-  read -ra fields <<<"$record"
-  [ "${#fields[@]}" -eq 5 ] || { echo "gate-entry.sh: role out of bounds: $record" >&2; exit 1; }
-  # Octets are host address parts like the subnet's: numeric, in range.
-  # The host validates on publish; this is the entry's fail-fast.
-  [[ "${fields[2]}" =~ ^[0-9]{1,3}$ ]] && [ "${fields[2]}" -ge 1 ] && [ "${fields[2]}" -le 254 ] \
-    || { echo "gate-entry.sh: role octet out of bounds: $record" >&2; exit 1; }
-  if [ "${fields[0]}" = "$RELAY_ROLE" ]; then RELAY_OCTET="${fields[2]}"; fi
-  case "${fields[3]}" in ssh|-) ;; *) { echo "gate-entry.sh: ssh flag out of bounds: $record" >&2; exit 1; } ;; esac
-  if [ "${fields[0]}" = "peer-o" ] && [ "${fields[3]}" = "ssh" ]; then PEER_O="$SSH_USER@$SUBNET.${fields[2]}"; fi
-  if [ "${fields[0]}" = "peer-n" ] && [ "${fields[3]}" = "ssh" ]; then PEER_N="$SSH_USER@$SUBNET.${fields[2]}"; fi
-done < <(tr '|' '\n' <"$ROLES_FILE")
-[ -n "$PEER_O" ] || { echo "gate-entry.sh: roles name no ssh peer-o" >&2; exit 1; }
-[ -n "$PEER_N" ] || { echo "gate-entry.sh: roles name no ssh peer-n" >&2; exit 1; }
-[ -n "$RELAY_OCTET" ] || { echo "gate-entry.sh: roles name no $RELAY_ROLE" >&2; exit 1; }
-RELAY_URL="ws://$SUBNET.$RELAY_OCTET:$RELAY_PORT"
-
-# Runner handoff: name=storepath lines the host build wrote. The names
-# are task convention (see header); unknown names are ignored, missing
-# required names refuse. The handoff names build output dirs; the
-# binaries live at $dir/bin.
-WYRD_OUT=""; NAK_OUT=""
-while IFS= read -r line || [ -n "$line" ]; do
-  [ -n "$line" ] || continue
-  case "$line" in
-    wyrd=*) WYRD_OUT="${line#wyrd=}" ;;
-    nak=*) NAK_OUT="${line#nak=}" ;;
+# Guest IPs from the validated image manifests the host published
+# (one <build>.json per image build, role-addressed inside). The
+# entry names no build and derives no subnet: the manifests are the
+# single declaration of addressing.
+MANIFESTS_DIR="$PROVISION_DIR/manifests"
+[ -d "$MANIFESTS_DIR" ] || { echo "gate-entry.sh: provision manifests are missing at $MANIFESTS_DIR" >&2; exit 1; }
+O_IP=""; N_IP=""; RELAY_IP=""
+for m in "$MANIFESTS_DIR"/*.json; do
+  [ -f "$m" ] || { echo "gate-entry.sh: no image manifests in $MANIFESTS_DIR" >&2; exit 1; }
+  role="$(jq -r '.role // empty' "$m" 2>/dev/null || true)"
+  ip="$(jq -r '.ip // empty' "$m" 2>/dev/null || true)"
+  [[ "$role" =~ ^[a-z0-9][a-z0-9-]{0,31}$ ]] || { echo "gate-entry.sh: manifest role out of bounds in $m" >&2; exit 1; }
+  [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}/24$ ]] || { echo "gate-entry.sh: manifest ip out of bounds in $m: $ip" >&2; exit 1; }
+  ip="${ip%/*}"
+  _o1="${ip%%.*}"; _rest="${ip#*.}"; _o2="${_rest%%.*}"; _rest="${_rest#*.}"; _o3="${_rest%%.*}"; _o4="${ip##*.}"
+  for _o in "$_o1" "$_o2" "$_o3" "$_o4"; do
+    [ "$_o" -le 255 ] || { echo "gate-entry.sh: manifest ip octet out of bounds in $m: $ip" >&2; exit 1; }
+  done
+  unset _o1 _o2 _o3 _o4 _o _rest
+  case "$role" in
+    peer-o) O_IP="$ip" ;;
+    peer-n) N_IP="$ip" ;;
   esac
-done <"$RUNNERS_ENV"
-[ -n "$WYRD_OUT" ] || { echo "gate-entry.sh: runner handoff names no wyrd build" >&2; exit 1; }
-[ -n "$NAK_OUT" ] || { echo "gate-entry.sh: runner handoff names no nak build" >&2; exit 1; }
-WYRD_BIN="$WYRD_OUT/bin/wyrd"; NAK_BIN="$NAK_OUT/bin/nak"
-[ -x "$WYRD_BIN" ] || { echo "gate-entry.sh: wyrd runner is not executable: $WYRD_BIN" >&2; exit 1; }
-[ -x "$NAK_BIN" ] || { echo "gate-entry.sh: nak runner is not executable: $NAK_BIN" >&2; exit 1; }
+  if [ "$role" = "$RELAY_ROLE" ]; then RELAY_IP="$ip"; fi
+done
+[ -n "$O_IP" ] || { echo "gate-entry.sh: manifests name no peer-o role" >&2; exit 1; }
+[ -n "$N_IP" ] || { echo "gate-entry.sh: manifests name no peer-n role" >&2; exit 1; }
+[ -n "$RELAY_IP" ] || { echo "gate-entry.sh: manifests name no $RELAY_ROLE role" >&2; exit 1; }
+RELAY_URL="ws://$RELAY_IP:$RELAY_PORT"
+
+# In-image binaries: the images carry the wyrd subject and nak, so
+# these stable NixOS paths resolve identically on every guest with
+# no handoff. The smoke suite asserts executability in-guest before
+# anything else runs.
+WYRD_BIN="/run/current-system/sw/bin/wyrd"
+NAK_BIN="/run/current-system/sw/bin/nak"
 
 # Run environment, published where the e2e guard parses the token
-# and pid (parsed, never sourced) and the legs source the rest.
-# Written into the build-owned run tree, which the phase-1 guest
-# pre-clean spares by name (see the wipe in tests/lima/alpha-lima.sh):
-# the file is run config minted fresh by this entry, not a run
-# artifact. The guest legs consume WYRD_BIN, RELAY_*, CHECKOUT and
-# E2E_ROOT from this file; a token-and-pid-only file starves them
-# under set -u. RELAY_MANAGED stays 0: the relay is host-provisioned,
-# never suite-managed.
+# and pid (parsed, never sourced) and pushed into each peer guest,
+# which the legs address as GUEST_ENV. The guest legs consume
+# WYRD_BIN, NAK_BIN, RELAY_*, peer IPs, CHECKOUT and E2E_ROOT from
+# this file; a token-and-pid-only file starves them under set -u.
+# RELAY_MANAGED stays 0: the relay is host-provisioned, never
+# suite-managed.
+E2E_ROOT="/var/lib/wyrd-e2e"
 TOKEN="$(head -c16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 {
-  echo "# Generated by tests/gate/gate-entry.sh; sourced by the suite in guests."
+  echo "# Generated by tests/gate/gate-entry.sh; pushed into each peer guest."
   printf 'WYRD_BIN=%q\n' "$WYRD_BIN"
+  printf 'NAK_BIN=%q\n' "$NAK_BIN"
   printf 'RELAY_PORT=%q\n' "$RELAY_PORT"
-  printf 'RELAY_HOST=%q\n' "$SUBNET.$RELAY_OCTET"
+  printf 'RELAY_HOST=%q\n' "$RELAY_IP"
   printf 'RELAY_MANAGED=%q\n' "0"
   printf 'CHECKOUT=%q\n' "/etc/wyrd-tests"
-  printf 'E2E_ROOT=%q\n' "/mnt/wyrd-state/run"
+  printf 'E2E_ROOT=%q\n' "$E2E_ROOT"
+  printf 'WYRD_PEER_O_IP=%q\n' "$O_IP"
+  printf 'WYRD_PEER_N_IP=%q\n' "$N_IP"
+  printf 'RENDEZVOUS_PORT=%q\n' "18770"
   printf 'WYRD_E2E_TOKEN=%s\n' "$TOKEN"
   printf 'WYRD_E2E_PID=%s\n' "$$"
   printf 'E2E_RUST_LOG=%q\n' "${E2E_RUST_LOG:-}"
   printf 'E2E_INTERVAL=%q\n' "${E2E_INTERVAL:-}"
 } > "$RUN/e2e-env.sh"
 chmod 0644 "$RUN/e2e-env.sh"
+
+# Guest preparation: fresh state trees on both peers, owned by the
+# suite user the legs run as, then the env file where the legs
+# address it. The full layout (drives, creds, mounts, logs) is
+# created here because only phase 1 wipes and recreates it, and
+# phase 1 runs on peer-o alone — a peer-n leg must never hit a
+# missing LOGDIR. The agent is the only transport; a guest that never
+# answers fails the run here, before the suite.
+for peer in peer-o peer-n; do
+  timeout 120 "$GUEST_BIN" exec "$peer" -- mkdir -p "$E2E_ROOT" \
+    || { echo "gate-entry.sh: guest $peer is unreachable (agent exec failed)" >&2; exit 1; }
+  timeout 120 "$GUEST_BIN" exec "$peer" -- rm -rf "$E2E_ROOT" \
+    || { echo "gate-entry.sh: guest $peer state reset failed" >&2; exit 1; }
+  timeout 120 "$GUEST_BIN" exec "$peer" -- mkdir -p "$E2E_ROOT/drives" "$E2E_ROOT/creds" "$E2E_ROOT/mnt" "$E2E_ROOT/logs" \
+    || { echo "gate-entry.sh: guest $peer state reset failed" >&2; exit 1; }
+  timeout 120 "$GUEST_BIN" exec "$peer" -- chown -R e2e:users "$E2E_ROOT" \
+    || { echo "gate-entry.sh: guest $peer state handover failed" >&2; exit 1; }
+  timeout 120 "$GUEST_BIN" push "$peer" "$RUN/e2e-env.sh" "$E2E_ROOT/e2e-env.sh" \
+    || { echo "gate-entry.sh: env push to $peer failed" >&2; exit 1; }
+done
 
 # Hold the provision lock for the suite's lifetime: a successful
 # non-blocking acquire by anyone else would mean no wrapper is
@@ -179,13 +190,13 @@ done
 [[ -n "$acquired" ]] || { echo "gate-entry.sh: another run holds $LOCK_FILE" >&2; exit 2; }
 
 export WYRD_E2E_TOKEN="$TOKEN" WYRD_E2E_LOCK="$LOCK_FILE"
-export STATE_DIR SSH_KEY WYRD_BIN NAK_BIN PEER_O PEER_N RELAY_URL
+export STATE_DIR WYRD_BIN NAK_BIN RELAY_URL
 # The partition primitive is host-published per task (gate
 # suite-wrapper unit env); the entry refuses without it, like the
-# old host_partition, so fault phases fail at the gate instead
-# of stranding taps mid-run.
-: "${GATE_PARTITION_BIN:?gate-entry.sh: GATE_PARTITION_BIN is not set (host must publish the tap primitive)}"
-export GATE_BATS_LIB GATE_PARTITION_BIN
+# guest transport, so fault phases fail at the gate instead
+# of stranding instances mid-run.
+: "${GATE_PARTITION_BIN:?gate-entry.sh: GATE_PARTITION_BIN is not set (host must publish the partition primitive)}"
+export GATE_BATS_LIB GATE_PARTITION_BIN GATE_GUEST_BIN
 export E2E_INTERVAL="${E2E_INTERVAL:-}"
 # Step selection (`--step 6,10`): phases build on each other, so the
 # run set is the prefix closure of the selection — selecting phase N
@@ -214,12 +225,12 @@ CORE_ONLY="1"
 for (( _c = 2; _c <= CORE_MAX; _c++ )); do CORE_ONLY="$CORE_ONLY,$_c"; done
 unset _c
 export CORE_ONLY
-# Host $RUN is shared into every guest at /mnt/wyrd-state (see
-# nix/microvm/common.nix), so $RUN/e2e-env.sh is guest-visible at
-# $GUEST_RUN/e2e-env.sh. The entry owns that translation: one export
-# here covers every phase, which must use $GUEST_ENV, never the host
-# $RUN path, for the guest-side env file.
-export GUEST_ENV="/mnt/wyrd-state/run/e2e-env.sh"
+# The env file lives at the same guest path on both peers; the entry
+# owns that translation: one export here covers every phase, which
+# must use $GUEST_ENV, never a host path, for the guest-side env file.
+export GUEST_ENV="$E2E_ROOT/e2e-env.sh"
+export GUEST_RUN="$E2E_ROOT"
+export GUEST_TESTS="/etc/wyrd-tests"
 
 # The suite is the prefix closure of the selection: smoke plus phase
 # 1 (microvm 1-5, every prefix includes it) plus gate phases 02-11
