@@ -55,8 +55,8 @@ milestones = [
 # their own copy), so the path is checkout-relative.
 [review]
 prompt = ".agents/prompts/branch-review-wyrd.md"
-model = "nvidia/nvidia/nemotron-3-ultra-550b-a55b"
-variant = "high"
+model = "opencode-go/deepseek-v4.1-flash"
+variant = "max"
 
 # Odin runner resource: the forced-command ssh path. The machine id comes
 # from the key entry server-side; nothing here can forge it.
