@@ -3,7 +3,8 @@
 #
 # Sourced, never executed: functions only, no side effects at source
 # time. Sourced by the gate-path bats phases
-# (tests/gate/gate-phase-*.bats). The transport is the Incus agent:
+# (tests/gate/gate-phase-*.bats) and the gate entry smoke suite
+# (tests/gate/gate-entry-smoke.bats). The transport is the Incus agent:
 # commands run inside the named role's guest and files move over
 # `incus file`, through the gate-owned helpers (`load
 # "$GATE_BATS_LIB/guest"` in each phase provides guest_exec,
@@ -74,10 +75,12 @@ as_e2e() { # <role> <cmd...>
 # guest_timeout <secs> <role> <cmd...>: agent exec with a hard bound.
 # timeout cannot execute a shell function, so the bound wraps the
 # gate transport binary directly — never guest_exec/on_o/on_n
-# (pinned by tests/harness/test-timeout-discipline.sh).
+# (pinned by tests/harness/test-timeout-discipline.sh). The KILL
+# grace makes the bound hard: a transport client that ignores TERM
+# is killed instead of stretching the call past its budget.
 guest_timeout() { # <secs> <role> <cmd...>
   local secs="$1"; shift
-  timeout "$secs" "$GATE_GUEST_BIN" exec "$@"
+  timeout -k 10 "$secs" "$GATE_GUEST_BIN" exec "$@"
 }
 
 # guest_wyrd <role> <wyrd-args...>: run the in-image wyrd binary in a

@@ -56,10 +56,10 @@ setup() {
 @test "peers serve the run rendezvous channel" {
   # The boot service exposes each peer's signals dir from boot, so a
   # signal a leg writes stays fetchable after that leg exits. The
-  # loop is deadline-bounded (120 s total), not attempt-counted: a
-  # hung agent fails the suite loudly instead of wedging the unit
-  # for an hour. Every cross-guest wait below depends on the
-  # writer's server.
+  # loop is deadline-bounded per peer (120 s wall time each), not
+  # attempt-counted: a hung agent fails the suite loudly instead of
+  # wedging the unit for an hour. Every cross-guest wait below
+  # depends on the writer's server.
   for peer in peer-o peer-n; do
     active=""
     deadline=$((SECONDS + 120))

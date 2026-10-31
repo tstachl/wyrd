@@ -19,6 +19,10 @@ PASS=0
 pass() { PASS=$((PASS + 1)); echo "  PASS: $1"; }
 die() { echo "  FAIL: $1" >&2; exit 1; }
 
+FIXTURE="$(mktemp -d)"
+CALLS="$FIXTURE/calls"
+trap 'rm -rf "$FIXTURE"' EXIT
+
 # The mechanism, pinned: a shell function under timeout exits 127.
 if command -v timeout >/dev/null 2>&1; then
   probe_fn() { echo ran; }
@@ -33,9 +37,47 @@ fi
 # The ban: no suite function under timeout in host-executed code.
 # Binaries ("$GATE_GUEST_BIN", python3, jq) are fine; the banned
 # names are the suite's own functions, which only resolve in-shell.
+# Covers the gate suite, its helpers, and the Lima legs (whose
+# peer_wait/peer_signal the ban list names).
 HITS="$(grep -rn -E 'timeout +[0-9]+ +(guest_exec|on_o|on_n|guest_wyrd|guest_timeout|mint_guest_creds|wait_guest_file|host_partition|as_e2e|gate_partition|gate_as_guest|peer_wait|peer_signal)( |$|")' \
-  "$ROOT/tests/gate" "$ROOT/tests/harness/e2e-helpers.bash" || true)"
+  "$ROOT/tests/gate" "$ROOT/tests/harness/e2e-helpers.bash" "$ROOT/tests/lima" || true)"
 [[ -z "$HITS" ]] || die "timeout wraps a shell function (use guest_timeout or the transport binary):\n$HITS"
 pass "no suite function runs under timeout"
+
+# The helper itself, executed: argv shape, guest status propagation,
+# and the bound. A stub transport records argv and exits 7; a
+# sleeper provokes the 124.
+if command -v timeout >/dev/null 2>&1; then
+  # shellcheck source=/dev/null
+  source "$ROOT/tests/harness/e2e-helpers.bash"
+  STUB="$FIXTURE/guest-bin-stub"
+  cat >"$STUB" <<'EOF'
+#!/bin/sh
+echo "stub $*" >>"$CALLS"
+exit "$STUB_RC"
+EOF
+  chmod +x "$STUB"
+  : >"$CALLS"
+  rc=0
+  GATE_GUEST_BIN="$STUB" CALLS="$CALLS" STUB_RC=7 guest_timeout 10 peer-o -- test -x /run/current-system/sw/bin/wyrd || rc=$?
+  [[ "$rc" == 7 ]] || die "guest status did not propagate (got $rc)"
+  grep -q "^stub exec peer-o -- test -x /run/current-system/sw/bin/wyrd$" "$CALLS" \
+    || die "guest_timeout argv is not the transport invocation: $(cat "$CALLS")"
+  pass "guest_timeout sends the transport invocation and propagates status"
+  cat >"$STUB" <<'EOF'
+#!/bin/sh
+sleep 30
+EOF
+  chmod +x "$STUB"
+  start="$(date +%s)"
+  rc=0
+  GATE_GUEST_BIN="$STUB" guest_timeout 2 peer-o -- true || rc=$?
+  [[ "$rc" == 124 ]] || die "guest_timeout did not time out (got $rc)"
+  elapsed=$(( $(date +%s) - start ))
+  (( elapsed < 15 )) || die "guest_timeout overran its bound (${elapsed}s)"
+  pass "guest_timeout enforces its bound"
+else
+  echo "  SKIP: timeout missing, helper execution omitted"
+fi
 
 echo "timeout-discipline: $PASS checks passed"
