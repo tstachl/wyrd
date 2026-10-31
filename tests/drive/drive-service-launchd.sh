@@ -137,8 +137,16 @@ def svc(name, args, logname, template):
     # The whole evaluated serviceConfig, with only the per-run
     # fields replaced: a module restart-policy regression must show
     # up in what this leg runs, never be papered over by a
-    # hand-mirrored dictionary.
-    out = dict(template)
+    # hand-mirrored dictionary. Null-valued keys have no plist
+    # encoding and mean "unset" to launchd, so drop them rather
+    # than failing the dump.
+    def strip_none(v):
+        if isinstance(v, dict):
+            return {k: strip_none(x) for k, x in v.items() if x is not None}
+        if isinstance(v, list):
+            return [strip_none(x) for x in v]
+        return v
+    out = strip_none(dict(template))
     out["Label"] = name
     out["ProgramArguments"] = args
     out["StandardOutPath"] = scratch + "/" + logname
@@ -164,7 +172,7 @@ plutil -lint "$SCRATCH/vault.plist" || die "generated vault plist fails lint"
 plutil -lint "$SCRATCH/mount.plist" || die "generated mount plist fails lint"
 say "PASS: both daemon plists generate and lint"
 
-pid_of() { launchctl list "$LABEL" 2>/dev/null | sed -n 's/.*"PID" = \([0-9][0-9]*\);.*/\1/p' | head -n 1; }
+pid_of() { launchctl list "$LABEL" 2>/dev/null | sed -n 's/.*"PID" = \([0-9][0-9]*\);.*/\1/p' | head -n 1; return 0; }
 
 say "bootstrapping $LABEL in the user domain"
 launchctl bootstrap "gui/$(id -u)" "$SCRATCH/vault.plist" || die "bootstrap failed"
@@ -175,7 +183,7 @@ PID1="$(pid_of)"
 say "PASS: service running after load (pid $PID1) with posture"
 
 say "assert: back with a new pid after SIGKILL of the child"
-CHILD="$(pgrep -P "$PID1" wyrd | head -n 1)"
+CHILD="$(pgrep -P "$PID1" wyrd | head -n 1 || true)"
 [[ -n "$CHILD" ]] || die "no supervised wyrd child under wrapper pid $PID1"
 kill -KILL "$CHILD"
 for _ in $(seq 1 12); do sleep 5; PID2="$(pid_of)"; [[ "$PID2" =~ ^[0-9]+$ && "$PID2" != "$PID1" ]] && break; done
