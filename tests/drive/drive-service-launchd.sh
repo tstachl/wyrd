@@ -146,7 +146,7 @@ plutil -lint "$SCRATCH/vault.plist" || die "generated vault plist fails lint"
 plutil -lint "$SCRATCH/mount.plist" || die "generated mount plist fails lint"
 say "PASS: both daemon plists generate and lint"
 
-pid_of() { launchctl list "$LABEL" 2>/dev/null | awk '$3 == "'"$LABEL"'" {print $1}'; }
+pid_of() { launchctl list "$LABEL" 2>/dev/null | sed -n 's/.*"PID" = \([0-9][0-9]*\);.*/\1/p' | head -n 1; }
 
 say "bootstrapping $LABEL in the user domain"
 launchctl bootstrap "gui/$(id -u)" "$SCRATCH/vault.plist" || die "bootstrap failed"
@@ -189,7 +189,17 @@ sleep 35
 PID4="$(pid_of)"
 [[ -z "$PID4" || "$PID4" == "-" ]] || die "held drive retried (pid $PID4), expected no retry"
 say "PASS: held drive failed once with 78, no retry"
-launchctl bootstrap "gui/$(id -u)" "$SCRATCH/vault.plist" || die "re-bootstrap after holder release failed"
+# Boot out the failed instance first: bootstrapping over a loaded
+# job is refused, and a restart inside the throttle window after the
+# 78 exit can refuse too — poll past either, and fail loud with
+# launchd's own error.
+launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
+BOOT_OK=""
+for i in $(seq 1 12); do
+  if launchctl bootstrap "gui/$(id -u)" "$SCRATCH/vault.plist" 2>"$SCRATCH/booterr.txt"; then BOOT_OK=1; break; fi
+  sleep 5
+done
+[[ -n "$BOOT_OK" ]] || { cat "$SCRATCH/booterr.txt" >&2; die "re-bootstrap after holder release failed"; }
 sleep 5
 PID5="$(pid_of)"
 [[ "$PID5" =~ ^[0-9]+$ ]] || die "service did not recover after the holder released"
