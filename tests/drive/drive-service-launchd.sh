@@ -53,21 +53,29 @@ trap cleanup EXIT
 launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
 
 say "building the wyrd package for this system"
-WYRD_BIN="$(nix build --print-out-paths --no-link "$ROOT#packages.aarch64-darwin.wyrd" | tail -n 1)/bin/wyrd"
+SYS="$(nix eval --impure --raw --expr 'builtins.currentSystem')"
+WYRD_BIN="$(nix build --print-out-paths --no-link "$ROOT#packages.$SYS.wyrd" | tail -n 1)/bin/wyrd"
 [[ -x "$WYRD_BIN" ]] || die "no wyrd binary built"
 say "wyrd: $WYRD_BIN"
+say "building the supervisor wrapper the module names"
+nix build --print-out-paths --no-link "$ROOT#packages.$SYS.wyrd-supervise" > "$SCRATCH/supervise.out" \
+  || die "wyrd-supervise package failed to build"
 
-say "provisioning scratch drive and secrets"
-head -c32 /dev/urandom > "$SCRATCH/identity"; chmod 600 "$SCRATCH/identity"
-printf e2e-test-passphrase > "$SCRATCH/passphrase"; chmod 600 "$SCRATCH/passphrase"
-"$WYRD_BIN" init "$SCRATCH/demo" --identity-file "$SCRATCH/identity" --passphrase-file "$SCRATCH/passphrase" \
-  || die "drive init failed"
+say "provisioning scratch drive and secrets (idempotent across --keep reruns)"
+if [[ -f "$SCRATCH/demo/DRIVE" ]]; then
+  say "scratch drive already initialized; reusing identity and drive"
+else
+  head -c32 /dev/urandom > "$SCRATCH/identity"; chmod 600 "$SCRATCH/identity"
+  printf e2e-test-passphrase > "$SCRATCH/passphrase"; chmod 600 "$SCRATCH/passphrase"
+  "$WYRD_BIN" init "$SCRATCH/demo" --identity-file "$SCRATCH/identity" --passphrase-file "$SCRATCH/passphrase" \
+    || die "drive init failed"
+fi
 
 say "generating the daemon plist from module evaluation"
 nix eval --json "$ROOT#darwinConfigurations.wyrd-drive-test.config.launchd.daemons" > "$SCRATCH/daemons.json" \
   || die "darwin daemon evaluation failed"
-python3 - "$SCRATCH/daemons.json" "$SCRATCH" "$LABEL" <<'EOF' || exit 1
-import json, plistlib, sys
+python3 - "$SCRATCH/daemons.json" "$SCRATCH" "$LABEL" "$SCRATCH/supervise.out" <<'EOF' || exit 1
+import json, os, plistlib, sys
 daemons_path, scratch, label = sys.argv[1], sys.argv[2], sys.argv[3]
 daemons = json.load(open(daemons_path))
 names = sorted(daemons)
@@ -76,6 +84,21 @@ assert "md.enesis.wyrd.vault-demo" in daemons, "vault daemon missing from module
 assert "md.enesis.wyrd.mount-demo" in daemons, "mount daemon missing from module output"
 vault = daemons["md.enesis.wyrd.vault-demo"]["serviceConfig"]
 argv = list(vault["ProgramArguments"])
+# The wrapper is a store path the module emits but evaluation never
+# realizes: launchd exec of a missing binary dies instantly with no
+# output at all (empty daemon log, no pid — exactly the silent
+# failure this looked like). The flake exposes the same build as
+# packages.*.wyrd-supervise; build it here and refuse loudly unless
+# it is byte-identical to what the module names (same builder, same
+# source, same nixpkgs — a mismatch means the leg would test a
+# different artifact than the module ships).
+wrapper = argv[0]
+assert wrapper.endswith("/bin/wyrd-supervise"), wrapper
+built = open(sys.argv[4]).read().strip().splitlines()
+assert len(built) == 1, built
+candidate = os.path.join(os.path.realpath(built[0]), "bin", "wyrd-supervise")
+assert os.path.realpath(wrapper) == candidate, (built, wrapper)
+assert os.path.isfile(candidate) and os.access(candidate, os.X_OK), candidate
 out = []
 skip_next = False
 for i, a in enumerate(argv):
@@ -84,6 +107,15 @@ for i, a in enumerate(argv):
         continue
     if a == "/var/lib/wyrd/demo":
         out.append(scratch + "/demo")
+    elif a.startswith("--posture-path="):
+        # --flag=value form: the bare-path rules below never match
+        # it, so rewrite the drive-rooted value explicitly.
+        k, v = a.split("=", 1)
+        if v.startswith("/var/lib/wyrd/demo"):
+            v = scratch + "/demo" + v[len("/var/lib/wyrd/demo"):]
+        out.append(k + "=" + v)
+    elif a.startswith("/var/lib/wyrd/demo/"):
+        out.append(scratch + "/demo" + a[len("/var/lib/wyrd/demo"):])
     elif a in ("/etc/wyrd/identity", "/etc/wyrd/passphrase"):
         out.append(scratch + "/" + a.rsplit("/", 1)[-1])
     elif a.startswith("/var/log/"):

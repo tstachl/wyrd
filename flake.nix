@@ -169,6 +169,17 @@
         # runs the wyrd image's own nak beside WYRD_BIN instead of
         # floating nixpkgs#nak.
         nak = (pkgsFor system).nak;
+        # Supervisor wrapper the drive-service module inlines
+        # (nix/drive/{darwin,nixos}.nix `readFile` this same script):
+        # exposed so system-level evidence can build the exact
+        # artifact the module names — evaluation alone leaves an
+        # unrealized store path that dies silently at exec.
+        # Same builder, same source, same nixpkgs: the leg asserts
+        # the output path equals the module's argv[0] rather than
+        # assuming it.
+        wyrd-supervise = (pkgsFor system).writers.writePython3Bin "wyrd-supervise" { } (
+          builtins.readFile ./nix/drive/supervise.py
+        );
         default = self.packages.${system}.wyrd;
       });
       apps = forAllSystems (system: {
