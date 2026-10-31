@@ -127,6 +127,103 @@
       "wyrd-tests/e2e-guard.sh".source = ../../tests/harness/e2e-guard.sh;
     };
 
+    services.openssh = {
+      enable = true;
+      settings.PermitRootLogin = "prohibit-password";
+    };
+    # Root login is key-only; the key itself arrives per boot, never
+    # baked: `wyrd-ssh-key.service` below copies the runner-generated
+    # pubkey from the state share into place, so image builds carry
+    # no credentials and rotation is just a new run.
+    users.users.root.openssh.authorizedKeys.keys = [ ];
+
+    # Boot-time ssh key install from the state share, for root and
+    # the e2e suite user. Poll-wait instead of ordering on the
+    # virtiofs mount unit: robust regardless of mount timing, and
+    # the host retries ssh anyway. set -x: when this unit misbehaves
+    # the trace in the journal is the first thing read, and there is
+    # no ssh to inspect it with (see wyrd-guest-debug below).
+    systemd.services.wyrd-ssh-key = {
+      wantedBy = [ "multi-user.target" ];
+      script = ''
+        set -x
+        for i in $(seq 1 150); do
+          [ -f /mnt/wyrd-state/authorized_keys.pub ] && break
+          sleep 0.2
+        done
+        mkdir -p /root/.ssh /home/e2e/.ssh
+        cp /mnt/wyrd-state/authorized_keys.pub /root/.ssh/authorized_keys
+        cp /mnt/wyrd-state/authorized_keys.pub /home/e2e/.ssh/authorized_keys
+        chmod 600 /root/.ssh/authorized_keys /home/e2e/.ssh/authorized_keys
+        chown -R e2e:users /home/e2e/.ssh
+      '';
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+      };
+    };
+
+    # Guest-side forensics readable without ssh: the drive evidence
+    # task provisions over a host-only tap and ssh may never arrive,
+    # so a stuck boot would leave no guest-side evidence unless the
+    # guest publishes it itself. This oneshot appends a timestamped
+    # bundle to the state share on every boot, mirroring the relay
+    # journal dump (same ordering on the virtiofs mount, same
+    # temp-file rename, same heartbeat timestamp, same bounded
+    # execution). Best effort only: every line tolerates failure
+    # and the unit never fails the boot — an absent or stale
+    # heartbeat is itself the signal that the dump never completed.
+    # Scoped to the drive guest: the e2e trio does not need it, and
+    # shared-infra changes stay minimal.
+    # A settle delay up front: the dump must show steady state, not
+    # a mid-poll race with wyrd-ssh-key's own 30s wait.
+    systemd.services.wyrd-guest-debug = lib.mkIf (config.networking.hostName == "wyrd-drive") {
+      after = [ "mnt-wyrd\\x2dstate.mount" ];
+      requires = [ "mnt-wyrd\\x2dstate.mount" ];
+      wantedBy = [ "multi-user.target" ];
+      script = ''
+        ${pkgs.coreutils}/bin/sleep 45
+        LOGDIR=/mnt/wyrd-state/run/logs
+        ${pkgs.coreutils}/bin/mkdir -p "$LOGDIR" || exit 0
+        {
+          echo "=== guest debug $(${pkgs.coreutils}/bin/cat /proc/sys/kernel/random/boot_id 2>/dev/null || echo unknown-boot) $(${pkgs.coreutils}/bin/date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown-time)"
+          echo "--- units ---"
+          ${pkgs.systemd}/bin/systemctl --no-pager --no-legend list-units 'wyrd-*' 'ssh*' 2>&1 || true
+          echo "--- wyrd-ssh-key state ---"
+          ${pkgs.systemd}/bin/systemctl --no-pager show wyrd-ssh-key -p ActiveState,SubState,Result,ExecMainStatus,NRestarts 2>&1 || true
+          echo "--- wyrd-ssh-key journal (this boot) ---"
+          ${pkgs.systemd}/bin/journalctl --no-pager -b -u wyrd-ssh-key 2>&1 | ${pkgs.coreutils}/bin/tail -n 50 || true
+          echo "--- state share visibility ---"
+          ${pkgs.coreutils}/bin/ls -la /mnt/wyrd-state/ 2>&1 || true
+          ${pkgs.coreutils}/bin/ls -la /mnt/wyrd-state/authorized_keys.pub 2>&1 || true
+          echo "--- share mount options ---"
+          ${pkgs.util-linux}/bin/findmnt -n -o TARGET,OPTIONS /mnt/wyrd-state 2>&1 || ${pkgs.coreutils}/bin/cat /proc/self/mountinfo 2>&1 || true
+          echo "--- network ---"
+          ${pkgs.iproute2}/bin/ip -brief addr show eth0 2>&1 || true
+          echo "--- drive units ---"
+          ${pkgs.systemd}/bin/systemctl --no-pager --lines=5 status wyrd-vault-demo wyrd-mount-demo 2>&1 || true
+        } > "$LOGDIR/.guest-debug.tmp" 2>&1 || true
+        ${pkgs.coreutils}/bin/mv "$LOGDIR/.guest-debug.tmp" "$LOGDIR/guest-debug.log" 2>/dev/null || exit 0
+        ${pkgs.coreutils}/bin/date -u +%Y-%m-%dT%H:%M:%SZ > "$LOGDIR/guest-debug.ts" 2>/dev/null || true
+        exit 0
+      '';
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+        TimeoutStartSec = "120s";
+      };
+    };
+
+    microvm = {
+      hypervisor = "qemu";
+      shares = [{
+        proto = "virtiofs";
+        tag = "wyrd-state";
+        source = config.wyrd.stateDir;
+        mountPoint = "/mnt/wyrd-state";
+      }];
+    };
+
     system.stateVersion = "26.05";
   };
 }

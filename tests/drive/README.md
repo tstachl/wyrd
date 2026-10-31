@@ -42,3 +42,9 @@ pins the evaluated contract; this directory boots it).
   (`PrivateTmp`), invisible from the host: probe serving from
   inside the supervised process's namespace via `nsenter`, never
   from the host mount table.
+- When ssh itself is unreachable, no guest-side check can run. The
+  `wyrd-guest-debug` oneshot in `nix/microvm/common.nix` (drive
+  guest only) dumps unit states, the key-install journal, share
+  visibility, and mount options to `/mnt/wyrd-state/run/logs/` on
+  every boot, so the host can diagnose a dark guest from the
+  shared state dir.
