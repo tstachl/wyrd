@@ -122,7 +122,14 @@ timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'set -e
 # A manual start here would mask a missing boot enablement.
 OLD_BOOT="$(timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'cat /proc/sys/kernel/random/boot_id')" || { echo "drive-service-entry.sh: cannot read guest boot id" >&2; exit 1; }
 timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'sudo systemctl reboot' || true
-echo "drive-service-entry.sh: waiting for the controlled reboot (up to 300s)"
+echo "drive-service-entry.sh: reboot requested, waiting for the guest to go down (up to 120s)"
+DOWN=""
+for _ in $(seq 1 24); do
+  if ! timeout 20 ssh $SSH_OPTS "$DRIVE_SSH" true 2>/dev/null; then DOWN=1; break; fi
+  sleep 5
+done
+[[ -n "$DOWN" ]] || { echo "drive-service-entry.sh: guest never went down for reboot" >&2; exit 1; }
+echo "drive-service-entry.sh: guest is down, waiting for it to come back with a new boot id (up to 300s)"
 BOOTED=""
 for _ in $(seq 1 60); do
   # shellcheck disable=SC2086
@@ -131,7 +138,7 @@ for _ in $(seq 1 60); do
   if [[ -n "$NEW_BOOT" && "$NEW_BOOT" != "$OLD_BOOT" ]]; then BOOTED=1; break; fi
   sleep 5
 done
-[[ -n "$BOOTED" ]] || { echo "drive-service-entry.sh: guest did not come back with a new boot id" >&2; exit 1; }
+[[ -n "$BOOTED" ]] || { echo "drive-service-entry.sh: guest went down for reboot but never came back with a new boot id" >&2; exit 1; }
 echo "drive-service-entry.sh: guest rebooted ($OLD_BOOT -> $NEW_BOOT)"
 
 exec bats "$ROOT/tests/drive/drive-service.bats"
