@@ -11,53 +11,23 @@
 # other over the test bridge (see peer_signal/peer_wait in
 # alpha-common.sh; the per-guest HTTP server is the wyrd-rendezvous
 # system unit below).
-# Shape and addressing live in options.gate.box, set per role in
-# nix/microvm/{peer-o,peer-n,relay}.nix: one source for the guest
-# network config, the image metadata, and the gate.image/v1 manifest
-# (see nix/microvm/image.nix), so the three can never drift.
+# Shape and addressing live in gate.box, set per role in
+# nix/microvm/{peer-o,peer-n,relay}.nix and owned by the gate
+# input's nixosModules.guest: one source for the guest network
+# config, the image metadata, and the gate.image/v1 manifest, so the
+# three can never drift.
 { config, pkgs, lib, ... }:
 {
-  options.gate.box = {
-    # Manifest role: names the instance in gate runs and addresses
-    # it in the suite (peer-o, peer-n, relay).
-    role = lib.mkOption {
-      type = lib.types.strMatching "^[a-z0-9][a-z0-9-]{0,31}$";
-      description = "Incus image role (gate.image/v1).";
-    };
-    vcpu = lib.mkOption {
-      type = lib.types.ints.between 1 64;
-      description = "Guest vcpus, checked against the host ceiling at launch.";
-    };
-    memMb = lib.mkOption {
-      type = lib.types.ints.between 512 131072;
-      description = "Guest memory in MiB, checked against the host ceiling at launch.";
-    };
-    mac = lib.mkOption {
-      type = lib.types.strMatching "^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$";
-      description = "Guest NIC hardware address on the managed bridge.";
-    };
-    # Bare dotted quad; the /24 suffix is appended where the wire
-    # format needs it (network prefix length, manifest ip). The
-    # bridge prefix itself is host policy (create-once), and the
-    # provisioner refuses a manifest outside it.
-    ip = lib.mkOption {
-      type = lib.types.strMatching "^([0-9]{1,3}\\.){3}[0-9]{1,3}$";
-      description = "Guest static IPv4 address (bare, /24 assumed).";
-    };
-  };
-
   config = {
     # Hostname derives from the role: wyrd-peer-o, wyrd-peer-n,
     # wyrd-relay. The legs key per-guest state off `hostname -s`.
     networking.hostName = "wyrd-${config.gate.box.role}";
-    # Deterministic interface names: with one NIC per guest this is
-    # always eth0, so the suite throttles and addresses one name.
-    boot.kernelParams = [ "net.ifnames=0" ];
-    # Static address on the managed bridge. DHCP (from the bridge's
-    # dnsmasq) may add a second address; the static one below is what
-    # the suite dials and what the manifest declares.
-    networking.interfaces.eth0.ipv4.addresses =
-      [{ address = config.gate.box.ip; prefixLength = 24; }];
+
+    # 8 GiB virtual disk for every role: the exhaustion leg
+    # fallocates ~2.3 GiB at runtime on the guest root fs, which the
+    # module default does not hold. Zeros compress, so the tarball
+    # stays small.
+    gate.image.diskSizeMb = 8192;
 
     # The test bridge is isolated (no uplink, host-only): filtering
     # there buys nothing and breaks the relay port plus dynamic iroh

@@ -40,10 +40,11 @@ is transient — no drive data is affected.
   each role builds a bootable Incus VM image (`images.peer-o`,
   `images.peer-n`, `images.relay`, each dir holding exactly
   `manifest.json` + `image.tar.gz`) with its shape declared once in
-  `gate.box` options — the guest network config, the image metadata
-  and the `gate.image/v1` manifest all derive from the same source,
-  and the derivation re-validates the manifest fail-closed at build
-  time. `gate.toml` names image builds instead of the retired
+  `gate.box` options (set per role, owned by the gate input's
+  `nixosModules.guest`) — the guest network config, the image
+  metadata and the `gate.image/v1` manifest all derive from the same
+  source, and the gate-owned assembly re-validates the manifest
+  fail-closed at build time. `gate.toml` names image builds instead of the retired
   `[tasks.*.topology]` sections; the entry resolves guest IPs from the
   validated manifests, reaches guests only through the agent
   (`guest_exec`/`push`/`pull`), and cross-guest rendezvous rides an

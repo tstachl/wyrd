@@ -25,7 +25,12 @@
     # (see nix/microvm/). x86_64-linux only: KVM hosts are x86_64,
     # and image assembly (disk images) builds on Linux. The subject
     # wyrd package rides the image closure; the manifest next to the
-    # tarball declares the image's shape.
+    # tarball declares the image's shape. The image contract
+    # (gate.box options, manifest generator, assembly) is owned by
+    # the gate input's nixosModules.guest; this repo declares values
+    # and guest config only.
+    gate.url = "git+https://grasp.t5.st/npub1k0y4eceal2zryes3azm6nsgt0r0jsa2v8zcsdf9uqxttn0jlfe9q04c9h8/gate.git?ref=refs/heads/master";
+    gate.inputs.nixpkgs.follows = "nixpkgs";
     # Service-module framework for the declarative drive module
     # (34): pinned to the 26.05 release to match nixpkgs, same as
     # every other input follows the same channel.
@@ -33,7 +38,7 @@
     darwin.inputs.nixpkgs.follows = "nixpkgs";
   };
 
-  outputs = { self, nixpkgs, crane, rust-overlay, darwin, wyrdSrc, ... }:
+  outputs = { self, nixpkgs, crane, rust-overlay, darwin, wyrdSrc, gate, ... }:
     let
       # Product platforms. x86_64-darwin is deliberately absent even though
       # rust-toolchain.toml lists the target: no builder covers it, so it
@@ -290,9 +295,9 @@
               system = "x86_64-linux";
               modules = [
                 "${nixpkgs}/nixos/modules/virtualisation/incus-virtual-machine.nix"
+                gate.nixosModules.guest
                 ./nix/microvm/common.nix
                 ./nix/microvm/${role}.nix
-                ./nix/microvm/image.nix
                 # The suite executes WYRD_BIN in-guest over the agent,
                 # and the opacity probe runs nak in-guest too — so the
                 # guests carry both packages. Stable paths
@@ -360,13 +365,14 @@
       # Bootable Incus images for the gate task, one output per role.
       # Each output dir holds exactly manifest.json (gate.image/v1)
       # and image.tar.gz (the unified tarball the host imports), both
-      # derived from the same gate.box options (see nix/microvm/).
+      # assembled by the gate-owned guest module from the same
+      # gate.box options (see nix/microvm/).
       # x86_64-linux only: KVM hosts are x86_64, and disk assembly
       # builds on Linux (evaluation works anywhere).
       images = {
-        peer-o = self.nixosConfigurations.wyrd-peer-o.config.system.build.wyrdImage;
-        peer-n = self.nixosConfigurations.wyrd-peer-n.config.system.build.wyrdImage;
-        relay = self.nixosConfigurations.wyrd-relay.config.system.build.wyrdImage;
+        peer-o = self.nixosConfigurations.wyrd-peer-o.config.system.build.gateImage;
+        peer-n = self.nixosConfigurations.wyrd-peer-n.config.system.build.gateImage;
+        relay = self.nixosConfigurations.wyrd-relay.config.system.build.gateImage;
       };
     };
 }

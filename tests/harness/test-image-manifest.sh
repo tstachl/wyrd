@@ -2,13 +2,14 @@
 # tests/harness/test-image-manifest.sh — the gate image declaration stays
 # schema-valid and single-sourced: gate.toml names image builds (never a
 # topology section), each role's gate.box facts validate, and the nix
-# sources agree with the declared builds. The image assembly derives
-# manifest.json from the same gate.box options (see
-# nix/microvm/image.nix), so drift is impossible by construction —
-# this test pins the declaration side (what the host builds and what
-# the suite dials), while the derivation re-validates the manifest
-# fail-closed at build time. Pure bash + grep, with optional nix eval
-# cross-checks when nix is available.
+# sources agree with the declared builds. The gate-owned guest
+# module derives manifest.json from the same gate.box options, so
+# drift is impossible by construction — this test pins the
+# declaration side (what the host builds and what the suite dials),
+# while the derivation re-validates the manifest fail-closed at
+# build time and the gateManifest eval below asserts the exact wire
+# bytes. Pure bash + grep, with optional nix eval cross-checks when
+# nix is available.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -80,61 +81,39 @@ pass "declared facts match the test bridge addressing"
 grep -qE 'microvm\.(url|inputs)|microvm\.nixosModules|microvmGuest' "$ROOT/flake.nix" \
   && die "flake.nix still references the retired microvm input"
 pass "no microvm input in flake.nix"
-grep -q "config.system.build.wyrdImage" "$ROOT/flake.nix" \
-  || die "flake.nix exposes no wyrdImage outputs"
+grep -q "config\.system\.build\.gateImage" "$ROOT/flake.nix" \
+  || die "flake.nix exposes no gateImage outputs"
 grep -q 'incus-virtual-machine.nix' "$ROOT/flake.nix" \
   || die "guests are not built on the incus virtual-machine module"
-pass "flake exposes wyrdImage outputs on the incus module"
+grep -q 'gate\.nixosModules\.guest' "$ROOT/flake.nix" \
+  || die "guests are not built on the gate-owned guest module"
+pass "flake exposes gateImage outputs on the incus and gate modules"
 
-# The build-time check runs against the vendored gate schema, not a
-# hand copy: the derivation references the schema file, and the file
-# carries the gate contract id.
-grep -q "image-manifest.schema.json" "$ROOT/nix/microvm/image.nix" \
-  || die "image.nix does not validate against the vendored gate schema"
-[[ -f "$ROOT/nix/microvm/image-manifest.schema.json" ]] \
-  || die "vendored gate schema is missing"
-grep -q '"\$id": "gate-image-manifest-v1"' "$ROOT/nix/microvm/image-manifest.schema.json" \
-  || die "vendored schema is not the gate.image/v1 contract"
-pass "derivation validates against the vendored gate schema"
-
-# Execution check: run the validator the derivation invokes against a
-# known-good manifest and one invalid variant per field family. A
-# reference-only check let the const-only `kind` failure through;
-# this runs the real code path.
-if command -v python3 >/dev/null 2>&1; then
-  VALIDATOR="$ROOT/nix/microvm/validate-manifest.py"
-  SCHEMA="$ROOT/nix/microvm/image-manifest.schema.json"
-  good='{"kind":"gate.image/v1","role":"peer-o","vcpu":4,"memMb":4096,"mac":"02:00:00:00:07:11","ip":"10.0.7.11/24","shares":[]}'
-  printf '%s' "$good" >"$FIXTURE/good.json"
-  out="$(python3 "$VALIDATOR" "$FIXTURE/good.json" "$SCHEMA")" \
-    || die "validator rejects a valid manifest: $out"
-  [[ "$out" == "manifest matches gate-image-manifest-v1" ]] \
-    || die "validator prints an unexpected verdict: $out"
-  bad_role='{"kind":"gate.image/v1","role":"Peer_O!","vcpu":4,"memMb":4096,"mac":"02:00:00:00:07:11","ip":"10.0.7.11/24","shares":[]}'
-  bad_vcpu='{"kind":"gate.image/v1","role":"peer-o","vcpu":0,"memMb":4096,"mac":"02:00:00:00:07:11","ip":"10.0.7.11/24","shares":[]}'
-  bad_mem='{"kind":"gate.image/v1","role":"peer-o","vcpu":4,"memMb":256,"mac":"02:00:00:00:07:11","ip":"10.0.7.11/24","shares":[]}'
-  bad_mac='{"kind":"gate.image/v1","role":"peer-o","vcpu":4,"memMb":4096,"mac":"not-a-mac","ip":"10.0.7.11/24","shares":[]}'
-  bad_ip='{"kind":"gate.image/v1","role":"peer-o","vcpu":4,"memMb":4096,"mac":"02:00:00:00:07:11","ip":"10.0.7.11","shares":[]}'
-  bad_shares='{"kind":"gate.image/v1","role":"peer-o","vcpu":4,"memMb":4096,"mac":"02:00:00:00:07:11","ip":"10.0.7.11/24","shares":["x"]}'
-  bad_kind='{"kind":"gate.image/v0","role":"peer-o","vcpu":4,"memMb":4096,"mac":"02:00:00:00:07:11","ip":"10.0.7.11/24","shares":[]}'
-  i=0
-  for variant in "$bad_role" "$bad_vcpu" "$bad_mem" "$bad_mac" "$bad_ip" "$bad_shares" "$bad_kind"; do
-    i=$((i + 1))
-    printf '%s' "$variant" >"$FIXTURE/bad-$i.json"
-    if python3 "$VALIDATOR" "$FIXTURE/bad-$i.json" "$SCHEMA" >/dev/null 2>&1; then
-      die "validator accepts an invalid manifest (case $i): $variant"
+# Manifest content, evaluated without building: system.build.gateManifest
+# is the pure passthrough of the manifest the image carries, so this
+# asserts the exact wire bytes (kind, key set, typed fields) at eval
+# time. jq enforces the v1 shape the host enforces at launch.
+if command -v nix >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
+  for _b in peer-o peer-n relay; do
+    if ! manifest_json="$(nix eval --json ".#nixosConfigurations.wyrd-${_b}.config.system.build.gateManifest" 2>"$FIXTURE/nix-err-$_b.txt")"; then
+      echo "gateManifest eval failed for $_b:" >&2
+      cat "$FIXTURE/nix-err-$_b.txt" >&2
+      die "gateManifest for $_b does not evaluate"
     fi
+    echo "$manifest_json" | jq -e '.kind == "gate.image/v1"' >/dev/null       || die "manifest kind is not gate.image/v1 for $_b"
+    echo "$manifest_json" | jq -e '([keys_unsorted[]] | sort) == ["ip","kind","mac","memMb","role","shares","vcpu"]' >/dev/null       || die "manifest key set is wrong for $_b"
+    echo "$manifest_json" | jq -e --arg role "$_b" '.role == $role and (.vcpu | type) == "number" and (.memMb | type) == "number"' >/dev/null       || die "manifest role/vcpu/memMb mistyped for $_b"
+    echo "$manifest_json" | jq -e '.shares == []' >/dev/null       || die "manifest shares are not empty for $_b"
   done
-  unset i variant
-  pass "validator accepts the valid manifest and refuses each invalid family"
+  unset _b manifest_json
+  pass "evaluated gateManifest carries the exact v1 wire bytes"
 else
-  echo "  SKIP: python3 unavailable, validator execution omitted"
+  echo "  SKIP: nix or jq unavailable, manifest content check omitted"
 fi
 
-# Eval cross-check when nix is available: the evaluated gate.box is
-# the manifest source (image.nix derives manifest.json from it), so
-# the nix facts above must equal what the entry would read. Eval
-# failures surface with the nix error, not a bare refusal.
+# Eval cross-check: the evaluated gate.box must equal what the entry
+# would read. Eval failures surface with the nix error, not a bare
+# refusal.
 if command -v nix >/dev/null 2>&1; then
   for _b in peer-o peer-n relay; do
     if ! role_json="$(nix eval --json ".#nixosConfigurations.wyrd-${_b}.config.gate.box" 2>"$FIXTURE/nix-err-$_b.txt")"; then
