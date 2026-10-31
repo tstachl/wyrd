@@ -90,15 +90,22 @@ setup() {
     && { echo "member device $DEV authored a gift wrap: authors must be ephemeral (see logs/nak-1059.err)"; false; }
   # Capture-then-assert (never grep -q in the pipeline): grep -q
   # exits at the first match and SIGPIPEs nak, which under pipefail
-  # turns a real multi-event leak into a silent pass. Draining grep
-  # plus || true keeps the failure reachable exactly when it matters.
+  # turns a real multi-event leak into a silent pass. Draining to a
+  # file keeps the failure reachable exactly when it matters, and the
+  # status is captured outside any command substitution — an
+  # assignment inside $() dies with the subshell, so a timeout would
+  # otherwise read as success (pre-existing shape, fixed here).
   nak_status=0
-  RUMORS="$( { printf '%s' "$REQ9501" | guest_timeout 30 peer-o -- "$NAK_BIN" req "$RELAY_URL" \
-    2>"$RUN/logs/nak-9501.err" || nak_status=$?; } | grep '"kind":9501' || true)"
+  { printf '%s' "$REQ9501" | guest_timeout 30 peer-o -- "$NAK_BIN" req "$RELAY_URL" \
+    >"$RUN/logs/nak-9501.raw" 2>"$RUN/logs/nak-9501.err" || nak_status=$?; }
+  RUMORS="$(grep '"kind":9501' "$RUN/logs/nak-9501.raw" || true)"
   # The leak query's real bound is the timeout above, not limit 500: a
   # zero-result subscription depends on the relay terminating it, so
   # "no rumor in thirty seconds" is what the pass below proves.
-  [[ "$nak_status" != 124 ]] || { echo "9501 query timed out: leak check inconclusive (see logs/nak-9501.err)"; false; }
+  # Both timeout codes fail closed: 124 is the TERM bound, 137 the
+  # KILL grace, and either one makes the leak check inconclusive.
+  [[ "$nak_status" != 124 && "$nak_status" != 137 ]] \
+    || { echo "9501 query timed out (status $nak_status): leak check inconclusive (see logs/nak-9501.err)"; false; }
   [[ -z "$RUMORS" ]] || { echo "relay carries a bare kind-9501 rumor: control leaked in cleartext (see logs/nak-9501.err)"; false; }
   # Wave 2 (sync-convergence issue): the embedded consumer converges
   # without mounting. The owner writes a second wave through FUSE and

@@ -37,10 +37,11 @@ fi
 # The ban: no suite function under timeout in host-executed code.
 # Binaries ("$GATE_GUEST_BIN", python3, jq) are fine; the banned
 # names are the suite's own functions, which only resolve in-shell.
-# Covers the gate suite, its helpers, and the Lima legs (whose
-# peer_wait/peer_signal the ban list names).
+# Covers the gate suite, its helpers, the Lima definitions, and
+# the microVM call sites (peer_wait/peer_signal are defined in Lima
+# but called from the microVM legs).
 HITS="$(grep -rn -E 'timeout +[0-9]+ +(guest_exec|on_o|on_n|guest_wyrd|guest_timeout|mint_guest_creds|wait_guest_file|host_partition|as_e2e|gate_partition|gate_as_guest|peer_wait|peer_signal)( |$|")' \
-  "$ROOT/tests/gate" "$ROOT/tests/harness/e2e-helpers.bash" "$ROOT/tests/lima" || true)"
+  "$ROOT/tests/gate" "$ROOT/tests/harness/e2e-helpers.bash" "$ROOT/tests/lima" "$ROOT/tests/microvm" || true)"
 [[ -z "$HITS" ]] || die "timeout wraps a shell function (use guest_timeout or the transport binary):\n$HITS"
 pass "no suite function runs under timeout"
 
@@ -76,6 +77,23 @@ EOF
   elapsed=$(( $(date +%s) - start ))
   (( elapsed < 15 )) || die "guest_timeout overran its bound (${elapsed}s)"
   pass "guest_timeout enforces its bound"
+  # The KILL grace: a client that ignores TERM is killed, and the
+  # caller must see 137, not a hang. Expected wall time is secs +
+  # grace (2 + 10 here); the bound below distinguishes that from a
+  # missing -k (which would run out the sleep).
+  cat >"$STUB" <<'EOF'
+#!/bin/sh
+trap '' TERM
+sleep 30
+EOF
+  chmod +x "$STUB"
+  start="$(date +%s)"
+  rc=0
+  GATE_GUEST_BIN="$STUB" guest_timeout 2 peer-o -- true || rc=$?
+  [[ "$rc" == 137 ]] || die "KILL grace did not report 137 (got $rc)"
+  elapsed=$(( $(date +%s) - start ))
+  (( elapsed < 20 )) || die "KILL grace overran its bound (${elapsed}s)"
+  pass "guest_timeout kills TERM-ignoring clients with 137"
 else
   echo "  SKIP: timeout missing, helper execution omitted"
 fi
