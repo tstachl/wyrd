@@ -13,11 +13,11 @@
 #
 # The vendored schema file is a verbatim copy of the gate repo's
 # wrapper/image-manifest.schema.json (gate rev 53b1b7b); refresh it
-# when the gate contract moves. Bounds come from the schema file, so
-# a gate-side change the vendored copy does not have fails the build
-# here; a stale vendored copy itself degrades to
-# build-pass/launch-refuse (the host re-validates at launch), never
-# false green.
+# when the gate contract moves. A manifest that violates the
+# vendored schema fails the build here; a gate-side schema change
+# the vendored copy does not have is invisible to the build and is
+# caught by the host at launch instead (fail closed there, never
+# false green).
 #
 # The qcow2 comes from the same make-disk-image the upstream
 # incus-virtual-machine module uses, with an explicit virtual size:

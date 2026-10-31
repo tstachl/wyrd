@@ -58,7 +58,7 @@ setup() {
   for peer in peer-o peer-n; do
     active=""
     for ((i = 0; i < 30; i++)); do
-      run guest_exec "$peer" -- systemctl is-active wyrd-rendezvous
+      run timeout 120 guest_exec "$peer" -- systemctl is-active wyrd-rendezvous
       if [ "$status" -eq 0 ] && [ "$output" = "active" ]; then active=1; break; fi
       sleep 1
     done

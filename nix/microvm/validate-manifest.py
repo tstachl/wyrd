@@ -5,11 +5,12 @@
 # Exits 0 with the schema id on success; exits 1 naming the field
 # and the schema path on the first violation. Every bound enforced
 # here is read from the schema file (kind const, required key set,
-# per-field types/patterns/minima/maxima), so a gate-side schema
-# change fails the build instead of drifting past a hand copy.
-# Invoked by the wyrdImage derivation in nix/microvm/image.nix
-# against the vendored nix/microvm/image-manifest.schema.json; the
-# host provisioner re-validates at launch.
+# per-field types/patterns/minima/maxima). A manifest that violates
+# the vendored schema fails the build; a gate-side schema change the
+# vendored copy does not have is invisible here and is caught by the
+# host at launch instead. Invoked by the wyrdImage derivation in
+# nix/microvm/image.nix against the vendored
+# nix/microvm/image-manifest.schema.json.
 import json
 import re
 import sys
