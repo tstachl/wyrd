@@ -98,8 +98,10 @@ setup() {
   # the tree can exceed the agent transport's pull cap, while the
   # verdicts need only anchor contents plus per-fill
   # existence-and-size. One guest-side pass reports violations;
-  # the host asserts a clean pass.
-  guest_exec peer-o bash -c '
+  # the host asserts a clean pass. Explicit PATH: the agent lands
+  # with a bare lookup path (same class as the tar/gzip fix above),
+  # and seq/stat/cat resolve from the system profile.
+  guest_exec peer-o env PATH=/run/current-system/sw/bin:/usr/bin:/bin bash -c '
     set -u
     fidx="$0"; d="$1"
     fail() { echo "FAIL: $1"; exit 1; }
@@ -118,7 +120,7 @@ setup() {
     done
     echo INVENTORY-OK
   ' "$_fidx" "$GUEST_RUN/export-exh" >"$RUN/logs/export-inventory.out" 2>&1 \
-    || { echo "exhaustion export inventory failed (see logs/export-inventory.out)"; false; }
+    || { echo "exhaustion export inventory failed (see logs/export-inventory.out)"; cat "$RUN/logs/export-inventory.out"; false; }
   grep -q '^INVENTORY-OK$' "$RUN/logs/export-inventory.out" \
     || { echo "exhaustion export inventory failed (see logs/export-inventory.out)"; cat "$RUN/logs/export-inventory.out"; false; }
   unset _fidx
