@@ -1,0 +1,49 @@
+# Native nix evaluation and package builds (phase 3 of the act → Nix
+# port). The build jobs realise the same derivations act built
+# (wyrd package + release archive); the flake-check job is the
+# `nix flake check --no-build` equivalent — evaluation only, no
+# image assembly, no store cache, no fetcher/eval-cache shims (fresh
+# VM: measure first, reintroduce nothing). Cold evaluation cost is
+# expected. No requirements beyond coordinator defaults, no
+# artifacts, no secrets, no Docker.
+version: 1
+system: x86_64-linux
+name: nix
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "deny.toml"
+      - "rust-toolchain.toml"
+      - "flake.nix"
+      - "flake.lock"
+      - "nix/**"
+      - "tests/**"
+      - ".ngit/nix/**"
+  pull_request:
+    # Ready-gated like the act job: draft pushes spend no CI, the
+    # draft-to-ready transition mints the runs.
+    types: [ready_for_review]
+    paths:
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "deny.toml"
+      - "rust-toolchain.toml"
+      - "flake.nix"
+      - "flake.lock"
+      - "nix/**"
+      - "tests/**"
+      - ".ngit/nix/**"
+
+jobs:
+  build-wyrd:
+    build: checks.x86_64-linux.wyrd
+  build-dist:
+    build: checks.x86_64-linux.wyrd-dist
+  flake-check:
+    run: nix.flake-check

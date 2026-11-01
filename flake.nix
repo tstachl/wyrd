@@ -436,6 +436,10 @@
       # x86_64-linux until another provider exists; the coordinator
       # resolves `run` references against these (see the workflow docs
       # in the ngit-ci repo). Act workflows are untouched.
-      ngit-ci.commands.x86_64-linux = import ./.ngit/nix/workflows { pkgs = pkgsFor "x86_64-linux"; };
+      ngit-ci.commands.x86_64-linux = import ./.ngit/nix/workflows {
+        pkgs = pkgsFor "x86_64-linux";
+        inherit crane;
+        src = ./.;
+      };
     };
 }
