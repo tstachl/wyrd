@@ -15,4 +15,14 @@
     mac = "02:00:00:00:07:13";
     ip = "10.0.7.13";
   };
+
+  # FUSE device node: the mount-mode unit mounts FUSE and the module
+  # only allowlists the device (DeviceAllow) — nothing loads the
+  # driver, and fuser opens /dev/fuse directly (no mount-syscall
+  # autoload). The microvm guest had it; the Incus image needs the
+  # module listed or the mount fails ENOENT and the unit burns its
+  # start budget. Scoped here, not in common.nix: only the drive
+  # guest serves FUSE. (Follow-up: the module should declare its own
+  # fuse precondition instead of relying on the evidence guest.)
+  boot.kernelModules = [ "fuse" ];
 }
