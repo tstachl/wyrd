@@ -140,7 +140,7 @@ timeout 120 "$(entry_sudo_bin)" -n "$GUEST_BIN" exec drive -- chown -R e2e:users
 # profile, same as the suite's as_e2e routing).
 timeout 120 "$(entry_sudo_bin)" -n "$GUEST_BIN" exec drive -- /usr/bin/env PATH=/run/current-system/sw/bin:/usr/bin:/bin bash -c '
   set -e
-  mkdir -p /etc/wyrd /var/lib/wyrd/demo /var/lib/wyrd/laptop
+  mkdir -p /etc/wyrd /var/lib/wyrd/demo /var/lib/wyrd/laptop /mnt/wyrd
   head -c32 /dev/urandom > /etc/wyrd/identity
   printf e2e-test-passphrase > /etc/wyrd/passphrase
   chmod 600 /etc/wyrd/identity /etc/wyrd/passphrase
