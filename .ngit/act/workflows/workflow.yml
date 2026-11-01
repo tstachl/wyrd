@@ -263,7 +263,7 @@ jobs:
       # name the same absent copy, so it goes too. The store tarball
       # plus DB is self-consistent without these files; they are only
       # a speedup.
-      - name: Drop stale fetcher caches
+      - name: Drop stale fetcher and eval caches
         run: |
           set -euo pipefail
           sudo rm -f /root/.cache/nix/fetchToStore-cache-* /root/.cache/nix/fetcher-cache-* /root/.cache/nix/eval-cache-*
