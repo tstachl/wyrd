@@ -65,8 +65,9 @@ setup() {
   # with a v0.2.0 binary (fixture-half design on the issue).
   guest_exec peer-n rm -f "$GUEST_RUN/signals/member-u-ready" "$GUEST_RUN/signals/member-u-done"
   guest_exec peer-o rm -f "$GUEST_RUN/signals/owner-u-updated" "$GUEST_RUN/signals/upgrade-blob.sha256"
-  UPGRADE_ROOT="$(dirname "$BATS_TEST_DIRNAME")"
-  UPGRADE_VERSION="$(grep '^version = ' "$UPGRADE_ROOT/Cargo.toml" | head -n 1 | cut -d'"' -f2)" \
+  UPGRADE_ROOT="$(dirname "$(dirname "$BATS_TEST_DIRNAME")")"
+  UPGRADE_VERSION="$(grep '^version = ' "$UPGRADE_ROOT/Cargo.toml" | head -n 1 | cut -d'"' -f2)"
+  [[ -n "$UPGRADE_VERSION" ]] \
     || { echo "workspace version unreadable ($UPGRADE_ROOT/Cargo.toml)"; false; }
   run guest_exec peer-o uname -m
   [ "$status" -eq 0 ] || { echo "$output"; false; }

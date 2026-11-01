@@ -43,9 +43,9 @@ pull_group() { # <role> <group>
   # Guest logs ride the agent into the host tree first, so the scan
   # below covers them. Best-effort: a dead guest loses its logs but
   # must not mask the phase failure that killed it.
-  guest_pull peer-o "$GUEST_RUN/logs" "$RUN/logs/peer-o" 2>/dev/null \
+  guest_pull_dir peer-o "$GUEST_RUN/logs" "$RUN/logs/peer-o" 2>/dev/null \
     || echo "# warn: peer-o log pull failed" >&2
-  guest_pull peer-n "$GUEST_RUN/logs" "$RUN/logs/peer-n" 2>/dev/null \
+  guest_pull_dir peer-n "$GUEST_RUN/logs" "$RUN/logs/peer-n" 2>/dev/null \
     || echo "# warn: peer-n log pull failed" >&2
   # Per-group scan: skip groups never minted (or only partially
   # written) by a failed earlier phase: an empty secret would match

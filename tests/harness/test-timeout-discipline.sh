@@ -43,7 +43,7 @@ fi
 # Covers the gate suite, its helpers, the Lima definitions, and
 # the microVM call sites (peer_wait/peer_signal are defined in Lima
 # but called from the microVM legs).
-HITS="$(grep -rn -E 'timeout +[0-9]+ +(guest_exec|on_o|on_n|guest_wyrd|guest_timeout|mint_guest_creds|wait_guest_file|host_partition|as_e2e|gate_partition|gate_as_guest|peer_wait|peer_signal)( |$|")' \
+HITS="$(grep -rn -E 'timeout +[0-9]+ +(guest_exec|on_o|on_n|guest_wyrd|guest_timeout|mint_guest_creds|wait_guest_file|host_partition|as_e2e|gate_partition|gate_as_guest|peer_wait|peer_signal|guest_push_e2e|guest_pull_dir|check_query_status)( |$|")' \
   "$ROOT/tests/gate" "$ROOT/tests/harness/e2e-helpers.bash" "$ROOT/tests/lima" "$ROOT/tests/microvm" || true)"
 [[ -z "$HITS" ]] || die "timeout wraps a shell function (use guest_timeout or the transport binary):\n$HITS"
 pass "no suite function runs under timeout"
@@ -163,6 +163,51 @@ EOF
   grep -q "^push " "$CALLS" || die "failed push recorded nothing"
   [ -z "$(grep "^exec " "$CALLS" || true)" ] || die "failed push still ran the chown"
   pass "failed push skips the handover and propagates status"
+  # Directory pull: the guest dir rides a plain (uncompressed, no
+  # gzip needed in-guest) tarball staged beside it, pulled,
+  # extracted, and removed on both ends. The exec stub performs the
+  # guest-side tar and rm for real inside the fixture tree, so the
+  # whole round trip executes; guest_pull is emulated by cp.
+  mkdir -p "$FIXTURE/gwork/export/sub"
+  printf 'anchor' >"$FIXTURE/gwork/export/small.txt"
+  printf 'deep' >"$FIXTURE/gwork/export/sub/nested.txt"
+  guest_pull() { echo "pull $*" >>"$CALLS"; [[ "${PULL_RC:-0}" == 0 ]] || return "$PULL_RC"; cp "$2" "$3"; }
+  guest_exec() {
+    echo "exec $*" >>"$CALLS"
+    local cmd="${2:-}"
+    if [[ "$cmd" == tar ]]; then
+      [[ "${TAR_RC:-0}" == 0 ]] || return "$TAR_RC"
+      shift 2; command tar "$@"; return "$?"
+    fi
+    if [[ "$cmd" == rm ]]; then shift 2; command rm "$@"; return "$?"; fi
+    return "${EXEC_RC:-0}"
+  }
+  : >"$CALLS"
+  guest_pull_dir peer-n "$FIXTURE/gwork/export" "$FIXTURE/hout/export"
+  [[ "$(cat "$FIXTURE/hout/export/small.txt")" == "anchor" ]] || die "pulled tree lost small.txt"
+  [[ "$(cat "$FIXTURE/hout/export/sub/nested.txt")" == "deep" ]] || die "pulled tree lost sub/nested.txt"
+  [ ! -e "$FIXTURE/gwork/export.tar" ] || die "guest tarball not removed"
+  [ ! -e "$FIXTURE/hout/export.tar" ] || die "host tarball not removed"
+  tar_line="$(grep -n '^exec peer-n tar -cf ' "$CALLS" | head -1 | cut -d: -f1)"
+  pull_line="$(grep -n '^pull ' "$CALLS" | head -1 | cut -d: -f1)"
+  rm_line="$(grep -n 'exec peer-n rm -f ' "$CALLS" | head -1 | cut -d: -f1)"
+  [[ -n "$tar_line$pull_line$rm_line" ]] || die "handover trace incomplete: $(cat "$CALLS")"
+  (( tar_line < pull_line && pull_line < rm_line )) || die "handover order is not tar-then-pull-then-clean: $(cat "$CALLS")"
+  pass "guest_pull_dir round-trips a tree and cleans up both ends"
+  : >"$CALLS"
+  rc=0
+  TAR_RC=9 guest_pull_dir peer-n "$FIXTURE/gwork/export" "$FIXTURE/hout2/export" || rc=$?
+  [[ "$rc" != 0 ]] || die "failed guest tar did not fail (got $rc)"
+  [ -z "$(grep '^pull ' "$CALLS" || true)" ] || die "failed guest tar still pulled"
+  pass "failed guest tar skips the pull"
+  rm -f "$FIXTURE/gwork/export.tar"
+  : >"$CALLS"
+  rc=0
+  PULL_RC=4 guest_pull_dir peer-n "$FIXTURE/gwork/export" "$FIXTURE/hout3/export" || rc=$?
+  [[ "$rc" == 4 ]] || die "failed pull status did not propagate (got $rc)"
+  [ ! -e "$FIXTURE/gwork/export.tar" ] || die "failed pull left the guest tarball"
+  [ ! -e "$FIXTURE/hout3/export.tar" ] || die "failed pull left the host tarball"
+  pass "failed pull heals the guest tarball and propagates status"
 else
   echo "  SKIP: timeout missing, helper execution omitted"
 fi

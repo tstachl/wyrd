@@ -72,7 +72,7 @@ setup() {
   printf '%s\n' "$output" >"$RUN/logs/export-exh.out"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   rm -rf "$RUN/export-exh"
-  guest_pull peer-o "$GUEST_RUN/export-exh" "$RUN/export-exh" \
+  guest_pull_dir peer-o "$GUEST_RUN/export-exh" "$RUN/export-exh" \
     || { echo "exhaustion export pull failed"; false; }
   [[ "$(cat "$RUN/export-exh/small.txt")" == "pre-fill" ]] \
     || die "exhaustion export lost the pre-fill anchor"

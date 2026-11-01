@@ -130,6 +130,27 @@ guest_push_e2e() { # <role> <src> <dst>
   guest_exec "$role" chown e2e:users "$dst"
 }
 
+# guest_pull_dir <role> <guest-dir> <host-dir>: copy a guest directory
+# tree to the host. The agent transport moves files only, so the dir
+# rides a plain tarball (uncompressed: no gzip needed in-guest)
+# staged beside it; the tarball is pulled, extracted, and removed on
+# both ends. Fails closed if any step fails.
+guest_pull_dir() { # <role> <guest-dir> <host-dir>
+  local role="$1" gdir="$2" hdir="$3"
+  local base parent hparent rc
+  base="$(basename "$gdir")"
+  parent="$(dirname "$gdir")"
+  hparent="$(dirname "$hdir")"
+  guest_exec "$role" tar -cf "$gdir.tar" -C "$parent" "$base" || return "$?"
+  mkdir -p "$hparent" || return "$?"
+  rc=0
+  guest_pull "$role" "$gdir.tar" "$hdir.tar" || rc="$?"
+  if (( rc != 0 )); then guest_exec "$role" rm -f "$gdir.tar"; return "$rc"; fi
+  tar -xf "$hdir.tar" -C "$hparent" || return "$?"
+  rm -f "$hdir.tar"
+  guest_exec "$role" rm -f "$gdir.tar"
+}
+
 # guest_wyrd <role> <wyrd-args...>: run the in-image wyrd binary in a
 # guest as the suite user. WYRD_BIN is the stable in-image path the
 # entry publishes; output streams back to the caller (bats `run`

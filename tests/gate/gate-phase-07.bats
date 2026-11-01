@@ -66,14 +66,14 @@ setup() {
     "$GOD" "$GUEST_RUN/export-owner"
   printf '%s\n' "$output" >"$RUN/logs/export-o.out"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  guest_pull peer-o "$GUEST_RUN/export-owner" "$RUN/export-owner" \
+  guest_pull_dir peer-o "$GUEST_RUN/export-owner" "$RUN/export-owner" \
     || { echo "owner export pull failed"; false; }
   run guest_wyrd peer-n export \
     --identity-file "$GMC/identity" --passphrase-file "$GMC/passphrase" \
     "$GMD" "$GUEST_RUN/export-member"
   printf '%s\n' "$output" >"$RUN/logs/export-m.out"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  guest_pull peer-n "$GUEST_RUN/export-member" "$RUN/export-member" \
+  guest_pull_dir peer-n "$GUEST_RUN/export-member" "$RUN/export-member" \
     || { echo "member export pull failed"; false; }
   [[ "$(cat "$RUN/export-owner/after-restart.txt")" == "after-restart" ]] \
     || die "owner export lost the post-restart write"

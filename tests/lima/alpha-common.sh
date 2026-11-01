@@ -251,6 +251,18 @@ expect_fail2() {
   pass "$name fails closed (exit 2, error: ...)"
 }
 
+# expect_fail_locked <log-name> <cmd...>: exit 78 with `error: ...`
+# on stderr. Store-lock contention is OD-34-C (EXIT_DRIVE_LOCKED, see
+# docs/design/cli.md): the supervisor treats exactly 78 as terminal,
+# so the suite pins that code rather than the generic exit 2.
+expect_fail_locked() {
+  local name="$1"; shift
+  expect_exit 78 "$name" "$@" >/dev/null
+  head -c 7 "$LOGDIR/$name.stderr" | grep -q "^error: " \
+    || die "$name: stderr does not start with 'error: '"
+  pass "$name fails closed (exit 78, error: ...)"
+}
+
 # expect_usage2 <log-name> <cmd...>: exit 2 with a usage error
 # (the complement of expect_fail2: here a bad invocation IS the case).
 expect_usage2() {

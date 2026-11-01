@@ -296,8 +296,9 @@ step5_export() {
   start_mount export "$oc" "$od" "$MNTS/export"
 
   # Offline commands take the store lock: exporting under a live
-  # mount refuses instead of reading a moving drive.
-  expect_fail2 step5-locked \
+  # mount refuses with the OD-34-C locked code (78), not the generic
+  # exit 2.
+  expect_fail_locked step5-locked \
     with_creds "$oc" export "$od" "$E2E_ROOT/export-locked"
   grep -q "another process holds" "$LOGDIR/step5-locked.stderr" \
     || die "locked-store refusal unexplained"
