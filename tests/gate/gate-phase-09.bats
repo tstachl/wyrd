@@ -67,7 +67,7 @@ setup() {
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   guest_pull peer-o "$GUEST_RUN/invitation-crash" "$RUN/invitation-crash" \
     || { echo "invitation-crash pull failed"; false; }
-  guest_push peer-n "$RUN/invitation-crash" "$GUEST_RUN/invitation-crash" \
+  guest_push_e2e peer-n "$RUN/invitation-crash" "$GUEST_RUN/invitation-crash" \
     || { echo "invitation-crash push failed"; false; }
   run guest_wyrd peer-n device --identity-file "$GCN/identity" --passphrase-file "$GCN/passphrase" \
     "$GCND" join "$GUEST_RUN/invitation-crash"

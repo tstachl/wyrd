@@ -47,7 +47,7 @@ setup() {
   # The phase-4 dedupe snapshot was recorded host-side; the fetch
   # legs read it in-guest, so it rides the agent into the member.
   printf '%s\n' "$(cat "$RUN/seen-after-restart")" > "$RUN/seen-after-restart.push"
-  guest_push peer-n "$RUN/seen-after-restart.push" "$GUEST_RUN/seen-after-restart" \
+  guest_push_e2e peer-n "$RUN/seen-after-restart.push" "$GUEST_RUN/seen-after-restart" \
     || { echo "seen-after-restart push failed"; false; }
   rm -f "$RUN/seen-after-restart.push"
   # Legs run backgrounded with output to log files (not `run`): their

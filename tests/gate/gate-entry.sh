@@ -198,6 +198,8 @@ for peer in peer-o peer-n; do
     || { echo "gate-entry.sh: guest $peer state handover failed" >&2; exit 1; }
   timeout 120 "$(entry_sudo_bin)" -n "$GUEST_BIN" push "$peer" "$E2E_ROOT/e2e-env.sh" <"$RUN/e2e-env.sh" \
     || { echo "gate-entry.sh: env push to $peer failed" >&2; exit 1; }
+  timeout 120 "$(entry_sudo_bin)" -n "$GUEST_BIN" exec "$peer" -- chown e2e:users "$E2E_ROOT/e2e-env.sh" \
+    || { echo "gate-entry.sh: env handover to $peer failed" >&2; exit 1; }
 done
 
 export WYRD_E2E_TOKEN="$TOKEN" WYRD_E2E_LOCK="$LOCK_FILE"

@@ -70,7 +70,7 @@ setup() {
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   guest_pull peer-o "$GUEST_RUN/invitation-n" "$RUN/invitation-n" \
     || { echo "invitation pull failed"; false; }
-  guest_push peer-n "$RUN/invitation-n" "$GUEST_RUN/invitation-n" \
+  guest_push_e2e peer-n "$RUN/invitation-n" "$GUEST_RUN/invitation-n" \
     || { echo "invitation push failed"; false; }
   run guest_wyrd peer-n device --identity-file "$GMC/identity" --passphrase-file "$GMC/passphrase" \
     "$GMD" join "$GUEST_RUN/invitation-n"

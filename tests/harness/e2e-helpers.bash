@@ -87,7 +87,7 @@ on_n() {
 as_e2e() { # <role> <cmd...>
   local role="$1"; shift
   if [[ -z "${GATE_GUEST_BIN:-}" ]]; then echo "e2e-helpers: as_e2e requires GATE_GUEST_BIN" >&2; return 1; fi
-  guest_exec "$role" runuser -u e2e -g users -G wheel -- /usr/bin/env "PATH=/run/current-system/sw/bin:/usr/bin:/bin" "$@"
+  guest_exec "$role" runuser -u e2e -g users -G wheel -- /usr/bin/env "PATH=/run/wrappers/bin:/run/current-system/sw/bin:/usr/bin:/bin" "$@"
 }
 
 # guest_timeout <secs> <role> <cmd...>: agent exec with a hard bound.
@@ -99,6 +99,18 @@ as_e2e() { # <role> <cmd...>
 guest_timeout() { # <secs> <role> <cmd...>
   local secs="$1"; shift
   timeout -k 10 "$secs" "$(e2e_sudo_bin)" -n "$GATE_GUEST_BIN" exec "$@"
+}
+
+# guest_push_e2e <role> <src> <dst>: copy a host file into the role's
+# guest and hand it to the suite user. The agent stages pushed files
+# root-owned (like every other root transport call), but legs and
+# wyrd run as e2e — without the handover the first read fails with
+# permission denied. Mode is left as pushed (secrets stay tight);
+# ownership is what the suite needs.
+guest_push_e2e() { # <role> <src> <dst>
+  local role="$1" src="$2" dst="$3"
+  guest_push "$role" "$src" "$dst" || return 1
+  guest_exec "$role" chown e2e:users "$dst"
 }
 
 # guest_wyrd <role> <wyrd-args...>: run the in-image wyrd binary in a

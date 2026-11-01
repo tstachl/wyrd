@@ -64,7 +64,7 @@ setup() {
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   guest_pull peer-o "$GUEST_RUN/invitation-uparent" "$RUN/invitation-uparent" \
     || { echo "invitation-uparent pull failed"; false; }
-  guest_push peer-n "$RUN/invitation-uparent" "$GUEST_RUN/invitation-uparent" \
+  guest_push_e2e peer-n "$RUN/invitation-uparent" "$GUEST_RUN/invitation-uparent" \
     || { echo "invitation-uparent push failed"; false; }
   run guest_wyrd peer-n device --identity-file "$GUN/identity" --passphrase-file "$GUN/passphrase" \
     "$GUND" join "$GUEST_RUN/invitation-uparent"

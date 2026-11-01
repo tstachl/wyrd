@@ -85,7 +85,7 @@ mint_pair() {
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   guest_pull peer-o "$GUEST_RUN/invitation-hc" "$RUN/invitation-hc" \
     || { echo "invitation-hc pull failed"; false; }
-  guest_push peer-n "$RUN/invitation-hc" "$GUEST_RUN/invitation-hc" \
+  guest_push_e2e peer-n "$RUN/invitation-hc" "$GUEST_RUN/invitation-hc" \
     || { echo "invitation-hc push failed"; false; }
   run guest_wyrd peer-n device --identity-file "$GHC/identity" --passphrase-file "$GHC/passphrase" \
     "$GHD" join "$GUEST_RUN/invitation-hc"
@@ -110,7 +110,7 @@ mint_pair() {
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   guest_pull peer-o "$GUEST_RUN/invitation-he" "$RUN/invitation-he" \
     || { echo "invitation-he pull failed"; false; }
-  guest_push peer-n "$RUN/invitation-he" "$GUEST_RUN/invitation-he" \
+  guest_push_e2e peer-n "$RUN/invitation-he" "$GUEST_RUN/invitation-he" \
     || { echo "invitation-he push failed"; false; }
   run guest_wyrd peer-n device --identity-file "$GHE/identity" --passphrase-file "$GHE/passphrase" \
     "$GHED" join "$GUEST_RUN/invitation-he"
@@ -153,7 +153,7 @@ mint_pair() {
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   guest_pull peer-o "$GUEST_RUN/invitation-hd" "$RUN/invitation-hd" \
     || { echo "invitation-hd pull failed"; false; }
-  guest_push peer-n "$RUN/invitation-hd" "$GUEST_RUN/invitation-hd" \
+  guest_push_e2e peer-n "$RUN/invitation-hd" "$GUEST_RUN/invitation-hd" \
     || { echo "invitation-hd push failed"; false; }
   run guest_wyrd peer-n device --identity-file "$GHDD/identity" --passphrase-file "$GHDD/passphrase" \
     "$GHDDD" join "$GUEST_RUN/invitation-hd"

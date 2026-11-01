@@ -135,6 +135,7 @@ grep -q "guest-bin push peer-o /var/lib/wyrd-e2e/e2e-env.sh$" "$CALLS" || die "e
 [ -z "$(grep "guest-bin push peer-o $RUN_DIR" "$CALLS" || true)" ] || die "push carries no host source path (stdin only)"
 grep -q "sudo -n .*guest-bin exec peer-o" "$CALLS" || die "peer-o exec elevates the transport"
 grep -q "sudo -n .*guest-bin push peer-o" "$CALLS" || die "peer-o push elevates the transport"
+grep -q "guest-bin exec peer-o -- chown e2e:users /var/lib/wyrd-e2e/e2e-env.sh$" "$CALLS" || die "env file handed to the suite user after push"
 grep -q "guest-bin push peer-n /var/lib/wyrd-e2e/e2e-env.sh$" "$CALLS" || die "env pushed to peer-n (stdin, dst only)"
 [ -z "$(grep -E "^(ssh|scp) " "$CALLS" || true)" ] || die "driver dials nothing itself (agent only)"
 [ -z "$(grep "PEER_O=" "$CALLS" || true)" ] || die "driver assembles no ssh-style peer endpoints"
