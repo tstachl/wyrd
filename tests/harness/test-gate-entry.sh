@@ -33,9 +33,11 @@ CALLS="$FIXTURE/calls"
 mkdir -p "$PROVISION_DIR/manifests" "$RUN_DIR" "$STUBBIN" "$NOBATS"
 
 # Absolute interpreters, resolved before the PATH scrubs below: NixOS
-# guests have no FHS /bin or /usr/bin, so bare `bash` and `#!/bin/sh`
-# stubs do not resolve there (act's Ubuntu does, which is why this
-# only ever failed natively). The driver still sees only the scrubbed
+# guests have no FHS `bash` (`/bin/bash`, `/usr/bin/bash`), so the
+# harness's own `bash "$ENTRY"` calls fail there with 127 while act's
+# Ubuntu resolves them. `#!/bin/sh` happens to resolve in the current
+# guest image, but that is not a contract — pin absolute interpreters
+# instead of depending on it. The driver still sees only the scrubbed
 # PATH; only the harness's own invocation is absolute.
 BASH_BIN="$(command -v bash)"
 SH_BIN="$(command -v sh)"
@@ -288,7 +290,15 @@ pass "out-of-bounds relay role refuses"
 # and before any suite phase — never silently. The timeout below is
 # real (it must execute its argv); sudo refuses; the guest binary
 # must never run.
-if command -v timeout >/dev/null 2>&1; then
+#
+# Elevation refusal is simulable only where the entry takes the
+# bare-`sudo` branch: where the absolute /run/wrappers/bin/sudo exists
+# and works (NixOS guests, including this job's), the entry never
+# consults PATH and the failing stub below cannot interpose — the
+# refusal cannot happen there, so skip rather than assert it.
+if [ -x /run/wrappers/bin/sudo ] && /run/wrappers/bin/sudo -n true 2>/dev/null; then
+  echo "  SKIP: working elevation wrapper bypasses the sudo stub, refusal untestable"
+elif command -v timeout >/dev/null 2>&1; then
   NEGDIR="$FIXTURE/negbin"
   mkdir -p "$NEGDIR"
   ln -sf "$(command -v timeout)" "$NEGDIR/timeout"
