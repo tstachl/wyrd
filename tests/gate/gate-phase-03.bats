@@ -105,11 +105,9 @@ setup() {
   # Both timeout codes fail closed: 124 is the TERM bound, 137 the
   # KILL grace, and either one makes the leak check inconclusive. Any
   # other nonzero status fails too: a failed query proves nothing
-  # about the relay, so only status 0 reaches the rumor assertion.
-  [[ "$nak_status" != 124 && "$nak_status" != 137 ]] \
-    || { echo "9501 query timed out (status $nak_status): leak check inconclusive (see logs/nak-9501.err)"; false; }
-  [[ "$nak_status" == 0 ]] \
-    || { echo "9501 query failed (status $nak_status): leak check inconclusive (see logs/nak-9501.err)"; false; }
+  # about the relay, so only status 0 reaches the rumor assertion
+  # (pinned by tests/harness/test-timeout-discipline.sh).
+  check_query_status "$nak_status" "9501 query" "logs/nak-9501.err" || return 1
   [[ -z "$RUMORS" ]] || { echo "relay carries a bare kind-9501 rumor: control leaked in cleartext (see logs/nak-9501.err)"; false; }
   # Wave 2 (sync-convergence issue): the embedded consumer converges
   # without mounting. The owner writes a second wave through FUSE and

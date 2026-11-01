@@ -7,8 +7,11 @@
 # on a healthy guest — the intended bound is never applied and the
 # suite fails closed on every call. The suite bounds agent calls
 # through guest_timeout (which wraps the elevated gate transport
-# binary directly) or by calling the transport under timeout. Pure bash
-# + grep, with one live mechanism check when timeout exists: run it
+# binary directly) or by calling the transport under timeout.
+# It also pins the two status helpers sourced from e2e-helpers.bash
+# beside it: check_query_status (only 0 passes a bounded query) and
+# guest_push_e2e (push-then-chown order, failed push skips the chown).
+# Pure bash + grep, with live checks when timeout exists: run it
 # anywhere with `bash tests/harness/test-timeout-discipline.sh`.
 set -euo pipefail
 
@@ -104,6 +107,56 @@ EOF
   elapsed=$(( $(date +%s) - start ))
   (( elapsed < 20 )) || die "KILL grace overran its bound (${elapsed}s)"
   pass "guest_timeout kills TERM-ignoring clients with 137"
+  # Query status vocabulary: only 0 passes. 124/137 name the timeout
+  # (the phase treats both as inconclusive, never as clean); any
+  # other nonzero status is a failed query, never a clean result.
+  rc=0
+  check_query_status 0 "probe query" "logs/probe.err" || rc=$?
+  [[ "$rc" == 0 ]] || die "status 0 did not pass (got $rc)"
+  for bad in 1 2 127; do
+    rc=0
+    out="$(check_query_status "$bad" "probe query" "logs/probe.err" 2>&1 || echo "status=$?")"
+    [[ "$out" == *"failed (status $bad)"* ]] || die "status $bad did not fail as failed (got: $out)"
+  done
+  for to in 124 137; do
+    rc=0
+    out="$(check_query_status "$to" "probe query" "logs/probe.err" 2>&1 || echo "status=$?")"
+    [[ "$out" == *"timed out (status $to)"* ]] || die "status $to did not fail as timed out (got: $out)"
+  done
+  pass "check_query_status passes only 0 and names timeouts"
+  # Missing elevation grant: a sudo that refuses must surface as the
+  # transport's failure, never as a pass or a hang. The stub sudo
+  # exits 1 without running the guest binary (proves the grant is on
+  # the call path); guest_timeout reports its status.
+  cat >"$SUDO_STUB" <<'EOF'
+#!/bin/sh
+echo "refused $*" >>"${CALLS:-/dev/null}"
+exit 1
+EOF
+  chmod +x "$SUDO_STUB"
+  : >"$CALLS"
+  rc=0
+  E2E_SUDO_BIN="$SUDO_STUB" GATE_GUEST_BIN="$STUB" CALLS="$CALLS" guest_timeout 2 peer-o -- true || rc=$?
+  [[ "$rc" == 1 ]] || die "refused elevation did not fail (got $rc)"
+  grep -q "^refused -n " "$CALLS" || die "refused elevation never reached sudo: $(cat "$CALLS")"
+  [ -z "$(grep "^stub " "$CALLS" || true)" ] || die "refused elevation still ran the guest binary"
+  pass "missing elevation grant fails fast without touching the guest"
+  # Handover order: the pushed file is handed to the suite user
+  # after the push, and a failed push never reaches the chown.
+  guest_push() { echo "push $*" >>"$CALLS"; return "${PUSH_RC:-0}"; }
+  guest_exec() { echo "exec $*" >>"$CALLS"; return 0; }
+  : >"$CALLS"
+  PUSH_RC=0 guest_push_e2e peer-n /tmp/invitation /var/lib/wyrd-e2e/invitation
+  [[ "$(cat "$CALLS")" == $'push peer-n /tmp/invitation /var/lib/wyrd-e2e/invitation\nexec peer-n chown e2e:users /var/lib/wyrd-e2e/invitation' ]] \
+    || die "handover order is not push-then-chown: $(cat "$CALLS")"
+  pass "guest_push_e2e hands the pushed file to the suite user"
+  : >"$CALLS"
+  rc=0
+  PUSH_RC=3 guest_push_e2e peer-n /tmp/invitation /var/lib/wyrd-e2e/invitation || rc=$?
+  [[ "$rc" == 3 ]] || die "failed push status did not propagate (got $rc)"
+  grep -q "^push " "$CALLS" || die "failed push recorded nothing"
+  [ -z "$(grep "^exec " "$CALLS" || true)" ] || die "failed push still ran the chown"
+  pass "failed push skips the handover and propagates status"
 else
   echo "  SKIP: timeout missing, helper execution omitted"
 fi

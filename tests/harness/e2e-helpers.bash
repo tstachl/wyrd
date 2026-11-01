@@ -81,9 +81,11 @@ on_n() {
 # executes — legs and wyrd invocations — routes through here. The
 # agent lands as root with a bare lookup path, so the target command
 # resolves through an explicit guest PATH (set via absolute env, which
-# needs no lookup): bare `bash` and every tool the legs invoke
-# resolve in /run/current-system/sw/bin first, mirroring the old
-# ssh-as-e2e login path.
+# needs no lookup): `/run/wrappers/bin` first so in-guest elevation
+# reaches the setuid wrapper (not the inert store copy), then the
+# system profile, then the fixed paths, mirroring the old ssh-login
+# resolution order. Bare `bash` and every tool the legs invoke
+# resolve through that PATH.
 as_e2e() { # <role> <cmd...>
   local role="$1"; shift
   if [[ -z "${GATE_GUEST_BIN:-}" ]]; then echo "e2e-helpers: as_e2e requires GATE_GUEST_BIN" >&2; return 1; fi
@@ -101,6 +103,21 @@ guest_timeout() { # <secs> <role> <cmd...>
   timeout -k 10 "$secs" "$(e2e_sudo_bin)" -n "$GATE_GUEST_BIN" exec "$@"
 }
 
+# check_query_status <status> <what> <log>: fail-closed status
+# interpretation for agent-bounded queries (nak req and friends).
+# Only 0 passes: 124/137 are inconclusive timeouts (named, never
+# silent), and any other nonzero status is a failed query that proves
+# nothing — both fail the caller, which names the log.
+check_query_status() { # <status> <what> <log>
+  local status="$1" what="$2" log="$3"
+  if [[ "$status" == 124 || "$status" == 137 ]]; then
+    echo "  FAIL: $what timed out (status $status): inconclusive (see $log)" >&2
+    return 1
+  fi
+  [[ "$status" == 0 ]] || { echo "  FAIL: $what failed (status $status): inconclusive (see $log)" >&2; return 1; }
+  return 0
+}
+
 # guest_push_e2e <role> <src> <dst>: copy a host file into the role's
 # guest and hand it to the suite user. The agent stages pushed files
 # root-owned (like every other root transport call), but legs and
@@ -109,7 +126,7 @@ guest_timeout() { # <secs> <role> <cmd...>
 # ownership is what the suite needs.
 guest_push_e2e() { # <role> <src> <dst>
   local role="$1" src="$2" dst="$3"
-  guest_push "$role" "$src" "$dst" || return 1
+  guest_push "$role" "$src" "$dst" || return "$?"
   guest_exec "$role" chown e2e:users "$dst"
 }
 

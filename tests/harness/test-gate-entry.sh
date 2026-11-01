@@ -136,6 +136,7 @@ grep -q "guest-bin push peer-o /var/lib/wyrd-e2e/e2e-env.sh$" "$CALLS" || die "e
 grep -q "sudo -n .*guest-bin exec peer-o" "$CALLS" || die "peer-o exec elevates the transport"
 grep -q "sudo -n .*guest-bin push peer-o" "$CALLS" || die "peer-o push elevates the transport"
 grep -q "guest-bin exec peer-o -- chown e2e:users /var/lib/wyrd-e2e/e2e-env.sh$" "$CALLS" || die "env file handed to the suite user after push"
+grep -q "guest-bin exec peer-n -- chown e2e:users /var/lib/wyrd-e2e/e2e-env.sh$" "$CALLS" || die "env file handed to the suite user on peer-n after push"
 grep -q "guest-bin push peer-n /var/lib/wyrd-e2e/e2e-env.sh$" "$CALLS" || die "env pushed to peer-n (stdin, dst only)"
 [ -z "$(grep -E "^(ssh|scp) " "$CALLS" || true)" ] || die "driver dials nothing itself (agent only)"
 [ -z "$(grep "PEER_O=" "$CALLS" || true)" ] || die "driver assembles no ssh-style peer endpoints"
@@ -258,6 +259,29 @@ out="$(run_entry -- --fresh)"
 [[ "$out" == "status=1" ]] || die "out-of-bounds relay role refuses, got: $out"
 printf 'relay' >"$PROVISION_DIR/relay-role"
 pass "out-of-bounds relay role refuses"
+
+# Missing elevation grant: the host must grant passwordless sudo for
+# exactly the published capability binaries (see README.md). Here a
+# sudo that refuses must fail the run at the first guest call — loud
+# and before any suite phase — never silently. The timeout below is
+# real (it must execute its argv); sudo refuses; the guest binary
+# must never run.
+if command -v timeout >/dev/null 2>&1; then
+  NEGDIR="$FIXTURE/negbin"
+  mkdir -p "$NEGDIR"
+  ln -sf "$(command -v timeout)" "$NEGDIR/timeout"
+  printf '#!/bin/sh\necho "sudo $*" >>"$CALLS"\nexit 1\n' >"$NEGDIR/sudo"
+  chmod +x "$NEGDIR/sudo"
+  cp "$STUBBIN/bats" "$NEGDIR/bats"; cp "$STUBBIN/flock" "$NEGDIR/flock"; cp "$STUBBIN/sleep" "$NEGDIR/sleep"
+  : >"$CALLS"
+  out="$(env -i PATH="$NEGDIR:$STUBBIN:/usr/bin:/bin" CALLS="$CALLS" GATE_TASK_PROVISION_DIR="$PROVISION_DIR" GATE_BATS_LIB="$FIXTURE/bats-lib" GATE_PARTITION_BIN="$FIXTURE/partition-bin" GATE_GUEST_BIN="$FIXTURE/guest-bin" bash "$ENTRY" --fresh 2>"$FIXTURE/stderr"; echo "status=$?")"
+  [[ "$out" == "status=1" ]] || die "refused elevation did not fail the run, got: $out"
+  grep -q "is unreachable (agent exec failed)" "$FIXTURE/stderr" || die "refused elevation hides the cause: $(cat "$FIXTURE/stderr")"
+  [ -z "$(grep "^guest " "$CALLS" || true)" ] || die "refused elevation still ran the guest binary"
+  pass "missing elevation grant fails fast without touching the guest"
+else
+  echo "  SKIP: timeout missing, elevation refusal check omitted"
+fi
 
 # Transient holder (the launcher releasing its hold as the unit
 # starts): the first acquires fail, then one succeeds. The entry

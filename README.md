@@ -177,7 +177,13 @@ steps 1-5 via `tests/lima/alpha-common.sh`) plus multi-host convergence,
 serving restart, and shutdown legs across real guest boundaries.
 It runs through the gate task runner, never directly: the host
 builds the images, imports and boots them, waits on the agent, and runs
-`tests/gate/gate-entry.sh` as the unprivileged build user.
+`tests/gate/gate-entry.sh` as the unprivileged build user. The unit
+holds no privilege itself: every guest and partition call elevates
+through a passwordless host `sudo` grant that names exactly the two
+published capability binaries (`GATE_GUEST_BIN`, `GATE_PARTITION_BIN`),
+and the suite refuses fast (`-n`, never prompting) when the grant is
+absent. Guest-side privilege is separate: the agent lands as root and
+the suite drops to the unprivileged `e2e` user for every leg.
 
 Linux with `/dev/kvm` is required (no nested KVM under macOS
 virtualization). One output per role in `flake.nix` (`images.peer-o`,

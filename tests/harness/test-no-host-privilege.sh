@@ -70,8 +70,17 @@ pass "task closure sources only itself"
 # guest_exec lines — both route through the gate-owned agent
 # transport, so the named program runs in the guest, never on the
 # host); phrases banned everywhere (they have no guest use).
-# Elevation (sudo) is checked separately: it may only target the
-# host-published capabilities or define the wrapper resolution.
+# Elevation (sudo) is checked separately and narrowly: the unit
+# holds no privilege itself and reaches the two host-published
+# capabilities (GATE_GUEST_BIN, GATE_PARTITION_BIN) only through a
+# passwordless host sudo grant (see README.md: the grant names exactly
+# those binaries, and every call uses -n and fails fast without it).
+# The exemption below names only the wrapper resolution itself
+# (sudo_bin, wrappers/bin/sudo), the exact elevated call sites
+# (through entry_sudo_bin/e2e_sudo_bin), and guest payloads
+# (on_o/on_n run inside the guest, where sudo is guest privilege).
+# Anything else naming sudo — including a line that merely mentions
+# a capability beside a host sudo — refuses.
 WORDS="setpriv|chown|mount|umount|qemu|virtiofsd|pgrep|pkill|ssh-keygen"
 PHRASES="ip link|ip tuntap|ip addr|nix build|nix-store"
 for f in "${CLOSURE[@]}"; do
@@ -82,7 +91,7 @@ for f in "${CLOSURE[@]}"; do
   [[ -z "$hits" ]] || die "privileged token in ${f#$ROOT/} (guest payloads excepted):\n$hits"
   phits="$(grep -n -E "$PHRASES" "$f" || true)"
   [[ -z "$phits" ]] || die "privileged operation in ${f#$ROOT/}:\n$phits"
-  shits="$(grep -n -w 'sudo' "$f" | grep -v 'on_o\|on_n\|guest_exec\|GUEST_BIN\|GATE_GUEST_BIN\|GATE_PARTITION_BIN\|sudo_bin\|wrappers' || true)"
+  shits="$(grep -n -w 'sudo' "$f" | grep -v 'on_o\|on_n\|sudo_bin\|wrappers/bin/sudo' || true)"
   [[ -z "$shits" ]] || die "host elevation outside the capabilities in ${f#$ROOT/}:\n$shits"
 done
 pass "task closure names no privileged program"
