@@ -32,6 +32,28 @@ NOBATS="$FIXTURE/nobats"
 CALLS="$FIXTURE/calls"
 mkdir -p "$PROVISION_DIR/manifests" "$RUN_DIR" "$STUBBIN" "$NOBATS"
 
+# Absolute interpreters, resolved before the PATH scrubs below: NixOS
+# guests have no FHS /bin or /usr/bin, so bare `bash` and `#!/bin/sh`
+# stubs do not resolve there (act's Ubuntu does, which is why this
+# only ever failed natively). The driver still sees only the scrubbed
+# PATH; only the harness's own invocation is absolute.
+BASH_BIN="$(command -v bash)"
+SH_BIN="$(command -v sh)"
+
+# Incidental toolset the driver needs beyond the stubs, symlinked
+# from the ambient environment: the scrubbed PATH below hides the
+# FHS dirs, and the guest has no FHS dirs to hide. Resolved with
+# command -v so the same list works on Ubuntu and NixOS. Deliberately
+# NOT here: the four stubbed tools (stubs stay first), sudo (refusal
+# is tested with its own stub), ssh/scp and anything guest-side (the
+# agent-only proof requires their absence).
+TOOLBIN="$FIXTURE/toolbin"
+mkdir -p "$TOOLBIN"
+for tool in jq seq head dirname cat tr od chmod env grep sort cut mktemp rm mkdir rmdir cp mv ln; do
+  bin="$(command -v "$tool")" || die "incidental tool missing from the test environment: $tool"
+  ln -sf "$bin" "$TOOLBIN/$tool"
+done
+
 printf 'br-wyrd' >"$PROVISION_DIR/bridge"
 printf '18761' >"$PROVISION_DIR/relay-port"
 printf '%s' "$STATE_DIR" >"$PROVISION_DIR/state-dir"
@@ -46,7 +68,7 @@ mkdir -p "$FIXTURE/bats-lib"
 # Stub guest transport: records argv, succeeds. The entry only needs
 # exit statuses from pre-clean and pushes, never guest output.
 cat >"$FIXTURE/guest-bin" <<EOF
-#!/bin/sh
+#!$SH_BIN
 echo "guest \$*" >>"$CALLS"
 exit 0
 EOF
@@ -58,7 +80,7 @@ chmod +x "$FIXTURE/guest-bin"
 # when flock never succeeds.
 for tool in bats flock timeout sleep; do
   cat >"$STUBBIN/$tool" <<EOF
-#!/bin/sh
+#!$SH_BIN
 echo "$tool \$*" >>"$CALLS"
 EOF
   if [ "$tool" = bats ]; then
@@ -79,13 +101,13 @@ run_entry() {
     if [ "$seen_dash" = 0 ] && [ "$a" = "--" ]; then seen_dash=1; continue; fi
     if [ "$seen_dash" = 0 ]; then envs+=("$a"); else args+=("$a"); fi
   done
-  env -i PATH="$STUBBIN:/usr/bin:/bin" CALLS="$CALLS" \
+  env -i PATH="$STUBBIN:$TOOLBIN:/usr/bin:/bin" CALLS="$CALLS" \
     GATE_TASK_PROVISION_DIR="$PROVISION_DIR" \
     GATE_BATS_LIB="$FIXTURE/bats-lib" \
     GATE_PARTITION_BIN="$FIXTURE/partition-bin" \
     GATE_GUEST_BIN="$FIXTURE/guest-bin" \
     "${envs[@]}" \
-    bash "$ENTRY" "${args[@]}" 2>"$FIXTURE/stderr"
+    "$BASH_BIN" "$ENTRY" "${args[@]}" 2>"$FIXTURE/stderr"
   echo "status=$?"
 }
 
@@ -186,21 +208,21 @@ grep -q "^bats .*/tests/gate/gate-entry-smoke.bats .*/tests/gate/gate-phase-01.b
 grep -q "^CORE_ONLY=1,2,3,4,5$" "$CALLS" || die "core stays full once the prefix reaches step 5"
 pass "step matrix covers core-only and mid-range multi-selections"
 
-out="$(env -i PATH="$STUBBIN:/usr/bin:/bin" GATE_BATS_LIB="$FIXTURE/bats-lib" GATE_GUEST_BIN="$FIXTURE/guest-bin" bash "$ENTRY" --fresh 2>/dev/null; echo "status=$?")"
+out="$(env -i PATH="$STUBBIN:$TOOLBIN:/usr/bin:/bin" GATE_BATS_LIB="$FIXTURE/bats-lib" GATE_GUEST_BIN="$FIXTURE/guest-bin" "$BASH_BIN" "$ENTRY" --fresh 2>/dev/null; echo "status=$?")"
 [[ "$out" == "status=1" ]] || die "missing provision dir refuses, got: $out"
 pass "missing GATE_TASK_PROVISION_DIR refuses"
 
-out="$(env -i PATH="$STUBBIN:/usr/bin:/bin" CALLS="$CALLS" GATE_TASK_PROVISION_DIR="$PROVISION_DIR" GATE_BATS_LIB="$FIXTURE/bats-lib" GATE_GUEST_BIN="$FIXTURE/guest-bin" bash "$ENTRY" --fresh 2>/dev/null; echo "status=$?")"
+out="$(env -i PATH="$STUBBIN:$TOOLBIN:/usr/bin:/bin" CALLS="$CALLS" GATE_TASK_PROVISION_DIR="$PROVISION_DIR" GATE_BATS_LIB="$FIXTURE/bats-lib" GATE_GUEST_BIN="$FIXTURE/guest-bin" "$BASH_BIN" "$ENTRY" --fresh 2>/dev/null; echo "status=$?")"
 [[ "$out" == "status=1" ]] || die "missing partition primitive refuses, got: $out"
 pass "missing GATE_PARTITION_BIN refuses"
 
-out="$(env -i PATH="$STUBBIN:/usr/bin:/bin" CALLS="$CALLS" GATE_TASK_PROVISION_DIR="$PROVISION_DIR" GATE_BATS_LIB="$FIXTURE/bats-lib" GATE_PARTITION_BIN="$FIXTURE/partition-bin" bash "$ENTRY" --fresh 2>/dev/null; echo "status=$?")"
+out="$(env -i PATH="$STUBBIN:$TOOLBIN:/usr/bin:/bin" CALLS="$CALLS" GATE_TASK_PROVISION_DIR="$PROVISION_DIR" GATE_BATS_LIB="$FIXTURE/bats-lib" GATE_PARTITION_BIN="$FIXTURE/partition-bin" "$BASH_BIN" "$ENTRY" --fresh 2>/dev/null; echo "status=$?")"
 [[ "$out" == "status=1" ]] || die "missing guest transport refuses, got: $out"
 pass "missing GATE_GUEST_BIN refuses"
 
-printf '#!/bin/sh\nexit 0\n' >"$FIXTURE/guest-notexec"
+printf '#!%s\nexit 0\n' "$SH_BIN" >"$FIXTURE/guest-notexec"
 chmod 644 "$FIXTURE/guest-notexec"
-out="$(env -i PATH="$STUBBIN:/usr/bin:/bin" CALLS="$CALLS" GATE_TASK_PROVISION_DIR="$PROVISION_DIR" GATE_BATS_LIB="$FIXTURE/bats-lib" GATE_PARTITION_BIN="$FIXTURE/partition-bin" GATE_GUEST_BIN="$FIXTURE/guest-notexec" bash "$ENTRY" --fresh 2>/dev/null; echo "status=$?")"
+out="$(env -i PATH="$STUBBIN:$TOOLBIN:/usr/bin:/bin" CALLS="$CALLS" GATE_TASK_PROVISION_DIR="$PROVISION_DIR" GATE_BATS_LIB="$FIXTURE/bats-lib" GATE_PARTITION_BIN="$FIXTURE/partition-bin" GATE_GUEST_BIN="$FIXTURE/guest-notexec" "$BASH_BIN" "$ENTRY" --fresh 2>/dev/null; echo "status=$?")"
 [[ "$out" == "status=1" ]] || die "non-executable guest transport refuses, got: $out"
 pass "non-executable GATE_GUEST_BIN refuses"
 
@@ -240,7 +262,7 @@ out="$(run_entry -- --fresh)"
 printf '%s' "$STATE_DIR/lock" >"$PROVISION_DIR/lock-file"
 pass "empty lock-file datum refuses"
 
-out="$(env -i PATH="$NOBATS:/usr/bin:/bin" GATE_TASK_PROVISION_DIR="$PROVISION_DIR" GATE_BATS_LIB="$FIXTURE/bats-lib" GATE_GUEST_BIN="$FIXTURE/guest-bin" bash "$ENTRY" --fresh 2>/dev/null; echo "status=$?")"
+out="$(env -i PATH="$NOBATS:$TOOLBIN:/usr/bin:/bin" GATE_TASK_PROVISION_DIR="$PROVISION_DIR" GATE_BATS_LIB="$FIXTURE/bats-lib" GATE_GUEST_BIN="$FIXTURE/guest-bin" "$BASH_BIN" "$ENTRY" --fresh 2>/dev/null; echo "status=$?")"
 [[ "$out" == "status=1" ]] || die "missing bats refuses, got: $out"
 pass "missing bats refuses"
 
@@ -270,11 +292,11 @@ if command -v timeout >/dev/null 2>&1; then
   NEGDIR="$FIXTURE/negbin"
   mkdir -p "$NEGDIR"
   ln -sf "$(command -v timeout)" "$NEGDIR/timeout"
-  printf '#!/bin/sh\necho "sudo $*" >>"$CALLS"\nexit 1\n' >"$NEGDIR/sudo"
+  printf '#!%s\necho "sudo $*" >>"$CALLS"\nexit 1\n' "$SH_BIN" >"$NEGDIR/sudo"
   chmod +x "$NEGDIR/sudo"
   cp "$STUBBIN/bats" "$NEGDIR/bats"; cp "$STUBBIN/flock" "$NEGDIR/flock"; cp "$STUBBIN/sleep" "$NEGDIR/sleep"
   : >"$CALLS"
-  out="$(env -i PATH="$NEGDIR:$STUBBIN:/usr/bin:/bin" CALLS="$CALLS" GATE_TASK_PROVISION_DIR="$PROVISION_DIR" GATE_BATS_LIB="$FIXTURE/bats-lib" GATE_PARTITION_BIN="$FIXTURE/partition-bin" GATE_GUEST_BIN="$FIXTURE/guest-bin" bash "$ENTRY" --fresh 2>"$FIXTURE/stderr"; echo "status=$?")"
+  out="$(env -i PATH="$NEGDIR:$STUBBIN:$TOOLBIN:/usr/bin:/bin" CALLS="$CALLS" GATE_TASK_PROVISION_DIR="$PROVISION_DIR" GATE_BATS_LIB="$FIXTURE/bats-lib" GATE_PARTITION_BIN="$FIXTURE/partition-bin" GATE_GUEST_BIN="$FIXTURE/guest-bin" "$BASH_BIN" "$ENTRY" --fresh 2>"$FIXTURE/stderr"; echo "status=$?")"
   [[ "$out" == "status=1" ]] || die "refused elevation did not fail the run, got: $out"
   grep -q "is unreachable (agent exec failed)" "$FIXTURE/stderr" || die "refused elevation hides the cause: $(cat "$FIXTURE/stderr")"
   [ -z "$(grep "^guest " "$CALLS" || true)" ] || die "refused elevation still ran the guest binary"
@@ -287,7 +309,7 @@ fi
 # starts): the first acquires fail, then one succeeds. The entry
 # waits out the handoff instead of refusing a healthy run.
 cat >"$STUBBIN/flock" <<EOF
-#!/bin/sh
+#!$SH_BIN
 echo "flock \$*" >>"$CALLS"
 n="\$(cat "$FIXTURE/flock-count" 2>/dev/null || echo 0)"
 n=\$((n + 1))
@@ -305,7 +327,7 @@ pass "transient lock holder is retried, then acquired"
 # Persistent holder (a genuinely foreign run): the full grace is
 # retried, then the run refuses with the cause named.
 cat >"$STUBBIN/flock" <<EOF
-#!/bin/sh
+#!$SH_BIN
 echo "flock \$*" >>"$CALLS"
 exit 1
 EOF
