@@ -287,40 +287,6 @@ jobs:
             fi
           } 2>&1 | tee -a /tmp/nix.log
 
-      # TEMPORARY diagnostic for the wyrd-image "path ... is not valid"
-      # failure: tries instantiating one image derivation under several
-      # evaluator settings, deleting the content-addressed nixpkgs copy
-      # first each time, then tries pre-materializing it. Eval-only,
-      # ~1min; never blocks the real check below. Remove once CI is
-      # green. Store paths are pinned to the current lock rev.
-      - name: Diagnose image instantiation
-        continue-on-error: true
-        run: |
-          set +e
-          nix --version
-          nix config show 2>/dev/null | grep -E '^(lazy-trees|eval-cores|eval-cache|experimental-features)( |:)' || true
-          SRC=/nix/store/zcqwwq108lzb92fggx0jaymdbb0b1lrb-source
-          DST=/nix/store/sjwwnlwjkv14wrksx5l2pb3phkm14v74-zcqwwq108lzb92fggx0jaymdbb0b1lrb-source
-          nix path-info "$SRC" >/dev/null 2>&1 && echo "have source tree" || echo "MISSING source tree"
-          ls -d "$DST" 2>/dev/null || echo "copy absent before tries"
-          try() {
-            l="$1"; shift
-            nix store delete "$DST" >/dev/null 2>&1 || true
-            if ls -d "$DST" >/dev/null 2>&1; then echo "NOTE $l: object still present, delete skipped"; fi
-            if nix eval --raw "$@" .#checks.x86_64-linux.wyrd-image-peer-n.drvPath >/dev/null 2>/tmp/eval-err.txt; then echo "PASS $l"
-            else echo "FAIL $l: $(grep -m1 'error' /tmp/eval-err.txt | head -c 200)"; fi
-            ls -d /nix/store/sjwwnl* 2>/dev/null || echo "(copy still absent after $l)"
-          }
-          try default
-          try single-core --option eval-cores 1
-          try no-lazy --option lazy-trees false
-          try no-evalcache --option eval-cache false
-          echo "== pre-materialize =="
-          nix-store --add-fixed sha256 --recursive "$SRC"
-          nix eval --raw .#checks.x86_64-linux.wyrd-image-peer-n.drvPath >/dev/null 2>/tmp/eval-err2.txt \
-            && echo "PASS pre-materialized" \
-            || echo "FAIL pre-materialized: $(grep -m1 'error' /tmp/eval-err2.txt | head -c 200)"
-
       # Builds the wyrd package and the release archive for the
       # runner's system (linux-x86_64), then evaluates the whole flake
       # without building: this proves the microVM topology still
@@ -338,14 +304,15 @@ jobs:
           echo "===== flake check =====" >> /tmp/nix.log
           {
             set -euo pipefail
-            # Cold evaluation for the image checks (see above): the
-            # derivations import through ${pkgs.path}, a
-            # content-addressed nixpkgs-tree copy that evaluation must
-            # materialize from the pristine flake input. With the stale
-            # fetcher caches dropped, a missing object is re-created
-            # instead of refused.
-            nix build .#checks.x86_64-linux.wyrd .#checks.x86_64-linux.wyrd-dist --print-build-logs --option eval-cache false
-            nix flake check --no-build --option eval-cache false
+            # The image checks instantiate derivations through
+            # ${pkgs.path}, a content-addressed nixpkgs-tree copy that
+            # evaluation materializes from the pristine flake input.
+            # The "Drop stale fetcher caches" step above removes
+            # restored cache entries that would otherwise name the
+            # copy without its NAR, failing instantiation with
+            # "path ... is not valid".
+            nix build .#checks.x86_64-linux.wyrd .#checks.x86_64-linux.wyrd-dist --print-build-logs
+            nix flake check --no-build
           } 2>&1 | tee -a /tmp/nix.log
 
       # Proves the release archive path end to end via the same script
