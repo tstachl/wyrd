@@ -110,13 +110,13 @@ pass "every elevation names its capability"
 # Every helper-mediated elevation must fail fast (-n on each call):
 # without it a missing grant would prompt instead of refusing, and
 # the suite would hang on the host instead of failing at the gate.
-nonflag="$(grep -n -E '[$]\((entry|e2e)_sudo_bin\)"' "${CLOSURE[@]}" | grep -v ' -n ' || true)"
-[[ -z "$nonflag" ]] || die "elevation without -n (would prompt on a missing grant):\n$nonflag"
+nonflag="$(grep -n -E '[$]\((entry|e2e)_sudo_bin\)"' "${CLOSURE[@]}" | grep -v -F 'sudo_bin)" -n' || true)"
+[[ -z "$nonflag" ]] || die "elevation without -n on the helper itself (would prompt on a missing grant):\n$nonflag"
 pass "every elevation fails fast"
 # The scans above match quoted invocations ("$(..._sudo_bin)");
 # an unquoted one would escape both, so refuse it by shape.
-unquoted="$(grep -n -E '[$]\((entry|e2e)_sudo_bin\)[^"]' "${CLOSURE[@]}" || true)"
-[[ -z "$unquoted" ]] || die "unquoted helper invocation escapes the scans:\n$unquoted"
+unquoted="$(grep -n -E '[$]\((entry|e2e)_sudo_bin\)([^"]|$)|=\s*"\?\$\((entry|e2e)_sudo_bin\)' "${CLOSURE[@]}" || true)"
+[[ -z "$unquoted" ]] || die "unquoted or indirected helper use escapes the scans:\n$unquoted"
 pass "every helper invocation is quoted"
 
 # --- kill -0 (liveness) is the only kill ---
