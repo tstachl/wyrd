@@ -22,7 +22,9 @@
 #   missing files do.
 # - The suite reaches guests only through GATE_GUEST_BIN (mandatory,
 #   unset refuses): guest_exec/push/pull from the gate-owned bats
-#   helpers. There is no ssh and no shared filesystem; the Incus
+#   helpers in phases, direct elevated transport calls in this entry
+#   (the unit runs as the build user, so the caller elevates with -n).
+#   There is no ssh and no shared filesystem; the Incus
 #   agent carries control and files.
 # - WYRD_BIN/NAK_BIN are the stable in-image paths: the images carry
 #   both packages, so no runner handoff resolution exists.
@@ -65,6 +67,13 @@ BATS_LIB="${GATE_BATS_LIB:?gate-entry.sh: GATE_BATS_LIB is not set}"
 [ -d "$BATS_LIB" ] || { echo "gate-entry.sh: bats helpers are missing at $BATS_LIB" >&2; exit 1; }
 GUEST_BIN="${GATE_GUEST_BIN:?gate-entry.sh: GATE_GUEST_BIN is not set (host must publish the guest transport)}"
 [ -x "$GUEST_BIN" ] || { echo "gate-entry.sh: guest transport is not executable: $GUEST_BIN" >&2; exit 1; }
+# Elevation for the host-owned GATE_GUEST_BIN transport: the unit runs
+# as the build user while the daemon socket is root-only, so the
+# caller elevates with -n (fail fast, never prompt). Mirrors the
+# gate-owned bats helpers (setuid wrapper first, PATH fallback).
+entry_sudo_bin() {
+  if [ -x /run/wrappers/bin/sudo ]; then printf '%s' /run/wrappers/bin/sudo; else printf '%s' sudo; fi # sudo_bin fallback
+}
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 # policy <name>: the single-line provision datum. Missing or empty
@@ -181,13 +190,13 @@ chmod 0644 "$RUN/e2e-env.sh"
 # missing LOGDIR. The agent is the only transport; a guest that never
 # answers fails the run here, before the suite.
 for peer in peer-o peer-n; do
-  timeout 120 "$GUEST_BIN" exec "$peer" -- rm -rf "$E2E_ROOT" \
+  timeout 120 "$(entry_sudo_bin)" -n "$GUEST_BIN" exec "$peer" -- rm -rf "$E2E_ROOT" \
     || { echo "gate-entry.sh: guest $peer is unreachable (agent exec failed)" >&2; exit 1; }
-  timeout 120 "$GUEST_BIN" exec "$peer" -- mkdir -p "$E2E_ROOT/drives" "$E2E_ROOT/creds" "$E2E_ROOT/mnt" "$E2E_ROOT/logs" "$E2E_ROOT/signals" \
+  timeout 120 "$(entry_sudo_bin)" -n "$GUEST_BIN" exec "$peer" -- mkdir -p "$E2E_ROOT/drives" "$E2E_ROOT/creds" "$E2E_ROOT/mnt" "$E2E_ROOT/logs" "$E2E_ROOT/signals" \
     || { echo "gate-entry.sh: guest $peer state reset failed" >&2; exit 1; }
-  timeout 120 "$GUEST_BIN" exec "$peer" -- chown -R e2e:users "$E2E_ROOT" \
+  timeout 120 "$(entry_sudo_bin)" -n "$GUEST_BIN" exec "$peer" -- chown -R e2e:users "$E2E_ROOT" \
     || { echo "gate-entry.sh: guest $peer state handover failed" >&2; exit 1; }
-  timeout 120 "$GUEST_BIN" push "$peer" "$RUN/e2e-env.sh" "$E2E_ROOT/e2e-env.sh" \
+  timeout 120 "$(entry_sudo_bin)" -n "$GUEST_BIN" push "$peer" "$E2E_ROOT/e2e-env.sh" <"$RUN/e2e-env.sh" \
     || { echo "gate-entry.sh: env push to $peer failed" >&2; exit 1; }
 done
 

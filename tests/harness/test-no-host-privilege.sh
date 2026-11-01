@@ -70,16 +70,20 @@ pass "task closure sources only itself"
 # guest_exec lines — both route through the gate-owned agent
 # transport, so the named program runs in the guest, never on the
 # host); phrases banned everywhere (they have no guest use).
-WORDS="setpriv|chown|mount|umount|sudo|qemu|virtiofsd|pgrep|pkill|ssh-keygen"
+# Elevation (sudo) is checked separately: it may only target the
+# host-published capabilities or define the wrapper resolution.
+WORDS="setpriv|chown|mount|umount|qemu|virtiofsd|pgrep|pkill|ssh-keygen"
 PHRASES="ip link|ip tuntap|ip addr|nix build|nix-store"
 for f in "${CLOSURE[@]}"; do
   # `GUEST_BIN" exec` is the entry's direct transport invocation (same
   # gate-owned binary the helpers wrap); anything else naming the bin
   # (exports, assignments) carries no privileged token.
-  hits="$(grep -n -w -E "$WORDS" "$f" | grep -v 'on_o\|on_n\|guest_exec\|GUEST_BIN" exec' || true)"
+  hits="$(grep -n -w -E "$WORDS" "$f" | grep -v 'on_o\|on_n\|guest_exec\|GUEST_BIN" exec\|GUEST_BIN" push' || true)"
   [[ -z "$hits" ]] || die "privileged token in ${f#$ROOT/} (guest payloads excepted):\n$hits"
   phits="$(grep -n -E "$PHRASES" "$f" || true)"
   [[ -z "$phits" ]] || die "privileged operation in ${f#$ROOT/}:\n$phits"
+  shits="$(grep -n -w 'sudo' "$f" | grep -v 'on_o\|on_n\|guest_exec\|GUEST_BIN\|GATE_GUEST_BIN\|GATE_PARTITION_BIN\|sudo_bin\|wrappers' || true)"
+  [[ -z "$shits" ]] || die "host elevation outside the capabilities in ${f#$ROOT/}:\n$shits"
 done
 pass "task closure names no privileged program"
 

@@ -76,9 +76,7 @@ setup() {
   # vanishes with no verdict (the suite keeps going and the plan
   # undercounts). heal_relay itself never fails the test.
   heal_relay() {
-    if [[ -n "${GATE_PARTITION_BIN:-}" ]]; then
-      "$GATE_PARTITION_BIN" relay up 2>/dev/null || true
-    fi
+    gate_partition relay up 2>/dev/null || true
   }
   host_partition relay down || { heal_relay; echo "  FAIL: host could not partition relay" >&2; return 1; }
   guest_exec peer-o -- touch "$GUEST_RUN/signals/conflict-partitioned"

@@ -17,6 +17,9 @@
 # Requires from the environment (published by tests/gate/gate-entry.sh):
 # GATE_GUEST_BIN (agent transport), WYRD_BIN (in-image wyrd path),
 # WYRD_E2E_TOKEN/LOCK, GUEST_ENV/GUEST_RUN/GUEST_TESTS, RELAY_URL.
+# Elevation mirrors the gate-owned bats helpers (GATE_GUEST_BIN,
+# GATE_PARTITION_BIN): the unit runs as the build user, so callers
+# elevate with -n (fail fast, never prompt), setuid wrapper first.
 # Provides task constants with overrideable defaults: GUEST_TESTS
 # (baked suite path in guests), GUEST_ENV (guest env file path),
 # GUEST_RUN (guest run-tree path).
@@ -46,6 +49,16 @@ die() { echo "  FAIL: $1" >&2; exit 1; }
 : "${GUEST_ENV:=/var/lib/wyrd-e2e/e2e-env.sh}"
 : "${GUEST_RUN:=/var/lib/wyrd-e2e}"
 
+# e2e_sudo_bin: print the elevation to use for GATE_GUEST_BIN and
+# GATE_PARTITION_BIN. The setuid wrapper lives in the host-controlled
+# wrappers dir; prefer it when present, else the PATH fallback. No
+# environment crosses the boundary (-n fails fast instead of
+# prompting). Mirrors gate-owned guest.bash.
+e2e_sudo_bin() {
+  if [ -n "${E2E_SUDO_BIN:-}" ]; then printf '%s' "$E2E_SUDO_BIN"; return 0; fi
+  if [ -x /run/wrappers/bin/sudo ]; then printf '%s' /run/wrappers/bin/sudo; else printf '%s' sudo; fi # sudo_bin fallback
+}
+
 # on_o <cmd...>: run the command on peer-o as the unprivileged suite
 # user, carrying the run token (and the explicit-unwrapped flag) so
 # the guest-side guard can verify the call came through a wrapper.
@@ -74,13 +87,13 @@ as_e2e() { # <role> <cmd...>
 
 # guest_timeout <secs> <role> <cmd...>: agent exec with a hard bound.
 # timeout cannot execute a shell function, so the bound wraps the
-# gate transport binary directly — never guest_exec/on_o/on_n
-# (pinned by tests/harness/test-timeout-discipline.sh). The KILL
+# gate transport binary directly (elevated, like guest_exec) — never
+# guest_exec/on_o/on_n (pinned by tests/harness/test-timeout-discipline.sh). The KILL
 # grace makes the bound hard: a transport client that ignores TERM
 # is killed instead of stretching the call past its budget.
 guest_timeout() { # <secs> <role> <cmd...>
   local secs="$1"; shift
-  timeout -k 10 "$secs" "$GATE_GUEST_BIN" exec "$@"
+  timeout -k 10 "$secs" "$(e2e_sudo_bin)" -n "$GATE_GUEST_BIN" exec "$@"
 }
 
 # guest_wyrd <role> <wyrd-args...>: run the in-image wyrd binary in a
@@ -114,7 +127,7 @@ mint_guest_creds() { # <role> <creds-dir> <drive-dir>
 host_partition() { # <role> down|up
   [[ -n "${GATE_PARTITION_BIN:-}" ]] \
     || die "partition capability not provided (host must set GATE_PARTITION_BIN)"
-  "$GATE_PARTITION_BIN" "$@"
+  "$(e2e_sudo_bin)" -n "$GATE_PARTITION_BIN" "$@"
 }
 
 # wait_guest_file <role> <seconds> <guest-path> <what> <leg-pid>:

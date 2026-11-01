@@ -6,8 +6,8 @@
 # guest_exec ...` fails with 127 ("No such file or directory") even
 # on a healthy guest — the intended bound is never applied and the
 # suite fails closed on every call. The suite bounds agent calls
-# through guest_timeout (which wraps the gate transport binary
-# directly) or by calling "$GATE_GUEST_BIN" under timeout. Pure bash
+# through guest_timeout (which wraps the elevated gate transport
+# binary directly) or by calling the transport under timeout. Pure bash
 # + grep, with one live mechanism check when timeout exists: run it
 # anywhere with `bash tests/harness/test-timeout-discipline.sh`.
 set -euo pipefail
@@ -35,7 +35,7 @@ else
 fi
 
 # The ban: no suite function under timeout in host-executed code.
-# Binaries ("$GATE_GUEST_BIN", python3, jq) are fine; the banned
+# Binaries (the transport via its elevation, python3, jq) are fine; the banned
 # names are the suite's own functions, which only resolve in-shell.
 # Covers the gate suite, its helpers, the Lima definitions, and
 # the microVM call sites (peer_wait/peer_signal are defined in Lima
@@ -52,6 +52,14 @@ if command -v timeout >/dev/null 2>&1; then
   # shellcheck source=/dev/null
   source "$ROOT/tests/harness/e2e-helpers.bash"
   STUB="$FIXTURE/guest-bin-stub"
+  SUDO_STUB="$FIXTURE/sudo-stub"
+  cat >"$SUDO_STUB" <<'EOF'
+#!/bin/sh
+echo "elevation $*" >>"${CALLS:-/dev/null}"
+if [ "$1" = "-n" ]; then shift; fi
+exec "$@"
+EOF
+  chmod +x "$SUDO_STUB"
   cat >"$STUB" <<'EOF'
 #!/bin/sh
 echo "stub $*" >>"$CALLS"
@@ -60,11 +68,13 @@ EOF
   chmod +x "$STUB"
   : >"$CALLS"
   rc=0
-  GATE_GUEST_BIN="$STUB" CALLS="$CALLS" STUB_RC=7 guest_timeout 10 peer-o -- test -x /run/current-system/sw/bin/wyrd || rc=$?
+  E2E_SUDO_BIN="$SUDO_STUB" GATE_GUEST_BIN="$STUB" CALLS="$CALLS" STUB_RC=7 guest_timeout 10 peer-o -- test -x /run/current-system/sw/bin/wyrd || rc=$?
   [[ "$rc" == 7 ]] || die "guest status did not propagate (got $rc)"
   grep -q "^stub exec peer-o -- test -x /run/current-system/sw/bin/wyrd$" "$CALLS" \
     || die "guest_timeout argv is not the transport invocation: $(cat "$CALLS")"
-  pass "guest_timeout sends the transport invocation and propagates status"
+  grep -q "^elevation -n " "$CALLS" \
+    || die "guest_timeout does not elevate the transport: $(cat "$CALLS")"
+  pass "guest_timeout sends the elevated transport invocation and propagates status"
   cat >"$STUB" <<'EOF'
 #!/bin/sh
 sleep 30
@@ -72,7 +82,7 @@ EOF
   chmod +x "$STUB"
   start="$(date +%s)"
   rc=0
-  GATE_GUEST_BIN="$STUB" guest_timeout 2 peer-o -- true || rc=$?
+  E2E_SUDO_BIN="$SUDO_STUB" GATE_GUEST_BIN="$STUB" guest_timeout 2 peer-o -- true || rc=$?
   [[ "$rc" == 124 ]] || die "guest_timeout did not time out (got $rc)"
   elapsed=$(( $(date +%s) - start ))
   (( elapsed < 15 )) || die "guest_timeout overran its bound (${elapsed}s)"
@@ -89,7 +99,7 @@ EOF
   chmod +x "$STUB"
   start="$(date +%s)"
   rc=0
-  GATE_GUEST_BIN="$STUB" guest_timeout 2 peer-o -- true || rc=$?
+  E2E_SUDO_BIN="$SUDO_STUB" GATE_GUEST_BIN="$STUB" guest_timeout 2 peer-o -- true || rc=$?
   [[ "$rc" == 137 ]] || die "KILL grace did not report 137 (got $rc)"
   elapsed=$(( $(date +%s) - start ))
   (( elapsed < 20 )) || die "KILL grace overran its bound (${elapsed}s)"

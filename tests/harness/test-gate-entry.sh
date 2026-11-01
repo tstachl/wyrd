@@ -131,8 +131,11 @@ grep -q "guest-bin exec peer-o -- rm -rf /var/lib/wyrd-e2e$" "$CALLS" || die "pe
 grep -q "guest-bin exec peer-o -- mkdir -p /var/lib/wyrd-e2e/drives" "$CALLS" || die "peer-o state layout prepared"
 grep -q "guest-bin exec peer-o -- chown -R e2e:users /var/lib/wyrd-e2e$" "$CALLS" || die "peer-o state root handed to the suite user"
 grep -q "guest-bin exec peer-n -- mkdir -p /var/lib/wyrd-e2e/drives" "$CALLS" || die "peer-n state layout prepared"
-grep -q "guest-bin push peer-o $RUN_DIR/e2e-env.sh /var/lib/wyrd-e2e/e2e-env.sh$" "$CALLS" || die "env pushed to peer-o"
-grep -q "guest-bin push peer-n $RUN_DIR/e2e-env.sh /var/lib/wyrd-e2e/e2e-env.sh$" "$CALLS" || die "env pushed to peer-n"
+grep -q "guest-bin push peer-o /var/lib/wyrd-e2e/e2e-env.sh$" "$CALLS" || die "env pushed to peer-o (stdin, dst only)"
+[ -z "$(grep "guest-bin push peer-o $RUN_DIR" "$CALLS" || true)" ] || die "push carries no host source path (stdin only)"
+grep -q "sudo -n .*guest-bin exec peer-o" "$CALLS" || die "peer-o exec elevates the transport"
+grep -q "sudo -n .*guest-bin push peer-o" "$CALLS" || die "peer-o push elevates the transport"
+grep -q "guest-bin push peer-n /var/lib/wyrd-e2e/e2e-env.sh$" "$CALLS" || die "env pushed to peer-n (stdin, dst only)"
 [ -z "$(grep -E "^(ssh|scp) " "$CALLS" || true)" ] || die "driver dials nothing itself (agent only)"
 [ -z "$(grep "PEER_O=" "$CALLS" || true)" ] || die "driver assembles no ssh-style peer endpoints"
 # Ordering: the lock is acquired before any guest mutation or env
