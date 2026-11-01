@@ -64,6 +64,7 @@ for _b in peer-o peer-n relay; do
     [ "$_o" -le 255 ] || die "box $_b ip octet out of bounds: $IP"
   done
   unset _o
+  printf '%s|%s|%s|%s|%s\n' "$ROLE" "$VCPU" "$MEM" "$MAC" "$IP" >"$FIXTURE/declared-$_b"
 done
 unset _b NIX ROLE VCPU MEM MAC IP
 pass "every role carries typed gate.box facts"
@@ -104,8 +105,17 @@ if command -v nix >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
     echo "$manifest_json" | jq -e '([keys_unsorted[]] | sort) == ["ip","kind","mac","memMb","role","shares","vcpu"]' >/dev/null       || die "manifest key set is wrong for $_b"
     echo "$manifest_json" | jq -e --arg role "$_b" '.role == $role and (.vcpu | type) == "number" and (.memMb | type) == "number"' >/dev/null       || die "manifest role/vcpu/memMb mistyped for $_b"
     echo "$manifest_json" | jq -e '.shares == []' >/dev/null       || die "manifest shares are not empty for $_b"
+    # Addressing and sizing must equal the declared gate.box facts:
+    # the derivation passes them through, so any drift between the
+    # manifest the host imports and the values the suite dials fails
+    # here, not on the guest. (Manifest ips carry the /24 the entry
+    # parses; the declared facts are bare.)
+    IFS='|' read -r _role _vcpu _mem _mac _ip <"$FIXTURE/declared-$_b"
+    echo "$manifest_json" | jq -e --arg ip "${_ip}/24" --arg mac "$_mac" --argjson vcpu "$_vcpu" --argjson memMb "$_mem" \
+      '.ip == $ip and .mac == $mac and .vcpu == $vcpu and .memMb == $memMb' >/dev/null \
+      || die "manifest addressing/values drift from gate.box for $_b (manifest: $(echo "$manifest_json" | jq -c '{ip,mac,vcpu,memMb}'))"
   done
-  unset _b manifest_json
+  unset _b manifest_json _role _vcpu _mem _mac _ip
   pass "evaluated gateManifest carries the exact v1 wire bytes"
 else
   echo "  SKIP: nix or jq unavailable, manifest content check omitted"

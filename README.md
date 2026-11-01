@@ -183,8 +183,9 @@ Linux with `/dev/kvm` is required (no nested KVM under macOS
 virtualization). One output per role in `flake.nix` (`images.peer-o`,
 `images.peer-n`, `images.relay`) holds exactly `manifest.json`
 (the `gate.image/v1` shape declaration) and `image.tar.gz` (the
-unified Incus tarball); both derive from the same `gate.box` options
-in `nix/microvm/`, so image and shape cannot drift.
+unified Incus tarball); both derive from the per-role `gate.box` values
+in `nix/microvm/`, owned by the gate input's `nixosModules.guest`,
+so image and shape cannot drift.
 `nix flake check --no-build` evaluates the three images as the eval
 gate, the disk images assemble when a gate run needs them, while suite
 *execution* stays on the KVM host. The suite reaches guests only
