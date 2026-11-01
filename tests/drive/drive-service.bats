@@ -80,8 +80,19 @@ setup() {
 }
 
 @test "vault and serving units are active after boot" {
-  run on_d 'systemctl is-active wyrd-vault-demo wyrd-mount-demo'
-  [ "$status" -eq 0 ] || { echo "$output"; touch "$RUN/FAILED"; false; }
+  # The units order after network-online.target, which the guest
+  # reaches after the agent is already answering (the entry's reboot
+  # wait keys on boot id, not network readiness): poll for active
+  # instead of asserting once, so early-boot job queueing is settling
+  # time, not a verdict. Budget covers the guest's online wait with
+  # margin; expiry still fails closed below.
+  ACTIVE=""
+  for _ in $(seq 1 36); do
+    run on_d 'systemctl is-active wyrd-vault-demo wyrd-mount-demo'
+    if [ "$status" -eq 0 ]; then ACTIVE=1; break; fi
+    sleep 5
+  done
+  [[ -n "$ACTIVE" ]] || { echo "$output"; touch "$RUN/FAILED"; false; }
   # The serving side comes up after the unit reports active, so poll
   # instead of asserting once. The service runs with PrivateTmp,
   # which puts it in its own namespace: the FUSE serving side stays
