@@ -259,14 +259,15 @@ jobs:
       # can name a content-addressed tree copy (e.g. the nixpkgs tree
       # behind ${pkgs.path}) whose NAR is absent from the restored
       # store, and evaluation then refuses it with "path ... is not
-      # valid" instead of re-materializing it. The store tarball plus
-      # DB is self-consistent without these files; they are only a
-      # speedup.
-      - name: Drop stale fetcher caches
+      # valid" instead of re-materializing it. The eval cache can
+      # name the same absent copy, so it goes too. The store tarball
+      # plus DB is self-consistent without these files; they are only
+      # a speedup.
+      - name: Drop stale fetcher and eval caches
         run: |
           set -euo pipefail
-          sudo rm -f /root/.cache/nix/fetchToStore-cache-* /root/.cache/nix/fetcher-cache-*
-          rm -f "${HOME}/.cache/nix/fetchToStore-cache-*" "${HOME}/.cache/nix/fetcher-cache-*"
+          sudo rm -f /root/.cache/nix/fetchToStore-cache-* /root/.cache/nix/fetcher-cache-* /root/.cache/nix/eval-cache-*
+          rm -f "${HOME}/.cache/nix/fetchToStore-cache-*" "${HOME}/.cache/nix/fetcher-cache-*" "${HOME}/.cache/nix/eval-cache-*"
 
       # Flake evaluation needs an openable Git repository (libgit2
       # ENOTFOUND otherwise) and the coordinator worktree can carry a stub
@@ -310,9 +311,13 @@ jobs:
             # The "Drop stale fetcher caches" step above removes
             # restored cache entries that would otherwise name the
             # copy without its NAR, failing instantiation with
-            # "path ... is not valid".
-            nix build .#checks.x86_64-linux.wyrd .#checks.x86_64-linux.wyrd-dist --print-build-logs
-            nix flake check --no-build
+            # "path ... is not valid". The eval cache can name the
+            # same absent copy, so both commands evaluate cold
+            # (--option eval-cache false); do not remove these flags
+            # without also proving a prefix-matched restore still
+            # instantiates the images.
+            nix build .#checks.x86_64-linux.wyrd .#checks.x86_64-linux.wyrd-dist --print-build-logs --option eval-cache false
+            nix flake check --no-build --option eval-cache false
           } 2>&1 | tee -a /tmp/nix.log
 
       # Proves the release archive path end to end via the same script
