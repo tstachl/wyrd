@@ -10,19 +10,20 @@
 # anywhere with `bash tests/harness/test-no-host-privilege.sh`. (Wired into
 # the CI shell-tests job alongside the other stubs.)
 #
-# Scope: the host-executed task closure — the files the gate task
-# runs on the host as the build user (tests/gate/gate-entry.sh plus the
-# smoke suite and bats phases it execs). Guest-executed legs
-# (alpha-microvm-legs.sh and what they source) run as the guest user
-# inside the VMs; guest-side sudo is guest privilege, not host
+# Scope: the host-executed task closure — the files the gate tasks
+# run on the host as the build user (tests/gate/gate-entry.sh plus
+# the smoke suite and bats phases it execs; tests/drive/ is the
+# drive-service task's own entry plus its bats suite). Guest-executed
+# legs (alpha-microvm-legs.sh and what they source) run as the guest
+# user inside the VMs; guest-side sudo is guest privilege, not host
 # privilege, and stays.
 #
 # Discipline: the bans below match comments too, so a comment that
 # needs one of these words must be reworded, not excepted. Guest
-# payloads are the only exception: a line routing through on_o/on_n
+# payloads are the only exception: a line routing through on_o/on_n/on_d
 # (or guest_exec, the gate-owned agent transport both route through)
-# executes inside the guest over the agent, where sudo/mount/chown are
-# guest privilege.
+# executes inside the guest over the agent, where sudo/mount/chown/kill
+# are guest privilege.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -50,6 +51,8 @@ CLOSURE=(
   "$ROOT/tests/gate/gate-phase-10.bats"
   "$ROOT/tests/gate/gate-phase-11.bats"
   "$ROOT/tests/gate/gate-epilogue.bats"
+  "$ROOT/tests/drive/drive-service-entry.sh"
+  "$ROOT/tests/drive/drive-service.bats"
 )
 for f in "${CLOSURE[@]}"; do
   [[ -f "$f" ]] || die "task closure file missing: $f"
@@ -66,7 +69,7 @@ done < <(grep -h -E '^[[:space:]]*(source|\.) ' "${CLOSURE[@]}" || true)
 pass "task closure sources only itself"
 
 # --- no privileged program names in the closure ---
-# Words banned everywhere except guest payloads (on_o/on_n and
+# Words banned everywhere except guest payloads (on_o/on_n/on_d and
 # guest_exec lines — both route through the gate-owned agent
 # transport, so the named program runs in the guest, never on the
 # host); phrases banned everywhere (they have no guest use).
@@ -78,7 +81,7 @@ pass "task closure sources only itself"
 # The exemption below names only the wrapper resolution itself
 # (sudo_bin, wrappers/bin/sudo), the exact elevated call sites
 # (through entry_sudo_bin/e2e_sudo_bin), and guest payloads
-# (on_o/on_n run inside the guest, where sudo is guest privilege).
+# (on_o/on_n/on_d run inside the guest, where sudo is guest privilege).
 # Anything else naming sudo — including a line that merely mentions
 # a capability beside a host sudo — refuses.
 WORDS="setpriv|chown|mount|umount|qemu|virtiofsd|pgrep|pkill|ssh-keygen"
@@ -86,7 +89,7 @@ PHRASES="ip link|ip tuntap|ip addr|nix build|nix-store"
 # Production elevation-scan shapes, defined once and shared by the
 # scans and their self-test below, so a regex typo cannot drift one
 # without failing the other.
-SUDO_SCAN_V='on_o\|on_n\|guest_exec\|sudo_bin\|wrappers/bin/sudo'
+SUDO_SCAN_V='on_o\|on_n\|on_d\|guest_exec\|sudo_bin\|wrappers/bin/sudo'
 INVOC_PAT='[$]\((entry|e2e)_sudo_bin\)"'
 NONFLAG_OK='sudo_bin)" -n'
 UNQ_PAT='[$]\((entry|e2e)_sudo_bin\)([^"]|$)|=\s*"?\$\((entry|e2e)_sudo_bin\)'
@@ -101,7 +104,7 @@ for f in "${CLOSURE[@]}"; do
   # `GUEST_BIN" exec` is the entry's direct transport invocation (same
   # gate-owned binary the helpers wrap); anything else naming the bin
   # (exports, assignments) carries no privileged token.
-  hits="$(grep -n -w -E "$WORDS" "$f" | grep -v 'on_o\|on_n\|guest_exec\|GUEST_BIN" exec\|GUEST_BIN" push' || true)"
+  hits="$(grep -n -w -E "$WORDS" "$f" | grep -v 'on_o\|on_n\|on_d\|guest_exec\|GUEST_BIN" exec\|GUEST_BIN" push' || true)"
   [[ -z "$hits" ]] || die "privileged token in ${f#$ROOT/} (guest payloads excepted):\n$hits"
   phits="$(grep -n -E "$PHRASES" "$f" || true)"
   [[ -z "$phits" ]] || die "privileged operation in ${f#$ROOT/}:\n$phits"
@@ -164,15 +167,18 @@ printf '%s\n' 'timeout 120 "$(entry_sudo_bin)" -n "$GUEST_BIN" exec x' \
   && die "quote scan flags a legitimate quoted call"
 pass "the scans flag hostile shapes and spare legitimate ones"
 
-# --- kill -0 (liveness) is the only kill ---
+# --- kill -0 (liveness) is the only kill on host lines ---
 # `kill -0` proves a leg is alive without signalling it; any other
-# kill form is host process management and belongs below the
-# task-runner boundary.
+# kill form on a host-executed line is host process management and
+# belongs below the task-runner boundary. Guest-payload lines
+# (on_o/on_n/on_d, guest_exec) signal inside the guest instead — the
+# drive suite SIGKILLs the supervised child it asserts on — so the
+# scan exempts exactly those lines.
 for f in "${CLOSURE[@]}"; do
-  khits="$(grep -n -w 'kill' "$f" | grep -v 'kill -0' || true)"
-  [[ -z "$khits" ]] || die "non-liveness kill in ${f#$ROOT/}:\n$khits"
+  khits="$(grep -n -w 'kill' "$f" | grep -v -E 'kill -0|on_o|on_n|on_d|guest_exec' || true)"
+  [[ -z "$khits" ]] || die "non-liveness host kill in ${f#$ROOT/}:\n$khits"
 done
-pass "task closure kills nothing (kill -0 liveness only)"
+pass "task closure kills nothing on the host (kill -0 liveness only)"
 
 # --- the capability surface is defined, not bypassed ---
 # The agent transport and the partition primitive live behind

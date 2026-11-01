@@ -169,6 +169,17 @@
         # runs the wyrd image's own nak beside WYRD_BIN instead of
         # floating nixpkgs#nak.
         nak = (pkgsFor system).nak;
+        # Supervisor wrapper the drive-service module inlines
+        # (nix/drive/{darwin,nixos}.nix `readFile` this same script):
+        # exposed so system-level evidence can build the exact
+        # artifact the module names — evaluation alone leaves an
+        # unrealized store path that dies silently at exec.
+        # Same builder, same source, same nixpkgs: the leg asserts
+        # the output path equals the module's argv[0] rather than
+        # assuming it.
+        wyrd-supervise = (pkgsFor system).writers.writePython3Bin "wyrd-supervise" { } (
+          builtins.readFile ./nix/drive/supervise.py
+        );
         default = self.packages.${system}.wyrd;
       });
       apps = forAllSystems (system: {
@@ -283,8 +294,12 @@
             else throw "wyrdSrc subject unreadable: expected a source tree with Cargo.toml at root, or the default placeholder; got ${toString wyrdSrc}";
           # imageGuestFor takes wyrdSrc with no default (N4): an
           # omitted argument must never silently mean the repo's own
-          # build. The single call site always passes explicitly.
-          imageGuestFor = { role, wyrdSrc }:
+          # build. Every call site passes explicitly.
+          # extraModules extends the guest composition for role
+          # guests that carry more than the suite (the drive-service
+          # evidence guest adds the wyrd-drive module and its
+          # declarations); the e2e trio passes none.
+          imageGuestFor = { role, wyrdSrc, extraModules ? [ ] }:
             let
               wyrdPkg =
                 if wyrdSrc == null
@@ -307,7 +322,7 @@
                   environment.systemPackages =
                     [ wyrdPkg pkgs.nak ];
                 })
-              ];
+              ] ++ extraModules;
             };
           imageGuest = role: imageGuestFor { inherit role; wyrdSrc = wyrdSrcFor; };
         in
@@ -354,6 +369,47 @@
                       mode = "mount";
                       mountpoint = "/mnt/wyrd";
                       identityFile = "/etc/wyrd/identity";
+                      passphraseFile = "/etc/wyrd/passphrase";
+                      package = self.packages.x86_64-linux.wyrd;
+                    };
+                  };
+                }
+              )
+            ];
+          };
+          # Bootable drive-service evidence guest for the system-level
+          # execution issue: the same vault+mount declaration as
+          # wyrd-drive-test, composed onto the Incus image guest path
+          # so the gate task can provision and boot it like the e2e
+          # trio. Evaluated in CI like the fixture; booted only by
+          # the drive-service task on the KVM host, never in CI.
+          wyrd-drive-vm = imageGuestFor {
+            role = "drive";
+            wyrdSrc = wyrdSrcFor;
+            extraModules = [
+              self.nixosModules.wyrd-drive
+              (
+                { ... }:
+                {
+                  system.stateVersion = "26.05";
+                  services.wyrd.drives = {
+                    vault-demo = {
+                      enable = true;
+                      driveDir = "/var/lib/wyrd/demo";
+                      mode = "vault";
+                      identityFile = "/etc/wyrd/identity";
+                      passphraseFile = "/etc/wyrd/passphrase";
+                      relays = [ "wss://relay.example" ];
+                      logFile = "/var/log/wyrd-demo.log";
+                      package = self.packages.x86_64-linux.wyrd;
+                    };
+                    mount-demo = {
+                      enable = true;
+                      driveDir = "/var/lib/wyrd/laptop";
+                      mode = "mount";
+                      mountpoint = "/mnt/wyrd";
+                      identityFile = "/etc/wyrd/identity";
+                      passphraseFile = "/etc/wyrd/passphrase";
                       package = self.packages.x86_64-linux.wyrd;
                     };
                   };
@@ -373,6 +429,7 @@
         peer-o = self.nixosConfigurations.wyrd-peer-o.config.system.build.gateImage;
         peer-n = self.nixosConfigurations.wyrd-peer-n.config.system.build.gateImage;
         relay = self.nixosConfigurations.wyrd-relay.config.system.build.gateImage;
+        drive = self.nixosConfigurations.wyrd-drive-vm.config.system.build.gateImage;
       };
     };
 }

@@ -101,9 +101,12 @@ nix/microvm/common.nix
 nix/microvm/peer-o.nix
 nix/microvm/peer-n.nix
 nix/microvm/relay.nix
+nix/microvm/drive.nix
 tests/harness/e2e-guard.sh
 tests/harness/e2e-helpers.bash
 tests/harness/step-grammar.sh
+tests/drive/drive-service-entry.sh
+tests/drive/drive-service.bats
 tests/gate/gate-entry.sh
 tests/gate/gate-entry-smoke.bats
 tests/gate/gate-phase-01.bats

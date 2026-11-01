@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Supervisor wrapper for one Wyrd drive process (OD-34-C).
 
 The supervisors cannot tell the cases apart on their own: the binary
@@ -75,6 +74,26 @@ def fresh_sidecar(path):
     return age <= POSTURE_FRESH_SECS
 
 
+def take_value(inline, rest):
+    """An inline `--flag=value`, else the next argv word, else None."""
+    if inline is not None:
+        return inline
+    return rest.pop(0) if rest else None
+
+
+def ready_notice(posture_path):
+    """The ready line for a fresh sidecar."""
+    return f"wyrd-supervise: ready (posture fresh at {posture_path})"
+
+
+def stale_notice(posture_path, readiness_timeout):
+    """The supervising-without-readiness line."""
+    return (
+        f"wyrd-supervise: no fresh posture at {posture_path} after "
+        f"{readiness_timeout}s; supervising without a readiness line"
+    )
+
+
 def parse_argv(argv):
     restart_status = None
     posture_path = None
@@ -91,7 +110,7 @@ def parse_argv(argv):
         if flag == "--":
             break
         if flag == "--restart-status":
-            value = inline if inline is not None else (rest.pop(0) if rest else None)
+            value = take_value(inline, rest)
             if value is None:
                 return None, "missing value for --restart-status"
             try:
@@ -101,12 +120,12 @@ def parse_argv(argv):
             if restart_status not in (0, 1):
                 return None, "--restart-status needs 0 or 1"
         elif flag == "--posture-path":
-            value = inline if inline is not None else (rest.pop(0) if rest else None)
+            value = take_value(inline, rest)
             if value is None:
                 return None, "missing value for --posture-path"
             posture_path = value
         elif flag == "--readiness-timeout":
-            value = inline if inline is not None else (rest.pop(0) if rest else None)
+            value = take_value(inline, rest)
             if value is None:
                 return None, "missing value for --readiness-timeout"
             try:
@@ -132,13 +151,15 @@ def main(argv):
     if "/" not in command[0]:
         resolved = shutil.which(command[0])
         if resolved is None:
-            print(f"wyrd-supervise: cannot start {command[0]}: not on PATH", file=sys.stderr)
+            missing = f"wyrd-supervise: cannot start {command[0]}: not on PATH"
+            print(missing, file=sys.stderr)
             return restart_status
         command = [resolved] + command[1:]
     try:
         child = os.spawnv(os.P_NOWAIT, command[0], command)
     except OSError as error:
-        print(f"wyrd-supervise: cannot start {command[0]}: {error}", file=sys.stderr)
+        failed = f"wyrd-supervise: cannot start {command[0]}: {error}"
+        print(failed, file=sys.stderr)
         return restart_status
     started = time.monotonic()
     ready_logged = False
@@ -152,14 +173,11 @@ def main(argv):
         if done_pid == 0:
             if not ready_logged:
                 if fresh_sidecar(posture_path):
-                    print(f"wyrd-supervise: ready (posture fresh at {posture_path})")
+                    print(ready_notice(posture_path))
                     ready_logged = True
                 elif time.monotonic() - started > readiness_timeout:
-                    print(
-                        f"wyrd-supervise: no fresh posture at {posture_path} after "
-                        f"{readiness_timeout}s; supervising without a readiness line",
-                        file=sys.stderr,
-                    )
+                    print(stale_notice(posture_path, readiness_timeout),
+                          file=sys.stderr)
                     ready_logged = True
             time.sleep(1)
             continue

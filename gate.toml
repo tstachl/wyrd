@@ -85,3 +85,20 @@ relayRole = "relay"
 img-peer-o = "images.peer-o"
 img-peer-n = "images.peer-n"
 img-relay = "images.relay"
+# The drive-service evidence task: one provisioned Incus guest
+# declaring a vault and a mount through services.wyrd.drives. Same
+# contract as the e2e task: the entry resolves the guest from the
+# run's validated image manifest (gate.image/v1, role "drive") and
+# reaches it only through the agent transport — no ssh, no shared
+# filesystem, no topology section (the provisioner refuses those as
+# the retired qemu backend). No relay box and no relayRole:
+# supervision, not convergence, is under test. requires names only
+# what the entry execs beyond the ambient base (bash, flock,
+# coreutils and timeout ride with the runner; jq parses the
+# manifest): bats runs the suite file.
+[tasks.wyrd-drive-e2e]
+entryPoint = "tests/drive/drive-service-entry.sh"
+requires = ["bats", "jq"]
+
+[tasks.wyrd-drive-e2e.builds]
+img-drive = "images.drive"

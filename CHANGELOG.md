@@ -624,6 +624,17 @@ is transient — no drive data is affected.
    walkthrough with who performs each step and which artifact
    passes between them (`pairing-request` -> `invite` ->
    `join`); the member/device actor boundary is unchanged.
+- System-level execution evidence for the declarative drive service
+  (`nostr:nevent1qqsy4lmlqq2eqzzux98rn9r6e9zlp3v57wqd0kh2h4g3mnjgy8cxf8qpz9mhxue69uhkwunpwdczuap49eehgmucyw7`):
+  a `wyrd-drive-e2e` gate task boots a NixOS guest declaring one
+  vault and one mount through `services.wyrd.drives` and asserts the
+  supervisor contract live — both units active after boot, the vault
+  back after SIGKILL of the supervised child, exit 78 with no retry
+  against a held drive, recovery once the holder releases. The
+  task-native shape (own topology box, entry + bats suite under
+  `tests/drive/`) rides the established gate runner; nothing executes
+  in CI. macOS mirror leg runs the module-generated launchd plist
+  locally.
 
 ### Fixed
 
