@@ -431,5 +431,11 @@
         relay = self.nixosConfigurations.wyrd-relay.config.system.build.gateImage;
         drive = self.nixosConfigurations.wyrd-drive-vm.config.system.build.gateImage;
       };
+      # Native CI commands (ngit-ci Nix path): one group per workflow
+      # file under .ngit/nix/workflows, exposed per system. Only
+      # x86_64-linux until another provider exists; the coordinator
+      # resolves `run` references against these (see the workflow docs
+      # in the ngit-ci repo). Act workflows are untouched.
+      ngit-ci.commands.x86_64-linux = import ./.ngit/nix/workflows { pkgs = pkgsFor "x86_64-linux"; };
     };
 }
