@@ -78,11 +78,16 @@ on_n() {
 # as_e2e <role> <cmd...>: run the command in the role's guest as the
 # unprivileged suite user. Setup/teardown file moves stay root (they
 # run before any suite premise applies); everything the suite
-# executes — legs and wyrd invocations — routes through here.
+# executes — legs and wyrd invocations — routes through here. The
+# agent lands as root with a bare lookup path, so the target command
+# resolves through an explicit guest PATH (set via absolute env, which
+# needs no lookup): bare `bash` and every tool the legs invoke
+# resolve in /run/current-system/sw/bin first, mirroring the old
+# ssh-as-e2e login path.
 as_e2e() { # <role> <cmd...>
   local role="$1"; shift
   if [[ -z "${GATE_GUEST_BIN:-}" ]]; then echo "e2e-helpers: as_e2e requires GATE_GUEST_BIN" >&2; return 1; fi
-  guest_exec "$role" runuser -u e2e -g users -G wheel -- "$@"
+  guest_exec "$role" runuser -u e2e -g users -G wheel -- /usr/bin/env "PATH=/run/current-system/sw/bin:/usr/bin:/bin" "$@"
 }
 
 # guest_timeout <secs> <role> <cmd...>: agent exec with a hard bound.
