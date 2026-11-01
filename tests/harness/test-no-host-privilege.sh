@@ -119,6 +119,30 @@ unquoted="$(grep -n -E '[$]\((entry|e2e)_sudo_bin\)([^"]|$)|=\s*"?\$\((entry|e2e
 [[ -z "$unquoted" ]] || die "unquoted or indirected helper use escapes the scans:\n$unquoted"
 pass "every helper invocation is quoted"
 
+# --- the scans are live, not vacuous ---
+# A regex typo that matches nothing would pass every check above
+# while guarding zero lines (exactly how the `\?` bug survived one
+# round). Known-bad shapes must flag, known-good shapes must stay
+# clean, and the tree must hold live invocations to examine.
+INVOC_PAT='[$]\((entry|e2e)_sudo_bin\)"'
+[[ "$(grep -h -E "$INVOC_PAT" "${CLOSURE[@]}" | wc -l)" -ge 5 ]] \
+  || die "elevation scans are vacuous (no invocations in the closure)"
+printf '%s\n' 'sudo rm -rf / # GUEST_BIN' | grep -w 'sudo' | grep -v 'on_o\|on_n\|guest_exec\|sudo_bin\|wrappers/bin/sudo' \
+  | grep -q . || die "sudo scan misses hostile sudo with a capability mention"
+printf '%s\n' 'timeout 120 "$(entry_sudo_bin)" -n "$GUEST_BIN" exec x' | grep -w 'sudo' \
+  | grep -v 'on_o\|on_n\|guest_exec\|sudo_bin\|wrappers/bin/sudo' | grep -q . \
+  && die "sudo scan flags a legitimate elevated call"
+printf '%s\n' 'timeout 5 "$(e2e_sudo_bin)" "$GATE_GUEST_BIN" exec tail -n 3' \
+  | grep -E "$INVOC_PAT" | grep -v -F 'sudo_bin)" -n' | grep -q . \
+  || die "fail-fast scan misses a payload-masked missing -n"
+printf '%s\n' 'x=$(e2e_sudo_bin)' 'bin="$(e2e_sudo_bin)"' \
+  | grep -E '[$]\((entry|e2e)_sudo_bin\)([^"]|$)|=\s*"?\$\((entry|e2e)_sudo_bin\)' | grep -q . \
+  || die "quote scan misses indirected helper use"
+printf '%s\n' 'timeout 120 "$(entry_sudo_bin)" -n "$GUEST_BIN" exec x' \
+  | grep -E '[$]\((entry|e2e)_sudo_bin\)([^"]|$)|=\s*"?\$\((entry|e2e)_sudo_bin\)' | grep -q . \
+  && die "quote scan flags a legitimate quoted call"
+pass "the scans flag hostile shapes and spare legitimate ones"
+
 # --- kill -0 (liveness) is the only kill ---
 # `kill -0` proves a leg is alive without signalling it; any other
 # kill form is host process management and belongs below the
