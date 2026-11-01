@@ -27,8 +27,9 @@
       lsof
       util-linux
     ];
-    # Same suite list as the act shell-tests job's E2E harness stubs,
-    # so a native green means the same thing as an act green.
+    # Same E2E harness stubs as the act shell-tests job (excluding
+    # .ngit/scripts/tests/run-all.sh, which stays act-only in phase
+    # 1), so a native green means the same thing as an act green.
     # Fail-fast like the act step (bash -e): the first red suite
     # stops the job and its tail names the failure.
     text = ''
