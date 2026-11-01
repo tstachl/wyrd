@@ -26,6 +26,7 @@
       shellcheck
       lsof
       util-linux
+      gnutar
     ];
     # Same E2E harness stubs as the act shell-tests job (excluding
     # .ngit/scripts/tests/run-all.sh, which stays act-only in phase
