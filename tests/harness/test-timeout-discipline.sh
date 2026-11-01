@@ -124,6 +124,12 @@ EOF
     [[ "$out" == *"timed out (status $to)"* ]] || die "status $to did not fail as timed out (got: $out)"
   done
   pass "check_query_status passes only 0 and names timeouts"
+  # Call-site pin: the phase-03 leak check must route its status
+  # through the helper — a future edit that drops the call would
+  # pass this file while reopening the silent-pass gap.
+  grep -q 'check_query_status "\$nak_status" "9501 query" "logs/nak-9501.err"' "$ROOT/tests/gate/gate-phase-03.bats" \
+    || die "phase-03 does not route the leak status through check_query_status"
+  pass "phase-03 routes the leak status through check_query_status"
   # Missing elevation grant: a sudo that refuses must surface as the
   # transport's failure, never as a pass or a hang. The stub sudo
   # exits 1 without running the guest binary (proves the grant is on

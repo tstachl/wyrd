@@ -91,10 +91,22 @@ for f in "${CLOSURE[@]}"; do
   [[ -z "$hits" ]] || die "privileged token in ${f#$ROOT/} (guest payloads excepted):\n$hits"
   phits="$(grep -n -E "$PHRASES" "$f" || true)"
   [[ -z "$phits" ]] || die "privileged operation in ${f#$ROOT/}:\n$phits"
-  shits="$(grep -n -w 'sudo' "$f" | grep -v 'on_o\|on_n\|sudo_bin\|wrappers/bin/sudo' || true)"
+  shits="$(grep -n -w 'sudo' "$f" | grep -v 'on_o\|on_n\|guest_exec\|sudo_bin\|wrappers/bin/sudo' || true)"
   [[ -z "$shits" ]] || die "host elevation outside the capabilities in ${f#$ROOT/}:\n$shits"
 done
 pass "task closure names no privileged program"
+# Elevated call sites must name their capability: every line that
+# elevates through the helpers must also name GATE_GUEST_BIN,
+# GATE_PARTITION_BIN, or the entry GUEST_BIN alias, so a sudo aimed
+# anywhere else cannot hide behind the exemption above.
+while IFS= read -r _line; do
+  case "$_line" in
+    *GATE_GUEST_BIN*|*GATE_PARTITION_BIN*|*GUEST_BIN*) ;;
+    *) die "elevation without a capability target: $_line" ;;
+  esac
+done < <(grep -hn -E '[$]\((entry|e2e)_sudo_bin\)" -n' "${CLOSURE[@]}" || true)
+unset _line
+pass "every elevation names its capability"
 
 # --- kill -0 (liveness) is the only kill ---
 # `kill -0` proves a leg is alive without signalling it; any other
