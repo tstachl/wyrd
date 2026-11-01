@@ -155,7 +155,9 @@ in
   # jobs never invoke nix in-guest (the provider realises them).
   nix.flake-check = pkgs.writeShellApplication {
     name = "nix-flake-check";
-    runtimeInputs = [ pkgs.nix ];
+    # git: `nix flake check` shells out to git to fetch git+https
+    # inputs (the gate input); the plain guest has no git without this.
+    runtimeInputs = [ pkgs.nix pkgs.git ];
     text = ''
       set -euo pipefail
       nix flake check --no-build --option eval-cache false
