@@ -87,7 +87,11 @@ setup() {
     || { echo "upgrade archive staging failed"; false; }
   guest_exec peer-o cp "$WYRD_BIN" "$GUEST_RUN/upgrade-archive/stage/top/bin/wyrd" \
     || { echo "upgrade archive staging failed"; false; }
-  guest_exec peer-o tar -czf "$GUEST_RUN/upgrade-archive/$UPGRADE_NAME" -C "$GUEST_RUN/upgrade-archive/stage" top \
+  # tar forks gzip through /bin/sh, which inherits a minimal agent
+  # PATH without the profile bin: hand it an explicit PATH (env
+  # itself lives in /usr/bin, guaranteed present) so the compressor
+  # resolves from the system profile.
+  guest_exec peer-o env PATH=/run/current-system/sw/bin:/usr/bin:/bin tar -czf "$GUEST_RUN/upgrade-archive/$UPGRADE_NAME" -C "$GUEST_RUN/upgrade-archive/stage" top \
     || { echo "upgrade archive packing failed"; false; }
   guest_exec peer-o rm -rf "$GUEST_RUN/upgrade-archive/stage" \
     || { echo "upgrade archive staging cleanup failed"; false; }
