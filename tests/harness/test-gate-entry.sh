@@ -2,14 +2,16 @@
 # tests/harness/test-gate-entry.sh — the gate-path entry assembles the suite
 # environment from host-published inputs and refuses bad ones.
 #
-# Pure bash + stubbed host commands (bats, flock, ssh, timeout): no
-# root, no nix, no guest. The stubs record their argv and environment
-# instead of acting, so every assertion below pins the driver's
-# contract without touching a VM. Run it anywhere:
+# Pure bash + stubbed host commands (bats, flock, timeout): no root,
+# no nix, no guest. jq is real (the entry parses the image manifests
+# with it). The stubs record their argv and environment instead of
+# acting, so every assertion below pins the driver's contract without
+# touching a VM. Run it anywhere:
 #   bash tests/harness/test-gate-entry.sh
 #
 # The smoke suite itself (tests/gate/gate-entry-smoke.bats) is Odin-only:
-# it dials real peers. This file pins everything up to exec bats.
+# it dials real peers over the agent. This file pins everything up to
+# exec bats.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -21,49 +23,47 @@ pass() { PASS=$((PASS + 1)); echo "  PASS: $1"; }
 die() { echo "  FAIL: $1" >&2; exit 1; }
 
 FIXTURE="$(mktemp -d)"
-trap 'rm -rf "$FIXTURE"' EXIT
+trap 'rm -f "$FIXTURE/stderr"; rm -rf "$FIXTURE"' EXIT
 PROVISION_DIR="$FIXTURE/provision"
 STATE_DIR="$FIXTURE/state"
 RUN_DIR="$STATE_DIR/run"
 STUBBIN="$FIXTURE/stubbin"
 NOBATS="$FIXTURE/nobats"
 CALLS="$FIXTURE/calls"
-mkdir -p "$PROVISION_DIR" "$RUN_DIR" "$STUBBIN" "$NOBATS"
+mkdir -p "$PROVISION_DIR/manifests" "$RUN_DIR" "$STUBBIN" "$NOBATS"
 
 printf 'br-wyrd' >"$PROVISION_DIR/bridge"
-printf '10.0.7' >"$PROVISION_DIR/subnet"
 printf '18761' >"$PROVISION_DIR/relay-port"
-printf 'e2e' >"$PROVISION_DIR/ssh-user"
-printf '1000' >"$PROVISION_DIR/guest-uid"
-printf 'wyrd-.*-virtiofs-wyrd-state\\.sock' >"$PROVISION_DIR/socket-pattern"
 printf '%s' "$STATE_DIR" >"$PROVISION_DIR/state-dir"
 printf '%s' "$STATE_DIR/lock" >"$PROVISION_DIR/lock-file"
 printf 'relay' >"$PROVISION_DIR/relay-role"
-printf 'peer-o tap-o 11 ssh runner-peer-o|peer-n tap-n 12 ssh runner-peer-n|relay tap-r 10 - runner-relay' >"$PROVISION_DIR/roles"
-printf 'nak packages.nak|runner-peer-o runners.peer-o|runner-peer-n runners.peer-n' >"$PROVISION_DIR/builds"
-printf 'key' >"$STATE_DIR/sshkey"
+printf 'img-peer-o images.peer-o|img-peer-n images.peer-n|img-relay images.relay' >"$PROVISION_DIR/builds"
+printf '{"kind":"gate.image/v1","role":"peer-o","vcpu":4,"memMb":4096,"mac":"02:00:00:00:07:11","ip":"10.0.7.11/24","shares":[]}' >"$PROVISION_DIR/manifests/img-peer-o.json"
+printf '{"kind":"gate.image/v1","role":"peer-n","vcpu":4,"memMb":4096,"mac":"02:00:00:00:07:12","ip":"10.0.7.12/24","shares":[]}' >"$PROVISION_DIR/manifests/img-peer-n.json"
+printf '{"kind":"gate.image/v1","role":"relay","vcpu":2,"memMb":1024,"mac":"02:00:00:00:07:10","ip":"10.0.7.10/24","shares":[]}' >"$PROVISION_DIR/manifests/img-relay.json"
 mkdir -p "$FIXTURE/bats-lib"
 
-RUNNER_BIN="$FIXTURE/wyrd-runner/bin/wyrd"
-NAK_BIN="$FIXTURE/nak-runner/bin/nak"
-mkdir -p "$FIXTURE/wyrd-runner/bin" "$FIXTURE/nak-runner/bin"
-printf '#!/bin/sh\nexit 0\n' >"$RUNNER_BIN"
-printf '#!/bin/sh\nexit 0\n' >"$NAK_BIN"
-chmod +x "$RUNNER_BIN" "$NAK_BIN"
-printf 'wyrd=%s\nnak=%s\nlegacy=ignored\n' "$FIXTURE/wyrd-runner" "$FIXTURE/nak-runner" >"$FIXTURE/runners.env"
+# Stub guest transport: records argv, succeeds. The entry only needs
+# exit statuses from pre-clean and pushes, never guest output.
+cat >"$FIXTURE/guest-bin" <<EOF
+#!/bin/sh
+echo "guest \$*" >>"$CALLS"
+exit 0
+EOF
+chmod +x "$FIXTURE/guest-bin"
 
 # Stub host commands: record argv, and for bats the environment the
-# suite would inherit. The driver must never call ssh itself. sleep
-# is stubbed instant: the lock-acquire grace below must run fast
+# suite would inherit. The driver must never dial a guest itself.
+# sleep is stubbed instant: the lock-acquire grace below must run fast
 # when flock never succeeds.
-for tool in bats flock ssh timeout sleep; do
+for tool in bats flock timeout sleep; do
   cat >"$STUBBIN/$tool" <<EOF
 #!/bin/sh
 echo "$tool \$*" >>"$CALLS"
 EOF
   if [ "$tool" = bats ]; then
     cat >>"$STUBBIN/$tool" <<'EOF'
-env | grep -E '^(WYRD_|NAK_|PEER_|RELAY_|STATE_DIR|SSH_KEY|E2E_|GATE_|CORE_|GUEST_)' | sort >>"$CALLS"
+env | grep -E '^(WYRD_|NAK_|RELAY_|STATE_DIR|E2E_|GATE_|CORE_|GUEST_)' | sort >>"$CALLS"
 EOF
   fi
   chmod +x "$STUBBIN/$tool"
@@ -83,7 +83,7 @@ run_entry() {
     GATE_TASK_PROVISION_DIR="$PROVISION_DIR" \
     GATE_BATS_LIB="$FIXTURE/bats-lib" \
     GATE_PARTITION_BIN="$FIXTURE/partition-bin" \
-    GATE_RUNNERS_ENV="$FIXTURE/runners.env" \
+    GATE_GUEST_BIN="$FIXTURE/guest-bin" \
     "${envs[@]}" \
     bash "$ENTRY" "${args[@]}" 2>"$FIXTURE/stderr"
   echo "status=$?"
@@ -96,31 +96,57 @@ out="$(run_entry -- --fresh)"
 # eleven phases, epilogue.
 grep -q "^bats .*/tests/gate/gate-entry-smoke.bats .*/tests/gate/gate-phase-01.bats .*/tests/gate/gate-phase-02.bats .*/tests/gate/gate-phase-03.bats .*/tests/gate/gate-phase-04.bats .*/tests/gate/gate-phase-05.bats .*/tests/gate/gate-phase-06.bats .*/tests/gate/gate-phase-07.bats .*/tests/gate/gate-phase-08.bats .*/tests/gate/gate-phase-09.bats .*/tests/gate/gate-phase-10.bats .*/tests/gate/gate-phase-11.bats .*/tests/gate/gate-epilogue.bats$" "$CALLS" || die "driver execs bats on the smoke and phase files"
 grep -q "^flock -n 9$" "$CALLS" || die "driver holds fd 9 non-blocking (flock -n 9)"
-grep -q "^PEER_O=e2e@10.0.7.11$" "$CALLS" || die "peer-o endpoint assembled from roles+subnet"
-grep -q "^PEER_N=e2e@10.0.7.12$" "$CALLS" || die "peer-n endpoint assembled from roles+subnet"
-grep -q "^RELAY_URL=ws://10.0.7.10:18761$" "$CALLS" || die "relay url assembled from relay role"
-grep -q "^WYRD_BIN=$RUNNER_BIN$" "$CALLS" || die "wyrd runner resolved from the handoff"
-grep -q "^NAK_BIN=$NAK_BIN$" "$CALLS" || die "nak runner resolved from the handoff"
+grep -q "^RELAY_URL=ws://10.0.7.10:18761$" "$CALLS" || die "relay url assembled from the relay manifest role"
+grep -q "^WYRD_BIN=/run/current-system/sw/bin/wyrd$" "$CALLS" || die "wyrd resolves to the stable in-image path"
+grep -q "^NAK_BIN=/run/current-system/sw/bin/nak$" "$CALLS" || die "nak resolves to the stable in-image path"
 grep -q "^GATE_BATS_LIB=$FIXTURE/bats-lib$" "$CALLS" || die "bats lib handed to the suite"
-grep -q "^GATE_PARTITION_BIN=$FIXTURE/partition-bin$" "$CALLS" || die "tap primitive handed to the suite"
+grep -q "^GATE_GUEST_BIN=$FIXTURE/guest-bin$" "$CALLS" || die "guest transport handed to the suite"
+grep -q "^GATE_PARTITION_BIN=$FIXTURE/partition-bin$" "$CALLS" || die "partition primitive handed to the suite"
 grep -q "^WYRD_E2E_LOCK=$STATE_DIR/lock$" "$CALLS" || die "provision lock handed to the suite"
 grep -q "^E2E_INTERVAL=$" "$CALLS" || die "interval default handed to the suite (empty)"
 grep -q "^CORE_ONLY=1,2,3,4,5$" "$CALLS" || die "core depth defaults to the five-step core"
-grep -q "^GUEST_ENV=/mnt/wyrd-state/run/e2e-env.sh$" "$CALLS" || die "guest env path handed to the suite (host RUN translated)"
+grep -q "^GUEST_ENV=/var/lib/wyrd-e2e/e2e-env.sh$" "$CALLS" || die "guest env path handed to the suite"
+grep -q "^GUEST_RUN=/var/lib/wyrd-e2e$" "$CALLS" || die "guest run root handed to the suite"
 token_env="$(grep '^WYRD_E2E_TOKEN=' "$CALLS" | cut -d= -f2-)"
 token_file="$(grep '^WYRD_E2E_TOKEN=' "$RUN_DIR/e2e-env.sh" | cut -d= -f2-)"
 [[ -n "$token_env" && "$token_env" == "$token_file" ]] || die "run token handed to the suite matches the published file"
 grep -q "^WYRD_E2E_PID=[0-9][0-9]*$" "$RUN_DIR/e2e-env.sh" || die "owner pid published in the env file"
-# Guest-required keys: the guest legs source this file, so every key
-# they consume must be present with gate-path values.
-grep -q "^WYRD_BIN=$RUNNER_BIN$" "$RUN_DIR/e2e-env.sh" || die "wyrd runner published in the env file"
+# Guest-required keys: the guest legs consume this file, so every key
+# they need must be present with gate-path values.
+grep -q "^WYRD_BIN=/run/current-system/sw/bin/wyrd$" "$RUN_DIR/e2e-env.sh" || die "wyrd path published in the env file"
+grep -q "^NAK_BIN=/run/current-system/sw/bin/nak$" "$RUN_DIR/e2e-env.sh" || die "nak path published in the env file"
 grep -q "^RELAY_HOST=10.0.7.10$" "$RUN_DIR/e2e-env.sh" || die "relay host published in the env file"
 grep -q "^RELAY_PORT=18761$" "$RUN_DIR/e2e-env.sh" || die "relay port published in the env file"
 grep -q "^RELAY_MANAGED=0$" "$RUN_DIR/e2e-env.sh" || die "relay unmanaged in the env file (host-provisioned)"
 grep -q "^CHECKOUT=/etc/wyrd-tests$" "$RUN_DIR/e2e-env.sh" || die "guest tests path published in the env file"
-grep -q "^E2E_ROOT=/mnt/wyrd-state/run$" "$RUN_DIR/e2e-env.sh" || die "guest run root published in the env file"
-[ -z "$(grep "^ssh " "$CALLS" || true)" ] || die "driver dials nothing itself (smoke does)"
-pass "happy path assembles env, holds lock, execs bats"
+grep -q "^E2E_ROOT=/var/lib/wyrd-e2e$" "$RUN_DIR/e2e-env.sh" || die "guest run root published in the env file"
+grep -q "^WYRD_PEER_O_IP=10.0.7.11$" "$RUN_DIR/e2e-env.sh" || die "peer-o ip published in the env file"
+grep -q "^WYRD_PEER_N_IP=10.0.7.12$" "$RUN_DIR/e2e-env.sh" || die "peer-n ip published in the env file"
+grep -q "^RENDEZVOUS_PORT=18770$" "$RUN_DIR/e2e-env.sh" || die "rendezvous port published in the env file"
+# Guest preparation rides the agent after the lock and before the
+# suite: fresh state trees on both peers, then the env file where
+# the legs read it. (Through the timeout wrapper the entry bounds
+# every agent call with.)
+grep -q "guest-bin exec peer-o -- rm -rf /var/lib/wyrd-e2e$" "$CALLS" || die "peer-o state root reset"
+grep -q "guest-bin exec peer-o -- mkdir -p /var/lib/wyrd-e2e/drives" "$CALLS" || die "peer-o state layout prepared"
+grep -q "guest-bin exec peer-o -- chown -R e2e:users /var/lib/wyrd-e2e$" "$CALLS" || die "peer-o state root handed to the suite user"
+grep -q "guest-bin exec peer-n -- mkdir -p /var/lib/wyrd-e2e/drives" "$CALLS" || die "peer-n state layout prepared"
+grep -q "guest-bin push peer-o /var/lib/wyrd-e2e/e2e-env.sh$" "$CALLS" || die "env pushed to peer-o (stdin, dst only)"
+[ -z "$(grep "guest-bin push peer-o $RUN_DIR" "$CALLS" || true)" ] || die "push carries no host source path (stdin only)"
+grep -q "sudo -n .*guest-bin exec peer-o" "$CALLS" || die "peer-o exec elevates the transport"
+grep -q "sudo -n .*guest-bin push peer-o" "$CALLS" || die "peer-o push elevates the transport"
+grep -q "guest-bin exec peer-o -- chown e2e:users /var/lib/wyrd-e2e/e2e-env.sh$" "$CALLS" || die "env file handed to the suite user after push"
+grep -q "guest-bin exec peer-n -- chown e2e:users /var/lib/wyrd-e2e/e2e-env.sh$" "$CALLS" || die "env file handed to the suite user on peer-n after push"
+grep -q "guest-bin push peer-n /var/lib/wyrd-e2e/e2e-env.sh$" "$CALLS" || die "env pushed to peer-n (stdin, dst only)"
+[ -z "$(grep -E "^(ssh|scp) " "$CALLS" || true)" ] || die "driver dials nothing itself (agent only)"
+[ -z "$(grep "PEER_O=" "$CALLS" || true)" ] || die "driver assembles no ssh-style peer endpoints"
+# Ordering: the lock is acquired before any guest mutation or env
+# write, so a second unit refuses before it can disturb the live run.
+flock_line="$(grep -n '^flock -n 9$' "$CALLS" | head -1 | cut -d: -f1)"
+guest_line="$(grep -n 'guest-bin ' "$CALLS" | head -1 | cut -d: -f1)"
+[[ -n "$flock_line" && -n "$guest_line" ]] || die "lock/guest calls missing from the trace"
+[[ "$flock_line" -lt "$guest_line" ]] || die "guest prep precedes the lock acquire"
+pass "happy path assembles env, prepares guests, holds lock, execs bats"
 
 out="$(run_entry --)"
 [[ "$out" == "status=2" ]] || die "missing arg refuses with usage (exit 2), got: $out"
@@ -160,24 +186,53 @@ grep -q "^bats .*/tests/gate/gate-entry-smoke.bats .*/tests/gate/gate-phase-01.b
 grep -q "^CORE_ONLY=1,2,3,4,5$" "$CALLS" || die "core stays full once the prefix reaches step 5"
 pass "step matrix covers core-only and mid-range multi-selections"
 
-out="$(env -i PATH="$STUBBIN:/usr/bin:/bin" GATE_BATS_LIB="$FIXTURE/bats-lib" GATE_RUNNERS_ENV="$FIXTURE/runners.env" bash "$ENTRY" --fresh 2>/dev/null; echo "status=$?")"
+out="$(env -i PATH="$STUBBIN:/usr/bin:/bin" GATE_BATS_LIB="$FIXTURE/bats-lib" GATE_GUEST_BIN="$FIXTURE/guest-bin" bash "$ENTRY" --fresh 2>/dev/null; echo "status=$?")"
 [[ "$out" == "status=1" ]] || die "missing provision dir refuses, got: $out"
 pass "missing GATE_TASK_PROVISION_DIR refuses"
 
-out="$(env -i PATH="$STUBBIN:/usr/bin:/bin" CALLS="$CALLS" GATE_TASK_PROVISION_DIR="$PROVISION_DIR" GATE_BATS_LIB="$FIXTURE/bats-lib" GATE_RUNNERS_ENV="$FIXTURE/runners.env" bash "$ENTRY" --fresh 2>/dev/null; echo "status=$?")"
-[[ "$out" == "status=1" ]] || die "missing tap primitive refuses, got: $out"
+out="$(env -i PATH="$STUBBIN:/usr/bin:/bin" CALLS="$CALLS" GATE_TASK_PROVISION_DIR="$PROVISION_DIR" GATE_BATS_LIB="$FIXTURE/bats-lib" GATE_GUEST_BIN="$FIXTURE/guest-bin" bash "$ENTRY" --fresh 2>/dev/null; echo "status=$?")"
+[[ "$out" == "status=1" ]] || die "missing partition primitive refuses, got: $out"
 pass "missing GATE_PARTITION_BIN refuses"
 
-printf 'nak=%s\n' "$NAK_BIN" >"$FIXTURE/runners-nowyrd.env"
-out="$(run_entry GATE_RUNNERS_ENV="$FIXTURE/runners-nowyrd.env" -- --fresh)"
-[[ "$out" == "status=1" ]] || die "handoff without wyrd refuses, got: $out"
-pass "runner handoff without wyrd refuses"
+out="$(env -i PATH="$STUBBIN:/usr/bin:/bin" CALLS="$CALLS" GATE_TASK_PROVISION_DIR="$PROVISION_DIR" GATE_BATS_LIB="$FIXTURE/bats-lib" GATE_PARTITION_BIN="$FIXTURE/partition-bin" bash "$ENTRY" --fresh 2>/dev/null; echo "status=$?")"
+[[ "$out" == "status=1" ]] || die "missing guest transport refuses, got: $out"
+pass "missing GATE_GUEST_BIN refuses"
 
-mv "$STATE_DIR/sshkey" "$STATE_DIR/sshkey.away"
+printf '#!/bin/sh\nexit 0\n' >"$FIXTURE/guest-notexec"
+chmod 644 "$FIXTURE/guest-notexec"
+out="$(env -i PATH="$STUBBIN:/usr/bin:/bin" CALLS="$CALLS" GATE_TASK_PROVISION_DIR="$PROVISION_DIR" GATE_BATS_LIB="$FIXTURE/bats-lib" GATE_PARTITION_BIN="$FIXTURE/partition-bin" GATE_GUEST_BIN="$FIXTURE/guest-notexec" bash "$ENTRY" --fresh 2>/dev/null; echo "status=$?")"
+[[ "$out" == "status=1" ]] || die "non-executable guest transport refuses, got: $out"
+pass "non-executable GATE_GUEST_BIN refuses"
+
+mv "$PROVISION_DIR/manifests" "$FIXTURE/manifests.away"
 out="$(run_entry -- --fresh)"
-[[ "$out" == "status=1" ]] || die "missing ssh key refuses, got: $out"
-mv "$STATE_DIR/sshkey.away" "$STATE_DIR/sshkey"
-pass "missing ssh key refuses"
+[[ "$out" == "status=1" ]] || die "missing manifests dir refuses, got: $out"
+mv "$FIXTURE/manifests.away" "$PROVISION_DIR/manifests"
+pass "missing manifests dir refuses"
+
+mv "$PROVISION_DIR/manifests/img-peer-o.json" "$FIXTURE/peer-o.away"
+out="$(run_entry -- --fresh)"
+[[ "$out" == "status=1" ]] || die "manifests without peer-o refuse, got: $out"
+mv "$FIXTURE/peer-o.away" "$PROVISION_DIR/manifests/img-peer-o.json"
+pass "manifests without peer-o refuse"
+
+printf 'member' >"$PROVISION_DIR/relay-role"
+out="$(run_entry -- --fresh)"
+[[ "$out" == "status=1" ]] || die "relay role naming no manifest refuses, got: $out"
+printf 'relay' >"$PROVISION_DIR/relay-role"
+pass "relay role naming no manifest refuses"
+
+printf '{"kind":"gate.image/v1","role":"peer-o"' >"$PROVISION_DIR/manifests/img-peer-o.json"
+out="$(run_entry -- --fresh)"
+[[ "$out" == "status=1" ]] || die "malformed manifest refuses, got: $out"
+printf '{"kind":"gate.image/v1","role":"peer-o","vcpu":4,"memMb":4096,"mac":"02:00:00:00:07:11","ip":"10.0.7.11/24","shares":[]}' >"$PROVISION_DIR/manifests/img-peer-o.json"
+pass "malformed manifest refuses"
+
+printf '{"kind":"gate.image/v1","role":"peer-o","vcpu":4,"memMb":4096,"mac":"02:00:00:00:07:11","ip":"10.0.999.11/24","shares":[]}' >"$PROVISION_DIR/manifests/img-peer-o.json"
+out="$(run_entry -- --fresh)"
+[[ "$out" == "status=1" ]] || die "out-of-bounds manifest ip refuses, got: $out"
+printf '{"kind":"gate.image/v1","role":"peer-o","vcpu":4,"memMb":4096,"mac":"02:00:00:00:07:11","ip":"10.0.7.11/24","shares":[]}' >"$PROVISION_DIR/manifests/img-peer-o.json"
+pass "out-of-bounds manifest ip refuses"
 
 printf '' >"$PROVISION_DIR/lock-file"
 out="$(run_entry -- --fresh)"
@@ -185,7 +240,7 @@ out="$(run_entry -- --fresh)"
 printf '%s' "$STATE_DIR/lock" >"$PROVISION_DIR/lock-file"
 pass "empty lock-file datum refuses"
 
-out="$(env -i PATH="$NOBATS:/usr/bin:/bin" GATE_TASK_PROVISION_DIR="$PROVISION_DIR" GATE_BATS_LIB="$FIXTURE/bats-lib" GATE_RUNNERS_ENV="$FIXTURE/runners.env" bash "$ENTRY" --fresh 2>/dev/null; echo "status=$?")"
+out="$(env -i PATH="$NOBATS:/usr/bin:/bin" GATE_TASK_PROVISION_DIR="$PROVISION_DIR" GATE_BATS_LIB="$FIXTURE/bats-lib" GATE_GUEST_BIN="$FIXTURE/guest-bin" bash "$ENTRY" --fresh 2>/dev/null; echo "status=$?")"
 [[ "$out" == "status=1" ]] || die "missing bats refuses, got: $out"
 pass "missing bats refuses"
 
@@ -193,36 +248,40 @@ printf 'abc' >"$PROVISION_DIR/relay-port"
 out="$(run_entry -- --fresh)"
 [[ "$out" == "status=1" ]] || die "non-numeric relay port refuses, got: $out"
 printf '18761' >"$PROVISION_DIR/relay-port"
-printf '10.0' >"$PROVISION_DIR/subnet"
+printf '99999' >"$PROVISION_DIR/relay-port"
 out="$(run_entry -- --fresh)"
-[[ "$out" == "status=1" ]] || die "truncated subnet refuses, got: $out"
-printf '10.0.7' >"$PROVISION_DIR/subnet"
-pass "malformed datums refuse"
+[[ "$out" == "status=1" ]] || die "out-of-range relay port refuses, got: $out"
+printf '18761' >"$PROVISION_DIR/relay-port"
+pass "malformed relay port refuses"
 
-# A glob character in a role field must stay literal: under word
-# splitting it would expand against the unit's working directory and
-# corrupt the field count. The runner field is unused downstream, so
-# a `*` there must leave the happy path green.
-cp "$PROVISION_DIR/roles" "$FIXTURE/roles.clean"
-printf 'peer-o tap-o 11 ssh *|peer-n tap-n 12 ssh runner-peer-n|relay tap-r 10 - runner-relay' >"$PROVISION_DIR/roles"
-: >"$CALLS"
+printf 'member relay with spaces' >"$PROVISION_DIR/relay-role"
 out="$(run_entry -- --fresh)"
-[[ "$out" == "status=0" ]] || die "glob in role field breaks parsing, got: $out ($(cat "$FIXTURE/stderr"))"
-grep -q "^PEER_O=e2e@10.0.7.11$" "$CALLS" || die "peer-o still resolves with a glob runner"
-cp "$FIXTURE/roles.clean" "$PROVISION_DIR/roles"
-pass "role fields are never glob-expanded"
+[[ "$out" == "status=1" ]] || die "out-of-bounds relay role refuses, got: $out"
+printf 'relay' >"$PROVISION_DIR/relay-role"
+pass "out-of-bounds relay role refuses"
 
-printf 'peer-o tap-o 999 ssh runner-peer-o|peer-n tap-n 12 ssh runner-peer-n|relay tap-r 10 - runner-relay' >"$PROVISION_DIR/roles"
-out="$(run_entry -- --fresh)"
-[[ "$out" == "status=1" ]] || die "out-of-range role octet refuses, got: $out"
-cp "$FIXTURE/roles.clean" "$PROVISION_DIR/roles"
-pass "role octet range refuses"
-
-printf '10.0.7.999' >"$PROVISION_DIR/subnet"
-out="$(run_entry -- --fresh)"
-[[ "$out" == "status=1" ]] || die "out-of-range subnet octet refuses, got: $out"
-printf '10.0.7' >"$PROVISION_DIR/subnet"
-pass "subnet octet range refuses"
+# Missing elevation grant: the host must grant passwordless sudo for
+# exactly the published capability binaries (see README.md). Here a
+# sudo that refuses must fail the run at the first guest call — loud
+# and before any suite phase — never silently. The timeout below is
+# real (it must execute its argv); sudo refuses; the guest binary
+# must never run.
+if command -v timeout >/dev/null 2>&1; then
+  NEGDIR="$FIXTURE/negbin"
+  mkdir -p "$NEGDIR"
+  ln -sf "$(command -v timeout)" "$NEGDIR/timeout"
+  printf '#!/bin/sh\necho "sudo $*" >>"$CALLS"\nexit 1\n' >"$NEGDIR/sudo"
+  chmod +x "$NEGDIR/sudo"
+  cp "$STUBBIN/bats" "$NEGDIR/bats"; cp "$STUBBIN/flock" "$NEGDIR/flock"; cp "$STUBBIN/sleep" "$NEGDIR/sleep"
+  : >"$CALLS"
+  out="$(env -i PATH="$NEGDIR:$STUBBIN:/usr/bin:/bin" CALLS="$CALLS" GATE_TASK_PROVISION_DIR="$PROVISION_DIR" GATE_BATS_LIB="$FIXTURE/bats-lib" GATE_PARTITION_BIN="$FIXTURE/partition-bin" GATE_GUEST_BIN="$FIXTURE/guest-bin" bash "$ENTRY" --fresh 2>"$FIXTURE/stderr"; echo "status=$?")"
+  [[ "$out" == "status=1" ]] || die "refused elevation did not fail the run, got: $out"
+  grep -q "is unreachable (agent exec failed)" "$FIXTURE/stderr" || die "refused elevation hides the cause: $(cat "$FIXTURE/stderr")"
+  [ -z "$(grep "^guest " "$CALLS" || true)" ] || die "refused elevation still ran the guest binary"
+  pass "missing elevation grant fails fast without touching the guest"
+else
+  echo "  SKIP: timeout missing, elevation refusal check omitted"
+fi
 
 # Transient holder (the launcher releasing its hold as the unit
 # starts): the first acquires fail, then one succeeds. The entry

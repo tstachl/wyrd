@@ -77,7 +77,9 @@ jobs:
           bash tests/harness/test-e2e-guard.sh 2>&1 | tee -a /tmp/shell.log
           bash tests/harness/test-bash-syntax.sh 2>&1 | tee -a /tmp/shell.log
           bash tests/harness/test-relay-forensics.sh 2>&1 | tee -a /tmp/shell.log
-          bash tests/harness/test-topology-toml.sh 2>&1 | tee -a /tmp/shell.log
+          bash tests/harness/test-rendezvous.sh 2>&1 | tee -a /tmp/shell.log
+          bash tests/harness/test-timeout-discipline.sh 2>&1 | tee -a /tmp/shell.log
+          bash tests/harness/test-image-manifest.sh 2>&1 | tee -a /tmp/shell.log
           bash tests/harness/test-gate-entry.sh 2>&1 | tee -a /tmp/shell.log
           bash -n tests/harness/e2e-helpers.bash 2>&1 | tee -a /tmp/shell.log
           bash tests/harness/test-no-host-privilege.sh 2>&1 | tee -a /tmp/shell.log
@@ -253,6 +255,19 @@ jobs:
           restore-prefixes-first-match: nix-${{ runner.os }}-
           token: unused
 
+      # Drop the restored fetcher caches: a prefix-matched stale cache
+      # can name a content-addressed tree copy (e.g. the nixpkgs tree
+      # behind ${pkgs.path}) whose NAR is absent from the restored
+      # store, and evaluation then refuses it with "path ... is not
+      # valid" instead of re-materializing it. The store tarball plus
+      # DB is self-consistent without these files; they are only a
+      # speedup.
+      - name: Drop stale fetcher caches
+        run: |
+          set -euo pipefail
+          sudo rm -f /root/.cache/nix/fetchToStore-cache-* /root/.cache/nix/fetcher-cache-*
+          rm -f "${HOME}/.cache/nix/fetchToStore-cache-*" "${HOME}/.cache/nix/fetcher-cache-*"
+
       # Flake evaluation needs an openable Git repository (libgit2
       # ENOTFOUND otherwise) and the coordinator worktree can carry a stub
       # or no .git metadata at all. Rebuild it when git itself cannot open
@@ -289,6 +304,13 @@ jobs:
           echo "===== flake check =====" >> /tmp/nix.log
           {
             set -euo pipefail
+            # The image checks instantiate derivations through
+            # ${pkgs.path}, a content-addressed nixpkgs-tree copy that
+            # evaluation materializes from the pristine flake input.
+            # The "Drop stale fetcher caches" step above removes
+            # restored cache entries that would otherwise name the
+            # copy without its NAR, failing instantiation with
+            # "path ... is not valid".
             nix build .#checks.x86_64-linux.wyrd .#checks.x86_64-linux.wyrd-dist --print-build-logs
             nix flake check --no-build
           } 2>&1 | tee -a /tmp/nix.log

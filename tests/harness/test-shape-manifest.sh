@@ -89,4 +89,24 @@ printf '%s\n' "$MANIFEST" | grep -q '^\[subject-slots\]$' || die "manifest lacks
 printf '%s\n' "$MANIFEST" | grep -q '^wyrdSrc:' || die "manifest lacks the wyrdSrc slot declaration"
 pass "subject slot declared"
 
+# Strict mode, pinned literally and live: a nixpkgs-fmt-style
+# reformat once rewrote `set -euo pipefail` into `set - euo pipefail`
+# (positional parameters, strict mode silently off). The literal pin
+# catches the rewrite; the live probe proves an unguarded input
+# failure (here: git) fails the emitter instead of emitting a
+# manifest with silently empty inputs.
+grep -q '^set -euo pipefail$' "$ROOT/nix/microvm/shape-manifest.sh" \
+  || die "emitter does not run under strict mode (set -euo pipefail)"
+pass "emitter runs under strict mode"
+FAILBIN="$(mktemp -d)"
+trap 'rm -rf "$FAILBIN"' EXIT
+printf '#!/bin/sh\nexit 1\n' >"$FAILBIN/git"
+chmod +x "$FAILBIN/git"
+if PATH="$FAILBIN:$PATH" bash "$ROOT/nix/microvm/shape-manifest.sh" >/dev/null 2>&1; then
+  die "emitter succeeded with a failing git (strict mode is off)"
+fi
+rm -rf "$FAILBIN"
+trap - EXIT
+pass "emitter fails when an input command fails"
+
 echo "shape-manifest: $PASS checks passed"

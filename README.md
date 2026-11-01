@@ -171,23 +171,33 @@ closure):
 The guest script is `tests/lima/alpha-lima.sh`; logs land in
 `/tmp/lima/logs/`.
 
-The hardened gate is the microVM suite: two peer VMs plus a relay VM
+The hardened gate is the Incus suite: two peer VMs plus a relay VM
 on a Linux KVM host, running the same shared core (`tests/lima/alpha-lima.sh`
 steps 1-5 via `tests/lima/alpha-common.sh`) plus multi-host convergence,
 serving restart, and shutdown legs across real guest boundaries.
 It runs through the gate task runner, never directly: the host
-provisions (bridge, taps, builds, boot) and runs
-`tests/gate/gate-entry.sh` as the unprivileged build user.
+builds the images, imports and boots them, waits on the agent, and runs
+`tests/gate/gate-entry.sh` as the unprivileged build user. The unit
+holds no privilege itself: every guest and partition call elevates
+through a passwordless host `sudo` grant that names exactly the two
+published capability binaries (`GATE_GUEST_BIN`, `GATE_PARTITION_BIN`),
+and the suite refuses fast (`-n`, never prompting) when the grant is
+absent. Guest-side privilege is separate: the agent lands as root and
+the suite drops to the unprivileged `e2e` user for every leg.
 
 Linux with `/dev/kvm` is required (no nested KVM under macOS
-virtualization, and vfkit lacks the tap/bridge networking the
-topology needs). The topology is declared in `nix/microvm/`
-(`flake.nix` `nixosConfigurations.wyrd-*`); `nix flake check
---no-build` evaluates the three runners as the eval gate, the runner
-closures build when a microVM run needs them, while suite *execution*
-stays on the KVM host. Logs land under
-`/var/lib/wyrd-microvm/state/run/logs` (overridable with
-`--state-dir`).
+virtualization). One output per role in `flake.nix` (`images.peer-o`,
+`images.peer-n`, `images.relay`) holds exactly `manifest.json`
+(the `gate.image/v1` shape declaration) and `image.tar.gz` (the
+unified Incus tarball); both derive from the per-role `gate.box` values
+in `nix/microvm/`, owned by the gate input's `nixosModules.guest`,
+so image and shape cannot drift.
+`nix flake check --no-build` evaluates the three images as the eval
+gate, the disk images assemble when a gate run needs them, while suite
+*execution* stays on the KVM host. The suite reaches guests only
+through the Incus agent (no ssh, no shared filesystem); per-run logs
+land in the run's state dir, with instance console logs captured at
+teardown.
 
 On macOS, the `wyrd-cli` and `wyrd-contracts` test binaries link the
 system FUSE library at load, and `wyrd mount` needs the kernel extension,

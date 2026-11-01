@@ -2,27 +2,23 @@
 # up for the run. The suite never manages it (RELAY_MANAGED=0): peer
 # restarts are the test, relay restarts are not.
 #
-# The relay carries no runner ssh key: it serves the control plane
-# only, and nothing ever logs into it. (It keeps the state share —
-# the generated virtiofsd wrapper assumes at least one share, and
-# the share contents are run-ephemeral test state. Peers keep both;
-# see common.nix.)
+# Nothing ever logs into the relay: it serves the control plane
+# only. (There is no ssh and no share; the Incus agent is the only
+# control plane, and the suite addresses the relay's port, never a
+# shell there.)
+#
+# Shape and addressing for the gate.image/v1 manifest, the guest
+# network config, and the image metadata derive from gate.box (see
+# the gate input's nixosModules.guest): this file is the single
+# source, so the three can never drift.
 { pkgs, ... }:
 {
-  networking.hostName = "wyrd-relay";
-  networking.interfaces.eth0.ipv4.addresses =
-    [{ address = "10.0.7.10"; prefixLength = 24; }];
-
-  systemd.services.wyrd-ssh-key.enable = false;
-
-  microvm = {
+  gate.box = {
+    role = "relay";
     vcpu = 2;
-    mem = 1024;
-    interfaces = [{
-      type = "tap";
-      id = "tap-r";
-      mac = "02:00:00:00:07:10";
-    }];
+    memMb = 1024;
+    mac = "02:00:00:00:07:10";
+    ip = "10.0.7.10";
   };
 
   environment.etc."wyrd-relay.toml".text = ''
@@ -47,53 +43,10 @@
     };
   };
 
-  # Relay-guest journal persistence for post-mortem forensics. The
-  # 2026-10-08 ~30s relay flaps left no guest-side evidence: teardown
-  # destroys the VM, and the relay carries no ssh key by design (see
-  # above), so the host cannot pull logs out. A 60s timer overwrites
-  # the current-boot journal into the state share — roughly every
-  # minute in the success case (AccuracySec=1s; systemd's default 1min
-  # slop would make even that a lie), up to ~90s after a bounded or
-  # failed dump since the elapse re-arms from deactivation. A silent
-  # heartbeat with an aging log is the signal that dumps keep
-  # failing, not that the relay is quiet.
-  # Overwrite, not append: bounded size, and the phase-1 pre-clean
-  # wipes $RUN/logs once per run — the next tick recreates the file.
-  # Ordered on the virtiofs mount, not merely timed: an early tick
-  # before the mount is up would write onto the guest-local root and
-  # the mount would hide it, failing invisibly in exactly the way
-  # this unit exists to fix (same race common.nix's ssh-key unit
-  # poll-waits around). The heartbeat timestamp next to the dump
-  # distinguishes "relay logged nothing" from "the dump never ran" —
-  # written only after a successful dump (via temp-file rename, so a
-  # failed journalctl can never leave a fresh heartbeat over a
-  # truncated log). Note the timestamp is guest-clock time (observed
-  # ~11min ahead of the host on odin): cross-layer correlation
-  # against host-availability.log must use the host-side file mtime
-  # as the skew reference, never compare the two directly.
-  systemd.services.wyrd-relay-journal = {
-    after = [ "mnt-wyrd\\x2dstate.mount" ];
-    requires = [ "mnt-wyrd\\x2dstate.mount" ];
-    script = ''
-      mkdir -p /mnt/wyrd-state/run/logs
-      ${pkgs.systemd}/bin/journalctl -b --no-pager > /mnt/wyrd-state/run/logs/.relay-journal.tmp \
-        && mv /mnt/wyrd-state/run/logs/.relay-journal.tmp /mnt/wyrd-state/run/logs/relay-journal.log \
-        && date -u +%Y-%m-%dT%H:%M:%SZ > /mnt/wyrd-state/run/logs/relay-journal.ts
-    '';
-    serviceConfig = {
-      Type = "oneshot";
-      # A wedged journalctl stalls the oneshot and systemd skips
-      # timer elapses while it runs — silently ending the dump
-      # series. Bound the read instead.
-      TimeoutStartSec = "30s";
-    };
-  };
-  systemd.timers.wyrd-relay-journal = {
-    wantedBy = [ "timers.target" ];
-    timerConfig = {
-      OnBootSec = "1min";
-      OnUnitActiveSec = "1min";
-      AccuracySec = "1s";
-    };
-  };
+  # Post-mortem forensics ride the host now: the provisioner captures
+  # the instance console log and instance info at teardown, and the
+  # suite pulls guest logs on demand over the agent. No guest-side
+  # journal dumper: with no shared filesystem there is nowhere for a
+  # guest timer to publish to, and a guest-local dump the suite
+  # never pulls is write-only forensics.
 }

@@ -55,8 +55,8 @@ milestones = [
 # their own copy), so the path is checkout-relative.
 [review]
 prompt = ".agents/prompts/branch-review-wyrd.md"
-model = "opencode-go/deepseek-v4.1-flash"
-variant = "max"
+model = "opencode-go/muse-spark-1.3-contributor"
+variant = "xhigh"
 
 # Odin runner resource: the forced-command ssh path. The machine id comes
 # from the key entry server-side; nothing here can forge it.
@@ -73,50 +73,15 @@ repo = "wyrd"
 # this section from the staged revision (never host config): entryPoint
 # runs as the build user under the host caps, requires must resolve in
 # the runner tool closure, builds map names to flake attrpaths the host
-# builds sandboxed, and relayRole names the topology box the suite
+# builds sandboxed, and relayRole names the manifest role the suite
 # waits on. Nothing here executes on the host except through the
-# provisioned microVMs; guest code is data.
+# provisioned Incus images; guest code is data.
 [tasks.wyrd-gate-e2e]
 entryPoint = "tests/gate/gate-entry.sh"
-requires = ["bats", "tar", "diff", "gawk", "gzip"]
+requires = ["bats", "tar", "diff", "gawk", "gzip", "jq"]
 relayRole = "relay"
 
 [tasks.wyrd-gate-e2e.builds]
-wyrd = "packages.x86_64-linux.wyrd"
-nak = "packages.x86_64-linux.nak"
-runner-peer-o = "nixosConfigurations.wyrd-peer-o.config.microvm.runner.qemu"
-runner-peer-n = "nixosConfigurations.wyrd-peer-n.config.microvm.runner.qemu"
-runner-relay = "nixosConfigurations.wyrd-relay.config.microvm.runner.qemu"
-
-# Declared VM topology for the microVM e2e task: data only. The gate
-# runner reads the boxes from the staged revision, checks each against
-# the host caps (vcpu, memory, subnet), and provisions exactly them.
-# Nothing here executes on the host. Values must match
-# nix/microvm/{relay,peer-o,peer-n}.nix (pinned by tests/harness/test-topology-toml.sh).
-[tasks.wyrd-gate-e2e.topology]
-version = 1
-boxes = ["peer-o", "peer-n", "relay"]
-
-[tasks.wyrd-gate-e2e.topology.box.peer-o]
-vcpu = 4
-mem_mb = 4096
-tap = "tap-o"
-mac = "02:00:00:00:07:11"
-ip = "10.0.7.11/24"
-ssh = true
-
-[tasks.wyrd-gate-e2e.topology.box.peer-n]
-vcpu = 4
-mem_mb = 4096
-tap = "tap-n"
-mac = "02:00:00:00:07:12"
-ip = "10.0.7.12/24"
-ssh = true
-
-[tasks.wyrd-gate-e2e.topology.box.relay]
-vcpu = 2
-mem_mb = 1024
-tap = "tap-r"
-mac = "02:00:00:00:07:10"
-ip = "10.0.7.10/24"
-ssh = false
+img-peer-o = "images.peer-o"
+img-peer-n = "images.peer-n"
+img-relay = "images.relay"

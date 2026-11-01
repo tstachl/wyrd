@@ -26,6 +26,12 @@
 #                  0: an external relay is used, start/stop are no-ops
 #   HOST_LOGS      when set, collect_logs copies LOGDIR there on exit;
 #                  when empty, logs stay in LOGDIR for the host to pull
+#   WYRD_PEER_O_IP/WYRD_PEER_N_IP
+#                  peer addresses on the test bridge (gate path only;
+#                  empty on Lima, where every leg shares one guest)
+#   RENDEZVOUS_PORT
+#                  loopback+bridge port serving the rendezvous dir
+#                  (default 18770; gate path only)
 set -euo pipefail
 
 # shellcheck source=/dev/null
@@ -42,6 +48,62 @@ RELAY_HOST="${RELAY_HOST:-127.0.0.1}"
 RELAY_BIND="${RELAY_BIND:-127.0.0.1}"
 RELAY_MANAGED="${RELAY_MANAGED:-1}"
 HOST_LOGS="${HOST_LOGS:-}"
+RENDEZVOUS_PORT="${RENDEZVOUS_PORT:-18770}"
+# The other peer's bridge address, derived from this guest's
+# hostname: owner waits on the member, member on the owner. Empty
+# everywhere but the two gate peers (Lima runs every leg in one
+# guest; the relay never runs legs), where peer_wait degrades to a
+# local poll.
+PEER_IP=""
+case "$(hostname -s 2>/dev/null || echo unknown)" in
+  wyrd-peer-o) PEER_IP="${WYRD_PEER_N_IP:-}" ;;
+  wyrd-peer-n) PEER_IP="${WYRD_PEER_O_IP:-}" ;;
+esac
+
+# Guest-to-guest rendezvous over the test bridge. With no shared
+# filesystem, concurrent legs on different guests cannot poll each
+# other's files — instead every guest serves its signals dir over
+# HTTP from boot (the wyrd-rendezvous system service, stdlib only),
+# signals publish a file there, and waits fetch the peer's copy and
+# materialize it locally. Run-scoped by construction: a signal a leg
+# writes stays fetchable after that leg exits, because no leg starts
+# or stops the server. Only cross-guest signals use this: same-guest
+# coordination keeps plain local files, host-observed signals are
+# polled by the host via wait_guest_file in e2e-helpers.bash, and
+# host-to-guest signals are plain touches through the agent.
+# Independent of the relay under test by design: rendezvous must not
+# depend on the system under test. Serves signals only, never the
+# state root (creds and drives stay off the bridge).
+RENDEZVOUS_DIR="${RENDEZVOUS_DIR:-$E2E_ROOT/signals}"
+
+# peer_signal <name>: publish a cross-guest signal.
+peer_signal() { # <name>
+  mkdir -p "$RENDEZVOUS_DIR"
+  touch "$RENDEZVOUS_DIR/$1"
+}
+
+# peer_wait <seconds> <name>: wait for a cross-guest signal — a
+# local file (already signalled, or signalled by a same-guest writer
+# as on Lima) or the peer's copy fetched over HTTP and materialized
+# at the same path. Polls at 1 Hz: the budgets are minutes, and each
+# attempt spawns an interpreter.
+peer_wait() { # <seconds> <name>
+  local n="$1" name="$2" i
+  mkdir -p "$RENDEZVOUS_DIR"
+  for ((i = 0; i < n; i++)); do
+    [[ -f "$RENDEZVOUS_DIR/$name" ]] && return 0
+    if [[ -n "$PEER_IP" ]]; then
+      if timeout 10 python3 -c 'import sys,urllib.request; sys.stdout.buffer.write(urllib.request.urlopen(sys.argv[1], timeout=5).read())' \
+        "http://$PEER_IP:$RENDEZVOUS_PORT/$name" > "$RENDEZVOUS_DIR/.$name.tmp" 2>/dev/null; then
+        mv "$RENDEZVOUS_DIR/.$name.tmp" "$RENDEZVOUS_DIR/$name"
+        return 0
+      fi
+      rm -f "$RENDEZVOUS_DIR/.$name.tmp"
+    fi
+    sleep 1
+  done
+  return 1
+}
 
 collect_logs() {
   [[ -n "$HOST_LOGS" ]] || return 0
@@ -187,6 +249,18 @@ expect_fail2() {
   head -c 7 "$LOGDIR/$name.stderr" | grep -q "^error: " \
     || die "$name: stderr does not start with 'error: '"
   pass "$name fails closed (exit 2, error: ...)"
+}
+
+# expect_fail_locked <log-name> <cmd...>: exit 78 with `error: ...`
+# on stderr. Store-lock contention is OD-34-C (EXIT_DRIVE_LOCKED, see
+# docs/design/cli.md): the supervisor treats exactly 78 as terminal,
+# so the suite pins that code rather than the generic exit 2.
+expect_fail_locked() {
+  local name="$1"; shift
+  expect_exit 78 "$name" "$@" >/dev/null
+  head -c 7 "$LOGDIR/$name.stderr" | grep -q "^error: " \
+    || die "$name: stderr does not start with 'error: '"
+  pass "$name fails closed (exit 78, error: ...)"
 }
 
 # expect_usage2 <log-name> <cmd...>: exit 2 with a usage error

@@ -17,13 +17,25 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # token on invocation (microVM phases 1-5 arrive via the host
 # orchestrator the same way); anything else dies here.
 # shellcheck source=/dev/null
-source "$SCRIPT_DIR/../harness/e2e-guard.sh"
+if [[ -f "$SCRIPT_DIR/../harness/e2e-guard.sh" ]]; then
+  source "$SCRIPT_DIR/../harness/e2e-guard.sh"
+elif [[ -f "$SCRIPT_DIR/e2e-guard.sh" ]]; then
+  source "$SCRIPT_DIR/e2e-guard.sh"
+else
+  echo "  FAIL: e2e-guard.sh in neither checkout nor baked layout" >&2; exit 2
+fi
 e2e_require_wrapped "${E2E_ENV_FILE:-/tmp/lima/e2e-env.sh}" "./tests/lima/run-alpha.sh" \
   || { echo "  FAIL: unwrapped suite invocation refused" >&2; exit 2; }
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/alpha-common.sh"
 # shellcheck source=/dev/null
-source "$SCRIPT_DIR/../harness/step-grammar.sh"
+if [[ -f "$SCRIPT_DIR/../harness/step-grammar.sh" ]]; then
+  source "$SCRIPT_DIR/../harness/step-grammar.sh"
+elif [[ -f "$SCRIPT_DIR/step-grammar.sh" ]]; then
+  source "$SCRIPT_DIR/step-grammar.sh"
+else
+  echo "  FAIL: step-grammar.sh in neither checkout nor baked layout" >&2; exit 2
+fi
 
 # --- step 1: init lifecycle --------------------------------------------
 step1_init() {
@@ -284,8 +296,9 @@ step5_export() {
   start_mount export "$oc" "$od" "$MNTS/export"
 
   # Offline commands take the store lock: exporting under a live
-  # mount refuses instead of reading a moving drive.
-  expect_fail2 step5-locked \
+  # mount refuses with the OD-34-C locked code (78), not the generic
+  # exit 2.
+  expect_fail_locked step5-locked \
     with_creds "$oc" export "$od" "$E2E_ROOT/export-locked"
   grep -q "another process holds" "$LOGDIR/step5-locked.stderr" \
     || die "locked-store refusal unexplained"

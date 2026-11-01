@@ -1,107 +1,210 @@
 #!/usr/bin/env bash
-# tests/harness/e2e-helpers.bash — shared ssh plumbing for the e2e suites.
+# tests/harness/e2e-helpers.bash — guest transport for the gate e2e suite.
 #
 # Sourced, never executed: functions only, no side effects at source
 # time. Sourced by the gate-path bats phases
-# (tests/gate-phase-*.bats) and by tests/lima/alpha-lima.sh, so both
-# paths dial guests identically; the environment (direct exec vs.
-# wrappers, partition primitive) is what differs, and that lives in
-# the gate-owned bats helpers, not here.
+# (tests/gate/gate-phase-*.bats) and the gate entry smoke suite
+# (tests/gate/gate-entry-smoke.bats). The transport is the Incus agent:
+# commands run inside the named role's guest and files move over
+# `incus file`, through the gate-owned helpers (`load
+# "$GATE_BATS_LIB/guest"` in each phase provides guest_exec,
+# guest_push, guest_pull; `load "$GATE_BATS_LIB/partition"` provides
+# gate_partition). This file adds the suite's routing on top: on_o
+# and on_n run legs on peer-o/peer-n with the run token, so every
+# leg call site keeps its shape while the transport underneath
+# changed from ssh to the agent.
 #
-# Requires from the environment: SSH (the ssh command line with key
-# and options), PEER_O, PEER_N (user@host endpoints).
+# Requires from the environment (published by tests/gate/gate-entry.sh):
+# GATE_GUEST_BIN (agent transport), WYRD_BIN (in-image wyrd path),
+# WYRD_E2E_TOKEN/LOCK, GUEST_ENV/GUEST_RUN/GUEST_TESTS, RELAY_URL.
+# Elevation mirrors the gate-owned bats helpers (GATE_GUEST_BIN,
+# GATE_PARTITION_BIN): the unit runs as the build user, so callers
+# elevate with -n (fail fast, never prompt), setuid wrapper first.
 # Provides task constants with overrideable defaults: GUEST_TESTS
 # (baked suite path in guests), GUEST_ENV (guest env file path),
 # GUEST_RUN (guest run-tree path).
-# Provides host capability shims: as_guest (de-escalated host wyrd
-# invocations) and hand_to_guest (share handover for created
-# credential material). Both are environment-driven: when the
-# wrapper bins are set they delegate, otherwise (task path, already
-# running as the owner) they exec directly / no-op.
-# host_partition (tap surgery for fault phases) is mandatory and
-# fatal: the host must set GATE_PARTITION_BIN. It lives here (not
-# in the gate-owned bats helpers) because all callers name the tap
-# and direction identically; only the binary behind the env var
-# differs (the host-owned tap primitive).
+# host_partition (fault phases) is mandatory and fatal: the host must
+# set GATE_PARTITION_BIN. It is role-addressed (gate_partition
+# <role> up|down): only the relay is ever partitioned, never a peer.
 #
 # Also provides the harness failure primitive (die) and the
-# host-driven fault rendezvous waiter (wait_conflict_file), shared
-# so both paths fail identically. Note the semantic shift: in the
-# old host script die aborted the whole run; in bats each @test runs
-# in its own process, so die aborts only the current test and later
-# phases cascade-fail on the missing state.
+# host-driven fault rendezvous waiter (wait_guest_file), shared so
+# guest-touching waits fail identically. Note the semantic shift: in
+# the old host script die aborted the whole run; in bats each @test
+# runs in its own process, so die aborts only the current test and
+# later phases cascade-fail on the missing state.
+#
+# Guest-to-guest rendezvous (legs coordinating across peers) does NOT
+# live here: with no shared filesystem, legs signal over the test
+# bridge (peer_signal/peer_wait in tests/lima/alpha-common.sh),
+# and host-observed signals poll the writer guest (wait_guest_file
+# below). Host-to-guest signals are plain guest_exec touch calls at
+# the call site.
 
-# die <msg>: fail with the harness FAIL line. Legacy path: aborts
-# the script. Gate path: aborts the current @test.
+# die <msg>: fail with the harness FAIL line. Gate path: aborts the
+# current @test.
 die() { echo "  FAIL: $1" >&2; exit 1; }
 
 : "${GUEST_TESTS:=/etc/wyrd-tests}"
-: "${GUEST_ENV:=/mnt/wyrd-state/e2e-env.sh}"
-: "${GUEST_RUN:=/mnt/wyrd-state/run}"
+: "${GUEST_ENV:=/var/lib/wyrd-e2e/e2e-env.sh}"
+: "${GUEST_RUN:=/var/lib/wyrd-e2e}"
 
-# on_o <cmd...>: run the command on peer-o, carrying the run token
-# (and the explicit-unwrapped flag) so the guest-side guard can
-# verify the call came through a wrapper.
+# e2e_sudo_bin: print the elevation to use for GATE_GUEST_BIN and
+# GATE_PARTITION_BIN. The setuid wrapper lives in the host-controlled
+# wrappers dir; prefer it when present, else the PATH fallback. No
+# environment crosses the boundary (-n fails fast instead of
+# prompting). Mirrors gate-owned guest.bash.
+e2e_sudo_bin() {
+  if [ -n "${E2E_SUDO_BIN:-}" ]; then printf '%s' "$E2E_SUDO_BIN"; return 0; fi
+  if [ -x /run/wrappers/bin/sudo ]; then printf '%s' /run/wrappers/bin/sudo; else printf '%s' sudo; fi # sudo_bin fallback
+}
+
+# on_o <cmd...>: run the command on peer-o as the unprivileged suite
+# user, carrying the run token (and the explicit-unwrapped flag) so
+# the guest-side guard can verify the call came through a wrapper.
+# The agent lands as root; as_e2e drops to e2e, mirroring the old
+# ssh-as-e2e transport and the host build user (same uid). Runs
+# through a remote bash, like the old ssh transport: the legs pass
+# env assignments and compound commands as one string.
 on_o() {
-  if [[ -z "${SSH:-}" || -z "${PEER_O:-}" ]]; then echo "e2e-helpers: on_o requires SSH and PEER_O" >&2; return 1; fi
-  $SSH "$PEER_O" "WYRD_E2E_TOKEN=${WYRD_E2E_TOKEN:-}" "WYRD_E2E_UNWRAPPED=${WYRD_E2E_UNWRAPPED:-0}" "$@"
+  as_e2e peer-o bash -c "WYRD_E2E_TOKEN=${WYRD_E2E_TOKEN:-} WYRD_E2E_UNWRAPPED=${WYRD_E2E_UNWRAPPED:-0} $*"
 }
 
 # on_n <cmd...>: run the command on peer-n. Same contract as on_o.
 on_n() {
-  if [[ -z "${SSH:-}" || -z "${PEER_N:-}" ]]; then echo "e2e-helpers: on_n requires SSH and PEER_N" >&2; return 1; fi
-  $SSH "$PEER_N" "WYRD_E2E_TOKEN=${WYRD_E2E_TOKEN:-}" "WYRD_E2E_UNWRAPPED=${WYRD_E2E_UNWRAPPED:-0}" "$@"
+  as_e2e peer-n bash -c "WYRD_E2E_TOKEN=${WYRD_E2E_TOKEN:-} WYRD_E2E_UNWRAPPED=${WYRD_E2E_UNWRAPPED:-0} $*"
 }
 
-# as_guest <cmd...>: run a host wyrd invocation de-escalated when the
-# wrapper is provided (dev loop drops to uid 1000); direct exec in
-# the task path, where the suite already runs as the owner.
-as_guest() {
-  if [[ -n "${GATE_AS_GUEST_BIN:-}" ]]; then
-    "$GATE_AS_GUEST_BIN" "$@"
-  else
-    "$@"
+# as_e2e <role> <cmd...>: run the command in the role's guest as the
+# unprivileged suite user. Setup/teardown file moves stay root (they
+# run before any suite premise applies); everything the suite
+# executes — legs and wyrd invocations — routes through here. The
+# agent lands as root with a bare lookup path, so the target command
+# resolves through an explicit guest PATH (set via absolute env, which
+# needs no lookup): `/run/wrappers/bin` first so in-guest elevation
+# reaches the setuid wrapper (not the inert store copy), then the
+# system profile, then the fixed paths, mirroring the old ssh-login
+# resolution order. Bare `bash` and every tool the legs invoke
+# resolve through that PATH.
+as_e2e() { # <role> <cmd...>
+  local role="$1"; shift
+  if [[ -z "${GATE_GUEST_BIN:-}" ]]; then echo "e2e-helpers: as_e2e requires GATE_GUEST_BIN" >&2; return 1; fi
+  guest_exec "$role" runuser -u e2e -g users -G wheel -- /usr/bin/env "PATH=/run/wrappers/bin:/run/current-system/sw/bin:/usr/bin:/bin" "$@"
+}
+
+# guest_timeout <secs> <role> <cmd...>: agent exec with a hard bound.
+# timeout cannot execute a shell function, so the bound wraps the
+# gate transport binary directly (elevated, like guest_exec) — never
+# guest_exec/on_o/on_n (pinned by tests/harness/test-timeout-discipline.sh). The KILL
+# grace makes the bound hard: a transport client that ignores TERM
+# is killed instead of stretching the call past its budget.
+guest_timeout() { # <secs> <role> <cmd...>
+  local secs="$1"; shift
+  timeout -k 10 "$secs" "$(e2e_sudo_bin)" -n "$GATE_GUEST_BIN" exec "$@"
+}
+
+# check_query_status <status> <what> <log>: fail-closed status
+# interpretation for agent-bounded queries (nak req and friends).
+# Only 0 passes: 124/137 are inconclusive timeouts (named, never
+# silent), and any other nonzero status is a failed query that proves
+# nothing — both fail the caller, which names the log.
+check_query_status() { # <status> <what> <log>
+  local status="$1" what="$2" log="$3"
+  if [[ "$status" == 124 || "$status" == 137 ]]; then
+    echo "  FAIL: $what timed out (status $status): inconclusive (see $log)" >&2
+    return 1
   fi
+  [[ "$status" == 0 ]] || { echo "  FAIL: $what failed (status $status): inconclusive (see $log)" >&2; return 1; }
+  return 0
 }
 
-# hand_to_guest <paths...>: hand created credential material to the
-# guest owner (dev loop hands ownership to uid 1000); a no-op in the
-# task path, where files arrive correctly owned.
-hand_to_guest() {
-  if [[ -n "${GATE_HAND_TO_GUEST_BIN:-}" ]]; then
-    "$GATE_HAND_TO_GUEST_BIN" "$@"
-  else
-    :
-  fi
+# guest_push_e2e <role> <src> <dst>: copy a host file into the role's
+# guest and hand it to the suite user. The agent stages pushed files
+# root-owned (like every other root transport call), but legs and
+# wyrd run as e2e — without the handover the first read fails with
+# permission denied. Mode is left as pushed (secrets stay tight);
+# ownership is what the suite needs.
+guest_push_e2e() { # <role> <src> <dst>
+  local role="$1" src="$2" dst="$3"
+  guest_push "$role" "$src" "$dst" || return "$?"
+  guest_exec "$role" chown e2e:users "$dst"
 }
 
-# host_partition <tap> down|up: perform tap surgery for fault
+# guest_pull_dir <role> <guest-dir> <host-dir>: copy a guest directory
+# tree to the host. The agent transport moves files only, so the dir
+# rides a plain tarball (uncompressed: no gzip needed in-guest)
+# staged beside it; the tarball is pulled, extracted, and removed on
+# both ends. Fails closed if any step fails.
+guest_pull_dir() { # <role> <guest-dir> <host-dir>
+  local role="$1" gdir="$2" hdir="$3"
+  local base parent hparent rc
+  base="$(basename "$gdir")"
+  parent="$(dirname "$gdir")"
+  hparent="$(dirname "$hdir")"
+  guest_exec "$role" tar -cf "$gdir.tar" -C "$parent" "$base" || return "$?"
+  mkdir -p "$hparent" || return "$?"
+  rc=0
+  guest_pull "$role" "$gdir.tar" "$hdir.tar" || rc="$?"
+  if (( rc != 0 )); then guest_exec "$role" rm -f "$gdir.tar"; return "$rc"; fi
+  tar -xf "$hdir.tar" -C "$hparent" || return "$?"
+  rm -f "$hdir.tar"
+  guest_exec "$role" rm -f "$gdir.tar"
+}
+
+# guest_wyrd <role> <wyrd-args...>: run the in-image wyrd binary in a
+# guest as the suite user. WYRD_BIN is the stable in-image path the
+# entry publishes; output streams back to the caller (bats `run`
+# captures it).
+guest_wyrd() { # <role> <wyrd-args...>
+  local role="$1"; shift
+  if [[ -z "${WYRD_BIN:-}" ]]; then echo "e2e-helpers: guest_wyrd requires WYRD_BIN" >&2; return 1; fi
+  as_e2e "$role" "$WYRD_BIN" "$@"
+}
+
+# mint_guest_creds <role> <creds-dir> <drive-dir>: create credential
+# material with the suite's standard sizes, owned by the suite user
+# of the guest that will use it. Secrets never touch the host:
+# everything runs in-guest through the agent.
+mint_guest_creds() { # <role> <creds-dir> <drive-dir>
+  local role="$1" c="$2" d="$3"
+  as_e2e "$role" bash -c '
+    set -e
+    mkdir -p "$0" "$1"
+    head -c 32 /dev/urandom | od -An -tx1 | tr -d " \\n" > "$0/identity"
+    printf "e2e-%s\\n" "$(head -c 16 /dev/urandom | od -An -tx1 | tr -d " \\n")" > "$0/passphrase"
+    chmod 600 "$0/identity" "$0/passphrase"
+  ' "$c" "$d"
+}
+
+# host_partition <role> down|up: host-driven link surgery for fault
 # phases. Mandatory: refuses when the host did not provide
 # GATE_PARTITION_BIN.
-host_partition() { # <tap> down|up
+host_partition() { # <role> down|up
   [[ -n "${GATE_PARTITION_BIN:-}" ]] \
     || die "partition capability not provided (host must set GATE_PARTITION_BIN)"
-  "$GATE_PARTITION_BIN" "$@"
+  "$(e2e_sudo_bin)" -n "$GATE_PARTITION_BIN" "$@"
 }
 
-# wait_conflict_file <seconds> <file> <what> <leg-pid>: shared
-# rendezvous waiter for host-driven fault blocks (partition, crash):
+# wait_guest_file <role> <seconds> <guest-path> <what> <leg-pid>:
+# shared host-driven rendezvous waiter for guest-touched signals:
 # fail fast when the awaited leg exits early instead of burning the
-# whole budget on a corpse. Returns 0 on rendezvous, 1 on timeout or
-# corpse — never exits: callers die (or heal-then-die) themselves, so
-# every failure surfaces as a verdict. (An EXIT trap must never be
-# used for the heal: it replaces bats' own result reporting and turns
-# failures into missing verdicts with a passing-looking count.)
-wait_conflict_file() { # <seconds> <file> <what> <leg-pid>
-  local budget="$1" f="$2" what="$3" leg="$4" i
-  for ((i = 0; i < budget * 2; i++)); do
-    [[ -f "$f" ]] && return 0
+# whole budget on a corpse. Polls at 1 Hz: each attempt is an agent
+# round trip, and the budgets are minutes. Returns 0 on rendezvous,
+# 1 on timeout or corpse — never exits: callers die (or heal-then-die)
+# themselves, so every failure surfaces as a verdict. (An EXIT trap
+# must never be used for the heal: it replaces bats' own result
+# reporting and turns failures into missing verdicts with a
+# passing-looking count.)
+wait_guest_file() { # <role> <seconds> <guest-path> <what> <leg-pid>
+  local role="$1" budget="$2" f="$3" what="$4" leg="$5" i
+  for ((i = 0; i < budget; i++)); do
+    guest_exec "$role" test -f "$f" >/dev/null 2>&1 && return 0
     # A dead leg never touches its file: fail fast instead of burning
     # the whole budget on a corpse. The pid is per-file (the sibling
     # leg may already have finished fine); $what names the awaited
     # rendezvous and its leg log.
     kill -0 "$leg" 2>/dev/null || { echo "  FAIL: $what (leg exited early)" >&2; return 1; }
-    sleep 0.5
+    sleep 1
   done
   echo "  FAIL: $what" >&2
   return 1

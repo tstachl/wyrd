@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 # shellcheck disable=SC2034
-# (SSH/SSH_OPTS are read indirectly by on_o/on_n from
+# (GATE_GUEST_BIN and friends are read indirectly by on_o/on_n from
 # tests/harness/e2e-helpers.bash through `run`, which shellcheck cannot see
 # through; every assignment below is consumed at call time.)
 # tests/gate/gate-phase-03.bats — gate-path phase 3: cross-host convergence.
@@ -11,29 +11,31 @@
 # no bare kind-9501 rumors) and runs the wave-2 embedded-consumer
 # check. Runs as the build user under tests/gate/gate-entry.sh, after
 # phases 1-2 in the same bats invocation: the pairing material this
-# phase inspects ($RUN/pairing-n.txt) was written by phase 2 on the
-# shared state, and is re-derived here from the file (bats runs each
-# @test in its own process, so no shell variable crosses phases).
+# phase inspects ($RUN/pairing-n.txt) was ferried host-side by phase 2
+# (pulled from the member peer), and is re-derived here from the file
+# (bats runs each @test in its own process, so no shell variable
+# crosses phases).
 
 bats_require_minimum_version 1.5.0
 
 load "$BATS_TEST_DIRNAME/../harness/e2e-guard.sh"
 
 setup() {
-  for v in STATE_DIR WYRD_BIN NAK_BIN PEER_O PEER_N RELAY_URL WYRD_E2E_TOKEN WYRD_E2E_LOCK SSH_KEY GATE_BATS_LIB CORE_ONLY GUEST_ENV; do
+  for v in STATE_DIR WYRD_BIN NAK_BIN WYRD_E2E_TOKEN WYRD_E2E_LOCK GATE_BATS_LIB GATE_GUEST_BIN GATE_PARTITION_BIN CORE_ONLY GUEST_ENV RELAY_URL; do
     [ -n "${!v+x}" ] || { echo "gate-phase-03: $v is not set (run through tests/gate/gate-entry.sh)" >&2; return 1; }
   done
   RUN="$STATE_DIR/run"
-  [ "$GUEST_ENV" = "/mnt/wyrd-state/run/e2e-env.sh" ] || { echo "gate-phase-03: GUEST_ENV=$GUEST_ENV is not the guest-visible env file" >&2; return 1; }
+  [ "$GUEST_ENV" = "/var/lib/wyrd-e2e/e2e-env.sh" ] || { echo "gate-phase-03: GUEST_ENV=$GUEST_ENV is not the guest env file" >&2; return 1; }
+  load "$GATE_BATS_LIB/guest"
+  load "$GATE_BATS_LIB/partition"
   source "$BATS_TEST_DIRNAME/../harness/e2e-helpers.bash"
   e2e_require_wrapped "$RUN/e2e-env.sh" "./tests/gate/gate-entry.sh (gate task)" --check-owner-pid
-  SSH_OPTS="-i $SSH_KEY -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o BatchMode=yes"
-  SSH="ssh $SSH_OPTS"
 }
 
 @test "owner and member converge across hosts with an opaque control plane" {
   mkdir -p "$RUN/logs"
-  rm -f "$RUN/owner-done"
+  guest_exec peer-o rm -f "$GUEST_RUN/signals/owner-done" "$GUEST_RUN/signals/owner-w2-written" "$GUEST_RUN"/wave2-owner-list.txt
+  guest_exec peer-n rm -f "$GUEST_RUN/signals/member-w2-done" "$GUEST_RUN"/wave2-member-list.txt
   OD="$GUEST_RUN/drives/owner"
   OC="$GUEST_RUN/creds/owner"
   GMD="$GUEST_RUN/drives/member-n"
@@ -51,16 +53,16 @@ setup() {
   wait "$LEG_O" || { echo "owner convergence leg failed (see logs/leg-owner.out)"; false; }
   # Control-plane opacity: the relay must only ever carry kind-1059
   # gift wraps — the 9501 rumor travels inside the NIP-59 seal+wrap
-  # (trust.md T16), never in cleartext. nak comes pinned from the
-  # flake's nixpkgs channel (NAK_BIN); the runner already gated on
-  # relay readiness, so an empty answer is a failure, not connection
+  # (trust.md T16), never in cleartext. nak runs in-guest (the image
+  # carries it beside wyrd); the runner already gated on relay
+  # readiness, so an empty answer is a failure, not connection
   # flakiness. Both queries below are sample-relative at limit 500.
   # Stdin filter form (not -k/-l flags): the channel's nak answers
   # flag-built filters with zero events on this relay while the stdin
   # form reads fine — observed on odin, so pin the working form.
   REQ1059='{"kinds":[1059],"limit":500}'
   REQ9501='{"kinds":[9501],"limit":500}'
-  WRAPS="$(printf '%s' "$REQ1059" | timeout 30 "$NAK_BIN" req "$RELAY_URL" 2>"$RUN/logs/nak-1059.err" | grep '"kind":1059' || true)"
+  WRAPS="$(printf '%s' "$REQ1059" | guest_timeout 30 peer-o -- "$NAK_BIN" req "$RELAY_URL" 2>"$RUN/logs/nak-1059.err" | grep '"kind":1059' || true)"
   [[ -n "$WRAPS" ]] || { echo "no kind-1059 wraps on the relay: control plane never flowed (see logs/nak-1059.err)"; false; }
   [[ -z "$(printf '%s\n' "$WRAPS" | grep -v '"p"' || true)" ]] \
     || { echo "gift wraps without recipient p tags on the relay (see logs/nak-1059.err)"; false; }
@@ -88,15 +90,24 @@ setup() {
     && { echo "member device $DEV authored a gift wrap: authors must be ephemeral (see logs/nak-1059.err)"; false; }
   # Capture-then-assert (never grep -q in the pipeline): grep -q
   # exits at the first match and SIGPIPEs nak, which under pipefail
-  # turns a real multi-event leak into a silent pass. Draining grep
-  # plus || true keeps the failure reachable exactly when it matters.
+  # turns a real multi-event leak into a silent pass. Draining to a
+  # file keeps the failure reachable exactly when it matters, and the
+  # status is captured outside any command substitution — an
+  # assignment inside $() dies with the subshell, so a timeout would
+  # otherwise read as success (pre-existing shape, fixed here).
   nak_status=0
-  RUMORS="$( { printf '%s' "$REQ9501" | timeout 30 "$NAK_BIN" req "$RELAY_URL" \
-    2>"$RUN/logs/nak-9501.err" || nak_status=$?; } | grep '"kind":9501' || true)"
+  { printf '%s' "$REQ9501" | guest_timeout 30 peer-o -- "$NAK_BIN" req "$RELAY_URL" \
+    >"$RUN/logs/nak-9501.raw" 2>"$RUN/logs/nak-9501.err" || nak_status=$?; }
+  RUMORS="$(grep '"kind":9501' "$RUN/logs/nak-9501.raw" || true)"
   # The leak query's real bound is the timeout above, not limit 500: a
   # zero-result subscription depends on the relay terminating it, so
   # "no rumor in thirty seconds" is what the pass below proves.
-  [[ "$nak_status" != 124 ]] || { echo "9501 query timed out: leak check inconclusive (see logs/nak-9501.err)"; false; }
+  # Both timeout codes fail closed: 124 is the TERM bound, 137 the
+  # KILL grace, and either one makes the leak check inconclusive. Any
+  # other nonzero status fails too: a failed query proves nothing
+  # about the relay, so only status 0 reaches the rumor assertion
+  # (pinned by tests/harness/test-timeout-discipline.sh).
+  check_query_status "$nak_status" "9501 query" "logs/nak-9501.err" || return 1
   [[ -z "$RUMORS" ]] || { echo "relay carries a bare kind-9501 rumor: control leaked in cleartext (see logs/nak-9501.err)"; false; }
   # Wave 2 (sync-convergence issue): the embedded consumer converges
   # without mounting. The owner writes a second wave through FUSE and
@@ -106,7 +117,6 @@ setup() {
   # live heads mean identical manifests, hence identical bytes by
   # CAS. Placed after the opacity checks so wave-2 control traffic
   # cannot push the relay sample past the queries' limit headroom.
-  rm -f "$RUN/owner-w2-written" "$RUN/member-w2-done" "$RUN"/wave2-*.txt
   on_n "E2E_ENV_FILE=$GUEST_ENV bash $GUEST_TESTS/alpha-microvm-legs.sh converge2-member $GMD $GMC $RELAY_URL" \
     >"$RUN/logs/leg-member-w2.out" 2>&1 &
   LEG_N=$!
@@ -122,6 +132,10 @@ setup() {
   wait "$LEG_O" || o_rc=$?
   [[ "$n_rc" == 0 ]] || { echo "member wave-2 leg failed (see logs/leg-member-w2.out; owner status $o_rc, see logs/leg-owner-w2.out)"; false; }
   [[ "$o_rc" == 0 ]] || { echo "owner wave-2 leg failed (see logs/leg-owner-w2.out)"; false; }
+  guest_pull peer-o "$GUEST_RUN/wave2-owner-list.txt" "$RUN/wave2-owner-list.txt" \
+    || { echo "owner list pull failed"; false; }
+  guest_pull peer-n "$GUEST_RUN/wave2-member-list.txt" "$RUN/wave2-member-list.txt" \
+    || { echo "member list pull failed"; false; }
   diff "$RUN/wave2-owner-list.txt" "$RUN/wave2-member-list.txt" \
     || { echo "embedded and FUSE views diverge on live heads (see wave2-*-list.txt)"; false; }
 }

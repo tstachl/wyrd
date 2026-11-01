@@ -33,6 +33,25 @@ is transient — no drive data is affected.
 
 ## [Unreleased]
 
+### Changed
+
+- Migrate the gate e2e task from microVM+qemu+ssh to Incus images+agent
+  (`nostr:nevent1qqspyt79fyjcvxm7xmz25g6cuwfsx8pxsxtvlva276g5c6ar2xdjjhqpz9mhxue69uhkwunpwdczuap49eehg2j6vx2`):
+  each role builds a bootable Incus VM image (`images.peer-o`,
+  `images.peer-n`, `images.relay`, each dir holding exactly
+  `manifest.json` + `image.tar.gz`) with its shape declared once in
+  `gate.box` options (set per role, owned by the gate input's
+  `nixosModules.guest`) — the guest network config, the image
+  metadata and the `gate.image/v1` manifest all derive from the same
+  source, and the gate-owned assembly re-validates the manifest
+  fail-closed at build time. `gate.toml` names image builds instead of the retired
+  `[tasks.*.topology]` sections; the entry resolves guest IPs from the
+  validated manifests, reaches guests only through the agent
+  (`guest_exec`/`push`/`pull`), and cross-guest rendezvous rides an
+  in-guest HTTP channel instead of the retired state share. No ssh,
+  no shared filesystem, no host-built runners: the images carry wyrd
+  and nak, and the suite runs the in-image binaries.
+
 ### Fixed
 
 - Bump `rustls-webpki` 0.103.15 → 0.103.16, `webpki-roots` 1.0.9 →
