@@ -291,8 +291,14 @@ jobs:
           echo "===== flake check =====" >> /tmp/nix.log
           {
             set -euo pipefail
-            nix build .#checks.x86_64-linux.wyrd .#checks.x86_64-linux.wyrd-dist --print-build-logs
-            nix flake check --no-build
+            # Cold evaluation, never the restored eval cache: the image
+            # checks instantiate derivations through "${pkgs.path}", a
+            # content-addressed nixpkgs-tree copy that must be
+            # materialized during evaluation. A prefix-matched stale
+            # cache serves the path value without the object and the
+            # instantiation fails with "path ... is not valid".
+            nix build .#checks.x86_64-linux.wyrd .#checks.x86_64-linux.wyrd-dist --print-build-logs --option eval-cache false
+            nix flake check --no-build --option eval-cache false
           } 2>&1 | tee -a /tmp/nix.log
 
       # Proves the release archive path end to end via the same script
