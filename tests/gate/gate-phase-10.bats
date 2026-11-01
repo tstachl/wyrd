@@ -71,13 +71,6 @@ setup() {
   run on_o "$WYRD_BIN export --identity-file '$GEC/identity' --passphrase-file '$GEC/passphrase' '$GED' '$GUEST_RUN/export-exh'"
   printf '%s\n' "$output" >"$RUN/logs/export-exh.out"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  rm -rf "$RUN/export-exh"
-  guest_pull_dir peer-o "$GUEST_RUN/export-exh" "$RUN/export-exh" \
-    || { echo "exhaustion export pull failed"; false; }
-  [[ "$(cat "$RUN/export-exh/small.txt")" == "pre-fill" ]] \
-    || die "exhaustion export lost the pre-fill anchor"
-  [[ "$(cat "$RUN/export-exh/recovery.txt")" == "recovered" ]] \
-    || die "exhaustion export lost the recovery anchor"
   # Fill-file inventory against the write-path commit contract
   # (docs/contracts/write-path.md: `create` commits the empty file as its own
   # snapshot; a refused write commits nothing of the write; a ceiling
@@ -101,28 +94,34 @@ setup() {
   _fidx="$(guest_exec peer-o cat "$GUEST_RUN/exh-failed-fill")"
   [[ "$_fidx" =~ ^[0-9]+$ ]] && (( _fidx >= 1 && _fidx <= 24 )) \
     || die "exhaustion leg recorded a bogus failing fill index: $_fidx"
-  for (( _x = 1; _x <= 24; _x++ )); do
-    _f="$RUN/export-exh/fill-$_x.bin"
-    if (( _x < _fidx )); then
-      [[ -e "$_f" ]] \
-        || die "exhaustion export lost fill-$_x.bin: its write reported success"
-      _sz="$(stat -c %s "$_f")"
-      [[ "$_sz" == "33554432" ]] \
-        || die "exhaustion export holds torn fill-$_x.bin ($_sz bytes)"
-    elif (( _x == _fidx )); then
-      if [[ ! -e "$_f" ]]; then
-        : # failing fill absent: create refused with the write — contract-legal
+  # The export tree itself stays in-guest: fills are 32 MiB each and
+  # the tree can exceed the agent transport's pull cap, while the
+  # verdicts need only anchor contents plus per-fill
+  # existence-and-size. One guest-side pass reports violations;
+  # the host asserts a clean pass.
+  guest_exec peer-o bash -c '
+    set -u
+    fidx="$0"; d="$1"
+    fail() { echo "FAIL: $1"; exit 1; }
+    [ "$(cat "$d/small.txt")" = "pre-fill" ] || fail "exhaustion export lost the pre-fill anchor"
+    [ "$(cat "$d/recovery.txt")" = "recovered" ] || fail "exhaustion export lost the recovery anchor"
+    for x in $(seq 1 24); do
+      f="$d/fill-$x.bin"
+      if [ "$x" -lt "$fidx" ]; then
+        [ -e "$f" ] || fail "exhaustion export lost fill-$x.bin: its write reported success"
+        [ "$(stat -c %s "$f")" = 33554432 ] || fail "exhaustion export holds torn fill-$x.bin"
+      elif [ "$x" = "$fidx" ]; then
+        if [ -e "$f" ]; then [ "$(stat -c %s "$f")" = 0 ] || fail "exhaustion export holds fill-$x.bin after its write reported failure"; fi
       else
-        _sz="$(stat -c %s "$_f")"
-        [[ "$_sz" == "0" ]] \
-          || die "exhaustion export holds fill-$_x.bin ($_sz bytes) after its write reported failure"
+        [ ! -e "$f" ] || fail "exhaustion export holds unattempted fill-$x.bin: phantom file"
       fi
-    else
-      [[ ! -e "$_f" ]] \
-        || die "exhaustion export holds unattempted fill-$_x.bin: phantom file"
-    fi
-  done
-  unset _x _f _sz _fidx
+    done
+    echo INVENTORY-OK
+  ' "$_fidx" "$GUEST_RUN/export-exh" >"$RUN/logs/export-inventory.out" 2>&1 \
+    || { echo "exhaustion export inventory failed (see logs/export-inventory.out)"; false; }
+  grep -q '^INVENTORY-OK$' "$RUN/logs/export-inventory.out" \
+    || { echo "exhaustion export inventory failed (see logs/export-inventory.out)"; cat "$RUN/logs/export-inventory.out"; false; }
+  unset _fidx
   # Best-effort detach: the loop device dies with the VM anyway;
   # this just keeps reruns tidy.
   on_o "sudo umount '$GED'" >"$RUN/logs/detach-exh-fs.out" 2>&1 || true
