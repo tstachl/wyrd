@@ -104,7 +104,7 @@ while IFS= read -r _line; do
     *GATE_GUEST_BIN*|*GATE_PARTITION_BIN*|*GUEST_BIN*) ;;
     *) die "elevation without a capability target: $_line" ;;
   esac
-done < <(grep -hn -E '[$]\((entry|e2e)_sudo_bin\)" -n' "${CLOSURE[@]}" || true)
+done < <(grep -n -E '[$]\((entry|e2e)_sudo_bin\)"' "${CLOSURE[@]}" || true)
 unset _line
 pass "every elevation names its capability"
 
