@@ -48,6 +48,16 @@ HITS="$(grep -rn -E 'timeout +[0-9]+ +(guest_exec|on_o|on_n|on_d|guest_wyrd|gues
 [[ -z "$HITS" ]] || die "timeout wraps a shell function (use guest_timeout or the transport binary):\n$HITS"
 pass "no suite function runs under timeout"
 
+# No in-guest compound command behind the env prefix: as_e2e routes
+# every call as `bash -c "TOKEN... <payload>"`, and assignments
+# cannot precede `for`/`while`/`if` (a leading compound keyword is a
+# guest-side syntax error, invisible to bash -n and shellcheck).
+# Retry loops stay host-side, one simple guest command per attempt.
+COMPOUND="$(grep -rn -E "(on_o|on_n|on_d)[ ]+[\"'] *(for|while|if|until|select|case)[ ;]" \
+  "$ROOT/tests/gate" "$ROOT/tests/drive" || true)"
+[[ -z "$COMPOUND" ]] || die "in-guest compound command behind the env prefix (loops stay host-side):\n$COMPOUND"
+pass "no in-guest compound command behind the env prefix"
+
 # The helper itself, executed: argv shape, guest status propagation,
 # and the bound. A stub transport records argv and exits 7; a
 # sleeper provokes the 124.

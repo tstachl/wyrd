@@ -117,9 +117,20 @@ setup() {
   # configured mountpoint in the serving namespace (an unmounted
   # directory passes an ls but has no table entry), then a
   # filesystem operation through it. Polled, since serving starts
-  # after the unit reports active.
+  # after the unit reports active. The retry loop stays host-side:
+  # the transport prefixes every guest command with env
+  # assignments, which cannot precede an in-guest compound command
+  # (a leading `for` is a syntax error), so each attempt is one
+  # simple guest command.
   # shellcheck disable=SC2086
-  run on_d "for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do sudo $NSENTER -t $MNT_CHILD -m grep -E ' /mnt/wyrd .*fuse' /proc/self/mountinfo >/dev/null 2>&1 && sudo $NSENTER -t $MNT_CHILD -m $LSCMD /mnt/wyrd >/dev/null 2>&1 && break || sleep 5; done; sudo $NSENTER -t $MNT_CHILD -m grep -E ' /mnt/wyrd .*fuse' /proc/self/mountinfo && sudo $NSENTER -t $MNT_CHILD -m $LSCMD /mnt/wyrd"
+  SERVED=""
+  for _ in $(seq 1 12); do
+    run on_d "sudo $NSENTER -t $MNT_CHILD -m grep -E ' /mnt/wyrd .*fuse' /proc/self/mountinfo >/dev/null 2>&1 && sudo $NSENTER -t $MNT_CHILD -m $LSCMD /mnt/wyrd >/dev/null 2>&1"
+    if [ "$status" -eq 0 ]; then SERVED=1; break; fi
+    sleep 5
+  done
+  [[ -n "$SERVED" ]] || { echo "$output"; touch "$RUN/FAILED"; false; }
+  run on_d "sudo $NSENTER -t $MNT_CHILD -m grep -E ' /mnt/wyrd .*fuse' /proc/self/mountinfo && sudo $NSENTER -t $MNT_CHILD -m $LSCMD /mnt/wyrd"
   [ "$status" -eq 0 ] || { echo "$output"; touch "$RUN/FAILED"; false; }
 }
 
