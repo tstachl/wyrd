@@ -1,36 +1,33 @@
 #!/usr/bin/env bats
 # tests/drive/drive-service.bats — system-level evidence for the
-# declarative drive service on the provisioned wyrd-drive-vm guest:
-# one vault and one mount declared through services.wyrd.drives,
-# asserted live over ssh.
+# declarative drive service on the provisioned drive guest: one vault
+# and one FUSE-serving unit declared through services.wyrd.drives,
+# asserted live over the agent.
 #
 # Runs as the build user under tests/drive/drive-service-entry.sh,
 # which assembles every variable used below. Not runnable directly:
 # without the entry the setup refuses (fail fast, not skip — a green
 # run with skipped tests would pretend coverage). Odin-only: the
-# drive box is a real provisioned microVM.
+# drive box is a real provisioned Incus guest.
+#
+# Guest calls ride on_d (as the suite user over the agent). State
+# changes and bounded queries alike go through it; the entry already
+# proved the reboot with per-probe bounds, and every suite call
+# returns promptly on a booted guest. Privileged names appear only
+# on on_d lines — guest privilege, never host.
 
 bats_require_minimum_version 1.5.0
 
 load "$BATS_TEST_DIRNAME/../harness/e2e-guard.sh"
 
-# setup_file() provisions over ssh before setup() ever runs, so the
-# ssh options live at file scope, not in setup(). The entry exports
-# every variable used below; setup() still verifies them for the
-# per-test path. LogLevel=ERROR silences the "Permanently added"
-# warning ssh prints to stderr on first contact: bats merges stderr
-# into $output, so the warning would corrupt exact-match assertions
-# and pid captures below.
-SSH_OPTS="-i $SSH_KEY -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o BatchMode=yes -o LogLevel=ERROR"
-
 setup_file() {
   # Wrapper and state first: the entry already validated datum,
   # lock, token, provisioned the guest, and rebooted it. This
   # re-checks the contract per file without touching the guest:
-  # provisioning and reboot live in the entry precisely so no
+  # provisioning and the reboot live in the entry precisely so no
   # runner-version setup_file semantics can skip them, and so an
   # unwrapped direct bats invocation has no mutation path.
-  for v in STATE_DIR DRIVE_SSH WYRD_E2E_TOKEN WYRD_E2E_LOCK SSH_KEY; do
+  for v in STATE_DIR WYRD_BIN WYRD_E2E_TOKEN WYRD_E2E_LOCK GATE_BATS_LIB GATE_GUEST_BIN; do
     [ -n "${!v:-}" ] || { echo "drive-service: $v is not set (run through tests/drive/drive-service-entry.sh)" >&2; return 1; }
   done
   RUN="$STATE_DIR/run"
@@ -44,26 +41,28 @@ teardown() {
   # unit, so a red test names its mechanism without a second run.
   if [ -f "$RUN/FAILED" ]; then
     echo "--- forensics for failed test: $BATS_TEST_DESCRIPTION ---"
-    # shellcheck disable=SC2086
-    run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'systemctl --no-pager --lines=30 status wyrd-vault-demo wyrd-mount-demo e2e-lockholder; echo ===; journalctl --no-pager -u wyrd-vault-demo -u wyrd-mount-demo -u e2e-lockholder | tail -n 60'
+    run on_d 'systemctl --no-pager --lines=30 status wyrd-vault-demo wyrd-mount-demo e2e-lockholder; echo ===; journalctl --no-pager -u wyrd-vault-demo -u wyrd-mount-demo -u e2e-lockholder | tail -n 60'
     echo "$output"
-    # Serving-namespace mount table: host-side mountinfo cannot see
-    # the PrivateTmp mount, so dump it from inside the mount child
-    # when one exists.
-    # Serving-namespace mount table: host-side mountinfo cannot see
-    # the PrivateTmp mount, so dump it from inside the mount child
-    # when one exists. Absolute paths: sudo does not inherit the
-    # login PATH these names resolved under.
-    # shellcheck disable=SC2086
-    run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'command -v nsenter; command -v pgrep'
+    # Serving-namespace FUSE table: the serving process hides its
+    # namespace from the host (PrivateTmp), so dump it from inside
+    # the serving child when one exists.
+    run on_d 'command -v nsenter; command -v pgrep'
     NSENTER_T="$(printf '%s\n' "$output" | sed -n '1p')"
     PGREP_T="$(printf '%s\n' "$output" | sed -n '2p')"
     if [ -n "$NSENTER_T" ] && [ -n "$PGREP_T" ]; then
+      run on_d 'systemctl show -p MainPID --value wyrd-mount-demo'
+      MNT_MAIN="$output"
       # shellcheck disable=SC2086
-      run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" "MPID=\$(systemctl show -p MainPID --value wyrd-mount-demo 2>/dev/null); CHILD=\$($PGREP_T -P \$MPID wyrd 2>/dev/null | head -n 1); if [ -n \"\$CHILD\" ]; then sudo $NSENTER_T -t \$CHILD -m cat /proc/self/mountinfo 2>/dev/null | grep -E ' mnt|fuse' || echo 'no mnt/fuse entries in serving namespace'; else echo 'no mount child to enter'; fi"
-      echo "$output"
+      run on_d "$PGREP_T -P $MNT_MAIN wyrd 2>/dev/null | head -n 1"
+      if [ -n "$output" ]; then
+        # shellcheck disable=SC2086
+        run on_d "sudo $NSENTER_T -t $output -m cat /proc/self/mountinfo 2>/dev/null | grep -E ' mnt|fuse' || echo 'no mnt/fuse entries in serving namespace'"
+        echo "$output"
+      else
+        echo 'no serving child to enter'
+      fi
     else
-      echo "drive-service: could not resolve nsenter/pgrep for namespace forensics"
+      echo "drive-service: could not resolve the namespace probe binaries"
     fi
   fi
   return 0
@@ -71,73 +70,67 @@ teardown() {
 
 setup() {
   rm -f "$STATE_DIR/run/FAILED" 2>/dev/null || true
-  for v in STATE_DIR DRIVE_SSH WYRD_E2E_TOKEN WYRD_E2E_LOCK SSH_KEY; do
+  for v in STATE_DIR WYRD_BIN WYRD_E2E_TOKEN WYRD_E2E_LOCK GATE_BATS_LIB GATE_GUEST_BIN; do
     [ -n "${!v:-}" ] || { echo "drive-service: $v is not set (run through tests/drive/drive-service-entry.sh)" >&2; return 1; }
   done
   RUN="$STATE_DIR/run"
+  load "$GATE_BATS_LIB/guest"
+  source "$BATS_TEST_DIRNAME/../harness/e2e-helpers.bash"
   e2e_require_wrapped "$RUN/e2e-env.sh" "./tests/drive/drive-service-entry.sh (gate task)" --check-owner-pid
 }
 
-@test "vault and mount units are active after boot" {
-  # shellcheck disable=SC2086
-  run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'systemctl is-active wyrd-vault-demo wyrd-mount-demo'
+@test "vault and serving units are active after boot" {
+  run on_d 'systemctl is-active wyrd-vault-demo wyrd-mount-demo'
   [ "$status" -eq 0 ] || { echo "$output"; touch "$RUN/FAILED"; false; }
-  # The mount completes after the unit reports active, so poll
+  # The serving side comes up after the unit reports active, so poll
   # instead of asserting once. The service runs with PrivateTmp,
-  # which puts it in its own mount namespace: the FUSE mount is
-  # invisible from the host (host-side mountpoint -q says rc=32 and
-  # host stat shows a plain subdir), so probe from inside the
-  # serving process's namespace via nsenter. Absolute binary paths:
-  # sudo's secure_path is not the login PATH. Polled, since serving
+  # which puts it in its own namespace: the FUSE serving side stays
+  # invisible from the host, so probe from inside the serving
+  # process's namespace via nsenter. Absolute paths: the login PATH
+  # these names resolved under is not inherited. Polled, since serving
   # starts after the unit reports active.
-  # shellcheck disable=SC2086
-  run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'command -v nsenter; command -v ls'
+  run on_d 'command -v nsenter; command -v ls'
   [ "$status" -eq 0 ] || { echo "$output"; touch "$RUN/FAILED"; false; }
   NSENTER="$(printf '%s\n' "$output" | sed -n '1p')"
   LSCMD="$(printf '%s\n' "$output" | sed -n '2p')"
   [ -n "$NSENTER" ] && [ -n "$LSCMD" ] || { echo "could not resolve nsenter+ls: $output"; touch "$RUN/FAILED"; false; }
-  # shellcheck disable=SC2086
-  run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'systemctl show -p MainPID --value wyrd-mount-demo'
+  run on_d 'systemctl show -p MainPID --value wyrd-mount-demo'
   [ "$status" -eq 0 ] || { echo "$output"; touch "$RUN/FAILED"; false; }
   MNT_MAIN="$output"
   # shellcheck disable=SC2086
-  run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" "pgrep -P $MNT_MAIN wyrd | head -n 1"
+  run on_d "pgrep -P $MNT_MAIN wyrd | head -n 1"
   [ "$status" -eq 0 ] || { echo "$output"; touch "$RUN/FAILED"; false; }
-  [ -n "$output" ] || { echo "no supervised wyrd child under mount wrapper pid $MNT_MAIN"; touch "$RUN/FAILED"; false; }
+  [ -n "$output" ] || { echo "no supervised wyrd child under wrapper pid $MNT_MAIN"; touch "$RUN/FAILED"; false; }
   MNT_CHILD="$output"
-  # Serving proof in two halves: a FUSE mount entry at exactly
-  # /mnt/wyrd in the serving namespace (an unmounted directory
-  # passes an ls but has no mount-table entry), then a filesystem
-  # operation through it. Polled, since serving starts after the
-  # unit reports active.
+  # Serving proof in two halves: a FUSE entry at exactly the
+  # configured mountpoint in the serving namespace (an unmounted
+  # directory passes an ls but has no table entry), then a
+  # filesystem operation through it. Polled, since serving starts
+  # after the unit reports active.
   # shellcheck disable=SC2086
-  run timeout 180 ssh $SSH_OPTS "$DRIVE_SSH" "for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do sudo $NSENTER -t $MNT_CHILD -m grep -E ' /mnt/wyrd .*fuse' /proc/self/mountinfo >/dev/null 2>&1 && sudo $NSENTER -t $MNT_CHILD -m $LSCMD /mnt/wyrd >/dev/null 2>&1 && break || sleep 5; done; sudo $NSENTER -t $MNT_CHILD -m grep -E ' /mnt/wyrd .*fuse' /proc/self/mountinfo && sudo $NSENTER -t $MNT_CHILD -m $LSCMD /mnt/wyrd"
+  run on_d "for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do sudo $NSENTER -t $MNT_CHILD -m grep -E ' /mnt/wyrd .*fuse' /proc/self/mountinfo >/dev/null 2>&1 && sudo $NSENTER -t $MNT_CHILD -m $LSCMD /mnt/wyrd >/dev/null 2>&1 && break || sleep 5; done; sudo $NSENTER -t $MNT_CHILD -m grep -E ' /mnt/wyrd .*fuse' /proc/self/mountinfo && sudo $NSENTER -t $MNT_CHILD -m $LSCMD /mnt/wyrd"
   [ "$status" -eq 0 ] || { echo "$output"; touch "$RUN/FAILED"; false; }
 }
 
 @test "vault comes back after SIGKILL of the supervised child" {
-  # shellcheck disable=SC2086
-  run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'systemctl show -p MainPID --value wyrd-vault-demo'
+  run on_d 'systemctl show -p MainPID --value wyrd-vault-demo'
   [ "$status" -eq 0 ] || { echo "$output"; touch "$RUN/FAILED"; false; }
   BEFORE_PID="$output"
   # shellcheck disable=SC2086
-  run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" "pgrep -P $BEFORE_PID wyrd | head -n 1"
+  run on_d "pgrep -P $BEFORE_PID wyrd | head -n 1"
   [ "$status" -eq 0 ] || { echo "$output"; touch "$RUN/FAILED"; false; }
   [ -n "$output" ] || { echo "no supervised wyrd child under wrapper pid $BEFORE_PID"; touch "$RUN/FAILED"; false; }
   CHILD="$output"
   # shellcheck disable=SC2086
-  run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" "sudo kill -KILL $CHILD"
+  run on_d "sudo kill -KILL $CHILD"
   [ "$status" -eq 0 ] || { echo "$output"; touch "$RUN/FAILED"; false; }
   sleep 12
-  # shellcheck disable=SC2086
-  run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'systemctl show -p MainPID --value wyrd-vault-demo'
+  run on_d 'systemctl show -p MainPID --value wyrd-vault-demo'
   [ "$status" -eq 0 ] || { echo "$output"; touch "$RUN/FAILED"; false; }
   [ "$output" != "$BEFORE_PID" ] || { echo "wrapper pid unchanged after child SIGKILL ($BEFORE_PID)"; touch "$RUN/FAILED"; false; }
-  # shellcheck disable=SC2086
-  run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'systemctl is-active wyrd-vault-demo'
+  run on_d 'systemctl is-active wyrd-vault-demo'
   [ "$status" -eq 0 ] || { echo "$output"; touch "$RUN/FAILED"; false; }
-  # shellcheck disable=SC2086
-  run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'systemctl show -p NRestarts --value wyrd-vault-demo'
+  run on_d 'systemctl show -p NRestarts --value wyrd-vault-demo'
   [ "$status" -eq 0 ] || { echo "$output"; touch "$RUN/FAILED"; false; }
   [ "$output" == "1" ] || { echo "expected exactly one restart, got $output"; touch "$RUN/FAILED"; false; }
 }
@@ -146,22 +139,20 @@ setup() {
   # Stop the vault first so the holder is the only possible
   # contender: verifying contention while the vault still runs proves
   # only that *someone* holds the lock. Order is the proof.
-  # shellcheck disable=SC2086
-  run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'sudo systemctl stop wyrd-vault-demo'
+  run on_d 'sudo systemctl stop wyrd-vault-demo'
   [ "$status" -eq 0 ] || { echo "$output"; touch "$RUN/FAILED"; false; }
   # The holder is a transient unit, not a background pid: precise
   # release via systemctl stop, no pattern matching anywhere. The
   # unit's PATH is systemd's default (no util-linux, no coreutils),
   # so resolve every binary absolutely — a bare name fails the unit
   # instantly (exit 69) and the "held" drive is held by nothing.
-  # shellcheck disable=SC2086
-  run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'command -v flock; command -v sleep'
+  run on_d 'command -v flock; command -v sleep'
   [ "$status" -eq 0 ] || { echo "$output"; touch "$RUN/FAILED"; false; }
   FLOCK="$(printf '%s\n' "$output" | sed -n '1p')"
   SLEEPCMD="$(printf '%s\n' "$output" | sed -n '2p')"
   [ -n "$FLOCK" ] && [ -n "$SLEEPCMD" ] || { echo "could not resolve flock+sleep: $output"; touch "$RUN/FAILED"; false; }
   # shellcheck disable=SC2086
-  run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" "sudo systemd-run --unit=e2e-lockholder --property=Type=simple $FLOCK /var/lib/wyrd/demo/LOCK $SLEEPCMD 120"
+  run on_d "sudo systemd-run --unit=e2e-lockholder --property=Type=simple $FLOCK /var/lib/wyrd/demo/LOCK $SLEEPCMD 120"
   [ "$status" -eq 0 ] || { echo "$output"; touch "$RUN/FAILED"; false; }
   # Verify the holder before asserting anything about the service: a
   # start that only queued the unit proves nothing, and an unheld
@@ -169,19 +160,18 @@ setup() {
   # vault is already stopped above, so the holder is the only
   # possible contender — a failed second-party probe proves the
   # holder itself holds the lock, not a third party.
-  # shellcheck disable=SC2086
-  run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'systemctl is-active e2e-lockholder'
+  run on_d 'systemctl is-active e2e-lockholder'
   [ "$status" -eq 0 ] || { echo "holder unit is not active: $output"; touch "$RUN/FAILED"; false; }
   # Poll the contention itself rather than asserting once:
   # is-active fires when the process spawns, possibly before its
   # first flock lands. Only the acquired lock is load-bearing. A
-  # refused non-blocking flock prints nothing; ssh failures print
+  # refused non-blocking flock prints nothing; agent failures print
   # diagnostics, so empty output plus non-zero status is the
   # contention signal and anything else keeps polling.
   HELD=""
   for _ in $(seq 1 15); do
     # shellcheck disable=SC2086
-    run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" "sudo $FLOCK -n /var/lib/wyrd/demo/LOCK true" 2>/dev/null || true
+    run on_d "sudo $FLOCK -n /var/lib/wyrd/demo/LOCK true" 2>/dev/null || true
     if [ "$status" -ne 0 ] && [ -z "$output" ]; then HELD=1; break; fi
     sleep 2
   done
@@ -192,36 +182,28 @@ setup() {
   # would be refused with start-limit-hit (stale ExecMainStatus from
   # the stop) instead of exercising the held-drive path. reset-failed
   # is the documented reset for exactly this.
-  # shellcheck disable=SC2086
-  run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'sudo systemctl reset-failed wyrd-vault-demo'
+  run on_d 'sudo systemctl reset-failed wyrd-vault-demo'
   [ "$status" -eq 0 ] || { echo "$output"; touch "$RUN/FAILED"; false; }
-  # shellcheck disable=SC2086
-  run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'sudo systemctl start wyrd-vault-demo' || true
+  run on_d 'sudo systemctl start wyrd-vault-demo' || true
   echo "start job output (non-zero expected for the 78 path): $output"
   sleep 12
-  # shellcheck disable=SC2086
-  run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'systemctl show -p ActiveState --value wyrd-vault-demo'
+  run on_d 'systemctl show -p ActiveState --value wyrd-vault-demo'
   [ "$status" -eq 0 ] || { echo "$output"; touch "$RUN/FAILED"; false; }
   [ "$output" == "failed" ] || { echo "held-drive unit is $output, expected failed"; touch "$RUN/FAILED"; false; }
-  # shellcheck disable=SC2086
-  run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'systemctl show -p ExecMainStatus --value wyrd-vault-demo'
+  run on_d 'systemctl show -p ExecMainStatus --value wyrd-vault-demo'
   [ "$status" -eq 0 ] || { echo "$output"; touch "$RUN/FAILED"; false; }
   [ "$output" == "78" ] || { echo "held-drive exit is $output, expected 78"; touch "$RUN/FAILED"; false; }
-  # shellcheck disable=SC2086
-  run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'systemctl show -p NRestarts --value wyrd-vault-demo'
+  run on_d 'systemctl show -p NRestarts --value wyrd-vault-demo'
   [ "$status" -eq 0 ] || { echo "$output"; touch "$RUN/FAILED"; false; }
   [ "$output" == "0" ] || { echo "held drive retried $output times, expected no retry"; touch "$RUN/FAILED"; false; }
 }
 
 @test "vault recovers once the holder releases" {
-  # shellcheck disable=SC2086
-  run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'sudo systemctl stop e2e-lockholder'
+  run on_d 'sudo systemctl stop e2e-lockholder'
   [ "$status" -eq 0 ] || { echo "$output"; touch "$RUN/FAILED"; false; }
-  # shellcheck disable=SC2086
-  run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'sudo systemctl reset-failed wyrd-vault-demo; sudo systemctl start wyrd-vault-demo'
+  run on_d 'sudo systemctl reset-failed wyrd-vault-demo; sudo systemctl start wyrd-vault-demo'
   [ "$status" -eq 0 ] || { echo "$output"; touch "$RUN/FAILED"; false; }
   sleep 8
-  # shellcheck disable=SC2086
-  run timeout 120 ssh $SSH_OPTS "$DRIVE_SSH" 'systemctl is-active wyrd-vault-demo'
+  run on_d 'systemctl is-active wyrd-vault-demo'
   [ "$status" -eq 0 ] || { echo "$output"; touch "$RUN/FAILED"; false; }
 }

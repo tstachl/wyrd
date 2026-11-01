@@ -294,7 +294,7 @@
             else throw "wyrdSrc subject unreadable: expected a source tree with Cargo.toml at root, or the default placeholder; got ${toString wyrdSrc}";
           # imageGuestFor takes wyrdSrc with no default (N4): an
           # omitted argument must never silently mean the repo's own
-          # build. The single call site always passes explicitly.
+          # build. Every call site passes explicitly.
           # extraModules extends the guest composition for role
           # guests that carry more than the suite (the drive-service
           # evidence guest adds the wyrd-drive module and its
@@ -379,10 +379,10 @@
           };
           # Bootable drive-service evidence guest for the system-level
           # execution issue: the same vault+mount declaration as
-          # wyrd-drive-test, composed onto the microvm guest path so
-          # the gate task can provision and boot it like the e2e trio.
-          # Evaluated in CI like the fixture; booted only by the
-          # drive-service task on the KVM host, never in CI.
+          # wyrd-drive-test, composed onto the Incus image guest path
+          # so the gate task can provision and boot it like the e2e
+          # trio. Evaluated in CI like the fixture; booted only by
+          # the drive-service task on the KVM host, never in CI.
           wyrd-drive-vm = imageGuestFor {
             role = "drive";
             wyrdSrc = wyrdSrcFor;
@@ -429,6 +429,7 @@
         peer-o = self.nixosConfigurations.wyrd-peer-o.config.system.build.gateImage;
         peer-n = self.nixosConfigurations.wyrd-peer-n.config.system.build.gateImage;
         relay = self.nixosConfigurations.wyrd-relay.config.system.build.gateImage;
+        drive = self.nixosConfigurations.wyrd-drive-vm.config.system.build.gateImage;
       };
     };
 }

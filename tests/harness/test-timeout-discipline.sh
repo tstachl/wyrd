@@ -40,11 +40,11 @@ fi
 # The ban: no suite function under timeout in host-executed code.
 # Binaries (the transport via its elevation, python3, jq) are fine; the banned
 # names are the suite's own functions, which only resolve in-shell.
-# Covers the gate suite, its helpers, the Lima definitions, and
-# the microVM call sites (peer_wait/peer_signal are defined in Lima
-# but called from the microVM legs).
-HITS="$(grep -rn -E 'timeout +[0-9]+ +(guest_exec|on_o|on_n|guest_wyrd|guest_timeout|mint_guest_creds|wait_guest_file|host_partition|as_e2e|gate_partition|gate_as_guest|peer_wait|peer_signal|guest_push_e2e|guest_pull_dir|check_query_status)( |$|")' \
-  "$ROOT/tests/gate" "$ROOT/tests/harness/e2e-helpers.bash" "$ROOT/tests/lima" "$ROOT/tests/microvm" || true)"
+# Covers the gate suite, the drive suite, their helpers, the Lima
+# definitions, and the microVM call sites (peer_wait/peer_signal
+# are defined in Lima but called from the microVM legs).
+HITS="$(grep -rn -E 'timeout +[0-9]+ +(guest_exec|on_o|on_n|on_d|guest_wyrd|guest_timeout|mint_guest_creds|wait_guest_file|host_partition|as_e2e|gate_partition|gate_as_guest|peer_wait|peer_signal|guest_push_e2e|guest_pull_dir|check_query_status)( |$|")' \
+  "$ROOT/tests/gate" "$ROOT/tests/drive" "$ROOT/tests/harness/e2e-helpers.bash" "$ROOT/tests/lima" "$ROOT/tests/microvm" || true)"
 [[ -z "$HITS" ]] || die "timeout wraps a shell function (use guest_timeout or the transport binary):\n$HITS"
 pass "no suite function runs under timeout"
 

@@ -16,7 +16,7 @@ pins the evaluated contract; this directory boots it).
   after SIGKILL of the supervised child, held drive fails once
   with exit 78 and no retry (holder verified first), recovery once
   the holder releases. Odin-only: the drive box is a real
-  provisioned microVM.
+  provisioned Incus guest, reached only through the agent.
 - `drive-service-launchd.sh` — macOS mirror leg. Evaluates the
   darwin fixture, copies each evaluated `serviceConfig` verbatim
   with only per-run fields replaced, lints both plists, bootstraps
@@ -42,9 +42,10 @@ pins the evaluated contract; this directory boots it).
   (`PrivateTmp`), invisible from the host: probe serving from
   inside the supervised process's namespace via `nsenter`, never
   from the host mount table.
-- When ssh itself is unreachable, no guest-side check can run. The
-  `wyrd-guest-debug` oneshot in `nix/microvm/common.nix` (drive
-  guest only) dumps unit states, the key-install journal, share
-  visibility, and mount options to `/mnt/wyrd-state/run/logs/` on
-  every boot, so the host can diagnose a dark guest from the
-  shared state dir.
+- When the agent itself is unreachable, no guest-side check can
+  run. The entry distinguishes the two dark-guest cases by probe:
+  a guest that never went down for reboot vs one that never came
+  back with a new boot id refuse with different messages. Once
+  the agent answers, failure forensics (unit status plus journals)
+  run live over the agent in the bats teardown — no ssh, no shared
+  state dir, nothing baked that could mask the failure.

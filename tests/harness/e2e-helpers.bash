@@ -75,6 +75,13 @@ on_n() {
   as_e2e peer-n bash -c "WYRD_E2E_TOKEN=${WYRD_E2E_TOKEN:-} WYRD_E2E_UNWRAPPED=${WYRD_E2E_UNWRAPPED:-0} $*"
 }
 
+# on_d <cmd...>: run the command on the drive guest. Same contract
+# as on_o/on_n; the drive-service suite (tests/drive) is the only
+# caller — the trio never addresses this role.
+on_d() {
+  as_e2e drive bash -c "WYRD_E2E_TOKEN=${WYRD_E2E_TOKEN:-} WYRD_E2E_UNWRAPPED=${WYRD_E2E_UNWRAPPED:-0} $*"
+}
+
 # as_e2e <role> <cmd...>: run the command in the role's guest as the
 # unprivileged suite user. Setup/teardown file moves stay root (they
 # run before any suite premise applies); everything the suite
