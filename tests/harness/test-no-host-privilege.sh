@@ -115,7 +115,7 @@ nonflag="$(grep -n -E '[$]\((entry|e2e)_sudo_bin\)"' "${CLOSURE[@]}" | grep -v -
 pass "every elevation fails fast"
 # The scans above match quoted invocations ("$(..._sudo_bin)");
 # an unquoted one would escape both, so refuse it by shape.
-unquoted="$(grep -n -E '[$]\((entry|e2e)_sudo_bin\)([^"]|$)|=\s*"\?\$\((entry|e2e)_sudo_bin\)' "${CLOSURE[@]}" || true)"
+unquoted="$(grep -n -E '[$]\((entry|e2e)_sudo_bin\)([^"]|$)|=\s*"?\$\((entry|e2e)_sudo_bin\)' "${CLOSURE[@]}" || true)"
 [[ -z "$unquoted" ]] || die "unquoted or indirected helper use escapes the scans:\n$unquoted"
 pass "every helper invocation is quoted"
 
