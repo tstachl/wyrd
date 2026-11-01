@@ -40,14 +40,14 @@ setup() {
   OC="$GUEST_RUN/creds/owner"
   GMD="$GUEST_RUN/drives/member-n"
   GMC="$GUEST_RUN/creds/member-n"
-  guest_exec peer-o -- rm -f "$GUEST_RUN"/signals/conflict-rename-owner-done \
+  guest_exec peer-o rm -f "$GUEST_RUN"/signals/conflict-rename-owner-done \
     "$GUEST_RUN"/signals/conflict-partitioned \
     "$GUEST_RUN"/signals/conflict-owner-written \
     "$GUEST_RUN"/signals/conflict-healed "$GUEST_RUN"/signals/conflict-owner-done \
     "$GUEST_RUN/logs"/conflict-eio-write-owner.stderr \
     "$GUEST_RUN/logs"/conflict-reread-owner-1.stderr \
     "$GUEST_RUN/logs"/conflict-reread-owner-2.stderr
-  guest_exec peer-n -- rm -f "$GUEST_RUN"/signals/conflict-rename-member-ready \
+  guest_exec peer-n rm -f "$GUEST_RUN"/signals/conflict-rename-member-ready \
     "$GUEST_RUN"/signals/conflict-rename-member-done \
     "$GUEST_RUN"/signals/conflict-partitioned \
     "$GUEST_RUN"/signals/conflict-member-written \
@@ -79,8 +79,8 @@ setup() {
     gate_partition relay up 2>/dev/null || true
   }
   host_partition relay down || { heal_relay; echo "  FAIL: host could not partition relay" >&2; return 1; }
-  guest_exec peer-o -- touch "$GUEST_RUN/signals/conflict-partitioned"
-  guest_exec peer-n -- touch "$GUEST_RUN/signals/conflict-partitioned"
+  guest_exec peer-o touch "$GUEST_RUN/signals/conflict-partitioned"
+  guest_exec peer-n touch "$GUEST_RUN/signals/conflict-partitioned"
   wait_guest_file peer-o 180 "$GUEST_RUN/signals/conflict-owner-written" \
     "owner never committed under partition (see logs/leg-conflict-owner.out)" "$LEG_O" \
     || { heal_relay; return 1; }
@@ -88,8 +88,8 @@ setup() {
     "member never committed under partition (see logs/leg-conflict-member.out)" "$LEG_N" \
     || { heal_relay; return 1; }
   host_partition relay up || { heal_relay; echo "  FAIL: host could not heal relay" >&2; return 1; }
-  guest_exec peer-o -- touch "$GUEST_RUN/signals/conflict-healed"
-  guest_exec peer-n -- touch "$GUEST_RUN/signals/conflict-healed"
+  guest_exec peer-o touch "$GUEST_RUN/signals/conflict-healed"
+  guest_exec peer-n touch "$GUEST_RUN/signals/conflict-healed"
   wait "$LEG_N" || die "conflict member leg failed (see logs/leg-conflict-member.out)"
   wait "$LEG_O" || die "conflict owner leg failed (see logs/leg-conflict-owner.out)"
 }

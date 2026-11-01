@@ -44,10 +44,10 @@ mint_pair() {
 
 @test "three headless peers exchange content with neither mounting" {
   mkdir -p "$RUN/logs"
-  guest_exec peer-o -- rm -f "$GUEST_RUN"/signals/headless-setup-done "$GUEST_RUN"/signals/headless-serve-ready \
+  guest_exec peer-o rm -f "$GUEST_RUN"/signals/headless-setup-done "$GUEST_RUN"/signals/headless-serve-ready \
     "$GUEST_RUN"/signals/headless-serve2-ready "$GUEST_RUN"/signals/headless-serve-stopped \
     "$GUEST_RUN"/signals/headless-d-invited "$GUEST_RUN"/signals/headless-serve3-ready
-  guest_exec peer-n -- rm -f "$GUEST_RUN"/signals/headless-fetch-c-done "$GUEST_RUN"/signals/headless-fetch-e-done \
+  guest_exec peer-n rm -f "$GUEST_RUN"/signals/headless-fetch-c-done "$GUEST_RUN"/signals/headless-fetch-e-done \
     "$GUEST_RUN"/signals/headless-fetch-d-done
   GHO="$GUEST_RUN/creds/headless-owner"
   GHF="$GUEST_RUN/drives/headless-fresh"
@@ -159,7 +159,7 @@ mint_pair() {
     "$GHDDD" join "$GUEST_RUN/invitation-hd"
   printf '%s\n' "$output" >"$RUN/logs/join-hd.out"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  guest_exec peer-o -- touch "$GUEST_RUN/signals/headless-d-invited"
+  guest_exec peer-o touch "$GUEST_RUN/signals/headless-d-invited"
   on_n "E2E_ENV_FILE=$GUEST_ENV bash $GUEST_TESTS/alpha-microvm-legs.sh headless-fetch $GHDDD $GHDD $RELAY_URL d headless-serve3-ready headless-fetch-d-done" \
     >"$RUN/logs/leg-headless-fetch-d.out" 2>&1 &
   LEG_HD=$!

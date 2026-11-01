@@ -70,11 +70,11 @@ setup() {
     "$GUND" join "$GUEST_RUN/invitation-uparent"
   printf '%s\n' "$output" >"$RUN/logs/join-uparent.out"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  guest_exec peer-o -- rm -f "$GUEST_RUN"/signals/uparent-owner-gone \
+  guest_exec peer-o rm -f "$GUEST_RUN"/signals/uparent-owner-gone \
     "$GUEST_RUN"/signals/uparent-owner-back \
     "$GUEST_RUN"/signals/uparent-announced "$GUEST_RUN"/up-2.err "$GUEST_RUN"/up-1.err \
     "$GUEST_RUN"/up-2.got "$GUEST_RUN"/up-1.got "$GUEST_RUN"/up-9.err "$GUEST_RUN"/up-9.got
-  guest_exec peer-n -- rm -f "$GUEST_RUN"/signals/uparent-member-probed \
+  guest_exec peer-n rm -f "$GUEST_RUN"/signals/uparent-member-probed \
     "$GUEST_RUN"/signals/uparent-member-healed \
     "$GUEST_RUN"/signals/uparent-announced "$GUEST_RUN"/up-2.err "$GUEST_RUN"/up-1.err \
     "$GUEST_RUN"/up-2.got "$GUEST_RUN"/up-1.got "$GUEST_RUN"/up-9.err "$GUEST_RUN"/up-9.got

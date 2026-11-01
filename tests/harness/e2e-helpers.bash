@@ -82,7 +82,7 @@ on_n() {
 as_e2e() { # <role> <cmd...>
   local role="$1"; shift
   if [[ -z "${GATE_GUEST_BIN:-}" ]]; then echo "e2e-helpers: as_e2e requires GATE_GUEST_BIN" >&2; return 1; fi
-  guest_exec "$role" -- runuser -u e2e -g users -G wheel -- "$@"
+  guest_exec "$role" runuser -u e2e -g users -G wheel -- "$@"
 }
 
 # guest_timeout <secs> <role> <cmd...>: agent exec with a hard bound.
@@ -143,7 +143,7 @@ host_partition() { # <role> down|up
 wait_guest_file() { # <role> <seconds> <guest-path> <what> <leg-pid>
   local role="$1" budget="$2" f="$3" what="$4" leg="$5" i
   for ((i = 0; i < budget; i++)); do
-    guest_exec "$role" -- test -f "$f" >/dev/null 2>&1 && return 0
+    guest_exec "$role" test -f "$f" >/dev/null 2>&1 && return 0
     # A dead leg never touches its file: fail fast instead of burning
     # the whole budget on a corpse. The pid is per-file (the sibling
     # leg may already have finished fine); $what names the awaited

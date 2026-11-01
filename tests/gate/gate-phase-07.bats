@@ -57,8 +57,8 @@ setup() {
   # writes survived the restart. (Cleared first: the guest export
   # refuses populated destinations, and a non-fresh rerun would leave
   # the previous run's trees behind.)
-  guest_exec peer-o -- rm -rf "$GUEST_RUN/export-owner"
-  guest_exec peer-n -- rm -rf "$GUEST_RUN/export-member"
+  guest_exec peer-o rm -rf "$GUEST_RUN/export-owner"
+  guest_exec peer-n rm -rf "$GUEST_RUN/export-member"
   rm -rf "$RUN/export-owner" "$RUN/export-member"
   run guest_wyrd peer-o export \
     --identity-file "$GOC/identity" \

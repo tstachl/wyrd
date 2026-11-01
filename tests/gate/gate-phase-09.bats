@@ -78,8 +78,8 @@ setup() {
   # discipline): the member authors alone while down.
   # ORDER MATTERS: 13a runs BEFORE 13b (the owner burst) — see the
   # legacy phase for the head-closure cost argument.
-  guest_exec peer-o -- rm -f "$GUEST_RUN"/signals/crash-m-listed
-  guest_exec peer-n -- rm -f "$GUEST_RUN"/signals/crash-m-listed "$GUEST_RUN"/signals/crash-m-ready "$GUEST_RUN"/signals/crash-m-partitioned \
+  guest_exec peer-o rm -f "$GUEST_RUN"/signals/crash-m-listed
+  guest_exec peer-n rm -f "$GUEST_RUN"/signals/crash-m-listed "$GUEST_RUN"/signals/crash-m-ready "$GUEST_RUN"/signals/crash-m-partitioned \
     "$GUEST_RUN"/signals/crash-m-killed "$GUEST_RUN"/signals/crash-m-healed "$GUEST_RUN"/signals/crash-m-done "$GUEST_RUN"/signals/crash-m-witness-done
   on_o "E2E_ENV_FILE=$GUEST_ENV bash $GUEST_TESTS/alpha-microvm-legs.sh steady-owner $GCOD $GCO $RELAY_URL" \
     >"$RUN/logs/leg-steady-owner.out" 2>&1 &
@@ -99,17 +99,17 @@ setup() {
     gate_partition relay up 2>/dev/null || true
   }
   host_partition relay down || { heal_relay; echo "  FAIL: host could not partition relay" >&2; return 1; }
-  guest_exec peer-n -- touch "$GUEST_RUN/signals/crash-m-partitioned"
+  guest_exec peer-n touch "$GUEST_RUN/signals/crash-m-partitioned"
   wait_guest_file peer-n 180 "$GUEST_RUN/signals/crash-m-killed" \
     "member never died on KILL under partition (see logs/leg-crash-member.out)" "$LEG_N" \
     || { heal_relay; return 1; }
   host_partition relay up || { heal_relay; echo "  FAIL: host could not heal relay" >&2; return 1; }
-  guest_exec peer-n -- touch "$GUEST_RUN/signals/crash-m-healed"
+  guest_exec peer-n touch "$GUEST_RUN/signals/crash-m-healed"
   wait "$LEG_N" || die "crash member leg failed (see logs/leg-crash-member.out)"
   wait "$LEG_O" || die "crash witness owner leg failed (see logs/leg-steady-owner.out)"
   # 13b: owner burst + KILL, witness holds convergence across the death.
-  guest_exec peer-o -- rm -f "$GUEST_RUN"/signals/crash-o-steady-ready "$GUEST_RUN"/signals/crash-o-back "$GUEST_RUN"/signals/crash-o-member-done
-  guest_exec peer-n -- rm -f "$GUEST_RUN"/signals/crash-o-steady-ready "$GUEST_RUN"/signals/crash-o-back "$GUEST_RUN"/signals/crash-o-member-done
+  guest_exec peer-o rm -f "$GUEST_RUN"/signals/crash-o-steady-ready "$GUEST_RUN"/signals/crash-o-back "$GUEST_RUN"/signals/crash-o-member-done
+  guest_exec peer-n rm -f "$GUEST_RUN"/signals/crash-o-steady-ready "$GUEST_RUN"/signals/crash-o-back "$GUEST_RUN"/signals/crash-o-member-done
   on_n "E2E_ENV_FILE=$GUEST_ENV bash $GUEST_TESTS/alpha-microvm-legs.sh steady-member $GCND $GCN $RELAY_URL" \
     >"$RUN/logs/leg-steady-member.out" 2>&1 &
   LEG_N=$!

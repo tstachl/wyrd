@@ -37,18 +37,18 @@ setup() {
 
 @test "writes fail closed ENOSPC and the drive recovers" {
   mkdir -p "$RUN/logs"
-  guest_exec peer-o -- rm -f "$GUEST_RUN"/fill-*.stderr "$GUEST_RUN"/exh-failed-fill
+  guest_exec peer-o rm -f "$GUEST_RUN"/fill-*.stderr "$GUEST_RUN"/exh-failed-fill
   GEC="$GUEST_RUN/creds/exh"
   GED="$GUEST_RUN/drives/exh"
   # Guest disk guard: the contained image costs ~2.3 GiB. Fail loudly
   # here instead of dying silently mid-fill when the guest is already
   # sick.
-  avail_kb="$(guest_exec peer-o -- df -k --output=avail / | tail -n 1 | tr -d ' ')"
+  avail_kb="$(guest_exec peer-o df -k --output=avail / | tail -n 1 | tr -d ' ')"
   [[ "$avail_kb" -ge 4194304 ]] \
     || die "guest disk has only ${avail_kb} KiB free: phase 10 needs 4 GiB for the contained exhaustion image"
   GIMG="$GUEST_RUN/exh-fs.img"
-  guest_exec peer-o -- rm -f "$GIMG"
-  guest_exec peer-o -- fallocate -l 2415919104 "$GIMG" \
+  guest_exec peer-o rm -f "$GIMG"
+  guest_exec peer-o fallocate -l 2415919104 "$GIMG" \
     || die "exhaustion image preallocation failed"
   mint_guest_creds peer-o "$GEC" "$GED"
   # Filesystem setup, init, and export run in-guest (escalation
@@ -67,7 +67,7 @@ setup() {
   run on_o "E2E_ENV_FILE=$GUEST_ENV bash $GUEST_TESTS/alpha-microvm-legs.sh exhaustion $GED $GEC"
   printf '%s\n' "$output" >"$RUN/logs/leg-exhaustion.out"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  guest_exec peer-o -- rm -rf "$GUEST_RUN/export-exh"
+  guest_exec peer-o rm -rf "$GUEST_RUN/export-exh"
   run on_o "$WYRD_BIN export --identity-file '$GEC/identity' --passphrase-file '$GEC/passphrase' '$GED' '$GUEST_RUN/export-exh'"
   printf '%s\n' "$output" >"$RUN/logs/export-exh.out"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
@@ -96,9 +96,9 @@ setup() {
   # phase exists to forbid. The index file lives beside the fill
   # stderrs in the guest state root — never on the exhausted fs, so
   # the failure handler does not depend on the filesystem under test.
-  guest_exec peer-o -- test -f "$GUEST_RUN/exh-failed-fill" \
+  guest_exec peer-o test -f "$GUEST_RUN/exh-failed-fill" \
     || die "exhaustion leg never recorded the failing fill index"
-  _fidx="$(guest_exec peer-o -- cat "$GUEST_RUN/exh-failed-fill")"
+  _fidx="$(guest_exec peer-o cat "$GUEST_RUN/exh-failed-fill")"
   [[ "$_fidx" =~ ^[0-9]+$ ]] && (( _fidx >= 1 && _fidx <= 24 )) \
     || die "exhaustion leg recorded a bogus failing fill index: $_fidx"
   for (( _x = 1; _x <= 24; _x++ )); do
@@ -126,5 +126,5 @@ setup() {
   # Best-effort detach: the loop device dies with the VM anyway;
   # this just keeps reruns tidy.
   on_o "sudo umount '$GED'" >"$RUN/logs/detach-exh-fs.out" 2>&1 || true
-  guest_exec peer-o -- rm -f "$GIMG" || true
+  guest_exec peer-o rm -f "$GIMG" || true
 }

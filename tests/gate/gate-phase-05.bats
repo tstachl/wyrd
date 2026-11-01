@@ -37,8 +37,8 @@ setup() {
   OC="$GUEST_RUN/creds/owner"
   GMD="$GUEST_RUN/drives/member-n"
   GMC="$GUEST_RUN/creds/member-n"
-  guest_exec peer-o -- rm -f "$GUEST_RUN"/signals/owner-stopped "$GUEST_RUN"/signals/owner-converged-done "$GUEST_RUN"/signals/owner-back
-  guest_exec peer-n -- rm -f "$GUEST_RUN"/signals/member-cold-done "$GUEST_RUN"/signals/member-listed-done \
+  guest_exec peer-o rm -f "$GUEST_RUN"/signals/owner-stopped "$GUEST_RUN"/signals/owner-converged-done "$GUEST_RUN"/signals/owner-back
+  guest_exec peer-n rm -f "$GUEST_RUN"/signals/member-cold-done "$GUEST_RUN"/signals/member-listed-done \
     "$GUEST_RUN"/signals/member-scratch-done "$GUEST_RUN"/signals/member-fetch-done \
     "$GUEST_RUN"/signals/member-probed-done "$GUEST_RUN"/signals/member-recovered-done \
     "$GUEST_RUN"/cold-2.got "$GUEST_RUN"/stale-1.err "$GUEST_RUN"/stale-2.err \

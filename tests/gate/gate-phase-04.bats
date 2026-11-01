@@ -34,7 +34,7 @@ setup() {
   mkdir -p "$RUN/logs"
   GMD="$GUEST_RUN/drives/member-n"
   GMC="$GUEST_RUN/creds/member-n"
-  guest_exec peer-n -- rm -f "$GUEST_RUN/signals/member-ready" "$GUEST_RUN/signals/member-done"
+  guest_exec peer-n rm -f "$GUEST_RUN/signals/member-ready" "$GUEST_RUN/signals/member-done"
   OD="$GUEST_RUN/drives/owner"
   OC="$GUEST_RUN/creds/owner"
   # Legs run backgrounded with output to log files (not `run`): their
@@ -52,7 +52,7 @@ setup() {
   # across this restart (redelivery observed) and holds no duplicates.
   # Missing file means no acks yet — record 0 rather than failing here;
   # the leg fails on it if the log is still empty at the end.
-  guest_exec peer-n -- cat "$GMD/mailbox.seen" 2>/dev/null | wc -l | tr -d ' ' > "$RUN/seen-after-restart" \
+  guest_exec peer-n cat "$GMD/mailbox.seen" 2>/dev/null | wc -l | tr -d ' ' > "$RUN/seen-after-restart" \
     || echo 0 > "$RUN/seen-after-restart"
   # Upgrade rejoin (post-upgrade convergence leg,
   # nostr:nevent1qqsr9arqyq4vjvcvtfsqrqf3r5h0wp0zju2zrf7h42uzggl950e0h8qpz9mhxue69uhkwunpwdczuap49eehg57t5zx):
@@ -63,12 +63,12 @@ setup() {
   # just-built binary under the canonical name, so resolve runs for
   # real; the true cross-version extension reuses these assertions
   # with a v0.2.0 binary (fixture-half design on the issue).
-  guest_exec peer-n -- rm -f "$GUEST_RUN/signals/member-u-ready" "$GUEST_RUN/signals/member-u-done"
-  guest_exec peer-o -- rm -f "$GUEST_RUN/signals/owner-u-updated" "$GUEST_RUN/signals/upgrade-blob.sha256"
+  guest_exec peer-n rm -f "$GUEST_RUN/signals/member-u-ready" "$GUEST_RUN/signals/member-u-done"
+  guest_exec peer-o rm -f "$GUEST_RUN/signals/owner-u-updated" "$GUEST_RUN/signals/upgrade-blob.sha256"
   UPGRADE_ROOT="$(dirname "$BATS_TEST_DIRNAME")"
   UPGRADE_VERSION="$(grep '^version = ' "$UPGRADE_ROOT/Cargo.toml" | head -n 1 | cut -d'"' -f2)" \
     || { echo "workspace version unreadable ($UPGRADE_ROOT/Cargo.toml)"; false; }
-  run guest_exec peer-o -- uname -m
+  run guest_exec peer-o uname -m
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   UPGRADE_GARCH="$(printf '%s' "$output" | tr -d ' \r\n')"
   case "$UPGRADE_GARCH" in
@@ -80,15 +80,15 @@ setup() {
   # The archive is crafted in-guest from the in-image binary: there is
   # no host copy of the binary anymore (no shared store), and the leg
   # consumes the archive at its guest path.
-  guest_exec peer-o -- rm -rf "$GUEST_RUN/upgrade-archive" \
+  guest_exec peer-o rm -rf "$GUEST_RUN/upgrade-archive" \
     || { echo "upgrade archive reset failed"; false; }
-  guest_exec peer-o -- mkdir -p "$GUEST_RUN/upgrade-archive/stage/top/bin" \
+  guest_exec peer-o mkdir -p "$GUEST_RUN/upgrade-archive/stage/top/bin" \
     || { echo "upgrade archive staging failed"; false; }
-  guest_exec peer-o -- cp "$WYRD_BIN" "$GUEST_RUN/upgrade-archive/stage/top/bin/wyrd" \
+  guest_exec peer-o cp "$WYRD_BIN" "$GUEST_RUN/upgrade-archive/stage/top/bin/wyrd" \
     || { echo "upgrade archive staging failed"; false; }
-  guest_exec peer-o -- tar -czf "$GUEST_RUN/upgrade-archive/$UPGRADE_NAME" -C "$GUEST_RUN/upgrade-archive/stage" top \
+  guest_exec peer-o tar -czf "$GUEST_RUN/upgrade-archive/$UPGRADE_NAME" -C "$GUEST_RUN/upgrade-archive/stage" top \
     || { echo "upgrade archive packing failed"; false; }
-  guest_exec peer-o -- rm -rf "$GUEST_RUN/upgrade-archive/stage" \
+  guest_exec peer-o rm -rf "$GUEST_RUN/upgrade-archive/stage" \
     || { echo "upgrade archive staging cleanup failed"; false; }
   on_n "E2E_ENV_FILE=$GUEST_ENV bash $GUEST_TESTS/alpha-microvm-legs.sh upgrade-member $GMD $GMC $RELAY_URL" \
     >"$RUN/logs/leg-upgrade-member.out" 2>&1 &
