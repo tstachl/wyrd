@@ -102,6 +102,17 @@ let
     cargoNextestExtraArgs = "--color never --workspace";
   });
 
+  # Nextest slow profile: the master-CI supplement (live-relay
+  # integration, ceiling-scale admission, measured heavyweights
+  # excluded from the default PR gate so PR runs stay fast).
+  # Same compile-once shape: shares rust-deps, compiles only
+  # workspace crates. Public-relay and kernel-FUSE tests stay
+  # #[ignore]d and never run in CI, so this stays sandbox-safe.
+  rustSlowTests = craneLib.cargoNextest (gateArgs // {
+    pname = "wyrd";
+    cargoNextestExtraArgs = "--color never --workspace --profile slow";
+  });
+
   # Doctests run in the check phase.
   rustDoctests = craneLib.cargoDocTest (gateArgs // {
     pname = "wyrd";
@@ -113,5 +124,6 @@ in
   rust-check = rustCheck;
   rust-clippy = rustClippy;
   rust-tests = rustTests;
+  rust-slow-tests = rustSlowTests;
   rust-doctests = rustDoctests;
 }

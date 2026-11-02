@@ -72,10 +72,13 @@ jobs:
           build: checks.x86_64-linux.rust-clippy
       - audit:
           run: rust.audit
-  # Slow gates: deps once, then the two test suites reuse it in the
+  # Test gates: deps once, then the two test suites reuse it in the
   # same store. Higher memory floor for nextest parallelism; no
   # scratch-mib (unschedulable — the adapter never advertises it).
-  gates-slow:
+  # (Named gates-tests, not gates-slow: it runs the default profile
+  # plus doctests on every PR. The slow profile lives in
+  # rust-slow.yaml and runs on master pushes only.)
+  gates-tests:
     requirements:
       resources:
         memory-mib: {gte: 8192}
