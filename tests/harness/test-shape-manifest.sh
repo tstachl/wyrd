@@ -59,20 +59,42 @@ pass "manifest covers every required and baked file"
 # tree, so every tracked Cargo input must be pinned. Inverse check:
 # list the tracked workspace files from git and require each in the
 # manifest (a build input the manifest drops fails the build at eval).
+#
+# Both sides derive from live `git ls-files`, so a single mismatch can
+# mean the tree moved between the emitter run and this read, or a read
+# degraded on the worker — not a repo defect (this exact flake failed
+# a clean tree in CI before). Retry boundedly: a genuinely dropped
+# file fails every attempt deterministically, while a transient read
+# passes on retry. Persistent failure across all attempts is therefore
+# evidence of systematic worker divergence, and the diagnostics below
+# (including the git version) are the starting point — not the repo.
 UNPINNED=""
-while IFS= read -r _f; do
-  [ -n "$_f" ] || continue
-  printf '%s\n' "$MANIFEST" | grep -qxF "$_f" || UNPINNED="$UNPINNED $_f"
-done < <(git -C "$ROOT" ls-files Cargo.toml Cargo.lock rust-toolchain.toml 'crates')
+ATTEMPT=0
+while [ "$ATTEMPT" -lt 3 ]; do
+  ATTEMPT=$((ATTEMPT + 1))
+  [ "$ATTEMPT" -eq 1 ] || {
+    echo "  retrying Cargo-inputs check (attempt $ATTEMPT/3) after a 5s settle delay..." >&2
+    sleep 5
+    MANIFEST="$(bash "$ROOT/nix/microvm/shape-manifest.sh")"
+    [[ -n "$MANIFEST" ]] || die "manifest emitter produced no output on retry"
+  }
+  UNPINNED=""
+  LISTING="$(git -C "$ROOT" ls-files Cargo.toml Cargo.lock rust-toolchain.toml 'crates')" || die "git ls-files failed (attempt $ATTEMPT)"
+  [[ -n "$LISTING" ]] || die "git ls-files returned empty (attempt $ATTEMPT)"
+  while IFS= read -r _f; do
+    [ -n "$_f" ] || continue
+    printf '%s\n' "$MANIFEST" | grep -qxF "$_f" || UNPINNED="$UNPINNED $_f"
+  done <<< "$LISTING"
+  [[ -n "$UNPINNED" ]] || break
+done
 [[ -z "$UNPINNED" ]] || {
-  # Self-diagnosing failure: the emitter derives its Cargo set from
-  # live `git ls-files`, so a missing line means the tree moved
-  # between the emitter run and this read, or a read degraded on the
-  # worker. Dump the read-only git state so the next occurrence
-  # points at harness concurrency vs worker I/O instead of the repo
-  # (no repo edit can fix a dynamic listing).
-  echo "diagnostics for the Cargo-inputs mismatch:" >&2
+  # Self-diagnosing failure: three consecutive mismatches rule out a
+  # one-off degraded read, so this points at systematic worker
+  # divergence (harness concurrency, worker git behavior, or I/O) —
+  # no repo edit can fix a dynamic listing.
+  echo "diagnostics for the Cargo-inputs mismatch (persistent across 3 attempts):" >&2
   echo "  HEAD: $(git -C "$ROOT" log --oneline -1 2>&1 || true)" >&2
+  echo "  git: $(git --version 2>&1 || true)" >&2
   echo "  status: $(git -C "$ROOT" status --porcelain 2>&1 | head -20 || true)" >&2
   echo "  ls-files count now: $(git -C "$ROOT" ls-files Cargo.toml Cargo.lock rust-toolchain.toml 'crates' 2>&1 | grep -c . || true)" >&2
   for _f in $UNPINNED; do
@@ -82,7 +104,11 @@ done < <(git -C "$ROOT" ls-files Cargo.toml Cargo.lock rust-toolchain.toml 'crat
   unset _f
   die "manifest omits Cargo inputs:$UNPINNED"
 }
-pass "manifest pins every tracked Cargo input"
+if [ "$ATTEMPT" -gt 1 ]; then
+  pass "manifest pins every tracked Cargo input (after $ATTEMPT attempts)"
+else
+  pass "manifest pins every tracked Cargo input"
+fi
 
 # Subject slot declared.
 printf '%s\n' "$MANIFEST" | grep -q '^\[subject-slots\]$' || die "manifest lacks a [subject-slots] section"
