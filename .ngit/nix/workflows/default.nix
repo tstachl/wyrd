@@ -1,7 +1,8 @@
 # .ngit/nix/workflows/default.nix — CI commands for the native Nix path.
 #
 # One command group per workflow file (shell.yaml → `shell`, rust.yaml
-# → `rust`, nix.yaml → `nix`), one command per run job. Commands are
+# → `rust`, nix.yaml → `nix`, dist.yaml → `dist`, page.yaml → `page`),
+# one command per run job. Commands are
 # writeShellApplications whose runtimeInputs carry every tool the job
 # shells out to — the guest is a plain NixOS VM, so nothing may be
 # assumed beyond the closure.
@@ -125,6 +126,60 @@ in
           ".#nixosConfigurations.wyrd-$role.pkgs.path" > /dev/null
       done
       nix flake check --no-build --option eval-cache false
+    '';
+  };
+
+  # Phase 4: release archive and static site. dist.publish reuses the
+  # wyrd-dist tarball realised by the leading build step (same store,
+  # no rebuild) and uploads it to public Blossom mirrors with an
+  # ephemeral identity: integrity is hash-based, so the uploader key
+  # carries no trust. Tag runs only. page.check pins marketing claims
+  # to docs with bun; page.deploy publishes via wrangler with the
+  # Cloudflare secrets (master pushes only: PR jobs cannot request
+  # secrets, so there is no PR preview leg).
+  dist.publish = pkgs.writeShellApplication {
+    name = "dist-publish";
+    runtimeInputs = with pkgs; [ nix git nak ];
+    text = ''
+      set -euo pipefail
+      out=$(nix build .#packages.x86_64-linux.wyrd-dist --print-out-paths --no-link)
+      test -f "$out"
+      sha=$(nix hash file --type sha256 --base16 "$out")
+      echo "artifact=$out"
+      echo "sha256=$sha"
+      printf '%s' "$sha" > "$NGIT_CI_OUTPUT_DIR/sha256.txt"
+      printf '%s' "$(basename "$out")" > "$NGIT_CI_OUTPUT_DIR/artifact.txt"
+      # Ephemeral upload identity: integrity is hash-based, so the
+      # uploader key carries no trust. The human publisher verifies
+      # the sha256 below before referencing it in the release.
+      eph=$(nak key generate)
+      for server in \
+        https://blossom.primal.net \
+        https://nostr.download \
+        https://cdn.hzrd149.com; do
+        echo "--- $server"
+        nak blossom upload --server "$server" --sec "$eph" "$out"
+      done
+    '';
+  };
+
+  page.check = pkgs.writeShellApplication {
+    name = "page-check";
+    runtimeInputs = with pkgs; [ bun ];
+    text = ''
+      set -euo pipefail
+      bun run page/check.ts
+    '';
+  };
+
+  page.deploy = pkgs.writeShellApplication {
+    name = "page-deploy";
+    runtimeInputs = with pkgs; [ wrangler coreutils ];
+    text = ''
+      set -euo pipefail
+      export CLOUDFLARE_ACCOUNT_ID="$(tr -d '\n' < "$NGIT_CI_SECRETS_DIR/CLOUDFLARE_ACCOUNT")"
+      export CLOUDFLARE_API_TOKEN="$(tr -d '\n' < "$NGIT_CI_SECRETS_DIR/CLOUDFLARE_API_TOKEN")"
+      wrangler pages deploy page/ --project-name=wyrd-enesis-md
     '';
   };
 }

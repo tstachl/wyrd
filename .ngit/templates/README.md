@@ -26,6 +26,6 @@ to use the template and is hidden by most renderers.
 - Templates contain **only `{{...}}` placeholders** for repo-specific content;
   the surrounding scaffolding stays the same across uses.
 - Reference issues from PRs as `nostr:nevent1...` URIs (never raw hex IDs) per
-  the ngit skill rules.
+  the gate skill rules.
 - Keep templates in sync with the contribution workflow in `AGENTS.md`: any
   change to the required issue shape should be reflected here in the same PR.
