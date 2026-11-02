@@ -12,7 +12,13 @@
 # a run command here.
 { pkgs, crane, src }:
 let
-  # (No shared prelude: each command below is self-contained.)
+  # The exact channel pinned in rust-toolchain.toml, so the audit job
+  # dispatches `cargo audit` / `cargo deny` through the same cargo as
+  # the flake builds. (The subcommand binaries alone are not enough:
+  # cargo discovers them via the driver on PATH.)
+  toolchain =
+    pkgs.rust-bin.fromRustupToolchainFile
+      (src + "/rust-toolchain.toml");
 in
 {
   # Phase 1: hermetic harness suites. Deliberately no `nix`: the two
@@ -74,11 +80,15 @@ in
   # CLI to clone the advisory DB.
   rust.audit = pkgs.writeShellApplication {
     name = "rust-audit";
-    runtimeInputs = with pkgs; [
+    # cargo-audit shells out to the git CLI to clone the advisory DB;
+    # coreutils/gnugrep cover what the subcommands shell out to.
+    runtimeInputs = [ toolchain ] ++ (with pkgs; [
+      coreutils
+      gnugrep
       cargo-audit
       cargo-deny
       git
-    ];
+    ]);
     text = ''
       set -euo pipefail
       cargo audit --color never
