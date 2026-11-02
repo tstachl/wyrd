@@ -482,6 +482,10 @@ where
         }
         Err(_) => {
             tracing::error!(stage = "sync", "supervised loop thread failed");
+            // The drain died with the loop thread, so nothing will ever
+            // run the queued requests: fail them now rather than strand
+            // their submitters (same mop-up as the join-Ok path).
+            supervisor.close_admission();
             let serving = serving.shutdown(deadlines.serving);
             if let Err(error) = &serving {
                 tracing::warn!(stage = "serving", error = %error, "serving shutdown failed");

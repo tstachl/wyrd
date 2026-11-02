@@ -72,8 +72,10 @@ pub(super) struct QueueState {
     /// completion and authoring under this same lock, so the operator
     /// surface reads a consistent copy with no extra locking.
     stats: WriteStats,
-    /// Closed by [`MutationQueue::shutdown`]: the loop will never drain
-    /// again, so new submissions fail fast instead of queueing behind it.
+    /// Closed by [`MutationQueue::close`] or [`MutationQueue::shutdown`]:
+    /// new submissions fail fast instead of queueing behind a dead loop.
+    /// `close` leaves already-queued requests for the loop thread's
+    /// post-return drain; `shutdown` fails them at once.
     closed: bool,
 }
 
