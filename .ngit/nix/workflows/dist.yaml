@@ -1,0 +1,35 @@
+# Native release-archive workflow (port of the former
+# .ngit/act/workflows/dist.yml).
+#
+# Builds the Linux x86_64 build-input tarball and uploads it to public
+# Blossom mirrors. This is the one release leg no maintainer machine can
+# build (Apple Silicon cannot execute x86_64-linux nix derivations,
+# Rosetta included). The tarball is not a release asset (release.yaml
+# names only installers since 07): it is the Flatpak module source the
+# publisher verifies by hash and builds the linux-x86_64 bundle from at
+# release time.
+#
+# Tag-triggered per release, never by normal CI. The human release flow
+# is manual through v0.x: cut the tag, let this workflow build the
+# x86_64 leg in CI, fetch the tarball from a mirror, build the installer
+# legs locally (macOS .dmg with signing and notarization, Linux
+# .flatpak bundles), and publish by hand. See `.ngit/release.yaml`.
+version: 1
+system: x86_64-linux
+name: dist
+reuse: never
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  dist-x86_64:
+    steps:
+      - dist:
+          build: packages.x86_64-linux.wyrd-dist
+      - publish:
+          run: dist.publish
+    public-outputs:
+      sha256: sha256.txt
+      artifact: artifact.txt

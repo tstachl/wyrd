@@ -1,7 +1,7 @@
 # Release manifest for `ngit release publish`: with this committed, a release
 # needs the version plus the four installer assets below, built and evidenced
 # per this runbook. Release flow is manual through v0.x
-# (see dist.yml header): cut the tag, let CI build the linux-x86_64
+# (see dist.yaml header): cut the tag, let CI build the linux-x86_64
 # build-input tarball (the Flatpak module source, not a release asset),
 # fetch it from a mirror, build the installer legs locally, sign, publish
 # by hand, and record the findings on the release issue for the next
@@ -28,7 +28,7 @@
 #      cover the rebased tip; re-run after the final rebase.
 #   5. Tag the release commit `v<version>` and push the tag (the version
 #      derives from the tag with one leading `v` stripped, so it must equal
-#      the Cargo version). Pushing the tag fires dist.yml in CI
+#      the Cargo version). Pushing the tag fires dist.yaml in CI
 #      automatically: do NOT trigger it by hand as well. There is no cancel
 #      (`ci stop` ends all CI), so check `ci status` before any manual
 #      trigger, and trigger only to retry a failed run.
