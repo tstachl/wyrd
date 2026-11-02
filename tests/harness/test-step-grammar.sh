@@ -3,7 +3,7 @@
 # bash, no harness, no guest, no nix: run it anywhere with
 # `bash tests/harness/test-step-grammar.sh`. It pins the contract the harnesses
 # share, so a grammar change fails here before it can reach Lima or odin.
-# (Wired into the CI shell-tests job alongside the ngit helpers.)
+# (Wired into the CI shell-tests job.)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

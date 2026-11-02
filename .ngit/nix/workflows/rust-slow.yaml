@@ -1,0 +1,46 @@
+# Native slow rust gates (the master-only supplement, restoring the
+# old act pipeline's master-only slow step as its own workflow).
+#
+# The `slow` nextest profile holds what the default PR gate excludes
+# so PR runs stay fast: the >10s live-relay integration tests, the
+# ceiling-scale admission tests, and the individually measured
+# ~20s-or-more heavyweights (see `.config/nextest.toml`: the `slow`
+# profile is the master-CI supplement; master CI runs `default` plus
+# `slow`). Tests needing a public relay or kernel FUSE stay
+# `#[ignore]`d and never run in CI, so this stays sandbox-safe as a
+# pure build derivation like the other rust gates.
+#
+# Master pushes only, scoped like the rust workflow so the same code
+# changes trigger it. No pull_request leg: PRs run the default profile
+# through `rust.yaml`, and the 8 GiB floor below would burn a shared
+# high-memory slot on every draft push. Ready-gating is irrelevant —
+# pushes to master are the only trigger.
+version: 1
+system: x86_64-linux
+name: rust-slow
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "deny.toml"
+      - "rust-toolchain.toml"
+      - "flake.nix"
+      - "flake.lock"
+      - "nix/**"
+      - "tests/**"
+      - ".ngit/nix/**"
+
+jobs:
+  # Slow profile as a pure build: compiles against the shared
+  # rust-deps like the other gates (compile-once shape) and runs the
+  # profile in the derivation's check phase. Higher memory floor for
+  # nextest parallelism over the heavyweight set.
+  slow-tests:
+    requirements:
+      resources:
+        memory-mib: {gte: 8192}
+    build: checks.x86_64-linux.rust-slow-tests
