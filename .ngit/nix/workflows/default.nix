@@ -42,11 +42,14 @@ let
 
   # One cargo invocation per command, mirroring the act rust job's
   # flags exactly (plus offline, via the prelude). Fail-fast like the
-  # act steps (bash -e).
+  # act steps (bash -e). coreutils and gnugrep ride every job:
+  # writeShellScript carries no PATH of its own, so the cargoOffline
+  # prelude's mktemp/cat (and rust.check's grep over the feature
+  # graph) resolve from the sourcing application's closure.
   cargoCmd = name: extraInputs: script:
     pkgs.writeShellApplication {
       inherit name;
-      runtimeInputs = [ toolchain ] ++ extraInputs;
+      runtimeInputs = [ toolchain pkgs.coreutils pkgs.gnugrep ] ++ extraInputs;
       text = ''
         set -euo pipefail
         # shellcheck disable=SC1091
