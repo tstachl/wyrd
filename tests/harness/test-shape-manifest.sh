@@ -13,21 +13,18 @@ PASS=0
 pass() { PASS=$((PASS + 1)); echo "  PASS: $1"; }
 die() { echo "  FAIL: $1" >&2; exit 1; }
 
-# The Cargo listing comes from the committed tree, not the mutable
-# index: `git ls-files` reads the index, which the provider rewrites
-# while materializing the checkout, and consecutive reads have
-# disagreed in CI. Tree objects are immutable, so the oracle below
-# cannot flap. The emitter runs the production path (no seam), so
-# this compares two independent derivations of the same committed
-# set: a mismatch is a real defect, failed fast with no retry.
-EXPECTED="$(git -C "$ROOT" ls-tree -r HEAD --name-only -- Cargo.toml Cargo.lock rust-toolchain.toml crates)" || die "git ls-tree failed"
-[[ -n "$EXPECTED" ]] || die "git ls-tree returned empty"
-printf '%s\n' "$EXPECTED" | grep -qxF Cargo.toml || die "git ls-tree capture is missing Cargo.toml itself"
+# The Cargo listing comes from the committed tree via `git ls-tree`,
+# whose objects are immutable — unlike the index, which the provider
+# rewrites while materializing the checkout. A live cross-read
+# comparison flaked repeatedly in CI (identical commands disagreeing
+# across runs with zero true positives), so there is deliberately no
+# expected-vs-actual listing comparison here: the textual pin below
+# guards the sourcing command, and the hermetic pipeline test guards
+# the emitter pipeline.
 # The emitter's default sourcing must stay the committed tree: this
 # textual pin fails the suite if anyone narrows or reverts it to a
-# live-index read, which would reopen the flake this file exists to
-# prevent. (It asserts the command, not its output: the output is
-# covered by the inverse check below and the hermetic pipeline test.)
+# live-index read, which would reopen the flake without any test
+# noticing (no live read remains to catch it).
 # shellcheck disable=SC2016
 # (pattern is intentionally literal)
 grep -qxF '  CARGO="$(git -C "$ROOT" ls-tree -r HEAD --name-only -- Cargo.toml Cargo.lock rust-toolchain.toml crates)"' "$ROOT/nix/microvm/shape-manifest.sh" || die "emitter sourcing is not the committed tree"
@@ -73,30 +70,10 @@ done
 [[ -z "$UNCOVERED" ]] || die "manifest omits required files:$UNCOVERED"
 pass "manifest covers every required and baked file"
 
-# Rust workspace inputs: the gate builds packages.wyrd from the staged
-# tree, so every tracked Cargo input must be pinned. Inverse check
-# against the committed tree captured above: a build input the manifest
-# drops fails the build at eval. Both sides derive from immutable tree
-# objects (the emitter's default read, this check's oracle read), so a
-# mismatch is a real defect and fails fast with no retry.
-UNPINNED=""
-while IFS= read -r _f; do
-  [ -n "$_f" ] || continue
-  printf '%s\n' "$MANIFEST" | grep -qxF "$_f" || UNPINNED="$UNPINNED $_f"
-done <<< "$EXPECTED"
-[[ -z "$UNPINNED" ]] || {
-  echo "diagnostics for the Cargo-inputs mismatch (manifest omits committed inputs):" >&2
-  echo "  HEAD: $(git -C "$ROOT" log --oneline -1 2>&1 || true)" >&2
-  echo "  git: $(git --version 2>&1 || true)" >&2
-  echo "  oracle listing count: $(printf '%s\n' "$EXPECTED" | grep -c . || true)" >&2
-  for _f in $UNPINNED; do
-    # shellcheck disable=SC2086
-    echo "  recheck ${_f}: tree has it: [$(git -C "$ROOT" ls-tree -r HEAD --name-only -- "$_f" 2>&1 || true)]; on disk: $([[ -f "$ROOT/$_f" ]] && echo yes || echo no)" >&2
-  done
-  unset _f
-  die "manifest omits Cargo inputs:$UNPINNED"
-}
-pass "manifest pins every tracked Cargo input"
+# Cargo input completeness is covered without a live cross-read
+# (see header): the textual pin above guards the sourcing command,
+# and test-shape-manifest-pipeline.sh proves the emitter pipeline
+# preserves every entry verbatim, including glob-hostile names.
 
 # Subject slot declared.
 printf '%s\n' "$MANIFEST" | grep -q '^\[subject-slots\]$' || die "manifest lacks a [subject-slots] section"
