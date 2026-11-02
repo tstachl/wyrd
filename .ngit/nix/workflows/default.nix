@@ -43,9 +43,9 @@ in
       util-linux
       gnutar
     ];
-    # Same E2E harness stubs as the act shell-tests job (excluding
-    # .ngit/scripts/tests/run-all.sh, which stays act-only in phase
-    # 1), so a native green means the same thing as an act green.
+    # Same E2E harness stubs as the former act shell-tests job
+    # (excluding run-all.sh, which ran ngit-helper suites rather than
+    # e2e evidence), so a native green covers the same stubs.
     # Fail-fast like the act step (bash -e): the first red suite
     # stops the job and its tail names the failure.
     text = ''

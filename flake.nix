@@ -448,7 +448,8 @@
       # file under .ngit/nix/workflows, exposed per system. Only
       # x86_64-linux until another provider exists; the coordinator
       # resolves `run` references against these (see the workflow docs
-      # in the ngit-ci repo). Act workflows are untouched.
+      # in the ngit-ci repo). The act pipeline is removed; native is
+      # the CI path.
       ngit-ci.commands.x86_64-linux = import ./.ngit/nix/workflows {
         pkgs = pkgsFor "x86_64-linux";
         inherit crane;

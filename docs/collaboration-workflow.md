@@ -41,7 +41,7 @@ gate pr cover --body-file cover.md
 
 The cover note describes the whole PR. Progress goes in comments.
 
-**CI** runs only on `ready_for_review`, and only for PRs touching paths listed in `.ngit/act/workflows/` (for `workflow.yml`: `crates/**`, `Cargo.toml`, `Cargo.lock`, `deny.toml`, `rust-toolchain.toml`, `flake.*`, the workflow itself, and `.ngit/scripts/*.sh`). Drafts and docs-only PRs run no Rust CI. Docs are covered by the `doc-links` pre-commit hook, which link-checks every local Markdown reference.
+**CI** runs on `master` pushes and PR `ready_for_review`, and only for changes touching paths listed in `.ngit/nix/workflows/` (`shell.yaml`, `rust.yaml`, `nix.yaml`: `crates/**`, `Cargo.toml`, `Cargo.lock`, `deny.toml`, `rust-toolchain.toml`, `flake.*`, `nix/**`, `tests/**`, and `.ngit/nix/**`). Drafts and docs-only changes run no CI jobs. Docs are covered by the `doc-links` pre-commit hook, which link-checks every local Markdown reference.
 
 ## 3. Review and update
 
