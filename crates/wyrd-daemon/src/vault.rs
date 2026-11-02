@@ -385,10 +385,11 @@ pub struct VaultRun<V: NamespaceView, M, B> {
 
 /// Run a headless vault to completion: install the serving surface,
 /// supervise the live loop on its own thread under `stop`, wait for
-/// the first of loop return or stop trip, close admission (a vault
-/// has no presentation session and therefore no teardown submitter —
-/// the close follows the loop join immediately instead of a session
-/// join), reap the loop thread, and run the shared transport tail.
+/// the first of loop return or stop trip, close admission for the
+/// drain (a vault has no presentation session and therefore no
+/// teardown submitter — no session join to bound one), reap the loop
+/// thread (its post-return drain has executed everything queued), mop
+/// up with `close_admission`, and run the shared transport tail.
 /// Returns the loop's end plus the transport outcome; the host maps
 /// both to its exit status.
 ///
@@ -578,9 +579,10 @@ pub fn compose_headless_owner(
 /// Run a composed headless owner to completion under `stop`: install
 /// the serving surface, serve the drive-owner interface beside the
 /// drive, supervise the live loop, wait for the first of loop return
-/// or stop trip, close admission (no presentation session exists to
-/// submit through, so the close only settles close-racers), reap the
-/// loop thread, stop the interface, and run the shared transport
+/// or stop trip, close admission for the post-return drain (no
+/// presentation session exists to submit through, so nothing new can
+/// queue behind the drain), reap the loop thread, mop up with
+/// `close_admission`, stop the interface, and run the shared transport
 /// tail under the mount's bounds. The ONLY headless run path, next
 /// to the ONLY headless composition path above.
 ///

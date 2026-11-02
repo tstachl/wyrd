@@ -351,6 +351,51 @@ fn submit_after_shutdown_fails_fast() {
     assert_eq!(queue.outstanding(), 0, "refusals hold no slots");
 }
 
+/// Closing admission keeps queued requests for the teardown drain:
+/// an admitted-but-incomplete request stays queued (not failed),
+/// later submissions fail fast, and draining the taken batch
+/// completes the submitter. A follow-up `shutdown` then finds
+/// nothing pending and is a no-op. Deterministic: the test thread
+/// drives admission, close, and drain — no timing involved.
+#[test]
+fn close_keeps_queued_requests_for_the_drain() {
+    let queue = Arc::new(MutationQueue::default());
+    let submitter = {
+        let queue = Arc::clone(&queue);
+        std::thread::spawn(move || queue.submit(mkdir("docs")))
+    };
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while queue.outstanding() == 0 {
+        assert!(Instant::now() < deadline, "submission never admitted");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    queue.close();
+    assert!(queue.is_closed(), "close flips the admission latch");
+    assert_eq!(
+        queue.queue_depth(),
+        1,
+        "the admitted request stays queued for the drain"
+    );
+    assert_eq!(
+        queue.submit(mkdir("later")),
+        Err(MutationError::Shutdown),
+        "a submission after close fails fast without queueing"
+    );
+    assert_eq!(queue.outstanding(), 1, "refusals hold no slots");
+    let mut batch = queue.take_batch();
+    assert_eq!(batch.len(), 1, "the drain takes the queued request");
+    batch.record(0, Ok(MutationOutcome::Done));
+    batch.finish();
+    assert_eq!(
+        submitter.join().unwrap(),
+        Ok(MutationOutcome::Done),
+        "the drained request resolves Done, never Shutdown"
+    );
+    assert_eq!(queue.outstanding(), 0, "completion releases the slot");
+    queue.shutdown();
+    assert_eq!(queue.outstanding(), 0, "mop-up shutdown is a no-op");
+}
+
 /// Submitters racing shutdown all resolve with `Shutdown`, whether
 /// admitted-then-drained or refused-at-admission: no interleaving
 /// blocks. The channel (not a join) bounds the wait so a regression
