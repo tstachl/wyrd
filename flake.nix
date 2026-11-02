@@ -441,5 +441,15 @@
         inherit crane;
         src = ./.;
       };
+      # Rust gate derivations (compile-once shape): rust.deps compiles
+      # third-party and dev-dependencies once per Cargo.lock; each
+      # gate compiles only workspace crates against those artifacts.
+      # The coordinator realises these for rust.yaml's build jobs;
+      # `nix flake check` ignores the ngit-ci namespace.
+      ngit-ci.builds.x86_64-linux = import ./.ngit/nix/builds {
+        pkgs = pkgsFor "x86_64-linux";
+        inherit crane;
+        src = ./.;
+      };
     };
 }

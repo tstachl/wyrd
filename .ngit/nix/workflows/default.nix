@@ -1,70 +1,18 @@
 # .ngit/nix/workflows/default.nix — CI commands for the native Nix path.
 #
 # One command group per workflow file (shell.yaml → `shell`, rust.yaml
-# → `rust`, nix.yaml → `nix`), one command per job. Commands are
+# → `rust`, nix.yaml → `nix`), one command per run job. Commands are
 # writeShellApplications whose runtimeInputs carry every tool the job
 # shells out to — the guest is a plain NixOS VM, so nothing may be
 # assumed beyond the closure.
+#
+# The rust compile gates live one layer down as pure derivations
+# (ngit-ci.builds, realised by rust.yaml's build jobs); only the
+# audit job — which needs the network for the advisory DB — remains
+# a run command here.
 { pkgs, crane, src }:
 let
-  # The exact channel pinned in rust-toolchain.toml, so CI compiles
-  # with the same rustc as the devenv shell and the flake builds.
-  # pkgs already carries the rust-overlay (see pkgsFor in flake.nix).
-  toolchain =
-    pkgs.rust-bin.fromRustupToolchainFile
-      (src + "/rust-toolchain.toml");
-  craneLib = (crane.mkLib pkgs).overrideToolchain toolchain;
-
-  # Vendored third-party sources, resolved once per lockfile: every
-  # rust command below builds and tests offline. The vendor derivation
-  # itself fetches at build time; job runtime never touches the
-  # network for dependencies (the audit job is the documented
-  # exception — the advisory DB is a live feed, not a dependency).
-  vendor = craneLib.vendorCargoDeps {
-    src = craneLib.cleanCargoSource src;
-  };
-
-  # Shared prelude for the cargo jobs: scratch CARGO_HOME (primed
-  # with the vendor source replacement) and scratch target dir, both
-  # on writable temp space — the checkout may be read-only and the
-  # store always is. Everything after this runs offline.
-  cargoOffline = pkgs.writeShellScript "wyrd-cargo-offline.sh" ''
-    export CARGO_HOME="$(mktemp -d)"
-    export CARGO_TARGET_DIR="$(mktemp -d)"
-    if [ -f "${vendor}/config.toml" ]; then
-      cat "${vendor}/config.toml" >>"$CARGO_HOME/config.toml"
-    else
-      printf '[source.crates-io]\nreplace-with = "nix-sources"\n[source.nix-sources]\ndirectory = "%s"\n' \
-        "${vendor}" >>"$CARGO_HOME/config.toml"
-    fi
-    export CARGO_NET_OFFLINE=true
-  '';
-
-  # Toolchain plus the C toolchain the workspace's build scripts
-  # shell out to: linker `cc`, fuse probes via pkg-config. The guest
-  # is a bare NixOS VM, so only the closure provides them. Mirrors
-  # the Linux inputs of binFor in flake.nix (pkg-config probing,
-  # libfuse2 link probe); the audit job does no compilation and
-  # stays lean (it needs git for the advisory DB instead).
-  compileInputs = [ pkgs.stdenv.cc pkgs.pkg-config pkgs.fuse ];
-
-  # One cargo invocation per command, mirroring the act rust job's
-  # flags exactly (plus offline, via the prelude). Fail-fast like the
-  # act steps (bash -e). coreutils and gnugrep ride every job:
-  # writeShellScript carries no PATH of its own, so the cargoOffline
-  # prelude's mktemp/cat (and rust.check's grep over the feature
-  # graph) resolve from the sourcing application's closure.
-  cargoCmd = name: extraInputs: script:
-    pkgs.writeShellApplication {
-      inherit name;
-      runtimeInputs = [ toolchain pkgs.coreutils pkgs.gnugrep ] ++ extraInputs;
-      text = ''
-        set -euo pipefail
-        # shellcheck disable=SC1091
-        source ${cargoOffline}
-        ${script}
-      '';
-    };
+  # (No shared prelude: each command below is self-contained.)
 in
 {
   # Phase 1: hermetic harness suites. Deliberately no `nix`: the two
@@ -118,48 +66,25 @@ in
     '';
   };
 
-  # Phase 2: rust gates. Each job mirrors one act step (same flags,
-  # plus offline). The production feature-graph gate rides with
-  # `check`: both ask "is the normal graph clean", and splitting
-  # them would double the cheapest compile in the phase.
-  rust.check = cargoCmd "rust-check" compileInputs ''
-    cargo check --color never --offline
-    # Production feature graph excludes insecure-fast-kdf: the normal
-    # dependency graph (no dev/test edges) must never enable it.
-    cargo tree -e normal,features --workspace --offline >"$CARGO_TARGET_DIR/features.log"
-    if grep -q insecure-fast-kdf "$CARGO_TARGET_DIR/features.log"; then
-      echo "error: the normal dependency graph enables insecure-fast-kdf" >&2
-      grep -n insecure-fast-kdf "$CARGO_TARGET_DIR/features.log" >&2
-      exit 1
-    fi
-  '';
-
-  rust.clippy = cargoCmd "rust-clippy" compileInputs ''
-    cargo clippy --workspace --all-targets --offline -- -D warnings
-  '';
-
-  rust.tests = cargoCmd "rust-tests" ([ pkgs.cargo-nextest ] ++ compileInputs) ''
-    cargo nextest run --color never --workspace
-  '';
-
-  rust.doctests = cargoCmd "rust-doctests" compileInputs ''
-    cargo test --color never --workspace --doc --offline
-  '';
-
-  # The one job allowed network: the advisory DB is a live feed, not
-  # a dependency, so offline vendoring does not apply to it. Cargo
-  # itself still resolves offline; only the audit/deny DB fetches
-  # reach the network. git: cargo-audit shells out to the git CLI to
-  # clone the advisory DB.
-  rust.audit = cargoCmd "rust-audit" [
-    pkgs.cargo-audit
-    pkgs.cargo-deny
-    pkgs.git
-  ] ''
-    unset CARGO_NET_OFFLINE
-    cargo audit --color never
-    cargo deny check
-  '';
+  # Phase 2: the audit job is the only remaining run command — the
+  # advisory DB is a live feed, not a dependency, and sandbox-free
+  # guest egress is the only way to fetch it. (The compile gates
+  # moved to pure derivations under ngit-ci.builds, realised by
+  # rust.yaml's build jobs.) git: cargo-audit shells out to the git
+  # CLI to clone the advisory DB.
+  rust.audit = pkgs.writeShellApplication {
+    name = "rust-audit";
+    runtimeInputs = with pkgs; [
+      cargo-audit
+      cargo-deny
+      git
+    ];
+    text = ''
+      set -euo pipefail
+      cargo audit --color never
+      cargo deny check
+    '';
+  };
 
   # Phase 3: nix evaluation and package builds. The two build jobs
   # realise the same derivations act built; the flake-check job is

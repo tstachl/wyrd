@@ -1,11 +1,14 @@
 # Native rust gates (phase 2 of the act → Nix port).
-# Mirrors the act rust job step for step — check (+ the production
-# feature-graph gate), clippy, nextest default profile, doctests,
-# audit+deny — so a native green means the same thing as an act
-# green. Dependencies resolve offline from the vendored lockfile;
-# only the audit job reaches the network (advisory DB), and only for
-# the DB. No requirements beyond coordinator defaults, no artifacts
-# (no provider Blossom yet), no secrets, no Docker.
+# Compile-once shape: the deps job compiles third-party and
+# dev-dependencies a single time per Cargo.lock (published to the
+# managed cache); each gate compiles only workspace crates against
+# those artifacts. Mirrors the act rust job step for step — check (+
+# the production feature-graph gate), clippy, nextest default
+# profile, doctests, audit+deny — so a native green means the same
+# thing as an act green. Only the audit job reaches the network
+# (advisory DB), and only for the DB. No requirements beyond
+# coordinator defaults, no artifacts (no provider Blossom yet), no
+# secrets, no Docker.
 version: 1
 system: x86_64-linux
 name: rust
@@ -41,13 +44,15 @@ on:
       - ".ngit/nix/**"
 
 jobs:
+  deps:
+    build: ngit-ci.builds.x86_64-linux.rust.deps
   check:
-    run: rust.check
+    build: ngit-ci.builds.x86_64-linux.rust.check
   clippy:
-    run: rust.clippy
+    build: ngit-ci.builds.x86_64-linux.rust.clippy
   tests:
-    run: rust.tests
+    build: ngit-ci.builds.x86_64-linux.rust.tests
   doctests:
-    run: rust.doctests
+    build: ngit-ci.builds.x86_64-linux.rust.doctests
   audit:
     run: rust.audit
