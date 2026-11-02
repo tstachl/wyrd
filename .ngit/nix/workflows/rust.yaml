@@ -13,16 +13,16 @@ version: 1
 system: x86_64-linux
 name: rust
 
-# Floor the providers can schedule on: the dep closure export
-# peaked near 10 GiB of scratch, and linking the workspace wants
-# real RAM. Mirrors the reference CI's pins (their ci.yaml asks the
-# same); demanding less risks another disk-full startup failure,
-# demanding more risks starving behind capacity that is already the
-# binding constraint.
+# Resource floors the provider can actually match: the Incus
+# adapter advertises vcpus, memory-mib and (when diskGiB is set)
+# disk-mib — there is no scratch-mib key, and the coordinator
+# matches keys exactly with no fallback, so demanding scratch-mib
+# vetoes scheduling outright (jobs sit until the search deadline).
+# Disk is enforced where it belongs, at the adapter via diskGiB;
+# memory-mib is the binding floor the host already provides.
 requirements:
   resources:
     memory-mib: {gte: 4096}
-    scratch-mib: {gte: 16384}
 
 on:
   push:
