@@ -63,6 +63,8 @@ gate review wait
 
 Request one review per finished tip, never on a revision you plan to amend. Skip re-review for non-blocking-only deltas; report the tip and move on to CI. Blocking findings earn exactly one re-review after the fix.
 
+**Docs-only findings** go to a follow-up issue, never a PR commit. `docs/**` fires no CI jobs in any native workflow, so a docs fix neither needs nor gets a CI round — and bundling one with trigger-path files burns a full round for nothing.
+
 Reply to review comments as yourself from the PR worktree. `gate review post` is reviewer-only and always posts as the review signer.
 
 ```bash
