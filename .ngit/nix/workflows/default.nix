@@ -177,8 +177,9 @@ in
     runtimeInputs = with pkgs; [ wrangler coreutils ];
     text = ''
       set -euo pipefail
-      export CLOUDFLARE_ACCOUNT_ID="$(tr -d '\n' < "$NGIT_CI_SECRETS_DIR/CLOUDFLARE_ACCOUNT")"
-      export CLOUDFLARE_API_TOKEN="$(tr -d '\n' < "$NGIT_CI_SECRETS_DIR/CLOUDFLARE_API_TOKEN")"
+      CLOUDFLARE_ACCOUNT_ID="$(tr -d '\n' < "$NGIT_CI_SECRETS_DIR/CLOUDFLARE_ACCOUNT")"
+      CLOUDFLARE_API_TOKEN="$(tr -d '\n' < "$NGIT_CI_SECRETS_DIR/CLOUDFLARE_API_TOKEN")"
+      export CLOUDFLARE_ACCOUNT_ID CLOUDFLARE_API_TOKEN
       wrangler pages deploy page/ --project-name=wyrd-enesis-md
     '';
   };
