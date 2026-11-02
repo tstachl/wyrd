@@ -72,10 +72,12 @@ TEST_FILES="$(printf '%s\n' "$FILES" | grep -E '.' | sort -u)"
 # workspace from it), so the workspace must be staged. Tracked files
 # only, via git ls-files (sorted): target/ and VCS state never enter
 # the build, and an untracked file cannot silently slip into the shape.
-CARGO="Cargo.toml
-Cargo.lock
-rust-toolchain.toml
-$(git -C "$ROOT" ls-files 'crates')"
+# Single-sourced with the test's expectation (which runs this exact
+# command): a separate listing here once diverged from the test's in
+# the guest by two files, failing a clean tree. Identical command,
+# identical result — any residual mismatch means the tree actually
+# moved mid-run.
+CARGO="$(git -C "$ROOT" ls-files Cargo.toml Cargo.lock rust-toolchain.toml 'crates')"
 
 # Baked set: the repo files common.nix bakes into /etc/wyrd-tests,
 # read from the .source targets so the manifest follows the layout

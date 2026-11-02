@@ -192,7 +192,9 @@
         };
         default = self.apps.${system}.wyrd;
       });
-      # The package build plus the release archive, per system.
+      # The package build plus the release archive, per system, plus
+      # the rust gates the native CI builds (compile-once shape: deps
+      # once per lockfile, each gate only workspace crates).
       # `nix flake check` builds the current system's entries; CI covers
       # linux, the maintainer's machine darwin.
       # On x86_64-linux the Incus images join the gate as
@@ -206,7 +208,7 @@
       checks = forAllSystems (system: {
         wyrd = self.packages.${system}.wyrd;
         wyrd-dist = self.packages.${system}.wyrd-dist;
-      } // nixpkgs.lib.optionalAttrs (system == "x86_64-linux") {
+      } // nixpkgs.lib.optionalAttrs (system == "x86_64-linux") ({
         wyrd-image-peer-o = self.images.peer-o;
         wyrd-image-peer-n = self.images.peer-n;
         wyrd-image-relay = self.images.relay;
@@ -214,7 +216,18 @@
         # attest the package attribute the images resolve it from,
         # on the platform that runs it.
         wyrd-image-nak = self.packages.${system}.nak;
-      });
+        # Rust gate derivations for the native CI (compile-once
+        # shape): rust-deps compiles third-party and
+        # dev-dependencies once per Cargo.lock; each gate compiles
+        # only workspace crates against those artifacts. Flat rust-*
+        # names: `nix flake check` requires every checks entry to be a
+        # derivation. The coordinator realises these for rust.yaml's
+        # build jobs.
+      } // import ./.ngit/nix/builds {
+        pkgs = pkgsFor "x86_64-linux";
+        inherit crane;
+        src = ./.;
+      }));
       # Declarative drive services (34): one module, two modes, one
       # declaration per drive. The same file serves NixOS and
       # nix-darwin, selected on `stdenv` inside.
@@ -430,6 +443,17 @@
         peer-n = self.nixosConfigurations.wyrd-peer-n.config.system.build.gateImage;
         relay = self.nixosConfigurations.wyrd-relay.config.system.build.gateImage;
         drive = self.nixosConfigurations.wyrd-drive-vm.config.system.build.gateImage;
+      };
+      # Native CI commands (ngit-ci Nix path): one group per workflow
+      # file under .ngit/nix/workflows, exposed per system. Only
+      # x86_64-linux until another provider exists; the coordinator
+      # resolves `run` references against these (see the workflow docs
+      # in the ngit-ci repo). The act pipeline is removed; native is
+      # the CI path.
+      ngit-ci.commands.x86_64-linux = import ./.ngit/nix/workflows {
+        pkgs = pkgsFor "x86_64-linux";
+        inherit crane;
+        src = ./.;
       };
     };
 }

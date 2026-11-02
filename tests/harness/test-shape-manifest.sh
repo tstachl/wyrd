@@ -100,7 +100,7 @@ grep -q '^set -euo pipefail$' "$ROOT/nix/microvm/shape-manifest.sh" \
 pass "emitter runs under strict mode"
 FAILBIN="$(mktemp -d)"
 trap 'rm -rf "$FAILBIN"' EXIT
-printf '#!/bin/sh\nexit 1\n' >"$FAILBIN/git"
+printf '#!%s\nexit 1\n' "$(command -v sh)" >"$FAILBIN/git"
 chmod +x "$FAILBIN/git"
 if PATH="$FAILBIN:$PATH" bash "$ROOT/nix/microvm/shape-manifest.sh" >/dev/null 2>&1; then
   die "emitter succeeded with a failing git (strict mode is off)"

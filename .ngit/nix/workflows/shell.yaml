@@ -1,0 +1,43 @@
+# Native shell-harness workflow (phase 1 of the act → Nix port).
+# Same E2E harness stubs as the former act shell-tests job, so a
+# native green covers the same stubs (excluding run-all.sh, which
+# ran ngit-helper suites rather than e2e evidence). No requirements (the
+# suites are light; coordinator defaults apply), no artifacts (the
+# provider has no Blossom target yet), no secrets.
+version: 1
+system: x86_64-linux
+name: shell
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "deny.toml"
+      - "rust-toolchain.toml"
+      - "flake.nix"
+      - "flake.lock"
+      - "nix/**"
+      - "tests/**"
+      - ".ngit/nix/**"
+  pull_request:
+    # Ready-gated like the act job: draft pushes spend no CI, the
+    # draft-to-ready transition mints the run.
+    types: [ready_for_review]
+    paths:
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "deny.toml"
+      - "rust-toolchain.toml"
+      - "flake.nix"
+      - "flake.lock"
+      - "nix/**"
+      - "tests/**"
+      - ".ngit/nix/**"
+
+jobs:
+  suites:
+    run: shell.suites
