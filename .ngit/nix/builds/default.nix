@@ -36,6 +36,10 @@ let
     strictDeps = true;
     nativeBuildInputs = [ pkgs.pkg-config ];
     buildInputs = [ pkgs.fuse ];
+    # Same dev profile as the gates: without this the hook default
+    # (release) builds release artifacts nobody consumes, and every
+    # gate recompiles the world in dev instead of sharing.
+    env = { CARGO_PROFILE = ""; };
   };
 
   # Common gate inputs: shared artifacts plus the native prelude for
