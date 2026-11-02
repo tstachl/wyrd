@@ -40,6 +40,14 @@ let
     export CARGO_NET_OFFLINE=true
   '';
 
+  # Toolchain plus the C toolchain the workspace's build scripts
+  # shell out to: linker `cc`, fuse probes via pkg-config. The guest
+  # is a bare NixOS VM, so only the closure provides them. Mirrors
+  # the Linux inputs of binFor in flake.nix (pkg-config probing,
+  # libfuse2 link probe); the audit job does no compilation and
+  # stays lean (it needs git for the advisory DB instead).
+  compileInputs = [ pkgs.stdenv.cc pkgs.pkg-config pkgs.fuse ];
+
   # One cargo invocation per command, mirroring the act rust job's
   # flags exactly (plus offline, via the prelude). Fail-fast like the
   # act steps (bash -e). coreutils and gnugrep ride every job:
@@ -114,7 +122,7 @@ in
   # plus offline). The production feature-graph gate rides with
   # `check`: both ask "is the normal graph clean", and splitting
   # them would double the cheapest compile in the phase.
-  rust.check = cargoCmd "rust-check" [ ] ''
+  rust.check = cargoCmd "rust-check" compileInputs ''
     cargo check --color never --offline
     # Production feature graph excludes insecure-fast-kdf: the normal
     # dependency graph (no dev/test edges) must never enable it.
@@ -126,25 +134,27 @@ in
     fi
   '';
 
-  rust.clippy = cargoCmd "rust-clippy" [ ] ''
+  rust.clippy = cargoCmd "rust-clippy" compileInputs ''
     cargo clippy --workspace --all-targets --offline -- -D warnings
   '';
 
-  rust.tests = cargoCmd "rust-tests" [ pkgs.cargo-nextest ] ''
+  rust.tests = cargoCmd "rust-tests" ([ pkgs.cargo-nextest ] ++ compileInputs) ''
     cargo nextest run --color never --workspace
   '';
 
-  rust.doctests = cargoCmd "rust-doctests" [ ] ''
+  rust.doctests = cargoCmd "rust-doctests" compileInputs ''
     cargo test --color never --workspace --doc --offline
   '';
 
   # The one job allowed network: the advisory DB is a live feed, not
   # a dependency, so offline vendoring does not apply to it. Cargo
   # itself still resolves offline; only the audit/deny DB fetches
-  # reach the network.
+  # reach the network. git: cargo-audit shells out to the git CLI to
+  # clone the advisory DB.
   rust.audit = cargoCmd "rust-audit" [
     pkgs.cargo-audit
     pkgs.cargo-deny
+    pkgs.git
   ] ''
     unset CARGO_NET_OFFLINE
     cargo audit --color never
