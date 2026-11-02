@@ -77,7 +77,7 @@ gate ci wait
 gate pr ready
 ```
 
-If CI fails, it posts the truncated failure tail as a PR comment and returns the PR to draft. Push the fix and mark ready again to re-trigger.
+Never push while CI is still running on the tip: the push orphans the in-flight run, wastes its compute, and leaves no usable signal on either revision — wait for it to settle, then push the batch.
 
 **History.** Don't rewrite published history unless the workflow requires it. Merging `master` in for review tooling is fine; gate tolerates it at merge time. Merging in another branch's commits is not, so rebase those out. Keep unrelated worktree changes out of the PR.
 
