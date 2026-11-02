@@ -43,6 +43,15 @@ let
   # mirroring binFor's Linux inputs in flake.nix. Outputs are
   # unconsumed — a succeeding build IS the gate — so no artifact
   # install.
+  #
+  # Dev profile, matching the act steps (`cargo check`, plain
+  # `cargo clippy/test/nextest`): crane defaults to release
+  # (CARGO_PROFILE=release when unset), and a profile mismatch
+  # silently defeats artifact sharing — release-built deps are
+  # useless to dev-profile gates, which recompile everything from
+  # scratch. Empty (not unset) so the hook's `${VAR-release}`
+  # default does not kick in; plain `cargo` never read the variable
+  # anyway.
   gateArgs = {
     inherit version;
     cargoArtifacts = rustDeps;
@@ -51,6 +60,7 @@ let
     doInstallCargoArtifacts = false;
     nativeBuildInputs = [ pkgs.pkg-config ];
     buildInputs = [ pkgs.fuse ];
+    env = { CARGO_PROFILE = ""; };
   };
 
   # check, plus the production feature-graph gate that rode with it
