@@ -1,13 +1,17 @@
 # Native rust gates (phase 2 of the act → Nix port).
-# Compile-once shape: the deps job compiles third-party and
-# dev-dependencies a single time per Cargo.lock (published to the
-# managed cache); each gate compiles only workspace crates against
-# those artifacts. Mirrors the act rust job step for step — check (+
-# the production feature-graph gate), clippy, nextest default
-# profile, doctests, audit+deny — so a native green means the same
-# thing as an act green. Only the audit job reaches the network
-# (advisory DB), and only for the DB. No requirements beyond
-# coordinator defaults, no artifacts (no provider Blossom yet), no
+# Two steps jobs sharing one store each: every job gets a fresh Incus
+# VM with a cold /nix/store, and crane sharing (cargoArtifacts =
+# rustDeps) only helps on a binary-cache hit — with no cache served,
+# per-gate build jobs each rebuilt rust-deps independently. Steps in
+# one job share the same VM and store, so deps builds once per job
+# (twice total) instead of four-plus times. Two jobs, not one: a
+# single serial run exceeds the 30-minute allocation. needs: between
+# build jobs is forbidden and shares no Nix state; only steps share.
+# Mirrors the act rust job step for step — check (+ the production
+# feature-graph gate), clippy, nextest default profile, doctests,
+# audit+deny — so a native green means the same thing as an act
+# green. Only the audit step reaches the network (advisory DB), and
+# only for the DB. No artifacts (no provider Blossom yet), no
 # secrets, no Docker.
 version: 1
 system: x86_64-linux
@@ -55,15 +59,30 @@ on:
       - ".ngit/nix/**"
 
 jobs:
-  deps:
-    build: checks.x86_64-linux.rust-deps
-  check:
-    build: checks.x86_64-linux.rust-check
-  clippy:
-    build: checks.x86_64-linux.rust-clippy
-  tests:
-    build: checks.x86_64-linux.rust-tests
-  doctests:
-    build: checks.x86_64-linux.rust-doctests
-  audit:
-    run: rust.audit
+  # Fast gates: deps once, then check + clippy reuse it in the same
+  # store, then the audit run command (network for the advisory DB).
+  # Build steps lead; the run step closes — no run before build.
+  gates-fast:
+    steps:
+      - deps:
+          build: checks.x86_64-linux.rust-deps
+      - check:
+          build: checks.x86_64-linux.rust-check
+      - clippy:
+          build: checks.x86_64-linux.rust-clippy
+      - audit:
+          run: rust.audit
+  # Slow gates: deps once, then the two test suites reuse it in the
+  # same store. Higher memory floor for nextest parallelism; no
+  # scratch-mib (unschedulable — the adapter never advertises it).
+  gates-slow:
+    requirements:
+      resources:
+        memory-mib: {gte: 8192}
+    steps:
+      - deps:
+          build: checks.x86_64-linux.rust-deps
+      - tests:
+          build: checks.x86_64-linux.rust-tests
+      - doctests:
+          build: checks.x86_64-linux.rust-doctests
