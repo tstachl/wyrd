@@ -3,28 +3,33 @@
 # Fails on links whose target file does not exist, or whose #anchor
 # matches no heading in the target file.
 #
-# Run from the checkout: ./ngit/scripts/tests/test-doc-links.sh
-# Exits nonzero on any failure. Pure bash, no network.
+# Run from the checkout: .ngit/scripts/tests/test-doc-links.sh
+# Exits nonzero on any failure. Bash plus git/grep/sed, no network.
 set -uo pipefail
 
 fail=0
 
 # Heading text -> GitHub-style anchor slug: lowercase, drop punctuation
-# except hyphens/underscores, spaces to hyphens.
+# except hyphens/underscores (dots too, matching GitHub), spaces to hyphens.
 slug() {
-  printf '%s' "$1" \
+  printf '%s\n' "$1" \
     | tr '[:upper:]' '[:lower:]' \
-    | sed -e 's/[[:space:]]/-/g' -e 's/[^a-z0-9_.-]//g'
+    | sed -e 's/[[:space:]]/-/g' -e 's/[^a-z0-9_-]//g'
 }
 
 check_file() {
-  local src="$1" srcdir target anchor full line link
+  local src="$1" srcdir anchor full line link rest
   srcdir="$(dirname "$src")"
   while IFS= read -r line; do
-    # Extract ](target) occurrences one at a time.
+    # Extract ](target) occurrences one at a time, cutting past the
+    # match literally: $link may contain glob characters (`[`, `*`,
+    # `?`), so it must never be used as a pattern — an unmatched
+    # strip leaves `line` unchanged and the outer loop spins forever.
     while [[ "$line" =~ \]\(([^\)]+)\) ]]; do
       link="${BASH_REMATCH[1]}"
-      line="${line#*]($link)}"
+      rest="${line#*](}"
+      rest="${rest:${#link}}"
+      line="${rest#\)}"
       case "$link" in
         http://*|https://*|mailto:*|nostr:*|"") continue ;;
       esac
@@ -48,10 +53,11 @@ check_file() {
         continue
       fi
       if [[ -n "$anchor" ]]; then
+        # Literal match: anchors may contain regex characters.
         if ! grep -E '^#{1,6} ' "$full" \
             | sed -e 's/^#* //' \
             | while IFS= read -r h; do slug "$h"; done \
-            | grep -qx "$anchor"; then
+            | grep -qxF "$anchor"; then
           echo "BROKEN: $src -> $link (no heading #$anchor)"
           fail=1
         fi
