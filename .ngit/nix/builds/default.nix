@@ -1,10 +1,12 @@
 # .ngit/nix/builds/default.nix — Rust gate derivations for the native Nix path.
 #
-# Compile-once shape: rust.deps (buildDepsOnly) compiles third-party
+# Compile-once shape: rust-deps (buildDepsOnly) compiles third-party
 # and dev-dependencies a single time per Cargo.lock; each gate takes
-# those artifacts and compiles only workspace crates. Exposed under
-# checks.x86_64-linux.rust, which rust.yaml's build jobs realise
-# (the coordinator validates `build:` targets against that namespace).
+# those artifacts and compiles only workspace crates. Exposed as flat
+# rust-* entries under checks.x86_64-linux, which rust.yaml's build
+# jobs realise (`nix flake check` requires every checks entry to be
+# a derivation, so the gates cannot nest the way ngit-ci.commands
+# nests per workflow file).
 { pkgs, crane, src }:
 let
   # The exact channel pinned in rust-toolchain.toml, so CI compiles
@@ -50,15 +52,12 @@ let
     nativeBuildInputs = [ pkgs.pkg-config ];
     buildInputs = [ pkgs.fuse ];
   };
-in
-{
-  rust.deps = rustDeps;
 
   # check, plus the production feature-graph gate that rode with it
   # in the act steps: `cargo check` proves the workspace compiles;
   # `cargo tree` proves the normal graph stays free of
   # insecure-fast-kdf.
-  rust.check = craneLib.mkCargoDerivation (gateArgs // {
+  rustCheck = craneLib.mkCargoDerivation (gateArgs // {
     pname = "wyrd";
     pnameSuffix = "-check";
     doCheck = false;
@@ -75,7 +74,7 @@ in
 
   # clippy through the pinned toolchain (not nixpkgs' clippy: under
   # -D warnings any version drift is fatal).
-  rust.clippy = craneLib.mkCargoDerivation (gateArgs // {
+  rustClippy = craneLib.mkCargoDerivation (gateArgs // {
     pname = "wyrd";
     pnameSuffix = "-clippy";
     doCheck = false;
@@ -84,14 +83,21 @@ in
   });
 
   # Nextest default profile: the PR gate.
-  rust.tests = craneLib.cargoNextest (gateArgs // {
+  rustTests = craneLib.cargoNextest (gateArgs // {
     pname = "wyrd";
     cargoNextestExtraArgs = "--color never --workspace";
   });
 
   # Doctests run in the check phase.
-  rust.doctests = craneLib.cargoDocTest (gateArgs // {
+  rustDoctests = craneLib.cargoDocTest (gateArgs // {
     pname = "wyrd";
     cargoTestExtraArgs = "--color never --workspace";
   });
+in
+{
+  rust-deps = rustDeps;
+  rust-check = rustCheck;
+  rust-clippy = rustClippy;
+  rust-tests = rustTests;
+  rust-doctests = rustDoctests;
 }

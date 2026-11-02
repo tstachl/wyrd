@@ -45,14 +45,14 @@ on:
 
 jobs:
   deps:
-    build: checks.x86_64-linux.rust.deps
+    build: checks.x86_64-linux.rust-deps
   check:
-    build: checks.x86_64-linux.rust.check
+    build: checks.x86_64-linux.rust-check
   clippy:
-    build: checks.x86_64-linux.rust.clippy
+    build: checks.x86_64-linux.rust-clippy
   tests:
-    build: checks.x86_64-linux.rust.tests
+    build: checks.x86_64-linux.rust-tests
   doctests:
-    build: checks.x86_64-linux.rust.doctests
+    build: checks.x86_64-linux.rust-doctests
   audit:
     run: rust.audit

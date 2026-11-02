@@ -208,7 +208,7 @@
       checks = forAllSystems (system: {
         wyrd = self.packages.${system}.wyrd;
         wyrd-dist = self.packages.${system}.wyrd-dist;
-      } // nixpkgs.lib.optionalAttrs (system == "x86_64-linux") {
+      } // nixpkgs.lib.optionalAttrs (system == "x86_64-linux") ({
         wyrd-image-peer-o = self.images.peer-o;
         wyrd-image-peer-n = self.images.peer-n;
         wyrd-image-relay = self.images.relay;
@@ -216,16 +216,18 @@
         # attest the package attribute the images resolve it from,
         # on the platform that runs it.
         wyrd-image-nak = self.packages.${system}.nak;
-        # Rust gate derivations for the native CI: rust.deps compiles
-        # third-party and dev-dependencies once per Cargo.lock; each
-        # gate compiles only workspace crates against those artifacts.
-        # The coordinator realises these for rust.yaml's build jobs.
-        rust = (import ./.ngit/nix/builds {
-          pkgs = pkgsFor "x86_64-linux";
-          inherit crane;
-          src = ./.;
-        }).rust;
-      });
+        # Rust gate derivations for the native CI (compile-once
+        # shape): rust-deps compiles third-party and
+        # dev-dependencies once per Cargo.lock; each gate compiles
+        # only workspace crates against those artifacts. Flat rust-*
+        # names: `nix flake check` requires every checks entry to be a
+        # derivation. The coordinator realises these for rust.yaml's
+        # build jobs.
+      } // import ./.ngit/nix/builds {
+        pkgs = pkgsFor "x86_64-linux";
+        inherit crane;
+        src = ./.;
+      }));
       # Declarative drive services (34): one module, two modes, one
       # declaration per drive. The same file serves NixOS and
       # nix-darwin, selected on `stdenv` inside.
