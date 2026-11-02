@@ -79,7 +79,9 @@ TEST_FILES="$(printf '%s\n' "$FILES" | grep -E '.' | sort -u)"
 # ls-files selection on a clean tree.
 # SHAPE_MANIFEST_CARGO is a test seam: the hermetic pipeline test
 # injects a fixture listing through it. Production callers leave it
-# unset and get the committed tree below.
+# unset and get the committed tree below. (Gate runs on a clean tree,
+# so HEAD equals the staged set; dirty-tree staged additions are
+# intentionally unpinned and fail closed at eval.)
 if [ -n "${SHAPE_MANIFEST_CARGO:-}" ]; then
   CARGO="$SHAPE_MANIFEST_CARGO"
 else

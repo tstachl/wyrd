@@ -28,6 +28,8 @@ printf '%s\n' "$EXPECTED" | grep -qxF Cargo.toml || die "git ls-tree capture is 
 # live-index read, which would reopen the flake this file exists to
 # prevent. (It asserts the command, not its output: the output is
 # covered by the inverse check below and the hermetic pipeline test.)
+# shellcheck disable=SC2016
+# (pattern is intentionally literal)
 grep -qxF '  CARGO="$(git -C "$ROOT" ls-tree -r HEAD --name-only -- Cargo.toml Cargo.lock rust-toolchain.toml crates)"' "$ROOT/nix/microvm/shape-manifest.sh" || die "emitter sourcing is not the committed tree"
 MANIFEST="$(bash "$ROOT/nix/microvm/shape-manifest.sh")"
 [[ -n "$MANIFEST" ]] || die "manifest emitter produced no output"

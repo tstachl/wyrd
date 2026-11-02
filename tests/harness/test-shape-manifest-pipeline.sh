@@ -10,7 +10,7 @@
 # test-shape-manifest.sh; the production path (no seam) is exercised
 # by that suite.
 #
-# Run from the checkout: bash .ngit/scripts/tests/test-shape-manifest-pipeline.sh
+# Run from the checkout: bash tests/harness/test-shape-manifest-pipeline.sh
 # Exits nonzero on any failure.
 set -uo pipefail
 

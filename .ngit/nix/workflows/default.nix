@@ -56,6 +56,7 @@ in
       bash tests/harness/test-step-grammar.sh
       bash tests/harness/test-baked-set.sh
       bash tests/harness/test-shape-manifest.sh
+      bash tests/harness/test-shape-manifest-pipeline.sh
       bash tests/harness/test-supervise.sh
       bash tests/harness/test-drive-probe.sh
       bash tests/harness/test-wyrd-module.sh
