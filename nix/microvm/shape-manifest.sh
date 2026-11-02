@@ -72,12 +72,19 @@ TEST_FILES="$(printf '%s\n' "$FILES" | grep -E '.' | sort -u)"
 # workspace from it), so the workspace must be staged. Tracked files
 # only, via git ls-files (sorted): target/ and VCS state never enter
 # the build, and an untracked file cannot silently slip into the shape.
-# Single-sourced with the test's expectation (which runs this exact
-# command): a separate listing here once diverged from the test's in
-# the guest by two files, failing a clean tree. Identical command,
-# identical result — any residual mismatch means the tree actually
-# moved mid-run.
-CARGO="$(git -C "$ROOT" ls-files Cargo.toml Cargo.lock rust-toolchain.toml 'crates')"
+# SHAPE_MANIFEST_CARGO is a test seam: the consistency suite hands
+# the agreed listing in so the manifest is compared against exactly
+# what the emitter pinned. Comparing two live reads flakes in CI (the
+# emitter-side read has dropped between one and five entries while an
+# identical re-read lists all 443 — worker-side read degradation, never
+# reproduced locally), so the suite single-sources the listing and the
+# emitter must not re-read when one is provided. Production callers
+# leave it unset and get the live read below.
+if [ -n "${SHAPE_MANIFEST_CARGO:-}" ]; then
+  CARGO="$SHAPE_MANIFEST_CARGO"
+else
+  CARGO="$(git -C "$ROOT" ls-files Cargo.toml Cargo.lock rust-toolchain.toml 'crates')"
+fi
 
 # Baked set: the repo files common.nix bakes into /etc/wyrd-tests,
 # read from the .source targets so the manifest follows the layout
