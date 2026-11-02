@@ -163,6 +163,22 @@ in
     runtimeInputs = [ pkgs.nix pkgs.git ];
     text = ''
       set -euo pipefail
+      # Materialize the nixpkgs tree behind pkgs.path before the
+      # check: the image checks instantiate derivations through
+      # gate's `import "''${pkgs.path}/nixos/lib/make-disk-image.nix"`,
+      # and that import refuses a content-addressed tree copy whose
+      # NAR is absent ("path ... is not valid") instead of
+      # re-materializing it. Evaluating the path below re-materializes
+      # the copy from the pristine flake input, so the check then
+      # finds it valid. All four image roles share the one nixpkgs
+      # input, hence the one copy; all four are named so a future
+      # input split stays covered. Cold evaluation like the check
+      # itself (--option eval-cache false): a cached path value must
+      # never stand in for the copy.
+      for role in peer-o peer-n relay drive-vm; do
+        nix eval --raw --option eval-cache false \
+          ".#nixosConfigurations.wyrd-$role.pkgs.path" > /dev/null
+      done
       nix flake check --no-build --option eval-cache false
     '';
   };
