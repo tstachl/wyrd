@@ -45,14 +45,14 @@ on:
 
 jobs:
   deps:
-    build: ngit-ci.builds.x86_64-linux.rust.deps
+    build: checks.x86_64-linux.rust.deps
   check:
-    build: ngit-ci.builds.x86_64-linux.rust.check
+    build: checks.x86_64-linux.rust.check
   clippy:
-    build: ngit-ci.builds.x86_64-linux.rust.clippy
+    build: checks.x86_64-linux.rust.clippy
   tests:
-    build: ngit-ci.builds.x86_64-linux.rust.tests
+    build: checks.x86_64-linux.rust.tests
   doctests:
-    build: ngit-ci.builds.x86_64-linux.rust.doctests
+    build: checks.x86_64-linux.rust.doctests
   audit:
     run: rust.audit

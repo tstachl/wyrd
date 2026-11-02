@@ -2,12 +2,9 @@
 #
 # Compile-once shape: rust.deps (buildDepsOnly) compiles third-party
 # and dev-dependencies a single time per Cargo.lock; each gate takes
-# those artifacts and compiles only workspace crates. The managed
-# cache publishes build-step outputs, so repeat runs substitute
-# dependencies instead of rebuilding them — the previous run-command
-# shape compiled the workspace from scratch in every job. Exposed as
-# ngit-ci.builds.<system>, which `nix flake check` ignores (like
-# ngit-ci.commands); rust.yaml's build jobs realise these.
+# those artifacts and compiles only workspace crates. Exposed under
+# checks.x86_64-linux.rust, which rust.yaml's build jobs realise
+# (the coordinator validates `build:` targets against that namespace).
 { pkgs, crane, src }:
 let
   # The exact channel pinned in rust-toolchain.toml, so CI compiles

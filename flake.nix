@@ -192,7 +192,9 @@
         };
         default = self.apps.${system}.wyrd;
       });
-      # The package build plus the release archive, per system.
+      # The package build plus the release archive, per system, plus
+      # the rust gates the native CI builds (compile-once shape: deps
+      # once per lockfile, each gate only workspace crates).
       # `nix flake check` builds the current system's entries; CI covers
       # linux, the maintainer's machine darwin.
       # On x86_64-linux the Incus images join the gate as
@@ -214,6 +216,15 @@
         # attest the package attribute the images resolve it from,
         # on the platform that runs it.
         wyrd-image-nak = self.packages.${system}.nak;
+        # Rust gate derivations for the native CI: rust.deps compiles
+        # third-party and dev-dependencies once per Cargo.lock; each
+        # gate compiles only workspace crates against those artifacts.
+        # The coordinator realises these for rust.yaml's build jobs.
+        rust = (import ./.ngit/nix/builds {
+          pkgs = pkgsFor "x86_64-linux";
+          inherit crane;
+          src = ./.;
+        }).rust;
       });
       # Declarative drive services (34): one module, two modes, one
       # declaration per drive. The same file serves NixOS and
@@ -437,16 +448,6 @@
       # resolves `run` references against these (see the workflow docs
       # in the ngit-ci repo). Act workflows are untouched.
       ngit-ci.commands.x86_64-linux = import ./.ngit/nix/workflows {
-        pkgs = pkgsFor "x86_64-linux";
-        inherit crane;
-        src = ./.;
-      };
-      # Rust gate derivations (compile-once shape): rust.deps compiles
-      # third-party and dev-dependencies once per Cargo.lock; each
-      # gate compiles only workspace crates against those artifacts.
-      # The coordinator realises these for rust.yaml's build jobs;
-      # `nix flake check` ignores the ngit-ci namespace.
-      ngit-ci.builds.x86_64-linux = import ./.ngit/nix/builds {
         pkgs = pkgsFor "x86_64-linux";
         inherit crane;
         src = ./.;
