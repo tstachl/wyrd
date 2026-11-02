@@ -25,11 +25,20 @@ die() { echo "  FAIL: $1" >&2; exit 1; }
 PREV=""
 AGREED=""
 ATTEMPT=0
+# Per-attempt fingerprints for the persistent-failure diagnostics
+# below: identical sets across attempts mean systematic divergence,
+# differing sets mean flapping reads.
+TRIES=""
 while [ "$ATTEMPT" -lt 3 ]; do
   ATTEMPT=$((ATTEMPT + 1))
   LISTING="$(git -C "$ROOT" ls-files Cargo.toml Cargo.lock rust-toolchain.toml 'crates')" || die "git ls-files failed (agreement attempt $ATTEMPT/3)"
   [[ -n "$LISTING" ]] || die "git ls-files returned empty (agreement attempt $ATTEMPT/3)"
   printf '%s\n' "$LISTING" | grep -qxF Cargo.toml || die "git ls-files capture is missing Cargo.toml itself (agreement attempt $ATTEMPT/3)"
+  COUNT="$(printf '%s\n' "$LISTING" | grep -c .)"
+  DIGEST="$(printf '%s\n' "$LISTING" | md5sum | cut -d' ' -f1)"
+  INDEX_STAT="$(stat -c '%Y %s' "$ROOT/.git/index" 2>&1 || echo "index-stat-failed")"
+  TRIES="$TRIES
+  attempt $ATTEMPT: $COUNT files, md5 $DIGEST, index $INDEX_STAT"
   if [[ -n "$PREV" ]]; then
     if [[ "$LISTING" == "$PREV" ]]; then
       AGREED="$LISTING"
@@ -42,7 +51,11 @@ while [ "$ATTEMPT" -lt 3 ]; do
   fi
   PREV="$LISTING"
 done
-[[ -n "$AGREED" ]] || die "workspace listing never agreed across 3 attempts (git $(git --version 2>&1 || true))"
+[[ -n "$AGREED" ]] || {
+  echo "diagnostics: workspace listing never agreed across 3 attempts (git $(git --version 2>&1 || true)):" >&2
+  printf '%s\n' "$TRIES" >&2
+  die "workspace listing never agreed across 3 attempts"
+}
 EXPECTED="$AGREED"
 unset PREV AGREED LISTING ATTEMPT
 MANIFEST="$(SHAPE_MANIFEST_CARGO="$EXPECTED" bash "$ROOT/nix/microvm/shape-manifest.sh")"
