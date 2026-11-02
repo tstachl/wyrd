@@ -282,6 +282,26 @@ impl MutationQueue {
         }
     }
 
+    /// Close admission without completing queued requests: new
+    /// submissions fail fast with [`MutationError::Shutdown`], but
+    /// already-queued requests stay queued for the teardown drain,
+    /// which the loop thread runs after its return. The composer
+    /// closes first, joins the loop thread (the drain has run by
+    /// then), and follows with `Supervisor::close_admission` as the
+    /// idempotent mop-up for anything left. Splitting close from
+    /// fail-all is what lets an admitted-before-stop write resolve
+    /// `Done` deterministically instead of racing `shutdown`'s
+    /// fail-all for the batch.
+    pub fn close(&self) {
+        self.lock_state().closed = true;
+        // A drain parked in `wait_until_work_or_closed` must observe
+        // the closure even if no submission arrives; a loop parked in
+        // its idle wait must observe it even if the stop trip races
+        // it. Same pokes as `shutdown`, minus the fail-all.
+        self.work.notify_all();
+        self.poke_waker();
+    }
+
     /// Close admission and complete every still-queued request with
     /// [`MutationError::Shutdown`]: the loop will never drain again, so
     /// admitted-but-incomplete callers must hear it now rather than block

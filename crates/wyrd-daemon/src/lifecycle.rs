@@ -142,6 +142,20 @@ impl Supervisor {
         self.waker.wake();
     }
 
+    /// Close admission but leave queued requests for the loop thread's
+    /// post-return drain: an admission made before the stop resolves
+    /// `Done` through the drain instead of racing `shutdown`'s
+    /// fail-all for the batch. Call before joining the loop thread
+    /// (the drain runs, then returns), and follow the join with
+    /// [`Supervisor::close_admission`] as the idempotent mop-up.
+    /// Mount teardown keeps `close_admission` (the session join
+    /// bounds its submitters); this is the vault/headless path,
+    /// which has no session to join on.
+    pub fn close_for_drain(&self) {
+        self.queue.close();
+        self.waker.wake();
+    }
+
     /// Spawn the supervised loop thread: run the loop until `stop`
     /// trips (or a class cap aborts it), report the return on
     /// `trigger`, then drain admitted mutations until the composer

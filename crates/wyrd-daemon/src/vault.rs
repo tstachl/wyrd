@@ -452,15 +452,23 @@ where
             }
         }
     }
-    // No session to join: close admission at once. A vault admits no
-    // teardown submission after the loop returns (no presentation
-    // surface exists to submit through), so the close only settles
-    // close-racers instead of bounding destroy's commits the way the
-    // mount's session join does.
-    supervisor.close_admission();
+    // No session to join: close admission at once, but leave queued
+    // requests for the loop thread's post-return drain — an admission
+    // made before the stop resolves `Done` through the drain instead
+    // of racing `shutdown`'s fail-all for the batch (see
+    // `Supervisor::close_for_drain`). The drain terminates on the
+    // close (empty plus closed returns promptly), so the join below
+    // cannot hang on it.
+    supervisor.close_for_drain();
     tracing::info!(stage = "teardown", "admission closed");
     match drive.join() {
         Ok(returned) => {
+            // Mop-up: the drain executed everything queued, so this
+            // finds nothing pending and changes nothing. Anything
+            // left here would be a close-racer the drain never saw;
+            // failing it closed keeps the post-teardown invariant
+            // (closed and empty) that `close_admission` documents.
+            supervisor.close_admission();
             let mut mailbox = returned.mailbox;
             let bulk = returned.bulk;
             let _live = returned.live;
