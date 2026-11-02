@@ -1,37 +1,29 @@
 # Roadmap
 
-This file tracks the implementation order for Wyrd. The normative contracts
-live in `docs/contracts/object-model.md`, `docs/contracts/trust.md`, `docs/contracts/epochs.md`, and
-`docs/contracts/sync-and-peers.md`; this roadmap stays directional.
+This file tracks implementation order and stays directional. Normative contracts live in `docs/contracts/` (`object-model.md`, `trust.md`, `epochs.md`, `sync-and-peers.md`); per-capability evidence lives in tests and release records.
 
-Milestones are capability-oriented, not issue-volume-oriented. Each milestone
-names the system that must become trustworthy before the next begins. The
-shape is deliberate: v0.2 through v0.3 make the substrate trustworthy,
-v0.4 through v0.7 build products around that substrate, and v0.8 through
-v1.0 make long-term promises about it.
+Milestones are capability-oriented, not issue-volume-oriented. Each names the system that must become trustworthy before the next begins: v0.2 to v0.3 make the substrate trustworthy, v0.4 to v0.7 build products around it, v0.8 to v1.0 make long-term promises about it.
 
-| Milestone | Thesis |
-| --------- | ------ |
-| v0.2 | Trustworthy live synchronization |
-| v0.3 | Durable operation and content recovery |
-| v0.4 | Cross-platform desktop product |
-| v0.5 | Human-scale history and conflict resolution |
-| v0.6 | Mobile synchronization |
-| v0.7 | Production vault infrastructure and disaster recovery |
-| v0.8 | Protocol compatibility and security freeze |
-| v0.9 | Release candidate and soak |
-| v1.0 | Full Wyrd drive |
+| Milestone | Label | Status | Thesis |
+| --------- | ----- | ------ | ------ |
+| v0.2 | `release:v0.2.0-alpha` | shipped | Trustworthy live synchronization |
+| v0.3 | `release:v0.3.0-alpha` | current | Durable operation and content recovery |
+| v0.4 | `release:v0.4` | | Cross-platform desktop product |
+| v0.5 | `release:v0.5` | | Human-scale history and conflict resolution |
+| v0.6 | `release:v0.6` | | Mobile synchronization |
+| v0.7 | `release:v0.7` | | Production vault infrastructure and disaster recovery |
+| v0.8 | `release:v0.8` | | Protocol compatibility and security freeze |
+| v0.9 | `release:v0.9.0-beta` | | Release candidate and soak (required before feature-complete Beta) |
+| v1.0 | `release:v1.0` | | Full Wyrd drive |
+| n/a | `release:backlog` | | Deferred beyond the immediate roadmap |
 
-Read as transitions: v0.2, sync works; v0.3, one machine can safely operate
-it; v0.4, people can use it; v0.5, people can understand its history;
-v0.6, people can use it on mobile; v0.7, infrastructure can keep it alive
-and recover it; v0.8, contracts become long-lived; v0.9, prove the whole
-thing; v1.0, ship it.
+`release:v0.1.0-alpha` is retired but stays on its issues for history. The label scheme itself is in `gate.toml`.
+
+As transitions: v0.2, sync works; v0.3, one machine can safely operate it; v0.4, people can use it; v0.5, people can understand its history; v0.6, people can use it on mobile; v0.7, infrastructure can keep it alive and recover it; v0.8, contracts become long-lived; v0.9, prove the whole thing; v1.0, ship it.
 
 ## Status vocabulary
 
-A capability is never just "done". Across this file, `architecture.md`,
-and design docs, these states are distinct — do not collapse them:
+A capability is never just "done". Here, in `architecture.md`, and in design docs, these states stay distinct:
 
 | Status | Meaning |
 | ------ | ------- |
@@ -42,494 +34,147 @@ and design docs, these states are distinct — do not collapse them:
 | End-to-end verified | The composed workflow has passed its required test. |
 | Proposed / Open | The design or decision is not settled. |
 
-Detailed evidence lives in tests and release records. Docs communicate
-the status accurately and link to that evidence.
+## Placing work on the map
 
-## Triage: placing work on the map
+Issue labeling mechanics are in `docs/collaboration-workflow.md`. Placement rules:
 
-Every triaged issue carries exactly one `release:*` milestone, applied with
-`ngit issue label` in triage — never at creation: creation-time labels are
-lowercased, embedded permanently in the issue event, and cannot be removed
-through a later `ngit label` event. The label scheme is
-`release:v0.2.0-alpha`, `release:v0.3.0-alpha`, and `release:v0.9.0-beta`
-for the existing milestones, then bare `release:v0.4`, `release:v0.5`,
-`release:v0.6`, `release:v0.7`, `release:v0.8`, and `release:v1.0` with no
-qualifier suffix, plus `release:backlog` for visible future work with no
-commitment. Earlier alphas are retired from the scheme but stay on their
-issues for history.
+- A new issue matches a milestone thesis, or it forces a thesis discussion first.
+- **v0.2 entry test** (for work targeting v0.2 or arguing a regression there): does it alter behavior a peer can observe over the network, or prevent locally corrupted or invalid state from being accepted? Performance work qualifies only when current behavior violates an operational bound; otherwise the sequence is correctness, measure, optimize, prove equivalence.
+- **Project rule, all milestones:** protocol and synchronization semantics never depend on whether the consumer is FUSE, a desktop app, iOS, Android, or a vault. Presentation surfaces are adapters around `wyrd-core` and the daemon, never the architecture. Platform clients may differ in process, lifecycle, storage and IPC. Platform-specific abstractions (persistence capabilities, lifecycle, resource budgets, key storage) are inputs to the core, not knowledge of which product is calling. Clients must still consume the same core synchronization and state semantics rather than reimplement them. This keeps v0.4 to v0.7 product work from turning the daemon into a universal application.
 
-- Backlog issues (deferred beyond the immediate roadmap) carry
-  `release:backlog`. The label is the signal; no body sentence is required.
-  No triaged issue is ever without a `release:*` label: an absent milestone
-  is invisible to every label-filtered query, including the milestone
-  queries release planning depends on.
+## Recovery terminology
 
-A new issue matches a milestone thesis below, or it forces a thesis
-discussion first. For v0.2 specifically, the entry test is: does this alter
-behavior a peer can observe over the network, or prevent locally
-corrupted or invalid state from being accepted? Performance work enters v0.2
-only when current behavior violates an operational bound; otherwise the
-sequence is correctness, measure, optimize, prove equivalence.
+"Recovery" always means one of three things. Say which:
 
-Project rule, all milestones: the protocol and synchronization semantics
-never depend on whether the consumer is FUSE, a desktop application, iOS,
-Android, or a vault. Presentation surfaces are adapters around `wyrd-core`
-and the daemon, never the architecture. Platform clients may differ in
-process, lifecycle, storage, and IPC architecture, and legitimate
-platform-specific abstractions (persistence capabilities, lifecycle,
-resource budgets, key storage) are inputs to the core, not knowledge of
-which product is calling; they must nevertheless consume the same core
-synchronization and state semantics rather than reimplementing them. This
-is the constraint that keeps the v0.4 through v0.7 product work from
-turning the daemon into an unmaintainable universal application.
+- **Crash recovery:** a local process or device survives a crash. Shipped.
+- **Content recovery:** stranded local content is grafted into current state. v0.3.
+- **Root recovery:** all capable devices are lost and guardians reconstruct control and root material. v0.7.
 
-## Current Boundary
+Until root recovery lands, losing all capable devices is unrecoverable, as `docs/contracts/trust.md` states. Nothing shipped should be read as operational root recovery.
 
-Protocol identity, wire format, authorization model, and control-plane
-contracts are frozen for v0. Core implementation and local durability
-semantics remain open where the product above them requires it:
+## Shipped foundations
 
-- format and identity types
-- canonical serialization and decoding
-- membership and snapshot authorization
- - epoch keys, capabilities, bootstrap framing, and escrow records
-   (local custody wrap/unwrap; the guardian root-recovery workflow is
-   future work — see Phase 3)
-- control-plane message set and mailbox/signing trait boundaries
+Protocol identity, wire format, authorization model and control-plane contracts are frozen for v0. Core implementation and local durability semantics stay open where the product above them requires it.
 
-Recovery comes in three distinct senses in this file. Say which one, every
-time; never let "recovery" float:
+- **Runtime sync:** durable membership, snapshot, manifest, capability and materialization state; crash recovery and restart reconciliation; transport identity distribution; bulk transport and fetch plan; serving router; relay interoperability across implementations (default gate; live public-relay runs are opt-in hand evidence, never CI).
+- **Filesystem:** FUSE mount via the daemon with fetch-on-open demand machinery. The mount serves read-write by default.
+- **Recovery foundations:** epoch-secret escrow records (T13), bootstrap custody create and reopen, and the recovery-snapshot flag and grafting rules (`docs/contracts/epochs.md`: content grafts, never lineage). Escrow is end to end for local custody, not for guardians.
+- **Hardening:** decode-cost and allocation bounds, property coverage for canonical state transitions, fuzzing of envelope and decoder surfaces.
 
-- crash recovery: a local process or device survives a crash. Shipped.
-- content recovery: stranded local content is grafted into current state.
-  v0.3.
-- root recovery: all capable devices are lost and guardians reconstruct
-  control and root material. v0.7.
+**Open from runtime sync** (not v0.2 blockers):
 
-Phases 1 to 4 shipped their tracked scope: the runtime sync engine, the
-read-only filesystem slice, crash recovery, recovery foundations, and
-the hardening passes are in place and under test. The mounted write path
-has landed since, and the mount serves read-write by default. The
-frontier is the live network (see v0.2 below).
+- **NIP-46 remote signing:** absent. The `SignerSession` boundary and `control/nip46.rs` codecs exist and are fake-tested, but there is no session negotiation. v0 operates with the local signer.
+- **Bulk backpressure on a live network:** the mechanism landed and is loopback-tested (`docs/design/fetch-on-open.md`, property 8). No operational bound is violated on current evidence, so live measurement books to later hardening.
 
-## Phase 1: Runtime Sync — shipped
-
-Goal: turn protocol primitives into a crash-safe, reconnecting sync engine.
-
-Tracked by (all applied):
-
-- `feat(sync): runtime sync engine` (`nostr:nevent1qqsd3u6j08rq9n0u0k9tjl4jp88fqjjktrp2pnqfr0g4tl3rwh425xgpz9mhxue69uhkwunpwdczuap49eehgv5jzw2`)
-- `feat(sync): durable local state and crash recovery` (`nostr:nevent1qqszjy7pcdmf7kztts3q048dr2d46zmjccjq2p5zl5tw5ndg9hgk6tcpz9mhxue69uhkwunpwdczuap49eehgp4ul4q`)
-- `feat(sync): control-plane transport wiring` (`nostr:nevent1qqswa6y6lwxywrnq5gt7w6v25gq9dz37qw7pq2cz63uppl3ajwnzh7cpz9mhxue69uhkwunpwdczuap49eehgtxs4lc`)
-
-Landed:
-
-- durable membership, snapshot, manifest, capability, and materialization
-  state — durable fact log, replay, restart reconciliation under test
-- crash recovery and restart reconciliation, including torn-commit recovery
-- transport identity distribution: BaoRoot announcements, author-signed
-  routing columns, announcement fork gating at intake with route updates
-- bulk object transport type (`IrohBulkSource`) and the fetch plan that
-  consumes the announced identities
-- the serving router peers dial into: a serving endpoint over the
-  durable vault answers peer fetches by transport root, wired in the
-  `wyrd` binary (`WyrdNode::open_serving`) and proven on the
-  real-iroh loopback (contract 13 in `wyrd-contracts`)
-- relay interoperability across implementations: the heterogeneous
-  episode (MiniRelay fake plus rust-nostr's real in-process
-  `LocalRelay` — publication fan-out, per-relay replay with dedupe,
-  outage with survivor intake, recovery with replay convergence)
-  runs in the default gate (`mailbox::tests_crossimpl`); live
-  public-relay runs stay opt-in hand evidence by rule (never in CI)
-
-Open from this phase (status + v0.2 blocker call each — reconciled
-against `docs/architecture.md`, `README.md`, and
-`docs/contracts/sync-and-peers.md`):
-
-- NIP-46 remote signing: absent. The `SignerSession` trait boundary
-  and the `control/nip46.rs` wire codecs exist and are fake-tested;
-  no session-negotiation implementation exists. Not a v0.2 blocker:
-  v0 operates with the local signer, and neither the v0.2 Ship list
-  nor the definition of done below names remote signing.
-- Bulk backpressure under live network conditions: mechanism landed
-  (pass-budget fair-share across providers, `docs/design/fetch-on-open.md`
-  property 8) and loopback-tested; measured pressure on a live
-  network is open. Not a v0.2 blocker: no operational bound is
-  violated on current evidence, so the v0.2 performance entry test
-  does not trigger; live measurement books to later hardening.
-
-## Phase 2: Minimal Filesystem Slice — shipped
-
-Goal: prove the runtime can surface a real drive through a filesystem API.
-
-Tracked by (applied):
-
-- `feat(fuse): minimal read-only mount slice` (`nostr:nevent1qqs9ews64fvne43dvzszggedn789kz4ylyfj88qxzy7epvqwq3wa5fgpz9mhxue69uhkwunpwdczuap49eehgzyghwf`)
-
-Landed:
-
-- read-only FUSE mount via the daemon (`wyrd init`, `wyrd mount`)
-- lookup, readdir, open, read, stat over the mount-free view
-- remote-only fetches through the documented materialization boundary:
-  fetch-on-open demand machinery (want registry, blocking open/read with a
-  bounded `EIO` deadline) proven against the bulk-source contract
-
-Remaining in this phase: nothing — the write path landed and the mount
-serves read-write by default.
-
-## Phase 3: Recovery Foundations — shipped; workflow pending
-
-Goal: land the recovery primitives the trust contract reserves the
-design for (`docs/contracts/trust.md`, Recovery). Making root recovery operational
-end to end (guardians reconstructing a lost root) is explicitly NOT in
-this phase.
-
-Tracked by (applied):
-
-- `feat(sync): recovery protocol completion` (`nostr:nevent1qqszq7ctvnagpkzwdcfyjs2u6ezqw2qrvgcqtsnawrugnz2yxarfxhspz9mhxue69uhkwunpwdczuap49eehgql62dp`)
-
-Landed (foundations — implemented, tested, wired):
-
-- epoch-secret escrow records (T13): wrap/unwrap implemented and
-  under test, wired into bootstrap custody (epoch-1 un-escrow on
-  reopen) — end to end for local custody, not for guardians
-- bootstrap custody handling: create plus reopen flows
-- recovery-snapshot flag and grafting rules, specified in
-  `docs/contracts/epochs.md` (content grafts, never lineage); the creation
-  workflow that mints one is unshipped (see below)
-
-Explicitly NOT landed (unimplemented, untracked — file tracking
-issues before implementing):
+**Not landed, and untracked** (file tracking issues before implementing; all root recovery, see v0.7):
 
 - guardian selection and membership-log guardian fields
-- Shamir reconstruction flow (k-of-n share return, root rebuild,
-  fresh capability / new epoch)
-- share rotation (re-split, re-deliver on compromise or loss)
+- Shamir reconstruction (k-of-n share return, root rebuild, fresh capability and epoch)
+- share rotation
 - historical epoch restoration
-- owner recovery-snapshot creation workflow
 
-Until those land, root loss with all capable devices gone is
-unrecoverable — exactly as `docs/contracts/trust.md` states. Nothing here
-should be read as operational root recovery.
+The owner recovery-snapshot creation workflow is content recovery (v0.3), not root recovery; it tracks against the v0.3 milestone.
 
-## Phase 4: Hardening — shipped
-
-Goal: make the protocol surfaces resilient under adversarial and malformed inputs.
-
-Tracked by (all applied):
-
-- `docs(sync): state the ingest decode-cost bound` (`nostr:nevent1qqstgq2uqm2vtf4efjc6hdah5k4cl856c08vakzn7lmewqkgtew8gscpz9mhxue69uhkwunpwdczuap49eehgf3hxu4`)
-- `test(sync): capability and canonical-apply property follow-ups` (`nostr:nevent1qqsxestle2hqna4lj0794qc8shns9p4nk9r4cd0pxy8rhap28thtd4cpz9mhxue69uhkwunpwdczuap49eehg3u5ztw`)
-- `test(sync): fuzz protocol decoders` (`nostr:nevent1qqs94gh4yjy66kcllmxze7dtu8n0jed3anlz0w7jpjs9rcm3gc7e2lgpz9mhxue69uhkwunpwdczuap49eehg2jard5`)
-
-Landed: decode-cost and allocation bounds, property coverage for canonical
-state transitions, and fuzzing for the envelope and decoder surfaces.
-
-## v0.2 — Trustworthy live synchronization
+## v0.2: Trustworthy live synchronization (shipped)
 
 Thesis: Wyrd can synchronize real drives reliably over the live network.
 
-Ship: multi-relay mailbox operation, relay interoperability, fetch-walk
-alternate-representation fallback and history catch-up, correct closure and
-head gating, demand-driven content acquisition, bounded intake and
-resource consumption, correct shutdown and restart behavior, headless
-sync, sync status, materialization policy, reliable FUSE read/write
-operation, E2E convergence tests, adversarial and runtime property
-tests, operationally meaningful limits and failure behavior.
+Definition of done: given two or more legitimate peers connected through real relay infrastructure, ordinary mutations (including history catch-up after disconnection) converge correctly, survive restart, partition and heal, never silently accept invalid state, and can be operated without a mounted FUSE filesystem. History acquisition and state convergence are separate failure domains, and the definition covers both.
 
-Explicitly do not ship: the recovery grafting workflow (no operator
-surface: no CLI command, no daemon entry point, no owner
-recovery-snapshot creation workflow — that workflow is v0.3),
-mobile, File Provider, sophisticated conflict UI, production
-telemetry platform, marketplace, release distribution (the v0.2.0-alpha
-archives ship through the manual flow to validate release mechanics;
-automated distribution is v0.3+), major
-performance architecture.
+Did not ship: the recovery grafting workflow (no CLI, daemon or embeddable-node entry point; v0.3), mobile, File Provider, conflict UI, production telemetry, marketplace, automated release distribution (v0.2.0-alpha archives shipped through the manual flow), major performance architecture.
 
-Definition of done: given two or more legitimate Wyrd peers connected
-through real relay infrastructure, ordinary mutations — including history
-catch-up after disconnection — converge correctly, survive restart,
-partition, and heal, never silently accept invalid state, and can be
-operated without a mounted FUSE filesystem. History acquisition and state
-convergence are separate failure domains; the definition covers both.
+`Engine::author_recovery_snapshot` stays public at the library layer only, because `wyrd-contracts` pins the grafting rule from outside the crate. That is contract enforcement, not a shipped workflow.
 
-Known v0.2 limitations (documented, not deferred silently): stranded local
-content has no sanctioned path back until the v0.3 content-recovery
-workflow; the local store is cooperative, so concurrent non-cooperating
-writers are outside the supported concurrency model; there is no
-dedicated peer-repair loop or background scrub — corrupt or unreachable
-representations fall back to the next recorded representation inside
-the fetch walk, route publication records one serving peer per
-snapshot, so the alternates are representations, not providers, and
-when no representation serves the waiter fails bounded (EIO) with
-invalid bytes never committed or served. Local bitrot is detected on
-read but never re-fetched — an object recorded as local stays local —
-so a bitrotted object is a permanent read error in v0.2. The repair
-loop and scrub are booked in v0.3 core below; the design, with its
-protocol invariants, is recorded in `docs/design/peer-repair.md`. Known history
-without a reachable provider stays visible but unfetchable, and the
-two cases fail differently: a known snapshot whose manifest chain
-cannot be materialized within the deadline fails `open()`
-bounded (`EIO`); an announcement whose body never arrives leaves the
-snapshot unadopted — a later snapshot built on it classifies
-`UnknownParent`, so its paths never enter the
-projected namespace (`ENOENT`, never a hang). Recovery needs a new
-announcement, since v0.2 provides neither content recovery nor a
-root-recovery workflow (both book to v0.3).
-The case split is normative in `docs/design/fetch-on-open.md`. Control-plane
-delivery is relay-accepted, not recipient-received: the outbox
-commits a `Delivered` fact only when at least one relay accepted the
-write (`SendReport`, normative in `docs/contracts/sync-and-peers.md`), and a
-send no relay accepts leaves the obligation pending for a later pass
-instead of retiring it. Relay acceptance is not evidence of relay
-storage: a relay that acknowledges a write and discards it is
-indistinguishable from delivery, on the sender and on the
-recipient. Relay retention is recovered by reconciliation, not by
-the relay: a peer absent past retention states its gap and the sender
-retransmits from its durable outbox — no relay re-push exists, and none
-is needed (normative in `docs/contracts/sync-and-peers.md`).
-(triage: nostr:nevent1qqs26a0kqnfm72p8l5c3sw2hr4mxf97r4nszm0zm7ekh7facn3h0j7gpz9mhxue69uhkwunpwdczuap49eehgrh0ugr).
-Removal bounds acquisition, not knowledge: a removed device keeps
-its local plaintext, and can keep fetching any content whose
-transport root it learned before removal, from any serving member
-that still answers. It learns no new roots — announcements bound
-to epochs after its removal are sealed under keys it never
-receives. Admitting
-a device walks the live epoch chain's ancestry and commits one
-announcement obligation per closure member in the single admission
-batch — O(recorded history) allocation and commit in one call, with
-no incremental checkpointing. Past the 65,536-record per-commit
-ceiling the admission is refused whole (never truncated, never
-partial); the walk covers the live epoch's chain only, so a
-newcomer admitted epochs later does not re-walk superseded chains
-(open question whether that horizon is intended: see
-nostr:nevent1qqsdypczmlxwznanysne4qlk640fv6akxdskpmzpn9atjr9yvu6a6dgpz9mhxue69uhkwunpwdczuap49eehgcjgtm3).
-Not a v0.2 blocker: it needs a long single-epoch history plus an
-admission, violates no operational bound, and incremental
-checkpointing under the resource budget is the booked fix. The
-ceiling behavior and the cost shape are pinned by
-`admission_closure_cost_scales_with_history` and documented in
-`docs/contracts/resource-limits.md`.
+**Known limitations** (documented, not deferred silently):
 
-Milestone decision (content recovery in v0.2): the grafting
-primitives exist at the library layer only.
-`Engine::author_recovery_snapshot` stays public because
-`wyrd-contracts` pins the normative grafting rule (`docs/contracts/epochs.md`)
-end to end from outside the crate; that pinning is contract
-enforcement, not a shipped workflow. Nothing in the operator surface
-(CLI, daemon, embeddable node) calls it, and the owner
-recovery-snapshot creation workflow that would make grafting operable
-ships in v0.3. Recovery terminology follows the canonical
-definitions above (crash, content, root): this paragraph concerns
-content recovery only.
+- **No content recovery path.** Stranded local content has no sanctioned way back until v0.3. Neither content nor root recovery exists in v0.2.
+- **Cooperative local store.** Concurrent non-cooperating writers are outside the supported concurrency model.
+- **No peer repair or scrub.** A corrupt or unreachable representation falls back to the next recorded one in the fetch walk. Route publication records one serving peer per snapshot, so alternates are representations, not providers. When none serves, the waiter fails bounded (`EIO`) and invalid bytes are never committed or served. Local bitrot is detected on read but never re-fetched, so it is a permanent read error. Fix: v0.3 (`docs/design/peer-repair.md`).
+- **Unreachable history.** A known snapshot whose manifest chain can't be materialized in time fails `open()` with `EIO`. An announcement whose body never arrives leaves the snapshot unadopted, and a later snapshot built on it is `UnknownParent` (`ENOENT`, never a hang). Recovery needs a new announcement. Normative: `docs/design/fetch-on-open.md`.
+- **Delivery is relay-accepted, not recipient-received.** A `Delivered` fact needs at least one relay to accept the write, and acceptance is not evidence of storage. A peer absent past retention states its gap and the sender retransmits from its durable outbox. Normative: `docs/contracts/sync-and-peers.md`.
+- **Removal bounds acquisition, not knowledge.** A removed device keeps its local plaintext and can keep fetching content whose transport root it learned before removal. It learns no new roots, since later announcements are sealed under keys it never receives.
+- **Admission cost is O(recorded history).** Admitting a device commits one announcement obligation per closure member in a single batch, with no incremental checkpointing. Past the 65,536-record per-commit ceiling the admission is refused whole. The walk covers the live epoch's chain only; whether that horizon is intended is an open question (`nostr:nevent1qqsdypczmlxwznanysne4qlk640fv6akxdskpmzpn9atjr9yvu6a6dgpz9mhxue69uhkwunpwdczuap49eehgcjgtm3`). Not a blocker: it needs a long single-epoch history plus an admission and violates no operational bound. Pinned by `admission_closure_cost_scales_with_history`; documented in `docs/contracts/resource-limits.md`.
 
-## v0.3 — Durable operation and content recovery
+## v0.3: Durable operation and content recovery (current)
 
-Thesis: Wyrd is no longer merely a working sync engine; it is something an
-operator can safely run on one machine. Three parts, in dependency order.
+Thesis: Wyrd is something an operator can safely run on one machine. Three parts, in dependency order.
 
-### v0.3 core: durability, recovery, observability
+**Core: durability, recovery, observability.** Device-local durability levels, mutation accumulation versus snapshot commitment, explicit transaction and commit windows, crash semantics, content-recovery snapshots and sanctioned grafting, durable outbox semantics, restart-equivalence testing. Also the peer-repair loop and local scrub: generation-scoped terminal fetch state with waiter completion, local quarantine with re-want, and fetch-failure diagnostics. This lands before editors and mobile build on Wyrd.
 
-Device-local durability levels, mutation accumulation versus snapshot
-commitment, explicit transaction and commit windows, crash semantics,
-content-recovery snapshots and sanctioned grafting, durable outbox
-semantics, restart-equivalence testing. A dedicated peer-repair loop
-and local scrub land here too: generation-scoped terminal fetch
-state with waiter completion, local quarantine with re-want, and
-fetch-failure diagnostics (design and protocol invariants in
-`docs/design/peer-repair.md`). This comes before editors and
-mobile behavior are built on Wyrd.
+Observability is real, not telemetry for its own sake: sync, peer, relay, pending work, fetch failures, materialization, queue and resource pressure, and convergence state, with explicit privacy boundaries (a vault is a different trust position from a client).
 
-Real observability, not telemetry for its own sake: sync, peer, relay,
-pending work, fetch failures, materialization, queue and resource
-pressure, and convergence state, with explicit privacy boundaries (a vault
-is a different trust position from a client).
+**Dogfood: unattended vault operation and self-hosted distribution.** One operator can run a reliable persistent peer: materialization policy, predictable retention, resource limits, restart recovery, health and status, relay and replication configuration, secure credential handling, upgrade behavior. `wyrd vault` on a server should be forgettable. This is not the production vault network (v0.7).
 
-### v0.3 dogfood: unattended vault operation and self-hosted distribution
+Distribution as dogfood (seeder vault, signed manifests, multi-source retrieval, `wyrd-get`, frozen public-read subset) is an optional validation track, not an exit criterion, and must never drive the schedule of the core work. The v0.3.0-alpha cut ships without it; the manual flow in `docs/releases/release-process.md` remains the mechanism.
 
-A single unattended vault: one operator can run a reliable persistent Wyrd
-peer with persistent materialization policy, predictable retention,
-resource limits, restart recovery, health and status, relay and
-replication configuration, secure credential handling, and upgrade
-behavior. `wyrd vault` on a server should be forgettable. This is
-unattended operation, not the production vault network (see v0.7).
+**Architecture: consolidation after semantics stabilize.** The deferred splits (live loop, engine, mailbox supervision, serving, FUSE, contracts, CLI, tests) land once live-network semantics are stable enough that moves are safe. Refactors qualify when they reduce semantic locality cost without changing the active contract, not because a file is large. The goal is that every major invariant has a discoverable home. Don't split files while the semantic boundary is moving.
 
-Distribution as dogfood of that operator system: seeder vault, Wyrd drive
-releases, signed manifests, multi-source retrieval, `wyrd-get`, frozen
-public-read subset. Wyrd uses Wyrd to distribute Wyrd. Distribution is a
-v0.3 target for dogfooding — an optional validation track, not a v0.3 exit
-criterion — and must never become the schedule driver for the core
-durability and recovery work above (the v0.3.0-alpha cut ships without
-the dogfood track: seeder, fetcher, manifest, and drive-distribution
-stayed out per the frame's staffing rule, and the manual flow in
-`docs/releases/release-process.md` remains the distribution mechanism).
-
-### v0.3 architecture: consolidation after the semantics stabilize
-
-The deferred splits (live loop, engine, mailbox supervision, serving,
-FUSE, contracts, CLI, tests) land here, once live-network semantics are
-stable enough that moves are safe. Refactors are eligible when they reduce
-semantic locality cost without changing the active contract; they are not
-scheduled merely because a file is large. The goal is semantic locality —
-every major invariant has a discoverable home — not pretty files. Do not
-split files while the semantic boundary is moving; split them after it
-has stabilized.
-
-## v0.4 — Cross-platform desktop product
+## v0.4: Cross-platform desktop product
 
 Thesis: a normal person can use Wyrd as a desktop file-sync application.
 
-A cross-platform desktop application around the core, on macOS and Linux:
-drive lifecycle (create, join, leave, device enrollment and
-removal or revocation, owner and member management, drive deletion and
-export where applicable), invitation and join flow, sharing and membership
-UX (protocol membership is not user-facing sharing: v0.4 sharing is
-member-only with no role picker — see `docs/contracts/epochs.md` — plus removal
-consequences for materialized data, ownership transfer), sync status,
-pause and resume, selective sync and materialization, storage usage,
-offline status, relay status, conflict indicators, settings,
-notifications, key and device management.
+A desktop application on macOS and Linux covering drive lifecycle (create, join, leave, device enrollment and removal or revocation, owner and member management, deletion and export), invitation and join flow, sharing and membership UX, sync status, pause and resume, selective sync and materialization, storage usage, offline and relay status, conflict indicators, settings, notifications, and key and device management. Protocol membership is not user-facing sharing: v0.4 sharing is member-only with no role picker (`docs/contracts/epochs.md`), plus removal consequences for materialized data and ownership transfer.
 
-Windows is not a target of this milestone: there is no native Windows
-filesystem integration and no Windows application, because the only credential
-reader fails closed on non-Unix builds, so a Windows build cannot open a drive.
-Windows presentation is an explicit future decision, and `docs/architecture.md`
-owns that statement.
+The test: a technically competent person installs the app and creates and manages a drive without learning what the `wyrd` CLI is. The UI talks to the drive-owner interface, not FUSE. FUSE and file-provider integrations are presentation adapters, not the product contract.
 
-The test: a technically competent person installs the application and
-creates and manages a drive without ever learning what the `wyrd` CLI is.
+Windows presentation is a future decision; see `docs/architecture.md`.
 
-**Conflict handling.** v0.4 provides divergence detection, preservation of both
-branches, and inspectable conflict state. Conflict resolution authoring is
-deferred to v0.5, including keep-both semantics and conflict-name assignment.
+**Conflicts:** divergence detection, preservation of both branches, and inspectable conflict state. Resolution authoring (including keep-both and conflict-name assignment) is v0.5.
 
-FUSE stays an implementation and presentation surface where appropriate;
-it is not the product contract. File-provider integrations are platform
-adapters. The UI talks to the drive-owner interface, not to FUSE.
-
-## v0.5 — Human-scale history and conflict resolution
+## v0.5: Human-scale history and conflict resolution
 
 Thesis: the immutable snapshot model becomes a usable human workflow.
 
-Conflict resolution is a namespace and state UI, not a sync-engine
-feature: visual branch and head representation, side-by-side comparison,
-text merge, binary selection, directory and rename/delete reconciliation,
-keep-mine, keep-theirs, keep-both, manual merged results, historical
-snapshots, restore of previous versions, arbitrary snapshot browsing, and
-resolution audit. The governing principle: the UI resolves conflicts by
-creating a new legitimate snapshot transition; it never mutates history.
+Conflict resolution is a namespace and state UI, not a sync-engine feature: branch and head visualization, side-by-side comparison, text merge, binary selection, directory and rename/delete reconciliation, keep-mine / keep-theirs / keep-both, manual merged results, resolution audit. The UI resolves a conflict by creating a new legitimate snapshot transition and never mutates history.
 
-Kept separate from v0.4 on purpose: v0.4 is usable synchronization with
-conflict safety, v0.5 is usable history semantics with human resolution.
+Time travel is also v0.5: browsing arbitrary historical snapshots and restoring previous versions, built on the retained history v0 already keeps but renders only as live heads. Docs must not claim it earlier.
 
-Time travel is the v0.5 deliverable today's docs must not claim early:
-browsing arbitrary historical snapshots and restoring previous versions,
-built on the retained history the v0 substrate already keeps but renders
-only as live heads.
+## v0.6: Mobile synchronization
 
-## v0.6 — Mobile synchronization
+Thesis: Wyrd works as a first-class mobile storage and sync system on iOS and Android.
 
-Thesis: Wyrd works as a first-class mobile storage and sync system, on iOS
-and Android.
+Lifecycle-aware sync, background wakeups, push gateway, battery and resource budgets, cellular and Wi-Fi policy, selective materialization, offline operation, local cache, upload and download queues, foreground catch-up, conflict notifications, secure key storage, device enrollment and removal, mobile-specific recovery.
 
-Lifecycle-aware sync, background wakeups, push gateway, battery and
-resource budgets, cellular and Wi-Fi policy, selective materialization,
-offline operation, local cache, upload and download queues, foreground
-catch-up, conflict notifications, secure key storage, device enrollment
-and removal, mobile-specific recovery.
+The operational contract is wake, inspect durable state, perform bounded work, persist, sleep, never "keep the daemon alive forever". Mobile adds lifecycle and resource policy around the shared sync engine and must not own synchronization semantics. Client semantics develop against ordinary peers; the vault-backed wake topology (phone sleeps, vault holds, desktop converges) is supported in v0.7.
 
-The operational contract is wake, inspect durable state, perform bounded
-work, persist, and sleep — never "keep the daemon alive forever". Mobile
-provides lifecycle and resource policy around the same shared semantic
-sync engine; it must not own synchronization semantics, though its process
-architecture may differ. Mobile client semantics develop against ordinary
-Wyrd peers; the vault-backed wake topology (phone sleeps, vault holds,
-desktop converges) is exercised as a supported topology in v0.7.
+## v0.7: Production vault infrastructure and disaster recovery
 
-## v0.7 — Production vault infrastructure and disaster recovery
+Thesis: Wyrd operates as infrastructure, and infrastructure can keep a drive alive and recover it.
 
-Thesis: Wyrd operates as infrastructure, and infrastructure can keep a
-drive alive and recover it — not merely personal-device sync.
+**Production vault network:** multiple independently operated vaults with unattended replication, replication and residency policy, storage and bandwidth quotas, peer admission and removal, relay configuration, encrypted-at-rest storage, monitoring, alerts, upgrade and migration, and mobile wake workflows as a supported topology. Vaults stay ordinary protocol participants, not privileged servers. Whether "backup" means another Wyrd vault holding replicated state or an independent disaster-recovery copy with its own retention semantics is a v0.7 design decision.
 
-Production vault network: multiple independently operated vaults providing
-durable, policy-controlled infrastructure for drives — unattended
-replication, replication and residency policy, storage and bandwidth
-quotas, peer admission and removal, relay configuration, encrypted-at-rest
-storage, monitoring, a backup and redundancy strategy appropriate to the
-vault's retention and recovery contract (whether "backup" means another
-Wyrd vault holding replicated state or an independent disaster-recovery
-copy with its own retention semantics is a v0.7 design decision, not an
-accident), upgrade, migration, operational alerts, and
-mobile wake and background workflows as a supported operational topology.
-Vaults stay ordinary protocol participants, not privileged servers.
+**Operational root recovery** is a committed deliverable, so v0.8 can audit and freeze it: guardian selection and membership state, Shamir reconstruction, root and control-key reconstruction, fresh capability and epoch after recovery, share rotation, historical epoch handling, recovery after loss of all capable devices or after vault or device compromise, and end-to-end recovery drills. Without it, v0.9 would polish an application whose disaster story is "don't lose all your devices", which doesn't fit the v1 promise.
 
-Operational root recovery becomes a committed deliverable here, so v0.8
-can audit and freeze it: guardian selection and membership state, Shamir
-reconstruction, root and control-key reconstruction, fresh capability and
-epoch after recovery, share rotation, historical epoch handling, recovery
-after loss of all capable devices, recovery after vault or device
-compromise, and end-to-end recovery drills. Without this, v0.9 would
-polish an application whose disaster story is still "do not lose all
-your devices" — which does not fit the v1 promise.
+## v0.8: Protocol compatibility and security freeze
 
-## v0.8 — Protocol compatibility and security freeze
+Thesis: the protocol and operational model are mature enough for long-lived promises.
 
-Thesis: the protocol and operational model are mature enough for
-long-lived promises.
+Exit condition: no known consumer-facing change requires changing object identity, serialization, authorization, membership, epoch, recovery, conflict, storage, compatibility, or user-visible drive semantics. After this, protocol change is exceptional.
 
-Exit condition: no known consumer-facing change requires changing object
-identity, serialization, authorization, membership, epoch, recovery,
-conflict, storage, compatibility, or user-visible drive semantics. After
-this point, changing the protocol becomes an exceptional event.
+- **Protocol:** versioned fact payloads, capability negotiation, mixed-version policy, compatibility matrix, migration machinery, retention refusal semantics, epoch escrow (finalizing the contract; the mechanism has landed), finalized key-rotation semantics.
+- **Security:** full threat-model review, recovery and custody review, device-compromise and malicious-vault scenarios, relay metadata, downgrade and replay, resource exhaustion, external audit if feasible.
+- **Release engineering** (subordinate): reproducible builds, signed releases, update mechanism, platform packaging, migration and compatibility testing.
+- Coverage gates become meaningful here, once contracts are stable enough to measure.
 
-Protocol: versioned fact payloads, capability negotiation, mixed-version
-policy, compatibility matrix, migration machinery, retention refusal
-semantics, epoch escrow (finalizing the long-lived contract; the mechanism
-foundations already landed), finalized key-rotation semantics. Security:
-full threat-model review, recovery and custody review, device-compromise
-and malicious-vault scenarios, relay metadata analysis, downgrade and
-replay analysis, resource-exhaustion review, external audit if feasible.
-Release engineering is subordinate: reproducible builds, signed releases,
-update mechanism, platform packaging, migration and compatibility testing.
-Coverage gates become meaningful here, once contracts are stable enough to
-measure.
+## v0.9: Release candidate and soak
 
-## v0.9 — Release candidate and soak
+Thesis: no major architecture remains between this and v1. Object identity, serialization, compatibility, membership, epochs, conflict and recovery semantics, client and vault roles, storage, and upgrade and migration rules are frozen.
 
-Thesis: no major architecture remains between this and v1. Freeze object
-identity, serialization, compatibility rules, membership, epochs, conflict
-and recovery semantics, client and vault roles, storage semantics, and
-upgrade and migration rules. Hard rule for the milestone: no new
-subsystem, no protocol redesign, no opportunistic refactor, no new
-platform, no new recovery model. Only proving what exists: soak testing,
-upgrade and migration testing, large drives, pathological histories,
-large vaults, multi-device and partition scenarios, mobile lifecycle,
-disk-full, crash injection, relay failure, malicious peers,
-cross-platform runs, audit fixes, UX polish.
+Hard rule: no new subsystem, protocol redesign, opportunistic refactor, platform, or recovery model. Only proving what exists: soak, upgrade and migration testing, large drives, pathological histories, large vaults, multi-device and partition scenarios, mobile lifecycle, disk-full, crash injection, relay failure, malicious peers, cross-platform runs, audit fixes, UX polish.
 
-## v1.0 — Full Wyrd drive
+## v1.0: Full Wyrd drive
 
-Defined by user capabilities, not implementation completeness. Files:
-install on Mac, Linux, Windows, iOS, and Android; create and join drives;
-edit normally with automatic sync; work offline and reconcile on
-reconnect; choose local materialization; recover previous versions.
-Migration: existing directories import as first-class drives without
-destroying or rearranging them — predictable symlinks, permissions and
-ownership on Unix, Windows semantics, case collisions, Unicode
-normalization, timestamps, executable bits, large files, files changing
-mid-import, resumable interrupted imports, and explicitly documented
-unsupported metadata. Conflicts: understand, compare, and resolve them
-without understanding Merkle DAGs, preserving both sides when desired.
-Devices: add, remove, revoke, and inspect status and materialization.
-Vaults: configure retention, run unattended, monitor, recover, replace,
-several per drive. Sharing: share drives with other people, with explicit
-roles and removal consequences. Recovery: never one disk failure away
-from unsupported recovery. Updates: move between releases without
-understanding protocol versioning.
+Defined by user capabilities, not implementation completeness:
+
+- **Files:** install on Mac, Linux, Windows, iOS and Android; create and join drives; edit with automatic sync; work offline and reconcile; choose local materialization; recover previous versions.
+- **Migration:** existing directories import as first-class drives without being destroyed or rearranged. Covers symlinks, Unix permissions and ownership, Windows semantics, case collisions, Unicode normalization, timestamps, executable bits, large files, files changing mid-import, resumable imports, and explicitly documented unsupported metadata.
+- **Conflicts:** understand, compare and resolve them without understanding Merkle DAGs, preserving both sides when desired.
+- **Devices:** add, remove, revoke, inspect status and materialization.
+- **Vaults:** configure retention, run unattended, monitor, recover, replace, several per drive.
+- **Sharing:** share with other people, with explicit roles and removal consequences.
+- **Recovery:** never one disk failure away from unsupported recovery.
+- **Updates:** move between releases without understanding protocol versioning.
 
 ## Post-v1
 
-Garbage collection stays post-v1: it needs a retention/acknowledgement
-design that is separate from the core protocol boundary. The current
-contract is append-only history, immutable objects, and explicit state
-changes.
+Garbage collection stays post-v1: it needs a retention/acknowledgement design separate from the core protocol boundary. The current contract is append-only history, immutable objects and explicit state changes.
