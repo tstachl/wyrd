@@ -429,6 +429,18 @@ fn a_crash_loses_ephemeral_state_but_no_durable_obligation() {
 /// obligations stay pending, and no phantom sequence appears. The
 /// synthetic pair (committed only into the torn batch) must be
 /// absent after the reopen while the author's real pairs remain.
+///
+/// Fault-injection coverage map (all-clear with evidence): the commit
+/// boundary and the durable outbox are exercised through
+/// `store.commit_until` at the torn stages — `AfterWriteTemp` and
+/// `AfterFsyncTemp` leave orphans (`crash_during_temp_write_...`),
+/// `AfterRenameCommit` keeps the before-state with the obligation
+/// pending (torn `AnnouncementQueued` never visible), and
+/// `AfterRenameCurrent` replays the committed obligation
+/// byte-identically. The full eight-stage sweep lives in the
+/// durability suite (`tests_durability.rs::ALL_STAGES`). No new
+/// injection infrastructure was needed: the harness reaches both the
+/// mutation commit boundary and the outbox.
 #[test]
 fn crash_after_rename_commit_keeps_before_state_with_obligation_pending() {
     let (mut pair, controls, _) = scenario();
@@ -548,4 +560,132 @@ fn crash_during_temp_write_ignores_orphan_and_matches_before_state() {
             "the orphan contributed no obligation ({stage:?})"
         );
     }
+}
+
+/// Re-demand after restart with no registry in the loop: surviving
+/// `Cached` materialization is the demand record, and the fetch plan
+/// re-drives it with no waiter, no admission cache, and no reader
+/// re-registration. A drains (both snapshots outstanding) but never
+/// executes; the reopened engine fetches both bodies from durable
+/// demand alone. This is the re-demand half the want-registry row
+/// defers to the materialization work.
+#[test]
+fn restart_equivalence_cached_materialization_redemands_without_registry() {
+    let (mut pair, controls, (snap_a, snap_b)) = scenario();
+    for content in [snap_a.content, snap_b.content] {
+        pair.a
+            .engine
+            .set_materialization(content, MaterializationState::Cached)
+            .unwrap();
+    }
+    assert_eq!(drain_side(&mut pair.relay, &mut pair.a).accepted, 7);
+    let cached_before = pair
+        .a
+        .engine
+        .runtime_state()
+        .expect("state before restart")
+        .materialization_summary()
+        .cached;
+    assert_eq!(cached_before, 2, "both contents cached before restart");
+    restart(&mut pair.a, &controls);
+    let cached_after = pair
+        .a
+        .engine
+        .runtime_state()
+        .expect("state after restart")
+        .materialization_summary()
+        .cached;
+    assert_eq!(
+        cached_after, cached_before,
+        "the Cached demand record survives the restart"
+    );
+    // No registry exists at this layer by construction: the plan
+    // reads durable policy, so fetched objects prove reconstruction
+    // from durable state rather than from re-registration.
+    let report = execute_side(&mut pair.bulk, &mut pair.a);
+    assert_eq!(
+        report.objects, 2,
+        "both outstanding bodies fetch after the restart from durable demand"
+    );
+    assert_eq!(
+        report.unfulfilled, 0,
+        "the re-driven plan converges fully, nothing left outstanding"
+    );
+}
+
+/// Serving route validated against the actual serving path: B runs
+/// its fetch plan over A's rebuilt `VaultSource`, not over a
+/// compared projection. A authors, announces, and B drains; A
+/// restarts; B's plan converges entirely over the rebuilt source
+/// and the bytes verify. This exercises the vault read path and the
+/// map lookups on rebuilt state, which maps-equality alone cannot.
+#[test]
+fn restart_equivalence_rebuilt_source_serves_peer_fetch() {
+    use crate::transport::mailbox::MemoryMailbox;
+
+    let (mut pair, controls, _) = scenario();
+    assert_eq!(drain_side(&mut pair.relay, &mut pair.a).accepted, 7);
+    assert_eq!(drain_side(&mut pair.relay, &mut pair.b).accepted, 6);
+    let mut objects = MemoryObjectStore::default();
+    let chunk = objects
+        .insert(ObjectKind::Chunk, b"restart serving payload")
+        .unwrap();
+    let tree = Tree::from_entries(vec![
+        Entry::file("served.txt", 23, false, vec![chunk]).unwrap()
+    ])
+    .unwrap()
+    .insert_into(&mut objects)
+    .unwrap();
+    let authored = pair.a.engine.author_snapshot(&objects, tree).unwrap();
+    let sent = {
+        let mut mailbox = MemoryMailbox {
+            relay: &mut pair.relay,
+            owner: pair.a.device,
+        };
+        pair.a
+            .engine
+            .announce_snapshot(&authored, &mut mailbox, None)
+            .unwrap()
+    };
+    assert_eq!(sent, 2, "owner and B hear the announcement");
+    assert_eq!(drain_side(&mut pair.relay, &mut pair.b).accepted, 1);
+    pair.b
+        .engine
+        .set_materialization(chunk, MaterializationState::Cached)
+        .unwrap();
+    let pre = crate::serving::VaultSource::from_state(
+        &pair.a.engine.runtime_state().unwrap(),
+        pair.a.engine.vault(),
+    )
+    .expect("serving maps build before restart");
+    assert!(
+        !pre.maps_for_test().0.is_empty(),
+        "the authored snapshot projects serving maps before restart"
+    );
+    restart(&mut pair.a, &controls);
+    let mut serving = crate::serving::VaultSource::from_state(
+        &pair.a.engine.runtime_state().unwrap(),
+        pair.a.engine.vault(),
+    )
+    .expect("serving maps rebuild after restart");
+    let mut peer_objects = MemoryObjectStore::default();
+    let report = pair
+        .b
+        .engine
+        .execute_plan(&mut serving, &mut peer_objects)
+        .unwrap();
+    assert_eq!(
+        report.snapshot_bodies, 1,
+        "the body rides the signed root from rebuilt state"
+    );
+    assert_eq!(report.manifests, 1, "a flat tree maps one root manifest");
+    assert_eq!(
+        report.objects, 2,
+        "the structural tree plus the requested chunk serve post-restart"
+    );
+    assert_eq!(
+        peer_objects.get(&chunk).unwrap().as_deref(),
+        Some(b"restart serving payload".as_slice()),
+        "the served bytes verify through the rebuilt source"
+    );
 }
