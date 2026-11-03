@@ -957,6 +957,79 @@ fn dirty_release_folds_the_handle() {
     }
 }
 
+/// A fold refused at commit (retained quota, `StorageFull`) is terminal
+/// for the handle: the buffered image is lost, not restored; every
+/// later operation fails `EIO`; and `release` still returns `Ok` — the
+/// close implies nothing about the dropped image (best-effort, logged).
+#[test]
+fn refused_commit_fails_the_handle_closed_and_release_implies_nothing() {
+    let (mut backend, _) = evolving_backend(b"first", b"second");
+    let queue = Arc::new(MutationQueue::default());
+    backend.mutations = Some(Arc::clone(&queue));
+    let fh = backend.open_write("f.txt", libc::O_RDWR).unwrap();
+    backend.write_handle(fh, 0, b"doomed").unwrap();
+    // The loop answers the fold the way a retained-quota refusal
+    // answers it: the whole fold fails, so every taken handle settles
+    // failed and the forcing syscall reports `ENOSPC`.
+    let drainer = {
+        let queue = Arc::clone(&queue);
+        std::thread::spawn(move || loop {
+            let mut batch = queue.take_batch();
+            if batch.is_empty() {
+                batch.finish();
+                std::thread::sleep(Duration::from_millis(1));
+                continue;
+            }
+            assert_eq!(batch.len(), 1, "one fsync submits one fold");
+            batch.record(
+                0,
+                Err(MutationError::Store(wyrd_format::StoreFailure::StorageFull)),
+            );
+            batch.finish();
+            break;
+        })
+    };
+    assert_eq!(
+        backend.fsync_handle(fh),
+        Err(fuser::Errno::ENOSPC),
+        "a quota-refused commit reports ENOSPC at the forcing boundary"
+    );
+    drainer.join().expect("refusing drainer exits");
+    assert_eq!(
+        queue.outstanding(),
+        0,
+        "the refused fold leaks no admission slot"
+    );
+    assert_eq!(
+        backend.budget.dirty_handles(),
+        0,
+        "the failed handle is no longer dirty"
+    );
+    assert_eq!(
+        backend.budget.total(),
+        0,
+        "the failed handle retains no budget"
+    );
+    assert_eq!(
+        backend.write_handle(fh, 0, b"after"),
+        Err(fuser::Errno::EIO),
+        "a write on the failed handle fails instead of re-materializing a lost image"
+    );
+    assert_eq!(
+        backend.fsync_handle(fh),
+        Err(fuser::Errno::EIO),
+        "a later fsync on the failed handle fails instead of implying durability"
+    );
+    assert_eq!(
+        backend.commit_handle(fh),
+        Err(fuser::Errno::EIO),
+        "a later flush on the failed handle fails instead of implying a commit"
+    );
+    assert!(
+        backend.release_handle(fh).is_ok(),
+        "release returns Ok even with the image dropped: best-effort close implies nothing"
+    );
+}
 /// OD-1 O_SYNC: a write on a synchronous handle commits before
 /// returning — no accumulation, no later forcing event required.
 #[test]
