@@ -244,6 +244,12 @@ pub struct LiveNode<V: NamespaceView> {
     /// idle loops skip the replay, classification, and
     /// reconciliation reads; reports and health stay per-pass.
     pub(super) observed_status: Option<(u64, usize, SyncStatus)>,
+    /// Pause switch (OD-19-A/B/C/D): when set, passes defer network
+    /// work and obligation discharge while local authoring and
+    /// serving continue. Process-local (`Arc`, never durable), read
+    /// atomically once per pass, set through the owner surface.
+    /// Never a `Wake` variant, never the daemon stop flag.
+    pub(super) paused: Arc<AtomicBool>,
 }
 
 /// What the owner publishes for out-of-process consumers at the end
@@ -300,6 +306,13 @@ pub struct LiveParts<V: NamespaceView> {
     /// interface like the projection slot. `None` until the first
     /// pass completes.
     pub observation: SharedObservation,
+    /// Pause switch shared with the loop (OD-19-D): the owner surface
+    /// sets it, the loop reads it once per pass. Process-local only.
+    /// Write through `LiveNode::set_paused`: a direct `store` here
+    /// skips the pacing-signal poke, so the loop waits out its idle
+    /// deadline instead of re-checking promptly (deferral only —
+    /// never a correctness loss, spurious wakeups are harmless).
+    pub paused: Arc<AtomicBool>,
 }
 
 impl<V> LiveNode<V>
@@ -395,6 +408,7 @@ where
             generation: 0,
         }));
         let observation = Arc::new(RwLock::new(None));
+        let paused = Arc::new(AtomicBool::new(false));
         let parts = LiveParts {
             projection: Arc::clone(&projection),
             wants: Arc::clone(&wants),
@@ -403,6 +417,7 @@ where
             open_timeout,
             freshness: Arc::clone(&freshness),
             observation: Arc::clone(&observation),
+            paused: Arc::clone(&paused),
         };
         Ok((
             LiveNode {
@@ -435,6 +450,7 @@ where
                 observation,
                 configured_relays: 0,
                 observed_status: None,
+                paused,
             },
             parts,
         ))
@@ -630,6 +646,23 @@ where
     /// route-less by construction (known-but-unfetchable to peers).
     pub fn node_addr(&self) -> Option<&[u8]> {
         self.node_addr.as_deref()
+    }
+
+    /// Set the pause switch (OD-19-A/D): `true` defers network work
+    /// and obligation discharge, local authoring and serving
+    /// continue. Process-local only; a restart starts running.
+    /// Pokes the pacing signal so the loop re-checks the world
+    /// promptly rather than waiting out the idle deadline.
+    pub fn set_paused(&self, paused: bool) {
+        self.paused.store(paused, Ordering::Relaxed);
+        self.waker.wake();
+    }
+
+    /// Whether the loop currently defers network work. Read by the
+    /// pass once per pass; the owner surface writes via
+    /// [`LiveNode::set_paused`].
+    pub fn is_paused(&self) -> bool {
+        self.paused.load(Ordering::Relaxed)
     }
 
     /// The retrieval route this pass's announcements discharge with:
@@ -966,3 +999,7 @@ mod serve_barrier_tests;
 #[cfg(test)]
 #[path = "tests_restart_redelivery.rs"]
 mod restart_redelivery_tests;
+
+#[cfg(test)]
+#[path = "tests_pause.rs"]
+mod pause_tests;
