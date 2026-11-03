@@ -14,6 +14,11 @@
 #      egress stories still hold (the codec refuses old formats loudly, the
 #      old binary still opens them, the keep-the-binary rule is documented).
 #      Tagging is the point of no return for user expectations.
+#   1b. Record compatibility in the CHANGELOG entry: wire format or protocol
+#      semantics changed? mixed-version peers safe, or coordinated upgrade
+#      required? remaining limitations? Each shipped asset verified on its
+#      claimed platform floor (steps 6/8/9 evidence linked, not assumed)?
+#      If any answer is unknown, say so in the notes rather than omitting it.
 #   2. Run the pre-sign gate (OD-07-D, hard, never waived): unpack
 #      crates.io fuser 0.18.0 and run `diff -rq <upstream> vendor/fuser`
 #      plus content diffs of every file it names. Acceptance is empty apart
