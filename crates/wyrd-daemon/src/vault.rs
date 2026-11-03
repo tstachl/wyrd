@@ -385,10 +385,11 @@ pub struct VaultRun<V: NamespaceView, M, B> {
 
 /// Run a headless vault to completion: install the serving surface,
 /// supervise the live loop on its own thread under `stop`, wait for
-/// the first of loop return or stop trip, close admission (a vault
-/// has no presentation session and therefore no teardown submitter —
-/// the close follows the loop join immediately instead of a session
-/// join), reap the loop thread, and run the shared transport tail.
+/// the first of loop return or stop trip, close admission for the
+/// drain (a vault has no presentation session and therefore no
+/// teardown submitter — no session join to bound one), reap the loop
+/// thread (its post-return drain has executed everything queued), mop
+/// up with `close_admission`, and run the shared transport tail.
 /// Returns the loop's end plus the transport outcome; the host maps
 /// both to its exit status.
 ///
@@ -452,15 +453,23 @@ where
             }
         }
     }
-    // No session to join: close admission at once. A vault admits no
-    // teardown submission after the loop returns (no presentation
-    // surface exists to submit through), so the close only settles
-    // close-racers instead of bounding destroy's commits the way the
-    // mount's session join does.
-    supervisor.close_admission();
+    // No session to join: close admission at once, but leave queued
+    // requests for the loop thread's post-return drain — an admission
+    // made before the stop resolves `Done` through the drain instead
+    // of racing `shutdown`'s fail-all for the batch (see
+    // `Supervisor::close_for_drain`). The drain terminates on the
+    // close (empty plus closed returns promptly), so the join below
+    // cannot hang on it.
+    supervisor.close_for_drain();
     tracing::info!(stage = "teardown", "admission closed");
     match drive.join() {
         Ok(returned) => {
+            // Mop-up: the drain executed everything queued, so this
+            // finds nothing pending and changes nothing. Anything
+            // left here would be a close-racer the drain never saw;
+            // failing it closed keeps the post-teardown invariant
+            // (closed and empty) that `close_admission` documents.
+            supervisor.close_admission();
             let mut mailbox = returned.mailbox;
             let bulk = returned.bulk;
             let _live = returned.live;
@@ -473,6 +482,10 @@ where
         }
         Err(_) => {
             tracing::error!(stage = "sync", "supervised loop thread failed");
+            // The drain died with the loop thread, so nothing will ever
+            // run the queued requests: fail them now rather than strand
+            // their submitters (same mop-up as the join-Ok path).
+            supervisor.close_admission();
             let serving = serving.shutdown(deadlines.serving);
             if let Err(error) = &serving {
                 tracing::warn!(stage = "serving", error = %error, "serving shutdown failed");
@@ -570,9 +583,10 @@ pub fn compose_headless_owner(
 /// Run a composed headless owner to completion under `stop`: install
 /// the serving surface, serve the drive-owner interface beside the
 /// drive, supervise the live loop, wait for the first of loop return
-/// or stop trip, close admission (no presentation session exists to
-/// submit through, so the close only settles close-racers), reap the
-/// loop thread, stop the interface, and run the shared transport
+/// or stop trip, close admission for the post-return drain (no
+/// presentation session exists to submit through, so nothing new can
+/// queue behind the drain), reap the loop thread, mop up with
+/// `close_admission`, stop the interface, and run the shared transport
 /// tail under the mount's bounds. The ONLY headless run path, next
 /// to the ONLY headless composition path above.
 ///

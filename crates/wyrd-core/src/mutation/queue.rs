@@ -72,8 +72,10 @@ pub(super) struct QueueState {
     /// completion and authoring under this same lock, so the operator
     /// surface reads a consistent copy with no extra locking.
     stats: WriteStats,
-    /// Closed by [`MutationQueue::shutdown`]: the loop will never drain
-    /// again, so new submissions fail fast instead of queueing behind it.
+    /// Closed by [`MutationQueue::close`] or [`MutationQueue::shutdown`]:
+    /// new submissions fail fast instead of queueing behind a dead loop.
+    /// `close` leaves already-queued requests for the loop thread's
+    /// post-return drain; `shutdown` fails them at once.
     closed: bool,
 }
 
@@ -280,6 +282,26 @@ impl MutationQueue {
                 Err(poison) => poison.into_inner().0,
             };
         }
+    }
+
+    /// Close admission without completing queued requests: new
+    /// submissions fail fast with [`MutationError::Shutdown`], but
+    /// already-queued requests stay queued for the teardown drain,
+    /// which the loop thread runs after its return. The composer
+    /// closes first, joins the loop thread (the drain has run by
+    /// then), and follows with `Supervisor::close_admission` as the
+    /// idempotent mop-up for anything left. Splitting close from
+    /// fail-all is what lets an admitted-before-stop write resolve
+    /// `Done` deterministically instead of racing `shutdown`'s
+    /// fail-all for the batch.
+    pub fn close(&self) {
+        self.lock_state().closed = true;
+        // A drain parked in `wait_until_work_or_closed` must observe
+        // the closure even if no submission arrives; a loop parked in
+        // its idle wait must observe it even if the stop trip races
+        // it. Same pokes as `shutdown`, minus the fail-all.
+        self.work.notify_all();
+        self.poke_waker();
     }
 
     /// Close admission and complete every still-queued request with
