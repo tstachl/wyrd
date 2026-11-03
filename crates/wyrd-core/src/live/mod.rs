@@ -308,6 +308,10 @@ pub struct LiveParts<V: NamespaceView> {
     pub observation: SharedObservation,
     /// Pause switch shared with the loop (OD-19-D): the owner surface
     /// sets it, the loop reads it once per pass. Process-local only.
+    /// Write through `LiveNode::set_paused`: a direct `store` here
+    /// skips the pacing-signal poke, so the loop waits out its idle
+    /// deadline instead of re-checking promptly (deferral only —
+    /// never a correctness loss, spurious wakeups are harmless).
     pub paused: Arc<AtomicBool>,
 }
 

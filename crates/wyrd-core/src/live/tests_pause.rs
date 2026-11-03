@@ -213,6 +213,118 @@ fn pause_is_not_process_lifecycle() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// OD-19-C headline promise: a pause lost to a crash costs nothing.
+/// Pause with a pending obligation, drop the node without resuming,
+/// reopen the same drive, and assert the obligation count is exactly
+/// what it was — then resume and discharge. The reopened drive runs
+/// (pause is process-local), and recovery rides the existing outbox.
+#[test]
+fn a_paused_then_restarted_drive_keeps_its_obligation_count() {
+    let dir = std::env::temp_dir().join(format!(
+        "wyrd-core-pause-restart-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let identity = DeviceIdentitySecret::generate().unwrap();
+    let mut engine = Engine::create(dir.clone(), "pause-restart-pass", identity.clone()).unwrap();
+    let mut store = MemoryObjectStore::default();
+    let chunk = store
+        .insert(ObjectKind::Chunk, b"pause-restart-base")
+        .unwrap();
+    let root = Tree::from_entries(vec![Entry::file("f", 18, false, vec![chunk]).unwrap()])
+        .unwrap()
+        .insert_into(&mut store)
+        .unwrap();
+    engine.author_snapshot(&store, root).unwrap();
+    let identity_b = DeviceIdentitySecret::generate().unwrap();
+    let encryption_b = DeviceEncryptionSecret::generate().unwrap();
+    engine
+        .admit_device(identity_b.device_id(), encryption_b.encryption_key())
+        .unwrap();
+    let chunk2 = store.insert(ObjectKind::Chunk, b"post-admission").unwrap();
+    let root2 = Tree::from_entries(vec![Entry::file("g", 14, false, vec![chunk2]).unwrap()])
+        .unwrap()
+        .insert_into(&mut store)
+        .unwrap();
+    engine.author_snapshot(&store, root2).unwrap();
+    let store_clone = store.clone();
+    let before: Vec<_> = engine.pending_announcements().unwrap();
+    assert!(
+        !before.is_empty(),
+        "the test owes an announcement pre-pause"
+    );
+    let heads = engine.live_heads().unwrap();
+    let mut node = live_over_configured(engine, store, &heads, &LiveConfig::for_local_sync());
+    node.set_paused(true);
+    let mut mailbox = AcceptingMailbox { sent: Vec::new() };
+    node.sync_once(&mut mailbox, None::<&mut wyrd_sync::serving::VaultSource>)
+        .unwrap();
+    assert!(
+        mailbox.sent.is_empty(),
+        "paused: nothing discharged pre-restart"
+    );
+    let paused_count = node.engine.pending_announcements().unwrap();
+    assert_eq!(paused_count, before, "paused: count unchanged pre-restart");
+    drop(node);
+    // Restart without resuming: reopen the same drive.
+    let engine = Engine::open_keystore(dir.clone(), "pause-restart-pass", identity).unwrap();
+    let reopened = engine.pending_announcements().unwrap();
+    assert_eq!(
+        reopened, before,
+        "restart after pause: obligation count is exactly what it was"
+    );
+    let heads = engine.live_heads().unwrap();
+    let mut node = live_over_configured(engine, store_clone, &heads, &LiveConfig::for_local_sync());
+    assert!(
+        !node.is_paused(),
+        "pause is process-local: the restarted drive runs"
+    );
+    let mut mailbox = AcceptingMailbox { sent: Vec::new() };
+    node.sync_once(&mut mailbox, None::<&mut wyrd_sync::serving::VaultSource>)
+        .unwrap();
+    assert!(
+        node.engine.pending_announcements().unwrap().is_empty(),
+        "the resumed drive discharges through the existing outbox"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Pause touches no head state: the eligible head set is identical
+/// across paused passes, so pausing can neither resolve nor hide a
+/// conflict. The `Conflicted` refusal itself lives on the ungated
+/// apply path (`apply_mutation` checks heads before any pause gate
+/// could matter); the existing conflicted suites pin the refusal,
+/// this pins the pause half.
+#[test]
+fn a_pause_never_alters_head_state() {
+    let (engine, dir, store, _chunk, _root, _head) = scratch_file_drive("pause-head-state");
+    let before = engine.live_heads().unwrap();
+    assert_eq!(before.len(), 1, "single-head drive");
+    let heads = before.clone();
+    let mut node = live_over_configured(engine, store, &heads, &LiveConfig::for_local_sync());
+    node.set_paused(true);
+    let mut mailbox = AcceptingMailbox { sent: Vec::new() };
+    for _ in 0..3 {
+        node.sync_once(&mut mailbox, None::<&mut wyrd_sync::serving::VaultSource>)
+            .unwrap();
+    }
+    let after = node.engine.live_heads().unwrap();
+    assert_eq!(
+        after
+            .iter()
+            .map(|h| h.snapshot().snapshot_id())
+            .collect::<Vec<_>>(),
+        before
+            .iter()
+            .map(|h| h.snapshot().snapshot_id())
+            .collect::<Vec<_>>(),
+        "paused passes neither resolve nor hide heads"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
 /// The coalescing dependency: pause then resume in quick succession
 /// cannot swallow the resume — the next pass runs and re-checks the
 /// world.
