@@ -429,6 +429,18 @@ fn a_crash_loses_ephemeral_state_but_no_durable_obligation() {
 /// obligations stay pending, and no phantom sequence appears. The
 /// synthetic pair (committed only into the torn batch) must be
 /// absent after the reopen while the author's real pairs remain.
+///
+/// Fault-injection coverage map (all-clear with evidence): the commit
+/// boundary and the durable outbox are exercised through
+/// `store.commit_until` at the torn stages — `AfterWriteTemp` and
+/// `AfterFsyncTemp` leave orphans (`crash_during_temp_write_...`),
+/// `AfterRenameCommit` keeps the before-state with the obligation
+/// pending (torn `AnnouncementQueued` never visible), and
+/// `AfterRenameCurrent` replays the committed obligation
+/// byte-identically. The full eight-stage sweep lives in the
+/// durability suite (`tests_durability.rs::ALL_STAGES`). No new
+/// injection infrastructure was needed: the harness reaches both the
+/// mutation commit boundary and the outbox.
 #[test]
 fn crash_after_rename_commit_keeps_before_state_with_obligation_pending() {
     let (mut pair, controls, _) = scenario();
@@ -594,6 +606,10 @@ fn restart_equivalence_cached_materialization_redemands_without_registry() {
     assert_eq!(
         report.objects, 2,
         "both outstanding bodies fetch after the restart from durable demand"
+    );
+    assert_eq!(
+        report.unfulfilled, 0,
+        "the re-driven plan converges fully, nothing left outstanding"
     );
 }
 
