@@ -719,7 +719,29 @@ to be inferred:
 - Filesystem watchers declare a lag contract: on `Lagged`, backfill/reconcile
 - Echo suppression for self-writes (hash + TTL) so the watcher never
   re-publishes what the peer just wrote
-- Pause/resume defers work instead of dropping it
+
+### Pause and resume
+
+Pausing a drive defers work; it never drops it. While paused, the node
+admits no new network work and discharges no outbox obligation. Pending
+mutations remain queued and are applied on resume. A resume is an
+ordinary pass: nothing about the deferred state is special-cased.
+
+Narrowed scope (OD-19-A, decided): pause stops network work and
+obligation discharge only. Local authoring and serving continue: a
+paused device still commits a person's writes and still serves its bytes
+to peers. Fetch, deliver, announce, and intake stop. The mutation
+prerequisite clock (`max_mutation_wait`, 30s) is never suspended or
+extended (OD-19-B). Pause is process-local and does not survive a
+restart; a restarted drive runs and reconciles durable obligations
+through the existing outbox, with no new protocol fact (OD-19-C). The
+flag lives on `LiveNode` in `wyrd-core`, read atomically each pass, and
+is set through the owner surface; it is never a `Wake` variant and never
+the daemon stop flag (OD-19-D).
+
+Negative invariant: pausing must never discard, cancel, or mark
+delivered any outbox obligation, and must never drop a pending
+mutation. Deferral only.
 
 ## FUSE behavior for non-local content (contract between sync and fuse)
 

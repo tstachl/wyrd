@@ -323,7 +323,16 @@ where
         V::Store: DiscardRejectedRepresentation,
         <V::Store as DiscardRejectedRepresentation>::Error: std::fmt::Debug,
     {
-        let drained = self.engine.drain(mailbox)?;
+        // Pause gate (OD-19-A): network intake and reconciliation
+        // stop while paused; local demand bookkeeping below
+        // continues. `DrainReport::default` is the honest empty
+        // report — nothing was read, nothing deferred.
+        let paused = self.paused.load(Ordering::Relaxed);
+        let drained = if paused {
+            Default::default()
+        } else {
+            self.engine.drain(mailbox)?
+        };
         // Reconciliation trigger (OD-21-4, C+A): the reconnect edge
         // plus the drain's gap signal, evaluated once per pass. The
         // edge is counter movement, never level — the first pass
@@ -335,14 +344,18 @@ where
         // dependencies): the sent half is observable on the recipient
         // as a received statement — which is what 21d surfaces — so
         // the local probe needs no counter of its own.
-        let reconnects = mailbox.reconnects();
-        if self.last_mailbox_reconnects.replace(reconnects) != Some(reconnects) {
-            self.engine.note_reconnected();
-        }
-        match self.engine.maybe_request_reconciliation(mailbox) {
-            Ok(_) => {}
-            Err(EngineError::Mailbox(_)) => {}
-            Err(other) => return Err(LiveError::Engine(other)),
+        //
+        // Paused passes skip the edge and the probe: both send.
+        if !paused {
+            let reconnects = mailbox.reconnects();
+            if self.last_mailbox_reconnects.replace(reconnects) != Some(reconnects) {
+                self.engine.note_reconnected();
+            }
+            match self.engine.maybe_request_reconciliation(mailbox) {
+                Ok(_) => {}
+                Err(EngineError::Mailbox(_)) => {}
+                Err(other) => return Err(LiveError::Engine(other)),
+            }
         }
         // Generation rotation on observed demand (OD-11-2): every
         // identity noted since the last pass whose generation
@@ -488,36 +501,43 @@ where
         )?;
         scrubbed.failures += probe_failures;
         let phase = std::time::Instant::now();
-        let fetched = match bulk {
-            Some(bulk) => {
-                // Route publication precedes every pass: routes come
-                // from durable announcements and manifest records, so
-                // each pass refreshes the address maps before fetching
-                // (a route update from this pass's intake lands next
-                // pass; the plan's own convergence passes cover the
-                // cascade body -> manifest -> objects). The count is
-                // informational for now; surfacing it in the report is
-                // observability work, separately tracked.
-                let state = self.engine.runtime_state()?;
-                let _routes = bulk.publish_routes(&state).map_err(LiveError::Engine)?;
-                // The fetch phase is always bounded. A held mutation's
-                // deadline takes precedence and clips this: its
-                // `TimedOut` decision lands on time even when a
-                // provider stalls. With nothing held the config's
-                // per-pass budget still applies — one unreachable route
-                // costs at most this per pass instead of wedging the
-                // loop behind a dial per pending item.
-                let pass_cap = std::time::Instant::now() + self.fetch_pass_budget;
-                let deadline = Some(
-                    self.mutations
-                        .nearest_deadline(self.max_mutation_wait)
-                        .map_or(pass_cap, |held| held.min(pass_cap)),
-                );
-                let mut shared = SharedStore::from(Arc::clone(&self.store));
-                self.engine
-                    .execute_plan_sliced(bulk, &mut shared, deadline)?
+        // Pause gate (OD-19-A): no fetch while paused. Local demand
+        // (wants, quarantine, scrub, admission above) still runs;
+        // the bulk plane simply does not execute this pass.
+        let fetched = if paused {
+            ExecuteReport::default()
+        } else {
+            match bulk {
+                Some(bulk) => {
+                    // Route publication precedes every pass: routes come
+                    // from durable announcements and manifest records, so
+                    // each pass refreshes the address maps before fetching
+                    // (a route update from this pass's intake lands next
+                    // pass; the plan's own convergence passes cover the
+                    // cascade body -> manifest -> objects). The count is
+                    // informational for now; surfacing it in the report is
+                    // observability work, separately tracked.
+                    let state = self.engine.runtime_state()?;
+                    let _routes = bulk.publish_routes(&state).map_err(LiveError::Engine)?;
+                    // The fetch phase is always bounded. A held mutation's
+                    // deadline takes precedence and clips this: its
+                    // `TimedOut` decision lands on time even when a
+                    // provider stalls. With nothing held the config's
+                    // per-pass budget still applies — one unreachable route
+                    // costs at most this per pass instead of wedging the
+                    // loop behind a dial per pending item.
+                    let pass_cap = std::time::Instant::now() + self.fetch_pass_budget;
+                    let deadline = Some(
+                        self.mutations
+                            .nearest_deadline(self.max_mutation_wait)
+                            .map_or(pass_cap, |held| held.min(pass_cap)),
+                    );
+                    let mut shared = SharedStore::from(Arc::clone(&self.store));
+                    self.engine
+                        .execute_plan_sliced(bulk, &mut shared, deadline)?
+                }
+                None => ExecuteReport::default(),
             }
-            None => ExecuteReport::default(),
         };
         tracing::debug!(
             elapsed_ms = phase.elapsed().as_millis(),
@@ -604,7 +624,15 @@ where
         // waiters would read a stale fetching state past it.
         let revision = self.engine.current();
         let generation = self.generation();
-        let outbound = self.engine.has_pending_outbound()?;
+        // Pause gate (OD-19-A): discharge deferred. The outbox stays
+        // pending durably; the idle gate below ignores it so a paused
+        // pass with no local change goes idle instead of
+        // republishing a generation merely to retry sends.
+        let outbound = if paused {
+            false
+        } else {
+            self.engine.has_pending_outbound()?
+        };
         if !self.dirty
             && revision == self.published_revision
             && !outbound
@@ -703,7 +731,9 @@ where
                 pending_heads,
                 "parent captures reopened while publication remains deferred"
             );
-            let sent = self.publish(mailbox)?;
+            // Pause gate (OD-19-A): obligations stay pending durably;
+            // no send while paused.
+            let sent = if paused { 0 } else { self.publish(mailbox)? };
             tracing::debug!(
                 pending_heads,
                 sent,
@@ -765,12 +795,13 @@ where
         // over the durable outbox — the delivered markers committed
         // here advance the sequence, so the next pass republishes the
         // (semantically unchanged) generation and retries whatever is
-        // still pending.
+        // still pending. Paused passes skip the send; the markers stay
+        // pending for the resume pass.
         tracing::debug!(
             elapsed_ms = phase.elapsed().as_millis(),
             "pass phase mutations done"
         );
-        let sent = self.publish(mailbox)?;
+        let sent = if paused { 0 } else { self.publish(mailbox)? };
         tracing::debug!(
             elapsed_ms = phase.elapsed().as_millis(),
             "pass phase publish done"
