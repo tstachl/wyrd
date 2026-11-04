@@ -795,11 +795,17 @@ pub struct WireSyncReport {
 /// switch as it reads back: a paused owner is reachable and quiet by
 /// choice, distinct from an unreachable owner (refused connection)
 /// and from a reachable owner with no pass yet.
+///
+/// `paused` defaults to `false` on the wire so a v1 reader from
+/// before the pause operations degrades to "running" instead of
+/// failing the parse; both sides of this change ship together, so
+/// the default only covers mixed-version skew during rollout.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WireLiveness {
     pub health: WireMailboxHealth,
     pub report: Option<WireSyncReport>,
     pub passes: u64,
+    #[serde(default)]
     pub paused: bool,
 }
 

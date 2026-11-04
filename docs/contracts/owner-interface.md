@@ -123,6 +123,12 @@ the consumer never infers state from silence. Setting the switch
 pokes the loop's pacing signal, so the loop re-checks promptly
 rather than waiting out its idle deadline.
 
+Wire shape note (pre-freeze): `pause`, `resume`, and the `paused`
+liveness field are new in v1's current shape. `paused` defaults to
+`false` on parse, so a pre-pause reader degrades to "running"
+instead of failing; both sides ship together, so the default only
+covers mixed-version skew during rollout.
+
 ## Crash answers
 
 Return one of three verdicts for every request. Confirmed means

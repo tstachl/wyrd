@@ -387,6 +387,33 @@ fn wire_field_names_are_pinned() {
     assert_eq!(keys(&response["result"]["err"]), set(&["code", "message"]));
 }
 
+/// A v1 liveness payload from before the pause operations carries no
+/// `paused` field and still parses, degrading to "running": mixed
+/// versions fail soft on the new flag, never hard on the parse.
+#[test]
+fn liveness_without_paused_parses_as_running() {
+    let legacy = serde_json::json!({
+        "health": {
+            "stream_alive": false,
+            "connected_relays": 0,
+            "total_relays": 1,
+            "saturation_recoveries": 0,
+            "supervisor_ticks": 0,
+            "relay_attached": false,
+            "stream_recovery_attempts": 0,
+            "relay_recovery_attempts": 0,
+            "closed_subscriptions": 0
+        },
+        "report": null,
+        "passes": 0
+    });
+    let liveness: WireLiveness = serde_json::from_value(legacy).unwrap();
+    assert!(
+        !liveness.paused,
+        "a pre-pause liveness payload reads back running"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Dispatch over a composed view
 // ---------------------------------------------------------------------------
