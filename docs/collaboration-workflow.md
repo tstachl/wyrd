@@ -43,6 +43,7 @@ Read the PR thread as plain text, oldest first (`gate review show`). Address con
 ## 4. Merge
 
 Confirm the PR is `open` (not `draft`), the final revision is correct, and CI is green on that exact revision. A green run on an older revision doesn't count. Docs-only PRs merge on a green `doc-links` hook, local checks, and review.
+- **E2E legs must go green at the PR tip before merge.** Review and CI never execute them, so neither counts as evidence for them. Record the revision, command, and logs on the PR.
 
 Merge from the `master` worktree, which needs the user or an explicit exception. The merge commit is created locally; publishing it and the `applied` status takes a human-signed push, since gate never pushes the target. Confirm with `gate pr status`.
 
