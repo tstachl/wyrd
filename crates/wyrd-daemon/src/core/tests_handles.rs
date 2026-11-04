@@ -252,12 +252,15 @@ fn uncommitted_handle_writes_die_with_the_daemon() {
 /// Crash boundary, the committed half: bytes the loop folded after
 /// a forcing event survive the daemon dying without ceremony. The
 /// create commits the empty file, buffered writes ride `fsync_handle`
-/// into one fold, and the fsync only returns once the loop executed
-/// that fold through the durable commit — so reopening from custody
-/// must serve the committed bytes, with the handle never released.
-/// Together with `uncommitted_handle_writes_die_with_the_daemon` this
-/// pins the commit (not the acknowledgement) as the exact durability
-/// line: accepted-but-uncommitted dies, fsync-acknowledged survives.
+/// into one fold, and the fsync only returns once the executing pass
+/// completes the fold — durable at step 3 and, on this live-loop
+/// path, published (`MutationQueue::submit` unblocks only after the
+/// pass; `crates/wyrd-core/src/mutation/queue.rs:185-190`) — so
+/// reopening from custody must serve the committed bytes, with the
+/// handle never released. Together with
+/// `uncommitted_handle_writes_die_with_the_daemon` this pins the
+/// commit (not the acknowledgement) as the exact durability line:
+/// accepted-but-uncommitted dies, fsync-acknowledged survives.
 #[test]
 fn committed_fsync_writes_survive_the_daemon() {
     let (engine, dir, identity) = scratch_drive();
@@ -290,8 +293,10 @@ fn committed_fsync_writes_survive_the_daemon() {
         // promise, so no visibility poll is needed past this point.
         backend.fsync_handle(fh).unwrap();
 
-        // Crash: the loop stops with the committed handle still open —
-        // never released, never torn down — and the backend is dropped
+        // Orderly loop stop plus backend drop without release — not
+        // power loss mid-commit, but an unreleased handle must not
+        // lose committed bytes either: the loop stops, the committed
+        // handle is never released, and the backend is dropped
         // without ceremony.
         stop.store(true, Ordering::Relaxed);
         loop_handle
