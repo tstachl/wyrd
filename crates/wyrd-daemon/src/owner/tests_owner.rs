@@ -1540,12 +1540,14 @@ fn broken_submit_connection_is_unconfirmed_and_reconciles() {
         .write_all(&(request.len() as u32).to_be_bytes())
         .unwrap();
     client.write_all(&request).unwrap();
-    std::thread::sleep(Duration::from_millis(200));
-    assert_eq!(
-        parts.mutations.outstanding(),
-        1,
-        "the submit is admitted but unexecuted"
-    );
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while parts.mutations.outstanding() != 1 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the submit is admitted but unexecuted"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
 
     // No answer while blocked: the read deadline expires instead of
     // producing success or failure.
@@ -1553,10 +1555,12 @@ fn broken_submit_connection_is_unconfirmed_and_reconciles() {
         .set_read_timeout(Some(Duration::from_millis(200)))
         .unwrap();
     let mut len = [0u8; 4];
-    assert!(
-        client.read_exact(&mut len).is_err(),
-        "no terminal answer while the submit is blocked"
-    );
+    match client.read_exact(&mut len) {
+        Err(error)
+            if error.kind() == std::io::ErrorKind::TimedOut
+                || error.kind() == std::io::ErrorKind::WouldBlock => {}
+        other => panic!("no terminal answer while the submit is blocked: {other:?}"),
+    }
 
     // The break: the client goes away with no answer delivered.
     drop(client);
@@ -1566,16 +1570,48 @@ fn broken_submit_connection_is_unconfirmed_and_reconciles() {
         "the break confirms nothing and fails nothing"
     );
 
-    // Reconcile before retry: a fresh connection re-reads the touched
-    // path and reaches a definite verdict — absent, never executed.
-    let error = dispatch_err(&server, OP_LOOKUP, "reconcile-me");
-    assert_eq!(error.code, WireErrorCode::NotFound);
+    // Reconcile before retry over a fresh connection, the way a
+    // real consumer re-reads: the touched path reaches a definite
+    // verdict — absent, never executed.
+    let mut fresh = UnixStream::connect(&socket_path).unwrap();
+    let probe = serde_json::to_vec(&RawRequest {
+        v: WIRE_VERSION,
+        id: 62,
+        op: OP_LOOKUP.to_string(),
+        params: serde_json::to_value(PathParams {
+            path: "reconcile-me".to_string(),
+        })
+        .unwrap(),
+    })
+    .unwrap();
+    fresh
+        .write_all(&(probe.len() as u32).to_be_bytes())
+        .unwrap();
+    fresh.write_all(&probe).unwrap();
+    let mut len = [0u8; 4];
+    fresh.read_exact(&mut len).unwrap();
+    let len = u32::from_be_bytes(len) as usize;
+    assert!(len <= MAX_FRAME_BYTES);
+    let mut frame = vec![0u8; len];
+    fresh.read_exact(&mut frame).unwrap();
+    let response: WireResponse = serde_json::from_slice(&frame).unwrap();
+    assert_eq!(response.id, 62);
+    match response.result {
+        WireResult::Err(error) => assert_eq!(error.code, WireErrorCode::NotFound),
+        WireResult::Ok(ok) => panic!("unexecuted submit must not be visible: {ok:?}"),
+    }
+    drop(fresh);
 
     // The pending mutation still executes exactly once through the
     // normal pass. No retry was sent, so no duplicate can exist.
     let mut mailbox = NoopMailbox;
     live.sync_once(&mut mailbox, None::<&mut wyrd_sync::bulk::MemoryBulkSource>)
         .unwrap();
+    assert_eq!(
+        parts.mutations.outstanding(),
+        0,
+        "the admitted submit completed through the pass"
+    );
     match dispatch_ok(&server, OP_LOOKUP, "reconcile-me") {
         WireOk::Lookup { .. } => {}
         other => panic!("reconciled submit must be visible: {other:?}"),
