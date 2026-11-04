@@ -1380,7 +1380,7 @@ leg_headless_fetch() {
 # leg_pause_owner <drive> <creds> <relay>: the pause/kill/restart leg
 # (issue 19, owner pause op item 2). Runs `wyrd vault`, pauses it
 # through the real owner operation, authors a mkdir while paused
-# (local authoring continues), proves the obligation stays queued
+# (local authoring continues), proves the obligation stays pending
 # while passes advance (deferral, not discharge), KILLs the vault
 # mid-pause, restarts through the normal production path, and proves
 # the drive comes back unpaused with the obligation reconciled. The
@@ -1411,20 +1411,22 @@ leg_pause_owner() {
   pass "pause sets the switch through the owner operation"
   # Author while paused: local authoring continues, so the submit
   # resolves, but discharge is deferred — the obligation must stay
-  # queued while passes keep advancing around it.
+  # pending (still owed) while passes keep advancing around it. The
+  # outbox sets are insert-only, so the queued total never drains;
+  # pending (queued minus delivered) is the discharge signal.
   [[ "$(python3 "$SCRIPT_DIR/owner-socket.py" submit-mkdir "$d" paused-marker)" == "submitted" ]] \
     || die "submit while paused never resolved"
   pass "submit while paused commits locally"
-  poll_until 300 bash -c "test \"\$(python3 \"$SCRIPT_DIR/owner-socket.py\" queued \"$d\")\" = 1" \
-    || die "paused obligation never stayed queued (see pause-serve-1.err)"
+  poll_until 300 bash -c "test \"\$(python3 \"$SCRIPT_DIR/owner-socket.py\" pending \"$d\")\" = 1" \
+    || die "paused obligation never stayed pending (see pause-serve-1.err)"
   local before
   before="$(python3 "$SCRIPT_DIR/owner-socket.py" liveness "$d")"
   poll_until 300 bash -c "test \"\$(python3 \"$SCRIPT_DIR/owner-socket.py\" liveness \"$d\")\" != \"$before\"" \
     || die "no further pass ran while paused"
-  after="$(python3 "$SCRIPT_DIR/owner-socket.py" queued "$d")"
+  after="$(python3 "$SCRIPT_DIR/owner-socket.py" pending "$d")"
   [[ "$after" == "1" ]] \
-    || die "passes advanced while paused but the obligation discharged (queued=$after)"
-  pass "passes advance while paused with the obligation still queued"
+    || die "passes advanced while paused but the obligation discharged (pending=$after)"
+  pass "passes advance while paused with the obligation still pending"
   # KILL mid-pause with the obligation pending: no graceful shutdown,
   # no reopen before the kill.
   local pid
@@ -1448,11 +1450,11 @@ leg_pause_owner() {
   [[ "$(python3 "$SCRIPT_DIR/owner-socket.py" liveness "$d")" == paused=false* ]] \
     || die "restarted vault did not come back unpaused"
   pass "restarted vault runs unpaused"
-  # The durable obligation reconciles through the outbox: queued
+  # The durable obligation reconciles through the outbox: pending
   # drains to zero and exactly one announcement delivers. Both sides
   # come from the same observe slot, but the delivery count is polled
-  # like the queue so a slow pass cannot flake the assertion.
-  poll_until 300 bash -c "test \"\$(python3 \"$SCRIPT_DIR/owner-socket.py\" queued \"$d\")\" = 0" \
+  # like the pending count so a slow pass cannot flake the assertion.
+  poll_until 300 bash -c "test \"\$(python3 \"$SCRIPT_DIR/owner-socket.py\" pending \"$d\")\" = 0" \
     || die "restarted vault never reconciled the obligation (see pause-serve-2.err)"
   poll_until 300 bash -c "test \"\$(python3 \"$SCRIPT_DIR/owner-socket.py\" delivered \"$d\")\" = 1" \
     || die "reconciled obligation did not deliver exactly once"
