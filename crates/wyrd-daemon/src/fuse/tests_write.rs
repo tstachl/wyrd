@@ -654,6 +654,10 @@ fn ack_tour_write_fsync_flush_release_compose() {
                     1,
                     "each forcing event folds exactly one image"
                 );
+                assert!(
+                    members[0].forcer,
+                    "the forcing event carries the fold privilege"
+                );
                 match &members[0].kind {
                     MutationKind::CommitFile { path, content, .. } => {
                         assert_eq!(path, "f.txt");
