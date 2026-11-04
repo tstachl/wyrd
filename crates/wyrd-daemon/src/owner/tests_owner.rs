@@ -1492,6 +1492,100 @@ fn absent_without_execution_stays_absent() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// A broken submit connection is unconfirmed, never success or
+/// failure: a client whose connection breaks while its submit is
+/// blocked gets no terminal answer either way, the admitted mutation
+/// stays pending (the break fails nothing), and a reconcile re-read
+/// reaches a definite verdict before any retry. Contract:
+/// `docs/contracts/owner-interface.md` ("Crash answers").
+#[test]
+fn broken_submit_connection_is_unconfirmed_and_reconciles() {
+    use wyrd_core::node::WyrdNode;
+
+    let (engine, dir) = scratch_drive();
+    let store = wyrd_format::FsObjectStore::open(dir.clone()).unwrap();
+    let mut daemon = WyrdNode::new(engine, store).unwrap();
+    daemon.put_file("seed.txt", b"seed").unwrap();
+    daemon.refresh_live_heads().unwrap();
+    let (mut live, parts) = daemon
+        .into_live(
+            Duration::from_secs(5),
+            &wyrd_core::live::LiveConfig::default(),
+        )
+        .unwrap();
+    let server = Arc::new(OwnerServer::new(OwnerHandles::from_parts(&parts)));
+    let socket_path = dir.join("unconfirmed.sock");
+    let _ = std::fs::remove_file(&socket_path);
+    let listener = std::os::unix::net::UnixListener::bind(&socket_path).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let stop: &'static AtomicBool = Box::leak(Box::new(AtomicBool::new(false)));
+    let serve_server = Arc::clone(&server);
+    let serve_thread = std::thread::spawn(move || serve_server.serve_on(&listener, stop));
+
+    // The submit blocks: admitted, unexecuted, no pass running.
+    let mut client = UnixStream::connect(&socket_path).unwrap();
+    let request = serde_json::to_vec(&RawRequest {
+        v: WIRE_VERSION,
+        id: 61,
+        op: OP_SUBMIT.to_string(),
+        params: serde_json::to_value(SubmitParams {
+            kind: WireMutationKind::Mkdir {
+                path: "reconcile-me".to_string(),
+            },
+        })
+        .unwrap(),
+    })
+    .unwrap();
+    client
+        .write_all(&(request.len() as u32).to_be_bytes())
+        .unwrap();
+    client.write_all(&request).unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(
+        parts.mutations.outstanding(),
+        1,
+        "the submit is admitted but unexecuted"
+    );
+
+    // No answer while blocked: the read deadline expires instead of
+    // producing success or failure.
+    client
+        .set_read_timeout(Some(Duration::from_millis(200)))
+        .unwrap();
+    let mut len = [0u8; 4];
+    assert!(
+        client.read_exact(&mut len).is_err(),
+        "no terminal answer while the submit is blocked"
+    );
+
+    // The break: the client goes away with no answer delivered.
+    drop(client);
+    assert_eq!(
+        parts.mutations.outstanding(),
+        1,
+        "the break confirms nothing and fails nothing"
+    );
+
+    // Reconcile before retry: a fresh connection re-reads the touched
+    // path and reaches a definite verdict — absent, never executed.
+    let error = dispatch_err(&server, OP_LOOKUP, "reconcile-me");
+    assert_eq!(error.code, WireErrorCode::NotFound);
+
+    // The pending mutation still executes exactly once through the
+    // normal pass. No retry was sent, so no duplicate can exist.
+    let mut mailbox = NoopMailbox;
+    live.sync_once(&mut mailbox, None::<&mut wyrd_sync::bulk::MemoryBulkSource>)
+        .unwrap();
+    match dispatch_ok(&server, OP_LOOKUP, "reconcile-me") {
+        WireOk::Lookup { .. } => {}
+        other => panic!("reconciled submit must be visible: {other:?}"),
+    }
+
+    stop.store(true, Ordering::Relaxed);
+    serve_thread.join().unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// The headless run serves the interface: compose, run, and reach
 /// the drive through the socket beside it. The socket appears only
 /// while the owner runs, and the run refuses to start deaf.
