@@ -168,3 +168,47 @@ mint_pair() {
   wait "$LEG_HD" || die "headless fetch-d leg failed (see logs/leg-headless-fetch-d.out)"
   wait "$LEG_HS" || die "headless serve leg failed (see logs/leg-headless-serve.out)"
 }
+
+@test "pause defers the outbox across an ungraceful restart" {
+  mkdir -p "$RUN/logs"
+  GPO="$GUEST_RUN/creds/pause-owner"
+  GPD="$GUEST_RUN/drives/pause"
+  mint_pair peer-o "$GPO" "$GPD"
+  run guest_wyrd peer-o init --identity-file "$GPO/identity" --passphrase-file "$GPO/passphrase" \
+    "$GPD"
+  printf '%s\n' "$output" >"$RUN/logs/init-pause.out"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  GPM="$GUEST_RUN/creds/pause-member"
+  GPMD="$GUEST_RUN/drives/pause-member"
+  mint_pair peer-n "$GPM" "$GPMD"
+  run guest_wyrd peer-n device --identity-file "$GPM/identity" --passphrase-file "$GPM/passphrase" \
+    "$GPMD" pairing-request "$GUEST_RUN/pairing-pm.txt"
+  printf '%s\n' "$output" >"$RUN/logs/pairing-pm.out"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  guest_pull peer-n "$GUEST_RUN/pairing-pm.txt" "$RUN/pairing-pm.txt" \
+    || { echo "pairing-pm pull failed"; false; }
+  DEV_M="$(grep '^device ' "$RUN/pairing-pm.txt" | cut -d' ' -f2)"
+  KEY_M="$(grep '^encryption-key ' "$RUN/pairing-pm.txt" | cut -d' ' -f2)"
+  [[ "${#DEV_M}" == 64 && "${#KEY_M}" == 64 ]] || die "pause-member pairing material malformed"
+  run guest_wyrd peer-o member --identity-file "$GPO/identity" \
+    --passphrase-file "$GPO/passphrase" "$GPD" \
+    invite "$DEV_M" "$KEY_M" "$GUEST_RUN/invitation-pm"
+  printf '%s\n' "$output" >"$RUN/logs/invite-pm.out"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  guest_pull peer-o "$GUEST_RUN/invitation-pm" "$RUN/invitation-pm" \
+    || { echo "invitation-pm push failed"; false; }
+  guest_push_e2e peer-n "$RUN/invitation-pm" "$GUEST_RUN/invitation-pm" \
+    || { echo "invitation-pm push failed"; false; }
+  run guest_wyrd peer-n device --identity-file "$GPM/identity" --passphrase-file "$GPM/passphrase" \
+    "$GPMD" join "$GUEST_RUN/invitation-pm"
+  printf '%s\n' "$output" >"$RUN/logs/join-pm.out"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  on_o "E2E_ENV_FILE=$GUEST_ENV bash $GUEST_TESTS/alpha-microvm-legs.sh pause-owner $GPD $GPO $RELAY_URL" \
+    >"$RUN/logs/leg-pause-owner.out" 2>&1 &
+  LEG_PO=$!
+  on_n "E2E_ENV_FILE=$GUEST_ENV bash $GUEST_TESTS/alpha-microvm-legs.sh pause-member $GPMD $GPM $RELAY_URL" \
+    >"$RUN/logs/leg-pause-member.out" 2>&1 &
+  LEG_PM=$!
+  wait "$LEG_PO" || die "pause owner leg failed (see logs/leg-pause-owner.out)"
+  wait "$LEG_PM" || die "pause member leg failed (see logs/leg-pause-member.out)"
+}

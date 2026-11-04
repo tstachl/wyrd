@@ -116,6 +116,7 @@
       "wyrd-tests/alpha-common.sh".source = ../../tests/lima/alpha-common.sh;
       "wyrd-tests/alpha-lima.sh".source = ../../tests/lima/alpha-lima.sh;
       "wyrd-tests/alpha-microvm-legs.sh".source = ../../tests/microvm/alpha-microvm-legs.sh;
+      "wyrd-tests/owner-socket.py".source = ../../tests/microvm/owner-socket.py;
       "wyrd-tests/alpha-lima-matrix.py".source = ../../tests/lima/alpha-lima-matrix.py;
       # Sourced at runtime by alpha-lima.sh (step selection); without it
       # every microVM phase 1 dies on a missing file before the first

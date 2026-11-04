@@ -38,6 +38,7 @@ use wyrd_core::quarantine::QuarantineQueue;
 use wyrd_core::read::{LiveReader, ReadError};
 use wyrd_core::scrub::ScrubQueue;
 use wyrd_core::view::{NamespaceView, Node, ViewError};
+use wyrd_core::wake::WakeSignal;
 use wyrd_core::want::{WantError, WantRegistry};
 
 use crate::vault::OwnerView;
@@ -46,8 +47,8 @@ use super::wire::{
     PathParams, RawRequest, SubmitParams, WireAttr, WireDirEntry, WireError, WireErrorCode,
     WireFreshness, WireLiveness, WireMailboxHealth, WireMutationError, WireMutationOutcome,
     WireNode, WireOk, WireParentToken, WireResponse, WireResult, WireSyncReport, WireSyncStatus,
-    OP_CAPTURE_PARENT, OP_FRESHNESS, OP_LIVENESS, OP_LOOKUP, OP_OBSERVE, OP_READ, OP_READDIR,
-    OP_STAT, OP_SUBMIT, WIRE_VERSION,
+    OP_CAPTURE_PARENT, OP_FRESHNESS, OP_LIVENESS, OP_LOOKUP, OP_OBSERVE, OP_PAUSE, OP_READ,
+    OP_READDIR, OP_RESUME, OP_STAT, OP_SUBMIT, WIRE_VERSION,
 };
 
 /// Bind the drive-directory socket: reclaim a stale entry from an
@@ -121,6 +122,15 @@ pub struct OwnerHandles {
     /// Repair submission for observed losses. `None` leaves losses
     /// surfaced, like a standalone backend.
     pub scrub: Option<Arc<ScrubQueue>>,
+    /// The loop's pause switch, shared with the loop like the
+    /// projection slot (OD-19-D): the owner surface sets it, the loop
+    /// reads it once per pass. Process-local only.
+    pub paused: Arc<AtomicBool>,
+    /// The loop's pacing signal. `set_paused` pokes it so the loop
+    /// re-checks promptly instead of waiting out its idle deadline;
+    /// `None` (tests that never run a loop) stores bare, which defers
+    /// only, never incorrectly.
+    pub waker: Option<Arc<WakeSignal>>,
     /// Largest whole-file read served in one request.
     pub max_read_bytes: u64,
 }
@@ -138,7 +148,29 @@ impl OwnerHandles {
             observation: Arc::clone(&parts.observation),
             quarantine: None,
             scrub: None,
+            paused: Arc::clone(&parts.paused),
+            waker: None,
             max_read_bytes: DEFAULT_MAX_READ_BYTES,
+        }
+    }
+
+    /// Wire the loop's pacing signal, like the mount composer wires
+    /// its backend beside `shared_with_wants`. The composer always
+    /// wires this in production, so `set_paused` pokes; tests that
+    /// never run a loop may skip it and store bare.
+    pub fn with_waker(mut self, waker: Arc<WakeSignal>) -> Self {
+        self.waker = Some(waker);
+        self
+    }
+
+    /// Set the pause switch with the pacing-signal poke, mirroring
+    /// [`LiveNode::set_paused`](wyrd_core::live::LiveNode::set_paused):
+    /// the loop re-checks promptly rather than waiting out its idle
+    /// deadline. Idempotent; the last writer wins.
+    pub fn set_paused(&self, paused: bool) {
+        self.paused.store(paused, Ordering::Relaxed);
+        if let Some(waker) = &self.waker {
+            waker.wake();
         }
     }
 
@@ -376,6 +408,8 @@ impl OwnerServer {
             OP_FRESHNESS => self.op_freshness(),
             OP_SUBMIT => self.op_submit(params),
             OP_CAPTURE_PARENT => self.op_capture_parent(params),
+            OP_PAUSE => self.op_pause(),
+            OP_RESUME => self.op_resume(),
             unknown => Err((
                 WireErrorCode::UnsupportedOperation,
                 format!("unsupported operation {unknown:?}"),
@@ -558,26 +592,52 @@ impl OwnerServer {
                 "owner observation lock poisoned".to_string(),
             )
         })?;
+        let paused = self.handles.paused.load(Ordering::Relaxed);
         match slot.as_ref() {
             Some(observation) => Ok(WireOk::Liveness {
                 liveness: WireLiveness {
                     health: WireMailboxHealth::from(&observation.health),
                     report: Some(WireSyncReport::from(&observation.report)),
                     passes: observation.passes,
+                    paused,
                 },
             }),
             // No pass yet: unknown health, no report, zero passes.
             // "Owner reachable, no recent sync activity" reads
             // exactly like this — distinct from "owner unreachable",
-            // which is a refused connection, not a response.
+            // which is a refused connection, not a response, and
+            // from paused, which sets the flag below.
             None => Ok(WireOk::Liveness {
                 liveness: WireLiveness {
                     health: WireMailboxHealth::unknown(),
                     report: None,
                     passes: 0,
+                    paused,
                 },
             }),
         }
+    }
+
+    /// Set the pause switch: network work and obligation discharge
+    /// defer from the next pass; local authoring and serving continue.
+    /// Idempotent — pausing twice is one pause — and the answer echoes
+    /// the switch as it reads back, so the consumer never infers state
+    /// from silence.
+    fn op_pause(&self) -> Result<WireOk, (WireErrorCode, String)> {
+        self.handles.set_paused(true);
+        Ok(WireOk::Paused {
+            paused: self.handles.paused.load(Ordering::Relaxed),
+        })
+    }
+
+    /// Clear the pause switch: the next pass is ordinary. Idempotent —
+    /// resuming a running drive changes nothing — and the answer echoes
+    /// the switch as it reads back.
+    fn op_resume(&self) -> Result<WireOk, (WireErrorCode, String)> {
+        self.handles.set_paused(false);
+        Ok(WireOk::Paused {
+            paused: self.handles.paused.load(Ordering::Relaxed),
+        })
     }
 
     fn op_freshness(&self) -> Result<WireOk, (WireErrorCode, String)> {

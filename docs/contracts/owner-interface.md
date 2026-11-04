@@ -76,6 +76,10 @@ the durable observation. A live socket is not a durable fact.
 Distinguish three states. Owner unreachable means the connection
 refused. Owner reachable with no pass yet means no recent sync
 activity. Owner reachable with a report means the given pass count.
+Each answer carries the loop's pause switch as it reads back: a
+paused owner is reachable and quiet by choice, distinct from an
+unreachable owner and from a reachable owner with no pass yet.
+`sent: 0` during a paused pass is not an empty outbox.
 
 ## Freshness
 
@@ -105,6 +109,25 @@ consumer side. Never reuse a token across an owner restart.
 
 Refuse nested folds at the wire. Let the queue enforce the rest.
 Forward all nine operations verbatim.
+
+## Pause and resume
+
+Set the loop's pause switch with `pause`, clear it with `resume`.
+Both take no parameters. Pausing defers network work and obligation
+discharge from the next pass; resuming returns to an ordinary pass.
+Local authoring and serving continue either way. The switch is
+process-local: a restarted drive runs unpaused. Each operation is
+idempotent — pausing twice is one pause, resuming a running drive
+changes nothing — and answers with the switch as it reads back, so
+the consumer never infers state from silence. Setting the switch
+pokes the loop's pacing signal, so the loop re-checks promptly
+rather than waiting out its idle deadline.
+
+Wire shape note (pre-freeze): `pause`, `resume`, and the `paused`
+liveness field are new in v1's current shape. `paused` defaults to
+`false` on parse, so a pre-pause reader degrades to "running"
+instead of failing; both sides ship together, so the default only
+covers mixed-version skew during rollout.
 
 ## Crash answers
 

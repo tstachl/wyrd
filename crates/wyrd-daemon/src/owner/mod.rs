@@ -42,6 +42,6 @@ pub use wire::{
     WireMutationKind, WireMutationOutcome, WireNode, WireObservation, WireOk, WireOutboxTotals,
     WireParentToken, WirePeerHandle, WirePendingObligations, WireQuarantineReport, WireQueueDepth,
     WireReconciliationCounters, WireResponse, WireResult, WireScrubReport, WireSyncReport,
-    WireSyncStatus, OP_CAPTURE_PARENT, OP_FRESHNESS, OP_LIVENESS, OP_LOOKUP, OP_OBSERVE, OP_READ,
-    OP_READDIR, OP_STAT, OP_SUBMIT, WIRE_VERSION,
+    WireSyncStatus, OP_CAPTURE_PARENT, OP_FRESHNESS, OP_LIVENESS, OP_LOOKUP, OP_OBSERVE, OP_PAUSE,
+    OP_READ, OP_READDIR, OP_RESUME, OP_STAT, OP_SUBMIT, WIRE_VERSION,
 };

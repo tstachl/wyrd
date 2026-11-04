@@ -620,11 +620,14 @@ where
     // peer-checked at the drive-directory socket. The composer
     // wires the loop's repair queues the way the mount composer
     // wires its backend.
-    let server =
-        crate::owner::OwnerServer::new(crate::owner::OwnerHandles::from_parts(&parts).with_repair(
-            Arc::clone(live.quarantine_queue()),
-            Arc::clone(live.scrub_queue()),
-        ));
+    let server = crate::owner::OwnerServer::new(
+        crate::owner::OwnerHandles::from_parts(&parts)
+            .with_repair(
+                Arc::clone(live.quarantine_queue()),
+                Arc::clone(live.scrub_queue()),
+            )
+            .with_waker(Arc::clone(live.waker())),
+    );
     // Bind before spawning: an owner that cannot serve its
     // interface refuses the run instead of running deaf. The store
     // lock is held throughout the run, so no competing owner can

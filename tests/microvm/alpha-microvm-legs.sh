@@ -1377,6 +1377,121 @@ leg_headless_fetch() {
   check_no_leaks "$LOGDIR/mount-xheadless-$tag.err" "$(cat "$c/identity")" "$(cat "$c/passphrase")"
 }
 
+# leg_pause_owner <drive> <creds> <relay>: the pause/kill/restart leg
+# (issue 19, owner pause op item 2). Runs `wyrd vault`, pauses it
+# through the real owner operation, authors a mkdir while paused
+# (local authoring continues), proves the obligation stays queued
+# while passes advance (deferral, not discharge), KILLs the vault
+# mid-pause, restarts through the normal production path, and proves
+# the drive comes back unpaused with the obligation reconciled. The
+# member leg proves the content converges after the restart. The
+# owner socket client is tests/microvm/owner-socket.py (baked into
+# the image): it speaks the framed socket protocol, never a seam.
+leg_pause_owner() {
+  local d="$1" c="$2" relay="$3"
+  step 12 "pause kill restart leg"
+  mkdir -p "$PIDDIR"
+  # serve#1: the vault announces and keeps syncing. The ready line
+  # proves the first routed pass completed, so pausing now races
+  # nothing.
+  with_creds "$c" vault "$d" --relay "$relay" \
+    >"$LOGDIR/pause-serve-1.out" 2>"$LOGDIR/pause-serve-1.err" &
+  echo $! > "$PIDDIR/pause-serve.pid"
+  poll_until 300 grep -q "vault ready: serving " "$LOGDIR/pause-serve-1.err" \
+    || die "pause serve#1 never reported ready (see pause-serve-1.err)"
+  grep -q "serving over iroh" "$LOGDIR/pause-serve-1.err" \
+    || die "pause serve#1 never bound its endpoint"
+  pass "pause serve#1 reports ready with its route and keeps syncing"
+  # Pause through the actual owner operation: the answer echoes the
+  # switch, and liveness carries it for renderers.
+  [[ "$(python3 "$SCRIPT_DIR/owner-socket.py" pause "$d")" == "paused=true" ]] \
+    || die "pause op did not echo paused=true"
+  [[ "$(python3 "$SCRIPT_DIR/owner-socket.py" liveness "$d")" == paused=true* ]] \
+    || die "liveness missed the paused flag after pause"
+  pass "pause sets the switch through the owner operation"
+  # Author while paused: local authoring continues, so the submit
+  # resolves, but discharge is deferred — the obligation must stay
+  # queued while passes keep advancing around it.
+  [[ "$(python3 "$SCRIPT_DIR/owner-socket.py" submit-mkdir "$d" paused-marker)" == "submitted" ]] \
+    || die "submit while paused never resolved"
+  pass "submit while paused commits locally"
+  poll_until 300 bash -c "test \"\$(python3 \"$SCRIPT_DIR/owner-socket.py\" queued \"$d\")\" = 1" \
+    || die "paused obligation never stayed queued (see pause-serve-1.err)"
+  local before
+  before="$(python3 "$SCRIPT_DIR/owner-socket.py" liveness "$d")"
+  poll_until 300 bash -c "test \"\$(python3 \"$SCRIPT_DIR/owner-socket.py\" liveness \"$d\")\" != \"$before\"" \
+    || die "no further pass ran while paused"
+  after="$(python3 "$SCRIPT_DIR/owner-socket.py" queued "$d")"
+  [[ "$after" == "1" ]] \
+    || die "passes advanced while paused but the obligation discharged (queued=$after)"
+  pass "passes advance while paused with the obligation still queued"
+  # KILL mid-pause with the obligation pending: no graceful shutdown,
+  # no reopen before the kill.
+  local pid
+  pid="$(cat "$PIDDIR/pause-serve.pid")"
+  kill -KILL "$pid" 2>/dev/null || die "pause serve pid already gone before KILL"
+  set +e; wait "$pid"; local kstatus=$?; set -e
+  [[ "$kstatus" == "137" ]] || die "pause serve KILL exit $kstatus, want 137"
+  kill -0 "$pid" 2>/dev/null && die "pause serve pid survived KILL"
+  rm -f "$PIDDIR/pause-serve.pid"
+  pass "paused vault dies on KILL with the obligation pending"
+  # serve#2: restart through the normal production path over the
+  # same drive. The ready line proves the first post-restart pass
+  # completed, so the checks below race nothing.
+  with_creds "$c" vault "$d" --relay "$relay" \
+    >"$LOGDIR/pause-serve-2.out" 2>"$LOGDIR/pause-serve-2.err" &
+  echo $! > "$PIDDIR/pause-serve.pid"
+  poll_until 300 grep -q "vault ready: serving " "$LOGDIR/pause-serve-2.err" \
+    || die "pause serve#2 never reported ready (see pause-serve-2.err)"
+  pass "restarted vault reports ready"
+  # A restarted drive runs unpaused: the switch is process-local.
+  [[ "$(python3 "$SCRIPT_DIR/owner-socket.py" liveness "$d")" == paused=false* ]] \
+    || die "restarted vault did not come back unpaused"
+  pass "restarted vault runs unpaused"
+  # The durable obligation reconciles through the outbox: queued
+  # drains to zero and exactly one announcement delivers. Both sides
+  # come from the same observe slot, but the delivery count is polled
+  # like the queue so a slow pass cannot flake the assertion.
+  poll_until 300 bash -c "test \"\$(python3 \"$SCRIPT_DIR/owner-socket.py\" queued \"$d\")\" = 0" \
+    || die "restarted vault never reconciled the obligation (see pause-serve-2.err)"
+  poll_until 300 bash -c "test \"\$(python3 \"$SCRIPT_DIR/owner-socket.py\" delivered \"$d\")\" = 1" \
+    || die "reconciled obligation did not deliver exactly once"
+  pass "pending obligation reconciles after restart with one delivery"
+  # TERM while parked: the ordered teardown must exit 0, proving
+  # the shutdown half beside the kill half above.
+  local pid2
+  pid2="$(cat "$PIDDIR/pause-serve.pid")"
+  kill -TERM "$pid2"
+  local i status="timeout"
+  for ((i = 0; i < 60 * 5; i++)); do
+    if ! kill -0 "$pid2" 2>/dev/null; then
+      set +e; wait "$pid2"; status=$?; set -e
+      break
+    fi
+    sleep 0.2
+  done
+  [[ "$status" == "0" ]] || die "pause serve#2 TERM shutdown exit $status, want clean 0"
+  rm -f "$PIDDIR/pause-serve.pid"
+  pass "restarted vault stops clean on TERM"
+  check_no_leaks "$LOGDIR/pause-serve-1.err" "$(cat "$c/identity")" "$(cat "$c/passphrase")"
+  check_no_leaks "$LOGDIR/pause-serve-2.err" "$(cat "$c/identity")" "$(cat "$c/passphrase")"
+}
+
+# leg_pause_member <drive> <creds> <relay>: mount and wait for the
+# pause leg's marker directory. The member polls from the start: the
+# marker can only converge after the restart discharges the
+# obligation, so convergence itself is the no-loss proof.
+leg_pause_member() {
+  local d="$1" c="$2" relay="$3"
+  step 12 "pause convergence leg"
+  start_mount xpause-m "$c" "$d" "$MNTS/xpause-m" --relay "$relay"
+  poll_until 600 test -d "$MNTS/xpause-m/paused-marker" \
+    || die "member never converged on the post-restart marker"
+  pass "member converges on the marker discharged after restart"
+  stop_mount xpause-m TERM
+  check_no_leaks "$LOGDIR/mount-xpause-m.err" "$(cat "$c/identity")" "$(cat "$c/passphrase")"
+}
+
 # leg_crash_owner <drive> <creds> <relay>: mount, converge an anchor
 # write with the witness, then take 40 acknowledged burst writes and
 # SIGKILL the mount's own process mid-stream — no graceful shutdown,
@@ -2019,7 +2134,9 @@ case "${1:-}" in
   headless-serve) leg_headless_serve "$2" "$3" "$4" ;;
   headless-fetch) leg_headless_fetch "$2" "$3" "$4" "$5" "$6" "$7" ;;
   headless-setup) leg_headless_setup "$2" "$3" ;;
-  *) echo "usage: $0 converge-owner|converge-member|converge2-owner|converge2-member|restarted-owner|restart-member|upgrade-member|fetch-owner|fetch-member|conflict-owner|conflict-member|crash-owner|steady-member|crash-member|steady-owner|exhaustion|uparent-owner|uparent-member|headless-serve <drive> <creds> <relay> | upgrade-owner <drive> <creds> <relay> <archive> | headless-fetch <drive> <creds> <relay> <tag> <ready-file> <done-file> | headless-setup <drive> <creds>" >&2; exit 2 ;;
+  pause-owner) leg_pause_owner "$2" "$3" "$4" ;;
+  pause-member) leg_pause_member "$2" "$3" "$4" ;;
+  *) echo "usage: $0 converge-owner|converge-member|converge2-owner|converge2-member|restarted-owner|restart-member|upgrade-member|fetch-owner|fetch-member|conflict-owner|conflict-member|crash-owner|steady-member|crash-member|steady-owner|exhaustion|uparent-owner|uparent-member|headless-serve <drive> <creds> <relay> | upgrade-owner <drive> <creds> <relay> <archive> | headless-fetch <drive> <creds> <relay> <tag> <ready-file> <done-file> | headless-setup <drive> <creds> | pause-owner|pause-member <drive> <creds> <relay>" >&2; exit 2 ;;
 esac
 e2e_timing_report
 echo "legs: $PASS_COUNT checks passed"
