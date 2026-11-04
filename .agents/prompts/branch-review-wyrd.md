@@ -156,7 +156,7 @@ devenv shell -- gate review post --body-file "/var/folders/lw/hzz10xqd7wn18gzsnh
 covers the tip (each tip gets at most one review); a missing comment
 afterward is unknown, never a cue to post again.
 
-If publication fails, times out, or aborts: stop, report exact local and remote state, and do not retry or use another method. A successful post ends the review.
+If `gate review post` refuses with a refusal block naming the fix (for example malformed body, already-covered tip): apply exactly what the refusal prescribes, then retry once. If it fails, times out, or aborts without a refusal block: stop, report exact local and remote state, and do not retry or use another method. A successful post ends the review.
 
 End the review body with exactly:
 
