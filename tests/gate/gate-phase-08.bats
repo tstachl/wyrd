@@ -169,7 +169,7 @@ mint_pair() {
   wait "$LEG_HS" || die "headless serve leg failed (see logs/leg-headless-serve.out)"
 }
 
-@test "pause defers the outbox across an ungraceful kill and restart" {
+@test "pause defers the outbox across an ungraceful restart" {
   mkdir -p "$RUN/logs"
   GPO="$GUEST_RUN/creds/pause-owner"
   GPD="$GUEST_RUN/drives/pause"
