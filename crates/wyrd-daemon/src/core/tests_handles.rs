@@ -249,6 +249,90 @@ fn uncommitted_handle_writes_die_with_the_daemon() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// Crash boundary, the committed half: bytes the loop folded after
+/// a forcing event survive the daemon dying without ceremony. The
+/// create commits the empty file, buffered writes ride `fsync_handle`
+/// into one fold, and the fsync only returns once the executing pass
+/// completes the fold — durable at step 3 and, on this live-loop
+/// path, published (`MutationQueue::submit` unblocks only after the
+/// pass; `crates/wyrd-core/src/mutation/queue.rs:185-190`) — so
+/// reopening from custody must serve the committed bytes, with the
+/// handle never released. Together with
+/// `uncommitted_handle_writes_die_with_the_daemon` this pins the
+/// commit (not the acknowledgement) as the exact durability line:
+/// accepted-but-uncommitted dies, fsync-acknowledged survives.
+#[test]
+fn committed_fsync_writes_survive_the_daemon() {
+    let (engine, dir, identity) = scratch_drive();
+    {
+        let daemon: WyrdNode<DriveView<_, RuntimeMaterialization>> =
+            WyrdNode::new(engine, FsObjectStore::open(dir.clone()).unwrap()).unwrap();
+        let (live, backend) = live_backend(daemon);
+        let (stop, loop_handle) = spawn_live_loop(live);
+
+        let (fh, _ino, _attr) = backend
+            .create_at(1, "durable.txt", libc::O_RDWR)
+            .expect("create commits");
+        // The create lands through the live loop: wait until the
+        // committed empty file is visible before writing the bytes
+        // whose survival the crash must prove.
+        let start = std::time::Instant::now();
+        loop {
+            if backend.open_at("durable.txt").is_ok() {
+                break;
+            }
+            assert!(
+                start.elapsed() < Duration::from_secs(10),
+                "created file never became visible"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(backend.write_handle(fh, 0, b"committed").unwrap(), 9);
+        // The fsync blocks until the loop folds the buffered bytes
+        // through the durable commit: its return IS the durability
+        // promise, so no visibility poll is needed past this point.
+        backend.fsync_handle(fh).unwrap();
+
+        // Orderly loop stop plus backend drop without release — not
+        // power loss mid-commit, but an unreleased handle must not
+        // lose committed bytes either: the loop stops, the committed
+        // handle is never released, and the backend is dropped
+        // without ceremony.
+        stop.store(true, Ordering::Relaxed);
+        loop_handle
+            .join()
+            .unwrap()
+            .expect("loop shuts down cleanly");
+        drop(backend);
+    }
+
+    let reopened =
+        wyrd_sync::runtime::Engine::open_keystore(dir.clone(), "daemon-test-pass", identity)
+            .unwrap();
+    let mut daemon: WyrdNode<DriveView<_, RuntimeMaterialization>> =
+        WyrdNode::new(reopened, FsObjectStore::open(dir.clone()).unwrap()).unwrap();
+    daemon.refresh_live_heads().unwrap();
+    let (live, backend) = live_backend(daemon);
+    let (stop, loop_handle) = spawn_live_loop(live);
+    let fresh = backend
+        .open_at("durable.txt")
+        .expect("committed file reopens");
+    assert_eq!(
+        backend.read_handle(fresh, 0, 64).unwrap(),
+        b"committed",
+        "fsync-acknowledged bytes survive the crash"
+    );
+    backend.release_handle(fresh).unwrap();
+
+    stop.store(true, Ordering::Relaxed);
+    loop_handle
+        .join()
+        .unwrap()
+        .expect("loop shuts down cleanly");
+    drop(backend);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// Two handles on one path: the first commit wins, the second is
 /// stale (`EIO`) and authors no snapshot. Reads on the losing
 /// handle still serve its open-time capture.
