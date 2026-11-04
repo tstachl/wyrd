@@ -791,12 +791,16 @@ pub struct WireSyncReport {
 /// The liveness answer: the transport health and the last pass
 /// report behind it, pinned to the pass count. `report` is `None`
 /// before the first pass completes — an explicit "no report yet",
-/// never a healthy-looking default.
+/// never a healthy-looking default. `paused` is the loop's pause
+/// switch as it reads back: a paused owner is reachable and quiet by
+/// choice, distinct from an unreachable owner (refused connection)
+/// and from a reachable owner with no pass yet.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WireLiveness {
     pub health: WireMailboxHealth,
     pub report: Option<WireSyncReport>,
     pub passes: u64,
+    pub paused: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -947,6 +951,9 @@ pub enum WireOk {
     },
     ParentToken {
         token: WireParentToken,
+    },
+    Paused {
+        paused: bool,
     },
 }
 
@@ -1389,6 +1396,13 @@ pub enum WireMutationOutcome {
 /// sends against; `submit` forwards one of the nine mutation kinds.
 pub const OP_SUBMIT: &str = "submit";
 pub const OP_CAPTURE_PARENT: &str = "capture-parent";
+
+/// The pause switch, beside the mutation-side operations. `pause`
+/// defers network work and obligation discharge, `resume` returns to
+/// an ordinary pass; local authoring and serving continue either way.
+/// Both take no parameters and answer with how the switch reads back.
+pub const OP_PAUSE: &str = "pause";
+pub const OP_RESUME: &str = "resume";
 
 /// Parameters for `submit`: one of the nine mutation kinds.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

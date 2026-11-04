@@ -13,7 +13,8 @@ use super::wire::{
     WireMutationKind, WireMutationOutcome, WireNode, WireOk, WireOutboxTotals, WireParentToken,
     WirePeerHandle, WirePendingObligations, WireQueueDepth, WireReconciliationCounters,
     WireResponse, WireResult, WireSyncStatus, OP_CAPTURE_PARENT, OP_FRESHNESS, OP_LIVENESS,
-    OP_LOOKUP, OP_OBSERVE, OP_READ, OP_READDIR, OP_STAT, OP_SUBMIT, WIRE_VERSION,
+    OP_LOOKUP, OP_OBSERVE, OP_PAUSE, OP_READ, OP_READDIR, OP_RESUME, OP_STAT, OP_SUBMIT,
+    WIRE_VERSION,
 };
 
 use std::collections::BTreeSet;
@@ -342,9 +343,13 @@ fn wire_field_names_are_pinned() {
         health: WireMailboxHealth::unknown(),
         report: None,
         passes: 0,
+        paused: false,
     })
     .unwrap();
-    assert_eq!(keys(&liveness), set(&["health", "report", "passes"]));
+    assert_eq!(
+        keys(&liveness),
+        set(&["health", "report", "passes", "paused"])
+    );
     assert_eq!(
         keys(&liveness["health"]),
         set(&[
@@ -607,6 +612,10 @@ fn observation_before_the_first_pass_is_explicit() {
                 assert!(!liveness.health.is_live(), "no health reads as live");
                 assert_eq!(liveness.report, None);
                 assert_eq!(liveness.passes, 0);
+                assert!(
+                    !liveness.paused,
+                    "a fresh drive reads back unpaused, never paused by default"
+                );
             }
             other => panic!("unexpected liveness result: {other:?}"),
         },
@@ -854,6 +863,180 @@ fn socket_round_trip_serves_a_lookup() {
     stop.store(true, Ordering::Relaxed);
     drop(client);
     serve_thread.join().unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// One framed request over a fresh client connection, returning the
+/// parsed response. The socket tests share it so each pause assertion
+/// exercises the real framing, not direct dispatch.
+fn transact(socket_path: &std::path::Path, id: u64, op: &str) -> WireResponse {
+    let mut client = UnixStream::connect(socket_path).unwrap();
+    let request = serde_json::to_vec(&RawRequest {
+        v: WIRE_VERSION,
+        id,
+        op: op.to_string(),
+        params: serde_json::Value::Null,
+    })
+    .unwrap();
+    client
+        .write_all(&(request.len() as u32).to_be_bytes())
+        .unwrap();
+    client.write_all(&request).unwrap();
+    let mut len = [0u8; 4];
+    client.read_exact(&mut len).unwrap();
+    let len = u32::from_be_bytes(len) as usize;
+    assert!(len <= MAX_FRAME_BYTES);
+    let mut frame = vec![0u8; len];
+    client.read_exact(&mut frame).unwrap();
+    serde_json::from_slice(&frame).unwrap()
+}
+
+/// Pause and resume through dispatch: the switch flips, the answer
+/// echoes the switch as it reads back, both operations are
+/// idempotent, and the wired pacing signal fires — the poke the
+/// contract requires, not a bare store.
+#[test]
+fn pause_resume_round_trip_pokes_the_loop_signal() {
+    use wyrd_core::wake::{Wake, WakeSignal};
+
+    let (parts, dir) = composed_parts();
+    let waker = Arc::new(WakeSignal::default());
+    let server = OwnerServer::new(OwnerHandles::from_parts(&parts).with_waker(Arc::clone(&waker)));
+    // A waiter on the loop's signal: the pause must wake it promptly,
+    // the way the loop's idle wait would observe it.
+    let waiter_waker = Arc::clone(&waker);
+    let waited = std::thread::spawn(move || {
+        let stop = AtomicBool::new(false);
+        waiter_waker.wait(&stop, Duration::from_secs(30))
+    });
+    let paused = server.dispatch(RawRequest {
+        v: WIRE_VERSION,
+        id: 71,
+        op: OP_PAUSE.to_string(),
+        params: serde_json::Value::Null,
+    });
+    match paused.result {
+        WireResult::Ok(ok) => match *ok {
+            WireOk::Paused { paused } => assert!(paused, "the answer echoes the set switch"),
+            other => panic!("unexpected pause result: {other:?}"),
+        },
+        other => panic!("pause unexpectedly failed: {other:?}"),
+    }
+    assert_eq!(
+        waited.join().unwrap(),
+        Wake::Signal,
+        "setting pause pokes the pacing signal"
+    );
+    // Idempotent: pausing twice is one pause, still echoed back.
+    match server
+        .dispatch(RawRequest {
+            v: WIRE_VERSION,
+            id: 72,
+            op: OP_PAUSE.to_string(),
+            params: serde_json::Value::Null,
+        })
+        .result
+    {
+        WireResult::Ok(ok) => match *ok {
+            WireOk::Paused { paused } => assert!(paused, "the second pause reads back paused"),
+            other => panic!("unexpected second pause result: {other:?}"),
+        },
+        other => panic!("second pause unexpectedly failed: {other:?}"),
+    }
+    // Resume clears; a resume on a running drive changes nothing.
+    for id in [73, 74] {
+        match server
+            .dispatch(RawRequest {
+                v: WIRE_VERSION,
+                id,
+                op: OP_RESUME.to_string(),
+                params: serde_json::Value::Null,
+            })
+            .result
+        {
+            WireResult::Ok(ok) => match *ok {
+                WireOk::Paused { paused } => {
+                    assert!(!paused, "resume reads back running")
+                }
+                other => panic!("unexpected resume result: {other:?}"),
+            },
+            other => panic!("resume unexpectedly failed: {other:?}"),
+        }
+    }
+
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Three states stay three over the wire: quiet (reachable, no pass
+/// yet, unpaused), paused (reachable, no pass yet, paused), and
+/// offline (the connection refuses). The two liveness answers differ
+/// in exactly the paused flag; the offline owner answers nothing at
+/// all. No renderer can collapse them into one status.
+#[test]
+fn liveness_keeps_paused_quiet_and_offline_distinct() {
+    let (parts, dir) = composed_parts();
+    let server = OwnerServer::new(OwnerHandles::from_parts(&parts));
+    let socket_path = dir.join("pausestates.sock");
+    let _ = std::fs::remove_file(&socket_path);
+    let listener = std::os::unix::net::UnixListener::bind(&socket_path).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let stop: &'static AtomicBool = Box::leak(Box::new(AtomicBool::new(false)));
+    let serve_thread = std::thread::spawn(move || server.serve_on(&listener, stop));
+
+    fn liveness_of(response: WireResponse) -> WireLiveness {
+        match response.result {
+            WireResult::Ok(ok) => match *ok {
+                WireOk::Liveness { liveness } => liveness,
+                other => panic!("unexpected liveness result: {other:?}"),
+            },
+            other => panic!("liveness unexpectedly failed: {other:?}"),
+        }
+    }
+    // Quiet: reachable, no pass yet, unpaused.
+    let quiet = liveness_of(transact(&socket_path, 81, OP_LIVENESS));
+    assert!(!quiet.paused, "a fresh drive reads back unpaused");
+    assert_eq!(quiet.passes, 0);
+    assert_eq!(quiet.report, None);
+    // Paused over the socket: the same slot, the flag set.
+    match transact(&socket_path, 82, OP_PAUSE).result {
+        WireResult::Ok(ok) => match *ok {
+            WireOk::Paused { paused } => assert!(paused, "pause echoes back set"),
+            other => panic!("unexpected socket pause result: {other:?}"),
+        },
+        other => panic!("socket pause unexpectedly failed: {other:?}"),
+    }
+    let paused = liveness_of(transact(&socket_path, 83, OP_LIVENESS));
+    assert!(paused.paused, "the pause shows in liveness");
+    assert_ne!(quiet, paused, "quiet and paused are distinct answers");
+    assert_eq!(
+        (&paused.health, &paused.report, &paused.passes),
+        (&quiet.health, &quiet.report, &quiet.passes),
+        "pausing changes the flag, nothing else"
+    );
+    // Resume over the socket restores the quiet answer exactly.
+    match transact(&socket_path, 84, OP_RESUME).result {
+        WireResult::Ok(ok) => match *ok {
+            WireOk::Paused { paused } => assert!(!paused, "resume echoes back running"),
+            other => panic!("unexpected socket resume result: {other:?}"),
+        },
+        other => panic!("socket resume unexpectedly failed: {other:?}"),
+    }
+    assert_eq!(
+        liveness_of(transact(&socket_path, 85, OP_LIVENESS)),
+        quiet,
+        "resume restores the quiet answer byte for byte"
+    );
+
+    // Offline: the stopped server refuses the connection instead of
+    // answering anything, which no response can be confused with.
+    stop.store(true, Ordering::Relaxed);
+    serve_thread.join().unwrap();
+    let _ = std::fs::remove_file(&socket_path);
+    assert!(
+        UnixStream::connect(&socket_path).is_err(),
+        "no listener means a refused connection, never a status"
+    );
+
     std::fs::remove_dir_all(dir).unwrap();
 }
 
