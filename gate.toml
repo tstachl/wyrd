@@ -68,6 +68,9 @@ key = "~/.ssh/id_ed25519_gate_odin"
 # a revision, never a path: the host resolves the name to the source it
 # is willing to build, so the name is profile configuration.
 repo = "wyrd"
+[runner.approver]
+user = "gate-approver"
+key = "~/.ssh/id_thomas.pub"
 
 # The wyrd-gate-e2e task declaration: data only. The gate runner reads
 # this section from the staged revision (never host config): entryPoint
