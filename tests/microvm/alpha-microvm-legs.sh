@@ -1449,21 +1449,28 @@ leg_pause_owner() {
     || die "restarted vault did not come back unpaused"
   pass "restarted vault runs unpaused"
   # The durable obligation reconciles through the outbox: queued
-  # drains to zero and exactly one announcement delivers.
+  # drains to zero and exactly one announcement delivers. Both sides
+  # come from the same observe slot, but the delivery count is polled
+  # like the queue so a slow pass cannot flake the assertion.
   poll_until 300 bash -c "test \"\$(python3 \"$SCRIPT_DIR/owner-socket.py\" queued \"$d\")\" = 0" \
     || die "restarted vault never reconciled the obligation (see pause-serve-2.err)"
-  [[ "$(python3 "$SCRIPT_DIR/owner-socket.py" delivered "$d")" == "1" ]] \
+  poll_until 300 bash -c "test \"\$(python3 \"$SCRIPT_DIR/owner-socket.py\" delivered \"$d\")\" = 1" \
     || die "reconciled obligation did not deliver exactly once"
   pass "pending obligation reconciles after restart with one delivery"
+  # TERM while parked: the ordered teardown must exit 0, proving
+  # the shutdown half beside the kill half above.
   local pid2
   pid2="$(cat "$PIDDIR/pause-serve.pid")"
   kill -TERM "$pid2"
-  local waited=0
-  while kill -0 "$pid2" 2>/dev/null; do
-    sleep 1
-    waited=$((waited + 1))
-    (( waited < 120 )) || die "pause serve#2 ignored TERM"
+  local i status="timeout"
+  for ((i = 0; i < 60 * 5; i++)); do
+    if ! kill -0 "$pid2" 2>/dev/null; then
+      set +e; wait "$pid2"; status=$?; set -e
+      break
+    fi
+    sleep 0.2
   done
+  [[ "$status" == "0" ]] || die "pause serve#2 TERM shutdown exit $status, want clean 0"
   rm -f "$PIDDIR/pause-serve.pid"
   pass "restarted vault stops clean on TERM"
   check_no_leaks "$LOGDIR/pause-serve-1.err" "$(cat "$c/identity")" "$(cat "$c/passphrase")"
