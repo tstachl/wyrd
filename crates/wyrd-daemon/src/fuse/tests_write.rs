@@ -608,6 +608,80 @@ fn commit_without_image_fails_closed_instead_of_authoring_empty() {
     );
 }
 
+/// The acknowledgement tour: `write` buffers, `fsync` folds, `flush`
+/// folds identically, and `release` closes clean — one session, two
+/// folds, no interference. `commit_handle` is the FUSE `flush` path
+/// (`ops.rs`) and must carry the same persistence promise as
+/// `fsync_handle`: this pins the `flush` ≡ `fsync` row of the
+/// forcing table compositionally, where the surrounding tests pin
+/// each row in isolation.
+#[test]
+fn ack_tour_write_fsync_flush_release_compose() {
+    let (mut backend, _) = evolving_backend(b"first", b"second");
+    let queue = Arc::new(MutationQueue::default());
+    backend.mutations = Some(Arc::clone(&queue));
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let done = Arc::new(AtomicBool::new(false));
+    let drainer = spawn_drainer(&queue, &seen, &done);
+    let fh = backend.open_write("f.txt", libc::O_RDWR).unwrap();
+    backend.write_handle(fh, 0, b"one").unwrap();
+    assert_eq!(
+        queue.outstanding(),
+        0,
+        "the write buffers: no submission without a forcing event"
+    );
+    backend.fsync_handle(fh).unwrap();
+    backend.write_handle(fh, 3, b"two").unwrap();
+    backend.commit_handle(fh).unwrap();
+    assert!(
+        backend.release_handle(fh).is_ok(),
+        "release after two committed folds is a clean close"
+    );
+    done.store(true, Ordering::Relaxed);
+    drainer.join().expect("drainer exits");
+    let seen = seen.lock().unwrap();
+    assert_eq!(
+        seen.len(),
+        2,
+        "fsync then flush submit two folds, saw {seen:?}"
+    );
+    let mut contents = Vec::new();
+    for submitted in seen.iter() {
+        match submitted {
+            MutationKind::Fold { members } => {
+                assert_eq!(
+                    members.len(),
+                    1,
+                    "each forcing event folds exactly one image"
+                );
+                match &members[0].kind {
+                    MutationKind::CommitFile { path, content, .. } => {
+                        assert_eq!(path, "f.txt");
+                        contents.push(content.clone());
+                    }
+                    other => panic!("every forcing event folds the file image, saw {other:?}"),
+                }
+            }
+            other => panic!("every forcing event submits a fold, saw {other:?}"),
+        }
+    }
+    // No-drop, not exact bytes: the fake loop records without
+    // publishing, so the second image merges against the last
+    // *published* base rather than the first fold's commit (the
+    // production accumulation chain is pinned in
+    // core/tests_coalescing.rs). Each fold carries its own writes.
+    assert!(
+        contents[0].windows(3).any(|w| w == b"one"),
+        "the fsync fold carries the first write, saw {:?}",
+        String::from_utf8_lossy(&contents[0])
+    );
+    assert!(
+        contents[1].windows(3).any(|w| w == b"two"),
+        "the flush fold carries the second write, saw {:?}",
+        String::from_utf8_lossy(&contents[1])
+    );
+}
+
 /// OD-1 accumulation: buffered writes submit nothing until a forcing
 /// event arrives; one fsync then folds the whole pending set into
 /// exactly one fold submission — one snapshot per forcing event,
