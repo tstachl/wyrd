@@ -35,10 +35,10 @@ impl PublishBudget {
     /// No deadline: every check passes, nothing ever clips. For
     /// single-send paths (bounded by the per-send relay timeout
     /// already) and tests that pin behavior unrelated to pacing.
+    /// A day out, not a century: far beyond any pass, but safely
+    /// below overflow on every platform.
     pub fn unbounded() -> Self {
-        // Far-future, not `Instant::now() + Duration::MAX`: adding
-        // the max duration to `now` can overflow on some platforms.
-        PublishBudget::new(Instant::now() + std::time::Duration::from_secs(3600 * 24 * 365 * 100))
+        PublishBudget::new(Instant::now() + std::time::Duration::from_secs(3600 * 24))
     }
 
     /// Check before attempting one obligation send. `true` means
@@ -47,7 +47,9 @@ impl PublishBudget {
     /// [`PublishBudget::defer`]) and the obligation stays pending.
     /// Marks clipped; counting belongs to `defer`, so a trip the
     /// caller mishandles still reads as clipped with no phantom
-    /// deferral.
+    /// deferral. The check is between sends, never mid-send: one
+    /// in-flight send can overshoot the deadline by up to the
+    /// per-send relay timeout.
     pub fn check(&mut self) -> bool {
         if Instant::now() >= self.deadline {
             self.clipped = true;
@@ -60,7 +62,12 @@ impl PublishBudget {
     /// Record `n` obligations left unattempted after the budget
     /// tripped (the loop's remainder on break, current obligation
     /// included). Marks clipped like [`PublishBudget::check`]: a
-    /// remainder exists only past the trip.
+    /// remainder exists only past the trip. The unit is the
+    /// caller's remainder — snapshots in the announce loop,
+    /// obligations in the delivery loops, statements in the answer
+    /// path, recipients in a fan-out — so the summed `deferred`
+    /// counts unattempted send opportunities across legs, not a
+    /// single uniform obligation.
     pub fn defer(&mut self, n: usize) {
         if n > 0 {
             self.clipped = true;

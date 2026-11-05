@@ -58,13 +58,19 @@ where
     /// serving barrier do), so one hanging relay cannot spend the
     /// pass on the loop thread. Tripped budgets defer — unattempted
     /// obligations stay pending for the next pass, never retired.
+    /// The bound is within one in-flight per-send timeout of the
+    /// deadline (checks run between sends, never mid-send), and the
+    /// serving barrier below runs outside this budget.
     fn publish<M: Mailbox>(&mut self, mailbox: &mut M) -> Result<PublishOutcome, LiveError> {
         let phase_start = std::time::Instant::now();
         // Deadline from the per-pass publish budget, clipped to the
         // nearest held mutation like the fetch cap: a held mutation's
-        // `TimedOut` decision lands on time even when a provider
-        // stalls mid-publish. With nothing held the config budget
-        // applies — one unreachable relay costs at most this per pass
+        // `TimedOut` decision lands within one in-flight per-send
+        // timeout of its instant even when a provider stalls
+        // mid-publish (checks run between sends, never mid-send).
+        // With nothing held the config budget applies — one
+        // unreachable relay costs at most this per pass plus the
+        // serving-barrier window (which runs outside this budget)
         // instead of N_obligations x per-send timeout.
         let pass_cap = phase_start + self.publish_pass_budget;
         let deadline = self
@@ -116,12 +122,21 @@ where
         // must not consume the serving budget (deliver_pending above
         // already tried those, and they are not mirror-gated).
         if !self.engine.pending_announcements()?.is_empty() && !self.flush_serving_barrier()? {
-            return Ok(PublishOutcome {
+            let outcome = PublishOutcome {
                 sent,
                 clipped: budget.clipped(),
                 deferred: budget.deferred(),
                 elapsed_ms: phase_start.elapsed().as_millis() as u64,
-            });
+            };
+            if outcome.clipped {
+                tracing::debug!(
+                    elapsed_ms = outcome.elapsed_ms,
+                    deferred = outcome.deferred,
+                    sent = outcome.sent,
+                    "publish phase clipped by the per-pass budget; unattempted obligations stay pending"
+                );
+            }
+            return Ok(outcome);
         }
         // The route is copied out first: selecting it reads the role
         // file through `self` while the discharge below needs the

@@ -204,6 +204,48 @@ fn transport_failure_leaves_the_statement_unanswered() {
     );
 }
 
+/// A publish-budget clip marks nothing answered: the statement stays
+/// unanswered (same retry contract as a transport failure) and the
+/// next pass with a live budget retries it.
+#[test]
+fn clip_leaves_the_statement_unanswered_for_retry() {
+    let (mut fx, _, child) = world();
+    let (_, r) = requester();
+    let child_id = child.transition_id();
+    fx.engine
+        .commit_facts(&[Fact::TransitionQueued(child_id, r)])
+        .unwrap();
+    state(&mut fx, r, keyed_evidence(r, &[]));
+    let mut budget = PublishBudget::new(std::time::Instant::now());
+    let mut mailbox = NullMailbox;
+    let report = fx
+        .engine
+        .answer_reconciliation(&mut mailbox, &mut budget)
+        .unwrap();
+    assert!(budget.clipped(), "the expired budget trips");
+    assert_eq!(report.sent, 0, "nothing sends past the trip");
+    assert_eq!(report.retired, 0, "nothing retires past the trip");
+    assert_eq!(
+        fx.engine.unanswered_statement_count(),
+        1,
+        "the clipped statement is still unanswered"
+    );
+    let mut mailbox = NullMailbox;
+    let report = fx
+        .engine
+        .answer_reconciliation(&mut mailbox, &mut PublishBudget::unbounded())
+        .unwrap();
+    assert_eq!(
+        report.statements, 1,
+        "the clipped statement is retried next pass"
+    );
+    assert_eq!(
+        fx.engine.unanswered_statement_count(),
+        0,
+        "the retry marks it answered"
+    );
+}
+
 /// `sender_sends_exactly_the_set_difference`: the full intake→answer
 /// wiring. The statement holds the genesis but missed the child; the
 /// answer retires the genesis and sends exactly the child — nothing

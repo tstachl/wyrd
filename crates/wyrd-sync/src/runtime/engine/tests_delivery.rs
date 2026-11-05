@@ -174,6 +174,60 @@ fn delivery_retains_obligation_when_no_relay_accepts() {
     );
 }
 
+/// A publish-budget clip attempts nothing: both obligations stay
+/// pending, the deferral counts the whole remainder, and the next
+/// pass with a live budget discharges them.
+#[test]
+fn clip_defers_every_delivery_obligation_for_retry() {
+    let (mut fx, child) = two_transition_world();
+    let child_id = child.transition_id();
+    let tip = fx
+        .engine
+        .log
+        .known_state()
+        .map(|state| state.transition_id)
+        .expect("tip observed");
+    let genesis_id = fx
+        .engine
+        .log
+        .transition(&tip)
+        .and_then(|t| t.prev)
+        .expect("genesis linked");
+    let recipient = identity(0x03).1;
+    fx.engine
+        .commit_facts(&[
+            Fact::TransitionQueued(genesis_id, recipient),
+            Fact::TransitionQueued(child_id, recipient),
+        ])
+        .unwrap();
+    let mut budget = PublishBudget::new(std::time::Instant::now());
+    let mut mailbox = MemoryMailbox {
+        relay: &mut fx.relay,
+        owner: fx.recipient,
+    };
+    assert_eq!(
+        fx.engine
+            .deliver_pending(&mut mailbox, &mut budget)
+            .unwrap(),
+        0,
+        "a clipped pass attempts no send"
+    );
+    assert!(budget.clipped(), "the expired budget trips");
+    assert_eq!(budget.deferred(), 2, "both obligations defer");
+    let loaded = fx.engine.store.load().unwrap();
+    assert!(
+        loaded.transition_delivered.is_empty(),
+        "a clip commits no Delivered fact"
+    );
+    assert_eq!(
+        fx.engine
+            .deliver_pending(&mut mailbox, &mut PublishBudget::unbounded())
+            .unwrap(),
+        2,
+        "the next pass discharges both"
+    );
+}
+
 /// A refusal the relays will never flip must be operator-visible:
 /// the first refusal of an obligation warns once under the default
 /// filter; repeats stay at debug. The obligation itself is
