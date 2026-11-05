@@ -10,7 +10,7 @@
 use super::tests_harness::{device_of, owner_engine};
 use crate::keys::{DeviceEncryptionSecret, DeviceIdentitySecret};
 use crate::membership::test_util::key;
-use crate::runtime::engine::{Engine, EngineError};
+use crate::runtime::engine::{Engine, EngineError, PublishBudget};
 use crate::runtime::test_util::{encryption_key, TestDir};
 use crate::transport::mailbox::{MemoryMailbox, MemoryRelay};
 
@@ -36,7 +36,9 @@ fn membership_lifecycle_bounds_acquisition_and_moves_authority() {
             relay: &mut relay,
             owner: owner_id,
         };
-        owner.deliver_pending(&mut sender).unwrap()
+        owner
+            .deliver_pending(&mut sender, &mut PublishBudget::unbounded())
+            .unwrap()
     };
     assert_eq!(first_sent, 2);
     let join_dir = TestDir::new("lifecycle-join-b");
@@ -123,7 +125,9 @@ fn membership_lifecycle_bounds_acquisition_and_moves_authority() {
             relay: &mut relay,
             owner: owner_id,
         };
-        owner.deliver_pending(&mut sender).unwrap()
+        owner
+            .deliver_pending(&mut sender, &mut PublishBudget::unbounded())
+            .unwrap()
     };
     assert!(sent > 0, "remaining members are owed catch-up");
     let rebuilt = owner.store.rebuild(owner_id).unwrap();

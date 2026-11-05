@@ -6,7 +6,7 @@ use crate::durable::{AuthorizeSnapshot, AuthorizedSnapshot, Fact};
 use crate::keys::capability::WrappedCapability;
 use crate::keys::{DeviceEncryptionSecret, DeviceIdentitySecret, EpochSecret};
 use crate::membership::test_util::{drive as member_drive, key, sign, Builder};
-use crate::runtime::engine::{Engine, EngineError};
+use crate::runtime::engine::{Engine, EngineError, PublishBudget};
 use crate::runtime::test_util::{
     control_key, encryption_key, identity, identity_secret, transition_message, TestDir,
 };
@@ -210,7 +210,9 @@ fn admit_queues_and_delivers_newcomer_catch_up() {
         owner: owner_id,
     };
     let rebuilds_before = engine.store.rebuild_count();
-    let sent = engine.deliver_pending(&mut sender).unwrap();
+    let sent = engine
+        .deliver_pending(&mut sender, &mut PublishBudget::unbounded())
+        .unwrap();
     assert_eq!(sent, 2, "transition plus capability");
     assert_eq!(
         engine.store.rebuild_count() - rebuilds_before,
@@ -354,9 +356,13 @@ fn admit_delivers_current_heads_to_the_newcomer() {
         relay: &mut relay,
         owner: engine.device(),
     };
-    let sent = engine.deliver_pending(&mut sender).unwrap();
+    let sent = engine
+        .deliver_pending(&mut sender, &mut PublishBudget::unbounded())
+        .unwrap();
     assert_eq!(sent, 2, "transition plus capability");
-    let announced = engine.announce_pending(&mut sender, None).unwrap();
+    let announced = engine
+        .announce_pending(&mut sender, None, &mut PublishBudget::unbounded())
+        .unwrap();
     assert_eq!(announced, 1, "the head announcement");
 
     // The newcomer joins and drains everything: transition,

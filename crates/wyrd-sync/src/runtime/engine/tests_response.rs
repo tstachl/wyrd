@@ -117,7 +117,9 @@ fn answer(fx: &mut Fixture) -> AnswerReport {
         relay: &mut fx.relay,
         owner: recipient,
     };
-    fx.engine.answer_reconciliation(&mut mailbox).unwrap()
+    fx.engine
+        .answer_reconciliation(&mut mailbox, &mut PublishBudget::unbounded())
+        .unwrap()
 }
 
 /// A mailbox that accepts nothing and retains nothing: sends report
@@ -183,16 +185,64 @@ fn transport_failure_leaves_the_statement_unanswered() {
         sent: 0,
         fail_after: 0,
     };
-    let err = fx.engine.answer_reconciliation(&mut failing).unwrap_err();
+    let err = fx
+        .engine
+        .answer_reconciliation(&mut failing, &mut PublishBudget::unbounded())
+        .unwrap_err();
     assert!(
         matches!(err, EngineError::Mailbox(_)),
         "transport failure surfaces, does not poison: {err:?}"
     );
     let mut mailbox = NullMailbox;
-    let report = fx.engine.answer_reconciliation(&mut mailbox).unwrap();
+    let report = fx
+        .engine
+        .answer_reconciliation(&mut mailbox, &mut PublishBudget::unbounded())
+        .unwrap();
     assert_eq!(
         report.statements, 1,
         "the failed statement is still unanswered"
+    );
+}
+
+/// A publish-budget clip marks nothing answered: the statement stays
+/// unanswered (same retry contract as a transport failure) and the
+/// next pass with a live budget retries it.
+#[test]
+fn clip_leaves_the_statement_unanswered_for_retry() {
+    let (mut fx, _, child) = world();
+    let (_, r) = requester();
+    let child_id = child.transition_id();
+    fx.engine
+        .commit_facts(&[Fact::TransitionQueued(child_id, r)])
+        .unwrap();
+    state(&mut fx, r, keyed_evidence(r, &[]));
+    let mut budget = PublishBudget::new(std::time::Instant::now());
+    let mut mailbox = NullMailbox;
+    let report = fx
+        .engine
+        .answer_reconciliation(&mut mailbox, &mut budget)
+        .unwrap();
+    assert!(budget.clipped(), "the expired budget trips");
+    assert_eq!(report.sent, 0, "nothing sends past the trip");
+    assert_eq!(report.retired, 0, "nothing retires past the trip");
+    assert_eq!(
+        fx.engine.unanswered_statement_count(),
+        1,
+        "the clipped statement is still unanswered"
+    );
+    let mut mailbox = NullMailbox;
+    let report = fx
+        .engine
+        .answer_reconciliation(&mut mailbox, &mut PublishBudget::unbounded())
+        .unwrap();
+    assert_eq!(
+        report.statements, 1,
+        "the clipped statement is retried next pass"
+    );
+    assert_eq!(
+        fx.engine.unanswered_statement_count(),
+        0,
+        "the retry marks it answered"
     );
 }
 
@@ -306,7 +356,10 @@ fn duplicate_reconciliation_is_idempotent() {
     assert_eq!(second.sent, 0, "and sends nothing further");
     fx.engine = reopen(&mut fx);
     let mut mailbox = NullMailbox;
-    let third = fx.engine.answer_reconciliation(&mut mailbox).unwrap();
+    let third = fx
+        .engine
+        .answer_reconciliation(&mut mailbox, &mut PublishBudget::unbounded())
+        .unwrap();
     assert_eq!(third.retired, 0, "restart re-answer commits nothing");
     let loaded = fx.engine.store.load().unwrap();
     assert_eq!(
@@ -343,7 +396,10 @@ fn successor_statement_retires_the_ancestor_it_validates() {
     };
     state(&mut fx, r, evidence.clone());
     let mut mailbox = NullMailbox;
-    let report = fx.engine.answer_reconciliation(&mut mailbox).unwrap();
+    let report = fx
+        .engine
+        .answer_reconciliation(&mut mailbox, &mut PublishBudget::unbounded())
+        .unwrap();
     assert_eq!(report.retired, 2, "child directly, genesis by ancestry");
     assert_eq!(report.sent, 0, "nothing missing, nothing sends");
     let loaded = fx.engine.store.load().unwrap();
@@ -392,7 +448,10 @@ fn capability_retires_on_exact_install_match() {
         },
     );
     let mut mailbox = NullMailbox;
-    let report = fx.engine.answer_reconciliation(&mut mailbox).unwrap();
+    let report = fx
+        .engine
+        .answer_reconciliation(&mut mailbox, &mut PublishBudget::unbounded())
+        .unwrap();
     assert_eq!(report.retired, 0, "a lesser install is not possession");
     // The install arrives in the next statement: retires, sends nothing.
     let evidence = keyed_evidence(r, &[]);
@@ -403,7 +462,10 @@ fn capability_retires_on_exact_install_match() {
     fx.engine
         .refusal_warned
         .insert(("capability", capability_obligation(2, &r), r));
-    let report = fx.engine.answer_reconciliation(&mut mailbox).unwrap();
+    let report = fx
+        .engine
+        .answer_reconciliation(&mut mailbox, &mut PublishBudget::unbounded())
+        .unwrap();
     assert_eq!(report.retired, 1);
     assert!(
         !fx.engine
@@ -446,7 +508,10 @@ fn announcement_obligations_retire_on_evidence() {
     };
     state(&mut fx, r, evidence.clone());
     let mut mailbox = NullMailbox;
-    let report = fx.engine.answer_reconciliation(&mut mailbox).unwrap();
+    let report = fx
+        .engine
+        .answer_reconciliation(&mut mailbox, &mut PublishBudget::unbounded())
+        .unwrap();
     assert_eq!(report.retired, 1, "the evidenced snapshot retires");
     assert_eq!(report.sent, 0, "covered needs no send");
     assert!(
@@ -554,7 +619,9 @@ fn evaluated_without_progress_records_a_live_stall() {
             relay: &mut fx.relay,
             owner: recipient,
         };
-        fx.engine.deliver_pending(&mut mailbox).unwrap();
+        fx.engine
+            .deliver_pending(&mut mailbox, &mut PublishBudget::unbounded())
+            .unwrap();
     }
     assert_eq!(
         fx.engine.stalled_statement_count().unwrap(),
@@ -586,9 +653,14 @@ fn stall_with_zero_acceptance_reads_open() {
     state(&mut fx, r, held1);
     {
         let mut mailbox = NullMailbox;
-        let report = fx.engine.answer_reconciliation(&mut mailbox).unwrap();
+        let report = fx
+            .engine
+            .answer_reconciliation(&mut mailbox, &mut PublishBudget::unbounded())
+            .unwrap();
         assert_eq!((report.retired, report.sent), (0, 0));
-        fx.engine.deliver_pending(&mut mailbox).unwrap();
+        fx.engine
+            .deliver_pending(&mut mailbox, &mut PublishBudget::unbounded())
+            .unwrap();
     }
     assert_eq!(
         fx.engine.unanswered_statement_count(),
@@ -677,7 +749,9 @@ fn orphan_obligation_latches_the_stall_across_restart() {
             relay: &mut fx.relay,
             owner: recipient,
         };
-        fx.engine.deliver_pending(&mut mailbox).unwrap();
+        fx.engine
+            .deliver_pending(&mut mailbox, &mut PublishBudget::unbounded())
+            .unwrap();
     }
     assert_eq!(
         fx.engine.runtime_state().unwrap().pending_transitions(),
@@ -697,7 +771,9 @@ fn orphan_obligation_latches_the_stall_across_restart() {
             relay: &mut fx.relay,
             owner: recipient,
         };
-        engine.answer_reconciliation(&mut mailbox).unwrap();
+        engine
+            .answer_reconciliation(&mut mailbox, &mut PublishBudget::unbounded())
+            .unwrap();
     }
     assert_eq!(
         engine.stalled_statement_count().unwrap(),
@@ -997,7 +1073,10 @@ fn recipient_crash_before_durable_commit_recovers_by_reconciliation() {
         relay: &mut fx.relay,
         owner: sender,
     };
-    let report = fx.engine.answer_reconciliation(&mut sbox).unwrap();
+    let report = fx
+        .engine
+        .answer_reconciliation(&mut sbox, &mut PublishBudget::unbounded())
+        .unwrap();
     assert_eq!(
         report.retired, 0,
         "the sender retires nothing on a gap statement"
@@ -1033,7 +1112,10 @@ fn recipient_crash_before_durable_commit_recovers_by_reconciliation() {
         relay: &mut fx.relay,
         owner: sender,
     };
-    let report = fx.engine.answer_reconciliation(&mut sbox).unwrap();
+    let report = fx
+        .engine
+        .answer_reconciliation(&mut sbox, &mut PublishBudget::unbounded())
+        .unwrap();
     assert_eq!(report.retired, 1, "possession evidenced retires");
     let loaded = fx.engine.store.load().unwrap();
     assert_eq!(loaded.transition_reconciled.len(), 1);
@@ -1168,7 +1250,10 @@ fn sender_crash_after_sealing_before_first_send_keeps_the_obligation() {
     // discharges.
     state(&mut fx, r, keyed_evidence(r, &[]));
     let mut refusing = RefusingMailbox { inner: NullMailbox };
-    let report = fx.engine.answer_reconciliation(&mut refusing).unwrap();
+    let report = fx
+        .engine
+        .answer_reconciliation(&mut refusing, &mut PublishBudget::unbounded())
+        .unwrap();
     assert_eq!(report.sent, 0, "zero acceptance sends nothing");
     let loaded = fx.engine.store.load().unwrap();
     assert!(
@@ -1234,7 +1319,9 @@ fn partial_reconciliation_then_crash_resumes_without_double_sending() {
     state(&mut fx, r, evidence);
     fx.engine.crash_after(CrashStage::AfterWriteTemp);
     let mut mailbox = NullMailbox;
-    fx.engine.answer_reconciliation(&mut mailbox).unwrap();
+    fx.engine
+        .answer_reconciliation(&mut mailbox, &mut PublishBudget::unbounded())
+        .unwrap();
     let loaded = fx.engine.store.load().unwrap();
     assert!(
         loaded.transition_reconciled.is_empty(),
@@ -1255,7 +1342,10 @@ fn partial_reconciliation_then_crash_resumes_without_double_sending() {
     };
     state(&mut fx, r, resumed);
     let mut mailbox = NullMailbox;
-    let report = fx.engine.answer_reconciliation(&mut mailbox).unwrap();
+    let report = fx
+        .engine
+        .answer_reconciliation(&mut mailbox, &mut PublishBudget::unbounded())
+        .unwrap();
     assert_eq!(report.retired, 2);
     assert_eq!(report.sent, 0, "covered needs no send");
     let loaded = fx.engine.store.load().unwrap();
@@ -1329,7 +1419,11 @@ fn divergent_progress_reconciles_to_the_same_durable_state() {
         relay: &mut pair.relay,
         owner: a_dev,
     };
-    let report = pair.a.engine.answer_reconciliation(&mut mailbox).unwrap();
+    let report = pair
+        .a
+        .engine
+        .answer_reconciliation(&mut mailbox, &mut PublishBudget::unbounded())
+        .unwrap();
     assert_eq!(report.retired, 3, "held transitions and install retire");
     assert_eq!(report.sent, 0, "nothing missing, nothing sends");
     let loaded = pair.a.engine.store.load().unwrap();
@@ -1373,7 +1467,10 @@ fn retirement_is_per_recipient() {
     let held1 = keyed_evidence(r1, &[child_id]);
     state(&mut fx, r1, held1.clone());
     let mut mailbox = NullMailbox;
-    let report = fx.engine.answer_reconciliation(&mut mailbox).unwrap();
+    let report = fx
+        .engine
+        .answer_reconciliation(&mut mailbox, &mut PublishBudget::unbounded())
+        .unwrap();
     assert_eq!(report.retired, 1);
     let loaded = fx.engine.store.load().unwrap();
     assert_eq!(
@@ -1388,7 +1485,10 @@ fn retirement_is_per_recipient() {
     );
     let held2 = keyed_evidence(r2, &[child_id]);
     state(&mut fx, r2, held2.clone());
-    let report = fx.engine.answer_reconciliation(&mut mailbox).unwrap();
+    let report = fx
+        .engine
+        .answer_reconciliation(&mut mailbox, &mut PublishBudget::unbounded())
+        .unwrap();
     assert_eq!(report.retired, 1, "R2's own statement retires R2");
     let loaded = fx.engine.store.load().unwrap();
     assert_eq!(loaded.transition_reconciled.len(), 2);
@@ -1410,7 +1510,9 @@ fn frozen_drive_answers_nothing() {
         ])
         .unwrap();
     let mut mailbox = NullMailbox;
-    let report = engine.answer_reconciliation(&mut mailbox).unwrap();
+    let report = engine
+        .answer_reconciliation(&mut mailbox, &mut PublishBudget::unbounded())
+        .unwrap();
     assert_eq!(report, AnswerReport::default());
     let loaded = engine.store.load().unwrap();
     assert!(
@@ -1453,7 +1555,10 @@ fn retire_commits_across_chunks() {
     };
     state(&mut fx, r, evidence);
     let mut mailbox = NullMailbox;
-    let report = fx.engine.answer_reconciliation(&mut mailbox).unwrap();
+    let report = fx
+        .engine
+        .answer_reconciliation(&mut mailbox, &mut PublishBudget::unbounded())
+        .unwrap();
     assert_eq!(
         report.retired,
         RETIRE_COMMIT_BATCH + 1,
@@ -1540,7 +1645,10 @@ fn two_statements_one_pass_retire_once() {
     state(&mut fx, r, first);
     state(&mut fx, r, second);
     let mut mailbox = NullMailbox;
-    let report = fx.engine.answer_reconciliation(&mut mailbox).unwrap();
+    let report = fx
+        .engine
+        .answer_reconciliation(&mut mailbox, &mut PublishBudget::unbounded())
+        .unwrap();
     assert_eq!(report.statements, 2, "both statements evaluated");
     assert_eq!(
         report.retired, 2,

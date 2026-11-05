@@ -27,6 +27,7 @@ use crate::durable::{
     ReconciliationEvidence, ReconciliationView,
 };
 use crate::membership::test_util::{drive as member_drive, Builder};
+use crate::runtime::engine::PublishBudget;
 use crate::runtime::respond::AnswerReport;
 use crate::runtime::test_util::{
     announcement_msg, announcement_msg_with, body_root, capability_message_for, control_key,
@@ -207,13 +208,21 @@ fn answer(world: &mut World, from: DeviceId) -> AnswerReport {
             relay: &mut world.relay,
             owner: from,
         };
-        world.a.engine.answer_reconciliation(&mut mailbox).unwrap()
+        world
+            .a
+            .engine
+            .answer_reconciliation(&mut mailbox, &mut PublishBudget::unbounded())
+            .unwrap()
     } else {
         let mut mailbox = MemoryMailbox {
             relay: &mut world.relay,
             owner: from,
         };
-        world.b.engine.answer_reconciliation(&mut mailbox).unwrap()
+        world
+            .b
+            .engine
+            .answer_reconciliation(&mut mailbox, &mut PublishBudget::unbounded())
+            .unwrap()
     }
 }
 
@@ -256,13 +265,21 @@ fn publish(world: &mut World, from: DeviceId) -> usize {
             relay: &mut world.relay,
             owner: from,
         };
-        world.a.engine.announce_pending(&mut mailbox, None).unwrap()
+        world
+            .a
+            .engine
+            .announce_pending(&mut mailbox, None, &mut PublishBudget::unbounded())
+            .unwrap()
     } else {
         let mut mailbox = MemoryMailbox {
             relay: &mut world.relay,
             owner: from,
         };
-        world.b.engine.announce_pending(&mut mailbox, None).unwrap()
+        world
+            .b
+            .engine
+            .announce_pending(&mut mailbox, None, &mut PublishBudget::unbounded())
+            .unwrap()
     }
 }
 

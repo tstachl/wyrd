@@ -18,7 +18,7 @@ use wyrd_format::{Change, MembershipTransition};
 use wyrd_sync::control::{CapabilityPayload, Message, TransitionPayload};
 use wyrd_sync::keys::capability::Capability;
 use wyrd_sync::keys::EpochSecret;
-use wyrd_sync::runtime::Engine;
+use wyrd_sync::runtime::{Engine, PublishBudget};
 use wyrd_sync::transport::mailbox::{Disposition, Mailbox, MailboxEnvelope};
 
 use crate::support::{
@@ -136,7 +136,10 @@ pub(crate) fn admit_and_collect(
         &outcome.invitation,
     )
     .unwrap();
-    let sent = owner.engine.deliver_pending(relay).unwrap();
+    let sent = owner
+        .engine
+        .deliver_pending(relay, &mut PublishBudget::unbounded())
+        .unwrap();
     assert!(sent >= 2, "transition plus capability at minimum");
     // Pull every envelope out of the owner relay in send order.
     let mut envelopes = Vec::new();
@@ -183,7 +186,10 @@ fn reader_converges_read_only() {
     )
     .unwrap();
     let mut outbox = Relay::new();
-    let sent = owner.engine.deliver_pending(&mut outbox).unwrap();
+    let sent = owner
+        .engine
+        .deliver_pending(&mut outbox, &mut PublishBudget::unbounded())
+        .unwrap();
     assert!(sent >= 2, "transition plus capability at minimum");
     let mut envelopes = Vec::new();
     while let Some(delivery) = outbox.recv().unwrap() {
@@ -253,7 +259,10 @@ fn readers_receive_ongoing_announcements() {
     // Catch-up first: transition plus capability converge the reader
     // onto the admission state before any snapshot exists.
     let mut outbox = Relay::new();
-    let sent = owner.engine.deliver_pending(&mut outbox).unwrap();
+    let sent = owner
+        .engine
+        .deliver_pending(&mut outbox, &mut PublishBudget::unbounded())
+        .unwrap();
     assert!(sent >= 2, "transition plus capability at minimum");
     let mut catch_up = Vec::new();
     while let Some(delivery) = outbox.recv().unwrap() {
@@ -651,7 +660,10 @@ fn offline_device_catch_up_accumulates_contiguously() {
     assert_eq!(b_epochs, vec![2, 3], "contiguous admission..current");
 
     let mut outbox = Relay::new();
-    let sent = owner.engine.deliver_pending(&mut outbox).unwrap();
+    let sent = owner
+        .engine
+        .deliver_pending(&mut outbox, &mut PublishBudget::unbounded())
+        .unwrap();
     assert!(sent >= 4, "two transitions plus two wraps for B");
     let mut envelopes = Vec::new();
     while let Some(delivery) = outbox.recv().unwrap() {
@@ -717,7 +729,10 @@ fn two_newcomers_converge_from_one_delivery_pass() {
         .unwrap();
 
     let mut outbox = Relay::new();
-    let sent = owner.engine.deliver_pending(&mut outbox).unwrap();
+    let sent = owner
+        .engine
+        .deliver_pending(&mut outbox, &mut PublishBudget::unbounded())
+        .unwrap();
     assert!(sent >= 4, "two transitions plus two wraps at minimum");
     let mut b_envelopes = Vec::new();
     let mut c_envelopes = Vec::new();

@@ -5,7 +5,7 @@ use super::delivery::{
 use crate::control::{seal as seal_control, Message, SnapshotAnnouncement};
 use crate::durable::{AuthorizeSnapshot, AuthorizedSnapshot, Fact, Rebuilt};
 use crate::keys::capability::DriveKeyring;
-use crate::runtime::engine::{Engine, EngineError};
+use crate::runtime::engine::{Engine, EngineError, PublishBudget};
 use crate::transport::endpoint_id;
 use crate::transport::mailbox::Mailbox;
 use wyrd_format::SnapshotId;
@@ -38,6 +38,7 @@ pub(crate) fn announce(
     mailbox: &mut impl Mailbox,
     node_addr: Option<&[u8]>,
     scope: &std::collections::BTreeSet<wyrd_format::SnapshotId>,
+    budget: &mut PublishBudget,
 ) -> Result<usize, EngineError> {
     let body = snapshot.snapshot();
     // The announcement is signed by this engine's identity, so it may
@@ -143,6 +144,7 @@ pub(crate) fn announce(
         mailbox,
         route_id_of(node_addr),
         scope,
+        budget,
     )
 }
 
@@ -210,6 +212,7 @@ pub(crate) fn announce_pending(
     engine: &mut Engine,
     mailbox: &mut impl Mailbox,
     node_addr: Option<&[u8]>,
+    budget: &mut PublishBudget,
 ) -> Result<usize, EngineError> {
     let rebuilt = engine.store.rebuild(engine.device)?;
     // The live route's endpoint identity, for route-scoped
@@ -234,13 +237,23 @@ pub(crate) fn announce_pending(
         .collect();
     snapshots.dedup();
     let mut sent = 0usize;
-    for snapshot_id in snapshots {
+    let mut index = 0usize;
+    while index < snapshots.len() {
+        if !budget.check() {
+            // Publish budget tripped: the rest of this pass's
+            // snapshot list stays pending and the next pass resumes
+            // it. Never retired by a clip.
+            budget.defer(snapshots.len() - index);
+            break;
+        }
+        let snapshot_id = snapshots[index];
+        index += 1;
         let Some(body) = rebuilt.runtime.snapshot_body(&snapshot_id) else {
-            sent += reannounce_one(engine, &rebuilt, snapshot_id, mailbox, &scope)?;
+            sent += reannounce_one(engine, &rebuilt, snapshot_id, mailbox, &scope, budget)?;
             continue;
         };
         if body.author != engine.device {
-            sent += reannounce_one(engine, &rebuilt, snapshot_id, mailbox, &scope)?;
+            sent += reannounce_one(engine, &rebuilt, snapshot_id, mailbox, &scope, budget)?;
             continue;
         }
         let authorized = AuthorizedSnapshot::authorize(body.clone(), &engine.drive)
@@ -268,6 +281,7 @@ pub(crate) fn announce_pending(
                     &obligation,
                     mailbox,
                     &scope,
+                    budget,
                 )? {
                     Some(sent_now) => sent += sent_now,
                     // No sealing key: retain the obligation for a later
@@ -277,7 +291,7 @@ pub(crate) fn announce_pending(
                 }
             }
             None => {
-                match announce(engine, &authorized, mailbox, node_addr, &scope) {
+                match announce(engine, &authorized, mailbox, node_addr, &scope, budget) {
                     Ok(sent_now) => sent += sent_now,
                     // No sealing key: the obligation stays pending and
                     // observable via the pending projection instead of
@@ -325,6 +339,7 @@ fn send_with_live_route(
     obligation: &str,
     mailbox: &mut impl Mailbox,
     scope: &std::collections::BTreeSet<wyrd_format::SnapshotId>,
+    budget: &mut PublishBudget,
 ) -> Result<Option<usize>, EngineError> {
     let Some((sealed_epoch, message)) =
         open_reused_sealed(engine, keyring, sealed_bytes, obligation)?
@@ -376,6 +391,7 @@ fn send_with_live_route(
         mailbox,
         route_id_of(node_addr),
         scope,
+        budget,
     )?))
 }
 
@@ -477,6 +493,7 @@ fn reannounce_one(
     snapshot: SnapshotId,
     mailbox: &mut impl Mailbox,
     scope: &std::collections::BTreeSet<SnapshotId>,
+    budget: &mut PublishBudget,
 ) -> Result<usize, EngineError> {
     let Some(known) = rebuilt.runtime.announcement(&snapshot).cloned() else {
         return Ok(0);
@@ -485,7 +502,15 @@ fn reannounce_one(
         // No sealing key: retain the obligation for a later pass.
         return Ok(0);
     };
-    send_pending_for(engine, snapshot, &sealed_bytes, mailbox, None, scope)
+    send_pending_for(
+        engine,
+        snapshot,
+        &sealed_bytes,
+        mailbox,
+        None,
+        scope,
+        budget,
+    )
 }
 
 /// Seal the known signed announcement for one snapshot: reuse the
@@ -571,6 +596,7 @@ fn send_pending_for(
     mailbox: &mut impl Mailbox,
     route_id: Option<[u8; 32]>,
     scope: &std::collections::BTreeSet<wyrd_format::SnapshotId>,
+    budget: &mut PublishBudget,
 ) -> Result<usize, EngineError> {
     // Re-read fresh: `announce` commits new queue facts before this
     // send, so the delivery snapshot above may predate the obligation.
@@ -598,7 +624,7 @@ fn send_pending_for(
         "announcement",
         &obligation,
         sealed_bytes,
-        recipients,
+        &recipients,
         |recipient| {
             let mut facts = vec![Fact::AnnouncementDelivered(snapshot, recipient)];
             // The route record commits atomically with its marker, so
@@ -617,5 +643,6 @@ fn send_pending_for(
             ));
             facts
         },
+        budget,
     )
 }

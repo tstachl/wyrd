@@ -12,7 +12,7 @@ use wyrd_format::{
 };
 use wyrd_sync::control::{seal, Message, SnapshotAnnouncement};
 use wyrd_sync::keys::{DeviceEncryptionSecret, DeviceIdentitySecret};
-use wyrd_sync::runtime::Engine;
+use wyrd_sync::runtime::{Engine, PublishBudget};
 use wyrd_sync::transport::mailbox::{check_outbound_size, MAX_MAILBOX_OPEN_BYTES};
 
 // --- integration tests over an in-process relay ---
@@ -244,7 +244,9 @@ fn engine_outbox_retains_obligations_through_live_relay_refusal() {
 
     relay.reject_writes("blocked: kind 1059 needs payment");
     assert_eq!(
-        owner.deliver_pending(&mut owner_mailbox).unwrap(),
+        owner
+            .deliver_pending(&mut owner_mailbox, &mut PublishBudget::unbounded())
+            .unwrap(),
         0,
         "refused sends count nothing"
     );
@@ -255,7 +257,10 @@ fn engine_outbox_retains_obligations_through_live_relay_refusal() {
 
     relay.accept_writes();
     assert!(
-        owner.deliver_pending(&mut owner_mailbox).unwrap() > 0,
+        owner
+            .deliver_pending(&mut owner_mailbox, &mut PublishBudget::unbounded())
+            .unwrap()
+            > 0,
         "acceptance discharges the retained obligations"
     );
     assert!(
@@ -556,7 +561,12 @@ fn maximum_valid_control_message_is_acked_by_live_engine() {
     )
     .unwrap();
 
-    assert_eq!(owner.deliver_pending(&mut owner_mailbox).unwrap(), 2);
+    assert_eq!(
+        owner
+            .deliver_pending(&mut owner_mailbox, &mut PublishBudget::unbounded())
+            .unwrap(),
+        2
+    );
     let setup = drain_until(&mut recipient, &mut recipient_mailbox, 2);
     assert_eq!(setup.accepted, 2);
     assert_eq!(setup.deferred, 0);

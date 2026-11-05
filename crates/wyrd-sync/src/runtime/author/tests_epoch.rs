@@ -1,7 +1,7 @@
 use super::tests_harness::{device_of, owner_engine};
 use crate::keys::{DeviceEncryptionSecret, DeviceIdentitySecret};
 use crate::membership::test_util::{drive as member_drive, key};
-use crate::runtime::engine::Engine;
+use crate::runtime::engine::{Engine, PublishBudget};
 use crate::runtime::test_util::{encryption_key, TestDir};
 use crate::transport::mailbox::{MemoryMailbox, MemoryRelay};
 
@@ -27,7 +27,9 @@ fn rotate_delivers_the_new_epoch_secret_to_a_current_member() {
             relay: &mut relay,
             owner: owner_id,
         };
-        let sent = engine.deliver_pending(&mut sender).unwrap();
+        let sent = engine
+            .deliver_pending(&mut sender, &mut PublishBudget::unbounded())
+            .unwrap();
         assert_eq!(sent, 2, "transition plus capability");
     }
 
@@ -70,7 +72,9 @@ fn rotate_delivers_the_new_epoch_secret_to_a_current_member() {
             relay: &mut relay,
             owner: owner_id,
         };
-        let sent = engine.deliver_pending(&mut sender).unwrap();
+        let sent = engine
+            .deliver_pending(&mut sender, &mut PublishBudget::unbounded())
+            .unwrap();
         assert_eq!(sent, 2, "rotation transition plus rotation delivery");
     }
     // First drain: the transition envelope is sealed under the new
@@ -197,7 +201,9 @@ fn pending_announcement_resends_with_the_live_route() {
         relay: &mut relay,
         owner: engine.device(),
     };
-    let sent = engine.announce_pending(&mut sender, Some(&live)).unwrap();
+    let sent = engine
+        .announce_pending(&mut sender, Some(&live), &mut PublishBudget::unbounded())
+        .unwrap();
     assert_eq!(sent, 1, "the pending head announcement");
 
     // The newcomer joins and learns the live route.

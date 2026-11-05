@@ -775,7 +775,11 @@ pub struct WireScrubReport {
 }
 
 /// The wire form of [`SyncReport`]: one pass's intake, fetch, repair,
-/// and publication counts.
+/// and publication counts. The publish-clip fields default like
+/// `paused` does: a v1 reader from before the publish budget degrades
+/// to "no clip reported" instead of failing the parse; both sides of
+/// this change ship together, so the default only covers
+/// mixed-version skew during rollout.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WireSyncReport {
     pub drained: WireDrainReport,
@@ -786,6 +790,12 @@ pub struct WireSyncReport {
     pub sent: usize,
     pub generation: u64,
     pub pending_heads: usize,
+    #[serde(default)]
+    pub publish_clipped: bool,
+    #[serde(default)]
+    pub publish_deferred: usize,
+    #[serde(default)]
+    pub publish_elapsed_ms: u64,
 }
 
 /// The liveness answer: the transport health and the last pass
@@ -1113,6 +1123,9 @@ impl From<&SyncReport> for WireSyncReport {
             scrubbed,
             published,
             sent,
+            publish_clipped,
+            publish_deferred,
+            publish_elapsed_ms,
             generation,
             pending_heads,
         } = report;
@@ -1123,6 +1136,9 @@ impl From<&SyncReport> for WireSyncReport {
             scrubbed: WireScrubReport::from(scrubbed),
             published: *published,
             sent: *sent,
+            publish_clipped: *publish_clipped,
+            publish_deferred: *publish_deferred,
+            publish_elapsed_ms: *publish_elapsed_ms,
             generation: *generation,
             pending_heads: *pending_heads,
         }

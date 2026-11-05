@@ -173,7 +173,11 @@ fn partial_send_then_restart_resends_only_the_unacked() {
         },
         recorded: Vec::new(),
     };
-    let sent = pair.a.engine.announce_pending(&mut mailbox, None).unwrap();
+    let sent = pair
+        .a
+        .engine
+        .announce_pending(&mut mailbox, None, &mut PublishBudget::unbounded())
+        .unwrap();
     assert_eq!(sent, 1);
     assert_eq!(
         mailbox
@@ -185,7 +189,11 @@ fn partial_send_then_restart_resends_only_the_unacked() {
         "the resume resends only the unacked recipient"
     );
     assert!(pair.a.engine.pending_announcements().unwrap().is_empty());
-    let idle = pair.a.engine.announce_pending(&mut mailbox, None).unwrap();
+    let idle = pair
+        .a
+        .engine
+        .announce_pending(&mut mailbox, None, &mut PublishBudget::unbounded())
+        .unwrap();
     assert_eq!(idle, 0, "a drained outbox stays quiet");
 
     // The resumed envelope converges at the receiver when it is
@@ -236,7 +244,10 @@ fn crash_before_announce_resumes_without_reauthoring() {
             relay: &mut pair.relay,
             owner: pair.a.device,
         };
-        pair.a.engine.announce_pending(&mut mailbox, None).unwrap()
+        pair.a
+            .engine
+            .announce_pending(&mut mailbox, None, &mut PublishBudget::unbounded())
+            .unwrap()
     };
     assert_eq!(sent, 2);
     assert!(pair.a.engine.pending_announcements().unwrap().is_empty());
@@ -399,7 +410,11 @@ fn route_resume_persists_and_resends_the_route_seal() {
         };
         pair.a
             .engine
-            .announce_pending(&mut mailbox, Some(route_b.as_slice()))
+            .announce_pending(
+                &mut mailbox,
+                Some(route_b.as_slice()),
+                &mut PublishBudget::unbounded(),
+            )
             .unwrap()
     };
     assert_eq!(sent, 2);
@@ -474,9 +489,11 @@ fn route_retry_reuses_one_durable_envelope_across_restart() {
     let route_b = vec![0xB2; 32];
     let mut mailbox = RecordingFailingMailbox { recorded: vec![] };
     assert!(matches!(
-        pair.a
-            .engine
-            .announce_pending(&mut mailbox, Some(route_b.as_slice())),
+        pair.a.engine.announce_pending(
+            &mut mailbox,
+            Some(route_b.as_slice()),
+            &mut PublishBudget::unbounded()
+        ),
         Err(EngineError::Mailbox(_))
     ));
     assert_eq!(mailbox.recorded.len(), 1);
@@ -494,9 +511,11 @@ fn route_retry_reuses_one_durable_envelope_across_restart() {
     restart(&mut pair.a, &controls);
     let mut mailbox = RecordingFailingMailbox { recorded: vec![] };
     assert!(matches!(
-        pair.a
-            .engine
-            .announce_pending(&mut mailbox, Some(route_b.as_slice())),
+        pair.a.engine.announce_pending(
+            &mut mailbox,
+            Some(route_b.as_slice()),
+            &mut PublishBudget::unbounded()
+        ),
         Err(EngineError::Mailbox(_))
     ));
     assert_eq!(mailbox.recorded.len(), 1);
@@ -531,7 +550,11 @@ fn route_retry_reuses_one_durable_envelope_across_restart() {
         };
         pair.a
             .engine
-            .announce_pending(&mut mailbox, Some(route_b.as_slice()))
+            .announce_pending(
+                &mut mailbox,
+                Some(route_b.as_slice()),
+                &mut PublishBudget::unbounded(),
+            )
             .unwrap()
     };
     assert_eq!(sent, 2);
@@ -563,7 +586,10 @@ fn orphaned_queue_entry_rebuilds_and_resumes_to_nothing() {
             relay: &mut pair.relay,
             owner: pair.a.device,
         };
-        pair.a.engine.announce_pending(&mut mailbox, None).unwrap()
+        pair.a
+            .engine
+            .announce_pending(&mut mailbox, None, &mut PublishBudget::unbounded())
+            .unwrap()
     };
     assert_eq!(sent, 0, "a bodyless obligation sends nothing");
     // The engine is otherwise healthy: authoring and announcing
@@ -771,7 +797,11 @@ fn route_change_redelivers_discharged_announcements() {
         };
         pair.a
             .engine
-            .announce_pending(&mut mailbox, Some(route_a.as_slice()))
+            .announce_pending(
+                &mut mailbox,
+                Some(route_a.as_slice()),
+                &mut PublishBudget::unbounded(),
+            )
             .unwrap()
     };
     assert_eq!(sent, 0, "no redelivery without a route change");
@@ -785,7 +815,10 @@ fn route_change_redelivers_discharged_announcements() {
             relay: &mut pair.relay,
             owner: pair.a.device,
         };
-        pair.a.engine.announce_pending(&mut mailbox, None).unwrap()
+        pair.a
+            .engine
+            .announce_pending(&mut mailbox, None, &mut PublishBudget::unbounded())
+            .unwrap()
     };
     assert_eq!(
         sent, 2,
@@ -806,7 +839,10 @@ fn route_change_redelivers_discharged_announcements() {
             relay: &mut pair.relay,
             owner: pair.a.device,
         };
-        pair.a.engine.announce_pending(&mut mailbox, None).unwrap()
+        pair.a
+            .engine
+            .announce_pending(&mut mailbox, None, &mut PublishBudget::unbounded())
+            .unwrap()
     };
     assert_eq!(
         sent, 0,
@@ -850,7 +886,11 @@ fn route_change_redelivers_discharged_announcements() {
         };
         pair.a
             .engine
-            .announce_pending(&mut mailbox, Some(route_b.as_slice()))
+            .announce_pending(
+                &mut mailbox,
+                Some(route_b.as_slice()),
+                &mut PublishBudget::unbounded(),
+            )
             .unwrap()
     };
     assert_eq!(sent, 2, "the route change redelivers both pairs");
@@ -872,7 +912,11 @@ fn route_change_redelivers_discharged_announcements() {
         };
         pair.a
             .engine
-            .announce_pending(&mut mailbox, Some(route_b.as_slice()))
+            .announce_pending(
+                &mut mailbox,
+                Some(route_b.as_slice()),
+                &mut PublishBudget::unbounded(),
+            )
             .unwrap()
     };
     assert_eq!(sent, 0, "the repair quenches under the recorded route");
@@ -944,7 +988,10 @@ fn withdrawal_outstanding_survives_reopen() {
             relay: &mut pair.relay,
             owner: pair.a.device,
         };
-        pair.a.engine.announce_pending(&mut mailbox, None).unwrap()
+        pair.a
+            .engine
+            .announce_pending(&mut mailbox, None, &mut PublishBudget::unbounded())
+            .unwrap()
     };
     assert_eq!(sent, 2, "the withdrawal redelivers route-less");
     assert_eq!(
@@ -1032,7 +1079,11 @@ fn route_change_redelivers_the_reachable_closure_and_quenches() {
         };
         pair.a
             .engine
-            .announce_pending(&mut mailbox, Some(route_b.as_slice()))
+            .announce_pending(
+                &mut mailbox,
+                Some(route_b.as_slice()),
+                &mut PublishBudget::unbounded(),
+            )
             .unwrap()
     };
     assert_eq!(sent, 6, "the route change redelivers the whole closure");
@@ -1055,7 +1106,11 @@ fn route_change_redelivers_the_reachable_closure_and_quenches() {
         };
         pair.a
             .engine
-            .announce_pending(&mut mailbox, Some(route_b.as_slice()))
+            .announce_pending(
+                &mut mailbox,
+                Some(route_b.as_slice()),
+                &mut PublishBudget::unbounded(),
+            )
             .unwrap()
     };
     assert_eq!(sent, 0, "the repair quenches under the recorded route");
@@ -1130,7 +1185,11 @@ fn route_change_leaves_out_of_scope_pairs_discharged() {
         };
         pair.a
             .engine
-            .announce_pending(&mut mailbox, Some(route_b.as_slice()))
+            .announce_pending(
+                &mut mailbox,
+                Some(route_b.as_slice()),
+                &mut PublishBudget::unbounded(),
+            )
             .unwrap()
     };
     assert_eq!(sent, 6, "only the servable closure reopens");
@@ -1194,7 +1253,11 @@ fn new_work_sends_alongside_closure_redelivery() {
         };
         pair.a
             .engine
-            .announce_pending(&mut mailbox, Some(route_b.as_slice()))
+            .announce_pending(
+                &mut mailbox,
+                Some(route_b.as_slice()),
+                &mut PublishBudget::unbounded(),
+            )
             .unwrap()
     };
     assert_eq!(sent, 8, "fresh work plus closure in a single resume");
@@ -1222,7 +1285,11 @@ fn new_work_sends_alongside_closure_redelivery() {
         };
         pair.a
             .engine
-            .announce_pending(&mut mailbox, Some(route_b.as_slice()))
+            .announce_pending(
+                &mut mailbox,
+                Some(route_b.as_slice()),
+                &mut PublishBudget::unbounded(),
+            )
             .unwrap()
     };
     assert_eq!(sent, 0, "fresh and redelivered alike quench");

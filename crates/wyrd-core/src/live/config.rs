@@ -153,6 +153,22 @@ pub struct SyncReport {
     /// and mailbox deliveries): counted here instead of dropped into
     /// the debug log so run totals can attribute sync load per pass.
     pub sent: usize,
+    /// Publish phase clipping: true when the per-pass publish
+    /// budget tripped before every pending obligation was attempted.
+    /// Unattempted obligations stay pending for the next pass —
+    /// never retired, never dropped.
+    pub publish_clipped: bool,
+    /// Obligations left unattempted because the publish clip
+    /// tripped. Zero on passes that attempted everything (whether
+    /// or not the sends were accepted). Sums unattempted send
+    /// opportunities across legs in each leg's unit (statements,
+    /// obligations, snapshots, fan-out recipients) — a pacing
+    /// gauge, not a uniform obligation count.
+    pub publish_deferred: usize,
+    /// Publish phase wall time in milliseconds, so the run report
+    /// carries the "clipped after N ms" half of the clip line next
+    /// to the deferred count.
+    pub publish_elapsed_ms: u64,
     /// The served generation after the pass (bumped exactly when
     /// `published`).
     pub generation: u64,
@@ -293,6 +309,18 @@ pub struct LiveConfig {
     /// at most this per pass instead of wedging the loop behind one
     /// dial per pending item; the rest resumes next pass.
     pub fetch_pass_budget: Duration,
+    /// Wall-clock budget for one pass's publish phase (reconciliation
+    /// answers, transition/capability deliveries, announcement
+    /// discharge), measured from phase start and further clipped to
+    /// the nearest held mutation's remaining time like the fetch
+    /// budget. A relay that accepts connections but never returns OK
+    /// otherwise spends N_obligations x per-send-timeout on the loop
+    /// thread per pass with nothing logged as an error; the clip
+    /// leaves unattempted obligations pending for the next pass —
+    /// never retired, never dropped. The bound holds within one
+    /// in-flight per-send timeout (checks run between sends), and
+    /// the serving barrier runs outside this budget.
+    pub publish_pass_budget: Duration,
     /// The object store's byte accountant, shared with the store that
     /// writes it. Required whenever `budgets.retained_bytes_quota` is
     /// set: the ceiling is a comparison against this number, so a quota
@@ -433,6 +461,7 @@ impl Default for LiveConfig {
             max_mutation_wait: Duration::from_secs(30),
             serving_flush_budget: Duration::from_secs(5),
             fetch_pass_budget: Duration::from_secs(10),
+            publish_pass_budget: Duration::from_secs(10),
             retained_bytes: None,
         }
     }

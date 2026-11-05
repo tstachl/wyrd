@@ -1665,8 +1665,12 @@ fn headless_loop_converges_a_new_device_to_current_heads() {
             }
         }
         let mut recorder = Recorder { sent: Vec::new() };
-        engine_a.deliver_pending(&mut recorder).unwrap();
-        engine_a.announce_pending(&mut recorder, None).unwrap();
+        engine_a
+            .deliver_pending(&mut recorder, &mut PublishBudget::unbounded())
+            .unwrap();
+        engine_a
+            .announce_pending(&mut recorder, None, &mut PublishBudget::unbounded())
+            .unwrap();
         recorder.sent
     };
     assert!(!outbound.is_empty(), "admission owes B catch-up");

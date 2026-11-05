@@ -9,7 +9,7 @@
 //! classification runs against the owner's own log.
 
 use wyrd_sync::authorization::{Classification, SnapshotDag};
-use wyrd_sync::runtime::{Engine, EngineError};
+use wyrd_sync::runtime::{Engine, EngineError, PublishBudget};
 use wyrd_sync::transport::mailbox::{Disposition, Mailbox, MailboxEnvelope};
 
 use crate::support::{device, drive, scratch_dir, sealed_envelope, signed_snapshot, Device, Relay};
@@ -118,7 +118,10 @@ fn admit_and_join(owner: &mut Owner, newcomer: &Device, relay: &mut Relay) -> En
         &outcome.invitation,
     )
     .unwrap();
-    let sent = owner.engine.deliver_pending(relay).unwrap();
+    let sent = owner
+        .engine
+        .deliver_pending(relay, &mut PublishBudget::unbounded())
+        .unwrap();
     assert!(sent >= 2, "transition plus capability at minimum");
     let report = newcomer_engine.drain(relay).unwrap();
     assert_eq!(report.skipped, 0, "invitation keys open every message");
@@ -201,7 +204,10 @@ fn removal_bounds_acquisition_and_retires_the_identity() {
     // wraps cap3 to B and C plus cap4 to C.
     let removal = owner.engine.remove_device(device_b.id).unwrap();
     assert_eq!(removal.epoch, 4);
-    let sent = owner.engine.deliver_pending(&mut relay).unwrap();
+    let sent = owner
+        .engine
+        .deliver_pending(&mut relay, &mut PublishBudget::unbounded())
+        .unwrap();
     assert_eq!(sent, 7, "backlog plus removal catch-up, nothing more");
     let envelopes = collect(&mut relay);
     assert_eq!(envelopes.len(), 7, "the pass produced exactly the fan-out");

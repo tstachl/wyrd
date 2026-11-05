@@ -11,7 +11,7 @@ use crate::control::{
 };
 use crate::durable::{Fact, Rebuilt};
 use crate::keys::capability::DriveKeyring;
-use crate::runtime::engine::{Engine, EngineError};
+use crate::runtime::engine::{Engine, EngineError, PublishBudget};
 use crate::transport::mailbox::{seal_for_recipient, Mailbox};
 use zeroize::Zeroizing;
 
@@ -47,8 +47,9 @@ struct Scope<'a> {
 pub(crate) fn deliver_pending(
     engine: &mut Engine,
     mailbox: &mut impl Mailbox,
+    budget: &mut PublishBudget,
 ) -> Result<usize, EngineError> {
-    deliver_inner(engine, mailbox, &mut None)
+    deliver_inner(engine, mailbox, &mut None, budget)
 }
 
 /// Send pending obligations for one recipient only, stopping after
@@ -65,19 +66,21 @@ pub(crate) fn deliver_scoped(
     recipient: &DeviceId,
     limit: usize,
     newest_held: u64,
+    budget: &mut PublishBudget,
 ) -> Result<usize, EngineError> {
     let mut scope = Some(Scope {
         recipient,
         remaining: limit,
         newest_held,
     });
-    deliver_inner(engine, mailbox, &mut scope)
+    deliver_inner(engine, mailbox, &mut scope, budget)
 }
 
 fn deliver_inner(
     engine: &mut Engine,
     mailbox: &mut impl Mailbox,
     scope: &mut Option<Scope<'_>>,
+    budget: &mut PublishBudget,
 ) -> Result<usize, EngineError> {
     // One validated delivery snapshot per pass: every read below comes
     // from this rebuild. Mid-pass commits only append Sealed,
@@ -96,8 +99,8 @@ fn deliver_inner(
     // can only attempt the missing set.
     let rebuilt = engine.store.rebuild(engine.device)?;
     let mut sent = 0usize;
-    sent += deliver_transitions(engine, mailbox, &rebuilt, &mut *scope)?;
-    sent += deliver_capabilities(engine, mailbox, &rebuilt, &mut *scope)?;
+    sent += deliver_transitions(engine, mailbox, &rebuilt, &mut *scope, budget)?;
+    sent += deliver_capabilities(engine, mailbox, &rebuilt, &mut *scope, budget)?;
     Ok(sent)
 }
 
@@ -246,17 +249,31 @@ pub(crate) fn announcement_obligation(snapshot: &wyrd_format::SnapshotId) -> Str
 /// kind only — never the recipient or the obligation's identities
 /// (trust.md OD-17-6). Discharge clears the marker, so a re-queued
 /// obligation warns again.
+/// A send failure returns immediately with the rest still
+/// pending. The publish budget is checked per recipient: a fan-out
+/// over many recipients is the same unbounded aggregate as a long
+/// obligation list, so a tripped budget defers the unattempted
+/// recipients for the next pass.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn send_sealed_to(
     engine: &mut Engine,
     mailbox: &mut impl Mailbox,
     kind: &'static str,
     obligation: &str,
     sealed_bytes: &[u8],
-    recipients: impl IntoIterator<Item = DeviceId>,
+    recipients: &[DeviceId],
     delivered: impl Fn(DeviceId) -> Vec<Fact>,
+    budget: &mut PublishBudget,
 ) -> Result<usize, EngineError> {
     let mut sent = 0usize;
-    for recipient in recipients {
+    for (index, recipient) in recipients.iter().enumerate() {
+        if !budget.check() {
+            // The rest of this fan-out stays pending for the next
+            // pass; the obligation is never retired by a clip.
+            budget.defer(recipients.len() - index);
+            break;
+        }
+        let recipient = *recipient;
         let envelope = seal_for_recipient(&engine.identity_secret, recipient, sealed_bytes)?;
         let report = mailbox.send(envelope)?;
         // The per-pair key: the same envelope fans out over many
@@ -299,6 +316,7 @@ fn deliver_transitions(
     mailbox: &mut impl Mailbox,
     rebuilt: &Rebuilt,
     scope: &mut Option<Scope<'_>>,
+    budget: &mut PublishBudget,
 ) -> Result<usize, EngineError> {
     let mut pending = rebuilt.runtime.pending_transitions();
     pending.sort();
@@ -317,6 +335,13 @@ fn deliver_transitions(
             // normal pass and the recipient's next statement.
             // Checked before any seal work, so an unsent obligation
             // costs no commit.
+            break;
+        }
+        if !budget.check() {
+            // Publish budget tripped: the rest of this pass's
+            // transition list stays pending and the next pass
+            // resumes it. Never retired by a clip.
+            budget.defer(pending.len() - index);
             break;
         }
         let id = pending[index].0;
@@ -447,8 +472,9 @@ fn deliver_transitions(
             "transition",
             &obligation,
             &sealed_bytes,
-            recipients,
+            &recipients,
             |recipient| vec![Fact::TransitionDelivered(id, recipient)],
+            budget,
         )?;
         if let Some(scope) = scope.as_mut() {
             // One attempt per recipient: in a scoped send there is at
@@ -477,6 +503,7 @@ fn deliver_capabilities(
     mailbox: &mut impl Mailbox,
     rebuilt: &Rebuilt,
     scope: &mut Option<Scope<'_>>,
+    budget: &mut PublishBudget,
 ) -> Result<usize, EngineError> {
     let mut pending = rebuilt.runtime.pending_capabilities();
     pending.sort();
@@ -511,12 +538,22 @@ fn deliver_capabilities(
     // lands). Cloned rather than borrowed so the obligation loop can
     // keep its `&mut Engine` while minting through the session.
     let signer = engine.identity_secret.clone();
-    for (epoch, recipient) in pending {
+    let mut index = 0usize;
+    while index < pending.len() {
         if scope.as_ref().is_some_and(|s| s.remaining == 0) {
             // Budget exhausted: same rule as the transition loop —
             // checked before any mint work, skips consume nothing.
             break;
         }
+        if !budget.check() {
+            // Publish budget tripped: the rest of this pass's
+            // capability list stays pending and the next pass
+            // resumes it. Never retired by a clip.
+            budget.defer(pending.len() - index);
+            break;
+        }
+        let (epoch, recipient) = pending[index];
+        index += 1;
         let Some(transition_id) = chain.get(&epoch).copied() else {
             continue;
         };
@@ -650,8 +687,9 @@ fn deliver_capabilities(
             "capability",
             &obligation,
             &sealed_bytes,
-            [recipient],
+            &[recipient],
             |delivered| vec![Fact::CapabilityDelivered(epoch, delivered)],
+            budget,
         )?;
         if let Some(scope) = scope.as_mut() {
             scope.remaining = scope.remaining.saturating_sub(1);

@@ -77,7 +77,7 @@ use std::collections::BTreeSet;
 use wyrd_format::{DeviceId, SnapshotId, TransitionId};
 
 use super::author::{announcement_obligation, capability_obligation, transition_obligation};
-use super::engine::{Engine, EngineError};
+use super::engine::{Engine, EngineError, PublishBudget};
 use super::state::RuntimeState;
 use crate::durable::{reconciliation_statement_digest, Fact, ReconciliationEvidence};
 use crate::membership::MembershipLog;
@@ -129,6 +129,7 @@ impl Engine {
     pub fn answer_reconciliation(
         &mut self,
         mailbox: &mut impl Mailbox,
+        budget: &mut PublishBudget,
     ) -> Result<AnswerReport, EngineError> {
         if self.log.frozen_at().is_some() {
             return Ok(AnswerReport::default());
@@ -169,7 +170,23 @@ impl Engine {
         }
         let mut rebuilt = rebuilt;
         let mut dirty = false;
-        for (requester, digest, evidence) in &todo {
+        let mut todo_index = 0usize;
+        let mut clipped = false;
+        while todo_index < todo.len() {
+            let (requester, digest, evidence) = &todo[todo_index];
+            todo_index += 1;
+            if !budget.check() {
+                // Publish budget tripped: the remaining statements
+                // stay unanswered this pass and the next pass
+                // re-derives them from the same suffix, exactly like
+                // a transport failure (which returns without
+                // marking). Only statements fully evaluated below
+                // are marked answered; the current and later ones
+                // are not.
+                budget.defer(todo.len() - todo_index + 1);
+                clipped = true;
+                break;
+            }
             // Fresh rebuild per statement — but only once something
             // earlier in this pass committed: the comparison below
             // reads the pass snapshot until a retire lands, and a
@@ -238,6 +255,7 @@ impl Engine {
                 requester,
                 MAX_RESPONSE_SENDS_PER_STATEMENT,
                 newest_held_epoch(evidence, requester),
+                budget,
             )?;
             report.sent += sent;
             // "Asked, nothing delivered": obligations were
@@ -254,10 +272,19 @@ impl Engine {
                 self.stalled_statements.insert((*requester, *digest));
             }
         }
-        for (requester, digest, _) in &todo {
+        // Mark only fully evaluated statements answered. On a clip
+        // the suffix is left unmarked and `answered_upto` stays put,
+        // so the next pass re-derives the same suffix — the same
+        // retry contract as a mailbox failure, which returns without
+        // marking. On a clean pass the whole suffix is marked and
+        // the cursor advances past it.
+        let processed = if clipped { todo_index - 1 } else { todo.len() };
+        for (requester, digest, _) in &todo[..processed] {
             self.answered_statements.insert((*requester, *digest));
         }
-        self.answered_upto = request_count;
+        if !clipped {
+            self.answered_upto = request_count;
+        }
         Ok(report)
     }
 

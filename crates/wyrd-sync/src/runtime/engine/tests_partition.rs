@@ -187,14 +187,20 @@ fn relay_partition_produces_two_heads_and_both_survive() {
             relay: &mut pair.relay,
             owner: pair.a.device,
         };
-        pair.a.engine.announce_pending(&mut mailbox, None).unwrap();
+        pair.a
+            .engine
+            .announce_pending(&mut mailbox, None, &mut PublishBudget::unbounded())
+            .unwrap();
     }
     {
         let mut mailbox = MemoryMailbox {
             relay: &mut pair.relay,
             owner: pair.b.device,
         };
-        pair.b.engine.announce_pending(&mut mailbox, None).unwrap();
+        pair.b
+            .engine
+            .announce_pending(&mut mailbox, None, &mut PublishBudget::unbounded())
+            .unwrap();
     }
     assert_eq!(drain_side(&mut pair.relay, &mut pair.a).accepted, 1);
     assert_eq!(drain_side(&mut pair.relay, &mut pair.b).accepted, 1);

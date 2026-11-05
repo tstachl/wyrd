@@ -89,6 +89,7 @@ pub use super::author::{
     RecoveryStatus,
 };
 pub use super::bootstrap::PairingRequest;
+pub use publish_budget::PublishBudget;
 
 /// The durability level the drive reached (DG-2, normative in
 /// `docs/contracts/write-path.md`): Working before the first recorded snapshot
@@ -1223,6 +1224,7 @@ mod membership;
 mod outbox;
 mod pending;
 mod plan;
+mod publish_budget;
 mod terminal;
 
 // Engine behavior tests live beside the engine, one file per theme:

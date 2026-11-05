@@ -6,7 +6,7 @@ use wyrd_core::scrub::ScrubReport;
 use wyrd_format::{Entry, MemoryObjectStore, ObjectKind, ObjectStore, Tree};
 use wyrd_sync::bulk::MemoryBulkSource;
 use wyrd_sync::keys::{DeviceEncryptionSecret, DeviceIdentitySecret};
-use wyrd_sync::runtime::{DrainReport, ExecuteReport};
+use wyrd_sync::runtime::{DrainReport, ExecuteReport, PublishBudget};
 use wyrd_sync::transport::mailbox::{
     Delivery, DeliveryId, Disposition, MailboxEnvelope, MailboxError, SendReport,
 };
@@ -1076,6 +1076,8 @@ fn report_with(outcome: RunOutcome, mailbox: Option<MailboxHealth>) -> SyncRunRe
         scrub_bytes_subtracted: 0,
         scrub_failures: 0,
         sent: 0,
+        publish_clipped_passes: 0,
+        publish_deferred: 0,
         outcome,
         pending: 0,
         reconciliation_outstanding: 0,
@@ -1671,6 +1673,8 @@ fn run_outcome_maps_to_success_or_incomplete() {
         scrub_bytes_subtracted: 0,
         scrub_failures: 0,
         sent: 0,
+        publish_clipped_passes: 0,
+        publish_deferred: 0,
         outcome: RunOutcome::Quiet,
         pending: 0,
         reconciliation_outstanding: 0,
@@ -1714,6 +1718,8 @@ fn run_outcome_maps_to_success_or_incomplete() {
         scrub_bytes_subtracted: 0,
         scrub_failures: 0,
         sent: 0,
+        publish_clipped_passes: 0,
+        publish_deferred: 0,
         outcome: RunOutcome::RemoteStalled,
         pending: 0,
         reconciliation_outstanding: 0,
@@ -1757,6 +1763,8 @@ fn run_outcome_maps_to_success_or_incomplete() {
         scrub_bytes_subtracted: 0,
         scrub_failures: 0,
         sent: 0,
+        publish_clipped_passes: 0,
+        publish_deferred: 0,
         outcome: RunOutcome::PassLimit,
         pending: 4,
         reconciliation_outstanding: 0,
@@ -1829,8 +1837,12 @@ fn headless_sync_now_converges_a_joined_device_to_current_heads() {
     let carried_id = carried[0].snapshot().snapshot_id();
     let outbound = {
         let mut recorder = RecordingMailbox::new();
-        engine_a.deliver_pending(&mut recorder).unwrap();
-        engine_a.announce_pending(&mut recorder, None).unwrap();
+        engine_a
+            .deliver_pending(&mut recorder, &mut PublishBudget::unbounded())
+            .unwrap();
+        engine_a
+            .announce_pending(&mut recorder, None, &mut PublishBudget::unbounded())
+            .unwrap();
         recorder.sent
     };
     assert!(!outbound.is_empty(), "admission owes B catch-up");
@@ -1924,8 +1936,12 @@ fn sync_now_reports_device_ids_that_status_renders_as_handles() {
         .unwrap();
     let outbound = {
         let mut recorder = RecordingMailbox::new();
-        engine_a.deliver_pending(&mut recorder).unwrap();
-        engine_a.announce_pending(&mut recorder, None).unwrap();
+        engine_a
+            .deliver_pending(&mut recorder, &mut PublishBudget::unbounded())
+            .unwrap();
+        engine_a
+            .announce_pending(&mut recorder, None, &mut PublishBudget::unbounded())
+            .unwrap();
         recorder.sent
     };
     assert!(!outbound.is_empty(), "admission owes B catch-up");
@@ -2002,8 +2018,12 @@ fn headless_loop_settles_for_late_arriving_mail() {
         .unwrap();
     let outbound = {
         let mut recorder = RecordingMailbox::new();
-        engine_a.deliver_pending(&mut recorder).unwrap();
-        engine_a.announce_pending(&mut recorder, None).unwrap();
+        engine_a
+            .deliver_pending(&mut recorder, &mut PublishBudget::unbounded())
+            .unwrap();
+        engine_a
+            .announce_pending(&mut recorder, None, &mut PublishBudget::unbounded())
+            .unwrap();
         recorder.sent
     };
     assert!(!outbound.is_empty(), "admission owes B catch-up");
@@ -2240,6 +2260,9 @@ fn sync_run_report_accumulates_every_pass_not_just_the_last() {
             },
             published: true,
             sent: 16,
+            publish_clipped: true,
+            publish_deferred: 27,
+            publish_elapsed_ms: 28,
             generation: 1,
             pending_heads: 0,
         });
@@ -2274,6 +2297,8 @@ fn sync_run_report_accumulates_every_pass_not_just_the_last() {
     assert_eq!(report.scrub_bytes_subtracted, 276);
     assert_eq!(report.scrub_failures, 288);
     assert_eq!(report.sent, 192);
+    assert_eq!(report.publish_clipped_passes, 12);
+    assert_eq!(report.publish_deferred, 324);
     assert_eq!(
         report.peers_observed,
         vec![peer_a, peer_b],

@@ -8,7 +8,9 @@ use nostr::event::FinalizeEvent;
 use wyrd_format::{ContentId, Entry, MemoryObjectStore, ObjectKind, ObjectStore, SnapshotId, Tree};
 use wyrd_sync::bulk::IrohBulkSource;
 use wyrd_sync::keys::{DeviceEncryptionSecret, DeviceIdentitySecret};
-use wyrd_sync::runtime::{DrainReport, Engine, MaterializationState, RoutePublishing};
+use wyrd_sync::runtime::{
+    DrainReport, Engine, MaterializationState, PublishBudget, RoutePublishing,
+};
 use wyrd_sync::serving::ServingEndpoint;
 
 use std::time::{Duration, Instant};
@@ -77,7 +79,12 @@ fn disconnected_peer_acquires_missed_history_over_real_relay() {
     let route = serving.node_addr_bytes();
 
     // Baseline: the admission converges over the live relay.
-    assert_eq!(owner.deliver_pending(&mut owner_mailbox).unwrap(), 2);
+    assert_eq!(
+        owner
+            .deliver_pending(&mut owner_mailbox, &mut PublishBudget::unbounded())
+            .unwrap(),
+        2
+    );
     let setup = drain_until(&mut recipient, &mut recipient_mailbox, 2);
     assert_eq!(setup.accepted, 2);
     assert_eq!(recipient.pending_count(), 0, "admission holds nothing");
@@ -251,7 +258,9 @@ fn disconnected_peer_acquires_missed_history_over_real_relay() {
     // and the retained announcement opens on re-offer. Arrival order
     // between the transition and the rotation carrying the epoch key
     // is relay timing, so the heal asserts state, not exact counts.
-    let sent = owner.deliver_pending(&mut owner_mailbox).unwrap();
+    let sent = owner
+        .deliver_pending(&mut owner_mailbox, &mut PublishBudget::unbounded())
+        .unwrap();
     assert!(sent >= 2, "admission transition plus capabilities publish");
     let start = Instant::now();
     loop {
@@ -301,7 +310,11 @@ fn disconnected_peer_acquires_missed_history_over_real_relay() {
     // anyone — the no-re-push property made visible.
     assert_eq!(
         owner
-            .announce_pending(&mut owner_mailbox, Some(&route))
+            .announce_pending(
+                &mut owner_mailbox,
+                Some(&route),
+                &mut PublishBudget::unbounded()
+            )
             .unwrap(),
         3,
         "pre-admission snapshots republish to the late member"
@@ -482,7 +495,12 @@ fn same_mailbox_acquires_missed_snapshots_across_relay_restart() {
         temp_path("catchup-restart-recipient-seen"),
     );
 
-    assert_eq!(owner.deliver_pending(&mut owner_mailbox).unwrap(), 2);
+    assert_eq!(
+        owner
+            .deliver_pending(&mut owner_mailbox, &mut PublishBudget::unbounded())
+            .unwrap(),
+        2
+    );
     let setup = drain_until(&mut recipient, &mut recipient_mailbox, 2);
     assert_eq!(setup.accepted, 2);
     let seen_before = recipient_mailbox.seen_len();

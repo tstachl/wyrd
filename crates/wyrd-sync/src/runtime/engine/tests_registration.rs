@@ -50,7 +50,9 @@ fn stale_registration_without_secrets_stays_pending() {
         owner: engine_device,
     };
     assert_eq!(
-        fx.engine.deliver_pending(&mut mailbox).unwrap(),
+        fx.engine
+            .deliver_pending(&mut mailbox, &mut PublishBudget::unbounded())
+            .unwrap(),
         0,
         "an unsatisfiable obligation skips, and the pass still succeeds"
     );
@@ -121,7 +123,10 @@ fn stale_registration_obligation_recovers_byte_identically_across_restart() {
 
     // Pass one: the re-mint commits the replacement, the send fails.
     let mut failing = FailSend;
-    let err = fx.engine.deliver_pending(&mut failing).unwrap_err();
+    let err = fx
+        .engine
+        .deliver_pending(&mut failing, &mut PublishBudget::unbounded())
+        .unwrap_err();
     assert!(
         matches!(err, EngineError::Mailbox(_)),
         "transport failure surfaces, does not poison: {err:?}"
@@ -152,7 +157,10 @@ fn stale_registration_obligation_recovers_byte_identically_across_restart() {
     // obligation, so the second pass reuses it instead of superseding
     // again — the per-pass append the invariant forbids would show up
     // here, before any restart.
-    let err = fx.engine.deliver_pending(&mut failing).unwrap_err();
+    let err = fx
+        .engine
+        .deliver_pending(&mut failing, &mut PublishBudget::unbounded())
+        .unwrap_err();
     assert!(
         matches!(err, EngineError::Mailbox(_)),
         "transport failure surfaces, does not poison: {err:?}"
@@ -196,7 +204,12 @@ fn stale_registration_obligation_recovers_byte_identically_across_restart() {
         relay: &mut fx.relay,
         owner: fx.recipient,
     };
-    assert_eq!(fx.engine.deliver_pending(&mut mailbox).unwrap(), 1);
+    assert_eq!(
+        fx.engine
+            .deliver_pending(&mut mailbox, &mut PublishBudget::unbounded())
+            .unwrap(),
+        1
+    );
     let loaded = fx.engine.store.load().unwrap();
     assert_eq!(
         loaded.capability_sealed_replaced.len(),
@@ -211,7 +224,9 @@ fn stale_registration_obligation_recovers_byte_identically_across_restart() {
     // Pass three: a discharged outbox stays quiet rather than
     // re-minting or re-sending.
     assert_eq!(
-        fx.engine.deliver_pending(&mut mailbox).unwrap(),
+        fx.engine
+            .deliver_pending(&mut mailbox, &mut PublishBudget::unbounded())
+            .unwrap(),
         0,
         "a discharged outbox stays quiet"
     );
