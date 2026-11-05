@@ -154,7 +154,13 @@ fn publish_budget_clips_a_hanging_relay_with_carryover() {
         "both obligations stay pending: attempted-but-unaccepted and clipped alike"
     );
     // Carry-over: the same node with a healthy relay discharges
-    // both obligations on the next pass.
+    // both obligations on the next pass. The carry-over runs under
+    // a generous budget: the 100ms bound above belongs to the
+    // hanging pass, and asserting it again here would time
+    // Pass-setup work under parallel load instead of proving
+    // anything about the clip (which retired nothing by
+    // construction — the pending count below is the proof).
+    node.publish_pass_budget = Duration::from_secs(10);
     let mut healthy = AcceptingMailbox { sent: 0 };
     let report = node
         .sync_once(&mut healthy, None::<&mut wyrd_sync::serving::VaultSource>)
