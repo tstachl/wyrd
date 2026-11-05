@@ -47,3 +47,6 @@ Reviewed commit is listed when the report records one.
 | [2026-10-20-gpt-6-adversarial-architecture-review.md](archive/2026-10-20-gpt-6-adversarial-architecture-review.md) | 2026-10-20 | adversarial architecture | not recorded |
 | [2026-10-20-gpt-6-adversarial-security-audit.md](archive/2026-10-20-gpt-6-adversarial-security-audit.md) | 2026-10-20 | adversarial security | not recorded |
 | [2026-10-20-sol-adversarial-prerelease-review.md](archive/2026-10-20-sol-adversarial-prerelease-review.md) | 2026-10-20 | adversarial pre-release | not recorded |
+| [2026-11-05-crouton-alpha-architecture-review.md](archive/2026-11-05-crouton-alpha-architecture-review.md) | 2026-11-05 | adversarial architecture | 438a2f3dd2464049d38e487b2fc2baf659fed13a |
+| [2026-11-05-crouton-alpha-security-review.md](archive/2026-11-05-crouton-alpha-security-review.md) | 2026-11-05 | adversarial security | 438a2f3dd2464049d38e487b2fc2baf659fed13a |
+| [2026-11-05-crouton-alpha-codebase-review.md](archive/2026-11-05-crouton-alpha-codebase-review.md) | 2026-11-05 | adversarial code quality | 438a2f3dd2464049d38e487b2fc2baf659fed13a |
