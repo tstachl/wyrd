@@ -959,6 +959,12 @@ where
 /// while the remainder waits for the next pass. A zero limit admits
 /// nothing and still reports the empty set.
 ///
+/// A poisoned registry also reports the empty set: the peek already
+/// counted and logged the poison, pending demand is preserved (never
+/// marked), and the next pass retries. Callers read `Ok([])` as
+/// "admitted nothing" and consult `poison_count()` to distinguish
+/// idle from poisoned.
+///
 /// Public because host-side tests pin the admission atomicity directly;
 /// the loop is the only production caller.
 pub fn admit_wants<E>(
@@ -966,7 +972,17 @@ pub fn admit_wants<E>(
     limit: usize,
     commit: &mut dyn FnMut(ContentId) -> Result<(), E>,
 ) -> Result<Vec<ContentId>, E> {
-    let pending = registry.peek_pending();
+    // A poisoned registry admits nothing this call: the failure is
+    // already counted and logged at the peek, and the empty outcome
+    // is fail-closed (the production caller gates on its own peek
+    // first, so this arm only runs when the poison lands between the
+    // gate and this call, or for test callers driving admission
+    // directly). Demand is not lost — the next registration
+    // re-demands.
+    let pending = match registry.peek_pending() {
+        Ok(pending) => pending,
+        Err(_) => return Ok(Vec::new()),
+    };
     let take = pending.len().min(limit);
     let mut admitted = Vec::with_capacity(take);
     for want in pending.into_iter().take(take) {

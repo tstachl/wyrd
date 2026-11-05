@@ -206,9 +206,14 @@ where
             Node::MergedDir { .. } | Node::Conflict { .. } => return Err(fuser::Errno::EIO),
             _ => return Err(fuser::Errno::ENOTDIR),
         }
-        let parent = mutations
-            .capture_parent(&parent_path)
-            .ok_or(fuser::Errno::ESTALE)?;
+        let parent = match mutations.capture_parent(&parent_path) {
+            Ok(Some(token)) => token,
+            // A blocked or saturated table reads as stale; a poisoned
+            // one fails louder so a dead table never presents as a
+            // retired inode.
+            Ok(None) => return Err(fuser::Errno::ESTALE),
+            Err(_) => return Err(fuser::Errno::EIO),
+        };
         let child_path = join(&parent_path, name);
         // Reserve the handle slot before the namespace mutation: a
         // saturated table fails here, before the create commits a

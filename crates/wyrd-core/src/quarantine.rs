@@ -40,6 +40,7 @@
 //! [`Engine::record_object_removed`]: wyrd_sync::runtime::Engine::record_object_removed
 
 use std::collections::BTreeSet;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, RwLock};
 
 use wyrd_format::{
@@ -128,51 +129,101 @@ impl Ord for VerificationFailure {
 /// a queue — a waiter polling every interval re-reports the same
 /// rejection until the drain runs, and duplicates collapse instead
 /// of scheduling repeat discards.
+///
+/// Lock poisoning is never silent here: every failed acquisition bumps
+/// the [`QuarantineQueue::poison_count`] counter and logs at error
+/// level, so an empty queue beside a nonzero count reads as "the
+/// repair channel is dead", never as "nothing rejected".
 #[derive(Debug, Default)]
 pub struct QuarantineQueue {
     state: Mutex<BTreeSet<VerificationFailure>>,
+    /// Lock-poison observations. Bumped once per failed acquisition,
+    /// never reset.
+    poison: AtomicU64,
 }
 
 impl QuarantineQueue {
+    /// Lock-poison observations since construction. Any nonzero value
+    /// means the queue state behind the infallible diagnostics is
+    /// suspect: submitted rejections may have been dropped, and
+    /// pending counts may under-report.
+    pub fn poison_count(&self) -> u64 {
+        self.poison.load(Ordering::Relaxed)
+    }
+
+    /// Record one poisoned acquisition, loudly: the counter names it
+    /// for status consumers, the log names it for the operator. Only
+    /// ever called with a lock already known poisoned.
+    fn note_poison(&self, op: &'static str) {
+        self.poison.fetch_add(1, Ordering::Relaxed);
+        tracing::error!(
+            op,
+            "quarantine queue lock poisoned; rejection report unreachable"
+        );
+    }
+
     /// Report one observed rejection. Idempotent per identity: the
     /// set holds one entry no matter how many reads saw it. A
-    /// poisoned lock drops the report — the holder panicked, so the
-    /// loop is not draining anymore and the waiter surfaces EIO.
+    /// poisoned lock drops the report loudly — the holder panicked,
+    /// so the loop is not draining anymore and the waiter surfaces
+    /// EIO — and the waiter re-reports what is still bad.
     pub fn submit(&self, failure: VerificationFailure) {
-        if let Ok(mut state) = self.state.lock() {
-            state.insert(failure);
-        }
+        let Ok(mut state) = self.state.lock() else {
+            self.note_poison("submit");
+            return;
+        };
+        state.insert(failure);
     }
 
     /// Take one pending rejection, oldest identity first. `None`
-    /// drains nothing; the drain loop ends on it.
+    /// drains nothing; the drain loop ends on it. A poisoned lock
+    /// also ends the drain with the remaining items still queued —
+    /// loudly — and the waiter re-reports what is still bad.
     fn pop(&self) -> Option<VerificationFailure> {
-        self.state.lock().ok().and_then(|mut state| {
-            let first = state.iter().next().copied();
-            if let Some(failure) = first {
-                state.remove(&failure);
-            }
-            first
-        })
+        let Ok(mut state) = self.state.lock() else {
+            self.note_poison("pop");
+            return None;
+        };
+        let first = state.iter().next().copied();
+        if let Some(failure) = first {
+            state.remove(&failure);
+        }
+        first
     }
 
     /// Pending rejection count. Diagnostics only, never semantics.
+    /// A poisoned lock reads 0 and counts, so 0 beside a nonzero
+    /// [`QuarantineQueue::poison_count`] reads as "channel dead",
+    /// never as "nothing rejected".
     pub fn len(&self) -> usize {
-        self.state.lock().map(|state| state.len()).unwrap_or(0)
+        match self.state.lock() {
+            Ok(state) => state.len(),
+            Err(_) => {
+                self.note_poison("len");
+                0
+            }
+        }
     }
 
     /// No rejections pending. Diagnostics only, never semantics.
+    /// Poison reads `true` and counts, like
+    /// [`QuarantineQueue::len`].
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
     /// The pending rejections, oldest identity first. Diagnostics
     /// and tests; the drain is the only consumer that removes.
+    /// Poison reads empty and counts, like
+    /// [`QuarantineQueue::len`].
     pub fn pending(&self) -> Vec<VerificationFailure> {
-        self.state
-            .lock()
-            .map(|state| state.iter().copied().collect())
-            .unwrap_or_default()
+        match self.state.lock() {
+            Ok(state) => state.iter().copied().collect(),
+            Err(_) => {
+                self.note_poison("pending");
+                Vec::new()
+            }
+        }
     }
 }
 
@@ -598,5 +649,37 @@ mod tests {
         assert!(emitted.is_empty());
         assert_eq!(engine.current(), committed);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Poison the quarantine queue lock the way
+    /// `poisoned_state_lock_is_recovered` does for the mutation
+    /// queue: submissions drop loudly, the drain ends with the
+    /// remaining items still queued, and the infallible diagnostics
+    /// read empty only beside a nonzero poison count.
+    #[test]
+    fn poisoned_quarantine_queue_drops_loudly_not_silently() {
+        use std::sync::Arc;
+        let queue = Arc::new(QuarantineQueue::default());
+        let failure = VerificationFailure::content_hash_mismatch(
+            ContentId::derive(ObjectKind::Chunk, b"bad"),
+            ObjectKind::Chunk,
+        );
+        queue.submit(failure);
+        assert_eq!(queue.len(), 1);
+        assert_eq!(queue.poison_count(), 0, "no poison observed yet");
+        let poisoner = Arc::clone(&queue);
+        let _ = std::thread::spawn(move || {
+            let _guard = poisoner.state.lock().unwrap();
+            panic!("poison the quarantine queue state");
+        })
+        .join();
+        // The dropped report counts instead of vanishing, and every
+        // diagnostic reads empty beside the count.
+        queue.submit(failure);
+        assert_eq!(queue.len(), 0, "the live length is unreachable");
+        assert!(queue.is_empty());
+        assert!(queue.pending().is_empty());
+        assert!(queue.pop().is_none(), "the drain ends loudly");
+        assert!(queue.poison_count() > 0, "every silent path counts");
     }
 }

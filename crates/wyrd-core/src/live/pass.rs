@@ -523,10 +523,18 @@ where
         // mirror off durable state, so the announce route below is
         // already route-less while anything is outstanding.
         self.drive_withdrawal()?;
-        let mut admission = if self.wants.peek_pending().is_empty() {
-            None
-        } else {
-            Some(self.engine.runtime_state()?)
+        // A poisoned registry reads as no demand, loudly: the gate
+        // names the poison and skips admission this pass instead of
+        // stalling demand behind healthy-looking idleness. The next
+        // registration re-demands, and `admit_wants` below fails the
+        // same way if the poison lands between the two peeks.
+        let mut admission = match self.wants.peek_pending() {
+            Ok(pending) if pending.is_empty() => None,
+            Ok(_) => Some(self.engine.runtime_state()?),
+            Err(error) => {
+                tracing::error!(%error, "want registry poisoned; skipping admission this pass");
+                None
+            }
         };
         // Ownerless demand needs no release: pending persists until
         // admission on failure, and an admitted fetch outlives

@@ -21,6 +21,7 @@
 //!   materialization state.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -101,6 +102,16 @@ impl RegistryState {
 /// Shared demand registry: FUSE registers and waits, the daemon loop
 /// drains, the engine stays the only synchronization authority. Own
 /// lock, never the view's or the store's.
+///
+/// Lock poisoning is never silent here: every failed acquisition bumps
+/// the [`WantRegistry::poison_count`] counter and logs at error level.
+/// The fail-closed mutating ops ([`WantRegistry::register`],
+/// [`WantRegistry::register_unowned`]) report `WantError::Lock`, and
+/// the admission gate ([`WantRegistry::peek_pending`]) reports it too —
+/// a poisoned registry stalls demand loudly instead of reading as
+/// idle. The remaining infallible diagnostics still read the live
+/// state, but a nonzero poison count beside them means "bookkeeping
+/// dead", never "nothing to do".
 #[derive(Debug)]
 pub struct WantRegistry {
     state: Mutex<RegistryState>,
@@ -108,6 +119,9 @@ pub struct WantRegistry {
     /// Production passes its budget at composition; tests use small
     /// bounds to exercise saturation without thousands of entries.
     limit: usize,
+    /// Lock-poison observations. Bumped once per failed acquisition,
+    /// never reset.
+    poison: AtomicU64,
 }
 
 impl Default for WantRegistry {
@@ -122,7 +136,27 @@ impl WantRegistry {
         WantRegistry {
             state: Mutex::new(RegistryState::default()),
             limit,
+            poison: AtomicU64::new(0),
         }
+    }
+
+    /// Lock-poison observations since construction. Any nonzero value
+    /// means the registry state behind the infallible diagnostics is
+    /// suspect: demand stalls loudly (registration and the admission
+    /// gate fail with `WantError::Lock`) instead of reading as idle.
+    pub fn poison_count(&self) -> u64 {
+        self.poison.load(Ordering::Relaxed)
+    }
+
+    /// Record one poisoned acquisition, loudly: the counter names it
+    /// for status consumers, the log names it for the operator. Only
+    /// ever called with a lock already known poisoned.
+    fn note_poison(&self, op: &'static str) {
+        self.poison.fetch_add(1, Ordering::Relaxed);
+        tracing::error!(
+            op,
+            "want registry lock poisoned; demand bookkeeping unreachable"
+        );
     }
     /// Register a demand for `content`. Identical outstanding wants
     /// coalesce: an identity that is pending (awaiting admission) or
@@ -131,7 +165,13 @@ impl WantRegistry {
     /// identity creates a bounded new entry. The caller then drives
     /// waiting against the view.
     pub fn register(&self, content: ContentId) -> Result<(), WantError> {
-        let mut state = self.state.lock().map_err(|_| WantError::Lock)?;
+        let mut state = match self.state.lock() {
+            Ok(state) => state,
+            Err(_) => {
+                self.note_poison("register");
+                return Err(WantError::Lock);
+            }
+        };
         let outstanding = state.pending.contains(&content) || state.admitted.contains(&content);
         if !outstanding {
             // Admit nothing new past the bound.
@@ -155,7 +195,13 @@ impl WantRegistry {
     /// it — and an admitted fetch outlives waiters by the standing
     /// rule, so ownerless demand is as durable as waited demand.
     pub fn register_unowned(&self, content: ContentId) -> Result<bool, WantError> {
-        let mut state = self.state.lock().map_err(|_| WantError::Lock)?;
+        let mut state = match self.state.lock() {
+            Ok(state) => state,
+            Err(_) => {
+                self.note_poison("register_unowned");
+                return Err(WantError::Lock);
+            }
+        };
         if state.pending.contains(&content) || state.admitted.contains(&content) {
             return Ok(false);
         }
@@ -175,6 +221,7 @@ impl WantRegistry {
     /// admitted fetch keeps its in-flight mark and continues.
     pub fn release(&self, content: &ContentId) {
         let Ok(mut state) = self.state.lock() else {
+            self.note_poison("release");
             return;
         };
         if let std::collections::btree_map::Entry::Occupied(mut slot) =
@@ -204,13 +251,15 @@ impl WantRegistry {
     /// admission atomic from the registry's perspective: a failed
     /// commit leaves the identity pending, so the next pass retries it
     /// and no waiter ever coalesces onto an unadmitted fetch. A
-    /// poisoned lock yields an empty peek — the next registration
-    /// re-demands, and the loop never blocks on registry health.
-    pub fn peek_pending(&self) -> Vec<ContentId> {
+    /// poisoned lock fails with `WantError::Lock` — never an empty
+    /// peek — so the loop skips admission loudly instead of stalling
+    /// demand behind healthy-looking idleness.
+    pub fn peek_pending(&self) -> Result<Vec<ContentId>, WantError> {
         let Ok(state) = self.state.lock() else {
-            return Vec::new();
+            self.note_poison("peek_pending");
+            return Err(WantError::Lock);
         };
-        state.pending.iter().copied().collect()
+        Ok(state.pending.iter().copied().collect())
     }
 
     /// Move exactly the durably committed identities from pending to
@@ -222,6 +271,7 @@ impl WantRegistry {
     /// twice is harmless.
     pub fn mark_admitted(&self, committed: &[ContentId]) {
         let Ok(mut state) = self.state.lock() else {
+            self.note_poison("mark_admitted");
             return;
         };
         for content in committed {
@@ -247,6 +297,7 @@ impl WantRegistry {
     /// retires, so waiters keep coalescing onto the fetch.
     pub fn retire_where(&self, settled: impl Fn(&ContentId, usize) -> bool) {
         let Ok(mut state) = self.state.lock() else {
+            self.note_poison("retire_where");
             return;
         };
         let retired: Vec<ContentId> = state
@@ -264,24 +315,33 @@ impl WantRegistry {
     }
 
     /// Introspection for providers and tests: whether `content` carries
-    /// the in-flight mark.
+    /// the in-flight mark. A poisoned lock reads `false` and counts,
+    /// so `false` beside a nonzero [`WantRegistry::poison_count`]
+    /// reads as "bookkeeping dead", never as "not admitted".
     pub fn is_admitted(&self, content: &ContentId) -> bool {
-        self.state
-            .lock()
-            .map(|state| state.admitted.contains(content))
-            .unwrap_or(false)
+        match self.state.lock() {
+            Ok(state) => state.admitted.contains(content),
+            Err(_) => {
+                self.note_poison("is_admitted");
+                false
+            }
+        }
     }
 
     /// Introspection for tests: the waiter count currently held for
     /// `content`. Asymmetric register/release pairs leak here — one
     /// waiter per registration, exactly one release per completion —
     /// so this is the leak detector for demand lifecycles that span
-    /// loop passes.
+    /// loop passes. A poisoned lock reads 0 and counts, like
+    /// [`WantRegistry::is_admitted`].
     pub fn waiter_count(&self, content: &ContentId) -> usize {
-        self.state
-            .lock()
-            .map(|state| state.waiting.get(content).copied().unwrap_or(0))
-            .unwrap_or(0)
+        match self.state.lock() {
+            Ok(state) => state.waiting.get(content).copied().unwrap_or(0),
+            Err(_) => {
+                self.note_poison("waiter_count");
+                0
+            }
+        }
     }
 
     /// Note reopen demand for a terminal identity: the next loop
@@ -295,6 +355,7 @@ impl WantRegistry {
     /// note (the retrying reader re-notes).
     pub fn note_reopen_demand(&self, content: &ContentId) {
         let Ok(mut state) = self.state.lock() else {
+            self.note_poison("note_reopen_demand");
             return;
         };
         if state.reopen_notes.len() >= self.limit {
@@ -306,10 +367,11 @@ impl WantRegistry {
     /// Drain the reopen notes for the loop's generation sweep.
     /// Unconditional: every pass consumes whatever arrived since the
     /// last one, so the set stays bounded by one pass interval. A
-    /// poisoned lock yields nothing — the noting readers retry and
-    /// re-note.
+    /// poisoned lock yields nothing and counts — the noting readers
+    /// retry and re-note.
     pub fn take_reopen_notes(&self) -> Vec<ContentId> {
         let Ok(mut state) = self.state.lock() else {
+            self.note_poison("take_reopen_notes");
             return Vec::new();
         };
         std::mem::take(&mut state.reopen_notes)
@@ -359,7 +421,7 @@ mod tests {
 
     /// The loop's atomic admission: peek, persist (fake), then mark.
     fn admit_all(registry: &WantRegistry) -> Vec<ContentId> {
-        let pending = registry.peek_pending();
+        let pending = registry.peek_pending().expect("healthy registry");
         registry.mark_admitted(&pending);
         pending
     }
@@ -380,7 +442,10 @@ mod tests {
         // A second register after admission coalesces: the fetch is in
         // flight, so no new demand entry appears.
         registry.register(content(1)).unwrap();
-        assert!(registry.peek_pending().is_empty());
+        assert!(registry
+            .peek_pending()
+            .expect("healthy registry")
+            .is_empty());
         // Releasing a single waiter of two leaves the in-flight fetch.
         registry.release(&content(1));
         assert!(registry.is_admitted(&content(1)));
@@ -398,7 +463,10 @@ mod tests {
         assert!(registry.register_unowned(content(1)).unwrap());
         assert!(!registry.register_unowned(content(1)).unwrap());
         assert_eq!(registry.waiter_count(&content(1)), 0);
-        assert_eq!(registry.peek_pending(), vec![content(1)]);
+        assert_eq!(
+            registry.peek_pending().expect("healthy registry"),
+            vec![content(1)]
+        );
         // Admission still moves it like any demand; the admitted
         // fetch outlives waiters by the standing rule.
         assert_eq!(admit_all(&registry), vec![content(1)]);
@@ -420,7 +488,10 @@ mod tests {
         // The backend waiter is gone, but the loop's demand stands:
         // still pending, still admittable next pass.
         assert_eq!(registry.waiter_count(&content(1)), 0);
-        assert_eq!(registry.peek_pending(), vec![content(1)]);
+        assert_eq!(
+            registry.peek_pending().expect("healthy registry"),
+            vec![content(1)]
+        );
         assert_eq!(admit_all(&registry), vec![content(1)]);
         assert!(registry.is_admitted(&content(1)));
     }
@@ -440,7 +511,7 @@ mod tests {
             admit_wants(&registry, 10, &mut |_| Err("store-class failure"));
         assert!(failed.is_err(), "the commit error propagates");
         assert_eq!(
-            registry.peek_pending(),
+            registry.peek_pending().expect("healthy registry"),
             vec![content(1)],
             "un-admitted demand survives the failed pass"
         );
@@ -486,7 +557,10 @@ mod tests {
             wait_for_materialization(&registry, content(3), Duration::from_millis(120), || false)
                 .unwrap_err();
         assert_eq!(error, WantError::TimedOut);
-        assert!(registry.peek_pending().is_empty());
+        assert!(registry
+            .peek_pending()
+            .expect("healthy registry")
+            .is_empty());
     }
 
     /// The reviewer's coalescing regression: once a demand is admitted
@@ -504,7 +578,10 @@ mod tests {
         // A second waiter arrives while the fetch is in flight.
         registry.register(content(1)).unwrap();
         assert!(
-            registry.peek_pending().is_empty(),
+            registry
+                .peek_pending()
+                .expect("healthy registry")
+                .is_empty(),
             "an admitted identity must not be re-demanded"
         );
     }
@@ -585,7 +662,10 @@ mod tests {
         // Second waiter: immediate success, no new demand entry.
         wait_for_materialization(&registry, content(4), Duration::from_millis(80), || true)
             .unwrap();
-        assert!(registry.peek_pending().is_empty());
+        assert!(registry
+            .peek_pending()
+            .expect("healthy registry")
+            .is_empty());
     }
 
     /// Admission is atomic from the registry's perspective: a peek
@@ -598,18 +678,21 @@ mod tests {
         registry.register(content(2)).unwrap();
         // The loop persists content(1) and fails on content(2): only
         // the committed prefix is marked.
-        let pending = registry.peek_pending();
+        let pending = registry.peek_pending().expect("healthy registry");
         assert_eq!(pending, vec![content(1), content(2)]);
         registry.mark_admitted(&[content(1)]);
         assert!(registry.is_admitted(&content(1)));
         assert_eq!(
-            registry.peek_pending(),
+            registry.peek_pending().expect("healthy registry"),
             vec![content(2)],
             "the uncommitted suffix stays pending"
         );
         // The retry admits the rest without re-demanding the prefix.
-        registry.mark_admitted(&registry.peek_pending());
-        assert!(registry.peek_pending().is_empty());
+        registry.mark_admitted(&registry.peek_pending().expect("healthy registry"));
+        assert!(registry
+            .peek_pending()
+            .expect("healthy registry")
+            .is_empty());
         assert!(registry.is_admitted(&content(2)));
     }
 
@@ -622,11 +705,14 @@ mod tests {
         let registry = WantRegistry::default();
         registry.register(content(1)).unwrap();
         // The loop peeks; the last waiter times out before the mark.
-        let peeked = registry.peek_pending();
+        let peeked = registry.peek_pending().expect("healthy registry");
         assert_eq!(peeked, vec![content(1)]);
         registry.release(&content(1));
         assert!(
-            registry.peek_pending().is_empty(),
+            registry
+                .peek_pending()
+                .expect("healthy registry")
+                .is_empty(),
             "the demand died with its last waiter"
         );
         // The loop promotes what it persisted: the leave wins.
@@ -677,7 +763,10 @@ mod tests {
         drop(registry);
         let restarted = WantRegistry::default();
         assert!(
-            restarted.peek_pending().is_empty(),
+            restarted
+                .peek_pending()
+                .expect("healthy registry")
+                .is_empty(),
             "no pending demand survives the restart"
         );
         assert!(
@@ -688,5 +777,60 @@ mod tests {
         // exactly as a first-time demand would.
         restarted.register(content(1)).unwrap();
         assert_eq!(admit_all(&restarted), vec![content(1)]);
+    }
+
+    /// Poison the registry lock the way
+    /// `poisoned_state_lock_is_recovered` does for the queue: the
+    /// admission gate fails with `Lock` instead of stalling demand
+    /// behind an empty peek, registration fails closed, and the
+    /// infallible diagnostics read empty only beside a nonzero
+    /// poison count.
+    #[test]
+    fn poisoned_registry_lock_stalls_loudly_not_idly() {
+        use std::sync::Arc;
+        let registry = Arc::new(WantRegistry::default());
+        registry.register(content(1)).unwrap();
+        assert_eq!(registry.poison_count(), 0, "no poison observed yet");
+        let poisoner = Arc::clone(&registry);
+        let _ = std::thread::spawn(move || {
+            let _guard = poisoner.state.lock().unwrap();
+            panic!("poison the registry state");
+        })
+        .join();
+        // The admission gate names the poison instead of idling.
+        assert_eq!(registry.peek_pending(), Err(WantError::Lock));
+        assert_eq!(registry.register(content(2)), Err(WantError::Lock));
+        assert_eq!(registry.register_unowned(content(2)), Err(WantError::Lock));
+        // Silent paths count instead of vanishing.
+        registry.release(&content(1));
+        registry.mark_admitted(&[content(1)]);
+        registry.retire_where(|_, _| true);
+        registry.note_reopen_demand(&content(1));
+        // Diagnostics read empty — but the counter says dead, not idle.
+        assert!(registry.take_reopen_notes().is_empty());
+        assert!(!registry.is_admitted(&content(1)));
+        assert_eq!(registry.waiter_count(&content(1)), 0);
+        assert!(registry.poison_count() > 0, "every silent path counts");
+    }
+
+    /// A poisoned registry admits nothing: `admit_wants` reports the
+    /// empty set without touching pending demand, so the next pass
+    /// retries what the poison skipped.
+    #[test]
+    fn admit_wants_on_a_poisoned_registry_preserves_pending() {
+        use super::super::live::admit_wants;
+        use std::sync::Arc;
+        let registry = Arc::new(WantRegistry::default());
+        registry.register(content(1)).unwrap();
+        let poisoner = Arc::clone(&registry);
+        let _ = std::thread::spawn(move || {
+            let _guard = poisoner.state.lock().unwrap();
+            panic!("poison the registry state");
+        })
+        .join();
+        let admitted: Result<Vec<ContentId>, &'static str> =
+            admit_wants(&registry, 10, &mut |_| Ok(()));
+        assert!(admitted.unwrap().is_empty(), "poison admits nothing");
+        assert!(registry.poison_count() > 0, "the failed peek counts");
     }
 }

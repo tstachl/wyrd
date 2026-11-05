@@ -295,8 +295,10 @@ impl Embedded {
         } else {
             format!("{parent}/{name}")
         };
-        let Some(token) = self.queue.capture_parent(parent) else {
-            return Outcome::Err("stale");
+        let token = match self.queue.capture_parent(parent) {
+            Ok(Some(token)) => token,
+            Ok(None) => return Outcome::Err("stale"),
+            Err(error) => return Outcome::Err(mutation_tag(&error)),
         };
         if let Err(error) = self.queue.submit(MutationKind::CreateFile {
             path: path.clone(),
@@ -393,8 +395,10 @@ impl Embedded {
         if self.mkdir(parent) != Outcome::Ok {
             return Outcome::Err("setup-failed");
         }
-        let Some(token) = self.queue.capture_parent(parent) else {
-            return Outcome::Err("stale");
+        let token = match self.queue.capture_parent(parent) {
+            Ok(Some(token)) => token,
+            Ok(None) => return Outcome::Err("stale"),
+            Err(error) => return Outcome::Err(mutation_tag(&error)),
         };
         // Reincarnate the directory out from under the token: the move
         // retires the observed incarnation, the fresh mkdir mints a
@@ -1118,7 +1122,11 @@ fn adapter_write_folding_matches_embedded_fold_script() {
         // adapter's handle-captured base.
         let (created, empty_base) = match emb.queue.submit(MutationKind::CreateFile {
             path: "fold.txt".to_string(),
-            parent: emb.queue.capture_parent("").expect("root token"),
+            parent: emb
+                .queue
+                .capture_parent("")
+                .expect("healthy table")
+                .expect("root token"),
         }) {
             Ok(MutationOutcome::Created(identity)) => (Outcome::Ok, Some(identity)),
             Ok(_) => (Outcome::Err("unexpected-outcome"), None),

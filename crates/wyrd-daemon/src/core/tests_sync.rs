@@ -428,12 +428,12 @@ fn failed_want_admission_stays_pending_and_retries() {
         !registry.is_admitted(&second),
         "a failed admission never strands the identity as admitted"
     );
-    assert_eq!(registry.peek_pending(), vec![second]);
+    assert_eq!(registry.peek_pending().unwrap(), vec![second]);
 
     // The next pass retries the pending suffix and finishes the batch.
     let retry = admit_wants(&registry, usize::MAX, &mut |_| Ok::<_, ()>(())).unwrap();
     assert_eq!(retry, vec![second]);
-    assert!(registry.peek_pending().is_empty());
+    assert!(registry.peek_pending().unwrap().is_empty());
 }
 
 /// The admission cap paces a flood: only the oldest `limit` wants
@@ -448,12 +448,12 @@ fn want_admission_cap_paces_floods_across_passes() {
     }
     let first = admit_wants(&registry, 2, &mut |_| Ok::<_, ()>(())).unwrap();
     assert_eq!(first, ids[..2]);
-    assert_eq!(registry.peek_pending(), ids[2..]);
+    assert_eq!(registry.peek_pending().unwrap(), ids[2..]);
     let second = admit_wants(&registry, 2, &mut |_| Ok::<_, ()>(())).unwrap();
     assert_eq!(second, ids[2..4]);
     let third = admit_wants(&registry, 2, &mut |_| Ok::<_, ()>(())).unwrap();
     assert_eq!(third, ids[4..]);
-    assert!(registry.peek_pending().is_empty());
+    assert!(registry.peek_pending().unwrap().is_empty());
 }
 /// Poison arriving through the mailbox is consumed (acked) rather
 /// than retained: an unopenable envelope is terminal, and the

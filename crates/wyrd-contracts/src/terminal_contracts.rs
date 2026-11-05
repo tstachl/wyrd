@@ -232,7 +232,7 @@ fn terminal_generation_completes_every_waiter_of_the_identity() {
         "the terminal identity retired from admission with waiters outstanding"
     );
     assert!(
-        parts.wants.peek_pending().is_empty(),
+        parts.wants.peek_pending().unwrap().is_empty(),
         "completion released every waiter"
     );
     assert_eq!(

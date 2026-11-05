@@ -1146,7 +1146,7 @@ fn deferred_publication_reopens_parent_captures() {
     let (engine, dir, _store, _chunk, _root, head) = scratch_file_drive("deferred-parent");
     let mut node = live_over_fake(engine, MemoryObjectStore::default(), &[head]);
     let queue = Arc::clone(node.mutations());
-    let token = queue.capture_parent("f").unwrap();
+    let token = queue.capture_parent("f").unwrap().unwrap();
     queue.invalidate_parent_tokens();
     node.dirty = true;
 
@@ -1161,8 +1161,8 @@ fn deferred_publication_reopens_parent_captures() {
         report.pending_heads, 1,
         "the deferred head is reported as pending, not silently skipped"
     );
-    assert!(!queue.validate_parent("f", token));
-    assert!(queue.capture_parent("f").is_some());
+    assert!(!queue.validate_parent("f", token).unwrap());
+    assert!(queue.capture_parent("f").unwrap().is_some());
     drop(node);
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -1236,7 +1236,7 @@ fn retry_after_timeout_admits_without_a_new_fact() {
         // for the pending demand keeps a slow spawn from turning
         // the admission into a vacuous no-op.
         let registered_by = std::time::Instant::now() + Duration::from_secs(5);
-        while node.wants().peek_pending().is_empty() {
+        while node.wants().peek_pending().unwrap().is_empty() {
             assert!(
                 std::time::Instant::now() < registered_by,
                 "the waiter never registered its demand"

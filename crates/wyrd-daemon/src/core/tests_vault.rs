@@ -413,7 +413,7 @@ fn failed_admission_keeps_pending_for_next_pass() {
     // drive with nothing pending.
     live.sync_once(&mut mailbox, None::<&mut MemoryBulkSource>)
         .unwrap();
-    assert!(live.wants().peek_pending().is_empty());
+    assert!(live.wants().peek_pending().unwrap().is_empty());
     // Seed ownerless demand for held content: the walk skips local
     // identities, so direct registration models a sweep-collected
     // identity without coupling this test to quarantine.
@@ -456,7 +456,7 @@ fn failed_admission_keeps_pending_for_next_pass() {
                 "a read-only drive fails the admission commit"
             );
             assert!(
-                live.wants().peek_pending().contains(&chunk),
+                live.wants().peek_pending().unwrap().contains(&chunk),
                 "failed admission leaves the demand pending for next pass"
             );
         }

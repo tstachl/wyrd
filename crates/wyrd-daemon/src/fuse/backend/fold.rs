@@ -493,14 +493,23 @@ where
     /// Idle `fsync` stays O(1): a zero dirty-handle count means no
     /// handle holds a budget reservation, and a reservation is held
     /// exactly while its handle is dirty, so there is nothing on any
-    /// path to delegate to.
-    fn earliest_dirty_on(&self, path: &str) -> Option<Arc<Mutex<WriteHandle>>> {
+    /// path to delegate to. A poisoned budget reads zero dirty
+    /// handles by design — the live count is unreachable — so the
+    /// fast path fails with `EIO` instead of reporting a path
+    /// durable without folding bytes reserved before the panic.
+    fn earliest_dirty_on(
+        &self,
+        path: &str,
+    ) -> Result<Option<Arc<Mutex<WriteHandle>>>, fuser::Errno> {
         if self.budget.dirty_handles() == 0 {
-            return None;
+            if self.budget.poison_count() > 0 {
+                return Err(fuser::Errno::EIO);
+            }
+            return Ok(None);
         }
         let arcs: Vec<Arc<Mutex<WriteHandle>>> = {
             let Ok(files) = self.files.lock() else {
-                return None;
+                return Ok(None);
             };
             files
                 .by_handle
@@ -524,7 +533,7 @@ where
                 best = Some((write.dirty_seq, Arc::clone(arc)));
             }
         }
-        best.map(|(_, arc)| arc)
+        Ok(best.map(|(_, arc)| arc))
     }
 
     /// Path-scoped durability boundary: `fsync`/`fdatasync` on any
@@ -553,7 +562,7 @@ where
                 }
                 write.path.clone()
             };
-            match self.earliest_dirty_on(&path) {
+            match self.earliest_dirty_on(&path)? {
                 // Nothing pending on this path: a committing boundary
                 // with no pending data commits nothing.
                 None => return Ok(()),

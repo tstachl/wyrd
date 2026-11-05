@@ -224,7 +224,7 @@ fn deferred_create_fails_when_its_evaluated_head_changes() {
         .insert_into(&mut serving_store)
         .unwrap();
     let mut live = live_over_tree(engine, serving_store, &[head]);
-    let parent = live.mutations().capture_parent("parent").unwrap();
+    let parent = live.mutations().capture_parent("parent").unwrap().unwrap();
     let create = MutationKind::CreateFile {
         path: "parent/child".to_string(),
         parent,
@@ -254,7 +254,7 @@ fn deferred_create_fails_when_its_evaluated_head_changes() {
 fn create_does_not_recreate_a_removed_parent() {
     let (engine, dir, store, root, head) = scratch_parent_drive("removed");
     let mut live = live_over_tree(engine, store, &[head]);
-    let parent = live.mutations().capture_parent("parent").unwrap();
+    let parent = live.mutations().capture_parent("parent").unwrap().unwrap();
     let new_root = {
         let mut store = live.store.write().unwrap();
         wyrd_format::mutation::remove(&mut *store, root, "parent").unwrap()
@@ -283,7 +283,7 @@ fn create_does_not_recreate_a_removed_parent() {
 fn create_rejects_a_replaced_parent() {
     let (engine, dir, store, root, head) = scratch_parent_drive("replaced");
     let mut live = live_over_tree(engine, store, &[head]);
-    let parent = live.mutations().capture_parent("parent").unwrap();
+    let parent = live.mutations().capture_parent("parent").unwrap().unwrap();
     let new_root = {
         let mut store = live.store.write().unwrap();
         let without_parent = wyrd_format::mutation::remove(&mut *store, root, "parent").unwrap();
@@ -459,7 +459,7 @@ fn scratch_fixed_drive(
 /// serving store carries the parent subtree but the mutation still
 /// defers with the evaluated head pinned.
 fn deferred_create(live: &mut LiveNode<TreeView>) -> MutationError {
-    let parent = live.mutations().capture_parent("parent").unwrap();
+    let parent = live.mutations().capture_parent("parent").unwrap().unwrap();
     live.apply_mutation(
         &MutationKind::CreateFile {
             path: "parent/child".to_string(),

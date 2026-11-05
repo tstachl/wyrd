@@ -77,7 +77,7 @@ fn read_blocks_on_want_until_content_arrives() {
     );
     worker.join().unwrap();
     assert!(
-        registry.peek_pending().is_empty(),
+        registry.peek_pending().unwrap().is_empty(),
         "success released the demand"
     );
 }
@@ -96,7 +96,7 @@ fn unknown_path_is_enoent_without_registering_a_want() {
         "unannounced paths resolve fast, never block for arrival"
     );
     assert!(
-        registry.peek_pending().is_empty(),
+        registry.peek_pending().unwrap().is_empty(),
         "resolution registered no demand"
     );
 }
@@ -115,7 +115,7 @@ fn read_deadline_is_eio_and_releases_the_want() {
         "deadline expiry is EIO, never a partial read"
     );
     assert!(
-        registry.peek_pending().is_empty(),
+        registry.peek_pending().unwrap().is_empty(),
         "expiry released the demand"
     );
 }
@@ -140,7 +140,7 @@ fn concurrent_reads_coalesce_into_one_want() {
     };
     std::thread::sleep(Duration::from_millis(80));
     assert_eq!(
-        registry.peek_pending().len(),
+        registry.peek_pending().unwrap().len(),
         1,
         "two waiters, one demand entry"
     );
@@ -228,7 +228,7 @@ fn manifest_chain_open_fails_bounded_eio_while_tree_unmaterialized() {
         "the open waits out the deadline instead of failing fast"
     );
     assert!(
-        registry.peek_pending().is_empty(),
+        registry.peek_pending().unwrap().is_empty(),
         "expiry retired the manifest-chain demand"
     );
     assert!(
@@ -241,7 +241,7 @@ fn manifest_chain_open_fails_bounded_eio_while_tree_unmaterialized() {
     let second = std::thread::spawn(move || patient.open_at("f.txt"));
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
-        let pending = registry.peek_pending();
+        let pending = registry.peek_pending().unwrap();
         if pending == vec![tree_id] {
             break;
         }
@@ -257,7 +257,7 @@ fn manifest_chain_open_fails_bounded_eio_while_tree_unmaterialized() {
         "the re-registered open fails bounded too, never cached"
     );
     assert!(
-        registry.peek_pending().is_empty(),
+        registry.peek_pending().unwrap().is_empty(),
         "the second expiry retired its demand as well"
     );
     assert!(
@@ -278,7 +278,7 @@ fn manifest_chain_open_fails_bounded_eio_while_tree_unmaterialized() {
         "the arrived tree serves without another wait"
     );
     assert!(
-        registry.peek_pending().is_empty(),
+        registry.peek_pending().unwrap().is_empty(),
         "the served open registers no demand"
     );
 }
@@ -346,7 +346,7 @@ fn terminal_verdict_fails_fast_with_eio(verdict: wyrd_format::FetchStatus) {
         "the waiter blocked across polls before the verdict landed"
     );
     assert!(
-        registry.peek_pending().is_empty(),
+        registry.peek_pending().unwrap().is_empty(),
         "completion released the demand"
     );
 }
@@ -372,7 +372,7 @@ fn terminal_first_touch_notes_reopen_demand() {
         "a terminal identity fails the read with EIO"
     );
     assert!(
-        registry.peek_pending().is_empty(),
+        registry.peek_pending().unwrap().is_empty(),
         "no waiter ever blocked: nothing pending to release"
     );
     assert_eq!(

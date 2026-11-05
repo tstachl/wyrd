@@ -1308,6 +1308,7 @@ fn submit_reports_the_same_outcome_both_ways() {
     let token = parts
         .mutations
         .capture_parent("")
+        .expect("healthy table")
         .expect("root captures a token");
     let direct = parts
         .mutations
