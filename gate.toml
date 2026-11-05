@@ -49,8 +49,9 @@ milestones = [
 # How `gate review run` fires the reviewer: the repo's branch-review
 # prompt and the model it runs. The command template defaults to an
 # `opencode run` invocation; substituted values are shell-quoted by gate.
-# `{variant}` expands to `--variant X` (or nothing when unset), `{pr}`,
-# `{tip}` and `{log}` name the proposal, its tip and this run's log.
+# `{variant}` expands to the `#variant` model suffix (or nothing when
+# unset), `{pr}`, `{tip}` and `{log}` name the proposal, its tip and
+# this run's log.
 # Prompts are vendored in the checkout (master and pr/* worktrees carry
 # their own copy), so the path is checkout-relative.
 [review]
