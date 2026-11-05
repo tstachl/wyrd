@@ -611,7 +611,7 @@ fn queued_create_rejects_same_content_parent_replacement() {
     let (live, backend) = live_backend(daemon);
     let parent_ino = backend.attr_at("parent").unwrap().ino.0;
     let queue = Arc::clone(live.mutations());
-    let parent_token = queue.capture_parent("parent").unwrap();
+    let parent_token = queue.capture_parent("parent").unwrap().unwrap();
     let backend = Arc::new(backend);
 
     let rmdir_backend = Arc::clone(&backend);
@@ -626,14 +626,14 @@ fn queued_create_rejects_same_content_parent_replacement() {
     let create =
         std::thread::spawn(move || create_backend.create_at(parent_ino, "child", libc::O_RDWR));
     wait_for_outstanding(&queue, 3);
-    assert!(queue.validate_parent("parent", parent_token));
+    assert!(queue.validate_parent("parent", parent_token).unwrap());
 
     let (stop, loop_handle) = spawn_live_loop(live);
     let create_result = create.join().unwrap();
     let rmdir_result = rmdir.join().unwrap();
     let mkdir_result = mkdir.join().unwrap().map(|_| ());
     assert!(
-        !queue.validate_parent("parent", parent_token),
+        !queue.validate_parent("parent", parent_token).unwrap(),
         "rmdir={rmdir_result:?}, mkdir={mkdir_result:?}"
     );
     assert!(

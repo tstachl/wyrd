@@ -138,15 +138,27 @@ impl MutationQueue {
 
     /// Capture the current parent-directory incarnation for a queued
     /// mutation. The same path returns the same token until the live loop
-    /// invalidates that path or its ancestors.
-    pub fn capture_parent(&self, path: &str) -> Option<ParentToken> {
+    /// invalidates that path or its ancestors. `Ok(None)` means the
+    /// path is blocked or the table is saturated (reported as
+    /// `StaleParent` downstream); `Err(Lock)` means the table itself
+    /// is unreachable and the caller must fail louder than stale.
+    pub fn capture_parent(&self, path: &str) -> Result<Option<ParentToken>, MutationError> {
         self.parents.capture(path)
     }
 
     /// Check a captured parent token immediately before a create is
-    /// authored. A false result is reported as `StaleParent`.
-    pub fn validate_parent(&self, path: &str, token: ParentToken) -> bool {
+    /// authored. A false result is reported as `StaleParent`; a
+    /// poisoned table reports `Lock` instead of a false stale.
+    pub fn validate_parent(&self, path: &str, token: ParentToken) -> Result<bool, MutationError> {
         self.parents.validate(path, token)
+    }
+
+    /// Parent-table lock-poison observations since construction. Any
+    /// nonzero value means the capture/validate answers are suspect:
+    /// creates still fail closed, but a `None` or `false` beside a
+    /// nonzero count reads as "table dead", never as "stale parent".
+    pub fn parent_poison_count(&self) -> u64 {
+        self.parents.poison_count()
     }
 
     /// Rotate tokens for a path and all of its descendants after a

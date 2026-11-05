@@ -69,6 +69,14 @@ struct BudgetState {
 
 /// Shared budget for all writable handles in one live session. The FUSE
 /// backend holds it in an `Arc`; handles reserve and release through it.
+///
+/// Lock poisoning is never silent here: every lock failure bumps the
+/// [`WriteBudget::poison_count`] counter and logs at error level, so an
+/// operator (or a `SyncReport` consumer) can distinguish "nothing
+/// budgeted" from "the bookkeeping is dead". The infallible
+/// diagnostics ([`WriteBudget::total`], [`WriteBudget::dirty_handles`])
+/// still read the live state — they never invent poison data — but the
+/// counter beside them names the poison case.
 #[derive(Debug)]
 pub struct WriteBudget {
     state: Mutex<BudgetState>,
@@ -76,6 +84,10 @@ pub struct WriteBudget {
     per_handle: usize,
     aggregate: usize,
     dirty_handles: usize,
+    /// Lock-poison observations. Bumped once per failed acquisition,
+    /// never reset: a nonzero count means every reading since is
+    /// suspect until the process restarts with a fresh budget.
+    poison: AtomicU64,
 }
 
 impl Default for WriteBudget {
@@ -99,6 +111,7 @@ impl WriteBudget {
             per_handle,
             aggregate,
             dirty_handles,
+            poison: AtomicU64::new(0),
         }
     }
 
@@ -114,7 +127,13 @@ impl WriteBudget {
         if new_len > self.per_handle {
             return Err(BudgetError::Handle);
         }
-        let mut state = self.lock()?;
+        let mut state = match self.lock() {
+            Ok(state) => state,
+            Err(error) => {
+                self.note_poison("reserve");
+                return Err(error);
+            }
+        };
         let old = state.lengths.get(&handle).copied();
         let new_dirty = old.is_none();
         if new_dirty && state.lengths.len() >= self.dirty_handles {
@@ -130,12 +149,16 @@ impl WriteBudget {
     }
 
     /// Release `handle`'s budget entirely (commit success, failed commit,
-    /// or close). Idempotent.
+    /// or close). Idempotent. A poisoned lock drops the release — the
+    /// holder panicked, so the daemon is coming down — and counts it
+    /// loudly instead of vanishing the bytes silently.
     pub fn release(&self, handle: HandleId) {
-        if let Ok(mut state) = self.state.lock() {
-            if let Some(len) = state.lengths.remove(&handle) {
-                state.total = state.total.saturating_sub(len);
-            }
+        let Ok(mut state) = self.state.lock() else {
+            self.note_poison("release");
+            return;
+        };
+        if let Some(len) = state.lengths.remove(&handle) {
+            state.total = state.total.saturating_sub(len);
         }
     }
 
@@ -149,7 +172,13 @@ impl WriteBudget {
     /// budget unchanged; the caller restores the taken images and
     /// reports the pressure instead of submitting unaccounted.
     pub fn reserve_fold(&self, bytes: usize) -> Result<FoldLease<'_>, BudgetError> {
-        let mut state = self.lock()?;
+        let mut state = match self.lock() {
+            Ok(state) => state,
+            Err(error) => {
+                self.note_poison("reserve_fold");
+                return Err(error);
+            }
+        };
         let adjusted = state.total.saturating_add(bytes);
         if adjusted > self.aggregate {
             return Err(BudgetError::Aggregate);
@@ -168,20 +197,54 @@ impl WriteBudget {
     /// so the refusal path restores images against exactly the budget
     /// it found.
     fn release_fold(&self, bytes: usize) {
-        if let Ok(mut state) = self.state.lock() {
-            state.total = state.total.saturating_sub(bytes);
-        }
+        let Ok(mut state) = self.state.lock() else {
+            self.note_poison("release_fold");
+            return;
+        };
+        state.total = state.total.saturating_sub(bytes);
     }
 
     /// Introspection for providers and tests: the aggregate buffered bytes.
+    /// A poisoned lock reads 0 — the live state is unreachable — and
+    /// counts the observation, so 0 beside a nonzero
+    /// [`WriteBudget::poison_count`] reads as "bookkeeping dead",
+    /// never as "nothing buffered".
     pub fn total(&self) -> usize {
-        self.lock().map(|state| state.total).unwrap_or(0)
+        match self.lock() {
+            Ok(state) => state.total,
+            Err(_) => {
+                self.note_poison("total");
+                0
+            }
+        }
     }
 
     /// Introspection for providers and tests: the number of dirty
-    /// (budgeted) handles.
+    /// (budgeted) handles. Poison reads 0 and counts, like
+    /// [`WriteBudget::total`].
     pub fn dirty_handles(&self) -> usize {
-        self.lock().map(|state| state.lengths.len()).unwrap_or(0)
+        match self.lock() {
+            Ok(state) => state.lengths.len(),
+            Err(_) => {
+                self.note_poison("dirty_handles");
+                0
+            }
+        }
+    }
+
+    /// Lock-poison observations since construction. Any nonzero value
+    /// means the state behind the infallible diagnostics is suspect:
+    /// reservations still fail closed, but totals may under-report.
+    pub fn poison_count(&self) -> u64 {
+        self.poison.load(Ordering::Relaxed)
+    }
+
+    /// Record one poisoned acquisition, loudly: the counter names it
+    /// for status consumers, the log names it for the operator. Only
+    /// ever called with a lock already known poisoned.
+    fn note_poison(&self, op: &'static str) {
+        self.poison.fetch_add(1, Ordering::Relaxed);
+        tracing::error!(op, "write budget lock poisoned; bookkeeping unreachable");
     }
 
     fn lock(&self) -> Result<MutexGuard<'_, BudgetState>, BudgetError> {
@@ -286,5 +349,57 @@ mod tests {
         assert_eq!(budget.dirty_handles(), 0);
         assert_eq!(budget.reserve(handle, 0), Ok(()), "O_TRUNC counts dirty");
         assert_eq!(budget.dirty_handles(), 1);
+    }
+
+    /// Poison the budget lock the way `poisoned_state_lock_is_recovered`
+    /// does for the queue: mutating ops still fail closed, diagnostics
+    /// never read healthy, and a dropped release leaves a visible
+    /// deficit instead of a quiet zero.
+    #[test]
+    fn poisoned_budget_lock_is_visible_not_healthy() {
+        let budget = std::sync::Arc::new(WriteBudget::default());
+        let handle = budget.next_handle();
+        assert_eq!(budget.reserve(handle, 1_000), Ok(()));
+        assert_eq!(budget.poison_count(), 0, "no poison observed yet");
+        let poisoner = std::sync::Arc::clone(&budget);
+        let _ = std::thread::spawn(move || {
+            let _guard = poisoner.state.lock().unwrap();
+            panic!("poison the budget state");
+        })
+        .join();
+        // Mutating ops fail closed, and every failure counts.
+        assert_eq!(budget.reserve(handle, 2_000), Err(BudgetError::Lock));
+        assert!(matches!(budget.reserve_fold(1), Err(BudgetError::Lock)));
+        assert!(budget.poison_count() >= 2, "failed reservations count");
+        // A release that cannot run drops loudly instead of vanishing
+        // the bytes silently: the counter records the dropped
+        // accounting, so the zero below reads as "dead, not idle".
+        budget.release(handle);
+        assert!(budget.poison_count() >= 3, "the dropped release counts");
+        assert_eq!(budget.total(), 0);
+        assert_eq!(budget.dirty_handles(), 0);
+        assert!(
+            budget.poison_count() >= 5,
+            "reads beside a nonzero count are dead, not idle"
+        );
+    }
+
+    /// A poisoned empty budget reads zero the way a healthy idle one
+    /// does — but the counter distinguishes them.
+    #[test]
+    fn poisoned_empty_budget_reads_zero_with_count() {
+        let budget = std::sync::Arc::new(WriteBudget::default());
+        let poisoner = std::sync::Arc::clone(&budget);
+        let _ = std::thread::spawn(move || {
+            let _guard = poisoner.state.lock().unwrap();
+            panic!("poison the budget state");
+        })
+        .join();
+        assert_eq!(budget.total(), 0);
+        assert_eq!(budget.dirty_handles(), 0);
+        assert!(
+            budget.poison_count() > 0,
+            "zero with a count is dead, not idle"
+        );
     }
 }

@@ -236,7 +236,7 @@ fn embedded_drive_lifecycle_needs_no_fuse_and_no_daemon() {
     // No want-registry state and no in-memory caches carry across a
     // restart: the fresh parts hold nothing from the dead sessions.
     assert!(
-        parts.wants.peek_pending().is_empty(),
+        parts.wants.peek_pending().unwrap().is_empty(),
         "no want state survives the restart"
     );
     let queue = Arc::clone(&parts.mutations);

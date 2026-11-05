@@ -1,7 +1,10 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use wyrd_format::ContentId;
+
+use super::kind::MutationError;
 
 /// Most distinct parent paths whose session-local create tokens are retained.
 /// Once full, new parent observations fail closed until an invalidation
@@ -102,6 +105,9 @@ struct ParentState {
 pub(super) struct ParentRegistry {
     state: Mutex<ParentState>,
     limit: usize,
+    /// Lock-poison observations. Bumped once per failed acquisition,
+    /// never reset.
+    poison: AtomicU64,
 }
 
 impl Default for ParentRegistry {
@@ -129,36 +135,69 @@ impl ParentRegistry {
         Self {
             state: Mutex::new(ParentState::default()),
             limit,
+            poison: AtomicU64::new(0),
         }
     }
 
-    pub(super) fn capture(&self, path: &str) -> Option<ParentToken> {
-        let mut state = self.state.lock().ok()?;
+    /// Lock-poison observations since construction. Any nonzero value
+    /// means the token state behind the capture/validate answers is
+    /// suspect: creates still fail closed, but a `None` or `false`
+    /// beside a nonzero count reads as "table dead", never as "stale
+    /// parent".
+    pub(super) fn poison_count(&self) -> u64 {
+        self.poison.load(Ordering::Relaxed)
+    }
+
+    /// Record one poisoned acquisition, loudly: the counter names it
+    /// for status consumers, the log names it for the operator. Only
+    /// ever called with a lock already known poisoned.
+    fn note_poison(&self, op: &'static str) {
+        self.poison.fetch_add(1, Ordering::Relaxed);
+        tracing::error!(op, "parent registry lock poisoned; token table unreachable");
+    }
+
+    pub(super) fn capture(&self, path: &str) -> Result<Option<ParentToken>, MutationError> {
+        let mut state = match self.state.lock() {
+            Ok(state) => state,
+            Err(_) => {
+                self.note_poison("capture");
+                return Err(MutationError::Lock);
+            }
+        };
         if state.block_all || is_blocked(&state.blocked, path) {
-            return None;
+            return Ok(None);
         }
         if let Some(token) = state.tokens.get(path) {
-            return Some(*token);
+            return Ok(Some(*token));
         }
         if state.tokens.len() >= self.limit {
-            return None;
+            return Ok(None);
         }
-        let next = state.next.checked_add(1)?;
+        // Token-counter overflow is unreachable in practice (u64 per
+        // path); if it ever happens the capture refuses like a
+        // saturated table, exactly as before the poison binding.
+        let Some(next) = state.next.checked_add(1) else {
+            return Ok(None);
+        };
         let token = ParentToken(next);
         state.next = next;
         state.tokens.insert(path.to_string(), token);
-        Some(token)
+        Ok(Some(token))
     }
 
-    pub(super) fn validate(&self, path: &str, token: ParentToken) -> bool {
-        self.state
-            .lock()
-            .ok()
-            .is_some_and(|state| !state.block_all && state.tokens.get(path) == Some(&token))
+    pub(super) fn validate(&self, path: &str, token: ParentToken) -> Result<bool, MutationError> {
+        match self.state.lock() {
+            Ok(state) => Ok(!state.block_all && state.tokens.get(path) == Some(&token)),
+            Err(_) => {
+                self.note_poison("validate");
+                Err(MutationError::Lock)
+            }
+        }
     }
 
     pub(super) fn invalidate_subtree(&self, path: &str) {
         let Ok(mut state) = self.state.lock() else {
+            self.note_poison("invalidate_subtree");
             return;
         };
         if path.is_empty() {
@@ -176,6 +215,7 @@ impl ParentRegistry {
 
     pub(super) fn invalidate_all(&self) {
         let Ok(mut state) = self.state.lock() else {
+            self.note_poison("invalidate_all");
             return;
         };
         state.tokens.clear();
@@ -185,9 +225,44 @@ impl ParentRegistry {
 
     pub(super) fn publish(&self) {
         let Ok(mut state) = self.state.lock() else {
+            self.note_poison("publish");
             return;
         };
         state.blocked.clear();
         state.block_all = false;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Poison the parent table lock the way
+    /// `poisoned_state_lock_is_recovered` does for the mutation
+    /// queue: capture and validate name the poison instead of
+    /// reading as blocked or stale, and the silent invalidations
+    /// count instead of vanishing.
+    #[test]
+    fn poisoned_parent_table_names_poison_not_stale() {
+        use std::sync::Arc;
+        let registry = Arc::new(ParentRegistry::with_limit(8));
+        let token = registry.capture("parent").unwrap().unwrap();
+        assert!(registry.validate("parent", token).unwrap());
+        assert_eq!(registry.poison_count(), 0, "no poison observed yet");
+        let poisoner = Arc::clone(&registry);
+        let _ = std::thread::spawn(move || {
+            let _guard = poisoner.state.lock().unwrap();
+            panic!("poison the parent table");
+        })
+        .join();
+        // Capture and validate name the poison instead of a stale
+        // parent: a dead table never presents as a retired inode.
+        assert_eq!(registry.capture("parent"), Err(MutationError::Lock));
+        assert_eq!(registry.validate("parent", token), Err(MutationError::Lock));
+        // Silent invalidations count instead of vanishing.
+        registry.invalidate_subtree("parent");
+        registry.invalidate_all();
+        registry.publish();
+        assert!(registry.poison_count() > 0, "every silent path counts");
     }
 }

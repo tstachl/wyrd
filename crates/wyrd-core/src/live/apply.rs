@@ -555,7 +555,7 @@ where
                     Some(Node::Dir { .. } | Node::MergedDir { .. }) => {}
                     Some(_) => return Err(MutationError::NotADirectory(parent_path.to_string())),
                 }
-                if !self.mutations.validate_parent(parent_path, *parent) {
+                if !self.mutations.validate_parent(parent_path, *parent)? {
                     return Err(MutationError::StaleParent(parent_path.to_string()));
                 }
                 if self.current_node(heads, path)?.is_some() {

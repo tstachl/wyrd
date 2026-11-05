@@ -668,16 +668,23 @@ impl OwnerServer {
             )
         })?;
         match self.handles.mutations.capture_parent(&params.path) {
-            Some(token) => Ok(WireOk::ParentToken {
+            Ok(Some(token)) => Ok(WireOk::ParentToken {
                 token: WireParentToken {
                     instance: self.instance,
                     counter: token.wire_value(),
                 },
             }),
-            None => Err((
+            Ok(None) => Err((
                 WireErrorCode::NotFound,
                 format!("no parent to capture for {:?}", params.path),
             )),
+            // A poisoned token table is not a missing parent: name it
+            // so the desktop surfaces a fault instead of retrying a
+            // stale-parent loop forever.
+            Err(error) => {
+                let mapped = WireMutationError::from(&error);
+                Err((mapped.code, mapped.message))
+            }
         }
     }
 

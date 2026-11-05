@@ -879,7 +879,10 @@ fn create_submits_a_lone_forcer_fold() {
     backend.mutations = Some(Arc::clone(&queue));
     let backend = Arc::new(backend);
     let (root, _, _) = backend.resolve_inode("").unwrap();
-    queue.capture_parent("").expect("root parent token");
+    queue
+        .capture_parent("")
+        .expect("healthy table")
+        .expect("root parent token");
     let worker_backend = Arc::clone(&backend);
     let worker = std::thread::spawn(move || {
         worker_backend
@@ -1188,7 +1191,7 @@ fn create_queues_the_observed_parent_identity() {
     let queue = Arc::new(MutationQueue::default());
     backend.mutations = Some(Arc::clone(&queue));
     let (parent_ino, _, _) = backend.resolve_inode("parent").unwrap();
-    let expected_parent = queue.capture_parent("parent").unwrap();
+    let expected_parent = queue.capture_parent("parent").unwrap().unwrap();
     let backend = Arc::new(backend);
     let helper = std::thread::spawn(move || {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);

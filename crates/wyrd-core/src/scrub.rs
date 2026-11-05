@@ -35,6 +35,7 @@
 //! [`Engine::record_missing_objects`]: wyrd_sync::runtime::Engine::record_missing_objects
 
 use std::collections::BTreeSet;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, RwLock};
 
 use wyrd_format::{ContentId, ObjectKind, ObjectStore, RetainedBytes};
@@ -96,51 +97,96 @@ impl Ord for ScrubObservation {
 /// set, not a queue — the walk re-submits an unrepaired loss every
 /// sweep until the drain runs, and duplicates collapse instead of
 /// scheduling repeat claim-clears.
+///
+/// Lock poisoning is never silent here: every failed acquisition bumps
+/// the [`ScrubQueue::poison_count`] counter and logs at error level,
+/// so an empty queue beside a nonzero count reads as "the repair
+/// channel is dead", never as "nothing lost".
 #[derive(Debug, Default)]
 pub struct ScrubQueue {
     state: Mutex<BTreeSet<ScrubObservation>>,
+    /// Lock-poison observations. Bumped once per failed acquisition,
+    /// never reset.
+    poison: AtomicU64,
 }
 
 impl ScrubQueue {
+    /// Lock-poison observations since construction. Any nonzero value
+    /// means the queue state behind the infallible diagnostics is
+    /// suspect: submitted losses may have been dropped, and pending
+    /// counts may under-report.
+    pub fn poison_count(&self) -> u64 {
+        self.poison.load(Ordering::Relaxed)
+    }
+
+    /// Record one poisoned acquisition, loudly: the counter names it
+    /// for status consumers, the log names it for the operator. Only
+    /// ever called with a lock already known poisoned.
+    fn note_poison(&self, op: &'static str) {
+        self.poison.fetch_add(1, Ordering::Relaxed);
+        tracing::error!(op, "scrub queue lock poisoned; loss report unreachable");
+    }
+
     /// Report one observed loss. Idempotent per identity: the set
     /// holds one entry no matter how many detectors saw it. A
-    /// poisoned lock drops the report — the holder panicked, so the
-    /// loop is not draining anymore and the waiter surfaces EIO.
+    /// poisoned lock drops the report loudly — the holder panicked,
+    /// so the loop is not draining anymore and the waiter surfaces
+    /// EIO — and the next sweep re-reports what is still missing.
     pub fn submit(&self, observation: ScrubObservation) {
-        if let Ok(mut state) = self.state.lock() {
-            state.insert(observation);
-        }
+        let Ok(mut state) = self.state.lock() else {
+            self.note_poison("submit");
+            return;
+        };
+        state.insert(observation);
     }
 
     /// Take one pending observation, oldest identity first. `None`
-    /// drains nothing; the drain loop ends on it.
+    /// drains nothing; the drain loop ends on it. A poisoned lock
+    /// also ends the drain with the remaining items still queued —
+    /// loudly — and the next pass retries them.
     fn pop(&self) -> Option<ScrubObservation> {
-        self.state.lock().ok().and_then(|mut state| {
-            let first = state.iter().next().copied();
-            if let Some(observation) = first {
-                state.remove(&observation);
-            }
-            first
-        })
+        let Ok(mut state) = self.state.lock() else {
+            self.note_poison("pop");
+            return None;
+        };
+        let first = state.iter().next().copied();
+        if let Some(observation) = first {
+            state.remove(&observation);
+        }
+        first
     }
 
     /// Pending observation count. Diagnostics only, never semantics.
+    /// A poisoned lock reads 0 and counts, so 0 beside a nonzero
+    /// [`ScrubQueue::poison_count`] reads as "channel dead", never
+    /// as "nothing lost".
     pub fn len(&self) -> usize {
-        self.state.lock().map(|state| state.len()).unwrap_or(0)
+        match self.state.lock() {
+            Ok(state) => state.len(),
+            Err(_) => {
+                self.note_poison("len");
+                0
+            }
+        }
     }
 
-    /// No losses pending. Diagnostics only, never semantics.
+    /// No losses pending. Diagnostics only, never semantics. Poison
+    /// reads `true` and counts, like [`ScrubQueue::len`].
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
     /// The pending observations, oldest identity first. Diagnostics
     /// and tests; the drain is the only consumer that removes.
+    /// Poison reads empty and counts, like [`ScrubQueue::len`].
     pub fn pending(&self) -> Vec<ScrubObservation> {
-        self.state
-            .lock()
-            .map(|state| state.iter().copied().collect())
-            .unwrap_or_default()
+        match self.state.lock() {
+            Ok(state) => state.iter().copied().collect(),
+            Err(_) => {
+                self.note_poison("pending");
+                Vec::new()
+            }
+        }
     }
 }
 
@@ -668,5 +714,37 @@ mod tests {
         assert_eq!(report.failures, 1);
         assert_eq!(engine.current(), committed);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Poison the scrub queue lock the way
+    /// `poisoned_state_lock_is_recovered` does for the mutation
+    /// queue: submissions drop loudly, the drain ends with the
+    /// remaining items still queued, and the infallible diagnostics
+    /// read empty only beside a nonzero poison count.
+    #[test]
+    fn poisoned_scrub_queue_drops_loudly_not_silently() {
+        use std::sync::Arc;
+        let queue = Arc::new(ScrubQueue::default());
+        let loss = ScrubObservation::missing(
+            ContentId::derive(ObjectKind::Chunk, b"lost"),
+            ObjectKind::Chunk,
+        );
+        queue.submit(loss);
+        assert_eq!(queue.len(), 1);
+        assert_eq!(queue.poison_count(), 0, "no poison observed yet");
+        let poisoner = Arc::clone(&queue);
+        let _ = std::thread::spawn(move || {
+            let _guard = poisoner.state.lock().unwrap();
+            panic!("poison the scrub queue state");
+        })
+        .join();
+        // The dropped report counts instead of vanishing, and every
+        // diagnostic reads empty beside the count.
+        queue.submit(loss);
+        assert_eq!(queue.len(), 0, "the live length is unreachable");
+        assert!(queue.is_empty());
+        assert!(queue.pending().is_empty());
+        assert!(queue.pop().is_none(), "the drain ends loudly");
+        assert!(queue.poison_count() > 0, "every silent path counts");
     }
 }

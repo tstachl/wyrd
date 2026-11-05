@@ -50,7 +50,10 @@ operation before any durable mutation (`epochs.md` recovery). On an
 error path, restore the in-memory invariants first and report second:
 the intake precedent restores the pending queue and resynchronizes
 volatile state to the durable baseline before returning, so a redelivery
-converges instead of wedging.
+converges instead of wedging. An infallible diagnostic never masks a
+poisoned lock: every silent lock failure is counted and logged, so a
+zero beside a nonzero poison count reads as "bookkeeping dead", never
+as "nothing to do".
 
 ## Raise vs count
 
