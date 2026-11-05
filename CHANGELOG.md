@@ -54,6 +54,21 @@ is transient — no drive data is affected.
 
 ### Fixed
 
+- Retransmit delivered-but-never-ingested announcements
+  (`nostr:nevent1qqsznh66507emwenfvpllhxp9y9uhkz340zg9mc2st73vzp0qrgaswspz9mhxue69uhkwunpwdczuap49eehgs82uuc`):
+  the publish pass re-advertises a delivered head the recipient's
+  latest statement evidences as missing — retransmit-only (never
+  retired), once per evidencing statement (the `0x1E` per-pair
+  per-statement marker quenches repeats), bounded by the publish
+  budget, and only on statements. A relay-accepted send the
+  recipient never retrieved previously sat discharged forever: the
+  response pass's missing set is pending-derived, so the answer
+  no-op'd and the publish pass never visited the pair. Transitions
+  and capabilities keep the old limit (reconciliation covers
+  recipients with no queue fact at all, not sends accepted and
+  lost); the contract revision is in `sync-and-peers.md`, the tag
+  boundary in `upgrade-contract.md`.
+
 - Solicit reconciliation on late transport attach
   (`nostr:nevent1qqsrpwqeg3pz9xwdr575eleamae8l65fkenuxyxw9cqqqaeeluxstngpz9mhxue69uhkwunpwdczuap49eehg7pvxx7`):
   the live loop latches a reconciliation probe on the

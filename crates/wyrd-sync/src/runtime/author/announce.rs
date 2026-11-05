@@ -1,14 +1,19 @@
+use std::collections::BTreeMap;
+
 use super::delivery::{
     announcement_obligation, control_key_for, open_reused_sealed, seal_fresh_for, send_sealed_to,
     verify_reused_sealed,
 };
 use crate::control::{seal as seal_control, Message, SnapshotAnnouncement};
-use crate::durable::{AuthorizeSnapshot, AuthorizedSnapshot, Fact, Rebuilt};
+use crate::durable::{
+    reconciliation_statement_digest, AuthorizeSnapshot, AuthorizedSnapshot, Fact, Rebuilt,
+    ReconciliationEvidence,
+};
 use crate::keys::capability::DriveKeyring;
 use crate::runtime::engine::{Engine, EngineError, PublishBudget};
 use crate::transport::endpoint_id;
 use crate::transport::mailbox::Mailbox;
-use wyrd_format::SnapshotId;
+use wyrd_format::{DeviceId, SnapshotId};
 
 /// Announce an authored snapshot to every other admitted device of the
 /// snapshot's bound transition — members and readers alike — over the
@@ -195,6 +200,28 @@ pub(crate) fn redelivery_scope_set(
     scope
 }
 
+/// Each requester's latest received reconciliation statement, in
+/// commit order: the durable evidence the publish pass derives
+/// evidence-triggered retransmits from. Last write wins per
+/// requester — a newer statement supersedes, so a resend answers
+/// the gap the recipient most recently evidenced, and a statement
+/// evidencing the head quenches the resend. Computed from the same
+/// fresh rebuild the send below reads, so the digest the marker
+/// commits names the statement the eligibility just compared
+/// against. Statements are rare (one per view change), so one
+/// bucket scan per snapshot visit is the honest cost of an exact
+/// comparison.
+fn latest_gap_statements(
+    rebuilt: &Rebuilt,
+) -> BTreeMap<DeviceId, ([u8; 32], ReconciliationEvidence)> {
+    let mut latest: BTreeMap<DeviceId, ([u8; 32], ReconciliationEvidence)> = BTreeMap::new();
+    for (requester, evidence) in &rebuilt.reconciliation_requests {
+        let digest = reconciliation_statement_digest(requester, evidence);
+        latest.insert(*requester, (digest, evidence.clone()));
+    }
+    latest
+}
+
 /// Resume every send-eligible announcement obligation across snapshots,
 /// returning the number of relay-accepted sends this call. This is the
 /// restart path: after a crash or a partial send, the durable outbox
@@ -229,12 +256,26 @@ pub(crate) fn announce_pending(
     // stays discharged: without the scope gate one restart resends
     // the whole outbox past and stalls live work behind it.
     let scope = redelivery_scope_set(engine, &rebuilt);
+    let latest = latest_gap_statements(&rebuilt);
     let mut snapshots: Vec<wyrd_format::SnapshotId> = rebuilt
         .runtime
         .announce_eligible_for(route_id, &scope)
         .into_iter()
         .map(|(snapshot, _)| snapshot)
         .collect();
+    // Evidence-triggered re-advertise joins the visit list:
+    // delivered-but-unevidenced heads have no pending pair, so
+    // without this union the pass below would never visit them.
+    // Sorted like the eligible list, so the drain stays
+    // deterministic.
+    let mut retransmit: Vec<wyrd_format::SnapshotId> = rebuilt
+        .runtime
+        .announce_retransmit_for(&latest)
+        .into_iter()
+        .map(|(snapshot, _, _)| snapshot)
+        .collect();
+    snapshots.append(&mut retransmit);
+    snapshots.sort();
     snapshots.dedup();
     let mut sent = 0usize;
     let mut index = 0usize;
@@ -480,13 +521,17 @@ fn reuse_or_seal_route(
 /// epoch key. Unknown snapshots are skipped orphan-tolerant — the
 /// obligation stays pending for a later pass.
 ///
-/// Pending-only, deliberately: the resent bytes carry the author's
+/// Pending plus evidence-triggered retransmits, deliberately not
+/// route-scoped redelivery: the resent bytes carry the author's
 /// route, not this engine's, so route-scoped redelivery by this
 /// engine would resend a route it cannot heal. The author's own
 /// engine owns that repair (its redelivery reseals under its live
 /// route); this path records no route and resends nothing already
-/// discharged. The author's redelivery arrives as a route update the
-/// receiver dedupes.
+/// discharged — except a delivered-but-unevidenced pair the latest
+/// gap statement re-opens, which resends byte-identical (no route
+/// change, so nothing to heal) through the union in
+/// `send_pending_for`. The author's redelivery arrives as a route
+/// update the receiver dedupes.
 fn reannounce_one(
     engine: &mut Engine,
     rebuilt: &Rebuilt,
@@ -584,11 +629,14 @@ fn reannounce_sealed_bytes(
 }
 
 /// Send the sealed bytes to every send-eligible recipient of one
-/// snapshot — still-pending pairs plus, for redelivery-scope
-/// members, pairs discharged against an older route — recording one
+/// snapshot — still-pending pairs, pairs in the redelivery scope
+/// discharged against an older route, and delivered-but-unevidenced
+/// pairs the latest gap statements re-open — recording one
 /// delivered marker plus its serving-route record per relay-accepted
-/// send. A send failure returns immediately with the rest still
-/// pending.
+/// send. A send of an already-delivered pair additionally commits
+/// the per-statement retransmit marker, so each evidencing
+/// statement re-opens its gap exactly once. A send failure returns
+/// immediately with the rest still pending.
 fn send_pending_for(
     engine: &mut Engine,
     snapshot: wyrd_format::SnapshotId,
@@ -606,15 +654,34 @@ fn send_pending_for(
     // parameter instead of recomputed here: queue and route-seal
     // commits mid-pass never touch the DAG, the bodies, or the
     // membership log the scope derives from, so the selecting pass's
-    // set stays exact for the whole drain.
+    // set stays exact for the whole drain. The gap statements are
+    // re-derived here for the same reason: the marker commits below
+    // never touch the received-request bucket, so the selecting
+    // pass's map stays exact.
     let rebuilt = engine.store.rebuild(engine.device)?;
-    let recipients: Vec<wyrd_format::DeviceId> = rebuilt
+    let latest = latest_gap_statements(&rebuilt);
+    let mut recipients: Vec<wyrd_format::DeviceId> = rebuilt
         .runtime
         .announce_eligible_for(route_id, scope)
         .into_iter()
         .filter(|(id, _)| *id == snapshot)
         .map(|(_, recipient)| recipient)
         .collect();
+    // Evidence-triggered re-advertise joins the fan-out: the pair
+    // has no pending obligation, so eligibility alone never visits
+    // it. Keyed by pair for the marker closure below.
+    let retransmit: BTreeMap<wyrd_format::DeviceId, [u8; 32]> = rebuilt
+        .runtime
+        .announce_retransmit_for(&latest)
+        .into_iter()
+        .filter(|(id, _, _)| *id == snapshot)
+        .map(|(_, recipient, digest)| (recipient, digest))
+        .collect();
+    for recipient in retransmit.keys() {
+        if !recipients.contains(recipient) {
+            recipients.push(*recipient);
+        }
+    }
     // Names the send's warn-once marker: one snapshot's fan-out, so
     // the marker still tracks each recipient pair independently.
     let obligation = announcement_obligation(&snapshot);
@@ -641,6 +708,27 @@ fn send_pending_for(
                 recipient,
                 route_id.unwrap_or(crate::runtime::state::WITHDRAWN_ROUTE),
             ));
+            // The one-shot marker commits atomically with the resend
+            // it quenches, so a crash between send and marker is
+            // impossible: a resend with no marker repeats (harmless —
+            // the receiver dedupes), never a marker with no resend
+            // (which would strand the gap). Only already-delivered
+            // pairs mark — a first delivery leaves no marker, so its
+            // own loss still re-opens on the next pass — and only
+            // under the digest just compared, so a newer gap
+            // statement re-arms exactly one more resend. Logged per
+            // recipient like the send path's own forensics below, so
+            // a stuck peer's resends read apart from first sends.
+            if let Some(digest) = retransmit.get(&recipient) {
+                tracing::debug!(
+                    snapshot = ?snapshot,
+                    recipient = ?recipient,
+                    "announcement retransmit answers an evidenced gap"
+                );
+                facts.push(Fact::AnnouncementRetransmitted(
+                    snapshot, recipient, *digest,
+                ));
+            }
             facts
         },
         budget,

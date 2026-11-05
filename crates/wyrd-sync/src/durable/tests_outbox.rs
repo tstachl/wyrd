@@ -287,3 +287,34 @@ fn announcement_retirement_tag_is_a_clean_upgrade_boundary() {
         "a duplicate tag decodes as the wrong fact"
     );
 }
+
+/// The retransmit-marker tag is a clean upgrade boundary: 0x1E is
+/// new (no old reader decodes it as another fact) and pinned, and a
+/// malformed record fails closed instead of decoding as a wrong
+/// triple. Same shape as the retirement boundary above: the marker
+/// is the fourth fixed triple keyed by snapshot, after 0x1D.
+#[test]
+fn announcement_retransmit_tag_is_a_clean_upgrade_boundary() {
+    use super::codec::{KNOWN_TAGS, TAG_ANNOUNCEMENT_RETRANSMITTED};
+    let pre_marker_tags = [
+        0x00u8, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E,
+        0x0F, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D,
+    ];
+    assert!(
+        !pre_marker_tags.contains(&TAG_ANNOUNCEMENT_RETRANSMITTED),
+        "the marker tag must be new, or an old reader would decode it as another fact"
+    );
+    assert_eq!(
+        TAG_ANNOUNCEMENT_RETRANSMITTED, 0x1E,
+        "the tag is pinned: a different value is a different format"
+    );
+    let mut sorted = KNOWN_TAGS.to_vec();
+    sorted.sort_unstable();
+    let len = sorted.len();
+    sorted.dedup();
+    assert_eq!(
+        sorted.len(),
+        len,
+        "a duplicate tag decodes as the wrong fact"
+    );
+}

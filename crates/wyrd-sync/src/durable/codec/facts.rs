@@ -5,13 +5,13 @@
 use super::tags::{
     CAPABILITY_STORE_AAD, MAX_RECORDS_PER_COMMIT, TAG_ANNOUNCEMENT, TAG_ANNOUNCEMENT_DELIVERED,
     TAG_ANNOUNCEMENT_DELIVERED_ROUTE, TAG_ANNOUNCEMENT_QUEUED, TAG_ANNOUNCEMENT_RECONCILED,
-    TAG_ANNOUNCEMENT_ROUTE_SEALED, TAG_ANNOUNCEMENT_SEALED, TAG_BOOTSTRAP_PENDING, TAG_CAPABILITY,
-    TAG_CAPABILITY_DELIVERED, TAG_CAPABILITY_QUEUED, TAG_CAPABILITY_RECONCILED,
-    TAG_CAPABILITY_SEALED, TAG_CAPABILITY_SEALED_REPLACED, TAG_CARRY_DONE, TAG_CARRY_QUEUED,
-    TAG_CONTROL_MESSAGE, TAG_LOCAL_OBJECT, TAG_MANIFEST, TAG_MATERIALIZATION, TAG_OBJECT_REMOVED,
-    TAG_RECONCILIATION_REQUEST, TAG_RECONCILIATION_VIEW, TAG_SNAPSHOT_BODY, TAG_TRANSITION,
-    TAG_TRANSITION_DELIVERED, TAG_TRANSITION_QUEUED, TAG_TRANSITION_RECONCILED,
-    TAG_TRANSITION_SEALED,
+    TAG_ANNOUNCEMENT_RETRANSMITTED, TAG_ANNOUNCEMENT_ROUTE_SEALED, TAG_ANNOUNCEMENT_SEALED,
+    TAG_BOOTSTRAP_PENDING, TAG_CAPABILITY, TAG_CAPABILITY_DELIVERED, TAG_CAPABILITY_QUEUED,
+    TAG_CAPABILITY_RECONCILED, TAG_CAPABILITY_SEALED, TAG_CAPABILITY_SEALED_REPLACED,
+    TAG_CARRY_DONE, TAG_CARRY_QUEUED, TAG_CONTROL_MESSAGE, TAG_LOCAL_OBJECT, TAG_MANIFEST,
+    TAG_MATERIALIZATION, TAG_OBJECT_REMOVED, TAG_RECONCILIATION_REQUEST, TAG_RECONCILIATION_VIEW,
+    TAG_SNAPSHOT_BODY, TAG_TRANSITION, TAG_TRANSITION_DELIVERED, TAG_TRANSITION_QUEUED,
+    TAG_TRANSITION_RECONCILED, TAG_TRANSITION_SEALED,
 };
 use crate::control::message::{ControlKind, Message, SnapshotAnnouncement};
 use crate::control::{ControlMessageId, SealedControl, SealedRotation};
@@ -300,6 +300,10 @@ pub(crate) fn encode_fact(
             TAG_ANNOUNCEMENT_RECONCILED,
             encode_reconciled_announcement(snapshot, recipient, statement),
         )),
+        Fact::AnnouncementRetransmitted(snapshot, recipient, statement) => Ok((
+            TAG_ANNOUNCEMENT_RETRANSMITTED,
+            encode_retransmitted_announcement(snapshot, recipient, statement),
+        )),
     }
 }
 
@@ -381,6 +385,23 @@ fn encode_reconciled_capability(epoch: u64, recipient: &DeviceId, statement: &[u
 /// triple, same shape as the transition retirement — the snapshot id
 /// is 32 bytes, so no epoch-width variant is needed.
 fn encode_reconciled_announcement(
+    snapshot: &SnapshotId,
+    recipient: &DeviceId,
+    statement: &[u8; 32],
+) -> Vec<u8> {
+    let mut out = Vec::with_capacity(96);
+    out.extend_from_slice(snapshot.as_bytes());
+    out.extend_from_slice(recipient.as_bytes());
+    out.extend_from_slice(statement);
+    out
+}
+
+/// Encode one evidence-triggered retransmit: the same fixed 96-byte
+/// triple shape as the retirement above — snapshot, recipient, and
+/// the gap statement's digest the resend answers. Same strictness
+/// below: the marker decides resend eligibility, so it never parses
+/// approximately.
+fn encode_retransmitted_announcement(
     snapshot: &SnapshotId,
     recipient: &DeviceId,
     statement: &[u8; 32],
@@ -679,6 +700,7 @@ pub(crate) fn decode_record(
         TAG_TRANSITION_RECONCILED => Some(decode_reconciled_transition(record)?),
         TAG_CAPABILITY_RECONCILED => Some(decode_reconciled_capability(record)?),
         TAG_ANNOUNCEMENT_RECONCILED => Some(decode_reconciled_announcement(record)?),
+        TAG_ANNOUNCEMENT_RETRANSMITTED => Some(decode_retransmitted_announcement(record)?),
         // Unreachable: the caller filters unknown tags.
         _ => None,
     }
@@ -721,6 +743,21 @@ fn decode_reconciled_announcement(record: &[u8]) -> Option<DecodedFact> {
     let recipient = DeviceId::from_bytes(record[32..64].try_into().ok()?);
     let statement: [u8; 32] = record[64..96].try_into().ok()?;
     Some(DecodedFact::AnnouncementReconciled(
+        snapshot, recipient, statement,
+    ))
+}
+
+/// Decode one evidence-triggered retransmit: the exact 96-byte
+/// triple, same strictness as the retirement above — a malformed
+/// record poisons the file instead of misdirecting a resend.
+fn decode_retransmitted_announcement(record: &[u8]) -> Option<DecodedFact> {
+    if record.len() != 96 {
+        return None;
+    }
+    let snapshot = SnapshotId::from_bytes(record[0..32].try_into().ok()?);
+    let recipient = DeviceId::from_bytes(record[32..64].try_into().ok()?);
+    let statement: [u8; 32] = record[64..96].try_into().ok()?;
+    Some(DecodedFact::AnnouncementRetransmitted(
         snapshot, recipient, statement,
     ))
 }
@@ -891,4 +928,5 @@ pub(crate) enum DecodedFact {
     TransitionReconciled(TransitionId, DeviceId, [u8; 32]),
     CapabilityReconciled(u64, DeviceId, [u8; 32]),
     AnnouncementReconciled(SnapshotId, DeviceId, [u8; 32]),
+    AnnouncementRetransmitted(SnapshotId, DeviceId, [u8; 32]),
 }

@@ -1520,6 +1520,97 @@ leg_pause_member() {
   check_no_leaks "$LOGDIR/mount-xpause-m.err" "$(cat "$c/identity")" "$(cat "$c/passphrase")"
 }
 
+# leg_retransmit_owner <drive> <creds> <relay>: the Run-2 leg
+# (sender-half issue). Discharge relay-accepted while the member is
+# down, then keep serving until the late member converges. The relay
+# drops sends to unattached endpoints, so the discharged envelope is
+# gone before the member ever attaches: without the
+# evidence-triggered retransmit the member's late probe changes
+# nothing and the marker never converges. With it the owner
+# re-advertises the delivered-but-missing head once per statement
+# and the member fetches behind the live serving endpoint.
+leg_retransmit_owner() {
+  local d="$1" c="$2" relay="$3"
+  step 16 "retransmit owner leg"
+  mkdir -p "$PIDDIR"
+  # The vault announces and keeps syncing. The ready line proves
+  # the first routed pass completed, so authoring now races nothing
+  # and any admission-time obligation already drained.
+  with_creds "$c" vault "$d" --relay "$relay" \
+    >"$LOGDIR/retransmit-serve.out" 2>"$LOGDIR/retransmit-serve.err" &
+  echo $! > "$PIDDIR/retransmit-serve.pid"
+  poll_until 300 grep -q "vault ready: serving " "$LOGDIR/retransmit-serve.err" \
+    || die "retransmit serve never reported ready (see retransmit-serve.err)"
+  grep -q "serving over iroh" "$LOGDIR/retransmit-serve.err" \
+    || die "retransmit serve never bound its endpoint"
+  pass "retransmit serve reports ready with its route and keeps syncing"
+  # Author while the member is down: the member mount starts only
+  # after the discharge signal below, so no relay holds the bytes
+  # for it — the attach window the pause legs gate around, here
+  # entered deliberately.
+  [[ "$(python3 "$SCRIPT_DIR/owner-socket.py" submit-mkdir "$d" retransmit-marker)" == "submitted" ]] \
+    || die "submit while member down never resolved"
+  pass "marker committed while the member is down"
+  # Discharge relay-accepted with nobody listening: pending drains
+  # to zero and exactly one delivery records — the Run-2 shape
+  # (pending==0, delivered==1, member unattached).
+  poll_until 300 bash -c "test \"\$(python3 \"$SCRIPT_DIR/owner-socket.py\" pending \"$d\")\" = 0" \
+    || die "marker obligation never discharged (see retransmit-serve.err)"
+  poll_until 300 bash -c "test \"\$(python3 \"$SCRIPT_DIR/owner-socket.py\" delivered \"$d\")\" = 1" \
+    || die "discharged marker did not deliver exactly once"
+  pass "marker discharged relay-accepted with the member down"
+  peer_signal xretransmit-discharged
+  # Hold the serve up until the late member converges: the
+  # retransmit and the bulk fetch both need the live route.
+  # Bounded both sides: if the member never converges both legs die
+  # named.
+  peer_wait 600 xretransmit-m-converged \
+    || die "member never converged on the retransmitted marker (see retransmit-serve.err)"
+  pass "member converged on the retransmit while serve stayed up"
+  # Ordered teardown: the mount lifecycle stays inside the leg so
+  # pid files never cross pid namespaces.
+  local pid
+  pid="$(cat "$PIDDIR/retransmit-serve.pid")"
+  kill -TERM "$pid"
+  local i status="timeout"
+  for ((i = 0; i < 60 * 5; i++)); do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      set +e; wait "$pid"; status=$?; set -e
+      break
+    fi
+    sleep 0.2
+  done
+  [[ "$status" == "0" ]] || die "retransmit serve TERM shutdown exit $status, want clean 0"
+  rm -f "$PIDDIR/retransmit-serve.pid"
+  pass "retransmit serve stops clean on TERM"
+  check_no_leaks "$LOGDIR/retransmit-serve.err" "$(cat "$c/identity")" "$(cat "$c/passphrase")"
+}
+
+# leg_retransmit_member <drive> <creds> <relay>: mount only after
+# the owner discharged with nobody listening (the late attach),
+# prove relay attachment, then wait for the marker the owner can
+# only have retransmitted. Convergence here is the no-loss proof:
+# the only announcement copy was dropped before this mount ever
+# attached, so the publish-pass re-advertise is the single path
+# that converges it.
+leg_retransmit_member() {
+  local d="$1" c="$2" relay="$3"
+  step 16 "retransmit convergence leg"
+  peer_wait 600 xretransmit-discharged \
+    || die "owner never discharged with the member down"
+  pass "owner discharged before the member attached"
+  start_mount xretransmit-m "$c" "$d" "$MNTS/xretransmit-m" --relay "$relay"
+  poll_until 300 grep -q "home is now relay" "$LOGDIR/mount-xretransmit-m.err" \
+    || die "member never attached to the relay (see mount-xretransmit-m.err)"
+  pass "member attached late, after the discharge"
+  poll_until 600 test -d "$MNTS/xretransmit-m/retransmit-marker" \
+    || die "member never converged on the retransmitted marker"
+  pass "member converges on the retransmit after a late attach"
+  peer_signal xretransmit-m-converged
+  stop_mount xretransmit-m TERM
+  check_no_leaks "$LOGDIR/mount-xretransmit-m.err" "$(cat "$c/identity")" "$(cat "$c/passphrase")"
+}
+
 # leg_crash_owner <drive> <creds> <relay>: mount, converge an anchor
 # write with the witness, then take 40 acknowledged burst writes and
 # SIGKILL the mount's own process mid-stream — no graceful shutdown,
@@ -2164,7 +2255,9 @@ case "${1:-}" in
   headless-setup) leg_headless_setup "$2" "$3" ;;
   pause-owner) leg_pause_owner "$2" "$3" "$4" ;;
   pause-member) leg_pause_member "$2" "$3" "$4" ;;
-  *) echo "usage: $0 converge-owner|converge-member|converge2-owner|converge2-member|restarted-owner|restart-member|upgrade-member|fetch-owner|fetch-member|conflict-owner|conflict-member|crash-owner|steady-member|crash-member|steady-owner|exhaustion|uparent-owner|uparent-member|headless-serve <drive> <creds> <relay> | upgrade-owner <drive> <creds> <relay> <archive> | headless-fetch <drive> <creds> <relay> <tag> <ready-file> <done-file> | headless-setup <drive> <creds> | pause-owner|pause-member <drive> <creds> <relay>" >&2; exit 2 ;;
+  retransmit-owner) leg_retransmit_owner "$2" "$3" "$4" ;;
+  retransmit-member) leg_retransmit_member "$2" "$3" "$4" ;;
+  *) echo "usage: $0 converge-owner|converge-member|converge2-owner|converge2-member|restarted-owner|restart-member|upgrade-member|fetch-owner|fetch-member|conflict-owner|conflict-member|crash-owner|steady-member|crash-member|steady-owner|exhaustion|uparent-owner|uparent-member|headless-serve <drive> <creds> <relay> | upgrade-owner <drive> <creds> <relay> <archive> | headless-fetch <drive> <creds> <relay> <tag> <ready-file> <done-file> | headless-setup <drive> <creds> | pause-owner|pause-member|retransmit-owner|retransmit-member <drive> <creds> <relay>" >&2; exit 2 ;;
 esac
 e2e_timing_report
 echo "legs: $PASS_COUNT checks passed"

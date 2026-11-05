@@ -71,6 +71,15 @@ pub struct RuntimeState {
     /// by `record_announcement_reconciled`, never separately.
     pub(super) announcement_reconciled: BTreeSet<(SnapshotId, DeviceId, [u8; 32])>,
     pub(super) announcement_reconciled_pairs: BTreeSet<(SnapshotId, DeviceId)>,
+    /// Evidence-triggered retransmits: (snapshot, recipient, gap
+    /// statement digest) triples the publish pass commits alongside
+    /// a resend of an already-delivered pair. The one-shot marker:
+    /// a delivered-but-unevidenced head resends once per evidencing
+    /// statement, never per pass. The triple set is audit (which
+    /// statement each resend answers); no pair set derives from it —
+    /// the marker never retires anything, so pending keeps deriving
+    /// as queued minus (delivered ∪ reconciled), untouched.
+    pub(super) announcement_retransmitted: BTreeSet<(SnapshotId, DeviceId, [u8; 32])>,
     /// Route-specific announcement reseals: one sealed envelope per
     /// (snapshot, route) for resumes whose live route differs from the
     /// first seal's. First seal per pair wins, like the canonical map
@@ -148,6 +157,7 @@ impl RuntimeState {
             announcement_delivered_route: BTreeMap::new(),
             announcement_reconciled: BTreeSet::new(),
             announcement_reconciled_pairs: BTreeSet::new(),
+            announcement_retransmitted: BTreeSet::new(),
             transition_queued: BTreeSet::new(),
             transition_sealed: BTreeMap::new(),
             transition_delivered: BTreeSet::new(),

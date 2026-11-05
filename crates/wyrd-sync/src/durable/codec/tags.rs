@@ -90,9 +90,19 @@ pub(crate) const TAG_ANNOUNCEMENT_DELIVERED_ROUTE: u8 = 0x1C;
 /// deferred.
 /// Crate-visible for the tag-boundary pin below.
 pub(crate) const TAG_ANNOUNCEMENT_RECONCILED: u8 = 0x1D;
+/// One evidence-triggered announcement retransmit: snapshot id (32)
+/// ‖ recipient DeviceId (32) ‖ the gap statement's digest (32) that
+/// the resend answers. Tag 0x1E: the tag space is append-only. Fixed
+/// 96 bytes — a retransmit names the obligation, whom it went to,
+/// and exactly which statement evidenced the gap, nothing else. The
+/// one-shot-per-statement marker: the publish pass resends a
+/// delivered-but-unevidenced head once per evidencing statement and
+/// quenches on this record until a newer statement re-opens the gap.
+/// Crate-visible for the tag-boundary pin below.
+pub(crate) const TAG_ANNOUNCEMENT_RETRANSMITTED: u8 = 0x1E;
 /// Record tags this version understands. Unknown tags are skipped on
 /// decode for forward compatibility.
-pub(crate) const KNOWN_TAGS: [u8; 29] = [
+pub(crate) const KNOWN_TAGS: [u8; 30] = [
     TAG_TRANSITION,
     TAG_CAPABILITY,
     TAG_ANNOUNCEMENT,
@@ -122,6 +132,7 @@ pub(crate) const KNOWN_TAGS: [u8; 29] = [
     TAG_CAPABILITY_RECONCILED,
     TAG_ANNOUNCEMENT_DELIVERED_ROUTE,
     TAG_ANNOUNCEMENT_RECONCILED,
+    TAG_ANNOUNCEMENT_RETRANSMITTED,
 ];
 
 /// Resource limits: a corrupt local file must not cause unbounded

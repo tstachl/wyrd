@@ -558,4 +558,14 @@ pub enum Fact {
     /// snapshots stop the sender retrying what the recipient's
     /// durable state already evidences.
     AnnouncementReconciled(SnapshotId, DeviceId, [u8; 32]),
+    /// One evidence-triggered announcement retransmit: the snapshot,
+    /// the recipient, and the gap statement's digest the resend
+    /// answers. Committed by the publish pass alongside the resend's
+    /// delivery facts, only when the pair was already delivered —
+    /// a first delivery commits no marker — so each evidencing
+    /// statement re-opens its gap exactly once. Never a retirement:
+    /// pending still derives as queued minus (delivered ∪
+    /// reconciled), and this marker quenches resends without ever
+    /// letting an obligation stop retrying.
+    AnnouncementRetransmitted(SnapshotId, DeviceId, [u8; 32]),
 }

@@ -54,6 +54,7 @@ pub enum RuntimeFact {
     TransitionReconciled(TransitionId, DeviceId, [u8; 32]),
     CapabilityReconciled(u64, DeviceId, [u8; 32]),
     AnnouncementReconciled(SnapshotId, DeviceId, [u8; 32]),
+    AnnouncementRetransmitted(SnapshotId, DeviceId, [u8; 32]),
     CarryQueued(SnapshotId),
     CarryDone(SnapshotId),
 }
@@ -123,6 +124,11 @@ pub struct LoadedFacts {
     /// above — the late-joiner retirement the sender's set
     /// difference commits once the recipient evidences the snapshot.
     pub announcement_reconciled: Vec<(SnapshotId, DeviceId, [u8; 32])>,
+    /// Evidence-triggered announcement retransmits, in commit order:
+    /// (snapshot, recipient, gap statement digest) triples, same
+    /// shape as above — which statement each resend answers, so the
+    /// one-shot-per-statement quench audits.
+    pub announcement_retransmitted: Vec<(SnapshotId, DeviceId, [u8; 32])>,
     pub runtime_facts: Vec<RuntimeFact>,
 }
 
@@ -300,6 +306,14 @@ impl LoadedFacts {
                     snapshot, recipient, statement,
                 ));
             }
+            DecodedFact::AnnouncementRetransmitted(snapshot, recipient, statement) => {
+                self.announcement_retransmitted
+                    .push((snapshot, recipient, statement));
+                self.runtime_facts
+                    .push(RuntimeFact::AnnouncementRetransmitted(
+                        snapshot, recipient, statement,
+                    ));
+            }
         }
     }
 }
@@ -452,6 +466,9 @@ pub(super) fn rebuild_facts(
             }
             RuntimeFact::AnnouncementReconciled(snapshot, recipient, statement) => {
                 runtime.record_announcement_reconciled(snapshot, recipient, statement);
+            }
+            RuntimeFact::AnnouncementRetransmitted(snapshot, recipient, statement) => {
+                runtime.record_announcement_retransmitted(snapshot, recipient, statement);
             }
             RuntimeFact::CarryQueued(head) => {
                 runtime.record_carry_queued(head);
