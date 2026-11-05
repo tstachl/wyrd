@@ -70,7 +70,8 @@ tip — not a bare epoch number; known membership epoch ≠ held epoch secrets
 (a device can learn epoch N's transition long before its capability for N
 arrives). The genesis transition (epoch 1, `prev = None`, empty `resolves`)
 is created with the drive; `members_root` and `owners_root` both cover
-exactly the owner, and `readers_root` covers the empty set (genesis admits
+exactly the owner — who is also the transition's author — and
+`readers_root` covers the empty set (genesis admits
 no readers). Every epoch number has a state, so snapshots can always
 reference one — the snapshot's membership reference is never optional.
 
@@ -161,6 +162,10 @@ A transition is **valid** iff:
 3. `T.author` is an owner **in the pre-transition state** (`state(prev)`).
    Signature authority always comes from the state being left — this is
    what makes `SetOwners` and removing the last current owner expressible.
+   At genesis there is no pre-transition state: `T.author` must be the
+   singleton owner the genesis installs, checked as part of the genesis
+   shape. A self-signed genesis naming another device as owner is
+   `BadGenesis`, never rooted.
 4. `T.signature` verifies, drive-bound, with full BIP-340 key validation
    (`lift_x` on the x-only pubkey; exactly 64-byte signatures; deterministic
    nonce) — exact bytes in `trust.md`.

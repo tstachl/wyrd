@@ -82,15 +82,19 @@ alongside the message. The table proves the rule row by row.
 
 - Authenticates: ECDH to the invitee's encryption key, AAD binding
   the recipient and key, the owner's signature over the unsigned
-  bytes, and `verify_invitation` (invitee/device/drive/key equality
-  plus authoritative-genesis validation) before anything touches disk.
+  bytes, and `verify_invitation` (invitee/device/drive/key equality,
+  `inviter == genesis.author` — the singleton owner the genesis
+  installs — plus authoritative-genesis validation) before anything
+  touches disk.
 - Transplant: a seal to a substituted key does not open under the
   victim's secret; a seal for another device fails the invitee check
   after opening; a foreign drive fails the drive check; an invalid
-  genesis fails closed before disk.
+  genesis fails closed before disk; a member-sealed invitation
+  carrying the genuine genesis fails the inviter check before disk.
 - Pinned by: another-device refusal, invalid-genesis refusal,
-  foreign-capability refusal, substituted-key refusal
-  (`runtime/bootstrap/tests_invitation.rs`).
+  foreign-capability refusal, substituted-key refusal, forged-inviter
+  refusal (`runtime/bootstrap/tests_invitation.rs`,
+  `runtime/bootstrap/tests_pairing.rs`).
 
 ## EscrowRecord
 

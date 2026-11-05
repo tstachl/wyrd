@@ -106,6 +106,16 @@ pub(super) fn verify_invitation(
     ) {
         return Err(EngineError::BadGenesis);
     }
+    // The envelope authenticates the inviter as the payload's signer,
+    // but nothing yet binds that signer to the chain the invitee is
+    // about to anchor to: an admitted member holding epoch control
+    // keys could otherwise seal a genuine invitation carrying someone
+    // else's genesis and substitute the trust anchor. Require the
+    // inviter to be the genesis author — the singleton owner the
+    // genesis installs — before touching disk.
+    if invitation.inviter != genesis.author {
+        return Err(EngineError::InvitationMismatch);
+    }
     // Fail before touching disk when the invitation's capability names
     // another device: the seal is addressed to us but the grant inside
     // is not ours. The unwrap also proves the encryption secret opens

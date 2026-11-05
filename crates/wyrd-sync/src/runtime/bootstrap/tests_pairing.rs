@@ -1,6 +1,8 @@
 use super::keystore::KEYSTORE_FILE;
 use super::pairing::PAIRING_FILE;
 use super::*;
+use crate::control::bootstrap::seal_bootstrap;
+use crate::keys::capability::Capability;
 use crate::keys::keystore::wrap_device_secret;
 use crate::keys::{DeviceEncryptionSecret, DeviceIdentitySecret, EpochSecret};
 use crate::runtime::engine::EngineError;
@@ -156,6 +158,64 @@ fn join_with_foreign_invitation_refuses_before_writing_custody() {
     assert!(matches!(
         join(dir.path.clone(), "test-pass", newcomer, &sealed),
         Err(EngineError::Invitation(_))
+    ));
+    assert!(
+        !dir.path.join(KEYSTORE_FILE).exists(),
+        "a refused join writes no custody"
+    );
+}
+
+#[test]
+fn join_with_member_forged_invitation_refuses_before_writing_custody() {
+    // M is admitted, then seals an invitation carrying the owner's
+    // genuine genesis to a fresh device that already staged pairing.
+    // The envelope opens under the staged secret and the genesis is
+    // valid, so only the inviter-is-author binding refuses — before
+    // the store opens, let alone the custody write.
+    let owner_dir = TestDir::new("join-forged-owner");
+    let dir = TestDir::new("join-forged-newcomer");
+    let owner_identity = DeviceIdentitySecret::generate().unwrap();
+    let mut owner = create(owner_dir.path.clone(), "test-pass", owner_identity).unwrap();
+    let member = DeviceIdentitySecret::generate().unwrap();
+    let member_encryption = DeviceEncryptionSecret::generate().unwrap();
+    owner
+        .admit_device(member.device_id(), member_encryption.encryption_key())
+        .unwrap();
+    let drive = owner.drive;
+    let genesis_id = owner
+        .log
+        .canonical_genesis()
+        .expect("the owner holds its genesis");
+    let genesis = owner
+        .log
+        .transition(&genesis_id)
+        .expect("genesis bytes")
+        .clone();
+    drop(owner);
+
+    let newcomer = DeviceIdentitySecret::generate().unwrap();
+    let pairing = pairing_request(&dir.path, "test-pass", &newcomer).unwrap();
+    let capability = Capability::new(
+        drive,
+        pairing.device,
+        pairing.encryption_key,
+        genesis_id,
+        1,
+        vec![EpochSecret::generate().unwrap()],
+    )
+    .unwrap();
+    let sealed = seal_bootstrap(
+        &member,
+        &drive,
+        pairing.device,
+        &pairing.encryption_key,
+        &genesis.canonical_bytes(),
+        capability.wrap().unwrap().as_bytes(),
+    )
+    .unwrap();
+    assert!(matches!(
+        join(dir.path.clone(), "test-pass", newcomer, &sealed),
+        Err(EngineError::InvitationMismatch)
     ));
     assert!(
         !dir.path.join(KEYSTORE_FILE).exists(),

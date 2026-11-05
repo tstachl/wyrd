@@ -239,6 +239,74 @@ fn accept_invitation_with_invalid_genesis_is_refused_before_disk() {
 }
 
 #[test]
+fn accept_invitation_forged_by_admitted_member_is_refused_before_disk() {
+    // The P1 sequence: the owner admits M, then M seals an invitation
+    // carrying the owner's genuine genesis to a fresh device. The
+    // envelope is genuinely M-signed and the genesis is genuinely
+    // valid, so only the inviter-is-author binding refuses it.
+    let dir = TestDir::new("accept-invitation-forged-owner");
+    let owner = DeviceIdentitySecret::generate().unwrap();
+    let mut owner_engine = Engine::create(dir.path.clone(), "test-pass", owner.clone()).unwrap();
+    let member = DeviceIdentitySecret::generate().unwrap();
+    let member_encryption = DeviceEncryptionSecret::generate().unwrap();
+    owner_engine
+        .admit_device(member.device_id(), member_encryption.encryption_key())
+        .unwrap();
+    let drive = owner_engine.drive;
+    let genesis_id = owner_engine
+        .log
+        .canonical_genesis()
+        .expect("the owner holds its genesis");
+    let genesis = owner_engine
+        .log
+        .transition(&genesis_id)
+        .expect("genesis bytes")
+        .clone();
+    assert_eq!(
+        genesis.author,
+        owner.device_id(),
+        "honest genesis is owner-authored"
+    );
+
+    let fresh = DeviceIdentitySecret::generate().unwrap();
+    let fresh_encryption = DeviceEncryptionSecret::generate().unwrap();
+    let capability = Capability::new(
+        drive,
+        fresh.device_id(),
+        fresh_encryption.encryption_key(),
+        genesis.transition_id(),
+        1,
+        vec![EpochSecret::generate().unwrap()],
+    )
+    .unwrap();
+    let sealed = seal_bootstrap(
+        &member,
+        &drive,
+        fresh.device_id(),
+        &fresh_encryption.encryption_key(),
+        &genesis.canonical_bytes(),
+        capability.wrap().unwrap().as_bytes(),
+    )
+    .unwrap();
+
+    let dir2 = TestDir::new("accept-invitation-forged-invitee");
+    assert!(matches!(
+        Engine::accept_invitation(
+            dir2.path.clone(),
+            "test-pass",
+            fresh,
+            fresh_encryption,
+            &sealed
+        ),
+        Err(EngineError::InvitationMismatch)
+    ));
+    assert!(
+        !dir2.path.join("DRIVE").exists(),
+        "forged invitations never touch disk"
+    );
+}
+
+#[test]
 fn accept_invitation_with_foreign_capability_is_refused() {
     let dir = TestDir::new("accept-invitation-foreign");
     let owner = DeviceIdentitySecret::generate().unwrap();
