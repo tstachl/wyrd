@@ -7,6 +7,7 @@ use crate::transport::mailbox::Mailbox;
 use super::super::author;
 use super::Engine;
 use super::EngineError;
+use super::PublishBudget;
 
 impl Engine {
     /// Send every undischarged transition- and capability-delivery
@@ -14,8 +15,12 @@ impl Engine {
     /// Transitions go before capabilities; a mid-loop transport
     /// failure leaves the rest pending for the next call. See
     /// [`author::deliver_pending`].
-    pub fn deliver_pending(&mut self, mailbox: &mut impl Mailbox) -> Result<usize, EngineError> {
-        author::deliver_pending(self, mailbox)
+    pub fn deliver_pending(
+        &mut self,
+        mailbox: &mut impl Mailbox,
+        budget: &mut PublishBudget,
+    ) -> Result<usize, EngineError> {
+        author::deliver_pending(self, mailbox, budget)
     }
 
     /// Hold an epoch's control key for inbox ingest. Keys live with

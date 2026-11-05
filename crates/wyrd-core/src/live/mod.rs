@@ -16,7 +16,8 @@ use wyrd_sync::ingest::IngestError;
 use wyrd_sync::serving::VaultError;
 use wyrd_sync::{
     runtime::{
-        Engine, EngineError, ExecuteReport, MaterializationState, RoutePublishing, TerminalState,
+        Engine, EngineError, ExecuteReport, MaterializationState, PublishBudget, RoutePublishing,
+        TerminalState,
     },
     transport::mailbox::{Mailbox, MailboxSnapshot},
 };
@@ -187,6 +188,12 @@ pub struct LiveNode<V: NamespaceView> {
     pub(super) serving_flush_budget: Duration,
     /// Stored copy of the config's per-pass fetch budget.
     pub(super) fetch_pass_budget: Duration,
+    /// Stored copy of the config's per-pass publish budget: every
+    /// publish phase (answers, deliveries, announcements) is clipped
+    /// to this from phase start, further clipped to the nearest
+    /// held mutation's remaining time like the fetch budget.
+    /// Unattempted obligations stay pending for the next pass.
+    pub(super) publish_pass_budget: Duration,
     /// Last observed mailbox reconnect count, for the
     /// reconciliation trigger's edge detection (OD-21-4): `None`
     /// before the first pass, which counts as a session start — the
@@ -444,6 +451,7 @@ where
                 serving_barrier: None,
                 serving_flush_budget: config.serving_flush_budget,
                 fetch_pass_budget: config.fetch_pass_budget,
+                publish_pass_budget: config.publish_pass_budget,
                 last_mailbox_reconnects: None,
                 pass_hook: None,
                 role_dir: None,
@@ -1001,6 +1009,10 @@ mod serve_barrier_tests;
 #[cfg(test)]
 #[path = "tests_restart_redelivery.rs"]
 mod restart_redelivery_tests;
+
+#[cfg(test)]
+#[path = "tests_publish_budget.rs"]
+mod publish_budget_tests;
 
 #[cfg(test)]
 #[path = "tests_pause.rs"]

@@ -77,7 +77,7 @@ use std::collections::BTreeSet;
 use wyrd_format::{DeviceId, SnapshotId, TransitionId};
 
 use super::author::{announcement_obligation, capability_obligation, transition_obligation};
-use super::engine::{Engine, EngineError};
+use super::engine::{Engine, EngineError, PublishBudget};
 use super::state::RuntimeState;
 use crate::durable::{reconciliation_statement_digest, Fact, ReconciliationEvidence};
 use crate::membership::MembershipLog;
@@ -129,6 +129,7 @@ impl Engine {
     pub fn answer_reconciliation(
         &mut self,
         mailbox: &mut impl Mailbox,
+        budget: &mut PublishBudget,
     ) -> Result<AnswerReport, EngineError> {
         if self.log.frozen_at().is_some() {
             return Ok(AnswerReport::default());
@@ -169,7 +170,20 @@ impl Engine {
         }
         let mut rebuilt = rebuilt;
         let mut dirty = false;
-        for (requester, digest, evidence) in &todo {
+        let mut todo_index = 0usize;
+        while todo_index < todo.len() {
+            let (requester, digest, evidence) = &todo[todo_index];
+            todo_index += 1;
+            if !budget.check() {
+                // Publish budget tripped: the remaining statements
+                // stay unanswered this pass and the next pass
+                // re-derives them from the same suffix. Nothing is
+                // marked answered below until every statement
+                // processes cleanly, so a clip retries exactly like
+                // a transport failure.
+                budget.defer(todo.len() - todo_index + 1);
+                break;
+            }
             // Fresh rebuild per statement — but only once something
             // earlier in this pass committed: the comparison below
             // reads the pass snapshot until a retire lands, and a
@@ -238,6 +252,7 @@ impl Engine {
                 requester,
                 MAX_RESPONSE_SENDS_PER_STATEMENT,
                 newest_held_epoch(evidence, requester),
+                budget,
             )?;
             report.sent += sent;
             // "Asked, nothing delivered": obligations were

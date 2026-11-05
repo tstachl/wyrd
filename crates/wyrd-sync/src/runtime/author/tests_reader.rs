@@ -9,7 +9,7 @@ use crate::control::bootstrap::open_bootstrap;
 use crate::keys::capability::WrappedCapability;
 use crate::keys::{DeviceEncryptionSecret, DeviceIdentitySecret};
 use crate::membership::test_util::{drive as member_drive, key};
-use crate::runtime::engine::{Engine, EngineError};
+use crate::runtime::engine::{Engine, EngineError, PublishBudget};
 use crate::runtime::test_util::{encryption_key, TestDir};
 use crate::transport::mailbox::{MemoryMailbox, MemoryRelay};
 use wyrd_format::{Entry, MemoryObjectStore, ObjectKind, ObjectStore, Tree};
@@ -99,7 +99,10 @@ fn join_reader(
         owner: engine.device(),
     };
     assert!(
-        engine.deliver_pending(&mut sender).unwrap() > 0,
+        engine
+            .deliver_pending(&mut sender, &mut PublishBudget::unbounded())
+            .unwrap()
+            > 0,
         "catch-up sends to the reader"
     );
     let mut receiver = MemoryMailbox {
@@ -238,7 +241,10 @@ fn reader_converges_across_a_later_rotation() {
         owner: engine.device(),
     };
     assert!(
-        engine.deliver_pending(&mut sender).unwrap() > 0,
+        engine
+            .deliver_pending(&mut sender, &mut PublishBudget::unbounded())
+            .unwrap()
+            > 0,
         "rotation sends to the reader"
     );
     let mut receiver = MemoryMailbox {

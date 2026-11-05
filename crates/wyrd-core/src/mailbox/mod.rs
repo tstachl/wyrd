@@ -299,6 +299,18 @@ const MAX_MAILBOX_RELAY_EVENT_BYTES: usize = 256 * 1024;
 /// applied before it broadcasts the parsed event to the mailbox drainer.
 const MAX_MAILBOX_RELAY_WIRE_BYTES: usize = 512 * 1024;
 const RELAY_EVENT_FIXED_BYTES: usize = 512;
+/// Per-send relay `OK` wait: how long one `send_event` waits for the
+/// relay's acceptance before resolving unaccepted. Pinned explicitly
+/// instead of inheriting the SDK default (10 s in the vendored
+/// nostr-sdk): a silent dependency bump must never move a
+/// load-bearing bound. The publish phase clips N sends per pass
+/// against `publish_pass_budget`, so one hanging relay costs at
+/// most this per send, not per pass.
+const MAILBOX_RELAY_OK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+/// Per-send relay authentication wait, pinned for the same reason:
+/// the SDK default is an unpinned dependency default on the same
+/// send path.
+const MAILBOX_RELAY_AUTH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 fn check_relay_event_size(event: &Event) -> Result<(), MailboxError> {
     let mut bytes = RELAY_EVENT_FIXED_BYTES
@@ -964,7 +976,13 @@ where
             .block_on(GiftWrapBuilder::new(recipient, rumor).finalize_async(&*self.signer))
             .map_err(|_| MailboxError::Signer)?;
         let output = runtime
-            .block_on(async { self.client.send_event(&wrap).await })
+            .block_on(async {
+                self.client
+                    .send_event(&wrap)
+                    .ok_timeout(MAILBOX_RELAY_OK_TIMEOUT)
+                    .authentication_timeout(MAILBOX_RELAY_AUTH_TIMEOUT)
+                    .await
+            })
             .map_err(|error| MailboxError::Transport(error.to_string()))?;
         // Per-relay send forensics at the same level as the outbox send
         // line: `send_event` resolves `Ok` even when every relay refused

@@ -789,7 +789,9 @@ pub(super) fn replacement_crash_matrix(plant: PlantObligation) {
         // The replacement commit is this pass's first durable write.
         fx.engine.crash_after(stage);
         let mut failing = FailSend;
-        let _ = fx.engine.deliver_pending(&mut failing);
+        let _ = fx
+            .engine
+            .deliver_pending(&mut failing, &mut PublishBudget::unbounded());
 
         let (engine_sk, engine_device) = identity(0x02);
         fx.engine.release_store_lock();
@@ -845,7 +847,9 @@ pub(super) fn replacement_crash_matrix(plant: PlantObligation) {
             owner: fx.recipient,
         };
         assert_eq!(
-            fx.engine.deliver_pending(&mut mailbox).unwrap(),
+            fx.engine
+                .deliver_pending(&mut mailbox, &mut PublishBudget::unbounded())
+                .unwrap(),
             1,
             "{stage:?}: the resumed pass delivers the obligation"
         );
@@ -895,7 +899,9 @@ pub(super) fn non_owner_leaves_stale_fact(plant: PlantObligation) {
         owner: engine,
     };
     assert_eq!(
-        fx.engine.deliver_pending(&mut mailbox).unwrap(),
+        fx.engine
+            .deliver_pending(&mut mailbox, &mut PublishBudget::unbounded())
+            .unwrap(),
         0,
         "an unauthorized sender sends nothing"
     );

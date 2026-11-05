@@ -3,6 +3,7 @@ use super::delivery::{
 };
 use super::tests_harness::mint_setup;
 use crate::durable::Fact;
+use crate::runtime::engine::PublishBudget;
 use crate::runtime::test_util::CapturedLogs;
 use crate::transport::mailbox::{
     Delivery, DeliveryId, Disposition, Mailbox, MailboxEnvelope, MailboxError, SendReport,
@@ -79,8 +80,9 @@ fn refusal_warn_marker_covers_every_control_kind() {
                 kind,
                 obligation,
                 &[0x02; 64],
-                [recipient],
+                &[recipient],
                 |_| vec![delivered.clone()],
+                &mut PublishBudget::unbounded(),
             )
             .expect("refusal is pending, not an error");
             assert_eq!(warns(), before + 1, "{kind}: the first refusal warns");
@@ -90,8 +92,9 @@ fn refusal_warn_marker_covers_every_control_kind() {
                 kind,
                 obligation,
                 &[0x02; 64],
-                [recipient],
+                &[recipient],
                 |_| vec![delivered.clone()],
+                &mut PublishBudget::unbounded(),
             )
             .expect("refusal is pending, not an error");
             assert_eq!(warns(), before + 1, "{kind}: the repeat stays at debug");
@@ -101,8 +104,9 @@ fn refusal_warn_marker_covers_every_control_kind() {
                 kind,
                 obligation,
                 &[0x02; 64],
-                [recipient],
+                &[recipient],
                 |_| vec![delivered.clone()],
+                &mut PublishBudget::unbounded(),
             )
             .expect("acceptance discharges");
             send_sealed_to(
@@ -111,8 +115,9 @@ fn refusal_warn_marker_covers_every_control_kind() {
                 kind,
                 obligation,
                 &[0x02; 64],
-                [recipient],
+                &[recipient],
                 |_| vec![delivered.clone()],
+                &mut PublishBudget::unbounded(),
             )
             .expect("refusal is pending, not an error");
             assert_eq!(

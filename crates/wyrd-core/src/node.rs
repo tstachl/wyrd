@@ -267,13 +267,16 @@ where
 
     /// Resume every undischarged announcement obligation in the
     /// engine's durable outbox, without re-authoring anything. The
-    /// restart path after a crash or a partial send.
+    /// restart path after a crash or a partial send. The budget
+    /// bounds this resume like a live publish phase; callers with
+    /// no phase budget pass [`PublishBudget::unbounded`].
     pub fn announce_pending(
         &mut self,
         mailbox: &mut impl Mailbox,
         node_addr: Option<&[u8]>,
+        budget: &mut wyrd_sync::runtime::PublishBudget,
     ) -> Result<usize, wyrd_sync::runtime::EngineError> {
-        self.engine.announce_pending(mailbox, node_addr)
+        self.engine.announce_pending(mailbox, node_addr, budget)
     }
 
     /// Write `data` to `path`: chunk the bytes into the view's store,

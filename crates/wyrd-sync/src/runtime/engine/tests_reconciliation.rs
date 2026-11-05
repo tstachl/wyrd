@@ -570,7 +570,7 @@ fn reconciliation_counters_replay_from_durable_facts() {
     let mut mailbox = mailbox_for(&mut pair.relay, b_dev);
     pair.b
         .engine
-        .answer_reconciliation(&mut mailbox)
+        .answer_reconciliation(&mut mailbox, &mut PublishBudget::unbounded())
         .expect("answer pass evaluates");
     drop(mailbox);
     assert_eq!(

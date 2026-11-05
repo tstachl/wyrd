@@ -139,6 +139,16 @@ pub(crate) struct SyncRunReport {
     pub(crate) scrub_failures: usize,
     /// Outbound sends committed by per-pass publication.
     pub(crate) sent: usize,
+    /// Passes whose publish phase tripped the per-pass publish
+    /// budget (reconciliation answers, deliveries, announcements
+    /// clipped to the held-mutation deadline or the pass cap).
+    /// A clipped pass defers its unattempted obligations to the next
+    /// pass — nonzero here is pacing under a slow relay, not loss.
+    pub(crate) publish_clipped_passes: usize,
+    /// Obligations left unattempted by publish clips, summed over
+    /// the run. Unattempted stays pending for later passes — this
+    /// counts deferrals, never drops.
+    pub(crate) publish_deferred: usize,
     /// Distinct senders named by intake envelopes this run (OD-17-4
     /// option B): the union of every pass's observed senders, in
     /// ascending byte order. A sender is any key that mailed us,
@@ -230,6 +240,8 @@ impl SyncRunReport {
         self.scrub_bytes_subtracted += pass.scrubbed.bytes_subtracted as usize;
         self.scrub_failures += pass.scrubbed.failures as usize;
         self.sent += pass.sent;
+        self.publish_clipped_passes += pass.publish_clipped as usize;
+        self.publish_deferred += pass.publish_deferred;
         self.unfetchable_heads = pass.pending_heads;
         // Union, not append: the same peer heard on twelve passes is
         // one observed peer. Sorted so reruns over the same traffic
@@ -410,6 +422,8 @@ where
         scrub_bytes_subtracted: 0,
         scrub_failures: 0,
         sent: 0,
+        publish_clipped_passes: 0,
+        publish_deferred: 0,
         outcome: RunOutcome::Quiet,
         pending: 0,
         reconciliation_outstanding: 0,
@@ -817,7 +831,7 @@ pub(crate) fn sync_now_render(report: &SyncRunReport) -> String {
         }
     };
     let mut out = format!(
-        "sync now: {} passes, intake {} accepted ({} duplicates, {} deferred [{} unseen, {} status-blocked, {} shed{}], {} skipped, {} discarded), fetch {} manifests, {} bodies, {} objects ({} unfulfilled), publish {} sends, {} obligations pending, {} unfetchable heads\n",
+        "sync now: {} passes, intake {} accepted ({} duplicates, {} deferred [{} unseen, {} status-blocked, {} shed{}], {} skipped, {} discarded), fetch {} manifests, {} bodies, {} objects ({} unfulfilled), publish {} sends ({} clipped passes, {} deferred), {} obligations pending, {} unfetchable heads\n",
         report.passes,
         report.accepted,
         report.duplicates,
@@ -833,6 +847,8 @@ pub(crate) fn sync_now_render(report: &SyncRunReport) -> String {
         report.objects,
         report.unfulfilled,
         report.sent,
+        report.publish_clipped_passes,
+        report.publish_deferred,
         report.pending,
         report.unfetchable_heads,
     );

@@ -12,6 +12,25 @@
 
 use super::*;
 
+use std::time::Duration;
+
+/// What one publish phase did: relay-accepted sends plus the clip
+/// accounting. The loop folds `sent` into the pass report and
+/// surfaces the clip there; unattempted obligations stay pending
+/// for the next pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(super) struct PublishOutcome {
+    /// Relay-accepted sends this phase.
+    pub sent: usize,
+    /// Whether the per-pass publish budget tripped before every
+    /// pending obligation was attempted.
+    pub clipped: bool,
+    /// Obligations left unattempted because the budget tripped.
+    pub deferred: usize,
+    /// Phase wall time in milliseconds.
+    pub elapsed_ms: u64,
+}
+
 impl<V> LiveNode<V>
 where
     V: NamespaceView<Materialization = RuntimeMaterialization>,
@@ -33,7 +52,26 @@ where
     /// the failure stands durably; the returned count covers only the
     /// fully completed step, so a mid-burst failure under-reports one
     /// pass and the next pass corrects it.
-    fn publish<M: Mailbox>(&mut self, mailbox: &mut M) -> Result<usize, LiveError> {
+    ///
+    /// The phase is bounded: the budget below clips to the nearest
+    /// held mutation's remaining time (as the fetch phase and the
+    /// serving barrier do), so one hanging relay cannot spend the
+    /// pass on the loop thread. Tripped budgets defer — unattempted
+    /// obligations stay pending for the next pass, never retired.
+    fn publish<M: Mailbox>(&mut self, mailbox: &mut M) -> Result<PublishOutcome, LiveError> {
+        let phase_start = std::time::Instant::now();
+        // Deadline from the per-pass publish budget, clipped to the
+        // nearest held mutation like the fetch cap: a held mutation's
+        // `TimedOut` decision lands on time even when a provider
+        // stalls mid-publish. With nothing held the config budget
+        // applies — one unreachable relay costs at most this per pass
+        // instead of N_obligations x per-send timeout.
+        let pass_cap = phase_start + self.publish_pass_budget;
+        let deadline = self
+            .mutations
+            .nearest_deadline(self.max_mutation_wait)
+            .map_or(pass_cap, |held| held.min(pass_cap));
+        let mut budget = PublishBudget::new(deadline);
         let mut sent = 0usize;
         // A stalled delivery step must not starve announcements (or
         // vice versa): each step absorbs its own mailbox failure and
@@ -48,12 +86,12 @@ where
         // not accumulated per pass. A dead transport stalls the
         // answer, never the loop, and the statement stays unanswered
         // for the next pass.
-        sent += match self.engine.answer_reconciliation(mailbox) {
+        sent += match self.engine.answer_reconciliation(mailbox, &mut budget) {
             Ok(report) => report.sent,
             Err(EngineError::Mailbox(_)) => 0,
             Err(other) => return Err(LiveError::Engine(other)),
         };
-        sent += match self.engine.deliver_pending(mailbox) {
+        sent += match self.engine.deliver_pending(mailbox, &mut budget) {
             Ok(n) => n,
             Err(EngineError::Mailbox(_)) => 0,
             Err(other) => return Err(LiveError::Engine(other)),
@@ -78,18 +116,46 @@ where
         // must not consume the serving budget (deliver_pending above
         // already tried those, and they are not mirror-gated).
         if !self.engine.pending_announcements()?.is_empty() && !self.flush_serving_barrier()? {
-            return Ok(sent);
+            return Ok(PublishOutcome {
+                sent,
+                clipped: budget.clipped(),
+                deferred: budget.deferred(),
+                elapsed_ms: phase_start.elapsed().as_millis() as u64,
+            });
         }
         // The route is copied out first: selecting it reads the role
         // file through `self` while the discharge below needs the
         // engine mutably, and a route is a hundred bytes per pass.
         let route = self.announce_route().map(|bytes| bytes.to_vec());
-        sent += match self.engine.announce_pending(mailbox, route.as_deref()) {
+        sent += match self
+            .engine
+            .announce_pending(mailbox, route.as_deref(), &mut budget)
+        {
             Ok(n) => n,
             Err(EngineError::Mailbox(_)) => 0,
             Err(other) => return Err(LiveError::Engine(other)),
         };
-        Ok(sent)
+        let outcome = PublishOutcome {
+            sent,
+            clipped: budget.clipped(),
+            deferred: budget.deferred(),
+            elapsed_ms: phase_start.elapsed().as_millis() as u64,
+        };
+        if outcome.clipped {
+            // Head-of-line blocking is otherwise silent: accepted==0
+            // is not an error and the absorbed mailbox failures below
+            // never surface, so without this line a wedged relay
+            // reads as a healthy pass that sent nothing. The counts
+            // ride the pass report too (see `SyncReport`), so this
+            // stays debug: the report, not the log, is the signal.
+            tracing::debug!(
+                elapsed_ms = outcome.elapsed_ms,
+                deferred = outcome.deferred,
+                sent = outcome.sent,
+                "publish phase clipped by the per-pass budget; unattempted obligations stay pending"
+            );
+        }
+        Ok(outcome)
     }
     /// Ask the serving mirror to catch up, time-boxed by the config
     /// and clipped to the nearest held mutation's remaining time. A
@@ -699,6 +765,11 @@ where
                 scrubbed,
                 published: false,
                 sent: 0,
+                // Idle passes never reach the publish phase, so no
+                // clip can trip and nothing is deferred by one.
+                publish_clipped: false,
+                publish_deferred: 0,
+                publish_elapsed_ms: 0,
                 generation,
                 pending_heads,
             });
@@ -733,10 +804,14 @@ where
             );
             // Pause gate (OD-19-A): obligations stay pending durably;
             // no send while paused.
-            let sent = if paused { 0 } else { self.publish(mailbox)? };
+            let outcome = if paused {
+                PublishOutcome::default()
+            } else {
+                self.publish(mailbox)?
+            };
             tracing::debug!(
                 pending_heads,
-                sent,
+                sent = outcome.sent,
                 "publication deferred: closure still fetching"
             );
             // Terminal verdicts publish with the next installable
@@ -749,7 +824,10 @@ where
                 quarantined,
                 scrubbed,
                 published: false,
-                sent,
+                sent: outcome.sent,
+                publish_clipped: outcome.clipped,
+                publish_deferred: outcome.deferred,
+                publish_elapsed_ms: outcome.elapsed_ms,
                 generation,
                 pending_heads,
             });
@@ -801,7 +879,11 @@ where
             elapsed_ms = phase.elapsed().as_millis(),
             "pass phase mutations done"
         );
-        let sent = if paused { 0 } else { self.publish(mailbox)? };
+        let outcome = if paused {
+            PublishOutcome::default()
+        } else {
+            self.publish(mailbox)?
+        };
         tracing::debug!(
             elapsed_ms = phase.elapsed().as_millis(),
             "pass phase publish done"
@@ -822,7 +904,10 @@ where
             invalid = fetched.invalid,
             unavailable_keys = fetched.unavailable_keys,
             local_failures = fetched.local_failures,
-            sent = sent,
+            sent = outcome.sent,
+            publish_clipped = outcome.clipped,
+            publish_deferred = outcome.deferred,
+            publish_elapsed_ms = outcome.elapsed_ms,
             revision = revision,
             eligible_heads = installed_heads,
             pending_heads = pending_heads,
@@ -834,7 +919,10 @@ where
             quarantined,
             scrubbed,
             published: true,
-            sent,
+            sent: outcome.sent,
+            publish_clipped: outcome.clipped,
+            publish_deferred: outcome.deferred,
+            publish_elapsed_ms: outcome.elapsed_ms,
             generation: generation + 1,
             pending_heads,
         })

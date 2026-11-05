@@ -5,7 +5,7 @@ use crate::control::Message;
 use crate::durable::Fact;
 use crate::keys::{DeviceEncryptionSecret, DeviceIdentitySecret};
 use crate::membership::test_util::key;
-use crate::runtime::engine::{Engine, EngineError};
+use crate::runtime::engine::{Engine, EngineError, PublishBudget};
 use crate::runtime::test_util::{encryption_key, identity, identity_secret, TestDir};
 use crate::transport::mailbox::{MemoryMailbox, MemoryRelay};
 
@@ -143,7 +143,9 @@ fn admission_queues_the_lineage_closure_for_the_newcomer() {
             relay: &mut relay,
             owner: engine.device(),
         };
-        engine.deliver_pending(&mut sender).unwrap();
+        engine
+            .deliver_pending(&mut sender, &mut PublishBudget::unbounded())
+            .unwrap();
     }
     {
         let mut receiver = MemoryMailbox {
@@ -587,12 +589,16 @@ fn admission_catch_up_completes_across_passes() {
             owner: engine.device(),
         };
         assert_eq!(
-            engine.deliver_pending(&mut sender).unwrap(),
+            engine
+                .deliver_pending(&mut sender, &mut PublishBudget::unbounded())
+                .unwrap(),
             0,
             "converged transitions and capabilities are never re-sent"
         );
         assert_eq!(
-            engine.announce_pending(&mut sender, None).unwrap(),
+            engine
+                .announce_pending(&mut sender, None, &mut PublishBudget::unbounded())
+                .unwrap(),
             0,
             "converged announcements are never re-sent"
         );

@@ -161,21 +161,27 @@ fn restarted_node_sends_redelivery_with_empty_pending_outbox() {
     let mut mailbox = AcceptingMailbox { sent: Vec::new() };
     assert_eq!(
         node.engine
-            .announce_pending(&mut mailbox, Some(route_a.as_slice()))
+            .announce_pending(
+                &mut mailbox,
+                Some(route_a.as_slice()),
+                &mut PublishBudget::unbounded()
+            )
             .unwrap(),
         0,
         "direct resume under the recorded route is silent"
     );
     let mut mailbox = AcceptingMailbox { sent: Vec::new() };
     assert_eq!(
-        node.engine.deliver_pending(&mut mailbox).unwrap(),
+        node.engine
+            .deliver_pending(&mut mailbox, &mut PublishBudget::unbounded())
+            .unwrap(),
         0,
         "direct transition/capability resume is silent after reopen"
     );
     let mut mailbox = AcceptingMailbox { sent: Vec::new() };
     assert_eq!(
         node.engine
-            .answer_reconciliation(&mut mailbox)
+            .answer_reconciliation(&mut mailbox, &mut PublishBudget::unbounded())
             .unwrap()
             .sent,
         0,

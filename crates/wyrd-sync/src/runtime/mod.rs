@@ -26,8 +26,8 @@ pub(crate) mod test_util;
 
 pub use engine::{
     AdmitOutcome, DrainReport, DurabilityLevel, Engine, EngineError, ExecuteReport, MergePath,
-    MergePlan, MergeSelection, PairingRequest, RecoveryPath, RecoveryPlan, RecoveryPreview,
-    RecoveryStatus, ResumeOutcome, SnapshotHead, TerminalState, UnqueuedClosure,
+    MergePlan, MergeSelection, PairingRequest, PublishBudget, RecoveryPath, RecoveryPlan,
+    RecoveryPreview, RecoveryStatus, ResumeOutcome, SnapshotHead, TerminalState, UnqueuedClosure,
     MAX_PENDING_MESSAGES,
 };
 

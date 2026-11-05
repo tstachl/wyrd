@@ -17,7 +17,7 @@ use wyrd_daemon::owner::{
 use wyrd_format::{
     ContentId, Entry, FsObjectStore, MemoryObjectStore, ObjectKind, ObjectStore, Tree,
 };
-use wyrd_sync::runtime::Engine;
+use wyrd_sync::runtime::{Engine, PublishBudget};
 use wyrd_sync::transport::mailbox::{Disposition, Mailbox};
 
 use crate::join_contracts::{admit_and_collect, newcomer_relay, owner};
@@ -114,7 +114,7 @@ fn submit_against_two_heads_relays_conflicted() {
     // obligations, nothing else.
     let mut outbox = Relay::new();
     let sent = engine_b
-        .announce_pending(&mut outbox, None)
+        .announce_pending(&mut outbox, None, &mut PublishBudget::unbounded())
         .expect("the rival announcement sends");
     assert!(sent >= 1, "the rival announcement leaves");
     let mut envelopes = Vec::new();

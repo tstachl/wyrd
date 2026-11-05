@@ -6,7 +6,7 @@ use crate::durable::AuthorizedSnapshot;
 use crate::transport::mailbox::Mailbox;
 
 use super::super::author;
-use super::{DurabilityLevel, Engine, EngineError};
+use super::{DurabilityLevel, Engine, EngineError, PublishBudget};
 
 impl Engine {
     /// Announce an authored snapshot over the control plane to every
@@ -28,7 +28,18 @@ impl Engine {
         // per resume, not per snapshot).
         let rebuilt = self.store.rebuild(self.device)?;
         let scope = author::redelivery_scope_set(self, &rebuilt);
-        author::announce(self, snapshot, mailbox, node_addr, &scope)
+        // Single snapshot, not the pass aggregate: the per-send relay
+        // timeout already bounds this call, so the pass budget does
+        // not apply. Callers driving whole passes use
+        // [`Engine::announce_pending`] with a real budget.
+        author::announce(
+            self,
+            snapshot,
+            mailbox,
+            node_addr,
+            &scope,
+            &mut PublishBudget::unbounded(),
+        )
     }
 
     /// Resume every undischarged announcement obligation across
@@ -39,8 +50,9 @@ impl Engine {
         &mut self,
         mailbox: &mut impl Mailbox,
         node_addr: Option<&[u8]>,
+        budget: &mut PublishBudget,
     ) -> Result<usize, EngineError> {
-        author::announce_pending(self, mailbox, node_addr)
+        author::announce_pending(self, mailbox, node_addr, budget)
     }
 
     /// Every still-undischarged `(snapshot, recipient)` obligation in

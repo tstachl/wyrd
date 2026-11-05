@@ -69,7 +69,10 @@ fn delivery_refuses_transition_sealed_bytes_for_another_id() {
         relay: &mut fx.relay,
         owner: fx.recipient,
     };
-    let err = fx.engine.deliver_pending(&mut mailbox).unwrap_err();
+    let err = fx
+        .engine
+        .deliver_pending(&mut mailbox, &mut PublishBudget::unbounded())
+        .unwrap_err();
     assert!(
         matches!(err, EngineError::SealedOutboxMismatch(_)),
         "unexpected: {err:?}"
@@ -139,7 +142,9 @@ fn delivery_retains_obligation_when_no_relay_accepts() {
         },
     };
     assert_eq!(
-        fx.engine.deliver_pending(&mut refusing).unwrap(),
+        fx.engine
+            .deliver_pending(&mut refusing, &mut PublishBudget::unbounded())
+            .unwrap(),
         0,
         "a refused send counts nothing"
     );
@@ -155,7 +160,9 @@ fn delivery_retains_obligation_when_no_relay_accepts() {
     );
     let mut mailbox = refusing.inner;
     assert_eq!(
-        fx.engine.deliver_pending(&mut mailbox).unwrap(),
+        fx.engine
+            .deliver_pending(&mut mailbox, &mut PublishBudget::unbounded())
+            .unwrap(),
         1,
         "acceptance discharges the retained obligation"
     );
@@ -202,7 +209,9 @@ fn a_repeated_refusal_warns_once_per_obligation() {
                 },
             };
             assert_eq!(
-                fx.engine.deliver_pending(&mut refusing).unwrap(),
+                fx.engine
+                    .deliver_pending(&mut refusing, &mut PublishBudget::unbounded())
+                    .unwrap(),
                 0,
                 "refused pass {pass} counts nothing"
             );
@@ -311,7 +320,10 @@ fn delivery_refuses_transition_sealed_under_the_wrong_epoch() {
         relay: &mut fx.relay,
         owner: fx.recipient,
     };
-    let err = fx.engine.deliver_pending(&mut mailbox).unwrap_err();
+    let err = fx
+        .engine
+        .deliver_pending(&mut mailbox, &mut PublishBudget::unbounded())
+        .unwrap_err();
     assert!(
         matches!(err, EngineError::SealedOutboxMismatch(_)),
         "unexpected: {err:?}"
@@ -354,7 +366,10 @@ fn delivery_refuses_announcement_sealed_under_the_wrong_epoch() {
         relay: &mut fx.relay,
         owner: fx.recipient,
     };
-    let err = fx.engine.announce_pending(&mut mailbox, None).unwrap_err();
+    let err = fx
+        .engine
+        .announce_pending(&mut mailbox, None, &mut PublishBudget::unbounded())
+        .unwrap_err();
     assert!(
         matches!(err, EngineError::SealedOutboxMismatch(_)),
         "unexpected: {err:?}"
@@ -404,7 +419,10 @@ fn delivery_skips_obligations_without_a_sealing_key_and_sends_the_rest() {
         relay: &mut fx.relay,
         owner: fx.recipient,
     };
-    let sent = fx.engine.deliver_pending(&mut mailbox).unwrap();
+    let sent = fx
+        .engine
+        .deliver_pending(&mut mailbox, &mut PublishBudget::unbounded())
+        .unwrap();
     assert_eq!(sent, 1, "only the sealable obligation sends");
     let loaded = fx.engine.store.load().unwrap();
     assert_eq!(
@@ -519,7 +537,10 @@ fn delivery_skips_capability_without_a_sealing_key_and_sends_the_rest() {
     // Pass one: the send fails after the seal commits. The obligation
     // stays pending with sealed bytes on file.
     let mut failing = FailSend;
-    let err = fx.engine.deliver_pending(&mut failing).unwrap_err();
+    let err = fx
+        .engine
+        .deliver_pending(&mut failing, &mut PublishBudget::unbounded())
+        .unwrap_err();
     assert!(
         matches!(err, EngineError::Mailbox(_)),
         "transport failure surfaces, does not poison: {err:?}"
@@ -536,7 +557,10 @@ fn delivery_skips_capability_without_a_sealing_key_and_sends_the_rest() {
         relay: &mut fx.relay,
         owner: fx.recipient,
     };
-    let sent = fx.engine.deliver_pending(&mut mailbox).unwrap();
+    let sent = fx
+        .engine
+        .deliver_pending(&mut mailbox, &mut PublishBudget::unbounded())
+        .unwrap();
     assert_eq!(sent, 1, "only the sealed obligation sends");
     let loaded = fx.engine.store.load().unwrap();
     assert_eq!(
@@ -636,7 +660,9 @@ fn capability_refusal_warns_once_with_the_capability_kind() {
             },
         };
         assert_eq!(
-            fx.engine.deliver_pending(&mut refusing).unwrap(),
+            fx.engine
+                .deliver_pending(&mut refusing, &mut PublishBudget::unbounded())
+                .unwrap(),
             0,
             "a refused capability send counts nothing"
         );
@@ -708,7 +734,9 @@ fn announcement_refusal_warns_once_with_the_announcement_kind() {
             },
         };
         assert_eq!(
-            fx.engine.announce_pending(&mut refusing, None).unwrap(),
+            fx.engine
+                .announce_pending(&mut refusing, None, &mut PublishBudget::unbounded())
+                .unwrap(),
             0,
             "a refused announcement send counts nothing"
         );
@@ -785,7 +813,10 @@ fn announce_skips_snapshot_without_a_sealing_key_and_sends_the_rest() {
         relay: &mut fx.relay,
         owner: fx.recipient,
     };
-    let sent = fx.engine.announce_pending(&mut mailbox, None).unwrap();
+    let sent = fx
+        .engine
+        .announce_pending(&mut mailbox, None, &mut PublishBudget::unbounded())
+        .unwrap();
     assert_eq!(sent, 1, "only the snapshot under the held key sends");
     let loaded = fx.engine.store.load().unwrap();
     assert_eq!(

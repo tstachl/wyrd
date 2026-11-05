@@ -10,7 +10,7 @@ use crate::keys::capability::{Capability, DriveKeyring};
 use crate::keys::{DeviceEncryptionSecret, DeviceIdentitySecret, EpochSecret};
 use crate::membership::test_util::{drive as member_drive, key, sign, Builder};
 use crate::membership::TransitionStatus;
-use crate::runtime::engine::Engine;
+use crate::runtime::engine::{Engine, PublishBudget};
 use crate::runtime::test_util::{
     control_key, encryption_key, identity, identity_secret, transition_message, TestDir,
 };
@@ -304,8 +304,12 @@ pub(super) fn relay_catch_up(
                 relay: &mut *relay,
                 owner: engine.device(),
             };
-            engine.deliver_pending(&mut sender).unwrap();
-            engine.announce_pending(&mut sender, None).unwrap();
+            engine
+                .deliver_pending(&mut sender, &mut PublishBudget::unbounded())
+                .unwrap();
+            engine
+                .announce_pending(&mut sender, None, &mut PublishBudget::unbounded())
+                .unwrap();
         }
         let report = {
             let mut receiver = MemoryMailbox {
