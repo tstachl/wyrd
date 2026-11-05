@@ -1114,7 +1114,10 @@ where
 
     /// The supervisor's current health as plain snapshot data: the
     /// live loop samples this per pass for the owner interface's
-    /// liveness observation. Same fields as [`health`](Self::health),
+    /// liveness observation, and for the reconciliation trigger's
+    /// attachment edge (the from-zero connected-relays transition —
+    /// the only edge a late-attaching transport ever reports). Same
+    /// fields as [`health`](Self::health),
     /// moved by value so the observation slot never borrows the
     /// supervisor.
     fn health_snapshot(&self) -> MailboxSnapshot {

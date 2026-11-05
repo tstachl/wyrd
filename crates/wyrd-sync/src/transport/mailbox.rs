@@ -301,12 +301,15 @@ pub trait Mailbox {
     /// observed: relay re-attachments, stream re-drives, saturation
     /// replays — any re-establishment the reconciliation trigger
     /// treats as a fresh opportunity to discover gaps unobservable
-    /// while disconnected (OD-21-4). The live loop compares the
-    /// count across passes and reports the edge, never the level, so
-    /// over-counting coalesces downstream: only movement matters,
-    /// never the absolute value. Defaults to zero movement — fakes
-    /// and mailboxes that cannot observe reconnects report none, and
-    /// stay compiling without an opinion.
+    /// while disconnected (OD-21-4). This is the counter edge; the
+    /// attachment edge (initial attach, which moves no counter —
+    /// recovery only fires post-attachment) is observed separately
+    /// through [`health_snapshot`](Self::health_snapshot). The live
+    /// loop compares the count across passes and reports the edge,
+    /// never the level, so over-counting coalesces downstream: only
+    /// movement matters, never the absolute value. Defaults to zero
+    /// movement — fakes and mailboxes that cannot observe reconnects
+    /// report none, and stay compiling without an opinion.
     fn reconnects(&self) -> u64 {
         0
     }
