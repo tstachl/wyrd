@@ -62,6 +62,37 @@ fn genesis_with_non_empty_resolves_is_invalid() {
     }
 }
 
+/// A genesis authored by anyone but the singleton owner it installs is
+/// `BadGenesis`, never rooted: the signature verifies and the shape is
+/// otherwise honest, so only the author binding refuses it.
+#[test]
+fn genesis_authored_by_non_owner_is_invalid() {
+    let (b, genesis) = Builder::genesis(1);
+    let owner = *b.owners.iter().next().unwrap();
+    let (other_sk, other) = key(2);
+    assert_ne!(other, owner, "the forgery needs a distinct author");
+    let mut forged = MembershipTransition::new(
+        genesis.epoch,
+        genesis.prev,
+        Vec::new(),
+        genesis.changes().to_vec(),
+        genesis.members_root,
+        genesis.owners_root,
+        genesis.readers_root,
+        other,
+    )
+    .unwrap();
+    sign(&mut forged, &other_sk, &b.drive);
+    let mut log = MembershipLog::new(drive());
+    log.observe(forged.clone());
+    assert_eq!(
+        log.status(&forged.transition_id()),
+        Some(TransitionStatus::Invalid(InvalidReason::BadGenesis))
+    );
+    assert_eq!(log.known_state(), None, "a forged genesis never roots");
+    assert_eq!(log.frozen_at(), None, "no conflict exists to freeze on");
+}
+
 #[test]
 fn two_valid_geneses_conflict_at_epoch_one() {
     let (_, g1) = Builder::genesis(1);

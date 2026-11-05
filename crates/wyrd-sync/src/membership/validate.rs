@@ -10,7 +10,7 @@ use wyrd_format::membership::{
     set_root, MEMBER_SET_CONTEXT, OWNER_SET_CONTEXT, READER_SET_CONTEXT,
 };
 use wyrd_format::signing::membership_challenge_for;
-use wyrd_format::{DriveId, MembershipTransition};
+use wyrd_format::{DeviceId, DriveId, MembershipTransition};
 
 /// Sign a transition in place with canonical BIP-340 nonces (trust.md,
 /// "Exact signing construction"). The genesis bootstrap is the production
@@ -76,13 +76,21 @@ pub(crate) fn check_intrinsic(t: &MembershipTransition) -> Result<(), InvalidRea
 }
 
 /// The genesis shape (epochs.md): the derived state must cover exactly one
-/// device, who is the owner. No readers at genesis: the founding device
-/// bootstraps with full membership, and read-only participation starts
-/// with an owner-signed admission.
-pub(crate) fn check_genesis_shape(state: &MembershipState) -> Result<(), InvalidReason> {
+/// device, who is the owner, and that device must be the transition's
+/// author. No readers at genesis: the founding device bootstraps with
+/// full membership, and read-only participation starts with an
+/// owner-signed admission. A self-signed genesis naming a different
+/// device as the singleton member/owner is not a founding act but a
+/// forgery, so it fails with the same `BadGenesis` as any other shape
+/// violation — never `AuthorNotOwner`, which reasons against a
+/// pre-transition state that genesis does not have.
+pub(crate) fn check_genesis_shape(
+    state: &MembershipState,
+    author: &DeviceId,
+) -> Result<(), InvalidReason> {
     let singleton =
         state.members.len() == 1 && state.owners.len() == 1 && state.members == state.owners;
-    if singleton && state.readers.is_empty() {
+    if singleton && state.readers.is_empty() && state.owners.contains(author) {
         Ok(())
     } else {
         Err(InvalidReason::BadGenesis)
@@ -90,8 +98,10 @@ pub(crate) fn check_genesis_shape(state: &MembershipState) -> Result<(), Invalid
 }
 
 /// Pre-transition owner authority (epochs.md rule 3). Skipped for genesis:
-/// there is no pre-transition state; the genesis author defines the initial
-/// owner, and competing geneses surface as a conflict instead.
+/// there is no pre-transition state; the genesis arm enforces the
+/// author binding through `check_genesis_shape` instead (author must be
+/// the installed singleton owner), and competing geneses surface as a
+/// conflict.
 pub(crate) fn check_authority(
     prev_state: &MembershipState,
     t: &MembershipTransition,

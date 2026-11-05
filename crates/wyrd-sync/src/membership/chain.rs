@@ -124,11 +124,13 @@ fn validate_link(
     }
 
     // Genesis: derive from the empty initial state; there is no
-    // pre-transition owner set to authorize against.
+    // pre-transition owner set to authorize against, so the shape
+    // check binds the author itself — the genesis author must be the
+    // singleton owner the genesis installs.
     let Some(prev_id) = t.prev else {
         let empty = MembershipState::default();
         return match derive_next(&empty, t)
-            .and_then(|state| check_genesis_shape(&state).map(|_| state))
+            .and_then(|state| check_genesis_shape(&state, &t.author).map(|_| state))
         {
             Ok(state) => Link::Valid {
                 state,
