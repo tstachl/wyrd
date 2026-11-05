@@ -1469,6 +1469,13 @@ leg_pause_owner() {
   poll_until 300 bash -c "test \"\$(python3 \"$SCRIPT_DIR/owner-socket.py\" delivered \"$d\")\" = 1" \
     || die "reconciled obligation did not deliver exactly once"
   pass "pending obligation reconciles after restart with one delivery"
+  # Hold serve#2 up until the member converges: the member fetches
+  # behind the announcement over the live serving endpoint, so
+  # TERMing here would strand it against a dead peer. Bounded both
+  # sides: if the member never converges both legs die named.
+  peer_wait 600 xpause-m-converged \
+    || die "member never converged on the discharged marker (see pause-serve-2.err)"
+  pass "member converged while serve#2 stayed up"
   # TERM while parked: the ordered teardown must exit 0, proving
   # the shutdown half beside the kill half above.
   local pid2
@@ -1508,6 +1515,7 @@ leg_pause_member() {
   poll_until 600 test -d "$MNTS/xpause-m/paused-marker" \
     || die "member never converged on the post-restart marker"
   pass "member converges on the marker discharged after restart"
+  peer_signal xpause-m-converged
   stop_mount xpause-m TERM
   check_no_leaks "$LOGDIR/mount-xpause-m.err" "$(cat "$c/identity")" "$(cat "$c/passphrase")"
 }
