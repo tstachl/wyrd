@@ -201,6 +201,18 @@ Releases are not required to write every format they read:
     `announcement_retirement_tag_is_a_clean_upgrade_boundary`),
     never overloading the class tags above.
 
+    The evidence-triggered retransmit marker (`0x1E`) is the same
+    fixed triple keyed by snapshot id (32 ‖ 32 ‖ 32, fixed 96 bytes
+    like the retirement): the pair plus the gap statement's digest
+    the resend answers, committed by the publish pass alongside the
+    resend. Same safe direction: an old node skips the unknown tag
+    and keeps whatever it had — the marker quenches only a new
+    node's resend, so an old node resends what a new node would send
+    once (harmless: the receiver dedupes byte-identical envelopes),
+    never strand a gap. `0x1E` follows `0x1D`, checked against the
+    full tag set (pinned by
+    `announcement_retransmit_tag_is_a_clean_upgrade_boundary`).
+
     The announcement route record (`0x1C`) names, per discharged
     announcement, the serving endpoint it was sent against: snapshot
     (32) ‖ recipient DeviceId (32) ‖ endpoint id (32), fixed 96

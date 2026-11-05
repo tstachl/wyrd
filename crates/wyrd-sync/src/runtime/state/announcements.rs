@@ -1,13 +1,14 @@
 //! Announcement outbox accounting: queued/sealed/delivered markers,
 //! route tracking, and reconciliation retirement per snapshot.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use wyrd_format::{DeviceId, SnapshotId};
 
 use super::WITHDRAWN_ROUTE;
 
 use super::RuntimeState;
+use crate::durable::ReconciliationEvidence;
 
 /// Queued vs delivered outbox counts per obligation class, as
 /// observed from durable state. Pending is always queued minus
@@ -453,5 +454,100 @@ impl RuntimeState {
             .insert((snapshot, recipient));
         self.announcement_reconciled
             .insert((snapshot, recipient, statement))
+    }
+
+    /// Record one evidence-triggered retransmit: the pair was
+    /// already delivered, the gap statement evidenced it missing,
+    /// and the publish pass just resent it. First marker per
+    /// (pair, statement) wins; a newer gap statement re-opens the
+    /// pair under its own digest. Never a retirement — the pair set
+    /// stays out of the pending derivation on purpose.
+    pub fn record_announcement_retransmitted(
+        &mut self,
+        snapshot: SnapshotId,
+        recipient: DeviceId,
+        statement: [u8; 32],
+    ) -> bool {
+        self.announcement_retransmitted
+            .insert((snapshot, recipient, statement))
+    }
+
+    /// Delivered-but-unevidenced announcements each recipient's
+    /// latest statement re-opens for resend, with the digest the
+    /// resend answers. The publish pass's eligibility half of
+    /// evidence-triggered re-advertise: the relay accepted the send,
+    /// the recipient never ingested it, and only the recipient's own
+    /// durable-state evidence can say so.
+    ///
+    /// Five gates, all conservative:
+    /// - **Recorded announcements only.** Same as the missing set:
+    ///   only the author re-advertises, everyone else re-sends the
+    ///   author's statement.
+    /// - **Delivered pairs only.** Pending pairs already resend
+    ///   through the normal publish drain; this set is the hole
+    ///   pending does not cover.
+    /// - **Unevidenced only.** A statement evidencing the snapshot
+    ///   proves possession — the resend would be pure waste — so a
+    ///   converged recipient's statement re-opens nothing.
+    /// - **Installed epochs only.** Same as the missing set: the
+    ///   seal goes under the announcement's own epoch, so an epoch
+    ///   the recipient evidences no install for stays silent until a
+    ///   later statement evidences it.
+    /// - **Once per statement.** A committed marker for this
+    ///   (pair, digest) quenches repeats: the recipient never
+    ///   re-states after ingesting (a static view stays quiet), so a
+    ///   per-pass derivation would resend into a converged peer
+    ///   forever. A newer gap statement carries a newer digest and
+    ///   re-arms exactly one more resend.
+    ///
+    /// Never retired: reconciled pairs stay out even when unevidenced
+    /// (retirement is subsumption evidence, and it already proved
+    /// possession — a divergent later statement cannot unprove it).
+    /// Sorted by (snapshot, recipient, digest): the loops below run
+    /// recipient-major, so the explicit sort keeps the claim — and
+    /// the publish drain — canonical.
+    pub fn announce_retransmit_for(
+        &self,
+        latest: &BTreeMap<DeviceId, ([u8; 32], ReconciliationEvidence)>,
+    ) -> Vec<(SnapshotId, DeviceId, [u8; 32])> {
+        let recorded: Vec<(SnapshotId, u64)> = self.recorded_announcement_epochs().collect();
+        let mut out = Vec::new();
+        for (recipient, (digest, evidence)) in latest {
+            let installs: BTreeSet<u64> = evidence
+                .capabilities
+                .iter()
+                .filter(|(device, _)| device == recipient)
+                .map(|(_, epoch)| *epoch)
+                .collect();
+            for (snapshot, epoch) in &recorded {
+                if evidence.snapshots.contains(snapshot) {
+                    continue;
+                }
+                if !installs.contains(epoch) {
+                    continue;
+                }
+                if !self
+                    .announcement_delivered
+                    .contains(&(*snapshot, *recipient))
+                {
+                    continue;
+                }
+                if self
+                    .announcement_reconciled_pairs
+                    .contains(&(*snapshot, *recipient))
+                {
+                    continue;
+                }
+                if self
+                    .announcement_retransmitted
+                    .contains(&(*snapshot, *recipient, *digest))
+                {
+                    continue;
+                }
+                out.push((*snapshot, *recipient, *digest));
+            }
+        }
+        out.sort();
+        out
     }
 }

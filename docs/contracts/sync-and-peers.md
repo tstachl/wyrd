@@ -313,7 +313,9 @@ received statement once per process lifetime (a volatile answered
 set; restarts re-answer idempotently), retiring what the evidence
 covers and retransmitting — at most 32 sends per statement —
 what it does not, through the existing deliver paths with no new
-wire kind. Transitions sealed past the recipient's newest
+wire kind for transitions and capabilities, and through the
+barrier-gated publish pass for announcements (below).
+Transitions sealed past the recipient's newest
 evidenced install are skipped, never retired, until the
 capability install arrives (rotation framing is never skipped, so
 the keys land first). Announcements follow the same epoch rule per
@@ -326,11 +328,21 @@ queue discharges on the barrier-gated publish pass (under the live
 route for first-party snapshots, through the resume path for
 third-party ones), because the answer pass runs before the
 serving-readiness barrier and only the publish pass may promise a
-local route. Two stated limits: a relay-accepted send that the
-recipient never ingested stays outside the missing set (pending
-derives as queued minus delivered, and retirement must stay
-sound), so reconciliation covers recipients with no queue fact at
-all, not sends accepted and lost; and the synthesized queue is not
+local route. One stated limit, and one lifted one: a
+relay-accepted transition or capability send that the recipient
+never ingested stays outside the missing set (pending derives as
+queued minus delivered, and retirement must stay sound), so for
+those classes reconciliation covers recipients with no queue fact
+at all, not sends accepted and lost; announcements outgrew that
+limit through evidence-triggered re-advertise — a
+delivered-but-never-ingested announcement whose snapshot the
+recipient's latest statement evidences as missing resends on the
+publish pass, retransmit-only (never retired: retirement still
+requires subsumption evidence), once per evidencing statement (the
+per-pair per-statement marker quenches repeats), bounded by the
+publish budget, and only on statements (a converged recipient's
+statement evidences the heads, so nothing re-opens, and a silent
+recipient triggers no resend); and the synthesized queue is not
 re-gated against current membership — the seal is under the
 epoch's control key the recipient already holds, so it learns
 nothing it could not decrypt, exactly like the outbox it joins.
@@ -366,7 +378,16 @@ re-evaluated next pass (awaiting-answer until then) and only zero
 acceptance flows through to a recorded stall. Still owed after
 every pass, so the run fails and names it. The stall record
 itself is volatile like the answered set; a restart re-derives it
-from the durable request bucket.
+from the durable request bucket. Delivered pairs read quiet in all
+of the above even while owed a retransmit: the liveness
+projections derive from pending (queued minus delivered ∪
+reconciled), and a delivered-but-unevidenced head is not pending —
+its resend rides on the evidencing statement alone, and a stuck
+retransmit is indistinguishable from converged until a newer gap
+statement arrives. That silence is intentional (delivered is the
+quiescent state; retransmits solicit nothing), not a gap in the
+gauges: no loss is involved, the pair retries next pass and
+re-arms on the next new statement.
 
 ### Acceptance scenarios (normative)
 
@@ -406,7 +427,10 @@ gate.
    required. Sender's next action: answer the recipient's pull
    statement through the response pass — retire what the evidence
    covers, retransmit (at most 32 sends per statement) what it does
-   not through the existing deliver paths.
+   not through the existing deliver paths — and re-advertise on the
+   publish pass what the response pass cannot: delivered-but-never-
+   ingested announcements the statement evidences as missing,
+   retransmit-only, once per statement.
 5. **Duplicate delivery.** Engines stay idempotent over redelivery;
    the forget contract must not weaken that, and reconciliation
    itself is duplicate-prone, so the comparison is set membership.

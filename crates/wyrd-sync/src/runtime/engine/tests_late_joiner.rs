@@ -12,7 +12,9 @@
 //! — the exact case retirement exists for: A never delivered, yet
 //! must stop retrying because J's durable state proves possession.
 
-use super::tests_harness::{drain_side, execute_side, open_device, restart, secret, Device};
+use super::tests_harness::{
+    drain_side, execute_side, open_device, restart, secret, Device, FailingMailbox,
+};
 
 use std::collections::BTreeSet;
 
@@ -661,4 +663,274 @@ fn statement_queues_unbounded_and_publish_drains() {
         .unwrap()
         .pending_announcements()
         .is_empty());
+}
+
+/// A relay-accepted announcement the recipient never ingested
+/// retransmits on the recipient's gap statement: the Run-2 shape
+/// (discharge relay-accepted while the follower is unattached,
+/// follower attaches and probes). The answer pass no-ops — nothing
+/// outstanding, nothing to queue, the pair is delivered — so the
+/// publish pass must re-advertise the head itself.
+#[test]
+fn delivered_but_unevidenced_announcement_retransmits() {
+    let mut world = build();
+    let (b_dev, j_dev) = (world.b.device, world.j.device);
+    let s0 = world.s0;
+    assert!(pending_for(&mut world, b_dev).is_empty());
+    // J's gap, committed directly (intake agreement and dedupe are
+    // 21b's; the answer path starts from durable evidence): no
+    // snapshots, installs for epochs 1 and 4 — s0's epoch held,
+    // s0 missing.
+    let gap = ReconciliationEvidence {
+        transitions: BTreeSet::new(),
+        snapshots: BTreeSet::new(),
+        capabilities: BTreeSet::from([(j_dev, 1), (j_dev, 4)]),
+    };
+    world
+        .b
+        .engine
+        .commit_facts(&[Fact::ReconciliationRequestReceived(j_dev, gap.clone())])
+        .unwrap();
+    // The answer queues the missing announcement and sends nothing
+    // itself — the late-joiner half, unchanged.
+    let report = answer(&mut world, b_dev);
+    assert_eq!(report.retired, 0);
+    assert_eq!(report.sent, 0);
+    assert_eq!(pending_for(&mut world, b_dev), vec![(s0, j_dev)]);
+    // First delivery, relay-accepted, so pending drains — but the
+    // envelope never reaches J: retention expiry past a live
+    // recipient, the accepted-and-lost shape.
+    let sent = publish(&mut world, b_dev);
+    assert_eq!(sent, 1, "the missing announcement discharges");
+    assert!(pending_for(&mut world, b_dev).is_empty());
+    world.relay = MemoryRelay::default();
+    // Same statement, next publish pass: the delivered-but-missing
+    // head re-advertises instead of staying silent forever.
+    let sent = publish(&mut world, b_dev);
+    assert_eq!(sent, 1, "one retransmit per evidencing statement");
+    // The marker commits against the statement that evidenced the
+    // gap — a first delivery leaves none, a retransmit leaves one.
+    let digest1 = reconciliation_statement_digest(&j_dev, &gap);
+    let loaded = world.b.engine.store.load().unwrap();
+    assert_eq!(
+        loaded.announcement_retransmitted,
+        vec![(s0, j_dev, digest1)],
+        "the retransmit names the pair and the evidencing statement"
+    );
+    assert!(
+        loaded.announcement_reconciled.is_empty(),
+        "retransmit-only, never retire: a delivered pair is not outstanding"
+    );
+    world.relay = MemoryRelay::default();
+    // The marker quenches the next pass even though J never
+    // re-stated: no new statement, no new send — the recipient's
+    // static view stays quiet, so a per-pass derivation would spam a
+    // converged peer forever.
+    let sent = publish(&mut world, b_dev);
+    assert_eq!(sent, 0, "the per-statement marker quenches repeats");
+    // A newer gap statement — J learned something else, still
+    // missing s0 — re-arms exactly one more retransmit under its own
+    // digest.
+    let mut gap2 = gap.clone();
+    gap2.snapshots.insert(SnapshotId::from_bytes([0xAA; 32]));
+    let digest2 = reconciliation_statement_digest(&j_dev, &gap2);
+    assert_ne!(digest1, digest2, "a changed view digests differently");
+    world
+        .b
+        .engine
+        .commit_facts(&[Fact::ReconciliationRequestReceived(j_dev, gap2)])
+        .unwrap();
+    let report = answer(&mut world, b_dev);
+    assert_eq!(report.retired, 0);
+    assert_eq!(
+        report.sent, 0,
+        "the answer still queues nothing for a delivered pair"
+    );
+    let sent = publish(&mut world, b_dev);
+    assert_eq!(sent, 1, "a new gap statement re-arms one retransmit");
+    let loaded = world.b.engine.store.load().unwrap();
+    assert_eq!(
+        loaded.announcement_retransmitted,
+        vec![(s0, j_dev, digest1), (s0, j_dev, digest2)],
+        "one marker per evidencing statement"
+    );
+    // J intakes the retransmit and states possession: the evidence
+    // itself quenches, and the pair still never retires.
+    drain_side(&mut world.relay, &mut world.j);
+    assert_eq!(epoch_one_ids(&world), vec![s0], "J learns the head");
+    let evidence3 = joiner_evidence(&mut world);
+    assert!(
+        evidence3.snapshots.contains(&s0),
+        "J's durable state now evidences the snapshot"
+    );
+    world
+        .b
+        .engine
+        .commit_facts(&[Fact::ReconciliationRequestReceived(j_dev, evidence3)])
+        .unwrap();
+    let report = answer(&mut world, b_dev);
+    assert_eq!(
+        report.retired, 0,
+        "a delivered pair is not outstanding, so nothing retires"
+    );
+    assert_eq!(report.sent, 0);
+    let sent = publish(&mut world, b_dev);
+    assert_eq!(sent, 0, "possession quenches the resend");
+    assert!(
+        world
+            .b
+            .engine
+            .store
+            .load()
+            .unwrap()
+            .announcement_reconciled
+            .is_empty(),
+        "converged without ever retiring the delivered pair"
+    );
+    // The quench is durable: after a restart the markers replay and
+    // the publish pass stays silent on the old gap statements.
+    restart(&mut world.b, &world.controls);
+    let sent = publish(&mut world, b_dev);
+    assert_eq!(sent, 0, "markers replay; no resend after restart");
+    // Negative gates live beside this test:
+    // `retransmit_negative_gates_stay_silent`.
+}
+
+/// The accepted-and-lost shape every retransmit negative starts
+/// from: J states its gap, B queues and discharges relay-accepted,
+/// and the envelope never reaches J. Returns the world with (s0, J)
+/// delivered-but-never-ingested, plus the evidencing gap and its
+/// digest.
+fn lost_delivery() -> (World, ReconciliationEvidence, [u8; 32]) {
+    let mut world = build();
+    let j_dev = world.j.device;
+    let b_dev = world.b.device;
+    let gap = ReconciliationEvidence {
+        transitions: BTreeSet::new(),
+        snapshots: BTreeSet::new(),
+        capabilities: BTreeSet::from([(j_dev, 1), (j_dev, 4)]),
+    };
+    let digest = reconciliation_statement_digest(&j_dev, &gap);
+    world
+        .b
+        .engine
+        .commit_facts(&[Fact::ReconciliationRequestReceived(j_dev, gap.clone())])
+        .unwrap();
+    let report = answer(&mut world, b_dev);
+    assert_eq!(report.retired, 0);
+    assert_eq!(report.sent, 0);
+    let sent = publish(&mut world, b_dev);
+    assert_eq!(sent, 1, "the first delivery discharges");
+    world.relay = MemoryRelay::default();
+    (world, gap, digest)
+}
+
+/// The three negative gates: each is a delivered-but-missing pair
+/// the publish pass must still refuse.
+#[test]
+fn retransmit_negative_gates_stay_silent() {
+    // No installed epoch: the gap evidences installs for epoch 4
+    // only, so s0's epoch-1 seal is unopenable at the recipient —
+    // the resend would discharge an obligation that delivers
+    // nothing. Silent, and markerless.
+    let (mut world, _, _) = lost_delivery();
+    let (b_dev, j_dev) = (world.b.device, world.j.device);
+    let uninstalled = ReconciliationEvidence {
+        transitions: BTreeSet::new(),
+        snapshots: BTreeSet::new(),
+        capabilities: BTreeSet::from([(j_dev, 4)]),
+    };
+    world
+        .b
+        .engine
+        .commit_facts(&[Fact::ReconciliationRequestReceived(j_dev, uninstalled)])
+        .unwrap();
+    let report = answer(&mut world, b_dev);
+    assert_eq!((report.retired, report.sent), (0, 0));
+    assert_eq!(publish(&mut world, b_dev), 0, "unopenable bytes never send");
+    assert!(
+        world
+            .b
+            .engine
+            .store
+            .load()
+            .unwrap()
+            .announcement_retransmitted
+            .is_empty(),
+        "no resend, no marker"
+    );
+
+    // Reconciled first: a divergent later statement cannot unprove
+    // retirement. Plant the terminal state, then state a newer gap
+    // still missing s0 — the pair stays out.
+    let (mut world, gap, digest1) = lost_delivery();
+    let (b_dev, j_dev, s0) = (world.b.device, world.j.device, world.s0);
+    world
+        .b
+        .engine
+        .commit_facts(&[Fact::AnnouncementReconciled(s0, j_dev, digest1)])
+        .unwrap();
+    let mut gap2 = gap.clone();
+    gap2.snapshots.insert(SnapshotId::from_bytes([0xAA; 32]));
+    world
+        .b
+        .engine
+        .commit_facts(&[Fact::ReconciliationRequestReceived(j_dev, gap2)])
+        .unwrap();
+    let report = answer(&mut world, b_dev);
+    assert_eq!((report.retired, report.sent), (0, 0));
+    assert_eq!(
+        publish(&mut world, b_dev),
+        0,
+        "retirement wins over a later gap"
+    );
+    assert!(
+        world
+            .b
+            .engine
+            .store
+            .load()
+            .unwrap()
+            .announcement_retransmitted
+            .is_empty(),
+        "no resend, no marker"
+    );
+
+    // Refused retransmit: the relay accepts nothing, so no marker
+    // commits without acceptance — and the pair re-offers on the
+    // next pass with a working relay.
+    let (mut world, _, _) = lost_delivery();
+    let b_dev = world.b.device;
+    let mut failing = FailingMailbox {
+        sent: 0,
+        fail_after: 0,
+    };
+    let err = world
+        .b
+        .engine
+        .announce_pending(&mut failing, None, &mut PublishBudget::unbounded())
+        .unwrap_err();
+    assert!(
+        matches!(err, crate::runtime::engine::EngineError::Mailbox(_)),
+        "transport failure surfaces, does not poison: {err:?}"
+    );
+    assert!(
+        world
+            .b
+            .engine
+            .store
+            .load()
+            .unwrap()
+            .announcement_retransmitted
+            .is_empty(),
+        "no acceptance, no marker"
+    );
+    let sent = publish(&mut world, b_dev);
+    assert_eq!(sent, 1, "the refused pair re-offers next pass");
+    let loaded = world.b.engine.store.load().unwrap();
+    assert_eq!(
+        loaded.announcement_retransmitted.len(),
+        1,
+        "the retry marks once it is accepted"
+    );
 }
