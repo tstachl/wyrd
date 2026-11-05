@@ -200,6 +200,20 @@ pub struct LiveNode<V: NamespaceView> {
     /// loop's first pass is itself a fresh opportunity to discover
     /// gaps. Compared by movement, never by value.
     pub(super) last_mailbox_reconnects: Option<u64>,
+    /// Last observed connected-relay count, for the reconciliation
+    /// trigger's attachment edge (OD-21-4): `None` before the first
+    /// pass. Compared by from-zero transition, never by level — a
+    /// late-attaching transport (slow cold start, relay-provisioning
+    /// delay) is the blind window the reconnect counter cannot see:
+    /// recovery attempts only fire post-attachment, so initial
+    /// attachment moves no counter and a follower that never learned
+    /// what it missed would otherwise stay quiet forever. Updated
+    /// only on unpaused passes like the counter edge, so a
+    /// during-pause attach observed by an earlier pass fires on the
+    /// first unpaused pass; an attach before the very first pass
+    /// has no observed count yet, and that probe fires through the
+    /// session-start counter edge instead.
+    pub(super) last_connected_relays: Option<usize>,
     /// Completed-pass hook, installed by the composer alongside the
     /// route and barrier: the loop calls it with the cumulative pass
     /// count and the pass's report after every successful pass. `None`
@@ -453,6 +467,7 @@ where
                 fetch_pass_budget: config.fetch_pass_budget,
                 publish_pass_budget: config.publish_pass_budget,
                 last_mailbox_reconnects: None,
+                last_connected_relays: None,
                 pass_hook: None,
                 role_dir: None,
                 vault_swept_revision: None,

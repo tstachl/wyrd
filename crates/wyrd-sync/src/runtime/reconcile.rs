@@ -6,7 +6,11 @@
 //! a reconnect occurs; never on a timer. A reconnect is an explicit
 //! opportunity to discover gaps that could not have been observed
 //! while disconnected — "no durable gap currently observed" is not
-//! evidence that no gap exists after an offline interval.
+//! evidence that no gap exists after an offline interval. The live
+//! loop reports two reconnect-class edges into the one latch:
+//! recovery-counter movement, and initial attachment (the from-zero
+//! connected-relays transition, which moves no counter because
+//! recovery only fires post-attachment).
 //!
 //! Triggers coalesce, they do not add: a reconnect edge and a gap
 //! observation in the same evaluation produce one request, and a

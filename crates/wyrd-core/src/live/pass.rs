@@ -432,6 +432,22 @@ where
             if self.last_mailbox_reconnects.replace(reconnects) != Some(reconnects) {
                 self.engine.note_reconnected();
             }
+            // Attachment edge (OD-21-4): initial attachment moves no
+            // recovery counter — relay and stream episodes only fire
+            // post-attachment — so a follower whose transport was
+            // down at session start would otherwise never probe: no
+            // durable gap (it never learned what it missed), no
+            // edge, quiet forever while the sender's relay-accepted
+            // obligation sits discharged. The from-zero
+            // connected-relays transition is the transport session
+            // start the counter cannot see. Level-derived but
+            // edge-compared: steady-state connections never re-fire,
+            // and mailboxes reporting unknown health (connected zero,
+            // forever) never arm.
+            let connected = mailbox.health_snapshot().connected_relays;
+            if self.last_connected_relays.replace(connected) == Some(0) && connected > 0 {
+                self.engine.note_reconnected();
+            }
             match self.engine.maybe_request_reconciliation(mailbox) {
                 Ok(_) => {}
                 Err(EngineError::Mailbox(_)) => {}

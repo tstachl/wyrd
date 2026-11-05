@@ -54,6 +54,18 @@ is transient — no drive data is affected.
 
 ### Fixed
 
+- Solicit reconciliation on late transport attach
+  (`nostr:nevent1qqsrpwqeg3pz9xwdr575eleamae8l65fkenuxyxw9cqqqaeeluxstngpz9mhxue69uhkwunpwdczuap49eehg7pvxx7`):
+  the live loop latches a reconciliation probe on the
+  connected-relays from-zero transition. Recovery attempts only fire
+  post-attachment, so a follower whose transport was down at session
+  start previously probed once into the void and then stayed silent
+  forever — no durable gap (it never learned what it missed), no
+  counter edge. Emit side only: pending and never-queued obligations
+  now recover through the existing answer path. Retransmitting
+  delivered-but-never-ingested pairs still needs the sender half,
+  which stays open on the issue.
+
 - Bump `rustls-webpki` 0.103.15 → 0.103.16, `webpki-roots` 1.0.9 →
   1.0.10 and `webpki-root-certs` 1.0.9 → 1.0.10
   (RUSTSEC-2026-0382: certificate verification may accept distrusted
