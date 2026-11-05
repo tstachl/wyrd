@@ -1380,7 +1380,7 @@ leg_headless_fetch() {
 # leg_pause_owner <drive> <creds> <relay>: the pause/kill/restart leg
 # (issue 19, owner pause op item 2). Runs `wyrd vault`, pauses it
 # through the real owner operation, authors a mkdir while paused
-# (local authoring continues), proves the obligation stays queued
+# (local authoring continues), proves the obligation stays pending
 # while passes advance (deferral, not discharge), KILLs the vault
 # mid-pause, restarts through the normal production path, and proves
 # the drive comes back unpaused with the obligation reconciled. The
@@ -1411,20 +1411,32 @@ leg_pause_owner() {
   pass "pause sets the switch through the owner operation"
   # Author while paused: local authoring continues, so the submit
   # resolves, but discharge is deferred — the obligation must stay
-  # queued while passes keep advancing around it.
+  # pending (still owed) while passes keep advancing around it. The
+  # outbox sets are insert-only, so the queued total never drains;
+  # pending (queued minus delivered) is the discharge signal.
   [[ "$(python3 "$SCRIPT_DIR/owner-socket.py" submit-mkdir "$d" paused-marker)" == "submitted" ]] \
     || die "submit while paused never resolved"
   pass "submit while paused commits locally"
-  poll_until 300 bash -c "test \"\$(python3 \"$SCRIPT_DIR/owner-socket.py\" queued \"$d\")\" = 1" \
-    || die "paused obligation never stayed queued (see pause-serve-1.err)"
+  poll_until 300 bash -c "test \"\$(python3 \"$SCRIPT_DIR/owner-socket.py\" pending \"$d\")\" = 1" \
+    || die "paused obligation never stayed pending (see pause-serve-1.err)"
   local before
   before="$(python3 "$SCRIPT_DIR/owner-socket.py" liveness "$d")"
   poll_until 300 bash -c "test \"\$(python3 \"$SCRIPT_DIR/owner-socket.py\" liveness \"$d\")\" != \"$before\"" \
     || die "no further pass ran while paused"
-  after="$(python3 "$SCRIPT_DIR/owner-socket.py" queued "$d")"
+  after="$(python3 "$SCRIPT_DIR/owner-socket.py" pending "$d")"
   [[ "$after" == "1" ]] \
-    || die "passes advanced while paused but the obligation discharged (queued=$after)"
-  pass "passes advance while paused with the obligation still queued"
+    || die "passes advanced while paused but the obligation discharged (pending=$after)"
+  pass "passes advance while paused with the obligation still pending"
+  # Cross-guest gate: the member must hold its relay attachment
+  # before the kill. Discharge after restart is a single
+  # relay-accepted send with no retry (delivered records relay
+  # accept, not receipt), so killing before the member attaches
+  # risks landing the announcement in the attach window, where the
+  # relay drops it and the member's converge poll below can never
+  # pass. Every wait stays deadline-bounded.
+  peer_wait 600 xpause-m-attached \
+    || die "member never attached before the kill window"
+  pass "member attached before the kill"
   # KILL mid-pause with the obligation pending: no graceful shutdown,
   # no reopen before the kill.
   local pid
@@ -1448,15 +1460,22 @@ leg_pause_owner() {
   [[ "$(python3 "$SCRIPT_DIR/owner-socket.py" liveness "$d")" == paused=false* ]] \
     || die "restarted vault did not come back unpaused"
   pass "restarted vault runs unpaused"
-  # The durable obligation reconciles through the outbox: queued
+  # The durable obligation reconciles through the outbox: pending
   # drains to zero and exactly one announcement delivers. Both sides
   # come from the same observe slot, but the delivery count is polled
-  # like the queue so a slow pass cannot flake the assertion.
-  poll_until 300 bash -c "test \"\$(python3 \"$SCRIPT_DIR/owner-socket.py\" queued \"$d\")\" = 0" \
+  # like the pending count so a slow pass cannot flake the assertion.
+  poll_until 300 bash -c "test \"\$(python3 \"$SCRIPT_DIR/owner-socket.py\" pending \"$d\")\" = 0" \
     || die "restarted vault never reconciled the obligation (see pause-serve-2.err)"
   poll_until 300 bash -c "test \"\$(python3 \"$SCRIPT_DIR/owner-socket.py\" delivered \"$d\")\" = 1" \
     || die "reconciled obligation did not deliver exactly once"
   pass "pending obligation reconciles after restart with one delivery"
+  # Hold serve#2 up until the member converges: the member fetches
+  # behind the announcement over the live serving endpoint, so
+  # TERMing here would strand it against a dead peer. Bounded both
+  # sides: if the member never converges both legs die named.
+  peer_wait 600 xpause-m-converged \
+    || die "member never converged on the discharged marker (see pause-serve-2.err)"
+  pass "member converged while serve#2 stayed up"
   # TERM while parked: the ordered teardown must exit 0, proving
   # the shutdown half beside the kill half above.
   local pid2
@@ -1477,17 +1496,26 @@ leg_pause_owner() {
   check_no_leaks "$LOGDIR/pause-serve-2.err" "$(cat "$c/identity")" "$(cat "$c/passphrase")"
 }
 
-# leg_pause_member <drive> <creds> <relay>: mount and wait for the
-# pause leg's marker directory. The member polls from the start: the
-# marker can only converge after the restart discharges the
-# obligation, so convergence itself is the no-loss proof.
+# leg_pause_member <drive> <creds> <relay>: mount, prove relay
+# attachment, signal the owner leg to proceed with the kill, then
+# wait for the pause leg's marker directory. The member polls from
+# the start: the marker can only converge after the restart
+# discharges the obligation, so convergence itself is the no-loss
+# proof. The attach signal is load-bearing, not pacing: the
+# discharge is a single send with no retry, so the owner must not
+# kill until the member holds a home relay.
 leg_pause_member() {
   local d="$1" c="$2" relay="$3"
   step 12 "pause convergence leg"
   start_mount xpause-m "$c" "$d" "$MNTS/xpause-m" --relay "$relay"
+  poll_until 300 grep -q "home is now relay" "$LOGDIR/mount-xpause-m.err" \
+    || die "member never attached to the relay (see mount-xpause-m.err)"
+  pass "member attached to the relay before the restart"
+  peer_signal xpause-m-attached
   poll_until 600 test -d "$MNTS/xpause-m/paused-marker" \
     || die "member never converged on the post-restart marker"
   pass "member converges on the marker discharged after restart"
+  peer_signal xpause-m-converged
   stop_mount xpause-m TERM
   check_no_leaks "$LOGDIR/mount-xpause-m.err" "$(cat "$c/identity")" "$(cat "$c/passphrase")"
 }

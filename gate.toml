@@ -83,6 +83,7 @@ key = "~/.ssh/id_thomas.pub"
 entryPoint = "tests/gate/gate-entry.sh"
 requires = ["bats", "tar", "diff", "gawk", "gzip", "jq"]
 relayRole = "relay"
+guest_log_dir = "wyrd-e2e"
 
 [tasks.wyrd-gate-e2e.builds]
 img-peer-o = "images.peer-o"

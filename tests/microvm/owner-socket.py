@@ -8,7 +8,9 @@
 #   pause | resume            -> prints "paused=true|false"
 #   liveness                  -> prints "paused=<bool> passes=<n>"
 #   submit-mkdir <path>       -> prints "submitted" (mkdir needs no token)
-#   queued                    -> prints announcements_queued (observe totals)
+#   pending                   -> prints still-owed announcements (queued minus
+#                                delivered: the outbox sets are insert-only,
+#                                so the queued total never drains)
 #   delivered                 -> prints announcements_delivered
 # Any refusal or transport break exits non-zero: a broken connection is
 # unconfirmed, never a status the leg may read as an answer.
@@ -93,16 +95,22 @@ def main(argv):
         if "Submitted" not in ok:
             die("submit answered without a submission verdict")
         print("submitted")
-    elif op in ("queued", "delivered"):
+    elif op == "pending":
+        ok = unwrap_ok(transact(sock, "observe", None, req_id), op)
+        try:
+            pending = ok["Observe"]["status"]["obligations"]["announcements"]
+            print(int(len(pending)))
+        except (KeyError, TypeError):
+            die("observe answered without pending obligations")
+    elif op == "delivered":
         ok = unwrap_ok(transact(sock, "observe", None, req_id), op)
         try:
             totals = ok["Observe"]["status"]["totals"]
-            key = "announcements_queued" if op == "queued" else "announcements_delivered"
-            print(int(totals[key]))
+            print(int(totals["announcements_delivered"]))
         except (KeyError, TypeError):
             die("observe answered without obligation totals")
     else:
-        die("unknown op {!r} (want pause|resume|liveness|submit-mkdir|queued|delivered)".format(op))
+        die("unknown op {!r} (want pause|resume|liveness|submit-mkdir|pending|delivered)".format(op))
 
 
 main(sys.argv)
