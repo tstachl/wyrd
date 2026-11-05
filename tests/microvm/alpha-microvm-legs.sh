@@ -1427,6 +1427,16 @@ leg_pause_owner() {
   [[ "$after" == "1" ]] \
     || die "passes advanced while paused but the obligation discharged (pending=$after)"
   pass "passes advance while paused with the obligation still pending"
+  # Cross-guest gate: the member must hold its relay attachment
+  # before the kill. Discharge after restart is a single
+  # relay-accepted send with no retry (delivered records relay
+  # accept, not receipt), so killing before the member attaches
+  # risks landing the announcement in the attach window, where the
+  # relay drops it and the member's converge poll below can never
+  # pass. Every wait stays deadline-bounded.
+  peer_wait 600 xpause-m-attached \
+    || die "member never attached before the kill window"
+  pass "member attached before the kill"
   # KILL mid-pause with the obligation pending: no graceful shutdown,
   # no reopen before the kill.
   local pid
@@ -1479,14 +1489,22 @@ leg_pause_owner() {
   check_no_leaks "$LOGDIR/pause-serve-2.err" "$(cat "$c/identity")" "$(cat "$c/passphrase")"
 }
 
-# leg_pause_member <drive> <creds> <relay>: mount and wait for the
-# pause leg's marker directory. The member polls from the start: the
-# marker can only converge after the restart discharges the
-# obligation, so convergence itself is the no-loss proof.
+# leg_pause_member <drive> <creds> <relay>: mount, prove relay
+# attachment, signal the owner leg to proceed with the kill, then
+# wait for the pause leg's marker directory. The member polls from
+# the start: the marker can only converge after the restart
+# discharges the obligation, so convergence itself is the no-loss
+# proof. The attach signal is load-bearing, not pacing: the
+# discharge is a single send with no retry, so the owner must not
+# kill until the member holds a home relay.
 leg_pause_member() {
   local d="$1" c="$2" relay="$3"
   step 12 "pause convergence leg"
   start_mount xpause-m "$c" "$d" "$MNTS/xpause-m" --relay "$relay"
+  poll_until 300 grep -q "home is now relay" "$LOGDIR/mount-xpause-m.err" \
+    || die "member never attached to the relay (see mount-xpause-m.err)"
+  pass "member attached to the relay before the restart"
+  peer_signal xpause-m-attached
   poll_until 600 test -d "$MNTS/xpause-m/paused-marker" \
     || die "member never converged on the post-restart marker"
   pass "member converges on the marker discharged after restart"
