@@ -9,13 +9,11 @@ use wyrd_core::mutation::{
     MutationOutcome, MutationQueue,
 };
 
-use wyrd_core::session::FoldLease;
-
 use wyrd_format::ObjectStore;
 use wyrd_fuse::{Materialization, ViewError};
 
 use super::super::inode::{Handle, WriteHandle, WriteImage};
-use super::{log_budget_refusal, log_refused, mutation_errno, FuseBackend};
+use super::{log_refused, mutation_errno, FuseBackend};
 
 /// One taken dirty buffer: the fold detached the overlay under the
 /// handle's lock and parked writers on `fold_wake` until it settles
@@ -35,6 +33,11 @@ pub(super) struct TakenMember {
     /// Overlay to put back on abort. `None` only for small appends,
     /// whose sequence *is* the taken content and restores from it.
     pub(super) restore: Option<WriteImage>,
+    /// A large append commits as a full image (see `taken_kind`),
+    /// so its `content` is base plus sequence, not the sequence.
+    /// Stored at take time so later predicates need not re-derive it
+    /// from lengths that already include the base.
+    pub(super) large_append: bool,
 }
 
 /// What owns a fold's forcing privilege: a dirty handle's own commit
@@ -76,14 +79,13 @@ pub(super) struct GatherFilter<'a> {
     pub(super) own: Option<&'a Arc<Mutex<WriteHandle>>>,
 }
 
-/// Whether an append take commits as a bare sequence: base plus
-/// sequence within the live loop's total cap. Past it the append
-/// commits as a full image instead (see `taken_kind`), so it must
-/// never merge into a sequence run.
+/// Whether an append take commits as a bare sequence: small
+/// appends ride `AppendFile`, large ones ride a full `CommitFile`
+/// (see `taken_kind`) and must never merge into a sequence run.
+/// Decided at take time from base plus sequence, since the taken
+/// content of a large append already includes the base.
 fn appends_as_sequence(taken: &TakenMember) -> bool {
-    taken.append
-        && taken.base.size().saturating_add(taken.content.len() as u64)
-            <= wyrd_core::session::MAX_WRITE_BUFFER_BYTES as u64
+    taken.append && !taken.large_append
 }
 
 /// The queue kind for one taken buffer. A small append sequence
@@ -271,36 +273,6 @@ where
             MutationKind::Rename { from, to, .. } => vec![from.clone(), to.clone()],
             _ => Vec::new(),
         }
-    }
-
-    /// Account a fold's transient submission memory before it is
-    /// submitted: the queue kinds clone the taken images (plus the
-    /// restore overlays held for an abort), so the fold's footprint
-    /// is ~2× the taken bytes while in flight. On refusal every
-    /// taken overlay is restored and the fold reports `ENOSPC` —
-    /// memory pressure, retryable, with all handles unchanged —
-    /// instead of submitting unaccounted. The lease lives until the
-    /// settle completes.
-    fn lease_fold(&self, taken: &[TakenMember]) -> Result<FoldLease<'_>, fuser::Errno> {
-        let bytes = taken
-            .iter()
-            .map(|taken| {
-                taken.content.len().saturating_add(
-                    taken
-                        .restore
-                        .as_ref()
-                        .map(WriteImage::resident)
-                        .unwrap_or_default(),
-                )
-            })
-            .sum();
-        self.budget.reserve_fold(bytes).map_err(|error| {
-            log_budget_refusal("fold-lease", error);
-            for taken in taken {
-                settle_restored(self, taken);
-            }
-            fuser::Errno::ENOSPC
-        })
     }
 
     /// Submit one fold over taken members: the non-forcing members in
@@ -668,7 +640,7 @@ where
                     return Ok(());
                 }
             }
-            let taken = self.gather_taken(
+            let (taken, _fold_lease) = self.gather_taken(
                 std::slice::from_ref(handle),
                 &GatherFilter {
                     skip_paths: &[],
@@ -682,7 +654,6 @@ where
                 continue;
             }
             let forcer = FoldSubmitForcer::Handle(Arc::clone(handle));
-            let _fold_lease = self.lease_fold(&taken)?;
             let (result, submitted) = self.run_fold(&queue, &taken, &forcer);
             let (mapped, _) = self.settle_fold(&taken, &submitted, &forcer, result);
             return match mapped {
@@ -712,7 +683,7 @@ where
     pub(super) fn force_op(&self, kind: MutationKind) -> Result<MutationOutcome, fuser::Errno> {
         let queue = Arc::clone(self.mutations.as_ref().ok_or(fuser::Errno::EROFS)?);
         let skip_paths = Self::forcer_skip_paths(&kind);
-        let taken = self.gather_taken(
+        let (taken, _fold_lease) = self.gather_taken(
             &[],
             &GatherFilter {
                 skip_paths: &skip_paths,
@@ -721,7 +692,6 @@ where
             },
         )?;
         let forcer = FoldSubmitForcer::Op(kind);
-        let _fold_lease = self.lease_fold(&taken)?;
         let (result, submitted) = self.run_fold(&queue, &taken, &forcer);
         let (mapped, _) = self.settle_fold(&taken, &submitted, &forcer, result);
         mapped
@@ -737,7 +707,12 @@ where
         let Some(queue) = self.mutations.as_ref().map(Arc::clone) else {
             return Vec::new();
         };
-        let taken = match self.gather_taken(
+        // A gather refusal already restored every detached overlay
+        // with its handle still dirty; report the candidates as
+        // uncommitted, like the old lease-refusal path did for the
+        // taken set. All candidates here were dirty handles, so the
+        // reporting set matches.
+        let (taken, _fold_lease) = match self.gather_taken(
             candidates,
             &GatherFilter {
                 skip_paths: &[],
@@ -746,22 +721,18 @@ where
             },
         ) {
             Ok(taken) => taken,
-            Err(_) => return Vec::new(),
+            Err(_) => {
+                return candidates
+                    .iter()
+                    .filter_map(|handle| {
+                        handle.lock().ok().map(|write| (write.path.clone(), false))
+                    })
+                    .collect();
+            }
         };
         if taken.is_empty() {
             return Vec::new();
         }
-        // Memory pressure restores the taken images inside
-        // `lease_fold`; the per-path loss log below reports them.
-        let _fold_lease = match self.lease_fold(&taken) {
-            Ok(lease) => lease,
-            Err(_) => {
-                return taken
-                    .iter()
-                    .map(|taken| (taken.path.clone(), false))
-                    .collect();
-            }
-        };
         let forcer = FoldSubmitForcer::None;
         let (result, submitted) = self.run_fold(&queue, &taken, &forcer);
         let (_, summary) = self.settle_fold(&taken, &submitted, &forcer, result);

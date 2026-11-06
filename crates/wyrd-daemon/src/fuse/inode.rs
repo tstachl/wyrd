@@ -208,6 +208,25 @@ impl SparseOverlay {
         &self.patches
     }
 
+    /// Resident buffered bytes after writing `data` at `offset`,
+    /// without mutating: the current resident count, minus the bytes
+    /// of overlapped patches the write supersedes, plus the new
+    /// bytes. Callers reserve this before [`write`](Self::write), so
+    /// a failing budget never observes a half-merged overlay.
+    pub(super) fn write_resident(&self, offset: u64, data: &[u8]) -> usize {
+        let end = offset.saturating_add(data.len() as u64);
+        let mut superseded = 0usize;
+        for (&start, bytes) in self.patches.range(..end) {
+            let patch_end = start.saturating_add(bytes.len() as u64);
+            if patch_end > offset {
+                superseded += (patch_end.min(end) - start.max(offset)) as usize;
+            }
+        }
+        self.resident()
+            .saturating_sub(superseded)
+            .saturating_add(data.len())
+    }
+
     /// Buffer `data` at `offset`, last-write-wins: overlapping
     /// patches are split around the new span (the covered middle is
     /// dropped) and the logical length extends. The caller reserves
@@ -730,6 +749,20 @@ mod tests_overlay {
         overlay.truncate(200);
         assert_eq!(overlay.len(), 200);
         assert_eq!(overlay.resident(), 5, "growing adds no resident bytes");
+    }
+
+    #[test]
+    fn write_resident_counts_post_merge_bytes_exactly() {
+        let mut overlay = SparseOverlay::new(100);
+        overlay.write(10, b"0123456789");
+        // Abutting write: nothing superseded.
+        assert_eq!(overlay.write_resident(20, b"ab"), 10 + 2);
+        // Overlapping write: 4 superseded of 6 new.
+        assert_eq!(overlay.write_resident(16, b"ABCDEF"), 10 - 4 + 6);
+        // Enveloping write: all 10 superseded.
+        assert_eq!(overlay.write_resident(0, &[b'x'; 50]), 50);
+        // Empty write: unchanged.
+        assert_eq!(overlay.write_resident(0, b""), 10);
     }
 
     #[test]

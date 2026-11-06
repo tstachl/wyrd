@@ -968,3 +968,58 @@ fn write_offset_overflow_is_efbig() {
     drop(backend);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+/// Two sparse overlays on one path race: the first-buffered handle
+/// commits its materialized image, and the same-base second goes
+/// stale and terminal, releasing its resident bytes. The losing
+/// overlay never publishes: read-back serves the winner, and the
+/// loser reports `EIO` on every later operation.
+#[test]
+fn same_path_sparse_handles_first_commits_second_goes_stale() {
+    let (engine, dir, _) = scratch_drive();
+    let daemon: WyrdNode<DriveView<_, RuntimeMaterialization>> =
+        WyrdNode::new(engine, MemoryObjectStore::default()).unwrap();
+    let (live, backend) = live_backend(daemon);
+    let (stop, loop_handle) = spawn_live_loop(live);
+
+    let (created, _, _) = backend.create_at(1, "race.txt", libc::O_RDWR).unwrap();
+    backend.write_handle(created, 0, b"base").unwrap();
+    backend.commit_handle(created).unwrap();
+    backend.release_handle(created).unwrap();
+
+    let first = backend.open_write("race.txt", libc::O_RDWR).unwrap();
+    let second = backend.open_write("race.txt", libc::O_RDWR).unwrap();
+    backend.write_handle(first, 0, b"AAAA").unwrap();
+    backend.write_handle(second, 4, b"BBBB").unwrap();
+    assert_eq!(
+        backend.budget_state(),
+        (8, 2),
+        "two disjoint patches buffer eight resident bytes on two handles"
+    );
+    backend.commit_handle(first).expect("the first fold wins");
+    assert_eq!(
+        backend.commit_handle(second),
+        Err(fuser::Errno::EIO),
+        "a same-base commit after the winner landed is stale and terminal"
+    );
+    let read = backend.open_at("race.txt").unwrap();
+    assert_eq!(
+        backend.read_handle(read, 0, 64).unwrap(),
+        b"AAAA",
+        "only the winner's overlay published"
+    );
+    backend.release_handle(read).unwrap();
+    assert_eq!(
+        backend.budget_state(),
+        (0, 0),
+        "the loser released its resident bytes going terminal"
+    );
+
+    stop.store(true, Ordering::Relaxed);
+    loop_handle
+        .join()
+        .unwrap()
+        .expect("loop shuts down cleanly");
+    drop(backend);
+    std::fs::remove_dir_all(dir).unwrap();
+}

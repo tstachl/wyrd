@@ -307,6 +307,13 @@ pub(super) fn join(parent: &str, name: &str) -> String {
     }
 }
 
+/// Largest logical file the mount can buffer or commit: the protocol
+/// ingest ceiling (65536 chunks x 256 KiB, `wyrd_sync::ingest::Limits::V0`),
+/// the same bound authoring enforces before any snapshot publishes.
+/// A logical length past it can never publish, so writes, truncates,
+/// and takes refuse `EFBIG` before allocating or leasing anything.
+pub(super) const MAX_COMMITTABLE_BYTES: u64 = 16 * 1024 * 1024 * 1024;
+
 /// Presentation attributes for one node: kind, size, exec bit. A
 /// conflicted path presents as a directory — the readdir union rules
 /// keep it navigable, and the conflict itself fails on read.

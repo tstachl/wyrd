@@ -13,7 +13,9 @@ use super::super::inode::{
     DirectoryEntries, Handle, OpenDir, SparseOverlay, WriteHandle, WriteImage,
     DIRECTORY_HANDLE_BASE, MOUNT_TIME,
 };
-use super::{attr_of, errno_of, inode_error, join, log_budget_refusal, FuseBackend};
+use super::{
+    attr_of, errno_of, inode_error, join, log_budget_refusal, FuseBackend, MAX_COMMITTABLE_BYTES,
+};
 
 impl<S: ObjectStore, M: Materialization> FuseBackend<S, M>
 where
@@ -587,8 +589,13 @@ where
         path: &str,
         size: u64,
     ) -> Result<(), fuser::Errno> {
-        // u64 is the overlay's address width on every target; the
-        // word-width check happens at commit-time materialization.
+        // u64 is the overlay's address width on every target, but a
+        // logical length past the ingest ceiling can never publish:
+        // refuse it before touching the overlay, like the old cap
+        // refused absurd targets before reading the base.
+        if size > MAX_COMMITTABLE_BYTES {
+            return Err(fuser::Errno::EFBIG);
+        }
         let target = size;
         let mut write = handle.lock().map_err(|_| fuser::Errno::EIO)?;
         write = self.wait_inflight(write)?;
@@ -620,6 +627,10 @@ where
         let new_resident = overlay.resident();
         if let Err(error) = self.budget.reserve(write.id, new_resident) {
             log_budget_refusal("truncate", error);
+            // The overlay was already taken: put it back so the
+            // refusal leaves the handle (and its dirty mark) unchanged,
+            // like the write path's restore on refusal.
+            write.image = Some(WriteImage::Sparse(overlay));
             return Err(fuser::Errno::ENOSPC);
         }
         write.image = Some(WriteImage::Sparse(overlay));

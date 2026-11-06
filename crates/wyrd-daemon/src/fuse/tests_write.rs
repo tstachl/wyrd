@@ -1672,3 +1672,141 @@ fn two_positioned_handles_on_distinct_paths_fold_together() {
         "the joint fold releases both handles"
     );
 }
+
+/// Logical lengths past the ingest ceiling can never publish, so the
+/// write and truncate paths refuse them up front with `EFBIG` —
+/// without allocating or touching the budget — while a length at
+/// exactly the ceiling still buffers.
+#[test]
+fn absurd_lengths_fail_fast_without_allocating() {
+    let (mut backend, _) = evolving_backend(b"first", b"second");
+    backend.mutations = Some(Arc::new(MutationQueue::default()));
+    let backend = Arc::new(backend);
+    let fh = backend.open_write("f.txt", libc::O_RDWR).unwrap();
+    assert_eq!(
+        backend.write_handle(fh, u64::MAX, b"x"),
+        Err(fuser::Errno::EFBIG),
+        "a write past the address width fails closed"
+    );
+    assert_eq!(
+        backend.write_handle(fh, 16 * 1024 * 1024 * 1024, b"x"),
+        Err(fuser::Errno::EFBIG),
+        "a write past the ingest ceiling fails closed"
+    );
+    assert_eq!(
+        backend.budget.total(),
+        0,
+        "refused absurd writes reserve nothing"
+    );
+    assert_eq!(
+        backend.read_handle(fh, 0, 64).unwrap(),
+        b"first",
+        "the handle still serves its base"
+    );
+    let ino = backend.attr_at("f.txt").unwrap().ino.0;
+    assert_eq!(
+        backend.setattr_attrs(ino, Some(fh), Some(u64::MAX), None),
+        Err(fuser::Errno::EFBIG),
+        "an absurd truncate fails closed"
+    );
+    backend
+        .setattr_attrs(ino, Some(fh), Some(16 * 1024 * 1024 * 1024), None)
+        .expect("a truncate to exactly the ceiling buffers");
+    assert_eq!(
+        backend.budget.total(),
+        0,
+        "a pure extension buffers no patches, so nothing is charged"
+    );
+}
+
+/// A sparse take past the aggregate refuses the fold lease before
+/// materializing: the overlay is restored with the handle still
+/// dirty, the reservation is exactly the resident bytes again, and
+/// the retry meets the same pressure, not a poisoned handle.
+#[test]
+fn sparse_take_past_aggregate_restores_the_overlay() {
+    let mut store = MemoryObjectStore::default();
+    let chunk = store.insert(ObjectKind::Chunk, &[0xCC; 1024]).unwrap();
+    let root = Tree::from_entries(vec![Entry::file("f.txt", 1024, false, vec![chunk]).unwrap()])
+        .unwrap()
+        .insert_into(&mut store)
+        .unwrap();
+    let mut backend = FuseBackend::new(DriveView::new(
+        store,
+        NoMaterialization,
+        heads(vec![snapshot_of(root)]),
+    ));
+    // Room for the 1.5 KiB resident patch but not for its 2.5 KiB
+    // take (full image plus restore) on top.
+    backend.budget = Arc::new(WriteBudget::with_limits(1024 * 1024, 2048, 8));
+    let queue = Arc::new(MutationQueue::default());
+    backend.mutations = Some(Arc::clone(&queue));
+    let backend = Arc::new(backend);
+    let fh = backend.open_write("f.txt", libc::O_RDWR).unwrap();
+    backend.write_handle(fh, 0, &[b'p'; 1536]).unwrap();
+    assert_eq!(backend.budget.total(), 1536);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let done = Arc::new(AtomicBool::new(false));
+    let drainer = spawn_summarizing_drainer(&queue, &seen, &done);
+    assert_eq!(
+        backend.commit_handle(fh),
+        Err(fuser::Errno::ENOSPC),
+        "the fold lease refuses a sparse take past the aggregate"
+    );
+    done.store(true, Ordering::Relaxed);
+    drainer.join().expect("drainer exits");
+    assert!(
+        seen.lock().unwrap().is_empty(),
+        "a refused fold submits nothing"
+    );
+    assert_eq!(
+        backend.budget.total(),
+        1536,
+        "the restored overlay keeps exactly its resident reservation"
+    );
+    assert_eq!(
+        backend.read_handle(fh, 0, 4).unwrap(),
+        b"pppp",
+        "the restored handle still serves its patches"
+    );
+    assert_eq!(
+        backend.commit_handle(fh),
+        Err(fuser::Errno::ENOSPC),
+        "the retry meets the same pressure, not a poisoned handle"
+    );
+    backend.release_handle(fh).unwrap();
+}
+
+/// An `O_SYNC` write on a past-cap base commits inline: one byte
+/// buffers, the fold carries the full image, and the write returns
+/// only after it is durable.
+#[test]
+fn o_sync_write_on_large_base_commits_inline() {
+    let (backend, queue) = large_backend(PAST_CAP);
+    let backend = Arc::new(backend);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let done = Arc::new(AtomicBool::new(false));
+    let drainer = spawn_summarizing_drainer(&queue, &seen, &done);
+    let fh = backend
+        .open_write("big", libc::O_RDWR | libc::O_SYNC)
+        .unwrap();
+    assert_eq!(
+        backend.write_handle(fh, PAST_CAP as u64 - 1, b"Z").unwrap(),
+        1
+    );
+    done.store(true, Ordering::Relaxed);
+    drainer.join().expect("drainer exits");
+    assert_eq!(
+        backend.budget.total(),
+        0,
+        "the inline commit releases its resident byte"
+    );
+    let seen = seen.lock().unwrap();
+    match &seen[..] {
+        [summary] => {
+            assert_eq!(summary.len, PAST_CAP);
+            assert_eq!(summary.tail, vec![0u8, 0u8, 0u8, b'Z']);
+        }
+        other => panic!("one fold with one member, saw {} summaries", other.len()),
+    }
+}

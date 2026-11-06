@@ -6,13 +6,17 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use fuser::FileHandle;
 
 use wyrd_core::mutation::{FileIdentity, MutationKind, MutationOutcome};
+use wyrd_core::session::FoldLease;
 
 use wyrd_format::ObjectStore;
 use wyrd_fuse::{Materialization, Node, ViewError};
 
 use super::super::inode::{Handle, SparseOverlay, WriteHandle, WriteImage};
 use super::fold::{GatherFilter, TakenMember};
-use super::{attr_of, errno_of, join, log_budget_refusal, unsupported_open_flags, FuseBackend};
+use super::{
+    attr_of, errno_of, join, log_budget_refusal, unsupported_open_flags, FuseBackend,
+    MAX_COMMITTABLE_BYTES,
+};
 
 impl<S: ObjectStore, M: Materialization> FuseBackend<S, M>
 where
@@ -359,27 +363,33 @@ where
             }
             return Ok(data.len() as u32);
         }
-        // Reject address overflow before buffering (EFBIG, handle
-        // unchanged); the overlay extends with saturating arithmetic
-        // past this point, and commit-time materialization re-checks
-        // the word width.
-        offset
+        // Reject address overflow and uncommittable lengths before
+        // buffering (EFBIG, handle unchanged): the overlay extends
+        // with saturating arithmetic past this point, and no logical
+        // length past the ingest ceiling can ever publish.
+        let end = offset
             .checked_add(data.len() as u64)
             .ok_or(fuser::Errno::EFBIG)?;
+        if end > MAX_COMMITTABLE_BYTES {
+            return Err(fuser::Errno::EFBIG);
+        }
 
         match write.image.take() {
             Some(WriteImage::Sparse(overlay)) => {
                 // Dirty handle: only the merged patches are resident,
-                // so account the merged count before mutating.
-                let mut merged = overlay.clone();
-                merged.write(offset, data);
-                let new_resident = merged.resident();
+                // so account the post-merge count before mutating.
+                // `write_resident` computes it exactly (overlapped
+                // bytes are superseded, not double-counted), so no
+                // clone is needed to test the budget.
+                let new_resident = overlay.write_resident(offset, data);
                 if let Err(error) = self.budget.reserve(write.id, new_resident) {
                     log_budget_refusal("write", error);
                     write.image = Some(WriteImage::Sparse(overlay));
                     return Err(fuser::Errno::ENOSPC);
                 }
-                write.image = Some(WriteImage::Sparse(merged));
+                let mut overlay = overlay;
+                overlay.write(offset, data);
+                write.image = Some(WriteImage::Sparse(overlay));
             }
             Some(_) => {
                 // A positioned handle never carries an append
@@ -459,12 +469,11 @@ where
     /// Assemble the full commit image for a sparse overlay: base
     /// bytes with patches applied, zero-extended to the logical
     /// length. The base is read in `u32`-sized windows so a large
-    /// base never needs one unbounded read; a word-width overflow in
-    /// the logical length fails closed. This allocates the logical
-    /// size transiently at take time: the take→submit window is
-    /// straight-line code holding no locks, and from submit the fold
-    /// lease covers the taken length (see `lease_fold`), exactly as
-    /// it covers the queue-kind clone.
+    /// base never needs one unbounded read; a logical length past
+    /// the ingest ceiling is refused by the caller before this runs
+    /// (see `gather_taken`), and the word width is re-checked here.
+    /// Runs under the fold lease taken over the full length (see
+    /// `gather_taken`), exactly the transient it accounts.
     fn materialize_sparse(
         &self,
         capture: &wyrd_fuse::OpenFile,
@@ -496,23 +505,32 @@ where
         Ok(out)
     }
 
-    /// Take every dirty handle's image for one fold, minus the
+    /// Take every dirty handle's overlay for one fold, minus the
     /// filter's exclusions: the table is only held to clone arcs,
     /// then each handle is locked alone (pointer order, never
     /// nested) and its overlay detached with the fold's identity.
-    /// Sparse overlays materialize to full commit images after the
-    /// handle lock is released (under no lock, so a large base read
+    /// Takes happen in two phases. First the overlays detach under
+    /// their handle locks with no blocking I/O; then one fold lease
+    /// covers the whole take (full images plus restore overlays)
+    /// before anything materializes, so no take-time byte is ever
+    /// unaccounted. A lease refusal restores every detached overlay
+    /// and reports `ENOSPC` with all handles still dirty and
+    /// retryable. Only then does each overlay materialize to its
+    /// full commit image outside the handle lock (a large base read
     /// never stalls other handles); a materialization failure fails
-    /// that handle closed and leaves the rest to fold. Skips clean,
-    /// failed, already-taken, filtered, and imageless handles — the
+    /// that handle closed and leaves the rest to fold. A logical
+    /// length past the ingest ceiling fails its handle closed with
+    /// `EFBIG` before leasing or allocating. Skips clean, failed,
+    /// already-taken, filtered, and imageless handles — the
     /// imageless one fails closed on the spot, like the old
     /// single-handle commit did. Returns the taken members in
-    /// first-in-first-buffered order.
+    /// first-in-first-buffered order with the lease held across the
+    /// caller's submit and settle.
     pub(super) fn gather_taken(
         &self,
         extra: &[Arc<Mutex<WriteHandle>>],
         filter: &GatherFilter<'_>,
-    ) -> Result<Vec<TakenMember>, fuser::Errno> {
+    ) -> Result<(Vec<TakenMember>, FoldLease<'_>), fuser::Errno> {
         let fold_id = self.fold_ids.fetch_add(1, Ordering::Relaxed);
         let mut arcs: Vec<Arc<Mutex<WriteHandle>>> = {
             let files = self.files.lock().map_err(|_| fuser::Errno::EIO)?;
@@ -531,7 +549,10 @@ where
             }
         }
         arcs.sort_by_key(|handle| Arc::as_ptr(handle) as usize);
-        let mut taken = Vec::new();
+        // Phase 1: detach overlays under per-handle locks. No
+        // blocking I/O here: writers park on `inflight` from the
+        // unlock on.
+        let mut pending: Vec<PendingTake> = Vec::new();
         for handle in &arcs {
             let mut write = match handle.lock() {
                 Ok(guard) => guard,
@@ -557,17 +578,6 @@ where
             // every dirty transition pairs with one. If the overlay
             // is ever absent here, fail the handle closed rather
             // than authoring an empty prefix as a successful write.
-            enum Take {
-                Append {
-                    sequence: Vec<u8>,
-                    restore: Option<WriteImage>,
-                    capture: wyrd_fuse::OpenFile,
-                    base_size: u64,
-                },
-                Sparse {
-                    overlay: SparseOverlay,
-                },
-            }
             let take = match write.image.take() {
                 Some(WriteImage::Append(sequence)) => {
                     // A large append commits as a full image (see
@@ -575,21 +585,16 @@ where
                     // path, since the materialized commit is not it.
                     // The base plus sequence are read after the lock
                     // is released, like every other materialization.
-                    let restore = if write.base.size().saturating_add(sequence.len() as u64)
-                        > wyrd_core::session::MAX_WRITE_BUFFER_BYTES as u64
-                    {
-                        Some(WriteImage::Append(sequence.clone()))
-                    } else {
-                        None
-                    };
-                    Take::Append {
+                    let large = write.base.size().saturating_add(sequence.len() as u64)
+                        > wyrd_core::session::MAX_WRITE_BUFFER_BYTES as u64;
+                    let restore = large.then(|| WriteImage::Append(sequence.clone()));
+                    TakeKind::Append {
                         sequence,
                         restore,
-                        capture: write.capture.clone(),
-                        base_size: write.base.size(),
+                        large,
                     }
                 }
-                Some(WriteImage::Sparse(overlay)) => Take::Sparse { overlay },
+                Some(WriteImage::Sparse(overlay)) => TakeKind::Sparse { overlay },
                 None => {
                     write.failed = true;
                     write.dirty = false;
@@ -600,25 +605,121 @@ where
             // Park writers before releasing the lock: the overlay is
             // out, so no write may land until the fold settles.
             write.inflight = Some(fold_id);
-            let path = write.path.clone();
-            let base = write.base.clone();
-            let capture = write.capture.clone();
-            let base_size = write.base.size();
-            let executable = write.executable;
-            let append = write.append;
-            let seq = write.dirty_seq;
-            drop(write);
-            // Materialize outside the handle lock.
-            let (content, restore) = match take {
-                Take::Append {
+            pending.push(PendingTake {
+                handle: Arc::clone(handle),
+                seq: write.dirty_seq,
+                path: write.path.clone(),
+                base: write.base.clone(),
+                capture: write.capture.clone(),
+                base_size: write.base.size(),
+                executable: write.executable,
+                append: write.append,
+                take,
+            });
+        }
+        // The full commit length each take will materialize: the
+        // overlay length for positioned handles, the base plus
+        // sequence for large appends, the bare sequence otherwise.
+        let full_len = |pending: &PendingTake| -> u64 {
+            match &pending.take {
+                TakeKind::Sparse { overlay } => overlay.len(),
+                TakeKind::Append {
+                    sequence, large, ..
+                } => {
+                    if *large {
+                        pending.base_size.saturating_add(sequence.len() as u64)
+                    } else {
+                        sequence.len() as u64
+                    }
+                }
+            }
+        };
+        // A logical length past the ingest ceiling can never publish:
+        // fail those handles closed before leasing or allocating
+        // anything, and abort the fold — the remaining handles stay
+        // dirty and retryable, restored below.
+        let mut oversized = false;
+        for pending in &pending {
+            if full_len(pending) > MAX_COMMITTABLE_BYTES {
+                oversized = true;
+                if let Ok(mut write) = pending.handle.lock() {
+                    write.failed = true;
+                    write.dirty = false;
+                    write.inflight = None;
+                    self.budget.release(write.id);
+                }
+            }
+        }
+        // One lease covers the whole take (full images plus the
+        // restore overlays held for an abort) before anything
+        // materializes. Refusal restores every detached overlay with
+        // all handles still dirty: memory pressure is retryable, and
+        // no submission is attempted unaccounted.
+        let restore_resident = |pending: &PendingTake| -> usize {
+            match &pending.take {
+                TakeKind::Sparse { overlay } => overlay.resident(),
+                TakeKind::Append { restore, .. } => {
+                    restore.as_ref().map(WriteImage::resident).unwrap_or(0)
+                }
+            }
+        };
+        let lease_bytes: usize = pending
+            .iter()
+            .map(|pending| {
+                usize::try_from(full_len(pending))
+                    .unwrap_or(usize::MAX)
+                    .saturating_add(restore_resident(pending))
+            })
+            .sum();
+        let lease = match self.budget.reserve_fold(lease_bytes) {
+            Ok(lease) => lease,
+            Err(error) => {
+                log_budget_refusal("fold-lease", error);
+                for pending in &pending {
+                    self.restore_pending(pending);
+                }
+                self.fold_wake.notify_all();
+                return Err(fuser::Errno::ENOSPC);
+            }
+        };
+        if oversized {
+            for pending in &pending {
+                if full_len(pending) <= MAX_COMMITTABLE_BYTES {
+                    self.restore_pending(pending);
+                }
+            }
+            self.fold_wake.notify_all();
+            drop(lease);
+            return Err(fuser::Errno::EFBIG);
+        }
+        // Phase 2: materialize under the lease, outside the handle
+        // locks. A materialization failure fails that handle closed;
+        // the lease over-holds its bytes until this call returns,
+        // which is bounded and transient.
+        let mut taken = Vec::new();
+        for pending in pending {
+            let PendingTake {
+                handle,
+                seq,
+                path,
+                base,
+                capture,
+                base_size,
+                executable,
+                append,
+                take,
+            } = pending;
+            let (content, restore, large_append) = match take {
+                TakeKind::Append {
                     sequence,
                     restore,
-                    capture,
-                    base_size,
-                } => match restore {
-                    // A large append commits the materialized base
-                    // plus sequence as one full image.
-                    Some(_) => {
+                    large,
+                } => {
+                    if !large {
+                        (sequence, None, false)
+                    } else {
+                        // A large append commits the materialized
+                        // base plus sequence as one full image.
                         let mut full = match self.materialize_sparse(
                             &capture,
                             base_size,
@@ -626,41 +727,28 @@ where
                         ) {
                             Ok(full) => full,
                             Err(error) => {
-                                if let Ok(mut write) = handle.lock() {
-                                    write.failed = true;
-                                    write.dirty = false;
-                                    write.inflight = None;
-                                    self.budget.release(write.id);
-                                }
-                                self.fold_wake.notify_all();
-                                tracing::debug!(
-                                    path = path.as_str(),
-                                    ?error,
-                                    "take could not materialize the large append base; handle failed"
+                                self.fail_pending(
+                                    &handle,
+                                    &path,
+                                    error,
+                                    "take could not materialize the large append base",
                                 );
                                 continue;
                             }
                         };
                         full.extend_from_slice(&sequence);
-                        (full, restore)
+                        (full, restore, true)
                     }
-                    None => (sequence, None),
-                },
-                Take::Sparse { overlay } => {
+                }
+                TakeKind::Sparse { overlay } => {
                     match self.materialize_sparse(&capture, base_size, &overlay) {
-                        Ok(content) => (content, Some(WriteImage::Sparse(overlay))),
+                        Ok(content) => (content, Some(WriteImage::Sparse(overlay)), false),
                         Err(error) => {
-                            if let Ok(mut write) = handle.lock() {
-                                write.failed = true;
-                                write.dirty = false;
-                                write.inflight = None;
-                                self.budget.release(write.id);
-                            }
-                            self.fold_wake.notify_all();
-                            tracing::debug!(
-                                path = path.as_str(),
-                                ?error,
-                                "take could not materialize the sparse overlay; handle failed"
+                            self.fail_pending(
+                                &handle,
+                                &path,
+                                error,
+                                "take could not materialize the sparse overlay",
                             );
                             continue;
                         }
@@ -668,7 +756,7 @@ where
                 }
             };
             taken.push(TakenMember {
-                handle: Arc::clone(handle),
+                handle: Arc::clone(&handle),
                 seq,
                 path,
                 base,
@@ -676,9 +764,73 @@ where
                 append,
                 content,
                 restore,
+                large_append,
             });
         }
         taken.sort_by_key(|taken| taken.seq);
-        Ok(taken)
+        Ok((taken, lease))
     }
+
+    /// Put a detached overlay back after an aborted take: the handle
+    /// stays dirty and retryable with its reservation intact.
+    fn restore_pending(&self, pending: &PendingTake) {
+        if let Ok(mut write) = pending.handle.lock() {
+            let image = match &pending.take {
+                TakeKind::Sparse { overlay } => Some(WriteImage::Sparse(overlay.clone())),
+                TakeKind::Append {
+                    sequence, restore, ..
+                } => Some(
+                    restore
+                        .clone()
+                        .unwrap_or_else(|| WriteImage::Append(sequence.clone())),
+                ),
+            };
+            write.image = image;
+            write.inflight = None;
+        }
+    }
+
+    /// Fail a taken handle closed: terminal, overlay discarded,
+    /// budget released, waiters woken.
+    fn fail_pending(
+        &self,
+        handle: &Arc<Mutex<WriteHandle>>,
+        path: &str,
+        error: fuser::Errno,
+        context: &'static str,
+    ) {
+        if let Ok(mut write) = handle.lock() {
+            write.failed = true;
+            write.dirty = false;
+            write.inflight = None;
+            self.budget.release(write.id);
+        }
+        self.fold_wake.notify_all();
+        tracing::debug!(path = path, ?error, "{context}; handle failed");
+    }
+}
+
+/// A detached overlay awaiting the fold lease: the handle's lock is
+/// released and its writers parked, but nothing is materialized yet.
+struct PendingTake {
+    handle: Arc<Mutex<WriteHandle>>,
+    seq: u64,
+    path: String,
+    base: FileIdentity,
+    capture: wyrd_fuse::OpenFile,
+    base_size: u64,
+    executable: bool,
+    append: bool,
+    take: TakeKind,
+}
+
+enum TakeKind {
+    Append {
+        sequence: Vec<u8>,
+        restore: Option<WriteImage>,
+        large: bool,
+    },
+    Sparse {
+        overlay: SparseOverlay,
+    },
 }
