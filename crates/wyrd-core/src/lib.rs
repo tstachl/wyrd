@@ -20,6 +20,7 @@ pub mod policy;
 pub mod projection;
 pub mod quarantine;
 pub mod read;
+pub mod relay_posture;
 pub mod role;
 pub mod scrub;
 pub mod session;

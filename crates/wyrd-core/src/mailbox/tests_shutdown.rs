@@ -368,6 +368,55 @@ fn relay_closed_subscription_is_counted_not_silent() {
     );
 }
 
+/// The surface leg of the blind-mailbox fixture above: with the
+/// mailbox in exactly that state — attached (1/1 connected) but
+/// with a closed subscription on record — the posture surface
+/// renders the attached-but-blind qualifier rather than "running".
+/// This is the reachable half of the OD-20-B debate: blind is a
+/// qualifier on the running state, and the qualifier names where
+/// to look (the relay account), which a bare "running" never does.
+#[test]
+fn blind_mailbox_renders_attached_but_blind_not_running() {
+    use crate::relay_posture::{render_posture, RelayPosture, RunningHealth};
+
+    let relay = MiniRelay::spawn();
+    relay.close_subscriptions("auth-required: gift-wrap reads need authentication");
+    let url = relay.url().to_string();
+    let receiver = keys();
+    let mailbox = live_mailbox(
+        &receiver,
+        std::slice::from_ref(&url),
+        temp_path("seen-closed-sub-surface"),
+    );
+    wait_for_health(&mailbox, true, OUTAGE_TIMEOUT);
+    let start = Instant::now();
+    let health = loop {
+        let health = mailbox.health();
+        if health.closed_subscriptions == 1 {
+            break health;
+        }
+        assert!(
+            start.elapsed() < OUTAGE_TIMEOUT,
+            "relay-sent closure is counted"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert_eq!(health.connected_relays, 1, "socket intact while blind");
+    assert_eq!(
+        RelayPosture::of(false, 1, Some(&health)),
+        RelayPosture::Running(RunningHealth::AttachedButBlind)
+    );
+    let rendering = render_posture(false, 1, Some(&health), 0);
+    assert!(
+        rendering.contains("attached but blind"),
+        "blind mailbox qualifies the run, never a bare live:\n{rendering}"
+    );
+    assert!(
+        !rendering.contains("relay: running ("),
+        "no bare running line beside the qualifier:\n{rendering}"
+    );
+}
+
 /// A relay-sent AUTH challenge is never answered: NIP-42 stays
 /// unimplemented by trust decision (answering signs with the device
 /// key), so the client must emit no AUTH frame no matter how often the
