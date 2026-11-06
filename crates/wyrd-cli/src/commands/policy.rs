@@ -481,9 +481,12 @@ pub(crate) fn policy_quadrant_summary(census: &ResidencyCensus) -> String {
 /// mount composes its own values from its flags, which no offline
 /// read can observe. Only the retention- and fetch-relevant bounds
 /// print here; the full table lives in
-/// `docs/contracts/resource-limits.md`. Every figure printed here
-/// goes through [`StorageFigure::label`], so the surface cannot emit
-/// a storage figure the DG-5 table does not name.
+/// `docs/contracts/resource-limits.md`. Every storage figure printed
+/// here goes through [`StorageFigure::label`], so the surface cannot
+/// emit a storage figure the DG-5 table does not name. (The three
+/// `max_*` fetch-budget lines below are not storage figures — they
+/// are pacing knobs owned by `resource-limits.md` — so the closed
+/// vocabulary does not cover them.)
 pub(crate) fn policy_budgets_render(
     census: &ResidencyCensus,
     accounting: &RetentionAccounting,
@@ -540,12 +543,15 @@ pub(crate) fn policy_budgets_render(
             // ceiling is a fact about this device, stated plainly —
             // never "unlimited" (a ceiling claim by another name) and
             // never 0 (which would read as "no bytes retained").
+            // Qualified as defaults-relative (not a device fact: the
+            // header already says offline defaults) so a copied line
+            // alone cannot be read as a live composition's promise.
             out.push_str(&format!(
-                "  {}: no retention ceiling is set on this device (unset: local writes and fetched content admit without a retention refusal)\n",
+                "  {}: under these offline defaults, no retention ceiling is set on this device (unset: local writes and fetched content admit without a retention refusal)\n",
                 StorageFigure::RetainedQuota.label()
             ));
             out.push_str(&format!(
-                "  {}: no retention ceiling is set on this device (set --retained-quota on mount/sync/vault to bound both paths)\n",
+                "  {}: under these offline defaults, no retention ceiling is set on this device (set --retained-quota on mount/sync/vault to bound both paths)\n",
                 StorageFigure::ReceiveCeiling.label()
             ));
         }

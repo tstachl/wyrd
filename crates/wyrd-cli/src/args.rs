@@ -101,7 +101,7 @@ pub(crate) enum Command {
         /// bounds local authoring (refused before the commit's first
         /// write, `ENOSPC`) and receive-path admission (refused before
         /// durable storage, counted separately, never stored). Unset
-        /// means unlimited (the dogfood default): existing deployments
+        /// (the default) enforces no ceiling: existing deployments
         /// behave exactly as before until an operator opts in. A
         /// startup below current retention refuses to start with both
         /// numbers named instead of failing every write.
@@ -463,7 +463,8 @@ pub(crate) enum VaultAction {
     Start {
         /// Per-device retained-bytes ceiling in bytes: the same
         /// number bounds local authoring and receive-path admission
-        /// (see `mount --retained-quota`). Unset means unlimited.
+        /// (see `mount --retained-quota`). Unset (the default)
+        /// enforces no ceiling.
         #[arg(long, value_name = "BYTES")]
         retained_quota: Option<u64>,
     },
@@ -511,7 +512,8 @@ pub(crate) enum SyncAction {
         serve: bool,
         /// Per-device retained-bytes ceiling in bytes: the same
         /// number bounds local authoring and receive-path admission
-        /// (see `mount --retained-quota`). Unset means unlimited.
+        /// (see `mount --retained-quota`). Unset (the default)
+        /// enforces no ceiling.
         #[arg(long, value_name = "BYTES")]
         retained_quota: Option<u64>,
     },

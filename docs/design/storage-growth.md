@@ -614,9 +614,10 @@ What the table deliberately has no row for:
 Out of scope for this table (named, not owned): action receipts
 (`pin`/`unpin`/`evict` reports describe an action just taken, not a
 storage observation) and the role posture block (device policy, owned
-by the role contract). The `--retained-quota` flag help keeps the
-word "unlimited" for the option default: it describes what an unset
-option does, not what protects the device.
+by the role contract). The `--retained-quota` flag help uses the same
+plain-absence language as the surface ("Unset (the default) enforces
+no ceiling"): the help describes what an unset option does, in the
+words the contract requires, so no carve-out remains.
 
 **Two live paths refuse.** The authoring check sits in the live
 node's commit boundary, ahead of every arm of `apply_mutation`, over

@@ -684,6 +684,19 @@ pub enum FigureKind {
     Census,
 }
 
+impl FigureKind {
+    /// The exact word the DG-5 table's Kind column uses for this
+    /// variant, so the contract test can tie each row's kind cell to
+    /// the type rather than to a passing mention elsewhere in the row.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            FigureKind::Enforced => "enforced",
+            FigureKind::Observational => "observational",
+            FigureKind::Boundary => "boundary",
+            FigureKind::Census => "census",
+        }
+    }
+}
 /// Phrases no storage surface may render, in any casing. "Free space"
 /// is the data-safety bug: a healthy free-space figure next to an
 /// absent ceiling teaches the operator the drive is protected when
@@ -769,10 +782,10 @@ impl StorageFigure {
                 "the operator-configured ceiling over retained content, when one is configured"
             }
             StorageFigure::ReceiveCeiling => {
-                "the same flag's receive-path face: fetched bytes admit against it before storage"
+                "the same flag's receive-path face: fetched representations admit against it before durable storage"
             }
             StorageFigure::AdvisoryCeiling => {
-                "a non-authoritative starting point for the operator's quota decision, at or above current retention"
+                "a non-authoritative starting point for the operator's quota decision, shown only when no quota is configured, at or above current retention"
             }
             StorageFigure::RetentionRefusals => {
                 "distinct representations declined before storage under a named ceiling"

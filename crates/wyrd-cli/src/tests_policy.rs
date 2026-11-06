@@ -214,7 +214,7 @@ fn policy_renderers_name_counts_and_quadrants() {
     // DG-5: no ceiling is stated plainly — never "unlimited" (a
     // ceiling claim by another name), never 0 as a ceiling.
     assert!(
-        rendered.contains("retained_bytes_quota: no retention ceiling is set on this device"),
+        rendered.contains("retained_bytes_quota: under these offline defaults, no retention ceiling is set on this device"),
         "unset quota must state the absence, got:\n{rendered}"
     );
     assert!(
@@ -417,11 +417,40 @@ fn every_storage_figure_maps_to_a_dg5_row() {
         .expect("DG-5 table end marker");
     assert!(start < end, "DG-5 table markers out of order");
     let table = &text[start..end];
+    let table_lower = table.to_lowercase();
     for figure in StorageFigure::all() {
         let cell = format!("`{}`", figure.label());
         assert!(
             table.contains(&cell),
             "storage figure {figure:?} has no DG-5 table row (expected {cell:?} in the table)"
+        );
+        // The scope text mirrors the row's scope cell: meaning
+        // cannot drift from the words while the label stays. Case
+        // folds because the table's sentence case need not match the
+        // code's fragment case — the words must match, not the caps.
+        assert!(
+            table_lower.contains(&figure.scope().to_lowercase()),
+            "storage figure {figure:?} scope {:?} is not in its DG-5 row",
+            figure.scope()
+        );
+        // The row's Kind cell is the kind word, not a passing
+        // mention elsewhere in the row: split the pipe-delimited row
+        // and compare the last cell exactly.
+        let row = table
+            .lines()
+            .find(|line| line.contains(&cell))
+            .unwrap_or_else(|| panic!("row for {figure:?} vanished between asserts"));
+        let kind_cell = row
+            .split('|')
+            .map(str::trim)
+            .filter(|cell| !cell.is_empty())
+            .next_back()
+            .unwrap_or_default();
+        assert_eq!(
+            kind_cell,
+            figure.kind().as_str(),
+            "storage figure {figure:?} kind cell is {kind_cell:?}, want {:?}",
+            figure.kind().as_str()
         );
     }
     // Exactly one figure backs enforcement. Anything else presented
@@ -497,12 +526,20 @@ fn storage_surface_never_says_free_space() {
     }
     // The bare-quota failure mode: a `retained_bytes_quota` number
     // with no refusal scope. The scope rides the same sentence, so
-    // assert the sentence, not just the label.
+    // assert the sentence, not just the label, on both faces of the
+    // one flag — the receive ceiling is a second rendering of the
+    // same number and must carry scope too.
     assert!(
         rendered_some.contains(
             "retained_bytes_quota: 1024 (operator-selected refusal boundary over retained content only"
         ),
         "a configured quota must carry its refusal scope:\n{rendered_some}"
+    );
+    assert!(
+        rendered_some.contains(
+            "receive_retention_ceiling: 1024 (same flag, fetch admission before storage)"
+        ),
+        "the receive face must carry its scope too:\n{rendered_some}"
     );
     // An unset quota states the absence (OD-22-A recommendation (A)):
     // never "unlimited", never a zero that would read as protection.
