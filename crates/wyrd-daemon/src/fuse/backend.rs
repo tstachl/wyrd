@@ -153,8 +153,8 @@ where
     /// Separate from the rejection window above so the two causes
     /// stay distinguishable end to end.
     pub(super) recent_losses: RecentRepairs,
-    /// The session's write budget: bounds the buffered logical images of
-    /// writable handles. Independent of the projection and store locks.
+    /// The session's write budget: bounds the resident buffered
+    /// bytes of writable handles. Independent of the projection and store locks.
     pub(super) budget: Arc<WriteBudget>,
     /// Fold coordination: a forcing boundary takes dirty handles'
     /// images under their own locks (never nested, kernel-handle
@@ -305,19 +305,6 @@ pub(super) fn join(parent: &str, name: &str) -> String {
     } else {
         format!("{parent}/{name}")
     }
-}
-
-/// The `[offset, offset+size)` window of a buffered image, clamped to
-/// the image end (never serving past the logical file).
-fn slice_image(image: &[u8], offset: u64, size: u32) -> Vec<u8> {
-    let Ok(start) = usize::try_from(offset) else {
-        return Vec::new();
-    };
-    if start >= image.len() {
-        return Vec::new();
-    }
-    let end = start.saturating_add(size as usize).min(image.len());
-    image[start..end].to_vec()
 }
 
 /// Presentation attributes for one node: kind, size, exec bit. A

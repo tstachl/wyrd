@@ -10,7 +10,7 @@ use wyrd_core::mutation::{FileIdentity, MutationKind, MutationOutcome};
 use wyrd_format::ObjectStore;
 use wyrd_fuse::{Materialization, Node, ViewError};
 
-use super::super::inode::{Handle, WriteHandle};
+use super::super::inode::{Handle, SparseOverlay, WriteHandle, WriteImage};
 use super::fold::{GatherFilter, TakenMember};
 use super::{attr_of, errno_of, join, log_budget_refusal, unsupported_open_flags, FuseBackend};
 
@@ -285,11 +285,12 @@ where
         Ok((fh, ino, attr))
     }
 
-    /// Buffer `data` at `offset` on a writable handle: materialize the
-    /// base on first touch, zero-fill any gap, apply last-write-wins,
-    /// and enforce the write budget by the resulting logical length
-    /// (`ENOSPC` on overflow, handle unchanged). Under `O_SYNC` the
-    /// write then commits before returning.
+    /// Buffer `data` at `offset` on a writable handle: record the
+    /// dirtied range in the sparse overlay (the base is never read or
+    /// copied here), apply last-write-wins, and enforce the write
+    /// budget by resulting resident bytes (`ENOSPC` on overflow,
+    /// handle unchanged). Under `O_SYNC` the write then commits
+    /// before returning.
     pub fn write_handle(
         &self,
         fh: FileHandle,
@@ -323,19 +324,29 @@ where
         }
         if write.append {
             // Append is position-independent: the offset is ignored and
-            // the sequence grows in submission order.
-            let mut image = write.image.take().unwrap_or_default();
-            let new_len = image
+            // the sequence grows in submission order. The budget
+            // charges the buffered sequence only, never the base.
+            let mut sequence = match write.image.take() {
+                Some(WriteImage::Append(sequence)) => sequence,
+                Some(_) => {
+                    write.failed = true;
+                    write.dirty = false;
+                    self.budget.release(write.id);
+                    return Err(fuser::Errno::EIO);
+                }
+                None => Vec::new(),
+            };
+            let new_len = sequence
                 .len()
                 .checked_add(data.len())
                 .ok_or(fuser::Errno::EFBIG)?;
             if let Err(error) = self.budget.reserve(write.id, new_len) {
                 log_budget_refusal("write", error);
-                write.image = Some(image);
+                write.image = Some(WriteImage::Append(sequence));
                 return Err(fuser::Errno::ENOSPC);
             }
-            image.extend_from_slice(data);
-            write.image = Some(image);
+            sequence.extend_from_slice(data);
+            write.image = Some(WriteImage::Append(sequence));
             self.mark_dirty(&mut write);
             let sync = write.sync;
             drop(write);
@@ -348,59 +359,51 @@ where
             }
             return Ok(data.len() as u32);
         }
-        let end = offset
+        // Reject address overflow before buffering (EFBIG, handle
+        // unchanged); the overlay extends with saturating arithmetic
+        // past this point, and commit-time materialization re-checks
+        // the word width.
+        offset
             .checked_add(data.len() as u64)
             .ok_or(fuser::Errno::EFBIG)?;
-        let end = usize::try_from(end).map_err(|_| fuser::Errno::EFBIG)?;
 
         match write.image.take() {
-            Some(mut image) => {
-                // Dirty handle: the image is already materialized and
-                // budgeted, so account the extension before mutating.
-                let new_len = image.len().max(end);
-                if let Err(error) = self.budget.reserve(write.id, new_len) {
+            Some(WriteImage::Sparse(overlay)) => {
+                // Dirty handle: only the merged patches are resident,
+                // so account the merged count before mutating.
+                let mut merged = overlay.clone();
+                merged.write(offset, data);
+                let new_resident = merged.resident();
+                if let Err(error) = self.budget.reserve(write.id, new_resident) {
                     log_budget_refusal("write", error);
-                    write.image = Some(image);
+                    write.image = Some(WriteImage::Sparse(overlay));
                     return Err(fuser::Errno::ENOSPC);
                 }
-                if end > image.len() {
-                    image.resize(end, 0);
-                }
-                image[offset as usize..end].copy_from_slice(data);
-                write.image = Some(image);
+                write.image = Some(WriteImage::Sparse(merged));
+            }
+            Some(_) => {
+                // A positioned handle never carries an append
+                // sequence: fail the handle closed, never serve or
+                // commit the mismatched bytes.
+                write.failed = true;
+                write.dirty = false;
+                self.budget.release(write.id);
+                return Err(fuser::Errno::EIO);
             }
             None => {
-                // Clean handle: reserve the projected logical length
-                // *before* materializing, so a base larger than the
-                // per-handle cap fails closed without allocating or
-                // reading it.
-                let projected = usize::try_from(write.base.size())
-                    .unwrap_or(usize::MAX)
-                    .max(end);
-                if let Err(error) = self.budget.reserve(write.id, projected) {
+                // Clean handle: the overlay starts empty over the
+                // base, so only the new patch is resident. The base
+                // is never read or copied here — a base larger than
+                // the per-handle cap no longer fails, because the cap
+                // bounds buffered bytes, not the logical length.
+                let mut overlay = SparseOverlay::new(write.base.size());
+                overlay.write(offset, data);
+                let new_resident = overlay.resident();
+                if let Err(error) = self.budget.reserve(write.id, new_resident) {
                     log_budget_refusal("write", error);
                     return Err(fuser::Errno::ENOSPC);
                 }
-                let capture = write.capture.clone();
-                let len = usize::try_from(write.base.size()).unwrap_or(usize::MAX);
-                let mut image = match self.read_via_capture(
-                    &capture,
-                    0,
-                    u32::try_from(len).unwrap_or(u32::MAX),
-                ) {
-                    Ok(image) => image,
-                    Err(error) => {
-                        // Nothing changed on the handle; drop the
-                        // reservation it never used.
-                        self.budget.release(write.id);
-                        return Err(error);
-                    }
-                };
-                if end > image.len() {
-                    image.resize(end, 0);
-                }
-                image[offset as usize..end].copy_from_slice(data);
-                write.image = Some(image);
+                write.image = Some(WriteImage::Sparse(overlay));
             }
         }
         self.mark_dirty(&mut write);
@@ -453,13 +456,57 @@ where
         Ok(write)
     }
 
+    /// Assemble the full commit image for a sparse overlay: base
+    /// bytes with patches applied, zero-extended to the logical
+    /// length. The base is read in `u32`-sized windows so a large
+    /// base never needs one unbounded read; a word-width overflow in
+    /// the logical length fails closed. This allocates the logical
+    /// size transiently at take time: the take→submit window is
+    /// straight-line code holding no locks, and from submit the fold
+    /// lease covers the taken length (see `lease_fold`), exactly as
+    /// it covers the queue-kind clone.
+    fn materialize_sparse(
+        &self,
+        capture: &wyrd_fuse::OpenFile,
+        base_size: u64,
+        overlay: &SparseOverlay,
+    ) -> Result<Vec<u8>, fuser::Errno> {
+        let len = usize::try_from(overlay.len()).map_err(|_| fuser::Errno::EFBIG)?;
+        let mut out = vec![0u8; len];
+        let base_len =
+            usize::try_from(base_size.min(overlay.len())).map_err(|_| fuser::Errno::EFBIG)?;
+        let mut off = 0usize;
+        while off < base_len {
+            let step = (base_len - off).min(u32::MAX as usize);
+            let window = self.read_via_capture(capture, off as u64, step as u32)?;
+            let have = window.len().min(step);
+            out[off..off + have].copy_from_slice(&window[..have]);
+            if have < step {
+                break;
+            }
+            off += step;
+        }
+        for (start, bytes) in overlay.patches() {
+            let at = usize::try_from(*start).map_err(|_| fuser::Errno::EFBIG)?;
+            let stop = at.saturating_add(bytes.len()).min(len);
+            if at < stop {
+                out[at..stop].copy_from_slice(&bytes[..stop - at]);
+            }
+        }
+        Ok(out)
+    }
+
     /// Take every dirty handle's image for one fold, minus the
     /// filter's exclusions: the table is only held to clone arcs,
     /// then each handle is locked alone (pointer order, never
-    /// nested) and its image detached with the fold's identity.
-    /// Skips clean, failed, already-taken, filtered, and imageless
-    /// handles — the imageless one fails closed on the spot, like the
-    /// old single-handle commit did. Returns the taken members in
+    /// nested) and its overlay detached with the fold's identity.
+    /// Sparse overlays materialize to full commit images after the
+    /// handle lock is released (under no lock, so a large base read
+    /// never stalls other handles); a materialization failure fails
+    /// that handle closed and leaves the rest to fold. Skips clean,
+    /// failed, already-taken, filtered, and imageless handles — the
+    /// imageless one fails closed on the spot, like the old
+    /// single-handle commit did. Returns the taken members in
     /// first-in-first-buffered order.
     pub(super) fn gather_taken(
         &self,
@@ -506,12 +553,43 @@ where
                     continue;
                 }
             }
-            // A dirty handle always carries its buffered image: every
-            // dirty transition pairs with a materialized image. If the
-            // image is ever absent here, fail the handle closed rather
+            // A dirty handle always carries its buffered overlay:
+            // every dirty transition pairs with one. If the overlay
+            // is ever absent here, fail the handle closed rather
             // than authoring an empty prefix as a successful write.
-            let content = match write.image.take() {
-                Some(image) => image,
+            enum Take {
+                Append {
+                    sequence: Vec<u8>,
+                    restore: Option<WriteImage>,
+                    capture: wyrd_fuse::OpenFile,
+                    base_size: u64,
+                },
+                Sparse {
+                    overlay: SparseOverlay,
+                },
+            }
+            let take = match write.image.take() {
+                Some(WriteImage::Append(sequence)) => {
+                    // A large append commits as a full image (see
+                    // `taken_kind`): keep the sequence for the abort
+                    // path, since the materialized commit is not it.
+                    // The base plus sequence are read after the lock
+                    // is released, like every other materialization.
+                    let restore = if write.base.size().saturating_add(sequence.len() as u64)
+                        > wyrd_core::session::MAX_WRITE_BUFFER_BYTES as u64
+                    {
+                        Some(WriteImage::Append(sequence.clone()))
+                    } else {
+                        None
+                    };
+                    Take::Append {
+                        sequence,
+                        restore,
+                        capture: write.capture.clone(),
+                        base_size: write.base.size(),
+                    }
+                }
+                Some(WriteImage::Sparse(overlay)) => Take::Sparse { overlay },
                 None => {
                     write.failed = true;
                     write.dirty = false;
@@ -519,15 +597,85 @@ where
                     continue;
                 }
             };
+            // Park writers before releasing the lock: the overlay is
+            // out, so no write may land until the fold settles.
             write.inflight = Some(fold_id);
+            let path = write.path.clone();
+            let base = write.base.clone();
+            let capture = write.capture.clone();
+            let base_size = write.base.size();
+            let executable = write.executable;
+            let append = write.append;
+            let seq = write.dirty_seq;
+            drop(write);
+            // Materialize outside the handle lock.
+            let (content, restore) = match take {
+                Take::Append {
+                    sequence,
+                    restore,
+                    capture,
+                    base_size,
+                } => match restore {
+                    // A large append commits the materialized base
+                    // plus sequence as one full image.
+                    Some(_) => {
+                        let mut full = match self.materialize_sparse(
+                            &capture,
+                            base_size,
+                            &SparseOverlay::new(base_size),
+                        ) {
+                            Ok(full) => full,
+                            Err(error) => {
+                                if let Ok(mut write) = handle.lock() {
+                                    write.failed = true;
+                                    write.dirty = false;
+                                    write.inflight = None;
+                                    self.budget.release(write.id);
+                                }
+                                self.fold_wake.notify_all();
+                                tracing::debug!(
+                                    path = path.as_str(),
+                                    ?error,
+                                    "take could not materialize the large append base; handle failed"
+                                );
+                                continue;
+                            }
+                        };
+                        full.extend_from_slice(&sequence);
+                        (full, restore)
+                    }
+                    None => (sequence, None),
+                },
+                Take::Sparse { overlay } => {
+                    match self.materialize_sparse(&capture, base_size, &overlay) {
+                        Ok(content) => (content, Some(WriteImage::Sparse(overlay))),
+                        Err(error) => {
+                            if let Ok(mut write) = handle.lock() {
+                                write.failed = true;
+                                write.dirty = false;
+                                write.inflight = None;
+                                self.budget.release(write.id);
+                            }
+                            self.fold_wake.notify_all();
+                            tracing::debug!(
+                                path = path.as_str(),
+                                ?error,
+                                "take could not materialize the sparse overlay; handle failed"
+                            );
+                            continue;
+                        }
+                    }
+                }
+            };
             taken.push(TakenMember {
                 handle: Arc::clone(handle),
-                seq: write.dirty_seq,
-                path: write.path.clone(),
-                base: write.base.clone(),
-                executable: write.executable,
-                append: write.append,
+                seq,
+                path,
+                base,
+                executable,
+                append,
                 content,
+                restore,
             });
         }
         taken.sort_by_key(|taken| taken.seq);

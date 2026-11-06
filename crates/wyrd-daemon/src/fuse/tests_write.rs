@@ -483,7 +483,8 @@ fn destroy_commits_dirty_write_handles_while_queue_live() {
     backend.destroy();
     done.store(true, Ordering::Relaxed);
     drainer.join().expect("drainer exits after destroy");
-    match &seen.lock().unwrap()[..] {
+    let seen = seen.lock().unwrap();
+    match &seen[..] {
         [MutationKind::Fold { members }] => {
             assert_eq!(
                 members.len(),
@@ -1266,4 +1267,408 @@ fn create_refuses_a_closed_parent_registry_with_estale() {
         Err(fuser::Errno::ESTALE)
     );
     assert_eq!(queue.outstanding(), 0, "a closed capture is not admitted");
+}
+
+/// One past the per-handle cap: the sparse-overlay contract tests run
+/// against a base just over 64 MiB, so every byte over the old bound
+/// exercises the new accounting.
+const PAST_CAP: usize = 64 * 1024 * 1024 + 1;
+
+/// A one-file drive whose `big` holds `size` zero bytes in a single
+/// chunk, with a live queue installed: the commit path below folds
+/// through the drainer like any forcing boundary.
+fn large_backend(
+    size: usize,
+) -> (
+    FuseBackend<MemoryObjectStore, NoMaterialization>,
+    Arc<MutationQueue>,
+) {
+    let mut store = MemoryObjectStore::default();
+    let chunk = store.insert(ObjectKind::Chunk, &vec![0u8; size]).unwrap();
+    let root = Tree::from_entries(vec![
+        Entry::file("big", size as u64, false, vec![chunk]).unwrap()
+    ])
+    .unwrap()
+    .insert_into(&mut store)
+    .unwrap();
+    let mut backend = FuseBackend::new(DriveView::new(
+        store,
+        NoMaterialization,
+        heads(vec![snapshot_of(root)]),
+    ));
+    let queue = Arc::new(MutationQueue::default());
+    backend.mutations = Some(Arc::clone(&queue));
+    (backend, queue)
+}
+
+/// A fold submission summarized without retaining its bytes: a
+/// 64 MiB commit image must not sit in the test's `seen` log next
+/// to the taken, queued, and cloned copies. Outcomes answer like
+/// the loop (forcer applied, members committed) so settle paths run
+/// exactly as behind `spawn_drainer`.
+struct FoldSummary {
+    path: String,
+    kind: &'static str,
+    len: usize,
+    head: Vec<u8>,
+    tail: Vec<u8>,
+}
+
+fn summarize(kind: &MutationKind, summaries: &mut Vec<FoldSummary>) {
+    let (path, tag, bytes) = match kind {
+        MutationKind::CommitFile { path, content, .. } => (path.clone(), "commit", content.clone()),
+        MutationKind::AppendFile { path, content } => (path.clone(), "append", content.clone()),
+        MutationKind::SetAttrs { path, size, .. } => {
+            summaries.push(FoldSummary {
+                path: path.clone(),
+                kind: "setattrs",
+                len: size.unwrap_or(0) as usize,
+                head: Vec::new(),
+                tail: Vec::new(),
+            });
+            return;
+        }
+        other => panic!("large-file tests submit only file commits, saw {other:?}"),
+    };
+    let head = bytes.iter().copied().take(4).collect();
+    let tail = bytes
+        .iter()
+        .rev()
+        .copied()
+        .take(4)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    summaries.push(FoldSummary {
+        path,
+        kind: tag,
+        len: bytes.len(),
+        head,
+        tail,
+    });
+}
+
+fn spawn_summarizing_drainer(
+    queue: &Arc<MutationQueue>,
+    seen: &Arc<Mutex<Vec<FoldSummary>>>,
+    done: &Arc<AtomicBool>,
+) -> std::thread::JoinHandle<()> {
+    let queue = Arc::clone(queue);
+    let seen = Arc::clone(seen);
+    let done = Arc::clone(done);
+    std::thread::spawn(move || loop {
+        let mut batch = queue.take_batch();
+        let empty = batch.is_empty();
+        for index in 0..batch.len() {
+            let kind = batch.request(index).kind().clone();
+            // Summarize every member up front (forcer and rest): the
+            // outcome match below moves the kind.
+            if let MutationKind::Fold { members } = &kind {
+                for member in members.iter() {
+                    summarize(&member.kind, &mut seen.lock().unwrap());
+                }
+            }
+            let outcome = match kind {
+                MutationKind::Fold { members } => {
+                    let forcer_kind = members
+                        .iter()
+                        .find(|member| member.forcer)
+                        .map(|member| member.kind.clone());
+                    let forcer = match forcer_kind {
+                        Some(
+                            MutationKind::CommitFile { .. }
+                            | MutationKind::AppendFile { .. }
+                            | MutationKind::CreateFile { .. }
+                            | MutationKind::SetAttrs { .. },
+                        ) => FoldForcerOutcome::Applied(Box::new(MutationOutcome::Committed(
+                            FileIdentity::new(5, false, Vec::new()),
+                        ))),
+                        _ => FoldForcerOutcome::Applied(Box::new(MutationOutcome::Done)),
+                    };
+                    MutationOutcome::Fold {
+                        forcer,
+                        members: members
+                            .iter()
+                            .filter(|member| !member.forcer)
+                            .map(|_| {
+                                FoldDisposition::Committed(FileIdentity::new(5, false, Vec::new()))
+                            })
+                            .collect(),
+                    }
+                }
+                _ => MutationOutcome::Committed(FileIdentity::new(5, false, Vec::new())),
+            };
+            batch.record(index, Ok(outcome));
+        }
+        batch.finish();
+        if empty && done.load(Ordering::Relaxed) {
+            break;
+        }
+        if empty {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    })
+}
+
+/// A one-byte write on a past-cap base buffers one resident byte —
+/// the per-handle cap never sees the logical length — and the commit
+/// materializes the full image: edited head, zeros elsewhere.
+#[test]
+fn large_base_single_byte_write_commits_without_buffering_the_base() {
+    let (backend, queue) = large_backend(PAST_CAP);
+    let backend = Arc::new(backend);
+    let fh = backend.open_write("big", libc::O_RDWR).unwrap();
+    backend.write_handle(fh, 0, b"X").unwrap();
+    assert_eq!(
+        backend.budget.total(),
+        1,
+        "one dirtied byte reserves one byte on a 64 MiB base"
+    );
+    assert_eq!(
+        backend.read_handle(fh, 0, 4).unwrap(),
+        b"X\0\0\0",
+        "read-your-writes stitches the patch over the base"
+    );
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let done = Arc::new(AtomicBool::new(false));
+    let drainer = spawn_summarizing_drainer(&queue, &seen, &done);
+    backend.commit_handle(fh).unwrap();
+    done.store(true, Ordering::Relaxed);
+    drainer.join().expect("drainer exits");
+    assert_eq!(
+        backend.budget.total(),
+        0,
+        "a committed handle releases its resident byte"
+    );
+    let seen = seen.lock().unwrap();
+    match &seen[..] {
+        [summary] => {
+            assert_eq!(summary.path, "big");
+            assert_eq!(summary.kind, "commit");
+            assert_eq!(summary.len, PAST_CAP, "the commit carries the whole file");
+            assert_eq!(summary.head, b"X\0\0\0", "the edit lands at offset zero");
+            assert_eq!(summary.tail, vec![0u8; 4], "the untouched tail stays zeros");
+        }
+        other => panic!("one fold with one member, saw {} summaries", other.len()),
+    }
+}
+
+/// Append past the loop's total cap cannot ride `AppendFile`, so the
+/// take commits the materialized base plus sequence as a full image.
+/// The base is never buffered to do it: five resident bytes drive a
+/// 64 MiB commit.
+#[test]
+fn append_grows_past_cap_commits_as_full_image() {
+    let (backend, queue) = large_backend(PAST_CAP - 5);
+    let backend = Arc::new(backend);
+    let fh = backend.open_write("big", libc::O_APPEND).unwrap();
+    backend.write_handle(fh, 0, b"hello").unwrap();
+    assert_eq!(
+        backend.budget.total(),
+        5,
+        "the append sequence reserves its own five bytes only"
+    );
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let done = Arc::new(AtomicBool::new(false));
+    let drainer = spawn_summarizing_drainer(&queue, &seen, &done);
+    backend.commit_handle(fh).unwrap();
+    done.store(true, Ordering::Relaxed);
+    drainer.join().expect("drainer exits");
+    let seen = seen.lock().unwrap();
+    match &seen[..] {
+        [summary] => {
+            assert_eq!(summary.path, "big");
+            assert_eq!(
+                summary.kind, "commit",
+                "a past-cap append commits as a full image, not an append"
+            );
+            assert_eq!(summary.len, PAST_CAP, "base plus the five appended bytes");
+            assert_eq!(
+                summary.head,
+                vec![0u8; 4],
+                "the base head is untouched zeros"
+            );
+            assert_eq!(summary.tail, b"ello", "the sequence lands at the new end");
+        }
+        other => panic!("one fold with one member, saw {} summaries", other.len()),
+    }
+}
+
+/// Truncate past the cap buffers a length, not bytes: no
+/// materialization at any size, and the budget stays empty until a
+/// write dirties a patch. The commit then carries the extension.
+#[test]
+fn truncate_extend_past_cap_buffers_sparse_then_commits() {
+    let (mut backend, _) = evolving_backend(b"first", b"second");
+    let queue = Arc::new(MutationQueue::default());
+    backend.mutations = Some(Arc::clone(&queue));
+    let backend = Arc::new(backend);
+    let ino = backend.attr_at("f.txt").unwrap().ino.0;
+    let fh = backend.open_write("f.txt", libc::O_RDWR).unwrap();
+    backend
+        .setattr_attrs(ino, Some(fh), Some(PAST_CAP as u64), None)
+        .unwrap();
+    assert_eq!(
+        backend.budget.total(),
+        0,
+        "a pure extension buffers no bytes"
+    );
+    assert_eq!(
+        backend.read_handle(fh, (PAST_CAP - 2) as u64, 4).unwrap(),
+        vec![0u8; 2],
+        "the extension gap reads as zeros, clamped to the logical end"
+    );
+    backend
+        .write_handle(fh, (PAST_CAP - 1) as u64, b"Z")
+        .unwrap();
+    assert_eq!(backend.budget.total(), 1);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let done = Arc::new(AtomicBool::new(false));
+    let drainer = spawn_summarizing_drainer(&queue, &seen, &done);
+    backend.commit_handle(fh).unwrap();
+    done.store(true, Ordering::Relaxed);
+    drainer.join().expect("drainer exits");
+    let seen = seen.lock().unwrap();
+    match &seen[..] {
+        [summary] => {
+            assert_eq!(summary.len, PAST_CAP);
+            assert_eq!(
+                summary.head, b"firs",
+                "the base head survives the extension"
+            );
+            assert_eq!(
+                summary.tail,
+                vec![0u8, 0u8, 0u8, b'Z'],
+                "only the last byte is new"
+            );
+        }
+        other => panic!("one fold with one member, saw {} summaries", other.len()),
+    }
+}
+
+/// Overlapping positioned writes are last-write-wins within the
+/// handle, and the commit carries exactly the modeled image: a
+/// deterministic pseudo-random program evaluated against a dense
+/// oracle, so the sparse representation cannot drift from it.
+#[test]
+fn sparse_random_writes_match_dense_model() {
+    let mut store = MemoryObjectStore::default();
+    let base: Vec<u8> = (0..4096u32).map(|i| (i % 251) as u8).collect();
+    let chunk = store.insert(ObjectKind::Chunk, &base).unwrap();
+    let root = Tree::from_entries(vec![Entry::file(
+        "f.txt",
+        base.len() as u64,
+        false,
+        vec![chunk],
+    )
+    .unwrap()])
+    .unwrap()
+    .insert_into(&mut store)
+    .unwrap();
+    let mut backend = FuseBackend::new(DriveView::new(
+        store,
+        NoMaterialization,
+        heads(vec![snapshot_of(root)]),
+    ));
+    let queue = Arc::new(MutationQueue::default());
+    backend.mutations = Some(Arc::clone(&queue));
+    let backend = Arc::new(backend);
+
+    let mut model = base.clone();
+    let mut rng = 0x12345678u64;
+    let mut next = || {
+        rng = rng
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        (rng >> 33) as usize
+    };
+    let fh = backend.open_write("f.txt", libc::O_RDWR).unwrap();
+    for _ in 0..200 {
+        let offset = next() % 6000;
+        let len = 1 + next() % 32;
+        let data: Vec<u8> = (0..len).map(|_| (next() % 256) as u8).collect();
+        backend.write_handle(fh, offset as u64, &data).unwrap();
+        if offset + len > model.len() {
+            model.resize(offset + len, 0);
+        }
+        model[offset..offset + len].copy_from_slice(&data);
+    }
+    assert!(
+        (backend.budget.total() as u64) < model.len() as u64,
+        "overlapping random patches stay resident-cheap against a 6 KiB logical image"
+    );
+    for (offset, size) in [(0u64, 4096u32), (1000, 5000), (5900, 200)] {
+        assert_eq!(
+            backend.read_handle(fh, offset, size).unwrap(),
+            model[offset as usize..(offset as usize + size as usize).min(model.len())].to_vec(),
+            "stitched reads match the dense model at {offset}+{size}"
+        );
+    }
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let done = Arc::new(AtomicBool::new(false));
+    let drainer = spawn_summarizing_drainer(&queue, &seen, &done);
+    backend.commit_handle(fh).unwrap();
+    done.store(true, Ordering::Relaxed);
+    drainer.join().expect("drainer exits");
+    let seen = seen.lock().unwrap();
+    match &seen[..] {
+        [summary] => {
+            assert_eq!(summary.len, model.len());
+            assert_eq!(summary.head, model[..4].to_vec());
+            assert_eq!(summary.tail, model[model.len() - 4..].to_vec());
+        }
+        other => panic!("one fold with one member, saw {} summaries", other.len()),
+    }
+}
+
+/// Two positioned handles on distinct paths fold together: one take
+/// materializes both overlays, one fold carries two full images.
+#[test]
+fn two_positioned_handles_on_distinct_paths_fold_together() {
+    let mut store = MemoryObjectStore::default();
+    let a = store.insert(ObjectKind::Chunk, b"aaa").unwrap();
+    let b = store.insert(ObjectKind::Chunk, b"bbb").unwrap();
+    let root = Tree::from_entries(vec![
+        Entry::file("a.txt", 3, false, vec![a]).unwrap(),
+        Entry::file("b.txt", 3, false, vec![b]).unwrap(),
+    ])
+    .unwrap()
+    .insert_into(&mut store)
+    .unwrap();
+    let mut backend = FuseBackend::new(DriveView::new(
+        store,
+        NoMaterialization,
+        heads(vec![snapshot_of(root)]),
+    ));
+    let queue = Arc::new(MutationQueue::default());
+    backend.mutations = Some(Arc::clone(&queue));
+    let backend = Arc::new(backend);
+    let fa = backend.open_write("a.txt", libc::O_RDWR).unwrap();
+    let fb = backend.open_write("b.txt", libc::O_RDWR).unwrap();
+    backend.write_handle(fa, 1, b"X").unwrap();
+    backend.write_handle(fb, 2, b"Y").unwrap();
+    assert_eq!(backend.budget.total(), 2);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let done = Arc::new(AtomicBool::new(false));
+    let drainer = spawn_summarizing_drainer(&queue, &seen, &done);
+    backend.commit_handle(fa).unwrap();
+    done.store(true, Ordering::Relaxed);
+    drainer.join().expect("drainer exits");
+    let seen = seen.lock().unwrap();
+    assert_eq!(
+        seen.len(),
+        2,
+        "one fold carries both handles, saw {}",
+        seen.len()
+    );
+    for summary in seen.iter() {
+        assert_eq!(summary.kind, "commit");
+        assert_eq!(summary.len, 3);
+    }
+    assert_eq!(
+        backend.budget.total(),
+        0,
+        "the joint fold releases both handles"
+    );
 }

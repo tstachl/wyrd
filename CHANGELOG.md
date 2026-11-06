@@ -118,6 +118,22 @@ is transient — no drive data is affected.
   20k-name conflicting directory completing with one store load per
   subtree plus oracle agreement with the lookup path.
 
+- Chunk-scoped sparse write overlay past 64 MiB
+  (`nostr:nevent1qqsy3qc98khxczerv4rngzqp4dqfn0xnsn50hvqe9nwqfvuug4nu3qgpz9mhxue69uhkwunpwdczuap49eehgqgywvv`):
+  positioned handles buffer dirtied ranges only instead of a dense
+  logical image, and the write budget charges resident patch bytes
+  rather than the logical length — a one-byte edit of a 200 MiB file
+  reserves one byte, and the 64 MiB bound caps memory again instead
+  of redefining which files exist. Reads stitch base ranges with
+  patches, truncate moves only the logical length, and take time
+  materializes the full commit image under the existing fold lease.
+  An append past the live loop's total cap commits as a full
+  `CommitFile` (base-checked) instead of `AppendFile`; the fh-less
+  `SetAttrs` size cap stays as the live-loop bound.
+  `ENOSPC` still reports resident-budget pressure with the handle
+  unchanged. Contract note in `docs/contracts/write-path.md`
+  (overlay strategy).
+
 ## [0.3.0-alpha]
 
 ### Added

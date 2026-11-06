@@ -10,7 +10,8 @@ use wyrd_format::ObjectStore;
 use wyrd_fuse::{Materialization, Node, ViewError};
 
 use super::super::inode::{
-    DirectoryEntries, Handle, OpenDir, WriteHandle, DIRECTORY_HANDLE_BASE, MOUNT_TIME,
+    DirectoryEntries, Handle, OpenDir, SparseOverlay, WriteHandle, WriteImage,
+    DIRECTORY_HANDLE_BASE, MOUNT_TIME,
 };
 use super::{attr_of, errno_of, inode_error, join, log_budget_refusal, FuseBackend};
 
@@ -82,13 +83,12 @@ where
                 if write.failed {
                     return Err(fuser::Errno::EIO);
                 }
-                let image_size = write.image.as_ref().map_or(0, |image| image.len() as u64);
-                let size = if write.append {
-                    write.base.size().saturating_add(image_size)
-                } else if write.image.is_some() {
-                    image_size
-                } else {
-                    write.base.size()
+                let size = match &write.image {
+                    Some(WriteImage::Sparse(overlay)) => overlay.len(),
+                    Some(WriteImage::Append(sequence)) => {
+                        write.base.size().saturating_add(sequence.len() as u64)
+                    }
+                    None => write.base.size(),
                 };
                 Ok(self.attr_parts(ino, fuser::FileType::RegularFile, size, write.executable))
             }
@@ -551,24 +551,17 @@ where
         if write.executable == executable && !write.dirty {
             return Ok(());
         }
-        // The commit path submits the buffered image; a clean handle has
-        // none, so materialize the captured content first or a
-        // metadata-only change would commit an empty file.
+        // The commit path submits the buffered overlay; a clean
+        // handle has none, so record an empty one over the base first
+        // or a metadata-only change would commit an empty file. No
+        // base bytes are buffered: the overlay starts with no patches
+        // and reserves nothing resident.
         if write.image.is_none() {
-            let projected = usize::try_from(write.base.size()).unwrap_or(usize::MAX);
-            if let Err(error) = self.budget.reserve(write.id, projected) {
+            if let Err(error) = self.budget.reserve(write.id, 0) {
                 log_budget_refusal("set-exec", error);
                 return Err(fuser::Errno::ENOSPC);
             }
-            let capture = write.capture.clone();
-            let len = usize::try_from(write.base.size()).unwrap_or(usize::MAX);
-            match self.read_via_capture(&capture, 0, u32::try_from(len).unwrap_or(u32::MAX)) {
-                Ok(image) => write.image = Some(image),
-                Err(error) => {
-                    self.budget.release(write.id);
-                    return Err(error);
-                }
-            }
+            write.image = Some(WriteImage::Sparse(SparseOverlay::new(write.base.size())));
         }
         write.executable = executable;
         self.mark_dirty(&mut write);
@@ -580,20 +573,23 @@ where
         Ok(())
     }
 
-    /// Truncate a writable handle's buffered image (handle-derived
-    /// `setattr(size)`): grow zero-fills, shrink discards the tail. The
-    /// change is buffered and committed at the next boundary, exactly
-    /// like a write. The handle must name `path`.
+    /// Truncate a writable handle's buffered overlay (handle-derived
+    /// `setattr(size)`): grow updates the logical length (the gap
+    /// reads as zeros), shrink discards the tail patches. Nothing is
+    /// materialized at any size: the budget charges the surviving
+    /// resident patches only, so the per-handle cap cannot refuse a
+    /// truncate for the base or target being large. The change is
+    /// buffered and committed at the next boundary, exactly like a
+    /// write. The handle must name `path`.
     fn truncate_handle_locked(
         &self,
         handle: &Arc<Mutex<WriteHandle>>,
         path: &str,
         size: u64,
     ) -> Result<(), fuser::Errno> {
-        let target = usize::try_from(size).map_err(|_| fuser::Errno::EFBIG)?;
-        if target > wyrd_core::session::MAX_WRITE_BUFFER_BYTES {
-            return Err(fuser::Errno::EFBIG);
-        }
+        // u64 is the overlay's address width on every target; the
+        // word-width check happens at commit-time materialization.
+        let target = size;
         let mut write = handle.lock().map_err(|_| fuser::Errno::EIO)?;
         write = self.wait_inflight(write)?;
         if write.path != path {
@@ -603,47 +599,30 @@ where
             return Err(fuser::Errno::EIO);
         }
         let current_len = match &write.image {
-            Some(image) => image.len(),
-            None => usize::try_from(write.base.size()).unwrap_or(usize::MAX),
+            Some(WriteImage::Sparse(overlay)) => overlay.len(),
+            Some(WriteImage::Append(_)) => {
+                // Unreachable through `setattr_attrs`, which refuses
+                // size on append handles: fail closed, never truncate
+                // a sequence.
+                return Err(fuser::Errno::EIO);
+            }
+            None => write.base.size(),
         };
         if current_len == target && !write.dirty {
             return Ok(());
         }
-        let was_clean = write.image.is_none();
-        let mut image = if was_clean {
-            // Reserve the larger of the base and the target before
-            // materializing, so an over-cap base is refused without
-            // reading or allocating it.
-            let projected = usize::try_from(write.base.size())
-                .unwrap_or(usize::MAX)
-                .max(target);
-            if let Err(error) = self.budget.reserve(write.id, projected) {
-                log_budget_refusal("truncate", error);
-                return Err(fuser::Errno::ENOSPC);
-            }
-            let capture = write.capture.clone();
-            let len = usize::try_from(write.base.size()).unwrap_or(usize::MAX);
-            match self.read_via_capture(&capture, 0, u32::try_from(len).unwrap_or(u32::MAX)) {
-                Ok(image) => image,
-                Err(error) => {
-                    self.budget.release(write.id);
-                    return Err(error);
-                }
-            }
-        } else {
-            write.image.take().unwrap_or_default()
+        let mut overlay = match write.image.take() {
+            Some(WriteImage::Sparse(overlay)) => overlay,
+            Some(WriteImage::Append(_)) => return Err(fuser::Errno::EIO),
+            None => SparseOverlay::new(write.base.size()),
         };
-        if let Err(error) = self.budget.reserve(write.id, target) {
+        overlay.truncate(target);
+        let new_resident = overlay.resident();
+        if let Err(error) = self.budget.reserve(write.id, new_resident) {
             log_budget_refusal("truncate", error);
-            if was_clean {
-                self.budget.release(write.id);
-            } else {
-                write.image = Some(image);
-            }
             return Err(fuser::Errno::ENOSPC);
         }
-        image.resize(target, 0);
-        write.image = Some(image);
+        write.image = Some(WriteImage::Sparse(overlay));
         self.mark_dirty(&mut write);
         let sync = write.sync;
         drop(write);

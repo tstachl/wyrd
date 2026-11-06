@@ -14,13 +14,15 @@ use wyrd_core::session::FoldLease;
 use wyrd_format::ObjectStore;
 use wyrd_fuse::{Materialization, ViewError};
 
-use super::super::inode::{Handle, WriteHandle};
+use super::super::inode::{Handle, WriteHandle, WriteImage};
 use super::{log_budget_refusal, log_refused, mutation_errno, FuseBackend};
 
-/// One taken dirty buffer: the fold detached the image under the
+/// One taken dirty buffer: the fold detached the overlay under the
 /// handle's lock and parked writers on `fold_wake` until it settles
 /// the handle, so no concurrent write is lost between the take and
-/// the re-pin.
+/// the re-pin. Sparse overlays materialize to full commit images at
+/// take time (see `gather_taken`); `restore` carries the overlay back
+/// for an aborted fold, since the materialized image is not it.
 pub(super) struct TakenMember {
     pub(super) handle: Arc<Mutex<WriteHandle>>,
     /// First-in-first-buffered order: members apply by this stamp.
@@ -30,6 +32,9 @@ pub(super) struct TakenMember {
     pub(super) executable: bool,
     pub(super) append: bool,
     pub(super) content: Vec<u8>,
+    /// Overlay to put back on abort. `None` only for small appends,
+    /// whose sequence *is* the taken content and restores from it.
+    pub(super) restore: Option<WriteImage>,
 }
 
 /// What owns a fold's forcing privilege: a dirty handle's own commit
@@ -71,11 +76,26 @@ pub(super) struct GatherFilter<'a> {
     pub(super) own: Option<&'a Arc<Mutex<WriteHandle>>>,
 }
 
-/// The queue kind for one taken buffer: an append sequence commits
-/// onto the current end with no base comparison, anything else
-/// commits its full image against its base.
+/// Whether an append take commits as a bare sequence: base plus
+/// sequence within the live loop's total cap. Past it the append
+/// commits as a full image instead (see `taken_kind`), so it must
+/// never merge into a sequence run.
+fn appends_as_sequence(taken: &TakenMember) -> bool {
+    taken.append
+        && taken.base.size().saturating_add(taken.content.len() as u64)
+            <= wyrd_core::session::MAX_WRITE_BUFFER_BYTES as u64
+}
+
+/// The queue kind for one taken buffer. A small append sequence
+/// commits onto the current end with no base comparison; anything
+/// else commits its full image against its base. A large append —
+/// base plus sequence past the live loop's total cap — cannot ride
+/// `AppendFile` (the loop refuses the total), so it commits as a
+/// full image instead and takes the base staleness check with it:
+/// concurrent appends to huge files contend where small appends
+/// concatenate. See `docs/contracts/write-path.md` (overlay strategy).
 fn taken_kind(taken: &TakenMember) -> MutationKind {
-    if taken.append {
+    if appends_as_sequence(taken) {
         MutationKind::AppendFile {
             path: taken.path.clone(),
             content: taken.content.clone(),
@@ -182,9 +202,13 @@ fn settle_failed<S: ObjectStore, M: Materialization>(
     backend.fold_wake.notify_all();
 }
 
-/// Settle one taken handle as restored: its image goes back and it
-/// stays dirty and retryable for its own forcing event. The budget
-/// was never released, so the reservation still covers the image.
+/// Settle one taken handle as restored: its overlay goes back and
+/// it stays dirty and retryable for its own forcing event. The
+/// budget was never released, so the reservation still covers the
+/// overlay. A small append restores from the taken sequence, which
+/// is what it is; anything else restores its taken overlay, and a
+/// positioned handle with no taken overlay is a contract break that
+/// fails closed instead of inventing bytes.
 fn settle_restored<S: ObjectStore, M: Materialization>(
     backend: &FuseBackend<S, M>,
     taken: &TakenMember,
@@ -192,9 +216,24 @@ fn settle_restored<S: ObjectStore, M: Materialization>(
     S::Error: std::fmt::Debug,
 {
     if let Ok(mut write) = taken.handle.lock() {
-        write.image = Some(taken.content.clone());
-        write.dirty = true;
-        write.inflight = None;
+        let image = match (&taken.restore, taken.append) {
+            (Some(overlay), _) => Some(overlay.clone()),
+            (None, true) => Some(WriteImage::Append(taken.content.clone())),
+            (None, false) => None,
+        };
+        match image {
+            Some(image) => {
+                write.image = Some(image);
+                write.dirty = true;
+                write.inflight = None;
+            }
+            None => {
+                write.failed = true;
+                write.dirty = false;
+                write.inflight = None;
+                backend.budget.release(write.id);
+            }
+        }
     }
     backend.fold_wake.notify_all();
 }
@@ -235,14 +274,26 @@ where
     }
 
     /// Account a fold's transient submission memory before it is
-    /// submitted: the queue kinds clone the taken images, so the
-    /// fold's footprint is ~2× the taken bytes while in flight. On
-    /// refusal every taken image is restored and the fold reports
-    /// `ENOSPC` — memory pressure, retryable, with all handles
-    /// unchanged — instead of submitting unaccounted. The lease lives
-    /// until the settle completes.
+    /// submitted: the queue kinds clone the taken images (plus the
+    /// restore overlays held for an abort), so the fold's footprint
+    /// is ~2× the taken bytes while in flight. On refusal every
+    /// taken overlay is restored and the fold reports `ENOSPC` —
+    /// memory pressure, retryable, with all handles unchanged —
+    /// instead of submitting unaccounted. The lease lives until the
+    /// settle completes.
     fn lease_fold(&self, taken: &[TakenMember]) -> Result<FoldLease<'_>, fuser::Errno> {
-        let bytes = taken.iter().map(|taken| taken.content.len()).sum();
+        let bytes = taken
+            .iter()
+            .map(|taken| {
+                taken.content.len().saturating_add(
+                    taken
+                        .restore
+                        .as_ref()
+                        .map(WriteImage::resident)
+                        .unwrap_or_default(),
+                )
+            })
+            .sum();
         self.budget.reserve_fold(bytes).map_err(|error| {
             log_budget_refusal("fold-lease", error);
             for taken in taken {
@@ -279,7 +330,10 @@ where
         let mut runs: Vec<(String, usize)> = Vec::new();
         for (index, taken) in taken.iter().enumerate() {
             let is_forcer = Some(index) == forcer_taken;
-            if taken.append {
+            // Only sequence-committing appends merge into a run: a
+            // large append is a full image with its own base check
+            // and rides alone, even on a path with a sequence run.
+            if appends_as_sequence(taken) {
                 if let Some((_, pos)) = runs.iter().find(|(path, _)| *path == taken.path) {
                     let pos = *pos;
                     if let FoldMember {
@@ -288,15 +342,20 @@ where
                     } = &mut members[pos]
                     {
                         content.extend_from_slice(&taken.content);
+                        submitted[pos].taken.push(index);
+                        submitted[pos].forcer |= is_forcer;
+                        members[pos].forcer |= is_forcer;
+                        continue;
                     }
-                    submitted[pos].taken.push(index);
-                    submitted[pos].forcer |= is_forcer;
-                    members[pos].forcer |= is_forcer;
-                    continue;
+                    // The run is a full-image member (a large append
+                    // got here first): this sequence rides alone in
+                    // its own run below.
                 }
             }
             let pos = submitted.len();
-            if taken.append {
+            // Only sequence runs merge: a full-image member records
+            // no run, so later sequences on the path ride alone too.
+            if appends_as_sequence(taken) {
                 runs.push((taken.path.clone(), pos));
             }
             submitted.push(SubmitMember {

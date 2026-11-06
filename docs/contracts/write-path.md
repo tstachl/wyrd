@@ -351,6 +351,21 @@ Overlay semantics, stated exactly:
    file contents (below). This is why an append handle's base identity is
    used only for existence/kind, not for content equality.
 
+**Overlay strategy (v0).** Positioned handles buffer chunk-scoped
+sparse patches (dirtied ranges only, last-write-wins), never the base:
+the write budget charges resident patch bytes, not the logical length,
+so a large file with a one-byte edit reserves one byte. Reads stitch
+base ranges with patches; truncate only moves the logical length and
+drops or trims patches. At take time the overlay materializes to the
+full commit image (transient, covered from submit by the fold lease
+over the taken length, like the queue-kind clone). The one deliberate
+fork: an append whose base plus sequence exceeds the live loop's
+`AppendFile` total cap commits as a full `CommitFile` instead, so it
+takes the base staleness check with it — concurrent appends to huge
+files contend where small appends concatenate. The fh-less `SetAttrs`
+size cap stays: it bounds live-loop materialization, while the
+handle path is bounded by the fold lease at take.
+
 A handle returned by `create` is **ordinary writable-handle state** once
 returned: it captures the created empty file's identity and path like any
 other handle. There is no privileged relationship between a handle and
