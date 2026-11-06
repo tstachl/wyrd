@@ -31,8 +31,10 @@ the words that mislead, and the order to read them in.
    module per command family in `commands/`; `composer.rs` holds
    the live-node plumbing shared by `mount`, `sync now`, and
    `vault`; `update/` holds the updater and its durable-file
-   capture. `wyrd-app` and `wyrd-embed` are sibling hosts over
-   the same daemon/core APIs.
+   capture. `wyrd-app` (desktop host) sits on `wyrd-core` plus
+   `wyrd-daemon`; `wyrd-embed` proves the core lifecycle without the
+   daemon or presentation, over `wyrd-core`, `wyrd-sync`,
+   `wyrd-format`, and `wyrd-fuse`.
 8. `wyrd-contracts` — the cross-crate contract suite (below).
 
 Normative contracts live in `docs/contracts/` (index in
@@ -51,9 +53,9 @@ environment harnesses (end-to-end and device runs).
 
 `wyrd-contracts` is the contract suite: one named test per
 architectural invariant, composed through the public APIs of
-`wyrd-format → wyrd-sync → wyrd-fuse → wyrd-daemon`, so an
-invariant regression fails a test instead of a deployment. It is a
-workspace leaf — it depends on every crate and nothing depends
+`wyrd-format`, `wyrd-namespace`, `wyrd-sync`, `wyrd-core`,
+`wyrd-fuse`, and `wyrd-daemon`, so an invariant regression fails a
+test instead of a deployment. It is a workspace leaf — it depends on every crate and nothing depends
 on it — and its dependency-edge test fails closed on any new
 member, edge, or external dependency.
 

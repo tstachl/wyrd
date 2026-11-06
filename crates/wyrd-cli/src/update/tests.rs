@@ -249,7 +249,7 @@ fn open_errors_classify_to_verdict_or_operation() {
 }
 
 #[test]
-fn durable_snapshot_diff_names_every_authored_change() {
+fn durable_files_diff_names_every_authored_change() {
     let before = DurableFiles {
         keystore: Some(b"ks".to_vec()),
         current: Some(b"c1".to_vec()),

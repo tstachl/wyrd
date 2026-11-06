@@ -1,6 +1,6 @@
 //! Runtime sync state: the durable bookkeeping that sits between control
 //! messages and bulk object transport, owned by the runtime engine
-//! (`engine.rs`, alongside `author`, `fetch`, and `intake`). It records the
+//! (`engine/`, alongside `author/`, `fetch/`, and `intake/`). It records the
 //! local facts the roadmap already names: which control messages were seen,
 //! which snapshot announcements arrived, which snapshot bodies are
 //! recorded, which manifests have been recorded, which objects are already

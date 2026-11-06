@@ -69,7 +69,7 @@ pub(crate) fn capture_durable_files(drive_dir: &Path) -> Result<DurableFiles, Cl
 }
 
 impl DurableFiles {
-    /// Every durable difference between two snapshots, oldest first.
+    /// Every durable difference between two captures, oldest first.
     /// Empty means the verification authored nothing: no transition
     /// emitted (invariant 6), no migration landed as a commit
     /// (invariant 8), no derived cache was mistaken for authority
