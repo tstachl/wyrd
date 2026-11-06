@@ -211,14 +211,25 @@ fn policy_renderers_name_counts_and_quadrants() {
     let budgets = LiveConfig::for_local_sync().budgets;
     let rendered = policy_budgets_render(&census, &accounting, &budgets);
     assert!(rendered.contains("pinned files: 1"));
-    assert!(rendered.contains("retained_bytes_quota: unlimited"));
+    // DG-5: no ceiling is stated plainly — never "unlimited" (a
+    // ceiling claim by another name), never 0 as a ceiling.
+    assert!(
+        rendered.contains("retained_bytes_quota: no retention ceiling is set on this device"),
+        "unset quota must state the absence, got:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("unlimited"),
+        "no ceiling claim by another name:\n{rendered}"
+    );
     // OD-26-B option B: the report names each dimension and labels
     // whether it backs enforcement or merely observes. A single total
     // known to be low is not acceptable output.
-    assert!(rendered.contains("retained content: 812 (quota-enforced)"));
+    assert!(rendered.contains(
+        "retained content: 812 (quota-enforced; object store only, not the fact log or sync vault)"
+    ));
     assert!(rendered.contains("fact log: 37 (observational)"));
     assert!(rendered.contains("sync vault: 124 (observational)"));
-    assert!(rendered.contains("total accounted: 973 (observational)"));
+    assert!(rendered.contains("total accounted: 973 (observational;"));
     // OD-26-A option C: with no configured ceiling the report advises
     // one, explicitly non-authoritative — never a silent default.
     assert!(rendered.contains("advisory ceiling (non-authoritative)"));
@@ -381,4 +392,190 @@ fn evict_refuses_under_vault() {
         "evict under vault must refuse naming the role, got {error:?}"
     );
     drop(temp);
+}
+
+/// DG-5 acceptance test, first half: every figure the closed
+/// vocabulary names maps to exactly one row of the normative table
+/// in `docs/design/storage-growth.md`. A new figure without a table
+/// row fails here before it can reach a screen unnamed — the table
+/// is the contract, so this is the test that makes it one. The table
+/// body is delimited by markers so prose elsewhere in the document
+/// can never satisfy the match by accident.
+#[test]
+fn every_storage_figure_maps_to_a_dg5_row() {
+    use wyrd_core::policy::{FigureKind, StorageFigure};
+
+    let doc = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/design/storage-growth.md");
+    let text = std::fs::read_to_string(&doc)
+        .unwrap_or_else(|error| panic!("DG-5 table doc must be readable: {doc:?}: {error}"));
+    let start = text
+        .find("<!-- DG-5-TABLE-START -->")
+        .expect("DG-5 table start marker");
+    let end = text
+        .find("<!-- DG-5-TABLE-END -->")
+        .expect("DG-5 table end marker");
+    assert!(start < end, "DG-5 table markers out of order");
+    let table = &text[start..end];
+    for figure in StorageFigure::all() {
+        let cell = format!("`{}`", figure.label());
+        assert!(
+            table.contains(&cell),
+            "storage figure {figure:?} has no DG-5 table row (expected {cell:?} in the table)"
+        );
+    }
+    // Exactly one figure backs enforcement. Anything else presented
+    // as enforced is the overstatement this contract exists to
+    // prevent; two enforced figures would disagree about what the
+    // ceiling compares against.
+    let enforced = StorageFigure::all()
+        .iter()
+        .filter(|figure| figure.kind() == FigureKind::Enforced)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        enforced,
+        vec![&StorageFigure::RetainedContent],
+        "exactly one enforced figure: {enforced:?}"
+    );
+}
+
+/// DG-5 acceptance test, second half: no forbidden phrase in any
+/// rendered output, and no quota rendering without its refusal
+/// scope. The list must include "free space", "disk usage", and
+/// "storage used" — a substring check on "free space" alone would
+/// miss the device-total claims — plus the bare-quota failure mode
+/// the whole issue is about.
+#[test]
+fn storage_surface_never_says_free_space() {
+    use wyrd_core::policy::{StorageFigure, FORBIDDEN_STORAGE_WORDS};
+
+    // The list itself is pinned: the issue requires "free space",
+    // "disk usage", and "storage used", and a list that silently
+    // shrank to one substring would pass the loop below while missing
+    // the device-total claims.
+    assert_eq!(
+        FORBIDDEN_STORAGE_WORDS,
+        &["free space", "disk usage", "storage used"]
+    );
+
+    let census = ResidencyCensus {
+        files: vec![wyrd_core::policy::FileResidency {
+            path: "a.txt".into(),
+            chunks: Vec::new(),
+            pinned_chunks: Vec::new(),
+            policy: RetentionPolicy::Pinned,
+            local: LocalPresence::Present,
+        }],
+        conflicts: vec!["split".into()],
+        dirs: 1,
+        symlinks_skipped: 1,
+    };
+    let budgets = LiveConfig::for_local_sync().budgets;
+    let quota_none = RetentionAccounting {
+        retained_content: 812,
+        fact_log: 37,
+        sync_vault: 124,
+        quota: None,
+        refusals: (0, Vec::new()),
+    };
+    let quota_some = RetentionAccounting {
+        quota: Some(1024),
+        refusals: (2, vec![1024]),
+        ..quota_none
+    };
+    let status = policy_status_render("", "docs", &census);
+    let rendered_none = policy_budgets_render(&census, &quota_none, &budgets);
+    let rendered_some = policy_budgets_render(&census, &quota_some, &budgets);
+    for output in [&status, &rendered_none, &rendered_some] {
+        let lower = output.to_lowercase();
+        for forbidden in FORBIDDEN_STORAGE_WORDS {
+            assert!(
+                !lower.contains(*forbidden),
+                "forbidden phrase {forbidden:?} in storage output:\n{output}"
+            );
+        }
+    }
+    // The bare-quota failure mode: a `retained_bytes_quota` number
+    // with no refusal scope. The scope rides the same sentence, so
+    // assert the sentence, not just the label.
+    assert!(
+        rendered_some.contains(
+            "retained_bytes_quota: 1024 (operator-selected refusal boundary over retained content only"
+        ),
+        "a configured quota must carry its refusal scope:\n{rendered_some}"
+    );
+    // An unset quota states the absence (OD-22-A recommendation (A)):
+    // never "unlimited", never a zero that would read as protection.
+    assert!(
+        rendered_none.contains("no retention ceiling is set on this device"),
+        "unset quota must state the absence:\n{rendered_none}"
+    );
+    assert!(
+        !rendered_none.contains("unlimited"),
+        "no ceiling claim by another name:\n{rendered_none}"
+    );
+    // A measured zero stays a measurement next to an explicit
+    // no-ceiling statement — never protection, never "not measured"
+    // confusion: the offline walk always measures, so zero means
+    // empty, and the absence that matters is the ceiling's.
+    let empty = RetentionAccounting {
+        retained_content: 0,
+        fact_log: 0,
+        sync_vault: 0,
+        quota: None,
+        refusals: (0, Vec::new()),
+    };
+    let rendered_empty = policy_budgets_render(&census, &empty, &budgets);
+    assert!(
+        rendered_empty.contains("retained content: 0 (quota-enforced;")
+            && rendered_empty.contains("no retention ceiling is set on this device"),
+        "a measured zero with no ceiling must read as empty, not protected:\n{rendered_empty}"
+    );
+    // Every label the renderer emits for a figure is the contract's
+    // label: spot-check the census rows the budgets report shares
+    // with the status report.
+    for label in [
+        StorageFigure::PinnedFiles.label(),
+        StorageFigure::QuadrantFiles.label(),
+        StorageFigure::ConflictsSkipped.label(),
+    ] {
+        assert!(
+            rendered_none.contains(label),
+            "budgets report must use the contract label {label:?}:\n{rendered_none}"
+        );
+    }
+}
+
+/// The offline report names its budgets honestly: this command's
+/// defaults, never a live composition's values. `policy budgets`
+/// cannot observe a running mount's flags (the quota is not
+/// persisted), so calling its numbers "effective" would let the
+/// report disagree with a configured drive without either being
+/// wrong. The live screen (issue 31) reads `LiveParts.budgets`; this
+/// report states its source instead.
+#[test]
+fn storage_surface_names_its_budgets_offline_defaults() {
+    let census = ResidencyCensus {
+        files: Vec::new(),
+        conflicts: Vec::new(),
+        dirs: 0,
+        symlinks_skipped: 0,
+    };
+    let accounting = RetentionAccounting {
+        retained_content: 0,
+        fact_log: 0,
+        sync_vault: 0,
+        quota: Some(1024),
+        refusals: (0, Vec::new()),
+    };
+    let budgets = LiveConfig::for_local_sync().budgets;
+    let rendered = policy_budgets_render(&census, &accounting, &budgets);
+    assert!(
+        rendered.contains("budgets (offline defaults"),
+        "the report must name its budgets' source:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("effective"),
+        "an offline report must not claim effective budgets:\n{rendered}"
+    );
 }

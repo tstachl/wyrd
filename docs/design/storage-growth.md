@@ -527,6 +527,97 @@ it. `wyrd policy budgets` renders all three with their labels; a quota
 is an operator-selected refusal boundary over retained bytes, not an
 implicit product policy over the device.
 
+## Storage wording contract (DG-5)
+
+A storage-usage surface can be written without a single argument about
+what its numbers mean, because this table already names every figure
+it may show, the scope each figure covers, the population each figure
+excludes, and the words it may not use. The screen follows the
+contract; it does not negotiate it. The closed figure type is
+`wyrd_core::policy::StorageFigure` — one variant per row, `label()`
+for the exact words — and the contract test
+`every_storage_figure_maps_to_a_dg5_row` fails when a figure appears
+that the table does not name. Status: table drafted against the DG-5
+recommendation; the DG-5 decision itself belongs to the decider named
+in the issue (`nevent1qqsvgc7v24q4n7cu3jl875qmvws0j203le0pqz8l2ad7pj4cr437n7qpz9mhxue69uhkwunpwdczuap49eehgxxvtx7`),
+as do OD-22-A/B/C below. Implementing the recommendation is correct
+under every reading of it; closing the gate is the decider's act, not
+this table's.
+
+<!-- DG-5-TABLE-START -->
+| Figure (exact label) | What it measures (scope) | What it excludes | Kind |
+|---|---|---|---|
+| `retained content` | Object-store bytes at report time (one walk, never cached): the enforcement quantity the ceiling is compared against | The fact log, the sync vault, and every unmetered writer — named in the same sentence, never a tooltip | enforced |
+| `fact log` | Durable fact-log commit bytes | Everything outside the commit log; observational, backs no refusal | observational |
+| `sync vault` | Sealed vault representations resident on this device | Everything outside the vault; observational, backs no refusal | observational |
+| `total accounted` | The three resident dimensions above, summed at report time | Every unmetered writer (fact-log intake, pre-live authoring): explicitly not a device total | observational |
+| `retained_bytes_quota` | The operator-configured ceiling over retained content, when one is configured | The device as a whole: an operator-selected refusal boundary over retained content only, never a ceiling on storage. Never rendered bare — the refusal scope rides the same sentence | boundary |
+| `receive_retention_ceiling` | The same flag's receive-path face: fetched representations admit against it before durable storage (DG-4 A) | Same as above: one flag drives both enforcement points | boundary |
+| `advisory ceiling (non-authoritative)` | A non-authoritative starting point for the operator's quota decision, shown only when no quota is configured, at or above current retention | Authority: a recommendation, never a default by another name | boundary |
+| `retention refusals (DG-4 A)` | Distinct representations declined before storage under a named ceiling | Loss semantics: refused is policy, never missing/invalid/corrupt, never entering repair as lost | observational |
+| `pinned files` | Reachable files carrying an explicit pin promise | Unpinned files; per-file counts over- or under-count shared chunks | census |
+| `pinned chunks` | Distinct pinned content identities, deduplicated across files that share chunks | Per-file multiplication: one promise, not one per path | census |
+| `files:` | Reachable files per (policy, presence) quadrant, plus walked directory count | Conflicted subtrees (named on their own row) and unreachable deleted-path bytes (never scanned) | census |
+| `conflicts` | Conflicted subtrees the census never walked | Traversal: costs a row, never the report | census |
+| `POLICY       LOCAL    PATH` | One reachable file with its policy/presence pair | The object store as a whole: reachable content only, never scanned | census |
+| `symlinks skipped` | Links met during the walk, never traversed | Content: a link names none of its own | census |
+<!-- DG-5-TABLE-END -->
+
+What the table deliberately has no row for:
+
+- **No device or disk total.** No v0.4 surface may present a number
+  labelled as the drive's or the device's on-disk total unless it is
+  computed from the object store, the vault, and the fact log together —
+  and unmetered writers make even that sum a lower bound, so the table
+  has no such row rather than a caveated one. Metering the vault and
+  the fact log is what would let a byte figure become a device total;
+  until then the negative invariant stands.
+- **No quota as ceiling.** No surface may present the quota as a
+  ceiling on the device or the disk. The quota bounds two admission
+  paths (mounted authoring, receive-path admission); the device's total
+  is not bounded by it.
+- **No free-space family.** "Free space", "disk usage", and "storage
+  used" never appear in any rendered output
+  (`storage_surface_never_says_free_space`). This section names the
+  forbidden words in order to forbid them, so the mechanical check is
+  that test — absence in rendered output — not a repo-wide grep over
+  the contract itself. A healthy free-space figure next to an absent ceiling is exactly the combination that
+  teaches a person the drive is protected when nothing is — and an
+  operator's response to a full disk is to delete things, which v0
+  cannot do (deletion is a state change; GC does not exist). That is
+  the data-safety bug this contract exists to prevent.
+- **No bare quota.** Any rendering of `retained_bytes_quota` that
+  omits its refusal scope is a forbidden rendering — the scope rides
+  the same sentence.
+- **No "unlimited", no zero-as-ceiling.** An unset quota states the
+  absence plainly — "no retention ceiling is set on this device"
+  (OD-22-A, recommendation (A); the sentence's wording is the
+  decider's) — never "unlimited", a ceiling claim by another name, and
+  never `0`, which would read as "no bytes retained" on a drive with
+  content. A measured zero (`retained content: 0`) stays a
+  measurement: the offline walk always measures, so zero means empty,
+  and the absence that matters is the ceiling's, stated beside it.
+- **No "effective" from an offline report.** `policy budgets` reads
+  durable state only; the quota it names is this command's defaults,
+  never a live composition's values (the quota is not persisted, so
+  no offline read can observe a running mount's flags). The budgets
+  header says "offline defaults" for exactly that reason; presenting
+  defaults as effective would let the report disagree with a
+  configured drive without either being wrong. The live screen (issue
+  31) reads `LiveParts.budgets`; this table is what it must render
+  each figure as.
+- **No same-number confusion.** Reachable-content counts are files;
+  byte dimensions are bytes; the two never share a row. The
+  per-identity pinned-chunk union is the promise count; per-file
+  counts are the navigation count.
+
+Out of scope for this table (named, not owned): action receipts
+(`pin`/`unpin`/`evict` reports describe an action just taken, not a
+storage observation) and the role posture block (device policy, owned
+by the role contract). The `--retained-quota` flag help keeps the
+word "unlimited" for the option default: it describes what an unset
+option does, not what protects the device.
+
 **Two live paths refuse.** The authoring check sits in the live
 node's commit boundary, ahead of every arm of `apply_mutation`, over
 the plaintext accountant (unchanged, as pinned); the DG-4 A gate sits
