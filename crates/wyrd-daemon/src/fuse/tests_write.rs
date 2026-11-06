@@ -1810,3 +1810,40 @@ fn o_sync_write_on_large_base_commits_inline() {
         other => panic!("one fold with one member, saw {} summaries", other.len()),
     }
 }
+
+/// A path-addressed resize leases its target before submitting: with
+/// no aggregate room the submit refuses `ENOSPC`, queues nothing, and
+/// the file keeps its size — the loop never sees the target. Past the
+/// committable ceiling the refusal is `EFBIG` instead, even with no
+/// budget at all: unpublishable lengths fail permanently, never
+/// retryably.
+#[test]
+fn fh_less_resize_leases_its_target_before_submitting() {
+    let (mut backend, _) = evolving_backend(b"first", b"second");
+    backend.budget = Arc::new(WriteBudget::with_limits(1024 * 1024, 2048, 8));
+    let queue = Arc::new(MutationQueue::default());
+    backend.mutations = Some(Arc::clone(&queue));
+    let ino = backend.attr_at("f.txt").unwrap().ino.0;
+    assert_eq!(
+        backend.set_size_at(ino, 1024 * 1024),
+        Err(fuser::Errno::ENOSPC),
+        "a 1 MiB target with 2 KiB of aggregate refuses before submitting"
+    );
+    assert_eq!(queue.outstanding(), 0, "a refused resize submits nothing");
+    assert_eq!(
+        backend.attr_at("f.txt").unwrap().size,
+        5,
+        "the file keeps its size"
+    );
+    assert_eq!(backend.budget.total(), 0, "the refused lease holds nothing");
+    assert_eq!(
+        backend.set_size_at(ino, wyrd_core::session::MAX_COMMITTABLE_BYTES + 1),
+        Err(fuser::Errno::EFBIG),
+        "past the committable ceiling fails EFBIG, never ENOSPC"
+    );
+    assert_eq!(
+        queue.outstanding(),
+        0,
+        "an absurd resize submits nothing either"
+    );
+}

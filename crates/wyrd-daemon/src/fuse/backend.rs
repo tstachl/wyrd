@@ -311,8 +311,10 @@ pub(super) fn join(parent: &str, name: &str) -> String {
 /// ingest ceiling (max chunks x max chunk bytes), the same bound
 /// authoring enforces before any snapshot publishes. A logical length
 /// past it can never publish, so writes, truncates, and takes refuse
-/// `EFBIG` before allocating or leasing anything.
-pub(super) const MAX_COMMITTABLE_BYTES: u64 = 16 * 1024 * 1024 * 1024;
+/// `EFBIG` before allocating or leasing anything. The canonical value
+/// lives in `wyrd_core::session`; this re-export keeps the existing
+/// import sites working.
+pub(super) use wyrd_core::session::MAX_COMMITTABLE_BYTES;
 
 // The FUSE ceiling above must track the protocol ingest ceiling: a
 // file needs at most one chunk reference per chunk, and a chunk

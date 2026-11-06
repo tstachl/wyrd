@@ -726,12 +726,21 @@ where
                     }
                 }
                 let want_exec = executable.unwrap_or(current_exec);
-                // Decide everything before reading: an over-budget target
-                // fails closed without materializing, and a shrink only
-                // reads the prefix it keeps.
+                // Decide everything before reading: a target past the
+                // protocol ingest ceiling can never publish, so it fails
+                // closed without materializing; a shrink only reads the
+                // prefix it keeps. The ceiling here is the committable
+                // bound, not the per-handle write budget: a
+                // path-addressed resize carries no handle, so no
+                // per-handle inequality applies to it. The transient
+                // allocation (the full target, resized below) is
+                // accounted at the FUSE boundary instead, where the
+                // submit leases it against the aggregate (see
+                // `force_op`); the loop trusts a submitted target the
+                // way it trusts a submitted commit image.
                 let new_size = match size {
                     Some(target) => {
-                        if *target > crate::session::MAX_WRITE_BUFFER_BYTES as u64 {
+                        if *target > crate::session::MAX_COMMITTABLE_BYTES {
                             return Err(MutationError::TooLarge(*target));
                         }
                         *target

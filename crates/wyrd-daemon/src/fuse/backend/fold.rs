@@ -13,7 +13,7 @@ use wyrd_format::ObjectStore;
 use wyrd_fuse::{Materialization, ViewError};
 
 use super::super::inode::{Handle, WriteHandle, WriteImage};
-use super::{log_refused, mutation_errno, FuseBackend};
+use super::{log_budget_refusal, log_refused, mutation_errno, FuseBackend};
 
 /// One taken dirty buffer: the fold detached the overlay under the
 /// handle's lock and parked writers on `fold_wake` until it settles
@@ -682,6 +682,31 @@ where
     /// if it had submitted alone.
     pub(super) fn force_op(&self, kind: MutationKind) -> Result<MutationOutcome, fuser::Errno> {
         let queue = Arc::clone(self.mutations.as_ref().ok_or(fuser::Errno::EROFS)?);
+        // A size-bearing `SetAttrs` materializes its full target in the
+        // loop (prefix read plus zero-fill), so lease the target here
+        // against the aggregate before anything is taken or submitted:
+        // the loop trusts a submitted target the way it trusts a taken
+        // commit image, and the lease is what bounds the transient.
+        // Refusal is `ENOSPC` with nothing submitted and every handle
+        // untouched. Targets past the committable ceiling fail `EFBIG`
+        // first — they can never publish, so no lease could admit them.
+        // Size-less operations (and the `O_TRUNC` zero) estimate
+        // nothing and always pass this gate.
+        let estimate = match &kind {
+            MutationKind::SetAttrs {
+                size: Some(target), ..
+            } => {
+                if *target > wyrd_core::session::MAX_COMMITTABLE_BYTES {
+                    return Err(fuser::Errno::EFBIG);
+                }
+                usize::try_from(*target).map_err(|_| fuser::Errno::EFBIG)?
+            }
+            _ => 0,
+        };
+        let _forcer_lease = self.budget.reserve_fold(estimate).map_err(|error| {
+            log_budget_refusal("force-op-size", error);
+            fuser::Errno::ENOSPC
+        })?;
         let skip_paths = Self::forcer_skip_paths(&kind);
         let (taken, _fold_lease) = self.gather_taken(
             &[],

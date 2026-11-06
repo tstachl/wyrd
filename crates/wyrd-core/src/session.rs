@@ -19,7 +19,10 @@
 //! These are v0 daemon budgets, named constants rather than architectural
 //! commitments: the contracts are the three inequalities, not the
 //! particular numbers. They are independent of the protocol ingest limits
-//! (`Limits::V0`), which still bound every committed object.
+//! (`Limits::V0`), which still bound every committed object —
+//! `MAX_COMMITTABLE_BYTES` below names exactly that protocol ceiling so
+//! both the FUSE boundary and the live loop refuse unpublishable lengths
+//! at the same value.
 //!
 //! This module depends only on std: it is the `wyrd-core` session
 //! surface.
@@ -34,6 +37,15 @@ pub const MAX_WRITE_BUFFER_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_BUFFERED_BYTES: usize = 256 * 1024 * 1024;
 /// Most handles that may be dirty (buffered) at once.
 pub const MAX_DIRTY_HANDLES: usize = 64;
+/// Largest logical file the mount can buffer or commit: the protocol
+/// ingest ceiling (max chunks x max chunk bytes), the same bound
+/// authoring enforces before any snapshot publishes. A logical length
+/// past it can never publish, so writes, truncates, takes, and
+/// path-addressed resizes refuse `EFBIG` before allocating or leasing
+/// anything. Unlike the three budgets above — which are daemon memory
+/// bounds, enforced at the FUSE boundary — this is a protocol bound,
+/// shared with the live loop's `SetAttrs` apply.
+pub const MAX_COMMITTABLE_BYTES: u64 = 16 * 1024 * 1024 * 1024;
 
 /// A stable per-handle accounting key, minted by the session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

@@ -362,9 +362,12 @@ over the taken length, like the queue-kind clone). The one deliberate
 fork: an append whose base plus sequence exceeds the live loop's
 `AppendFile` total cap commits as a full `CommitFile` instead, so it
 takes the base staleness check with it — concurrent appends to huge
-files contend where small appends concatenate. The fh-less `SetAttrs`
-size cap stays: it bounds live-loop materialization, while the
-handle path is bounded by the fold lease at take.
+files contend where small appends concatenate. A path-addressed
+(`fh-less`) resize commits through the same ceiling: the submit leases
+the full target against the aggregate up front (`ENOSPC` on refusal,
+nothing submitted), and the loop materializes at most the leased
+target. Past the committable ceiling the submit refuses `EFBIG`
+before leasing anything.
 
 A handle returned by `create` is **ordinary writable-handle state** once
 returned: it captures the created empty file's identity and path like any
