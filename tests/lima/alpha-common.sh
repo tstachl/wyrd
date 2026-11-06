@@ -142,13 +142,15 @@ cleanup_mounts() {
     [[ -e "$m" || -L "$m" ]] || continue
     fusermount3 -uz "$m" 2>/dev/null || umount -l "$m" 2>/dev/null || true
   done
-  # Mount pidfiles plus the headless vault pidfile: a leg that dies
-  # early with a live `wyrd vault` behind it (any status probe after
-  # `vault &` can do it) would otherwise park the bare `wait` below
-  # forever — the EXIT trap never finishes, the ssh session never
-  # closes, and the host waits on a leg that already reported FAIL.
-  # Success paths remove their pidfiles, so this is a no-op there.
-  for pidf in "$PIDDIR"/mount-*.pid "$PIDDIR"/headless-serve.pid; do
+  # Mount pidfiles, the headless vault pidfile, and every leg's
+  # serve pidfile (pause-serve, retransmit-serve, ...): a leg that
+  # dies early with a live `wyrd vault` behind it (any status probe
+  # after `vault &` can do it) would otherwise park the bare `wait`
+  # below forever — the EXIT trap never finishes, the ssh session
+  # never closes, and the host waits on a leg that already reported
+  # FAIL. Success paths remove their pidfiles, so this is a no-op
+  # there.
+  for pidf in "$PIDDIR"/mount-*.pid "$PIDDIR"/headless-serve.pid "$PIDDIR"/*-serve.pid; do
     [[ -f "$pidf" ]] || continue
     kill -KILL "$(cat "$pidf")" 2>/dev/null || true
   done

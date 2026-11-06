@@ -8,6 +8,10 @@
 {
   gate.box = {
     role = "peer-n";
+    # Gate-owned DHCP client; the lease duplicates the static ip
+    # given the host reservation. Explicit per guest (the gate
+    # default is also on): intent, immune to default flips.
+    dhcp = true;
     vcpu = 4;
     memMb = 4096;
     mac = "02:00:00:00:07:12";
