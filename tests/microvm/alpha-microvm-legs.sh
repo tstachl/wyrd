@@ -1508,7 +1508,13 @@ leg_pause_member() {
   local d="$1" c="$2" relay="$3"
   step 12 "pause convergence leg"
   start_mount xpause-m "$c" "$d" "$MNTS/xpause-m" --relay "$relay"
-  poll_until 300 grep -q "home is now relay" "$LOGDIR/mount-xpause-m.err" \
+  # Attach signal is the wyrd (nostr) relay connection, not iroh's
+  # public home: `home is now relay` needs internet and never fires
+  # on closed bridges, while `Connected to` proves the member holds
+  # the route the discharge needs (the relay drops sends to
+  # unattached endpoints). Gating on the iroh line wedged this leg
+  # for the full 300s with the member attached from second 1.
+  poll_until 300 grep -q "Connected to '$relay'" "$LOGDIR/mount-xpause-m.err" \
     || die "member never attached to the relay (see mount-xpause-m.err)"
   pass "member attached to the relay before the restart"
   peer_signal xpause-m-attached
@@ -1600,7 +1606,9 @@ leg_retransmit_member() {
     || die "owner never discharged with the member down"
   pass "owner discharged before the member attached"
   start_mount xretransmit-m "$c" "$d" "$MNTS/xretransmit-m" --relay "$relay"
-  poll_until 300 grep -q "home is now relay" "$LOGDIR/mount-xretransmit-m.err" \
+  # Same wyrd-relay attach signal as the pause member: iroh's public
+  # home never fires on closed bridges (see above).
+  poll_until 300 grep -q "Connected to '$relay'" "$LOGDIR/mount-xretransmit-m.err" \
     || die "member never attached to the relay (see mount-xretransmit-m.err)"
   pass "member attached late, after the discharge"
   poll_until 600 test -d "$MNTS/xretransmit-m/retransmit-marker" \
