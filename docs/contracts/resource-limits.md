@@ -55,7 +55,7 @@ the `wyrd` binary runs defaults except for the retention ceiling —
 | Parent create tokens (distinct retained paths) | `max_parent_tokens` (4096) | new parent capture fails closed; `ESTALE` at the FUSE boundary |
 | Write buffer per dirty handle (resident overlay bytes, not logical length) | `write_per_handle_bytes` (64 MiB) | reservation refused; `ENOSPC`, handle unchanged |
 | Write buffers aggregate (resident bytes) | `write_aggregate_bytes` (256 MiB) | reservation refused; `ENOSPC` |
-| Fold take plus submission copies (transient full images + restore overlays, ~1× the taken lengths) | `write_aggregate_bytes` (same 256 MiB) | fold refused before materializing; `ENOSPC` on the forcing call, all taken overlays restored |
+| Fold take plus submission copies (transient full images + restore overlays; the lease charges ~1× the taken lengths while ~2× is held with the queue-kind clone, so peak can reach ~2× the aggregate) | `write_aggregate_bytes` (same 256 MiB) | fold refused before materializing; `ENOSPC` on the forcing call, all taken overlays restored |
 | Dirty (buffered) handles | `write_dirty_handles` (64) | new dirty handle refused; `ENOSPC` |
 | Open file handles (read + write) | `max_open_handles` (4096) | open refused; `EMFILE` |
 | Open-capture bytes aggregate (read chunk lists + writable capture-plus-base) | `max_open_capture_bytes` (256 MiB) | open refused; `ENOSPC`. Checked at open; a handle's retention may grow toward the ingest chunk ceiling afterwards |

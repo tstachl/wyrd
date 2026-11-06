@@ -636,11 +636,13 @@ where
         };
         // A logical length past the ingest ceiling can never publish:
         // fail those handles closed before leasing or allocating
-        // anything, and abort the fold — the remaining handles stay
-        // dirty and retryable, restored below.
+        // anything, drop them from the fold, and report the permanent
+        // error — never the retryable lease refusal — so callers do
+        // not retry what cannot succeed.
+        let mut healthy: Vec<PendingTake> = Vec::with_capacity(pending.len());
         let mut oversized = false;
-        for pending in &pending {
-            if full_len(pending) > MAX_COMMITTABLE_BYTES {
+        for pending in pending {
+            if full_len(&pending) > MAX_COMMITTABLE_BYTES {
                 oversized = true;
                 if let Ok(mut write) = pending.handle.lock() {
                     write.failed = true;
@@ -648,8 +650,18 @@ where
                     write.inflight = None;
                     self.budget.release(write.id);
                 }
+            } else {
+                healthy.push(pending);
             }
         }
+        if oversized {
+            for pending in &healthy {
+                self.restore_pending(pending);
+            }
+            self.fold_wake.notify_all();
+            return Err(fuser::Errno::EFBIG);
+        }
+        let pending = healthy;
         // One lease covers the whole take (full images plus the
         // restore overlays held for an abort) before anything
         // materializes. Refusal restores every detached overlay with
@@ -670,7 +682,7 @@ where
                     .unwrap_or(usize::MAX)
                     .saturating_add(restore_resident(pending))
             })
-            .sum();
+            .fold(0usize, |total, bytes| total.saturating_add(bytes));
         let lease = match self.budget.reserve_fold(lease_bytes) {
             Ok(lease) => lease,
             Err(error) => {
@@ -682,16 +694,6 @@ where
                 return Err(fuser::Errno::ENOSPC);
             }
         };
-        if oversized {
-            for pending in &pending {
-                if full_len(pending) <= MAX_COMMITTABLE_BYTES {
-                    self.restore_pending(pending);
-                }
-            }
-            self.fold_wake.notify_all();
-            drop(lease);
-            return Err(fuser::Errno::EFBIG);
-        }
         // Phase 2: materialize under the lease, outside the handle
         // locks. A materialization failure fails that handle closed;
         // the lease over-holds its bytes until this call returns,

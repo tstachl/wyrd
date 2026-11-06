@@ -1023,3 +1023,55 @@ fn same_path_sparse_handles_first_commits_second_goes_stale() {
     drop(backend);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+/// One past the per-handle cap: the sparse overlay must publish a
+/// large file through the real loop, not just the fake queue.
+const PAST_CAP: usize = 64 * 1024 * 1024 + 1;
+
+/// A one-byte edit of a past-cap file publishes through the live
+/// loop: the fold materializes the full image, the loop re-chunks
+/// and authors it, and read-back serves the edit with zeros
+/// elsewhere. This is the issue's headline case end to end — no
+/// summarizing drainer stands in for chunking or authoring.
+#[test]
+fn past_cap_sparse_edit_publishes_through_the_live_loop() {
+    let (engine, dir, _) = scratch_drive();
+    let mut daemon: WyrdNode<DriveView<_, RuntimeMaterialization>> =
+        WyrdNode::new(engine, MemoryObjectStore::default()).unwrap();
+    daemon.put_file("big", &vec![0u8; PAST_CAP]).unwrap();
+    let (live, backend) = live_backend(daemon);
+    let (stop, loop_handle) = spawn_live_loop(live);
+
+    let fh = backend.open_write("big", libc::O_RDWR).unwrap();
+    backend.write_handle(fh, 0, b"Z").unwrap();
+    assert_eq!(
+        backend.budget_state(),
+        (1, 1),
+        "one dirtied byte on one handle"
+    );
+    backend
+        .commit_handle(fh)
+        .expect("a one-byte past-cap edit commits");
+    let read = backend.open_at("big").unwrap();
+    assert_eq!(
+        backend.read_handle(read, 0, 4).unwrap(),
+        b"Z\0\0\0",
+        "the edit is durable at the head"
+    );
+    assert_eq!(
+        backend.read_handle(read, (PAST_CAP - 4) as u64, 4).unwrap(),
+        vec![0u8; 4],
+        "the untouched tail stays zeros"
+    );
+    backend.release_handle(read).unwrap();
+    backend.release_handle(fh).unwrap();
+    assert_eq!(backend.budget_state(), (0, 0));
+
+    stop.store(true, Ordering::Relaxed);
+    loop_handle
+        .join()
+        .unwrap()
+        .expect("loop shuts down cleanly");
+    drop(backend);
+    std::fs::remove_dir_all(dir).unwrap();
+}
