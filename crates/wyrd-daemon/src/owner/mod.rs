@@ -30,7 +30,8 @@ pub mod wire;
 
 pub use server::{
     bind_listener, socket_path_for, OwnerHandles, OwnerServer, DEFAULT_MAX_READ_BYTES,
-    MAX_FRAME_BYTES, OWNER_SOCKET_NAME, READ_DEMAND_TIMEOUT,
+    MAX_FRAME_BYTES, MAX_OWNER_CONNECTIONS, MAX_SUBMIT_CONTENT_BYTES, OWNER_SOCKET_NAME,
+    READ_DEMAND_TIMEOUT,
 };
 
 pub use wire::{

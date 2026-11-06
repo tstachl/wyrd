@@ -16,9 +16,15 @@ Delete a stale socket entry at bind while the store lock is held.
 Remove the socket file on clean shutdown.
 
 Frame each message with a u32 big-endian length prefix followed by
-that many JSON bytes. Refuse frames past 96 MiB by closing the
-connection. Treat every broken connection as unconfirmed. Never
-treat it as success. Never treat it as failure.
+that many JSON bytes. Assemble frames explicitly: an idle
+connection re-polls on the read deadline, but a stall past the
+deadline with a partially assembled frame — a short length prefix
+or a short body — closes the connection, as does a length past 96
+MiB. A half-read frame is never dispatched. Serve at most 16
+concurrent connections: a connection past the bound is closed
+without an answer. Treat every broken
+connection as unconfirmed. Never treat it as success. Never treat
+it as failure.
 
 ## Authentication
 
@@ -109,6 +115,18 @@ consumer side. Never reuse a token across an owner restart.
 
 Refuse nested folds at the wire. Let the queue enforce the rest.
 Forward all nine operations verbatim.
+
+Bound one submit's carried content: a submit whose decoded file
+content (commit and append bodies, summed across fold members)
+exceeds 32 MiB is refused with `TooLarge` before any decode or
+queue admission, with retry guidance in the message. Hex encoding
+doubles bytes on the wire, so the 32 MiB bound keeps every accepted
+submit under the 96 MiB frame ceiling. A window saves a larger file
+through the mount, or by chunked submission — several appends or
+commits, each within the bound — never by a single over-bound
+submit. A frame past 96 MiB still closes the connection; the stated
+submit bound is what keeps a conforming client from ever meeting
+that silence.
 
 ## Pause and resume
 
