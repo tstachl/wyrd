@@ -126,7 +126,11 @@ through the mount, or by chunked submission — several appends or
 commits, each within the bound — never by a single over-bound
 submit. A frame past 96 MiB still closes the connection; the stated
 submit bound is what keeps a conforming client from ever meeting
-that silence.
+that silence. A `SetAttrs` size is not carried content — it names a
+target the loop materializes — so it is not counted here and may
+materialize up to the committable ceiling without aggregate
+accounting; the owner client is same-UID trusted, and bulk resizes
+belong on the mount, which leases the target at submit.
 
 ## Pause and resume
 
