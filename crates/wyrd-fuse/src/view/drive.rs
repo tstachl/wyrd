@@ -212,6 +212,8 @@ where
         &self,
         subtrees: Vec<(wyrd_format::SnapshotId, ContentId)>,
     ) -> Result<Vec<DirEntry>, ViewError> {
+        // Component order is the canonical byte order, so the union
+        // order is unchanged from the old String set.
         let mut names = BTreeSet::new();
         let mut trees = BTreeMap::new();
         for (snapshot, subtree) in &subtrees {

@@ -389,7 +389,12 @@ fn merged_dir_child_kind_divergence_conflicts() {
 /// keeps this test green only by making it take quadratic time
 /// (10k names measured 0.23 s, doubling per doubling); the load
 /// bound plus the scale pin the seam, and the oracle pins the
-/// absence-vs-presence conflict behavior.
+/// absence-vs-presence conflict behavior. The oracle samples one
+/// name per semantic class rather than all 20,200: the per-name
+/// path has no position-dependent branches, `Tree::get` agrees
+/// with a linear scan by construction on canonical order (covered
+/// in `wyrd-format`), and the full sorted-name equality above
+/// already asserts the complete union set.
 #[test]
 fn readdir_union_resolves_large_conflict_through_binary_lookup() {
     const SHARED: usize = 20_000;
