@@ -134,6 +134,17 @@ is transient — no drive data is affected.
   unchanged. Contract note in `docs/contracts/write-path.md`
   (overlay strategy).
 
+- Lift the fh-less `SetAttrs` size cap to the committable ceiling
+  (`nostr:nevent1qqsgshg7f49ap7cc8jy87cnwj0ldq9d30xah08qj6j9ght3mxjn7rgspz9mhxue69uhkwunpwdczuap49eehgdp3qat`):
+  a path-addressed resize (`truncate(path, …)`) now commits the same
+  sizes a handle truncate commits — the submit leases the full target
+  against the aggregate up front (`ENOSPC`, nothing queued, file
+  unchanged on refusal), and only targets past the protocol ingest
+  ceiling fail `EFBIG`. The loop-side `SetAttrs` apply trusts a
+  submitted target the way it trusts a taken commit image. Contract
+  rows in `docs/contracts/write-path.md` (overlay strategy) and
+  `docs/contracts/resource-limits.md`.
+
 ## [0.3.0-alpha]
 
 ### Added

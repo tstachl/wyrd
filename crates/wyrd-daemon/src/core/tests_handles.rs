@@ -652,8 +652,9 @@ fn setattr_truncates_and_toggles_exec() {
     );
     backend.release_handle(read_only).unwrap();
 
-    // An over-budget target fails closed before materializing.
-    let too_big = wyrd_core::session::MAX_WRITE_BUFFER_BYTES as u64 + 1;
+    // A target past the committable ceiling can never publish: it
+    // fails closed before leasing or submitting anything.
+    let too_big = wyrd_core::session::MAX_COMMITTABLE_BYTES + 1;
     assert_eq!(backend.set_size_at(ino, too_big), Err(fuser::Errno::EFBIG));
 
     // A writable handle cannot combine a buffered truncate with a
@@ -1066,6 +1067,57 @@ fn past_cap_sparse_edit_publishes_through_the_live_loop() {
     backend.release_handle(read).unwrap();
     backend.release_handle(fh).unwrap();
     assert_eq!(backend.budget_state(), (0, 0));
+
+    stop.store(true, Ordering::Relaxed);
+    loop_handle
+        .join()
+        .unwrap()
+        .expect("loop shuts down cleanly");
+    drop(backend);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// A path-addressed truncate past the old per-handle cap publishes
+/// through the live loop: the submit leases the target against the
+/// aggregate, the loop materializes and chunks it, and read-back
+/// serves the old head with zeros past it. This is the fh-less half
+/// of the sparse-overlay headline case — same ceiling, same
+/// evidence, no handle.
+#[test]
+fn fh_less_truncate_past_cap_publishes_through_the_live_loop() {
+    let (engine, dir, _) = scratch_drive();
+    let mut daemon: WyrdNode<DriveView<_, RuntimeMaterialization>> =
+        WyrdNode::new(engine, MemoryObjectStore::default()).unwrap();
+    daemon.put_file("grow", b"seed").unwrap();
+    let (live, backend) = live_backend(daemon);
+    let (stop, loop_handle) = spawn_live_loop(live);
+
+    let ino = backend.attr_at("grow").unwrap().ino.0;
+    backend
+        .set_size_at(ino, PAST_CAP as u64)
+        .expect("a past-cap path truncate commits");
+    assert_eq!(
+        backend.attr_at("grow").unwrap().size,
+        PAST_CAP as u64,
+        "the extension is durable"
+    );
+    let read = backend.open_at("grow").unwrap();
+    assert_eq!(
+        backend.read_handle(read, 0, 4).unwrap(),
+        b"seed",
+        "the old head survives the extension"
+    );
+    assert_eq!(
+        backend.read_handle(read, (PAST_CAP - 4) as u64, 4).unwrap(),
+        vec![0u8; 4],
+        "the extension gap reads as zeros"
+    );
+    backend.release_handle(read).unwrap();
+    assert_eq!(
+        backend.budget_state(),
+        (0, 0),
+        "the forcer lease releases on settle"
+    );
 
     stop.store(true, Ordering::Relaxed);
     loop_handle
