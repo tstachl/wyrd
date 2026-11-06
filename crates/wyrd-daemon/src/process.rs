@@ -81,16 +81,18 @@ pub const SHUTDOWN_DEADLINE: Duration = Duration::from_secs(5);
 pub const TRANSPORT_SHUTDOWN_DEADLINE: Duration = Duration::from_secs(60);
 
 /// The startup retention cross-check, shared by every composer that
-/// starts a live node: a quota below what the mounted store already
-/// holds would refuse every write, so refuse to start with both
-/// numbers instead of discovering it per write. Unset quotas skip
-/// the walk entirely.
+/// starts a live node: a quota below what the device already retains
+/// (plaintext plus vault-seen, the same total the receive-path gate
+/// enforces) would refuse every write, so refuse to start with all
+/// three numbers instead of discovering it per write. Unset quotas
+/// skip the walk entirely.
 pub fn check_startup_retention(
     config: &LiveConfig,
     store: &FsObjectStore,
+    vault_seen: u64,
 ) -> Result<(), QuotaCheckError> {
     if let Some(quota) = config.budgets.retained_bytes_quota {
-        check_retained_ceiling(quota, store)?;
+        check_retained_ceiling(quota, store, vault_seen)?;
     }
     Ok(())
 }

@@ -12,7 +12,7 @@ use super::{ManifestRecord, PendingObjectFetch, RuntimeState};
 use crate::bulk::{BulkError, BulkSource, SealedManifest};
 use crate::ingest::{check_chunk_len, check_manifest, check_snapshot, Limits};
 use crate::keys::capability::DriveKeyring;
-use crate::seal::{open_manifest, verify, EncryptedObject};
+use crate::seal::{blob_root, open_manifest, verify, EncryptedObject};
 use crate::serving::Vault;
 
 /// One fetch attempt's structured result. Every non-fulfilled variant is
@@ -167,19 +167,42 @@ pub(super) fn root(
     // mapping must name a representation this drive can serve, so an
     // import failure is a local refusal, never a committed advertisement.
     // The retention gate precedes the import: refused bytes are never
-    // stored and charged nowhere (DG-4 A).
+    // stored and charged nowhere (DG-4 A). An already-held root admits
+    // as a no-op — the import below would store nothing new (both
+    // dimensions charge only fresh bytes), so re-charging `incoming` on
+    // a retry would double-count, including the torn-import retry whose
+    // held-root path heals directory durability. The held check runs
+    // only on the refusal path, so the hot path pays no extra I/O.
     if let Err(refusal) = gate.check(served.sealed.len() as u64, 0) {
-        let unit = root_unit(snapshot);
-        let _ = refusals.record(&unit, refusal.quota);
+        let held = vault
+            .sealed(&blob_root(&served.sealed))
+            .ok()
+            .flatten()
+            .is_some();
+        if !held {
+            let unit = root_unit(snapshot);
+            if let Err(error) = refusals.record(&unit, refusal.quota) {
+                tracing::warn!(
+                    unit,
+                    quota = refusal.quota,
+                    error = %error,
+                    "retention refusal held in memory but not durably recorded; a restart may forget it"
+                );
+            }
+            tracing::debug!(
+                unit,
+                quota = refusal.quota,
+                retained = refusal.retained,
+                vault_seen = refusal.vault_seen,
+                incoming = refusal.incoming_vault,
+                "retention gate refused root manifest before storage; nothing stored, nothing committed"
+            );
+            return FetchOutcome::Refused;
+        }
         tracing::debug!(
-            unit,
-            quota = refusal.quota,
-            retained = refusal.retained,
-            vault_seen = refusal.vault_seen,
-            incoming = refusal.incoming_vault,
-            "retention gate refused root manifest before storage; nothing stored, nothing committed"
+            snapshot = ?snapshot,
+            "retention gate would refuse, but the root is already held: admission is a no-op"
         );
-        return FetchOutcome::Refused;
     }
     match vault.import(&served.sealed) {
         Ok(_) => FetchOutcome::Fulfilled(record),
@@ -195,6 +218,11 @@ pub(super) fn root(
 /// committing, and the signature gate happens at the commit boundary,
 /// because durable facts only carry verified bodies. The transport
 /// route fetches by the announcement's author-signed body root.
+///
+/// Takes no retention gate: bodies are fetched before the announcement
+/// binding is compared, so the plan gates post-authorize before the
+/// vault import instead. The plan's `Refused` arm for this leg is
+/// therefore defensive exhaustiveness, not a live path.
 pub(super) fn snapshot_body(
     bulk: &mut impl BulkSource,
     runtime: &RuntimeState,
@@ -287,18 +315,33 @@ pub(super) fn child(
     };
     // Residency precedes the record, as in root(). The retention gate
     // precedes the import: refused bytes are never stored (DG-4 A).
+    // An already-held representation admits as a no-op (see root()).
     if let Err(refusal) = gate.check(sealed.len() as u64, 0) {
-        let unit = manifest_unit(id);
-        let _ = refusals.record(&unit, refusal.quota);
+        let held = vault.sealed(&blob_root(&sealed)).ok().flatten().is_some();
+        if !held {
+            let unit = manifest_unit(id);
+            if let Err(error) = refusals.record(&unit, refusal.quota) {
+                tracing::warn!(
+                    unit,
+                    quota = refusal.quota,
+                    error = %error,
+                    "retention refusal held in memory but not durably recorded; a restart may forget it"
+                );
+            }
+            tracing::debug!(
+                unit,
+                quota = refusal.quota,
+                retained = refusal.retained,
+                vault_seen = refusal.vault_seen,
+                incoming = refusal.incoming_vault,
+                "retention gate refused child manifest before storage; nothing stored, nothing committed"
+            );
+            return FetchOutcome::Refused;
+        }
         tracing::debug!(
-            unit,
-            quota = refusal.quota,
-            retained = refusal.retained,
-            vault_seen = refusal.vault_seen,
-            incoming = refusal.incoming_vault,
-            "retention gate refused child manifest before storage; nothing stored, nothing committed"
+            manifest = ?id,
+            "retention gate would refuse, but the child manifest is already held: admission is a no-op"
         );
-        return FetchOutcome::Refused;
     }
     match vault.import(&sealed) {
         Ok(_) => FetchOutcome::Fulfilled(record),
@@ -495,20 +538,38 @@ pub(super) fn object(
         // gate precedes both writes — the ciphertext import and the
         // plaintext insert — since only the insert charges the
         // plaintext accountant: refused bytes reach neither (DG-4 A).
+        // An already-held representation admits as a no-op (see
+        // root()): both stores charge only fresh bytes, so a retry
+        // retains nothing new.
         if let Err(refusal) = gate.check(sealed.len() as u64, plaintext.len() as u64) {
-            let unit = object_unit(content);
-            let _ = refusals.record(&unit, refusal.quota);
+            let vault_held = vault.sealed(&blob_root(&sealed)).ok().flatten().is_some();
+            let plaintext_held = objects.has(content).unwrap_or(false);
+            if !(vault_held && plaintext_held) {
+                let unit = object_unit(content);
+                if let Err(error) = refusals.record(&unit, refusal.quota) {
+                    tracing::warn!(
+                        unit = %unit,
+                        quota = refusal.quota,
+                        error = %error,
+                        "retention refusal held in memory but not durably recorded; a restart may forget it"
+                    );
+                }
+                tracing::debug!(
+                    unit = %unit,
+                    quota = refusal.quota,
+                    retained = refusal.retained,
+                    vault_seen = refusal.vault_seen,
+                    incoming_vault = refusal.incoming_vault,
+                    incoming_retained = refusal.incoming_retained,
+                    "retention gate refused object before storage; nothing stored, nothing committed"
+                );
+                aggregate = worse(aggregate, FetchOutcome::Refused);
+                continue;
+            }
             tracing::debug!(
-                unit = %unit,
-                quota = refusal.quota,
-                retained = refusal.retained,
-                vault_seen = refusal.vault_seen,
-                incoming_vault = refusal.incoming_vault,
-                incoming_retained = refusal.incoming_retained,
-                "retention gate refused object before storage; nothing stored, nothing committed"
+                content = ?content,
+                "retention gate would refuse, but the object is already held: admission is a no-op"
             );
-            aggregate = worse(aggregate, FetchOutcome::Refused);
-            continue;
         }
         if let Err(error) = vault.import(&sealed) {
             if let Some(fatal) = fatal_vault(&error) {

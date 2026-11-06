@@ -28,6 +28,11 @@ use super::host::{HostError, OpenHost};
 /// entry point. The returned parts stay exposed (not dropped) so
 /// backends — and tests submitting through the live channel — can
 /// hold the mutation queue while the run is in flight.
+///
+/// The desktop host composes unlimited in this release (no quota
+/// flag on this surface): operator-configured ceilings ride the
+/// `wyrd vault` / `mount` / `sync now` composers via
+/// `compose_headless_owner_with_quota`.
 pub fn compose(open: OpenHost, loopback: bool) -> Result<ComposedHeadless, HostError> {
     let OpenHost { engine, drive_dir } = open;
     let composed = wyrd_daemon::compose_headless_owner(engine, drive_dir, loopback)

@@ -1270,7 +1270,7 @@ pub(crate) fn sync_now(
     // Same startup cross-check as mount: headless runs compose a live
     // node too, so a misconfigured quota must fail here rather than
     // in the first write.
-    check_startup_retention(&config, &store)?;
+    check_startup_retention(&config, &store, engine.vault().seen_bytes())?;
     // The serve phase below parks on this latch, so arm it before the
     // drain: a signal during the drain trips the flag, the drain
     // still reports its own verdict, and the serve phase then tears

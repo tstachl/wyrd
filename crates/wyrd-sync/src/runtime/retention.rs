@@ -230,6 +230,11 @@ impl RefusalLedger {
     /// crash leaves the previous ledger or the full new one — never a
     /// torn half. Lock poisoning or I/O failure returns an error and
     /// the in-memory map keeps the entry for this lifetime regardless.
+    /// Cost: one whole-file rewrite per newly refused unit — O(N)
+    /// fsyncs on a first wave of many distinct over-quota
+    /// representations. Retries under the same ceiling are free, and
+    /// single-writer (store lock) ordering makes the rewrite correct;
+    /// batch per-pass writes only if dogfood ever shows this biting.
     pub fn record(&self, unit: &str, quota: u64) -> Result<bool, String> {
         let mut map = self
             .refused

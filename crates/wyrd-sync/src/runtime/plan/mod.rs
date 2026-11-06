@@ -14,6 +14,7 @@ use super::{PendingObjectFetch, RuntimeState};
 use crate::bulk::BulkSource;
 use crate::control::SnapshotAnnouncement;
 use crate::durable::{AuthorizeSnapshot, DurableError, Fact};
+use crate::seal::blob_root;
 
 /// Look up the announcement a planned body derives from. The plan's
 /// pending bodies come from the same projection, so a miss is a
@@ -189,21 +190,43 @@ fn execute_inner(
                             // before the fact commits, so the recorded
                             // snapshot never names a missing body. The
                             // retention gate precedes the import: refused
-                            // bytes are never stored (DG-4 A).
+                            // bytes are never stored (DG-4 A). An
+                            // already-held body admits as a no-op (see
+                            // `fetch::root`).
                             let encoded = authorized.snapshot().encode();
                             if let Err(refusal) = gate.check(encoded.len() as u64, 0) {
-                                let unit = snapshot_body_unit(snapshot);
-                                let _ = engine.refusals.record(&unit, refusal.quota);
+                                let held = engine
+                                    .vault
+                                    .sealed(&blob_root(&encoded))
+                                    .ok()
+                                    .flatten()
+                                    .is_some();
+                                if !held {
+                                    let unit = snapshot_body_unit(snapshot);
+                                    if let Err(error) = engine.refusals.record(&unit, refusal.quota)
+                                    {
+                                        tracing::warn!(
+                                            unit,
+                                            quota = refusal.quota,
+                                            error = %error,
+                                            "retention refusal held in memory but not durably recorded; a restart may forget it"
+                                        );
+                                    }
+                                    tracing::debug!(
+                                        unit,
+                                        quota = refusal.quota,
+                                        retained = refusal.retained,
+                                        vault_seen = refusal.vault_seen,
+                                        incoming = refusal.incoming_vault,
+                                        "retention gate refused snapshot body before storage; nothing stored, nothing committed"
+                                    );
+                                    report.refused += 1;
+                                    continue;
+                                }
                                 tracing::debug!(
-                                    unit,
-                                    quota = refusal.quota,
-                                    retained = refusal.retained,
-                                    vault_seen = refusal.vault_seen,
-                                    incoming = refusal.incoming_vault,
-                                    "retention gate refused snapshot body before storage; nothing stored, nothing committed"
+                                    snapshot = ?snapshot,
+                                    "retention gate would refuse, but the snapshot body is already held: admission is a no-op"
                                 );
-                                report.refused += 1;
-                                continue;
                             }
                             match engine.vault.import(&encoded) {
                                 Ok(_) => {

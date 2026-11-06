@@ -590,7 +590,7 @@ pub fn compose_headless_owner_with_quota(
             (store, LiveConfig::for_local_sync())
         }
     };
-    crate::process::check_startup_retention(&config, &store)?;
+    crate::process::check_startup_retention(&config, &store, engine.vault().seen_bytes())?;
     let mut node = WyrdNode::new(engine, store)?;
     node.refresh_live_heads()?;
     let serving = node.open_serving(&drive_dir, loopback)?;

@@ -267,3 +267,125 @@ fn vault_orphans_are_charged_against_the_gate() {
         "orphans spend the ceiling: 1024 + 1 >= 1025"
     );
 }
+
+/// A retry of already-stored bytes admits as a no-op instead of
+/// refusing: both stores charge only fresh bytes, so re-charging
+/// `incoming` would double-count — including the torn-import retry
+/// whose held-root path heals directory durability. The fresh-bytes
+/// control below proves the same gate refuses what is not held.
+#[test]
+fn an_already_held_object_admits_despite_the_ceiling() {
+    use crate::keys::capability::{Capability, DriveKeyring};
+    use crate::keys::{DeviceEncryptionSecret, EpochSecret};
+    use crate::membership::test_util::{drive as member_drive, Builder};
+    use crate::membership::MembershipLog;
+    use crate::runtime::fetch::object;
+    use crate::runtime::retention::{RefusalLedger, RetentionGate};
+    use crate::runtime::test_util::{encryption_key, TestDir};
+    use crate::runtime::PendingObjectFetch;
+    use crate::seal::{seal, SEAL_VERSION};
+    use wyrd_format::membership::Admission;
+    use wyrd_format::{Change, DeviceId, ObjectKind};
+
+    let epoch = 2;
+    let device = DeviceId::from_bytes([0x2A; 32]);
+    let encryption = encryption_key(&DeviceEncryptionSecret::from_bytes([0xE1; 32]).unwrap());
+    let (mut builder, genesis) = Builder::genesis(10);
+    let admit = builder.child(vec![Change::Admit(Admission {
+        device,
+        encryption_key: encryption,
+    })]);
+    let mut log = MembershipLog::new(member_drive());
+    log.observe(genesis);
+    log.observe(admit.clone());
+    let secret = EpochSecret::from_bytes([0x77; 32]);
+    let first = EpochSecret::from_bytes([0x76; 32]);
+    let cap = Capability::new(
+        member_drive(),
+        device,
+        encryption,
+        admit.transition_id(),
+        epoch,
+        vec![first, secret],
+    )
+    .unwrap();
+    let mut keyring = DriveKeyring::new(member_drive(), device);
+    keyring.install(&cap, &log).unwrap();
+
+    let plaintext = b"already stored";
+    let content = wyrd_format::ContentId::derive(ObjectKind::Chunk, plaintext);
+    let key = keyring.secret(epoch).expect("epoch secret").object_key(
+        &member_drive(),
+        epoch,
+        &content,
+        ObjectKind::Chunk,
+        SEAL_VERSION,
+    );
+    let sealed = seal(&key, ObjectKind::Chunk, &content, plaintext).unwrap();
+    let candidate = PendingObjectFetch {
+        content_id: content,
+        storage_id: sealed.storage_id(),
+        transport: crate::seal::transport_root(&sealed),
+        kind: ObjectKind::Chunk,
+        version: SEAL_VERSION,
+        encryption_epoch: epoch,
+        size: plaintext.len() as u64,
+    };
+    let mut bulk = MemoryBulkSource::default();
+    bulk.publish_sealed(sealed.storage_id(), sealed.encode());
+    bulk.publish_transport(sealed.encode());
+
+    // A 1-byte ceiling refuses every fresh representation.
+    let dir = TestDir::new("retention-held-admits");
+    let vault = crate::serving::Vault::open(&dir.path).unwrap();
+    let retained = RetainedBytes::new();
+    let gate = RetentionGate::new(
+        Some(1),
+        Some(std::sync::Arc::clone(&retained)),
+        vault.seen_handle(),
+    );
+    let refusals = RefusalLedger::load(&dir.path).unwrap();
+
+    // Control: fresh bytes refuse — nothing stored, nothing charged.
+    let mut fresh_objects = MemoryObjectStore::default();
+    let attempt = object(
+        &member_drive(),
+        &mut bulk,
+        &keyring,
+        &mut fresh_objects,
+        &vault,
+        &content,
+        std::slice::from_ref(&candidate),
+        &gate,
+        &refusals,
+    );
+    assert!(
+        matches!(attempt.aggregate, FetchOutcome::Refused),
+        "fresh bytes over the ceiling refuse: {:?}",
+        attempt.aggregate
+    );
+
+    // The same bytes, already stored in both dimensions, admit as a
+    // no-op: the import and the insert below store nothing new.
+    vault.import(&sealed.encode()).unwrap();
+    let mut held_objects = MemoryObjectStore::default();
+    held_objects
+        .insert_verified(ObjectKind::Chunk, &content, plaintext)
+        .unwrap();
+    let attempt = object(
+        &member_drive(),
+        &mut bulk,
+        &keyring,
+        &mut held_objects,
+        &vault,
+        &content,
+        std::slice::from_ref(&candidate),
+        &gate,
+        &refusals,
+    );
+    assert!(
+        matches!(attempt.aggregate, FetchOutcome::Fulfilled(())),
+        "already-held bytes admit despite the ceiling: {:?}",
+        attempt.aggregate
+    );
+}

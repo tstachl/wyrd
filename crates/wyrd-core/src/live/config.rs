@@ -368,11 +368,13 @@ impl LiveConfig {
 
 /// A quota configured below what the device already retains. Starting
 /// anyway would refuse every write — the ceiling compares against
-/// bytes already held, and the fold gate additionally estimates the
-/// pending set's full image lengths — so the composer diagnoses this
-/// at startup instead of discovering it as a stream of `ENOSPC` at the
-/// first write. Both numbers are named: the quota (an operator-selected
-/// refusal boundary) and the retention it was compared against.
+/// bytes already held (plaintext plus vault-seen, the same total the
+/// receive-path gate enforces), and the fold gate additionally
+/// estimates the pending set's full image lengths — so the composer
+/// diagnoses this at startup instead of discovering it as a stream
+/// of `ENOSPC` at the first write. All three numbers are named: the
+/// quota (an operator-selected refusal boundary) and the retention
+/// it was compared against.
 /// Note the asymmetry this type cannot close: the gate refuses at
 /// count + estimate, so a quota within one image length *above*
 /// retention passes this check yet refuses content writes. Widening
@@ -384,15 +386,17 @@ pub struct QuotaBelowRetention {
     pub quota: u64,
     /// What the mounted store already holds, in bytes.
     pub retained: u64,
+    /// What the vault already observes, in bytes.
+    pub vault_seen: u64,
 }
 
 impl std::fmt::Display for QuotaBelowRetention {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "retained_bytes_quota {} is below current retention {}: \
+            "retained_bytes_quota {} is below current retention {} (retained) + {} (vault-seen): \
              every write would be refused; raise the quota or free retained bytes",
-            self.quota, self.retained
+            self.quota, self.retained, self.vault_seen
         )
     }
 }
@@ -431,20 +435,29 @@ impl std::error::Error for QuotaCheckError {
 /// The composition root's startup cross-check for a configured
 /// retention ceiling: compare the quota against
 /// [`FsObjectStore::retained_bytes`] — the mounted store walk, one
-/// traversal at open, never per commit — before the node starts.
-/// A quota at or above retention is not a diagnosis, but it is not a
-/// clean bill either: the fold gate refuses at count + full image
-/// lengths, so a quota within one image length above retention still
-/// refuses content writes. That narrower gap is stated, not closed,
-/// here — closing it belongs to a configuration surface.
+/// traversal at open, never per commit — plus the vault-seeing
+/// counter the engine's open-time walk seeded, before the node
+/// starts. The sum is the same total the receive-path gate compares
+/// per representation, so a vault-exceeded start fails fast with all
+/// three numbers instead of refusing per fetch. A quota at or above
+/// the total is not a diagnosis, but it is not a clean bill either:
+/// the fold gate refuses at count + full image lengths, so a quota
+/// within one image length above retention still refuses content
+/// writes. That narrower gap is stated, not closed, here — closing
+/// it belongs to a configuration surface.
 /// Composers call this when they configure a quota; an unset quota
-/// needs no check. Offline and relay-free: a local-read diagnostic.
-pub fn check_retained_ceiling(quota: u64, store: &FsObjectStore) -> Result<(), QuotaCheckError> {
+/// needs no check. Offline and relay-free: local-read diagnostics.
+pub fn check_retained_ceiling(
+    quota: u64,
+    store: &FsObjectStore,
+    vault_seen: u64,
+) -> Result<(), QuotaCheckError> {
     let retained = store.retained_bytes().map_err(QuotaCheckError::Walk)?;
-    if retained > quota {
+    if retained.saturating_add(vault_seen) > quota {
         return Err(QuotaCheckError::Below(QuotaBelowRetention {
             quota,
             retained,
+            vault_seen,
         }));
     }
     Ok(())

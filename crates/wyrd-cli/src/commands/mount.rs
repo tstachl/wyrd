@@ -195,7 +195,7 @@ pub(crate) fn mount(
     // would refuse every write, so starting is refused with both
     // numbers instead. Unset quotas skip the walk — and the binary
     // ships none, so this fires only for future configuration surfaces.
-    check_startup_retention(&config, &store)?;
+    check_startup_retention(&config, &store, engine.vault().seen_bytes())?;
     let mut daemon = WyrdNode::new(engine, store)?;
     daemon.refresh_live_heads()?;
 
