@@ -75,7 +75,13 @@ deletes a tree that a later snapshot still navigates.
 A candidate is not a single reachable/unreachable bit. Mark must produce a
 *reason* for every retained object, e.g. `retained_by: pinned_snapshot:S1,
 recovery_branch:S2, outbox_obligation:O3`. Four sets overlap without
-being identical:
+being identical.
+
+Reclaimability is evaluated per stored representation against the
+*union* of all protecting references, not by which snapshot introduced the
+object. If S1 is VOIDED and S2 is ELIGIBLE and both reference ContentId
+X, X remains protected by S2. Snapshot-oriented traversal must not
+classify payloads by introducing snapshot.
 
 | Set | What it protects | Example |
 |---|---|---|
@@ -113,6 +119,13 @@ The following are hard invariants, not implementation details:
   deletion.
 - A candidate cannot become reachable between authorization and deletion
   without invalidating the authorization for that candidate.
+- Candidate validation and the destructive transition are serialized
+  against each other and against operations that can introduce new
+  references. In Wyrd terms this goes through the drive-owner interface
+  (`../contracts/owner-interface.md`) and its single mutation queue
+  (`../architecture.md` Runtime ownership) — never an independent
+  store-level writer. A check-then-delete sequence without that
+  serialization is still a race.
 
 Crash windows follow `crash-consistency.md` pattern: mark is read-only,
 authorize is atomic, sweep is idempotent per object and checkpoints per
@@ -136,6 +149,12 @@ peer re-announcing the object. L1 does not imply L2; L2 does not imply L3.
 
 ### What L2 does not promise (explicit)
 
+- Two completions, not one. *Protocol-complete* means every required
+  participant has supplied acceptable destruction evidence. *Cryptographically
+  established* means the threat model and key-custody model make
+  irrecoverability defensible. The second is conditional on participant
+  behavior and compromise assumptions. No absolute erasure is promised
+  against a malicious or previously compromised key holder.
 - Plaintext already acquired cannot be recalled.
 - Previously copied plaintext cannot be erased.
 - A device that retained an independent key copy (e.g. a capability
@@ -158,7 +177,26 @@ peer re-announcing the object. L1 does not imply L2; L2 does not imply L3.
 - Tombstone compaction requires the frontier to survive after the
   tombstone fact itself is compacted. Quorum acknowledgement of the
   tombstone is not permission to delete the frontier while any holder that
-  has not yet seen it may re-announce the object.
+  has not yet seen it may re-announce the object. Compaction must preserve
+  anti-resurrection without reintroducing an unbounded per-ContentId
+  tombstone list (e.g. monotonic epoch / generation fences that reject
+  pre-fence announcements). That compaction design is post-v1 work, not
+  scope for this note.
+
+### Three independent authorities
+
+GC in Wyrd is run by three separate authorities that must not collapse:
+
+| Authority | Responsibility |
+|---|---|
+| **Owner** (`architecture.md` Runtime ownership) | Serializes durable mutations through the drive-owner interface; controls the local store |
+| **Custody** | Establishes which devices carry retention obligations (the acknowledgement set) |
+| **Reclamation** | Approves destruction of previously retained representations |
+
+Being the owner does not prove remote copies are reclaimable. Being a
+custodian does not authorize deletion. Being in the authorization quorum
+does not prove every custodian acknowledged. Being offline does not
+extinguish a custody obligation.
 
 ### Level-dependent sweep semantics
 
@@ -208,10 +246,13 @@ four reachability sets, each with its reason set and generation. Emit
 measurement report only (`wyrd policy budgets` style — no deletion). This
 sizes the problem before any sweep.
 
-**Hold (grace + holder acknowledgement).** Publish candidate set, start grace
-period (README proposes 30 days). Poll *holders*, not an abstract quorum.
-An offline holder that has not acknowledged blocks sweep for its slice.
-This is the retention/acknowledgement protocol `ROADMAP.md:180` requires.
+**Hold (grace + retention-custodian acknowledgement).** Poll *custodians*,
+not an abstract quorum. A custodian is a device with a durable retention
+obligation for the representation. Possession (has the bytes), obligation
+(has the promise), and serving (may serve the bytes) are three distinct sets;
+the acknowledgement set is the obligation set, not a liveness probe. An
+offline custodian stays in the set and blocks sweep for its slice. This is
+the retention/acknowledgement protocol `ROADMAP.md:180` requires.
 
 **Authorize (authorization quorum + human).** `k`-of-`N` authorized
 decision-makers sign the `(candidate-set hash, generation, hold expiry)`.
