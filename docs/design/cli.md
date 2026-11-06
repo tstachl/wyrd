@@ -713,19 +713,29 @@ eviction, and the effective `vault` role refuses eviction outright.
   scanned. One census, one projection: the posture block and the
   table render from a single read.
 - `policy budgets`: device totals over reachable content plus the
-  effective retention and fetch budgets. Facts are per identity,
-  not per path, so pinned paths are not listed. Below the budgets,
-  a `retention accounting (bytes):` block reports three resident
-  dimensions measured at report time (three walks, never cached):
-  `retained content` (the object store — the quota-enforced quantity),
+  retention and fetch budgets this command ran with. Facts are per
+  identity, not per path, so pinned paths are not listed. The budgets
+  header says "offline defaults": the quota named here is this
+  command's defaults, never a live mount's composition (the quota is
+  not persisted, so no offline read can observe a running mount's
+  flags). Below the budgets, a `retention accounting (bytes):` block
+  reports three resident dimensions measured at report time (three
+  walks, never cached): `retained content` (the object store — the
+  quota-enforced quantity, exclusions in the same sentence),
   `fact log` and `sync vault` (resident but unenforced — auxiliary
-  growth), each labelled, plus an observational total. With no quota
-  configured the block ends in an explicitly non-authoritative
-  advisory ceiling ("no lower than current retention"); a quota is
-  an operator-selected refusal boundary, never an implicit default. The
-  report names the local quota only: the refusal ceiling and the
-  receive-side ceiling required by `docs/contracts/retention-constraints.md:147-149`
-  have no value to report until the receive-path admission gate lands.
+  growth), each labelled, plus an observational total that is
+  explicitly not a device total. With no quota configured the quota
+  rows state plainly that no retention ceiling is set — never
+  "unlimited" — and the block ends in an explicitly
+  non-authoritative advisory ceiling ("no lower than current
+  retention"); a quota is an operator-selected refusal boundary,
+  never an implicit default. The local quota and the
+  receive-retention ceiling render as two distinct rows driven by one
+  flag, and a `retention refusals (DG-4 A)` section names the
+  distinct refused representations and the ceilings that refused
+  them. Every label is a row of the DG-5 wording table in
+  `docs/design/storage-growth.md`, enforced by
+  `every_storage_figure_maps_to_a_dg5_row`.
 - `policy role set <mirror|vault>`: widen or narrow the device-local
   materialization role. What this device intends to be: `mirror`
   (prunable participant) or `vault` (replicates every object, never

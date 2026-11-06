@@ -14,7 +14,7 @@ use crate::CliError;
 use std::path::{Path, PathBuf};
 use wyrd_core::policy::{
     evict_subtree, pin_subtree, residency_census_with_role, unpin_subtree, LocalPresence,
-    ResidencyCensus, RetentionPolicy,
+    ResidencyCensus, RetentionPolicy, StorageFigure,
 };
 use wyrd_daemon::{LiveConfig, ResourceBudgets};
 use wyrd_sync::keys::DeviceIdentitySecret;
@@ -436,8 +436,9 @@ pub(crate) fn policy_status_render(
 ) -> String {
     let mut out = String::from(role_block);
     out.push_str(&format!(
-        "policy status under {}\nPOLICY       LOCAL    PATH\n",
-        display_policy_path(path)
+        "policy status under {}\n{}\n",
+        display_policy_path(path),
+        StorageFigure::PerFileRow.label()
     ));
     for file in &census.files {
         out.push_str(&format!(
@@ -453,8 +454,9 @@ pub(crate) fn policy_status_render(
     out.push_str(&policy_quadrant_summary(census));
     if census.symlinks_skipped > 0 {
         out.push_str(&format!(
-            "note: {} symlinks skipped (a link names no content of its own)\n",
-            census.symlinks_skipped
+            "note: {} {} (a link names no content of its own)\n",
+            census.symlinks_skipped,
+            StorageFigure::SymlinksSkipped.label()
         ));
     }
     out
@@ -462,7 +464,8 @@ pub(crate) fn policy_status_render(
 
 pub(crate) fn policy_quadrant_summary(census: &ResidencyCensus) -> String {
     format!(
-        "files: {} (PINNED/PRESENT: {}, PINNED/ABSENT: {}, REMOTE_ONLY/PRESENT: {}, REMOTE_ONLY/ABSENT: {}), dirs: {}\n",
+        "{} {} (PINNED/PRESENT: {}, PINNED/ABSENT: {}, REMOTE_ONLY/PRESENT: {}, REMOTE_ONLY/ABSENT: {}), dirs: {}\n",
+        StorageFigure::QuadrantFiles.label(),
         census.files.len(),
         census.quadrant(RetentionPolicy::Pinned, LocalPresence::Present),
         census.quadrant(RetentionPolicy::Pinned, LocalPresence::Absent),
@@ -473,11 +476,17 @@ pub(crate) fn policy_quadrant_summary(census: &ResidencyCensus) -> String {
 }
 
 /// Device totals over reachable content plus the budgets that
-/// bound retention and fetch. The budgets are the live loop's own
-/// (`for_local_sync`, the same config mount runs): what the report
-/// calls effective is what the daemon enforces, not a parallel
-/// copy. Only the retention- and fetch-relevant bounds print here;
-/// the full table lives in `docs/contracts/resource-limits.md`.
+/// bound retention and fetch. Reads durable state only: an offline
+/// report, so the quota lines name this command's defaults — a live
+/// mount composes its own values from its flags, which no offline
+/// read can observe. Only the retention- and fetch-relevant bounds
+/// print here; the full table lives in
+/// `docs/contracts/resource-limits.md`. Every storage figure printed
+/// here goes through [`StorageFigure::label`], so the surface cannot
+/// emit a storage figure the DG-5 table does not name. (The three
+/// `max_*` fetch-budget lines below are not storage figures — they
+/// are pacing knobs owned by `resource-limits.md` — so the closed
+/// vocabulary does not cover them.)
 pub(crate) fn policy_budgets_render(
     census: &ResidencyCensus,
     accounting: &RetentionAccounting,
@@ -489,7 +498,9 @@ pub(crate) fn policy_budgets_render(
     // chunk pinned through two paths is one promise, not two.
     let pinned_chunks = census.pinned_chunk_union().len();
     let mut out = format!(
-        "policy budgets (reachable content)\npinned files: {pinned_files}\npinned chunks: {pinned_chunks}\n",
+        "policy budgets (reachable content)\n{}: {pinned_files}\n{}: {pinned_chunks}\n",
+        StorageFigure::PinnedFiles.label(),
+        StorageFigure::PinnedChunks.label(),
     );
     out.push_str(&policy_quadrant_summary(census));
     // Totals silently skip conflicted subtrees, so name the gap:
@@ -498,22 +509,51 @@ pub(crate) fn policy_budgets_render(
     // status report, instead of one unbounded joined line.
     if !census.conflicts.is_empty() {
         out.push_str(&format!(
-            "conflicts: {} skipped (never walked):\n",
+            "{}: {} skipped (never walked):\n",
+            StorageFigure::ConflictsSkipped.label(),
             census.conflicts.len()
         ));
         for conflict in &census.conflicts {
             out.push_str(&format!("  {conflict}\n"));
         }
     }
-    out.push_str("budgets (effective):\n");
+    // Offline defaults, not a live composition's values: the quota
+    // this command ran with is `LiveConfig::for_local_sync` (or the
+    // test's override), while a live mount composes its own ceiling
+    // from its flags. Calling these "effective" would let the report
+    // disagree with a configured drive without either being wrong.
+    out.push_str("budgets (offline defaults — not a live composition's values):\n");
     match accounting.quota {
         Some(quota) => {
-            out.push_str(&format!("  retained_bytes_quota: {quota}\n"));
-            out.push_str(&format!("  receive_retention_ceiling: {quota} (same flag, fetch admission before storage)\n"));
+            // No bare quota number: DG-5 forbids a `retained_bytes_quota`
+            // rendering that omits its refusal scope, so the scope rides
+            // the same sentence — operator-selected refusal boundary
+            // over retained content, never a device ceiling.
+            out.push_str(&format!(
+                "  {}: {quota} (operator-selected refusal boundary over retained content only; not a ceiling on the device)\n",
+                StorageFigure::RetainedQuota.label()
+            ));
+            out.push_str(&format!(
+                "  {}: {quota} (same flag, fetch admission before storage)\n",
+                StorageFigure::ReceiveCeiling.label()
+            ));
         }
         None => {
-            out.push_str("  retained_bytes_quota: unlimited\n");
-            out.push_str("  receive_retention_ceiling: unlimited (set --retained-quota on mount/sync/vault to bound both paths)\n");
+            // OD-22-A, recommendation (A), decider to confirm: no
+            // ceiling is a fact about this device, stated plainly —
+            // never "unlimited" (a ceiling claim by another name) and
+            // never 0 (which would read as "no bytes retained").
+            // Qualified as defaults-relative (not a device fact: the
+            // header already says offline defaults) so a copied line
+            // alone cannot be read as a live composition's promise.
+            out.push_str(&format!(
+                "  {}: under these offline defaults, no retention ceiling is set on this device (unset: local writes and fetched content admit without a retention refusal)\n",
+                StorageFigure::RetainedQuota.label()
+            ));
+            out.push_str(&format!(
+                "  {}: under these offline defaults, no retention ceiling is set on this device (set --retained-quota on mount/sync/vault to bound both paths)\n",
+                StorageFigure::ReceiveCeiling.label()
+            ));
         }
     }
     out.push_str(&format!(
@@ -523,30 +563,38 @@ pub(crate) fn policy_budgets_render(
     // The retention breakdown: one row per resident dimension, each
     // labelled with whether it backs enforcement or merely observes.
     // `retained content` is the enforcement quantity — the number the
-    // ceiling is compared against. The fact log and the sync vault
+    // ceiling is compared against — with its exclusions in the same
+    // sentence (OD-22-B, recommendation (A)): "object store" alone
+    // would read as a device total. The fact log and the sync vault
     // are resident but unenforced (auxiliary growth): folding them
     // into the enforced number would silently widen what a refusal
     // rejects, so they report separately and the total is labelled
-    // observational. See the retained / resident / auxiliary terms in
-    // `docs/design/storage-growth.md`.
+    // observational. See the retained / resident / auxiliary terms and
+    // the DG-5 wording table in `docs/design/storage-growth.md`.
     let total = accounting
         .retained_content
         .saturating_add(accounting.fact_log)
         .saturating_add(accounting.sync_vault);
     out.push_str("retention accounting (bytes):\n");
     out.push_str(&format!(
-        "  retained content: {} (quota-enforced)\n",
+        "  {}: {} (quota-enforced; object store only, not the fact log or sync vault)\n",
+        StorageFigure::RetainedContent.label(),
         accounting.retained_content
     ));
     out.push_str(&format!(
-        "  fact log: {} (observational)\n",
+        "  {}: {} (observational)\n",
+        StorageFigure::FactLog.label(),
         accounting.fact_log
     ));
     out.push_str(&format!(
-        "  sync vault: {} (observational)\n",
+        "  {}: {} (observational)\n",
+        StorageFigure::SyncVault.label(),
         accounting.sync_vault
     ));
-    out.push_str(&format!("  total accounted: {total} (observational)\n"));
+    out.push_str(&format!(
+        "  {}: {total} (observational; not a device total — unmetered writers exist outside all three rows)\n",
+        StorageFigure::TotalAccounted.label()
+    ));
     // No implicit ceiling: with no configured quota the report advises
     // one instead of applying one. The recommendation is explicitly
     // advisory and non-authoritative — a starting point for the
@@ -556,8 +604,9 @@ pub(crate) fn policy_budgets_render(
     // write, so the advice starts there.
     if accounting.quota.is_none() {
         out.push_str(&format!(
-            "  advisory ceiling (non-authoritative): no lower than {} \
+            "  {}: no lower than {} \
              (current retention); no default is applied\n",
+            StorageFigure::AdvisoryCeiling.label(),
             accounting.retained_content
         ));
     }
@@ -571,7 +620,8 @@ pub(crate) fn policy_budgets_render(
     let (refused_units, refused_ceilings) = &accounting.refusals;
     if *refused_units > 0 {
         out.push_str(&format!(
-            "retention refusals (DG-4 A): {refused_units} refused"
+            "{}: {refused_units} refused",
+            StorageFigure::RetentionRefusals.label()
         ));
         if !refused_ceilings.is_empty() {
             let ceilings = refused_ceilings

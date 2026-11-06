@@ -604,6 +604,204 @@ pub fn evict_subtree<V: NamespaceView>(
     })
 }
 
+/// DG-5 storage wording contract: the closed vocabulary a storage
+/// surface may emit. Every figure a v0.4 storage surface can show —
+/// byte dimensions, refusal boundaries, and reachable-content counts —
+/// is one variant here, and the normative table in
+/// `docs/design/storage-growth.md` names each variant's label, scope,
+/// and exclusions. The renderer (`wyrd policy budgets`, and the issue
+/// 31 screen that follows this contract) prints `label()` for the
+/// figure, so a new figure without a variant has no label to print:
+/// the compiler, plus the `every_storage_figure_maps_to_a_dg5_row`
+/// test that ties each label to a table row, keeps the vocabulary
+/// closed. Action receipts (`pin`/`unpin`/`evict` reports) and the
+/// role posture block are not variants: receipts describe an action
+/// just taken, posture describes device policy — neither is a storage
+/// observation, so the table does not own their words.
+///
+/// Forbidden in any storage surface's place: [`FORBIDDEN_STORAGE_WORDS`].
+/// A quota rendering that omits its refusal scope is one of them —
+/// see `RetainedQuota`'s label discipline below.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum StorageFigure {
+    /// Object-store bytes at report time: the enforcement quantity
+    /// the ceiling is compared against. Object store only — the fact
+    /// log and the sync vault are separate variants, never folded in.
+    RetainedContent,
+    /// Fact-log commit bytes: resident, observational.
+    FactLog,
+    /// Sealed vault representations: resident, observational.
+    SyncVault,
+    /// The three resident dimensions summed: observational, never a
+    /// device total (unmetered writers exist outside all three).
+    TotalAccounted,
+    /// The configured ceiling, when one is configured: an
+    /// operator-selected refusal boundary over retained content, not
+    /// a ceiling on the device. Never rendered bare — the label
+    /// carries its refusal scope in the same sentence.
+    RetainedQuota,
+    /// The same flag's receive-path face: fetched representations
+    /// admit against this before durable storage (DG-4 A).
+    ReceiveCeiling,
+    /// Shown only when no quota is configured: explicitly
+    /// non-authoritative, a starting point for the operator's
+    /// decision, never a default by another name.
+    AdvisoryCeiling,
+    /// Durable receive-path refusals (DG-4 A): how many distinct
+    /// representations were declined before storage. Policy, never loss.
+    RetentionRefusals,
+    /// Reachable files carrying an explicit pin promise.
+    PinnedFiles,
+    /// Distinct pinned content identities, deduplicated across files
+    /// that share chunks: what the device promised, not per-file counts.
+    PinnedChunks,
+    /// The per-quadrant reachable-file totals line.
+    QuadrantFiles,
+    /// Conflicted subtrees the walk never traversed: cost a row, not
+    /// the report — totals that skip them must name them.
+    ConflictsSkipped,
+    /// One row per reachable file (policy/presence/path). Reachable
+    /// content only — the object store as a whole is never scanned.
+    PerFileRow,
+    /// Links met during the walk: named, never traversed — a link
+    /// names no content of its own.
+    SymlinksSkipped,
+}
+
+/// What backs a [`StorageFigure`]: enforcement, observation, the
+/// refusal boundary itself, or a reachable-content count. Exactly one
+/// variant is `Enforced` — anything else presented as enforced is
+/// the overstatement this contract exists to prevent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FigureKind {
+    /// Compared against the ceiling to refuse: [`StorageFigure::RetainedContent`].
+    Enforced,
+    /// Measured and reported, backing no refusal.
+    Observational,
+    /// The operator-selected refusal boundary (or its explicit absence).
+    Boundary,
+    /// A count of reachable content, never bytes.
+    Census,
+}
+
+impl FigureKind {
+    /// The exact word the DG-5 table's Kind column uses for this
+    /// variant, so the contract test can tie each row's kind cell to
+    /// the type rather than to a passing mention elsewhere in the row.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            FigureKind::Enforced => "enforced",
+            FigureKind::Observational => "observational",
+            FigureKind::Boundary => "boundary",
+            FigureKind::Census => "census",
+        }
+    }
+}
+/// Phrases no storage surface may render, in any casing. "Free space"
+/// is the data-safety bug: a healthy free-space figure next to an
+/// absent ceiling teaches the operator the drive is protected when
+/// nothing is. "Disk usage" and "storage used" claim a device total
+/// no metered figure backs — unmetered writers (fact-log intake,
+/// pre-live authoring) exist outside every row of the table.
+pub const FORBIDDEN_STORAGE_WORDS: &[&str] = &["free space", "disk usage", "storage used"];
+
+impl StorageFigure {
+    /// Every figure the contract names, in table order.
+    pub fn all() -> &'static [Self] {
+        use StorageFigure::*;
+        &[
+            RetainedContent,
+            FactLog,
+            SyncVault,
+            TotalAccounted,
+            RetainedQuota,
+            ReceiveCeiling,
+            AdvisoryCeiling,
+            RetentionRefusals,
+            PinnedFiles,
+            PinnedChunks,
+            QuadrantFiles,
+            ConflictsSkipped,
+            PerFileRow,
+            SymlinksSkipped,
+        ]
+    }
+
+    /// The exact words the surface prints for this figure. Renderers
+    /// print this and nothing else for the figure's name, so the
+    /// `every_storage_figure_maps_to_a_dg5_row` test can tie each
+    /// label to its normative row by string match.
+    pub fn label(&self) -> &'static str {
+        match self {
+            StorageFigure::RetainedContent => "retained content",
+            StorageFigure::FactLog => "fact log",
+            StorageFigure::SyncVault => "sync vault",
+            StorageFigure::TotalAccounted => "total accounted",
+            StorageFigure::RetainedQuota => "retained_bytes_quota",
+            StorageFigure::ReceiveCeiling => "receive_retention_ceiling",
+            StorageFigure::AdvisoryCeiling => "advisory ceiling (non-authoritative)",
+            StorageFigure::RetentionRefusals => "retention refusals (DG-4 A)",
+            StorageFigure::PinnedFiles => "pinned files",
+            StorageFigure::PinnedChunks => "pinned chunks",
+            StorageFigure::QuadrantFiles => "files:",
+            StorageFigure::ConflictsSkipped => "conflicts",
+            StorageFigure::PerFileRow => "POLICY       LOCAL    PATH",
+            StorageFigure::SymlinksSkipped => "symlinks skipped",
+        }
+    }
+
+    /// What backs this figure: enforcement, observation, the refusal
+    /// boundary, or a reachable-content count.
+    pub fn kind(&self) -> FigureKind {
+        match self {
+            StorageFigure::RetainedContent => FigureKind::Enforced,
+            StorageFigure::FactLog | StorageFigure::SyncVault | StorageFigure::TotalAccounted => {
+                FigureKind::Observational
+            }
+            StorageFigure::RetainedQuota
+            | StorageFigure::ReceiveCeiling
+            | StorageFigure::AdvisoryCeiling => FigureKind::Boundary,
+            StorageFigure::RetentionRefusals => FigureKind::Observational,
+            _ => FigureKind::Census,
+        }
+    }
+
+    /// The population this figure covers. Mirrors the normative row;
+    /// kept beside the label so the meaning cannot drift from the words.
+    pub fn scope(&self) -> &'static str {
+        match self {
+            StorageFigure::RetainedContent => {
+                "object-store bytes at report time (one walk, never cached)"
+            }
+            StorageFigure::FactLog => "durable fact-log commit bytes",
+            StorageFigure::SyncVault => "sealed vault representations resident on this device",
+            StorageFigure::TotalAccounted => {
+                "the three resident dimensions above, summed at report time"
+            }
+            StorageFigure::RetainedQuota => {
+                "the operator-configured ceiling over retained content, when one is configured"
+            }
+            StorageFigure::ReceiveCeiling => {
+                "the same flag's receive-path face: fetched representations admit against it before durable storage"
+            }
+            StorageFigure::AdvisoryCeiling => {
+                "a non-authoritative starting point for the operator's quota decision, shown only when no quota is configured, at or above current retention"
+            }
+            StorageFigure::RetentionRefusals => {
+                "distinct representations declined before storage under a named ceiling"
+            }
+            StorageFigure::PinnedFiles => "reachable files carrying an explicit pin promise",
+            StorageFigure::PinnedChunks => {
+                "distinct pinned content identities, deduplicated across files"
+            }
+            StorageFigure::QuadrantFiles => "reachable files per (policy, presence) quadrant",
+            StorageFigure::ConflictsSkipped => "conflicted subtrees the census never walked",
+            StorageFigure::PerFileRow => "one reachable file with its policy/presence pair",
+            StorageFigure::SymlinksSkipped => "links met during the walk, never traversed",
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
