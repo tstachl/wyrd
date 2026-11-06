@@ -15,6 +15,8 @@
 {
   gate.box = {
     role = "relay";
+    # Gate-owned DHCP client (option lands with the gate PR; parked until then).
+    dhcp = true;
     vcpu = 2;
     memMb = 1024;
     mac = "02:00:00:00:07:10";

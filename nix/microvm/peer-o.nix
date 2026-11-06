@@ -7,6 +7,8 @@
 {
   gate.box = {
     role = "peer-o";
+    # Gate-owned DHCP client (option lands with the gate PR; parked until then).
+    dhcp = true;
     vcpu = 4;
     memMb = 4096;
     mac = "02:00:00:00:07:11";
