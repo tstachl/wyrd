@@ -19,15 +19,19 @@
 //! second credential.
 //!
 //! Framing: each message is a u32 big-endian length prefix followed
-//! by that many JSON bytes, capped at [`MAX_FRAME_BYTES`]. A frame
-//! that exceeds the cap closes the connection without an answer —
-//! the client treats any broken connection as unconfirmed (child 3),
-//! never as success or failure.
+//! by that many JSON bytes, capped at [`MAX_FRAME_BYTES`]. Assembly
+//! is explicit: the length prefix and the body accumulate byte by
+//! byte, an idle connection re-polls on the read deadline, and any
+//! stall past the deadline with a partially assembled frame — or a
+//! length past the cap — closes the connection without an answer and
+//! without dispatching the partial bytes. The client treats any
+//! broken connection as unconfirmed (child 3), never as success or
+//! failure.
 
 use std::io::{Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -45,10 +49,10 @@ use crate::vault::OwnerView;
 
 use super::wire::{
     PathParams, RawRequest, SubmitParams, WireAttr, WireDirEntry, WireError, WireErrorCode,
-    WireFreshness, WireLiveness, WireMailboxHealth, WireMutationError, WireMutationOutcome,
-    WireNode, WireOk, WireParentToken, WireResponse, WireResult, WireSyncReport, WireSyncStatus,
-    OP_CAPTURE_PARENT, OP_FRESHNESS, OP_LIVENESS, OP_LOOKUP, OP_OBSERVE, OP_PAUSE, OP_READ,
-    OP_READDIR, OP_RESUME, OP_STAT, OP_SUBMIT, WIRE_VERSION,
+    WireFreshness, WireLiveness, WireMailboxHealth, WireMutationError, WireMutationKind,
+    WireMutationOutcome, WireNode, WireOk, WireParentToken, WireResponse, WireResult,
+    WireSyncReport, WireSyncStatus, OP_CAPTURE_PARENT, OP_FRESHNESS, OP_LIVENESS, OP_LOOKUP,
+    OP_OBSERVE, OP_PAUSE, OP_READ, OP_READDIR, OP_RESUME, OP_STAT, OP_SUBMIT, WIRE_VERSION,
 };
 
 /// Bind the drive-directory socket: reclaim a stale entry from an
@@ -92,6 +96,26 @@ pub const DEFAULT_MAX_READ_BYTES: u64 = 32 << 20;
 /// bound plus JSON and hex overhead, rounded up. A frame past this
 /// closes the connection; the client treats the break as unconfirmed.
 pub const MAX_FRAME_BYTES: usize = 96 << 20;
+
+/// Largest file content one submit may carry, in decoded bytes: the
+/// commit and append bodies of the submit, summed across fold
+/// members. The hex encoding doubles the bytes on the wire, so 32
+/// MiB of content stays under the frame ceiling with JSON overhead
+/// to spare. A submit past this bound is refused with
+/// [`WireErrorCode::TooLarge`] before any decode or queue admission
+/// — with retry guidance in the message, never silence. A window
+/// saves a larger file through the mount, or by chunked submission
+/// (several appends or commits, each within the bound), never by a
+/// single over-bound submit.
+pub const MAX_SUBMIT_CONTENT_BYTES: usize = 32 << 20;
+
+/// Maximum simultaneous owner-interface connections. One thread
+/// serves each connection, so the accept loop enforces a small fixed
+/// pool: a connection past the bound is closed immediately — the
+/// client treats the break as unconfirmed — and an accept flood
+/// cannot grow threads without bound. Idle connections hold their
+/// slot; consumers keep few, short-lived connections.
+pub const MAX_OWNER_CONNECTIONS: usize = 16;
 
 /// How long the read side blocks registering demand before failing
 /// a remote-only read. Matches the backend's bounded open: demand
@@ -195,6 +219,19 @@ pub const CONN_POLL_INTERVAL: Duration = Duration::from_millis(250);
 /// holding its thread forever.
 pub const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// A held connection-pool slot, released back to the accept loop
+/// on drop: the served-thread count is the live pool size, so the
+/// gate in `serve_on` always observes the truth.
+struct ConnectionSlot<'a> {
+    active: &'a AtomicUsize,
+}
+
+impl Drop for ConnectionSlot<'_> {
+    fn drop(&mut self) {
+        self.active.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
 /// The owner-side interface server: peer-checked dispatch over the
 /// shared serving state. Holds handles, never engines: constructing
 /// one names no `DurableStore`, no `RuntimeState`, no `Engine`, and
@@ -258,7 +295,10 @@ impl OwnerServer {
     /// Serve an already-bound listener until `stop` trips. The
     /// accept loop polls so a tripped stop ends serving without a
     /// dummy connection. Each connection gets its own thread under
-    /// a scoped join: all threads share the serving handles, every
+    /// a scoped join, bounded by [`MAX_OWNER_CONNECTIONS`]: a
+    /// connection past the bound is closed immediately instead of
+    /// spawning, so an accept flood cannot grow threads without
+    /// bound. All served threads share the serving handles, every
     /// read re-checks the stop flag inside the poll interval, and
     /// the scope joins every connection before returning — no
     /// shutdown blocks past one poll behind an in-flight dispatch.
@@ -266,11 +306,27 @@ impl OwnerServer {
     /// own teardown (teardown drain or admission close), so the
     /// join is bounded by the run, never by a silent waiter.
     pub fn serve_on(&self, listener: &UnixListener, stop: &AtomicBool) {
+        let active = AtomicUsize::new(0);
+        // Shared by the gate and every spawned guard: a shared
+        // reference, so each `move` closure copies it instead of
+        // moving the counter.
+        let slots = &active;
         std::thread::scope(|scope| {
             while !stop.load(Ordering::Relaxed) {
                 match listener.accept() {
                     Ok((stream, _)) => {
                         if !self.check_peer(&stream) {
+                            continue;
+                        }
+                        // The pool gate, before any thread exists: an
+                        // excess connection closes on drop,
+                        // unconfirmed like every other broken
+                        // connection. The accept loop is the only
+                        // spawner, so a check-then-count here never
+                        // overshoots — concurrent exits only free
+                        // slots.
+                        if slots.load(Ordering::Relaxed) >= MAX_OWNER_CONNECTIONS {
+                            tracing::warn!("owner interface connection refused: pool saturated");
                             continue;
                         }
                         // Accepted sockets inherit the listener's
@@ -283,7 +339,11 @@ impl OwnerServer {
                             Ok(()) => {
                                 let _ = stream.set_read_timeout(Some(CONN_POLL_INTERVAL));
                                 let _ = stream.set_write_timeout(Some(WRITE_TIMEOUT));
-                                scope.spawn(move || self.serve_connection(stream, stop));
+                                slots.fetch_add(1, Ordering::Relaxed);
+                                scope.spawn(move || {
+                                    let _slot = ConnectionSlot { active: slots };
+                                    self.serve_connection(stream, stop)
+                                });
                             }
                             Err(error) => {
                                 tracing::warn!(error = %error, "owner interface connection setup failed");
@@ -328,27 +388,29 @@ impl OwnerServer {
     }
 
     /// Serve one connection to close: read frames, dispatch, write
-    /// answers. Reads re-check the stop flag inside the poll
+    /// answers. Idle reads re-check the stop flag inside the poll
     /// interval, so a tripped stop ends an idle connection without
-    /// waiting out a dispatch. Any transport failure ends the
-    /// connection without a terminal answer — the client treats the
-    /// break as unconfirmed.
+    /// waiting out a dispatch. A torn frame, an overlong length, or
+    /// any transport failure ends the connection without a terminal
+    /// answer — the client treats the break as unconfirmed, and a
+    /// half-read frame is never dispatched.
     fn serve_connection(&self, mut stream: UnixStream, stop: &AtomicBool) {
         loop {
             let frame = match read_frame(&mut stream) {
-                Ok(frame) => frame,
-                // A read deadline is the stop poll, not a failure:
-                // idle while stopping ends the connection, idle
-                // while serving waits for the next request.
-                Err(error)
-                    if error.kind() == std::io::ErrorKind::TimedOut
-                        || error.kind() == std::io::ErrorKind::WouldBlock =>
-                {
+                Ok(Some(frame)) => frame,
+                // An idle read deadline is the stop poll, not a
+                // failure: idle while stopping ends the connection,
+                // idle while serving waits for the next request.
+                Ok(None) => {
                     if stop.load(Ordering::Relaxed) {
                         return;
                     }
                     continue;
                 }
+                // A partially assembled frame at the deadline, an
+                // overlong length, or any transport failure: close
+                // deterministically, still unconfirmed, never a
+                // half-read dispatch.
                 Err(_) => return,
             };
             let response = self.dispatch_frame(&frame);
@@ -694,7 +756,10 @@ impl OwnerServer {
     /// distinct outcomes, and a success means exactly what an
     /// in-process submit's success means. A broken connection while
     /// blocked is unconfirmed, never success and never failure
-    /// (child 3 owns that answer).
+    /// (child 3 owns that answer). A submit past the content bound
+    /// refuses here with `TooLarge` — legibly, with retry guidance —
+    /// before any decode or queue admission, so an over-limit submit
+    /// never meets the framing silence of an overlong frame.
     fn op_submit(&self, params: serde_json::Value) -> Result<WireOk, (WireErrorCode, String)> {
         let params: SubmitParams = serde_json::from_value(params).map_err(|error| {
             (
@@ -702,6 +767,16 @@ impl OwnerServer {
                 format!("bad submit params: {error}"),
             )
         })?;
+        let carried = submit_content_bytes(&params.kind);
+        if carried > MAX_SUBMIT_CONTENT_BYTES as u64 {
+            return Err((
+                WireErrorCode::TooLarge,
+                format!(
+                    "submit carries {carried} content bytes, over the {} interface submit bound: split into smaller submits or save through the mount",
+                    MAX_SUBMIT_CONTENT_BYTES
+                ),
+            ));
+        }
         let kind = params.kind.to_kind(self.instance)?;
         match self.handles.mutations.submit(kind) {
             Ok(outcome) => Ok(WireOk::Submitted {
@@ -712,6 +787,24 @@ impl OwnerServer {
                 Err((mapped.code, mapped.message))
             }
         }
+    }
+}
+
+/// File content one submit carries, in decoded bytes: the commit
+/// and append bodies, summed across fold members (recursively — a
+/// nested fold is refused later as malformed, but its bytes still
+/// count here). Measured on the hex length so an over-bound submit
+/// refuses before any decode allocates. Saturating: the sum names a
+/// magnitude for the refusal message, never an exact ledger.
+fn submit_content_bytes(kind: &WireMutationKind) -> u64 {
+    match kind {
+        WireMutationKind::CommitFile { content_hex, .. }
+        | WireMutationKind::AppendFile { content_hex, .. } => (content_hex.len() / 2) as u64,
+        WireMutationKind::Fold { members } => members
+            .iter()
+            .map(|member| submit_content_bytes(&member.kind))
+            .fold(0u64, |total, carried| total.saturating_add(carried)),
+        _ => 0,
     }
 }
 
@@ -771,12 +864,43 @@ fn map_read_error(error: ReadError) -> (WireErrorCode, String) {
     }
 }
 
-/// Read one length-delimited frame: u32 big-endian length, then that
-/// many JSON bytes. Anything overlong, short, or unreadable ends
-/// the connection — the client treats the break as unconfirmed.
-fn read_frame(stream: &mut UnixStream) -> std::io::Result<Vec<u8>> {
+/// Read one length-delimited frame: u32 big-endian length, then
+/// that many JSON bytes. Returns `Ok(None)` on an idle read deadline
+/// at a frame boundary — the caller re-checks its stop flag and
+/// polls again. Anything short of a complete frame ends the
+/// connection with `Err`: a peer that goes quiet mid-frame (a short
+/// length prefix or a short body at the deadline), a vanished peer,
+/// an overlong length, or any transport error. The connection closes
+/// without an answer and without dispatching the partial bytes — the
+/// client treats the break as unconfirmed, and the next connection
+/// starts at a fresh frame boundary, never mid-stream.
+fn read_frame(stream: &mut UnixStream) -> std::io::Result<Option<Vec<u8>>> {
     let mut len = [0u8; 4];
-    stream.read_exact(&mut len)?;
+    let mut prefix_read = 0;
+    while prefix_read < len.len() {
+        match stream.read(&mut len[prefix_read..]) {
+            Ok(0) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "owner interface peer closed mid-frame",
+                ));
+            }
+            Ok(n) => prefix_read += n,
+            Err(error)
+                if error.kind() == std::io::ErrorKind::TimedOut
+                    || error.kind() == std::io::ErrorKind::WouldBlock =>
+            {
+                if prefix_read == 0 {
+                    return Ok(None);
+                }
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "owner interface frame stalled mid-length; closing",
+                ));
+            }
+            Err(error) => return Err(error),
+        }
+    }
     let len = u32::from_be_bytes(len) as usize;
     if len > MAX_FRAME_BYTES {
         return Err(std::io::Error::new(
@@ -785,8 +909,33 @@ fn read_frame(stream: &mut UnixStream) -> std::io::Result<Vec<u8>> {
         ));
     }
     let mut frame = vec![0u8; len];
-    stream.read_exact(&mut frame)?;
-    Ok(frame)
+    let mut body_read = 0;
+    while body_read < len {
+        match stream.read(&mut frame[body_read..]) {
+            Ok(0) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "owner interface peer closed mid-frame",
+                ));
+            }
+            Ok(n) => body_read += n,
+            // The length prefix is already consumed: a stall here is
+            // a torn frame however many body bytes arrived, including
+            // none — idleness only polls at a frame boundary, never
+            // mid-frame.
+            Err(error)
+                if error.kind() == std::io::ErrorKind::TimedOut
+                    || error.kind() == std::io::ErrorKind::WouldBlock =>
+            {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "owner interface frame stalled mid-body; closing",
+                ));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(Some(frame))
 }
 
 /// Write one length-delimited frame.

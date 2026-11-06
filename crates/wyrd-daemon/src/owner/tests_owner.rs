@@ -4,7 +4,9 @@
 //! socket round trip. Mutation submission (child 2) and crash
 //! answers (child 3) extend this file, not a second harness.
 
-use super::server::{OwnerHandles, OwnerServer, MAX_FRAME_BYTES};
+use super::server::{
+    OwnerHandles, OwnerServer, MAX_FRAME_BYTES, MAX_OWNER_CONNECTIONS, MAX_SUBMIT_CONTENT_BYTES,
+};
 use super::wire::{
     PathParams, RawRequest, SubmitParams, WireAttr, WireConvergenceState, WireDirEntry,
     WireDurabilityLevel, WireError, WireErrorCode, WireFileIdentity, WireFreshness,
@@ -916,6 +918,88 @@ fn transact(socket_path: &std::path::Path, id: u64, op: &str) -> WireResponse {
     let mut frame = vec![0u8; len];
     client.read_exact(&mut frame).unwrap();
     serde_json::from_slice(&frame).unwrap()
+}
+
+/// Try one framed request with explicit params over a fresh client
+/// connection. `Err` means the server did not answer in time — a
+/// saturated pool closes without answering, a draining pool may too
+/// — so the caller retries or fails on its own deadline.
+fn try_transact_params(
+    socket_path: &std::path::Path,
+    id: u64,
+    op: &str,
+    params: serde_json::Value,
+) -> std::io::Result<WireResponse> {
+    let mut client = UnixStream::connect(socket_path)?;
+    let request = serde_json::to_vec(&RawRequest {
+        v: WIRE_VERSION,
+        id,
+        op: op.to_string(),
+        params,
+    })
+    .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+    client.write_all(&(request.len() as u32).to_be_bytes())?;
+    client.write_all(&request)?;
+    client
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    let mut len = [0u8; 4];
+    client.read_exact(&mut len)?;
+    let len = u32::from_be_bytes(len) as usize;
+    if len > MAX_FRAME_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "response exceeds interface bound",
+        ));
+    }
+    let mut frame = vec![0u8; len];
+    client.read_exact(&mut frame)?;
+    serde_json::from_slice(&frame)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+}
+
+/// One framed request with explicit params over a fresh client
+/// connection, returning the parsed response. The framing tests
+/// share it so each pins the real socket behavior, not direct
+/// dispatch.
+fn transact_params(
+    socket_path: &std::path::Path,
+    id: u64,
+    op: &str,
+    params: serde_json::Value,
+) -> WireResponse {
+    try_transact_params(socket_path, id, op, params).expect("the server answers the request")
+}
+
+/// Serve `server` on a fresh socket in `dir`: bind non-blocking like
+/// every socket test, spawn `serve_on`, and hand the join back. The
+/// caller trips `stop` and joins.
+fn serve_parts(
+    server: OwnerServer,
+    socket_name: &str,
+    dir: &std::path::Path,
+    stop: &'static AtomicBool,
+) -> (std::path::PathBuf, std::thread::JoinHandle<()>) {
+    let socket_path = dir.join(socket_name);
+    let _ = std::fs::remove_file(&socket_path);
+    let listener = std::os::unix::net::UnixListener::bind(&socket_path).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let serve_thread = std::thread::spawn(move || server.serve_on(&listener, stop));
+    (socket_path, serve_thread)
+}
+
+/// Read a lookup answer and unwrap the file node. The framing tests
+/// share it so each asserts content, not just round-trip shape.
+fn lookup_file(response: WireResponse, id: u64) -> WireNode {
+    assert_eq!(response.v, WIRE_VERSION);
+    assert_eq!(response.id, id);
+    match response.result {
+        WireResult::Ok(ok) => match *ok {
+            WireOk::Lookup { node, .. } => node,
+            other => panic!("unexpected lookup result: {other:?}"),
+        },
+        other => panic!("lookup unexpectedly failed: {other:?}"),
+    }
 }
 
 /// Pause and resume through dispatch: the switch flips, the answer
@@ -2090,5 +2174,352 @@ fn intake_failure_records_retained_freshness() {
         other => panic!("a failed pass must retain, not read fresh: {other:?}"),
     }
 
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// Framing honesty (owner-frames P1): explicit assembly, typed
+// over-limit refusal, bounded connection threads.
+// ---------------------------------------------------------------------------
+
+/// A stall mid-frame closes the connection deterministically: a
+/// client that trickles a length prefix, sleeps past the read
+/// deadline, then sends the remainder gets a clean close with zero
+/// misframed traffic — the remainder is never read as a fresh
+/// length prefix.
+#[test]
+fn stalled_mid_frame_closes_with_zero_misframed_traffic() {
+    let (parts, dir) = composed_parts();
+    let server = OwnerServer::new(OwnerHandles::from_parts(&parts));
+    let stop: &'static AtomicBool = Box::leak(Box::new(AtomicBool::new(false)));
+    let (socket_path, serve_thread) = serve_parts(server, "trickle.sock", &dir, stop);
+
+    let lookup_params = || {
+        serde_json::to_value(PathParams {
+            path: "hello.txt".to_string(),
+        })
+        .unwrap()
+    };
+    let request = serde_json::to_vec(&RawRequest {
+        v: WIRE_VERSION,
+        id: 81,
+        op: OP_LOOKUP.to_string(),
+        params: lookup_params(),
+    })
+    .unwrap();
+    let mut wire = (request.len() as u32).to_be_bytes().to_vec();
+    wire.extend_from_slice(&request);
+
+    let mut client = UnixStream::connect(&socket_path).unwrap();
+    client
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    // Two length bytes, then silence past the 250 ms read deadline.
+    client.write_all(&wire[..2]).unwrap();
+    std::thread::sleep(Duration::from_millis(800));
+    // The server has closed by now: EOF, never a response.
+    let mut seen = Vec::new();
+    let mut buf = [0u8; 1024];
+    loop {
+        match client.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => seen.extend_from_slice(&buf[..n]),
+            Err(error) => panic!("a torn close reads as EOF, never a stall: {error:?}"),
+        }
+    }
+    assert!(seen.is_empty(), "a torn frame dispatches nothing: {seen:?}");
+    // The remainder lands on a closed connection: ignored, and still
+    // no response bytes follow it.
+    let _ = client.write_all(&wire[2..]);
+    match client.read(&mut buf) {
+        Ok(0) => {}
+        Err(_) => {}
+        Ok(n) => panic!("no response follows a torn frame, saw {n} bytes"),
+    }
+
+    // The stream is not desynchronized: fresh connections serve.
+    let response = transact_params(&socket_path, 82, OP_LOOKUP, lookup_params());
+    match lookup_file(response, 82) {
+        WireNode::File { size: 11, .. } => {}
+        other => panic!("unexpected lookup node after a torn frame: {other:?}"),
+    }
+
+    stop.store(true, Ordering::Relaxed);
+    serve_thread.join().unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// An overlong length prefix closes the connection with no answer:
+/// framing honesty means the overlong frame is never read, never
+/// dispatched, and the client sees unconfirmed silence — while the
+/// server keeps serving fresh connections.
+#[test]
+fn overlong_length_prefix_closes_without_answer() {
+    let (parts, dir) = composed_parts();
+    let server = OwnerServer::new(OwnerHandles::from_parts(&parts));
+    let stop: &'static AtomicBool = Box::leak(Box::new(AtomicBool::new(false)));
+    let (socket_path, serve_thread) = serve_parts(server, "overlong.sock", &dir, stop);
+
+    let mut client = UnixStream::connect(&socket_path).unwrap();
+    client
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    client
+        .write_all(&((MAX_FRAME_BYTES as u32 + 1).to_be_bytes()))
+        .unwrap();
+    // No response bytes precede the close: EOF, not a refusal.
+    let mut buf = [0u8; 8];
+    let mut seen = 0;
+    loop {
+        match client.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => seen += n,
+            Err(error) => panic!("an overlong close reads as EOF, never a stall: {error:?}"),
+        }
+    }
+    assert_eq!(seen, 0, "an overlong frame is never answered");
+    drop(client);
+
+    let response = transact_params(
+        &socket_path,
+        83,
+        OP_LOOKUP,
+        serde_json::to_value(PathParams {
+            path: "hello.txt".to_string(),
+        })
+        .unwrap(),
+    );
+    match lookup_file(response, 83) {
+        WireNode::File { size: 11, .. } => {}
+        other => panic!("unexpected lookup node after an overlong frame: {other:?}"),
+    }
+
+    stop.store(true, Ordering::Relaxed);
+    serve_thread.join().unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// An over-limit submit is a typed `TooLarge` refusal, not silence:
+/// the submit content bound sits below the frame ceiling, so the
+/// refusal carries the request id and retry guidance on the
+/// still-open connection.
+#[test]
+fn over_limit_submit_is_a_typed_toolarge_not_silence() {
+    let (parts, dir) = composed_parts();
+    let server = OwnerServer::new(OwnerHandles::from_parts(&parts));
+    let stop: &'static AtomicBool = Box::leak(Box::new(AtomicBool::new(false)));
+    let (socket_path, serve_thread) = serve_parts(server, "toolarge.sock", &dir, stop);
+
+    // One byte past the submit bound: the hex doubles it, the frame
+    // still fits the 96 MiB ceiling, so the refusal is typed.
+    let content_hex = "ab".repeat(MAX_SUBMIT_CONTENT_BYTES + 1);
+    let request = serde_json::to_vec(&RawRequest {
+        v: WIRE_VERSION,
+        id: 84,
+        op: OP_SUBMIT.to_string(),
+        params: serde_json::to_value(SubmitParams {
+            kind: WireMutationKind::AppendFile {
+                path: "hello.txt".to_string(),
+                content_hex,
+            },
+        })
+        .unwrap(),
+    })
+    .unwrap();
+    assert!(
+        request.len() <= MAX_FRAME_BYTES,
+        "the over-limit submit still fits the frame: {}",
+        request.len()
+    );
+    let mut client = UnixStream::connect(&socket_path).unwrap();
+    client
+        .set_read_timeout(Some(Duration::from_secs(60)))
+        .unwrap();
+    client
+        .write_all(&(request.len() as u32).to_be_bytes())
+        .unwrap();
+    client.write_all(&request).unwrap();
+    let mut len = [0u8; 4];
+    client.read_exact(&mut len).unwrap();
+    let len = u32::from_be_bytes(len) as usize;
+    let mut frame = vec![0u8; len];
+    client.read_exact(&mut frame).unwrap();
+    let response: WireResponse = serde_json::from_slice(&frame).unwrap();
+    assert_eq!(response.id, 84);
+    match response.result {
+        WireResult::Err(error) => {
+            assert_eq!(error.code, WireErrorCode::TooLarge);
+            assert!(
+                error.message.contains("split into smaller submits")
+                    && error.message.contains("mount"),
+                "the refusal carries retry guidance: {}",
+                error.message
+            );
+        }
+        ok => panic!("an over-limit submit must refuse, not answer: {ok:?}"),
+    }
+    // The refusal is terminal, not severance: the same connection
+    // serves on.
+    let lookup = serde_json::to_vec(&RawRequest {
+        v: WIRE_VERSION,
+        id: 85,
+        op: OP_LOOKUP.to_string(),
+        params: serde_json::to_value(PathParams {
+            path: "hello.txt".to_string(),
+        })
+        .unwrap(),
+    })
+    .unwrap();
+    client
+        .write_all(&(lookup.len() as u32).to_be_bytes())
+        .unwrap();
+    client.write_all(&lookup).unwrap();
+    let mut len = [0u8; 4];
+    client.read_exact(&mut len).unwrap();
+    let len = u32::from_be_bytes(len) as usize;
+    let mut frame = vec![0u8; len];
+    client.read_exact(&mut frame).unwrap();
+    let response: WireResponse = serde_json::from_slice(&frame).unwrap();
+    match lookup_file(response, 85) {
+        WireNode::File { size: 11, .. } => {}
+        other => panic!("the connection serves on after a typed refusal: {other:?}"),
+    }
+
+    stop.store(true, Ordering::Relaxed);
+    drop(client);
+    serve_thread.join().unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// A stall mid-body closes the connection deterministically, like
+/// a stall mid-length: a client that sends a full length prefix and
+/// one body byte, then sleeps past the read deadline, gets a clean
+/// close with zero misframed traffic.
+#[test]
+fn stalled_mid_body_closes_with_zero_misframed_traffic() {
+    let (parts, dir) = composed_parts();
+    let server = OwnerServer::new(OwnerHandles::from_parts(&parts));
+    let stop: &'static AtomicBool = Box::leak(Box::new(AtomicBool::new(false)));
+    let (socket_path, serve_thread) = serve_parts(server, "midbody.sock", &dir, stop);
+
+    let request = serde_json::to_vec(&RawRequest {
+        v: WIRE_VERSION,
+        id: 87,
+        op: OP_LOOKUP.to_string(),
+        params: serde_json::to_value(PathParams {
+            path: "hello.txt".to_string(),
+        })
+        .unwrap(),
+    })
+    .unwrap();
+    let mut wire = (request.len() as u32).to_be_bytes().to_vec();
+    wire.extend_from_slice(&request);
+
+    let mut client = UnixStream::connect(&socket_path).unwrap();
+    client
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    // A full length prefix and one body byte, then silence past the
+    // 250 ms read deadline: the length is already consumed, so even
+    // the first body stall is a torn frame, never an idle poll.
+    client.write_all(&wire[..5]).unwrap();
+    std::thread::sleep(Duration::from_millis(800));
+    let mut seen = Vec::new();
+    let mut buf = [0u8; 1024];
+    loop {
+        match client.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => seen.extend_from_slice(&buf[..n]),
+            Err(error) => panic!("a torn close reads as EOF, never a stall: {error:?}"),
+        }
+    }
+    assert!(seen.is_empty(), "a torn body dispatches nothing: {seen:?}");
+    drop(client);
+
+    let response = transact_params(
+        &socket_path,
+        88,
+        OP_LOOKUP,
+        serde_json::to_value(PathParams {
+            path: "hello.txt".to_string(),
+        })
+        .unwrap(),
+    );
+    match lookup_file(response, 88) {
+        WireNode::File { size: 11, .. } => {}
+        other => panic!("unexpected lookup node after a torn body: {other:?}"),
+    }
+
+    stop.store(true, Ordering::Relaxed);
+    serve_thread.join().unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// An accept flood stays bounded: the pool holds, excess
+/// connections close promptly instead of spawning threads, and the
+/// server keeps serving once the flood drains.
+#[test]
+fn accept_flood_stays_bounded() {
+    let (parts, dir) = composed_parts();
+    let server = OwnerServer::new(OwnerHandles::from_parts(&parts));
+    let stop: &'static AtomicBool = Box::leak(Box::new(AtomicBool::new(false)));
+    let (socket_path, serve_thread) = serve_parts(server, "flood.sock", &dir, stop);
+
+    // Fill the pool with idle holders.
+    let mut holders = Vec::new();
+    for _ in 0..MAX_OWNER_CONNECTIONS {
+        holders.push(UnixStream::connect(&socket_path).unwrap());
+    }
+    std::thread::sleep(Duration::from_secs(1));
+    // Excess connections close promptly instead of spawning.
+    let mut extras = Vec::new();
+    for _ in 0..8 {
+        let extra = UnixStream::connect(&socket_path).unwrap();
+        extra
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        extras.push(extra);
+    }
+    std::thread::sleep(Duration::from_secs(1));
+    for extra in extras.iter_mut() {
+        let mut buf = [0u8; 1];
+        match extra.read(&mut buf) {
+            Ok(0) => {}
+            Err(error) => {
+                panic!("excess connections close promptly, never stall: {error:?}")
+            }
+            Ok(_) => panic!("an excess connection was served past the pool bound"),
+        }
+    }
+    drop(extras);
+    drop(holders);
+    // The pool drains asynchronously as holder threads observe the
+    // EOF and release their slots: retry the fresh lookup until the
+    // server serves again or the deadline expires, instead of a
+    // single shot that races the drain.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let lookup_params = serde_json::to_value(PathParams {
+        path: "hello.txt".to_string(),
+    })
+    .unwrap();
+    let response = loop {
+        match try_transact_params(&socket_path, 86, OP_LOOKUP, lookup_params.clone()) {
+            Ok(response) => break response,
+            Err(_) => {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "the server serves again after the flood drains"
+                );
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
+    };
+    match lookup_file(response, 86) {
+        WireNode::File { size: 11, .. } => {}
+        other => panic!("the server serves on after the flood drains: {other:?}"),
+    }
+
+    stop.store(true, Ordering::Relaxed);
+    serve_thread.join().unwrap();
     std::fs::remove_dir_all(dir).unwrap();
 }
