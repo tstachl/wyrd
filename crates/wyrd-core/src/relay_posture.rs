@@ -33,10 +33,10 @@
 //!    also non-zero.
 //!
 //! The degraded predicate mirrors `mailbox_degraded` in
-//! `wyrd-cli/src/commands/sync.rs` exactly (same fields, same
-//! truth table, saturation replays excluded); the CLI keeps its
-//! own copy as the run-verdict oracle and this module keeps the
-//! surface vocabulary, and the table test below pins their
+//! `wyrd-cli/src/commands/sync.rs` field for field (same inputs,
+//! same truth table, saturation replays excluded); the posture
+//! splits its one boolean into words while the CLI keeps its copy
+//! as the run-verdict oracle, and the table test below pins their
 //! agreement cell by cell.
 //!
 //! Reads are observations, not instantaneous facts: the supervisor
@@ -139,10 +139,11 @@ pub const ACCEPTANCE_IS_NOT_RECEIPT: &str =
 
 /// Render the full posture block: the state line, the configured
 /// count in OD-20-C's words, the unconditional standing
-/// qualifier, and the observation label wherever the reading is
-/// not a construction-time guarantee (the offline switch and the
-/// configured count are construction facts; every health-derived
-/// line may be briefly stale).
+/// qualifier, and the observation label on health-derived states
+/// only (Running and Unavailable with a sample behind them — the
+/// supervisor tick refreshes them, so they may be briefly stale).
+/// The offline switch and the relay counts are construction facts
+/// and carry no stale label.
 ///
 /// `pending_obligations` feeds the offline scope line only: an
 /// offline rendering always carries its scope, even at zero
@@ -150,6 +151,11 @@ pub const ACCEPTANCE_IS_NOT_RECEIPT: &str =
 /// conflation the offline trap warns about. No other state takes
 /// a delivered or pending count — rendering one here would be the
 /// OD-20-A overstatement.
+///
+/// When a host presenter exists to own person-visible copy, the
+/// rendering below migrates there and this module keeps the state
+/// vocabulary and predicates; until then the copy lives next to
+/// the mapping its tests pin.
 pub fn render_posture(
     offline: bool,
     configured_relays: usize,
@@ -203,7 +209,11 @@ pub fn render_posture(
         "configured relays: {configured_relays} (current owner configuration)\n"
     ));
     out.push_str(ACCEPTANCE_IS_NOT_RECEIPT);
-    if health.is_some() {
+    let health_derived = matches!(
+        RelayPosture::of(offline, configured_relays, health),
+        RelayPosture::Running(_) | RelayPosture::Unavailable
+    );
+    if health_derived && health.is_some() {
         out.push_str("note: health readings are observed and may be briefly stale\n");
     }
     out

@@ -254,3 +254,54 @@ fn acceptance_qualifier_ignores_pending_counts() {
         );
     }
 }
+
+/// Coverage around the edges the table test does not own:
+/// saturation replays never degrade, the offline switch outranks a
+/// zero relay count, partial connectivity names its fraction, and
+/// mismatched state-vs-copy inputs render by the documented rule
+/// (state follows the observation, copy states the configured
+/// count) rather than failing or folding.
+#[test]
+fn posture_edge_cells_render_by_rule() {
+    // Saturation replays are pressure signals, not a health
+    // verdict: a live mailbox with only replays on record runs live.
+    let mut replayed = live_health();
+    replayed.saturation_recoveries = 41;
+    assert_eq!(
+        RelayPosture::of(false, 2, Some(&replayed)),
+        RelayPosture::Running(RunningHealth::Live)
+    );
+    // The operator's switch outranks even a zero relay count.
+    assert_eq!(
+        RelayPosture::of(true, 0, None),
+        RelayPosture::OfflineByChoice
+    );
+    // Partial connectivity names its fraction, never a bare live.
+    let partial = health(true, 1, 2, 0, 0, 0);
+    let rendering = render_posture(false, 2, Some(&partial), 0);
+    assert!(
+        rendering.contains("relay: running (1 of 2 relays connected)"),
+        "partial connectivity names the fraction:\n{rendering}"
+    );
+    // Offline with a sample behind it carries no stale label: the
+    // state derives from the switch, a construction fact.
+    let offline_observed = render_posture(true, 2, Some(&live_health()), 0);
+    assert!(
+        !offline_observed.contains("briefly stale"),
+        "offline state is a construction fact:\n{offline_observed}"
+    );
+    // Mismatched inputs (unreachable in production, where the
+    // mailbox is built from the owner's count): the state follows
+    // the observation, the copy states the configured count.
+    let mismatch = health(true, 2, 2, 0, 0, 0);
+    assert_eq!(
+        RelayPosture::of(false, 0, Some(&mismatch)),
+        RelayPosture::Running(RunningHealth::Live),
+        "observation places the state"
+    );
+    let rendered = render_posture(false, 0, Some(&mismatch), 0);
+    assert!(
+        rendered.contains("configured relays: 0 (current owner configuration)"),
+        "copy states the configured count:\n{rendered}"
+    );
+}
