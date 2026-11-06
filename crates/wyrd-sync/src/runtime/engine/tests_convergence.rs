@@ -144,6 +144,7 @@ fn repeated_restarts_are_idempotent() {
                 invalid: 0,
                 unavailable_keys: 0,
                 local_failures: 0,
+                refused: 0,
             }
         );
         assert_eq!(pair.a.engine.current(), current, "no new commits");

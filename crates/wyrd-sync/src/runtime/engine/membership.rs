@@ -46,6 +46,8 @@ impl Engine {
         encryption_secret: DeviceEncryptionSecret,
     ) -> Result<Self, EngineError> {
         let vault = crate::serving::Vault::open(store.dir())?;
+        let refusals = crate::runtime::retention::RefusalLedger::load(store.dir())
+            .map_err(EngineError::ObjectStore)?;
         let mut engine = Engine {
             drive,
             device,
@@ -86,6 +88,9 @@ impl Engine {
             reconnect_latched: false,
             last_requested_digest: None,
             last_trigger_eval: None,
+            retention_quota: None,
+            retained: None,
+            refusals,
         };
         engine.resync()?;
         engine.restore_epoch_keys()?;

@@ -51,8 +51,6 @@ use crate::credentials::load_credentials;
 #[cfg(test)]
 pub(crate) use crate::credentials::{read_credentials, read_identity, read_secret_file};
 #[cfg(test)]
-pub(crate) use crate::live::live_config;
-#[cfg(test)]
 pub(crate) use crate::logging::init_mount_diagnostics;
 #[cfg(test)]
 pub(crate) use crate::probes::{combine_status, TeardownStatus};
@@ -445,6 +443,7 @@ fn command(args: Vec<String>) -> Result<(), CliError> {
             relays,
             verbose,
             interval,
+            retained_quota,
             ..
         } => {
             // Ceiling as well as floor: past a day the deadline stops
@@ -461,6 +460,7 @@ fn command(args: Vec<String>) -> Result<(), CliError> {
                 resolve_relays(relays.relay, config.as_ref()).relays,
                 verbose,
                 interval,
+                retained_quota,
                 &passphrase,
                 identity,
             )
@@ -500,13 +500,26 @@ fn command(args: Vec<String>) -> Result<(), CliError> {
             action,
             ..
         } => match action {
-            None | Some(VaultAction::Start) => {
+            None => {
                 let resolution = resolve_relays(relays.relay, config.as_ref());
                 vault(
                     drive_dir,
                     resolution,
                     config.as_ref(),
                     log_file,
+                    None,
+                    &passphrase,
+                    identity,
+                )
+            }
+            Some(VaultAction::Start { retained_quota }) => {
+                let resolution = resolve_relays(relays.relay, config.as_ref());
+                vault(
+                    drive_dir,
+                    resolution,
+                    config.as_ref(),
+                    log_file,
+                    retained_quota,
                     &passphrase,
                     identity,
                 )

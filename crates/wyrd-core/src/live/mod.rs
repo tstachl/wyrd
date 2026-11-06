@@ -379,6 +379,15 @@ where
         if config.budgets.retained_bytes_quota.is_some() && config.retained_bytes.is_none() {
             return Err(CompositionError::QuotaWithoutAccountant);
         }
+        let mut engine = engine;
+        // Install the receive-path gate (DG-4 A) on the engine: the
+        // fetch legs consult the same ceiling and accountant the
+        // authoring path enforces, plus the vault-seeing counter the
+        // vault maintains. Unlimited by default — no quota, no gate.
+        engine.set_retention_gate(
+            config.budgets.retained_bytes_quota,
+            config.retained_bytes.clone(),
+        );
         let baseline = Projection::initial(baseline, revision);
         let projection = Arc::new(RwLock::new(Arc::new(baseline)));
         let budgets = config.budgets;

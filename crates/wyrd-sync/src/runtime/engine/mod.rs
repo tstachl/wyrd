@@ -500,6 +500,16 @@ pub struct ExecuteReport {
     pub unavailable_keys: usize,
     /// Verified bytes the local store refused; never marked local.
     pub local_failures: usize,
+    /// Retention-gate refusals (DG-4 A): verified bytes refused before
+    /// durable storage because admitting them would exceed the
+    /// device's retention ceiling. Never stored, never charged, never
+    /// struck, never terminal — retry re-evaluates the same ceiling.
+    /// Distinct from every other class: refused is not missing, not
+    /// invalid, not a transport fault, not a local failure, and not a
+    /// fatal store condition. The operator reads the count beside the
+    /// ceiling that caused it (`policy budgets`); the durable ledger
+    /// preserves the decision across restart.
+    pub refused: usize,
 }
 
 /// What one held (deferred) message waits on: the membership
@@ -847,6 +857,21 @@ pub struct Engine {
     /// `AlreadyStated` without another full load. Edges and unmarked
     /// digests always evaluate fully.
     pub(super) last_trigger_eval: Option<(u64, [u8; 32])>,
+    /// Receive-path retention admission ceiling (DG-4 A): refused
+    /// before durable storage, never after. `None` is unlimited (the
+    /// dogfood default). Set by the composer alongside the plaintext
+    /// accountant; tests set it directly.
+    pub(super) retention_quota: Option<u64>,
+    /// The plaintext accountant the gate compares the ceiling
+    /// against. Shared with the object store that maintains it.
+    /// `None` with a quota set is a half-wired config the composer
+    /// refuses — the gate then treats the ceiling as unevaluatable
+    /// and admits (never refuse-everything on misconfiguration).
+    pub(super) retained: Option<std::sync::Arc<wyrd_format::RetainedBytes>>,
+    /// Durable refusal record: refused units survive restart so a
+    /// reboot cannot turn "refused" into "promised". Sidecar file in
+    /// the drive directory, never a durable `Fact`.
+    pub(super) refusals: super::retention::RefusalLedger,
 }
 
 /// A single-rebuild local-write session: the eligible heads plus the
@@ -1208,6 +1233,42 @@ impl Engine {
     /// serve what peers fetch.
     pub fn vault(&self) -> &crate::serving::Vault {
         &self.vault
+    }
+
+    /// Install the receive-path retention admission gate (DG-4 A). The
+    /// composer calls this with the live config's ceiling and the
+    /// shared plaintext accountant; tests set it directly. A quota
+    /// without an accountant is half-wired — the gate then admits
+    /// (composition refuses that pairing before running, so the gate
+    /// never refuses everything on misconfiguration).
+    pub fn set_retention_gate(
+        &mut self,
+        quota: Option<u64>,
+        retained: Option<std::sync::Arc<wyrd_format::RetainedBytes>>,
+    ) {
+        self.retention_quota = quota;
+        self.retained = retained;
+    }
+
+    /// The admission gate the fetch legs consult: the ceiling over the
+    /// plaintext accountant plus the vault-seeing counter. Fresh per
+    /// call (the counters are shared, never copied).
+    pub(super) fn retention_gate(&self) -> super::retention::RetentionGate {
+        super::retention::RetentionGate::new(
+            self.retention_quota,
+            self.retained.clone(),
+            self.vault.seen_handle(),
+        )
+    }
+
+    /// How many distinct representations were refused under the gate.
+    pub fn refusal_count(&self) -> usize {
+        self.refusals.len()
+    }
+
+    /// Units refused, sorted, for the operator surface.
+    pub fn refused_units(&self) -> Vec<String> {
+        self.refusals.units()
     }
 }
 

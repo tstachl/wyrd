@@ -206,6 +206,7 @@ fn policy_renderers_name_counts_and_quadrants() {
         fact_log: 37,
         sync_vault: 124,
         quota: None,
+        refusals: (0, Vec::new()),
     };
     let budgets = LiveConfig::for_local_sync().budgets;
     let rendered = policy_budgets_render(&census, &accounting, &budgets);

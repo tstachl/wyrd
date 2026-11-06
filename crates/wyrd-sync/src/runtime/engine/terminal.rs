@@ -26,10 +26,10 @@ impl Engine {
     /// representation-level ledgers. An identity is terminal when it
     /// has at least one representation, every representation is
     /// cooled on failure evidence (strikes, never budget burns), and
-    /// the current generation attempted. Missing, keyless, and
-    /// locally-refused representations stay eligible and block
-    /// terminality — they are not evidence about the representation.
-    /// Snapshot bodies and roots are a different identity space and
+    /// the current generation attempted. Missing, keyless,
+    /// locally-refused, and retention-gate-refused representations
+    /// stay eligible and block terminality — they are not evidence
+    /// about the representation. Snapshot bodies and roots are a
     /// never participate: only object and child-manifest storage keys
     /// feed an identity's generation. Root-manifest and snapshot-body
     /// waiters therefore still block to the deadline (see the

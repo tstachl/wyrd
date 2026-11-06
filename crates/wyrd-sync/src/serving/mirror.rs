@@ -24,6 +24,34 @@ use super::vault::VaultError;
 pub const MAX_MIRROR_QUEUE_ITEMS: usize = 64;
 pub const MAX_MIRROR_QUEUE_BYTES: usize = 64 << 20;
 
+/// Retained vault bytes observed through replication: the ciphertext
+/// dimension the object-store `RetainedBytes` cannot see. Lives beside
+/// mirror accounting in `wyrd-sync`, where ciphertext already lives,
+/// never as a widened `wyrd-format` `RetainedBytes` (plaintext-world
+/// split, `retention-constraints.md` prerequisite). Seeded by a vault-dir
+/// walk at open — so torn-authoring orphans with no naming fact still
+/// charge the gate — and incremented on every newly-stored import.
+/// Append-only like the vault: no decrement, no GC in v0.
+#[derive(Debug, Default)]
+pub struct VaultSeen(std::sync::atomic::AtomicU64);
+
+impl VaultSeen {
+    /// A fresh counter, shared with the vault that writes it.
+    pub fn new() -> std::sync::Arc<Self> {
+        std::sync::Arc::new(Self::default())
+    }
+
+    /// Bytes currently charged.
+    pub fn get(&self) -> u64 {
+        self.0.load(Ordering::SeqCst)
+    }
+
+    /// Charge newly retained vault bytes.
+    pub fn add(&self, bytes: u64) {
+        self.0.fetch_add(bytes, Ordering::SeqCst);
+    }
+}
+
 /// Shared accounting for one serving mirror queue: queued depth in
 /// items and bytes plus rejection/failure counters. One `Arc` is held
 /// by the write-through sender, the drain worker, and every readiness

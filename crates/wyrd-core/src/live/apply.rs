@@ -296,6 +296,13 @@ where
         else {
             return Ok(());
         };
+        // Plaintext dimension only, as pinned: widening the authoring
+        // comparison to the vault-seeing counter would silently widen
+        // what a refusal rejects (retained / resident / auxiliary in
+        // `storage-growth.md`). Vault bytes participate through the
+        // receive-path gate instead, where the counting gap left the
+        // peer-side ceiling unevaluatable — the fetch legs consult
+        // retained plus vault-seen before either write lands.
         if retained.get().saturating_add(estimate) >= limit {
             // StorageFull is the classification that already means "full
             // disk" to every reader of this store, and it reaches the

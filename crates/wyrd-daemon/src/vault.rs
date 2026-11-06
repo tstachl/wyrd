@@ -562,9 +562,34 @@ pub fn compose_headless_owner(
     drive_dir: PathBuf,
     loopback: bool,
 ) -> Result<ComposedHeadless, OwnerError> {
-    let store = FsObjectStore::open(drive_dir.clone())
-        .map_err(|error| OwnerError::Store(error.to_string()))?;
-    let config = LiveConfig::for_local_sync();
+    compose_headless_owner_with_quota(engine, drive_dir, loopback, None)
+}
+
+/// Compose an opened drive for headless ownership with a retention
+/// ceiling: the same number gates the authoring path and
+/// receive-path admission (DG-4 A), with the store accountant wired
+/// so the comparison is against a maintained tally. `None` is
+/// unlimited (the dogfood default).
+pub fn compose_headless_owner_with_quota(
+    engine: Engine,
+    drive_dir: PathBuf,
+    loopback: bool,
+    retained_quota: Option<u64>,
+) -> Result<ComposedHeadless, OwnerError> {
+    let (store, config) = match retained_quota {
+        Some(limit) => {
+            let (config, retained) = LiveConfig::with_retained_quota(limit);
+            let store =
+                FsObjectStore::open_with(drive_dir.clone(), Some(std::sync::Arc::clone(&retained)))
+                    .map_err(|error| OwnerError::Store(error.to_string()))?;
+            (store, config)
+        }
+        None => {
+            let store = FsObjectStore::open(drive_dir.clone())
+                .map_err(|error| OwnerError::Store(error.to_string()))?;
+            (store, LiveConfig::for_local_sync())
+        }
+    };
     crate::process::check_startup_retention(&config, &store)?;
     let mut node = WyrdNode::new(engine, store)?;
     node.refresh_live_heads()?;

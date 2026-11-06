@@ -19,7 +19,9 @@ mod source;
 mod vault;
 
 pub use endpoint::ServingEndpoint;
-pub use mirror::{MirrorStats, ServingHandle, MAX_MIRROR_QUEUE_BYTES, MAX_MIRROR_QUEUE_ITEMS};
+pub use mirror::{
+    MirrorStats, ServingHandle, VaultSeen, MAX_MIRROR_QUEUE_BYTES, MAX_MIRROR_QUEUE_ITEMS,
+};
 pub use source::VaultSource;
 pub use vault::{Vault, VaultError};
 

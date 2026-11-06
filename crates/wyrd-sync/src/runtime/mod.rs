@@ -21,6 +21,7 @@ mod intake;
 mod plan;
 pub(crate) mod reconcile;
 pub(crate) mod respond;
+pub mod retention;
 #[cfg(test)]
 pub(crate) mod test_util;
 
@@ -30,6 +31,7 @@ pub use engine::{
     RecoveryPreview, RecoveryStatus, ResumeOutcome, SnapshotHead, TerminalState, UnqueuedClosure,
     MAX_PENDING_MESSAGES,
 };
+pub use retention::{RefusalLedger, RetentionGate, RetentionRefusal};
 
 /// What one route-publication pass did. `published` counts the address
 /// maps filled; `undecodable` counts announcements whose opaque

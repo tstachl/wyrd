@@ -482,7 +482,7 @@ fn vault_start_is_default_and_status_queries() {
     }
     match parse(&["start"]).command {
         Command::Vault {
-            action: Some(VaultAction::Start),
+            action: Some(VaultAction::Start { .. }),
             ..
         } => {}
         other => panic!("vault start must parse, got: {other:?}"),

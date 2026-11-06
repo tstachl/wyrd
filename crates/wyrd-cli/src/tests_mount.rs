@@ -223,16 +223,32 @@ fn mount_defaults_and_accepts_a_live_interval() {
     );
 }
 
-/// The flag reaches the loop: `live_config` carries the interval
-/// into the config, so the knob cannot silently become a no-op.
+/// The quota flag reaches the loop with its accountant: the store and
+/// the config share the same tally, so the ceiling compares against a
+/// maintained number — a quota without a tally would compare against
+/// nothing. Unset stays unlimited with no accountant, exactly stock.
 #[test]
-fn live_config_carries_the_interval_to_the_loop() {
-    assert_eq!(live_config(1).interval, std::time::Duration::from_secs(1));
+fn open_store_with_quota_wires_the_accountant_with_the_ceiling() {
+    use wyrd_format::{ObjectKind, ObjectStore};
+    let temp = TempDir::new();
+    let drive = temp.0.join("drive");
+    // Unlimited: stock config, no accountant, interval untouched.
+    let (_store, config, retained) = crate::live::open_store_with_quota(&drive, None).unwrap();
+    assert_eq!(config.budgets.retained_bytes_quota, None);
+    assert!(retained.is_none());
     assert_eq!(
-        live_config(5).interval,
+        config.interval,
         LiveConfig::for_local_sync().interval,
-        "the default flag value reproduces the stock config"
+        "no flag means the stock config"
     );
+    // Set: the same tally the store charges, under the same ceiling.
+    let (mut store, config, retained) =
+        crate::live::open_store_with_quota(&drive, Some(1024)).unwrap();
+    assert_eq!(config.budgets.retained_bytes_quota, Some(1024));
+    let retained = retained.expect("a quota wires an accountant");
+    assert!(config.retained_bytes.is_some());
+    store.insert(ObjectKind::Chunk, b"charged").unwrap();
+    assert_eq!(retained.get(), b"charged".len() as u64);
 }
 
 /// The mount serves a read-write `wyrd` filesystem: the backend
@@ -354,6 +370,7 @@ fn live_mount_serves_read_write_until_shutdown() {
                 Vec::new(),
                 false,
                 5,
+                None,
                 "test-pass",
                 identity,
             )
@@ -457,6 +474,7 @@ fn live_mount_preserves_dirty_handle_across_shutdown() {
                 Vec::new(),
                 false,
                 5,
+                None,
                 "test-pass",
                 identity,
             )

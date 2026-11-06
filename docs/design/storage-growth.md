@@ -257,7 +257,7 @@ residency refusal with no admission gate behind it bounds nothing physical.
 
 | | Quantity | Enforcement point | Bounds | Status |
 |---|---|---|---|---|
-| **A — storage admission** | bytes admitted to the local immutable store | at fetched-representation admission: the `Vault::import` calls in the `runtime/fetch/mod.rs` root, child, and object legs plus the snapshot-body import in the plan layer (`runtime/plan/mod.rs`), where an import failure is already a local refusal (`FetchOutcome::Local`), never a committed advertisement. Refused bytes are never stored by this device at all | disk | decided, unimplemented — the receive path is unbounded today |
+| **A — storage admission** | bytes admitted to the local immutable store | at fetched-representation admission: the `Vault::import` calls in the `runtime/fetch/mod.rs` root, child, and object legs plus the snapshot-body import in the plan layer (`runtime/plan/mod.rs`), where the retention gate (`runtime/retention.rs`) precedes both writes — ciphertext import and plaintext insert — and a refusal records the durable ledger (`retention-refusals` sidecar, never a `Fact`) instead of a committed advertisement. Refused bytes are never stored by this device at all | disk | implemented — the receive path was unbounded before |
 | **B — provider residency** | objects/bytes held as *servable*, i.e. advertised as residency | two faces (see below): on the authoring device, after local durability before announcement (`write-path.md` steps 5–6: servable at 5, obligation discharged at 6); on a peer holding received content, at its own serving-mirror admission and serving maps. The bytes are already in this device's store — the refusal is about residency, not storage: durably accepted bytes the peer declines to make resident/servable under current local policy | what this peer promises | decided, unimplemented — today's mirror bounds are transient backpressure, not policy |
 
 **B has two faces because only authors announce.** On the authoring
@@ -527,13 +527,15 @@ it. `wyrd policy budgets` renders all three with their labels; a quota
 is an operator-selected refusal boundary over retained bytes, not an
 implicit product policy over the device.
 
-**Only the mounted write path refuses.** The check sits in the live
-node's commit boundary, ahead of every arm of `apply_mutation`. Four
-writers raise the count with nothing to refuse them: the sync pass
-fetching objects into the same store, the vault retaining ciphertext per
-representation, the fact log growing per commit / per accepted intake
-message / per delivery, and the node's own `put_file` and `remove`, which
-insert chunks and tree nodes and author a snapshot with no quota in scope.
+**Two live paths refuse.** The authoring check sits in the live
+node's commit boundary, ahead of every arm of `apply_mutation`, over
+the plaintext accountant (unchanged, as pinned); the DG-4 A gate sits
+at every fetch/plan import leg, refusing over-quota remote content
+before durable storage over retained plus vault-seen. Two writers still
+raise the count with nothing to refuse them: the fact log growing
+per commit / per accepted intake message / per delivery, and the
+node's own `put_file` and `remove`, which insert chunks and tree
+nodes and author a snapshot with no quota in scope.
 (The fact log is not unbounded by a pass — materialization commits are
 idempotent, as "Already bounded" records — it simply is not metered here.)
 
@@ -545,16 +547,17 @@ way the device's retained bytes are *not* bounded by the configured
 number, and the number can be crossed by paths that
 have no ceiling at all.
 
-**And that makes it an interference channel.** Because those unrefused paths
-do charge the accountant, a remote author can spend a peer's headroom
-simply by authoring content — the peer accepts the closure, its count
-climbs past the quota, and the first refusal lands on the peer's own next
-local write as `ENOSPC`. Nothing is deleted and no logical state changes;
-the drive looks healthy while the local author is locked out of writing.
-This is a consequence of *this* bound rather than a pre-existing
-property, and it is the strongest practical argument for open question 1:
-until peers have a refusal right, a local quota is a lever a remote member
-can pull.
+**The interference channel is closed at any configured ceiling.**
+Fetched bytes charge the accountant through the same gate that
+refuses them: over-quota remote content is refused before storage,
+so a remote author cannot spend a peer's headroom past the quota —
+the first refusal lands on the remote content, never on the peer's
+own next local write as `ENOSPC`. Nothing is deleted and no logical
+state changes. Unset (unlimited) behaves as before: the channel is
+a property of the configured bound, and the dogfood default
+configures none. The pre-live `put_file`/`remove` window stays
+ungated (headless-embedder surface, tracked separately), and the
+fact log is still unmetered.
 
 **The overshoot is bounded by the tree nodes.** The fold gate compares bytes
 already retained plus a conservative estimate of the pending set's new
@@ -568,7 +571,9 @@ design). The estimate covers the handle's buffered image — up to 64 MiB
 of write buffer (`MAX_WRITE_BUFFER_BYTES`) — while the tree nodes
 rebuilt on the changed path are the separate step-1 row in the
 fixed-cost table above and do not scale with the write. On the fetch
-path nothing bounds `N` at all. A commit is refused when count plus
+path the gate bounds the same sum per representation before either
+write lands — refused bytes reach neither store — so `N` converges
+instead of growing without a ceiling. A commit is refused when count plus
 estimate is already over — which, because the estimate over-counts,
 includes rewrites that would retain nothing new.
 
@@ -628,18 +633,28 @@ handles, not just the write in hand.
     - **Counting the other two writers.** Settled as report, not as
       enforcement (OD-26-B option B). `RetainedBytes` still covers the
       object store only — widening it would silently widen what a
-      refusal rejects — and `wyrd policy budgets` reports the fact log
-      and the sync vault as separate observational rows with an
-      observational total, each labelled, so the gap is explicit
-      instead of a single total known to be low.
-    - **Refusing the unrefused paths.** Fetched objects cross the quota
-      with no ceiling in scope, which is what turns a local quota into the
-      interference channel above. Whether a peer may decline to retain is
-      decided in the contract above (open question 1, `trust.md` T18):
-      the fetch-side refusal is local policy at the admission points
-      named there, not a new protocol surface — there is no wire refusal
-      signal in v0.3 — and until it is enforced the interference stands
-      as documented, leaving the quota to local-write protection only.
+      refusal rejects — and the vault-seeing counter (`VaultSeen`,
+      beside mirror accounting in `wyrd-sync`) carries the ciphertext
+      dimension into the same gate without widening the plaintext
+      counter. `wyrd policy budgets` reports the fact log and the sync
+      vault as separate observational rows with an observational
+      total, each labelled, so the residual gap (fact log, pre-live
+      `put_file`/`remove`) stays explicit instead of a single total
+      known to be low.
+    - **Refusing the unrefused paths.** Enforced for the receive
+      path: fetched representations pass the same ceiling through
+      the DG-4 A gate before durable storage (vault ciphertext via
+      the vault-seeing counter, plaintext via the object-store
+      accountant), closing the interference channel where a remote
+      author spent a peer's local-write headroom. The mounted
+      authoring path is unchanged (plaintext dimension, as pinned):
+      widening it to the vault counter would silently widen what a
+      refusal rejects. The fetch-side refusal is local policy at
+      the admission points named in the contract above (open
+      question 1, `trust.md` T18), not a new protocol surface — there
+      is no wire refusal signal in v0.3. The fact log and the
+      pre-live `put_file`/`remove` window stay unrefused by design
+      (metering, embedder surface).
     - **In-flight accounting.** Documented, not implemented. The fold
       gate compares bytes already retained plus a conservative
       estimate of the pending set (full image lengths), so the

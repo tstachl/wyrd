@@ -120,6 +120,9 @@ fn policy_budgets(
             .resident_bytes()
             .map_err(|error| CliError::Store(error.to_string()))?,
         quota: budgets.retained_bytes_quota,
+        refusals: wyrd_sync::runtime::RefusalLedger::load(drive_dir.as_path())
+            .map(|ledger| (ledger.len(), ledger.ceilings()))
+            .unwrap_or((0, Vec::new())),
     };
     print!("{}", policy_budgets_render(&census, &accounting, &budgets));
     print!(
@@ -504,8 +507,14 @@ pub(crate) fn policy_budgets_render(
     }
     out.push_str("budgets (effective):\n");
     match accounting.quota {
-        Some(quota) => out.push_str(&format!("  retained_bytes_quota: {quota}\n")),
-        None => out.push_str("  retained_bytes_quota: unlimited\n"),
+        Some(quota) => {
+            out.push_str(&format!("  retained_bytes_quota: {quota}\n"));
+            out.push_str(&format!("  receive_retention_ceiling: {quota} (same flag, fetch admission before storage)\n"));
+        }
+        None => {
+            out.push_str("  retained_bytes_quota: unlimited\n");
+            out.push_str("  receive_retention_ceiling: unlimited (set --retained-quota on mount/sync/vault to bound both paths)\n");
+        }
     }
     out.push_str(&format!(
         "  max_admit_per_pass: {}\n  max_pending_wants: {}\n  max_quarantine_per_pass: {}\n",
@@ -552,6 +561,30 @@ pub(crate) fn policy_budgets_render(
             accounting.retained_content
         ));
     }
+    // Receive-path refusals (DG-4 A): distinct from every loss class.
+    // Refused bytes were never stored and are charged nowhere; the
+    // ledger preserves the decision across restart, and the ceilings
+    // named are the ones that actually refused (the live ceiling is
+    // the composer's `--retained-quota`; this offline report
+    // configures none). A refusal is never missing, invalid, or
+    // corrupt, and refused content never enters loss/repair as lost.
+    let (refused_units, refused_ceilings) = &accounting.refusals;
+    if *refused_units > 0 {
+        out.push_str(&format!(
+            "retention refusals (DG-4 A): {refused_units} refused"
+        ));
+        if !refused_ceilings.is_empty() {
+            let ceilings = refused_ceilings
+                .iter()
+                .map(|ceiling| ceiling.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            out.push_str(&format!(" under ceiling(s) {ceilings}"));
+        }
+        out.push_str(
+            "\n  note: refused is policy, not loss: refused bytes were never stored, never enter repair as lost, and retry after raising the ceiling\n",
+        );
+    }
     out
 }
 
@@ -569,4 +602,11 @@ pub(crate) struct RetentionAccounting {
     pub(crate) sync_vault: u64,
     /// The effective quota, if one is configured.
     pub(crate) quota: Option<u64>,
+    /// Durable receive-path refusals (DG-4 A): how many distinct
+    /// representations were declined before storage, and the
+    /// distinct ceilings that declined them. The live ceiling is the
+    /// composer's `--retained-quota` (this offline report configures
+    /// none); the ceilings named here are the ones that actually
+    /// refused, read off the durable ledger.
+    pub(crate) refusals: (usize, Vec<u64>),
 }

@@ -3,7 +3,6 @@
 //! teardown. Owns the mount's lifecycle end to end; the shutdown
 //! latch and teardown bounds it honors live in
 //! `wyrd_daemon::process`.
-use crate::live::live_config;
 use crate::logging::init_mount_diagnostics;
 use crate::probes::combine_status;
 #[cfg(target_os = "macos")]
@@ -26,7 +25,6 @@ use wyrd_daemon::process::{
 };
 use wyrd_daemon::{install_role_dir, install_serving, shutdown_transport, TransportDeadlines};
 use wyrd_daemon::{FailureClass, LiveError, LoopError, Supervisor, WyrdNode};
-use wyrd_format::FsObjectStore;
 use wyrd_sync::durable::DurableError;
 use wyrd_sync::keys::DeviceIdentitySecret;
 use wyrd_sync::runtime::{Engine, EngineError};
@@ -117,12 +115,17 @@ impl MountObserver {
         )
     }
 }
+// Eight params: the composer threads the operator's flags straight
+// into composition (established shape — bundling them would hide
+// which knob each call site sets).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn mount(
     drive_dir: PathBuf,
     mountpoint: PathBuf,
     relays: Vec<String>,
     verbose: bool,
     interval: u64,
+    retained_quota: Option<u64>,
     passphrase: &str,
     identity: DeviceIdentitySecret,
 ) -> Result<(), CliError> {
@@ -167,15 +170,16 @@ pub(crate) fn mount(
     recorder.note_startup();
     // Operational policy in one place: the loop and the serving
     // backend share this config's budgets, wired into both halves
-    // by `into_live` below. Constructed through `for_local_sync`
-    // (never `Default` directly) so headless sync shares these exact
-    // budgets and ceilings — several are correctness boundaries, and
-    // a mount-only default must never silently diverge them. One
-    // value from here to `into_live`, so the startup check below and
-    // the loop compare against the same numbers.
-    let config = live_config(interval);
-    let store = FsObjectStore::open(drive_dir.clone())
-        .map_err(|error| CliError::Store(error.to_string()))?;
+    // by `into_live` below. The store and the config are built
+    // together so a quota always travels with the accountant that
+    // maintains it (a quota without a tally would compare against
+    // nothing). One value from here to `into_live`, so the startup
+    // check below and the loop compare against the same numbers —
+    // and the same number gates both the authoring path and the
+    // receive-path admission gate (DG-4 A).
+    let (store, mut config, _retained) =
+        crate::live::open_store_with_quota(&drive_dir, retained_quota)?;
+    config.interval = std::time::Duration::from_secs(interval);
     // Fail fast on macOS before binding any endpoint: a missing
     // macFUSE runtime can never mount, and every later stage would
     // report the same opaque failure.
