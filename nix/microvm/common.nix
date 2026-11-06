@@ -16,6 +16,18 @@
 # input's nixosModules.guest: one source for the guest network
 # config, the image metadata, and the gate.image/v1 manifest, so the
 # three can never drift.
+#
+# DHCP division: the DHCP client in the guest is Gate-owned and the
+# bridge DHCP server is Odin host substrate — neither lives here.
+# Wyrd sets values only (gate.box.{mac,ip} per role above); the
+# static ip stays the manifest key and the dnsmasq reservation key
+# (MAC → ip), so suite addressing (.10/.11/.12) is unchanged. There
+# is deliberately no DHCP code in this file (no useNetworkd /
+# systemd.network stanza) — the gate guest module owns the client,
+# and a second client here would risk a dhcpcd-vs-networkd fight.
+# Until the gate `gate.box.dhcp` option lands, the pinned gate rev
+# has no such option: do not set it here (unknown option = eval
+# error). The flake.lock gate bump rides the gate PR, not this one.
 { config, pkgs, lib, ... }:
 {
   config = {
