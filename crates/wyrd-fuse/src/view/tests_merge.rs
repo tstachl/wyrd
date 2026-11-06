@@ -380,3 +380,125 @@ fn merged_dir_child_kind_divergence_conflicts() {
     assert_eq!(union.len(), 1);
     assert_eq!(union[0].name, "deep.txt");
 }
+
+/// `readdir_union` resolves every union name through the canonical
+/// ordered lookup (`Tree::get`, binary search), never a linear scan:
+/// two conflicting heads over a large near-identical directory must
+/// complete with one store load per subtree and byte-identical
+/// semantics to the lookup path. A linear scan reintroduced here
+/// keeps this test green only by making it take quadratic time
+/// (10k names measured 0.23 s, doubling per doubling); the load
+/// bound plus the scale pin the seam, and the oracle pins the
+/// absence-vs-presence conflict behavior.
+#[test]
+fn readdir_union_resolves_large_conflict_through_binary_lookup() {
+    const SHARED: usize = 20_000;
+    const PRIVATE: usize = 100;
+    let mut store = MemoryObjectStore::default();
+    let common = chunk(&mut store, b"x");
+    let chunk_a = chunk(&mut store, b"a");
+    let chunk_b = chunk(&mut store, b"bb");
+    let mut entries_a = Vec::with_capacity(SHARED + PRIVATE);
+    let mut entries_b = Vec::with_capacity(SHARED + PRIVATE);
+    let mut expected: Vec<String> = Vec::with_capacity(SHARED + 2 * PRIVATE);
+    for i in 0..SHARED {
+        let name = format!("shared-{i:05}");
+        if i % 3 == 0 {
+            entries_a.push(Entry::file(name.clone(), 1, false, vec![chunk_a]).unwrap());
+            entries_b.push(Entry::file(name.clone(), 2, false, vec![chunk_b]).unwrap());
+        } else {
+            entries_a.push(Entry::file(name.clone(), 1, false, vec![common]).unwrap());
+            entries_b.push(Entry::file(name.clone(), 1, false, vec![common]).unwrap());
+        }
+        expected.push(name);
+    }
+    for i in 0..PRIVATE {
+        let name = format!("only-a-{i:04}");
+        entries_a.push(Entry::file(name.clone(), 1, false, vec![common]).unwrap());
+        expected.push(name);
+        let name = format!("only-b-{i:04}");
+        entries_b.push(Entry::file(name.clone(), 1, false, vec![common]).unwrap());
+        expected.push(name);
+    }
+    expected.sort_unstable();
+    let root_a = tree_of(&mut store, entries_a);
+    let root_b = tree_of(&mut store, entries_b);
+    let view = DriveView::new(
+        CountingStore {
+            inner: store,
+            gets: std::cell::Cell::new(0),
+        },
+        FakeMaterialization::empty(),
+        heads(vec![snapshot(root_a), snapshot(root_b)]),
+    );
+
+    let root = view.lookup("").unwrap();
+    assert!(matches!(root, Node::MergedDir { .. }));
+    // The union itself must not cost per-name store work: both
+    // subtrees load once up front, every name resolves in memory.
+    view.store_read().unwrap().gets.set(0);
+    let listed = view.readdir(&root).unwrap();
+    assert_eq!(
+        view.store_read().unwrap().gets.get(),
+        2,
+        "readdir_union must load one tree per subtree, not one per name"
+    );
+
+    let names: Vec<String> = listed.iter().map(|entry| entry.name.clone()).collect();
+    assert_eq!(names, expected);
+
+    // Spot semantics: agreement serves, divergence and
+    // presence-vs-absence conflict.
+    assert!(matches!(
+        view.lookup("shared-00001").unwrap(),
+        Node::File { .. }
+    ));
+    assert!(matches!(
+        view.lookup("shared-00000").unwrap(),
+        Node::Conflict { .. }
+    ));
+    assert!(matches!(
+        view.lookup("only-a-0042").unwrap(),
+        Node::Conflict { .. }
+    ));
+    assert!(matches!(
+        view.lookup("only-b-0042").unwrap(),
+        Node::Conflict { .. }
+    ));
+
+    // Oracle: every sampled union entry agrees with the lookup path
+    // (which resolves through `Tree::get`), so the union can never
+    // silently diverge from canonical resolution. Version order is
+    // normalized first: `readdir_union` iterates subtrees keyed by
+    // snapshot id while `lookup` follows head order, a pre-existing
+    // ordering difference this fix does not change.
+    fn canonical(node: &Node) -> Node {
+        match node {
+            Node::Conflict { versions } => {
+                let mut versions = versions.clone();
+                versions.sort_by(|a, b| a.snapshot.cmp(&b.snapshot));
+                Node::Conflict { versions }
+            }
+            other => other.clone(),
+        }
+    }
+    for name in [
+        "shared-00000",
+        "shared-00001",
+        "shared-00003",
+        "shared-09999",
+        "shared-19999",
+        "only-a-0042",
+        "only-b-0042",
+    ] {
+        let looked = view.lookup(name).unwrap();
+        let at = listed
+            .binary_search_by(|entry| entry.name.as_str().cmp(name))
+            .unwrap();
+        assert_eq!(
+            canonical(&listed[at].node),
+            canonical(&looked),
+            "union disagrees on {name}"
+        );
+    }
+}

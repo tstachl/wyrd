@@ -108,6 +108,16 @@ is transient — no drive data is affected.
   (`[suite] repo = "wyrd"`), the name the host resolves to the source
   it is willing to build.
 
+- Binary lookup in `readdir_union` merged enumeration
+  (`nostr:nevent1qqsy3a20d078zqs4eay0up56ywdsz4htyke99ph3tfk994h77rx7l6gpz9mhxue69uhkwunpwdczuap49eehg39a083`):
+  every union name now resolves through the canonical ordered lookup
+  (`Tree::get`, binary search) instead of a linear scan of each
+  head's entry vector — O(names × trees × log n) with no new limits
+  and no semantics change (absence still resolves to `None`, so
+  presence-vs-absence still conflicts). Regression test pins a
+  20k-name conflicting directory completing with one store load per
+  subtree plus oracle agreement with the lookup path.
+
 ## [0.3.0-alpha]
 
 ### Added

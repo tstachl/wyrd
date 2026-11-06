@@ -217,7 +217,7 @@ where
         for (snapshot, subtree) in &subtrees {
             let tree = self.load_tree(subtree)?;
             for entry in tree.entries() {
-                names.insert(entry.name.as_str().to_string());
+                names.insert(entry.name.clone());
             }
             trees.insert(*snapshot, tree);
         }
@@ -226,15 +226,11 @@ where
             .map(|name| {
                 let mut resolutions = Vec::with_capacity(trees.len());
                 for (snapshot, tree) in &trees {
-                    let node = tree
-                        .entries()
-                        .iter()
-                        .find(|entry| entry.name.as_str() == name)
-                        .map(|entry| leaf(&entry.content));
+                    let node = tree.get(&name).map(|entry| leaf(&entry.content));
                     resolutions.push((*snapshot, node));
                 }
                 Ok(DirEntry {
-                    name,
+                    name: name.as_str().to_string(),
                     node: merge(resolutions)?,
                 })
             })
