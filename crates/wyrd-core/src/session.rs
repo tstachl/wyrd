@@ -2,15 +2,19 @@
 //! handles.
 //!
 //! Normative in `docs/contracts/write-path.md` (Resource bounds). A writable handle
-//! buffers a dense logical file image; those buffers are memory, so the
-//! daemon budgets them explicitly and fails closed (`ENOSPC` at the POSIX
-//! boundary) rather than allocating without limit.
+//! buffers a sparse overlay (dirtied ranges only, plus the append
+//! sequence); those resident bytes are memory, so the daemon budgets
+//! them explicitly and fails closed (`ENOSPC` at the POSIX boundary)
+//! rather than allocating without limit. The logical length is never
+//! charged: a large file with a one-byte edit reserves one byte, and
+//! the full image exists only transiently at commit time, covered by
+//! the fold lease.
 //!
-//! Accounting is by **current logical length**, not accumulated writes:
-//! overwriting bytes already buffered costs nothing, and shrinking or
-//! clearing a buffer releases budget. Presence in the budget's map *is*
-//! the dirty-handle mark, so an `O_TRUNC` handle counts even before its
-//! first write.
+//! Accounting is by **current resident bytes**, not accumulated writes:
+//! overwriting buffered bytes costs nothing, and shrinking, clearing,
+//! or truncating a buffer releases budget. Presence in the budget's map
+//! *is* the dirty-handle mark, so an `O_TRUNC` handle counts even with
+//! an empty overlay.
 //!
 //! These are v0 daemon budgets, named constants rather than architectural
 //! commitments: the contracts are the three inequalities, not the
@@ -61,7 +65,7 @@ pub enum BudgetError {
 
 #[derive(Debug, Default)]
 struct BudgetState {
-    /// Current logical length per dirty handle. Presence marks the
+    /// Current resident buffered bytes per dirty handle. Presence marks the
     /// handle dirty (budgeted); absent handles are clean and unbudgeted.
     lengths: BTreeMap<HandleId, usize>,
     total: usize,
@@ -120,7 +124,7 @@ impl WriteBudget {
         HandleId(self.next.fetch_add(1, Ordering::Relaxed))
     }
 
-    /// Reserve (or extend) `handle`'s buffered logical image to
+    /// Reserve (or extend) `handle`'s resident buffered bytes to
     /// `new_len` bytes. Shrinking is always allowed and releases budget.
     /// Refusal leaves the budget and the handle's accounting unchanged.
     pub fn reserve(&self, handle: HandleId, new_len: usize) -> Result<(), BudgetError> {
@@ -300,11 +304,11 @@ mod tests {
         assert_eq!(budget.reserve(handle, MAX_WRITE_BUFFER_BYTES), Ok(()));
     }
 
-    /// The budget is by current logical length: extending to the cap is
+    /// The budget is by resident buffered bytes: extending to the cap is
     /// allowed, one byte past is `ENOSPC`, and overwriting an existing
     /// span costs nothing.
     #[test]
-    fn budget_tracks_logical_length_not_writes() {
+    fn budget_tracks_resident_bytes_not_writes() {
         let mib = 1024 * 1024;
         let budget = WriteBudget::with_limits(64 * mib, 256 * mib, 64);
         let handle = budget.next_handle();

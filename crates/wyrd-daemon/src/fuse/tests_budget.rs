@@ -50,10 +50,12 @@ fn with_capture<T>(max: tracing::Level, run: impl FnOnce() -> T) -> (T, String) 
     (value, logged)
 }
 
-/// A first write whose resulting logical length exceeds the
-/// per-handle budget fails closed with `ENOSPC` *before*
-/// materializing the base, so an oversized file never allocates
-/// past the advertised bound.
+/// The budget charges resident buffered bytes, never the logical
+/// length: a one-byte write on a 100-byte base reserves one byte —
+/// and never reads the base, so even an unreadable base (its chunk
+/// was never inserted) does not matter — while a five-byte write
+/// against a four-byte per-handle budget fails closed with `ENOSPC`
+/// and reserves nothing.
 #[test]
 fn first_write_over_the_handle_budget_does_not_materialize() {
     let mut store = MemoryObjectStore::default();
@@ -69,20 +71,28 @@ fn first_write_over_the_handle_budget_does_not_materialize() {
     .unwrap();
     let view = DriveView::new(store, NoMaterialization, heads(vec![snapshot_of(root)]));
     // A tiny budget and a channel so `open_write` is permitted; the
-    // write itself must be refused before any base read.
+    // base chunk is absent from the store, so any base read would
+    // fail — the resident write below must never attempt one.
     let mut backend = FuseBackend::new(view);
     backend.budget = Arc::new(WriteBudget::with_limits(4, 100, 8));
     backend.mutations = Some(Arc::new(MutationQueue::default()));
 
     let fh = backend.open_write("big", libc::O_RDWR).unwrap();
+    backend.write_handle(fh, 0, b"x").unwrap();
     assert_eq!(
-        backend.write_handle(fh, 0, b"x"),
+        backend.budget.total(),
+        1,
+        "one dirtied byte reserves one byte, not the 100-byte logical length"
+    );
+    let dirty = backend.open_write("big", libc::O_RDWR).unwrap();
+    assert_eq!(
+        backend.write_handle(dirty, 0, b"yyyyy"),
         Err(fuser::Errno::ENOSPC),
-        "a base over the per-handle cap is refused"
+        "five resident bytes past a four-byte per-handle cap refuse"
     );
     assert_eq!(
         backend.budget.total(),
-        0,
+        1,
         "the refused write reserves nothing"
     );
 }
@@ -106,14 +116,15 @@ fn a_budget_refusal_names_its_layer_and_reason() {
     .unwrap();
     let view = DriveView::new(store, NoMaterialization, heads(vec![snapshot_of(root)]));
     // A tiny budget and a channel so `open_write` is permitted; the
-    // write itself must be refused before any base read.
+    // refusal below is for resident bytes, so the write must name
+    // more bytes than the per-handle cap holds.
     let mut backend = FuseBackend::new(view);
     backend.budget = Arc::new(WriteBudget::with_limits(4, 100, 8));
     backend.mutations = Some(Arc::new(MutationQueue::default()));
 
     let fh = backend.open_write("big", libc::O_RDWR).unwrap();
     let (errno, logged) = with_capture(tracing::Level::DEBUG, || {
-        backend.write_handle(fh, 0, b"x").unwrap_err()
+        backend.write_handle(fh, 0, b"xxxxx").unwrap_err()
     });
     assert_eq!(
         errno,
@@ -135,14 +146,14 @@ fn a_budget_refusal_names_its_layer_and_reason() {
 }
 
 /// An aggregate refusal names its reason too: the per-handle bound
-/// is clear, but the handles' combined images exceed the global
-/// bound. Same helper, same errno — the family differs only by
+/// is clear, but the handles' combined resident bytes exceed the
+/// global bound. Same helper, same errno — the family differs only by
 /// which inequality failed.
 #[test]
 fn an_aggregate_refusal_names_its_reason() {
     let mut store = MemoryObjectStore::default();
-    // A real chunk: the first write succeeds and so materializes its
-    // base, unlike the refusal-first fixture above.
+    // A real chunk, so the suite reads serve: the assertion below
+    // is about resident accounting, not about absent bytes.
     let chunk = store.insert(ObjectKind::Chunk, &[0xAB; 100]).unwrap();
     let root = Tree::from_entries(vec![Entry::file("big", 100, false, vec![chunk]).unwrap()])
         .unwrap()
@@ -153,14 +164,15 @@ fn an_aggregate_refusal_names_its_reason() {
     backend.budget = Arc::new(WriteBudget::with_limits(1000, 150, 8));
     backend.mutations = Some(Arc::new(MutationQueue::default()));
 
-    // First handle reserves 100 of the 150 aggregate bytes.
+    // First handle buffers 100 resident bytes of the 150-byte
+    // aggregate.
     let first = backend.open_write("big", libc::O_RDWR).unwrap();
-    backend.write_handle(first, 0, b"x").unwrap();
-    // Second handle fits its per-handle bound (projected 100 of
-    // 1000) but would take the aggregate to 200 of 150.
+    backend.write_handle(first, 0, &[b'a'; 100]).unwrap();
+    // Second handle fits its per-handle bound (60 resident of 1000)
+    // but would take the aggregate to 160 of 150.
     let second = backend.open_write("big", libc::O_RDWR).unwrap();
     let (errno, logged) = with_capture(tracing::Level::DEBUG, || {
-        backend.write_handle(second, 0, b"y").unwrap_err()
+        backend.write_handle(second, 0, &[b'b'; 60]).unwrap_err()
     });
     assert_eq!(
         errno,

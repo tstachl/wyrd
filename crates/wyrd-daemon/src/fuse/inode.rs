@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -169,13 +169,147 @@ impl Handle {
     }
 }
 
+/// A sparse positioned overlay: last-write-wins patches over the
+/// base, keyed by start offset. Entries never overlap: [`write`](Self::write)
+/// merges overlaps on insert and [`truncate`](Self::truncate) trims at
+/// the logical end. Only dirtied bytes are resident; unmentioned
+/// ranges read from the base (or as zeros past it). The budget
+/// charges exactly [`resident`](Self::resident), never the logical
+/// length, so a large file with a one-byte edit buffers one byte.
+#[derive(Debug, Clone, Default)]
+pub(super) struct SparseOverlay {
+    patches: BTreeMap<u64, Vec<u8>>,
+    len: u64,
+}
+
+impl SparseOverlay {
+    /// An empty overlay over a base of `base_len`: reads serve the
+    /// base until the first write or truncate moves `len`.
+    pub(super) fn new(base_len: u64) -> Self {
+        SparseOverlay {
+            patches: BTreeMap::new(),
+            len: base_len,
+        }
+    }
+
+    /// Resident buffered bytes: the sum of patch lengths. This is the
+    /// only overlay memory the write budget accounts.
+    pub(super) fn resident(&self) -> usize {
+        self.patches.values().map(Vec::len).sum()
+    }
+
+    /// The logical length: the max of the base size and every write
+    /// end, as reset by truncate.
+    pub(super) fn len(&self) -> u64 {
+        self.len
+    }
+
+    pub(super) fn patches(&self) -> &BTreeMap<u64, Vec<u8>> {
+        &self.patches
+    }
+
+    /// Resident buffered bytes after writing `data` at `offset`,
+    /// without mutating: the current resident count, minus the bytes
+    /// of overlapped patches the write supersedes, plus the new
+    /// bytes. Callers reserve this before [`write`](Self::write), so
+    /// a failing budget never observes a half-merged overlay.
+    pub(super) fn write_resident(&self, offset: u64, data: &[u8]) -> usize {
+        let end = offset.saturating_add(data.len() as u64);
+        let mut superseded = 0usize;
+        for (&start, bytes) in self.patches.range(..end) {
+            let patch_end = start.saturating_add(bytes.len() as u64);
+            if patch_end > offset {
+                superseded += (patch_end.min(end) - start.max(offset)) as usize;
+            }
+        }
+        self.resident()
+            .saturating_sub(superseded)
+            .saturating_add(data.len())
+    }
+
+    /// Buffer `data` at `offset`, last-write-wins: overlapping
+    /// patches are split around the new span (the covered middle is
+    /// dropped) and the logical length extends. The caller reserves
+    /// the resulting resident count first; this never fails.
+    pub(super) fn write(&mut self, offset: u64, data: &[u8]) {
+        let end = offset.saturating_add(data.len() as u64);
+        self.len = self.len.max(end);
+        if data.is_empty() {
+            return;
+        }
+        // Split every overlapping patch around [offset, end): the
+        // covered middle is superseded, the surviving head and tail
+        // stay as their own patches.
+        let mut overlapped: Vec<(u64, Vec<u8>)> = Vec::new();
+        let mut cursor = self.patches.range(..end);
+        while let Some((&start, bytes)) = cursor.next_back() {
+            if start.saturating_add(bytes.len() as u64) <= offset {
+                break;
+            }
+            overlapped.push((start, bytes.clone()));
+        }
+        for (start, bytes) in overlapped {
+            self.patches.remove(&start);
+            let patch_end = start.saturating_add(bytes.len() as u64);
+            if start < offset {
+                let keep = (offset - start) as usize;
+                self.patches.insert(start, bytes[..keep].to_vec());
+            }
+            if patch_end > end {
+                let skip = (end - start) as usize;
+                self.patches.insert(end, bytes[skip..].to_vec());
+            }
+        }
+        self.patches.insert(offset, data.to_vec());
+    }
+
+    /// Reset the logical length, dropping patches at or past it and
+    /// trimming a straddling patch. Shrinking releases resident
+    /// bytes; growing adds none (the hole reads as zeros).
+    pub(super) fn truncate(&mut self, target: u64) {
+        self.len = target;
+        let mut drop_from: Vec<u64> = Vec::new();
+        if let Some((&start, bytes)) = self.patches.range(..target).next_back() {
+            if start.saturating_add(bytes.len() as u64) > target {
+                let keep = (target - start) as usize;
+                self.patches.insert(start, bytes[..keep].to_vec());
+            }
+        }
+        for (&start, _) in self.patches.range(target..) {
+            drop_from.push(start);
+        }
+        for start in drop_from {
+            self.patches.remove(&start);
+        }
+    }
+}
+
+/// A writable handle's buffered image: positioned writes overlay
+/// sparsely on the base, while `O_APPEND` buffers an ordered byte
+/// sequence that is never resolved against offsets until commit.
+#[derive(Debug, Clone)]
+pub(super) enum WriteImage {
+    Sparse(SparseOverlay),
+    Append(Vec<u8>),
+}
+
+impl WriteImage {
+    /// Resident buffered bytes charged against the write budget.
+    pub(super) fn resident(&self) -> usize {
+        match self {
+            WriteImage::Sparse(overlay) => overlay.resident(),
+            WriteImage::Append(sequence) => sequence.len(),
+        }
+    }
+}
 /// One writable open: the path, the identity it opened against, and the
-/// dense logical image its writes build.
+/// buffered overlay its writes build (sparse patches for positioned
+/// writes, an ordered sequence for append).
 ///
 /// State machine (serialized by this handle's own mutex, never held by
 /// the loop): a clean handle has `image == None` and serves its open-time
-/// `capture`. The first write materializes the base into `image` and sets
-/// `dirty`. Every commit-producing operation (`O_SYNC` write, `flush`,
+/// `capture`. The first write creates the overlay (patches only, never
+/// the base) and sets `dirty`. Every commit-producing operation (`O_SYNC` write, `flush`,
 /// `fsync`, `release`) runs under this mutex, so no write can interleave
 /// with a commit and no two commits can overlap. A successful commit
 /// advances `base` to the committed identity, drops the image, and makes
@@ -196,9 +330,9 @@ pub(crate) struct WriteHandle {
     pub(super) base: FileIdentity,
     /// The target exec bit for the next commit (buffered like content).
     pub(super) executable: bool,
-    /// The dense logical image; `None` while clean. For an append
+    /// The buffered overlay; `None` while clean. For an append
     /// handle this is the buffered append sequence (never the base).
-    pub(super) image: Option<Vec<u8>>,
+    pub(super) image: Option<WriteImage>,
     /// `O_APPEND`: writes buffer an ordered sequence that commits onto
     /// the current file end; reads concatenate the capture and the
     /// sequence.
@@ -554,5 +688,88 @@ impl InodeTable {
             entry.generation = generation;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests_overlay {
+    use super::*;
+
+    #[test]
+    fn disjoint_writes_accumulate_resident_bytes() {
+        let mut overlay = SparseOverlay::new(100);
+        overlay.write(0, b"ab");
+        overlay.write(10, b"cde");
+        assert_eq!(overlay.len(), 100);
+        assert_eq!(overlay.resident(), 5);
+        assert_eq!(overlay.patches().len(), 2);
+    }
+
+    #[test]
+    fn overlapping_write_supersedes_the_covered_middle() {
+        let mut overlay = SparseOverlay::new(100);
+        overlay.write(10, b"0123456789");
+        overlay.write(12, b"AB");
+        // Head [10, 12) and tail [14, 20) survive around the patch.
+        assert_eq!(overlay.patches().get(&10), Some(&b"01".to_vec()));
+        assert_eq!(overlay.patches().get(&12), Some(&b"AB".to_vec()));
+        assert_eq!(overlay.patches().get(&14), Some(&b"456789".to_vec()));
+        assert_eq!(overlay.resident(), 2 + 2 + 6);
+    }
+
+    #[test]
+    fn enveloping_write_drops_inner_patches() {
+        let mut overlay = SparseOverlay::new(100);
+        overlay.write(10, b"aa");
+        overlay.write(30, b"bb");
+        overlay.write(0, &[b'x'; 50]);
+        assert_eq!(overlay.patches().len(), 1);
+        assert_eq!(overlay.patches().get(&0), Some(&vec![b'x'; 50]));
+        assert_eq!(overlay.resident(), 50);
+    }
+
+    #[test]
+    fn write_past_end_extends_the_logical_length() {
+        let mut overlay = SparseOverlay::new(100);
+        overlay.write(150, b"zz");
+        assert_eq!(overlay.len(), 152);
+        assert_eq!(overlay.resident(), 2);
+    }
+
+    #[test]
+    fn truncate_drops_and_trims_at_the_target() {
+        let mut overlay = SparseOverlay::new(100);
+        overlay.write(10, b"0123456789");
+        overlay.write(50, b"ab");
+        overlay.truncate(15);
+        assert_eq!(overlay.len(), 15);
+        assert_eq!(overlay.patches().get(&10), Some(&b"01234".to_vec()));
+        assert!(!overlay.patches().contains_key(&50));
+        assert_eq!(overlay.resident(), 5);
+        overlay.truncate(200);
+        assert_eq!(overlay.len(), 200);
+        assert_eq!(overlay.resident(), 5, "growing adds no resident bytes");
+    }
+
+    #[test]
+    fn write_resident_counts_post_merge_bytes_exactly() {
+        let mut overlay = SparseOverlay::new(100);
+        overlay.write(10, b"0123456789");
+        // Abutting write: nothing superseded.
+        assert_eq!(overlay.write_resident(20, b"ab"), 10 + 2);
+        // Overlapping write: 4 superseded of 6 new.
+        assert_eq!(overlay.write_resident(16, b"ABCDEF"), 10 - 4 + 6);
+        // Enveloping write: all 10 superseded.
+        assert_eq!(overlay.write_resident(0, &[b'x'; 50]), 50);
+        // Empty write: unchanged.
+        assert_eq!(overlay.write_resident(0, b""), 10);
+    }
+
+    #[test]
+    fn empty_overlay_holds_only_the_base_length() {
+        let overlay = SparseOverlay::new(100);
+        assert_eq!(overlay.len(), 100);
+        assert_eq!(overlay.resident(), 0);
+        assert!(overlay.patches().is_empty());
     }
 }

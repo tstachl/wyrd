@@ -153,8 +153,8 @@ where
     /// Separate from the rejection window above so the two causes
     /// stay distinguishable end to end.
     pub(super) recent_losses: RecentRepairs,
-    /// The session's write budget: bounds the buffered logical images of
-    /// writable handles. Independent of the projection and store locks.
+    /// The session's write budget: bounds the resident buffered
+    /// bytes of writable handles. Independent of the projection and store locks.
     pub(super) budget: Arc<WriteBudget>,
     /// Fold coordination: a forcing boundary takes dirty handles'
     /// images under their own locks (never nested, kernel-handle
@@ -307,18 +307,22 @@ pub(super) fn join(parent: &str, name: &str) -> String {
     }
 }
 
-/// The `[offset, offset+size)` window of a buffered image, clamped to
-/// the image end (never serving past the logical file).
-fn slice_image(image: &[u8], offset: u64, size: u32) -> Vec<u8> {
-    let Ok(start) = usize::try_from(offset) else {
-        return Vec::new();
-    };
-    if start >= image.len() {
-        return Vec::new();
-    }
-    let end = start.saturating_add(size as usize).min(image.len());
-    image[start..end].to_vec()
-}
+/// Largest logical file the mount can buffer or commit: the protocol
+/// ingest ceiling (max chunks x max chunk bytes), the same bound
+/// authoring enforces before any snapshot publishes. A logical length
+/// past it can never publish, so writes, truncates, and takes refuse
+/// `EFBIG` before allocating or leasing anything.
+pub(super) const MAX_COMMITTABLE_BYTES: u64 = 16 * 1024 * 1024 * 1024;
+
+// The FUSE ceiling above must track the protocol ingest ceiling: a
+// file needs at most one chunk reference per chunk, and a chunk
+// carries at most MAX_CHUNK plaintext bytes.
+const _: () = assert!(
+    MAX_COMMITTABLE_BYTES
+        == wyrd_sync::ingest::Limits::V0.max_file_chunks as u64
+            * wyrd_format::chunk::MAX_CHUNK as u64,
+    "FUSE committable ceiling must match the protocol ingest ceiling"
+);
 
 /// Presentation attributes for one node: kind, size, exec bit. A
 /// conflicted path presents as a directory — the readdir union rules

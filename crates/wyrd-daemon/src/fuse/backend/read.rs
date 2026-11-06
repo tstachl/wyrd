@@ -12,8 +12,8 @@ use wyrd_core::want::wait_for_materialization;
 use wyrd_format::{ObjectStore, StoreFailure};
 use wyrd_fuse::{Materialization, OpenFile, ViewError};
 
-use super::super::inode::Handle;
-use super::{complete_waiter_on_terminal, errno_of, slice_image, FuseBackend};
+use super::super::inode::{Handle, SparseOverlay, WriteImage};
+use super::{complete_waiter_on_terminal, errno_of, FuseBackend};
 
 impl<S: ObjectStore, M: Materialization> FuseBackend<S, M>
 where
@@ -59,11 +59,18 @@ where
                 if append {
                     // Read-your-writes over the logical file: the pinned
                     // capture followed by the buffered append sequence.
-                    let buffer = image.unwrap_or_default();
-                    return self.read_append(&capture, base_size, &buffer, offset, size);
+                    let sequence = match image {
+                        Some(WriteImage::Append(sequence)) => sequence,
+                        Some(_) => return Err(fuser::Errno::EIO),
+                        None => Vec::new(),
+                    };
+                    return self.read_append(&capture, base_size, &sequence, offset, size);
                 }
                 match image {
-                    Some(image) => Ok(slice_image(&image, offset, size)),
+                    Some(WriteImage::Sparse(overlay)) => {
+                        self.read_sparse(&capture, base_size, &overlay, offset, size)
+                    }
+                    Some(_) => Err(fuser::Errno::EIO),
                     None => self.read_via_capture(&capture, offset, size),
                 }
             }
@@ -101,6 +108,72 @@ where
             let start = offset.saturating_sub(base_size) as usize;
             let stop = (end - base_size) as usize;
             out.extend_from_slice(&buffer[start..stop]);
+        }
+        Ok(out)
+    }
+
+    /// Read a window of a sparsely-overlaid file: patched ranges
+    /// serve from the overlay, unpatched ranges within the base read
+    /// from the store through the capture, and anything past the base
+    /// reads as zeros (sparse extension). Only the requested base
+    /// ranges are read, so a large base is never materialized for a
+    /// small read.
+    fn read_sparse(
+        &self,
+        capture: &OpenFile,
+        base_size: u64,
+        overlay: &SparseOverlay,
+        offset: u64,
+        size: u32,
+    ) -> Result<Vec<u8>, fuser::Errno> {
+        let len = overlay.len();
+        if size == 0 || offset >= len {
+            return Ok(Vec::new());
+        }
+        let end = offset.saturating_add(size as u64).min(len);
+        let mut out = Vec::with_capacity((end - offset) as usize);
+        let mut cursor = offset;
+        while cursor < end {
+            // A patch covering the cursor serves it directly.
+            if let Some((&start, bytes)) = overlay.patches().range(..=cursor).next_back() {
+                let patch_end = start.saturating_add(bytes.len() as u64);
+                if patch_end > cursor {
+                    let from = (cursor - start) as usize;
+                    let take = (patch_end.min(end) - cursor) as usize;
+                    out.extend_from_slice(&bytes[from..from + take]);
+                    cursor += take as u64;
+                    continue;
+                }
+            }
+            // A gap: the next patch bounds it (or the read end).
+            // Empty patches carry no bytes and never bound a gap.
+            let gap_end = overlay
+                .patches()
+                .range(cursor..)
+                .find(|(_, bytes)| !bytes.is_empty())
+                .map(|(&start, _)| start)
+                .unwrap_or(end)
+                .min(end);
+            let read_end = gap_end.min(base_size);
+            while cursor < read_end {
+                let step = (read_end - cursor).min(u32::MAX as u64);
+                let window = self.read_via_capture(capture, cursor, step as u32)?;
+                if window.is_empty() {
+                    break;
+                }
+                let have = window.len() as u64;
+                out.extend_from_slice(&window);
+                cursor += have;
+                if have < step {
+                    break;
+                }
+            }
+            // Past the base (or past served bytes) the gap is zeros.
+            while cursor < gap_end {
+                let zeros = (gap_end - cursor).min(8192);
+                out.extend(std::iter::repeat_n(0, zeros as usize));
+                cursor += zeros;
+            }
         }
         Ok(out)
     }
