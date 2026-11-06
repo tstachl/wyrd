@@ -3,9 +3,8 @@
 //! runs a bounded fetch plan, conditionally republishes the serving
 //! generation, and discharges outbound obligations; `run_loop` paces
 //! passes and `drain_until_closed` is the post-return teardown phase.
-//! Mutation application lives in `super` until phase 4 extracts
-//! `apply.rs`; the pass calls it through `self`, so no visibility
-//! widening is needed in either direction.
+//! Mutation application lives in `apply.rs`; the pass calls it through
+//! `self`, so no visibility widening is needed in either direction.
 //!
 //! [`partition_heads`] is the closure gate the pass and the direct
 //! refresh share; it is re-exported through `super` for `node.rs`.

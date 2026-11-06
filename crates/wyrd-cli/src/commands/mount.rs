@@ -178,7 +178,7 @@ pub(crate) fn mount(
     // and the same number gates both the authoring path and the
     // receive-path admission gate (DG-4 A).
     let (store, mut config, _retained) =
-        crate::live::open_store_with_quota(&drive_dir, retained_quota)?;
+        crate::composer::open_store_with_quota(&drive_dir, retained_quota)?;
     config.interval = std::time::Duration::from_secs(interval);
     // Fail fast on macOS before binding any endpoint: a missing
     // macFUSE runtime can never mount, and every later stage would

@@ -598,9 +598,9 @@ fn main() {
 
 mod args;
 mod commands;
+mod composer;
 mod credentials;
 mod drive_config;
-mod live;
 mod logging;
 mod probes;
 mod update;

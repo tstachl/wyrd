@@ -63,7 +63,7 @@
 //!     (`sync-and-peers.md` exchange; tracking issue: real-iroh
 //!     serving router loopback). Its substitute companion,
 //!     `a_fresh_peer_fetches_pre_kill_content_from_the_substitute_endpoint`,
-//!     pins the fetch-d shape without the Phase-12 gate: the publishing
+//!     pins the fetch-d shape without a multi-process gate: the publishing
 //!     endpoint dies before a second peer ever contacts it, and that
 //!     fresh peer converges entirely against the replacement over the
 //!     same vault.

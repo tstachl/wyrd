@@ -2,9 +2,7 @@
 //! the format layer and `wyrd-namespace`'s namespace value model, with
 //! remote-only content mapped through [`wyrd_format::FetchStatus`].
 //!
-//! This is the first FUSE slice: it proves the protocol/runtime boundary
-//! can be exposed as a filesystem surface without mounting anything. It
-//! works against [`wyrd_format::ObjectStore`] and the abstract [`Materialization`]
+//! The view works against [`wyrd_format::ObjectStore`] and the abstract [`Materialization`]
 //! interface only — no networking, no async, no iroh. A daemon composes
 //! this view with `wyrd-sync`; the view never learns how bytes arrive.
 //!
@@ -55,7 +53,6 @@ mod drive;
 mod grammar;
 mod head;
 mod merge;
-mod types;
 
 #[cfg(test)]
 mod tests_chunks;
@@ -72,7 +69,14 @@ mod tests_symlink;
 
 pub use drive::DriveView;
 pub use head::{VerifiedSnapshot, ViewHead};
-pub use types::{
+// Namespace value types live in `wyrd-namespace` (the provider-neutral
+// namespace model) and are re-exported here so existing view and
+// backend code keeps its paths. The symlink confinement policy lives
+// there too — it is namespace policy shared by every backend that
+// materializes links, not kernel policy. The kernel refusal mapping
+// (EOPNOTSUPP) lives at the backend's `readlink` boundary in
+// `wyrd-daemon`.
+pub use wyrd_namespace::view::{
     confine_symlink_target, Attr, ConfinementError, ConflictVersion, DirEntry, Kind,
-    Materialization, Node, OpenFile, ViewError,
+    MaterializationPolicy as Materialization, Node, OpenFile, ViewError,
 };

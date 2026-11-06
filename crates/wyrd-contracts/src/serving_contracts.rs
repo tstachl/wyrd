@@ -116,7 +116,7 @@ fn a_serving_daemon_serves_a_peer_over_live_iroh() {
 /// replacement's route) then fetches body, manifests, tree, and
 /// chunk from the substitute alone. Success proves vault-persisted
 /// representations outlive the endpoint for a peer with no prior
-/// contact — the composition the Phase-12 fetch-d leg covers with
+/// contact — the composition the multi-process fetch-d leg covers with
 /// three serving processes and two fetching devices. (The route
 /// update half — re-announcement rotating a recorded route — stays
 /// with `a_serving_daemon_serves_a_peer_over_live_iroh` above.)

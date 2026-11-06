@@ -26,7 +26,7 @@ in any mode. Three reasons, in order:
    4 below).
  3. Quiesce/flush/unmount already exists as tested behavior on the
    vault's own SIGINT/SIGTERM path (the `SHUTDOWN` latch in
-   `crates/wyrd-cli/src/live.rs`, armed by `install_shutdown_handler`
+   `crates/wyrd-cli/src/composer.rs`, armed by `install_shutdown_handler`
    there; SIGTERM exits 0 on a clean stop per the ordered teardown in
    `mount` (`crates/wyrd-cli/src/commands/mount.rs`), pinned by
    `crates/wyrd-cli/tests/vault_process.rs`). Re-implementing that

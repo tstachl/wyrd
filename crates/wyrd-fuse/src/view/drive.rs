@@ -9,7 +9,7 @@ use wyrd_format::{
 use super::grammar;
 use super::head::ViewHead;
 use super::merge::merge;
-use super::types::{Attr, DirEntry, Kind, Materialization, Node, OpenFile, ViewError};
+use super::{Attr, DirEntry, Kind, Materialization, Node, OpenFile, ViewError};
 use wyrd_namespace::view::{Head, LookupResult, NamespaceView, ViewLockError};
 
 /// A mounted drive's read-only view: the head set plus the stores that
