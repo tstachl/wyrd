@@ -113,7 +113,11 @@ The following are hard invariants, not implementation details:
   barrier (durable generation watermark, not wall-clock time).
 - Every candidate carries the generation at which it was identified.
 - Any new reference (commit, import, graft, reconciliation re-announce)
-  to a candidate invalidates that candidate immediately.
+  to a candidate invalidates that candidate immediately. Invalidation is
+  per-candidate, not per-batch: the authorisation and accumulated grace for
+  the invalidated candidate alone are discarded. If the content later
+  becomes unreachable again it must be reconsidered from scratch under a
+  fresh candidate generation — no retained authorization or grace.
 - Authorization binds to `(candidate-set hash, generation)`. Sweep must
   revalidate eligibility against current generation immediately before
   deletion.
@@ -205,8 +209,10 @@ sweep description:
 
 - **L1:** authorized physical reclamation. Durable, idempotent per-object
   sweep accounting. No tombstone. No key destruction.
-- **L2:** authorized key-destruction saga. Numeric completion = all
-  required destruction participants evidenced. Physical reclamation is
+- **L2:** authorized key-destruction saga. Protocol completion = all
+  required destruction participants have supplied acceptable destruction
+  evidence. Cryptographic establishment remains conditional on the declared
+  threat and key-custody assumptions. Physical reclamation is
   optional after L2; cryptographic unavailability is the guarantee.
 - **L3:** commit the tombstone transition *before* allowing physical
   reclamation. Tombstone durability precedes sweep. Enforce on every
@@ -251,8 +257,21 @@ not an abstract quorum. A custodian is a device with a durable retention
 obligation for the representation. Possession (has the bytes), obligation
 (has the promise), and serving (may serve the bytes) are three distinct sets;
 the acknowledgement set is the obligation set, not a liveness probe. An
-offline custodian stays in the set and blocks sweep for its slice. This is
-the retention/acknowledgement protocol `ROADMAP.md:180` requires.
+offline custodian stays in the set and blocks sweep for its slice.
+
+Acknowledgement comes in two kinds and they are not interchangeable:
+
+- *Prepare acknowledgement:* the custodian has seen the candidate set and
+  confirms its retention obligation can be retired when the transition
+  completes. This authorizes proceeding; it is not evidence the bytes are
+  gone.
+- *Completion acknowledgement:* the custodian confirms its physical
+  representation has actually been removed (and accounting returned).
+
+A custodian must not be treated as finished after prepare alone — it could
+crash before deleting. No second wire message is introduced in this note;
+the acknowledgement contract must name which kind each signal carries.
+This is the retention/acknowledgement protocol `ROADMAP.md:180` requires.
 
 **Authorize (authorization quorum + human).** `k`-of-`N` authorized
 decision-makers sign the `(candidate-set hash, generation, hold expiry)`.
@@ -265,7 +284,8 @@ Holder acknowledgement and authorization answer different questions:
 
 | Mechanism | Question answered |
 |---|---|
-| Holder acknowledgement | Have the devices responsible for retaining this representation acknowledged the proposed reclamation? |
+| Custodian prepare acknowledgement | Has the custodian acknowledged the proposed reclamation and confirmed its obligation can be retired when the transition completes? |
+| Custodian completion acknowledgement | Has the custodian confirmed its physical representation has actually been removed? |
 | Authorization quorum | Have enough authorized decision-makers approved the reclamation? |
 | Human confirmation | Has the owner explicitly approved this destructive operation? |
 
