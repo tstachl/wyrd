@@ -7,11 +7,12 @@ use wyrd_format::{
     ObjectStore, Snapshot, SnapshotId, StorageId, StoreError, StoreFailure,
 };
 
+use super::retention::{manifest_unit, object_unit, root_unit, RefusalLedger, RetentionGate};
 use super::{ManifestRecord, PendingObjectFetch, RuntimeState};
 use crate::bulk::{BulkError, BulkSource, SealedManifest};
 use crate::ingest::{check_chunk_len, check_manifest, check_snapshot, Limits};
 use crate::keys::capability::DriveKeyring;
-use crate::seal::{open_manifest, verify, EncryptedObject};
+use crate::seal::{blob_root, open_manifest, verify, EncryptedObject};
 use crate::serving::Vault;
 
 /// One fetch attempt's structured result. Every non-fulfilled variant is
@@ -44,6 +45,15 @@ pub(super) enum FetchOutcome<T> {
     },
     /// Verified bytes the local store refused.
     Local,
+    /// Retention-gate refusal (DG-4 A): admitting the verified bytes
+    /// would exceed the device's retention ceiling. Refused before
+    /// durable storage — never stored, never charged, never committed.
+    /// Counted separately from every other outcome, never struck, and
+    /// never terminal: retry re-evaluates the same ceiling, so raising
+    /// it (or freeing retained bytes) re-admits without any ledger
+    /// reset. Durable via the refusal ledger, so restart preserves the
+    /// decision.
+    Refused,
     /// The local disk cannot take more bytes (full) or this process
     /// may not write to it. Unlike [`FetchOutcome::Local`], which the
     /// plan layer counts and retries next run, this aborts the pass:
@@ -96,6 +106,9 @@ fn fatal_store<E: StoreError>(error: &E) -> Option<StoreFailure> {
 /// daemon's head gate before any classified head is installed. Fetch
 /// records the bytes; the gate refuses to materialize a closure that is
 /// incomplete or does not correspond (object-model decision 27).
+// The gate and ledger ride as separate params (one threaded context
+// would churn every validator signature for no behavioral gain).
+#[allow(clippy::too_many_arguments)]
 pub(super) fn root(
     drive: &DriveId,
     bulk: &mut impl BulkSource,
@@ -103,6 +116,8 @@ pub(super) fn root(
     runtime: &RuntimeState,
     vault: &Vault,
     snapshot: &SnapshotId,
+    gate: &RetentionGate,
+    refusals: &RefusalLedger,
 ) -> FetchOutcome<ManifestRecord> {
     let Some(announcement) = runtime.announcement(snapshot) else {
         return FetchOutcome::Missing;
@@ -151,6 +166,44 @@ pub(super) fn root(
     // Ciphertext residency precedes the durable record: a committed
     // mapping must name a representation this drive can serve, so an
     // import failure is a local refusal, never a committed advertisement.
+    // The retention gate precedes the import: refused bytes are never
+    // stored and charged nowhere (DG-4 A). An already-held root admits
+    // as a no-op — the import below would store nothing new (both
+    // dimensions charge only fresh bytes), so re-charging `incoming` on
+    // a retry would double-count, including the torn-import retry whose
+    // held-root path heals directory durability. The held check runs
+    // only on the refusal path, so the hot path pays no extra I/O.
+    if let Err(refusal) = gate.check(served.sealed.len() as u64, 0) {
+        let held = vault
+            .sealed(&blob_root(&served.sealed))
+            .ok()
+            .flatten()
+            .is_some();
+        if !held {
+            let unit = root_unit(snapshot);
+            if let Err(error) = refusals.record(&unit, refusal.quota) {
+                tracing::warn!(
+                    unit,
+                    quota = refusal.quota,
+                    error = %error,
+                    "retention refusal held in memory but not durably recorded; a restart may forget it"
+                );
+            }
+            tracing::debug!(
+                unit,
+                quota = refusal.quota,
+                retained = refusal.retained,
+                vault_seen = refusal.vault_seen,
+                incoming = refusal.incoming_vault,
+                "retention gate refused root manifest before storage; nothing stored, nothing committed"
+            );
+            return FetchOutcome::Refused;
+        }
+        tracing::debug!(
+            snapshot = ?snapshot,
+            "retention gate would refuse, but the root is already held: admission is a no-op"
+        );
+    }
     match vault.import(&served.sealed) {
         Ok(_) => FetchOutcome::Fulfilled(record),
         Err(error) => fatal_vault(&error).map_or(FetchOutcome::Local, FetchOutcome::Store),
@@ -165,6 +218,11 @@ pub(super) fn root(
 /// committing, and the signature gate happens at the commit boundary,
 /// because durable facts only carry verified bodies. The transport
 /// route fetches by the announcement's author-signed body root.
+///
+/// Takes no retention gate: bodies are fetched before the announcement
+/// binding is compared, so the plan gates post-authorize before the
+/// vault import instead. The plan's `Refused` arm for this leg is
+/// therefore defensive exhaustiveness, not a live path.
 pub(super) fn snapshot_body(
     bulk: &mut impl BulkSource,
     runtime: &RuntimeState,
@@ -215,6 +273,9 @@ pub(super) fn snapshot_body(
 }
 
 /// Fetch and validate a pending child manifest.
+// The gate and ledger ride as separate params (one threaded context
+// would churn every validator signature for no behavioral gain).
+#[allow(clippy::too_many_arguments)]
 pub(super) fn child(
     drive: &DriveId,
     bulk: &mut impl BulkSource,
@@ -223,6 +284,8 @@ pub(super) fn child(
     vault: &Vault,
     id: &ContentId,
     link: &ChildManifest,
+    gate: &RetentionGate,
+    refusals: &RefusalLedger,
 ) -> FetchOutcome<ManifestRecord> {
     let Some(snapshot) = runtime.manifest_parent_snapshot(id) else {
         return FetchOutcome::Missing;
@@ -250,7 +313,36 @@ pub(super) fn child(
     let Some(record) = open_record(&sealed, &key, &link.manifest, snapshot, false) else {
         return FetchOutcome::Invalid;
     };
-    // Residency precedes the record, as in root().
+    // Residency precedes the record, as in root(). The retention gate
+    // precedes the import: refused bytes are never stored (DG-4 A).
+    // An already-held representation admits as a no-op (see root()).
+    if let Err(refusal) = gate.check(sealed.len() as u64, 0) {
+        let held = vault.sealed(&blob_root(&sealed)).ok().flatten().is_some();
+        if !held {
+            let unit = manifest_unit(id);
+            if let Err(error) = refusals.record(&unit, refusal.quota) {
+                tracing::warn!(
+                    unit,
+                    quota = refusal.quota,
+                    error = %error,
+                    "retention refusal held in memory but not durably recorded; a restart may forget it"
+                );
+            }
+            tracing::debug!(
+                unit,
+                quota = refusal.quota,
+                retained = refusal.retained,
+                vault_seen = refusal.vault_seen,
+                incoming = refusal.incoming_vault,
+                "retention gate refused child manifest before storage; nothing stored, nothing committed"
+            );
+            return FetchOutcome::Refused;
+        }
+        tracing::debug!(
+            manifest = ?id,
+            "retention gate would refuse, but the child manifest is already held: admission is a no-op"
+        );
+    }
     match vault.import(&sealed) {
         Ok(_) => FetchOutcome::Fulfilled(record),
         Err(error) => fatal_vault(&error).map_or(FetchOutcome::Local, FetchOutcome::Store),
@@ -355,6 +447,9 @@ pub(super) struct ObjectAttempt {
 /// a missing key, a missing key outranks a sliced attempt, and a
 /// sliced attempt outranks plain absence — a peer never asked is
 /// budget pressure, not a negative answer.
+// The gate and ledger ride as separate params (one threaded context
+// would churn every validator signature for no behavioral gain).
+#[allow(clippy::too_many_arguments)]
 pub(super) fn object(
     drive: &DriveId,
     bulk: &mut impl BulkSource,
@@ -363,6 +458,8 @@ pub(super) fn object(
     vault: &Vault,
     content: &ContentId,
     candidates: &[PendingObjectFetch],
+    gate: &RetentionGate,
+    refusals: &RefusalLedger,
 ) -> ObjectAttempt {
     let mut aggregate = FetchOutcome::Missing;
     let mut invalid = Vec::new();
@@ -437,7 +534,43 @@ pub(super) fn object(
         // plaintext consequence, and a refusal is a local failure. A
         // full or unwritable disk returns immediately: every further
         // candidate would refuse identically, and the pass must abort
-        // rather than count one `Local` per candidate.
+        // rather than count one `Local` per candidate. The retention
+        // gate precedes both writes — the ciphertext import and the
+        // plaintext insert — since only the insert charges the
+        // plaintext accountant: refused bytes reach neither (DG-4 A).
+        // An already-held representation admits as a no-op (see
+        // root()): both stores charge only fresh bytes, so a retry
+        // retains nothing new.
+        if let Err(refusal) = gate.check(sealed.len() as u64, plaintext.len() as u64) {
+            let vault_held = vault.sealed(&blob_root(&sealed)).ok().flatten().is_some();
+            let plaintext_held = objects.has(content).unwrap_or(false);
+            if !(vault_held && plaintext_held) {
+                let unit = object_unit(content);
+                if let Err(error) = refusals.record(&unit, refusal.quota) {
+                    tracing::warn!(
+                        unit = %unit,
+                        quota = refusal.quota,
+                        error = %error,
+                        "retention refusal held in memory but not durably recorded; a restart may forget it"
+                    );
+                }
+                tracing::debug!(
+                    unit = %unit,
+                    quota = refusal.quota,
+                    retained = refusal.retained,
+                    vault_seen = refusal.vault_seen,
+                    incoming_vault = refusal.incoming_vault,
+                    incoming_retained = refusal.incoming_retained,
+                    "retention gate refused object before storage; nothing stored, nothing committed"
+                );
+                aggregate = worse(aggregate, FetchOutcome::Refused);
+                continue;
+            }
+            tracing::debug!(
+                content = ?content,
+                "retention gate would refuse, but the object is already held: admission is a no-op"
+            );
+        }
         if let Err(error) = vault.import(&sealed) {
             if let Some(fatal) = fatal_vault(&error) {
                 return ObjectAttempt {
@@ -500,8 +633,9 @@ fn worse(first: FetchOutcome<()>, second: FetchOutcome<()>) -> FetchOutcome<()> 
             FetchOutcome::UnavailableKey => 2,
             FetchOutcome::Invalid => 3,
             FetchOutcome::Local => 4,
-            FetchOutcome::Transport => 5,
-            FetchOutcome::Store(_) => 6,
+            FetchOutcome::Refused => 5,
+            FetchOutcome::Transport => 6,
+            FetchOutcome::Store(_) => 7,
             FetchOutcome::Fulfilled(()) => 255,
         }
     }
@@ -541,6 +675,17 @@ impl<T> FetchOutcome<T> {
             | FetchOutcome::Deadline { .. }
             | FetchOutcome::Store(_) => FetchStatus::Unavailable(generation),
             FetchOutcome::Invalid | FetchOutcome::Local => FetchStatus::Corrupt,
+            // A retention refusal is local policy, not damage and not
+            // absence — but the settled projection predates the refusal
+            // ledger and has no ledger-aware consumer yet (no production
+            // caller). Until the FUSE/view boundary learns a refused
+            // state, refusals project as unavailable-with-generation so
+            // they retry on a later generation instead of entering
+            // scrub/repair as corrupt. The operator surface (sync
+            // report `refused` count, `policy budgets` refusal section,
+            // durable ledger) is where refusal stays distinct from
+            // loss — never the settled verdict alone.
+            FetchOutcome::Refused => FetchStatus::Unavailable(generation),
         }
     }
 }

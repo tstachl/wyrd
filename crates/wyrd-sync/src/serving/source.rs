@@ -64,6 +64,7 @@ impl VaultSource {
         Ok(VaultSource {
             vault: Vault {
                 dir: vault.dir.clone(),
+                seen: vault.seen_handle(),
                 mirror: std::sync::Arc::new(Mutex::new(None)),
                 durability: durable::Durability::new(),
             },

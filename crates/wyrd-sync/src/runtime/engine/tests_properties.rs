@@ -177,6 +177,7 @@ fn re_execute_without_new_work_commits_nothing() {
             invalid: 0,
             unavailable_keys: 0,
             local_failures: 0,
+            refused: 0,
         },
         "second execute with no new work is a no-op"
     );
@@ -333,6 +334,7 @@ fn large_announcement_history_converges_with_exact_reports() {
             invalid: 0,
             unavailable_keys: 0,
             local_failures: 0,
+            refused: 0,
         },
         "the converged history re-executes to nothing"
     );

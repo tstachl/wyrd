@@ -97,6 +97,16 @@ pub(crate) enum Command {
         /// usage errors.
         #[arg(long, value_name = "SECS", default_value_t = 5)]
         interval: u64,
+        /// Per-device retained-bytes ceiling in bytes: the same number
+        /// bounds local authoring (refused before the commit's first
+        /// write, `ENOSPC`) and receive-path admission (refused before
+        /// durable storage, counted separately, never stored). Unset
+        /// means unlimited (the dogfood default): existing deployments
+        /// behave exactly as before until an operator opts in. A
+        /// startup below current retention refuses to start with both
+        /// numbers named instead of failing every write.
+        #[arg(long, value_name = "BYTES")]
+        retained_quota: Option<u64>,
         #[command(flatten)]
         credentials: Credentials,
     },
@@ -450,7 +460,13 @@ pub(crate) enum VaultAction {
     /// Start the persistent vault process. The default when no
     /// subcommand is given, so the shipped `wyrd vault <drive>`
     /// keeps starting.
-    Start,
+    Start {
+        /// Per-device retained-bytes ceiling in bytes: the same
+        /// number bounds local authoring and receive-path admission
+        /// (see `mount --retained-quota`). Unset means unlimited.
+        #[arg(long, value_name = "BYTES")]
+        retained_quota: Option<u64>,
+    },
     /// Report the running process's posture and, when the drive is
     /// stopped, its durable state. Never opens the store for the
     /// process section; never claims liveness.
@@ -493,6 +509,11 @@ pub(crate) enum SyncAction {
         /// no route publication, so nothing could discover it).
         #[arg(long)]
         serve: bool,
+        /// Per-device retained-bytes ceiling in bytes: the same
+        /// number bounds local authoring and receive-path admission
+        /// (see `mount --retained-quota`). Unset means unlimited.
+        #[arg(long, value_name = "BYTES")]
+        retained_quota: Option<u64>,
     },
 }
 

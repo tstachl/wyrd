@@ -10,21 +10,41 @@ use std::time::Duration;
 use crate::CliError;
 use wyrd_daemon::process::SHUTDOWN;
 use wyrd_daemon::process::TRANSPORT_SHUTDOWN_DEADLINE;
-#[cfg(any(test, feature = "mount"))]
 use wyrd_daemon::LiveConfig;
 
-/// Live-loop config for a mount: the shared local-sync budgets with
-/// the idle pacing overridden. One constructor so the flag cannot
-/// silently stop reaching the loop — the unit test pins the override.
-/// Only the pacing moves: `--interval` shortens how long total silence
-/// may delay a pass, never any ceiling.
-/// Mount-scoped with the unit test that pins it: without the mount
-/// command no non-test caller remains, but the test still runs.
-#[cfg(any(test, feature = "mount"))]
-pub(crate) fn live_config(interval: u64) -> LiveConfig {
-    let mut config = LiveConfig::for_local_sync();
-    config.interval = Duration::from_secs(interval);
-    config
+/// Open the object store for a live composer, wiring the retention
+/// accountant when a ceiling is configured: the ceiling is a
+/// comparison against a number the store keeps, so the store and the
+/// config must share the same tally. Returns the store plus the config
+/// to compose with (the config's `retained_bytes` is the tally the
+/// store charges).
+pub(crate) fn open_store_with_quota(
+    drive_dir: &std::path::Path,
+    quota: Option<u64>,
+) -> Result<
+    (
+        wyrd_format::FsObjectStore,
+        LiveConfig,
+        Option<std::sync::Arc<wyrd_format::RetainedBytes>>,
+    ),
+    crate::CliError,
+> {
+    match quota {
+        Some(limit) => {
+            let (config, retained) = LiveConfig::with_retained_quota(limit);
+            let store = wyrd_format::FsObjectStore::open_with(
+                drive_dir.to_path_buf(),
+                Some(std::sync::Arc::clone(&retained)),
+            )
+            .map_err(|error| crate::CliError::Store(error.to_string()))?;
+            Ok((store, config, Some(retained)))
+        }
+        None => {
+            let store = wyrd_format::FsObjectStore::open(drive_dir.to_path_buf())
+                .map_err(|error| crate::CliError::Store(error.to_string()))?;
+            Ok((store, LiveConfig::for_local_sync(), None))
+        }
+    }
 }
 
 /// Park the `--serve` phase on the shutdown latch: the endpoint

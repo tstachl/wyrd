@@ -9,10 +9,12 @@ use wyrd_format::{ObjectStore, SnapshotId};
 
 use super::engine::{Engine, EngineError, ExecuteReport, FetchKey};
 use super::fetch::FetchOutcome;
+use super::retention::snapshot_body_unit;
 use super::{PendingObjectFetch, RuntimeState};
 use crate::bulk::BulkSource;
 use crate::control::SnapshotAnnouncement;
 use crate::durable::{AuthorizeSnapshot, DurableError, Fact};
+use crate::seal::blob_root;
 
 /// Look up the announcement a planned body derives from. The plan's
 /// pending bodies come from the same projection, so a miss is a
@@ -107,6 +109,11 @@ fn execute_inner(
 ) -> Result<ExecuteReport, EngineError> {
     let mut report = ExecuteReport::default();
     engine.fetch_run += 1;
+    // The retention gate reads live counters through shared handles,
+    // so one gate per run sees every import this run lands: vault
+    // bytes charge on import, plaintext on store insert, and each
+    // check compares the fresh totals.
+    let gate = engine.retention_gate();
     // One durable replay per run, not per pass: this executor commits
     // only snapshot-body, manifest, and local-object facts, and it
     // applies each of those to the in-memory projection through the
@@ -181,8 +188,47 @@ fn execute_inner(
                             // Residency precedes the durable record: the
                             // verified body lands in the serving vault
                             // before the fact commits, so the recorded
-                            // snapshot never names a missing body.
-                            match engine.vault.import(&authorized.snapshot().encode()) {
+                            // snapshot never names a missing body. The
+                            // retention gate precedes the import: refused
+                            // bytes are never stored (DG-4 A). An
+                            // already-held body admits as a no-op (see
+                            // `fetch::root`).
+                            let encoded = authorized.snapshot().encode();
+                            if let Err(refusal) = gate.check(encoded.len() as u64, 0) {
+                                let held = engine
+                                    .vault
+                                    .sealed(&blob_root(&encoded))
+                                    .ok()
+                                    .flatten()
+                                    .is_some();
+                                if !held {
+                                    let unit = snapshot_body_unit(snapshot);
+                                    if let Err(error) = engine.refusals.record(&unit, refusal.quota)
+                                    {
+                                        tracing::warn!(
+                                            unit,
+                                            quota = refusal.quota,
+                                            error = %error,
+                                            "retention refusal held in memory but not durably recorded; a restart may forget it"
+                                        );
+                                    }
+                                    tracing::debug!(
+                                        unit,
+                                        quota = refusal.quota,
+                                        retained = refusal.retained,
+                                        vault_seen = refusal.vault_seen,
+                                        incoming = refusal.incoming_vault,
+                                        "retention gate refused snapshot body before storage; nothing stored, nothing committed"
+                                    );
+                                    report.refused += 1;
+                                    continue;
+                                }
+                                tracing::debug!(
+                                    snapshot = ?snapshot,
+                                    "retention gate would refuse, but the snapshot body is already held: admission is a no-op"
+                                );
+                            }
+                            match engine.vault.import(&encoded) {
                                 Ok(_) => {
                                     runtime.record_snapshot_body(authorized.snapshot().clone())?;
                                     facts.push(crate::durable::Fact::SnapshotBody(authorized));
@@ -230,6 +276,9 @@ fn execute_inner(
                     }
                 }
                 FetchOutcome::Local => report.local_failures += 1,
+                // Retention refusal: counted separately, never struck,
+                // never terminal — retry re-evaluates the same ceiling.
+                FetchOutcome::Refused => report.refused += 1,
                 FetchOutcome::Store(fatal) => return Err(EngineError::Store(fatal)),
             }
         }
@@ -261,6 +310,8 @@ fn execute_inner(
                 runtime,
                 &engine.vault,
                 snapshot,
+                &gate,
+                &engine.refusals,
             ) {
                 FetchOutcome::Fulfilled(record) => {
                     runtime.record_manifest(record.clone())?;
@@ -289,6 +340,9 @@ fn execute_inner(
                     }
                 }
                 FetchOutcome::Local => report.local_failures += 1,
+                // Retention refusal: counted separately, never struck,
+                // never terminal — retry re-evaluates the same ceiling.
+                FetchOutcome::Refused => report.refused += 1,
                 FetchOutcome::Store(fatal) => return Err(EngineError::Store(fatal)),
             }
         }
@@ -321,6 +375,8 @@ fn execute_inner(
                 &engine.vault,
                 id,
                 link,
+                &gate,
+                &engine.refusals,
             ) {
                 FetchOutcome::Fulfilled(record) => {
                     runtime.record_manifest(record.clone())?;
@@ -349,6 +405,9 @@ fn execute_inner(
                     }
                 }
                 FetchOutcome::Local => report.local_failures += 1,
+                // Retention refusal: counted separately, never struck,
+                // never terminal — retry re-evaluates the same ceiling.
+                FetchOutcome::Refused => report.refused += 1,
                 FetchOutcome::Store(fatal) => return Err(EngineError::Store(fatal)),
             }
         }
@@ -394,6 +453,8 @@ fn execute_inner(
                 &engine.vault,
                 content,
                 &eligible,
+                &gate,
+                &engine.refusals,
             );
             // Strike representations whose bytes arrived and failed
             // validation regardless of the aggregate verdict: a corrupt
@@ -407,9 +468,9 @@ fn execute_inner(
             // back the representation off exactly like strikes, on a
             // separate ledger, so a hanging route stops being retried
             // every pass without ever being branded faulty. Absent,
-            // key-less, and locally-refused candidates are attributed
-            // nowhere: they are not evidence against the
-            // representation.
+            // key-less, locally-refused, and retention-refused
+            // candidates are attributed nowhere: none of them is
+            // evidence against the representation.
             for storage in &attempt.invalid {
                 engine.note_fetch_invalid(&FetchKey::Storage(*storage));
             }
@@ -450,6 +511,10 @@ fn execute_inner(
                 FetchOutcome::UnavailableKey => report.unavailable_keys += 1,
                 FetchOutcome::Transport => report.transport_errors += 1,
                 FetchOutcome::Local => report.local_failures += 1,
+                // Retention refusal: counted separately, never struck,
+                // never terminal — retry re-evaluates the same ceiling.
+                // The item stays pending, so `remaining` is untouched.
+                FetchOutcome::Refused => report.refused += 1,
                 FetchOutcome::Store(fatal) => return Err(EngineError::Store(fatal)),
             }
         }
@@ -488,3 +553,5 @@ mod tests_accounting;
 mod tests_bounded;
 #[cfg(test)]
 mod tests_convergence;
+#[cfg(test)]
+mod tests_retention;

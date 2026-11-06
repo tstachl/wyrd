@@ -5,7 +5,7 @@ use thiserror::Error;
 use wyrd_format::durable;
 use wyrd_format::BaoRoot;
 
-use super::mirror::{MirrorSender, MirrorStats};
+use super::mirror::{MirrorSender, MirrorStats, VaultSeen};
 use crate::seal::blob_root;
 
 /// The vault directory inside a drive directory.
@@ -43,6 +43,12 @@ pub enum VaultError {
 /// named by the root's hex, written atomically and never rewritten.
 pub struct Vault {
     pub(crate) dir: PathBuf,
+    /// Retained vault bytes observed through replication (ciphertext
+    /// dimension). Seeded by the open-time walk below so orphans —
+    /// sealed envelopes with no naming fact after torn authoring —
+    /// charge the same gate as fresh imports. Shared like the mirror
+    /// slot so the retention gate reads it without locking the vault.
+    pub(crate) seen: std::sync::Arc<VaultSeen>,
     /// The live serving mirror's bounded write-through sender, attached
     /// by [`ServingEndpoint::open`](super::endpoint::ServingEndpoint::open) and replaced (never co-held) on
     /// reopen. Imports enqueue after the durable rename, so the vault
@@ -74,8 +80,18 @@ impl Vault {
     pub fn open(drive_dir: &Path) -> Result<Self, VaultError> {
         let dir = drive_dir.join(VAULT_DIR);
         crate::durable::ensure_owner_only_dir(&dir)?;
+        // Seed the vault-seeing counter from what is already on disk:
+        // one walk at open, never per import. Orphan sealed envelopes
+        // (torn authoring, retries) are still retained bytes, so they
+        // charge the gate exactly like fresh imports. `.tmp-*` scratch
+        // is excluded like `resident_bytes` — not servable, not
+        // retained. A missing directory counts as zero.
+        let seen = VaultSeen::new();
+        let seeded = Self::walk_bytes(&dir)?;
+        seen.add(seeded);
         Ok(Vault {
             dir,
+            seen,
             mirror: std::sync::Arc::new(Mutex::new(None)),
             durability: durable::Durability::new(),
         })
@@ -96,8 +112,15 @@ impl Vault {
     /// excluded — they are not servable representations — and a missing
     /// vault directory counts as zero.
     pub fn resident_bytes(&self) -> Result<u64, VaultError> {
+        Self::walk_bytes(&self.dir)
+    }
+
+    /// One shared walk for the open-time seed and the observational
+    /// report above: the two numbers must agree, or the startup
+    /// cross-check cannot diagnose anything.
+    fn walk_bytes(dir: &Path) -> Result<u64, VaultError> {
         let mut total = 0u64;
-        let entries = match std::fs::read_dir(&self.dir) {
+        let entries = match std::fs::read_dir(dir) {
             Ok(entries) => entries,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
             Err(error) => return Err(VaultError::Io(error)),
@@ -129,6 +152,19 @@ impl Vault {
             total += metadata.len();
         }
         Ok(total)
+    }
+
+    /// Vault bytes charged against the retention gate: the open-time
+    /// seed plus every newly-stored import since. Orphan envelopes
+    /// count — they are still retained bytes.
+    pub fn seen_bytes(&self) -> u64 {
+        self.seen.get()
+    }
+
+    /// The shared counter handle for the retention gate: the gate
+    /// reads it without locking the vault.
+    pub(crate) fn seen_handle(&self) -> std::sync::Arc<VaultSeen> {
+        std::sync::Arc::clone(&self.seen)
     }
 
     /// Import sealed bytes: the file name is the bytes' own transport
@@ -181,19 +217,26 @@ impl Vault {
             }
             Err(durable::PublishError::DirectorySync(error)) => {
                 // The rename installed the file but its directory entry is
-                // not known durable. Notify the mirror best-effort so the
-                // failure does not also strand serving readiness, then
-                // surface the durability error; a retry re-syncs the
-                // directory. Best-effort is literal here: even a full
-                // queue — and even a poisoned slot — must not outrank
-                // the error the caller was promised. The retry's
-                // held-root path re-imports into the mirror once the
-                // drain has room, and still surfaces a poisoned slot
-                // through that path.
+                // not known durable. The bytes are retained regardless —
+                // charge them now so a retry through the held-root path
+                // (which never charges) cannot undercount. Notify the
+                // mirror best-effort so the failure does not also strand
+                // serving readiness, then surface the durability error;
+                // a retry re-syncs the directory. Best-effort is literal
+                // here: even a full queue — and even a poisoned slot —
+                // must not outrank the error the caller was promised.
+                // The retry's held-root path re-imports into the mirror
+                // once the drain has room, and still surfaces a poisoned
+                // slot through that path.
+                self.seen.add(sealed.len() as u64);
                 let _ = self.notify_mirror(root, sealed);
                 return Err(error.into());
             }
         }
+        // Newly stored: charge the vault-seeing counter. Held-root and
+        // concurrent-winner paths above never charge — the bytes were
+        // already counted by the seed or by the winning import.
+        self.seen.add(sealed.len() as u64);
         self.notify_mirror(root, sealed)?;
         Ok(root)
     }

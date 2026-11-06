@@ -23,9 +23,7 @@ use wyrd_daemon::process::{
     bind_bulk_source, check_startup_retention, install_shutdown_handler, SHUTDOWN_DEADLINE,
 };
 use wyrd_daemon::DriveView;
-use wyrd_daemon::{
-    install_role_dir, install_serving, LiveConfig, LiveError, LiveNode, SyncReport, WyrdNode,
-};
+use wyrd_daemon::{install_role_dir, install_serving, LiveError, LiveNode, SyncReport, WyrdNode};
 use wyrd_format::{DeviceId, FsObjectStore, ObjectStore};
 use wyrd_sync::keys::DeviceIdentitySecret;
 use wyrd_sync::runtime::{Engine, RoutePublishing};
@@ -121,6 +119,14 @@ pub(crate) struct SyncRunReport {
     pub(crate) invalid: usize,
     pub(crate) unavailable_keys: usize,
     pub(crate) local_failures: usize,
+    /// Retention-gate refusals (DG-4 A), accumulated like the rest:
+    /// verified bytes declined before durable storage because
+    /// admitting them would exceed the device's retention ceiling.
+    /// Never stored, never charged, never a share of any other
+    /// class — refused is not missing, invalid, transport trouble,
+    /// or a local failure — so this counter is stored and rendered
+    /// apart from the fetch-classes breakdown it rides beside.
+    pub(crate) refused: usize,
     /// Rejected-representation repair, accumulated like the rest:
     /// stored for the surface that renders them
     /// (`14-fetch-failure-diagnostics` owns the class renderer —
@@ -231,6 +237,7 @@ impl SyncRunReport {
         self.invalid += pass.fetched.invalid;
         self.unavailable_keys += pass.fetched.unavailable_keys;
         self.local_failures += pass.fetched.local_failures;
+        self.refused += pass.fetched.refused;
         self.quarantined_observed += pass.quarantined.observed as usize;
         self.quarantine_claims_cleared += pass.quarantined.claims_cleared as usize;
         self.quarantine_bytes_discarded += pass.quarantined.bytes_discarded as usize;
@@ -413,6 +420,7 @@ where
         invalid: 0,
         unavailable_keys: 0,
         local_failures: 0,
+        refused: 0,
         quarantined_observed: 0,
         quarantine_claims_cleared: 0,
         quarantine_bytes_discarded: 0,
@@ -792,6 +800,12 @@ pub(crate) fn quiet_stall_clauses(report: &SyncRunReport) -> Vec<String> {
     if report.local_failures > 0 {
         clauses.push(format!("{} local failures", report.local_failures));
     }
+    if report.refused > 0 {
+        clauses.push(format!(
+            "{} refused under the retention ceiling",
+            report.refused
+        ));
+    }
     clauses
 }
 
@@ -880,6 +894,7 @@ pub(crate) fn sync_now_render(report: &SyncRunReport) -> String {
         ("invalid", report.invalid),
         ("unavailable_keys", report.unavailable_keys),
         ("local_failures", report.local_failures),
+        ("refused", report.refused),
     ];
     if report.unfulfilled > 0 && classes.iter().any(|(_, count)| *count > 0) {
         out.push_str("fetch classes (diagnostic counts, not shares of unfulfilled):\n");
@@ -887,6 +902,9 @@ pub(crate) fn sync_now_render(report: &SyncRunReport) -> String {
             if count > 0 {
                 out.push_str(&format!("  {label}: {count}\n"));
             }
+        }
+        if report.refused > 0 {
+            out.push_str("  note: refused is retention policy, not loss: refused bytes were never stored, never enter repair as lost, and retry after raising the ceiling\n");
         }
     }
     out.push_str(&format!(
@@ -1147,7 +1165,11 @@ pub(crate) fn sync(
             print!("{}", relay_source_line(resolution.source, config_path));
             Ok(())
         }
-        SyncAction::Now { offline, serve } => {
+        SyncAction::Now {
+            offline,
+            serve,
+            retained_quota,
+        } => {
             // --offline means "run without relays": combining it with
             // --relay is contradictory, and silently ignoring the flag
             // would lie about the run. (clap conflicts_with cannot
@@ -1201,7 +1223,14 @@ pub(crate) fn sync(
             }
             let RelayResolution { relays, source } = resolution;
             let provenance = relay_source_line(source, config_path);
-            sync_now(drive_dir, relays, serve, passphrase, identity)?;
+            sync_now(
+                drive_dir,
+                relays,
+                serve,
+                retained_quota,
+                passphrase,
+                identity,
+            )?;
             print!("{provenance}");
             Ok(())
         }
@@ -1223,6 +1252,7 @@ pub(crate) fn sync_now(
     drive_dir: PathBuf,
     relays: Vec<String>,
     serve: bool,
+    retained_quota: Option<u64>,
     passphrase: &str,
     identity: DeviceIdentitySecret,
 ) -> Result<(), CliError> {
@@ -1232,13 +1262,15 @@ pub(crate) fn sync_now(
     // only its summary counts. Stdout keeps the machine-read report.
     init_sync_diagnostics();
     let engine = Engine::open_keystore(drive_dir.clone(), passphrase, identity.clone())?;
-    let config = LiveConfig::for_local_sync();
-    let store = FsObjectStore::open(drive_dir.clone())
-        .map_err(|error| CliError::Store(error.to_string()))?;
+    // Same store+config pairing as mount: a quota travels with the
+    // accountant that maintains it, so the same number gates the
+    // authoring path and receive-path admission (DG-4 A).
+    let (store, config, _retained) =
+        crate::live::open_store_with_quota(&drive_dir, retained_quota)?;
     // Same startup cross-check as mount: headless runs compose a live
     // node too, so a misconfigured quota must fail here rather than
     // in the first write.
-    check_startup_retention(&config, &store)?;
+    check_startup_retention(&config, &store, engine.vault().seen_bytes())?;
     // The serve phase below parks on this latch, so arm it before the
     // drain: a signal during the drain trips the flag, the drain
     // still reports its own verdict, and the serve phase then tears

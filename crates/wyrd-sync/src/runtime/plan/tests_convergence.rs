@@ -226,6 +226,7 @@ fn plan_executes_to_convergence() {
             invalid: 0,
             unavailable_keys: 0,
             local_failures: 0,
+            refused: 0,
         }
     );
 }
@@ -989,6 +990,7 @@ fn torn_pass_converges(nth: usize, stage: CrashStage) {
             invalid: 0,
             unavailable_keys: 0,
             local_failures: 0,
+            refused: 0,
         },
         "{stage:?} nth={nth}: recovery rerun is a no-op"
     );

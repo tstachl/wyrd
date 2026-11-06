@@ -158,6 +158,8 @@ fn chunk_over_the_payload_ceiling_is_invalid_and_unimported() {
     bulk.publish_sealed(sealed.storage_id(), sealed.encode());
     bulk.publish_transport(sealed.encode());
     let mut objects = MemoryObjectStore::default();
+    let gate = RetentionGate::new(None, None, vault.seen_handle());
+    let refusals = RefusalLedger::load(&dir.path).unwrap();
     let attempt = object(
         &member_drive(),
         &mut bulk,
@@ -166,6 +168,8 @@ fn chunk_over_the_payload_ceiling_is_invalid_and_unimported() {
         &vault,
         &content,
         std::slice::from_ref(&candidate),
+        &gate,
+        &refusals,
     );
     assert!(
         matches!(attempt.aggregate, FetchOutcome::Invalid),
@@ -197,6 +201,8 @@ fn chunk_at_the_payload_ceiling_imports() {
     bulk.publish_sealed(sealed.storage_id(), sealed.encode());
     bulk.publish_transport(sealed.encode());
     let mut objects = MemoryObjectStore::default();
+    let gate = RetentionGate::new(None, None, vault.seen_handle());
+    let refusals = RefusalLedger::load(&dir.path).unwrap();
     let attempt = object(
         &member_drive(),
         &mut bulk,
@@ -205,6 +211,8 @@ fn chunk_at_the_payload_ceiling_imports() {
         &vault,
         &content,
         std::slice::from_ref(&candidate),
+        &gate,
+        &refusals,
     );
     assert!(
         matches!(attempt.aggregate, FetchOutcome::Fulfilled(())),

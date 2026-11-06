@@ -14,7 +14,9 @@ use wyrd_core::vault::{observe_vault, VaultStatus};
 use wyrd_daemon::posture;
 use wyrd_daemon::process::{bind_bulk_source, install_shutdown_handler, SHUTDOWN};
 use wyrd_daemon::LoopError;
-use wyrd_daemon::{compose_headless_owner, run_composed_owner, VaultEvent, VaultLoopEnd};
+use wyrd_daemon::{
+    compose_headless_owner_with_quota, run_composed_owner, VaultEvent, VaultLoopEnd,
+};
 use wyrd_sync::durable::DurableError;
 use wyrd_sync::keys::DeviceIdentitySecret;
 use wyrd_sync::runtime::{Engine, EngineError};
@@ -92,6 +94,7 @@ pub(crate) fn vault(
     resolution: RelayResolution,
     config: Option<&LoadedConfig>,
     log_file: Option<PathBuf>,
+    retained_quota: Option<u64>,
     passphrase: &str,
     identity: DeviceIdentitySecret,
 ) -> Result<(), CliError> {
@@ -134,7 +137,8 @@ pub(crate) fn vault(
     // never loopback — the announced route must be one a peer on
     // another machine can dial), and the live split. Transport binding
     // below is environment, not composition.
-    let composed = compose_headless_owner(engine, drive_dir.clone(), false)?;
+    let composed =
+        compose_headless_owner_with_quota(engine, drive_dir.clone(), false, retained_quota)?;
     eprintln!("serving over iroh: {}", composed.serving_id);
     tracing::info!(stage = "serving", iroh_id = %composed.serving_id, "serving endpoint bound");
     // The mailbox signs with the local identity key: open and signer

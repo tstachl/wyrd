@@ -1061,12 +1061,15 @@ fn the_commit_that_crosses_the_ceiling_is_admitted_and_overshoots() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
-/// Bytes the device did not author still raise the count, and
-/// nothing refuses them. This is the interference channel the
-/// normative docs now name: a remote author's content can spend a
-/// peer's local-write headroom, so the first `ENOSPC` a peer sees
-/// may be caused by a member on another device. The test pins the
-/// behavior that makes the documentation true.
+/// Bytes the device did not author still raise the count when they
+/// reach the store directly, and the store itself refuses nothing:
+/// the gate lives at the fetch legs, not in the store. (A real fetch
+/// passes the DG-4 A gate before either write lands; this test stands
+/// in for one with a raw insert, which is exactly the ungated writer
+/// the gate was built to front.) With the ceiling below the total,
+/// the local write is refused even though this device authored none
+/// of the excess. The test pins the charging half that makes the
+/// gate's comparison meaningful.
 #[test]
 fn bytes_retained_without_a_local_commit_still_raise_the_count() {
     let (engine, dir, store, _chunk, _root, head) = scratch_file_drive("retained-foreign");
@@ -1075,7 +1078,9 @@ fn bytes_retained_without_a_local_commit_still_raise_the_count() {
     let authored = retained.get();
 
     // Stand in for a fetch: content this device never authored,
-    // landing in the same object store with no quota in scope.
+    // landing in the same object store through a raw insert that
+    // bypasses the fetch legs (the gate refuses before storage; the
+    // store itself charges without refusing).
     let foreign = b"fetched from a peer, never authored here";
     store.insert(ObjectKind::Chunk, foreign).unwrap();
     assert_eq!(
@@ -1085,7 +1090,9 @@ fn bytes_retained_without_a_local_commit_still_raise_the_count() {
     );
 
     // With the ceiling now below the total, the local write is
-    // refused even though this device authored none of the excess.
+    // refused even though this device authored none of the excess:
+    // whoever charged the accountant, the authoring gate compares
+    // against it.
     config.budgets.retained_bytes_quota = Some(authored + 1);
     let mut node = live_over_configured(engine, store, &[head], &config);
     let error = node
@@ -1094,7 +1101,7 @@ fn bytes_retained_without_a_local_commit_still_raise_the_count() {
     assert_eq!(
         error,
         MutationError::Store(StoreFailure::StorageFull),
-        "a peer's content can exhaust a local author's headroom"
+        "charged bytes exhaust a local author's headroom whoever wrote them"
     );
     drop(node);
     std::fs::remove_dir_all(dir).unwrap();

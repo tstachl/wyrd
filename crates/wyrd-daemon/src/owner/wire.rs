@@ -754,6 +754,13 @@ pub struct WireExecuteReport {
     pub invalid: usize,
     pub unavailable_keys: usize,
     pub local_failures: usize,
+    /// Retention-gate refusals (DG-4 A): distinct from every other
+    /// class — refused is not missing, invalid, or a local failure.
+    /// Defaults for mixed-version skew during rollout, like the
+    /// publish-clip fields below: a pre-gate reader degrades to "no
+    /// refusals reported" instead of failing the parse.
+    #[serde(default)]
+    pub refused: usize,
 }
 
 /// The wire form of [`QuarantineReport`].
@@ -1064,6 +1071,7 @@ impl From<&ExecuteReport> for WireExecuteReport {
             invalid,
             unavailable_keys,
             local_failures,
+            refused,
         } = *report;
         WireExecuteReport {
             manifests,
@@ -1076,6 +1084,7 @@ impl From<&ExecuteReport> for WireExecuteReport {
             invalid,
             unavailable_keys,
             local_failures,
+            refused,
         }
     }
 }

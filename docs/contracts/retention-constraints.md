@@ -29,9 +29,10 @@ Two quantities, two enforcement points, never merged:
   first write, `LiveNode::enforce_retained_quota`): it bounds the
   object-store plaintext dimension only, admits one commit of overshoot,
   and leaves vault ciphertext, snapshot bodies, sealed manifests, and
-  the fact log untallied. The receive path has no gate yet (the DG-4 A
-  gate is decided, unimplemented), so fetched bytes charge the same
-  accountant with no ceiling in scope. The v0.x constraint is that
+  the fact log untallied. The receive path enforces the DG-4 A gate (implemented):
+  every fetched representation is admitted against the same ceiling
+  over retained plus vault-seen before it reaches durable storage —
+  refused bytes are never stored and charged nowhere. The v0.x constraint is that
   every path adding durable bytes converges on this gate; the
   implementation status per path is in `storage-growth.md`.
 * **Residency (what is promised):** what this device claims it will
@@ -50,11 +51,14 @@ line:
   storage: refused bytes are never stored and charged nowhere on this
   device. Local mutation admission is governed by the same accounting
   direction (the mounted-path `retained_bytes_quota` check,
-  `storage-growth.md`); until the receive-path A gate is enforced, a
-  remote author can still spend a peer's local-write headroom, and the
-  quota bounds the object-store plaintext dimension only (vault,
-  body, manifest, and fact-log bytes untallied; one commit of
-  overshoot).
+  `storage-growth.md`); the receive-path A gate is enforced at every
+  fetch/plan import leg plus the authoring path, so a remote author
+  can no longer spend a peer's local-write headroom past the
+  configured ceiling. The plaintext dimension is exact; vault
+  ciphertext participates through the vault-seeing counter (seeded by
+  the open-time vault-dir walk, so orphans charge the gate); body,
+  manifest structure beyond that counter, and fact-log bytes remain
+  untallied, with one commit of overshoot.
 * **B — residency refusal:** after durable local acceptance, decline to
   make those bytes eligible for serving, mirroring, or new retention
   promises under local policy. The bytes remain stored and charged;
@@ -80,9 +84,13 @@ v0.x designs against this adversary, not against large files alone:
    Accounting that charges only new leaf bytes understates a replica
    by a multiple.
 4. **Remote spending of local headroom.** Fetched bytes charge the
-   local accountant. Without an admission gate, a remote author can
-   consume a peer's local-write quota until the peer's own writes fail
-   `ENOSPC` on a healthy drive.
+   local accountant. The admission gate (A, enforced) closes the
+   interference channel at any configured ceiling: over-quota remote
+   content is refused before storage, so a remote author cannot
+   consume a peer's local-write quota until the peer's own writes
+   fail `ENOSPC` on a healthy drive. Unset (unlimited) behaves as
+   before — the channel is a property of the configured bound, and
+   the dogfood default configures none.
 
 Chunking, deduplication, and per-object ingest ceilings (`Limits::V0`)
 bound one commit. They do not bound the count of commits.
@@ -130,9 +138,9 @@ implementation:
 | Item | Status | Required action |
 | --- | --- | --- |
 | SD-1 retained-byte subtraction | Implemented; documentation corrected above | None — every future removal path must call it |
-| A: receive-side admission ceiling | Decided, not implemented (enforcement exists only on the authoring path) | Track implementation and refusal tests; until it lands, a remote author can still spend a peer's local-write headroom |
-| B: residency-based refusal | Decided, implementation status unverified ("residency" in code currently means materialization possession, not refusal-to-advertise) | Inspect the advertisement and serving paths before claiming anything |
-| Four refusal acceptance tests | Missing | Add alongside implementation, not after it |
+| A: receive-side admission ceiling | Implemented (fetch/plan import legs plus the authoring path; vault-seeing counter seeded by the open-time vault walk; durable refusal ledger beside committed facts) | None — B stays separate; every future path adding durable bytes must consult the same gate |
+| B: residency-based refusal | Decided, implementation status unverified ("residency" in code currently means materialization possession, not refusal-to-advertise) | Inspect the advertisement and serving paths before claiming anything; explicitly out of scope for the A implementation |
+| Four refusal acceptance tests | Implemented for A (`tests_retention`: nothing stored and no claim; durable across restart; distinct from loss; orphans charged) | B-side tests ride the B implementation, not this one |
 
 Two misrepresentations are forbidden, and they are different
 failures with separate observable outcomes, tested separately:
@@ -162,17 +170,27 @@ on them:
 * A vault-seeing counter beside mirror accounting in `wyrd-sync`,
   recording the retained body and manifest bytes observed through
   vault replication so those untallied bytes participate in local
-  accounting. It lives beside mirror accounting where ciphertext
-  already lives, not as a widened `wyrd-format` `RetainedBytes`,
-  which the plaintext-world split reserves for plaintext accounting.
-* Durable refusal state the boot rebuild can consult. The state must
-  identify the refused retention/promise unit sufficiently for the
-  rebuild to preserve the same refusal decision — this document does
-  not fix the unit (content, representation, snapshot, or otherwise);
-  the implementation follow-up does.
+  accounting. Implemented (`VaultSeen` in `serving/mirror.rs`,
+  seeded by the vault open-time walk, incremented on every
+  newly-stored import). It lives beside mirror accounting where
+  ciphertext already lives, not as a widened `wyrd-format`
+  `RetainedBytes`, which the plaintext-world split reserves for
+  plaintext accounting.
+* Durable refusal state the boot rebuild can consult. Implemented
+  (`retention-refusals` sidecar in the drive directory, alongside
+  committed facts, never in the commit log): the ledger names each
+  refused unit (content, representation, or snapshot) with the
+  ceiling that refused it, so the rebuild preserves the same refusal
+  decision. A refusal mints no durable `Fact` and sends no wire
+  signal — the v0.3 prohibition stands, and the sidecar is the
+  form it permits.
 * `wyrd policy budgets` reports the ceiling that caused a refusal,
   alongside the reachable-content census and effective budgets, with
   local quota and receive-side ceilings shown as distinct numbers.
+  Implemented: the report renders both ceiling rows (one flag drives
+  both enforcement points) plus a refusal section with the ledger's
+  distinct ceilings; `sync now` counts refusals apart from every
+  loss class.
 
 ## What v0.3-v0.4 must not introduce
 
