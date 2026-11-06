@@ -57,7 +57,7 @@ use wyrd_sync::runtime::RoutePublishing;
 use wyrd_sync::transport::mailbox::Mailbox;
 
 // Pacing primitives live in wyrd-core (runtime sync, not process
-// policy); re-exported here until the Phase 3 shim removal.
+// policy); re-exported here for composing crates.
 pub use wyrd_core::wake::{Wake, WakeSignal};
 
 /// How the supervised loop thread ended, with everything it

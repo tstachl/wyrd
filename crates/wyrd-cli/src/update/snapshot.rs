@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Durable state that `__update_verify` must leave byte-identical:
+/// Durable-file capture that `__update_verify` must leave byte-identical:
 /// the custody record, the commit marker, the drive identity, and
 /// the commit set. Operational files (LOCK, the vault directory,
 /// `*.tmp` crash debris) are excluded by construction — the lock is
@@ -11,7 +11,10 @@ use std::path::{Path, PathBuf};
 /// never durable state. Commits record (name, size): content change
 /// without size change is corruption the commit chain itself
 /// detects, while any authored record changes the set.
-pub(crate) struct DurableSnapshot {
+///
+/// This is a capture of durable files for update verification, not a
+/// drive snapshot: it never enters the snapshot DAG.
+pub(crate) struct DurableFiles {
     pub(crate) keystore: Option<Vec<u8>>,
     pub(crate) current: Option<Vec<u8>>,
     pub(crate) drive: Option<Vec<u8>>,
@@ -26,7 +29,7 @@ fn read_optional(path: PathBuf) -> Result<Option<Vec<u8>>, CliError> {
     }
 }
 
-pub(crate) fn snapshot_durable_files(drive_dir: &Path) -> Result<DurableSnapshot, CliError> {
+pub(crate) fn capture_durable_files(drive_dir: &Path) -> Result<DurableFiles, CliError> {
     let mut commits = BTreeMap::new();
     match fs::read_dir(drive_dir.join("commits")) {
         Ok(entries) => {
@@ -57,7 +60,7 @@ pub(crate) fn snapshot_durable_files(drive_dir: &Path) -> Result<DurableSnapshot
             });
         }
     }
-    Ok(DurableSnapshot {
+    Ok(DurableFiles {
         keystore: read_optional(drive_dir.join("keystore"))?,
         current: read_optional(drive_dir.join("CURRENT"))?,
         drive: read_optional(drive_dir.join("DRIVE"))?,
@@ -65,14 +68,14 @@ pub(crate) fn snapshot_durable_files(drive_dir: &Path) -> Result<DurableSnapshot
     })
 }
 
-impl DurableSnapshot {
+impl DurableFiles {
     /// Every durable difference between two snapshots, oldest first.
     /// Empty means the verification authored nothing: no transition
     /// emitted (invariant 6), no migration landed as a commit
     /// (invariant 8), no derived cache was mistaken for authority
     /// (invariant 4 — derived state lives outside these files, so
     /// anything load-bearing the verify wrote would show here).
-    pub(crate) fn diff(&self, after: &DurableSnapshot) -> Vec<String> {
+    pub(crate) fn diff(&self, after: &DurableFiles) -> Vec<String> {
         let mut diffs = Vec::new();
         if self.keystore != after.keystore {
             diffs.push("keystore changed".to_owned());

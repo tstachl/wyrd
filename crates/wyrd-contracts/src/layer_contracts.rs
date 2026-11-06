@@ -1,7 +1,7 @@
 //! The workspace dependency DAG is a load-bearing architectural invariant:
 //! layers depend downward only (`wyrd-format → wyrd-sync → wyrd-core →
-//! presentation`), so the Phase 1 extraction cannot smuggle a backward
-//! edge while staying green. This module checks every member's
+//! presentation`), so no backward edge can be smuggled in while staying
+//! green. This module checks every member's
 //! `[dependencies]` against the declared policy and fails closed on any
 //! crate or edge the policy does not know: a new member, a new edge, or
 //! a new external dependency is a deliberate policy edit, never an

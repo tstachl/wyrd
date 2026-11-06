@@ -1,10 +1,10 @@
 //! `sync status` / `sync now`: headless sync over the keystore.
 //! Owns `SyncRunReport`, the stopping-verdict and rendering helpers,
 //! and the `sync` / `sync_now` runners; the dispatcher in `main.rs`
-//! calls in. `vault` (phase 4) keeps its own status renderer.
+//! calls in. `vault` keeps its own status renderer.
 use crate::args::SyncAction;
+use crate::composer::{park_serving_until_shutdown, shutdown_headless_serving};
 use crate::drive_config::{relay_source_line, LoadedConfig, RelayResolution, RelaySource};
-use crate::live::{park_serving_until_shutdown, shutdown_headless_serving};
 use crate::logging::init_sync_diagnostics;
 use crate::probes::combine_status;
 use crate::probes::TeardownStatus;
@@ -1266,7 +1266,7 @@ pub(crate) fn sync_now(
     // accountant that maintains it, so the same number gates the
     // authoring path and receive-path admission (DG-4 A).
     let (store, config, _retained) =
-        crate::live::open_store_with_quota(&drive_dir, retained_quota)?;
+        crate::composer::open_store_with_quota(&drive_dir, retained_quota)?;
     // Same startup cross-check as mount: headless runs compose a live
     // node too, so a misconfigured quota must fail here rather than
     // in the first write.

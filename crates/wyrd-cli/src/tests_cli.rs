@@ -781,7 +781,7 @@ fn invite_outcomes_render_distinctly() {
 /// `read_secret_file` fails closed before opening anything, and the
 /// shutdown handler stays a no-op because no drive can be opened there
 /// at all. Canonical scope statement is the Windows paragraph in
-/// `docs/architecture.md`; `docs/design/cli.md` and `live.rs` point at it
+/// `docs/architecture.md`; `docs/design/cli.md` and `composer.rs` point at it
 /// rather than restating it.
 #[test]
 fn credential_files_are_unix_only() {

@@ -81,7 +81,7 @@ pub(crate) fn run_update_verify(
             _ => unreachable!("just constructed incompatible"),
         })
     };
-    let pre = snapshot_durable_files(drive_dir)?;
+    let pre = capture_durable_files(drive_dir)?;
     let engine = match Engine::open_keystore(drive_dir.to_path_buf(), passphrase, identity) {
         Ok(engine) => engine,
         Err(error) => match classify_open_error(drive_dir, error) {
@@ -118,7 +118,7 @@ pub(crate) fn run_update_verify(
     checks.push("epoch keys restored for held epochs".to_owned());
     let transitions = engine.membership_log().observed_ids();
     let genesis = engine.membership_log().canonical_genesis();
-    let post = snapshot_durable_files(drive_dir)?;
+    let post = capture_durable_files(drive_dir)?;
     let diffs = pre.diff(&post);
     if !diffs.is_empty() {
         // Anything authored is a membership-affecting write until

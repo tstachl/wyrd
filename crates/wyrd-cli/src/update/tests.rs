@@ -250,7 +250,7 @@ fn open_errors_classify_to_verdict_or_operation() {
 
 #[test]
 fn durable_snapshot_diff_names_every_authored_change() {
-    let before = DurableSnapshot {
+    let before = DurableFiles {
         keystore: Some(b"ks".to_vec()),
         current: Some(b"c1".to_vec()),
         drive: Some(b"d".to_vec()),
@@ -260,7 +260,7 @@ fn durable_snapshot_diff_names_every_authored_change() {
         ]),
     };
     assert!(before
-        .diff(&DurableSnapshot {
+        .diff(&DurableFiles {
             keystore: Some(b"ks".to_vec()),
             current: Some(b"c1".to_vec()),
             drive: Some(b"d".to_vec()),
@@ -270,7 +270,7 @@ fn durable_snapshot_diff_names_every_authored_change() {
             ]),
         })
         .is_empty());
-    let after = DurableSnapshot {
+    let after = DurableFiles {
         keystore: Some(b"ks!".to_vec()),
         current: Some(b"c1".to_vec()),
         drive: Some(b"d".to_vec()),

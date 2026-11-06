@@ -1,6 +1,6 @@
 use wyrd_format::ContentId;
 
-use super::types::{ConflictVersion, Node, ViewError};
+use super::{ConflictVersion, Node, ViewError};
 
 /// Merge per-head resolutions: unanimous absence is not-found,
 /// unanimous presence with agreement serves, presence with all-dir

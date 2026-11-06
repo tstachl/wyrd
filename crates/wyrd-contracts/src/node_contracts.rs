@@ -1,7 +1,7 @@
 //! The node-without-a-backend contract: the composed node (engine,
 //! view, loop, channels) operates end to end with no presentation
 //! backend in the path — no `FuseBackend`, no fuser, no mount. This
-//! is the Phase 2 architectural proof: the provider edge is inverted
+//! is the architectural proof that the provider edge is inverted
 //! (backends build from the node's live parts), so driving the node
 //! headless exercises the same composition production mounts.
 //!
@@ -11,7 +11,7 @@
 //!
 //! Contract 36 goes one further: the loop, parts, and projection
 //! compose over a view type defined outside `wyrd-fuse` entirely,
-//! proving the Phase 3 genericity claim (any provider implements the
+//! proving the genericity claim (any provider implements the
 //! trait; the node never names one).
 
 use std::sync::atomic::{AtomicBool, Ordering};

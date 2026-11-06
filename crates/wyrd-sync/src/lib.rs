@@ -6,12 +6,13 @@
 //! - asymmetric peer roles: mirrors (hot state) and vaults (full history)
 //! - client-side encryption so vault peers store only opaque blobs
 //!
-//! Implemented so far: the control plane (sealed envelopes over a
+//! Implemented: the control plane (sealed envelopes over a
 //! mailbox), the runtime engine (membership intake, snapshot and
 //! manifest authoring, fetch plans with transport-root routing), the
-//! durable fact store, and the drive-local serving vault. The iroh
-//! endpoint wiring in the daemon and the mirror/vault peer roles are
-//! the remaining slices. The iroh version set is validated as a set;
+//! durable fact store, the drive-local serving vault, the iroh
+//! endpoint wiring (`serving/endpoint.rs`), and the mirror/vault peer
+//! roles (`serving/mirror.rs`, `wyrd-daemon/src/vault.rs`; contract 13).
+//! The iroh version set is validated as a set;
 //! change both together and run the full test suite.
 
 pub mod authorization;

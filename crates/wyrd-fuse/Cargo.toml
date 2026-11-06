@@ -3,7 +3,7 @@ name = "wyrd-fuse"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Wyrd's FUSE presentation layer: live view and conflict-version lookup"
+description = "Wyrd's mount-free read view: namespace-shaped reads over the format layer (the FUSE backend lives in wyrd-daemon)"
 
 [dependencies]
 wyrd-format.workspace = true

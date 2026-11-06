@@ -13,7 +13,7 @@
 
 use wyrd_format::Component;
 
-use super::types::{ConflictVersion, ViewError};
+use super::{ConflictVersion, ViewError};
 
 /// A parsed version reference: component `index` carries `@version` on
 /// top of the stored `name`.
