@@ -5,6 +5,9 @@ let
   unstable = import inputs.nixpkgs-unstable { system = pkgs.stdenv.system; };
 in
 {
+  env.NGIT_RELAY_TIMEOUT_SECS = 2;
+  env.NGIT_RELAY_CONNECT_TIMEOUT_SECS = 2;
+
   languages.javascript.enable = true;
   languages.javascript.bun.enable = true;
   languages.rust.enable = true;
@@ -20,6 +23,7 @@ in
     # Agent-facing development CLI (verbs encode the correct procedure);
     # see gate.toml and docs/collaboration-workflow.md.
     inputs.gate.packages.${pkgs.stdenv.system}.default
+    inputs.ngit.packages.${pkgs.stdenv.hostPlatform.system}.default
   ] ++ optionals isLinux [
     # Fast parallel linker for large debug artifacts. Only wired up when we
     # add .cargo/config.toml with -fuse-ld=mold; falls back to the system

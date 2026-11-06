@@ -16,5 +16,7 @@ inputs:
         follows: nixpkgs
   gate:
     url: git+https://grasp.t5.st/npub1k0y4eceal2zryes3azm6nsgt0r0jsa2v8zcsdf9uqxttn0jlfe9q04c9h8/gate.git?ref=refs/heads/master
+  ngit:
+    url: git+https://relay.ngit.dev/npub15qydau2hjma6ngxkl2cyar74wzyjshvl65za5k5rl69264ar2exs5cyejr/ngit.git?shallow=true&rev=2966f6811f7e504f162139659905d1ec764ad4d8
 imports:
 - gate/skill
