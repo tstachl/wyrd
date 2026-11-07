@@ -2918,6 +2918,118 @@ fn sync_status_prints_no_fetch_class() {
     }
 }
 
+/// OD-18-C parity: the desktop summary and the CLI render the same
+/// observation. Factual parity, never layout identity — the two
+/// share no line of copy by construction (the CLI says "delivered",
+/// the surface says "relay-accepted" for the same counts), so the
+/// table below checks facts, not text. Divergence here is a defect,
+/// not a platform variant.
+#[test]
+fn status_gui_and_cli_agree_on_the_same_observation() {
+    use wyrd_core::status_surface::{render_status_detail, render_status_summary, IntakeDeferral};
+
+    let fixture = Fixture::new();
+    {
+        let mut engine = fixture.open();
+        let mut store = FsObjectStore::open(fixture.drive.clone()).unwrap();
+        let chunk = store.insert(ObjectKind::Chunk, b"parity-bytes").unwrap();
+        let root = Tree::from_entries(vec![Entry::file("f", 12, false, vec![chunk]).unwrap()])
+            .unwrap()
+            .insert_into(&mut store)
+            .unwrap();
+        engine.author_snapshot(&store, root).unwrap();
+        engine.stage_carry_heads().unwrap();
+        let peer = DeviceIdentitySecret::generate().unwrap();
+        let encryption = DeviceEncryptionSecret::generate().unwrap();
+        engine
+            .admit_device(peer.device_id(), encryption.encryption_key())
+            .unwrap();
+        let store = FsObjectStore::open(fixture.drive.clone()).unwrap();
+        engine.carry_pending(&store).unwrap();
+    }
+    let engine = fixture.open();
+    let status = observe(&engine, 2).unwrap();
+    assert_eq!(
+        status.obligations.len(),
+        4,
+        "non-vacuous fixture: {status:?}"
+    );
+    let cli = sync_status_render(&status);
+    let intake = IntakeDeferral::NotObserved;
+    let summary = render_status_summary(&status, intake);
+    let detail = render_status_detail(&status, intake);
+
+    // The fact table: every value below names a committed fact, and
+    // every one renders in the CLI and in the surface (summary for
+    // the five groups, detail for the itemized rows).
+    let tip = status.tip.as_ref().expect("admission fixture has a tip");
+    let mut facts = vec![
+        tip.epoch.to_string(),
+        tip.transition_id.to_string(),
+        status.obligations.len().to_string(),
+        status.totals.announcements_queued.to_string(),
+        status.totals.transitions_queued.to_string(),
+        status.totals.capabilities_queued.to_string(),
+        status.live_heads.len().to_string(),
+        status.head_classes.eligible.to_string(),
+        status.queue.total().to_string(),
+        status.queue.outbox.to_string(),
+        status.queue.fetch.to_string(),
+        status.known_members.to_string(),
+        status.materialization.local_objects.to_string(),
+        status.durability.as_str().to_owned(),
+        status.mailbox.configured_relays.to_string(),
+    ];
+    for head in &status.live_heads {
+        facts.push(head.id.to_string());
+    }
+    for fact in &facts {
+        assert!(cli.contains(fact), "CLI carries fact {fact}:\n{cli}");
+        assert!(
+            summary.contains(fact) || detail.contains(fact),
+            "surface carries fact {fact}:\n{summary}\n---\n{detail}"
+        );
+    }
+    // Peer handles agree by construction: the same opaque numbering
+    // renders on both sides.
+    for entry in &status.peers {
+        let handle = format!("peer-{}", entry.handle);
+        assert!(cli.contains(&handle), "CLI names {handle}:\n{cli}");
+        assert!(
+            detail.contains(&handle),
+            "surface names {handle}:\n{detail}"
+        );
+    }
+    // The intended textual divergence, documented: same counts,
+    // honest words on each side. The CLI predates the surface and
+    // keeps its copy; the surface never says "delivered" bare.
+    assert!(cli.contains("delivered"), "CLI keeps its copy:\n{cli}");
+    assert!(
+        !summary.contains("delivered") && !detail.contains("delivered"),
+        "surface says relay-accepted, never delivered"
+    );
+    assert!(
+        summary.contains("relay-accepted") && detail.contains("relay-accepted"),
+        "the fact keeps its whole meaning on the surface"
+    );
+    // The standing sentences ride the surface permanently, on a
+    // backlog fixture as on an empty one.
+    for sentence in [
+        "Delivery means the relay accepted it.",
+        "This device cannot tell you whether it is missing history",
+    ] {
+        assert!(
+            summary.contains(sentence),
+            "summary carries the limit:\n{summary}"
+        );
+        assert!(
+            detail.contains(sentence),
+            "detail carries the limit:\n{detail}"
+        );
+    }
+}
+/// connected, so the line reads live and the recovery clause is
+/// the only variable.
 /// A live-attached mailbox posture for the pressure-counter tests:
 /// connected, so the line reads live and the recovery clause is
 /// the only variable.
