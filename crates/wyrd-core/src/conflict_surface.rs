@@ -9,10 +9,12 @@
 //!    no live head; that is not a conflict).
 //! 2. Inspect: one bounded, read-only root-path comparison built from
 //!    the merge plan the resolver UI already consumes (`MergePlan`),
-//!    filtered to `!agreed()` before rendering. The scope sentence
-//!    ("root paths only") rides every rendering, and a budget
-//!    exhaustion yields an explicitly incomplete result — never a
-//!    partial set presented as the complete set.
+//!    filtered to `!agreed()` in a single pass that builds at most
+//!    `budget` rows. The scope sentence ("root paths only") rides every
+//!    inspection rendering — the not-requested placeholder below says
+//!    the comparison was not run instead — and a budget exhaustion
+//!    yields an explicitly incomplete result, never a partial set
+//!    presented as the complete set.
 //! 3. Explain limits: membership freezes named with their remedy, and
 //!    unreadable branch contents rendered as unavailable — never an
 //!    empty document, never a zero-byte file, never evidence of
@@ -26,13 +28,17 @@
 //! affordance later — which is the point.
 //!
 //! Branch labels (OD-23-A option A): author device, epoch, short
-//! snapshot id. No `@N` anywhere in this module's output — not as a
-//! branch name, not as an inspection label, not as a plan column. The
-//! version-qualified lookup stays what it is today, something a person
-//! may type, never a promise the UI makes about numbering. Neither
-//! this module nor its tests implement version ordering: the grammar
-//! is `wyrd-fuse`'s (`grammar.rs`), and a second copy of the numbering
-//! would be a second answer to `docs/object-model.md:382`.
+//! snapshot id. Branch labels and plan columns never use `@N` — not as
+//! a branch name, not as an inspection label, not as a column. Stored
+//! root paths render verbatim, so an entry legitimately named `foo@1`
+//! shows as `foo@1`: that is the store's name winning, as the lookup
+//! grammar requires — never a version number this surface invented.
+//! The version-qualified lookup stays what it is today, something a
+//! person may type, never a promise the UI makes about numbering.
+//! Neither this module nor its tests implement version ordering: the
+//! grammar is `wyrd-fuse`'s (`grammar.rs`), and a second copy of the
+//! numbering would be a second answer to
+//! `docs/contracts/object-model.md:382-384`.
 //!
 //! When a host presenter exists to own person-visible copy, the
 //! rendering below migrates there and this module keeps the state
@@ -40,7 +46,7 @@
 //! mapping its tests pin (same arrangement as `relay_posture`,
 //! `status_surface`, and `storage_surface`).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use wyrd_format::{DeviceId, SnapshotId};
 use wyrd_sync::runtime::{MergePath, MergePlan};
@@ -104,12 +110,18 @@ impl DivergenceState {
     /// Build the verdict from the eligible heads. The caller supplies
     /// the heads (from `snapshot_heads` eligibility or `live_heads`
     /// summaries); the type supplies the verdict, so no caller can
-    /// re-mean a two-head drive as converged.
+    /// re-mean a two-head drive as converged. Duplicate submissions
+    /// collapse by snapshot id: passing the same head twice is one
+    /// head, not divergence.
     pub fn from_branches(branches: &[BranchHead]) -> DivergenceState {
-        if branches.len() >= 2 {
-            DivergenceState::Diverged {
-                branches: branches.to_vec(),
-            }
+        let mut seen = BTreeSet::new();
+        let unique: Vec<BranchHead> = branches
+            .iter()
+            .filter(|branch| seen.insert(branch.id))
+            .copied()
+            .collect();
+        if unique.len() >= 2 {
+            DivergenceState::Diverged { branches: unique }
         } else {
             DivergenceState::Converged
         }
@@ -183,8 +195,10 @@ pub enum NodeDivergence {
     /// differ: a DAG conflict that is not a path conflict. Serves as
     /// one directory (union of children), so no marker in a listing.
     DirectoryContent,
-    /// An ordinary node: agrees everywhere, or absent. Not a
-    /// divergence of any kind.
+    /// An ordinary node: agrees everywhere. (Absence is the caller's
+    /// `None`, never a `Node` — present-vs-absent lives in the
+    /// difference row, not in this classification.) Not a divergence
+    /// of any kind.
     None,
 }
 
@@ -254,6 +268,10 @@ impl InspectionOutcome {
 /// exceeds it, the outcome is `Incomplete` with the first `budget`
 /// rows shown. A `budget` of zero with differences present is
 /// incomplete, never empty-as-complete.
+///
+/// The pass is single and bounded: column labels compute once per
+/// head, and at most `budget` rows materialize — a large root with a
+/// small budget never builds the whole differing set.
 pub fn inspect_differences(
     plan: &MergePlan,
     branches: &[BranchHead],
@@ -261,47 +279,48 @@ pub fn inspect_differences(
 ) -> InspectionOutcome {
     let facts: BTreeMap<SnapshotId, &BranchHead> =
         branches.iter().map(|branch| (branch.id, branch)).collect();
-    let label = |id: &SnapshotId| -> String {
-        match facts.get(id) {
-            Some(branch) => branch.label(),
-            None => {
-                let hex = id.to_string();
-                let short: String = hex.chars().take(8).collect();
-                format!("snapshot {short}")
-            }
-        }
-    };
-    let differing: Vec<PathDifference> = plan
-        .paths
+    // One label per plan head, up front: rows below reuse them.
+    let columns: Vec<(SnapshotId, String)> = plan
+        .heads
         .iter()
-        .filter(|path| !path.agreed())
-        .map(|path| difference_row(path, &plan.heads, &label))
+        .map(|head| {
+            let label = match facts.get(head) {
+                Some(branch) => branch.label(),
+                None => {
+                    let hex = head.to_string();
+                    let short: String = hex.chars().take(8).collect();
+                    format!("snapshot {short}")
+                }
+            };
+            (*head, label)
+        })
         .collect();
-    if differing.len() <= budget {
-        InspectionOutcome::Complete {
-            differences: differing,
+    let mut shown = Vec::new();
+    let mut total_differing = 0;
+    for path in plan.paths.iter().filter(|path| !path.agreed()) {
+        total_differing += 1;
+        if shown.len() < budget {
+            shown.push(difference_row(path, &columns));
         }
+    }
+    if total_differing <= budget {
+        InspectionOutcome::Complete { differences: shown }
     } else {
-        let shown = differing.into_iter().take(budget).collect::<Vec<_>>();
         InspectionOutcome::Incomplete {
-            total_differing: plan.paths.iter().filter(|path| !path.agreed()).count(),
-            budget,
             shown,
+            total_differing,
+            budget,
         }
     }
 }
 
-fn difference_row(
-    path: &MergePath,
-    heads: &[SnapshotId],
-    label: &dyn Fn(&SnapshotId) -> String,
-) -> PathDifference {
+fn difference_row(path: &MergePath, columns: &[(SnapshotId, String)]) -> PathDifference {
     PathDifference {
         path: path.path.clone(),
-        cells: heads
+        cells: columns
             .iter()
-            .map(|head| BranchCell {
-                head: label(head),
+            .map(|(head, label)| BranchCell {
+                head: label.clone(),
                 present: path.versions.get(head).is_some_and(Option::is_some),
             })
             .collect(),

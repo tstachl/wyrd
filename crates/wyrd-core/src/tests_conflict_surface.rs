@@ -76,8 +76,10 @@ fn plan_two_heads_disagreeing() -> (MergePlan, Vec<BranchHead>) {
 /// DG-3's negative invariant, executable: every action the surface
 /// offers leaves the durable log byte-identical, the head set
 /// unchanged, and no new snapshot id behind. The surface takes no
-/// engine and nothing mutable, so this fails only if someone later
-/// adds an authoring affordance — which is the point.
+/// engine and nothing mutable, so no forked two-head fixture is needed
+/// to prove this — exercising every action against a live engine and
+/// asserting log-identity is the whole proof, and it fails only if
+/// someone later adds an authoring affordance, which is the point.
 #[test]
 fn conflict_surface_authors_no_snapshot() {
     let dir = std::env::temp_dir().join(format!(
@@ -396,6 +398,52 @@ fn inspection_budget_exhaustion_is_incomplete_never_partial_as_complete() {
     assert!(
         render_inspection(&empty).contains("no differing root paths"),
         "agreed plans render their emptiness"
+    );
+}
+
+/// Duplicate submissions collapse: passing the same head twice is one
+/// head, not divergence. The verdict counts distinct snapshot ids, so
+/// a caller holding a duplicated handle cannot report a diverged drive
+/// that is not diverged over eligible heads.
+#[test]
+fn duplicate_heads_do_not_diverge() {
+    let head = branch(0xA1, 3, 0x11);
+    assert_eq!(
+        DivergenceState::from_branches(&[head, head]),
+        DivergenceState::Converged,
+        "same snapshot twice is one head"
+    );
+    assert_eq!(
+        DivergenceState::from_branches(&[head, head, head]),
+        DivergenceState::Converged
+    );
+    assert!(
+        DivergenceState::from_branches(&heads_two()).is_diverged(),
+        "distinct heads still diverge"
+    );
+}
+
+/// Stored names pass through verbatim: a root entry legitimately named
+/// `foo@1` renders as `foo@1` because the store's name wins — the
+/// lookup grammar's rule, never a version number this surface invented.
+/// OD-23-A governs labels and columns, not suppression of stored names.
+#[test]
+fn stored_names_render_verbatim() {
+    let branches = heads_two();
+    let mut versions = BTreeMap::new();
+    versions.insert(branches[0].id, Some(file_entry("entry", 0x01)));
+    versions.insert(branches[1].id, None);
+    let plan = MergePlan {
+        heads: vec![branches[0].id, branches[1].id],
+        paths: vec![MergePath {
+            path: "foo@1".into(),
+            versions,
+        }],
+    };
+    let rendered = render_inspection(&inspect_differences(&plan, &branches, 64));
+    assert!(
+        rendered.contains("foo@1"),
+        "stored name verbatim, not suppressed:\n{rendered}"
     );
 }
 
