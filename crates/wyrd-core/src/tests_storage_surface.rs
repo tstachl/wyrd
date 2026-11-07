@@ -259,7 +259,10 @@ fn storage_screen_names_which_full_it_ruled_out() {
     };
 
     // 1. Ceiling configured and reached: the one identified case.
-    let reached = assess_refusal(measured(70000), Some(65536));
+    // The estimate rides along: a count below the ceiling whose
+    // estimate crosses it is still the ceiling's refusal (the live
+    // gate refuses at count-plus-estimate).
+    let reached = assess_refusal(measured(70000), Some(65536), 0);
     assert_eq!(
         reached,
         RefusalAssessment::CeilingRefused {
@@ -271,9 +274,28 @@ fn storage_screen_names_which_full_it_ruled_out() {
     assert!(reached_copy.contains("70000") && reached_copy.contains("65536"));
     assert!(reached_copy.contains("operator-selected refusal boundary over retained content only"));
 
+    // The B1 regression: retained 60000, ceiling 65536, estimate
+    // 10000 — the commit gate refuses (70000 >= 65536), so the
+    // screen must identify the ceiling, never exonerate it. With
+    // no estimate the same count exonerates.
+    assert_eq!(
+        assess_refusal(measured(60000), Some(65536), 10000),
+        RefusalAssessment::CeilingRefused {
+            bytes: 60000,
+            ceiling: 65536
+        }
+    );
+    assert_eq!(
+        assess_refusal(measured(60000), Some(65536), 0),
+        RefusalAssessment::CeilingExonerated {
+            bytes: 60000,
+            ceiling: 65536
+        }
+    );
+
     // 2. No ceiling: unattributable, and the copy says the two host
     // causes cannot be distinguished.
-    let no_ceiling = assess_refusal(measured(70000), None);
+    let no_ceiling = assess_refusal(measured(70000), None, 0);
     assert_eq!(no_ceiling, RefusalAssessment::Unattributable);
     let no_ceiling_copy = explain_refusal(no_ceiling);
     assert!(no_ceiling_copy.contains("no retention ceiling is configured"));
@@ -282,7 +304,7 @@ fn storage_screen_names_which_full_it_ruled_out() {
 
     // 3. Ceiling configured but not reached: the ceiling is
     // exonerated, and the copy refuses the positive host diagnosis.
-    let exonerated = assess_refusal(measured(100), Some(65536));
+    let exonerated = assess_refusal(measured(100), Some(65536), 0);
     assert_eq!(
         exonerated,
         RefusalAssessment::CeilingExonerated {
@@ -302,11 +324,11 @@ fn storage_screen_names_which_full_it_ruled_out() {
 
     // Unmeasured or unreachable counts compare against nothing.
     assert_eq!(
-        assess_refusal(StorageReading::Unmeasured, Some(65536)),
+        assess_refusal(StorageReading::Unmeasured, Some(65536), 10000),
         RefusalAssessment::CannotCompare
     );
     assert_eq!(
-        assess_refusal(StorageReading::Unavailable, Some(65536)),
+        assess_refusal(StorageReading::Unavailable, Some(65536), 10000),
         RefusalAssessment::CannotCompare
     );
     let cannot_copy = explain_refusal(RefusalAssessment::CannotCompare);
@@ -437,7 +459,7 @@ fn standing_and_census_carry_their_own_observation_times() {
         "standing figure timestamps itself:\n{rendered}"
     );
     assert!(
-        rendered.contains("distance to refusal: 57 bytes below the ceiling"),
+        rendered.contains("distance to refusal: 57 bytes of retention headroom"),
         "live distance, not a cached verdict:\n{rendered}"
     );
 
@@ -487,4 +509,35 @@ fn one_screen_orders_census_above_quota() {
     // never a zero.
     let bare = render_storage_screen(&standing, None, None);
     assert!(bare.contains("not requested in this view"));
+}
+
+/// NB2/NB3 follow-ups: the quadrant figure's label already ends in a
+/// colon, so the render must not add a second; and an
+/// `Unmeasured`-with-ceiling pair renders the known ceiling row,
+/// never a no-ceiling sentence.
+#[test]
+fn census_and_unmeasured_render_without_false_claims() {
+    let census = census_fixture();
+    let rendered = render_census(Some(CensusReading {
+        census: &census,
+        observed_unix_secs: 1,
+    }));
+    assert!(
+        !rendered.contains("files::"),
+        "the label carries its own colon:\n{rendered}"
+    );
+    assert!(rendered.contains("files: 1 pinned present"));
+
+    // A directly-constructed inconsistent pair cannot render a false
+    // ceiling claim: the ceiling row states what is known.
+    let paired = StandingStorage {
+        reading: StorageReading::Unmeasured,
+        ceiling: Some(1024),
+    }
+    .render();
+    assert!(paired.contains("retained_bytes_quota: 1024"));
+    assert!(
+        !paired.contains("no retention ceiling is set"),
+        "known ceiling never renders as no-ceiling:\n{paired}"
+    );
 }

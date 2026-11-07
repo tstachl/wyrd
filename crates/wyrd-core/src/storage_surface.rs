@@ -4,10 +4,12 @@
 //! One screen answers one user question — how much of the drive is
 //! here, and how much is intended to be — with the census figures
 //! above and the quota half below. Every figure name comes from the
-//! DG-5 closed vocabulary ([`StorageFigure::label`]); a figure
-//! without a variant has no label to print, so the surface cannot
-//! emit it. The forbidden words ([`FORBIDDEN_STORAGE_WORDS`]) never
-//! render, in any casing.
+//! closed vocabulary the DG-5 table drafts
+//! ([`StorageFigure::label`]; the decision belongs to the named
+//! decider, this screen only renders rows it did not write). A
+//! figure without a variant has no label to print, so the surface
+//! cannot emit it. The forbidden words
+//! ([`FORBIDDEN_STORAGE_WORDS`]) never render, in any casing.
 //!
 //! Two halves with different cadences (OD-31-A): the quota half is
 //! standing — the retained count is an atomic load on the counter
@@ -105,7 +107,11 @@ impl StandingStorage {
 
     /// Render the standing half: figure, ceiling with its refusal
     /// scope, distance to refusal, and observation time. Every figure
-    /// name is a [`StorageFigure`] label.
+    /// name is a [`StorageFigure`] label. The ceiling row renders in
+    /// every arm — a known ceiling does not vanish when the count is
+    /// unmeasured or unreachable — and a directly-constructed
+    /// `Unmeasured`-with-ceiling pair renders as
+    /// ceiling-known-count-unknown, never as no-ceiling.
     pub fn render(&self) -> String {
         let mut out = String::new();
         match self.reading {
@@ -117,58 +123,72 @@ impl StandingStorage {
                     "{}: {bytes} bytes (observed unix {observed_unix_secs})\n",
                     StorageFigure::RetainedContent.label(),
                 ));
-                match self.ceiling {
-                    Some(ceiling) => {
-                        // No bare quota number: DG-5 forbids a quota
-                        // rendering that omits its refusal scope, so
-                        // the scope rides the same sentence.
+                out.push_str(&self.ceiling_row());
+                if let Some(ceiling) = self.ceiling {
+                    if bytes >= ceiling {
+                        out.push_str(
+                            "  distance to refusal: at or above the ceiling — writes refuse\n",
+                        );
+                    } else {
+                        // Retention headroom, not write headroom: a
+                        // write's own estimated size counts against
+                        // the ceiling too, so a near-boundary count
+                        // can still refuse.
                         out.push_str(&format!(
-                            "  {}: {ceiling} (operator-selected refusal boundary over retained content only; not a ceiling on the device)\n",
-                            StorageFigure::RetainedQuota.label()
-                        ));
-                        if bytes >= ceiling {
-                            out.push_str(
-                                "  distance to refusal: at or above the ceiling — writes refuse\n",
-                            );
-                        } else {
-                            out.push_str(&format!(
-                                "  distance to refusal: {} bytes below the ceiling\n",
-                                ceiling - bytes
-                            ));
-                        }
-                    }
-                    None => {
-                        out.push_str(&format!(
-                            "  {}: no retention ceiling is set on this device (unset: local writes and fetched content admit without a retention refusal)\n",
-                            StorageFigure::RetainedQuota.label()
+                            "  distance to refusal: {} bytes of retention headroom (a write's own estimated size counts against the ceiling too)\n",
+                            ceiling - bytes
                         ));
                     }
                 }
             }
             StorageReading::Unmeasured => {
                 out.push_str(&format!(
-                    "{}: not measured (no retention ceiling is configured on this device)\n",
+                    "{}: not measured (the retained count was not observed on this device)\n",
                     StorageFigure::RetainedContent.label(),
                 ));
-                out.push_str(&format!(
-                    "  {}: no retention ceiling is set on this device (unset: local writes and fetched content admit without a retention refusal)\n",
-                    StorageFigure::RetainedQuota.label()
-                ));
+                // This line names the accountant state, not the
+                // ceiling — the ceiling row below states that.
+                out.push_str(&self.ceiling_row());
             }
             StorageReading::Unavailable => {
                 out.push_str(&format!(
                     "{}: unavailable (the owner or observation mechanism is unreachable; no old observation is shown as current)\n",
                     StorageFigure::RetainedContent.label(),
                 ));
+                out.push_str(&self.ceiling_row());
             }
         }
         out
+    }
+
+    /// The ceiling row shared by every arm: the quota with its
+    /// refusal scope, or the no-ceiling sentence. Never "unlimited".
+    fn ceiling_row(&self) -> String {
+        match self.ceiling {
+            // No bare quota number: DG-5 forbids a quota rendering
+            // that omits its refusal scope, so the scope rides the
+            // same sentence.
+            Some(ceiling) => format!(
+                "  {}: {ceiling} (operator-selected refusal boundary over retained content only; not a ceiling on the device)\n",
+                StorageFigure::RetainedQuota.label()
+            ),
+            None => format!(
+                "  {}: no retention ceiling is set on this device (unset: local writes and fetched content admit without a retention refusal)\n",
+                StorageFigure::RetainedQuota.label()
+            ),
+        }
     }
 }
 
 /// What the available measurements establish about a refused write
 /// (OD-31-B): exactly one arm is the identified ceiling refusal;
 /// every other arm says what cannot be established.
+///
+/// The live gate refuses at count-plus-estimate (`retained +
+/// estimate >= limit`), so the assessment takes the refused write's
+/// estimated size alongside the reading: a count below the ceiling
+/// whose estimate crosses it is a ceiling refusal, not an
+/// exoneration. A zero estimate reduces to the count comparison.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RefusalAssessment {
     /// Ceiling configured and the measured count at or above it: the
@@ -186,11 +206,16 @@ pub enum RefusalAssessment {
     CannotCompare,
 }
 
-/// Classify a refused write from the reading at refusal time. Pure:
-/// the caller supplies the observation, the type supplies the words.
-/// Call this when a write was actually refused — the standing render
+/// Classify a refused write from the reading at refusal time plus
+/// the refused write's estimated size. Pure: the caller supplies the
+/// observation and the estimate, the type supplies the words. Call
+/// this when a write was actually refused — the standing render
 /// above never claims a refusal on its own.
-pub fn assess_refusal(reading: StorageReading, ceiling: Option<u64>) -> RefusalAssessment {
+pub fn assess_refusal(
+    reading: StorageReading,
+    ceiling: Option<u64>,
+    estimate: u64,
+) -> RefusalAssessment {
     match (reading, ceiling) {
         (
             StorageReading::Measured {
@@ -198,7 +223,9 @@ pub fn assess_refusal(reading: StorageReading, ceiling: Option<u64>) -> RefusalA
                 observed_unix_secs: _,
             },
             Some(ceiling),
-        ) if bytes >= ceiling => RefusalAssessment::CeilingRefused { bytes, ceiling },
+        ) if bytes.saturating_add(estimate) >= ceiling => {
+            RefusalAssessment::CeilingRefused { bytes, ceiling }
+        }
         (_, None) => RefusalAssessment::Unattributable,
         (
             StorageReading::Measured {
@@ -270,7 +297,7 @@ pub fn render_census(reading: Option<CensusReading<'_>>) -> String {
         census.pinned_chunk_union().len(),
     ));
     out.push_str(&format!(
-        "{}: {} pinned present, {} pinned absent, {} remote-only present, {} remote-only absent (reachable content only; observed unix {})\n",
+        "{} {} pinned present, {} pinned absent, {} remote-only present, {} remote-only absent (reachable content only; observed unix {})\n",
         StorageFigure::QuadrantFiles.label(),
         census.quadrant(RetentionPolicy::Pinned, LocalPresence::Present),
         census.quadrant(RetentionPolicy::Pinned, LocalPresence::Absent),
