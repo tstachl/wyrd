@@ -267,7 +267,8 @@ fn storage_screen_names_which_full_it_ruled_out() {
         reached,
         RefusalAssessment::CeilingRefused {
             bytes: 70000,
-            ceiling: 65536
+            ceiling: 65536,
+            estimate: 0,
         }
     );
     let reached_copy = explain_refusal(reached);
@@ -282,8 +283,16 @@ fn storage_screen_names_which_full_it_ruled_out() {
         assess_refusal(measured(60000), Some(65536), 10000),
         RefusalAssessment::CeilingRefused {
             bytes: 60000,
-            ceiling: 65536
+            ceiling: 65536,
+            estimate: 10000,
         }
+    );
+    // The near-boundary explanation names the estimate, so the
+    // below-ceiling count does not read as a contradiction.
+    let near_boundary = explain_refusal(assess_refusal(measured(60000), Some(65536), 10000));
+    assert!(
+        near_boundary.contains("estimated 10000 bytes pushed the total over the ceiling"),
+        "near-boundary refusal names the estimate:\n{near_boundary}"
     );
     assert_eq!(
         assess_refusal(measured(60000), Some(65536), 0),
@@ -389,6 +398,7 @@ fn storage_screen_shows_only_figures_with_a_named_population() {
         explain_refusal(RefusalAssessment::CeilingRefused {
             bytes: 2048,
             ceiling: 1024,
+            estimate: 0,
         }),
         explain_refusal(RefusalAssessment::Unattributable),
     ];

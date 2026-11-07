@@ -191,9 +191,15 @@ impl StandingStorage {
 /// exoneration. A zero estimate reduces to the count comparison.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RefusalAssessment {
-    /// Ceiling configured and the measured count at or above it: the
-    /// one case the screen can identify.
-    CeilingRefused { bytes: u64, ceiling: u64 },
+    /// Ceiling configured and the measured count plus the refused
+    /// write's estimate at or above it: the one case the screen can
+    /// identify. The estimate rides the arm so the explanation can
+    /// name what pushed a below-ceiling count over.
+    CeilingRefused {
+        bytes: u64,
+        ceiling: u64,
+        estimate: u64,
+    },
     /// No ceiling configured: Wyrd cannot attribute the refusal to
     /// its own ceiling.
     Unattributable,
@@ -223,9 +229,11 @@ pub fn assess_refusal(
                 observed_unix_secs: _,
             },
             Some(ceiling),
-        ) if bytes.saturating_add(estimate) >= ceiling => {
-            RefusalAssessment::CeilingRefused { bytes, ceiling }
-        }
+        ) if bytes.saturating_add(estimate) >= ceiling => RefusalAssessment::CeilingRefused {
+            bytes,
+            ceiling,
+            estimate,
+        },
         (_, None) => RefusalAssessment::Unattributable,
         (
             StorageReading::Measured {
@@ -243,10 +251,25 @@ pub fn assess_refusal(
 /// what the measurements cannot distinguish instead of choosing.
 pub fn explain_refusal(assessment: RefusalAssessment) -> String {
     match assessment {
-        RefusalAssessment::CeilingRefused { bytes, ceiling } => format!(
-            "the configured Wyrd ceiling refused the write: {} {bytes} bytes against a ceiling of {ceiling} bytes (operator-selected refusal boundary over retained content only; not a ceiling on the device)\n",
-            StorageFigure::RetainedContent.label(),
-        ),
+        RefusalAssessment::CeilingRefused {
+            bytes,
+            ceiling,
+            estimate,
+        } => {
+            let mut line = format!(
+                "the configured Wyrd ceiling refused the write: {} {bytes} bytes against a ceiling of {ceiling} bytes (operator-selected refusal boundary over retained content only; not a ceiling on the device)\n",
+                StorageFigure::RetainedContent.label(),
+            );
+            // Near-boundary refusals read as contradictions without
+            // this: a count below the ceiling refused because the
+            // write's own size pushed the total over.
+            if estimate > 0 && bytes < ceiling {
+                line.push_str(&format!(
+                    "the refused write's estimated {estimate} bytes pushed the total over the ceiling\n"
+                ));
+            }
+            line
+        }
         RefusalAssessment::Unattributable => "Wyrd cannot attribute this refusal to its own ceiling: no retention ceiling is configured on this device. The refusal may be due to host filesystem capacity or a host filesystem quota; the available measurements cannot distinguish those causes.\n".to_owned(),
         RefusalAssessment::CeilingExonerated { bytes, ceiling } => format!(
             "the configured ceiling does not explain this refusal: {bytes} bytes is below the ceiling of {ceiling} bytes. The underlying cause is not established by the available measurements.\n",
