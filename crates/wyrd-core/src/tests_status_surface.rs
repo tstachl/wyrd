@@ -451,3 +451,55 @@ fn every_status_field_is_accounted() {
     let _ = DeviceId::from_bytes([0u8; 32]);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+/// N1 follow-up: the tip-less path renders the live-head count
+/// rather than collapsing to "none", so summary and detail agree
+/// even in the impossible-but-unproven state.
+#[test]
+fn tipless_summary_names_live_heads_like_detail() {
+    let (engine, dir) = scratch_authored();
+    let mut status = observe(&engine, 0).unwrap();
+    assert!(!status.live_heads.is_empty());
+    status.tip = None;
+    let summary = render_status_summary(&status, IntakeDeferral::NotObserved);
+    let detail = render_status_detail(&status, IntakeDeferral::NotObserved);
+    assert!(
+        summary.contains("no membership tip"),
+        "tip-less state named:\n{summary}"
+    );
+    assert!(
+        summary.contains(&status.live_heads.len().to_string()),
+        "heads not collapsed to none:\n{summary}"
+    );
+    assert!(detail.contains("membership: none observed"));
+    assert!(detail.contains("live heads: 1"));
+
+    // And the reachable tip-less shape (no tip, no heads) agrees too.
+    status.live_heads.clear();
+    let summary = render_status_summary(&status, IntakeDeferral::NotObserved);
+    assert!(summary.contains("heads: none observed (no membership tip)"));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// N2 follow-up: the surface renders the shared idle reading
+/// (`RELAY_IDLE_LINE`, identical to the CLI's `MAILBOX_IDLE_LINE`),
+/// never a paraphrase, so the status, now, and posture surfaces
+/// cannot drift apart.
+#[test]
+fn idle_line_is_the_shared_reading() {
+    use crate::relay_posture::RELAY_IDLE_LINE;
+
+    assert_eq!(RELAY_IDLE_LINE, "mailbox: idle (no --relay given)\n");
+    let (engine, dir) = scratch_authored();
+    let status = observe(&engine, 0).unwrap();
+    for rendering in [
+        render_status_summary(&status, IntakeDeferral::NotObserved),
+        render_status_detail(&status, IntakeDeferral::NotObserved),
+    ] {
+        assert!(
+            rendering.contains(RELAY_IDLE_LINE),
+            "shared idle reading, never a paraphrase:\n{rendering}"
+        );
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}

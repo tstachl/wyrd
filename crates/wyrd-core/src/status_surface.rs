@@ -36,6 +36,7 @@
 
 use wyrd_sync::runtime::DrainReport;
 
+use super::relay_posture::RELAY_IDLE_LINE;
 use super::status::SyncStatus;
 
 /// Standing sentence one (OD-18-A): delivery is relay acceptance,
@@ -123,7 +124,20 @@ pub fn render_status_summary(status: &SyncStatus, intake: IntakeDeferral) -> Str
                 classes.rejected,
             ));
         }
-        None => out.push_str("heads: none observed (no membership tip)\n"),
+        None => {
+            // No membership tip observed. Live heads normally require
+            // a tip, but the summary never assumes it: if heads exist
+            // without a tip, their count still renders rather than
+            // collapsing to "none" and disagreeing with the detail.
+            if status.live_heads.is_empty() {
+                out.push_str("heads: none observed (no membership tip)\n");
+            } else {
+                out.push_str(&format!(
+                    "heads: {} live (no membership tip)\n",
+                    status.live_heads.len()
+                ));
+            }
+        }
     }
     // 3. Delivery obligations: queued vs relay-accepted vs pending.
     // "Delivered" never renders bare: the fact's whole meaning is
@@ -152,7 +166,7 @@ pub fn render_status_summary(status: &SyncStatus, intake: IntakeDeferral) -> Str
         status.known_members,
     ));
     if status.mailbox.configured_relays == 0 {
-        out.push_str("mailbox: idle (no --relay given)\n");
+        out.push_str(RELAY_IDLE_LINE);
     } else {
         out.push_str(&format!(
             "mailbox: {} relays configured (liveness visible on sync now or mount)\n",
@@ -300,7 +314,7 @@ pub fn render_status_detail(status: &SyncStatus, intake: IntakeDeferral) -> Stri
         classes.rejected,
     ));
     if status.mailbox.configured_relays == 0 {
-        out.push_str("mailbox: idle (no --relay given)\n");
+        out.push_str(RELAY_IDLE_LINE);
     } else {
         out.push_str(&format!(
             "mailbox: {} relays configured (liveness visible on sync now or mount)\n",
