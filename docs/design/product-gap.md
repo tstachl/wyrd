@@ -32,6 +32,18 @@ A document skill or doc-gap pass covers obvious contradictions. User
 comprehension does not need post-hoc edits to misleading prose — it needs
 the answers above to have a surface, a flow, and a test.
 
+Completion mechanism (small, repeatable): after creating a drive, the
+user can answer from the app alone — in their own words, without
+architecture vocabulary:
+
+- Which devices have complete copies?
+- What happens when this computer goes offline?
+- Can the vault operator read my files?
+- Can I recover if I lose this computer?
+
+Displaying text is not sufficient. If the user cannot answer, first-run
+is not complete.
+
 ## Definitions
 
 - **Commit.** A local mutation is durable when the owner reports success
@@ -63,9 +75,26 @@ Goal: source-of-truth status a person can act on.
 
   Human-readable status is derived from these rows. Example: `Available offline` = owner running, local work possible, remote delivery unavailable. Failed probe is not proof the owner died (see `../contracts/sync-and-peers.md` forget-contract epistemic limits).
 - **Storage accounting** (report-only first, from existing probes):
-  - *Library accounting* — logical retained content, materialized content, structural metadata.
-  - *Device capacity accounting* — physical ciphertext, other local cache, total filesystem consumption for the drive directory. Do not sum rows across the two groups; the source is probes, not UI arithmetic. See `wyrd policy budgets` / `wyrd policy cache status` (materialization policy vs capacity caps).
+  Do not let the UI inherit the GC accounting model simply because both
+  discuss storage. Distinguish:
+  - *GC accounting units* (internal, in `storage-growth.md` / GC note):
+    retained, ciphertext, structural metadata, orphan bytes.
+  - *Product measurements* (user-visible): logical retained content,
+    materialized content, structural metadata, cache, physical
+    ciphertext, total filesystem consumption for the drive directory.
+  Do not sum rows across the two groups; the source is probes, not UI
+  arithmetic. See `wyrd policy budgets` / `wyrd policy cache status`
+  (materialization policy vs capacity caps).
   - First release is report-only. A user can safely evict locally cached content under local policy; they cannot infer retained content is globally reclaimable. A separate narrowly-scoped cache-evict op is allowed only where already contractually supported.
+
+Acceptance: v0.4 minimum (must ship for a usable first desktop release)
+is owner availability + local offline operation, basic report-only
+storage measurements, safe install/upgrade/restart/uninstall, and
+conflict detection where existing reconciliation evidence supports it.
+Full consumer-friendly storage recommendations, advanced conflict
+resolution, and comprehensive cross-platform packaging are longer-term
+and do not block that minimum. This is a scheduling split, not a
+weakening of guarantees.
 - **Candidate problems for review:** desktop boot while offline, owner
   process death, malformed membership announcements surfaced as
   `unknown` instead of "sync failed."
@@ -161,7 +190,7 @@ Acceptance:
   history. Retention determines whether older content remains available;
   the UI must not imply indefinite availability unless guaranteed.
 
-### 7. Installation and upgrade lifecycle (v0.4)
+### 6. Installation and upgrade lifecycle (v0.4)
 
 Goal: predictable behavior across application lifecycle, not just daemon
 lifecycle.
@@ -176,10 +205,14 @@ Acceptance:
 - Upgrade and reinstall test preserves `wyrd export` round-trip (files,
   permissions, symlinks, exec bit) and the store's crash-consistency
   posture per `../contracts/crash-consistency.md`.
+- Existing drive identity and membership remain intact; existing
+  snapshots and retained objects remain accessible; pending durable
+  obligations (outbox obligations, undelivered announcements) survive
+  restart; no reinitialization or implicit destructive migration occurs.
 - Uninstall leaves the store intact (explicitly separate from any
   `wyrd vault` retention decision).
 
-### 6. Differentiator verification (v0.9 soak)
+### 7. Differentiator verification (v0.9 soak)
 
 Goal: separate integrity / confidentiality / availability claims.
 
