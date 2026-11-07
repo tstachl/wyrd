@@ -11,6 +11,7 @@
 //! never its definition.
 
 pub mod budgets;
+pub mod conflict_surface;
 pub mod export;
 pub mod live;
 pub mod mailbox;
