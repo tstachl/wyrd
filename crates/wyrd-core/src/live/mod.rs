@@ -336,6 +336,29 @@ pub struct LiveParts<V: NamespaceView> {
     /// re-checking promptly (deferral only — never a correctness loss,
     /// spurious wakeups are harmless).
     pub paused: Arc<AtomicBool>,
+    /// The retained-bytes accountant, shared with the store that
+    /// writes: the storage screen's standing figure reads its atomic
+    /// count through this handle instead of opening the store
+    /// (drive ownership: only the owner opens the store). `None`
+    /// when no ceiling is configured — composition refuses the
+    /// mismatched pairing, so a `Some` quota always has its counter.
+    /// The screen renders `None` as unmeasured, never zero.
+    pub retained_bytes: Option<Arc<RetainedBytes>>,
+}
+
+impl<V: NamespaceView> LiveParts<V> {
+    /// The standing storage figure for the screen: the live atomic
+    /// count plus the ceiling it is compared against, stamped at
+    /// read time. The screen's only read path for the quota half —
+    /// it never opens the store (drive ownership: only the owner
+    /// opens the store). A `None` accountant renders unmeasured,
+    /// never zero.
+    pub fn standing_storage(&self) -> crate::storage_surface::StandingStorage {
+        crate::storage_surface::StandingStorage::read(
+            self.retained_bytes.as_deref(),
+            self.budgets.retained_bytes_quota,
+        )
+    }
 }
 
 impl<V> LiveNode<V>
@@ -450,6 +473,7 @@ where
             freshness: Arc::clone(&freshness),
             observation: Arc::clone(&observation),
             paused: Arc::clone(&paused),
+            retained_bytes: config.retained_bytes.clone(),
         };
         Ok((
             LiveNode {
