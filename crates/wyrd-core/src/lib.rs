@@ -26,6 +26,7 @@ pub mod scrub;
 pub mod session;
 pub mod status;
 pub mod status_surface;
+pub mod storage_surface;
 pub mod vault;
 pub mod view;
 pub mod wake;
