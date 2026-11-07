@@ -52,18 +52,23 @@ the answers above to have a surface, a flow, and a test.
 
 Goal: source-of-truth status a person can act on.
 
-- **Owner health states** (visible, not log-only):
-  `available`, `local-only` (offline capable), `remote-external` (check
-  via relay), `stale` (owner died, cannot open). Distinguish "cannot
-  open" from "open but offline."
-- **Storage accounting** (report-only, from existing probes):
-  logical library size, materialized content, structural metadata, cache,
-  physical ciphertext — sourced from `wyrd policy budgets` /
-  `wyrd policy cache status` (materialization policy vs capacity caps).
-  No byte total invents a new measurement.
+- **Owner dimensions** (visible, not log-only — do not collapse to one `stale` enum):
+
+  | Dimension | Observation |
+  |---|---|
+  | Owner process | `available` / `unavailable` / `unknown` |
+  | Local operations | `available` / `unavailable` |
+  | Remote delivery | `connected` / `degraded` / `unavailable` / `unknown` |
+  | Local data | `available` / `partially materialized` / `unavailable` |
+
+  Human-readable status is derived from these rows. Example: `Available offline` = owner running, local work possible, remote delivery unavailable. Failed probe is not proof the owner died (see `../contracts/sync-and-peers.md` forget-contract epistemic limits).
+- **Storage accounting** (report-only first, from existing probes):
+  - *Library accounting* — logical retained content, materialized content, structural metadata.
+  - *Device capacity accounting* — physical ciphertext, other local cache, total filesystem consumption for the drive directory. Do not sum rows across the two groups; the source is probes, not UI arithmetic. See `wyrd policy budgets` / `wyrd policy cache status` (materialization policy vs capacity caps).
+  - First release is report-only. A user can safely evict locally cached content under local policy; they cannot infer retained content is globally reclaimable. A separate narrowly-scoped cache-evict op is allowed only where already contractually supported.
 - **Candidate problems for review:** desktop boot while offline, owner
   process death, malformed membership announcements surfaced as
-  `unknown/stale` instead of "sync failed."
+  `unknown` instead of "sync failed."
 
 Acceptance:
 - v0.4 desktop shows owner status and can complete local work offline.
@@ -72,22 +77,28 @@ Acceptance:
 
 ### 2. Conflict visibility and naming (v0.4-0.5)
 
-Goal: detection at write time, resolution later by an inspectable
+Goal: detection when sufficient evidence exists, resolution later by an inspectable
 snapshot flow. Do not couple UI to Merkle DAG internals.
 
-- **Indicator:** multi-head state is visible immediately when two heads
-  exist (reconcile state, `sync-and-peers.md` forget contract). Never
-  auto-merge.
+- **Indicator:** multi-head state is visible as soon as the local system
+  has sufficient evidence of multiple heads (reconcile state,
+  `sync-and-peers.md` forget contract). A local `write()` alone does not
+  know a remote peer concurrently wrote. Absence of an indicator does not
+  prove no concurrent remote edit. Never auto-merge.
 - **Resolve:** version addresses via `@N` lookup (never listed by
   `readdir`); export shows `name@N` siblings. Resolution authoring is
-  v0.5 — see `docs/design/cli.md` conflict-version lookup.
+  v0.5 — see `docs/design/cli.md` conflict-version lookup. The desktop
+  surface uses author/time context and preserves both versions; it does
+  not require users to understand version numbering.
 - **Guidepost:** "conflict = two heads" is a category error for users.
   Surface as "we have two versions of this file" with author + time-ordered
   display and a keep-both choice.
 
 Acceptance:
-- Concurrent edits produce an indicator in the desktop app and an
-  inspectable `wyrd snapshot conflict` evidence trail.
+- Concurrent edits produce an indicator in the desktop app once heads are
+  known, plus an inspectable `wyrd snapshot conflict` evidence trail.
+- Resolving a conflict is a new durable snapshot. It never erases the
+  competing snapshot or rewrites history.
 - `name@N` browsing works from the filesystem surface without
   understanding SnapshotId ordering.
 
@@ -105,7 +116,14 @@ and materializes only a subset.
 
 Acceptance:
 - New device with metadata only + 2GB pinned completes first-run sync in
-  bounded time and can open pinned files.
+  bounded time and can open pinned files. A bound needs both logical
+  bytes and object/path count (metadata footprint varies with file count
+  and directory structure, not DB size alone).
+- Interrupted bootstrap is tested: relay unavailable during discovery,
+  vault unavailable after metadata, peer disappears mid pinned-content,
+  restart after partial download, materialization change mid-bootstrap,
+  insufficient local capacity. Partial bootstrap is recoverable and must
+  never look like a complete library.
 - Snapshot restore is user-visible and restorable, not just export dump.
 
 ### 4. Remote access performance contracts (v0.6)
@@ -119,9 +137,15 @@ Goal: contracts, not anecdotes. Three separates:
 | Large sequential fetch | Sustained throughput, parallel chunk acquisition, resume after interruption, backpressure |
 
 Acceptance:
-- iroh range / Bao resume benchmarks published for CGNAT and relay paths.
-- Vault-unavailable does not produce cascading FUSE failures for pinned
-  content.
+- iroh range / Bao resume benchmarks published for direct connection,
+  relay-mediated, CGNAT, vault-unavailable, and interrupted-transfer-
+  followed-by-restart cases, with: time-to-first-byte, sustained
+  throughput, peak RSS, temp disk, recovery time after interruption,
+  network bytes transferred. Target scenarios must separate warm local
+  cache from warm remote connection.
+- Vault-unavailable does not invalidate already materialized content.
+  Locally pinned content keeps working; only remote misses fail — and
+  they fail explicitly, without cascading FUSE invalidation.
 
 ### 5. Time-travel demo (v0.5 public evidence)
 
@@ -132,15 +156,38 @@ one file → restore directory → concurrent-edit preservation.
 
 Acceptance:
 - 2-minute walk-through reproducible from a clean snapshot.
-- Restore does not create a delete tombstone mutation: it is a forward
-  snapshot, never a rewrite.
+- Restore authors a new forward state. Previously authored snapshots
+  remain immutable; restore does not silently delete or rewrite competing
+  history. Retention determines whether older content remains available;
+  the UI must not imply indefinite availability unless guaranteed.
+
+### 7. Installation and upgrade lifecycle (v0.4)
+
+Goal: predictable behavior across application lifecycle, not just daemon
+lifecycle.
+
+- Cover: initial install, drive creation, first login/start, sleep/wake,
+  application upgrade, owner restart, uninstallation, reinstall.
+- Uninstallation must not imply deletion of the durable store.
+- Upgrade / reinstall preserves the existing drive and the owner recovers
+  state without reinitializing.
+
+Acceptance:
+- Upgrade and reinstall test preserves `wyrd export` round-trip (files,
+  permissions, symlinks, exec bit) and the store's crash-consistency
+  posture per `../contracts/crash-consistency.md`.
+- Uninstall leaves the store intact (explicitly separate from any
+  `wyrd vault` retention decision).
 
 ### 6. Differentiator verification (v0.9 soak)
 
 Goal: separate integrity / confidentiality / availability claims.
 
-- **Integrity:** every retrieved object hashes to its expected identity
-  (content hash + AEAD double-check).
+- **Integrity:** every retrieved object matches its expected identity.
+  Content-identity check (plaintext hashes to expected `ContentId`) and
+  AEAD check (ciphertext authenticates under the expected key/nonce/AAD)
+  are distinct and both required. See `../contracts/trust.md` AEAD
+  binding and `../contracts/object-model.md` two-identity rule.
 - **Confidentiality:** vault cannot decrypt under the threat model in
   `../contracts/trust.md`. No data-plumbing claim beyond the defined
   boundaries.
@@ -149,8 +196,10 @@ Goal: separate integrity / confidentiality / availability claims.
 
 Acceptance:
 - Chaos legs run in CI with peer-teardown mid-transfer, relay death, and
-  restart reconciliation; failures are `EIO` bounded and recoverable,
-  never silent corruption.
+  restart reconciliation; remote failure produces a bounded, explicit
+  error appropriate to the operation and never returns corrupted or
+  incomplete content as successful. Local operations with required data
+  available stay successful.
 
 ## Explicit non-goals
 
