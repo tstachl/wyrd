@@ -195,9 +195,11 @@ fn conflict_surface_distinguishes_the_three_divergences() {
 }
 
 /// OD-23-A as a test: no branch is ever named unreadably. No `@`
-/// followed by a digit in any rendering the surface can emit; every
-/// branch label carries author, epoch, and snapshot facts; no label
-/// claims a stored name.
+/// followed by a digit in any branch label or plan column the surface
+/// emits (stored root paths pass through verbatim — see
+/// `stored_names_render_verbatim` — so the scan below covers only
+/// renderings with benign paths); every branch label carries author,
+/// epoch, and snapshot facts; no label claims a stored name.
 #[test]
 fn conflict_surface_never_names_a_branch_unreadably() {
     let branches = heads_two();
