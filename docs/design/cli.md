@@ -181,7 +181,10 @@ characters (x-only pubkeys).
   The transition commits with the usual catch-up obligations, filled
   incrementally in bounded batches; the report names the obligations
   and batches (`N obligations in K batches`). The newcomer joins from
-  the invitation file. With `--reader` the device joins read-only: it
+  the invitation file. The count is the walk made visible: the
+  admission fills the newcomer's catch-up closure in bounded
+  batches, so a long history reports its fill rather than hanging
+  silent. With `--reader` the device joins read-only: it
   holds every epoch secret but authors nothing. The destination is
   claimed before the commit: an existing file is refused, and an
   uncreatable path fails with no transition authored. A write failure
@@ -335,7 +338,15 @@ next mounted sync, not here.
   a refused join writes nothing. Join never targets an owner's
   drive home or another device's member directory: an owner record
   refuses outright, and a member record for another device refuses
-  rather than stranding it.
+  rather than stranding it. The confirmation states the history
+  boundary at the moment of joining: content written before this
+  device was admitted may not be reachable (the admission covers
+  the live chain only; pre-admission snapshots arrive through
+  later reconciliation, never promised at join — the v0.3
+  late-joiner tracker owns the gap, the confirmation only states
+  it), catch-up arrives on the next mounted sync rather than here,
+  and a lost invitation file recovers with `reissue`, never with a
+  second admission.
 
 The pairing flow, end to end — three steps, two actors, two
 artifacts handed over out of band. The newcomer acts twice (steps

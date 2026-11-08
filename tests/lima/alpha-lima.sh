@@ -223,9 +223,16 @@ step4_member() {
   [[ -f "$E2E_ROOT/invitation2" ]] || die "reissue wrote no file"
   pass "reissue reseals the admission from durable state"
 
-  expect_exit 0 step4-join \
-    with_creds "$nc" device "$ndr" join "$E2E_ROOT/invitation2" >/dev/null
-  pass "join accepts the reissued invitation"
+  local join_out
+  join_out="$(expect_exit 0 step4-join \
+    with_creds "$nc" device "$ndr" join "$E2E_ROOT/invitation2")"
+  echo "$join_out" | grep -q "may not be reachable" \
+    || die "join confirmation states no history boundary"
+  echo "$join_out" | grep -q "next mounted sync" \
+    || die "join confirmation names no catch-up cadence"
+  echo "$join_out" | grep -q "recovers with reissue" \
+    || die "join confirmation points recovery nowhere"
+  pass "join accepts the reissued invitation and states the boundary"
   local id_out
   id_out="$(expect_exit 0 step4-id with_creds "$nc" device "$ndr" id)"
   [[ "$id_out" == "device $dev"* ]] || die "joined id mismatch: $id_out"

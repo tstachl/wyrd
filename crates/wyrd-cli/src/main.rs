@@ -16,7 +16,9 @@ use wyrd_daemon::process::{install_shutdown_handler, SHUTDOWN};
 pub(crate) use crate::args::Credentials;
 use crate::commands::device::device;
 #[cfg(test)]
-pub(crate) use crate::commands::device::{device_id_report, parse_device_id, parse_encryption_key};
+pub(crate) use crate::commands::device::{
+    device_id_report, join_confirmation_report, parse_device_id, parse_encryption_key,
+};
 use crate::commands::export::export;
 use crate::commands::member::member;
 #[cfg(test)]

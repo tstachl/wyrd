@@ -14,6 +14,7 @@ pub mod budgets;
 pub mod conflict_host;
 pub mod conflict_surface;
 pub mod export;
+pub mod invitation_surface;
 pub mod live;
 pub mod mailbox;
 pub mod mutation;
