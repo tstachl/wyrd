@@ -36,7 +36,7 @@ use crate::commands::snapshot::snapshot;
 #[cfg(test)]
 pub(crate) use crate::commands::snapshot::{
     frozen_merge_hint, map_merge_error, merge_dry_run_verdict, recovery_dry_run_verdict,
-    recovery_plan_report, snapshot_heads_report, snapshot_plan_report,
+    recovery_plan_report, snapshot_diverged_report, snapshot_heads_report, snapshot_plan_report,
 };
 use crate::commands::sync::sync;
 #[cfg(test)]

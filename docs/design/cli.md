@@ -28,7 +28,7 @@ wyrd [--config <path>] vault [--relay <url>...] [--log-file <path>] [--identity-
 wyrd [--config <path>] policy <drive_dir> \
     (status [path] creds | budgets creds | role (set <mirror|vault> [--yes] | status creds) | pin <path> creds | unpin <path> creds | evict <path> creds)
 wyrd [--config <path>] snapshot [--identity-file <path>] [--passphrase-file <path>] <drive_dir> \
-    (heads | merge [--head <id>...] [--default @N] [--take path=@N]... [--drop path]... [--dry-run] | recover --from <id> [--take path]... [--all] [--content <id>]... [--dry-run])
+    (heads | diverged [--budget <N>] | merge [--head <id>...] [--default @N] [--take path=@N]... [--drop path]... [--dry-run] | recover --from <id> [--take path]... [--all] [--content <id>]... [--dry-run])
 wyrd [--config <path>] update [--relay <url>...] [--restart] [--identity-file <path>] [--passphrase-file <path>] <drive_dir> <archive>
   where creds = [--identity-file <path>] [--passphrase-file <path>]: credential flags ride each
   policy action, never the parent — `policy role set` alone takes neither
@@ -242,6 +242,17 @@ keeps its classification row but takes no number). `recover
   number. Recovery-flagged tips carry a `recovery` marker: the
   marker audits a snapshot while it is listed, not after history
   moves past it.
+- `diverged [--budget <N>]`: the diverged-drive screen from live
+  engine state — the standing indicator over the eligible heads
+  (more than one is divergence; zero or one is not), the freeze
+  half naming the epoch and its `member resolve` remedy, and, only
+  on a diverged drive, the bounded what-differs comparison over
+  the real merge plan. Branch labels name facts (author device,
+  epoch, short snapshot id), never `@N`. `--budget` (default 64)
+  bounds the comparison rows: a differing set past it renders as
+  explicitly incomplete, never as the complete set. Read-only:
+  authors nothing, needs the drive un-mounted like every other
+  snapshot reader.
 - `merge [--head <id>...] [--default @N] [--take path=@N]...
   [--drop path]... [--dry-run]`: merge source heads — all live
   heads by default, or an explicit subset of at least two — into

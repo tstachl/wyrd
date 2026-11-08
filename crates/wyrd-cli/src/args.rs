@@ -363,6 +363,19 @@ pub(crate) enum SnapshotAction {
     /// this is also the live-head listing; every other class is
     /// retained history with its reason attached and no number.
     Heads,
+    /// Report the divergence screen from live engine state: the
+    /// standing indicator over the eligible heads, the freeze half
+    /// with its remedy, and — only on a diverged drive — the bounded
+    /// what-differs comparison over the real merge plan. Read-only:
+    /// opens the keystore and the object store, authors nothing, and
+    /// needs the drive un-mounted like every other snapshot reader.
+    Diverged {
+        /// Root-path budget for the on-demand comparison: the
+        /// differing set past it renders as explicitly incomplete,
+        /// never as the complete set.
+        #[arg(long, default_value_t = wyrd_core::conflict_host::DEFAULT_INSPECTION_BUDGET)]
+        budget: usize,
+    },
     /// Merge source heads into one snapshot. Sources default to all
     /// live heads; `--head` narrows to an explicit subset (at least
     /// two). Conflicted root paths take `--take path=@N`, drop with

@@ -330,6 +330,63 @@ fn frozen_hint_names_the_conflict() {
     assert!(hint.contains("member resolve"), "names the resolver");
 }
 
+/// `snapshot diverged` on a fresh drive reports converged with no
+/// comparison: zero eligible heads is not divergence, and the host
+/// maps the real engine state rather than a fixture.
+#[test]
+fn snapshot_diverged_on_a_fresh_drive_is_converged() {
+    let fixture = Fixture::new();
+    command(fixture.args(vec!["diverged".into()])).unwrap();
+
+    let engine = fixture.open();
+    let screen = snapshot_diverged_report(&engine, &fixture.drive, 64).unwrap();
+    assert!(
+        screen.contains("divergence: none observed (zero or one eligible head)"),
+        "fresh drive is converged: {screen}"
+    );
+    assert!(
+        screen.contains("membership: not frozen"),
+        "fresh drive carries no freeze: {screen}"
+    );
+    assert!(
+        screen.contains("what differs: not requested in this view"),
+        "no comparison without divergence: {screen}"
+    );
+    // The dispatch prints exactly these bytes: the wiring is pinned,
+    // not just its exit status.
+    let store = FsObjectStore::open(fixture.drive.clone()).unwrap();
+    assert_eq!(
+        screen,
+        wyrd_core::conflict_host::diverged_report(&engine, &store, 64).unwrap(),
+        "CLI dispatches the host mapping unchanged"
+    );
+}
+
+/// `snapshot diverged` on a single-head drive stays converged and
+/// names no branch: one eligible head feeds the surface and the
+/// surface verdict holds.
+#[test]
+fn snapshot_diverged_on_a_single_head_drive_is_converged() {
+    let fixture = Fixture::new();
+    let id = write_file(&fixture, "kept.txt", b"kept");
+    command(fixture.args(vec!["diverged".into(), "--budget".into(), "1".into()])).unwrap();
+
+    let engine = fixture.open();
+    let screen = snapshot_diverged_report(&engine, &fixture.drive, 1).unwrap();
+    assert!(
+        screen.contains("divergence: none observed (zero or one eligible head)"),
+        "one head is converged: {screen}"
+    );
+    assert!(
+        !screen.contains(&id.to_string()),
+        "converged screen names no branch: {screen}"
+    );
+    assert!(
+        screen.contains("what differs: not requested in this view"),
+        "no comparison for one head at any budget: {screen}"
+    );
+}
+
 /// The engine-to-operator seam maps only the freeze to guidance:
 /// every other refusal passes through untouched.
 #[test]
