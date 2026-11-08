@@ -2338,16 +2338,50 @@ fn fn_is_fixture_gated(raw_lines: &[&str], code_lines: &[&str], def_idx: usize) 
         .any(|line| line.trim_start().starts_with("#[cfg(") && line.contains("test-fixtures"))
 }
 
-/// A `fn` definition line (any visibility): the block tracker below
-/// attributes each authoring call to its enclosing function.
+/// A `fn` definition line: an optional `pub` visibility (possibly
+/// scoped, even with spaces), then `async`/`unsafe`/`const`/`extern`
+/// modifiers in any order, then the `fn` keyword and the function
+/// name. Matching the trailing `fn <ident>` shape — rather than a
+/// visibility-prefix list — keeps a future `pub(crate) async fn` /
+/// `pub unsafe fn` / `pub const fn` authoring body attributed to
+/// itself instead of the previous function. Runs on stripped code
+/// lines, so comments and string literals never match; `fn`-pointer
+/// types (`fn(u32)`) and `Fn` bounds never match either (`fn` must
+/// stand alone, followed by a name).
 fn is_fn_def(line: &str) -> bool {
-    let line = line.trim_start();
-    line.starts_with("fn ")
-        || line.starts_with("pub fn ")
-        || line.starts_with("pub(crate) fn ")
-        || line.starts_with("pub(super) fn ")
-        || line.starts_with("async fn ")
-        || line.starts_with("pub async fn ")
+    let mut tokens = line.split_whitespace().peekable();
+    // Optional visibility: `pub`, `pub(...)`.
+    if tokens
+        .peek()
+        .is_some_and(|t| *t == "pub" || t.starts_with("pub("))
+    {
+        let vis = tokens.next().unwrap_or("");
+        // A scoped visibility may contain spaces (`pub(in crate::x)`):
+        // consume through the closing paren.
+        if vis.starts_with("pub(") && !vis.ends_with(')') {
+            for tok in tokens.by_ref() {
+                if tok.ends_with(')') {
+                    break;
+                }
+            }
+        }
+    }
+    // Optional modifiers, in any order.
+    while tokens
+        .peek()
+        .is_some_and(|t| matches!(*t, "async" | "unsafe" | "const" | "extern"))
+    {
+        tokens.next();
+    }
+    // The keyword plus the function name.
+    match tokens.next() {
+        Some("fn") => tokens.next().is_some_and(|name| {
+            name.chars()
+                .next()
+                .is_some_and(|c| c == '_' || c.is_alphabetic())
+        }),
+        _ => false,
+    }
 }
 
 /// Check that snapshot authoring in `wyrd-core` stays confined to the
@@ -2461,20 +2495,33 @@ fn check_node_authoring_confined(files: &[(&str, &str)]) -> Vec<String> {
 #[test]
 fn node_authoring_stays_in_the_live_pass_or_fixtures() {
     let root = workspace_root();
-    let mut refs: Vec<(String, String)> = Vec::new();
-    for member in [
-        "crates/wyrd-core/src/node.rs",
-        "crates/wyrd-core/src/live/apply.rs",
-        "crates/wyrd-core/src/live/mod.rs",
-        "crates/wyrd-core/src/live/pass.rs",
-        "crates/wyrd-core/src/live/config.rs",
-    ] {
-        let text = fs::read_to_string(root.join(member))
-            .unwrap_or_else(|_| panic!("{member} is readable"));
-        refs.push((member.to_owned(), text));
-    }
-    assert!(!refs.is_empty(), "the node surface holds sources to check");
-    let borrowed: Vec<(&str, &str)> = refs.iter().map(|(p, t)| (p.as_str(), t.as_str())).collect();
+    // The whole `wyrd-core` source tree, not a hardcoded file list: a
+    // new submodule cannot evade the pin by name. The checker itself
+    // scopes to `node.rs` plus `live/` (test files out of scope), so
+    // production files elsewhere ride along harmlessly. Paths stay
+    // relative to the workspace root to match the checker's
+    // `wyrd-core/src/...` shapes.
+    let (files, errors) = collect_rs_files(&root.join("crates/wyrd-core/src"), &root);
+    assert!(
+        errors.is_empty(),
+        "the source walk must read cleanly: {}",
+        errors.join("; ")
+    );
+    assert!(!files.is_empty(), "the node surface holds sources to check");
+    assert!(
+        files
+            .iter()
+            .any(|(p, _)| p.ends_with("wyrd-core/src/node.rs")),
+        "node.rs must be in the walked set"
+    );
+    assert!(
+        files.iter().any(|(p, _)| p.contains("wyrd-core/src/live/")),
+        "live/ must be in the walked set"
+    );
+    let borrowed: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(p, t)| (p.as_str(), t.as_str()))
+        .collect();
     let violations = check_node_authoring_confined(&borrowed);
     assert!(
         violations.is_empty(),
@@ -2916,6 +2963,26 @@ mod policy_tests {
     }
 
     #[test]
+    fn target_scoped_prod_fixtures_edge_is_rejected() {
+        // A `test-fixtures` edge under `[target.*.dependencies]` is a
+        // production edge: the walker descends through `target`
+        // nesting, so only `[dev-dependencies]` (at any depth) stays
+        // allowed.
+        let violations = check_fixtures_feature_edges(
+            "wyrd-daemon",
+            &fixtures_manifest(
+                r#"
+                [target.'cfg(unix)'.dependencies]
+                wyrd-core = { workspace = true, features = ["test-fixtures"] }
+            "#,
+            ),
+        );
+        assert_eq!(violations.len(), 1);
+        assert!(violations[0].contains("wyrd-daemon"));
+        assert!(violations[0].contains("wyrd-core"));
+    }
+
+    #[test]
     fn dev_fixtures_edge_is_allowed() {
         // The four test suites author setup state through the gated
         // fixtures; the dev-dep edge is the sanctioned shape.
@@ -3099,6 +3166,37 @@ mod policy_tests {
             violations.is_empty(),
             "the traced seam must pass: {violations:?}"
         );
+    }
+
+    #[test]
+    fn fn_def_matches_any_visibility_and_modifier_shape() {
+        // The retirement pin attributes authoring calls to the
+        // enclosing function; a future modifier shape must resolve to
+        // its own definition, never the previous one.
+        for line in [
+            "fn plain() {",
+            "pub fn public() {",
+            "pub(crate) fn scoped() {",
+            "pub(super) fn parent() {",
+            "pub(in crate::live) fn area() {",
+            "async fn async_plain() {",
+            "pub async fn async_public() {",
+            "pub(crate) async fn async_scoped() {",
+            "pub unsafe fn unsafe_public() {",
+            "pub const fn const_public() {",
+            "unsafe extern fn foreign() {",
+        ] {
+            assert!(is_fn_def(line), "{line:?} is a definition");
+        }
+        for line in [
+            "let f: fn(u32) = g;",
+            "let cb: Box<dyn Fn()> = x;",
+            "    // fn commented() {",
+            "fn_call();",
+            "    -> fn() {",
+        ] {
+            assert!(!is_fn_def(line), "{line:?} is not a definition");
+        }
     }
 
     #[test]

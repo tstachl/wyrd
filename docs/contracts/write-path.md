@@ -823,7 +823,7 @@ is a complete, valid filesystem.
 |---|---|
 | `create` | Commits an empty regular file, folding any pending set, **and** returns a handle based on the resulting snapshot, as one daemon operation (no window between them). The empty-file snapshot is a complete, independently valid state: a crash before the first content commit leaves it, and a peer may observe it. `O_EXCL` → `EEXIST`. A refusal decided before submit submits and forces nothing; a precondition that fails during application is a failed member that never forces, and a failed forcer aborts the fold (DG-1 table). |
 | `write` | Buffer only; committed by `flush`/`fsync`/`release`. |
-| `mkdir` | Creates an empty directory. Does **not** create intermediates: `mkdir a/b/c` is `ENOENT` when `a/b` is absent. `EEXIST` when the name exists. (The mount does not inherit `WyrdNode::put_file`'s intermediate-creation convenience.) |
+| `mkdir` | Creates an empty directory. Does **not** create intermediates: `mkdir a/b/c` is `ENOENT` when `a/b` is absent. `EEXIST` when the name exists. (The mount does not inherit the intermediate-creation convenience of the `test-fixtures`-gated `WyrdNode::put_file` fixture.) |
 | `unlink` | Removes a file or symlink entry; `EISDIR` on a directory; `ENOENT` when absent. |
 | `rmdir` | Removes an empty directory only (`ENOTEMPTY` otherwise); `ENOTDIR` on a file. |
 | `rename` | File→file replaces; file→dir `EISDIR`; dir→empty-dir replaces; dir→nonempty-dir `ENOTEMPTY`; dir→file `ENOTDIR`; a directory into its own descendant `EINVAL`; same path is a no-op. A trailing slash on the source requires a directory. |
@@ -899,7 +899,7 @@ future work).
 
 **Zero heads is not a conflict.** A fresh drive has no live head; its
 first mutation authors the initial root from an empty tree (the same
-bootstrap `WyrdNode::put_file` performs), so `create`/`mkdir`/`write` on an
+bootstrap the `test-fixtures`-gated `WyrdNode::put_file` fixture performs), so `create`/`mkdir`/`write` on an
 empty drive succeed. The conflicted rule applies only to *multiple* live
 heads.
 

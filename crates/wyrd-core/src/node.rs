@@ -27,6 +27,11 @@ use std::time::Duration;
 /// Why a node write failed. Store and mutation errors keep the
 /// store's own error type; engine errors (membership, authoring) surface
 /// unchanged so callers can match on them.
+///
+/// Fixture-only surface: only the `test-fixtures`-gated
+/// `WyrdNode::put_file`/`remove` bodies construct this type — the live
+/// channel surfaces authoring failures as `EngineError` directly, and
+/// the daemon re-export exists for the fixture-driven suites.
 #[derive(Debug, thiserror::Error)]
 pub enum WriteError<E: std::fmt::Debug> {
     /// `remove` on a drive with no snapshots: there is no tree to
