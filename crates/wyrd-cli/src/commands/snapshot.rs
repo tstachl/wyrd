@@ -30,12 +30,7 @@ pub(crate) fn snapshot(
             Ok(())
         }
         SnapshotAction::Diverged { budget } => {
-            let store = FsObjectStore::open(drive_dir.to_path_buf())
-                .map_err(|error| CliError::Store(error.to_string()))?;
-            print!(
-                "{}",
-                wyrd_core::conflict_host::diverged_report(&engine, &store, budget)?
-            );
+            print!("{}", snapshot_diverged_report(&engine, &drive_dir, budget)?);
             Ok(())
         }
         SnapshotAction::Merge {
@@ -272,6 +267,22 @@ fn check_recover_path(path: &str) -> Result<String, CliError> {
         )));
     }
     Ok(path.to_owned())
+}
+
+/// Render the diverged-drive screen for the `diverged` action:
+/// the host mapping over this engine and store, as the exact bytes
+/// the command prints. Split from the dispatch so tests pin the
+/// wiring's bytes, not just its exit status.
+pub(crate) fn snapshot_diverged_report(
+    engine: &Engine,
+    drive_dir: &std::path::Path,
+    budget: usize,
+) -> Result<String, CliError> {
+    let store = FsObjectStore::open(drive_dir.to_path_buf())
+        .map_err(|error| CliError::Store(error.to_string()))?;
+    Ok(wyrd_core::conflict_host::diverged_report(
+        engine, &store, budget,
+    )?)
 }
 
 /// Every DAG head with its authorization classification; eligible

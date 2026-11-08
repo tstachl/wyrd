@@ -18,12 +18,11 @@
 
 use std::collections::BTreeMap;
 
-use wyrd_format::{DeviceId, ObjectStore, SnapshotId};
-use wyrd_sync::runtime::{Engine, EngineError};
-
 use super::conflict_surface::{
     inspect_differences, render_conflict_screen, BranchHead, DivergenceState, FreezeState,
 };
+use wyrd_format::{DeviceId, ObjectStore, SnapshotId};
+use wyrd_sync::runtime::{Engine, EngineError};
 
 /// Default root-path budget for the on-demand comparison: the same
 /// small number the surface tests exercise, so the CLI default and
@@ -37,12 +36,13 @@ pub const DEFAULT_INSPECTION_BUDGET: usize = 64;
 ///
 /// Eligible heads come from `snapshot_heads` classification (id and
 /// epoch are durable facts); the author comes from the `live_heads`
-/// projection joined by id. An eligible head with no live body — an
-/// internal disagreement both projections fail safe on — keeps its
-/// row under its fact epoch and the zero author, never dropped and
-/// never evidence of absence. Plan failures propagate as engine
-/// errors: a read-only report fails closed rather than rendering a
-/// partial screen as complete.
+/// projection joined by id. An eligible head with no live body —
+/// an internal disagreement both projections fail safe on — fails
+/// closed with `NotEligibleHead`, the same verdict `merge_plan`
+/// returns for an id the live projection does not carry, rather
+/// than rendering a fabricated author. Plan failures propagate as
+/// engine errors: a read-only report fails closed rather than
+/// rendering a partial screen as complete.
 pub fn diverged_report<S: ObjectStore>(
     engine: &Engine,
     store: &S,
@@ -71,15 +71,18 @@ where
         .collect();
     let branches: Vec<BranchHead> = eligible
         .iter()
-        .map(|(id, epoch)| BranchHead {
-            id: *id,
-            epoch: *epoch,
-            author: authors
+        .map(|(id, epoch)| {
+            let author = authors
                 .get(id)
                 .copied()
-                .unwrap_or(DeviceId::from_bytes([0; 32])),
+                .ok_or(EngineError::NotEligibleHead(*id))?;
+            Ok(BranchHead {
+                id: *id,
+                epoch: *epoch,
+                author,
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, EngineError>>()?;
 
     let divergence = DivergenceState::from_branches(&branches);
     let freeze = FreezeState::from_frozen_epoch(engine.membership_log().frozen_at());

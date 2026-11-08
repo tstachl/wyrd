@@ -339,8 +339,7 @@ fn snapshot_diverged_on_a_fresh_drive_is_converged() {
     command(fixture.args(vec!["diverged".into()])).unwrap();
 
     let engine = fixture.open();
-    let store = FsObjectStore::open(fixture.drive.clone()).unwrap();
-    let screen = wyrd_core::conflict_host::diverged_report(&engine, &store, 64).unwrap();
+    let screen = snapshot_diverged_report(&engine, &fixture.drive, 64).unwrap();
     assert!(
         screen.contains("divergence: none observed (zero or one eligible head)"),
         "fresh drive is converged: {screen}"
@@ -352,6 +351,14 @@ fn snapshot_diverged_on_a_fresh_drive_is_converged() {
     assert!(
         screen.contains("what differs: not requested in this view"),
         "no comparison without divergence: {screen}"
+    );
+    // The dispatch prints exactly these bytes: the wiring is pinned,
+    // not just its exit status.
+    let store = FsObjectStore::open(fixture.drive.clone()).unwrap();
+    assert_eq!(
+        screen,
+        wyrd_core::conflict_host::diverged_report(&engine, &store, 64).unwrap(),
+        "CLI dispatches the host mapping unchanged"
     );
 }
 
@@ -365,8 +372,7 @@ fn snapshot_diverged_on_a_single_head_drive_is_converged() {
     command(fixture.args(vec!["diverged".into(), "--budget".into(), "1".into()])).unwrap();
 
     let engine = fixture.open();
-    let store = FsObjectStore::open(fixture.drive.clone()).unwrap();
-    let screen = wyrd_core::conflict_host::diverged_report(&engine, &store, 1).unwrap();
+    let screen = snapshot_diverged_report(&engine, &fixture.drive, 1).unwrap();
     assert!(
         screen.contains("divergence: none observed (zero or one eligible head)"),
         "one head is converged: {screen}"
