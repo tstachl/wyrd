@@ -14,14 +14,21 @@
 //! under the live name. `open` sweeps stale `.tmp` files left by crashed
 //! writers.
 //! Re-inserting identical content is a no-op when the live bytes still
-//! derive to the requested id, and heals them when they don't. A bounded
-//! in-process map of length-plus-mtime stamps skips the revalidation read
-//! for objects this process already verified; any drift falls back to the
-//! full re-derive, and `get` retires a stamp when it observes corruption.
+//! derive to the requested id, and heals them when the full re-derive
+//! observes otherwise. A bounded in-process map of length-plus-mtime
+//! stamps skips the revalidation read for objects this process already
+//! verified; any length or mtime drift (or a retired/absent stamp) falls
+//! back to the full re-derive, which still heals. Corruption that
+//! preserves both length and mtime is invisible to the cheap signal:
+//! a stamp-matched `insert` reports success without rewriting the live
+//! bytes, and healing happens only after a `get` observes the mismatch,
+//! fails closed, and retires the stamp — the next `insert` then
+//! re-derives and heals.
 //! The stamp assumes the filesystem reports mtime changes (coarse
 //! granularity weakens it): bitrot that leaves length and mtime untouched
-//! is invisible to it and is caught by the full re-derive (or by `get`,
-//! which fails closed and retires it).
+//! is invisible to it and is caught by the full re-derive whenever the
+//! stamp is absent or stale (or by `get`, which fails closed and retires
+//! it).
 //!
 //! Trust and durability assumptions: the store directory is trusted —
 //! symlinks or foreign entries inside it are not defended against, and
@@ -501,13 +508,15 @@ impl ObjectStore for FsObjectStore {
         let id = ContentId::derive(kind, data);
         let path = self.path_for(kind, &id);
         // A present file is a no-op only when it still derives to the
-        // requested id: bitrot under the live name heals here instead of
-        // succeeding while `get` keeps failing closed. The stamp check is
-        // a fast path over that rule: an object this process already
-        // verified at the same length and mtime cannot have been replaced
-        // or rewritten since, so the read and re-hash are skipped. Any
-        // drift (or a retired stamp) falls through to the full re-derive,
-        // which still heals.
+        // requested id: bitrot under the live name heals here when the
+        // full re-derive observes it. The stamp check is a fast path over
+        // that rule: an object this process already verified at the same
+        // length and mtime skips the read and re-hash — so corruption
+        // preserving both is NOT healed by this insert (it reports
+        // success without rewriting); only a length/mtime drift or a
+        // retired stamp falls through to the full re-derive, which still
+        // heals. `get` retires the stamp when it observes corruption, so
+        // the insert after the failed `get` heals.
         let meta = fs::metadata(&path).ok().filter(fs::Metadata::is_file);
         let stamped = match meta.as_ref() {
             Some(meta) => self.stamp_for(&id).is_some_and(|stamp| stamp.matches(meta)),
@@ -1041,6 +1050,45 @@ mod tests {
         // `get` still fails closed, and retires the stamp so the next
         // insert re-derives and heals instead of trusting it.
         assert!(store.get(&id).is_err());
+        assert_eq!(store.insert(ObjectKind::Chunk, b"pristine").unwrap(), id);
+        assert_eq!(
+            store.get(&id).unwrap().as_deref(),
+            Some(b"pristine".as_slice())
+        );
+        remove_scratch(&dir);
+    }
+
+    #[test]
+    fn insert_over_mtime_preserving_corruption() {
+        let dir = scratch_dir();
+        let mut store = FsObjectStore::open(dir.clone()).unwrap();
+        let id = store.insert(ObjectKind::Chunk, b"pristine").unwrap();
+        let path = store.path_for(ObjectKind::Chunk, &id);
+        let pristine = fs::metadata(&path).unwrap();
+        // Same-length tamper so length alone cannot see it, then restore
+        // the mtime so the cheap length+mtime signal still matches.
+        fs::write(&path, b"tampered").unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(pristine.modified().unwrap())
+            .unwrap();
+        let disguised = fs::metadata(&path).unwrap();
+        assert_eq!(disguised.len(), pristine.len());
+        assert_eq!(disguised.modified().unwrap(), pristine.modified().unwrap());
+        // The stamp still matches, so this insert takes the fast path:
+        // it reports success without healing — the bytes stay corrupt
+        // and the next read still fails closed. Mtime-preserving rot is
+        // healed only after a `get` retires the stamp.
+        assert_eq!(store.insert(ObjectKind::Chunk, b"pristine").unwrap(), id);
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            b"tampered",
+            "stamp-matched insert must not rewrite disguised bytes"
+        );
+        assert!(store.get(&id).is_err());
+        // The failed `get` retired the stamp, so re-inserting heals.
         assert_eq!(store.insert(ObjectKind::Chunk, b"pristine").unwrap(), id);
         assert_eq!(
             store.get(&id).unwrap().as_deref(),
