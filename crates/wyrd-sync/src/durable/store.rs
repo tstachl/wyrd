@@ -213,9 +213,14 @@ pub fn atomic_write_mode(dir: &Path, name: &str, bytes: &[u8], mode: u32) -> std
 /// owner-masking umask lands a stricter leaf, never a looser one.
 /// Freshness comes from the create call itself (`AlreadyExists` means a concurrent creator won), not from a
 /// preceding stat, so no check-then-act gap exists. A pre-existing
-/// directory is left untouched, and parents above the leaf are the
-/// operator's business and keep their modes: creation hardens,
-/// opening never chmods. Non-Unix falls back to plain
+/// directory is verified, not trusted: it must be a real directory
+/// (never a symlink), owned by the current user, and closed to group
+/// and other — except that a same-owner leaf with loose modes still
+/// opens, with an operator warning, because v0.2 established drives
+/// at umask modes and the upgrade contract (Level 1) promises a newer
+/// Wyrd opens an old local store without migration. Parents above the
+/// leaf are the operator's business and keep their modes: creation
+/// hardens, opening never chmods. Non-Unix falls back to plain
 /// `create_dir_all` (see `docs/design/cli.md`).
 pub(crate) fn ensure_owner_only_dir(path: &Path) -> std::io::Result<()> {
     #[cfg(not(unix))]
@@ -223,21 +228,18 @@ pub(crate) fn ensure_owner_only_dir(path: &Path) -> std::io::Result<()> {
     #[cfg(unix)]
     {
         if path.is_dir() {
-            return Ok(());
+            return verify_preexisting_dir(path);
         }
         let mut builder = std::fs::DirBuilder::new();
         builder.mode(DRIVE_DIR_MODE);
         match builder.create(path) {
             Ok(()) => return Ok(()),
             // A concurrent creator won the leaf — but `AlreadyExists`
-            // is also a regular file or dangling symlink, so confirm
-            // it is a directory and fail at the call that names it
-            // when it is not.
+            // is also a regular file or dangling symlink, so verify
+            // the winner at the call that names it instead of trusting
+            // the error kind.
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                if path.is_dir() {
-                    return Ok(());
-                }
-                return Err(error);
+                return verify_preexisting_dir(path);
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(error),
@@ -250,6 +252,89 @@ pub(crate) fn ensure_owner_only_dir(path: &Path) -> std::io::Result<()> {
         fs::create_dir_all(path)?;
         fs::set_permissions(path, fs::Permissions::from_mode(DRIVE_DIR_MODE))?;
         Ok(())
+    }
+}
+
+/// The effective uid, for the custody ownership check below. Mirrors
+/// `wyrd-cli`'s `current_uid`: no new dependency, no new behaviour.
+#[cfg(unix)]
+#[allow(unsafe_code)]
+pub(crate) fn current_euid() -> u32 {
+    // SAFETY: geteuid has no pointer or aliasing preconditions and only
+    // reads the calling process's kernel credential.
+    unsafe { libc::geteuid() }
+}
+
+/// What a pre-existing custody leaf proved to be. `Clean` needs
+/// nothing; `LooseMode` opens (upgrade compatibility with v0.2-era
+/// umask-mode drives) but the operator is warned to `chmod 700`.
+/// Anything else (non-directory, foreign owner) is an error at the
+/// call site, never a warning: writing custody state there would leak
+/// it to another local user.
+#[cfg(unix)]
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum LeafVerdict {
+    Clean,
+    LooseMode,
+}
+
+/// The pure custody decision for one pre-existing leaf: directory-ness,
+/// ownership, then group/other closure. Pure so the foreign-owner arm
+/// is pinnable without root (no test can chown to another uid).
+#[cfg(unix)]
+pub(crate) fn leaf_verdict(
+    is_dir: bool,
+    uid: u32,
+    mode: u32,
+    euid: u32,
+) -> std::io::Result<LeafVerdict> {
+    if !is_dir {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotADirectory,
+            "custody path is not a directory",
+        ));
+    }
+    if uid != euid {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            format!("custody directory is owned by uid {uid}, not the current user"),
+        ));
+    }
+    if mode & 0o077 != 0 {
+        return Ok(LeafVerdict::LooseMode);
+    }
+    Ok(LeafVerdict::Clean)
+}
+
+/// Verify a pre-existing custody leaf against the live directory
+/// object, never the path: the open carries `O_NOFOLLOW`, so a
+/// substituted symlink fails the open itself instead of satisfying
+/// the check, and the metadata comes from the open file description.
+/// A foreign-owned leaf refuses before any custody state is read or
+/// written; a loose same-owner leaf warns (see [`LeafVerdict`]).
+#[cfg(unix)]
+fn verify_preexisting_dir(path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    let file = options.open(path)?;
+    let metadata = file.metadata()?;
+    match leaf_verdict(
+        metadata.is_dir(),
+        metadata.uid(),
+        metadata.mode(),
+        current_euid(),
+    )? {
+        LeafVerdict::Clean => Ok(()),
+        LeafVerdict::LooseMode => {
+            tracing::warn!(
+                path = %path.display(),
+                mode = format!("{:o}", metadata.mode() & 0o777),
+                "custody directory is readable by group or other users: chmod 700 to close it (opening proceeds for upgrade compatibility)"
+            );
+            Ok(())
+        }
     }
 }
 
