@@ -11,9 +11,10 @@ read-only FUSE mount today, mobile file surfaces later. The `wyrd` binary
   fetch planning, authoring, vault) to a `DriveView` with daemon
   materialization policy. Heads reach the view only through the engine's
   classified projection — never derived from announcements here.
-- **The write path**: `Daemon::put_file` and `Daemon::remove` publish
-  authored snapshots — manifest generation, vault import, and announcement
-  ride the engine.
+- **The write path**: mounted writes submit through the live mutation
+  channel (queue, fold, retained-quota gate); the `test-fixtures`
+  direct-write bodies (`put_file`/`remove`) publish the same way but
+  are test setup only and never enabled in production builds.
 - **Fetch-on-open** (`want.rs`, `LiveDaemon`): a want registry on its own
   lock; `open`/`read` on remote-only content blocks on a bounded deadline
   (`EIO` on expiry) while the fetch plan satisfies registered wants.

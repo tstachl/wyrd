@@ -18,6 +18,9 @@ wyrd-fuse.workspace = true
 # The contract builds a real drive; enable the fast KDF profile so the
 # lifecycle composition does not pay the production Argon2id cost.
 wyrd-sync = { workspace = true, features = ["insecure-fast-kdf"] }
+# Fixture authoring (`WyrdNode::put_file`/`remove`) is test-only (see
+# `layer_contracts`); production builds never carry it.
+wyrd-core = { workspace = true, features = ["test-fixtures"] }
 
 [lints]
 workspace = true

@@ -17,6 +17,14 @@ thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 
+[features]
+# Test-only direct-write fixtures (`WyrdNode::put_file`/`remove`): the
+# retired second mutation authority, kept for contract and lifecycle
+# fixtures that author setup state without a live loop. Never enabled
+# outside `[dev-dependencies]` (pinned by `layer_contracts`); the
+# default build carries no non-test mutation entry point.
+test-fixtures = []
+
 [dev-dependencies]
 # Downstream tests build a real `Engine` per test; enabling the fast KDF
 # profile here keeps that affordable without touching production builds.

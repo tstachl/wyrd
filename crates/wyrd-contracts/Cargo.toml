@@ -24,6 +24,10 @@ fuser = { version = "0.18", optional = true }
 # The contract suite builds real drives; enable the fast KDF profile so the
 # composition tests do not pay the production Argon2id cost.
 wyrd-sync = { workspace = true, features = ["insecure-fast-kdf"] }
+# Fixture authoring (`WyrdNode::put_file`/`remove`) is test-only: enable
+# the fixtures feature here so the suite can author setup state without
+# a live loop; production builds never carry it (see `layer_contracts`).
+wyrd-core = { workspace = true, features = ["test-fixtures"] }
 secp256k1.workspace = true
 blake3.workspace = true
 zeroize = "1.9"
