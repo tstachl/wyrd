@@ -66,6 +66,70 @@ fn a_fresh_drive_directory_is_owner_only() {
 
 #[cfg(unix)]
 #[test]
+fn preexisting_loose_dir_ensures_without_chmod() {
+    use super::store::ensure_owner_only_dir;
+    use std::os::unix::fs::PermissionsExt;
+    let dir = TestDir::new("custody-loose-helper");
+    std::fs::set_permissions(&dir.path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    // A v0.2-era umask-mode leaf: the open proceeds (upgrade contract
+    // Level 1) with an operator warning, and never chmods.
+    ensure_owner_only_dir(&dir.path).unwrap();
+    assert_eq!(
+        mode_of(&dir.path) & 0o777,
+        0o755,
+        "verification warns, never chmods"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn substituted_symlink_does_not_satisfy_the_check() {
+    use super::store::ensure_owner_only_dir;
+    let dir = TestDir::new("custody-symlink");
+    let target = dir.path.join("real");
+    std::fs::create_dir(&target).unwrap();
+    let link = dir.path.join("link");
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+    // The open carries O_NOFOLLOW, so the substituted symlink fails
+    // the open itself instead of verifying the target's modes.
+    // ELOOP is asserted by raw number: this toolchain predates
+    // `ErrorKind::FilesystemLoop`.
+    let error = ensure_owner_only_dir(&link).unwrap_err();
+    assert_eq!(
+        error.raw_os_error(),
+        Some(libc::ELOOP),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn leaf_verdict_pins_all_arms() {
+    use super::store::{current_euid, leaf_verdict, LeafVerdict};
+    let me = current_euid();
+    // A verified owner-only leaf is silent.
+    assert_eq!(
+        leaf_verdict(true, me, 0o40700, me).unwrap(),
+        LeafVerdict::Clean
+    );
+    // Same owner, any group/other bit: opens with a warning.
+    for mode in [0o40755, 0o40770, 0o40707, 0o40777] {
+        assert_eq!(
+            leaf_verdict(true, me, mode, me).unwrap(),
+            LeafVerdict::LooseMode,
+            "mode {mode:o}"
+        );
+    }
+    // A foreign-owned leaf refuses before any custody state moves.
+    let foreign = leaf_verdict(true, me.wrapping_add(1), 0o40700, me).unwrap_err();
+    assert_eq!(foreign.kind(), std::io::ErrorKind::PermissionDenied);
+    // A non-directory never verifies, whatever owns it.
+    let not_dir = leaf_verdict(false, me, 0o40700, me).unwrap_err();
+    assert_eq!(not_dir.kind(), std::io::ErrorKind::NotADirectory);
+}
+
+#[cfg(unix)]
+#[test]
 fn ensure_owner_only_dir_creates_at_owner_only() {
     use super::store::ensure_owner_only_dir;
     let _guard = UmaskGuard::set(0o000);

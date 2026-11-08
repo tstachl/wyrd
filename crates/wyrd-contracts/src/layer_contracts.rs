@@ -83,7 +83,11 @@ fn policy_for(member: &str) -> Option<MemberPolicy> {
         // Protocol machinery: format below, a pinned third-party set,
         // nothing upward or sideways. `tracing` is the structured
         // forensics facade (per-pass sync counts, intake verdicts,
-        // outbox sends) — events only, no subscriber, no I/O.
+        // outbox sends) — events only, no subscriber, no I/O. `libc`
+        // is the custody boundary only (`O_NOFOLLOW` directory opens
+        // and the euid ownership check in `durable::store`, mirroring
+        // the CLI's credential-file hardening) — no transport, no
+        // process control, no other call sites.
         "wyrd-sync" => Some(MemberPolicy {
             workspace_allow: &["wyrd-format", "wyrd-namespace"],
             external_allow: &[
@@ -104,6 +108,7 @@ fn policy_for(member: &str) -> Option<MemberPolicy> {
                 "thiserror",
                 "tracing",
                 "zeroize",
+                "libc",
             ],
         }),
         // The embeddable node: view, sync, and format below; the mailbox
@@ -1774,6 +1779,15 @@ fn check_consumer_link_graph(member: &str, graph: &BTreeMap<String, MemberEdges>
                     .external
                     .iter()
                     .filter(|name| matches!(name.as_str(), "fuser" | "libc" | "clap"))
+                    // `libc` through `wyrd-sync` is the custody boundary,
+                    // not presentation: `O_NOFOLLOW` directory opens and
+                    // the euid ownership check in `durable::store`,
+                    // mirroring the CLI's credential-file hardening. The
+                    // embedded consumer boundary excludes presentation
+                    // and the process host, not the C library the
+                    // substrate verifies custody with. `libc` through any
+                    // other member still bites.
+                    .filter(|name| !(reached.as_str() == "wyrd-sync" && name.as_str() == "libc"))
                     .map(|name| (reached.clone(), name.clone())),
             );
         }
@@ -2899,6 +2913,44 @@ mod policy_tests {
         assert!(
             violations[0].contains("wyrd-cli"),
             "names the process host: {violations:?}"
+        );
+    }
+
+    #[test]
+    fn consumer_closure_allows_libc_via_sync_only() {
+        // `wyrd-sync`'s `libc` is the custody boundary (`O_NOFOLLOW`
+        // opens, euid ownership), not a presentation surface.
+        let graph = link_graph(&[
+            ("wyrd-embed", &["wyrd-core"], &[]),
+            ("wyrd-core", &["wyrd-format", "wyrd-sync"], &["thiserror"]),
+            ("wyrd-sync", &["wyrd-format"], &["thiserror", "libc"]),
+            ("wyrd-format", &[], &["blake3", "thiserror"]),
+        ]);
+        assert!(
+            check_consumer_link_graph("wyrd-embed", &graph).is_empty(),
+            "custody libc must pass: {graph:?}"
+        );
+    }
+
+    #[test]
+    fn consumer_closure_rejects_libc_via_other_members() {
+        // The exemption is member-scoped: `libc` anywhere but
+        // `wyrd-sync` still bites.
+        let graph = link_graph(&[
+            ("wyrd-embed", &["wyrd-core"], &[]),
+            (
+                "wyrd-core",
+                &["wyrd-format", "wyrd-sync"],
+                &["thiserror", "libc"],
+            ),
+            ("wyrd-sync", &["wyrd-format"], &["thiserror"]),
+            ("wyrd-format", &[], &["blake3", "thiserror"]),
+        ]);
+        let violations = check_consumer_link_graph("wyrd-embed", &graph);
+        assert_eq!(violations.len(), 1, "libc via core only: {violations:?}");
+        assert!(
+            violations[0].contains("`libc` via `wyrd-core`"),
+            "the presentation external names its declaring member: {violations:?}"
         );
     }
 

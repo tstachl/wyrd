@@ -26,6 +26,10 @@ blake3.workspace = true
 tokio.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+# Custody-directory verification (`durable::store`): `O_NOFOLLOW` opens
+# and the euid ownership check, mirroring the CLI's credential-file
+# hardening. Production use, not test-only.
+libc.workspace = true
 
 # Zeroize secret material on drop (root key, epoch secrets, capability and
 # keystore plaintexts). `derive` gives us `ZeroizeOnDrop` for the newtype
@@ -47,8 +51,6 @@ insecure-fast-kdf = []
 proptest.workspace = true
 # Hex literals for the release-read freeze-pin vectors.
 hex.workspace = true
-# umask control for the custody-permission tests (Unix-only).
-libc.workspace = true
 
 [lints]
 workspace = true
