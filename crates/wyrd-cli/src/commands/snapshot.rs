@@ -29,6 +29,15 @@ pub(crate) fn snapshot(
             print!("{}", snapshot_heads_report(&engine)?);
             Ok(())
         }
+        SnapshotAction::Diverged { budget } => {
+            let store = FsObjectStore::open(drive_dir.to_path_buf())
+                .map_err(|error| CliError::Store(error.to_string()))?;
+            print!(
+                "{}",
+                wyrd_core::conflict_host::diverged_report(&engine, &store, budget)?
+            );
+            Ok(())
+        }
         SnapshotAction::Merge {
             heads,
             default,

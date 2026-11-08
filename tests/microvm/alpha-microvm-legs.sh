@@ -851,6 +851,21 @@ leg_conflict_owner() {
   peer_wait 240 conflict-member-done \
     || die "member never finished the conflict assertions"
   stop_mount xowner-c INT
+  # Host-acquisition leg for the divergedrive screen: the partition
+  # left two eligible heads, so `snapshot diverged` must report the
+  # divergence, the bounded what-differs comparison naming the
+  # conflict path, and the freeze state — all mount-free, off the
+  # real engine state.
+  with_creds "$c" snapshot "$d" diverged >"$E2E_ROOT/owner-diverged.txt" \
+    || die "owner snapshot diverged failed"
+  grep -q "divergence: diverged (2 eligible heads)" "$E2E_ROOT/owner-diverged.txt" \
+    || die "owner diverged screen shows no two-head divergence"
+  grep -q "conflict-c.txt" "$E2E_ROOT/owner-diverged.txt" \
+    || die "owner diverged screen names no conflict-c.txt difference"
+  grep -q "membership: not frozen" "$E2E_ROOT/owner-diverged.txt" \
+    || die "owner diverged screen misstates the freeze state"
+  pass "diverged drive reports through the host (indicator, comparison, freeze)"
+  check_no_leaks "$E2E_ROOT/owner-diverged.txt" "$(cat "$c/identity")" "$(cat "$c/passphrase")"
   check_no_leaks "$LOGDIR/mount-xowner-c.err" "$(cat "$c/identity")" "$(cat "$c/passphrase")"
 }
 
