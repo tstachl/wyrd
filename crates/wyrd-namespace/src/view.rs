@@ -5,7 +5,7 @@
 //! The value types (`Node`, `OpenFile`, attributes, entries, errors)
 //! model the drive's own namespace — files, directories, symlinks, and
 //! multi-head conflicts are content facts from the object model, not
-//! FUSE concepts — so they live here and `wyrd-fuse` uses them. The
+//! FUSE concepts — so they live here and `wyrd-view` uses them. The
 //! POSIX mapping (errnos, inodes, descriptors) stays at the FUSE
 //! boundary, outside this crate.
 //!

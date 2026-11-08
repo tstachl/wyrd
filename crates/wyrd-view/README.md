@@ -1,7 +1,8 @@
-# wyrd-fuse
+# wyrd-view
 
-Wyrd's presentation layer: the drive as a standard filesystem, mounted by
-the daemon over `fuser`.
+Wyrd's mount-free read view: the live view and conflict-version lookup.
+Actual FUSE mounting composes this view in the daemon; the view itself
+never learns how bytes arrive.
 
 ## What belongs here
 

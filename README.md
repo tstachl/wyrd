@@ -134,7 +134,7 @@ Wyrd's bet is that these are one system: git's object model, Syncthing's replica
 | `crates/wyrd-format` | The format contract: two identities (content/storage), canonical encoding, chunking, Merkle file trees, snapshot DAG |
 | `crates/wyrd-sync` | Peer replication on iroh: snapshot announcements, encrypted manifests, roles × materialization, two-phase content, zero-trust encryption |
 | `crates/wyrd-namespace` | Provider-neutral namespace: value types, verified-head handle, and read surface every presentation backend serves; depends on `wyrd-format` only |
-| `crates/wyrd-fuse` | The drive as a filesystem: live view, conflict-version lookup, visible conflicts |
+| `crates/wyrd-view` | The drive as a filesystem: live view, conflict-version lookup, visible conflicts |
 | `crates/wyrd-core` | Embeddable local node: namespace, snapshots, mutations, materialization, and sync control; no presentation, no argument parsing, no process supervision |
 | `crates/wyrd-daemon` | Composition library: engine + view + presentation backends (read-write FUSE today) |
 | `crates/wyrd-cli` | The `wyrd` process host: `init`, `mount`, `export`, `member`, `device`, `sync`, `vault`, `policy`, `snapshot`, `update`, diagnostics, exit codes over the daemon's surface |
@@ -218,7 +218,7 @@ prints a checklist, because macFUSE can fail without setting errno and a
 bare errno may be stale. The `devenv`
 environment only provides build-time stubs for fuser's probe; it cannot
 supply the runtime library or the kernel extension. `cargo check` and the
-`wyrd-format`, `wyrd-sync`, and `wyrd-fuse` suites need no FUSE at all.
+`wyrd-format`, `wyrd-sync`, and `wyrd-view` suites need no FUSE at all.
 
 `crates/wyrd-format` carries the format contract and `crates/wyrd-sync`
 the cryptography and state machines (both under test); the read-write

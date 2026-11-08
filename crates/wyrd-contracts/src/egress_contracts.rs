@@ -4,7 +4,7 @@
 //! This is the pre-format-break guarantee: the exported tree needs no
 //! wyrd software to read afterward.
 //!
-//! The fail-closed half composes rather than re-proves: `wyrd-fuse`'s
+//! The fail-closed half composes rather than re-proves: `wyrd-view`'s
 //! view tests pin absent chunks to `NotMaterialized`, and
 //! `wyrd-core`'s walk tests pin `NotMaterialized` to a failed export
 //! naming the missing content. Rebuilding a two-member intake rig
@@ -18,9 +18,9 @@ use wyrd_core::export::{export_tree, ExportError};
 use wyrd_core::node::WyrdNode;
 use wyrd_core::view::{ConfinementError, RuntimeMaterialization};
 use wyrd_format::{Entry, MemoryObjectStore, ObjectKind, ObjectStore, Tree};
-use wyrd_fuse::DriveView;
 use wyrd_sync::keys::DeviceIdentitySecret;
 use wyrd_sync::runtime::Engine;
+use wyrd_view::DriveView;
 
 /// A fresh engine directory for one egress composition. The
 /// process-wide counter keeps parallel workers from sharing a

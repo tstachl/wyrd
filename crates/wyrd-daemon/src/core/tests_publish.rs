@@ -1,6 +1,6 @@
 use super::*;
 
-use wyrd_fuse::DriveView;
+use wyrd_view::DriveView;
 
 use wyrd_format::{
     DeviceId, Entry, FsObjectStore, MemoryObjectStore, ObjectKind, ObjectStore, Tree,

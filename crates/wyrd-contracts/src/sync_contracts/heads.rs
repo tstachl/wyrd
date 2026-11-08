@@ -12,7 +12,6 @@ use wyrd_daemon::fuse::FuseBackend;
 #[cfg(feature = "mount")]
 use wyrd_format::Snapshot;
 use wyrd_format::{BaoRoot, ContentId, Entry, MemoryObjectStore, ObjectKind, ObjectStore, Tree};
-use wyrd_fuse::{DriveView, ViewError};
 #[cfg(feature = "mount")]
 use wyrd_sync::bulk::MemoryBulkSource;
 use wyrd_sync::durable::DurableError;
@@ -25,6 +24,7 @@ use wyrd_sync::transport::mailbox::{Delivery, Mailbox};
 use wyrd_sync::transport::mailbox::{
     DeliveryId, Disposition, MailboxEnvelope, MailboxError, SendReport,
 };
+use wyrd_view::{DriveView, ViewError};
 
 /// One head per verified body; a broken signature never becomes
 /// durable, never classified, and never mounts (architecture.md

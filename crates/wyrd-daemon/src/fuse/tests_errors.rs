@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use fuser::FileHandle;
 
-use wyrd_fuse::ViewError;
+use wyrd_view::ViewError;
 
 use wyrd_core::mutation::{MutationError, MutationKind, MutationOutcome, MutationQueue};
 
@@ -317,8 +317,8 @@ fn mount_log_reports_queue_depth_and_wait_time_without_a_new_dependency() {
             "tracing",
             "wyrd-core",
             "wyrd-format",
-            "wyrd-fuse",
             "wyrd-sync",
+            "wyrd-view",
         ],
         "no metrics pipeline dependency may land beside the probe"
     );

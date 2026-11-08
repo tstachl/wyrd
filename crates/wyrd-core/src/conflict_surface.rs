@@ -36,7 +36,7 @@
 //! The version-qualified lookup stays what it is today, something a
 //! person may type, never a promise the UI makes about numbering.
 //! Neither this module nor its tests implement version ordering: the
-//! grammar is `wyrd-fuse`'s (`grammar.rs`), and a second copy of the
+//! grammar is `wyrd-view`'s (`grammar.rs`), and a second copy of the
 //! numbering would be a second answer to
 //! `docs/contracts/object-model.md:382-384`.
 //!

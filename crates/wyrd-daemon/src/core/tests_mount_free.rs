@@ -12,7 +12,7 @@ use wyrd_format::{
     ContentId, DeviceId, Entry, FetchStatus, MemoryObjectStore, ObjectKind, ObjectStore, Snapshot,
     TransitionId, Tree,
 };
-use wyrd_fuse::{DriveView, VerifiedSnapshot, ViewError, ViewHead};
+use wyrd_view::{DriveView, VerifiedSnapshot, ViewError, ViewHead};
 
 /// Residency for the equivalence drive: store presence serves;
 /// absent identities are remote-only unless listed terminal, in
@@ -23,7 +23,7 @@ struct EquivalenceMaterialization {
     terminal: Vec<ContentId>,
 }
 
-impl wyrd_fuse::Materialization for EquivalenceMaterialization {
+impl wyrd_view::Materialization for EquivalenceMaterialization {
     fn status(&self, id: &ContentId) -> FetchStatus {
         if self.terminal.contains(id) {
             FetchStatus::Unavailable(1)

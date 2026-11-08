@@ -12,7 +12,7 @@ t = "nextest run"
 # stays `cargo nextest run` (default profile) plus `--profile slow` on
 # master CI.
 fast-format = "nextest run --profile local -p wyrd-format -p wyrd-namespace"
-fast-fuse = "nextest run --profile local -p wyrd-fuse"
+fast-view = "nextest run --profile local -p wyrd-view"
 fast-sync = "nextest run --profile local -p wyrd-sync"
 fast-core = "nextest run --profile local -p wyrd-core"
 fast-daemon = "nextest run --profile local -p wyrd-daemon"

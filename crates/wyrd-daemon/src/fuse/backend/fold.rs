@@ -10,7 +10,7 @@ use wyrd_core::mutation::{
 };
 
 use wyrd_format::ObjectStore;
-use wyrd_fuse::{Materialization, ViewError};
+use wyrd_view::{Materialization, ViewError};
 
 use super::super::inode::{Handle, WriteHandle, WriteImage};
 use super::{log_budget_refusal, log_refused, mutation_errno, FuseBackend};

@@ -16,7 +16,7 @@ use wyrd_core::scrub::ScrubQueue;
 use wyrd_core::session::WriteBudget;
 use wyrd_core::want::WantRegistry;
 use wyrd_format::ObjectStore;
-use wyrd_fuse::{DriveView, Materialization};
+use wyrd_view::{DriveView, Materialization};
 
 use super::super::inode::{DirectoryState, InodeTable, OpenFiles, DIRECTORY_HANDLE_BASE};
 use super::{current_owner, BackendProjection, FuseBackend, RecentRepairs};

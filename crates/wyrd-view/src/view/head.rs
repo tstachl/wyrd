@@ -39,7 +39,7 @@ use wyrd_format::Snapshot;
 /// the composing crate, and review each like an `unsafe` block.
 ///
 /// ```compile_fail
-/// use wyrd_fuse::VerifiedSnapshot;
+/// use wyrd_view::VerifiedSnapshot;
 /// use wyrd_format::Snapshot;
 ///
 /// struct Unchecked(Snapshot);

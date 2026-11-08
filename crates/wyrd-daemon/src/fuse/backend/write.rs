@@ -9,7 +9,7 @@ use wyrd_core::mutation::{FileIdentity, MutationKind, MutationOutcome};
 use wyrd_core::session::FoldLease;
 
 use wyrd_format::ObjectStore;
-use wyrd_fuse::{Materialization, Node, ViewError};
+use wyrd_view::{Materialization, Node, ViewError};
 
 use super::super::inode::{Handle, SparseOverlay, WriteHandle, WriteImage};
 use super::fold::{GatherFilter, TakenMember};
@@ -476,7 +476,7 @@ where
     /// `gather_taken`), exactly the transient it accounts.
     fn materialize_sparse(
         &self,
-        capture: &wyrd_fuse::OpenFile,
+        capture: &wyrd_view::OpenFile,
         base_size: u64,
         overlay: &SparseOverlay,
     ) -> Result<Vec<u8>, fuser::Errno> {
@@ -819,7 +819,7 @@ struct PendingTake {
     seq: u64,
     path: String,
     base: FileIdentity,
-    capture: wyrd_fuse::OpenFile,
+    capture: wyrd_view::OpenFile,
     base_size: u64,
     executable: bool,
     append: bool,

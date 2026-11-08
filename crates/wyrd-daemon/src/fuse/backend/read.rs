@@ -10,7 +10,7 @@ use wyrd_core::scrub::ScrubObservation;
 
 use wyrd_core::want::wait_for_materialization;
 use wyrd_format::{ObjectStore, StoreFailure};
-use wyrd_fuse::{Materialization, OpenFile, ViewError};
+use wyrd_view::{Materialization, OpenFile, ViewError};
 
 use super::super::inode::{Handle, SparseOverlay, WriteImage};
 use super::{complete_waiter_on_terminal, errno_of, FuseBackend};

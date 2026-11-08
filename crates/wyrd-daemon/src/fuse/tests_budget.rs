@@ -9,7 +9,7 @@ use wyrd_core::mutation::{FileIdentity, MutationOutcome, MutationQueue};
 use wyrd_core::session::WriteBudget;
 use wyrd_format::ObjectStore;
 use wyrd_format::{ContentId, Entry, MemoryObjectStore, ObjectKind, Tree};
-use wyrd_fuse::{DriveView, OpenFile};
+use wyrd_view::{DriveView, OpenFile};
 
 /// In-memory tracing writer: captures the budget-refusal line so the
 /// test below can assert on the emitted layer and reason — the

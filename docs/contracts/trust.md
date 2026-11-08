@@ -697,7 +697,7 @@ The precise state machine — transition validation, membership conflicts,
 snapshot classification, recovery — is normative in `epochs.md`.
 
 **View-head audit rule.** The live view admits snapshots only through the
-`wyrd_fuse::VerifiedSnapshot` capability, whose `unsafe impl` is the trust
+`wyrd_view::VerifiedSnapshot` capability, whose `unsafe impl` is the trust
 assertion that the wrapped snapshot was verified by the trust authority.
 Every future `unsafe impl` of that trait is therefore a trust-boundary
 change and needs individual audit: keep implementations few, local to the

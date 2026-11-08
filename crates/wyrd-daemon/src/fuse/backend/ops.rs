@@ -5,7 +5,7 @@ use std::ffi::OsStr;
 use fuser::{FileHandle, INodeNo, LockOwner, OpenFlags};
 
 use wyrd_format::ObjectStore;
-use wyrd_fuse::Materialization;
+use wyrd_view::Materialization;
 
 use super::super::inode::{statfs_capacity, Handle, TTL};
 use super::{join, unsupported_open_flags, FuseBackend};

@@ -1,9 +1,9 @@
 #[cfg(feature = "mount")]
 use super::*;
 
-#[cfg(feature = "mount")]
-use wyrd_fuse::DriveView;
 use wyrd_sync::{runtime::Engine, transport::mailbox::Mailbox};
+#[cfg(feature = "mount")]
+use wyrd_view::DriveView;
 
 use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(feature = "mount")]

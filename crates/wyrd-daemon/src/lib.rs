@@ -42,6 +42,6 @@ pub use vault::{
 // host composition check sees only the composer surface. The daemon is
 // already transport-fluent (lifecycle, vault); this re-export moves no
 // machinery, it only names the boundary the host may touch.
-pub use wyrd_fuse::DriveView;
 pub use wyrd_sync::serving::ServingEndpoint;
 pub use wyrd_sync::transport::mailbox::Mailbox;
+pub use wyrd_view::DriveView;

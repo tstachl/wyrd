@@ -17,7 +17,6 @@ use wyrd_format::{
 };
 #[cfg(feature = "mount")]
 use wyrd_format::{MembershipTransition, SnapshotId};
-use wyrd_fuse::DriveView;
 #[cfg(feature = "mount")]
 use wyrd_sync::bulk::{AttemptBudget, BulkError, BulkSource, SealedManifest};
 use wyrd_sync::closure::{verify_snapshot_manifest, ClosureError};
@@ -42,6 +41,7 @@ use wyrd_sync::serving::VaultSource;
 use wyrd_sync::transport::mailbox::{
     Delivery, DeliveryId, Disposition, Mailbox, MailboxEnvelope, MailboxError, SendReport,
 };
+use wyrd_view::DriveView;
 #[cfg(feature = "mount")]
 use zeroize::Zeroizing;
 

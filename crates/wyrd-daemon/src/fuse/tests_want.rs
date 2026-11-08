@@ -5,7 +5,7 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use wyrd_format::ObjectStore;
-use wyrd_fuse::DriveView;
+use wyrd_view::DriveView;
 
 use wyrd_core::budgets::ResourceBudgets;
 use wyrd_core::mutation::MutationQueue;
@@ -294,7 +294,7 @@ struct TerminalMaterialization {
     verdict: wyrd_format::FetchStatus,
 }
 
-impl wyrd_fuse::Materialization for TerminalMaterialization {
+impl wyrd_view::Materialization for TerminalMaterialization {
     fn status(&self, id: &ContentId) -> wyrd_format::FetchStatus {
         if id == &self.chunk {
             let polls = self.polls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
@@ -573,7 +573,7 @@ fn lost_read_reports_to_scrub_and_fails_eio() {
 /// publishable generation.
 struct AvailableMaterialization;
 
-impl wyrd_fuse::Materialization for AvailableMaterialization {
+impl wyrd_view::Materialization for AvailableMaterialization {
     fn status(&self, _id: &ContentId) -> wyrd_format::FetchStatus {
         wyrd_format::FetchStatus::Available
     }

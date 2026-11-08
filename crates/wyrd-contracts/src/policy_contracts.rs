@@ -11,9 +11,9 @@ use wyrd_core::policy::{evict_subtree, pin_subtree, unpin_subtree};
 use wyrd_core::status::observe;
 use wyrd_core::view::RuntimeMaterialization;
 use wyrd_format::{Entry, FsObjectStore, ObjectKind, ObjectStore, Tree};
-use wyrd_fuse::DriveView;
 use wyrd_sync::keys::DeviceIdentitySecret;
 use wyrd_sync::runtime::Engine;
+use wyrd_view::DriveView;
 
 use crate::support::scratch_dir;
 

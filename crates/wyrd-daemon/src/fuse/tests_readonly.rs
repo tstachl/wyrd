@@ -3,7 +3,7 @@ use super::tests_harness::{backend, heads, snapshot_of, NoMaterialization};
 use super::*;
 use fuser::INodeNo;
 use wyrd_format::{ContentId, Entry, MemoryObjectStore, Tree};
-use wyrd_fuse::{DriveView, Node};
+use wyrd_view::{DriveView, Node};
 
 /// A backend with no mutation channel is the standalone read-only
 /// mount: every mutating operation is refused with EROFS, never

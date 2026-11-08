@@ -28,12 +28,12 @@
 //! `code_text`.
 //!
 //! A second rule needs the transitive closure, not the direct edges,
-//! and lives here as well: `wyrd-fuse`'s production-edge closure must
+//! and lives here as well: `wyrd-view`'s production-edge closure must
 //! reach neither `wyrd-sync` nor any `iroh*` package. Only the view
 //! crate is walked — `wyrd-daemon` and `wyrd-cli` must link the
 //! transport, so the gap is load-bearing only here (mobile surfaces
 //! mount no FUSE; they build on the same provider-neutral view). The
-//! direct check above cannot see reachability — `wyrd-fuse → wyrd-core
+//! direct check above cannot see reachability — `wyrd-view → wyrd-core
 //! → wyrd-sync` is three allowed edges that link iroh into the view
 //! crate. Manifests see member-declared edges only: a third-party
 //! crate's own transitive dependencies are invisible here, so this
@@ -142,7 +142,7 @@ fn policy_for(member: &str) -> Option<MemberPolicy> {
         // below, nothing else. No edge on `wyrd-core` by design — the
         // view links no transport, not even transitively (checked by
         // `fuse_link_graph_excludes_sync_and_iroh` below).
-        "wyrd-fuse" => Some(MemberPolicy {
+        "wyrd-view" => Some(MemberPolicy {
             workspace_allow: &["wyrd-format", "wyrd-namespace"],
             external_allow: &["thiserror"],
         }),
@@ -160,7 +160,7 @@ fn policy_for(member: &str) -> Option<MemberPolicy> {
         // lock-refused starter reads it — `serde`/`serde_json` are the
         // sidecar schema and encoding, nothing else may use them.
         "wyrd-daemon" => Some(MemberPolicy {
-            workspace_allow: &["wyrd-format", "wyrd-sync", "wyrd-fuse", "wyrd-core"],
+            workspace_allow: &["wyrd-format", "wyrd-sync", "wyrd-view", "wyrd-core"],
             external_allow: &[
                 "fuser",
                 "futures-util",
@@ -223,7 +223,7 @@ fn policy_for(member: &str) -> Option<MemberPolicy> {
             workspace_allow: &[
                 "wyrd-format",
                 "wyrd-sync",
-                "wyrd-fuse",
+                "wyrd-view",
                 "wyrd-core",
                 "wyrd-daemon",
                 "wyrd-cli",
@@ -243,7 +243,7 @@ fn policy_for(member: &str) -> Option<MemberPolicy> {
         // contract suite. The transitive half of the boundary is
         // `consumer_link_graph_excludes_presentation`.
         "wyrd-embed" => Some(MemberPolicy {
-            workspace_allow: &["wyrd-format", "wyrd-sync", "wyrd-fuse", "wyrd-core"],
+            workspace_allow: &["wyrd-format", "wyrd-sync", "wyrd-view", "wyrd-core"],
             external_allow: &[],
         }),
         // The desktop host: the owner process. It opens the store
@@ -367,7 +367,7 @@ fn dev_deps(manifest: &toml::Table) -> DepSet {
     deps
 }
 
-/// `wyrd-fuse`'s test-only edge set, pinned exactly: the view tests
+/// `wyrd-view`'s test-only edge set, pinned exactly: the view tests
 /// build export fixtures against `wyrd-core` and nothing else. The
 /// direct check exempts dev-dependencies by design, so this pin is
 /// what makes a widening deliberate instead of silent. Pure over the
@@ -379,7 +379,7 @@ fn check_fuse_dev_deps(deps: &DepSet, workspace_deps: &toml::Table) -> Vec<Strin
         .collect();
     if names != BTreeSet::from(["wyrd-core".to_owned()]) {
         return vec![format!(
-            "`wyrd-fuse` dev-dependencies drifted to `{names:?}` (want exactly \
+            "`wyrd-view` dev-dependencies drifted to `{names:?}` (want exactly \
              `wyrd-core` for export fixtures): widen deliberately here, never silently"
         )];
     }
@@ -1107,7 +1107,7 @@ fn workspace_members_are_exact() {
         "crates/wyrd-format",
         "crates/wyrd-sync",
         "crates/wyrd-namespace",
-        "crates/wyrd-fuse",
+        "crates/wyrd-view",
         "crates/wyrd-core",
         "crates/wyrd-daemon",
         "crates/wyrd-cli",
@@ -1274,7 +1274,7 @@ fn check_link_graph(member: &str, graph: &BTreeMap<String, MemberEdges>) -> Vec<
     violations
 }
 
-/// Contract 34, transitive half: `wyrd-fuse` is the crate the mobile
+/// Contract 34, transitive half: `wyrd-view` is the crate the mobile
 /// story depends on staying transport-neutral, so its
 /// production-edge closure must reach neither `wyrd-sync` nor any
 /// `iroh*` package. Resolves every member's normal edges from the
@@ -1302,7 +1302,7 @@ fn fuse_link_graph_excludes_sync_and_iroh() {
         let deps = production_deps(&read_manifest(&root.join(member)));
         graph.insert(name.to_owned(), member_edges(&deps, &workspace_deps));
     }
-    let violations = check_link_graph("wyrd-fuse", &graph);
+    let violations = check_link_graph("wyrd-view", &graph);
     assert!(
         violations.is_empty(),
         "link-graph violations:\n- {}",
@@ -1310,7 +1310,7 @@ fn fuse_link_graph_excludes_sync_and_iroh() {
     );
 }
 
-/// Contract 34, dev-dep pin: `wyrd-fuse`'s test-only edges stay
+/// Contract 34, dev-dep pin: `wyrd-view`'s test-only edges stay
 /// exactly `wyrd-core` (export fixtures). The direct check exempts
 /// dev-dependencies, and the transitive check ignores them, so
 /// without this pin a transport edge could hide in the test profile
@@ -1320,7 +1320,7 @@ fn fuse_dev_deps_stay_pinned() {
     let root = workspace_root();
     let root_manifest = read_manifest(&root);
     let workspace_deps = workspace_dep_table(&root_manifest);
-    let fuse = read_manifest(&root.join("crates/wyrd-fuse"));
+    let fuse = read_manifest(&root.join("crates/wyrd-view"));
     let violations = check_fuse_dev_deps(&dev_deps(&fuse), &workspace_deps);
     assert!(
         violations.is_empty(),
@@ -1513,7 +1513,7 @@ fn no_surface_authors_a_conflict_resolution() {
         "crates/wyrd-cli/src",
         "crates/wyrd-daemon/src",
         "crates/wyrd-app/src",
-        "crates/wyrd-fuse/src",
+        "crates/wyrd-view/src",
     ] {
         let (files, errors) = collect_rs_files(&root.join(member), &root);
         assert!(
@@ -1649,7 +1649,7 @@ fn no_v04_surface_offers_a_role_choice() {
     for member in [
         "crates/wyrd-app/src",
         "crates/wyrd-daemon/src",
-        "crates/wyrd-fuse/src",
+        "crates/wyrd-view/src",
         "crates/wyrd-cli/src",
     ] {
         let (files, errors) = collect_rs_files(&root.join(member), &root);
@@ -3223,9 +3223,9 @@ mod policy_tests {
 
     #[test]
     fn cli_never_touches_the_view_crate() {
-        let violations = check_member("wyrd-cli", &deps(&["wyrd-core", "wyrd-fuse"]), &empty_ws());
+        let violations = check_member("wyrd-cli", &deps(&["wyrd-core", "wyrd-view"]), &empty_ws());
         assert_eq!(violations.len(), 1);
-        assert!(violations[0].contains("wyrd-fuse"));
+        assert!(violations[0].contains("wyrd-view"));
     }
 
     #[test]
@@ -3483,7 +3483,7 @@ mod policy_tests {
     #[test]
     fn transitive_sync_reachability_is_rejected_with_witness() {
         let graph = link_graph(&[
-            ("wyrd-fuse", &["wyrd-core"], &["thiserror"]),
+            ("wyrd-view", &["wyrd-core"], &["thiserror"]),
             (
                 "wyrd-core",
                 &["wyrd-format", "wyrd-sync"],
@@ -3492,14 +3492,14 @@ mod policy_tests {
             ("wyrd-sync", &["wyrd-format"], &["iroh", "thiserror"]),
             ("wyrd-format", &[], &["blake3", "thiserror"]),
         ]);
-        let violations = check_link_graph("wyrd-fuse", &graph);
+        let violations = check_link_graph("wyrd-view", &graph);
         assert_eq!(violations.len(), 2, "sync and iroh: {violations:?}");
         assert!(
             violations[0].contains("wyrd-sync"),
             "sync reachability names the target: {violations:?}"
         );
         assert!(
-            violations[0].contains("wyrd-fuse → wyrd-core → wyrd-sync"),
+            violations[0].contains("wyrd-view → wyrd-core → wyrd-sync"),
             "the witness path names every hop: {violations:?}"
         );
         assert!(
@@ -3514,11 +3514,11 @@ mod policy_tests {
         // declaring an iroh-family package fails even with no
         // `wyrd-sync` in the closure.
         let graph = link_graph(&[
-            ("wyrd-fuse", &["wyrd-core"], &["thiserror"]),
+            ("wyrd-view", &["wyrd-core"], &["thiserror"]),
             ("wyrd-core", &["wyrd-format"], &["iroh-blobs", "thiserror"]),
             ("wyrd-format", &[], &["blake3", "thiserror"]),
         ]);
-        let violations = check_link_graph("wyrd-fuse", &graph);
+        let violations = check_link_graph("wyrd-view", &graph);
         assert_eq!(violations.len(), 1, "iroh only: {violations:?}");
         assert!(
             violations[0].contains("`iroh-blobs` via `wyrd-core`"),
@@ -3529,12 +3529,12 @@ mod policy_tests {
     #[test]
     fn clean_closure_passes() {
         let graph = link_graph(&[
-            ("wyrd-fuse", &["wyrd-namespace"], &["thiserror"]),
+            ("wyrd-view", &["wyrd-namespace"], &["thiserror"]),
             ("wyrd-namespace", &["wyrd-format"], &["thiserror"]),
             ("wyrd-format", &[], &["blake3", "hex", "thiserror"]),
         ]);
         assert!(
-            check_link_graph("wyrd-fuse", &graph).is_empty(),
+            check_link_graph("wyrd-view", &graph).is_empty(),
             "a transport-free closure must pass"
         );
     }
@@ -3544,9 +3544,9 @@ mod policy_tests {
         // Edges at non-members (a removed crate, a typo) are the
         // direct check's fail-closed territory; the closure walk must
         // not panic on them, just treat them as leaves.
-        let graph = link_graph(&[("wyrd-fuse", &["wyrd-gone"], &["thiserror"])]);
+        let graph = link_graph(&[("wyrd-view", &["wyrd-gone"], &["thiserror"])]);
         assert!(
-            check_link_graph("wyrd-fuse", &graph).is_empty(),
+            check_link_graph("wyrd-view", &graph).is_empty(),
             "unknown members are leaves to the closure: {graph:?}"
         );
     }
@@ -3556,8 +3556,8 @@ mod policy_tests {
         let graph = link_graph(&[
             ("wyrd-embed", &["wyrd-core"], &[]),
             ("wyrd-core", &["wyrd-format", "wyrd-daemon"], &["thiserror"]),
-            ("wyrd-daemon", &["wyrd-fuse"], &["fuser"]),
-            ("wyrd-fuse", &[], &["thiserror"]),
+            ("wyrd-daemon", &["wyrd-view"], &["fuser"]),
+            ("wyrd-view", &[], &["thiserror"]),
             ("wyrd-format", &[], &["blake3", "thiserror"]),
         ]);
         let violations = check_consumer_link_graph("wyrd-embed", &graph);
@@ -3639,8 +3639,8 @@ mod policy_tests {
     #[test]
     fn consumer_clean_closure_passes() {
         let graph = link_graph(&[
-            ("wyrd-embed", &["wyrd-fuse", "wyrd-core"], &[]),
-            ("wyrd-fuse", &["wyrd-namespace"], &["thiserror"]),
+            ("wyrd-embed", &["wyrd-view", "wyrd-core"], &[]),
+            ("wyrd-view", &["wyrd-namespace"], &["thiserror"]),
             (
                 "wyrd-core",
                 &["wyrd-format", "wyrd-sync"],
@@ -3675,14 +3675,14 @@ mod policy_tests {
     #[test]
     fn mint_count_rejects_a_second_mint() {
         let holders = [
-            ("crates/wyrd-fuse/src/view/tests_harness.rs".to_owned(), 1),
+            ("crates/wyrd-view/src/view/tests_harness.rs".to_owned(), 1),
             ("crates/wyrd-namespace/src/view.rs".to_owned(), 1),
             ("crates/wyrd-sync/src/durable/mod.rs".to_owned(), 1),
         ];
         let violations = check_proof_mint(&holders);
         assert_eq!(violations.len(), 1, "one rogue mint: {violations:?}");
         assert!(
-            violations[0].contains("crates/wyrd-fuse/src/view/tests_harness.rs"),
+            violations[0].contains("crates/wyrd-view/src/view/tests_harness.rs"),
             "names the rogue file: {violations:?}"
         );
     }
@@ -3729,7 +3729,7 @@ mod policy_tests {
     fn mint_scanner_ignores_comments_and_strings() {
         let files = [
             (
-                "crates/wyrd-fuse/src/view/head.rs",
+                "crates/wyrd-view/src/view/head.rs",
                 "// mint via from_verified_unchecked is forbidden",
             ),
             (
@@ -3924,7 +3924,7 @@ mod policy_tests {
     fn resolution_check_ignores_comments_and_strings() {
         let files = [
             (
-                "crates/wyrd-fuse/src/view/drive.rs",
+                "crates/wyrd-view/src/view/drive.rs",
                 "// MergeSelection lives in the engine, not here",
             ),
             (

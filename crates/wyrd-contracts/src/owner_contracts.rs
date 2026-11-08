@@ -136,7 +136,7 @@ fn submit_against_two_heads_relays_conflicted() {
     let view_dir = scratch_dir("owner-fork-view");
     let view_store = FsObjectStore::open(view_dir.clone()).unwrap();
     let mut daemon: wyrd_core::node::WyrdNode<
-        wyrd_fuse::DriveView<FsObjectStore, wyrd_core::view::RuntimeMaterialization>,
+        wyrd_view::DriveView<FsObjectStore, wyrd_core::view::RuntimeMaterialization>,
     > = wyrd_core::node::WyrdNode::new(holder_a.engine, view_store).unwrap();
     daemon.refresh_live_heads().unwrap();
     let (mut live, parts) = daemon

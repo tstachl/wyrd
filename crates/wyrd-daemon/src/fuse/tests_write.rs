@@ -13,7 +13,7 @@ use wyrd_core::mutation::{
 };
 use wyrd_core::session::WriteBudget;
 use wyrd_format::{Entry, MemoryObjectStore, ObjectKind, ObjectStore, Tree};
-use wyrd_fuse::{DriveView, Node};
+use wyrd_view::{DriveView, Node};
 
 /// The `O_TRUNC` half of an open is bound to the identity that open
 /// observed. A same-path replacement publishing before the loop

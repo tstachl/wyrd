@@ -1293,7 +1293,7 @@ where
     }
 
     /// Classify absent content on the mutation path, paired with the
-    /// view's own absence rule (`wyrd-fuse`'s `absent`): a remote or
+    /// view's own absence rule (`wyrd-view`'s `absent`): a remote or
     /// fetching identity is a `NeedContent` prerequisite, anything
     /// else — a local claim the store cannot back, unreachable, or
     /// corrupt — fails closed as the transient store error the view

@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use wyrd_fuse::OpenFile;
+use wyrd_view::OpenFile;
 
 use wyrd_core::mutation::FileIdentity;
 use wyrd_core::session::HandleId;

@@ -9,7 +9,7 @@ use wyrd_format::Change;
 #[cfg(feature = "mount")]
 use wyrd_format::ObjectStore;
 #[cfg(feature = "mount")]
-use wyrd_fuse::DriveView;
+use wyrd_view::DriveView;
 
 /// Compose a serving backend from the node's live parts: contracts
 /// take the composer role production gives `main.rs` — the backend is

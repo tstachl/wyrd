@@ -1,6 +1,6 @@
 //! Wyrd's cross-crate architectural contract suite (principal review,
 //! 2026-09-10 §9): one named test per contract, each composed through
-//! the public APIs of `wyrd-format → wyrd-sync → wyrd-fuse →
+//! the public APIs of `wyrd-format → wyrd-sync → wyrd-view →
 //! wyrd-daemon`, so an invariant regression fails a test instead of a
 //! deployment. The suite is a workspace leaf: it depends on every
 //! crate and nothing depends on it.

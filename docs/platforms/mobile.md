@@ -2,7 +2,7 @@
 
 **Status:** Design plan. Not yet normative. Nothing in this document is a contract: normative behavior lives in `docs/contracts/object-model.md`, `docs/contracts/trust.md`, `docs/contracts/epochs.md`, and `docs/contracts/write-path.md` until a tracked issue explicitly adopts a section here.
 
-**Extraction status (2026-09):** the Phase 1 split below is done — `wyrd-core` holds `WyrdNode`, `LiveNode`/`LiveParts`, the mutation/session/projection machinery, and the relay mailbox; `wyrd-daemon` is the desktop composition library; `wyrd-cli` is the `wyrd` process host. Two deliberate deviations from the plan as written: `DriveView` stayed in `wyrd-fuse` (providers program against the `NamespaceView` trait in `wyrd-core` instead), and the moved types were renamed (`Daemon` → `WyrdNode`, `LiveDaemon` → `LiveNode`). Read `Daemon`/`LiveDaemon`/`DriveView` below as their current names; the remaining sections are future mobile work to be re-validated, not descriptions of today.
+**Extraction status (2026-09):** the Phase 1 split below is done — `wyrd-core` holds `WyrdNode`, `LiveNode`/`LiveParts`, the mutation/session/projection machinery, and the relay mailbox; `wyrd-daemon` is the desktop composition library; `wyrd-cli` is the `wyrd` process host. Two deliberate deviations from the plan as written: `DriveView` stayed in `wyrd-view` (providers program against the `NamespaceView` trait in `wyrd-core` instead), and the moved types were renamed (`Daemon` → `WyrdNode`, `LiveDaemon` → `LiveNode`). Read `Daemon`/`LiveDaemon`/`DriveView` below as their current names; the remaining sections are future mobile work to be re-validated, not descriptions of today.
 
 ## Purpose
 
@@ -20,7 +20,7 @@ The important architectural constraint is that mobile must not introduce a secon
 
 ## The core insight
 
-`wyrd-fuse::DriveView` is already intended to be presentation-agnostic. The architecture documentation describes FUSE as:
+`wyrd-view::DriveView` is already intended to be presentation-agnostic. The architecture documentation describes FUSE as:
 
 > "The FUSE adapter is the first such backend, not a property of the core."
 
@@ -145,7 +145,7 @@ Responsibilities:
 * daemon composition;
 * `WyrdNode`;
 * `LiveNode`/`LiveParts`;
-* `NamespaceView` trait (`DriveView` stayed in `wyrd-fuse` as its first implementation);
+* `NamespaceView` trait (`DriveView` stayed in `wyrd-view` as its first implementation);
 * projection state;
 * projection generations;
 * open file handles;
@@ -901,7 +901,7 @@ This extraction builds on the tracked composition seam — `refactor(daemon): ma
 
 * Extract `wyrd-core`. ✅ done (node extraction, contracts 34–36).
 * Move `Daemon` and `LiveDaemon` into the new crate. ✅ done as `WyrdNode` and `LiveNode`.
-* Move `DriveView` into the new crate if it does not already live at an appropriate platform-independent boundary. ✅ resolved the other way: `DriveView` stayed in `wyrd-fuse`; providers program against the `NamespaceView` trait.
+* Move `DriveView` into the new crate if it does not already live at an appropriate platform-independent boundary. ✅ resolved the other way: `DriveView` stayed in `wyrd-view`; providers program against the `NamespaceView` trait.
 * Move writable-handle and mutation-queue infrastructure into the core as the write path lands. ✅ done.
 * Ensure the core has no FUSE or Unix-specific dependencies. ✅ done (contract 34's `wyrd-core` clause forbids fuser, clap, and libc).
 * Retain `wyrd-daemon` as the desktop composition layer. ✅ done (library; the binary lives in `wyrd-cli`).

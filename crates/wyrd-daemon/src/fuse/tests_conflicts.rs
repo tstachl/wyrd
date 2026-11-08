@@ -3,7 +3,7 @@ use super::tests_harness::{heads, snapshot_of, NoMaterialization};
 use super::*;
 
 use wyrd_format::ObjectStore;
-use wyrd_fuse::{DriveView, Node};
+use wyrd_view::{DriveView, Node};
 
 use wyrd_format::{ContentId, Entry, MemoryObjectStore, ObjectKind, Tree};
 

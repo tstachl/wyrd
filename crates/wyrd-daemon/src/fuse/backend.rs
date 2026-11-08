@@ -5,7 +5,7 @@ use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use wyrd_format::{ObjectStore, StoreFailure};
-use wyrd_fuse::{DriveView, Materialization, Node, ViewError};
+use wyrd_view::{DriveView, Materialization, Node, ViewError};
 
 use super::inode::{DirectoryState, InodeError, InodeTable, OpenFiles};
 

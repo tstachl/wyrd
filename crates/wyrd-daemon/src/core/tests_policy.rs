@@ -12,8 +12,8 @@ use wyrd_core::policy::{
     RetentionPolicy,
 };
 use wyrd_format::{EntryContent, FsObjectStore, ObjectKind, ObjectStore, Tree};
-use wyrd_fuse::DriveView;
 use wyrd_sync::runtime::Engine;
+use wyrd_view::DriveView;
 
 /// A node over its drive's own store with two authored files, heads
 /// installed: the offline shape the CLI policy commands compose.
@@ -203,7 +203,7 @@ fn export_against_policy_proves_pin_needs_bytes() {
     use wyrd_core::export::{export_tree, ExportError};
     use wyrd_core::view::Head;
     use wyrd_format::MemoryObjectStore;
-    use wyrd_fuse::ViewHead;
+    use wyrd_view::ViewHead;
 
     let (mut daemon, dir, _identity, _heads) = policy_node();
     {

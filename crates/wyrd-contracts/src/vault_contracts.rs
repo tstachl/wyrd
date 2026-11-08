@@ -4,7 +4,6 @@
 use wyrd_format::{
     Entry, FetchStatus, MemoryObjectStore, ObjectKind, ObjectStore, Snapshot, TransitionId, Tree,
 };
-use wyrd_fuse::{DriveView, ViewError};
 use wyrd_sync::bulk::{BulkSource, MemoryBulkSource, SealedManifest};
 use wyrd_sync::control::{sign_announcement, SnapshotAnnouncement};
 use wyrd_sync::public_read::{
@@ -12,6 +11,7 @@ use wyrd_sync::public_read::{
     PUBLIC_RELEASE_LEN,
 };
 use wyrd_sync::seal::{self, SEAL_VERSION};
+use wyrd_view::{DriveView, ViewError};
 
 use crate::support::{
     device, drive, mount_heads, seal_flat_drive, signed_snapshot, Loaded, RemoteOnlyMaterialization,

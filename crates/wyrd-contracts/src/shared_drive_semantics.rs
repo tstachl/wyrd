@@ -33,13 +33,13 @@ use wyrd_daemon::fuse::FuseBackend;
 use wyrd_format::{
     ContentId, Entry, FetchStatus, MemoryObjectStore, ObjectKind, ObjectStore, Tree,
 };
-use wyrd_fuse::{DriveView, Materialization, ViewError};
 use wyrd_sync::bulk::MemoryBulkSource;
 use wyrd_sync::keys::DeviceIdentitySecret;
 use wyrd_sync::runtime::Engine;
 use wyrd_sync::transport::mailbox::{
     Delivery, DeliveryId, Disposition, Mailbox, MailboxEnvelope, MailboxError, SendReport,
 };
+use wyrd_view::{DriveView, Materialization, ViewError};
 
 use crate::support::{fixture_heads, scratch_dir, signed_head};
 

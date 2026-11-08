@@ -1,6 +1,6 @@
 use super::*;
 
-use wyrd_fuse::DriveView;
+use wyrd_view::DriveView;
 
 use std::sync::{
     atomic::{AtomicBool, Ordering},

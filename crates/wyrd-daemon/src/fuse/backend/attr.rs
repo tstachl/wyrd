@@ -7,7 +7,7 @@ use fuser::FileHandle;
 use wyrd_core::mutation::MutationKind;
 
 use wyrd_format::ObjectStore;
-use wyrd_fuse::{Materialization, Node, ViewError};
+use wyrd_view::{Materialization, Node, ViewError};
 
 use super::super::inode::{
     DirectoryEntries, Handle, OpenDir, SparseOverlay, WriteHandle, WriteImage,

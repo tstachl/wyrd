@@ -1,8 +1,8 @@
 use super::*;
 
-use wyrd_fuse::DriveView;
+use wyrd_view::DriveView;
 #[cfg(feature = "mount")]
-use wyrd_fuse::ViewError;
+use wyrd_view::ViewError;
 
 #[cfg(feature = "mount")]
 use std::sync::atomic::Ordering;
