@@ -283,6 +283,35 @@ step4_member() {
     with_creds "$oc" member "$od" remove "$owner_id"
   grep -q "sole owner" "$LOGDIR/step4-remove-sole-owner.stderr" \
     || die "sole-owner remove refusal unexplained"
+  pass "unconfirmed sole-owner removal refused with the terminal consequence"
+
+  # The confirmed `--yes` path, on a throwaway drive so the harness
+  # owner keeps its authority for the later steps: the removal
+  # states the terminal consequence, the drive is terminal
+  # afterwards (empty owner set), and a subsequent `rotate` fails
+  # closed. The engine-level terminality is pinned at
+  # `tests_removal.rs:92-120`; the missing evidence was end to end.
+  local td="$DRIVES/terminal" tc="$CREDS/terminal"
+  mkdir -p "$tc" "$td"
+  gen_identity "$tc/identity"; gen_passphrase "$tc/passphrase"
+  expect_exit 0 step4-terminal-init with_creds "$tc" init "$td" >/dev/null
+  local terminal_id
+  terminal_id="$(with_creds "$tc" device "$td" id | awk '/^device /{print $2}')"
+  local removed_out
+  removed_out="$(expect_exit 0 step4-remove-sole-owner-confirmed \
+    with_creds "$tc" member "$td" remove "$terminal_id" --yes)"
+  echo "$removed_out" | grep -q "freezes permanently" \
+    || die "confirmed removal states no terminal consequence: $removed_out"
+  pass "confirmed sole-owner removal states the terminal consequence"
+  local terminal_owners
+  terminal_owners="$(with_creds "$tc" member "$td" status \
+    | sed -n 's/^members \([0-9]*\) owners \([0-9]*\)$/\1 \2/p')"
+  [[ "$terminal_owners" == "1 0" ]] \
+    || die "terminal drive keeps no owner: $terminal_owners"
+  pass "terminal drive holds an empty owner set"
+  expect_fail2 step4-rotate-after-terminal \
+    with_creds "$tc" member "$td" rotate
+  pass "rotate on a terminal drive fails closed"
 
   local f
   for f in "$LOGDIR"/step4-*.stderr; do

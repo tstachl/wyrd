@@ -9,6 +9,10 @@ use crate::CliError;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use wyrd_core::member_surface::{
+    render_frozen_notice, render_handover_confirmation, render_removal_confirmation,
+    render_rotation_confirmation, SOLE_OWNER_TERMINAL,
+};
 use wyrd_format::FsObjectStore;
 use wyrd_format::{DeviceId, MembershipTransition, TransitionId};
 use wyrd_sync::keys::DeviceIdentitySecret;
@@ -86,18 +90,28 @@ pub(crate) fn member(
             let (transition, carried) = transition_with_carry(&mut engine, &drive_dir, |engine| {
                 engine.remove_device(device)
             })?;
-            println!(
-                "removed {device} at epoch {} ({} carried)",
-                transition.epoch, carried
+            // The owner set after the commit tells an ordinary
+            // removal from a terminal one: a sole-owner removal
+            // empties it, and the confirmation carries the terminal
+            // sentence the acknowledgement required the person to
+            // have read.
+            let terminal = engine
+                .membership_log()
+                .owners_of(&transition.transition_id())
+                .map(|owners| owners.is_empty())
+                .unwrap_or(false);
+            print!(
+                "{}",
+                render_removal_confirmation(&device, transition.epoch, carried, terminal)
             );
             Ok(())
         }
         MemberAction::Rotate => {
             let (transition, carried) =
                 transition_with_carry(&mut engine, &drive_dir, |engine| engine.rotate_epoch())?;
-            println!(
-                "rotated to epoch {} ({} carried)",
-                transition.epoch, carried
+            print!(
+                "{}",
+                render_rotation_confirmation(transition.epoch, carried)
             );
             Ok(())
         }
@@ -105,9 +119,17 @@ pub(crate) fn member(
             let device = parse_device_id(&device)?;
             let (transition, carried) =
                 transition_with_carry(&mut engine, &drive_dir, |engine| engine.set_owners(device))?;
-            println!(
-                "owner is now {device} at epoch {} ({} carried)",
-                transition.epoch, carried
+            // Authority comes from the pre-transition owner set, so
+            // the transition author is the outgoing owner signing the
+            // handover — never the incoming one.
+            print!(
+                "{}",
+                render_handover_confirmation(
+                    &device,
+                    &transition.author,
+                    transition.epoch,
+                    carried
+                )
             );
             Ok(())
         }
@@ -299,8 +321,10 @@ fn write_invitation(out: &Path, file: &mut fs::File, bytes: &[u8]) -> Result<(),
 
 /// Removing the sole owner is valid but terminal (epochs.md): it
 /// empties the owner set and no future transition can be authorized.
-/// Refuse without explicit confirmation; the protocol stays
-/// authoritative and would accept the transition either way.
+/// Refuse without explicit acknowledgement; the protocol stays
+/// authoritative and would accept the transition either way. The
+/// refusal carries the terminal consequence itself (OD-14-B, option
+/// A), so the confirm control stays disabled until it has been read.
 fn require_last_owner_confirmation(
     engine: &Engine,
     device: &DeviceId,
@@ -313,10 +337,9 @@ fn require_last_owner_confirmation(
         return Ok(());
     };
     if owners.len() == 1 && owners.contains(device) && !yes {
-        return Err(CliError::Usage(
-            "removing the sole owner permanently ends owner-authorized evolution; pass --yes to confirm"
-                .into(),
-        ));
+        return Err(CliError::Usage(format!(
+            "{SOLE_OWNER_TERMINAL}; pass --yes to confirm"
+        )));
     }
     Ok(())
 }
@@ -405,13 +428,8 @@ pub(crate) fn member_status_report(engine: &Engine) -> Result<String, CliError> 
             // on, from the same derivation the resolver validates
             // against — status can never list a rival resolve then
             // refuses. Sorted for stable output.
-            let rivals = engine
-                .frozen_contenders()
-                .into_iter()
-                .map(|id| id.to_string())
-                .collect::<Vec<_>>()
-                .join(" ");
-            format!("frozen at epoch {epoch}\nrivals: {rivals}")
+            let rivals = engine.frozen_contenders();
+            render_frozen_notice(epoch, &rivals)
         }
         None => "frozen: no".into(),
     };

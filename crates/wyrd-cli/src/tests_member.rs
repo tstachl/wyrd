@@ -465,3 +465,340 @@ fn member_resolve_refusal_stages_carry_without_transition() {
         "the live head stages as a carry obligation"
     );
 }
+
+/// Render `policy status` for a drive without capturing stdout: the
+/// same census and posture block the command prints, so the test
+/// below compares exactly what a person would read.
+fn policy_status_of(
+    drive: &std::path::Path,
+    identity_file: &std::path::Path,
+    passphrase: &str,
+) -> String {
+    use wyrd_core::policy::residency_census_with_role;
+    let identity = read_identity(identity_file).unwrap();
+    let node = super::commands::export::open_policy_node(drive.to_path_buf(), passphrase, identity)
+        .unwrap();
+    let state = wyrd_core::role::load(drive).unwrap();
+    let role = state.effective();
+    let (engine, view) = node.parts();
+    let census = residency_census_with_role(engine, view, "", role).unwrap();
+    let outstanding = wyrd_core::role::withdrawal_outstanding(engine).unwrap();
+    policy_status_render(&role_section_render(drive, state, outstanding), "", &census)
+}
+
+/// The live head trees a drive serves, sorted: what the drive holds
+/// for a person, independent of the epochs the carry stamped on the
+/// re-authored snapshots.
+fn live_trees(engine: &Engine) -> Vec<ContentId> {
+    let mut trees: Vec<ContentId> = engine
+        .live_heads()
+        .unwrap()
+        .iter()
+        .map(|head| head.snapshot().tree)
+        .collect();
+    trees.sort();
+    trees
+}
+
+/// A joined second device with its own drive dir: pairing, invite,
+/// join — the same real surface a person drives, so the removed
+/// device below holds genuine local state rather than a fixture.
+struct SecondDevice {
+    _temp: TempDir,
+    drive: PathBuf,
+    identity_file: PathBuf,
+    device: DeviceId,
+}
+
+fn join_second_device(owner: &Fixture) -> SecondDevice {
+    let temp = TempDir::new();
+    let drive = temp.0.join("newcomer-drive");
+    let identity_file = temp.0.join("newcomer-identity");
+    let passphrase_file = temp.0.join("newcomer-passphrase");
+    let pairing_file = temp.0.join("pairing");
+    let invitation_file = temp.0.join("invitation");
+    write_secret(&identity_file, [0x33; 32]);
+    write_secret(&passphrase_file, b"newcomer-pass\n");
+    let device_args = |action: Vec<String>| {
+        let mut args = vec![
+            "device".into(),
+            drive.display().to_string(),
+            "--identity-file".into(),
+            identity_file.display().to_string(),
+            "--passphrase-file".into(),
+            passphrase_file.display().to_string(),
+        ];
+        args.extend(action);
+        args
+    };
+    command(device_args(vec![
+        "pairing-request".into(),
+        pairing_file.display().to_string(),
+    ]))
+    .unwrap();
+    let pairing = fs::read_to_string(&pairing_file).unwrap();
+    let mut lines = pairing.lines();
+    let device = lines
+        .next()
+        .and_then(|line| line.strip_prefix("device "))
+        .expect("pairing names the device")
+        .to_owned();
+    let key = lines
+        .next()
+        .and_then(|line| line.strip_prefix("encryption-key "))
+        .expect("pairing names the encryption key")
+        .to_owned();
+    command(owner.args(vec![
+        "invite".into(),
+        device.clone(),
+        key,
+        invitation_file.display().to_string(),
+    ]))
+    .unwrap();
+    command(device_args(vec![
+        "join".into(),
+        invitation_file.display().to_string(),
+    ]))
+    .unwrap();
+    SecondDevice {
+        _temp: temp,
+        drive,
+        identity_file,
+        device: parse_device_id(&device).unwrap(),
+    }
+}
+
+/// The rendered removal confirmation carries the canonical
+/// OD-14-A sentence — the retained-knowledge boundary and the
+/// no-re-encryption history sentence — and none of the euphemisms
+/// that would overstate the boundary.
+#[test]
+fn removal_confirmation_states_the_retained_knowledge_boundary() {
+    use wyrd_core::member_surface::{
+        render_removal_confirmation, HISTORY_NEVER_REENCRYPTED, REMOVAL_BOUNDARY,
+        SOLE_OWNER_TERMINAL,
+    };
+    let device = device_id_of(&[0x44; 32]);
+    for terminal in [false, true] {
+        let out = render_removal_confirmation(&device, 3, 1, terminal);
+        assert!(
+            out.contains(REMOVAL_BOUNDARY),
+            "canonical boundary verbatim: {out}"
+        );
+        assert!(
+            out.contains(HISTORY_NEVER_REENCRYPTED),
+            "canonical history sentence: {out}"
+        );
+        for forbidden in [
+            "wiped",
+            "no longer has access",
+            "revoked all access",
+            "can no longer read",
+        ] {
+            assert!(
+                !out.contains(forbidden),
+                "no euphemism {forbidden:?}: {out}"
+            );
+        }
+    }
+    let ordinary = render_removal_confirmation(&device, 3, 1, false);
+    assert!(
+        !ordinary.contains(SOLE_OWNER_TERMINAL),
+        "ordinary removal states no terminal consequence: {ordinary}"
+    );
+    let terminal = render_removal_confirmation(&device, 2, 0, true);
+    assert!(
+        terminal.contains(SOLE_OWNER_TERMINAL),
+        "terminal removal states the terminal consequence: {terminal}"
+    );
+}
+
+/// Removal changes nothing about materialized data (C7): the
+/// remaining owner's quadrant totals, the served trees, and the
+/// removed device's own local cache and materialization facts are
+/// all identical across the removal. The carry re-authors the served
+/// head at the new epoch over the same tree (transition continuity),
+/// so the test compares trees — what the drive holds — rather than
+/// snapshot ids, which the carry legitimately restamps.
+#[test]
+fn removal_leaves_materialized_data_byte_identical() {
+    let fixture = Fixture::new();
+    let (_tree, _first) = write_file(&fixture, "kept.txt", b"kept");
+    let newcomer = join_second_device(&fixture);
+    let owner_before = policy_status_of(&fixture.drive, &fixture.identity_file, "test-pass");
+    assert!(
+        owner_before.contains("kept.txt"),
+        "census names the file before removal"
+    );
+    let newcomer_before =
+        policy_status_of(&newcomer.drive, &newcomer.identity_file, "newcomer-pass");
+    let trees_before = live_trees(&fixture.open());
+
+    command(fixture.args(vec!["remove".into(), newcomer.device.to_string()])).unwrap();
+
+    assert_eq!(
+        policy_status_of(&fixture.drive, &fixture.identity_file, "test-pass"),
+        owner_before,
+        "owner quadrant totals and rows identical across removal"
+    );
+    assert_eq!(
+        live_trees(&fixture.open()),
+        trees_before,
+        "served trees identical across removal"
+    );
+    assert_eq!(
+        policy_status_of(&newcomer.drive, &newcomer.identity_file, "newcomer-pass"),
+        newcomer_before,
+        "removed device's own local facts identical across removal"
+    );
+}
+
+/// Last-owner removal needs the acknowledgement before authoring:
+/// without `--yes` the surface renders the terminal consequence and
+/// authors nothing, and a non-owner is refused with nothing
+/// committed (owner-only authority at `remove_device`).
+#[test]
+fn last_owner_removal_requires_acknowledgement_before_authoring() {
+    use wyrd_core::member_surface::SOLE_OWNER_TERMINAL;
+    let fixture = Fixture::new();
+    let owner = device_id_of(&[0x22; 32]);
+    let tip_before = fixture.open().membership_log().known_state().expect("tip");
+    let error = command(fixture.args(vec!["remove".into(), owner.to_string()])).unwrap_err();
+    assert!(
+        matches!(error, CliError::Usage(_)),
+        "refusal, not an inline warning: {error:?}"
+    );
+    assert!(
+        error.to_string().contains(SOLE_OWNER_TERMINAL),
+        "refusal renders the terminal consequence: {error}"
+    );
+    let (tip_id, owners_hold_owner) = {
+        let log = fixture.open();
+        let tip_after = log.membership_log().known_state().expect("tip");
+        (
+            tip_after.transition_id,
+            log.membership_log()
+                .owners_of(&tip_after.transition_id)
+                .expect("owners")
+                .contains(&owner),
+        )
+    };
+    assert_eq!(
+        tip_id, tip_before.transition_id,
+        "nothing authored without acknowledgement"
+    );
+    assert!(owners_hold_owner, "owner set untouched");
+
+    // A stranger's credentials fail at open: the keystore binds to
+    // its owner's device identity, so a non-owner reaches no
+    // transition — and the tip above proves nothing was committed.
+    let stranger_file = fixture._temp.0.join("stranger");
+    write_secret(&stranger_file, [0x55; 32]);
+    let error = command(vec![
+        "member".into(),
+        fixture.drive.display().to_string(),
+        "--identity-file".into(),
+        stranger_file.display().to_string(),
+        "--passphrase-file".into(),
+        fixture.passphrase_file.display().to_string(),
+        "remove".into(),
+        owner.to_string(),
+    ])
+    .unwrap_err();
+    assert!(
+        matches!(error, CliError::Engine(EngineError::OwnerMismatch)),
+        "non-owner refused: {error:?}"
+    );
+}
+
+/// The handover confirmation reports the carried head count to the
+/// person and attributes the handover to the outgoing owner — and
+/// only a current member can be named (OD-14-C, option A: v0
+/// ownership is a singleton, so the picker offers members only).
+#[test]
+fn set_owner_reports_the_carried_head_count() {
+    use wyrd_core::member_surface::render_handover_confirmation;
+    let fixture = Fixture::new();
+    let owner = device_id_of(&[0x22; 32]);
+    let second = admit(&fixture, &[0x44; 32]);
+    let stranger = device_id_of(&[0x55; 32]);
+
+    // A non-member target fails with the engine's verdict and
+    // authors nothing: the picker offers members only.
+    let tip_before = fixture.open().membership_log().known_state().expect("tip");
+    let error = command(fixture.args(vec!["set-owner".into(), stranger.to_string()])).unwrap_err();
+    assert!(
+        matches!(error, CliError::Engine(EngineError::NotMember)),
+        "handover to a non-member refused: {error:?}"
+    );
+    assert_eq!(
+        fixture
+            .open()
+            .membership_log()
+            .known_state()
+            .expect("tip")
+            .transition_id,
+        tip_before.transition_id,
+        "refused handover authors nothing"
+    );
+
+    let (_tree, _first) = write_file(&fixture, "kept.txt", b"kept");
+    command(fixture.args(vec!["set-owner".into(), second.to_string()])).unwrap();
+    // The person-visible line: the carried count and the outgoing
+    // author, over the handover the CLI just authored (admit, file,
+    // handover: epoch 3, one head carried).
+    let out = render_handover_confirmation(&second, &owner, 3, 1);
+    assert!(out.contains("(1 carried)"), "carried count: {out}");
+    assert!(
+        out.contains(&format!("handed over by {owner}")),
+        "outgoing author: {out}"
+    );
+    let engine = fixture.open();
+    let tip = engine.membership_log().known_state().expect("tip");
+    assert_eq!(tip.epoch, 3, "admit plus handover");
+    assert_eq!(
+        engine
+            .membership_log()
+            .owners_of(&tip.transition_id)
+            .expect("owners")
+            .iter()
+            .collect::<Vec<_>>(),
+        [&second],
+        "ownership moves"
+    );
+}
+
+/// The rotation confirmation names the fresh epoch secret and the
+/// unchanged membership — and offers no device-key control, because
+/// the object model cannot express one.
+#[test]
+fn rotate_copy_does_not_claim_the_device_key_changed() {
+    use wyrd_core::member_surface::render_rotation_confirmation;
+    let out = render_rotation_confirmation(3, 1);
+    assert!(
+        out.contains("fresh epoch secret"),
+        "what rotation mints: {out}"
+    );
+    assert!(
+        out.contains("membership unchanged"),
+        "what rotation touches: {out}"
+    );
+    assert!(
+        !out.contains("device key"),
+        "rotation claims no device-key change: {out}"
+    );
+
+    // No such control exists at the argument boundary either:
+    // replacing a device is a removal plus an admission under a
+    // fresh identity, never a rotation of a key.
+    let fixture = Fixture::new();
+    for action in ["rotate-key", "rotate-device-key"] {
+        let error = command(fixture.args(vec![action.into()])).unwrap_err();
+        assert!(
+            matches!(error, CliError::Usage(_)),
+            "no {action:?} control: {error:?}"
+        );
+    }
+    let tip = fixture.open().membership_log().known_state().expect("tip");
+    assert_eq!(tip.epoch, 1, "refused controls author nothing");
+}

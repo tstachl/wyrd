@@ -17,6 +17,7 @@ pub mod export;
 pub mod invitation_surface;
 pub mod live;
 pub mod mailbox;
+pub mod member_surface;
 pub mod mutation;
 pub mod node;
 pub mod policy;
