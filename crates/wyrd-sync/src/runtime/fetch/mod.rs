@@ -555,37 +555,39 @@ pub(super) fn object(
                     content = ?content,
                     "retention gate would refuse, but the object is already held: admission is a no-op"
                 );
-            } else if let Err(refusal) = gate.check(
-                if vault_held { 0 } else { sealed.len() as u64 },
-                if plaintext_held {
+            } else {
+                let fresh_vault = if vault_held { 0 } else { sealed.len() as u64 };
+                let fresh_retained = if plaintext_held {
                     0
                 } else {
                     plaintext.len() as u64
-                },
-            ) {
-                let unit = object_unit(content);
-                if let Err(error) = refusals.record(&unit, refusal.quota) {
-                    tracing::warn!(
+                };
+                if let Err(refusal) = gate.check(fresh_vault, fresh_retained) {
+                    let unit = object_unit(content);
+                    if let Err(error) = refusals.record(&unit, refusal.quota) {
+                        tracing::warn!(
+                            unit = %unit,
+                            quota = refusal.quota,
+                            error = %error,
+                            "retention refusal held in memory but not durably recorded; a restart may forget it"
+                        );
+                    }
+                    tracing::debug!(
                         unit = %unit,
                         quota = refusal.quota,
-                        error = %error,
-                        "retention refusal held in memory but not durably recorded; a restart may forget it"
+                        retained = refusal.retained,
+                        vault_seen = refusal.vault_seen,
+                        incoming_vault = refusal.incoming_vault,
+                        incoming_retained = refusal.incoming_retained,
+                        "retention gate refused object before storage; nothing stored, nothing committed"
                     );
+                    aggregate = worse(aggregate, FetchOutcome::Refused);
+                    continue;
                 }
                 tracing::debug!(
-                    unit = %unit,
-                    quota = refusal.quota,
-                    retained = refusal.retained,
-                    vault_seen = refusal.vault_seen,
-                    incoming_vault = refusal.incoming_vault,
-                    incoming_retained = refusal.incoming_retained,
-                    "retention gate refused object before storage; nothing stored, nothing committed"
-                );
-                aggregate = worse(aggregate, FetchOutcome::Refused);
-                continue;
-            } else {
-                tracing::debug!(
                     content = ?content,
+                    incoming_vault = fresh_vault,
+                    incoming_retained = fresh_retained,
                     "retention gate would refuse full charges, but only fresh bytes are new: admission proceeds"
                 );
             }
