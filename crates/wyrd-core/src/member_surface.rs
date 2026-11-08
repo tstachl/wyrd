@@ -38,12 +38,17 @@ pub const REMOVAL_BOUNDARY: &str = "Removal bounds acquisition, not knowledge: a
 /// The canonical history sentence (OD-14-A): no silent
 /// re-encryption, ever. Rendered verbatim from the normative trust.md
 /// subsection — never paraphrased.
-pub const HISTORY_NEVER_REENCRYPTED: &str = "History is never re-encrypted: excluding a removed device from old-epoch content is an explicit, separate migration, never an implicit side effect of removal";
+pub const HISTORY_NEVER_REENCRYPTED: &str = "History is never re-encrypted: excluding a removed device from old-epoch content is an explicit, separate migration (re-encrypt + new manifests), never an implicit side effect of removal";
 
 /// The terminal-consequence sentence (OD-14-B, option A): what the
 /// last-owner acknowledgement requires the person to have read.
-/// Rendered verbatim from the normative trust.md subsection.
-pub const SOLE_OWNER_TERMINAL: &str = "Removing the sole owner is valid but terminal: the owner set empties and no future transition can ever be authorized, so the drive freezes permanently";
+/// Rendered verbatim from the normative trust.md subsection. The
+/// subsection's MUST — warn as a refusal without acknowledgement,
+/// never an inline note — is implemented by the refusal shape
+/// (`require_last_owner_confirmation`), not rendered as copy: a
+/// normative instruction to implementors is not a sentence for a
+/// person.
+pub const SOLE_OWNER_TERMINAL: &str = "Removing the sole owner is valid but terminal: the owner set empties with the author and no future transition can ever be authorized, so the drive freezes permanently";
 
 /// Render the removal confirmation: the removed line (byte-identical
 /// to the legacy `member remove` headline) followed by the canonical

@@ -65,6 +65,48 @@ fn handover_confirmation_attributes_and_counts() {
     assert!(out.contains("(2 carried)"), "carried count: {out}");
 }
 
+/// The three constants render the normative trust.md subsection
+/// verbatim (markup aside): the subsection body is delimited by
+/// markers so prose elsewhere in the document can never satisfy the
+/// match by accident, and both sides are whitespace-collapsed so
+/// Markdown line-wrapping cannot hide drift. Either side reworded
+/// without the other fails here before it can reach a screen
+/// restated wrong.
+#[test]
+fn removal_copy_matches_the_normative_subsection() {
+    let doc =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/contracts/trust.md");
+    let text = std::fs::read_to_string(&doc)
+        .unwrap_or_else(|error| panic!("trust.md must be readable: {doc:?}: {error}"));
+    let start = text
+        .find("<!-- REMOVAL-COPY-START -->")
+        .expect("removal copy start marker");
+    let end = text
+        .find("<!-- REMOVAL-COPY-END -->")
+        .expect("removal copy end marker");
+    assert!(start < end, "removal copy markers out of order");
+    let section = flatten(&text[start..end]);
+    for constant in [
+        REMOVAL_BOUNDARY,
+        HISTORY_NEVER_REENCRYPTED,
+        SOLE_OWNER_TERMINAL,
+    ] {
+        assert!(
+            section.contains(&flatten(constant)),
+            "canonical sentence drifted from trust.md: {constant:?}"
+        );
+    }
+}
+
+/// Collapse every whitespace run to one space and drop emphasis
+/// markup, so the comparison sees sentences, not line-wrapping.
+fn flatten(text: &str) -> String {
+    text.replace('*', "")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// The frozen notice names the epoch, lists the rivals, and points
 /// at the resolver — never at authoring another control.
 #[test]
