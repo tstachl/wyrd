@@ -50,6 +50,9 @@ zeroize.workspace = true
 # Downstream tests build a real `Engine` per test; enabling the fast KDF
 # profile here keeps that affordable without touching production builds.
 wyrd-sync = { workspace = true, features = ["insecure-fast-kdf"] }
+# Fixture authoring (`WyrdNode::put_file`/`remove`) is test-only (see
+# `layer_contracts`); production builds never carry it.
+wyrd-core = { workspace = true, features = ["test-fixtures"] }
 # In-process relay for the vault process test (test-only: rust-nostr's
 # real relay beside the binary under test; never a runtime dependency).
 nostr-sdk = { workspace = true, features = ["local-relay"] }

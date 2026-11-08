@@ -28,5 +28,7 @@ fetches (fetching is the engine's plan).
 
 The mount-free view and the daemon's read-only FUSE backend (`wyrd mount`)
 are in place and under test, including open-fd stability across head
-advancement. Write support behind the mount is pending; the write path
-exists through the daemon API (`Daemon::put_file`/`Daemon::remove`).
+advancement. Write support behind the mount is pending; direct writes
+exist only as the `test-fixtures` test path on `WyrdNode`
+(`put_file`/`remove`, never enabled in production builds) — production
+writes submit through the live mutation channel.

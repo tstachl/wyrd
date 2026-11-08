@@ -633,8 +633,8 @@ idempotent, as "Already bounded" records — it simply is not metered here.)
 
 That last one is the narrowest and the most likely to be assumed covered,
 because those methods sit on the same type that carries the accountant.
-But `into_live` consumes the node, so it is the pre-live and
-headless-embedder window rather than a hole in the mounted path. Either
+But `into_live` consumes the node, so it is the pre-live
+test-fixture window rather than a hole in the mounted path. Either
 way the device's retained bytes are *not* bounded by the configured
 number, and the number can be crossed by paths that
 have no ceiling at all.
@@ -647,8 +647,8 @@ the first refusal lands on the remote content, never on the peer's
 own next local write as `ENOSPC`. Nothing is deleted and no logical
 state changes. Unset (unlimited) behaves as before: the channel is
 a property of the configured bound, and the dogfood default
-configures none. The pre-live `put_file`/`remove` window stays
-ungated (headless-embedder surface, tracked separately), and the
+configures none. The pre-live `put_file`/`remove` fixtures stay
+ungated (test-only surface, tracked separately), and the
 fact log is still unmetered.
 
 **The overshoot is bounded by the tree nodes.** The fold gate compares bytes

@@ -13,7 +13,9 @@
 
 use crate::live::{partition_heads, LiveConfig, LiveNode, LiveParts};
 use crate::view::{Head, NamespaceView, RuntimeMaterialization};
-use wyrd_format::{chunk, Entry, ObjectStore, Tree};
+use wyrd_format::ObjectStore;
+#[cfg(feature = "test-fixtures")]
+use wyrd_format::{chunk, Entry, Tree};
 use wyrd_sync::durable::AuthorizedSnapshot;
 use wyrd_sync::{
     runtime::{Engine, RoutePublishing},
@@ -250,12 +252,13 @@ where
         }
     }
 
-    /// Announce an authored local snapshot through the control plane. The
-    /// snapshot returned by [`WyrdNode::put_file`] or [`WyrdNode::remove`] is
-    /// already durable, and its announcement obligation was queued with
-    /// it; announcement failure therefore leaves the remaining
-    /// recipients pending in the engine's durable outbox for a later
-    /// retry and never rolls the local write back.
+    /// Announce an authored local snapshot through the control plane. A
+    /// snapshot authored through the live mutation channel (or the
+    /// test-fixtures direct-write path) is already durable, and its
+    /// announcement obligation was queued with it; announcement failure
+    /// therefore leaves the remaining recipients pending in the
+    /// engine's durable outbox for a later retry and never rolls the
+    /// local write back.
     pub fn announce_snapshot(
         &mut self,
         snapshot: &AuthorizedSnapshot,
@@ -279,12 +282,21 @@ where
         self.engine.announce_pending(mailbox, node_addr, budget)
     }
 
-    /// Write `data` to `path`: chunk the bytes into the view's store,
-    /// upsert the file entry (creating intermediate directories),
-    /// author a snapshot over the new root, and install it as the
-    /// drive's head so backends serve the change. Files are regular
-    /// and non-executable; symlinks and the executable bit are not
-    /// part of this surface. Returns the authored snapshot.
+    /// Test-only direct write (feature `test-fixtures`, never enabled
+    /// outside `[dev-dependencies]`): write `data` to `path`, chunking
+    /// the bytes into the view's store, upserting the file entry
+    /// (creating intermediate directories), authoring a snapshot over
+    /// the new root, and installing it as the drive's head so backends
+    /// serve the change. Files are regular and non-executable;
+    /// symlinks and the executable bit are not part of this surface.
+    /// Returns the authored snapshot.
+    ///
+    /// This is the retired second mutation authority, kept as a
+    /// fixture so contract and lifecycle tests can author setup state
+    /// without composing a live loop. It bypasses the live channel by
+    /// construction — no queue slot, no fold, no retained-quota gate —
+    /// so production code must submit through the live channel
+    /// ([`MutationQueue`](crate::mutation::MutationQueue)) instead.
     ///
     /// One durable rebuild serves the whole write: [`Engine::begin_write`]
     /// captures the eligible heads with the rebuilt state that
@@ -292,6 +304,7 @@ where
     /// instead of replaying durable state a second time. The node's
     /// `&mut` borrow spans begin, mutation, and author, so no intake
     /// can interleave — the reused state cannot be stale.
+    #[cfg(feature = "test-fixtures")]
     pub fn put_file(
         &mut self,
         path: &str,
@@ -321,12 +334,14 @@ where
         Ok(authorized)
     }
 
-    /// Remove the entry at `path`: rebuild the tree without it, author
-    /// a snapshot over the new root, and install it as the drive's
-    /// head. The removed bytes stay in the store (append-only until
-    /// GC); the path simply stops resolving. Directories left empty
-    /// are kept, matching the mutation layer. Returns the authored
-    /// snapshot. Single-rebuild like [`WyrdNode::put_file`].
+    /// Test-only direct remove (feature `test-fixtures`, same
+    /// retired-authority fixture as [`WyrdNode::put_file`]): remove the
+    /// entry at `path`, authoring a snapshot over the rebuilt tree and
+    /// installing it as the drive's head. The removed bytes stay in
+    /// the store (append-only until GC); the path simply stops
+    /// resolving. Directories left empty are kept, matching the
+    /// mutation layer. Returns the authored snapshot.
+    #[cfg(feature = "test-fixtures")]
     pub fn remove(
         &mut self,
         path: &str,
@@ -358,6 +373,7 @@ where
     /// Its closure verified against this same store during authoring,
     /// so it is publishable, never pending: exactly what a refresh
     /// would install, minus the two rebuilds.
+    #[cfg(feature = "test-fixtures")]
     fn install_authored_head(&mut self, authorized: AuthorizedSnapshot) {
         NamespaceView::set_heads(&mut self.view, vec![Head::new(authorized)]);
         self.installed_heads = 1;

@@ -1,9 +1,10 @@
 //! Live mount-free reads: the demand-driven open/read sequence
 //! every serving backend performs, without a kernel mount.
 //!
-//! Writes never needed FUSE ([`WyrdNode::put_file`](crate::node::WyrdNode::put_file),
-//! [`WyrdNode::remove`](crate::node::WyrdNode::remove)), and offline
-//! reads never did ([`export`](crate::export)); what only the FUSE
+//! Writes never needed FUSE (production writes submit through the
+//! live mutation channel; the `test-fixtures` direct-write path on
+//! `WyrdNode` exists for test setup only), and offline reads never
+//! did ([`export`](crate::export)); what only the FUSE
 //! backend could do is read remote-only content live — register the
 //! want, block bounded while the fetch plan serves it, and surface
 //! terminal verdicts fast. [`LiveReader`] is that sequence over any

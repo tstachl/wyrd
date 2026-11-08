@@ -174,6 +174,14 @@
 //!     features, so the shipped binary derives with the pinned KDF
 //!     table (`docs/contracts/trust.md`, recorded KDF decision).
 //!
+//! 57. `release_manifests_exclude_test_fixtures` — no member's
+//!     production manifest edge enables `test-fixtures` (fixture
+//!     edges stay in `[dev-dependencies]`), and
+//!     `node_authoring_stays_in_the_live_pass_or_fixtures` is the
+//!     source half: `WyrdNode::put_file`/`remove` survive only as
+//!     feature-gated fixtures, and snapshot authoring in `wyrd-core`
+//!     stays confined to the live pass (`live/apply.rs`).
+//!
 //! The node contracts (provider-neutral boundary):
 //!
 //! 35. `node_composes_and_serves_without_a_presentation_backend` —
