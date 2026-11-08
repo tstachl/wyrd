@@ -245,6 +245,70 @@ fn torn_import_retry_charges_only_fresh_bytes() {
     assert!(refusals.is_empty(), "an admitted retry records no refusal");
 }
 
+/// The symmetric torn state: the plaintext object is already held
+/// (inserted through an earlier pass or a local write) while the
+/// sealed vault representation is missing. A retry must charge only
+/// the fresh sealed bytes: re-charging the already-held plaintext
+/// double-counts it against the ceiling and falsely refuses.
+#[test]
+fn plaintext_held_retry_charges_only_fresh_bytes() {
+    let epoch = 2;
+    let keyring = keyring_with_secret(epoch);
+    let dir = TestDir::new("fetch-limits-plaintext-held");
+    let vault = Vault::open(&dir.path).unwrap();
+    let plaintext = vec![0x5C; 64];
+    let (candidate, sealed, content) =
+        sealed_candidate(&keyring, epoch, ObjectKind::Chunk, &plaintext);
+    let mut objects = MemoryObjectStore::default();
+    objects
+        .insert_verified(ObjectKind::Chunk, &content, &plaintext)
+        .unwrap();
+    assert!(
+        objects.has(&content).unwrap(),
+        "the fixture establishes the mirrored torn state: plaintext-held, vault-missing"
+    );
+    assert!(
+        vault
+            .sealed(&crate::seal::blob_root(&sealed.encode()))
+            .unwrap()
+            .is_none(),
+        "the vault holds nothing yet: only the sealed bytes are fresh"
+    );
+    let sealed_len = sealed.encode().len() as u64;
+    let plain_len = plaintext.len() as u64;
+    // A ceiling between fresh-only and double-charged admission: the
+    // retry retains only fresh sealed bytes, so it must admit, while
+    // re-charging the already-held plaintext would falsely refuse.
+    let quota = sealed_len + 1;
+    debug_assert!(
+        quota <= sealed_len + plain_len,
+        "the ceiling must stay at or below the double-charged total to pin the boundary"
+    );
+    let retained = wyrd_format::RetainedBytes::new();
+    let gate = RetentionGate::new(Some(quota), Some(retained), vault.seen_handle());
+    let refusals = RefusalLedger::load(&dir.path).unwrap();
+    let mut bulk = MemoryBulkSource::default();
+    bulk.publish_sealed(sealed.storage_id(), sealed.encode());
+    bulk.publish_transport(sealed.encode());
+    let attempt = object(
+        &member_drive(),
+        &mut bulk,
+        &keyring,
+        &mut objects,
+        &vault,
+        &content,
+        std::slice::from_ref(&candidate),
+        &gate,
+        &refusals,
+    );
+    assert!(
+        matches!(attempt.aggregate, FetchOutcome::Fulfilled(())),
+        "a plaintext-held retry admits on fresh bytes alone: {:?}",
+        attempt.aggregate
+    );
+    assert!(refusals.is_empty(), "an admitted retry records no refusal");
+}
+
 #[test]
 fn chunk_at_the_payload_ceiling_imports() {
     let epoch = 2;
