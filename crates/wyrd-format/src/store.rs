@@ -12,6 +12,10 @@ use thiserror::Error;
 ///
 /// Contract:
 /// - objects are immutable; `insert` of identical content is a no-op
+///   (a store may still skip the rewrite when its cheap freshness signal
+///   matches — `FsObjectStore`'s stamp-matched `insert` reports success
+///   without healing mtime-preserving rot, which heals only after the
+///   stamp is retired)
 /// - a stored object always hashes back to its address (the scrub invariant)
 /// - `insert_verified` never accepts data whose derived identity differs
 ///   from the expected one — verification is the store's job, not the

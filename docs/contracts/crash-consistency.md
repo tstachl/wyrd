@@ -461,7 +461,8 @@ exactly one of two consistent states: claim and bytes both present
 (nothing happened — the waiter re-reports and the next pass
 repairs), or claim cleared with bytes still on disk (the repair
 converges — a read re-observes the rejection and re-submits, and
-`insert` heals a present-but-unverifiable name). Bytes gone under a
+`insert` heals a present-but-unverifiable name once the full re-derive
+runs — a stamp-matched `insert` alone reports success without rewriting). Bytes gone under a
 live claim cannot happen: the unlink never runs before the commit.
 Two bounds, both by process lifetime: the in-memory queue loses a
   diagnostic emitted microseconds before the crash (per-representation
