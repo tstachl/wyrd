@@ -21,9 +21,10 @@
 //! back to the full re-derive, which still heals. Corruption that
 //! preserves both length and mtime is invisible to the cheap signal:
 //! a stamp-matched `insert` reports success without rewriting the live
-//! bytes, and healing happens only after a `get` observes the mismatch,
-//! fails closed, and retires the stamp — the next `insert` then
-//! re-derives and heals.
+//! bytes, and healing happens only after the stamp is retired — a `get`
+//! observing the mismatch fails closed and retires it (as do the
+//! discard path, cache eviction, and process restart) — and the next
+//! `insert` then re-derives and heals.
 //! The stamp assumes the filesystem reports mtime changes (coarse
 //! granularity weakens it): bitrot that leaves length and mtime untouched
 //! is invisible to it and is caught by the full re-derive whenever the
@@ -1089,6 +1090,55 @@ mod tests {
         );
         assert!(store.get(&id).is_err());
         // The failed `get` retired the stamp, so re-inserting heals.
+        assert_eq!(store.insert(ObjectKind::Chunk, b"pristine").unwrap(), id);
+        assert_eq!(
+            store.get(&id).unwrap().as_deref(),
+            Some(b"pristine".as_slice())
+        );
+        remove_scratch(&dir);
+    }
+
+    #[test]
+    fn insert_first_heals_length_drifted_corruption() {
+        let dir = scratch_dir();
+        let mut store = FsObjectStore::open(dir.clone()).unwrap();
+        let id = store.insert(ObjectKind::Chunk, b"pristine").unwrap();
+        let path = store.path_for(ObjectKind::Chunk, &id);
+        // Longer tamper so the cheap length signal drifts: no preceding
+        // `get`, yet the stale stamp must fall back to the full
+        // re-derive, which heals.
+        fs::write(&path, b"tampered!!").unwrap();
+        assert_ne!(fs::metadata(&path).unwrap().len(), 8);
+        assert_eq!(store.insert(ObjectKind::Chunk, b"pristine").unwrap(), id);
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            b"pristine",
+            "drifted insert must rewrite, not trust the stale stamp"
+        );
+        assert_eq!(
+            store.get(&id).unwrap().as_deref(),
+            Some(b"pristine".as_slice())
+        );
+        remove_scratch(&dir);
+    }
+
+    #[test]
+    fn insert_first_heals_mtime_drifted_corruption() {
+        let dir = scratch_dir();
+        let mut store = FsObjectStore::open(dir.clone()).unwrap();
+        let id = store.insert(ObjectKind::Chunk, b"pristine").unwrap();
+        let path = store.path_for(ObjectKind::Chunk, &id);
+        // Same-length tamper so length alone cannot see it, but drift
+        // the mtime instead of preserving it: the stale stamp must fall
+        // back to the full re-derive, which heals — no preceding `get`.
+        fs::write(&path, b"tampered").unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(SystemTime::UNIX_EPOCH)
+            .unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"tampered");
         assert_eq!(store.insert(ObjectKind::Chunk, b"pristine").unwrap(), id);
         assert_eq!(
             store.get(&id).unwrap().as_deref(),
