@@ -140,7 +140,7 @@ Wyrd's bet is that these are one system: git's object model, Syncthing's replica
 | `crates/wyrd-cli` | The `wyrd` process host: `init`, `mount`, `export`, `member`, `device`, `sync`, `vault`, `policy`, `snapshot`, `update`, diagnostics, exit codes over the daemon's surface |
 | `crates/wyrd-contracts` | Cross-crate architectural contract suite: one named test per review contract, composed end to end |
 | `crates/wyrd-embed` | Embedder-shaped consumer: proves a drive's whole lifecycle runs through `wyrd-core` with no presentation, daemon, or CLI in the path |
-| `crates/wyrd-app` | Desktop host process: owns a drive through `wyrd-core` and runs the live loop under the daemon's supervision |
+| `crates/wyrd-host` | Desktop host process: owns a drive through `wyrd-core` and runs the live loop under the daemon's supervision |
 
 Design docs live in `docs/` (`architecture.md` is the one-page entry point);
 `AGENTS.md` holds repository conventions and hard rules.

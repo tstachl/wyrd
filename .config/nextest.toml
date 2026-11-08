@@ -47,7 +47,7 @@ contracts-serial = { max-threads = 1 }
 # binaries keep full parallelism: groups only constrain their own
 # process). See the override below for why.
 
-# The wyrd-app host-lifecycle pair races when run concurrently:
+# The wyrd-host host-lifecycle pair races when run concurrently:
 # host_quit_preserves_a_dirty_handle and
 # host_closes_admission_only_after_its_last_submitter fail
 # interchangeably across runs (each passes solo, and the binary

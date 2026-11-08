@@ -31,7 +31,7 @@ while [[ $# -gt 0 ]]; do
     --re-share) RESHARE=1; shift ;;
     --host-leg)
       # The alpha suite asserts mount artifacts, so it cannot run
-      # unchanged against the host: this mode builds the wyrd-app
+      # unchanged against the host: this mode builds the wyrd-host
       # binary beside wyrd and runs the host leg instead.
       HOST_LEG=1; shift ;;
     --step)
@@ -218,18 +218,18 @@ else
 fi
 # The desktop-host leg needs its own binary beside wyrd (init and
 # reopen still go through the CLI). Same skip-if-present gate.
-WYRD_APP_BIN=""
+WYRD_HOST_BIN=""
 if [[ $HOST_LEG -eq 1 ]]; then
-  echo "==> building the $LINUX_SYSTEM wyrd-app binary on the host"
-  APP_OUT="$(nix build "$ROOT#packages.$LINUX_SYSTEM.wyrd-app" --no-link --print-out-paths 2>/dev/null | tail -n 1)"
-  WYRD_APP_BIN="$APP_OUT/bin/wyrd-app"
-  echo "    $WYRD_APP_BIN"
-  if (cd / && limactl shell "$INSTANCE" -- test -x "$WYRD_APP_BIN" 2>/dev/null); then
-    echo "    guest already carries $WYRD_APP_BIN, skipping export"
+  echo "==> building the $LINUX_SYSTEM wyrd-host binary on the host"
+  APP_OUT="$(nix build "$ROOT#packages.$LINUX_SYSTEM.wyrd-host" --no-link --print-out-paths 2>/dev/null | tail -n 1)"
+  WYRD_HOST_BIN="$APP_OUT/bin/wyrd-host"
+  echo "    $WYRD_HOST_BIN"
+  if (cd / && limactl shell "$INSTANCE" -- test -x "$WYRD_HOST_BIN" 2>/dev/null); then
+    echo "    guest already carries $WYRD_HOST_BIN, skipping export"
   else
-    echo "==> exporting the wyrd-app closure for the guest"
+    echo "==> exporting the wyrd-host closure for the guest"
     readarray -t APP_CLOSURE < <(nix-store -qR "$APP_OUT")
-    nix-store --export "${APP_CLOSURE[@]}" > "$SHARE/wyrd-app-closure.nar"
+    nix-store --export "${APP_CLOSURE[@]}" > "$SHARE/wyrd-host-closure.nar"
   fi
 fi
 REV="$(python3 -c "import json; print(json.load(open('$ROOT/flake.lock'))['nodes']['nixpkgs']['locked']['rev'])")"
@@ -245,7 +245,7 @@ E2E_TOKEN="$(head -c16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
   printf 'WYRD_BIN=%q\n' "$WYRD_BIN"
   # Host-leg only: the desktop-host binary beside wyrd (init and
   # reopen still go through the CLI).
-  [[ $HOST_LEG -eq 0 ]] || printf 'WYRD_APP_BIN=%q\n' "$WYRD_APP_BIN"
+  [[ $HOST_LEG -eq 0 ]] || printf 'WYRD_HOST_BIN=%q\n' "$WYRD_HOST_BIN"
   printf 'NIXPKGS_REV=%q\n' "$REV"
   printf 'WYRD_E2E_TOKEN=%q\n' "$E2E_TOKEN"
   printf 'RELAY_PORT=%q\n' "18761"

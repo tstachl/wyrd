@@ -157,10 +157,10 @@
         # for the Lima order-evidence leg. Never distributed (07 owns
         # the shipped artifact); the flake contract pins only that
         # `-p wyrd-cli` stays the distribution build.
-        wyrd-app = wyrdFor system ./. {
-          pname = "wyrd-app";
-          mainProgram = "wyrd-app";
-          cargoExtraArgs = "-p wyrd-app";
+        wyrd-host = wyrdFor system ./. {
+          pname = "wyrd-host";
+          mainProgram = "wyrd-host";
+          cargoExtraArgs = "-p wyrd-host";
           description = "Desktop host owner process (developer-run, headless)";
         };
         wyrd-dist = distFor system;

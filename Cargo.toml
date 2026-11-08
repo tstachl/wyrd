@@ -10,7 +10,7 @@ members = [
     "crates/wyrd-cli",
     "crates/wyrd-contracts",
     "crates/wyrd-embed",
-    "crates/wyrd-app",
+    "crates/wyrd-host",
 ]
 
 [workspace.package]

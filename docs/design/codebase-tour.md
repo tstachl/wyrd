@@ -31,7 +31,7 @@ the words that mislead, and the order to read them in.
    module per command family in `commands/`; `composer.rs` holds
    the live-node plumbing shared by `mount`, `sync now`, and
    `vault`; `update/` holds the updater and its durable-file
-   capture. `wyrd-app` (desktop host) sits on `wyrd-core` plus
+   capture. `wyrd-host` (desktop host) sits on `wyrd-core` plus
    `wyrd-daemon`; `wyrd-embed` proves the core lifecycle without the
    daemon or presentation, over `wyrd-core`, `wyrd-sync`,
    `wyrd-format`, and `wyrd-view`.

@@ -553,7 +553,7 @@ pub struct ComposedHeadless {
 /// over the daemon view with live heads refreshed, bind the serving
 /// surface (loopback for developer runs, real otherwise), and split
 /// for live serving. The ONLY headless composition path — `wyrd
-/// vault`, `wyrd-app`, and every future owner-mode entry point call
+/// vault`, `wyrd-host`, and every future owner-mode entry point call
 /// this instead of assembling the steps ad hoc. Mailbox connection,
 /// bulk binding, and the emit sink stay caller-side: they are
 /// transport binding and diagnostics, not composition.

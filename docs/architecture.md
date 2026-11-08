@@ -23,7 +23,7 @@ Listed in dependency order. Dependencies point only at rows above, and `wyrd-con
 | `wyrd-core` | Embeddable local node: namespace, snapshots, mutations, materialization, sync control | format, namespace, sync; never presentation |
 | `wyrd-view` | Filesystem-shaped read surface; never mounts or authors content | `wyrd-format`, `wyrd-namespace` |
 | `wyrd-daemon` | Composes the core, view and presentation backends | `wyrd-core`, `wyrd-view` |
-| `wyrd-app` | Desktop host process: owns a drive through `wyrd-core`, runs the live loop under daemon supervision | `wyrd-core`, `wyrd-daemon` |
+| `wyrd-host` | Desktop host process: owns a drive through `wyrd-core`, runs the live loop under daemon supervision | `wyrd-core`, `wyrd-daemon` |
 | `wyrd-cli` | Binary process host over the daemon's public API | `wyrd-daemon` |
 | `wyrd-embed` | Proves the core lifecycle works without daemon, CLI or presentation | `wyrd-core`, `wyrd-sync`, `wyrd-format`, `wyrd-view` |
 | `wyrd-contracts` | Cross-crate architectural contract tests; nothing depends on it | all of the above |

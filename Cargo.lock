@@ -5191,21 +5191,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "wyrd-app"
-version = "0.3.0-alpha"
-dependencies = [
- "hex",
- "libc",
- "serde_json",
- "thiserror 2.0.20",
- "tracing",
- "wyrd-core",
- "wyrd-daemon",
- "wyrd-format",
- "wyrd-sync",
-]
-
-[[package]]
 name = "wyrd-cli"
 version = "0.3.0-alpha"
 dependencies = [
@@ -5313,6 +5298,21 @@ dependencies = [
  "fastcdc",
  "hex",
  "thiserror 2.0.20",
+]
+
+[[package]]
+name = "wyrd-host"
+version = "0.3.0-alpha"
+dependencies = [
+ "hex",
+ "libc",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tracing",
+ "wyrd-core",
+ "wyrd-daemon",
+ "wyrd-format",
+ "wyrd-sync",
 ]
 
 [[package]]

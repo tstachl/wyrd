@@ -35,6 +35,18 @@ is transient — no drive data is affected.
 
 ### Changed
 
+- Rename `wyrd-app` to `wyrd-host` (binary too)
+  (`nostr:nevent1qqsp69pryzjygnr760tl5gkmwp3eg8g2kxvjh7t6pu8nuhpzj8kqn2qpz9mhxue69uhkwunpwdczuap49eehg3m42y0`):
+  the headless owner process already says "host" everywhere
+  (`open_host`, `HostError`, `HostView`, "host ready" logs), so the
+  crate name was the only outlier. Pure move: `git mv
+  crates/wyrd-app crates/wyrd-host`, the package, binary, and lib
+  names, the flake package (`packages.<system>.wyrd-host`,
+  `mainProgram wyrd-host`), the Flatpak `command`, the Lima
+  host-leg closure and binary paths (`WYRD_HOST_BIN`), and the
+  crate-name mentions in `docs/architecture.md`, the codebase tour,
+  and the layer contracts. No behavior change: workspace check,
+  nextest, contract suite, clippy, and fmt are green.
 - Rename `wyrd-fuse` to `wyrd-view`
   (`nostr:nevent1qqsp69pryzjygnr760tl5gkmwp3eg8g2kxvjh7t6pu8nuhpzj8kqn2qpz9mhxue69uhkwunpwdczuap49eehg3m42y0`):
   the crate holds `DriveView` and never mounts — the FUSE backend

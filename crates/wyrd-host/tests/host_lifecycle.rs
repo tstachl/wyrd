@@ -7,11 +7,11 @@ use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use wyrd_app::{exit_code, open_host, ComposedHeadless, HostError, HostView};
 use wyrd_core::mutation::{MutationKind, MutationOutcome};
 use wyrd_core::node::WyrdNode;
 use wyrd_daemon::{run_composed_owner, VaultEvent};
 use wyrd_format::FsObjectStore;
+use wyrd_host::{exit_code, open_host, ComposedHeadless, HostError, HostView};
 use wyrd_sync::bulk::MemoryBulkSource;
 use wyrd_sync::keys::DeviceIdentitySecret;
 use wyrd_sync::runtime::Engine;
@@ -26,7 +26,7 @@ const PASS: &str = "host-lifecycle-pass";
 fn scratch(label: &str) -> PathBuf {
     static SEQ: AtomicU64 = AtomicU64::new(0);
     let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    let dir = std::env::temp_dir().join(format!("wyrd-app-{label}-{}-{n}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("wyrd-host-{label}-{}-{n}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir
@@ -148,7 +148,7 @@ fn set_up(
     let dir = scratch(label);
     create_drive(dir.clone());
     let open = open_host(dir.clone(), PASS, identity()).expect("host opens");
-    let composed = wyrd_app::compose(open, true).expect("composition splits");
+    let composed = wyrd_host::compose(open, true).expect("composition splits");
     let queue = Arc::clone(&composed.parts.mutations);
     (dir, composed, queue)
 }

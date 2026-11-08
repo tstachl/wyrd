@@ -20,8 +20,8 @@ e2e_require_wrapped "${E2E_ENV_FILE:-/tmp/lima/e2e-env.sh}" "./tests/lima/run-al
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/alpha-common.sh"
 
-[[ -n "${WYRD_APP_BIN:-}" && -x "$WYRD_APP_BIN" ]] \
-  || die "host leg needs an executable WYRD_APP_BIN from e2e-env.sh"
+[[ -n "${WYRD_HOST_BIN:-}" && -x "$WYRD_HOST_BIN" ]] \
+  || die "host leg needs an executable WYRD_HOST_BIN from e2e-env.sh"
 
 # --- step 1: a drive the host can own ----------------------------------
 host_step1_init() {
@@ -44,7 +44,7 @@ host_step2_boot() {
   # would orphan the host instead of folding clean).
   WYRD_PASSPHRASE="$(cat "$c/passphrase")" \
     WYRD_IDENTITY_HEX="$(cat "$c/identity")" \
-    "$WYRD_APP_BIN" "$d" --loopback \
+    "$WYRD_HOST_BIN" "$d" --loopback \
     >"$LOGDIR/host.out" 2>"$LOGDIR/host.err" &
   echo $! > "$E2E_ROOT/host.pid"
   poll_until 60 grep -q "host ready: serving " "$LOGDIR/host.err" \

@@ -255,7 +255,7 @@ fn policy_for(member: &str) -> Option<MemberPolicy> {
         // the serving-id rendering, `libc` the Unix signal arming,
         // `tracing` the stage-log facade. A GUI toolkit joins this
         // set only under OD-06-C's exclusion rule.
-        "wyrd-app" => Some(MemberPolicy {
+        "wyrd-host" => Some(MemberPolicy {
             workspace_allow: &["wyrd-format", "wyrd-sync", "wyrd-core", "wyrd-daemon"],
             external_allow: &["hex", "libc", "thiserror", "tracing"],
         }),
@@ -867,7 +867,7 @@ fn release_assets_cover_every_platform_tag() {
     // publisher's machine.
     let flatpak = fs::read_to_string(root.join("flatpak/md.enesis.wyrd.yaml"))
         .expect("the Flatpak manifest exists");
-    for marker in ["app-id: md.enesis.wyrd", "command: wyrd-app"]
+    for marker in ["app-id: md.enesis.wyrd", "command: wyrd-host"]
         .iter()
         .copied()
     {
@@ -1116,7 +1116,7 @@ fn workspace_members_are_exact() {
         // The desktop host (06, first of the OD-8 pair): the owner
         // process with no presentation backend. The File Provider
         // adapter (17) is the second member and amends this list again.
-        "crates/wyrd-app",
+        "crates/wyrd-host",
     ]
     .into_iter()
     .map(str::to_owned)
@@ -1332,7 +1332,7 @@ fn fuse_dev_deps_stay_pinned() {
 /// Check that every headless owner run goes through the daemon's
 /// shared composition: `run_vault` and its input struct `VaultRun`
 /// may appear only inside `wyrd-daemon` itself. `wyrd vault`, `wyrd
-/// mount` (session path excluded — see below), `wyrd-app`, and every
+/// mount` (session path excluded — see below), `wyrd-host`, and every
 /// future owner-mode entry point compose through
 /// `compose_headless_owner` / `run_composed_owner` instead of wiring
 /// the runner ad hoc. `Supervisor::spawn_loop` is deliberately NOT
@@ -1368,7 +1368,7 @@ fn check_owner_runs_through_daemon(files: &[(&str, &str)]) -> Vec<String> {
 /// machinery: the host composes through `wyrd-core` and `wyrd-daemon`
 /// and opens through `wyrd-sync`'s durable side, so a `transport::`,
 /// `bulk::`, or `serving::` path segment — or an `iroh`/`n0` crate,
-/// type, or module ident — in `crates/wyrd-app/src` is a second
+/// type, or module ident — in `crates/wyrd-host/src` is a second
 /// transport implementation starting. Matched as path segments and
 /// ident prefixes (`iroh::`, `Iroh`, `n0_`, `n0::`), so a field that
 /// merely mentions the transport (`iroh_id` in stage logs, kept
@@ -1409,7 +1409,7 @@ fn check_host_transport_free(files: &[(&str, &str)]) -> Vec<String> {
 /// above it. Manifest half: the host edge set names `wyrd-core` and
 /// no `iroh*`/`n0*` package. Source half: no transport path segment
 /// in the host's own production sources. The mechanical companion,
-/// run by hand and pasted into the PR: `cargo tree -p wyrd-app
+/// run by hand and pasted into the PR: `cargo tree -p wyrd-host
 /// -e normal` reviewed against the same list — transitive `iroh`
 /// arrives only through `wyrd-core` and `wyrd-daemon`, never through
 /// a host edge.
@@ -1418,7 +1418,7 @@ fn host_embeds_wyrd_core_and_links_no_transport_above_it() {
     let root = workspace_root();
     let root_manifest = read_manifest(&root);
     let workspace_deps = workspace_dep_table(&root_manifest);
-    let manifest = read_manifest(&root.join("crates/wyrd-app"));
+    let manifest = read_manifest(&root.join("crates/wyrd-host"));
     let deps = production_deps(&manifest);
     let names: Vec<String> = deps
         .iter()
@@ -1437,7 +1437,7 @@ fn host_embeds_wyrd_core_and_links_no_transport_above_it() {
         "the host declares no transport package, found: {transport_deps:?}"
     );
 
-    let (files, errors) = collect_rs_files(&root.join("crates/wyrd-app/src"), &root);
+    let (files, errors) = collect_rs_files(&root.join("crates/wyrd-host/src"), &root);
     assert!(
         errors.is_empty(),
         "host source walk errors:\n- {}",
@@ -1459,7 +1459,7 @@ fn host_embeds_wyrd_core_and_links_no_transport_above_it() {
 /// Contract (06 follow-up): every headless owner run goes through
 /// the daemon's shared composition. Scans the CLI's and the host's
 /// production sources for direct uses of the headless runner and
-/// its input struct; `wyrd vault`, `wyrd-app`, and every future
+/// its input struct; `wyrd vault`, `wyrd-host`, and every future
 /// owner-mode entry point must reach `run_vault` only through
 /// `compose_headless_owner` / `run_composed_owner`. The mount's
 /// session-supervised loop is intentionally out of scope (its
@@ -1472,7 +1472,7 @@ fn host_embeds_wyrd_core_and_links_no_transport_above_it() {
 fn headless_runs_go_through_the_daemon_composer() {
     let root = workspace_root();
     let mut refs: Vec<(String, String)> = Vec::new();
-    for member in ["crates/wyrd-cli/src", "crates/wyrd-app/src"] {
+    for member in ["crates/wyrd-cli/src", "crates/wyrd-host/src"] {
         let (files, errors) = collect_rs_files(&root.join(member), &root);
         assert!(
             errors.is_empty(),
@@ -1512,7 +1512,7 @@ fn no_surface_authors_a_conflict_resolution() {
     for member in [
         "crates/wyrd-cli/src",
         "crates/wyrd-daemon/src",
-        "crates/wyrd-app/src",
+        "crates/wyrd-host/src",
         "crates/wyrd-view/src",
     ] {
         let (files, errors) = collect_rs_files(&root.join(member), &root);
@@ -1647,7 +1647,7 @@ fn no_v04_surface_offers_a_role_choice() {
     // Surface half: no picker vocabulary outside the CLI member path.
     let mut refs: Vec<(String, String)> = Vec::new();
     for member in [
-        "crates/wyrd-app/src",
+        "crates/wyrd-host/src",
         "crates/wyrd-daemon/src",
         "crates/wyrd-view/src",
         "crates/wyrd-cli/src",
@@ -3765,7 +3765,7 @@ mod policy_tests {
     #[test]
     fn host_transport_check_rejects_a_transport_path() {
         let files = [(
-            "crates/wyrd-app/src/host.rs",
+            "crates/wyrd-host/src/host.rs",
             "use wyrd_sync::transport::mailbox::Mailbox;",
         )];
         let violations = check_host_transport_free(&files);
@@ -3779,7 +3779,7 @@ mod policy_tests {
     #[test]
     fn host_transport_check_rejects_an_iroh_ident() {
         let files = [(
-            "crates/wyrd-app/src/main.rs",
+            "crates/wyrd-host/src/main.rs",
             "let endpoint = IrohBulkSource::connect_default();",
         )];
         let violations = check_host_transport_free(&files);
@@ -3790,11 +3790,11 @@ mod policy_tests {
     fn host_transport_check_ignores_comments_and_strings() {
         let files = [
             (
-                "crates/wyrd-app/src/lib.rs",
+                "crates/wyrd-host/src/lib.rs",
                 "// the host names no wyrd_sync transport machinery",
             ),
             (
-                "crates/wyrd-app/src/run.rs",
+                "crates/wyrd-host/src/run.rs",
                 "let note = \"serving installs on the loop\";",
             ),
         ];
@@ -3807,7 +3807,7 @@ mod policy_tests {
     #[test]
     fn host_transport_check_passes_the_durable_side() {
         let files = [(
-            "crates/wyrd-app/src/host.rs",
+            "crates/wyrd-host/src/host.rs",
             "use wyrd_sync::{durable::DurableError, runtime::{Engine, EngineError}};",
         )];
         assert!(
@@ -3833,7 +3833,7 @@ mod policy_tests {
     #[test]
     fn owner_composition_check_rejects_a_runner_struct_use() {
         let files = [(
-            "crates/wyrd-app/src/run.rs",
+            "crates/wyrd-host/src/run.rs",
             "use wyrd_daemon::{run_vault, VaultRun};",
         )];
         let violations = check_owner_runs_through_daemon(&files);
@@ -3852,7 +3852,7 @@ mod policy_tests {
                 "// run_vault used to live here, now shared",
             ),
             (
-                "crates/wyrd-app/src/run.rs",
+                "crates/wyrd-host/src/run.rs",
                 "let note = \"VaultRun carries the live node\";",
             ),
         ];
@@ -3883,7 +3883,7 @@ mod policy_tests {
         // Naming the outcome is observing the run, not owning the
         // composition: outcome, event, and loop-end types stay free.
         let files = [(
-            "crates/wyrd-app/src/run.rs",
+            "crates/wyrd-host/src/run.rs",
             "fn exit_code(outcome: &VaultOutcome) -> i32 {",
         )];
         assert!(
@@ -3909,7 +3909,7 @@ mod policy_tests {
     #[test]
     fn resolution_check_rejects_a_merge_heads_call() {
         let files = [(
-            "crates/wyrd-app/src/run.rs",
+            "crates/wyrd-host/src/run.rs",
             "let snapshot = engine.merge_heads(map)?;",
         )];
         let violations = check_no_surface_authors_resolutions(&files);

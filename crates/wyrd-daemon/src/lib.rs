@@ -37,7 +37,7 @@ pub use vault::{
     ServeSurface, TransportDeadlines, TransportShutdown, VaultEvent, VaultLoopEnd, VaultObserver,
     VaultOutcome, VaultRun,
 };
-// Transport vocabulary for composers: the host (`wyrd-app`) bounds its
+// Transport vocabulary for composers: the host (`wyrd-host`) bounds its
 // run over these without spelling `wyrd_sync` transport paths, so the
 // host composition check sees only the composer surface. The daemon is
 // already transport-fluent (lifecycle, vault); this re-export moves no
