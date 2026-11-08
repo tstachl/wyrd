@@ -5,8 +5,8 @@ let
   unstable = import inputs.nixpkgs-unstable { system = pkgs.stdenv.system; };
 in
 {
-  env.NGIT_RELAY_TIMEOUT_SECS = 2;
-  env.NGIT_RELAY_CONNECT_TIMEOUT_SECS = 2;
+  env.NGIT_RELAY_TIMEOUT_SECS = 5;
+  env.NGIT_RELAY_CONNECT_TIMEOUT_SECS = 5;
 
   languages.javascript.enable = true;
   languages.javascript.bun.enable = true;
