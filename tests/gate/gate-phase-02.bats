@@ -83,6 +83,8 @@ setup() {
     || { echo "join confirmation states no history boundary"; false; }
   grep -q "next mounted sync" "$RUN/logs/join-n.out" \
     || { echo "join confirmation names no catch-up cadence"; false; }
+  grep -q "recovers with reissue" "$RUN/logs/join-n.out" \
+    || { echo "join confirmation points recovery nowhere"; false; }
   # Rerun-resume cover (bound-admission-closure child 2): re-inviting
   # an admitted device resumes its catch-up instead of failing — same
   # device and key, fresh destination (the destination policy refuses

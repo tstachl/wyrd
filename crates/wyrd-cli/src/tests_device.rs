@@ -598,13 +598,16 @@ fn join_confirmation_states_the_superseded_epoch_boundary() {
     );
 }
 
-/// A drive with real snapshot history reports the admission walk
-/// rather than silence: the invite commits a bounded catch-up
-/// fill for the newcomer, and the owner's status names the
+/// The issue's `join_reports_the_admission_walk_rather_than_silence`
+/// under its literal name: a drive with real snapshot history
+/// reports the admission walk rather than silence. Under the
+/// re-baselined mechanism (bounded catch-up fill, not one
+/// proportional commit) the walk surfaces invite-side — the
+/// invite commits the fill and the owner's status names the
 /// pending count for the newcomer instead of showing nothing in
 /// progress.
 #[test]
-fn invite_on_a_historied_drive_reports_the_catch_up_walk() {
+fn join_reports_the_admission_walk_rather_than_silence() {
     use wyrd_format::{Entry, FsObjectStore, ObjectKind, ObjectStore, Tree};
     let pair = Pair::new();
     // Two snapshots of history before the newcomer exists.
