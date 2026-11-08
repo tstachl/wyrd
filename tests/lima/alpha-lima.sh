@@ -288,7 +288,8 @@ step4_member() {
   # The confirmed `--yes` path, on a throwaway drive so the harness
   # owner keeps its authority for the later steps: the removal
   # states the terminal consequence, the drive is terminal
-  # afterwards (empty owner set), and a subsequent `rotate` fails
+  # afterwards (empty owner set — the sole owner leaves members
+  # and owners alike), and a subsequent `rotate` fails
   # closed. The engine-level terminality is pinned at
   # `tests_removal.rs:92-120`; the missing evidence was end to end.
   local td="$DRIVES/terminal" tc="$CREDS/terminal"
@@ -306,9 +307,9 @@ step4_member() {
   local terminal_owners
   terminal_owners="$(with_creds "$tc" member "$td" status \
     | sed -n 's/^members \([0-9]*\) owners \([0-9]*\)$/\1 \2/p')"
-  [[ "$terminal_owners" == "1 0" ]] \
+  [[ "$terminal_owners" == "0 0" ]] \
     || die "terminal drive keeps no owner: $terminal_owners"
-  pass "terminal drive holds an empty owner set"
+  pass "terminal drive empties members and owners"
   expect_fail2 step4-rotate-after-terminal \
     with_creds "$tc" member "$td" rotate
   pass "rotate on a terminal drive fails closed"
