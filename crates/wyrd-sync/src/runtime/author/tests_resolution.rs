@@ -198,3 +198,40 @@ fn resolve_over_a_contradicted_conflict_fails_closed() {
     assert_eq!(engine.log.frozen_at(), Some(3), "still frozen");
     assert_eq!(engine.current(), seq, "nothing committed");
 }
+
+/// Every management control refuses on a frozen drive: the surface
+/// shows the freeze (frozen epoch plus the live contenders the
+/// freeze waits on) and points at `member resolve`, and no control
+/// authors a transition.
+#[test]
+fn management_surfaces_refuse_on_a_frozen_membership() {
+    let (_dir, mut engine, owner, _genesis, winner, rival) = frozen_engine("management-frozen");
+    // The surface facts: frozen epoch plus the live contenders the
+    // freeze waits on — the same derivation `member status` renders
+    // and `member resolve` validates against.
+    assert_eq!(engine.log.frozen_at(), Some(2), "fork freezes at 2");
+    let mut contenders = engine.frozen_contenders();
+    contenders.sort();
+    let mut expected = [winner, rival];
+    expected.sort();
+    assert_eq!(contenders, expected, "rivals named");
+    let tip = engine.log.known_state().expect("tip");
+    let seq = engine.current();
+    for error in [
+        engine.remove_device(owner).unwrap_err(),
+        engine.rotate_epoch().unwrap_err(),
+        engine.set_owners(owner).unwrap_err(),
+    ] {
+        assert!(
+            matches!(error, EngineError::FrozenConflictRemains),
+            "management refuses on a frozen drive: {error:?}"
+        );
+    }
+    assert_eq!(
+        engine.log.known_state().expect("tip").transition_id,
+        tip.transition_id,
+        "no control authors while frozen"
+    );
+    assert_eq!(engine.current(), seq, "nothing committed");
+    assert_eq!(engine.log.frozen_at(), Some(2), "still frozen");
+}

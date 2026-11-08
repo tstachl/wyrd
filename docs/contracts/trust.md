@@ -792,6 +792,28 @@ cannot compile quietly — it arrives as a visible, greppable trust decision.
   question over the owner set (`1-of-2 may add`, `2-of-2 to remove an
   owner`, …) rather than a new key system. v0 ships exactly one owner.
 
+### What removal does and does not do (normative; OD-14-A C)
+
+The three sentences below are the canonical removal copy. Every
+management surface renders this boundary from these sentences; no
+surface paraphrases them, because a paraphrased security boundary is
+a boundary restated wrong:
+
+<!-- REMOVAL-COPY-START -->
+- **Removal bounds acquisition, not knowledge:** a removed device
+  keeps its local plaintext, and can keep fetching any content whose
+  transport root it learned before removal, from any serving member
+  that still answers. It learns no new roots.
+- **History is never re-encrypted:** excluding a removed device from
+  old-epoch content is an explicit, separate migration (re-encrypt +
+  new manifests), never an implicit side effect of removal.
+- **Removing the sole owner is valid but terminal:** the owner set
+  empties with the author and no future transition can ever be
+  authorized, so the drive freezes permanently. Implementations MUST
+  warn — as a refusal without acknowledgement, never an inline note —
+  before applying it.
+<!-- REMOVAL-COPY-END -->
+
 ## Recovery (reserved design, post-v0 implementation)
 
 Without the root key, ciphertext is unrecoverable once every device holding

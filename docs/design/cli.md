@@ -154,22 +154,36 @@ characters (x-only pubkeys).
   discharges them without authoring while the heads stay eligible.
 - `remove <device>`: author a removal transition. The removed device —
   member or reader — receives no new-epoch material; its acquisition
-  ends at the removal boundary while its history stays valid.
-  Removal bounds acquisition, not knowledge: a removed device keeps
-  its local plaintext, and can keep fetching any content whose
-  transport root it learned before removal, from any serving member
-  that still answers. It learns no new roots.
-  Removing the sole owner is valid but terminal — it empties the owner
-  set and no future transition can be authorized — so it requires
-  `--yes`. Like `rotate` and `set-owner` below, `remove` fails on a
-  membership-frozen drive with "transition leaves a membership
-  conflict frozen; resolve it first": nothing new is canonical while
-  frozen, so the conflict resolves before any of the three commits.
+  ends at the removal boundary while its history stays valid. The
+  confirmation renders the canonical removal sentences verbatim from
+  the normative `docs/contracts/trust.md` subsection "What removal
+  does and does not do" (OD-14-A, option C) — no paraphrase, no
+  euphemism: a removed device keeps its local plaintext, and can keep
+  fetching any content whose transport root it learned before removal,
+  from any serving member that still answers. It learns no new roots,
+  and history is never re-encrypted.
+  Removing the sole owner is valid but terminal — it empties the
+  owner set and no future transition can be authorized — so it
+  requires `--yes` (OD-14-B, option A: a refusal without
+  acknowledgement, never an inline warning). Like `rotate` and
+  `set-owner` below, `remove` fails on a membership-frozen drive with
+  "transition leaves a membership conflict frozen; resolve it first":
+  nothing new is canonical while frozen, so the conflict resolves
+  before any of the three commits.
 - `rotate`: force a fresh epoch secret. Membership unchanged; every
-  current member and reader is owed the new-epoch wrap.
+  current member and reader is owed the new-epoch wrap. The
+  confirmation says exactly that — a fresh epoch secret, nothing
+  added or removed — and the surface offers no control that would
+  rotate a device key, because the object model cannot express one:
+  replacing a device is a removal plus an admission under a fresh
+  identity (identity is single-use within a membership chain).
 - `set-owner <device>`: hand ownership to a member (v0 ownership is
-  a singleton). Authority comes from the pre-transition owner set,
-  so the current owner signs the handover.
+  a singleton). The target names a current member and nothing else
+  (OD-14-C, option A: no co-ownership); a non-member target fails
+  with the engine's `NotMember`. Authority comes from the
+  pre-transition owner set, so the current owner signs the handover
+  and the confirmation attributes it to the outgoing owner, with the
+  carried head count.
 - `remove`, `rotate`, `set-owner`, and `invite` carry the namespace
   forward: after the transition commits, each served head is
   re-authored at the new epoch over the same tree (transition

@@ -18,7 +18,7 @@ use crate::runtime::engine::{Engine, EngineError};
 ///
 /// Authority comes from the pre-transition owner set (epochs.md rule
 /// 3): only an owner rotates. The post state equals the pre state, so
-/// every current member is owed the new-epoch wrap.
+/// every current member and reader is owed the new-epoch wrap.
 pub(crate) fn rotate_epoch(engine: &mut Engine) -> Result<MembershipTransition, EngineError> {
     let tip = engine
         .log
