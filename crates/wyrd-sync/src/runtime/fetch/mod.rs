@@ -538,13 +538,31 @@ pub(super) fn object(
         // gate precedes both writes — the ciphertext import and the
         // plaintext insert — since only the insert charges the
         // plaintext accountant: refused bytes reach neither (DG-4 A).
-        // An already-held representation admits as a no-op (see
-        // root()): both stores charge only fresh bytes, so a retry
-        // retains nothing new.
-        if let Err(refusal) = gate.check(sealed.len() as u64, plaintext.len() as u64) {
+        // Each dimension charges only fresh bytes, so an already-held
+        // representation admits as a no-op (see root()): a retry
+        // retains nothing new — including the torn-import retry, whose
+        // vault-held ciphertext must not be re-charged. The held check
+        // runs only on the refusal path, so the hot path pays no extra
+        // I/O.
+        if gate
+            .check(sealed.len() as u64, plaintext.len() as u64)
+            .is_err()
+        {
             let vault_held = vault.sealed(&blob_root(&sealed)).ok().flatten().is_some();
             let plaintext_held = objects.has(content).unwrap_or(false);
-            if !(vault_held && plaintext_held) {
+            if vault_held && plaintext_held {
+                tracing::debug!(
+                    content = ?content,
+                    "retention gate would refuse, but the object is already held: admission is a no-op"
+                );
+            } else if let Err(refusal) = gate.check(
+                if vault_held { 0 } else { sealed.len() as u64 },
+                if plaintext_held {
+                    0
+                } else {
+                    plaintext.len() as u64
+                },
+            ) {
                 let unit = object_unit(content);
                 if let Err(error) = refusals.record(&unit, refusal.quota) {
                     tracing::warn!(
@@ -565,11 +583,12 @@ pub(super) fn object(
                 );
                 aggregate = worse(aggregate, FetchOutcome::Refused);
                 continue;
+            } else {
+                tracing::debug!(
+                    content = ?content,
+                    "retention gate would refuse full charges, but only fresh bytes are new: admission proceeds"
+                );
             }
-            tracing::debug!(
-                content = ?content,
-                "retention gate would refuse, but the object is already held: admission is a no-op"
-            );
         }
         if let Err(error) = vault.import(&sealed) {
             if let Some(fatal) = fatal_vault(&error) {

@@ -187,6 +187,64 @@ fn chunk_over_the_payload_ceiling_is_invalid_and_unimported() {
     );
 }
 
+/// A torn import leaves the sealed bytes vault-held (and `seen`-charged
+/// exactly once) while the plaintext insert never ran. A retry must
+/// charge only the fresh plaintext bytes: re-charging the already-held
+/// sealed bytes double-counts them against the ceiling and falsely
+/// refuses, wedging convergence on bytes that retain nothing new.
+#[test]
+fn torn_import_retry_charges_only_fresh_bytes() {
+    let epoch = 2;
+    let keyring = keyring_with_secret(epoch);
+    let dir = TestDir::new("fetch-limits-torn-import");
+    let vault = Vault::open(&dir.path).unwrap();
+    let plaintext = vec![0x5C; 64];
+    let (candidate, sealed, content) =
+        sealed_candidate(&keyring, epoch, ObjectKind::Chunk, &plaintext);
+    vault.import(&sealed.encode()).unwrap();
+    assert!(
+        vault
+            .sealed(&crate::seal::blob_root(&sealed.encode()))
+            .unwrap()
+            .is_some(),
+        "the fixture establishes the torn state: vault-held, plaintext-missing"
+    );
+    let sealed_len = sealed.encode().len() as u64;
+    let plain_len = plaintext.len() as u64;
+    // A ceiling between fresh-only and double-charged admission: the
+    // retry retains only fresh plaintext bytes, so it must admit, while
+    // re-charging the already-held sealed bytes would falsely refuse.
+    let quota = sealed_len + plain_len + 1;
+    let retained = wyrd_format::RetainedBytes::new();
+    let gate = RetentionGate::new(Some(quota), Some(retained), vault.seen_handle());
+    let refusals = RefusalLedger::load(&dir.path).unwrap();
+    let mut bulk = MemoryBulkSource::default();
+    bulk.publish_sealed(sealed.storage_id(), sealed.encode());
+    bulk.publish_transport(sealed.encode());
+    let mut objects = MemoryObjectStore::default();
+    let attempt = object(
+        &member_drive(),
+        &mut bulk,
+        &keyring,
+        &mut objects,
+        &vault,
+        &content,
+        std::slice::from_ref(&candidate),
+        &gate,
+        &refusals,
+    );
+    assert!(
+        matches!(attempt.aggregate, FetchOutcome::Fulfilled(())),
+        "a torn-import retry admits on fresh bytes alone: {:?}",
+        attempt.aggregate
+    );
+    assert!(
+        objects.has(&content).unwrap(),
+        "the plaintext object landed on retry"
+    );
+    assert!(refusals.is_empty(), "an admitted retry records no refusal");
+}
+
 #[test]
 fn chunk_at_the_payload_ceiling_imports() {
     let epoch = 2;
