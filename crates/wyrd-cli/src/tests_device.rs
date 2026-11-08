@@ -528,6 +528,216 @@ fn reissue_recovers_lost_invitation_through_the_surface() {
     );
 }
 
+/// The whole flow completes with no relay configured anywhere:
+/// pairing, invite, and join take no relay flags because the
+/// invitation is a file handed over out of band (OD-13-A, option
+/// A) — this pins the executable form of that decision rather
+/// than asserting the absence of a flag.
+#[test]
+fn join_completes_with_no_relay_configured() {
+    let pair = Pair::new();
+    let (newcomer, _) = pair.pair_and_join();
+    // The newcomer reopens from member custody and reads the
+    // membership it joined: no transport was ever involved.
+    command(pair.newcomer_device(vec!["id".into()])).unwrap();
+    command(pair.newcomer_member(vec!["list".into()])).unwrap();
+    assert!(
+        pair.owner_list().contains(&newcomer.to_string()),
+        "owner lists the newcomer admitted with no relay in the loop"
+    );
+}
+
+/// The join confirmation states the superseded-epoch boundary at
+/// the moment of joining (OD-13-B, option B): pre-admission
+/// history may not be reachable, the admission covers the live
+/// chain only, and catch-up arrives on sync — never a promise of
+/// completeness.
+#[test]
+fn join_confirmation_states_the_superseded_epoch_boundary() {
+    let pair = Pair::new();
+    pair.pair_and_join();
+    let engine = Engine::open_keystore(
+        pair.newcomer_drive.clone(),
+        "newcomer-pass",
+        read_identity(&pair.newcomer_identity).unwrap(),
+    )
+    .unwrap();
+    let screen = join_confirmation_report(&engine);
+    for needle in [
+        "may not be reachable",
+        "live chain only",
+        "never promised at join",
+        "next mounted sync",
+    ] {
+        assert!(
+            screen.contains(needle),
+            "confirmation states the boundary ({needle}): {screen}"
+        );
+    }
+    assert!(
+        !screen.to_lowercase().contains("complete")
+            && !screen.to_lowercase().contains("up to date")
+            && !screen.to_lowercase().contains("in sync"),
+        "confirmation never promises completeness: {screen}"
+    );
+    // The dispatch prints exactly these bytes: the wiring is
+    // pinned, not just its exit status.
+    let epoch = engine
+        .membership_log()
+        .known_state()
+        .map(|tip| tip.epoch)
+        .unwrap_or(0);
+    assert_eq!(
+        screen,
+        wyrd_core::invitation_surface::render_join_confirmation(
+            &engine.device(),
+            &engine.drive(),
+            epoch
+        ),
+        "CLI dispatches the surface wording unchanged"
+    );
+}
+
+/// A drive with real snapshot history reports the admission walk
+/// rather than silence: the invite commits a bounded catch-up
+/// fill for the newcomer, and the owner's status names the
+/// pending count for the newcomer instead of showing nothing in
+/// progress.
+#[test]
+fn invite_on_a_historied_drive_reports_the_catch_up_walk() {
+    use wyrd_format::{Entry, FsObjectStore, ObjectKind, ObjectStore, Tree};
+    let pair = Pair::new();
+    // Two snapshots of history before the newcomer exists.
+    {
+        let mut engine = Engine::open_keystore(
+            pair.owner_drive.clone(),
+            "owner-pass",
+            read_identity(&pair.owner_identity).unwrap(),
+        )
+        .unwrap();
+        let mut store = FsObjectStore::open(pair.owner_drive.clone()).unwrap();
+        for (name, bytes) in [
+            ("first.txt", b"first".as_slice()),
+            ("second.txt", b"second".as_slice()),
+        ] {
+            let chunk = store.insert(ObjectKind::Chunk, bytes).unwrap();
+            let entry = Entry::file(name, bytes.len() as u64, false, vec![chunk]).unwrap();
+            let tree = Tree::from_entries(vec![entry])
+                .unwrap()
+                .insert_into(&mut store)
+                .unwrap();
+            engine.author_snapshot(&store, tree).unwrap();
+        }
+    }
+    let (device, key) = pair.stage_pairing();
+    command(pair.owner_member(vec![
+        "invite".into(),
+        device.clone(),
+        key,
+        pair.invitation_file.display().to_string(),
+    ]))
+    .unwrap();
+    let newcomer = parse_device_id(&device).unwrap();
+    let status = {
+        let engine = Engine::open_keystore(
+            pair.owner_drive.clone(),
+            "owner-pass",
+            read_identity(&pair.owner_identity).unwrap(),
+        )
+        .unwrap();
+        member_status_report(&engine).unwrap()
+    };
+    assert!(
+        status.contains(&format!("announcements pending for {newcomer}: "))
+            && !status.contains(&format!("announcements pending for {newcomer}: 0")),
+        "the walk is visible as the newcomer's pending catch-up: {status}"
+    );
+    // The invitation the walk filled opens: the fill was real work,
+    // not a count printed beside an empty file.
+    command(pair.newcomer_device(vec![
+        "join".into(),
+        pair.invitation_file.display().to_string(),
+    ]))
+    .unwrap();
+}
+
+/// A removed device returns only under a fresh identity: the
+/// re-invite of the retired identity refuses with `RetiredDevice`
+/// (the early refusal stays reachable), and the refusal itself
+/// names the remedy.
+#[test]
+fn join_states_that_a_removed_device_returns_only_under_a_fresh_identity() {
+    let pair = Pair::new();
+    let (newcomer, newcomer_key) = pair.pair_and_join();
+    command(pair.owner_member(vec!["remove".into(), newcomer.to_string()])).unwrap();
+    let out = pair._temp.0.join("re-invitation-after-removal");
+    let error = command(pair.owner_member(vec![
+        "invite".into(),
+        newcomer.to_string(),
+        newcomer_key.to_string(),
+        out.display().to_string(),
+    ]))
+    .unwrap_err();
+    assert!(
+        matches!(error, CliError::Engine(EngineError::RetiredDevice)),
+        "retired identity is refused, not re-admitted: {error:?}"
+    );
+    assert!(
+        format!("{error}").contains("use a new device identity"),
+        "the refusal names the remedy: {error}"
+    );
+    assert!(!out.exists(), "a refused invite writes no file");
+}
+
+/// Invitation recovery is reissue, not re-invite: after the file
+/// is lost the admission stands, `reissue` recovers the join, and
+/// a re-invite rerun resumes the same admission (no second
+/// transition) with a reissued file.
+#[test]
+fn invitation_recovery_is_reissue_not_reinvite() {
+    let pair = Pair::new();
+    let (device, key) = pair.stage_pairing();
+    command(pair.owner_member(vec![
+        "invite".into(),
+        device.clone(),
+        key.clone(),
+        pair.invitation_file.display().to_string(),
+    ]))
+    .unwrap();
+    let epoch = pair.owner_tip_epoch();
+    // Lose the invitation file: the admission stands with no
+    // published invitation.
+    fs::remove_file(&pair.invitation_file).unwrap();
+    // Reissue recovers the join without a second admission.
+    let reissued = pair._temp.0.join("reissued-invitation");
+    command(pair.owner_member(vec![
+        "reissue".into(),
+        device.clone(),
+        reissued.display().to_string(),
+    ]))
+    .unwrap();
+    command(pair.newcomer_device(vec!["join".into(), reissued.display().to_string()])).unwrap();
+    // And a re-invite rerun resumes the same admission rather than
+    // authoring a duplicate — recovery either way, admission once.
+    let rerun = pair._temp.0.join("rerun-invitation");
+    command(pair.owner_member(vec![
+        "invite".into(),
+        device,
+        key,
+        rerun.display().to_string(),
+    ]))
+    .unwrap();
+    assert_eq!(
+        pair.owner_tip_epoch(),
+        epoch,
+        "recovery never authors a second admission"
+    );
+    assert!(
+        rerun.is_file(),
+        "rerun reissues the file for the joined device"
+    );
+}
+
 /// The five hex parsers share one decode helper; their usage
 /// messages are the user-facing contract, so pin each message
 /// against both failure modes (undecodable input, wrong length).

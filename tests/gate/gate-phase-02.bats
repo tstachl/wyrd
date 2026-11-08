@@ -76,6 +76,13 @@ setup() {
     "$GMD" join "$GUEST_RUN/invitation-n"
   printf '%s\n' "$output" >"$RUN/logs/join-n.out"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
+  # Guided-flow surface: the join confirmation states the history
+  # boundary on the real two-device flow — pre-admission content
+  # may not be reachable, and catch-up arrives on sync, not here.
+  grep -q "may not be reachable" "$RUN/logs/join-n.out" \
+    || { echo "join confirmation states no history boundary"; false; }
+  grep -q "next mounted sync" "$RUN/logs/join-n.out" \
+    || { echo "join confirmation names no catch-up cadence"; false; }
   # Rerun-resume cover (bound-admission-closure child 2): re-inviting
   # an admitted device resumes its catch-up instead of failing — same
   # device and key, fresh destination (the destination policy refuses

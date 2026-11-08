@@ -51,19 +51,29 @@ pub(crate) fn device(
             let bytes = read_bounded(&invitation, MAX_INVITATION_BYTES)?;
             let sealed = SealedBootstrap::decode(&bytes).map_err(|_| CliError::InvitationFormat)?;
             let engine = Engine::join(drive_dir, passphrase, identity, &sealed)?;
-            let epoch = engine
-                .membership_log()
-                .known_state()
-                .map(|tip| tip.epoch)
-                .unwrap_or(0);
-            println!(
-                "joined {} drive {} at epoch {epoch}",
-                engine.device(),
-                engine.drive()
-            );
+            print!("{}", join_confirmation_report(&engine));
             Ok(())
         }
     }
+}
+
+/// Render the join confirmation for the `join` action: the surface
+/// wording over this engine's device, drive, and tip epoch. Split
+/// from the dispatch so tests pin the wiring's bytes, not just its
+/// exit status. The epoch is the admission the newcomer joined at
+/// (genesis plus its invitation grant is what join commits); the
+/// boundary and catch-up sentences ride below the legacy headline.
+pub(crate) fn join_confirmation_report(engine: &Engine) -> String {
+    let epoch = engine
+        .membership_log()
+        .known_state()
+        .map(|tip| tip.epoch)
+        .unwrap_or(0);
+    wyrd_core::invitation_surface::render_join_confirmation(
+        &engine.device(),
+        &engine.drive(),
+        epoch,
+    )
 }
 
 /// Read a bounded non-credential input file. Invitation bytes are
