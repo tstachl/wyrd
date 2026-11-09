@@ -167,7 +167,10 @@ pub(crate) fn open_with_notice(
 ) -> Result<Engine, CliError> {
     err.write_all(wyrd_core::key_surface::render_unlock_notice().as_bytes())
         .map_err(|source| CliError::Io {
-            path: drive_dir.clone(),
+            // A closed stderr is a sink failure, not a drive failure:
+            // the placeholder keeps it from reading as a drive open
+            // error.
+            path: "<stderr>".into(),
             source,
         })?;
     Ok(Engine::open_keystore(drive_dir, passphrase, identity)?)

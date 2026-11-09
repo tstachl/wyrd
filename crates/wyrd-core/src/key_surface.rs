@@ -33,11 +33,10 @@
 //!    message itself lives on `KeystoreError::WrongPassphrase`; this
 //!    module only renders panels, never errors.
 //!
-//! The copy never names a keychain, a Secure Enclave, a TPM,
-//! hardware-backed storage, or OS encryption: those are the words a
-//! person would read as promises this release does not keep. It
-//! never says `root recovery`: a lost passphrase has no remedy, and
-//! recovery belongs to its own release.
+//! The copy never names any platform credential store: those
+//! words would read as promises this release does not keep. It
+//! never names the recovery that belongs to its own release, either:
+//! a lost passphrase has no remedy, and recovery belongs elsewhere.
 
 use wyrd_format::{DeviceEncryptionKey, DeviceId};
 
@@ -52,9 +51,9 @@ pub const KEY_LIVES_HERE: &str = "the root key and this device's encryption secr
 /// secret only and changes no key.
 pub const NO_DEVICE_KEY_ROTATION: &str = "this device's encryption key cannot be rotated: replacing a device takes the owner removing it and admitting a fresh identity; member rotate mints a fresh epoch secret only and changes no key";
 
-/// A lost passphrase has no remedy in this release. States the fact
-/// without naming `root recovery`, which belongs to its own release
-/// and must never read as available here.
+/// A lost passphrase has no remedy in this release. States the
+/// fact without naming the recovery that belongs to its own
+/// release, which must never read as available here.
 pub const NO_PASSPHRASE_RECOVERY: &str =
     "a lost passphrase has no remedy in this release: nothing recovers it";
 
@@ -96,11 +95,13 @@ pub fn render_key_report(
 }
 
 /// Render the replacement sequence: the owner-mediated steps in
-/// order, naming the exact commands. The runner never performs the
+/// order, naming the exact commands. Step 2 needs a fresh identity
+/// file (device identity is single-use within a membership chain),
+/// never the removed device's key. The runner never performs the
 /// owner half — this is guidance, not automation.
 pub fn render_re_enrol(device: &DeviceId) -> String {
     format!(
-        "to replace this device:\n1. the owner runs: member remove {device}\n2. this device runs: device pairing-request <out>\n3. the owner runs: member invite <device> <encryption-key> <invitation>\n4. this device runs: device join <invitation>\n"
+        "to replace this device:\n1. the owner runs: member remove {device}\n2. with a fresh identity file, this device runs: device pairing-request <out>\n3. the owner runs: member invite <device> <encryption-key> <invitation>\n4. this device runs: device join <invitation>\n"
     )
 }
 
