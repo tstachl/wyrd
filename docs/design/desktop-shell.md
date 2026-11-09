@@ -101,8 +101,11 @@ This note splits them:
 
 `tauri.conf.json` lives with the backend (`crates/wyrd-desktop/`),
 with `frontendDist` pointing at the built `apps/desktop/` output and
-`beforeDevCommand` / `beforeBuildCommand` delegating into
-`apps/desktop/`. Rationale: the backend owns the app identity and
+`beforeDevCommand` (`bun run dev`) / `beforeBuildCommand`
+(`bun run build`) executing in `apps/desktop/`. No deno anywhere:
+the reference editor runs its frontend under deno, but this
+workspace's JavaScript toolchain is bun (`languages.javascript.bun`
+in `devenv.nix`) and the desktop frontend follows it. Rationale: the backend owns the app identity and
 the IPC surface, so the config that names both sits with it; the
 frontend directory stays free of Rust tooling, and `cargo package` /
 `cargo check` never see web assets. `cargo-tauri` accepts a config
