@@ -107,17 +107,26 @@ The proposed shape is option 2, with the endpoint as a file, not a
 socket: no new daemon, no new protocol, no general-purpose control
 plane. Three pieces, all precedented in-tree:
 
-- **A per-user drive registry**, owned by the installer: one entry
-  per drive (`name`, `drive_dir`, relay set, service name). Never
-  secrets — paths at most, in the style of `nix/drive/options.nix`
-  (`identityFile`/`passphraseFile` are paths, never store strings);
-  key material lives in the OS keychain / credential files per the
-  settings contract (issue 25). Proposed locations, not frozen:
+- **A per-user drive registry**, created at install time with
+  owner-only permissions — and owned, at the filesystem level, by
+  the user account, with the desktop application's registration
+  flow as its normal writer. It is per-user configuration, not
+  privileged system state, so no installer-side registry manager is
+  introduced; "owned by the installer" means the installer creates
+  and perms the file, nothing more. Each entry holds drive facts
+  (`name`, `drive_dir`, relay set, service name, mode) and never
+  secrets. Updates are crash-safe: write to a temporary file in the
+  same directory, sync it, atomically replace, and sync the
+  directory, so an interrupted registration can never leave a
+  truncated registry that makes every drive undiscoverable. The UI
+  treats every entry as untrusted configuration: it validates paths
+  before use and still authenticates each owner connection with the
+  existing local peer-credential and protocol checks — registry
+  content is discovery metadata, never proof of drive identity or
+  authorization. Proposed locations, not frozen:
   `XDG_STATE_HOME/wyrd/drives.toml` on Linux,
   `~/Library/Application Support/Wyrd/drives.toml` on macOS,
   resolved through the platform path APIs the frontend already uses.
-  Owner-only permissions; the registry is read by the UI and the
-  installer, written by the installer-side registration flow.
 - **Per-drive owner services**, installed from a template the
   installer ships: a launchd agent per drive on macOS, a systemd
   user unit per drive on Linux — the same shapes `nix/drive`
@@ -125,16 +134,73 @@ plane. Three pieces, all precedented in-tree:
   registration time for non-Nix users. The OS service manager owns
   the process lifecycle: enablement is startup-at-login, and a UI
   that exits or crashes never takes the owner down with it, because
-  launchd/systemd — not the UI — is the parent.
-- **A fixed handoff sequence** for create and join. The UI collects
-  name, directory, passphrase, and relays; secrets land in the
-  keychain / credential files; the registration flow writes the
-  registry entry and installs/enables the per-drive service; the
-  owner binds `<drive_dir>/owner.sock` under the store lock; the UI
-  connects with `OwnerClient::connect_drive` and verifies with
-  `observe`/`liveness` before showing the drive. Discovery is
-  reading the registry file. No network discovery, no stable
-  socket, nothing to supervise.
+  launchd/systemd — not the UI — is the parent. The supervision
+  contract mirrors the `nix/drive` precedent (OD-34-C): a terminal
+  status is never restarted (configuration errors, held drive),
+  crashes restart rate-limited (systemd `on-failure` with backoff
+  and start limits; launchd `KeepAlive` on unsuccessful exit with a
+  throttle interval). A stale socket entry from an unclean shutdown
+  is reclaimed at bind while the store lock is held, so a restarted
+  owner never wedges on its predecessor's socket. The UI
+  distinguishes the lifecycle states the policy produces: a
+  restarting owner reads as temporarily unavailable (starting /
+  retrying, with the loop's pause switch and pass count telling
+  quiet apart from dead), while a disabled drive stays registered
+  with its service stopped and an unregistered drive simply
+  disappears from discovery — disabling stops the service without
+  touching drive data, and only an explicit shutdown of the service
+  is a deliberate stop, as opposed to a crash the manager will
+  retry. The absence drill covers the temporary case; the permanent
+  cases get their own first-class states, never an error toast.
+- **Owner credential loading independent of the UI.** The owner
+  must obtain its secrets without the UI alive: at login, at
+  restart, at 3 a.m. with nobody watching. Secrets live in the OS
+  keychain / credential files (issue 25 owns the mechanism), and
+  the service's loading behavior must work in the actual service
+  context — a launchd user agent or systemd user unit, not a login
+  shell. The sharp edge is macOS, where keychain access can depend
+  on login and unlock state: the installer requests the needed
+  keychain access at registration time, and the exact ACLs travel
+  with the settings contract, but the requirement is fixed here —
+  if the secrets are unreachable in service context, the drive
+  reads as registered but unavailable, never as broken, and the UI
+  says exactly that.
+- **A fixed handoff sequence** for create and join, with
+  initialization as an explicit owner-side provisioning operation
+  that runs before anything is registered. Creating is
+  `Engine::create` (new single-device drive; fails if the directory
+  already holds one); joining is `Engine::accept_invitation` (sealed
+  invitation plus device encryption secret; commits genesis, and the
+  admission itself still arrives through normal intake, so the join
+  is not complete until the loop confirms it). Both run in the same
+  ownership model as everything else — exclusive keystore access,
+  no UI-held store — and neither is a mutation through the UI: the
+  UI never acquires authoring capability, it only drives the
+  provisioning flow whose terminal states the owner defines. The
+  order is fixed: initialize → verify the open (`open_keystore`
+  succeeds) → write the registry entry → install and enable the
+  per-drive service → start → verify the socket. Registration and
+  enablement happen only after initialization succeeds, never
+  speculatively. Partial completion has explicit recovery, and a
+  drive is reported ready only when its socket verifies this
+  session — never because its registry entry exists:
+  - initialization fails (directory already holds a drive, bad
+    invitation) → nothing is registered; the error surfaces, and a
+    retry that finds an existing drive reconciles instead of
+    re-creating (`create` refuses; the flow detects and re-verifies);
+  - initialization succeeds but the registry write fails → the
+    drive exists on disk, unregistered; registration retries
+    idempotently;
+  - registry written but service installation or enablement fails
+    → registered but unavailable; enablement retries, readiness
+    is withheld;
+  - service starts but the socket never verifies → registered but
+    unavailable, same handling.
+  The UI's drive states mirror exactly this: not registered,
+  provisioning incomplete, registered but unavailable, verified
+  available. No larger provisioning state machine is invented; the
+  owner stays authoritative for actual drive state, and the
+  registry entry is a claim to verify, never proof of health.
 
 Why a file instead of the stable-socket endpoint the review
 preferred: a socket endpoint needs a always-on manager process
@@ -341,22 +407,26 @@ precedent for exactly this shape:
 `consumer_link_graph_excludes_presentation` walk the
 member-declared production closure, not just direct edges. The
 scaffold therefore adds a third check of the same kind — a desktop
-link-graph test excluding `wyrd-core` (and, through it, the sync
-authoring surface) from the desktop closure — so the policy looks
-green only when the architecture claim holds.
+transitive Cargo dependency-closure test excluding `wyrd-core`
+(and, through it, the sync authoring surface) from the desktop
+closure — so the policy looks green only when the architecture
+claim holds. Like its precedents it walks member-declared
+production edges, not the final linked binary; the name says
+exactly that, and `cargo tree` in CI remains the full-graph
+backstop.
 
 Decision rule, applied before the desktop crate is wired (stage 1):
 resolve the closure against the intended invariant. If consuming
 the shared client through `wyrd-daemon` reaches daemon composition
 or core authoring capabilities — which the manifests say it does,
-and the new link-graph test confirms mechanically — extract the
+and the new closure test confirms mechanically — extract the
 narrowly scoped `wyrd-owner-client` crate first (shared client and
 wire types; `wyrd-daemon` keeps the server and composition,
 `wyrd-desktop` depends only on the consumer surface) and point the
 desktop policy at that edge instead. The extraction is therefore
 conditional-required by a mechanical check, not pre-committed crate
 proliferation and not deferred multi-consumer hardening: no green
-link-graph test, no desktop wiring. Its backlog issue tracks the
+closure test, no desktop wiring. Its backlog issue tracks the
 work; stage 1 runs the check that decides it.
 
 ## Nix GUI dependencies (ported from the enesis editor)
@@ -467,9 +537,12 @@ installer issue; auto-update is explicitly v0.8.
 1. Scaffold: `crates/wyrd-desktop` with the IPC surface over
    `OwnerClient`, the frontend directory with `tauri.conf.json`
    wiring, the `layer_contracts` policy plus negatives, the desktop
-   link-graph test, and the Nix stanzas. No views; the shell compiles
+   transitive dependency-closure test (member-declared production
+   edges, after the `view`/`embed` precedent — not a linked-binary
+   audit; `cargo tree` in CI remains the full-graph backstop), and
+   the Nix stanzas. No views; the shell compiles
    and the gate holds. First act inside this stage is the closure
-   decision rule: if the link-graph test reaches daemon composition
+   decision rule: if the closure test reaches daemon composition
    or core authoring, the `wyrd-owner-client` extraction lands here,
    before the desktop crate is wired. The
    IPC behavioral tests above land here, against the real client
@@ -498,7 +571,7 @@ installer issue; auto-update is explicitly v0.8.
 5. Settings hand-off (issue 25): reference that issue; duplicate no
    field definitions here.
 6. `wyrd-owner-client` extraction: conditional-required by the
-   link-graph decision rule in the layer-gate section, not by future
+   closure decision rule in the layer-gate section, not by future
    consumer count. The backlog issue tracks the work; stage 1 runs
    the check that decides it.
 
