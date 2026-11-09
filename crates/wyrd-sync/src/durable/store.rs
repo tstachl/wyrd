@@ -309,15 +309,26 @@ pub(crate) fn leaf_verdict(
 /// Verify a pre-existing custody leaf against the live directory
 /// object, never the path: the open carries `O_NOFOLLOW`, so a
 /// substituted symlink fails the open itself instead of satisfying
-/// the check, and the metadata comes from the open file description.
-/// A foreign-owned leaf refuses before any custody state is read or
-/// written; a loose same-owner leaf warns (see [`LeafVerdict`]).
+/// the check; `O_DIRECTORY`, so a FIFO at the leaf fails fast with
+/// `ENOTDIR` instead of blocking the open; and the metadata comes
+/// from the open file description. A foreign-owned leaf refuses before
+/// any custody state is read or written; a loose same-owner leaf warns
+/// (see [`LeafVerdict`]). The `is_dir` check in [`leaf_verdict`]
+/// stays as defence in depth.
+///
+/// The file description is dropped after the check: the store and its
+/// callers re-name the leaf by path for every later open, so the
+/// check binds the leaf only at verify time. A writer of a parent
+/// directory could substitute the leaf afterwards; the LOCK flock
+/// serializes cooperating Wyrd processes, not parent writers, so
+/// deployment keeps ancestor directories out of other users' write
+/// reach (see `docs/design/cli.md`, "Drive custody files").
 #[cfg(unix)]
 fn verify_preexisting_dir(path: &Path) -> std::io::Result<()> {
     use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
     let mut options = fs::OpenOptions::new();
     options.read(true);
-    options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_DIRECTORY);
     let file = options.open(path)?;
     let metadata = file.metadata()?;
     match leaf_verdict(

@@ -180,7 +180,9 @@ pub fn record_path(store_dir: &Path, epoch: u64) -> PathBuf {
 /// crash between temp creation and rename never strands a
 /// group-readable sidecar holding a wrapped epoch secret. Like every
 /// custody write, creation hardens and opening never chmods: a
-/// pre-existing directory or record keeps the mode it has.
+/// pre-existing directory is verified first (foreign owners and
+/// non-directories refuse, loose same-owner modes warn) and a record
+/// keeps the mode it has.
 pub fn persist_record(store_dir: &Path, record: &EscrowRecord) -> std::io::Result<()> {
     let dir = store_dir.join(ESCROW_DIR);
     crate::durable::ensure_owner_only_dir(&dir)?;
