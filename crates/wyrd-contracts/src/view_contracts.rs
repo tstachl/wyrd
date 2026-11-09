@@ -638,6 +638,10 @@ fn verified_snapshot_capability_stays_unsafe_with_a_compile_fail_pin() {
         "the doctest implements the capability in safe code, which must not compile"
     );
     assert!(
+        !doctest.contains("unsafe impl"),
+        "the doctest must stay a safe-code impl: an unsafe impl would compile and silence the pin"
+    );
+    assert!(
         doctest.contains("into_snapshot"),
         "the doctest exercises the capability method, not just the trait name"
     );

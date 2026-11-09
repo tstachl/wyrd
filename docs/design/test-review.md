@@ -88,7 +88,7 @@ placements and two serial groups.
    compiles, the `compile_fail` on `VerifiedSnapshot`, and it
    guarantees that no downstream crate can put an unverified
    snapshot into a view head in safe code
-   (`view_contracts.rs:167` names it as the pin for that
+   (`view_contracts.rs:169` names it as the pin for that
    property). Removing `unsafe` from the trait breaks the three
    test-harness `unsafe impl`s on a pull request, but a
    deliberate fix-the-errors change would silence that, and only
@@ -428,8 +428,8 @@ this change:
 1. Two measured tail members stay in `default`:
    `concurrent_senders_never_exceed` and
    `serving_mount_refuses_push` leave the `default`
-   exclusion and the `slow` inclusion (they stay in
-   `local`). Rationale and measured cost are in the
+   exclusion and the `slow` inclusion (they stay excluded
+   from `local`). Rationale and measured cost are in the
    executive summary.
 2. The trust-boundary pin: new `wyrd-contracts` test
    `verified_snapshot_capability_stays_unsafe_with_a_compile_fail_pin`
