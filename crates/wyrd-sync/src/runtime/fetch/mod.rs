@@ -540,8 +540,10 @@ pub(super) fn object(
         // plaintext accountant: refused bytes reach neither (DG-4 A).
         // Each dimension charges only fresh bytes, so an already-held
         // representation admits as a no-op (see root()): a retry
-        // retains nothing new — including the torn-import retry, whose
-        // vault-held ciphertext must not be re-charged. The held check
+        // retains nothing new — in either torn direction (vault-held
+        // with plaintext missing, or plaintext-held with the vault
+        // representation missing), the held side must not be
+        // re-charged. The held check
         // runs only on the refusal path, so the hot path pays no extra
         // I/O.
         if gate
@@ -566,14 +568,14 @@ pub(super) fn object(
                     let unit = object_unit(content);
                     if let Err(error) = refusals.record(&unit, refusal.quota) {
                         tracing::warn!(
-                            unit = %unit,
+                            unit,
                             quota = refusal.quota,
                             error = %error,
                             "retention refusal held in memory but not durably recorded; a restart may forget it"
                         );
                     }
                     tracing::debug!(
-                        unit = %unit,
+                        unit,
                         quota = refusal.quota,
                         retained = refusal.retained,
                         vault_seen = refusal.vault_seen,

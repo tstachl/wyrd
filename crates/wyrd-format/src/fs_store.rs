@@ -1081,7 +1081,8 @@ mod tests {
         // The stamp still matches, so this insert takes the fast path:
         // it reports success without healing — the bytes stay corrupt
         // and the next read still fails closed. Mtime-preserving rot is
-        // healed only after a `get` retires the stamp.
+        // healed only after the stamp is retired (a `get` observing
+        // corruption does so).
         assert_eq!(store.insert(ObjectKind::Chunk, b"pristine").unwrap(), id);
         assert_eq!(
             fs::read(&path).unwrap(),
@@ -1140,6 +1141,11 @@ mod tests {
             .unwrap();
         assert_eq!(fs::read(&path).unwrap(), b"tampered");
         assert_eq!(store.insert(ObjectKind::Chunk, b"pristine").unwrap(), id);
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            b"pristine",
+            "drifted insert must rewrite, not trust the stale stamp"
+        );
         assert_eq!(
             store.get(&id).unwrap().as_deref(),
             Some(b"pristine".as_slice())

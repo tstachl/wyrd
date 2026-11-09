@@ -2339,15 +2339,17 @@ fn fn_is_fixture_gated(raw_lines: &[&str], code_lines: &[&str], def_idx: usize) 
 }
 
 /// A `fn` definition line: an optional `pub` visibility (possibly
-/// scoped, even with spaces), then `async`/`unsafe`/`const`/`extern`
-/// modifiers in any order, then the `fn` keyword and the function
-/// name. Matching the trailing `fn <ident>` shape — rather than a
-/// visibility-prefix list — keeps a future `pub(crate) async fn` /
-/// `pub unsafe fn` / `pub const fn` authoring body attributed to
-/// itself instead of the previous function. Runs on stripped code
-/// lines, so comments and string literals never match; `fn`-pointer
-/// types (`fn(u32)`) and `Fn` bounds never match either (`fn` must
-/// stand alone, followed by a name).
+/// scoped, even with spaces), then `async`/`unsafe`/`const`/`extern`/
+/// `default` modifiers in any order, an optional ABI string after
+/// `extern` (`extern "C" fn`, `unsafe extern "C-unwind" fn`), then the
+/// `fn` keyword and the function name. Matching the trailing
+/// `fn <ident>` shape — rather than a visibility-prefix list — keeps a
+/// future `pub(crate) async fn` / `pub unsafe fn` / `pub const fn` /
+/// `pub extern "C" fn` authoring body attributed to itself instead of
+/// the previous function. Runs on stripped code lines, so comments and
+/// string literals never match; `fn`-pointer types (`fn(u32)`) and
+/// `Fn` bounds never match either (`fn` must stand alone, followed by
+/// a name).
 fn is_fn_def(line: &str) -> bool {
     let mut tokens = line.split_whitespace().peekable();
     // Optional visibility: `pub`, `pub(...)`.
@@ -2366,11 +2368,20 @@ fn is_fn_def(line: &str) -> bool {
             }
         }
     }
-    // Optional modifiers, in any order.
+    // Optional modifiers, in any order. `default` covers specialization
+    // shapes (`default fn`); an ABI string literal may follow `extern`
+    // (`extern "C" fn`) and is skipped, not mistaken for the name.
+    let mut saw_extern = false;
     while tokens
         .peek()
-        .is_some_and(|t| matches!(*t, "async" | "unsafe" | "const" | "extern"))
+        .is_some_and(|t| matches!(*t, "async" | "unsafe" | "const" | "extern" | "default"))
     {
+        if tokens.peek().is_some_and(|t| *t == "extern") {
+            saw_extern = true;
+        }
+        tokens.next();
+    }
+    if saw_extern && tokens.peek().is_some_and(|t| t.starts_with('"')) {
         tokens.next();
     }
     // The keyword plus the function name.
@@ -2496,9 +2507,11 @@ fn check_node_authoring_confined(files: &[(&str, &str)]) -> Vec<String> {
 fn node_authoring_stays_in_the_live_pass_or_fixtures() {
     let root = workspace_root();
     // The whole `wyrd-core` source tree, not a hardcoded file list: a
-    // new submodule cannot evade the pin by name. The checker itself
-    // scopes to `node.rs` plus `live/` (test files out of scope), so
-    // production files elsewhere ride along harmlessly. Paths stay
+    // new submodule inside `live/` cannot evade the pin by name. The
+    // checker itself scopes to `node.rs` plus `live/` (test files out
+    // of scope), so production files elsewhere ride along unchecked —
+    // confinement outside `node.rs`/`live/` rests on the engine owning
+    // the only authoring methods, not on this scan. Paths stay
     // relative to the workspace root to match the checker's
     // `wyrd-core/src/...` shapes.
     let (files, errors) = collect_rs_files(&root.join("crates/wyrd-core/src"), &root);
@@ -3002,6 +3015,26 @@ mod policy_tests {
     }
 
     #[test]
+    fn target_scoped_dev_fixtures_edge_is_allowed() {
+        // `dev` propagates through `[target.*]` nesting exactly like
+        // production sections do: a target-scoped dev-dep edge is still
+        // a dev edge, never a shipped enablement.
+        let violations = check_fixtures_feature_edges(
+            "wyrd-daemon",
+            &fixtures_manifest(
+                r#"
+                [target.'cfg(unix)'.dev-dependencies]
+                wyrd-core = { workspace = true, features = ["test-fixtures"] }
+            "#,
+            ),
+        );
+        assert!(
+            violations.is_empty(),
+            "target-scoped dev-dep fixture edges must stay allowed: {violations:?}"
+        );
+    }
+
+    #[test]
     fn fixtures_feature_definition_is_not_an_edge() {
         // `wyrd-core` declares the feature itself; the declaration is
         // not an enablement and must not trip the checker.
@@ -3185,6 +3218,9 @@ mod policy_tests {
             "pub unsafe fn unsafe_public() {",
             "pub const fn const_public() {",
             "unsafe extern fn foreign() {",
+            "pub extern \"C\" fn foreign_c() {",
+            "unsafe extern \"C-unwind\" fn foreign_unwind() {",
+            "default fn specialized() {",
         ] {
             assert!(is_fn_def(line), "{line:?} is a definition");
         }
