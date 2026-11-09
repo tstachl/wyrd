@@ -39,14 +39,16 @@ pub use server::{
 };
 
 pub use wire::{
-    PathParams, RawRequest, SubmitParams, WireAttr, WireConvergenceState, WireDirEntry,
-    WireDrainReport, WireDurabilityLevel, WireError, WireErrorCode, WireExecuteReport,
-    WireFileIdentity, WireFoldDisposition, WireFoldForcerOutcome, WireFoldMember, WireFreshness,
-    WireFreshnessState, WireHeadClasses, WireHeadSummary, WireKind, WireLiveness,
-    WireMailboxHealth, WireMailboxView, WireMaterializationSummary, WireMutationError,
-    WireMutationKind, WireMutationOutcome, WireNode, WireObservation, WireOk, WireOutboxTotals,
-    WireParentToken, WirePeerHandle, WirePendingObligations, WireQuarantineReport, WireQueueDepth,
-    WireReconciliationCounters, WireResponse, WireResult, WireScrubReport, WireSyncReport,
-    WireSyncStatus, OP_CAPTURE_PARENT, OP_FRESHNESS, OP_LIVENESS, OP_LOOKUP, OP_OBSERVE, OP_PAUSE,
-    OP_READ, OP_READDIR, OP_RESUME, OP_STAT, OP_SUBMIT, WIRE_VERSION,
+    map_policy_error, PathParams, RawRequest, SubmitParams, WireAttr, WireConvergenceState,
+    WireDirEntry, WireDrainReport, WireDurabilityLevel, WireError, WireErrorCode,
+    WireExecuteReport, WireFileIdentity, WireFoldDisposition, WireFoldForcerOutcome,
+    WireFoldMember, WireFreshness, WireFreshnessState, WireHeadClasses, WireHeadSummary, WireKind,
+    WireLiveness, WireMailboxHealth, WireMailboxView, WireMaterializationSummary,
+    WireMutationError, WireMutationKind, WireMutationOutcome, WireNode, WireObservation, WireOk,
+    WireOutboxTotals, WireParentToken, WirePeerHandle, WirePendingObligations, WirePolicyRow,
+    WirePresence, WireQuarantineReport, WireQueueDepth, WireReconciliationCounters, WireResponse,
+    WireResult, WireRetentionPolicy, WireScrubReport, WireSyncReport, WireSyncStatus,
+    OP_CAPTURE_PARENT, OP_FRESHNESS, OP_LIVENESS, OP_LOOKUP, OP_OBSERVE, OP_PAUSE, OP_POLICY_EVICT,
+    OP_POLICY_PIN, OP_POLICY_STATUS, OP_POLICY_UNPIN, OP_READ, OP_READDIR, OP_RESUME, OP_STAT,
+    OP_SUBMIT, WIRE_VERSION,
 };

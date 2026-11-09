@@ -219,7 +219,7 @@ pub struct FileResidency {
 /// Reachable content only — the object store as a whole is never
 /// scanned, so unreachable (deleted-path) bytes stay out of the
 /// report instead of making its semantics ambiguous.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct ResidencyCensus {
     pub files: Vec<FileResidency>,
     /// Conflicted paths met during the walk: recorded, never
@@ -263,6 +263,27 @@ impl ResidencyCensus {
     }
 }
 
+/// Per-request traversal budget for on-demand status reads over
+/// the owner interface: status walks at most this many namespace
+/// entries (files plus dirs plus symlinks plus conflict rows)
+/// before stopping with `complete == false`. The loop never runs a
+/// periodic census — only this bounded on-demand walk — so an
+/// adversarial subtree cannot stall a pass. The CLI's offline
+/// `policy status` stays unbounded (it reads its own drive directly
+/// and reports the whole subtree); the bound applies to the
+/// served on-demand path only.
+pub const POLICY_STATUS_TRAVERSAL_BUDGET: usize = 4096;
+
+/// One on-demand status walk: the census plus whether the walk ran to
+/// completion. `complete == false` means the traversal budget ran
+/// out: the rows returned are a prefix, not the subtree, and the
+/// consumer must narrow the path or accept the aggregate as partial.
+#[derive(Debug)]
+pub struct BoundedCensus {
+    pub census: ResidencyCensus,
+    pub complete: bool,
+}
+
 /// Walk `path` and classify every reachable file against one runtime
 /// snapshot, so every row observes the same state.
 pub fn residency_census<V: NamespaceView>(
@@ -270,7 +291,7 @@ pub fn residency_census<V: NamespaceView>(
     view: &V,
     path: &str,
 ) -> Result<ResidencyCensus, PolicyError> {
-    census_impl(engine, view, path, crate::role::Role::Mirror)
+    census_impl(engine, view, path, crate::role::Role::Mirror, None).map(|bounded| bounded.census)
 }
 
 /// Same walk, but every unpinned chunk is measured against the
@@ -284,7 +305,21 @@ pub fn residency_census_with_role<V: NamespaceView>(
     path: &str,
     role: crate::role::Role,
 ) -> Result<ResidencyCensus, PolicyError> {
-    census_impl(engine, view, path, role)
+    census_impl(engine, view, path, role, None).map(|bounded| bounded.census)
+}
+
+/// Bounded on-demand walk for the served status path: at most
+/// `budget` namespace entries before stopping with
+/// `complete == false`. Unbounded callers pass `None` via the two
+/// wrappers above; the served path passes `Some(budget)`.
+pub fn residency_census_bounded<V: NamespaceView>(
+    engine: &Engine,
+    view: &V,
+    path: &str,
+    role: crate::role::Role,
+    budget: usize,
+) -> Result<BoundedCensus, PolicyError> {
+    census_impl(engine, view, path, role, Some(budget))
 }
 
 fn census_impl<V: NamespaceView>(
@@ -292,7 +327,8 @@ fn census_impl<V: NamespaceView>(
     view: &V,
     path: &str,
     role: crate::role::Role,
-) -> Result<ResidencyCensus, PolicyError> {
+    budget: Option<usize>,
+) -> Result<BoundedCensus, PolicyError> {
     let root = view.lookup(path).map_err(|source| PolicyError::View {
         path: path.to_string(),
         source,
@@ -302,7 +338,23 @@ fn census_impl<V: NamespaceView>(
     let runtime = engine.runtime_state()?;
     let mut census = ResidencyCensus::default();
     let mut stack = vec![(path.to_string(), root, 0usize)];
+    // Bounded walks count every namespace entry met (files, dirs,
+    // symlinks, conflict rows): hitting the budget stops the walk
+    // with `complete == false` and returns the prefix walked so far.
+    // Unbounded walks (`None`, the offline CLI) never stop early.
+    let mut visited: usize = 0;
     while let Some((at, node, depth)) = stack.pop() {
+        if let Some(budget) = budget {
+            if visited >= budget {
+                census.files.sort_by(|a, b| a.path.cmp(&b.path));
+                census.conflicts.sort();
+                return Ok(BoundedCensus {
+                    census,
+                    complete: false,
+                });
+            }
+        }
+        visited += 1;
         if depth > MAX_PATH_DEPTH {
             return Err(PolicyError::TooDeep(at));
         }
@@ -367,7 +419,11 @@ fn census_impl<V: NamespaceView>(
         }
     }
     census.files.sort_by(|a, b| a.path.cmp(&b.path));
-    Ok(census)
+    census.conflicts.sort();
+    Ok(BoundedCensus {
+        census,
+        complete: true,
+    })
 }
 
 /// Reachable chunk identities a vault-role device still has to
@@ -1354,6 +1410,30 @@ mod tests {
         // the shared chunk counts once even though b.txt names it.
         assert_eq!(census.pinned_chunk_union().len(), 2);
         assert_eq!(census.symlinks_skipped, 1);
+        drop(engine);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn bounded_status_stops_with_an_incomplete_flag() {
+        use crate::role::Role;
+        let (engine, dir) = scratch_engine();
+        let view = tree_view();
+        // The full walk names two files; a budget of one stops early
+        // with a prefix, never a silent whole.
+        let bounded = residency_census_bounded(&engine, &view, "", Role::Mirror, 1).unwrap();
+        assert!(
+            !bounded.complete,
+            "a budget below the walk must report incomplete"
+        );
+        assert!(
+            bounded.census.files.len() <= 1,
+            "an incomplete walk returns a prefix, got {} files",
+            bounded.census.files.len()
+        );
+        let whole = residency_census_bounded(&engine, &view, "", Role::Mirror, 4096).unwrap();
+        assert!(whole.complete, "a generous budget covers the walk");
+        assert_eq!(whole.census.files.len(), 2);
         drop(engine);
         std::fs::remove_dir_all(dir).unwrap();
     }

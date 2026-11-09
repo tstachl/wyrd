@@ -54,6 +54,15 @@ pub const OP_OBSERVE: &str = "observe";
 pub const OP_LIVENESS: &str = "liveness";
 pub const OP_FRESHNESS: &str = "freshness";
 
+/// Policy operations: the four engine operations the interface
+/// forwards to the loop-thread policy executor (not the mutation
+/// queue). Names are plain strings like the read operations above:
+/// an unknown name refuses with the name echoed back.
+pub const OP_POLICY_PIN: &str = "policy-pin";
+pub const OP_POLICY_UNPIN: &str = "policy-unpin";
+pub const OP_POLICY_EVICT: &str = "policy-evict";
+pub const OP_POLICY_STATUS: &str = "policy-status";
+
 /// Encode 32 raw identifier bytes as wire hex.
 fn hex_id(bytes: &[u8; 32]) -> String {
     hex::encode(bytes)
@@ -978,6 +987,33 @@ pub enum WireOk {
     Paused {
         paused: bool,
     },
+    PolicyPinned {
+        pinned: u64,
+        already_pinned: u64,
+        files: u64,
+        dirs: u64,
+    },
+    PolicyUnpinned {
+        released: u64,
+        already_unpinned: u64,
+        files: u64,
+        dirs: u64,
+    },
+    PolicyEvicted {
+        released: u64,
+        already_remote: u64,
+        files: u64,
+        dirs: u64,
+    },
+    PolicyStatus {
+        files: Vec<WirePolicyRow>,
+        conflicts: Vec<String>,
+        dirs: u64,
+        symlinks_skipped: u64,
+        complete: bool,
+        generation: u64,
+        revision: u64,
+    },
 }
 
 /// An explicit refusal: a machine-readable code plus a human message.
@@ -1023,6 +1059,12 @@ pub enum WireErrorCode {
     Unobserved,
     Poisoned,
     Io,
+    /// Evict refused: part of the subtree is pinned. Unpin first.
+    /// Nothing was committed. Distinct from every other refusal —
+    /// refused is not missing, invalid, or a local failure.
+    PinnedPresent,
+    /// The namespace path exceeds the format's depth bound.
+    TooDeep,
 }
 
 impl From<&DrainReport> for WireDrainReport {
@@ -1522,4 +1564,99 @@ impl From<&wyrd_core::mutation::MutationOutcome> for WireMutationOutcome {
             },
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Policy operation values (selective sync)
+// ---------------------------------------------------------------------------
+
+/// The wire form of [`RetentionPolicy`](wyrd_core::policy::RetentionPolicy).
+/// Serialized as the canonical words — the same two strings the CLI
+/// prints — so the wire and the surface share one vocabulary. The
+/// `policy_words_match_surface_copy` test pins the rename to the
+/// surface consts, so a re-wording fails the suite instead of
+/// drifting the contract.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WireRetentionPolicy {
+    #[serde(rename = "PINNED")]
+    Pinned,
+    #[serde(rename = "REMOTE_ONLY")]
+    RemoteOnly,
+}
+
+/// The wire form of [`LocalPresence`](wyrd_core::policy::LocalPresence).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WirePresence {
+    #[serde(rename = "PRESENT")]
+    Present,
+    #[serde(rename = "ABSENT")]
+    Absent,
+}
+
+/// One reachable file's policy/presence row. Reachable content only —
+/// the per-file table the `policy status` surface renders.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WirePolicyRow {
+    pub path: String,
+    pub policy: WireRetentionPolicy,
+    pub presence: WirePresence,
+}
+
+impl From<&wyrd_core::policy::RetentionPolicy> for WireRetentionPolicy {
+    fn from(policy: &wyrd_core::policy::RetentionPolicy) -> Self {
+        match policy {
+            wyrd_core::policy::RetentionPolicy::Pinned => WireRetentionPolicy::Pinned,
+            wyrd_core::policy::RetentionPolicy::RemoteOnly => WireRetentionPolicy::RemoteOnly,
+        }
+    }
+}
+
+impl From<&wyrd_core::policy::LocalPresence> for WirePresence {
+    fn from(presence: &wyrd_core::policy::LocalPresence) -> Self {
+        match presence {
+            wyrd_core::policy::LocalPresence::Present => WirePresence::Present,
+            wyrd_core::policy::LocalPresence::Absent => WirePresence::Absent,
+        }
+    }
+}
+
+impl From<&wyrd_core::policy::FileResidency> for WirePolicyRow {
+    fn from(file: &wyrd_core::policy::FileResidency) -> Self {
+        WirePolicyRow {
+            path: file.path.clone(),
+            policy: WireRetentionPolicy::from(&file.policy),
+            presence: WirePresence::from(&file.local),
+        }
+    }
+}
+
+/// Map a policy failure to a wire refusal. Every variant names its
+/// own code — never collapse two refusals into one. View failures
+/// reuse the view codes; engine failures (including channel shutdown
+/// and lock poison, which the core already reports as engine)
+/// surface as engine.
+pub fn map_policy_error(error: wyrd_core::policy::PolicyError) -> (WireErrorCode, String) {
+    use wyrd_core::policy::PolicyError;
+    use wyrd_core::view::ViewError;
+    let message = error.to_string();
+    let code = match &error {
+        PolicyError::View { source, .. } => match source {
+            ViewError::NotFound => WireErrorCode::NotFound,
+            ViewError::InvalidPath => WireErrorCode::Malformed,
+            ViewError::NotADirectory => WireErrorCode::NotADirectory,
+            ViewError::NotAFile => WireErrorCode::NotAFile,
+            ViewError::Conflict => WireErrorCode::Conflicted,
+            ViewError::NotMaterialized { .. } => WireErrorCode::NotMaterialized,
+            ViewError::Unavailable { .. } => WireErrorCode::Unavailable,
+            ViewError::Corrupt => WireErrorCode::Corrupt,
+            ViewError::RejectedRepresentation { .. } => WireErrorCode::RejectedRepresentation,
+            ViewError::LostRepresentation { .. } => WireErrorCode::LostRepresentation,
+            ViewError::Store(..) => WireErrorCode::Store,
+        },
+        PolicyError::Conflict { .. } => WireErrorCode::Conflicted,
+        PolicyError::PinnedPresent { .. } => WireErrorCode::PinnedPresent,
+        PolicyError::TooDeep(_) => WireErrorCode::TooDeep,
+        PolicyError::Engine(_) => WireErrorCode::Engine,
+    };
+    (code, message)
 }

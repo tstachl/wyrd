@@ -690,6 +690,13 @@ where
         {
             self.waker.wake();
         }
+        // Policy operations run here, on this thread, after the
+        // mutation batch and before the revision gate: the same
+        // engine, the same pass, so a pin and its publication never
+        // straddle passes. Status reads are on demand only — no
+        // periodic census — bounded per request with a `complete`
+        // flag.
+        self.drain_policy();
         // Settle admitted wants: retire a landed fetch, retire a
         // terminal generation (its waiters observe the verdict through
         // the view and release; the fetch it coalesced onto is over,
@@ -1106,6 +1113,11 @@ where
             let mut batch = mutations.take_batch().with_wants(Arc::clone(&self.wants));
             if batch.is_empty() {
                 batch.finish();
+                // Teardown policy submissions resolve through this
+                // same drain: an owner-interface pin admitted before
+                // the close executes here instead of hanging a
+                // connection thread past the server join.
+                self.drain_policy();
                 if closed {
                     return;
                 }
@@ -1133,6 +1145,7 @@ where
                 }
             }
             batch.finish();
+            self.drain_policy();
             if closed {
                 // The last pre-close admissions are executed; leftovers
                 // were failed closed above, so nothing is left held.
