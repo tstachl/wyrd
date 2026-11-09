@@ -42,15 +42,9 @@ pub(crate) fn generate_ephemeral(
 mod tests {
     use super::*;
 
-    #[test]
-    fn ephemeral_scalar_implements_zeroize_on_drop() {
-        // Type-level lock, mirroring the epoch-secret and root locks:
-        // `Drop` scrubs the seed bytes when the sibling goes out of
-        // scope. The FFI scalar itself is not observable from safe Rust,
-        // so this is a compile-time guarantee, not a runtime check.
-        fn assert_zeroize_on_drop<T: zeroize::ZeroizeOnDrop>() {}
-        assert_zeroize_on_drop::<EphemeralScalar>();
-    }
+    // ZeroizeOnDrop lock lives in `crate::keys::hygiene`
+    // (`secret_leaves_implement_zeroize_on_drop`); this module keeps
+    // only the public-key wiring pin.
 
     #[test]
     fn generated_public_key_matches_the_secret() {

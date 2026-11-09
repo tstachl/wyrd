@@ -8,9 +8,9 @@
 #   stay by design. Use it per package while coding:
 #   `cargo fast-sync`, `cargo fast-core`, etc.
 # - `default` is the PR gate: everything local plus the medium
-#   integration evidence (cross-crate contracts, heterogeneous relay
-#   cover, normal persistence and restart, selected mailbox and iroh
-#   loopback). Branch reviews run this profile.
+#   integration evidence (cross-crate contracts, normal persistence
+#   and restart, selected mailbox and iroh loopback). Branch
+#   reviews run this profile.
 # - `slow` is the master-CI supplement: the nine >10s live-relay tests
 #   excluded from `default`, plus the ceiling-scale admission tests
 #   (debug-profile signatures at 2.5k-66k links) that the bounded-
@@ -18,10 +18,13 @@
 #   measured ~20s-or-more heavyweights (32 MiB boundary-read frame,
 #   ceiling-scale manifest batch, vault-role fetch, spam resilience,
 #   sliced share, deep-tip classification, large announcement history;
-#   measured Oct-30, with the heterogeneous relay cover deliberately
-#   staying in `default` as standing cross-implementation evidence). A future `master` profile (everything plus
-#   stress and enlarged proptest budgets) is planned; until then master
-#   CI runs `default` plus `slow`.
+#   measured Oct-30) and the Nov-09 tail (per-sender quota, bulk
+#   walkers, oversize flood, torn-commit cross product, concurrent
+#   256 MiB mirror fill, serving push-denial dials, and the
+#   heterogeneous cross-implementation cover; see
+#   docs/design/test-review.md). A future `master` profile
+#   (everything plus stress and enlarged proptest budgets) is
+#   planned; until then master CI runs `default` plus `slow`.
 #
 # P0 baseline (Oct-5, M2, contended dev machine): default wall 206s over
 # 1415 tests with ~7x effective parallelism; warm compile negligible.
@@ -69,16 +72,18 @@ host-lifecycle = { max-threads = 1 }
 # live-relay plus the named ceiling-scale admission tests plus the
 # seven measured heavyweights).
 #
-# Deliberate exception: heterogeneous_relays_cover stays in the default
-# profile. Both its relays are localhost (MiniRelay plus an in-process
-# real relay), so it needs no external resource, and it is the only
-# default-gate coverage of the cross-implementation path — the slow
-# profile covers the fake-only sibling instead. About 30s of wall time
-# buys that standing evidence on every PR run. It is excluded from
-# `local`, where multi-relay integration cover is out of budget by
-# design (single-relay and iroh unit tests stay; see below).
+# Former deliberate exception, moved in Nov-09: heterogeneous_relays_cover
+# used to stay in `default` as the only default-gate coverage of the
+# cross-implementation path (about 30s of wall time on every PR). It
+# needs no external resource (both relays are localhost: MiniRelay
+# plus an in-process real relay), but the per-PR wall matters more
+# than the standing cover now that the corpus counts near 2,300
+# tests. It runs on master through `slow` with the fake-only
+# sibling; it is excluded from `local` as before, where multi-relay
+# integration cover is out of budget by design (single-relay and
+# iroh unit tests stay; see below).
 [profile.default]
-default-filter = "not (test(~flood_beyond_channel_capacity) or test(~saturation_recovers_broadcast_drops) or test(~saturation_recoveries_keep_single) or test(~restart_past_retention_redelivers) or test(~relay_outage_marks_down) or test(~serving_restart_with_accumulated_failures) or test(~poison_flood_stays_memory_only_at_scale) or test(~retry_flood_holds_at_most_one_window) or test(~two_relays_cover) or test(~admission_commit_is_bounded_by_the_pass_budget) or test(~admission_closure_commits_bounded_batches) or test(~crash_mid_incremental_admission_resumes_without_duplicate_obligations) or test(~member_invite_rerun_resumes_across_batches) or test(~largest_accepted_read_fits_the_frame) or test(~over_ceiling_manifest_batch) or test(~vault_role_fetches) or test(~sustained_spam_commits_bounded) or test(~full_share_sliced_attempts) or test(~deep_tip_classifies_without_recursion) or test(~large_announcement_history_converges_with_exact_reports))"
+default-filter = "not (test(~flood_beyond_channel_capacity) or test(~saturation_recovers_broadcast_drops) or test(~saturation_recoveries_keep_single) or test(~restart_past_retention_redelivers) or test(~relay_outage_marks_down) or test(~serving_restart_with_accumulated_failures) or test(~poison_flood_stays_memory_only_at_scale) or test(~retry_flood_holds_at_most_one_window) or test(~two_relays_cover) or test(~admission_commit_is_bounded_by_the_pass_budget) or test(~admission_closure_commits_bounded_batches) or test(~crash_mid_incremental_admission_resumes_without_duplicate_obligations) or test(~member_invite_rerun_resumes_across_batches) or test(~largest_accepted_read_fits_the_frame) or test(~over_ceiling_manifest_batch) or test(~vault_role_fetches) or test(~sustained_spam_commits_bounded) or test(~full_share_sliced_attempts) or test(~deep_tip_classifies_without_recursion) or test(~large_announcement_history_converges_with_exact_reports) or test(~per_sender_quota) or test(~heterogeneous) or test(~budgeted_walk_reaches_live) or test(~capped_walk_pages_dial_hangs) or test(~oversize_flood_retains_nothing) or test(~torn_commit_in_any_pass) or test(~concurrent_senders_never_exceed) or test(~serving_mount_refuses_push))"
 # Nextest's LEAK verdict fires when a test's stdout/stderr pipes stay
 # open past its exit: a live child process inheriting them, or an event
 # loop too loaded to observe the EOF within the window. Nextest runs
@@ -135,11 +140,11 @@ leak-timeout = "5s"
 filter = 'test(~host_quit_preserves_a_dirty_handle) or test(~host_closes_admission_only_after_its_last_submitter)'
 test-group = 'host-lifecycle'
 [profile.local]
-default-filter = "not (package(wyrd-contracts) or test(~flood_beyond_channel_capacity) or test(~saturation_recovers_broadcast_drops) or test(~saturation_recoveries_keep_single) or test(~restart_past_retention_redelivers) or test(~relay_outage_marks_down) or test(~serving_restart_with_accumulated_failures) or test(~poison_flood_stays_memory_only_at_scale) or test(~retry_flood_holds_at_most_one_window) or test(~two_relays_cover) or test(~heterogeneous) or test(~unacked_bound) or test(~useless_flood) or test(~spam) or test(~deep_tree_authoring) or test(~large_announcement_history_converges_with_exact_reports) or test(~merge_plan_refuses_more_heads) or test(~deep_tip_classifies_without_recursion) or test(~seen_store_evicts) or test(~repeated_compaction) or test(~budgeted_walk_reaches_live) or test(~replacement_commit_is_atomic) or test(~same_mailbox_acquires_missed) or test(~disconnected_peer_acquires_missed) or test(~sliced_run_attempts_live) or test(~prod_kdf_params) or test(~admission_commit_is_bounded_by_the_pass_budget) or test(~admission_closure_commits_bounded_batches) or test(~crash_mid_incremental_admission_resumes_without_duplicate_obligations) or test(~member_invite_rerun_resumes_across_batches) or test(~largest_accepted_read_fits_the_frame) or test(~over_ceiling_manifest_batch) or test(~vault_role_fetches) or test(~sustained_spam_commits_bounded) or test(~full_share_sliced_attempts))"
+default-filter = "not (package(wyrd-contracts) or test(~flood_beyond_channel_capacity) or test(~saturation_recovers_broadcast_drops) or test(~saturation_recoveries_keep_single) or test(~restart_past_retention_redelivers) or test(~relay_outage_marks_down) or test(~serving_restart_with_accumulated_failures) or test(~poison_flood_stays_memory_only_at_scale) or test(~retry_flood_holds_at_most_one_window) or test(~two_relays_cover) or test(~heterogeneous) or test(~unacked_bound) or test(~useless_flood) or test(~spam) or test(~deep_tree_authoring) or test(~large_announcement_history_converges_with_exact_reports) or test(~merge_plan_refuses_more_heads) or test(~deep_tip_classifies_without_recursion) or test(~seen_store_evicts) or test(~repeated_compaction) or test(~budgeted_walk_reaches_live) or test(~replacement_commit_is_atomic) or test(~same_mailbox_acquires_missed) or test(~disconnected_peer_acquires_missed) or test(~sliced_run_attempts_live) or test(~prod_kdf_params) or test(~admission_commit_is_bounded_by_the_pass_budget) or test(~admission_closure_commits_bounded_batches) or test(~crash_mid_incremental_admission_resumes_without_duplicate_obligations) or test(~member_invite_rerun_resumes_across_batches) or test(~largest_accepted_read_fits_the_frame) or test(~over_ceiling_manifest_batch) or test(~vault_role_fetches) or test(~sustained_spam_commits_bounded) or test(~full_share_sliced_attempts) or test(~capped_walk_pages_dial_hangs) or test(~oversize_flood_retains_nothing) or test(~torn_commit_in_any_pass) or test(~concurrent_senders_never_exceed) or test(~serving_mount_refuses_push))"
 leak-timeout = "5s"
 
 [profile.slow]
-default-filter = "test(~flood_beyond_channel_capacity) or test(~saturation_recovers_broadcast_drops) or test(~saturation_recoveries_keep_single) or test(~restart_past_retention_redelivers) or test(~relay_outage_marks_down) or test(~serving_restart_with_accumulated_failures) or test(~poison_flood_stays_memory_only_at_scale) or test(~retry_flood_holds_at_most_one_window) or test(~two_relays_cover) or test(~admission_commit_is_bounded_by_the_pass_budget) or test(~admission_closure_commits_bounded_batches) or test(~crash_mid_incremental_admission_resumes_without_duplicate_obligations) or test(~member_invite_rerun_resumes_across_batches) or test(~largest_accepted_read_fits_the_frame) or test(~over_ceiling_manifest_batch) or test(~vault_role_fetches) or test(~sustained_spam_commits_bounded) or test(~full_share_sliced_attempts) or test(~deep_tip_classifies_without_recursion) or test(~large_announcement_history_converges_with_exact_reports)"
+default-filter = "test(~flood_beyond_channel_capacity) or test(~saturation_recovers_broadcast_drops) or test(~saturation_recoveries_keep_single) or test(~restart_past_retention_redelivers) or test(~relay_outage_marks_down) or test(~serving_restart_with_accumulated_failures) or test(~poison_flood_stays_memory_only_at_scale) or test(~retry_flood_holds_at_most_one_window) or test(~two_relays_cover) or test(~admission_commit_is_bounded_by_the_pass_budget) or test(~admission_closure_commits_bounded_batches) or test(~crash_mid_incremental_admission_resumes_without_duplicate_obligations) or test(~member_invite_rerun_resumes_across_batches) or test(~largest_accepted_read_fits_the_frame) or test(~over_ceiling_manifest_batch) or test(~vault_role_fetches) or test(~sustained_spam_commits_bounded) or test(~full_share_sliced_attempts) or test(~deep_tip_classifies_without_recursion) or test(~large_announcement_history_converges_with_exact_reports) or test(~per_sender_quota) or test(~heterogeneous) or test(~budgeted_walk_reaches_live) or test(~capped_walk_pages_dial_hangs) or test(~oversize_flood_retains_nothing) or test(~torn_commit_in_any_pass) or test(~concurrent_senders_never_exceed) or test(~serving_mount_refuses_push)"
 
 [[profile.default.overrides]]
 filter = 'test(flood)'
