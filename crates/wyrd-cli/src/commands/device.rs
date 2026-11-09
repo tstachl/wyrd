@@ -27,6 +27,17 @@ pub(crate) fn device(
             print!("{}", device_id_report(&engine)?);
             Ok(())
         }
+        DeviceAction::Keys => {
+            // The unlock notice is the observable unlocking state:
+            // the keystore derivation is expensive and reports no
+            // progress of its own, so silence without the notice
+            // reads as a hang. The surface owns the words; the open
+            // owns the derivation.
+            let mut err = std::io::stderr();
+            let engine = open_with_notice(drive_dir, passphrase, identity, &mut err)?;
+            print!("{}", device_keys_report(&engine)?);
+            Ok(())
+        }
         DeviceAction::PairingRequest { out } => {
             let pairing = Engine::pairing_request(&drive_dir, passphrase, &identity)?;
             fs::write(
@@ -120,6 +131,49 @@ pub(crate) fn device_id_report(engine: &Engine) -> Result<String, CliError> {
         Some(key) => format!("device {device}\nencryption-key {key}\n"),
         None => format!("device {device}\nencryption-key unregistered\n"),
     })
+}
+
+/// What keys this device holds: its id, the registered encryption
+/// key, and the held epoch secrets — plus where the secrets live,
+/// that the device key cannot be rotated, and the owner-mediated
+/// replacement sequence. Reads the canonical tip and the held
+/// epochs; authors nothing. Built as a string so tests assert the
+/// rendering without capturing stdout.
+pub(crate) fn device_keys_report(engine: &Engine) -> Result<String, CliError> {
+    let device = engine.device();
+    let log = engine.membership_log();
+    let registered = log
+        .known_state()
+        .and_then(|tip| log.state_of(&tip.transition_id))
+        .and_then(|state| state.encryption_key_of(&device).copied());
+    let held = engine.held_epochs().map_err(CliError::Engine)?;
+    Ok(wyrd_core::key_surface::render_key_report(
+        &device,
+        registered.as_ref(),
+        &held,
+    ))
+}
+
+/// Open the keystore with the unlock notice written first: the
+/// Argon2id derivation is expensive and reports no progress, so the
+/// notice is the observable unlocking state before the blocking
+/// call. Takes the error sink so tests assert the ordering without
+/// capturing stderr.
+pub(crate) fn open_with_notice(
+    drive_dir: PathBuf,
+    passphrase: &str,
+    identity: DeviceIdentitySecret,
+    err: &mut dyn std::io::Write,
+) -> Result<Engine, CliError> {
+    err.write_all(wyrd_core::key_surface::render_unlock_notice().as_bytes())
+        .map_err(|source| CliError::Io {
+            // A closed stderr is a sink failure, not a drive failure:
+            // the placeholder keeps it from reading as a drive open
+            // error.
+            path: "<stderr>".into(),
+            source,
+        })?;
+    Ok(Engine::open_keystore(drive_dir, passphrase, identity)?)
 }
 
 /// Decode 64 hex characters into 32 bytes, or fail with the

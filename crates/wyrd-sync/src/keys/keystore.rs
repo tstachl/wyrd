@@ -60,7 +60,9 @@ const TEST_KDF_P_COST: u32 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum KeystoreError {
-    #[error("the passphrase did not open the wrapped secret")]
+    #[error(
+        "the passphrase did not open the wrapped secret (wrong passphrase or damaged keystore)"
+    )]
     WrongPassphrase,
     #[error("malformed wrapped-secret bytes")]
     Malformed,
@@ -288,6 +290,23 @@ mod tests {
         assert_eq!(
             unwrap_root(&wrapped, "something else"),
             Err(KeystoreError::WrongPassphrase)
+        );
+    }
+
+    /// OD-24-D: one message naming both causes. A mistyped passphrase
+    /// and a damaged keystore are indistinguishable at open, so the
+    /// message must not pick one — the person retries once and then
+    /// knows to look for a damaged keystore.
+    #[test]
+    fn wrong_passphrase_names_both_causes() {
+        let msg = KeystoreError::WrongPassphrase.to_string();
+        assert!(
+            msg.contains("wrong passphrase"),
+            "names the mistyped cause: {msg}"
+        );
+        assert!(
+            msg.contains("damaged keystore"),
+            "names the damaged cause: {msg}"
         );
     }
 

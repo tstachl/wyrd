@@ -778,3 +778,154 @@ fn hex_parsers_reject_malformed_input_with_stable_messages() {
         );
     }
 }
+
+/// `device keys` shows what this device holds plus the honest copy:
+/// the device id, the registered key, the held secrets, where the
+/// secrets live, that the device key cannot be rotated, and the
+/// owner-mediated replacement sequence. Owner and joined newcomer
+/// both render; the newcomer's admission arrives with catch-up, so
+/// its key is registered owner-side after join.
+#[test]
+fn keys_panel_shows_device_key_and_storage_copy() {
+    let pair = Pair::new();
+    let report = device_keys_report(
+        &Engine::open_keystore(
+            pair.owner_drive.clone(),
+            "owner-pass",
+            read_identity(&pair.owner_identity).unwrap(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(
+        report.contains("passphrase"),
+        "names the wrapping: {report}"
+    );
+    assert!(
+        report.contains("files on this device"),
+        "names the place: {report}"
+    );
+    assert!(
+        report.contains("cannot be rotated"),
+        "states the boundary: {report}"
+    );
+    assert!(
+        report.contains("member remove"),
+        "names the owner command: {report}"
+    );
+    assert!(
+        report.contains("no remedy"),
+        "lost passphrase has no remedy: {report}"
+    );
+    for banned in [
+        "keychain",
+        "Secure Enclave",
+        "TPM",
+        "hardware-backed",
+        "encrypted by the OS",
+        "root recovery",
+    ] {
+        assert!(
+            !report.contains(banned),
+            "no unkept promise ({banned}): {report}"
+        );
+    }
+
+    let (device, key) = pair.pair_and_join();
+    command(pair.newcomer_device(vec!["keys".into()])).unwrap();
+    let newcomer_report = device_keys_report(
+        &Engine::open_keystore(
+            pair.newcomer_drive.clone(),
+            "newcomer-pass",
+            read_identity(&pair.newcomer_identity).unwrap(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(
+        newcomer_report.contains(&device.to_string()),
+        "newcomer panel names its device: {newcomer_report}"
+    );
+    // The newcomer's own log learns its admission through intake, so
+    // its local tip may not register it yet — `unregistered` is the
+    // honest local state, exactly as `device id` reports it.
+    assert!(
+        newcomer_report.contains("encryption-key unregistered"),
+        "newcomer panel is honest about its local tip: {newcomer_report}"
+    );
+    let owner_engine = Engine::open_keystore(
+        pair.owner_drive.clone(),
+        "owner-pass",
+        read_identity(&pair.owner_identity).unwrap(),
+    )
+    .unwrap();
+    let tip = owner_engine
+        .membership_log()
+        .known_state()
+        .expect("owner tip");
+    assert_eq!(
+        owner_engine
+            .membership_log()
+            .state_of(&tip.transition_id)
+            .and_then(|state| state.encryption_key_of(&device).copied()),
+        Some(key),
+        "owner-side log registers the newcomer's key"
+    );
+}
+
+/// The unlock notice precedes the KDF-backed open: the notice bytes
+/// reach the error sink before `open_keystore` runs its blocking
+/// derivation, so the silence during derivation reads as work. The
+/// derivation itself runs inside the open, never in the surface.
+#[test]
+fn unlock_shows_progress_before_the_kdf_returns() {
+    let pair = Pair::new();
+    let mut err = Vec::new();
+    let engine = crate::commands::device::open_with_notice(
+        pair.owner_drive.clone(),
+        "owner-pass",
+        read_identity(&pair.owner_identity).unwrap(),
+        &mut err,
+    )
+    .unwrap();
+    assert_eq!(
+        String::from_utf8(err).unwrap(),
+        wyrd_core::key_surface::render_unlock_notice(),
+        "the notice is the whole pre-open output"
+    );
+    assert!(
+        engine.membership_log().known_state().is_some(),
+        "the noticed open still opens"
+    );
+}
+
+/// The keys surface reimplements no credential rule: `device.rs`
+/// opens through the existing keystore entry point and hardens
+/// nothing itself. A group-readable passphrase file refuses with
+/// the credential error on the keys path exactly as on every other
+/// subcommand.
+#[test]
+fn credential_rules_are_not_reimplemented_by_the_surface() {
+    let source = include_str!("commands/device.rs");
+    for marker in ["O_NOFOLLOW", "O_CLOEXEC", "0o077", "MetadataExt", "mode()"] {
+        assert!(
+            !source.contains(marker),
+            "the device runner hardens nothing itself ({marker})"
+        );
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let pair = Pair::new();
+        std::fs::set_permissions(
+            &pair.owner_passphrase,
+            std::fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+        let error = command(pair.owner_device(vec!["keys".into()])).unwrap_err();
+        assert!(
+            matches!(error, CliError::Credential { .. }),
+            "insecure passphrase refuses on the keys path: {error:?}"
+        );
+    }
+}

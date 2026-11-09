@@ -601,6 +601,22 @@ step7_leave() {
   dev="$(with_creds "$nc" device "$ndr" id | awk '/^device /{print $2}')"
   [[ "${#dev}" == 64 ]] || die "newcomer id unreadable: $dev"
 
+  # The keys panel over the joined second device: names the device
+  # and where its secrets live, states the no-rotation boundary, and
+  # shows the unlocking notice on stderr. Authors nothing.
+  local keys_out
+  keys_out="$(expect_exit 0 step7-keys \
+    with_creds "$nc" device "$ndr" keys)"
+  echo "$keys_out" | grep -q "$dev" \
+    || die "keys panel names no device id: $keys_out"
+  echo "$keys_out" | grep -q "passphrase" \
+    || die "keys panel names no wrapping: $keys_out"
+  echo "$keys_out" | grep -q "cannot be rotated" \
+    || die "keys panel states no rotation boundary: $keys_out"
+  grep -q "unlocking" "$LOGDIR/step7-keys.stderr" \
+    || die "keys run shows no unlocking notice"
+  pass "keys panel names device, wrapping, and boundary"
+
   local log_before list_before
   log_before="$(with_creds "$oc" member "$od" log | grep -c .)"
   list_before="$(with_creds "$oc" member "$od" list)"
