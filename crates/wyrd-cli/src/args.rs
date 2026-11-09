@@ -457,6 +457,13 @@ pub(crate) enum DeviceAction {
     /// device's admission arrives — a fresh join only holds genesis).
     /// Also the cheapest reopen probe: it opens the keystore.
     Id,
+    /// Show what keys this device holds: its id, the registered
+    /// encryption key, and the held epoch secrets — plus where the
+    /// secrets live, that the device key cannot be rotated, and the
+    /// owner-mediated replacement sequence. Prints an unlocking
+    /// notice first: opening the keystore derives keys and shows no
+    /// progress.
+    Keys,
     /// Stage this device's pairing secret and write the public
     /// pairing material (device plus encryption key, no secrets) for
     /// the owner. Re-running returns the same key.

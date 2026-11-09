@@ -22,7 +22,7 @@ wyrd [--config <path>] mount [--relay <url>...] [--verbose] [--interval <secs>] 
     [--identity-file <path>] [--passphrase-file <path>] <drive_dir> <mountpoint>
 wyrd [--config <path>] export [--identity-file <path>] [--passphrase-file <path>] <drive_dir> <out_dir>
 wyrd [--config <path>] member [--identity-file <path>] [--passphrase-file <path>] <drive_dir> (list | log | status | remove <device> [--yes] | leave [--yes] | rotate | set-owner <device> | invite <device> <encryption-key> <out> [--reader] | reissue <device> <out>)
-wyrd [--config <path>] device [--identity-file <path>] [--passphrase-file <path>] <drive_dir> (id | pairing-request <out> | join <invitation>)
+wyrd [--config <path>] device [--identity-file <path>] [--passphrase-file <path>] <drive_dir> (id | keys | pairing-request <out> | join <invitation>)
 wyrd [--config <path>] sync [--relay <url>...] [--identity-file <path>] [--passphrase-file <path>] <drive_dir> (status | now)
 wyrd [--config <path>] vault [--relay <url>...] [--log-file <path>] [--identity-file <path>] [--passphrase-file <path>] <drive_dir> [start | status]
 wyrd [--config <path>] policy <drive_dir> \
@@ -356,6 +356,13 @@ next mounted sync, not here.
   fresh join holds genesis only, and its own admission arrives with
   the catch-up set. Also the cheapest reopen probe — it opens the
   keystore, which works for owner and member records alike.
+- `keys`: what keys this device holds — id, registered encryption
+  key, held epoch secrets — plus where the secrets live
+  (passphrase-wrapped files on this device, no OS secure storage),
+  that the device key cannot be rotated, and the owner-mediated
+  replacement sequence. Prints an unlocking notice first: the
+  keystore derivation takes a moment and shows no progress. A lost
+  passphrase has no remedy.
 - `pairing-request <out>`: stage this device's pairing secret and
   write the public pairing material (device plus encryption key, no
   secrets) to `<out>` for the owner. Re-running returns the same
