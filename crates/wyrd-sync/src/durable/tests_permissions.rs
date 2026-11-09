@@ -92,12 +92,16 @@ fn substituted_symlink_does_not_satisfy_the_check() {
     std::os::unix::fs::symlink(&target, &link).unwrap();
     // The open carries O_NOFOLLOW, so the substituted symlink fails
     // the open itself instead of verifying the target's modes.
-    // ELOOP is asserted by raw number: this toolchain predates
-    // `ErrorKind::FilesystemLoop`.
+    // O_DIRECTORY reports the link as ENOTDIR (it is not a
+    // directory); ELOOP is the equivalent refusal without it. Either
+    // refuses before any custody state moves. Errnos are asserted by
+    // raw number: this toolchain predates `ErrorKind::FilesystemLoop`.
     let error = ensure_owner_only_dir(&link).unwrap_err();
-    assert_eq!(
-        error.raw_os_error(),
-        Some(libc::ELOOP),
+    assert!(
+        matches!(
+            error.raw_os_error(),
+            Some(libc::ELOOP) | Some(libc::ENOTDIR)
+        ),
         "unexpected error: {error:?}"
     );
 }
@@ -239,5 +243,30 @@ fn a_loose_mode_existing_drive_still_opens() {
         .iter()
         .map(|n| mode_of(&dir.path.join(n)))
         .collect();
-    assert_eq!(before, after, "opening reports nothing and changes nothing");
+    assert_eq!(before, after, "opening warns but changes nothing");
+}
+
+#[cfg(unix)]
+#[allow(unsafe_code)]
+#[test]
+fn a_fifo_at_the_leaf_fails_open_without_blocking() {
+    use super::store::ensure_owner_only_dir;
+    // A FIFO at the custody leaf must fail the open fast: without
+    // `O_DIRECTORY` the verification open would block on the fifo
+    // instead of refusing it.
+    let parent = TestDir::new("custody-fifo-parent");
+    let leaf = parent.path.join("leaf");
+    let name = std::ffi::CString::new(leaf.as_os_str().as_encoded_bytes())
+        .expect("leaf path is a valid C string");
+    // SAFETY: mkfifo on a fresh path in a temp dir; the NUL-free
+    // CString carries the path, the return is checked immediately,
+    // and no pointer is retained.
+    let ret = unsafe { libc::mkfifo(name.as_ptr(), 0o700) };
+    assert_eq!(ret, 0, "mkfifo failed: {}", std::io::Error::last_os_error());
+    let error = ensure_owner_only_dir(&leaf).unwrap_err();
+    assert_eq!(
+        error.kind(),
+        std::io::ErrorKind::NotADirectory,
+        "a fifo leaf fails fast, never blocks: {error:?}"
+    );
 }

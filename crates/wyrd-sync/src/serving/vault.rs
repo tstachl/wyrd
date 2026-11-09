@@ -74,9 +74,12 @@ static NEXT_TMP: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::ne
 impl Vault {
     /// Open (or create) the vault directory under a drive directory.
     /// The leaf is established owner-only when this call creates it,
-    /// never the umask's business; a pre-existing directory keeps its
-    /// mode — creation hardens, opening never chmods, the same
-    /// contract the custody files follow.
+    /// never the umask's business; a pre-existing leaf is verified
+    /// (owned by the current user, closed to group/other — a loose
+    /// same-owner leaf warns and opens, a foreign owner or a
+    /// non-directory refuses) and otherwise keeps its mode: creation
+    /// hardens, opening never chmods, the same contract the custody
+    /// files follow.
     pub fn open(drive_dir: &Path) -> Result<Self, VaultError> {
         let dir = drive_dir.join(VAULT_DIR);
         crate::durable::ensure_owner_only_dir(&dir)?;

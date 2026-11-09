@@ -841,7 +841,19 @@ Both are read and hardened by wyrd code, never by clap:
   a replaced custody file takes the hardened mode through the rename.
   Only the leaf directory this call creates is restricted, except that
   establishing fresh drive state restricts the directory it is given;
-  missing parents above the leaf keep the operator's modes.
+  missing parents above the leaf keep the operator's modes. A
+  pre-existing leaf is verified, never trusted: the open carries
+  `O_NOFOLLOW | O_DIRECTORY` so a substituted symlink fails the open
+  itself and a FIFO fails fast instead of blocking, and the live
+  directory must be owned by the current user and closed to group and
+  other — except that a same-owner leaf with loose modes still opens
+  with an operator warning (`chmod 700` to close it), because v0.2
+  established drives at umask modes and the upgrade contract promises
+  a newer Wyrd opens an old store without migration. A foreign-owned
+  leaf or a non-directory refuses before any custody state is read or
+  written. The check binds only the leaf at verify time: parents
+  above it are neither verified nor held, so keep ancestor
+  directories out of other local users' write reach.
   Subdirectories created later for operational state follow the same
   creation-only contract: `escrow/` (and its epoch sidecars, sealed
   epoch secrets at `0o600`), `vault/`, and `serve/` are established
