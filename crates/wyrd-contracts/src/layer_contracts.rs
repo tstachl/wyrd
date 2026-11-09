@@ -277,6 +277,21 @@ fn policy_for(member: &str) -> Option<MemberPolicy> {
             workspace_allow: &["wyrd-format", "wyrd-sync", "wyrd-core", "wyrd-daemon"],
             external_allow: &["hex", "libc", "thiserror", "tracing"],
         }),
+        // The desktop management UI backend: a non-owning client of
+        // the drive-owner interface. Forwards through the shared
+        // `wyrd-owner-client` only — never the store, never the
+        // authoring surface, never presentation. `tauri` is the
+        // reserved toolkit edge for the command layer that lands
+        // with the first view; `serde`/`serde_json` are the typed
+        // IPC answers, `thiserror` the backend error plumbing.
+        // Every other direct workspace edge — `wyrd-core`,
+        // `wyrd-sync`, `wyrd-view`, `wyrd-format`, `wyrd-host`,
+        // `wyrd-cli`, `wyrd-daemon` — is a violation, and the
+        // transitive closure test below pins the reachability half.
+        "wyrd-desktop" => Some(MemberPolicy {
+            workspace_allow: &["wyrd-owner-client"],
+            external_allow: &["tauri", "serde", "serde_json", "thiserror"],
+        }),
         _ => None,
     }
 }
@@ -1135,6 +1150,11 @@ fn workspace_members_are_exact() {
         // process with no presentation backend. The File Provider
         // adapter (17) is the second member and amends this list again.
         "crates/wyrd-host",
+        // The desktop management UI backend: a non-owning client of
+        // the drive-owner interface over `wyrd-owner-client`. No
+        // views yet (stage 1); the closure test below is its
+        // architectural proof.
+        "crates/wyrd-desktop",
         // The drive-owner client: owned protocol types and the
         // non-owning socket client. Domain-free by extraction (the
         // closure test below is its proof); the daemon keeps the
@@ -1975,6 +1995,89 @@ fn check_owner_client_link_graph(
                 .join(", ")
         )]
     }
+}
+
+/// Check one consumer member's transitive production closure against
+/// the desktop boundary: the only workspace member reachable is the
+/// domain-free `wyrd-owner-client`. The desktop crate forwards
+/// through the shared client and never opens a drive, so even a
+/// `wyrd-format` edge would be a conceptual leak — and a
+/// `wyrd-daemon` edge would re-link the composition (`desktop →
+/// daemon → core`) the extraction removed. Pure over the edge sets
+/// so the negative tests below can prove the checker bites without
+/// touching the filesystem.
+fn check_desktop_link_graph(member: &str, graph: &BTreeMap<String, MemberEdges>) -> Vec<String> {
+    let mut seen = BTreeSet::new();
+    let mut stack = vec![member.to_owned()];
+    while let Some(current) = stack.pop() {
+        if !seen.insert(current.clone()) {
+            continue;
+        }
+        if let Some(edges) = graph.get(&current) {
+            stack.extend(edges.workspace.iter().cloned());
+        }
+    }
+    seen.remove(member);
+    seen.remove("wyrd-owner-client");
+    if seen.is_empty() {
+        Vec::new()
+    } else {
+        let mut reached: Vec<&String> = seen.iter().collect();
+        reached.sort();
+        vec![format!(
+            "`{member}` reaches workspace members beyond the owner client through production \
+             edges ({}): the desktop boundary is the non-owning consumer surface — move the \
+             conversion into the daemon or the protocol into the owner client",
+            reached
+                .iter()
+                .map(|next| witness_path(member, next, graph).join(" → "))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )]
+    }
+}
+
+/// Contract (desktop scaffold): `wyrd-desktop` is the non-owning
+/// management UI backend, so its production-edge closure must reach
+/// no workspace member but the domain-free `wyrd-owner-client` —
+/// never `wyrd-core` or any authoring capability, even transitively.
+/// Resolves every member's normal edges from the manifests
+/// (dev-dependencies excluded, as in the direct check) and walks the
+/// closure from the desktop crate. Test-only harnesses (real-owner
+/// IPC proofs) legitimately reach the daemon through
+/// `[dev-dependencies]`; production never does.
+#[test]
+fn desktop_link_graph_excludes_everything_but_the_owner_client() {
+    let root = workspace_root();
+    let root_manifest = read_manifest(&root);
+    let members: Vec<String> = root_manifest
+        .get("workspace")
+        .and_then(|w| w.get("members"))
+        .and_then(|m| m.as_array())
+        .expect("workspace members list")
+        .iter()
+        .filter_map(|m| m.as_str().map(str::to_owned))
+        .collect();
+    // Never pass vacuously: an empty member list would check nothing.
+    assert!(!members.is_empty(), "workspace declares no members");
+    let workspace_deps = workspace_dep_table(&root_manifest);
+
+    let mut graph = BTreeMap::new();
+    for member in &members {
+        let name = member.rsplit('/').next().unwrap_or(member);
+        let deps = production_deps(&read_manifest(&root.join(member)));
+        graph.insert(name.to_owned(), member_edges(&deps, &workspace_deps));
+    }
+    assert!(
+        graph.contains_key("wyrd-desktop"),
+        "the desktop crate is a workspace member with a policy"
+    );
+    let violations = check_desktop_link_graph("wyrd-desktop", &graph);
+    assert!(
+        violations.is_empty(),
+        "link-graph violations:\n- {}",
+        violations.join("\n- ")
+    );
 }
 
 /// Contract (desktop scaffold), extraction half: `wyrd-owner-client`
@@ -3830,6 +3933,118 @@ mod policy_tests {
         assert!(
             check_owner_client_link_graph("wyrd-owner-client", &graph).is_empty(),
             "no workspace edges must pass: {graph:?}"
+        );
+    }
+
+    #[test]
+    fn desktop_closure_rejects_daemon_composition_with_witness() {
+        // The shape the extraction removed: `desktop → daemon →
+        // core`. A direct `wyrd-daemon` edge fails even though the
+        // daemon is a legitimate composer for owner-mode binaries —
+        // the desktop is a consumer, not a composer.
+        let graph = link_graph(&[
+            ("wyrd-desktop", &["wyrd-daemon"], &["serde"]),
+            (
+                "wyrd-daemon",
+                &["wyrd-core", "wyrd-owner-client"],
+                &["serde", "tokio"],
+            ),
+            ("wyrd-core", &["wyrd-sync"], &["thiserror"]),
+            ("wyrd-sync", &["wyrd-format"], &["iroh"]),
+            ("wyrd-format", &[], &["blake3"]),
+            ("wyrd-owner-client", &[], &["serde", "serde_json"]),
+        ]);
+        let violations = check_desktop_link_graph("wyrd-desktop", &graph);
+        assert_eq!(
+            violations.len(),
+            1,
+            "the daemon reachability: {violations:?}"
+        );
+        assert!(
+            violations[0].contains("wyrd-daemon"),
+            "reachability names the target: {violations:?}"
+        );
+        assert!(
+            violations[0].contains("wyrd-desktop → wyrd-daemon"),
+            "the witness path names every hop: {violations:?}"
+        );
+    }
+
+    #[test]
+    fn desktop_closure_rejects_core_even_without_the_daemon() {
+        // The two clauses are independent: a `wyrd-core` edge fails
+        // even with no daemon in the closure.
+        let graph = link_graph(&[
+            ("wyrd-desktop", &["wyrd-core", "wyrd-owner-client"], &[]),
+            ("wyrd-core", &["wyrd-format"], &["thiserror"]),
+            ("wyrd-format", &[], &["blake3"]),
+            ("wyrd-owner-client", &[], &["serde", "serde_json"]),
+        ]);
+        let violations = check_desktop_link_graph("wyrd-desktop", &graph);
+        assert_eq!(violations.len(), 1, "the core reachability: {violations:?}");
+        assert!(
+            violations[0].contains("wyrd-desktop → wyrd-core"),
+            "names the member and the witness: {violations:?}"
+        );
+    }
+
+    #[test]
+    fn desktop_closure_passes_over_the_owner_client_only() {
+        let graph = link_graph(&[
+            (
+                "wyrd-desktop",
+                &["wyrd-owner-client"],
+                &["serde", "serde_json"],
+            ),
+            ("wyrd-owner-client", &[], &["hex", "serde", "serde_json"]),
+        ]);
+        assert!(
+            check_desktop_link_graph("wyrd-desktop", &graph).is_empty(),
+            "the owner-client edge must pass: {graph:?}"
+        );
+    }
+
+    #[test]
+    fn desktop_direct_policy_rejects_every_prohibited_workspace_edge() {
+        // The policy names each prohibited edge the way the
+        // host-composition checks do: no store, no authoring, no
+        // presentation, no suite, no sibling consumer.
+        for edge in [
+            "wyrd-core",
+            "wyrd-sync",
+            "wyrd-view",
+            "wyrd-format",
+            "wyrd-host",
+            "wyrd-cli",
+            "wyrd-daemon",
+        ] {
+            let violations = check_member("wyrd-desktop", &deps(&[edge]), &empty_ws());
+            assert_eq!(
+                violations.len(),
+                1,
+                "the {edge} edge must fail closed: {violations:?}"
+            );
+            assert!(
+                violations[0].contains(edge),
+                "the violation names the edge: {violations:?}"
+            );
+        }
+        // The allowed surface passes: the shared client plus the
+        // reserved toolkit and plumbing externals.
+        assert!(
+            check_member(
+                "wyrd-desktop",
+                &deps(&[
+                    "wyrd-owner-client",
+                    "tauri",
+                    "serde",
+                    "serde_json",
+                    "thiserror"
+                ]),
+                &empty_ws()
+            )
+            .is_empty(),
+            "the consumer surface must pass"
         );
     }
 

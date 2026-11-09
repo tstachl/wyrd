@@ -1,0 +1,28 @@
+[package]
+name = "wyrd-desktop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The desktop management UI backend: a non-owning Tauri client of the drive-owner interface. Forwards operations through the shared OwnerClient and never opens a drive directory — the owner holds the store, the shell only forwards."
+
+[dependencies]
+wyrd-owner-client.workspace = true
+# Typed IPC answers and refusal codes; no other serialization surface.
+serde.workspace = true
+serde_json.workspace = true
+# Backend error plumbing only.
+thiserror.workspace = true
+
+[dev-dependencies]
+# Integration tests spin a real owner (the daemon's server over a
+# composed view) and drive it through the backend: the IPC proofs
+# run against live interface answers, never against invented
+# semantics. Production builds never carry these edges (the closure
+# test pins that).
+wyrd-core = { workspace = true, features = ["test-fixtures"] }
+wyrd-daemon = { workspace = true }
+wyrd-format = { workspace = true }
+wyrd-sync = { workspace = true, features = ["insecure-fast-kdf"] }
+
+[lints]
+workspace = true

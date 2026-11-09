@@ -409,15 +409,18 @@ verdict.
 
 `wyrd-desktop` gets a `MemberPolicy` entry in
 `crates/wyrd-contracts/src/layer_contracts.rs`
-(`policy_for`, alongside the `wyrd-host` entry): direct workspace
-edges limited to `wyrd-daemon`, externals limited to Tauri,
+(`policy_for`, alongside the `wyrd-host` entry): the single direct
+workspace edge is `wyrd-owner-client` — the extraction the closure
+decision rule below required has landed, so the desktop policy
+points at the consumer surface instead of `wyrd-daemon` — and
+externals are limited to the reserved `tauri` toolkit edge,
 `serde`/`serde_json`, and error/`thiserror` plumbing. Every other
 direct workspace edge — `wyrd-core`, `wyrd-sync`, `wyrd-view`,
-`wyrd-format`, `wyrd-host`, `wyrd-cli` — is a violation, with a
-negative test that names each prohibited edge the way the existing
-host-composition checks do. Unknown members already fail closed
-("add it deliberately, do not work around this test"), so the crate
-cannot exist in the workspace without its policy.
+`wyrd-format`, `wyrd-host`, `wyrd-cli`, `wyrd-daemon` — is a
+violation, with a negative test that names each prohibited edge the
+way the existing host-composition checks do. Unknown members already
+fail closed ("add it deliberately, do not work around this test"),
+so the crate cannot exist in the workspace without its policy.
 
 The direct tier is not the whole invariant, and the note does not
 pretend it is. The intended property is reachability: the desktop
@@ -440,18 +443,15 @@ exactly that, and `cargo tree` in CI remains the full-graph
 backstop.
 
 Decision rule, applied before the desktop crate is wired (stage 1):
-resolve the closure against the intended invariant. If consuming
-the shared client through `wyrd-daemon` reaches daemon composition
-or core authoring capabilities — which the manifests say it does,
-and the new closure test confirms mechanically — extract the
-narrowly scoped `wyrd-owner-client` crate first (shared client and
+resolve the closure against the intended invariant. Consuming the
+shared client through `wyrd-daemon` reached daemon composition and
+core authoring capabilities (`desktop → daemon → core`), as the
+closure test confirmed mechanically — so the narrowly scoped
+`wyrd-owner-client` crate was extracted first (shared client and
 wire types; `wyrd-daemon` keeps the server and composition,
-`wyrd-desktop` depends only on the consumer surface) and point the
-desktop policy at that edge instead. The extraction is therefore
-conditional-required by a mechanical check, not pre-committed crate
-proliferation and not deferred multi-consumer hardening: no green
-closure test, no desktop wiring. Its backlog issue tracks the
-work; stage 1 runs the check that decides it.
+`wyrd-desktop` depends only on the consumer surface) and the desktop
+policy points at that edge instead. No green closure test, no
+desktop wiring.
 
 ## Nix GUI dependencies (ported from the enesis editor)
 
@@ -494,9 +494,16 @@ GStreamer/media stack — Wyrd v0.4 has no camera or media path).
   `flake.nix` the desktop package is opt-in (a new
   `wyrd-desktop`-style package beside `wyrd`/`wyrd-host`), and the
   flake contract keeps `-p wyrd-cli` as the distribution build.
-- Backend `Cargo.toml` (Rust side): `tauri` v2 plus only the plugins
-  a shipped view needs, `serde`/`serde_json`, `wyrd-daemon`;
-  Linux-only `webkit2gtk` + `glib` pins matching the reference.
+- Backend `Cargo.toml` (Rust side): the shared `wyrd-owner-client`
+  (never `wyrd-daemon`: the `desktop → daemon → core` composition the
+  closure test rejects is exactly what the extraction removed),
+  `serde`/`serde_json`, error/`thiserror` plumbing, and the reserved
+  `tauri` toolkit edge; the `tauri` crate itself plus only the
+  plugins a shipped view needs link with the first view — the Linux
+  GUI closure cannot be compile-verified from a macOS dev machine, so
+  the link lands where a Linux builder attests it, not blind in the
+  scaffold. Linux-only `webkit2gtk` + `glib` pins match the
+  reference when the link lands.
   Reviewers: flag any plugin beyond `dialog`/`store`/`opener` scope
   creep at review time.
 
@@ -566,12 +573,14 @@ installer issue; auto-update is explicitly v0.8.
    edges, after the `view`/`embed` precedent — not a linked-binary
    audit; `cargo tree` in CI remains the full-graph backstop), and
    the Nix stanzas. No views; the shell compiles
-   and the gate holds. First act inside this stage is the closure
-   decision rule: if the closure test reaches daemon composition
-   or core authoring, the `wyrd-owner-client` extraction lands here,
-   before the desktop crate is wired. The
+   and the gate holds. The `wyrd-owner-client` extraction the
+   closure decision rule required has landed, so the desktop crate
+   wires straight to the consumer surface. The
    IPC behavioral tests above land here, against the real client
-   types on a real owner.
+   types on a real owner. The `tauri` crate link itself lands with
+   the first view: the Linux GUI closure cannot be compile-verified
+   from a macOS dev machine, so the link lands where a Linux
+   builder attests it.
 2. Three views against the live interface — never against mocked
    owner behavior.
 3. Packaging inputs consumed by the installer issue; human-path
@@ -595,10 +604,9 @@ installer issue; auto-update is explicitly v0.8.
    check covers the chosen id.
 5. Settings hand-off (issue 25): reference that issue; duplicate no
    field definitions here.
-6. `wyrd-owner-client` extraction: conditional-required by the
-   closure decision rule in the layer-gate section, not by future
-   consumer count. The backlog issue tracks the work; stage 1 runs
-   the check that decides it.
+6. `wyrd-owner-client` extraction: landed — the closure decision
+   rule in the layer-gate section required it (`desktop → daemon →
+   core`), and the desktop policy points at the consumer surface.
 
 ## Persistent-format impact
 
