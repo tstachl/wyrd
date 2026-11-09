@@ -1,0 +1,27 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Wyrd",
+  "version": "0.4.0",
+  "identifier": "md.enesis.wyrd",
+  "build": {
+    "frontendDist": "../../apps/desktop/dist",
+    "beforeDevCommand": "bun --cwd ../../apps/desktop run dev",
+    "beforeBuildCommand": "bun --cwd ../../apps/desktop run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Wyrd",
+        "width": 960,
+        "height": 640
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all"
+  }
+}

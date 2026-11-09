@@ -12,6 +12,7 @@ members = [
     "crates/wyrd-contracts",
     "crates/wyrd-embed",
     "crates/wyrd-host",
+    "crates/wyrd-desktop",
 ]
 
 [workspace.package]

@@ -1,12 +1,30 @@
 { pkgs, inputs, ... }:
 let
-  inherit (pkgs.lib) optionals;
+  inherit (pkgs.lib) optionals optionalString makeSearchPath makeLibraryPath;
   inherit (pkgs.stdenv.hostPlatform) isLinux isDarwin;
   unstable = import inputs.nixpkgs-unstable { system = pkgs.stdenv.system; };
 in
 {
   env.NGIT_RELAY_TIMEOUT_SECS = 5;
   env.NGIT_RELAY_CONNECT_TIMEOUT_SECS = 5;
+
+  # Tauri on Linux discovers GIO modules (libgiognutls.so for HTTPS)
+  # and GSettings schemas only through these vars; nothing sets them
+  # implicitly. The plural GSETTINGS_SCHEMAS_PATH is a devenv-local
+  # intermediate, not a GLib standard — the actual GLib mechanism is
+  # XDG_DATA_DIRS, and the variable is only ever consumed by the
+  # enterShell prepend below. An implementation that copies this
+  # stanza must preserve the data flow (schema dirs into
+  # XDG_DATA_DIRS), not the name.
+  env.LD_LIBRARY_PATH = optionalString isLinux
+    (makeLibraryPath [ unstable.libayatana-appindicator ]);
+  env.GIO_MODULE_DIR = optionalString isLinux
+    "${unstable.glib-networking}/lib/gio/modules";
+  env.GSETTINGS_SCHEMAS_PATH = optionalString isLinux
+    (makeSearchPath "share/gsettings-schemas" [
+      unstable.gsettings-desktop-schemas
+      unstable.gtk3
+    ]);
 
   languages.javascript.enable = true;
   languages.javascript.bun.enable = true;
@@ -18,6 +36,7 @@ in
     cargo-audit
     cargo-deny
     cargo-nextest
+    cargo-tauri
     pkg-config
     shellcheck
     # Agent-facing development CLI (verbs encode the correct procedure);
@@ -29,6 +48,32 @@ in
     # add .cargo/config.toml with -fuse-ld=mold; falls back to the system
     # linker without it.
     mold
+    # Native deps required by Tauri's *-sys crates on Linux
+    # (GLib/GTK/WebKit). No Android SDK, no GStreamer/media stack —
+    # Wyrd v0.4 has no camera or media path. macOS needs nothing
+    # Nix-side: system WKWebView via Xcode, same split as FUSE
+    # (stubs for build, system facility at runtime).
+    glib
+    # Provides GIO's libgiognutls.so TLS backend; without it WebKitGTK
+    # fails every HTTPS request with "TLS support is not available".
+    # GIO_MODULE_DIR above points GLib at its modules.
+    glib-networking
+    # Installs org.gtk.* schemas (FileChooser etc.).
+    gsettings-desktop-schemas
+    gtk3
+    webkitgtk_4_1
+    libsoup_3
+    gdk-pixbuf
+    cairo
+    pango
+    harfbuzz
+    atk
+    dbus
+    librsvg
+    # libayatana-appindicator is dlopen'ed by libappindicator-sys at
+    # runtime, so it can't be resolved through link-time rpath;
+    # LD_LIBRARY_PATH above exposes it.
+    libayatana-appindicator
   ] ++ optionals isDarwin [
     # Build-time headers/stubs for fuser's libfuse probes (fuse.pc from
     # nixpkgs, fuse3.pc from our own stubs: nix/macfuse3-stubs.nix).
@@ -44,6 +89,16 @@ in
   # real system macFUSE (kernel extension,
   # /Library/Filesystems/macfuse.fs), which nix cannot provide.
   # Revisit if/when we target FUSE 3 on Linux.
+
+  # GLib resolves GSettings schemas (org.gtk.Settings.FileChooser etc.)
+  # at runtime via XDG_DATA_DIRS/<dir>/glib-2.0/schemas — the
+  # GSETTINGS_SCHEMAS_PATH above is only consumed by wrapper hooks
+  # that unwrapped binaries never see. Prepend the versioned schema
+  # dirs so WebKitGTK apps don't abort with "Settings schema ... is
+  # not installed".
+  enterShell = optionalString isLinux ''
+    export XDG_DATA_DIRS="$GSETTINGS_SCHEMAS_PATH:$XDG_DATA_DIRS"
+  '';
 
   git-hooks.hooks = {
     # Mirrors CI (`workflow.yml`): workspace-wide, all targets (unit

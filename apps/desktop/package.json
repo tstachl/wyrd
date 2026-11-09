@@ -1,0 +1,10 @@
+{
+  "name": "wyrd-desktop-frontend",
+  "version": "0.4.0",
+  "private": true,
+  "description": "Wyrd desktop management UI: three views against the drive-owner interface, served through the Tauri backend IPC surface only.",
+  "scripts": {
+    "dev": "bun build src/main.ts --outdir dist --watch",
+    "build": "bun build src/main.ts --outdir dist && cp index.html dist/"
+  }
+}
