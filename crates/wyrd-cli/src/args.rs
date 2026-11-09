@@ -94,16 +94,20 @@ pub(crate) enum Command {
         #[arg(long, value_name = "PATH")]
         registry: Option<PathBuf>,
         /// Owner binary for the service definition elsewhere than
-        /// the `wyrd-host` shipped beside this binary.
+        /// the `wyrd` beside this command. The service runs
+        /// `wyrd vault` with the same credential files.
         #[arg(long, value_name = "PATH")]
         owner_bin: Option<PathBuf>,
+        /// `wyrd-supervise` wrapper for the service definition
+        /// elsewhere than beside the `wyrd` binary. The restart
+        /// policy rests on the wrapper's wait-status mapping, so a
+        /// managed service without it is refused.
+        #[arg(long, value_name = "PATH")]
+        supervise_bin: Option<PathBuf>,
         /// Register without installing or enabling any OS service:
         /// the owner stays supervised by whoever starts it.
         #[arg(long)]
         no_service: bool,
-        /// Install and enable the service without starting it now.
-        #[arg(long)]
-        no_start: bool,
     },
     /// Mount a live projection at `mountpoint` (read-write).
     // Behind the `mount` feature (plain comment: `///` docs would leak

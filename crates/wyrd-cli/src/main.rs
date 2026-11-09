@@ -453,8 +453,8 @@ fn command(args: Vec<String>) -> Result<(), CliError> {
             invitation_file,
             registry,
             owner_bin,
+            supervise_bin,
             no_service,
-            no_start,
         } => bootstrap(
             crate::commands::bootstrap::BootstrapArgs {
                 name,
@@ -464,10 +464,12 @@ fn command(args: Vec<String>) -> Result<(), CliError> {
                 invitation_file,
                 registry,
                 owner_bin,
+                supervise_bin,
                 no_service,
-                no_start,
             },
-            cli.config.clone(),
+            identity,
+            &passphrase,
+            config.as_ref(),
         ),
         #[cfg(feature = "mount")]
         Command::Mount {

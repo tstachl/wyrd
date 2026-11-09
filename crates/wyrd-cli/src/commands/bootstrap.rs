@@ -12,8 +12,7 @@ use wyrd_daemon::bootstrap::{
 };
 
 use crate::args::{Credentials, RelayArgs};
-use crate::credentials::load_credentials;
-use crate::drive_config::resolve_relays;
+use crate::drive_config::{resolve_credential_path, resolve_relays, LoadedConfig};
 use crate::CliError;
 
 /// Provision one drive from nothing and hand it to OS supervision.
@@ -27,15 +26,34 @@ pub(crate) struct BootstrapArgs {
     pub(crate) invitation_file: Option<PathBuf>,
     pub(crate) registry: Option<PathBuf>,
     pub(crate) owner_bin: Option<PathBuf>,
+    pub(crate) supervise_bin: Option<PathBuf>,
     pub(crate) no_service: bool,
-    pub(crate) no_start: bool,
 }
 
-pub(crate) fn bootstrap(args: BootstrapArgs, config: Option<PathBuf>) -> Result<(), CliError> {
+/// Resolve, then provision: credentials load once here (the
+/// dispatcher already loaded them for its own routing), and the
+/// resolved credential *paths* travel to the service definition so
+/// the supervised owner reads the same files.
+pub(crate) fn bootstrap(
+    args: BootstrapArgs,
+    identity: wyrd_sync::keys::DeviceIdentitySecret,
+    passphrase: &str,
+    config: Option<&LoadedConfig>,
+) -> Result<(), CliError> {
     let drive_dir = args.drive_dir.clone();
-    let (identity, passphrase, _, loaded) =
-        load_credentials(&drive_dir, &args.credentials, config.as_deref())?;
-    let relays = resolve_relays(args.relays.relay, loaded.as_ref()).relays;
+    let relays = resolve_relays(args.relays.relay, config).relays;
+    let identity_file = resolve_credential_path(
+        args.credentials.identity_file,
+        config.and_then(|c| c.identity_file.clone()),
+        "--identity-file",
+        "identity_file",
+    )?;
+    let passphrase_file = resolve_credential_path(
+        args.credentials.passphrase_file,
+        config.and_then(|c| c.passphrase_file.clone()),
+        "--passphrase-file",
+        "passphrase_file",
+    )?;
 
     let init = match &args.invitation_file {
         None => Init::Create,
@@ -46,6 +64,7 @@ pub(crate) fn bootstrap(args: BootstrapArgs, config: Option<PathBuf>) -> Result<
             }
         }
     };
+    let registry_path = args.registry.clone().unwrap_or_else(default_registry_path);
     let report = provision(ProvisionConfig {
         name: args.name,
         drive_dir,
@@ -53,14 +72,17 @@ pub(crate) fn bootstrap(args: BootstrapArgs, config: Option<PathBuf>) -> Result<
         identity,
         passphrase: passphrase.to_string(),
         init,
-        registry_path: args.registry.unwrap_or_else(default_registry_path),
-        owner_bin: args.owner_bin,
+        registry_path,
+        wyrd_bin: args.owner_bin,
+        supervise_bin: args.supervise_bin,
+        identity_file,
+        passphrase_file,
         manage_service: !args.no_service,
-        start_now: !args.no_start,
         verify_timeout: Duration::from_secs(30),
     });
     match report {
         ProvisionState::VerifiedAvailable { entry } => {
+            warn_skipped(&args.registry);
             println!(
                 "drive {} verified available (socket {})",
                 entry.name,
@@ -68,12 +90,32 @@ pub(crate) fn bootstrap(args: BootstrapArgs, config: Option<PathBuf>) -> Result<
             );
             Ok(())
         }
-        ProvisionState::RegisteredButUnavailable { entry, reason } => Err(CliError::Usage(
-            format!("drive {} registered but unavailable: {reason}", entry.name),
-        )),
+        ProvisionState::RegisteredButUnavailable { entry, reason } => {
+            warn_skipped(&args.registry);
+            Err(CliError::Usage(format!(
+                "drive {} registered but unavailable: {reason}",
+                entry.name
+            )))
+        }
         ProvisionState::ProvisioningIncomplete { stage, reason } => Err(CliError::Usage(format!(
             "provisioning incomplete at {stage}: {reason}"
         ))),
+    }
+}
+
+/// Surface registry entries the read path skipped: provision rewrites
+/// only the valid set, so a rotten entry would otherwise vanish
+/// without any user-visible signal. Non-fatal — discovery keeps
+/// working — but loud.
+fn warn_skipped(registry: &Option<PathBuf>) {
+    let path = registry
+        .clone()
+        .unwrap_or_else(wyrd_daemon::bootstrap::default_registry_path);
+    let Ok(read) = wyrd_daemon::bootstrap::read_registry(&path) else {
+        return;
+    };
+    for skipped in &read.skipped {
+        eprintln!("warning: registry entry skipped: {skipped}");
     }
 }
 

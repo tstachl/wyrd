@@ -31,6 +31,7 @@ use wyrd_sync::keys::DeviceIdentitySecret;
 use wyrd_sync::runtime::{Engine, EngineError};
 
 use crate::owner::client::{ClientError, OwnerClient};
+use crate::owner::wire::WireErrorCode;
 
 /// Registry schema version. Bump only with a migration that reads
 /// the previous version; readers refuse newer versions loudly
@@ -44,12 +45,32 @@ pub const REGISTRY_FILENAME: &str = "drives.json";
 /// Supervision mode for one registered drive. Only headless owner
 /// mode exists today: mounting through the registry waits on the P2
 /// owner-socket decision, which either moves the server into the
-/// shared composition or marks mount non-desktop. A `mount` entry is
-/// refused with that pointer, never silently run headless.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+/// shared composition or marks mount non-desktop. Unknown modes
+/// from newer writers are skipped per entry with a reason — a
+/// future mode must never fail the whole file.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ServiceMode {
     Vault,
+    Unknown(String),
+}
+
+impl Serialize for ServiceMode {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            ServiceMode::Vault => serializer.serialize_str("vault"),
+            ServiceMode::Unknown(mode) => serializer.serialize_str(mode),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ServiceMode {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let mode = String::deserialize(deserializer)?;
+        match mode.as_str() {
+            "vault" => Ok(ServiceMode::Vault),
+            other => Ok(ServiceMode::Unknown(other.to_string())),
+        }
+    }
 }
 
 /// One registered drive: facts for discovery and supervision, never
@@ -174,10 +195,32 @@ fn validate_entry(key: &str, entry: &RegistryEntry) -> Result<(), String> {
             entry.drive_dir.display()
         ));
     }
-    if entry.relays.iter().any(|relay| relay.is_empty()) {
-        return Err("relays must not contain empty entries".to_string());
+    if has_dotdot(&entry.drive_dir) {
+        return Err(format!(
+            "drive_dir {} must not contain ..",
+            entry.drive_dir.display()
+        ));
+    }
+    if !matches!(entry.mode, ServiceMode::Vault) {
+        return Err(
+            "unknown service mode: mount and later modes wait on the P2 owner-socket decision"
+                .to_string(),
+        );
+    }
+    if entry.relays.iter().any(|relay| {
+        relay.is_empty()
+            || relay
+                .bytes()
+                .any(|byte| byte.is_ascii_whitespace() || byte < 0x20)
+    }) {
+        return Err("relays must be non-empty URLs without whitespace".to_string());
     }
     Ok(())
+}
+
+fn has_dotdot(path: &Path) -> bool {
+    path.components()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
 }
 
 /// Write the registry crash-safely: temporary file in the same
@@ -198,11 +241,33 @@ pub fn write_registry(path: &Path, drives: &BTreeMap<String, RegistryEntry>) -> 
         std::fs::create_dir_all(parent)
             .map_err(|error| format!("create {}: {error}", parent.display()))?;
     }
-    let tmp = path.with_extension("tmp");
+    // Unique temporary sibling per writer: the rename stays atomic,
+    // and concurrent writers fail on their own file instead of
+    // clobbering each other's. Registration is still single-writer by
+    // contract (one registration flow per user); the unique name
+    // turns a violation into an error, not silent loss.
+    let tmp = path.with_extension(format!("tmp.{}", std::process::id()));
     std::fs::write(&tmp, &bytes).map_err(|error| format!("write {}: {error}", tmp.display()))?;
+    restrict_owner_only(&tmp)?;
     sync_file(&tmp)?;
     std::fs::rename(&tmp, path).map_err(|error| format!("replace {}: {error}", path.display()))?;
+    restrict_owner_only(path)?;
     sync_dir(path);
+    Ok(())
+}
+
+/// Owner-only file permissions (Unix): the registry holds drive
+/// facts, not secrets, but it is still per-user state — no group or
+/// other access, ever.
+#[cfg(unix)]
+fn restrict_owner_only(path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+        .map_err(|error| format!("chmod {}: {error}", path.display()))
+}
+
+#[cfg(not(unix))]
+fn restrict_owner_only(_path: &Path) -> Result<(), String> {
     Ok(())
 }
 
@@ -222,23 +287,109 @@ fn sync_dir(path: &Path) {
     }
 }
 
-/// Render the per-drive launchd agent property list. The service runs
-/// the owner binary against the drive directory, keeps it alive on
-/// crash (never on the terminal held-drive status — that contract
-/// belongs to the supervisor wrapper), and throttles restarts.
-pub fn render_launchd_plist(label: &str, owner_bin: &Path, entry: &RegistryEntry) -> String {
-    let mut argv = format!(
-        "    <string>{}</string>\n    <string>{}</string>\n",
-        owner_bin.display(),
-        entry.drive_dir.display()
-    );
-    for relay in &entry.relays {
-        argv.push_str(&format!(
-            "    <string>--relay</string>\n    <string>{relay}</string>\n"
-        ));
+/// XML-escape one plist string value. Paths, relays, and binary
+/// locations are operator input; the template must not break or
+/// reinterpret them.
+fn xml_escape(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '"' => escaped.push_str("&quot;"),
+            '\'' => escaped.push_str("&apos;"),
+            _ => escaped.push(ch),
+        }
     }
-    if entry.relays.is_empty() {
-        argv.push_str("    <string>--loopback</string>\n");
+    escaped
+}
+
+/// Shell-quote one systemd `ExecStart` argument. systemd splits the
+/// line itself, so arguments with spaces, quotes, or backslashes are
+/// double-quoted with backslash escapes.
+fn systemd_quote(arg: &str) -> String {
+    if arg
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || b"-_./:=,".contains(&byte))
+    {
+        return arg.to_string();
+    }
+    let mut quoted = String::with_capacity(arg.len() + 2);
+    quoted.push('"');
+    for ch in arg.chars() {
+        if ch == '"' || ch == '\\' {
+            quoted.push('\\');
+        }
+        quoted.push(ch);
+    }
+    quoted.push('"');
+    quoted
+}
+
+/// The supervised owner command: the `wyrd-supervise` wrapper from
+/// `nix/drive` (OD-34-C) around `wyrd vault` with file credentials.
+/// Managers cannot distinguish the binary's collapsed exit codes on
+/// their own — every CLI failure is 2 except the terminal held-drive
+/// 78 — so the wrapper maps the wait status onto the exit the
+/// supervisor's policy wants (restart-worthy per manager, 78 never).
+/// Routing through the wrapper is what makes the restart policy
+/// below truthful; a bare owner binary cannot express it.
+#[derive(Debug, Clone)]
+pub struct SupervisedOwner {
+    /// `wyrd-supervise` (`nix/drive/supervise.py`): same installer
+    /// layout as the `wyrd` binary, overridable per command.
+    pub supervise_bin: PathBuf,
+    /// The `wyrd` binary whose `vault` subcommand serves the drive
+    /// and binds the interface socket.
+    pub wyrd_bin: PathBuf,
+    /// Hardened credential files, resolved the way `load_credentials`
+    /// resolves them. Paths, not secrets, travel here — the service
+    /// definition names the same files the operator already keeps.
+    pub identity_file: PathBuf,
+    pub passphrase_file: PathBuf,
+}
+
+impl SupervisedOwner {
+    /// The full supervised argv: wrapper, per-manager restart
+    /// status, posture path, `--` separator, then the vault command.
+    pub fn argv(&self, entry: &RegistryEntry, restart_status: &str) -> Vec<String> {
+        let mut argv = vec![
+            self.supervise_bin.to_string_lossy().into_owned(),
+            "--restart-status".to_string(),
+            restart_status.to_string(),
+            "--posture-path".to_string(),
+            entry
+                .drive_dir
+                .join("vault.posture")
+                .to_string_lossy()
+                .into_owned(),
+            "--".to_string(),
+            self.wyrd_bin.to_string_lossy().into_owned(),
+            "vault".to_string(),
+            entry.drive_dir.to_string_lossy().into_owned(),
+            "--identity-file".to_string(),
+            self.identity_file.to_string_lossy().into_owned(),
+            "--passphrase-file".to_string(),
+            self.passphrase_file.to_string_lossy().into_owned(),
+        ];
+        for relay in &entry.relays {
+            argv.push("--relay".to_string());
+            argv.push(relay.clone());
+        }
+        argv
+    }
+}
+
+/// Render the per-drive launchd agent property list. `KeepAlive`
+/// with `SuccessfulExit` restarts the wrapper's exit 0 (unexpected
+/// death mapped restart-worthy) and never its 78 (terminal held
+/// drive) — the `nix/drive` semantics, which only hold because the
+/// wrapper normalizes the child's collapsed codes first.
+pub fn render_launchd_plist(label: &str, owner: &SupervisedOwner, entry: &RegistryEntry) -> String {
+    let mut argv = String::new();
+    for arg in owner.argv(entry, "0") {
+        argv.push_str(&format!("    <string>{}</string>\n", xml_escape(&arg)));
     }
     format!(
         concat!(
@@ -257,7 +408,7 @@ pub fn render_launchd_plist(label: &str, owner_bin: &Path, entry: &RegistryEntry
             "    <key>KeepAlive</key>\n",
             "    <dict>\n",
             "        <key>SuccessfulExit</key>\n",
-            "        <false/>\n",
+            "        <true/>\n",
             "    </dict>\n",
             "    <key>ThrottleInterval</key>\n",
             "    <integer>30</integer>\n",
@@ -268,27 +419,27 @@ pub fn render_launchd_plist(label: &str, owner_bin: &Path, entry: &RegistryEntry
             "</dict>\n",
             "</plist>\n"
         ),
-        label = label,
+        label = xml_escape(label),
         argv = argv,
-        log = entry.drive_dir.join("service.log").display(),
+        log = xml_escape(&entry.drive_dir.join("service.log").to_string_lossy()),
     )
 }
 
-/// Render the per-drive systemd user unit. Restart on failure with
-/// backoff and a start limit, mirroring the `nix/drive` supervision
-/// contract: terminal statuses never restart, crashes do.
-pub fn render_systemd_unit(description: &str, owner_bin: &Path, entry: &RegistryEntry) -> String {
-    let mut exec = format!(
-        "ExecStart={} {}",
-        owner_bin.display(),
-        entry.drive_dir.display()
-    );
-    for relay in &entry.relays {
-        exec.push_str(&format!(" --relay {relay}"));
-    }
-    if entry.relays.is_empty() {
-        exec.push_str(" --loopback");
-    }
+/// Render the per-drive systemd user unit. `Restart=on-failure`
+/// with `RestartPreventExitStatus=78` mirrors the `nix/drive`
+/// contract against the wrapper's normalized statuses: unexpected
+/// death restarts rate-limited, the terminal held drive stands down.
+pub fn render_systemd_unit(
+    description: &str,
+    owner: &SupervisedOwner,
+    entry: &RegistryEntry,
+) -> String {
+    let exec = owner
+        .argv(entry, "1")
+        .iter()
+        .map(|arg| systemd_quote(arg))
+        .collect::<Vec<_>>()
+        .join(" ");
     format!(
         concat!(
             "[Unit]\n",
@@ -297,8 +448,9 @@ pub fn render_systemd_unit(description: &str, owner_bin: &Path, entry: &Registry
             "Wants=network-online.target\n\n",
             "[Service]\n",
             "Type=simple\n",
-            "{exec}\n",
+            "ExecStart={exec}\n",
             "Restart=on-failure\n",
+            "RestartPreventExitStatus=78\n",
             "RestartSec=5\n",
             "StartLimitIntervalSec=300\n",
             "StartLimitBurst=3\n\n",
@@ -311,11 +463,13 @@ pub fn render_systemd_unit(description: &str, owner_bin: &Path, entry: &Registry
 }
 
 /// Install the per-drive service definition for this platform and
-/// return its path. Installation writes the definition; enabling
-/// and starting are separate steps so registration can report
-/// exactly which one failed.
+/// return its path. Writes atomically with owner-only permissions:
+/// a half-written unit must never be what the manager loads.
+/// Installation writes the definition; enabling and starting are
+/// separate steps so registration can report exactly which one
+/// failed.
 #[cfg(unix)]
-pub fn install_service(entry: &RegistryEntry, owner_bin: &Path) -> Result<PathBuf, String> {
+pub fn install_service(entry: &RegistryEntry, owner: &SupervisedOwner) -> Result<PathBuf, String> {
     #[cfg(target_os = "macos")]
     {
         let dir = std::env::var_os("HOME")
@@ -326,8 +480,7 @@ pub fn install_service(entry: &RegistryEntry, owner_bin: &Path) -> Result<PathBu
             .map_err(|error| format!("create {}: {error}", dir.display()))?;
         let label = format!("md.enesis.wyrd.{}", entry.service);
         let path = dir.join(format!("{label}.plist"));
-        std::fs::write(&path, render_launchd_plist(&label, owner_bin, entry))
-            .map_err(|error| format!("write {}: {error}", path.display()))?;
+        write_service_file(&path, &render_launchd_plist(&label, owner, entry))?;
         Ok(path)
     }
     #[cfg(not(target_os = "macos"))]
@@ -344,30 +497,51 @@ pub fn install_service(entry: &RegistryEntry, owner_bin: &Path) -> Result<PathBu
         std::fs::create_dir_all(&dir)
             .map_err(|error| format!("create {}: {error}", dir.display()))?;
         let path = dir.join(format!("wyrd-{}.service", entry.service));
-        std::fs::write(
+        write_service_file(
             &path,
-            render_systemd_unit(&format!("Wyrd drive {}", entry.name), owner_bin, entry),
-        )
-        .map_err(|error| format!("write {}: {error}", path.display()))?;
+            &render_systemd_unit(&format!("Wyrd drive {}", entry.name), owner, entry),
+        )?;
         return Ok(path);
     }
 }
 
+/// Atomic owner-only service write: temporary sibling, sync,
+/// replace — the manager never loads a half-written definition.
+#[cfg(unix)]
+fn write_service_file(path: &Path, contents: &str) -> Result<(), String> {
+    let tmp = path.with_extension(format!("tmp.{}", std::process::id()));
+    std::fs::write(&tmp, contents).map_err(|error| format!("write {}: {error}", tmp.display()))?;
+    restrict_owner_only(&tmp)?;
+    sync_file(&tmp)?;
+    std::fs::rename(&tmp, path).map_err(|error| format!("replace {}: {error}", path.display()))?;
+    restrict_owner_only(path)
+}
+
 #[cfg(not(unix))]
-pub fn install_service(_entry: &RegistryEntry, _owner_bin: &Path) -> Result<PathBuf, String> {
+pub fn install_service(
+    _entry: &RegistryEntry,
+    _owner: &SupervisedOwner,
+) -> Result<PathBuf, String> {
     Err("per-drive services are implemented for Unix (launchd agent, systemd user unit)".into())
 }
 
-/// Enable the installed service for startup-at-login. Separate from
-/// installation and from starting, so each failure reports its own
-/// stage.
+/// Enable the installed service for startup-at-login. Separate
+/// from installation and from starting, so each failure reports its
+/// own stage. On macOS `load -w` loads now and starts the agent, so
+/// enablement is the start; re-enabling unloads first, which
+/// restarts a running service rather than duplicating it. Disabling
+/// later is `launchctl unload` / `systemctl --user disable --now` —
+/// the documented stop path, distinct from a crash the manager
+/// retries.
 #[cfg(unix)]
 pub fn enable_service(entry: &RegistryEntry, definition: &Path) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
         let label = format!("md.enesis.wyrd.{}", entry.service);
-        // `load -w` both loads now and persists across login; a
-        // disabled leftover re-enables rather than duplicating.
+        // Unload-then-load: a disabled leftover re-enables rather
+        // than duplicating, and a running service restarts on the
+        // new definition. Errors from the unload are ignored — the
+        // service may never have loaded — but the load must succeed.
         let _ = run("launchctl", &["unload", &definition.to_string_lossy()]);
         run("launchctl", &["load", "-w", &definition.to_string_lossy()])
             .map_err(|error| format!("enable {label}: {error}"))
@@ -383,19 +557,18 @@ pub fn enable_service(entry: &RegistryEntry, definition: &Path) -> Result<(), St
     }
 }
 
-/// Start the enabled service now.
+/// Start the enabled service now. On macOS enablement already
+/// started the agent, so this only verifies it is loaded — a second
+/// start path would double-start. On systemd enablement persists
+/// without starting, so this starts explicitly.
 #[cfg(unix)]
 pub fn start_service(entry: &RegistryEntry) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
         let label = format!("md.enesis.wyrd.{}", entry.service);
-        // `load -w` above already starts persistent agents; kickstart
-        // covers the already-loaded case without erroring the flow.
-        let uid = user_id()?;
-        match run("launchctl", &["kickstart", &format!("gui/{uid}/{label}")]) {
-            Ok(()) => Ok(()),
-            Err(error) => Err(format!("start {label}: {error}")),
-        }
+        run("launchctl", &["list", &label])
+            .map_err(|error| format!("start {label}: agent not loaded: {error}"))?;
+        Ok(())
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -404,21 +577,6 @@ pub fn start_service(entry: &RegistryEntry) -> Result<(), String> {
             .map_err(|error| format!("start {unit}: {error}"))?;
         Ok(())
     }
-}
-
-#[cfg(all(unix, target_os = "macos"))]
-fn user_id() -> Result<String, String> {
-    // uid of the invoking user: the agent domain bootstrap runs in.
-    // Read from `id`, not from process introspection, so this
-    // module carries no unsafe code.
-    let output = std::process::Command::new("id")
-        .arg("-u")
-        .output()
-        .map_err(|error| format!("spawn id: {error}"))?;
-    if !output.status.success() {
-        return Err("id -u failed".to_string());
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 #[cfg(unix)]
@@ -457,14 +615,26 @@ pub struct ProvisionConfig {
     pub passphrase: String,
     pub init: Init,
     pub registry_path: PathBuf,
-    pub owner_bin: Option<PathBuf>,
-    /// Install and enable the OS service. Off skips both (and the
-    /// start below): registration only, for operators who supervise
+    /// The `wyrd` binary whose `vault` subcommand the service runs.
+    /// Defaults to the `wyrd` beside the provisioning command; the
+    /// installer ships both together.
+    pub wyrd_bin: Option<PathBuf>,
+    /// `wyrd-supervise` (`nix/drive/supervise.py`): the wait-status
+    /// mapper the restart policy rests on. Defaults to the sibling
+    /// of the `wyrd` binary. Managing a service without it is
+    /// refused — a bare owner binary cannot express the terminal
+    /// distinction — so pass an explicit path wherever the layout
+    /// differs instead of running unmanaged.
+    pub supervise_bin: Option<PathBuf>,
+    /// Hardened credential files for the service definition,
+    /// resolved the way `load_credentials` resolves them. Paths,
+    /// never secrets, travel here.
+    pub identity_file: PathBuf,
+    pub passphrase_file: PathBuf,
+    /// Install, enable, and start the per-drive service. Off skips
+    /// all three: registration only, for operators who supervise
     /// the owner themselves.
     pub manage_service: bool,
-    /// Start the service after enabling. Off registers and enables
-    /// without starting now.
-    pub start_now: bool,
     /// How long one socket verification waits for a terminal answer.
     /// An expiry is `Unconfirmed`, never success.
     pub verify_timeout: Duration,
@@ -507,18 +677,31 @@ pub fn provision(config: ProvisionConfig) -> ProvisionState {
             reason,
         };
     }
+    // A headless `wyrd vault` refuses a relay-less drive (it would
+    // serve nothing peers can discover), so managing a service
+    // without relays is refused before anything is created or
+    // registered — with that pointer, not a definition that can
+    // never verify.
+    if config.manage_service && config.relays.is_empty() {
+        return ProvisionState::ProvisioningIncomplete {
+            stage: "validate",
+            reason: "managing a service needs at least one --relay: \
+                a relay-less vault serves nothing peers can discover; \
+                register with --no-service instead"
+                .to_string(),
+        };
+    }
 
     // 1. Initialize, or reconcile an existing drive. `DriveExists`
     // means a previous run (or another operator) already created
-    // it: re-verify the open instead of re-creating.
-    let initialized = match &config.init {
+    // it: fall through and re-verify the open instead of re-creating.
+    match &config.init {
         Init::Create => match Engine::create(
             config.drive_dir.clone(),
             &config.passphrase,
             config.identity.clone(),
         ) {
-            Ok(_) => true,
-            Err(EngineError::DriveExists) => false,
+            Ok(_) | Err(EngineError::DriveExists) => {}
             Err(error) => {
                 return ProvisionState::ProvisioningIncomplete {
                     stage: "initialize",
@@ -542,8 +725,7 @@ pub fn provision(config: ProvisionConfig) -> ProvisionState {
                 config.identity.clone(),
                 &sealed,
             ) {
-                Ok(_) => true,
-                Err(EngineError::DriveExists) => false,
+                Ok(_) | Err(EngineError::DriveExists) => {}
                 Err(error) => {
                     return ProvisionState::ProvisioningIncomplete {
                         stage: "initialize",
@@ -553,7 +735,6 @@ pub fn provision(config: ProvisionConfig) -> ProvisionState {
             }
         }
     };
-    let _ = initialized;
 
     // 2. Verify the open before registering anything.
     if let Err(error) = Engine::open_keystore(
@@ -587,20 +768,41 @@ pub fn provision(config: ProvisionConfig) -> ProvisionState {
 
     // 4. Install, enable, and start the per-drive service.
     if config.manage_service {
-        let owner_bin = match &config.owner_bin {
+        let wyrd_bin = match &config.wyrd_bin {
             Some(path) => path.clone(),
-            None => match sibling_owner_bin() {
+            None => match sibling_bin("wyrd") {
                 Some(path) => path,
                 None => {
                     return ProvisionState::RegisteredButUnavailable {
                         entry,
-                        reason: "no owner binary: pass --owner-bin (no wyrd-host beside wyrd)"
+                        reason: "no wyrd binary: pass --owner-bin (no wyrd beside this command)"
                             .to_string(),
                     };
                 }
             },
         };
-        let definition = match install_service(&entry, &owner_bin) {
+        let supervise_bin = match &config.supervise_bin {
+            Some(path) => path.clone(),
+            None => match sibling_bin("wyrd-supervise") {
+                Some(path) => path,
+                None => {
+                    return ProvisionState::RegisteredButUnavailable {
+                        entry,
+                        reason: "no wyrd-supervise: pass --supervise-bin \
+                            (the restart policy needs the wrapper; \
+                            a bare owner binary cannot express it)"
+                            .to_string(),
+                    };
+                }
+            },
+        };
+        let owner = SupervisedOwner {
+            supervise_bin,
+            wyrd_bin,
+            identity_file: config.identity_file.clone(),
+            passphrase_file: config.passphrase_file.clone(),
+        };
+        let definition = match install_service(&entry, &owner) {
             Ok(path) => path,
             Err(reason) => {
                 return ProvisionState::RegisteredButUnavailable {
@@ -615,31 +817,34 @@ pub fn provision(config: ProvisionConfig) -> ProvisionState {
                 reason: format!("enable-service: {reason}"),
             };
         }
-        if config.start_now {
-            if let Err(reason) = start_service(&entry) {
-                return ProvisionState::RegisteredButUnavailable {
-                    entry,
-                    reason: format!("start-service: {reason}"),
-                };
-            }
-        } else {
+        if let Err(reason) = start_service(&entry) {
             return ProvisionState::RegisteredButUnavailable {
                 entry,
-                reason: "service installed and enabled, not started (--no-start)".to_string(),
+                reason: format!("start-service: {reason}"),
             };
         }
     }
 
-    // 5. Verify the socket: connect and demand a terminal answer.
-    // Ok and Refused both prove the owner serves; only a terminal
-    // refusal counts as verified — Unconfirmed and Unavailable mean
-    // the outcome is unknown or the owner is down.
+    // 5. Verify the socket: the owner must answer terminally. Ready
+    // means `Ok` or the pre-first-pass `Unobserved` refusal — every
+    // other refusal shape is unexpected from this operation and
+    // stays unavailable, never verified. `Unconfirmed` and
+    // `Unavailable` likewise never verify: the outcome is unknown
+    // or the owner is down.
+    if !wait_for_socket(&config.drive_dir, config.verify_timeout) {
+        return ProvisionState::RegisteredButUnavailable {
+            entry,
+            reason: "verify-socket: owner.sock never appeared".to_string(),
+        };
+    }
     match OwnerClient::connect_drive(&config.drive_dir)
         .and_then(|client| client.with_timeout(config.verify_timeout))
     {
         Ok(mut client) => match client.observe() {
             Ok(_) => ProvisionState::VerifiedAvailable { entry },
-            Err(ClientError::Refused(_)) => ProvisionState::VerifiedAvailable { entry },
+            Err(ClientError::Refused(error)) if error.code == WireErrorCode::Unobserved => {
+                ProvisionState::VerifiedAvailable { entry }
+            }
             Err(error) => ProvisionState::RegisteredButUnavailable {
                 entry,
                 reason: format!("verify-socket: {error}"),
@@ -652,14 +857,28 @@ pub fn provision(config: ProvisionConfig) -> ProvisionState {
     }
 }
 
-/// Locate `wyrd-host` beside the running executable: the installer
-/// ships both binaries together, so the sibling is the default
-/// owner. Overridable with an explicit path wherever the layout
-/// differs.
-fn sibling_owner_bin() -> Option<PathBuf> {
+/// Wait for the owner socket to appear: the service was just
+/// enabled and the owner may still be starting. Polls; never
+/// invents an answer.
+fn wait_for_socket(drive_dir: &Path, timeout: Duration) -> bool {
+    let sock = crate::owner::socket_path_for(drive_dir);
+    let deadline = std::time::Instant::now() + timeout;
+    while std::time::Instant::now() < deadline {
+        if sock.exists() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    sock.exists()
+}
+
+/// Locate a sibling binary beside the running executable: the
+/// installer ships the set together, so the sibling is the default.
+/// Overridable with an explicit path wherever the layout differs.
+fn sibling_bin(name: &str) -> Option<PathBuf> {
     let current = std::env::current_exe().ok()?;
     let dir = current.parent()?;
-    let candidate = dir.join("wyrd-host");
+    let candidate = dir.join(name);
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -688,7 +907,7 @@ mod tests {
 
     static COUNTER: AtomicU64 = AtomicU64::new(0);
 
-    fn scratch(case: &str) -> PathBuf {
+    pub(super) fn scratch(case: &str) -> PathBuf {
         let n = COUNTER.fetch_add(1, Ordering::SeqCst);
         let dir =
             std::env::temp_dir().join(format!("wyrd-bootstrap-{case}-{}-{n}", std::process::id()));
@@ -697,7 +916,7 @@ mod tests {
         dir
     }
 
-    fn entry(name: &str, dir: &Path) -> RegistryEntry {
+    pub(super) fn entry(name: &str, dir: &Path) -> RegistryEntry {
         RegistryEntry {
             name: name.to_string(),
             drive_dir: dir.join("drive"),
@@ -775,27 +994,44 @@ mod tests {
     #[test]
     fn service_templates_name_the_service_paths_and_relays() {
         let dir = scratch("templates");
-        let owner = PathBuf::from("/opt/wyrd/bin/wyrd-host");
+        let owner = SupervisedOwner {
+            supervise_bin: PathBuf::from("/opt/wyrd/bin/wyrd-supervise"),
+            wyrd_bin: PathBuf::from("/opt/wyrd/bin/wyrd"),
+            identity_file: dir.join("identity"),
+            passphrase_file: dir.join("passphrase"),
+        };
         let owned = entry("demo", &dir);
         let plist = render_launchd_plist("md.enesis.wyrd.drive-demo", &owner, &owned);
         assert!(plist.contains("<string>md.enesis.wyrd.drive-demo</string>"));
-        assert!(plist.contains(&*owner.display().to_string()));
+        assert!(plist.contains("wyrd-supervise"));
+        assert!(plist.contains("--restart-status"));
+        assert!(plist.contains("<string>0</string>"), "{plist}");
+        assert!(plist.contains("vault.posture"));
         assert!(plist.contains(&*owned.drive_dir.display().to_string()));
+        assert!(plist.contains("--identity-file"));
         assert!(plist.contains("--relay"));
+        assert!(plist.contains("<key>SuccessfulExit</key>"));
         let unit = render_systemd_unit("Wyrd drive demo", &owner, &owned);
         assert!(unit.contains("WantedBy=default.target"));
         assert!(unit.contains("Restart=on-failure"));
+        assert!(unit.contains("RestartPreventExitStatus=78"));
+        assert!(unit.contains("wyrd-supervise"));
+        assert!(unit.contains("--restart-status=1") || unit.contains("--restart-status 1"));
         assert!(unit.contains(&*owned.drive_dir.display().to_string()));
     }
 
-    /// A stub owner socket: answers every request with the terminal
-    /// `Unobserved` refusal. It speaks the real framed protocol, so
-    /// the handoff test exercises the real client, the real framing,
-    /// and the real refusal mapping — only the owner is fake. The
+    /// A stub owner socket: answers every request with the given
+    /// refusal code. It speaks the real framed protocol, so the
+    /// handoff test exercises the real client, the real framing, and
+    /// the real refusal mapping — only the owner is fake. The
     /// accept loop is deadline-bounded so the thread always returns
     /// for `join`, even when the caller makes fewer connections than
     /// the cap.
-    fn stub_owner(sock: PathBuf, max_requests: usize) -> std::thread::JoinHandle<()> {
+    pub(super) fn stub_owner(
+        sock: PathBuf,
+        max_requests: usize,
+        code: &'static str,
+    ) -> std::thread::JoinHandle<()> {
         if sock.exists() {
             std::fs::remove_file(&sock).unwrap();
         }
@@ -832,7 +1068,7 @@ mod tests {
                 let reply = serde_json::json!({
                     "v": 1,
                     "id": id,
-                    "result": {"err": {"code": "Unobserved", "message": "no pass yet"}},
+                    "result": {"err": {"code": code, "message": "stub refusal"}},
                 });
                 let body = serde_json::to_vec(&reply).unwrap();
                 let _ = stream.write_all(&(body.len() as u32).to_be_bytes());
@@ -841,11 +1077,11 @@ mod tests {
         })
     }
 
-    fn identity() -> DeviceIdentitySecret {
+    pub(super) fn identity() -> DeviceIdentitySecret {
         DeviceIdentitySecret::from_bytes([7u8; 32]).unwrap()
     }
 
-    fn provision_no_service(dir: &Path, registry: &Path, name: &str) -> ProvisionConfig {
+    pub(super) fn provision_no_service(dir: &Path, registry: &Path, name: &str) -> ProvisionConfig {
         ProvisionConfig {
             name: name.to_string(),
             drive_dir: dir.join("drive"),
@@ -854,9 +1090,11 @@ mod tests {
             passphrase: "bootstrap-test-pass".to_string(),
             init: Init::Create,
             registry_path: registry.to_path_buf(),
-            owner_bin: None,
+            wyrd_bin: Some(dir.join("wyrd")),
+            supervise_bin: Some(dir.join("wyrd-supervise")),
+            identity_file: dir.join("identity"),
+            passphrase_file: dir.join("passphrase"),
             manage_service: false,
-            start_now: false,
             verify_timeout: Duration::from_secs(10),
         }
     }
@@ -867,7 +1105,7 @@ mod tests {
         let registry = dir.join("drives.json");
         let sock = dir.join("drive").join("owner.sock");
         std::fs::create_dir_all(sock.parent().unwrap()).unwrap();
-        let server = stub_owner(sock, 1);
+        let server = stub_owner(sock, 1, "Unobserved");
 
         let report = provision(provision_no_service(&dir, &registry, "demo"));
         let ProvisionState::VerifiedAvailable { entry } = report else {
@@ -923,5 +1161,145 @@ mod tests {
         );
         assert!(!dir.join("drive").exists());
         assert!(!registry.exists());
+    }
+}
+
+#[cfg(test)]
+mod hardening_tests {
+    use super::tests::{entry, provision_no_service, scratch, stub_owner};
+    use super::*;
+
+    #[test]
+    fn registry_skips_unknown_modes_without_failing_the_file() {
+        let dir = scratch("mode");
+        let path = dir.join("drives.json");
+        let raw = serde_json::json!({
+            "version": 1,
+            "drives": {
+                "future": {
+                    "name": "future",
+                    "drive_dir": dir.join("drive").to_string_lossy(),
+                    "relays": [],
+                    "service": "drive-future",
+                    "mode": "mount"
+                }
+            }
+        });
+        std::fs::write(&path, serde_json::to_vec(&raw).unwrap()).unwrap();
+        let read = read_registry(&path).unwrap();
+        assert!(read.drives.is_empty());
+        assert_eq!(read.skipped.len(), 1, "{:?}", read.skipped);
+        assert!(read.skipped[0].contains("mount"), "{:?}", read.skipped);
+    }
+
+    #[test]
+    fn registry_file_is_owner_only() {
+        let dir = scratch("perms");
+        let path = dir.join("drives.json");
+        let mut drives = BTreeMap::new();
+        drives.insert("demo".to_string(), entry("demo", &dir));
+        write_registry(&path, &drives).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "registry is owner-only, got {mode:o}");
+        }
+    }
+
+    #[test]
+    fn service_files_write_atomically_and_owner_only() {
+        let dir = scratch("svcfile");
+        let path = dir.join("wyrd-drive-demo.service");
+        let owner = SupervisedOwner {
+            supervise_bin: PathBuf::from("/opt/wyrd/bin/wyrd-supervise"),
+            wyrd_bin: PathBuf::from("/opt/wyrd/bin/wyrd"),
+            identity_file: dir.join("identity"),
+            passphrase_file: dir.join("passphrase"),
+        };
+        let owned = entry("demo", &dir);
+        write_service_file(
+            &path,
+            &render_systemd_unit("Wyrd drive demo", &owner, &owned),
+        )
+        .unwrap();
+        assert!(path.exists());
+        assert!(
+            !dir.join(format!("wyrd-drive-demo.tmp.{}", std::process::id()))
+                .exists(),
+            "no temporary sibling remains"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(
+                mode, 0o600,
+                "service definition is owner-only, got {mode:o}"
+            );
+        }
+    }
+
+    #[test]
+    fn templates_escape_operator_input() {
+        let dir = scratch("escape");
+        let mut owned = entry("demo", &dir);
+        owned.relays = vec!["relay://exa mple".to_string()];
+        let owner = SupervisedOwner {
+            supervise_bin: PathBuf::from("/opt/wyrd/bin/with space/wyrd-supervise"),
+            wyrd_bin: PathBuf::from("/opt/wyrd/bin/wyrd"),
+            identity_file: dir.join("identity"),
+            passphrase_file: dir.join("passphrase"),
+        };
+        let plist = render_launchd_plist("md.enesis.wyrd.drive-demo", &owner, &owned);
+        assert!(plist.contains("with space"), "paths survive escaped");
+        let unit = render_systemd_unit("Wyrd drive demo", &owner, &owned);
+        assert!(
+            unit.contains("\"/opt/wyrd/bin/with space/wyrd-supervise\""),
+            "spaces are quoted, got:\n{unit}"
+        );
+        assert!(
+            unit.contains("\"relay://exa mple\""),
+            "relay spaces are quoted, got:\n{unit}"
+        );
+    }
+
+    #[test]
+    fn only_ok_and_unobserved_verify() {
+        let dir = scratch("whitelist");
+        let registry = dir.join("drives.json");
+        let sock = dir.join("drive").join("owner.sock");
+        std::fs::create_dir_all(sock.parent().unwrap()).unwrap();
+        let server = stub_owner(sock, 1, "Malformed");
+        let report = provision(provision_no_service(&dir, &registry, "demo"));
+        assert!(
+            matches!(report, ProvisionState::RegisteredButUnavailable { .. }),
+            "an unexpected refusal shape must not verify"
+        );
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn managing_a_service_needs_a_relay() {
+        let dir = scratch("norelay");
+        let registry = dir.join("drives.json");
+        let mut config = provision_no_service(&dir, &registry, "demo");
+        config.manage_service = true;
+        config.relays = vec![];
+        let report = provision(config);
+        assert!(
+            matches!(
+                report,
+                ProvisionState::ProvisioningIncomplete {
+                    stage: "validate",
+                    ..
+                }
+            ),
+            "a relay-less managed service is refused, not installed"
+        );
+        assert!(
+            !registry.exists(),
+            "refusal precedes registration side effects"
+        );
     }
 }

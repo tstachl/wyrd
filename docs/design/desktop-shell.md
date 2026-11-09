@@ -138,24 +138,34 @@ plane. Three pieces, all precedented in-tree:
   registration time for non-Nix users. The OS service manager owns
   the process lifecycle: enablement is startup-at-login, and a UI
   that exits or crashes never takes the owner down with it, because
-  launchd/systemd — not the UI — is the parent. The supervision
-  contract mirrors the `nix/drive` precedent (OD-34-C): a terminal
-  status is never restarted (configuration errors, held drive),
-  crashes restart rate-limited (systemd `on-failure` with backoff
-  and start limits; launchd `KeepAlive` on unsuccessful exit with a
-  throttle interval). A stale socket entry from an unclean shutdown
-  is reclaimed at bind while the store lock is held, so a restarted
-  owner never wedges on its predecessor's socket. The UI
-  distinguishes the lifecycle states the policy produces: a
-  restarting owner reads as temporarily unavailable (starting /
-  retrying, with the loop's pause switch and pass count telling
-  quiet apart from dead), while a disabled drive stays registered
-  with its service stopped and an unregistered drive simply
-  disappears from discovery — disabling stops the service without
-  touching drive data, and only an explicit shutdown of the service
-  is a deliberate stop, as opposed to a crash the manager will
-  retry. The absence drill covers the temporary case; the permanent
-  cases get their own first-class states, never an error toast.
+  launchd/systemd — not the UI — is the parent. The service runs
+  `wyrd vault` with the registration's credential files (never a
+  bare env-keyed binary: the supervised owner must load secrets in
+  service context, and only the file-credential form works there),
+  routed through the `wyrd-supervise` wrapper from `nix/drive`
+  (OD-34-C). Managers cannot distinguish the binary's collapsed
+  exit codes on their own — every CLI failure is 2 except the
+  terminal held-drive 78 — so the wrapper maps the wait status
+  onto the exit the supervisor's policy wants, exactly as the Nix
+  services already do: launchd `KeepAlive` restarts the wrapper's
+  exit 0 and never its 78; systemd `Restart=on-failure` with
+  `RestartPreventExitStatus=78`, backoff, and start limits. A bare
+  owner binary cannot express this distinction, so a managed
+  service without the wrapper beside the `wyrd` binary is refused
+  with that pointer instead of installed. A stale socket entry
+  from an unclean shutdown is reclaimed at bind while the store
+  lock is held, so a restarted owner never wedges on its
+  predecessor's socket. The UI distinguishes the lifecycle states
+  the policy produces: a restarting owner reads as temporarily
+  unavailable (starting / retrying, with the loop's pause switch
+  and pass count telling quiet apart from dead), while a disabled
+  drive stays registered with its service stopped and an
+  unregistered drive simply disappears from discovery — disabling
+  stops the service without touching drive data, and only an
+  explicit shutdown of the service is a deliberate stop, as
+  opposed to a crash the manager will retry. The absence drill
+  covers the temporary case; the permanent cases get their own
+  first-class states, never an error toast.
 - **Owner credential loading independent of the UI.** The owner
   must obtain its secrets without the UI alive: at login, at
   restart, at 3 a.m. with nobody watching. Secrets live in the OS
@@ -182,12 +192,16 @@ plane. Three pieces, all precedented in-tree:
   UI never acquires authoring capability, it only drives the
   provisioning flow whose terminal states the owner defines. The
   order is fixed: initialize → verify the open (`open_keystore`
-  succeeds) → write the registry entry → install and enable the
-  per-drive service → start → verify the socket. Registration and
+  succeeds) → write the registry entry → install, enable, and start
+  the per-drive service → verify the socket. Registration and
   enablement happen only after initialization succeeds, never
-  speculatively. Partial completion has explicit recovery, and a
-  drive is reported ready only when its socket verifies this
-  session — never because its registry entry exists:
+  speculatively. A managed service needs at least one relay: a
+  headless `wyrd vault` refuses a relay-less drive, so supervision
+  without relays is refused with that pointer instead of installing
+  a definition that can never verify. Partial completion has
+  explicit recovery, and a drive is reported ready only when its
+  socket verifies this session — never because its registry entry
+  exists:
   - initialization fails (directory already holds a drive, bad
     invitation) → nothing is registered; the error surfaces, and a
     retry that finds an existing drive reconciles instead of
@@ -222,14 +236,19 @@ drives may run mounted; if `wyrd mount` is marked non-desktop,
 registered drives run headless and the UI remains the only consumer.
 The registry records the mode per drive; it does not decide P2.
 
-Stage-0 exit: the handoff runs end to end with existing pieces —
-registry entry, supervised owner start with the parent gone,
-framed `observe` answered over the drive socket to a non-owner
-process — recorded as a rehearsal, not asserted as prose. The
-installer mechanics (template, enablement UX, keychain wiring) stay
-with the installer issue; what stage 0 freezes is the registry
-shape, the service template's supervision contract, and the handoff
-order above.
+Stage-0 exit: the handoff runs end to end through the built
+command — `wyrd bootstrap` registers, a separately spawned `wyrd
+vault` owns and serves, a non-owner `OwnerClient` gets a terminal
+`observe` answer out of the drive socket, and SIGTERM shuts the
+owner down clean — pinned as the `bootstrap_then_vault` CLI
+integration test, with the supervise wait-status mapping pinned by
+the existing `test-supervise.sh` harness leg. What stays manual,
+documented on the bootstrap issue: enablement and restart under a
+real launchd agent / systemd user unit, which no CI sandbox
+provides. The installer mechanics (template, enablement UX,
+keychain wiring) stay with the installer issue; what stage 0
+freezes is the registry shape, the service template's supervision
+contract, and the handoff order above.
 
 ## Shape: backend crate plus frontend directory
 
@@ -581,5 +600,7 @@ installer issue; auto-update is explicitly v0.8.
 
 ## Persistent-format impact
 
-None. The shell forwards existing mutation and status shapes and
-adds no durable fact, envelope, or protocol byte.
+The per-user registry file (`drives.json`, schema version 1, reader
+refuses newer versions loudly). Nothing else: the shell and its
+provisioning forward existing mutation and status shapes and add no
+durable drive fact, envelope, or protocol byte.

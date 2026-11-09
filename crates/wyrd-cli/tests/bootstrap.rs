@@ -7,10 +7,12 @@
 
 #![cfg(unix)]
 
+use std::io::{BufRead, BufReader};
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 use std::sync::atomic::AtomicU64;
+use std::time::{Duration, Instant};
 
 fn wyrd() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_wyrd"))
@@ -80,6 +82,99 @@ impl Drop for Fixture {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.dir);
     }
+}
+
+/// A real relay beside the binary under test: rust-nostr's
+/// in-process `LocalRelay` on its own runtime, which this struct
+/// owns so the listener outlives every `block_on` (the sync-config
+/// pattern).
+struct TestRelay {
+    _runtime: tokio::runtime::Runtime,
+    relay: nostr_sdk::local_relay::LocalRelay,
+    url: String,
+}
+
+impl TestRelay {
+    fn spawn() -> Self {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime");
+        let relay = nostr_sdk::local_relay::LocalRelay::new();
+        runtime.block_on(relay.run()).expect("test relay serves");
+        let url = runtime.block_on(relay.url()).to_string();
+        TestRelay {
+            _runtime: runtime,
+            relay,
+            url,
+        }
+    }
+}
+
+/// The full handoff through the built binaries: bootstrap
+/// registers, a separately spawned `wyrd vault` owns and serves,
+/// and a non-owner `OwnerClient` gets a terminal answer out of the
+/// socket the service path would bind. The OS service manager is
+/// deliberately out of scope here (no launchd/systemd in CI);
+/// enablement stays the documented manual step.
+#[test]
+fn bootstrap_then_vault_serves_a_non_owner_client() {
+    let fixture = Fixture::new("full-loop");
+    let output = fixture.bootstrap(&[]);
+    assert!(
+        !output.status.success(),
+        "no owner runs yet, so ready is withheld"
+    );
+
+    let relay = TestRelay::spawn();
+    let mut child = Command::new(wyrd())
+        .args([
+            "vault",
+            fixture.drive.to_str().unwrap(),
+            "--relay",
+            &relay.url,
+            "--identity-file",
+            fixture.identity.to_str().unwrap(),
+            "--passphrase-file",
+            fixture.passphrase.to_str().unwrap(),
+        ])
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("wyrd vault spawns");
+    let deadline = Instant::now() + Duration::from_secs(90);
+    let stderr = child.stderr.take().expect("vault stderr piped");
+    let mut ready = false;
+    for line in BufReader::new(stderr).lines() {
+        let line = line.expect("vault stderr reads");
+        if line.contains("vault ready: serving ") {
+            ready = true;
+            break;
+        }
+        if Instant::now() > deadline {
+            break;
+        }
+    }
+    assert!(ready, "the vault binds the owner socket");
+    // Separate the reader from the child: the client below must
+    // prove a non-owner process is served, not the test harness.
+    drop(child.stderr.take());
+
+    let client = wyrd_daemon::owner::client::OwnerClient::connect_drive(&fixture.drive)
+        .expect("the socket accepts a non-owner connection");
+    let client = client
+        .with_timeout(Duration::from_secs(10))
+        .expect("timeout arms");
+    // Rebind mutably: with_timeout consumes and returns the client.
+    let mut client = client;
+    let status = client.observe().expect("observe answers terminally");
+    assert!(status.tip.is_some(), "the answer carries durable status");
+
+    let _ = Command::new("kill")
+        .args(["-TERM", &child.id().to_string()])
+        .status();
+    let exit = child.wait().expect("vault reaps");
+    assert!(exit.success(), "SIGTERM shuts the owner down clean");
+    relay.relay.shutdown();
 }
 
 /// Without an owner behind the socket, bootstrap initializes and
