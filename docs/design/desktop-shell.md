@@ -105,7 +105,13 @@ making `wyrd mount` expose the socket still leaves a new
 installation with no owner to discover before anything is mounted.
 The stage-0 gate (below) resolves the bootstrap and discovery
 contract — endpoint, provisioning, and first-drive path — before any
-frontend scaffolding. Views are built against the real client types
+frontend scaffolding. A direction under consideration, not a
+decision: an installer-provisioned owner with a stable local
+bootstrap endpoint, followed by drive-specific owner connections —
+which would avoid introducing a general-purpose control plane solely
+to solve initial discovery. The choice belongs to stage 0 and must
+be demonstrable (a first-drive path that runs), not merely
+described. Views are built against the real client types
 on a real owner, never against mocks that invent owner behavior.
 
 ## Shape: backend crate plus frontend directory
@@ -366,8 +372,13 @@ installer issue; auto-update is explicitly v0.8.
 - Absence/recovery drill: owner down shows the explicit unavailable
   state and the backend never opens the store; owner back resumes
   without restart (OD-16-F explicitness, UI side).
-- Dirty-quit parity: quit with an in-flight operation; the terminal
-  answer is still delivered or explicitly failed.
+- Dirty-quit parity: quit with an in-flight operation under graceful
+  shutdown. Outstanding operations drain until terminal answers or
+  defined timeouts; nothing is reported successful without an
+  authoritative owner answer; timed-out operations remain
+  `Unconfirmed`, never recast as failures. Forced termination leaves
+  every outstanding outcome unknown and requires reconciliation
+  after reconnect.
 - Human-path rehearsal (shared with the installer issue): install,
   create drive, see it, quit cleanly — no terminal.
 - No new wire bytes, so no new golden vectors: the backend speaks
