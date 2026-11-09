@@ -2752,7 +2752,8 @@ fn client_wrong_shape_and_wrong_id_are_incompatible() {
     });
     let mut client = OwnerClient::connect(&socket_path)
         .expect("the transport connects")
-        .with_timeout(Duration::from_secs(10));
+        .with_timeout(Duration::from_secs(10))
+        .expect("the timeout arms");
     match client.lookup("hello.txt") {
         Err(ClientError::Incompatible(_)) => {}
         other => panic!("a pause answer to lookup is incompatible: {other:?}"),
@@ -2767,10 +2768,30 @@ fn client_wrong_shape_and_wrong_id_are_incompatible() {
     });
     let mut client = OwnerClient::connect(&socket_path)
         .expect("the transport connects")
-        .with_timeout(Duration::from_secs(10));
+        .with_timeout(Duration::from_secs(10))
+        .expect("the timeout arms");
     match client.observe() {
         Err(ClientError::Incompatible(_)) => {}
         other => panic!("a mismatched id is incompatible: {other:?}"),
+    }
+    responder.join().unwrap();
+
+    let socket_path = dir.join("wrong-version.sock");
+    let responder = serve_canned_once(&socket_path, |request| WireResponse {
+        v: 999,
+        id: request.id,
+        result: WireResult::Err(WireError {
+            code: WireErrorCode::UnknownVersion,
+            message: "unsupported wire version 999, want 1".to_string(),
+        }),
+    });
+    let mut client = OwnerClient::connect(&socket_path)
+        .expect("the transport connects")
+        .with_timeout(Duration::from_secs(10))
+        .expect("the timeout arms");
+    match client.observe() {
+        Err(ClientError::Incompatible(_)) => {}
+        other => panic!("a foreign wire version is incompatible: {other:?}"),
     }
     responder.join().unwrap();
     std::fs::remove_dir_all(dir).unwrap();
@@ -2887,4 +2908,126 @@ fn golden_vectors_pin_the_wire() {
         },
         "the lookup request frames byte-for-byte"
     );
+}
+
+/// A timed-out instance sends nothing more: the second call fails
+/// without touching the socket, so the server never sees a second
+/// frame. Without the poison, the second request would reuse the
+/// broken stream and read the first answer late as an id mismatch.
+#[test]
+fn client_timed_out_instance_sends_nothing_more() {
+    let dir = std::env::temp_dir().join(format!(
+        "wyrd-owner-client-timeout-{}-{}",
+        std::process::id(),
+        SCRATCH_N.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let socket_path = dir.join("timeout.sock");
+    let listener = std::os::unix::net::UnixListener::bind(&socket_path).unwrap();
+    let probe = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut len_bytes = [0u8; 4];
+        stream.read_exact(&mut len_bytes).unwrap();
+        let len = u32::from_be_bytes(len_bytes) as usize;
+        let mut frame = vec![0u8; len];
+        stream.read_exact(&mut frame).unwrap();
+        // Outlast the client deadline: the first request times out
+        // on the client side while the server still holds it.
+        std::thread::sleep(Duration::from_millis(400));
+        stream
+            .set_read_timeout(Some(Duration::from_millis(500)))
+            .unwrap();
+        let mut second = [0u8; 4];
+        match stream.read(&mut second) {
+            // Silence or a clean close: the poisoned instance sent
+            // nothing more.
+            Ok(0) => false,
+            Err(error)
+                if error.kind() == std::io::ErrorKind::TimedOut
+                    || error.kind() == std::io::ErrorKind::WouldBlock =>
+            {
+                false
+            }
+            // Bytes arrived: the broken stream was reused.
+            _ => true,
+        }
+    });
+
+    let mut client = OwnerClient::connect(&socket_path)
+        .expect("the transport connects")
+        .with_timeout(Duration::from_millis(50))
+        .expect("the timeout arms");
+    match client.pause() {
+        Err(ClientError::Unconfirmed { .. }) => {}
+        other => panic!("an unanswered request is unconfirmed: {other:?}"),
+    }
+    match client.pause() {
+        Err(ClientError::Unconfirmed { .. }) => {}
+        other => panic!("a poisoned instance stays unconfirmed: {other:?}"),
+    }
+    assert!(
+        !probe.join().unwrap(),
+        "a timed-out instance sends nothing more"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// An overlong response length poisons without reading the body: no
+/// allocation past the bound, and no later call misreads the
+/// unread body as a new length.
+#[test]
+fn client_overlong_frame_poisons_without_reading_the_body() {
+    let dir = std::env::temp_dir().join(format!(
+        "wyrd-owner-client-overlong-{}-{}",
+        std::process::id(),
+        SCRATCH_N.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let socket_path = dir.join("overlong.sock");
+    let listener = std::os::unix::net::UnixListener::bind(&socket_path).unwrap();
+    let probe = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut len_bytes = [0u8; 4];
+        stream.read_exact(&mut len_bytes).unwrap();
+        let len = u32::from_be_bytes(len_bytes) as usize;
+        let mut frame = vec![0u8; len];
+        stream.read_exact(&mut frame).unwrap();
+        // A length past the ceiling, with no body behind it: the
+        // client must refuse the length, never allocate or read on.
+        let overlong = (MAX_FRAME_BYTES as u32).wrapping_add(1);
+        stream.write_all(&overlong.to_be_bytes()).unwrap();
+        stream.flush().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_millis(500)))
+            .unwrap();
+        let mut second = [0u8; 4];
+        match stream.read(&mut second) {
+            Ok(0) => false,
+            Err(error)
+                if error.kind() == std::io::ErrorKind::TimedOut
+                    || error.kind() == std::io::ErrorKind::WouldBlock =>
+            {
+                false
+            }
+            _ => true,
+        }
+    });
+
+    let mut client = OwnerClient::connect(&socket_path)
+        .expect("the transport connects")
+        .with_timeout(Duration::from_secs(10))
+        .expect("the timeout arms");
+    match client.lookup("hello.txt") {
+        Err(ClientError::Unconfirmed { .. }) => {}
+        other => panic!("an overlong length is unconfirmed: {other:?}"),
+    }
+    match client.lookup("hello.txt") {
+        Err(ClientError::Unconfirmed { .. }) => {}
+        other => panic!("a poisoned instance stays unconfirmed: {other:?}"),
+    }
+    assert!(
+        !probe.join().unwrap(),
+        "an overlong frame sends nothing more and reads no body"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
 }

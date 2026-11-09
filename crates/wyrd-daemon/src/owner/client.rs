@@ -52,12 +52,13 @@ pub enum ClientError {
     /// success, never evidence about any request — no request was
     /// sent.
     Unavailable(String),
-    /// The request went out but no terminal answer came back: the
-    /// connection broke, a frame tore, the response overran the
-    /// bound, or the wait expired. The outcome is unknown. Reconcile
-    /// (re-read through the owner) before deciding whether retry is
-    /// safe; a transport failure alone never authorizes retry and
-    /// never establishes failure.
+    /// The request never got a terminal answer: the connection
+    /// broke, a frame tore, the response overran the bound, or the
+    /// wait expired. The outcome is unknown. Reconnect — the broken
+    /// instance poisons itself and sends nothing more — then
+    /// reconcile (re-read through the owner) before deciding whether
+    /// retry is safe; a transport failure alone never authorizes
+    /// retry and never establishes failure.
     Unconfirmed { op: String, detail: String },
     /// The owner answered with a defined refusal. Terminal: the
     /// request did not commit and will not commit on retry unless the
@@ -93,10 +94,18 @@ impl std::error::Error for ClientError {}
 /// answer matchable to its request. Connections are cheap and
 /// short-lived; the pool bound counts concurrent connections, so a
 /// consumer that pipelines keeps few.
+///
+/// A connection that reports `Unconfirmed` is broken: framing past
+/// that point is unknowable (an unread body, a late answer, a torn
+/// frame), so the instance poisons itself and every further call
+/// fails without touching the socket. Reconnect with
+/// [`OwnerClient::connect`]: recovery is a new connection, never a
+/// resumed stream.
 pub struct OwnerClient {
     stream: UnixStream,
     next_id: u64,
     timeout: Duration,
+    broken: bool,
 }
 
 impl std::fmt::Debug for OwnerClient {
@@ -104,6 +113,7 @@ impl std::fmt::Debug for OwnerClient {
         f.debug_struct("OwnerClient")
             .field("next_id", &self.next_id)
             .field("timeout", &self.timeout)
+            .field("broken", &self.broken)
             .finish()
     }
 }
@@ -126,6 +136,7 @@ impl OwnerClient {
             stream,
             next_id: 1,
             timeout: DEFAULT_RESPONSE_TIMEOUT,
+            broken: false,
         })
     }
 
@@ -137,12 +148,19 @@ impl OwnerClient {
     }
 
     /// Wait at most this long for one terminal answer instead of the
-    /// default. An expired wait is `Unconfirmed`, never success.
-    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+    /// default. An expired wait is `Unconfirmed`, never success. The
+    /// socket timeouts are armed together with the stored value, and
+    /// a failure to arm them fails the builder — the stored timeout
+    /// never diverges from the socket.
+    pub fn with_timeout(mut self, timeout: Duration) -> Result<Self, ClientError> {
         self.timeout = timeout;
-        let _ = self.stream.set_read_timeout(Some(timeout));
-        let _ = self.stream.set_write_timeout(Some(timeout));
-        self
+        self.stream
+            .set_read_timeout(Some(timeout))
+            .map_err(|error| ClientError::Unavailable(format!("arm read timeout: {error}")))?;
+        self.stream
+            .set_write_timeout(Some(timeout))
+            .map_err(|error| ClientError::Unavailable(format!("arm write timeout: {error}")))?;
+        Ok(self)
     }
 
     /// Look up one path: the node plus the serving generation and
@@ -215,9 +233,7 @@ impl OwnerClient {
                 generation,
                 revision,
             } => {
-                let bytes = hex::decode(&bytes_hex).map_err(|error| {
-                    ClientError::Incompatible(format!("owner sent non-hex read bytes: {error}"))
-                })?;
+                let bytes = decode_read_bytes(&bytes_hex)?;
                 Ok((bytes, generation, revision))
             }
             other => Err(unexpected(OP_READ, other)),
@@ -315,7 +331,9 @@ impl OwnerClient {
     /// re-read — namespace facts for existence and kind, file
     /// identities for content — because only the caller knows what
     /// it sent. A failed re-read never resolves the original
-    /// request: it stays unconfirmed.
+    /// request: it stays unconfirmed. A fold touches many paths:
+    /// re-read every one of them, and never treat absence on one
+    /// path as proof the fold did not commit.
     pub fn reconcile_lookup(
         &mut self,
         path: &str,
@@ -330,53 +348,70 @@ impl OwnerClient {
     /// One framed exchange: length-prefixed JSON out, length-prefixed
     /// JSON back, id echoed. Any transport break — refused write,
     /// torn frame, overlong length, expired wait, unparseable answer —
-    /// is `Unconfirmed` for this op, never success and never failure.
+    /// is `Unconfirmed` for this op, never success and never failure,
+    /// and poisons the instance: the stream position past a break is
+    /// unknowable (an unread body, a late answer, a torn frame), so
+    /// every further call fails without touching the socket.
+    /// Reconnect for the recovery re-read.
     fn transact<P: serde::Serialize>(
         &mut self,
         op: &str,
         params: P,
     ) -> Result<WireOk, ClientError> {
-        let unconfirmed = |detail: String| ClientError::Unconfirmed {
-            op: op.to_string(),
-            detail,
-        };
+        if self.broken {
+            return Err(ClientError::Unconfirmed {
+                op: op.to_string(),
+                detail: "the connection broke on an earlier request; reconnect before retrying"
+                    .to_string(),
+            });
+        }
         let id = self.next_id;
         self.next_id = self.next_id.wrapping_add(1).max(1);
         let params = serde_json::to_value(params)
-            .map_err(|error| unconfirmed(format!("encode {op} params: {error}")))?;
+            .map_err(|error| self.fail(op, format!("encode {op} params: {error}")))?;
         let request = serde_json::to_vec(&RawRequest {
             v: WIRE_VERSION,
             id,
             op: op.to_string(),
             params,
         })
-        .map_err(|error| unconfirmed(format!("encode {op} request: {error}")))?;
-        let len = u32::try_from(request.len())
-            .map_err(|_| unconfirmed(format!("{op} request exceeds frame bound")))?;
+        .map_err(|error| self.fail(op, format!("encode {op} request: {error}")))?;
         if request.len() > MAX_FRAME_BYTES {
-            return Err(unconfirmed(format!("{op} request exceeds frame bound")));
+            // Nothing went out, so the outcome is certainly absent —
+            // but the shape stays Unconfirmed, and the instance still
+            // poisons: one error taxonomy, no special cases.
+            return Err(self.fail(op, format!("{op} request exceeds frame bound")));
         }
-        self.stream
+        let len = u32::try_from(request.len())
+            .map_err(|error| self.fail(op, format!("frame {op} request: {error}")))?;
+        if let Err(error) = self
+            .stream
             .write_all(&len.to_be_bytes())
             .and_then(|()| self.stream.write_all(&request))
             .and_then(|()| self.stream.flush())
-            .map_err(|error| unconfirmed(format!("send {op}: {error}")))?;
+        {
+            return Err(self.fail(op, format!("send {op}: {error}")));
+        }
         let mut len_bytes = [0u8; 4];
-        self.stream
-            .read_exact(&mut len_bytes)
-            .map_err(|error| unconfirmed(format!("read {op} response length: {error}")))?;
+        if let Err(error) = self.stream.read_exact(&mut len_bytes) {
+            return Err(self.fail(op, format!("read {op} response length: {error}")));
+        }
         let len = u32::from_be_bytes(len_bytes) as usize;
         if len > MAX_FRAME_BYTES {
-            return Err(unconfirmed(format!(
-                "{op} response length {len} exceeds frame bound"
-            )));
+            // The body stays unread by design: never allocate what the
+            // bound refuses, and never let a later call misread it as
+            // a new length.
+            return Err(self.fail(
+                op,
+                format!("{op} response length {len} exceeds frame bound"),
+            ));
         }
         let mut frame = vec![0u8; len];
-        self.stream
-            .read_exact(&mut frame)
-            .map_err(|error| unconfirmed(format!("read {op} response body: {error}")))?;
+        if let Err(error) = self.stream.read_exact(&mut frame) {
+            return Err(self.fail(op, format!("read {op} response body: {error}")));
+        }
         let response: WireResponse = serde_json::from_slice(&frame)
-            .map_err(|error| unconfirmed(format!("parse {op} response: {error}")))?;
+            .map_err(|error| self.fail(op, format!("parse {op} response: {error}")))?;
         if response.v != WIRE_VERSION {
             return Err(ClientError::Incompatible(format!(
                 "owner answered wire version {}, want {WIRE_VERSION}",
@@ -392,6 +427,17 @@ impl OwnerClient {
         match response.result {
             WireResult::Ok(ok) => Ok(*ok),
             WireResult::Err(error) => Err(ClientError::Refused(error)),
+        }
+    }
+
+    /// Record a transport break: the outcome is `Unconfirmed` and the
+    /// instance is poisoned, so no later call can misread the stream
+    /// past this point.
+    fn fail(&mut self, op: &str, detail: String) -> ClientError {
+        self.broken = true;
+        ClientError::Unconfirmed {
+            op: op.to_string(),
+            detail,
         }
     }
 }
