@@ -586,6 +586,55 @@ EOF
       "$(cat "$nc/identity")" "$(cat "$nc/passphrase")"
   done
 }
+# --- step 7: honest leave -------------------------------------------------
+# A second device joins, then attempts to leave as a non-owner: the
+# surface says the owner must remove it (device id in copyable
+# form), authors no membership transition, and the owner's member
+# list is unchanged. The sole-owner terminal path is covered by
+# step 4's throwaway-drive leg; this step pins the non-owner half.
+step7_leave() {
+  step 7 "honest leave"
+  local od="$DRIVES/owner" oc="$CREDS/owner"
+  local ndr="$DRIVES/newcomer" nc="$CREDS/newcomer"
+
+  local dev
+  dev="$(with_creds "$nc" device "$ndr" id | awk '/^device /{print $2}')"
+  [[ "${#dev}" == 64 ]] || die "newcomer id unreadable: $dev"
+
+  local log_before list_before
+  log_before="$(with_creds "$oc" member "$od" log | grep -c .)"
+  list_before="$(with_creds "$oc" member "$od" list)"
+
+  local leave_out
+  leave_out="$(expect_exit 0 step7-leave \
+    with_creds "$nc" member "$ndr" leave)"
+  echo "$leave_out" | grep -q "only an owner can remove" \
+    || die "leave refusal names no owner requirement: $leave_out"
+  echo "$leave_out" | grep -q "$dev" \
+    || die "leave refusal names no copyable device id: $leave_out"
+  echo "$leave_out" | grep -q "still in the shared membership" \
+    || die "leave refusal claims a departure that never happened: $leave_out"
+  pass "non-owner leave is refused with the owner requirement"
+
+  local log_after
+  log_after="$(with_creds "$oc" member "$od" log | grep -c .)"
+  [[ "$log_after" == "$log_before" ]] \
+    || die "a non-owner leave authored a transition: $log_before -> $log_after"
+  pass "non-owner leave authors no membership transition"
+  local list_after
+  list_after="$(with_creds "$oc" member "$od" list)"
+  [[ "$list_after" == "$list_before" ]] \
+    || die "owner member list changed across a refused leave"
+  echo "$list_after" | grep -q "^member $dev$" \
+    || die "leaver vanished from the owner list: $list_after"
+  pass "owner member list unchanged, leaver still seated"
+
+  local f
+  for f in "$LOGDIR"/step7-*.stderr; do
+    check_no_leaks "$f" "$(cat "$oc/identity")" "$(cat "$oc/passphrase")" \
+      "$(cat "$nc/identity")" "$(cat "$nc/passphrase")"
+  done
+}
 main() {
   # Fresh slate every run: steps build on each other within one run, and a
   # previous partial run must never leak state into the next. Unmount
@@ -637,8 +686,8 @@ main() {
   # the prefix. An absent variable (the wrapper omits it) means all.
   local max_step=0
   if [[ -n "$only" ]]; then
-    max_step="$(step_max 1 6 "$only")" \
-      || die "--step: '$only' is not a step (expected a comma list of 1-6)"
+    max_step="$(step_max 1 7 "$only")" \
+      || die "--step: '$only' is not a step (expected a comma list of 1-7)"
   fi
   want_step() { [[ -z "$only" ]] || (( $1 <= max_step )); }
   if want_step 1; then step1_init; fi
@@ -647,6 +696,7 @@ main() {
   if want_step 4; then step4_member; fi
   if want_step 5; then step5_export; fi
   if want_step 6; then step6_relay; fi
+  if want_step 7; then step7_leave; fi
   e2e_timing_report
   echo "e2e: $PASS_COUNT checks passed"
 }

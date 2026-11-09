@@ -52,6 +52,57 @@ fn author_made_owner_by_the_transition_is_invalid() {
 }
 
 #[test]
+fn a_member_authored_self_removal_is_classified_invalid() {
+    // A non-owner member authors Remove(self): the engine's
+    // owner-only gate (epochs.md rule 3) does not admit it, and the
+    // classifier must agree on the author's own log and on a
+    // peer's. The leave surface never attempts this — this test
+    // exists precisely because it does not.
+    let (mut b, genesis) = Builder::genesis(1);
+    let owner = *b.owners.iter().next().unwrap();
+    let (member_sk, member) = key(2);
+    let admission = b.child(vec![admit(member)]);
+    let mut t = signed(
+        &b,
+        3,
+        Some(admission.transition_id()),
+        Vec::new(),
+        vec![Change::Remove(member)],
+        &[owner],
+        &[owner],
+    );
+    t.author = member;
+    sign(&mut t, &member_sk, &b.drive);
+    let id = t.transition_id();
+    for log in [
+        &mut MembershipLog::new(drive()),
+        &mut MembershipLog::new(drive()),
+    ] {
+        observe_all(log, &[&genesis, &admission, &t]);
+        assert_eq!(
+            log.status(&id),
+            Some(TransitionStatus::Invalid(InvalidReason::AuthorNotOwner)),
+            "member-authored self-removal is invalid"
+        );
+        assert_eq!(
+            log.members_of(&id),
+            None,
+            "an invalid transition derives no member state"
+        );
+        assert_eq!(
+            log.owners_of(&id),
+            None,
+            "an invalid transition derives no owner state"
+        );
+        assert_eq!(
+            log.known_state().map(|tip| tip.transition_id),
+            Some(admission.transition_id()),
+            "the canonical tip does not advance past the invalid self-removal"
+        );
+    }
+}
+
+#[test]
 fn remove_last_owner_is_valid_and_terminal() {
     let (mut b, genesis) = Builder::genesis(1);
     let owner = *b.owners.iter().next().unwrap();

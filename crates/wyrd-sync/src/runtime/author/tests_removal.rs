@@ -141,3 +141,46 @@ fn admit_retired_device_is_refused_before_signing() {
     assert_eq!(tip.epoch, 3, "refused admit commits nothing");
     assert_ne!(tip.transition_id, tip_before);
 }
+
+#[test]
+fn sole_owner_leave_empties_the_owner_set() {
+    // The leave the surface offers the sole owner: Remove(self)
+    // through the existing owner gate. The transition commits, the
+    // owner set empties, the epoch bumps, nothing is installed for
+    // the author — and no later transition can be authored, so the
+    // drive freezes permanently.
+    let (_dir, mut engine, _genesis) = owner_engine("sole-owner-leave");
+    let this = engine.device();
+    let transition = engine.remove_device(this).unwrap();
+    assert_eq!(transition.epoch, 2, "leave opens a new epoch");
+    let tip = engine.log.known_state().expect("canonical tip");
+    assert_eq!(tip.transition_id, transition.transition_id());
+    assert!(
+        engine
+            .log
+            .owners_of(&tip.transition_id)
+            .expect("state")
+            .is_empty(),
+        "leave empties the owner set with the author"
+    );
+    assert!(
+        !engine.held_epochs().unwrap().contains(&transition.epoch),
+        "the removed author installs no self capability for the new epoch"
+    );
+    let rebuilt = engine.store.rebuild(engine.device()).unwrap();
+    assert!(
+        !rebuilt
+            .runtime
+            .pending_capabilities()
+            .iter()
+            .any(|(epoch, _)| *epoch == transition.epoch),
+        "leave queues no new-epoch material for the author"
+    );
+    assert!(matches!(engine.rotate_epoch(), Err(EngineError::NotOwner)));
+    let newcomer = DeviceIdentitySecret::generate().unwrap();
+    let newcomer_encryption = DeviceEncryptionSecret::generate().unwrap();
+    assert!(matches!(
+        engine.admit_device(device_of(&newcomer), encryption_key(&newcomer_encryption)),
+        Err(EngineError::NotOwner)
+    ));
+}

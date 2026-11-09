@@ -98,3 +98,63 @@ fn export_command_refuses_a_populated_destination() {
     );
     assert_eq!(fs::read(out.join("mine.txt")).unwrap(), b"not yours");
 }
+
+/// While the application holds the drive, a second open — and the
+/// export built on it — fails closed with the store lock: no retry
+/// loop, no lock-file removal, and the holder keeps running.
+#[test]
+fn lifecycle_export_refuses_while_the_store_is_locked() {
+    use wyrd_sync::durable::DurableError;
+    let temp = TempDir::new();
+    let identity_file = temp.0.join("identity");
+    let passphrase_file = temp.0.join("passphrase");
+    let drive = temp.0.join("drive");
+    let out = temp.0.join("out");
+    write_secret(&identity_file, [0x22; 32]);
+    write_secret(&passphrase_file, b"test-pass\n");
+    command(vec![
+        "init".into(),
+        drive.display().to_string(),
+        "--identity-file".into(),
+        identity_file.display().to_string(),
+        "--passphrase-file".into(),
+        passphrase_file.display().to_string(),
+    ])
+    .unwrap();
+
+    // The application holds the store for its lifetime.
+    let identity = read_identity(&identity_file).unwrap();
+    let _held = Engine::open_keystore(drive.clone(), "test-pass", identity).unwrap();
+
+    // A second open contends — one attempt, definite refusal.
+    let identity = read_identity(&identity_file).unwrap();
+    assert!(matches!(
+        Engine::open_keystore(drive.clone(), "test-pass", identity),
+        Err(EngineError::Durable(DurableError::StoreLocked))
+    ));
+    // Export surfaces the same lock through the command, and the
+    // exit mapping names it held (78) rather than failed (2).
+    let error = command(vec![
+        "export".into(),
+        drive.display().to_string(),
+        out.display().to_string(),
+        "--identity-file".into(),
+        identity_file.display().to_string(),
+        "--passphrase-file".into(),
+        passphrase_file.display().to_string(),
+    ])
+    .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            CliError::Engine(EngineError::Durable(DurableError::StoreLocked))
+        ),
+        "export fails closed on the held lock: {error:?}"
+    );
+    assert_eq!(error.exit_code(), EXIT_DRIVE_LOCKED);
+    assert!(
+        drive.join("LOCK").exists(),
+        "no lock-file removal on refusal"
+    );
+    assert!(!out.exists(), "no partial tree beside the refusal");
+}
