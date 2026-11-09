@@ -70,6 +70,41 @@ pub(crate) enum Command {
         #[command(flatten)]
         credentials: Credentials,
     },
+    /// Provision a drive from nothing and hand it to OS supervision:
+    /// initialize, register in the per-user registry, install and
+    /// enable the per-drive service, and verify the owner socket.
+    /// Ready is reported only when the socket answers this session.
+    Bootstrap {
+        /// Registration name: 1-64 chars of [a-z0-9-]. Names the
+        /// registry entry and derives the service name.
+        #[arg(long)]
+        name: String,
+        /// Directory holding (or to hold) the drive's keystore and
+        /// object store.
+        drive_dir: PathBuf,
+        #[command(flatten)]
+        relays: RelayArgs,
+        #[command(flatten)]
+        credentials: Credentials,
+        /// Join as an invited device instead of creating: the sealed
+        /// invitation file the inviter's `member invite` wrote.
+        #[arg(long, value_name = "PATH")]
+        invitation_file: Option<PathBuf>,
+        /// Registry file elsewhere than the platform default.
+        #[arg(long, value_name = "PATH")]
+        registry: Option<PathBuf>,
+        /// Owner binary for the service definition elsewhere than
+        /// the `wyrd-host` shipped beside this binary.
+        #[arg(long, value_name = "PATH")]
+        owner_bin: Option<PathBuf>,
+        /// Register without installing or enabling any OS service:
+        /// the owner stays supervised by whoever starts it.
+        #[arg(long)]
+        no_service: bool,
+        /// Install and enable the service without starting it now.
+        #[arg(long)]
+        no_start: bool,
+    },
     /// Mount a live projection at `mountpoint` (read-write).
     // Behind the `mount` feature (plain comment: `///` docs would leak
     // into the pinned `--help` surface): a mount-free build has no

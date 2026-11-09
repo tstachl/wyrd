@@ -124,9 +124,13 @@ plane. Three pieces, all precedented in-tree:
   existing local peer-credential and protocol checks — registry
   content is discovery metadata, never proof of drive identity or
   authorization. Proposed locations, not frozen:
-  `XDG_STATE_HOME/wyrd/drives.toml` on Linux,
-  `~/Library/Application Support/Wyrd/drives.toml` on macOS,
+  `XDG_STATE_HOME/wyrd/drives.json` on Linux,
+  `~/Library/Application Support/Wyrd/drives.json` on macOS,
   resolved through the platform path APIs the frontend already uses.
+  JSON, not TOML, deliberately: the daemon already carries
+  `serde_json`, and the registry must add no third-party dependency
+  to its closure — the format follows the dependency rule, and the
+  registration flow (not hand-editing) is the writer.
 - **Per-drive owner services**, installed from a template the
   installer ships: a launchd agent per drive on macOS, a systemd
   user unit per drive on Linux — the same shapes `nix/drive`
@@ -169,8 +173,8 @@ plane. Three pieces, all precedented in-tree:
   initialization as an explicit owner-side provisioning operation
   that runs before anything is registered. Creating is
   `Engine::create` (new single-device drive; fails if the directory
-  already holds one); joining is `Engine::accept_invitation` (sealed
-  invitation plus device encryption secret; commits genesis, and the
+  already holds one); joining is `Engine::join` (sealed
+  invitation file; commits genesis, and the
   admission itself still arrives through normal intake, so the join
   is not complete until the loop confirms it). Both run in the same
   ownership model as everything else — exclusive keystore access,
