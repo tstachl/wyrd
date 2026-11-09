@@ -5,7 +5,6 @@
   "identifier": "md.enesis.wyrd",
   "build": {
     "frontendDist": "../../apps/desktop/dist",
-    "devUrl": "http://localhost:1420",
     "beforeDevCommand": "bun --cwd ../../apps/desktop run dev",
     "beforeBuildCommand": "bun --cwd ../../apps/desktop run build"
   },

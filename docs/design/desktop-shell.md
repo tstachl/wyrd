@@ -601,7 +601,11 @@ installer issue; auto-update is explicitly v0.8.
    warranted complexity).
 4. App identifier and bundle metadata: decide before packaging and
    capability configuration; confirm the existing app-id marker
-   check covers the chosen id.
+   check covers the chosen id. The scaffold's `tauri.conf.json`
+   reuses the workspace `md.enesis.wyrd` id as a placeholder so the
+   existing marker covers it; the distinct desktop bundle id (the
+   host Flatpak keeps `md.enesis.wyrd`) is decided with packaging,
+   not here.
 5. Settings hand-off (issue 25): reference that issue; duplicate no
    field definitions here.
 6. `wyrd-owner-client` extraction: landed — the closure decision

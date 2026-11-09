@@ -120,12 +120,17 @@ impl DesktopBackend {
     /// stream: outstanding operations resolve `Unconfirmed`, and the
     /// new instance replays nothing. A failed reconnect keeps the old
     /// (poisoned) instance in place and reports `Unavailable` — the
-    /// backend never invents a connection it does not hold.
+    /// backend never invents a connection it does not hold. A
+    /// poisoned mutex recovers here too: the guard is reclaimed
+    /// rather than brick the backend as `Incompatible`, because a
+    /// panic while held must not defeat the new-connection recovery
+    /// this method exists to provide.
     pub fn reconnect(&self) -> Result<(), BackendError> {
         let fresh = OwnerClient::connect_drive(&self.drive_dir)?;
-        let mut held = self.client.lock().map_err(|_| BackendError::Incompatible {
-            detail: "backend client lock poisoned".to_string(),
-        })?;
+        let mut held = self
+            .client
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
         *held = fresh;
         Ok(())
     }
@@ -137,65 +142,72 @@ impl DesktopBackend {
 
     fn with_client<T>(
         &self,
-        op: &str,
         call: impl FnOnce(&mut OwnerClient) -> Result<T, ClientError>,
     ) -> Result<T, BackendError> {
-        let mut held = self.client.lock().map_err(|_| BackendError::Incompatible {
-            detail: format!("backend client lock poisoned during {op}"),
-        })?;
+        // A poisoned mutex reclaims its guard instead of bricking
+        // the backend: the call path holds no panic sites (socket IO
+        // reports errors, never panics), so poisoning means a bug
+        // elsewhere, and every later call degrading to
+        // `Incompatible` would defeat `reconnect`'s recovery. The
+        // poisoned instance itself is untouched — still poisoned if
+        // the client broke — only the lock recovers.
+        let mut held = self
+            .client
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
         call(&mut held).map_err(BackendError::from)
     }
 
     /// Look up one path: the node plus the serving generation and
     /// durable revision it was served from.
     pub fn lookup(&self, path: &str) -> Result<(WireNode, u64, u64), BackendError> {
-        self.with_client("lookup", |client| client.lookup(path))
+        self.with_client(|client| client.lookup(path))
     }
 
     /// Stat one path: attributes plus serving generation and durable
     /// revision.
     pub fn stat(&self, path: &str) -> Result<(WireAttr, u64, u64), BackendError> {
-        self.with_client("stat", |client| client.stat(path))
+        self.with_client(|client| client.stat(path))
     }
 
     /// List one directory: entries plus serving generation and
     /// durable revision.
     pub fn readdir(&self, path: &str) -> Result<(Vec<WireDirEntry>, u64, u64), BackendError> {
-        self.with_client("readdir", |client| client.readdir(path))
+        self.with_client(|client| client.readdir(path))
     }
 
     /// Read one whole file, plus serving generation and durable
     /// revision. Files past the interface read bound refuse with
     /// `TooLarge` — never truncated, never streamed.
     pub fn read(&self, path: &str) -> Result<(Vec<u8>, u64, u64), BackendError> {
-        self.with_client("read", |client| client.read(path))
+        self.with_client(|client| client.read(path))
     }
 
     /// The owner's durable observation: what a member may observe,
     /// never liveness.
     pub fn observe(&self) -> Result<WireSyncStatus, BackendError> {
-        self.with_client("observe", |client| client.observe())
+        self.with_client(|client| client.observe())
     }
 
     /// Transport health plus the last pass report, pinned to the pass
     /// count. A separate object from the durable observation: a live
     /// socket is not a durable fact.
     pub fn liveness(&self) -> Result<WireLiveness, BackendError> {
-        self.with_client("liveness", |client| client.liveness())
+        self.with_client(|client| client.liveness())
     }
 
     /// The projection freshness judgment: fresh empty, fresh
     /// non-empty, retained last-good with its refresh failure, or no
     /// trustworthy projection.
     pub fn freshness(&self) -> Result<WireFreshness, BackendError> {
-        self.with_client("freshness", |client| client.freshness())
+        self.with_client(|client| client.freshness())
     }
 
     /// Capture the parent-directory incarnation a create must send
     /// against. `path` is the parent directory that will contain the
     /// create — `""` for the drive root — not the file path itself.
     pub fn capture_parent(&self, path: &str) -> Result<WireParentToken, BackendError> {
-        self.with_client("capture_parent", |client| client.capture_parent(path))
+        self.with_client(|client| client.capture_parent(path))
     }
 
     /// Forward one mutation to the owner's single queue and block for
@@ -203,7 +215,7 @@ impl DesktopBackend {
     /// second route through this backend. A sent request is not a
     /// committed write — only the terminal answer says what happened.
     pub fn submit(&self, kind: WireMutationKind) -> Result<WireMutationOutcome, BackendError> {
-        self.with_client("submit", |client| client.submit(kind))
+        self.with_client(|client| client.submit(kind))
     }
 
     /// Backend-owned recovery, not an ordinary frontend command: the
@@ -217,7 +229,7 @@ impl DesktopBackend {
         &self,
         path: &str,
     ) -> Result<Option<(WireNode, u64, u64)>, BackendError> {
-        self.with_client("reconcile_lookup", |client| client.reconcile_lookup(path))
+        self.with_client(|client| client.reconcile_lookup(path))
     }
 }
 
