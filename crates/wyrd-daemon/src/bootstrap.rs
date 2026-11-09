@@ -559,7 +559,10 @@ pub fn install_service(
 /// the documented stop path, distinct from a crash the manager
 /// retries.
 #[cfg(unix)]
-pub fn enable_service(entry: &RegistryEntry, definition: &Path) -> Result<(), String> {
+pub fn enable_service(
+    entry: &RegistryEntry,
+    #[cfg_attr(not(target_os = "macos"), allow(unused_variables))] definition: &Path,
+) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
         let label = format!("md.enesis.wyrd.{}", entry.service);
