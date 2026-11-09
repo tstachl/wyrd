@@ -31,8 +31,10 @@ Rust tests by `#[test]` count, 2026-11-09, at `55160edf`:
 Shell and end-to-end evidence: 17 `test-*.sh` harness suites and
 4 libraries, 14 `tests/gate` bats files plus 1 driver, 1 `tests/drive`
 bats file, the Lima scripts, and the 2,286-line
-`tests/microvm/alpha-microvm-legs.sh`. Rust doctests are 6 fenced
-examples in 3 files.
+`tests/microvm/alpha-microvm-legs.sh`. Rust doctests are 2 listed
+(1 `compile_fail` in `wyrd-view`, 1 `ignore` in `wyrd-core`); the
+rest of the fenced blocks are `text`/`toml`/`ignore` and never
+compile.
 
 The baseline in `.config/nextest.toml` records 1,415 tests in 206
 seconds on 2026-10-05. The current tree carries more tests than
@@ -69,11 +71,12 @@ fast unit tests. The run-time cost is not the count. It is four
 placements and two serial groups.
 
 1. Doctests compile the whole workspace on every pull request for
-   6 examples. They belong on `master`, not on the pull-request gate.
-   The plain consequence: a doctest that stops compiling on a
-   product branch now breaks on `master`, not on that branch.
-   Local `cargo test --workspace --doc` runs plus the doc-links
-   hook are the only branch-level backstop.
+   2 listed examples. They belong on `master`, not on the pull-request
+   gate. The plain consequence: a doctest that stops compiling on a
+   product branch now breaks on `master`, not on that branch. A
+   local `cargo test --workspace --doc` run is the only branch-level
+   backstop; the doc-links hook checks Markdown links, not doctest
+   compilation.
 2. Eight multi-second live-relay tests still run on the
    pull-request gate. They belong in the `slow` profile with
    the floods. Their measured cost is at most the 28 to 36
@@ -145,9 +148,12 @@ Merge candidates (about 55):
   and version tests become one table.
 - About 15 codec round trips collapse to one per codec. Each
   keeps its known-answer or truncation rejection.
-- `keys/root.rs` (2), `keys/ephemeral.rs` (1), and two device
-  zeroize locks duplicate `keys/hygiene.rs`. They remove
-  without loss (this branch removes 3).
+- `keys/root.rs` (2), `keys/ephemeral.rs` (1),
+  `keys/device.rs` (`device_secrets_do_not_leak_through_debug`),
+  and `keys/epoch.rs` (`epoch_secret_implements_zeroize_on_drop`)
+  duplicate `keys/hygiene.rs`. This branch removes the three
+  named above without loss; the two remaining duplicates stay
+  as follow-up scope.
 - `close.rs` (5) stays. The zero-deadline sparing of an
   already-complete stop is the serving contract. It is not
   trivia.

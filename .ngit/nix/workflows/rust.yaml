@@ -10,7 +10,7 @@
 # Mirrors the act rust job step for step — check (+ the production
 # feature-graph gate), clippy, nextest default profile, audit+deny —
 # so a native green means the same thing as an act green. Doctests
-# moved to rust-slow.yaml in Nov-09: 6 examples do not justify a
+# moved to rust-slow.yaml in Nov-09: 2 listed doctests do not justify a
 # second workspace compile on every PR (see
 # docs/design/test-review.md). Only the audit step reaches the
 # network (advisory DB), and only for the DB. No artifacts (no

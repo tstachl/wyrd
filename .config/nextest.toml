@@ -70,7 +70,10 @@ host-lifecycle = { max-threads = 1 }
 # never run in CI. Substrings are distinctive enough to select exactly
 # these tests without a name-by-name list at each call site (nine
 # live-relay plus the named ceiling-scale admission tests plus the
-# seven measured heavyweights).
+# seven measured heavyweights plus the eight-test Nov-09 tail:
+# per-sender quota, bulk walkers, oversize flood, torn-commit
+# cross product, concurrent 256 MiB fill, serving push-denial
+# dials, heterogeneous cover).
 #
 # Former deliberate exception, moved in Nov-09: heterogeneous_relays_cover
 # used to stay in `default` as the only default-gate coverage of the
