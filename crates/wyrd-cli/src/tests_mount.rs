@@ -4,7 +4,7 @@ use super::tests_harness::{reclaim, JOIN_TIMEOUT};
 use super::tests_harness::{write_secret, TempDir, WithoutRustLog};
 use super::*;
 
-use wyrd_fuse::DriveView;
+use wyrd_view::DriveView;
 
 #[cfg(feature = "mount")]
 use std::sync::{Mutex, MutexGuard};

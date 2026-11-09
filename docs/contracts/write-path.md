@@ -1002,7 +1002,7 @@ The write state machine lives in the daemon and sync crates; FUSE stays
 an adapter:
 
 ```text
-presentation     wyrd-fuse (POSIX translation only)
+presentation     wyrd-view (POSIX translation only)
                      ↓ reads the shared view; never authors
 node             wyrd-core (MutationQueue, fold orchestration,
                  commit sequencing, stale checks, publication)
@@ -1015,7 +1015,7 @@ Separately, the daemon backend owns the per-handle `WriteHandle`
 state (buffers, base advance, budget release) and supplies the
 post-commit transition as a handle-owner callback upward into the
 orchestrated commit (rule 7). `wyrd-daemon` depends on `wyrd-core`,
-never the reverse; `wyrd-fuse` depends on `wyrd-format` and
+never the reverse; `wyrd-view` depends on `wyrd-format` and
 `wyrd-namespace` only and never calls into the node.
 
 Stale checks, snapshot creation, tree mutation, and commit sequencing

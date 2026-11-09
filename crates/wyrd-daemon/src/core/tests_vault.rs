@@ -13,12 +13,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use wyrd_format::MemoryObjectStore;
-use wyrd_fuse::DriveView;
 use wyrd_sync::bulk::MemoryBulkSource;
 use wyrd_sync::keys::{DeviceEncryptionSecret, DeviceIdentitySecret};
 use wyrd_sync::transport::mailbox::{
     Delivery, DeliveryId, Disposition, Mailbox, MailboxEnvelope, MailboxError, SendReport,
 };
+use wyrd_view::DriveView;
 
 use crate::vault::{install_role_dir, install_serving, ServeSurface};
 

@@ -10,7 +10,7 @@ use wyrd_sync::durable::AuthorizeSnapshot;
 /// contract fixtures keep their object stores complete.
 pub(crate) struct RemoteOnlyMaterialization;
 
-impl wyrd_fuse::Materialization for RemoteOnlyMaterialization {
+impl wyrd_view::Materialization for RemoteOnlyMaterialization {
     fn status(&self, _id: &ContentId) -> wyrd_format::FetchStatus {
         FetchStatus::RemoteOnly
     }
@@ -24,7 +24,7 @@ struct TestLiveHead(wyrd_sync::durable::AuthorizedSnapshot);
 // SAFETY: contract fixtures deliberately use this only to exercise view
 // mechanics. Production head installation remains daemon-owned.
 #[allow(unsafe_code)]
-unsafe impl wyrd_fuse::VerifiedSnapshot for TestLiveHead {
+unsafe impl wyrd_view::VerifiedSnapshot for TestLiveHead {
     fn into_snapshot(self) -> Snapshot {
         self.0.snapshot().clone()
     }
@@ -36,18 +36,18 @@ unsafe impl wyrd_fuse::VerifiedSnapshot for TestLiveHead {
 /// adapter); this path exists so view contracts need no engine.
 pub(crate) fn mount_heads(
     heads: impl IntoIterator<Item = wyrd_sync::durable::AuthorizedSnapshot>,
-) -> Vec<wyrd_fuse::ViewHead> {
+) -> Vec<wyrd_view::ViewHead> {
     heads
         .into_iter()
         .map(TestLiveHead)
-        .map(wyrd_fuse::ViewHead::new)
+        .map(wyrd_view::ViewHead::new)
         .collect()
 }
 
 /// Wrap hand-signed fixture snapshots into view heads: each body runs
 /// through `AuthorizedSnapshot::authorize` exactly as the composition
 /// requires, so an unsigned fixture cannot slip past the boundary.
-pub(crate) fn fixture_heads(snapshots: Vec<Snapshot>) -> Vec<wyrd_fuse::ViewHead> {
+pub(crate) fn fixture_heads(snapshots: Vec<Snapshot>) -> Vec<wyrd_view::ViewHead> {
     mount_heads(snapshots.into_iter().map(|snapshot| {
         wyrd_sync::durable::AuthorizedSnapshot::authorize(snapshot, &super::signing::drive())
             .unwrap()

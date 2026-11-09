@@ -7,7 +7,7 @@ use fuser::FileHandle;
 use wyrd_core::mutation::FileIdentity;
 
 use wyrd_format::{ObjectStore, StoreFailure};
-use wyrd_fuse::{Materialization, Node, ViewError};
+use wyrd_view::{Materialization, Node, ViewError};
 
 use super::super::inode::{Handle, OpenFiles, ReadHandle, WriteHandle, DIRECTORY_HANDLE_BASE};
 use super::{errno_of, log_capture_refusal, FuseBackend};

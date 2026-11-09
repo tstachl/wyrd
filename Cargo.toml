@@ -4,13 +4,13 @@ members = [
     "crates/wyrd-format",
     "crates/wyrd-sync",
     "crates/wyrd-namespace",
-    "crates/wyrd-fuse",
+    "crates/wyrd-view",
     "crates/wyrd-core",
     "crates/wyrd-daemon",
     "crates/wyrd-cli",
     "crates/wyrd-contracts",
     "crates/wyrd-embed",
-    "crates/wyrd-app",
+    "crates/wyrd-host",
 ]
 
 [workspace.package]
@@ -21,7 +21,7 @@ license = "MIT"
 
 [workspace.lints.rust]
 # The verified-head boundary rests on unsafe-impl auditability (see
-# `wyrd_fuse::VerifiedSnapshot`): every unsafe surface in the workspace
+# `wyrd_view::VerifiedSnapshot`): every unsafe surface in the workspace
 # is an explicit, commented exception. Crates without an exception have
 # none, so an accidental capability impl cannot compile.
 unsafe_code = "deny"
@@ -58,7 +58,7 @@ fuser = { path = "vendor/fuser" }
 wyrd-format = { path = "crates/wyrd-format" }
 wyrd-sync = { path = "crates/wyrd-sync" }
 wyrd-namespace = { path = "crates/wyrd-namespace" }
-wyrd-fuse = { path = "crates/wyrd-fuse" }
+wyrd-view = { path = "crates/wyrd-view" }
 wyrd-core = { path = "crates/wyrd-core" }
 # No default features here: the `mount` feature (default-on) in each of
 # `wyrd-daemon`, `wyrd-cli`, and `wyrd-contracts` re-enables the daemon's

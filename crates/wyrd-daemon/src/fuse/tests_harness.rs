@@ -1,10 +1,10 @@
 use super::*;
 
 use wyrd_format::ObjectStore;
-use wyrd_fuse::{DriveView, Materialization};
+use wyrd_view::{DriveView, Materialization};
 
 use wyrd_format::{ContentId, Entry, FetchStatus, MemoryObjectStore, ObjectKind, Snapshot, Tree};
-use wyrd_fuse::ViewHead;
+use wyrd_view::ViewHead;
 
 /// Test materialization: everything is remote-only. Local reads
 /// never consult it — the store answers from memory.
@@ -25,7 +25,7 @@ pub(super) struct TestHead(Snapshot);
 // code. The upstream verification boundary is covered by the
 // daemon adapter and the contract suite, not here.
 #[allow(unsafe_code)]
-unsafe impl wyrd_fuse::VerifiedSnapshot for TestHead {
+unsafe impl wyrd_view::VerifiedSnapshot for TestHead {
     fn into_snapshot(self) -> Snapshot {
         self.0
     }

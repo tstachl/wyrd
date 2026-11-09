@@ -8,7 +8,7 @@ description = "Wyrd's cross-crate architectural contract suite: one named test p
 [dependencies]
 wyrd-format.workspace = true
 wyrd-sync.workspace = true
-wyrd-fuse.workspace = true
+wyrd-view.workspace = true
 wyrd-core.workspace = true
 # The `mount` feature below re-enables the daemon's mount explicitly;
 # the workspace dependency carries no defaults (see the root manifest).

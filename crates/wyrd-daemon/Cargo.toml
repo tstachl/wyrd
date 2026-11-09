@@ -8,7 +8,7 @@ description = "Wyrd's daemon library: composes the sync engine with the drive vi
 [dependencies]
 wyrd-format.workspace = true
 wyrd-sync.workspace = true
-wyrd-fuse.workspace = true
+wyrd-view.workspace = true
 wyrd-core.workspace = true
 # The FUSE adapter is the first presentation backend, not a property of
 # the node (`docs/architecture.md`): it is a default-on feature so a

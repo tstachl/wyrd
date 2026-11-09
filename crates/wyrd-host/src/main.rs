@@ -8,21 +8,21 @@
 //! the shipped artifact): credentials arrive over environment
 //! variables, never a third credential path, and relay set and
 //! loopback are flags. Usage:
-//! `wyrd-app <drive-dir> --relay <url>... [--loopback]`
+//! `wyrd-host <drive-dir> --relay <url>... [--loopback]`
 //! with `WYRD_PASSPHRASE` and `WYRD_IDENTITY_HEX` (32-byte signer key)
 //! in the environment.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use wyrd_app::{compose, exit_code, loop_result, open_host, telemetry_emit};
 use wyrd_daemon::posture::PostureRecorder;
 use wyrd_daemon::process::{bind_bulk_source, install_shutdown_handler, SHUTDOWN};
 use wyrd_daemon::{run_composed_owner, VaultOutcome};
+use wyrd_host::{compose, exit_code, loop_result, open_host, telemetry_emit};
 use wyrd_sync::keys::DeviceIdentitySecret;
 
 fn usage() -> ! {
-    eprintln!("usage: wyrd-app <drive-dir> --relay <url>... [--loopback]");
+    eprintln!("usage: wyrd-host <drive-dir> --relay <url>... [--loopback]");
     eprintln!("env: WYRD_PASSPHRASE, WYRD_IDENTITY_HEX (32-byte hex signer key)");
     std::process::exit(2);
 }
@@ -64,7 +64,7 @@ fn main() {
             // shared with the `wyrd` binary's supervisor contract);
             // every other open failure keeps the historical exit 1.
             let code = match &error {
-                wyrd_app::HostError::DriveLocked { .. } => 78,
+                wyrd_host::HostError::DriveLocked { .. } => 78,
                 _ => 1,
             };
             std::process::exit(code);

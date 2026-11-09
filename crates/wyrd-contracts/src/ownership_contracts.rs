@@ -36,10 +36,10 @@ use wyrd_format::{
     membership::Admission, Change, Entry, MemoryObjectStore, ObjectKind, ObjectStore, SnapshotId,
     Tree,
 };
-use wyrd_fuse::{DriveView, Node, ViewHead};
 use wyrd_sync::authorization::{Classification, SnapshotDag};
 use wyrd_sync::durable::{AuthorizeSnapshot, AuthorizedSnapshot, DurableError, DurableStore};
 use wyrd_sync::membership::MembershipLog;
+use wyrd_view::{DriveView, Node, ViewHead};
 
 use crate::support::{
     device, drive, scratch_dir, signed_snapshot, signed_transition, RemoteOnlyMaterialization,

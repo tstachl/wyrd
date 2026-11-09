@@ -22,7 +22,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use wyrd_format::MemoryObjectStore;
-use wyrd_fuse::DriveView;
+use wyrd_view::DriveView;
 
 /// A live drive: the backend on the test thread, the loop on its own
 /// thread, a scratch directory underneath.

@@ -10,7 +10,7 @@
 //! rather than one implementation of it.
 //!
 //! Contract 36 goes one further: the loop, parts, and projection
-//! compose over a view type defined outside `wyrd-fuse` entirely,
+//! compose over a view type defined outside `wyrd-view` entirely,
 //! proving the genericity claim (any provider implements the
 //! trait; the node never names one).
 
@@ -32,7 +32,6 @@ use wyrd_format::{
     ContentId, Entry, FetchStatus, FsObjectStore, MemoryObjectStore, ObjectKind, ObjectStore,
     StoreFailure, Tree,
 };
-use wyrd_fuse::{DriveView, ViewHead};
 use wyrd_sync::bulk::MemoryBulkSource;
 use wyrd_sync::durable::DurableError;
 use wyrd_sync::keys::DeviceIdentitySecret;
@@ -40,6 +39,7 @@ use wyrd_sync::runtime::{Engine, EngineError};
 use wyrd_sync::transport::mailbox::{
     Delivery, DeliveryId, Disposition, Mailbox, MailboxEnvelope, MailboxError, SendReport,
 };
+use wyrd_view::{DriveView, ViewHead};
 
 /// A control plane that never speaks: no announcements, no sends, so
 /// the loop idles on pacing alone and every observed change is local.
@@ -97,7 +97,7 @@ fn node_composes_and_serves_without_a_presentation_backend() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
-/// A second namespace-view provider, defined outside `wyrd-fuse`: a
+/// A second namespace-view provider, defined outside `wyrd-view`: a
 /// newtype over [`DriveView`] implementing [`NamespaceView`] by
 /// delegation. It proves the trait is implementable out-of-crate —
 /// heads cross through the public [`ViewHead`] admission ticket, and
@@ -197,7 +197,7 @@ impl NamespaceView for ContractView {
 }
 
 /// Contract 36: the node composes, runs, mutates, and serves over a
-/// provider defined outside `wyrd-fuse`. Same driver as contract 35,
+/// provider defined outside `wyrd-view`. Same driver as contract 35,
 /// monomorphized over [`ContractView`] — the loop, the split parts,
 /// and the publication slot never name the FUSE view type.
 #[test]
@@ -612,7 +612,7 @@ fn fold_commits_one_snapshot_for_many_members() {
 /// unclaimed by one loop pass — bytes gone, claim gone, `Cached`
 /// policy intact — and the repair is reported in the pass report,
 /// not repeated on the next pass. The observation half (which bytes
-/// may be named) is pinned at the view boundary in `wyrd-fuse` and
+/// may be named) is pinned at the view boundary in `wyrd-view` and
 /// the discard half in `wyrd-core`; this pins the loop's half over
 /// public APIs: submit, pass, repaired.
 #[test]

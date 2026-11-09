@@ -1,7 +1,7 @@
 #[cfg(feature = "mount")]
 use super::*;
 #[cfg(feature = "mount")]
-use wyrd_fuse::DriveView;
+use wyrd_view::DriveView;
 
 use wyrd_format::ContentId;
 #[cfg(feature = "mount")]

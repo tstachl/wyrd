@@ -15,7 +15,6 @@ use wyrd_format::{
     BaoRoot, Change, ContentId, Entry, FetchStatus, FsObjectStore, Manifest, MembershipTransition,
     MemoryObjectStore, ObjectKind, ObjectStore, SnapshotId, Tree,
 };
-use wyrd_fuse::{DriveView, ViewError};
 use wyrd_sync::authorization::{Classification, Pendency, Rejection, SnapshotDag};
 use wyrd_sync::bulk::{MemoryBulkSource, SealedManifest};
 use wyrd_sync::control::{CapabilityPayload, Message};
@@ -28,6 +27,7 @@ use wyrd_sync::seal::SEAL_VERSION;
 use wyrd_sync::transport::mailbox::{
     Delivery, DeliveryId, Disposition, Mailbox, MailboxEnvelope, MailboxError, SendReport,
 };
+use wyrd_view::{DriveView, ViewError};
 
 /// A control plane that never speaks: no announcements, no sends, so
 /// the loop idles on pacing alone and every observed change is local.

@@ -5,7 +5,7 @@
 //! Narrowly scoped on purpose — this module must never become a
 //! second `main.rs`.
 //!
-//! The host (`wyrd-app`) composes through exactly this surface so the
+//! The host (`wyrd-host`) composes through exactly this surface so the
 //! teardown bounds and the retention check cannot silently diverge
 //! between composers. The mount keeps its own `live_config` override
 //! (with its unit test) in the CLI: only the pacing moves there, never

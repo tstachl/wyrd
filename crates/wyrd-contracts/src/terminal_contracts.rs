@@ -25,9 +25,9 @@ use wyrd_format::{
     BaoRoot, ContentId, FetchStatus, FsObjectStore, MemoryObjectStore, ObjectKind, ObjectStore,
     StorageId,
 };
-use wyrd_fuse::DriveView;
 use wyrd_sync::bulk::{AttemptBudget, BulkError, BulkSource, MemoryBulkSource, SealedManifest};
 use wyrd_sync::runtime::{EngineError, RoutePublishing, RouteReport, RuntimeState};
+use wyrd_view::DriveView;
 
 use crate::support::Loaded;
 

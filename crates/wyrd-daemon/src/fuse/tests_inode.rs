@@ -2,7 +2,7 @@ use super::backend::{attr_of, join};
 use super::inode::{statfs_capacity, InodeError, InodeTable};
 use super::tests_harness::{kind_changing_backend, publish};
 
-use wyrd_fuse::Node;
+use wyrd_view::Node;
 
 use wyrd_format::ContentId;
 

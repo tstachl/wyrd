@@ -5191,21 +5191,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "wyrd-app"
-version = "0.3.0-alpha"
-dependencies = [
- "hex",
- "libc",
- "serde_json",
- "thiserror 2.0.20",
- "tracing",
- "wyrd-core",
- "wyrd-daemon",
- "wyrd-format",
- "wyrd-sync",
-]
-
-[[package]]
 name = "wyrd-cli"
 version = "0.3.0-alpha"
 dependencies = [
@@ -5228,8 +5213,8 @@ dependencies = [
  "wyrd-core",
  "wyrd-daemon",
  "wyrd-format",
- "wyrd-fuse",
  "wyrd-sync",
+ "wyrd-view",
  "zeroize",
 ]
 
@@ -5248,8 +5233,8 @@ dependencies = [
  "wyrd-core",
  "wyrd-daemon",
  "wyrd-format",
- "wyrd-fuse",
  "wyrd-sync",
+ "wyrd-view",
  "zeroize",
 ]
 
@@ -5291,8 +5276,8 @@ dependencies = [
  "tracing-subscriber",
  "wyrd-core",
  "wyrd-format",
- "wyrd-fuse",
  "wyrd-sync",
+ "wyrd-view",
 ]
 
 [[package]]
@@ -5301,8 +5286,8 @@ version = "0.3.0-alpha"
 dependencies = [
  "wyrd-core",
  "wyrd-format",
- "wyrd-fuse",
  "wyrd-sync",
+ "wyrd-view",
 ]
 
 [[package]]
@@ -5316,13 +5301,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "wyrd-fuse"
+name = "wyrd-host"
 version = "0.3.0-alpha"
 dependencies = [
+ "hex",
+ "libc",
+ "serde_json",
  "thiserror 2.0.20",
+ "tracing",
  "wyrd-core",
+ "wyrd-daemon",
  "wyrd-format",
- "wyrd-namespace",
+ "wyrd-sync",
 ]
 
 [[package]]
@@ -5359,6 +5349,16 @@ dependencies = [
  "wyrd-format",
  "wyrd-namespace",
  "zeroize",
+]
+
+[[package]]
+name = "wyrd-view"
+version = "0.3.0-alpha"
+dependencies = [
+ "thiserror 2.0.20",
+ "wyrd-core",
+ "wyrd-format",
+ "wyrd-namespace",
 ]
 
 [[package]]

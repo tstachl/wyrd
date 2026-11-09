@@ -1,7 +1,7 @@
 # wyrd-daemon
 
 Wyrd's composition crate: it owns a `wyrd-sync` engine, projects the
-`wyrd-fuse` view over it, and exposes the presentation backends — a
+`wyrd-view` view over it, and exposes the presentation backends — a
 read-only FUSE mount today, mobile file surfaces later. The `wyrd` binary
 (`init`, `mount`) lives here.
 
@@ -43,7 +43,7 @@ paths; it never contains secret bytes.
 
 Format, cryptography, membership, and transport logic. The daemon composes
 and never reimplements: new protocol behavior belongs in `wyrd-sync`, new
-filesystem semantics belong in `wyrd-fuse`.
+filesystem semantics belong in `wyrd-view`.
 
 ## Status
 

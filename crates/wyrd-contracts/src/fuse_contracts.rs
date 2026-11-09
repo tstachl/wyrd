@@ -7,8 +7,8 @@ use wyrd_daemon::fuse::FuseBackend;
 #[cfg(feature = "mount")]
 use wyrd_format::TransitionId;
 use wyrd_format::{Entry, MemoryObjectStore, ObjectKind, ObjectStore, Tree};
-use wyrd_fuse::{DriveView, Kind, Node, ViewError};
 use wyrd_sync::durable::AuthorizeSnapshot;
+use wyrd_view::{DriveView, Kind, Node, ViewError};
 
 #[cfg(feature = "mount")]
 use crate::support::{device, drive, mount_heads, signed_snapshot, Loaded};

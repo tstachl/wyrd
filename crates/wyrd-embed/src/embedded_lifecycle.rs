@@ -44,13 +44,13 @@ use wyrd_core::role::Role;
 use wyrd_core::status::observe;
 use wyrd_core::view::{NamespaceView, RuntimeMaterialization};
 use wyrd_format::{FsObjectStore, SnapshotId};
-use wyrd_fuse::DriveView;
 use wyrd_sync::bulk::MemoryBulkSource;
 use wyrd_sync::keys::DeviceIdentitySecret;
 use wyrd_sync::runtime::Engine;
 use wyrd_sync::transport::mailbox::{
     Delivery, DeliveryId, Disposition, Mailbox, MailboxEnvelope, MailboxError, SendReport,
 };
+use wyrd_view::DriveView;
 
 /// A control plane that never speaks: no announcements, no sends, so
 /// the loop idles on pacing alone and every observed change is local.

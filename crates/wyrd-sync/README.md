@@ -44,7 +44,7 @@ encrypted manifests, roles × materialization.
 
 Merging (Wyrd keeps both heads instead of merging), garbage collection (the
 store is append-only for now), and any filesystem presentation (that is
-`wyrd-fuse`).
+`wyrd-view`).
 
 ## Status
 

@@ -1,16 +1,16 @@
 use super::*;
 
-use wyrd_fuse::DriveView;
+use wyrd_view::DriveView;
 
 use wyrd_format::ObjectStore;
-use wyrd_fuse::Node;
 use wyrd_sync::runtime::Engine;
+use wyrd_view::Node;
 
 use super::tests_harness::{scratch_drive, scratch_engine, NoopMailbox};
 
 use wyrd_format::{FsObjectStore, MemoryObjectStore, SnapshotId};
-use wyrd_fuse::ViewError;
 use wyrd_sync::bulk::BulkSource;
+use wyrd_view::ViewError;
 
 /// Read a whole file back through the daemon view.
 fn read_through<S: ObjectStore>(

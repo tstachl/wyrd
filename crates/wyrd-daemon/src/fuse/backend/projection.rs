@@ -8,7 +8,7 @@ use wyrd_core::mutation::FileIdentity;
 use wyrd_core::projection::Projection;
 
 use wyrd_format::ObjectStore;
-use wyrd_fuse::{DriveView, Materialization, Node, OpenFile, ViewError};
+use wyrd_view::{DriveView, Materialization, Node, OpenFile, ViewError};
 
 use super::super::inode::InodeError;
 use super::{attr_of, errno_of, inode_error, mounted_symlink_traversal_error, FuseBackend};

@@ -2,7 +2,7 @@
 //! engine-coupled materialization.
 //!
 //! The value types, [`Head`], and [`NamespaceView`] live in `wyrd-namespace`
-//! — link-graph position format-only, so `wyrd-fuse` serves them
+//! — link-graph position format-only, so `wyrd-view` serves them
 //! without linking the transport — and are re-exported here so node,
 //! daemon, and backend code keeps its paths. The re-export list is
 //! explicit: a new view item reaches `wyrd_core::view` deliberately,

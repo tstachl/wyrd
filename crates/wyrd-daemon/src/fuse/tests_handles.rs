@@ -5,7 +5,7 @@ use fuser::FileHandle;
 use fuser::Filesystem as _;
 use std::sync::Arc;
 use wyrd_core::mutation::MutationQueue;
-use wyrd_fuse::DriveView;
+use wyrd_view::DriveView;
 
 #[test]
 fn reads_serve_the_opened_version_across_head_advancement() {

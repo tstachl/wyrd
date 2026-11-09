@@ -20,7 +20,6 @@ use wyrd_core::mutation::{MutationError, MutationKind, MutationOutcome};
 use wyrd_core::view::Node;
 #[cfg(feature = "mount")]
 use wyrd_format::FsObjectStore;
-use wyrd_fuse::DriveView;
 #[cfg(feature = "mount")]
 use wyrd_sync::bulk::MemoryBulkSource;
 #[cfg(feature = "mount")]
@@ -29,6 +28,7 @@ use wyrd_sync::keys::DeviceIdentitySecret;
 use wyrd_sync::runtime::Engine;
 #[cfg(feature = "mount")]
 use wyrd_sync::transport::mailbox::Mailbox;
+use wyrd_view::DriveView;
 
 #[cfg(feature = "mount")]
 use crate::lifecycle::LoopError;

@@ -3,7 +3,7 @@
 //! the signatures.
 //!
 //! Link-graph position is the point of this crate: it depends on
-//! `wyrd-format` only — no sync, no iroh, no async — so `wyrd-fuse`
+//! `wyrd-format` only — no sync, no iroh, no async — so `wyrd-view`
 //! and future mobile surfaces serve the namespace without linking the
 //! transport. The verification proof crosses from `wyrd-sync` through
 //! [`view::AuthorizedSnapshot::from_verified_unchecked`]: the
