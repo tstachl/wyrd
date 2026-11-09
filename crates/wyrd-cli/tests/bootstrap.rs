@@ -259,6 +259,30 @@ fn bootstrap_rejects_bad_names_before_touching_anything() {
     );
 }
 
+/// A rotten registry entry does not fail provisioning and is not
+/// silently deleted: it is skipped with a reason, and the run says
+/// so on stderr.
+#[test]
+fn bootstrap_surfaces_skipped_registry_entries() {
+    let fixture = Fixture::new("skipped");
+    std::fs::write(
+        &fixture.registry,
+        r#"{"version": 1, "drives": {"rotten": {"name": "rotten", "drive_dir": "relative/nope", "relays": [], "service": "drive-rotten", "mode": "vault"}}}"#,
+    )
+    .expect("rotten registry writes");
+    let output = fixture.bootstrap(&[]);
+    let stderr = String::from_utf8(output.stderr).expect("stderr is UTF-8");
+    assert!(
+        stderr.contains("warning: registry entry skipped"),
+        "skips are loud, got:\n{stderr}"
+    );
+    let registry = fixture.registry_entries();
+    assert!(
+        registry["drives"].get("demo").is_some(),
+        "the valid entry still registers"
+    );
+}
+
 /// The registry path in the spec contract resolves per platform;
 /// the flag overrides it. The override path is what the installer
 /// would never use — but tests must not touch a real home.

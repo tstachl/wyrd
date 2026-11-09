@@ -183,6 +183,12 @@ fn validate_entry(key: &str, entry: &RegistryEntry) -> Result<(), String> {
             entry.name
         ));
     }
+    if entry.name.len() + "drive-".len() > 64 {
+        return Err(format!(
+            "name {:?} leaves no room for the drive- service prefix (max 58 chars)",
+            entry.name
+        ));
+    }
     if !valid_token(&entry.service) {
         return Err(format!(
             "service {:?} must be 1-64 chars of [a-z0-9-]",
@@ -211,9 +217,22 @@ fn validate_entry(key: &str, entry: &RegistryEntry) -> Result<(), String> {
         relay.is_empty()
             || relay
                 .bytes()
-                .any(|byte| byte.is_ascii_whitespace() || byte < 0x20)
+                .any(|byte| byte < 0x20 || byte == 0x7f || byte.is_ascii_whitespace())
     }) {
-        return Err("relays must be non-empty URLs without whitespace".to_string());
+        return Err(
+            "relays must be non-empty URLs without whitespace or control bytes".to_string(),
+        );
+    }
+    if entry
+        .drive_dir
+        .to_string_lossy()
+        .bytes()
+        .any(|byte| byte < 0x20 || byte == 0x7f)
+    {
+        return Err(format!(
+            "drive_dir {} must not contain control characters",
+            entry.drive_dir.display()
+        ));
     }
     Ok(())
 }
@@ -307,17 +326,20 @@ fn xml_escape(value: &str) -> String {
 
 /// Shell-quote one systemd `ExecStart` argument. systemd splits the
 /// line itself, so arguments with spaces, quotes, or backslashes are
-/// double-quoted with backslash escapes.
+/// double-quoted with backslash escapes. `%` is doubled first:
+/// systemd expands bare specifiers (`%i`, `%n`, …) even inside
+/// quotes, and a relay or path must never become a specifier.
 fn systemd_quote(arg: &str) -> String {
-    if arg
+    let escaped = arg.replace('%', "%%");
+    if escaped
         .bytes()
         .all(|byte| byte.is_ascii_alphanumeric() || b"-_./:=,".contains(&byte))
     {
-        return arg.to_string();
+        return escaped;
     }
-    let mut quoted = String::with_capacity(arg.len() + 2);
+    let mut quoted = String::with_capacity(escaped.len() + 2);
     quoted.push('"');
-    for ch in arg.chars() {
+    for ch in escaped.chars() {
         if ch == '"' || ch == '\\' {
             quoted.push('\\');
         }
@@ -403,6 +425,8 @@ pub fn render_launchd_plist(label: &str, owner: &SupervisedOwner, entry: &Regist
             "    <key>ProgramArguments</key>\n",
             "    <array>\n{argv}",
             "    </array>\n",
+            "    <key>WorkingDirectory</key>\n",
+            "    <string>/</string>\n",
             "    <key>RunAtLoad</key>\n",
             "    <true/>\n",
             "    <key>KeepAlive</key>\n",
@@ -448,6 +472,7 @@ pub fn render_systemd_unit(
             "Wants=network-online.target\n\n",
             "[Service]\n",
             "Type=simple\n",
+            "WorkingDirectory=/\n",
             "ExecStart={exec}\n",
             "Restart=on-failure\n",
             "RestartPreventExitStatus=78\n",
@@ -573,7 +598,11 @@ pub fn start_service(entry: &RegistryEntry) -> Result<(), String> {
     #[cfg(not(target_os = "macos"))]
     {
         let unit = format!("wyrd-{}.service", entry.service);
-        run("systemctl", &["--user", "start", &unit])
+        // Restart, not start: enablement leaves a running unit
+        // alone, and a re-run that changed relays or credential
+        // paths must bring the new definition live instead of
+        // verifying the still-running old owner.
+        run("systemctl", &["--user", "restart", &unit])
             .map_err(|error| format!("start {unit}: {error}"))?;
         Ok(())
     }
@@ -643,15 +672,20 @@ pub struct ProvisionConfig {
 /// Where one provisioning run ended. Ready is reported only as
 /// `VerifiedAvailable` — a socket answer this session. Every other
 /// variant names the stage that stopped, so partial completion is
-/// explicit and resumable, never mistaken for ready.
+/// explicit and resumable, never mistaken for ready. The post-write
+/// variants carry the registry entries the read skipped, so the
+/// caller can surface them instead of silently discarding rotten
+/// data on rewrite.
 #[derive(Debug)]
 pub enum ProvisionState {
     VerifiedAvailable {
         entry: RegistryEntry,
+        skipped: Vec<String>,
     },
     RegisteredButUnavailable {
         entry: RegistryEntry,
         reason: String,
+        skipped: Vec<String>,
     },
     ProvisioningIncomplete {
         stage: &'static str,
@@ -748,7 +782,9 @@ pub fn provision(config: ProvisionConfig) -> ProvisionState {
         };
     }
 
-    // 3. Write the registry entry.
+    // 3. Write the registry entry, carrying the skipped entries
+    // forward so the caller surfaces them instead of silently
+    // deleting rotten data on rewrite.
     let mut registry = match read_registry(&config.registry_path) {
         Ok(registry) => registry,
         Err(reason) => {
@@ -765,6 +801,7 @@ pub fn provision(config: ProvisionConfig) -> ProvisionState {
             reason,
         };
     }
+    let skipped = registry.skipped;
 
     // 4. Install, enable, and start the per-drive service.
     if config.manage_service {
@@ -775,6 +812,7 @@ pub fn provision(config: ProvisionConfig) -> ProvisionState {
                 None => {
                     return ProvisionState::RegisteredButUnavailable {
                         entry,
+                        skipped: skipped.clone(),
                         reason: "no wyrd binary: pass --owner-bin (no wyrd beside this command)"
                             .to_string(),
                     };
@@ -788,6 +826,7 @@ pub fn provision(config: ProvisionConfig) -> ProvisionState {
                 None => {
                     return ProvisionState::RegisteredButUnavailable {
                         entry,
+                        skipped: skipped.clone(),
                         reason: "no wyrd-supervise: pass --supervise-bin \
                             (the restart policy needs the wrapper; \
                             a bare owner binary cannot express it)"
@@ -807,6 +846,7 @@ pub fn provision(config: ProvisionConfig) -> ProvisionState {
             Err(reason) => {
                 return ProvisionState::RegisteredButUnavailable {
                     entry,
+                    skipped: skipped.clone(),
                     reason: format!("install-service: {reason}"),
                 };
             }
@@ -814,12 +854,14 @@ pub fn provision(config: ProvisionConfig) -> ProvisionState {
         if let Err(reason) = enable_service(&entry, &definition) {
             return ProvisionState::RegisteredButUnavailable {
                 entry,
+                skipped: skipped.clone(),
                 reason: format!("enable-service: {reason}"),
             };
         }
         if let Err(reason) = start_service(&entry) {
             return ProvisionState::RegisteredButUnavailable {
                 entry,
+                skipped: skipped.clone(),
                 reason: format!("start-service: {reason}"),
             };
         }
@@ -834,6 +876,7 @@ pub fn provision(config: ProvisionConfig) -> ProvisionState {
     if !wait_for_socket(&config.drive_dir, config.verify_timeout) {
         return ProvisionState::RegisteredButUnavailable {
             entry,
+            skipped,
             reason: "verify-socket: owner.sock never appeared".to_string(),
         };
     }
@@ -841,17 +884,25 @@ pub fn provision(config: ProvisionConfig) -> ProvisionState {
         .and_then(|client| client.with_timeout(config.verify_timeout))
     {
         Ok(mut client) => match client.observe() {
-            Ok(_) => ProvisionState::VerifiedAvailable { entry },
+            Ok(_) => ProvisionState::VerifiedAvailable {
+                entry,
+                skipped: skipped.clone(),
+            },
             Err(ClientError::Refused(error)) if error.code == WireErrorCode::Unobserved => {
-                ProvisionState::VerifiedAvailable { entry }
+                ProvisionState::VerifiedAvailable {
+                    entry,
+                    skipped: skipped.clone(),
+                }
             }
             Err(error) => ProvisionState::RegisteredButUnavailable {
                 entry,
+                skipped: skipped.clone(),
                 reason: format!("verify-socket: {error}"),
             },
         },
         Err(error) => ProvisionState::RegisteredButUnavailable {
             entry,
+            skipped,
             reason: format!("verify-socket: {error}"),
         },
     }
@@ -1108,7 +1159,7 @@ mod tests {
         let server = stub_owner(sock, 1, "Unobserved");
 
         let report = provision(provision_no_service(&dir, &registry, "demo"));
-        let ProvisionState::VerifiedAvailable { entry } = report else {
+        let ProvisionState::VerifiedAvailable { entry, .. } = report else {
             panic!("expected verified available, got terminal state without success");
         };
         assert_eq!(entry.name, "demo");
@@ -1124,7 +1175,7 @@ mod tests {
         let dir = scratch("noowner");
         let registry = dir.join("drives.json");
         let report = provision(provision_no_service(&dir, &registry, "demo"));
-        let ProvisionState::RegisteredButUnavailable { entry, reason } = report else {
+        let ProvisionState::RegisteredButUnavailable { entry, reason, .. } = report else {
             panic!("a missing owner must never verify");
         };
         assert!(reason.contains("verify-socket"), "{reason}");
@@ -1244,7 +1295,7 @@ mod hardening_tests {
     fn templates_escape_operator_input() {
         let dir = scratch("escape");
         let mut owned = entry("demo", &dir);
-        owned.relays = vec!["relay://exa mple".to_string()];
+        owned.relays = vec!["relay://exa mple".to_string(), "relay://%i".to_string()];
         let owner = SupervisedOwner {
             supervise_bin: PathBuf::from("/opt/wyrd/bin/with space/wyrd-supervise"),
             wyrd_bin: PathBuf::from("/opt/wyrd/bin/wyrd"),
@@ -1261,6 +1312,10 @@ mod hardening_tests {
         assert!(
             unit.contains("\"relay://exa mple\""),
             "relay spaces are quoted, got:\n{unit}"
+        );
+        assert!(
+            unit.contains("\"relay://%%i\""),
+            "relay specifiers are doubled, got:\n{unit}"
         );
     }
 

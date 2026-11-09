@@ -54,7 +54,15 @@ pub(crate) fn bootstrap(
         "--passphrase-file",
         "passphrase_file",
     )?;
-
+    // Services run with a fixed working directory, so every path
+    // the definition carries is absolute: canonicalize what must
+    // exist (the credential files were just read) and absolutize
+    // the binaries without requiring them (a missing supervise
+    // wrapper is its own actionable error at provision time).
+    let identity_file = canonicalize(&identity_file)?;
+    let passphrase_file = canonicalize(&passphrase_file)?;
+    let owner_bin = args.owner_bin.map(absolutize);
+    let supervise_bin = args.supervise_bin.map(absolutize);
     let init = match &args.invitation_file {
         None => Init::Create,
         Some(path) => {
@@ -73,16 +81,16 @@ pub(crate) fn bootstrap(
         passphrase: passphrase.to_string(),
         init,
         registry_path,
-        wyrd_bin: args.owner_bin,
-        supervise_bin: args.supervise_bin,
+        wyrd_bin: owner_bin,
+        supervise_bin,
         identity_file,
         passphrase_file,
         manage_service: !args.no_service,
         verify_timeout: Duration::from_secs(30),
     });
     match report {
-        ProvisionState::VerifiedAvailable { entry } => {
-            warn_skipped(&args.registry);
+        ProvisionState::VerifiedAvailable { entry, skipped } => {
+            warn_skipped(&skipped);
             println!(
                 "drive {} verified available (socket {})",
                 entry.name,
@@ -90,8 +98,12 @@ pub(crate) fn bootstrap(
             );
             Ok(())
         }
-        ProvisionState::RegisteredButUnavailable { entry, reason } => {
-            warn_skipped(&args.registry);
+        ProvisionState::RegisteredButUnavailable {
+            entry,
+            reason,
+            skipped,
+        } => {
+            warn_skipped(&skipped);
             Err(CliError::Usage(format!(
                 "drive {} registered but unavailable: {reason}",
                 entry.name
@@ -103,23 +115,39 @@ pub(crate) fn bootstrap(
     }
 }
 
-/// Surface registry entries the read path skipped: provision rewrites
+/// Surface registry entries the read skipped: provision rewrites
 /// only the valid set, so a rotten entry would otherwise vanish
 /// without any user-visible signal. Non-fatal — discovery keeps
-/// working — but loud.
-fn warn_skipped(registry: &Option<PathBuf>) {
-    let path = registry
-        .clone()
-        .unwrap_or_else(wyrd_daemon::bootstrap::default_registry_path);
-    let Ok(read) = wyrd_daemon::bootstrap::read_registry(&path) else {
-        return;
-    };
-    for skipped in &read.skipped {
+/// working — but loud. The list travels in the provisioning result
+/// itself, because re-reading after the write would find nothing
+/// left to report.
+fn warn_skipped(skipped: &[String]) {
+    for skipped in skipped {
         eprintln!("warning: registry entry skipped: {skipped}");
     }
 }
 
-/// Read a bounded non-credential input file. Invitation bytes are
+/// Canonicalize a file that must exist (credential files were
+/// just read): resolves symlinks and guarantees absoluteness, so
+/// the service definition names one unambiguous path.
+fn canonicalize(path: &PathBuf) -> Result<PathBuf, CliError> {
+    std::fs::canonicalize(path).map_err(|source| CliError::Io {
+        path: path.clone(),
+        source,
+    })
+}
+
+/// Absolutize a path that need not exist yet (binaries): joins
+/// relative paths onto the working directory without touching the
+/// filesystem.
+fn absolutize(path: PathBuf) -> PathBuf {
+    if path.is_absolute() {
+        return path;
+    }
+    std::env::current_dir()
+        .map(|dir| dir.join(&path))
+        .unwrap_or(path)
+}
 /// sealed, not secret, so no ownership hardening applies — but an
 /// unbounded read lets a corrupt file exhaust memory before decode
 /// refuses it. Mirrors the member invite-claim bound; duplicated

@@ -75,8 +75,9 @@ pub(crate) enum Command {
     /// enable the per-drive service, and verify the owner socket.
     /// Ready is reported only when the socket answers this session.
     Bootstrap {
-        /// Registration name: 1-64 chars of [a-z0-9-]. Names the
-        /// registry entry and derives the service name.
+        /// Registration name: 1-58 chars of [a-z0-9-]. Names the
+        /// registry entry and derives the `drive-<name>` service name,
+        /// so 59-64 chars would overflow the 64-char service token.
         #[arg(long)]
         name: String,
         /// Directory holding (or to hold) the drive's keystore and
