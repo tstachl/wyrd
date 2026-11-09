@@ -9,15 +9,16 @@ use super::server::{
     OwnerHandles, OwnerServer, MAX_FRAME_BYTES, MAX_OWNER_CONNECTIONS, MAX_SUBMIT_CONTENT_BYTES,
 };
 use super::wire::{
-    PathParams, RawRequest, SubmitParams, WireAttr, WireConvergenceState, WireDirEntry,
-    WireDurabilityLevel, WireError, WireErrorCode, WireFileIdentity, WireFreshness,
+    map_policy_error, PathParams, RawRequest, SubmitParams, WireAttr, WireConvergenceState,
+    WireDirEntry, WireDurabilityLevel, WireError, WireErrorCode, WireFileIdentity, WireFreshness,
     WireFreshnessState, WireHeadClasses, WireHeadSummary, WireKind, WireLiveness,
     WireMailboxHealth, WireMailboxView, WireMaterializationSummary, WireMutationError,
     WireMutationKind, WireMutationOutcome, WireNode, WireOk, WireOutboxTotals, WireParentToken,
-    WirePeerHandle, WirePendingObligations, WireQueueDepth, WireReconciliationCounters,
-    WireResponse, WireResult, WireSyncStatus, OP_CAPTURE_PARENT, OP_FRESHNESS, OP_LIVENESS,
-    OP_LOOKUP, OP_OBSERVE, OP_PAUSE, OP_READ, OP_READDIR, OP_RESUME, OP_STAT, OP_SUBMIT,
-    WIRE_VERSION,
+    WirePeerHandle, WirePendingObligations, WirePolicyRow, WirePolicyStatus, WirePresence,
+    WireQueueDepth, WireReconciliationCounters, WireResponse, WireResult, WireRetentionPolicy,
+    WireSyncStatus, OP_CAPTURE_PARENT, OP_FRESHNESS, OP_LIVENESS, OP_LOOKUP, OP_OBSERVE, OP_PAUSE,
+    OP_POLICY_EVICT, OP_POLICY_PIN, OP_POLICY_STATUS, OP_POLICY_UNPIN, OP_READ, OP_READDIR,
+    OP_RESUME, OP_STAT, OP_SUBMIT, WIRE_VERSION,
 };
 
 use std::collections::BTreeSet;
@@ -2837,6 +2838,10 @@ fn golden_vectors_pin_the_wire() {
                     "freshness" => OP_FRESHNESS,
                     "pause" => OP_PAUSE,
                     "resume" => OP_RESUME,
+                    "policy-pin" => OP_POLICY_PIN,
+                    "policy-unpin" => OP_POLICY_UNPIN,
+                    "policy-evict" => OP_POLICY_EVICT,
+                    "policy-status" => OP_POLICY_STATUS,
                     other => panic!("unknown vector operation: {other}"),
                 };
                 assert_eq!(
@@ -2866,16 +2871,31 @@ fn golden_vectors_pin_the_wire() {
                         matches!(*ok, WireOk::Submitted { .. }),
                         "the submit sample answers a submit"
                     ),
+                    ("policy-pin", WireResult::Ok(ok)) => assert!(
+                        matches!(*ok, WireOk::PolicyPinned { .. }),
+                        "the policy-pin sample answers a pin"
+                    ),
+                    ("policy-status", WireResult::Ok(ok)) => assert!(
+                        matches!(
+                            *ok,
+                            WireOk::PolicyStatus {
+                                status: WirePolicyStatus { complete: true, .. },
+                                ..
+                            }
+                        ),
+                        "the policy-status sample answers a complete status"
+                    ),
                     other => panic!("unexpected ok sample: {other:?}"),
                 }
             }
-            "not-found" | "unknown-version" => {
+            "not-found" | "unknown-version" | "pinned-present" => {
                 let response: WireResponse = serde_json::from_value(vector.json.clone())
                     .unwrap_or_else(|error| {
                         panic!("{} parses as a response: {error}", vector.name)
                     });
                 let expected = match shape {
                     "not-found" => WireErrorCode::NotFound,
+                    "pinned-present" => WireErrorCode::PinnedPresent,
                     _ => WireErrorCode::UnknownVersion,
                 };
                 match response.result {
@@ -3029,5 +3049,373 @@ fn client_overlong_frame_poisons_without_reading_the_body() {
         !probe.join().unwrap(),
         "an overlong frame sends nothing more and reads no body"
     );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+// Materialization policy (selective sync)
+// ---------------------------------------------------------------------------
+
+/// Dispatch one policy operation and unwrap the success.
+fn policy_ok(server: &OwnerServer, op: &str, path: &str) -> WireOk {
+    let response = server.dispatch(RawRequest {
+        v: WIRE_VERSION,
+        id: 31,
+        op: op.to_string(),
+        params: serde_json::to_value(PathParams {
+            path: path.to_string(),
+        })
+        .unwrap(),
+    });
+    assert_eq!(response.v, WIRE_VERSION);
+    assert_eq!(response.id, 31);
+    match response.result {
+        WireResult::Ok(ok) => *ok,
+        WireResult::Err(error) => panic!("{op} {path} refused: {:?} {}", error.code, error.message),
+    }
+}
+
+/// Dispatch one policy operation and unwrap the refusal.
+fn policy_err(server: &OwnerServer, op: &str, path: &str) -> WireError {
+    let response = server.dispatch(RawRequest {
+        v: WIRE_VERSION,
+        id: 32,
+        op: op.to_string(),
+        params: serde_json::to_value(PathParams {
+            path: path.to_string(),
+        })
+        .unwrap(),
+    });
+    match response.result {
+        WireResult::Err(error) => error,
+        WireResult::Ok(ok) => panic!("{op} {path} unexpectedly succeeded: {ok:?}"),
+    }
+}
+
+/// The wire vocabulary is the surface vocabulary: the serialized words
+/// match the materialization surface consts, so a re-wording fails
+/// here instead of drifting the contract past review.
+#[test]
+fn policy_words_match_surface_copy() {
+    use wyrd_core::materialization_surface::{
+        POLICY_PINNED_WORD, POLICY_REMOTE_ONLY_WORD, PRESENCE_ABSENT_WORD, PRESENCE_PRESENT_WORD,
+    };
+    assert_eq!(
+        serde_json::to_value(WireRetentionPolicy::Pinned)
+            .unwrap()
+            .as_str()
+            .unwrap(),
+        POLICY_PINNED_WORD
+    );
+    assert_eq!(
+        serde_json::to_value(WireRetentionPolicy::RemoteOnly)
+            .unwrap()
+            .as_str()
+            .unwrap(),
+        POLICY_REMOTE_ONLY_WORD
+    );
+    assert_eq!(
+        serde_json::to_value(WirePresence::Present)
+            .unwrap()
+            .as_str()
+            .unwrap(),
+        PRESENCE_PRESENT_WORD
+    );
+    assert_eq!(
+        serde_json::to_value(WirePresence::Absent)
+            .unwrap()
+            .as_str()
+            .unwrap(),
+        PRESENCE_ABSENT_WORD
+    );
+    // The canonical sentences live in one module: the CLI renders the
+    // same consts, and the wire never re-words them.
+    let surface = include_str!("../../../wyrd-core/src/materialization_surface.rs");
+    for marker in [
+        "Content fetched through access is still REMOTE_ONLY",
+        "This releases the device's retention promise",
+    ] {
+        assert!(
+            surface.contains(marker),
+            "the surface owns the canonical copy ({marker:?})"
+        );
+    }
+}
+
+/// The policy wire field names are pinned like the read-side fields
+/// above: adding, renaming, or re-meaning a field is a protocol
+/// change, and an accidental edit fails here.
+#[test]
+fn policy_wire_field_names_are_pinned() {
+    fn keys(value: &serde_json::Value) -> BTreeSet<String> {
+        value
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<BTreeSet<_>>()
+    }
+    let set = |names: &[&str]| {
+        names
+            .iter()
+            .map(|name| name.to_string())
+            .collect::<BTreeSet<_>>()
+    };
+
+    let row = serde_json::to_value(&WirePolicyRow {
+        path: "a.txt".to_string(),
+        policy: WireRetentionPolicy::Pinned,
+        presence: WirePresence::Absent,
+    })
+    .unwrap();
+    assert_eq!(keys(&row), set(&["path", "policy", "presence"]));
+
+    let status_body = serde_json::to_value(&WirePolicyStatus {
+        files: Vec::new(),
+        conflicts: Vec::new(),
+        dirs: 0,
+        symlinks_skipped: 0,
+        complete: true,
+    })
+    .unwrap();
+    assert_eq!(
+        keys(&status_body),
+        set(&["files", "conflicts", "dirs", "symlinks_skipped", "complete"])
+    );
+
+    let status = serde_json::to_value(&WireOk::PolicyStatus {
+        status: WirePolicyStatus {
+            files: Vec::new(),
+            conflicts: Vec::new(),
+            dirs: 0,
+            symlinks_skipped: 0,
+            complete: true,
+        },
+        generation: 0,
+        revision: 0,
+    })
+    .unwrap();
+    assert_eq!(keys(&status), set(&["PolicyStatus",]));
+    assert_eq!(
+        keys(&status["PolicyStatus"]),
+        set(&["status", "generation", "revision"])
+    );
+
+    let pinned = serde_json::to_value(&WireOk::PolicyPinned {
+        pinned: 0,
+        already_pinned: 0,
+        files: 0,
+        dirs: 0,
+    })
+    .unwrap();
+    assert_eq!(
+        keys(&pinned["PolicyPinned"]),
+        set(&["pinned", "already_pinned", "files", "dirs"])
+    );
+}
+
+/// Policy refusals map to distinct codes: evict-against-pinned is
+/// `PinnedPresent` (never missing, never invalid), and a path past
+/// the depth bound is `TooDeep`.
+#[test]
+fn policy_refusals_map_to_distinct_codes() {
+    let (code, _) = map_policy_error(wyrd_core::policy::PolicyError::PinnedPresent {
+        path: "docs".to_string(),
+        pinned: 2,
+    });
+    assert_eq!(code, WireErrorCode::PinnedPresent);
+    let (code, _) = map_policy_error(wyrd_core::policy::PolicyError::TooDeep("d".to_string()));
+    assert_eq!(code, WireErrorCode::TooDeep);
+}
+
+/// Pin, status, unpin, and evict round-trip through the interface
+/// against the loop-thread executor: the same engine, the same
+/// thread as mutations, four engine operations rather than a second
+/// mutation path. Evict against a pin refuses with `PinnedPresent`
+/// and commits nothing; unpin first, then evict succeeds.
+#[test]
+fn owner_interface_forwards_policy_unchanged() {
+    let (server, _parts, dir, stop, loop_thread) = running_parts();
+
+    // Pin through the interface: the seeded file promises retention.
+    match policy_ok(&server, OP_POLICY_PIN, "seed.txt") {
+        WireOk::PolicyPinned { pinned, .. } => {
+            assert_eq!(pinned, 1, "the seeded file pins one identity");
+        }
+        other => panic!("unexpected pin result: {other:?}"),
+    }
+
+    // Status through the interface: one reachable file, PINNED, with
+    // the generation and revision the loop actually walked attached.
+    match policy_ok(&server, OP_POLICY_STATUS, "seed.txt") {
+        WireOk::PolicyStatus {
+            status,
+            generation,
+            revision,
+        } => {
+            assert!(status.complete, "a one-file walk fits the budget");
+            assert_eq!(status.files.len(), 1);
+            assert_eq!(status.files[0].policy, WireRetentionPolicy::Pinned);
+            assert_eq!(status.files[0].path, "seed.txt");
+            let _ = (generation, revision);
+        }
+        other => panic!("unexpected status result: {other:?}"),
+    }
+
+    // Evict against a pin refuses distinctly and commits nothing.
+    let error = policy_err(&server, OP_POLICY_EVICT, "seed.txt");
+    assert_eq!(error.code, WireErrorCode::PinnedPresent);
+
+    // Unpin releases, then evict succeeds.
+    match policy_ok(&server, OP_POLICY_UNPIN, "seed.txt") {
+        WireOk::PolicyUnpinned { released, .. } => {
+            assert_eq!(released, 1);
+        }
+        other => panic!("unexpected unpin result: {other:?}"),
+    }
+    match policy_ok(&server, OP_POLICY_EVICT, "seed.txt") {
+        WireOk::PolicyEvicted { released, .. } => {
+            assert_eq!(released, 1);
+        }
+        other => panic!("unexpected evict result: {other:?}"),
+    }
+
+    // The refused evict above committed nothing observable: status
+    // after the unpin/evict pair reports REMOTE_ONLY.
+    match policy_ok(&server, OP_POLICY_STATUS, "seed.txt") {
+        WireOk::PolicyStatus { status, .. } => {
+            assert_eq!(status.files[0].policy, WireRetentionPolicy::RemoteOnly);
+        }
+        other => panic!("unexpected trailing status: {other:?}"),
+    }
+
+    stop.store(true, Ordering::Relaxed);
+    let summary = loop_thread.join().unwrap();
+    assert!(summary.is_ok(), "the loop ends clean on stop");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// The DG-1 negative invariant for the policy path: while the live
+/// owner holds the drive, the offline opener fails closed — and the
+/// interface-committed facts equal an in-process pin on a twin drive.
+///
+/// The held half uses the lock probe, which is the same authority as
+/// the open path (`try_lock` on the store LOCK file): the CLI's
+/// `open_policy_node` reaches the same lock through
+/// `Engine::open_keystore` → `DurableStore::open` → `StoreLocked`,
+/// so `Held` here is the offline command failing closed. The parity
+/// half pins the same seeded file through the interface and
+/// in-process (`pin_subtree` on a twin with identical bytes, hence
+/// identical chunk identities) and compares every policy/presence
+/// row — the durable `Fact::Materialization` batch is the same batch
+/// either way.
+#[test]
+fn policy_command_reaches_a_mounted_drive() {
+    use wyrd_sync::durable::{probe_lock, LockProbe};
+
+    let (server, _parts, dir, stop, loop_thread) = running_parts();
+
+    // While the loop holds the store, the offline path fails closed.
+    // `running_parts` holds `FsObjectStore` open in the live node and
+    // the engine holds the durable lock beside it.
+    assert_eq!(
+        probe_lock(&dir).expect("the probe reads the lock, not state"),
+        LockProbe::Held,
+        "the live owner holds the drive: the offline policy command fails closed here"
+    );
+
+    // The interface pin commits through the held owner.
+    match policy_ok(&server, OP_POLICY_PIN, "seed.txt") {
+        WireOk::PolicyPinned { pinned, .. } => assert_eq!(pinned, 1),
+        other => panic!("unexpected pin result: {other:?}"),
+    }
+
+    // Twin drive, same bytes (hence same chunk identities), pinned
+    // in process: the durable facts must match the interface commit
+    // row for row.
+    let (twin_engine, twin_dir) = scratch_drive();
+    let twin_store = wyrd_format::FsObjectStore::open(twin_dir.clone()).unwrap();
+    let mut twin: wyrd_core::node::WyrdNode<crate::vault::OwnerView> =
+        wyrd_core::node::WyrdNode::new(twin_engine, twin_store).expect("twin composes");
+    twin.put_file("seed.txt", b"seed").expect("twin seeds");
+    twin.refresh_live_heads().expect("twin installs its head");
+    {
+        let (engine, view) = twin.parts_mut();
+        wyrd_core::policy::pin_subtree(engine, view, "seed.txt").expect("twin pins in process");
+    }
+    let twin_census = {
+        let (engine, view) = twin.parts();
+        wyrd_core::policy::residency_census(engine, view, "seed.txt").expect("twin reads back")
+    };
+    match policy_ok(&server, OP_POLICY_STATUS, "seed.txt") {
+        WireOk::PolicyStatus { status, .. } => {
+            assert_eq!(
+                status.files.len(),
+                twin_census.files.len(),
+                "interface and in-process walks name the same files"
+            );
+            for (row, file) in status.files.iter().zip(twin_census.files.iter()) {
+                assert_eq!(row.path, file.path);
+                assert_eq!(row.policy, WireRetentionPolicy::from(&file.policy));
+                assert_eq!(row.presence, WirePresence::from(&file.local));
+            }
+        }
+        other => panic!("unexpected status result: {other:?}"),
+    }
+
+    stop.store(true, Ordering::Relaxed);
+    let summary = loop_thread.join().unwrap();
+    assert!(summary.is_ok(), "the loop ends clean on stop");
+    drop(twin);
+    std::fs::remove_dir_all(dir).unwrap();
+    std::fs::remove_dir_all(twin_dir).unwrap();
+}
+
+/// The shared client serves the whole policy surface over the
+/// socket: pin, status, the `PinnedPresent` refusal, unpin, and
+/// evict, against the running loop — the Tauri-shaped path, not just
+/// the in-process dispatch half above.
+#[test]
+fn client_serves_the_policy_surface() {
+    let (engine, dir) = scratch_drive();
+    let store = wyrd_format::FsObjectStore::open(dir.clone()).unwrap();
+    let mut daemon = wyrd_core::node::WyrdNode::new(engine, store).unwrap();
+    daemon.put_file("seed.txt", b"seed").unwrap();
+    daemon.refresh_live_heads().unwrap();
+    let (live, parts) = daemon
+        .into_live(
+            Duration::from_secs(5),
+            &wyrd_core::live::LiveConfig::default(),
+        )
+        .unwrap();
+    let server = OwnerServer::new(OwnerHandles::from_parts(&parts));
+    let stop: &'static AtomicBool = Box::leak(Box::new(AtomicBool::new(false)));
+    let (socket_path, serve_thread) = serve_parts(server, "policysock", &dir, stop);
+    let loop_thread = spawn_loop(live, stop);
+
+    let mut client = OwnerClient::connect(&socket_path).expect("the owner answers");
+    let (pinned, already, files, _) = client.policy_pin("seed.txt").expect("pin commits");
+    assert_eq!((pinned, already, files), (1, 0, 1));
+    let (status, generation, revision) = client.policy_status("seed.txt").expect("status serves");
+    assert!(status.complete, "a one-file walk fits the budget");
+    assert_eq!(status.files.len(), 1);
+    assert_eq!(status.files[0].policy, WireRetentionPolicy::Pinned);
+    let _ = (generation, revision);
+    match client.policy_evict("seed.txt") {
+        Err(ClientError::Refused(error)) => {
+            assert_eq!(error.code, WireErrorCode::PinnedPresent)
+        }
+        other => panic!("evict against a pin refuses distinctly: {other:?}"),
+    }
+    let (released, _, _, _) = client.policy_unpin("seed.txt").expect("unpin releases");
+    assert_eq!(released, 1);
+    let (evicted, _, _, _) = client
+        .policy_evict("seed.txt")
+        .expect("evict succeeds unpinned");
+    assert_eq!(evicted, 1);
+
+    stop.store(true, Ordering::Relaxed);
+    serve_thread.join().unwrap();
+    let summary = loop_thread.join().unwrap();
+    assert!(summary.is_ok(), "the loop ends clean on stop");
     std::fs::remove_dir_all(dir).unwrap();
 }

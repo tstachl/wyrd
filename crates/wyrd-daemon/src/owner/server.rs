@@ -37,6 +37,7 @@ use std::time::Duration;
 
 use wyrd_core::live::{LiveParts, SharedObservation};
 use wyrd_core::mutation::MutationQueue;
+use wyrd_core::policy_channel::{PolicyChannel, PolicyRequest, PolicyResponse};
 use wyrd_core::projection::{Projection, SharedFreshness, SharedProjection};
 use wyrd_core::quarantine::QuarantineQueue;
 use wyrd_core::read::{LiveReader, ReadError};
@@ -48,11 +49,13 @@ use wyrd_core::want::{WantError, WantRegistry};
 use crate::vault::OwnerView;
 
 use super::wire::{
-    PathParams, RawRequest, SubmitParams, WireAttr, WireDirEntry, WireError, WireErrorCode,
-    WireFreshness, WireLiveness, WireMailboxHealth, WireMutationError, WireMutationKind,
-    WireMutationOutcome, WireNode, WireOk, WireParentToken, WireResponse, WireResult,
-    WireSyncReport, WireSyncStatus, OP_CAPTURE_PARENT, OP_FRESHNESS, OP_LIVENESS, OP_LOOKUP,
-    OP_OBSERVE, OP_PAUSE, OP_READ, OP_READDIR, OP_RESUME, OP_STAT, OP_SUBMIT, WIRE_VERSION,
+    map_policy_error, PathParams, RawRequest, SubmitParams, WireAttr, WireDirEntry, WireError,
+    WireErrorCode, WireFreshness, WireLiveness, WireMailboxHealth, WireMutationError,
+    WireMutationKind, WireMutationOutcome, WireNode, WireOk, WireParentToken, WirePolicyRow,
+    WirePolicyStatus, WireResponse, WireResult, WireSyncReport, WireSyncStatus, OP_CAPTURE_PARENT,
+    OP_FRESHNESS, OP_LIVENESS, OP_LOOKUP, OP_OBSERVE, OP_PAUSE, OP_POLICY_EVICT, OP_POLICY_PIN,
+    OP_POLICY_STATUS, OP_POLICY_UNPIN, OP_READ, OP_READDIR, OP_RESUME, OP_STAT, OP_SUBMIT,
+    WIRE_VERSION,
 };
 
 /// Bind the drive-directory socket: reclaim a stale entry from an
@@ -135,6 +138,12 @@ pub struct OwnerHandles {
     /// interface interprets nothing: the queue owns admission,
     /// ordering, and every refusal.
     pub mutations: Arc<MutationQueue>,
+    /// The policy channel the four policy operations forward to. The
+    /// interface interprets nothing: the loop-thread executor owns
+    /// execution, and every refusal carries through as its own code.
+    /// Same engine, same thread as the mutation queue — four engine
+    /// operations, not mutations.
+    pub policy: Arc<PolicyChannel>,
     /// The freshness judgment over the served generation.
     pub freshness: SharedFreshness,
     /// The latest owner observation, if any pass completed.
@@ -168,6 +177,7 @@ impl OwnerHandles {
             projection: Arc::clone(&parts.projection),
             wants: Arc::clone(&parts.wants),
             mutations: Arc::clone(&parts.mutations),
+            policy: Arc::clone(&parts.policy),
             freshness: Arc::clone(&parts.freshness),
             observation: Arc::clone(&parts.observation),
             quarantine: None,
@@ -472,6 +482,10 @@ impl OwnerServer {
             OP_CAPTURE_PARENT => self.op_capture_parent(params),
             OP_PAUSE => self.op_pause(),
             OP_RESUME => self.op_resume(),
+            OP_POLICY_PIN => self.op_policy_pin(params),
+            OP_POLICY_UNPIN => self.op_policy_unpin(params),
+            OP_POLICY_EVICT => self.op_policy_evict(params),
+            OP_POLICY_STATUS => self.op_policy_status(params),
             unknown => Err((
                 WireErrorCode::UnsupportedOperation,
                 format!("unsupported operation {unknown:?}"),
@@ -786,6 +800,152 @@ impl OwnerServer {
                 let mapped = WireMutationError::from(&error);
                 Err((mapped.code, mapped.message))
             }
+        }
+    }
+
+    /// Forward one pin to the loop-thread policy executor and block
+    /// for its terminal answer. The interface interprets nothing:
+    /// decode failures refuse at the wire, policy refusals carry
+    /// through as distinct codes, and a success means exactly what an
+    /// in-process pin's success means.
+    fn op_policy_pin(&self, params: serde_json::Value) -> Result<WireOk, (WireErrorCode, String)> {
+        let params: PathParams = serde_json::from_value(params).map_err(|error| {
+            (
+                WireErrorCode::Malformed,
+                format!("bad policy-pin params: {error}"),
+            )
+        })?;
+        match self
+            .handles
+            .policy
+            .submit(PolicyRequest::Pin { path: params.path })
+        {
+            Ok(PolicyResponse::Pinned(report)) => Ok(WireOk::PolicyPinned {
+                pinned: report.pinned,
+                already_pinned: report.already_pinned,
+                files: report.files,
+                dirs: report.dirs,
+            }),
+            Ok(_) => Err((
+                WireErrorCode::Engine,
+                "policy channel answered pin with the wrong outcome".to_string(),
+            )),
+            Err(error) => Err(map_policy_error(error)),
+        }
+    }
+
+    /// Forward one unpin to the loop-thread policy executor and block
+    /// for its terminal answer. Releasing a promise never refuses —
+    /// the executor owns that invariant, the interface only carries
+    /// it.
+    fn op_policy_unpin(
+        &self,
+        params: serde_json::Value,
+    ) -> Result<WireOk, (WireErrorCode, String)> {
+        let params: PathParams = serde_json::from_value(params).map_err(|error| {
+            (
+                WireErrorCode::Malformed,
+                format!("bad policy-unpin params: {error}"),
+            )
+        })?;
+        match self
+            .handles
+            .policy
+            .submit(PolicyRequest::Unpin { path: params.path })
+        {
+            Ok(PolicyResponse::Unpinned(report)) => Ok(WireOk::PolicyUnpinned {
+                released: report.released,
+                already_unpinned: report.already_unpinned,
+                files: report.files,
+                dirs: report.dirs,
+            }),
+            Ok(_) => Err((
+                WireErrorCode::Engine,
+                "policy channel answered unpin with the wrong outcome".to_string(),
+            )),
+            Err(error) => Err(map_policy_error(error)),
+        }
+    }
+
+    /// Forward one evict to the loop-thread policy executor and block
+    /// for its terminal answer. A pinned subtree refuses with
+    /// `PinnedPresent` before committing anything — narrowing an
+    /// explicit promise piecemeal never happens silently.
+    fn op_policy_evict(
+        &self,
+        params: serde_json::Value,
+    ) -> Result<WireOk, (WireErrorCode, String)> {
+        let params: PathParams = serde_json::from_value(params).map_err(|error| {
+            (
+                WireErrorCode::Malformed,
+                format!("bad policy-evict params: {error}"),
+            )
+        })?;
+        match self
+            .handles
+            .policy
+            .submit(PolicyRequest::Evict { path: params.path })
+        {
+            Ok(PolicyResponse::Evicted(report)) => Ok(WireOk::PolicyEvicted {
+                released: report.released,
+                already_remote: report.already_remote,
+                files: report.files,
+                dirs: report.dirs,
+            }),
+            Ok(_) => Err((
+                WireErrorCode::Engine,
+                "policy channel answered evict with the wrong outcome".to_string(),
+            )),
+            Err(error) => Err(map_policy_error(error)),
+        }
+    }
+
+    /// Answer one on-demand status read from the loop-thread executor.
+    /// No periodic census exists: every status is a bounded walk at
+    /// request time, with a `complete` flag naming whether the
+    /// traversal budget covered the subtree. The generation and
+    /// revision ride the loop's answer — captured from the same
+    /// published generation the walk read — so the consumer
+    /// correlates the answer with the freshness judgment instead of
+    /// assuming recency.
+    fn op_policy_status(
+        &self,
+        params: serde_json::Value,
+    ) -> Result<WireOk, (WireErrorCode, String)> {
+        let params: PathParams = serde_json::from_value(params).map_err(|error| {
+            (
+                WireErrorCode::Malformed,
+                format!("bad policy-status params: {error}"),
+            )
+        })?;
+        match self
+            .handles
+            .policy
+            .submit(PolicyRequest::Status { path: params.path })
+        {
+            Ok(PolicyResponse::Status {
+                census: bounded,
+                generation,
+                revision,
+            }) => {
+                let census = &bounded.census;
+                Ok(WireOk::PolicyStatus {
+                    status: WirePolicyStatus {
+                        files: census.files.iter().map(WirePolicyRow::from).collect(),
+                        conflicts: census.conflicts.clone(),
+                        dirs: census.dirs,
+                        symlinks_skipped: census.symlinks_skipped,
+                        complete: bounded.complete,
+                    },
+                    generation,
+                    revision,
+                })
+            }
+            Ok(_) => Err((
+                WireErrorCode::Engine,
+                "policy channel answered status with the wrong outcome".to_string(),
+            )),
+            Err(error) => Err(map_policy_error(error)),
         }
     }
 }

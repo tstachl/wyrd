@@ -5,8 +5,9 @@
 //!
 //! The interface forwards and never interprets: namespace reads go to
 //! the shared projection, the durable observation and liveness go to
-//! the loop-published slots, and mutations go to the single mutation
-//! queue. See `docs/contracts/owner-interface.md` for the protocol contract;
+//! the loop-published slots, mutations go to the single mutation
+//! queue, and materialization policy goes to the loop-thread policy
+//! executor. See `docs/contracts/owner-interface.md` for the protocol contract;
 //! this module is its implementation.
 //!
 //! Three negative invariants pin the shape, enforced in
@@ -39,14 +40,16 @@ pub use server::{
 };
 
 pub use wire::{
-    PathParams, RawRequest, SubmitParams, WireAttr, WireConvergenceState, WireDirEntry,
-    WireDrainReport, WireDurabilityLevel, WireError, WireErrorCode, WireExecuteReport,
-    WireFileIdentity, WireFoldDisposition, WireFoldForcerOutcome, WireFoldMember, WireFreshness,
-    WireFreshnessState, WireHeadClasses, WireHeadSummary, WireKind, WireLiveness,
-    WireMailboxHealth, WireMailboxView, WireMaterializationSummary, WireMutationError,
-    WireMutationKind, WireMutationOutcome, WireNode, WireObservation, WireOk, WireOutboxTotals,
-    WireParentToken, WirePeerHandle, WirePendingObligations, WireQuarantineReport, WireQueueDepth,
-    WireReconciliationCounters, WireResponse, WireResult, WireScrubReport, WireSyncReport,
-    WireSyncStatus, OP_CAPTURE_PARENT, OP_FRESHNESS, OP_LIVENESS, OP_LOOKUP, OP_OBSERVE, OP_PAUSE,
+    map_policy_error, PathParams, RawRequest, SubmitParams, WireAttr, WireConvergenceState,
+    WireDirEntry, WireDrainReport, WireDurabilityLevel, WireError, WireErrorCode,
+    WireExecuteReport, WireFileIdentity, WireFoldDisposition, WireFoldForcerOutcome,
+    WireFoldMember, WireFreshness, WireFreshnessState, WireHeadClasses, WireHeadSummary, WireKind,
+    WireLiveness, WireMailboxHealth, WireMailboxView, WireMaterializationSummary,
+    WireMutationError, WireMutationKind, WireMutationOutcome, WireNode, WireObservation, WireOk,
+    WireOutboxTotals, WireParentToken, WirePeerHandle, WirePendingObligations, WirePolicyRow,
+    WirePolicyStatus, WirePresence, WireQuarantineReport, WireQueueDepth,
+    WireReconciliationCounters, WireResponse, WireResult, WireRetentionPolicy, WireScrubReport,
+    WireSyncReport, WireSyncStatus, OP_CAPTURE_PARENT, OP_FRESHNESS, OP_LIVENESS, OP_LOOKUP,
+    OP_OBSERVE, OP_PAUSE, OP_POLICY_EVICT, OP_POLICY_PIN, OP_POLICY_STATUS, OP_POLICY_UNPIN,
     OP_READ, OP_READDIR, OP_RESUME, OP_STAT, OP_SUBMIT, WIRE_VERSION,
 };

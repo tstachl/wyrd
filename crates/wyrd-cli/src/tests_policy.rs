@@ -515,7 +515,21 @@ fn storage_surface_never_says_free_space() {
     let status = policy_status_render("", "docs", &census);
     let rendered_none = policy_budgets_render(&census, &quota_none, &budgets);
     let rendered_some = policy_budgets_render(&census, &quota_some, &budgets);
-    for output in [&status, &rendered_none, &rendered_some] {
+    // The action receipts are storage surfaces too: `evict_render`'s
+    // note rides beside byte-adjacent words ("no bytes deleted"), so
+    // it is scanned like the reports above rather than trusted by
+    // inspection.
+    let evicted = evict_render(
+        "docs",
+        &wyrd_core::policy::EvictReport {
+            files: 1,
+            dirs: 1,
+            symlinks_skipped: 0,
+            released: 2,
+            already_remote: 0,
+        },
+    );
+    for output in [&status, &rendered_none, &rendered_some, &evicted] {
         let lower = output.to_lowercase();
         for forbidden in FORBIDDEN_STORAGE_WORDS {
             assert!(
@@ -615,4 +629,84 @@ fn storage_surface_names_its_budgets_offline_defaults() {
         !rendered.contains("effective"),
         "an offline report must not claim effective budgets:\n{rendered}"
     );
+}
+
+/// One census, two renderers: the CLI table (`policy_status_render`)
+/// and the wire answer (`WireOk::PolicyStatus`) name the same rows
+/// from the same facts. A future renderer cannot drift from the wire
+/// rows while the vocabulary tests still pass, because this test
+/// asserts the row table, not just the words.
+#[test]
+fn status_render_and_wire_agree_on_every_row() {
+    use wyrd_daemon::owner::WireOk;
+    use wyrd_daemon::owner::{WirePolicyRow, WirePolicyStatus, WirePresence, WireRetentionPolicy};
+
+    let census = ResidencyCensus {
+        files: vec![
+            wyrd_core::policy::FileResidency {
+                path: "kept.txt".into(),
+                chunks: Vec::new(),
+                pinned_chunks: Vec::new(),
+                policy: RetentionPolicy::Pinned,
+                local: LocalPresence::Present,
+            },
+            wyrd_core::policy::FileResidency {
+                path: "left.txt".into(),
+                chunks: Vec::new(),
+                pinned_chunks: Vec::new(),
+                policy: RetentionPolicy::RemoteOnly,
+                local: LocalPresence::Absent,
+            },
+        ],
+        conflicts: vec!["split".into()],
+        dirs: 2,
+        symlinks_skipped: 1,
+    };
+    let rendered = policy_status_render("", "docs", &census);
+    let wire_rows: Vec<WirePolicyRow> = census.files.iter().map(WirePolicyRow::from).collect();
+    let wire = WireOk::PolicyStatus {
+        status: WirePolicyStatus {
+            files: wire_rows.clone(),
+            conflicts: census.conflicts.clone(),
+            dirs: census.dirs,
+            symlinks_skipped: census.symlinks_skipped,
+            complete: true,
+        },
+        generation: 3,
+        revision: 9,
+    };
+    let WireOk::PolicyStatus {
+        status,
+        generation,
+        revision,
+    } = wire
+    else {
+        panic!("the wire answer carries the status envelope");
+    };
+    assert_eq!((generation, revision), (3, 9));
+    assert_eq!(status.files.len(), census.files.len());
+    assert_eq!(status.conflicts, census.conflicts);
+    assert_eq!(
+        (status.dirs, status.symlinks_skipped),
+        (census.dirs, census.symlinks_skipped)
+    );
+    assert!(status.complete);
+    // Every wire row reads back in the CLI table under the same
+    // words: the two renderers cannot disagree file by file.
+    for row in &status.files {
+        let (policy_word, presence_word) = match (&row.policy, &row.presence) {
+            (WireRetentionPolicy::Pinned, WirePresence::Present) => ("PINNED", "PRESENT"),
+            (WireRetentionPolicy::Pinned, WirePresence::Absent) => ("PINNED", "ABSENT"),
+            (WireRetentionPolicy::RemoteOnly, WirePresence::Present) => ("REMOTE_ONLY", "PRESENT"),
+            (WireRetentionPolicy::RemoteOnly, WirePresence::Absent) => ("REMOTE_ONLY", "ABSENT"),
+        };
+        let line = format!("{policy_word:<12} {presence_word:<8} {}", row.path);
+        assert!(
+            rendered.contains(&line),
+            "CLI table names the wire row verbatim:\n{rendered}\nmissing: {line}"
+        );
+    }
+    // The conflict costs a row in both renderers, never a silent skip.
+    assert!(rendered.contains("CONFLICT") && rendered.contains("split"));
+    assert_eq!(status.conflicts, vec!["split".to_string()]);
 }

@@ -431,6 +431,13 @@ where
     let (hook, on_error) = VaultObserver::new(emit, serving_id, Instant::now()).shared();
     live.set_pass_hook(hook);
     let supervisor = Supervisor::new(Arc::clone(live.mutations()), stop, Arc::clone(live.waker()));
+    // The policy channel shares the loop thread with the mutation
+    // queue, so it shares the teardown: close admission with the
+    // drain (admitted-before-stop resolves through it), fail
+    // close-racers with the mop-up. The owner interface serves until
+    // after this run returns, so without this a pin admitted at the
+    // stop would hang its connection past the server join.
+    let policy = Arc::clone(live.policy_channel());
     let (trigger_tx, trigger_rx) = std::sync::mpsc::channel::<()>();
     let drive = supervisor.spawn_loop(live, mailbox, bulk, config, trigger_tx, on_error);
     // Teardown trigger: the loop's return or the stop trip. The wait
@@ -461,6 +468,7 @@ where
     // close (empty plus closed returns promptly), so the join below
     // cannot hang on it.
     supervisor.close_for_drain();
+    policy.close();
     tracing::info!(stage = "teardown", "admission closed");
     match drive.join() {
         Ok(returned) => {
@@ -470,6 +478,7 @@ where
             // failing it closed keeps the post-teardown invariant
             // (closed and empty) that `close_admission` documents.
             supervisor.close_admission();
+            policy.shutdown();
             let mut mailbox = returned.mailbox;
             let bulk = returned.bulk;
             let _live = returned.live;
@@ -486,6 +495,7 @@ where
             // run the queued requests: fail them now rather than strand
             // their submitters (same mop-up as the join-Ok path).
             supervisor.close_admission();
+            policy.shutdown();
             let serving = serving.shutdown(deadlines.serving);
             if let Err(error) = &serving {
                 tracing::warn!(stage = "serving", error = %error, "serving shutdown failed");

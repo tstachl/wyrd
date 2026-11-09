@@ -129,6 +129,12 @@ pub struct LiveNode<V: NamespaceView> {
     /// drains and applies them serially each pass (the total order).
     /// Its lock is its own; submitting also wakes the loop's idle wait.
     pub(super) mutations: Arc<MutationQueue>,
+    /// Policy operations: the owner interface submits and blocks, the
+    /// loop drains and executes them serially each pass on the same
+    /// engine and thread as mutations — four engine operations, not
+    /// mutations (no parent-token, fold, or projection machinery).
+    /// Its lock is its own; submitting also wakes the loop's idle wait.
+    pub(super) policy: Arc<crate::policy_channel::PolicyChannel>,
     /// The durable revision the served generation was built from. The
     /// loop publishes exactly when the engine's sequence has advanced
     /// past this — every fact commit advances the sequence and empty
@@ -316,6 +322,10 @@ pub struct LiveParts<V: NamespaceView> {
     /// Mounted mutations: the backend submits and blocks, the loop
     /// drains and applies them serially each pass.
     pub mutations: Arc<MutationQueue>,
+    /// Policy operations: the owner interface submits and blocks, the
+    /// loop drains and executes them serially each pass on the same
+    /// engine and thread as mutations.
+    pub policy: Arc<crate::policy_channel::PolicyChannel>,
     /// Resource bounds for this live session, fixed at composition.
     pub budgets: ResourceBudgets,
     /// How long a backend `open` blocks for demand before failing.
@@ -426,6 +436,8 @@ where
         // callers (mailbox intake) so every producer wakes the loop.
         let waker = Arc::new(WakeSignal::default());
         mutations.attach_waker(Arc::clone(&waker));
+        let policy = Arc::new(crate::policy_channel::PolicyChannel::new());
+        policy.attach_waker(Arc::clone(&waker));
         // Baseline observability: idle lines before the first publish
         // report what the adopted generation serves.
         let observed_heads: Vec<SnapshotId> = engine
@@ -468,6 +480,7 @@ where
             projection: Arc::clone(&projection),
             wants: Arc::clone(&wants),
             mutations: Arc::clone(&mutations),
+            policy: Arc::clone(&policy),
             budgets,
             open_timeout,
             freshness: Arc::clone(&freshness),
@@ -485,6 +498,7 @@ where
                 scrub,
                 scrub_cursor: None,
                 mutations,
+                policy,
                 retained_bytes: config.retained_bytes.clone(),
                 published_revision: revision,
                 published_terminal: BTreeMap::new(),
@@ -939,6 +953,122 @@ where
     /// teardown joins).
     pub fn mutations(&self) -> &Arc<MutationQueue> {
         &self.mutations
+    }
+
+    /// The policy channel the owner interface submits through: the
+    /// same loop-thread executor as mutations, four engine operations
+    /// (not mutations). The supervisor closes it alongside the
+    /// mutation queue on teardown.
+    pub fn policy_channel(&self) -> &Arc<crate::policy_channel::PolicyChannel> {
+        &self.policy
+    }
+
+    /// Drain queued policy operations against the loop's engine, in
+    /// submission order, on this thread — the same thread that just
+    /// drained mutations. Status reads run on demand against the
+    /// current published generation under the per-request traversal
+    /// budget; mutations commit durably and advance the revision gate
+    /// below like any other fact commit. Called once per pass after
+    /// the mutation batch, before the revision gate, so a pin and its
+    /// publication never straddle passes.
+    pub fn drain_policy(&mut self) {
+        use crate::policy::{residency_census_bounded, POLICY_STATUS_TRAVERSAL_BUDGET};
+        use crate::policy_channel::{PolicyRequest, PolicyResponse};
+
+        let queued = self.policy.take_queued();
+        if queued.is_empty() {
+            return;
+        }
+        // One published generation for the whole drain: every request
+        // observes the same serving state, and a concurrent local
+        // write cannot mix generations into one drain. The generation
+        // and revision are captured here, beside the walk, so a
+        // status answer reports the pair it was actually served from —
+        // never a pair the server read before submitting while a
+        // publication landed between the two.
+        let projection = match self.projection.read() {
+            Ok(slot) => Arc::clone(&slot),
+            Err(_) => {
+                for (_, reply) in &queued {
+                    crate::policy_channel::PolicyChannel::complete(
+                        reply,
+                        Err(crate::policy::PolicyError::Engine(
+                            wyrd_sync::runtime::EngineError::ObjectStore(
+                                "serving projection lock poisoned".to_string(),
+                            ),
+                        )),
+                    );
+                }
+                return;
+            }
+        };
+        let generation = projection.generation();
+        let revision = projection.revision();
+        // The effective role, loaded lazily once per drain and only
+        // when a status request needs it: pin, unpin, and evict act on
+        // stored facts and never consult the role, so a torn role file
+        // fails status alone instead of refusing a pin. `None` means
+        // no status request has needed it yet; the first status loads
+        // it and every later status in the drain reuses the same
+        // posture, so one drain never measures two postures.
+        let mut role: Option<crate::role::Role> = None;
+        for (request, reply) in &queued {
+            let result = match request {
+                PolicyRequest::Pin { path } => {
+                    crate::policy::pin_subtree(&mut self.engine, projection.view(), path)
+                        .map(PolicyResponse::Pinned)
+                }
+                PolicyRequest::Unpin { path } => {
+                    crate::policy::unpin_subtree(&mut self.engine, projection.view(), path)
+                        .map(PolicyResponse::Unpinned)
+                }
+                PolicyRequest::Evict { path } => {
+                    crate::policy::evict_subtree(&mut self.engine, projection.view(), path)
+                        .map(PolicyResponse::Evicted)
+                }
+                PolicyRequest::Status { path } => {
+                    let posture = match role {
+                        Some(posture) => posture,
+                        None => {
+                            let loaded = match self.role_dir.clone() {
+                                Some(dir) => match crate::role::load(&dir) {
+                                    Ok(state) => state.effective(),
+                                    Err(_) => {
+                                        let failure = crate::policy::PolicyError::Engine(
+                                            wyrd_sync::runtime::EngineError::ObjectStore(
+                                                "unreadable role file: retaining as mirror until repaired"
+                                                    .to_string(),
+                                            ),
+                                        );
+                                        crate::policy_channel::PolicyChannel::complete(
+                                            reply,
+                                            Err(failure),
+                                        );
+                                        continue;
+                                    }
+                                },
+                                None => crate::role::Role::Mirror,
+                            };
+                            role = Some(loaded);
+                            loaded
+                        }
+                    };
+                    residency_census_bounded(
+                        &self.engine,
+                        projection.view(),
+                        path,
+                        posture,
+                        POLICY_STATUS_TRAVERSAL_BUDGET,
+                    )
+                    .map(|census| PolicyResponse::Status {
+                        census,
+                        generation,
+                        revision,
+                    })
+                }
+            };
+            crate::policy_channel::PolicyChannel::complete(reply, result);
+        }
     }
 
     /// Point-in-time copy of the lifetime write-path totals for the

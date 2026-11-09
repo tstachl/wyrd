@@ -12,6 +12,10 @@ use crate::commands::export::open_policy_node;
 use crate::drive_config::{CredentialProvenance, LoadedConfig, RelayResolution};
 use crate::CliError;
 use std::path::{Path, PathBuf};
+use wyrd_core::materialization_surface::{
+    EVICT_RELEASED_NOTE, FETCHED_STILL_REMOTE_ONLY, POLICY_PINNED_WORD, POLICY_REMOTE_ONLY_WORD,
+    PRESENCE_ABSENT_WORD, PRESENCE_PRESENT_WORD,
+};
 use wyrd_core::policy::{
     evict_subtree, pin_subtree, residency_census_with_role, unpin_subtree, LocalPresence,
     ResidencyCensus, RetentionPolicy, StorageFigure,
@@ -311,7 +315,7 @@ pub(crate) fn evict_render(path: &str, report: &wyrd_core::policy::EvictReport) 
         report.dirs,
         display_policy_path(path),
     );
-    out.push_str("note: eviction releases intent only — no bytes deleted, files that stay fully local keep reading\n");
+    out.push_str(&format!("{EVICT_RELEASED_NOTE}\n"));
     if report.symlinks_skipped > 0 {
         out.push_str(&format!(
             "note: {} symlinks skipped (a link names no content of its own)\n",
@@ -365,15 +369,15 @@ pub(crate) fn display_policy_path(path: &str) -> &str {
 
 pub(crate) fn policy_word(policy: RetentionPolicy) -> &'static str {
     match policy {
-        RetentionPolicy::Pinned => "PINNED",
-        RetentionPolicy::RemoteOnly => "REMOTE_ONLY",
+        RetentionPolicy::Pinned => POLICY_PINNED_WORD,
+        RetentionPolicy::RemoteOnly => POLICY_REMOTE_ONLY_WORD,
     }
 }
 
 pub(crate) fn presence_word(local: LocalPresence) -> &'static str {
     match local {
-        LocalPresence::Present => "PRESENT",
-        LocalPresence::Absent => "ABSENT",
+        LocalPresence::Present => PRESENCE_PRESENT_WORD,
+        LocalPresence::Absent => PRESENCE_ABSENT_WORD,
     }
 }
 
@@ -452,6 +456,7 @@ pub(crate) fn policy_status_render(
         out.push_str(&format!("{:<12} {:<8} {}\n", "CONFLICT", "-", conflict));
     }
     out.push_str(&policy_quadrant_summary(census));
+    out.push_str(&format!("note: {FETCHED_STILL_REMOTE_ONLY}\n"));
     if census.symlinks_skipped > 0 {
         out.push_str(&format!(
             "note: {} {} (a link names no content of its own)\n",

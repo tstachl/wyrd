@@ -5,8 +5,11 @@ Status: Normative. Scope: the cross-process operations a non-owner consumer may 
 A second process uses a drive it does not own through this
 interface. One process owns the durable store. Every other local
 consumer submits operations to the owner and never opens the store.
-The interface forwards each request to the owner's single mutation
-queue or its published read state. It interprets nothing.
+The interface forwards mutation requests to the owner's single
+mutation queue, policy requests to the owner's loop-thread policy
+executor (the same engine, the same thread — four engine operations,
+not mutations), and reads to its published read state. It interprets
+nothing.
 
 ## Transport
 
@@ -151,6 +154,82 @@ liveness field are new in v1's current shape. `paused` defaults to
 instead of failing; both sides ship together, so the default only
 covers mixed-version skew during rollout.
 
+## Materialization policy
+
+Forward `policy-pin`, `policy-unpin`, `policy-evict`, and
+`policy-status` to the loop-thread policy executor through a
+dedicated typed channel — the same engine, the same loop thread as
+the mutation queue, but never the mutation queue itself. Policy
+operations are four engine operations, not mutations: the queue's
+parent-token, fold, and projection machinery is not theirs to touch,
+and the mutation family's "forward all nine operations verbatim"
+reservation keeps its meaning per op family. There is still exactly
+one writer (the loop owns `&mut Engine`), no second mutation path,
+no new authority, and no read-side mailbox. Budgets and role stay
+CLI-offline: the budgets screen reads durable state directly, the
+role file stays local, and setting the role needs no owner.
+
+Pin promises retention for every chunk under the path, unpin
+releases the promise back to cacheable policy, and evict returns
+unpinned content to `REMOTE_ONLY` policy. Evict changes intent only:
+no bytes are deleted, no store is compacted, heads are untouched. A
+pinned subtree refuses evict with `PinnedPresent` before committing
+anything — narrowing an explicit promise piecemeal never happens
+silently. Unpin never refuses. Every write is idempotent: re-pinning
+commits nothing, and a repeated write is observably a no-op. Policy
+facts are device-local: never published, never authorize anything,
+never alter a snapshot. A success means exactly what an in-process
+policy call's success means.
+
+Answer `policy-status` on demand only. The loop runs no periodic
+census; every status is a bounded walk at request time against the
+loop's engine and its published generation. The walk covers at most
+the implementer traversal budget (4096 namespace entries: files plus
+dirs plus symlinks plus conflict rows) before stopping with
+`complete: false` — a prefix, not the subtree, and the consumer
+narrows the path or accepts the aggregate as partial. The answer
+carries the serving generation and durable revision the loop
+actually walked — captured from the same published generation as the
+rows, never read separately beforehand — so the consumer correlates
+it with the freshness judgment instead of assuming recency.
+Reachable content only: the object store as a whole is never
+scanned. Conflicted subtrees cost a row, not the report; mutating
+commands still refuse conflicted paths outright. Label the counts
+"reachable content", never "total storage" or "all files".
+Distinguish last-observed from in-progress from unavailable, and
+never render a live byte figure the storage contract does not own.
+
+Pin, unpin, and evict resolve against the last published
+generation, not the engine's in-flight state: a mutation the same
+pass authored is not yet published when the policy drain runs, so a
+policy operation addressing that same path agrees with the drain
+only on the next pass. Serialisation is still total and safe — the
+loop executes the mutation batch and the policy drain in one order
+on one thread — but the namespace can lag the engine by one pass.
+In-process calls observe durable state directly and have no such
+lag; over the interface, re-read (status) after a same-pass author
+before assuming the pin landed.
+
+Writes traverse the whole subtree with no entry, chunk, or byte
+budget: one pin over a large subtree commits one batch, but the walk
+itself runs synchronously on the loop thread, ahead of publication
+and of every queued status behind it. Only the status walk is
+budgeted; stage a huge tree by subpaths rather than pinning the root
+in one operation. The per-commit record ceiling still fences absurd
+batches, but a large-but-legal subtree stretches its pass past the
+pacing deadline in ordinary-sized trees this never matters — the
+operator-size caveat belongs here rather than in a refusal, because
+the walk's cost is time on the loop thread, not a correctness bound.
+
+Carry refusals through as distinct codes. Map each policy error to
+its own code: `PinnedPresent` for the evict refusal, `TooDeep` for
+paths past the format depth bound, `Conflicted` for conflicted paths,
+the view codes for view failures, `Engine` for engine failures
+(including channel shutdown and lock poison). Never collapse two
+refusals into one. A status read builds no mailbox, connects to
+nothing, and changes no durable state; a policy write commits a
+durable policy fact and nothing else.
+
 ## Crash answers
 
 Return one of three verdicts for every request. Confirmed means
@@ -181,4 +260,4 @@ peer identity. Carry drain peer counts only, never identities.
 Keep `wyrd_sync` implementation types out of the operation
 surface. The mapping may name source types. Operations never
 accept or return store internals. The server holds shared
-projections, registries, queues, and published slots only.
+projections, registries, queues, channels, and published slots only.
