@@ -44,3 +44,11 @@ jobs:
       resources:
         memory-mib: {gte: 8192}
     build: checks.x86_64-linux.rust-slow-tests
+  # Doctests moved here in Nov-09 from rust.yaml's PR gate: 2 listed
+  # doctests do not justify a second workspace compile on every PR.
+  # Kept as a derivation so `nix flake check` still evaluates it.
+  doctests:
+    requirements:
+      resources:
+        memory-mib: {gte: 8192}
+    build: checks.x86_64-linux.rust-doctests

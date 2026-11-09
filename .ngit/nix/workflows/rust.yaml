@@ -8,11 +8,13 @@
 # single serial run exceeds the 30-minute allocation. needs: between
 # build jobs is forbidden and shares no Nix state; only steps share.
 # Mirrors the act rust job step for step — check (+ the production
-# feature-graph gate), clippy, nextest default profile, doctests,
-# audit+deny — so a native green means the same thing as an act
-# green. Only the audit step reaches the network (advisory DB), and
-# only for the DB. No artifacts (no provider Blossom yet), no
-# secrets, no Docker.
+# feature-graph gate), clippy, nextest default profile, audit+deny —
+# so a native green means the same thing as an act green. Doctests
+# moved to rust-slow.yaml in Nov-09: 2 listed doctests do not justify a
+# second workspace compile on every PR (see
+# docs/design/test-review.md). Only the audit step reaches the
+# network (advisory DB), and only for the DB. No artifacts (no
+# provider Blossom yet), no secrets, no Docker.
 version: 1
 system: x86_64-linux
 name: rust
@@ -72,12 +74,12 @@ jobs:
           build: checks.x86_64-linux.rust-clippy
       - audit:
           run: rust.audit
-  # Test gates: deps once, then the two test suites reuse it in the
+  # Test gate: deps once, then the test suite reuses it in the
   # same store. Higher memory floor for nextest parallelism; no
   # scratch-mib (unschedulable — the adapter never advertises it).
   # (Named gates-tests, not gates-slow: it runs the default profile
-  # plus doctests on every PR. The slow profile lives in
-  # rust-slow.yaml and runs on master pushes only.)
+  # on every PR. The slow profile and the doctests live in
+  # rust-slow.yaml and run on master pushes only.)
   gates-tests:
     requirements:
       resources:
@@ -87,5 +89,3 @@ jobs:
           build: checks.x86_64-linux.rust-deps
       - tests:
           build: checks.x86_64-linux.rust-tests
-      - doctests:
-          build: checks.x86_64-linux.rust-doctests

@@ -68,22 +68,10 @@ mod tests {
         assert_ne!(a, b);
     }
 
-    #[test]
-    fn root_does_not_leak_through_debug() {
-        let root = DriveRootKey::from_bytes([0xAB; 32]);
-        assert_eq!(format!("{root:?}"), "DriveRootKey(REDACTED)");
-    }
-
-    #[test]
-    fn root_implements_zeroize_on_drop() {
-        // The type-level guarantee is what we're testing: the trait
-        // derive means `Drop` will scrub the underlying bytes when the
-        // wrapper goes out of scope. Behavioral zeroization is not
-        // directly observable in safe Rust, so this is a compile-time
-        // lock on the contract, not a runtime check.
-        fn assert_zeroize_on_drop<T: zeroize::ZeroizeOnDrop>() {}
-        assert_zeroize_on_drop::<DriveRootKey>();
-    }
+    // Hygiene locks (Debug redaction, ZeroizeOnDrop) live in
+    // `crate::keys::hygiene` (`secret_leaves_redact_through_debug`,
+    // `secret_leaves_implement_zeroize_on_drop`); this module keeps
+    // only the freshness pin that hygiene does not cover.
 
     // The root's most important property is structural: no derivation
     // from the root to epoch material exists anywhere in this crate. The
