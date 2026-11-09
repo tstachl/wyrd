@@ -4,6 +4,7 @@
 //! socket round trip. Mutation submission (child 2) and crash
 //! answers (child 3) extend this file, not a second harness.
 
+use super::client::{ClientError, OwnerClient};
 use super::server::{
     OwnerHandles, OwnerServer, MAX_FRAME_BYTES, MAX_OWNER_CONNECTIONS, MAX_SUBMIT_CONTENT_BYTES,
 };
@@ -2521,5 +2522,512 @@ fn accept_flood_stays_bounded() {
 
     stop.store(true, Ordering::Relaxed);
     serve_thread.join().unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// Shared Rust client (OD-16-F, client-integration decision)
+// ---------------------------------------------------------------------------
+
+/// The typed client serves the whole read surface against a live
+/// server: every op returns its own shape, the observation refusal
+/// stays explicit, and reconciliation maps absence to data.
+#[test]
+fn client_serves_the_typed_surface() {
+    let (parts, dir) = composed_parts();
+    let server = OwnerServer::new(OwnerHandles::from_parts(&parts));
+    let stop: &'static AtomicBool = Box::leak(Box::new(AtomicBool::new(false)));
+    let (socket_path, serve_thread) = serve_parts(server, "client.sock", &dir, stop);
+    let mut client = OwnerClient::connect(&socket_path).expect("the owner answers");
+
+    let (node, generation, revision) = client.lookup("hello.txt").expect("lookup serves");
+    assert!(
+        matches!(node, WireNode::File { size: 11, .. }),
+        "lookup serves the seeded file: {node:?}"
+    );
+    let (_, stat_generation, stat_revision) = client.stat("hello.txt").expect("stat serves");
+    assert_eq!((stat_generation, stat_revision), (generation, revision));
+    let (entries, _, _) = client.readdir("").expect("readdir serves the root");
+    assert!(
+        entries.iter().any(|entry| entry.name == "hello.txt"),
+        "the root lists the seeded file"
+    );
+    let (bytes, _, _) = client.read("hello.txt").expect("read serves");
+    assert_eq!(bytes, b"hello owner");
+    match client.observe() {
+        Err(ClientError::Refused(error)) => assert_eq!(error.code, WireErrorCode::Unobserved),
+        other => panic!("no pass completed, so observe refuses explicitly: {other:?}"),
+    }
+    let liveness = client.liveness().expect("liveness serves");
+    assert_eq!((liveness.passes, liveness.paused), (0, false));
+    match client.freshness().expect("freshness serves").state {
+        WireFreshnessState::FreshNonEmpty => {}
+        other => panic!("the composed view is fresh and non-empty: {other:?}"),
+    }
+    assert!(client.pause().expect("pause sets the switch"));
+    assert!(client.liveness().expect("liveness re-reads").paused);
+    assert!(!client.resume().expect("resume clears the switch"));
+
+    // Reconciliation: presence is data, absence is data.
+    assert!(client
+        .reconcile_lookup("hello.txt")
+        .expect("reconcile reads")
+        .is_some());
+    assert!(client
+        .reconcile_lookup("missing.txt")
+        .expect("absence reconciles")
+        .is_none());
+
+    stop.store(true, Ordering::Relaxed);
+    serve_thread.join().unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Submit through the client against a running loop: creates land,
+/// the re-read confirms them, and refusals carry their own codes —
+/// the transport never collapses two refusals into one.
+#[test]
+fn client_submit_forwards_and_refusals_carry_their_codes() {
+    let (server, _parts, dir, stop, loop_thread) = running_parts();
+    let (socket_path, serve_thread) = serve_parts(server, "client-submit.sock", &dir, stop);
+    let mut client = OwnerClient::connect(&socket_path).expect("the owner answers");
+
+    // Capture-then-create races the loop's publication: a pass
+    // that replaces the namespace between capture and submit
+    // invalidates the token, and the create refuses StaleParent.
+    // The consumer discipline is re-capture and retry — the same
+    // loop a Tauri or File Provider client runs — bounded here
+    // because the root goes quiet once the seed settles. The
+    // capture names the parent directory ("" is the drive root),
+    // not the file being created.
+    let outcome = {
+        let mut attempts = 0;
+        loop {
+            attempts += 1;
+            let token = client.capture_parent("").expect("the parent captures");
+            match client.submit(WireMutationKind::CreateFile {
+                path: "child.txt".to_string(),
+                parent: token,
+            }) {
+                Ok(outcome) => break outcome,
+                Err(ClientError::Refused(error))
+                    if error.code == WireErrorCode::StaleParent && attempts < 30 =>
+                {
+                    std::thread::sleep(Duration::from_millis(50));
+                    continue;
+                }
+                other => panic!("create submits: {other:?}"),
+            }
+        }
+    };
+    assert!(
+        matches!(outcome, WireMutationOutcome::Created(_)),
+        "create reports its identity: {outcome:?}"
+    );
+
+    let outcome = client
+        .submit(WireMutationKind::Mkdir {
+            path: "via-client".to_string(),
+        })
+        .expect("mkdir submits");
+    assert_eq!(outcome, WireMutationOutcome::Done);
+    match client
+        .reconcile_lookup("via-client")
+        .expect("reconcile re-reads")
+    {
+        Some((WireNode::Dir { .. }, _, _)) => {}
+        other => panic!("the created directory serves: {other:?}"),
+    }
+
+    match client.submit(WireMutationKind::Rmdir {
+        path: "nope".to_string(),
+    }) {
+        Err(ClientError::Refused(error)) => assert_eq!(error.code, WireErrorCode::NotFound),
+        other => panic!("removing a missing dir refuses NotFound: {other:?}"),
+    }
+    match client.submit(WireMutationKind::Mkdir {
+        path: "seed.txt".to_string(),
+    }) {
+        Err(ClientError::Refused(error)) => assert_eq!(error.code, WireErrorCode::AlreadyExists),
+        other => panic!("re-making a file refuses AlreadyExists: {other:?}"),
+    }
+
+    stop.store(true, Ordering::Relaxed);
+    serve_thread.join().unwrap();
+    spawn_loop_done(loop_thread);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// An absent or refused socket is unavailable — never an empty
+/// drive, never a success, never evidence about any request.
+#[test]
+fn client_absence_is_unavailable() {
+    let dir = std::env::temp_dir().join(format!(
+        "wyrd-owner-client-absent-{}-{}",
+        std::process::id(),
+        SCRATCH_N.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    match OwnerClient::connect(&dir.join("no.sock")) {
+        Err(ClientError::Unavailable(_)) => {}
+        other => panic!("no socket is unavailable, not an answer: {other:?}"),
+    }
+    match OwnerClient::connect_drive(&dir) {
+        Err(ClientError::Unavailable(_)) => {}
+        other => panic!("no owner beside the drive is unavailable: {other:?}"),
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// A dead owner leaves in-flight and later requests unconfirmed —
+/// and a failed re-read never resolves the original request, it
+/// stays unconfirmed too.
+#[test]
+fn client_dead_owner_is_unconfirmed_and_reconcile_stays_unconfirmed() {
+    let (parts, dir) = composed_parts();
+    let server = OwnerServer::new(OwnerHandles::from_parts(&parts));
+    let stop: &'static AtomicBool = Box::leak(Box::new(AtomicBool::new(false)));
+    let (socket_path, serve_thread) = serve_parts(server, "client-dead.sock", &dir, stop);
+    let mut client = OwnerClient::connect(&socket_path).expect("the owner answers");
+    client
+        .lookup("hello.txt")
+        .expect("the owner serves while alive");
+
+    stop.store(true, Ordering::Relaxed);
+    serve_thread.join().unwrap();
+
+    match client.lookup("hello.txt") {
+        Err(ClientError::Unconfirmed { .. }) => {}
+        other => panic!("a dead owner is unconfirmed, never success: {other:?}"),
+    }
+    match client.reconcile_lookup("missing.txt") {
+        Err(ClientError::Unconfirmed { .. }) => {}
+        other => panic!("a failed re-read stays unconfirmed: {other:?}"),
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Serve exactly one canned answer: the fake responder reads one
+/// frame, answers it, and closes. Enough transport to prove the
+/// client classifies protocol violations without a real owner.
+fn serve_canned_once(
+    socket_path: &std::path::Path,
+    respond: impl FnOnce(RawRequest) -> WireResponse + Send + 'static,
+) -> std::thread::JoinHandle<()> {
+    let listener = std::os::unix::net::UnixListener::bind(socket_path).unwrap();
+    std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut len_bytes = [0u8; 4];
+        stream.read_exact(&mut len_bytes).unwrap();
+        let len = u32::from_be_bytes(len_bytes) as usize;
+        let mut frame = vec![0u8; len];
+        stream.read_exact(&mut frame).unwrap();
+        let request: RawRequest = serde_json::from_slice(&frame).unwrap();
+        let answer = serde_json::to_vec(&respond(request)).unwrap();
+        stream
+            .write_all(&(answer.len() as u32).to_be_bytes())
+            .unwrap();
+        stream.write_all(&answer).unwrap();
+        stream.flush().unwrap();
+    })
+}
+
+/// An answer in a shape the operation never produces, and an answer
+/// echoing the wrong id, are incompatibilities — explicit, never a
+/// generic unavailability and never a refusal of the request.
+#[test]
+fn client_wrong_shape_and_wrong_id_are_incompatible() {
+    let dir = std::env::temp_dir().join(format!(
+        "wyrd-owner-client-fake-{}-{}",
+        std::process::id(),
+        SCRATCH_N.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let socket_path = dir.join("wrong-shape.sock");
+    let responder = serve_canned_once(&socket_path, |request| WireResponse {
+        v: WIRE_VERSION,
+        id: request.id,
+        result: WireResult::Ok(Box::new(WireOk::Paused { paused: false })),
+    });
+    let mut client = OwnerClient::connect(&socket_path)
+        .expect("the transport connects")
+        .with_timeout(Duration::from_secs(10))
+        .expect("the timeout arms");
+    match client.lookup("hello.txt") {
+        Err(ClientError::Incompatible(_)) => {}
+        other => panic!("a pause answer to lookup is incompatible: {other:?}"),
+    }
+    responder.join().unwrap();
+
+    let socket_path = dir.join("wrong-id.sock");
+    let responder = serve_canned_once(&socket_path, |request| WireResponse {
+        v: WIRE_VERSION,
+        id: request.id.wrapping_add(1),
+        result: WireResult::Ok(Box::new(WireOk::Paused { paused: false })),
+    });
+    let mut client = OwnerClient::connect(&socket_path)
+        .expect("the transport connects")
+        .with_timeout(Duration::from_secs(10))
+        .expect("the timeout arms");
+    match client.observe() {
+        Err(ClientError::Incompatible(_)) => {}
+        other => panic!("a mismatched id is incompatible: {other:?}"),
+    }
+    responder.join().unwrap();
+
+    let socket_path = dir.join("wrong-version.sock");
+    let responder = serve_canned_once(&socket_path, |request| WireResponse {
+        v: 999,
+        id: request.id,
+        result: WireResult::Err(WireError {
+            code: WireErrorCode::UnknownVersion,
+            message: "unsupported wire version 999, want 1".to_string(),
+        }),
+    });
+    let mut client = OwnerClient::connect(&socket_path)
+        .expect("the transport connects")
+        .with_timeout(Duration::from_secs(10))
+        .expect("the timeout arms");
+    match client.observe() {
+        Err(ClientError::Incompatible(_)) => {}
+        other => panic!("a foreign wire version is incompatible: {other:?}"),
+    }
+    responder.join().unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// The golden vectors pin the bytes both sides agree on: every
+/// checked-in request parses as the named operation at version 1
+/// and re-serializes to the identical document, every ok sample
+/// decodes to its operation's result shape, every refusal sample
+/// decodes to its code — and one request is asserted byte-for-byte
+/// through the framing, length prefix included, so a second
+/// implementation can reproduce the transport exactly.
+#[test]
+fn golden_vectors_pin_the_wire() {
+    #[derive(Debug, serde::Deserialize)]
+    struct Vector {
+        name: String,
+        json: serde_json::Value,
+    }
+    let vectors: Vec<Vector> =
+        serde_json::from_str(include_str!("vectors.json")).expect("vectors parse");
+    assert!(!vectors.is_empty(), "the vectors pin at least one document");
+    for vector in &vectors {
+        let (kind, shape) = vector
+            .name
+            .split_once('/')
+            .unwrap_or_else(|| panic!("vector names are kind/shape: {}", vector.name));
+        match shape {
+            "request" => {
+                let request: RawRequest = serde_json::from_value(vector.json.clone())
+                    .unwrap_or_else(|error| panic!("{} parses as a request: {error}", vector.name));
+                assert_eq!(request.v, WIRE_VERSION, "{} carries version 1", vector.name);
+                let expected_op = match kind {
+                    "capture-parent" => OP_CAPTURE_PARENT,
+                    "submit" => OP_SUBMIT,
+                    "submit-create" => OP_SUBMIT,
+                    "lookup" => OP_LOOKUP,
+                    "stat" => OP_STAT,
+                    "readdir" => OP_READDIR,
+                    "read" => OP_READ,
+                    "observe" => OP_OBSERVE,
+                    "liveness" => OP_LIVENESS,
+                    "freshness" => OP_FRESHNESS,
+                    "pause" => OP_PAUSE,
+                    "resume" => OP_RESUME,
+                    other => panic!("unknown vector operation: {other}"),
+                };
+                assert_eq!(
+                    request.op, expected_op,
+                    "{} names its operation",
+                    vector.name
+                );
+                let round_trip = serde_json::to_value(&request).expect("requests re-serialize");
+                assert_eq!(
+                    round_trip, vector.json,
+                    "{} re-serializes to the identical document",
+                    vector.name
+                );
+            }
+            "ok" => {
+                let response: WireResponse = serde_json::from_value(vector.json.clone())
+                    .unwrap_or_else(|error| {
+                        panic!("{} parses as a response: {error}", vector.name)
+                    });
+                assert_eq!(response.v, WIRE_VERSION);
+                match (kind, response.result) {
+                    ("lookup", WireResult::Ok(ok)) => assert!(
+                        matches!(*ok, WireOk::Lookup { .. }),
+                        "the lookup sample answers a lookup"
+                    ),
+                    ("submit", WireResult::Ok(ok)) => assert!(
+                        matches!(*ok, WireOk::Submitted { .. }),
+                        "the submit sample answers a submit"
+                    ),
+                    other => panic!("unexpected ok sample: {other:?}"),
+                }
+            }
+            "not-found" | "unknown-version" => {
+                let response: WireResponse = serde_json::from_value(vector.json.clone())
+                    .unwrap_or_else(|error| {
+                        panic!("{} parses as a response: {error}", vector.name)
+                    });
+                let expected = match shape {
+                    "not-found" => WireErrorCode::NotFound,
+                    _ => WireErrorCode::UnknownVersion,
+                };
+                match response.result {
+                    WireResult::Err(error) => assert_eq!(error.code, expected),
+                    ok => panic!("{} is a refusal: {ok:?}", vector.name),
+                }
+            }
+            other => panic!("unknown vector shape: {other}"),
+        }
+    }
+    // One request through the framing, byte for byte: the
+    // length-prefix plus the canonical body a second implementation
+    // must reproduce exactly.
+    let lookup = vectors
+        .iter()
+        .find(|vector| vector.name == "lookup/request")
+        .unwrap();
+    let request: RawRequest = serde_json::from_value(lookup.json.clone()).unwrap();
+    let body = serde_json::to_vec(&request).unwrap();
+    let mut framed = (body.len() as u32).to_be_bytes().to_vec();
+    framed.extend_from_slice(&body);
+    assert_eq!(
+        framed,
+        {
+            let mut expected = (body.len() as u32).to_be_bytes().to_vec();
+            expected.extend_from_slice(
+                b"{\"v\":1,\"id\":7,\"op\":\"lookup\",\"params\":{\"path\":\"hello.txt\"}}",
+            );
+            expected
+        },
+        "the lookup request frames byte-for-byte"
+    );
+}
+
+/// A timed-out instance sends nothing more: the second call fails
+/// without touching the socket, so the server never sees a second
+/// frame. Without the poison, the second request would reuse the
+/// broken stream and read the first answer late as an id mismatch.
+#[test]
+fn client_timed_out_instance_sends_nothing_more() {
+    let dir = std::env::temp_dir().join(format!(
+        "wyrd-owner-client-timeout-{}-{}",
+        std::process::id(),
+        SCRATCH_N.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let socket_path = dir.join("timeout.sock");
+    let listener = std::os::unix::net::UnixListener::bind(&socket_path).unwrap();
+    let probe = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut len_bytes = [0u8; 4];
+        stream.read_exact(&mut len_bytes).unwrap();
+        let len = u32::from_be_bytes(len_bytes) as usize;
+        let mut frame = vec![0u8; len];
+        stream.read_exact(&mut frame).unwrap();
+        // Outlast the client deadline: the first request times out
+        // on the client side while the server still holds it.
+        std::thread::sleep(Duration::from_millis(400));
+        stream
+            .set_read_timeout(Some(Duration::from_millis(500)))
+            .unwrap();
+        let mut second = [0u8; 4];
+        match stream.read(&mut second) {
+            // Silence or a clean close: the poisoned instance sent
+            // nothing more.
+            Ok(0) => false,
+            Err(error)
+                if error.kind() == std::io::ErrorKind::TimedOut
+                    || error.kind() == std::io::ErrorKind::WouldBlock =>
+            {
+                false
+            }
+            // Bytes arrived: the broken stream was reused.
+            _ => true,
+        }
+    });
+
+    let mut client = OwnerClient::connect(&socket_path)
+        .expect("the transport connects")
+        .with_timeout(Duration::from_millis(50))
+        .expect("the timeout arms");
+    match client.pause() {
+        Err(ClientError::Unconfirmed { .. }) => {}
+        other => panic!("an unanswered request is unconfirmed: {other:?}"),
+    }
+    match client.pause() {
+        Err(ClientError::Unconfirmed { .. }) => {}
+        other => panic!("a poisoned instance stays unconfirmed: {other:?}"),
+    }
+    assert!(
+        !probe.join().unwrap(),
+        "a timed-out instance sends nothing more"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// An overlong response length poisons without reading the body: no
+/// allocation past the bound, and no later call misreads the
+/// unread body as a new length.
+#[test]
+fn client_overlong_frame_poisons_without_reading_the_body() {
+    let dir = std::env::temp_dir().join(format!(
+        "wyrd-owner-client-overlong-{}-{}",
+        std::process::id(),
+        SCRATCH_N.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let socket_path = dir.join("overlong.sock");
+    let listener = std::os::unix::net::UnixListener::bind(&socket_path).unwrap();
+    let probe = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut len_bytes = [0u8; 4];
+        stream.read_exact(&mut len_bytes).unwrap();
+        let len = u32::from_be_bytes(len_bytes) as usize;
+        let mut frame = vec![0u8; len];
+        stream.read_exact(&mut frame).unwrap();
+        // A length past the ceiling, with no body behind it: the
+        // client must refuse the length, never allocate or read on.
+        let overlong = (MAX_FRAME_BYTES as u32).wrapping_add(1);
+        stream.write_all(&overlong.to_be_bytes()).unwrap();
+        stream.flush().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_millis(500)))
+            .unwrap();
+        let mut second = [0u8; 4];
+        match stream.read(&mut second) {
+            Ok(0) => false,
+            Err(error)
+                if error.kind() == std::io::ErrorKind::TimedOut
+                    || error.kind() == std::io::ErrorKind::WouldBlock =>
+            {
+                false
+            }
+            _ => true,
+        }
+    });
+
+    let mut client = OwnerClient::connect(&socket_path)
+        .expect("the transport connects")
+        .with_timeout(Duration::from_secs(10))
+        .expect("the timeout arms");
+    match client.lookup("hello.txt") {
+        Err(ClientError::Unconfirmed { .. }) => {}
+        other => panic!("an overlong length is unconfirmed: {other:?}"),
+    }
+    match client.lookup("hello.txt") {
+        Err(ClientError::Unconfirmed { .. }) => {}
+        other => panic!("a poisoned instance stays unconfirmed: {other:?}"),
+    }
+    assert!(
+        !probe.join().unwrap(),
+        "an overlong frame sends nothing more and reads no body"
+    );
     std::fs::remove_dir_all(dir).unwrap();
 }
