@@ -526,7 +526,7 @@ pub fn install_service(entry: &RegistryEntry, owner: &SupervisedOwner) -> Result
             &path,
             &render_systemd_unit(&format!("Wyrd drive {}", entry.name), owner, entry),
         )?;
-        return Ok(path);
+        Ok(path)
     }
 }
 
@@ -577,8 +577,7 @@ pub fn enable_service(entry: &RegistryEntry, definition: &Path) -> Result<(), St
         run("systemctl", &["--user", "daemon-reload"])
             .map_err(|error| format!("reload user units: {error}"))?;
         run("systemctl", &["--user", "enable", &unit])
-            .map_err(|error| format!("enable {unit}: {error}"))?;
-        return Ok(());
+            .map_err(|error| format!("enable {unit}: {error}"))
     }
 }
 
@@ -603,8 +602,7 @@ pub fn start_service(entry: &RegistryEntry) -> Result<(), String> {
         // paths must bring the new definition live instead of
         // verifying the still-running old owner.
         run("systemctl", &["--user", "restart", &unit])
-            .map_err(|error| format!("start {unit}: {error}"))?;
-        Ok(())
+            .map_err(|error| format!("restart {unit}: {error}"))
     }
 }
 

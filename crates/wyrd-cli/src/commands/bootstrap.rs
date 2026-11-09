@@ -30,10 +30,10 @@ pub(crate) struct BootstrapArgs {
     pub(crate) no_service: bool,
 }
 
-/// Resolve, then provision: credentials load once here (the
-/// dispatcher already loaded them for its own routing), and the
-/// resolved credential *paths* travel to the service definition so
-/// the supervised owner reads the same files.
+/// Resolve, then provision: credentials were already loaded once
+/// by the dispatcher for its own routing; here only the resolved
+/// credential *paths* travel to the service definition so the
+/// supervised owner reads the same files.
 pub(crate) fn bootstrap(
     args: BootstrapArgs,
     identity: wyrd_sync::keys::DeviceIdentitySecret,
