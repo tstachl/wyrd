@@ -6,7 +6,10 @@ records one of five actions: **keep**, **merge**, **move** to a
 different evidence budget, **remove** a duplicate, or **add** a missing
 test. The section "What this branch does" names the small change
 that implements the most valuable verdicts. The remaining merges
-stay as follow-up work.
+stay as follow-up work. This file is dated point-in-time
+evidence. The five follow-up items in "Follow-up work" are the
+canonical tracking surface once filed as issues; this file
+records the decision, the issues track the work.
 
 ## Inventory
 
@@ -67,13 +70,21 @@ placements and two serial groups.
 
 1. Doctests compile the whole workspace on every pull request for
    6 examples. They belong on `master`, not on the pull-request gate.
-2. The per-sender spam test (`31s`) and four other
-   multi-second live-relay tests still run on the pull-request
-   gate. They belong in the `slow` profile with the floods.
-3. `wyrd-contracts` runs one binary serially (about 9 to 25
-   seconds) and the mailbox flood group runs serially. Both are
-   correct load control, but the contracts serial group is the
-   largest single tail in the `default` profile.
+   The plain consequence: a doctest that stops compiling on a
+   product branch now breaks on `master`, not on that branch.
+   Local `cargo test --workspace --doc` runs plus the doc-links
+   hook are the only branch-level backstop.
+2. Eight multi-second live-relay tests still run on the
+   pull-request gate. They belong in the `slow` profile with
+   the floods. Their measured cost is at most the 28 to 36
+   second critical path (see below). If the contracts serial
+   tail dominates, the wall saving is smaller. The move still
+   removes load and contention.
+3. `wyrd-contracts` runs one binary serially (measured 52
+   seconds for 215 tests on this machine, `default` profile)
+   and the mailbox flood group runs serially. Both are correct
+   load control, but the contracts serial group is the largest
+   single tail in the `default` profile on this machine.
 4. Two files each exceed 2,500 lines (`wyrd-cli` sync,
    `wyrd-daemon` owner). They are correct in content and hard to
    review. They need splits, not deletions.
@@ -144,15 +155,20 @@ Merge candidates (about 55):
 Slow candidates still in `default`:
 
 - `per_sender_quota_keeps_one_spammer_from_starving_others`
-  (31s). Moves to `slow` in this branch.
-- `budgeted_walk_reaches_live_behind_hanging_candidates` and
-  `capped_walk_pages_dial_hangs_one_per_pass` (silent-relay
-  dials). Move to `slow` in this branch.
-- `oversize_flood_retains_nothing_per_delivery` (100,000
-  envelopes) and `torn_commit_in_any_pass_converges_like_a_clean_run`
-  (15 scenario builds). Move to `slow` in this branch.
-- `concurrent_senders_never_exceed_the_byte_bound` (256 MiB)
-  moves to `slow` in this branch.
+  (31s in the Oct-05 P0 comments; 5.4s in the Nov-09 local run).
+  Moves to `slow` in this branch.
+- `budgeted_walk_reaches_live_behind_hanging_candidates` (10.7s
+  local) and `capped_walk_pages_dial_hangs_one_per_pass`
+  (10.1s local). Move to `slow` in this branch.
+- `oversize_flood_retains_nothing_per_delivery` (2.0s local,
+  100,000 envelopes) and
+  `torn_commit_in_any_pass_converges_like_a_clean_run`
+  (3.6s local, 15 scenario builds). Move to `slow` in this branch.
+  Grouping hygiene more than wall savings.
+- `concurrent_senders_never_exceed_the_byte_bound` (0.9s local,
+  256 MiB alloc) and `serving_mount_refuses_push` (4.8s local).
+  Move to `slow` in this branch. Grouping hygiene more than
+  wall savings.
 
 ### `wyrd-core`, `wyrd-format`, `wyrd-view`, `wyrd-namespace`
 
@@ -257,28 +273,48 @@ This branch changes the `default` filter to exclude eight
 additional substrings and restates them in `slow` verbatim
 (profiles do not inherit filters):
 
-- `per_sender_quota` (31s spam-scale quota proof)
-- `heterogeneous` (30s cross-implementation cover)
+- `per_sender_quota` (spam-scale quota proof)
+- `heterogeneous` (cross-implementation cover)
 - `budgeted_walk_reaches_live`
 - `capped_walk_pages_dial_hangs`
 - `oversize_flood_retains_nothing`
 - `torn_commit_in_any_pass`
 - `concurrent_senders_never_exceed`
-- `serving_mount_refuses_push` (2.5s of dial sleeps for a
-  push-denied pin; now `slow` with the rest of serving
-  evidence)
+- `serving_mount_refuses_push` (push-denied pin; now `slow`
+  with the rest of serving evidence)
 
-The heterogeneous cover is the honest trade. It is the only
-`default` proof of the real-relay path. On `master` it still
-runs. On a pull request it does not. If reviewers want it on
-every pull request again, remove one substring. Do not
-re-add the whole tail.
+Measured Nov-09, local `slow` profile, one run (serial, as
+`slow` runs):
+
+| Test | Wall |
+| --- | --- |
+| `heterogeneous_relays_cover` | 28.1s (36.1s on rerun) |
+| `budgeted_walk_reaches_live` | 10.7s |
+| `capped_walk_pages_dial_hangs` | 10.1s |
+| `serving_mount_refuses_push` | 4.8s |
+| `per_sender_quota` | 5.4s |
+| `torn_commit_in_any_pass` | 3.6s |
+| `oversize_flood_retains_nothing` | 2.0s |
+| `concurrent_senders_never_exceed` | 0.9s |
+| Total, 8 serial | 65.6s |
+
+In `default` these run in parallel, so the saving is at most
+the longest single test (28 to 36s), not the serial sum. If
+the 52s contracts serial tail dominates, the wall saving is
+smaller and the move reads as load reduction. The heterogeneous
+test is the honest trade: it was the only `default` proof of
+the real-relay path. On `master` it still runs. On a pull
+request it does not. If reviewers want it on every pull
+request again, restore the one `heterogeneous` substring to
+`default` (remove it from the `default` exclusion, keep it in
+`slow` and `local`). Do not re-add the whole tail.
 
 Doctests move with the tail. `rust.yaml` no longer builds
 `rust-doctests` on the pull-request gate. `rust-slow.yaml`
-builds it on `master` pushes. The derivation stays so
-`nix flake check` still evaluates it. No KDF coverage is lost:
-`rust-check` still runs the production feature-graph gate
+(`on: push: branches: [master]`) builds it on `master`
+pushes. The derivation stays so `nix flake check` still
+evaluates it. No KDF coverage is lost: `rust-check` still
+runs the production feature-graph gate
 (`cargo tree -e normal,features`).
 
 ## What this branch does
@@ -324,12 +360,22 @@ this branch.
 
 ## Method and limits
 
-Each finding came from static file review only. No test was
-executed for this document. Duration claims come from the
-comments in `.config/nextest.toml` (2026-10-05 P0, 2026-10-30
+Each verdict came from static file review plus one
+`cargo nextest run --profile slow` timing run for the eight
+moved tests (Nov-09, local machine, single run; durations
+above). Duration claims otherwise come from the comments in
+`.config/nextest.toml` (2026-10-05 P0, 2026-10-30
 heavyweight pass) and from size signals in code (sleep,
 relay spawn, 100,000-envelope loops, 256 MiB allocations,
-Argon2 production params). The next run of
-`cargo nextest run` with timing output should replace
-estimates with fresh numbers. If a moved test proves cheap
-on that run, move it back.
+Argon2 production params). Timings vary by machine and load
+(`per_sender_quota` is 31s in the P0 comments and 5.4s
+locally). The next full `cargo nextest run` with timing
+output should replace single-run numbers. If a moved test
+proves cheap on that run, move it back.
+
+Hygiene verification: `keys/hygiene.rs` names
+`DriveRootKey` and `EphemeralScalar` in both
+`secret_leaves_implement_zeroize_on_drop` (lines 70 to 77)
+and the inventory table. `secret_leaves_redact_through_debug`
+covers `DriveRootKey(REDACTED)`. The deleted trait-bound
+asserts are covered byte-for-byte.
