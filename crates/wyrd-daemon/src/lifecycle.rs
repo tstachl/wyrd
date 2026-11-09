@@ -26,8 +26,12 @@
 //! backend's `destroy` commits dirty handles here, against the still-
 //! open queue the drain executes concurrently), close admission
 //! ([`Supervisor::close_admission`]) — the session join is the
-//! submission boundary, so after it no FUSE-driven submission can
-//! race the drain's end — reap the loop thread, then stop the
+//! submission boundary for presentation, but the owner socket is a
+//! second submitter beside the backend (P2, option A): a socket
+//! submit admitted before the close and raced by it resolves
+//! `Shutdown` through the drain instead of draining to `Done`, and
+//! that refusal is the terminal, honest answer — never a hang, never
+//! a silent success. Reap the loop thread, then stop the
 //! mailbox, the bulk source, and serving, folding every outcome into
 //! the exit status. Mailbox stop and both endpoint closes run under
 //! deadlines; the bulk drop between them releases an owned

@@ -229,6 +229,11 @@ pub struct OwnerService {
     socket_path: PathBuf,
     stop: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
+    /// Whether the socket file has been removed. Shutdown removes at
+    /// most once: after an explicit shutdown the drop is a no-op, so
+    /// a late drop can never unlink a successor owner's socket file
+    /// bound at the same path.
+    removed: bool,
 }
 
 impl OwnerService {
@@ -249,6 +254,7 @@ impl OwnerService {
             socket_path,
             stop,
             thread: Some(thread),
+            removed: false,
         })
     }
 
@@ -258,9 +264,13 @@ impl OwnerService {
     }
 
     /// Stop serving, join the accept thread, and remove the socket
-    /// file. Idempotent: a second call (including the drop) is a
-    /// no-op. A thread that ended unexpectedly logs, never panics —
-    /// the run's own outcome already carries the verdict.
+    /// file. Idempotent: a second call (including the drop) neither
+    /// rejoins nor re-removes. A thread that ended unexpectedly logs,
+    /// never panics — the run's own outcome already carries the
+    /// verdict. Call while the store lock is still held (after the
+    /// transport tail, before the live node drops): the removal must
+    /// precede the lock release, or a successor owner binding the
+    /// same path races this unlink.
     pub fn shutdown(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
         if let Some(thread) = self.thread.take() {
@@ -268,7 +278,10 @@ impl OwnerService {
                 tracing::warn!("owner interface thread ended unexpectedly");
             }
         }
-        let _ = std::fs::remove_file(&self.socket_path);
+        if !self.removed {
+            self.removed = true;
+            let _ = std::fs::remove_file(&self.socket_path);
+        }
     }
 }
 

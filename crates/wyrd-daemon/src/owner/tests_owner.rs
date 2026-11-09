@@ -2565,6 +2565,38 @@ fn mounted_owner_serves_socket_alongside_backend() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// Shutdown removes the socket file exactly once, while the live
+/// state is still held: a late drop never unlinks a successor
+/// owner's socket bound at the same path (F1). Holds the composed
+/// parts across the shutdown — the composer order, where the live
+/// node (and its store lock) outlives the removal — then simulates
+/// the successor by recreating the path before the guard drops.
+#[test]
+fn owner_service_shutdown_removes_once_and_spares_a_successor() {
+    let (parts, dir) = composed_parts();
+    let socket_path = super::socket_path_for(&dir);
+    let mut service =
+        super::OwnerService::bind(OwnerHandles::from_parts(&parts), &dir).expect("bind serves");
+    assert!(socket_path.exists(), "bind creates the socket file");
+    service.shutdown();
+    assert!(
+        !socket_path.exists(),
+        "shutdown removes the socket while the parts are still held"
+    );
+    // A successor owner binds at the same path before the old guard
+    // drops (the race F1 closes by ordering): the late drop must not
+    // touch it, and the at-most-once removal makes that structural.
+    std::fs::write(&socket_path, b"successor").unwrap();
+    drop(service);
+    assert_eq!(
+        std::fs::read(&socket_path).unwrap(),
+        b"successor",
+        "the late drop never unlinks the successor's file"
+    );
+    std::fs::remove_file(&socket_path).unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// An absent or refused socket is unavailable — never an empty
 /// drive, never a success, never evidence about any request.
 #[test]

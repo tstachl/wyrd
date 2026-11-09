@@ -247,9 +247,11 @@ pub(crate) fn mount(
     // serves, peer-checked at the drive-directory socket (P2,
     // option A). Bind before presenting: an owner that cannot serve
     // its interface refuses the run instead of running deaf. The
-    // guard stops and removes the socket on drop, so every post-bind
-    // failure path below tears the interface down with the run.
-    let _owner_service = OwnerService::bind(
+    // guard is shut down explicitly after the transport tail while
+    // the live node (and its store lock) is still held — the removal
+    // must precede the lock release, or a successor owner binding
+    // the same path races this unlink; its drop is then a no-op.
+    let mut owner_service = OwnerService::bind(
         OwnerHandles::for_live(
             &parts,
             Arc::clone(live.quarantine_queue()),
@@ -500,6 +502,19 @@ pub(crate) fn mount(
         },
     );
     let serving_status = transport.serving.map_err(CliError::Serving);
+    // The owner socket stops after the tail while the live node (and
+    // its store lock) is still held: `_live` drops at the function's
+    // end, after this shutdown removes the socket. The join is
+    // bounded by the accept poll plus any in-flight dispatch (a read
+    // at most `READ_DEMAND_TIMEOUT`, a submit by the teardown drain),
+    // and the stage log keeps that tail visible beside the
+    // mailbox/serving stages.
+    owner_service.shutdown();
+    tracing::info!(
+        stage = "teardown",
+        elapsed_ms = teardown_start.elapsed().as_millis(),
+        "owner interface stopped"
+    );
     combine_status(TeardownStatus {
         loop_result: loop_result.map(|_| ()),
         session_result,
