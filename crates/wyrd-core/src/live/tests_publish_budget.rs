@@ -157,7 +157,7 @@ fn publish_budget_clips_a_hanging_relay_with_carryover() {
     // discharges exactly both). `nostr:nevent1qqs0l8nqp8923t2xlq4cm98wud4flwv20z04x2vp8qkahx4udsnrpxgpz9mhxue69uhkwunpwdczuap49eehgw6y0zz`
     assert!(
         report.publish_deferred >= 1,
-        "the unattempted obligation is reported deferred"
+        "at least one obligation is reported deferred"
     );
     assert_eq!(
         node.pending_obligations().unwrap().len(),

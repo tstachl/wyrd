@@ -3744,7 +3744,7 @@ mod policy_tests {
     }
 
     #[test]
-    fn fuse_dev_dep_widening_is_rejected() {
+    fn view_dev_dep_widening_is_rejected() {
         let violations = check_view_dev_deps(&deps(&["wyrd-core", "tokio"]), &empty_ws());
         assert_eq!(violations.len(), 1, "widened dev-deps: {violations:?}");
         assert!(
@@ -3754,7 +3754,7 @@ mod policy_tests {
     }
 
     #[test]
-    fn fuse_dev_dep_pin_passes_exact() {
+    fn view_dev_dep_pin_passes_exact() {
         let violations = check_view_dev_deps(&deps(&["wyrd-core"]), &empty_ws());
         assert!(
             violations.is_empty(),
