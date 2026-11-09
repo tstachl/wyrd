@@ -10,6 +10,11 @@ wyrd-format.workspace = true
 wyrd-sync.workspace = true
 wyrd-view.workspace = true
 wyrd-core.workspace = true
+# The owned drive-owner protocol types and non-owning client: the
+# single definition of the wire both sides agree on. The daemon keeps
+# the server and performs every domain-to-wire conversion in
+# `owner::mapping`; it never redefines the protocol.
+wyrd-owner-client.workspace = true
 # The FUSE adapter is the first presentation backend, not a property of
 # the node (`docs/architecture.md`): it is a default-on feature so a
 # machine without system libfuse can still build and run everything

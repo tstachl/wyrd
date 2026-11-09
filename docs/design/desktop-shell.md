@@ -51,9 +51,11 @@ the same rule as the interface itself.
   change.
 - 16's contract: thin forwarder over `MutationQueue::submit` plus
   status structs, member-hosted disclosure bound, freshness facts. The
-  golden vectors (`crates/wyrd-daemon/src/owner/vectors.json`) pin the
+  golden vectors (`crates/wyrd-owner-client/vectors.json`) pin the
   bytes both sides agree on; the shared Rust client
-  (`crates/wyrd-daemon/src/owner/client.rs`) is the only transport any
+  (`crates/wyrd-owner-client/src/client.rs`, re-exported for historical
+  importers at `crates/wyrd-daemon/src/owner/client.rs`) is the only
+  transport any
   in-language consumer uses.
 - OD-16-F: fail closed on absence; recovery is reconnect-only.
   Transport failure never authorizes retry; an unconfirmed outcome is

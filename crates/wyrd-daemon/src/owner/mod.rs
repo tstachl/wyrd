@@ -25,6 +25,7 @@
 
 pub mod auth;
 pub mod client;
+pub mod mapping;
 pub mod server;
 #[cfg(test)]
 mod tests_owner;
@@ -33,14 +34,27 @@ pub mod wire;
 pub use client::{
     decode_read_bytes, ClientError, OwnerClient, CLIENT_WIRE_VERSION, DEFAULT_RESPONSE_TIMEOUT,
 };
-pub use server::{
-    bind_listener, socket_path_for, OwnerHandles, OwnerServer, DEFAULT_MAX_READ_BYTES,
-    MAX_FRAME_BYTES, MAX_OWNER_CONNECTIONS, MAX_SUBMIT_CONTENT_BYTES, OWNER_SOCKET_NAME,
-    READ_DEMAND_TIMEOUT,
+pub use mapping::{
+    attr_from_wire, file_identity_from_wire, kind_from_wire, map_policy_error,
+    mutation_kind_from_wire, node_from_wire, parent_token_from_wire, wire_attr,
+    wire_conflict_version, wire_convergence_state, wire_dir_entry, wire_drain_report,
+    wire_durability_level, wire_execute_report, wire_file_identity, wire_fold_disposition,
+    wire_fold_forcer_outcome, wire_freshness, wire_freshness_state, wire_head_classes,
+    wire_head_summary, wire_kind, wire_known_state, wire_mailbox_health, wire_mailbox_view,
+    wire_materialization_summary, wire_mutation_error, wire_mutation_outcome, wire_node,
+    wire_observation, wire_outbox_totals, wire_peer_handle, wire_pending_obligations,
+    wire_policy_row, wire_presence, wire_quarantine_report, wire_queue_depth,
+    wire_reconciliation_counters, wire_retention_policy, wire_scrub_report, wire_sync_report,
+    wire_sync_status,
 };
+pub use server::{
+    bind_listener, OwnerHandles, OwnerServer, DEFAULT_MAX_READ_BYTES, MAX_OWNER_CONNECTIONS,
+    MAX_SUBMIT_CONTENT_BYTES, READ_DEMAND_TIMEOUT,
+};
+pub use wyrd_owner_client::{socket_path_for, MAX_FRAME_BYTES, OWNER_SOCKET_NAME};
 
 pub use wire::{
-    map_policy_error, PathParams, RawRequest, SubmitParams, WireAttr, WireConvergenceState,
+    PathParams, RawRequest, SubmitParams, WireAttr, WireConflictVersion, WireConvergenceState,
     WireDirEntry, WireDrainReport, WireDurabilityLevel, WireError, WireErrorCode,
     WireExecuteReport, WireFileIdentity, WireFoldDisposition, WireFoldForcerOutcome,
     WireFoldMember, WireFreshness, WireFreshnessState, WireHeadClasses, WireHeadSummary, WireKind,

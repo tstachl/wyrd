@@ -153,6 +153,17 @@ fn policy_for(member: &str) -> Option<MemberPolicy> {
             workspace_allow: &["wyrd-format"],
             external_allow: &["thiserror"],
         }),
+        // The drive-owner client: owned protocol types and the
+        // non-owning socket client. Domain-free by construction —
+        // the daemon performs every domain-to-wire conversion — so
+        // desktop and future consumers link the interface without
+        // the authoring surface. No `wyrd-*` edge at all, not even
+        // `wyrd-format`: identifiers cross as hex strings, never as
+        // content types.
+        "wyrd-owner-client" => Some(MemberPolicy {
+            workspace_allow: &[],
+            external_allow: &["hex", "serde", "serde_json"],
+        }),
         // The composer and process host: everything below, never the CLI
         // (presentation depends on the host's public surface, not the
         // reverse) and never the contract suite. The posture sidecar
@@ -160,7 +171,13 @@ fn policy_for(member: &str) -> Option<MemberPolicy> {
         // lock-refused starter reads it — `serde`/`serde_json` are the
         // sidecar schema and encoding, nothing else may use them.
         "wyrd-daemon" => Some(MemberPolicy {
-            workspace_allow: &["wyrd-format", "wyrd-sync", "wyrd-view", "wyrd-core"],
+            workspace_allow: &[
+                "wyrd-format",
+                "wyrd-sync",
+                "wyrd-view",
+                "wyrd-core",
+                "wyrd-owner-client",
+            ],
             external_allow: &[
                 "fuser",
                 "futures-util",
@@ -226,6 +243,7 @@ fn policy_for(member: &str) -> Option<MemberPolicy> {
                 "wyrd-view",
                 "wyrd-core",
                 "wyrd-daemon",
+                "wyrd-owner-client",
                 "wyrd-cli",
             ],
             // The suite itself names `fuser::Errno` in its
@@ -1117,6 +1135,11 @@ fn workspace_members_are_exact() {
         // process with no presentation backend. The File Provider
         // adapter (17) is the second member and amends this list again.
         "crates/wyrd-host",
+        // The drive-owner client: owned protocol types and the
+        // non-owning socket client. Domain-free by extraction (the
+        // closure test below is its proof); the daemon keeps the
+        // server and every domain conversion.
+        "crates/wyrd-owner-client",
     ]
     .into_iter()
     .map(str::to_owned)
@@ -1843,6 +1866,87 @@ fn consumer_link_graph_excludes_presentation() {
         graph.insert(name.to_owned(), member_edges(&deps, &workspace_deps));
     }
     let violations = check_consumer_link_graph("wyrd-embed", &graph);
+    assert!(
+        violations.is_empty(),
+        "link-graph violations:\n- {}",
+        violations.join("\n- ")
+    );
+}
+
+/// Check one consumer member's transitive production closure against
+/// the owner-client boundary: no workspace member reachable at all.
+/// The client owns the protocol representation and the transport;
+/// every domain conversion lives in the daemon, so even a
+/// `wyrd-format` edge would be a conceptual leak, not just a build
+/// edge. Pure over the edge sets so the negative tests below can
+/// prove the checker bites without touching the filesystem.
+fn check_owner_client_link_graph(
+    member: &str,
+    graph: &BTreeMap<String, MemberEdges>,
+) -> Vec<String> {
+    let mut seen = BTreeSet::new();
+    let mut stack = vec![member.to_owned()];
+    while let Some(current) = stack.pop() {
+        if !seen.insert(current.clone()) {
+            continue;
+        }
+        if let Some(edges) = graph.get(&current) {
+            stack.extend(edges.workspace.iter().cloned());
+        }
+    }
+    seen.remove(member);
+    if seen.is_empty() {
+        Vec::new()
+    } else {
+        let mut reached: Vec<&String> = seen.iter().collect();
+        reached.sort();
+        vec![format!(
+            "`{member}` reaches workspace members through production edges ({}): the \
+             owner-client boundary is domain-free — move the conversion into the daemon",
+            reached
+                .iter()
+                .map(|next| witness_path(member, next, graph).join(" → "))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )]
+    }
+}
+
+/// Contract (desktop scaffold), extraction half: `wyrd-owner-client`
+/// is the domain-free consumer surface the desktop closure test will
+/// depend on, so its own production closure must reach no workspace
+/// member at all — not even `wyrd-format`. The stage-1 closure
+/// analysis demonstrated the need mechanically
+/// (`desktop → daemon → core`); this test pins the extraction's
+/// answer in the same member-declared-edge style as the view and
+/// embed precedents.
+#[test]
+fn owner_client_link_graph_is_domain_free() {
+    let root = workspace_root();
+    let root_manifest = read_manifest(&root);
+    let members: Vec<String> = root_manifest
+        .get("workspace")
+        .and_then(|w| w.get("members"))
+        .and_then(|m| m.as_array())
+        .expect("workspace members list")
+        .iter()
+        .filter_map(|m| m.as_str().map(str::to_owned))
+        .collect();
+    // Never pass vacuously: an empty member list would check nothing.
+    assert!(!members.is_empty(), "workspace declares no members");
+    let workspace_deps = workspace_dep_table(&root_manifest);
+
+    let mut graph = BTreeMap::new();
+    for member in &members {
+        let name = member.rsplit('/').next().unwrap_or(member);
+        let deps = production_deps(&read_manifest(&root.join(member)));
+        graph.insert(name.to_owned(), member_edges(&deps, &workspace_deps));
+    }
+    assert!(
+        graph.contains_key("wyrd-owner-client"),
+        "the owner-client crate is a workspace member with a policy"
+    );
+    let violations = check_owner_client_link_graph("wyrd-owner-client", &graph);
     assert!(
         violations.is_empty(),
         "link-graph violations:\n- {}",
@@ -3638,6 +3742,33 @@ mod policy_tests {
     }
 
     #[test]
+    fn owner_client_closure_rejects_any_workspace_reachability_with_witness() {
+        let graph = link_graph(&[
+            ("wyrd-owner-client", &["wyrd-format"], &["serde"]),
+            ("wyrd-format", &[], &["blake3", "thiserror"]),
+        ]);
+        let violations = check_owner_client_link_graph("wyrd-owner-client", &graph);
+        assert_eq!(violations.len(), 1, "even wyrd-format: {violations:?}");
+        assert!(
+            violations[0].contains("wyrd-format"),
+            "reachability names the target: {violations:?}"
+        );
+        assert!(
+            violations[0].contains("wyrd-owner-client → wyrd-format"),
+            "the witness path names every hop: {violations:?}"
+        );
+    }
+
+    #[test]
+    fn owner_client_closure_passes_domain_free() {
+        let graph = link_graph(&[("wyrd-owner-client", &[], &["hex", "serde", "serde_json"])]);
+        assert!(
+            check_owner_client_link_graph("wyrd-owner-client", &graph).is_empty(),
+            "no workspace edges must pass: {graph:?}"
+        );
+    }
+
+    #[test]
     fn consumer_closure_allows_libc_via_sync_only() {
         // `wyrd-sync`'s `libc` is the custody boundary (`O_NOFOLLOW`
         // opens, euid ownership), not a presentation surface.
@@ -4042,14 +4173,16 @@ fn interface_exposes_no_store_internals() {
     // `wyrd_sync::runtime` types ride the same rule on the
     // operation surface (the server, its handles, and its auth):
     // no operation there names the module. The wire mapping
-    // (`wire.rs`) is exempt by design — mapping a value requires
-    // naming its source type, and the `From` impls are Rust-side
-    // conversion conveniences, invisible on the wire. The tests are
+    // (`mapping.rs` — the conversions moved out of the old `wire.rs`
+    // with the extraction, the protocol types now living in
+    // `wyrd-owner-client`) is exempt by design — mapping a value requires
+    // naming its source type, and the conversion functions are Rust-side
+    // conveniences, invisible on the wire. The tests are
     // exempt because a test composer needs an engine to build a
     // drive worth serving.
     for (path, text) in &borrowed {
         let file = path.rsplit('/').next().unwrap_or(path);
-        if file == "wire.rs" || file == "tests_owner.rs" {
+        if file == "mapping.rs" || file == "tests_owner.rs" {
             continue;
         }
         let code = code_text(text);

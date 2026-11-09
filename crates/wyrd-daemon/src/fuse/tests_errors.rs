@@ -282,7 +282,9 @@ fn mount_log_reports_queue_depth_and_wait_time_without_a_new_dependency() {
     // `getrandom`, `hex`, `serde`, and `serde_json` are the vault
     // posture sidecar's (22c) schema and instance identity, not
     // metrics: the sidecar moved to this crate so every composer
-    // writes and reads it from one copy.
+    // writes and reads it from one copy. `wyrd-owner-client` is the
+    // owned drive-owner protocol surface (extraction, not metrics):
+    // the daemon keeps the server over the client's types.
     let manifest = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"))
         .expect("the crate manifest reads");
     let mut in_deps = false;
@@ -317,6 +319,7 @@ fn mount_log_reports_queue_depth_and_wait_time_without_a_new_dependency() {
             "tracing",
             "wyrd-core",
             "wyrd-format",
+            "wyrd-owner-client",
             "wyrd-sync",
             "wyrd-view",
         ],
