@@ -117,6 +117,8 @@ A desktop application on macOS and Linux covering drive lifecycle (create, join,
 
 The test: a technically competent person installs the app and creates and manages a drive without learning what the `wyrd` CLI is. The UI talks to the drive-owner interface, not FUSE. FUSE and file-provider integrations are presentation adapters, not the product contract.
 
+**Desktop owner (P2, decided option A):** both owner-mode composers serve the socket through the shared `OwnerService` — `wyrd vault` / `wyrd-host` headless and manual `wyrd mount` alike — so a manually mounted drive still answers a second process over `owner.sock` while the FUSE backend holds the same shared arcs. The desktop-managed surface therefore includes manually mounted drives; `wyrd mount` stays product (not CLI-only). Registry-managed `mount` mode (service template and enablement UX for desktop-registered drives) still travels with the installer follow-up. Offline commands (`member`, `snapshot`, `policy`) remain transient owners: they fail `StoreLocked` while a long-lived owner (vault, mount, or desktop service) holds the drive — stop the service first, the same rule `update` already states.
+
 Windows presentation is a future decision; see `docs/architecture.md`.
 
 **Conflicts:** divergence detection, preservation of both branches, and inspectable conflict state. Resolution authoring (including keep-both and conflict-name assignment) is v0.5.

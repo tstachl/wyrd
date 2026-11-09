@@ -66,21 +66,21 @@ the same rule as the interface itself.
   owner-independence). The `layer_contracts` gate below fails closed
   on it.
 
-## Prerequisite: which binary serves the socket
+## Prerequisite: which binary serves the socket (P2, decided option A)
 
-The P2 owner-socket issue is load-bearing for every composition this
-note describes. Today `wyrd vault` / `wyrd-app` (via
-`run_composed_owner`) binds `owner.sock` while `wyrd mount` never
-does, so a desktop composition running the drive under `wyrd mount`
-leaves the window with no interface — operationally identical to
-"mount breaks the desktop app." Either the owner server moves into
-the shared composition so mount and headless both bind it, or
-`wyrd mount` is marked explicitly non-product (non-desktop) with the
-docs saying so. This note assumes the decision lands first and the
-shell builds against exactly one unambiguous owner; the composition
-test pinned by that issue (`lookup`/`read`/`submit` over `owner.sock`
-while mounted, or the mount-docs exclusion) is the shell's
-precondition, not its work.
+The P2 owner-socket issue was load-bearing for every composition this
+note describes and has landed: both `wyrd vault` / `wyrd-app` (via
+`run_composed_owner`) and `wyrd mount` bind `owner.sock` through the
+shared `OwnerService`, so a desktop composition running the drive
+under `wyrd mount` leaves the window with its interface — the
+"mount breaks the desktop app" failure is gone. The alternative
+(marking `wyrd mount` explicitly non-product) was rejected: the
+desktop-managed surface includes mounted drives, and `wyrd mount`
+stays product. The shell builds against exactly one unambiguous
+owner surface; the composition test pinning the decision
+(`mounted_owner_serves_socket_alongside_backend`: `lookup`/`read`/`submit`
+over `owner.sock` while the backend holds the same shared arcs) is
+the shell's precondition, not its work.
 
 ## Bootstrap and discovery: registry file plus OS services (proposed)
 
@@ -232,11 +232,10 @@ lifecycle) with two precedented mechanisms and zero new privileged
 code. Per-socket peer authentication stays exactly where the
 interface puts it: same-UID checks at each drive socket.
 
-P2 interplay: this contract works under either P2 outcome. If the
-owner server moves into the shared composition, registered desktop
-drives may run mounted; if `wyrd mount` is marked non-desktop,
-registered drives run headless and the UI remains the only consumer.
-The registry records the mode per drive; it does not decide P2.
+P2 interplay (decided option A): the owner server moved into the
+shared composition, so registered desktop drives may run mounted;
+the non-desktop marking was rejected. The registry records the mode
+per drive; it does not re-decide P2.
 
 Stage-0 exit: the handoff runs end to end through the built
 command — `wyrd bootstrap` registers, a separately spawned `wyrd
@@ -555,7 +554,8 @@ installer issue; auto-update is explicitly v0.8.
 ## Staging
 
 0. Prerequisite gate (blocks everything below): the P2
-   socket-composition decision, then the bootstrap/discovery
+   socket-composition decision (landed: option A, mount serves the
+   socket through the shared `OwnerService`), then the bootstrap/discovery
    contract from the section above — endpoint, provisioning, and
    the installation-to-first-drive path. Nothing scaffolds until
    both are specified.
@@ -579,8 +579,8 @@ installer issue; auto-update is explicitly v0.8.
 
 ## Open questions for reviewers
 
-1. P2 owner socket: blocking prerequisite, resolved before the
-   scaffold (stage 0).
+1. P2 owner socket: decided (option A, landed) — prerequisite met
+   before the scaffold (stage 0).
 2. First-drive bootstrap and discovery: decided as proposed in
    the bootstrap section (registry file + OS per-drive services,
    option 3 rejected without an OD-06-E scope change). Stays

@@ -1,7 +1,9 @@
 //! The `mount` command: diagnostics, preflight, the serving
-//! endpoint, the session thread, the loop join, and the ordered
-//! teardown. Owns the mount's lifecycle end to end; the shutdown
-//! latch and teardown bounds it honors live in
+//! endpoint, the owner socket (P2 option A: the shared `OwnerService`
+//! beside the FUSE backend, so a mounted drive still answers the
+//! desktop over `owner.sock`), the session thread, the loop join,
+//! and the ordered teardown. Owns the mount's lifecycle end to end;
+//! the shutdown latch and teardown bounds it honors live in
 //! `wyrd_daemon::process`.
 use crate::logging::init_mount_diagnostics;
 use crate::probes::combine_status;
@@ -18,6 +20,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use wyrd_core::mailbox::LiveMailbox;
 use wyrd_daemon::fuse::FuseBackend;
+use wyrd_daemon::owner::{OwnerHandles, OwnerService};
 use wyrd_daemon::posture::PostureRecorder;
 use wyrd_daemon::process::{
     bind_bulk_source, check_startup_retention, install_shutdown_handler, SHUTDOWN,
@@ -239,6 +242,25 @@ pub(crate) fn mount(
     // sync, and vault.
     install_role_dir(&mut live, &drive_dir);
     install_serving(&mut live, &serving).map_err(CliError::Serving)?;
+    // The drive-owner interface serves beside the mount through the
+    // shared `OwnerService`: the same handles either presentation
+    // serves, peer-checked at the drive-directory socket (P2,
+    // option A). Bind before presenting: an owner that cannot serve
+    // its interface refuses the run instead of running deaf. The
+    // guard is shut down explicitly after the transport tail while
+    // the live node (and its store lock) is still held — the removal
+    // must precede the lock release, or a successor owner binding
+    // the same path races this unlink; its drop is then a no-op.
+    let mut owner_service = OwnerService::bind(
+        OwnerHandles::for_live(
+            &parts,
+            Arc::clone(live.quarantine_queue()),
+            Arc::clone(live.scrub_queue()),
+            Arc::clone(live.waker()),
+        ),
+        &drive_dir,
+    )
+    .map_err(CliError::Serving)?;
     // Endpoint ownership (and shutdown below) stays here; the loop
     // holds only the cloneable readiness handle the install took.
     // The composer builds its presentation backend from the node's
@@ -480,6 +502,19 @@ pub(crate) fn mount(
         },
     );
     let serving_status = transport.serving.map_err(CliError::Serving);
+    // The owner socket stops after the tail while the live node (and
+    // its store lock) is still held: `_live` drops at the function's
+    // end, after this shutdown removes the socket. The join is
+    // bounded by the accept poll plus any in-flight dispatch (a read
+    // at most `READ_DEMAND_TIMEOUT`, a submit by the teardown drain),
+    // and the stage log keeps that tail visible beside the
+    // mailbox/serving stages.
+    owner_service.shutdown();
+    tracing::info!(
+        stage = "teardown",
+        elapsed_ms = teardown_start.elapsed().as_millis(),
+        "owner interface stopped"
+    );
     combine_status(TeardownStatus {
         loop_result: loop_result.map(|_| ()),
         session_result,

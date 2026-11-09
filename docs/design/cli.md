@@ -124,6 +124,13 @@ any format break.
 
 ### `member` — administer drive membership
 
+Offline commands (`member`, `snapshot`, `policy`) are transient
+owners: each opens the keystore and takes the exclusive store lock,
+so a long-lived owner holding the drive — `wyrd vault`, `wyrd mount`,
+or a desktop service — refuses them with `StoreLocked`. Stop the
+service first and retry, the same rule `update` already states; the
+lock error names the holding drive, never a retry.
+
 Reads project the membership log offline over the keystore; writes
 author one transition plus catch-up obligations through the engine,
 which enforces owner-only — the CLI never decides authorization

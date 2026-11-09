@@ -378,6 +378,13 @@ pub struct VaultRun<V: NamespaceView, M, B> {
     pub deadlines: TransportDeadlines,
     /// The process-wide stop latch the loop polls.
     pub stop: &'static AtomicBool,
+    /// The bound owner socket, served through the run. The run shuts
+    /// it down after the transport tail while the live node (and its
+    /// store lock) is still held — the removal must precede the lock
+    /// release, or a successor owner binding the same path races this
+    /// unlink (F1). Owned here rather than by the composer so the
+    /// ordering is structural, not a call-site discipline.
+    pub owner_service: crate::owner::OwnerService,
     /// The host-owned event sink (stderr plus log file in
     /// production, a recording vec in tests).
     pub emit: Arc<dyn Fn(VaultEvent) + Send + Sync>,
@@ -415,6 +422,7 @@ where
         config,
         deadlines,
         stop,
+        mut owner_service,
         emit,
     } = run;
     // The surface the loop's barrier reads through is the bound
@@ -484,6 +492,11 @@ where
             let _live = returned.live;
             tracing::info!(stage = "teardown", "loop thread joined");
             let transport = shutdown_transport(&mut mailbox, bulk, serving, &deadlines);
+            // The interface stops after the tail while the live node
+            // (and its store lock) is still held: `_live` drops at
+            // the arm's end, after this shutdown removes the socket.
+            owner_service.shutdown();
+            tracing::info!(stage = "teardown", "owner interface stopped");
             Ok(VaultOutcome {
                 loop_end: VaultLoopEnd::Returned(returned.result),
                 transport,
@@ -500,6 +513,8 @@ where
             if let Err(error) = &serving {
                 tracing::warn!(stage = "serving", error = %error, "serving shutdown failed");
             }
+            owner_service.shutdown();
+            tracing::info!(stage = "teardown", "owner interface stopped");
             Ok(VaultOutcome {
                 loop_end: VaultLoopEnd::SupervisionLost,
                 transport: TransportShutdown { serving },
@@ -654,26 +669,22 @@ where
     // projection, the loop-published slots, and the single queue,
     // peer-checked at the drive-directory socket. The composer
     // wires the loop's repair queues the way the mount composer
-    // wires its backend.
-    let server = crate::owner::OwnerServer::new(
-        crate::owner::OwnerHandles::from_parts(&parts)
-            .with_repair(
-                Arc::clone(live.quarantine_queue()),
-                Arc::clone(live.scrub_queue()),
-            )
-            .with_waker(Arc::clone(live.waker())),
-    );
-    // Bind before spawning: an owner that cannot serve its
-    // interface refuses the run instead of running deaf. The store
-    // lock is held throughout the run, so no competing owner can
-    // race the stale-socket reclaim.
-    let socket_path = crate::owner::socket_path_for(&drive_dir);
-    let listener = crate::owner::server::bind_listener(&socket_path).map_err(OwnerError::Io)?;
-    let server_stop = Arc::new(AtomicBool::new(false));
-    let server_thread = {
-        let server_stop = Arc::clone(&server_stop);
-        std::thread::spawn(move || server.serve_on(&listener, &server_stop))
-    };
+    // wires its backend — through the shared `OwnerService`, so
+    // headless and mount bind the same surface. Bind before
+    // spawning: an owner that cannot serve its interface refuses
+    // the run instead of running deaf. The store lock is held
+    // throughout the run, so no competing owner can race the
+    // stale-socket reclaim.
+    let owner_service = crate::owner::OwnerService::bind(
+        crate::owner::OwnerHandles::for_live(
+            &parts,
+            Arc::clone(live.quarantine_queue()),
+            Arc::clone(live.scrub_queue()),
+            Arc::clone(live.waker()),
+        ),
+        &drive_dir,
+    )
+    .map_err(OwnerError::Io)?;
     // No presentation backend is attached yet: the parts are owned
     // but never served, the queue stays open but nobody submits, so
     // passes only ever see intake and fetch work. The queue handle
@@ -683,6 +694,10 @@ where
     // working through the run.
     let _queue = parts.mutations.clone();
     drop(parts);
+    // The service travels into the run so the shutdown order is
+    // structural: `run_vault` stops the interface after the tail
+    // while the live node (and its store lock) is still held, and
+    // the removal precedes the lock release.
     let outcome = run_vault(VaultRun {
         live,
         drive_dir,
@@ -697,23 +712,19 @@ where
             serving: crate::process::TRANSPORT_SHUTDOWN_DEADLINE,
         },
         stop,
+        owner_service,
         emit,
     });
-    // The loop is reaped; the interface stops with it, on success
+    // The loop is reaped; the interface stopped with it, on success
     // and on failure alike — an early run error never detaches a
     // still-serving socket. A submission admitted before the stop
     // resolves through the teardown drain or refuses `Shutdown` at
     // admission close: no consumer waits past this join without a
-    // terminal answer.
-    server_stop.store(true, Ordering::Relaxed);
-    if server_thread.join().is_err() {
-        tracing::warn!("owner interface thread ended unexpectedly");
-    }
-    // The socket belongs to the run: remove it on the way out so a
-    // later owner never inherits a stale entry and no client
-    // mistakes an absent owner for a listening one. The store lock
-    // releases with the engine drop after this return.
-    let _ = std::fs::remove_file(&socket_path);
+    // terminal answer. The socket belongs to the run: `run_vault`
+    // shut it down after the tail while the live node (and its store
+    // lock) was still held, so no later owner inherits a stale entry
+    // and no client mistakes an absent owner for a listening one.
+    // The store lock releases with the engine drop after this return.
     outcome.map_err(OwnerError::from)
 }
 

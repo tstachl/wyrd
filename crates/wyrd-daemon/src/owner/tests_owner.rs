@@ -2473,6 +2473,150 @@ fn client_submit_forwards_and_refusals_carry_their_codes() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// P2 composition pin (option A): the mount and the headless runner
+/// bind the same socket surface through the shared `OwnerService`, so
+/// a mounted drive still answers a second process over `owner.sock`.
+/// The backend holds the same shared arcs the socket serves — the
+/// mount's shape — while a client `lookup`s, `read`s, and `submit`s
+/// through the drive socket. A regression that drops the mount's
+/// bind (or hand-rolls a second server) fails here, not in review.
+/// Requires the `mount` feature: it holds the mount's real
+/// `FuseBackend` beside the socket.
+#[cfg(feature = "mount")]
+#[test]
+fn mounted_owner_serves_socket_alongside_backend() {
+    use super::OwnerService;
+    use crate::fuse::FuseBackend;
+
+    let (engine, dir) = scratch_drive();
+    let store = wyrd_format::FsObjectStore::open(dir.clone()).unwrap();
+    let mut daemon = wyrd_core::node::WyrdNode::new(engine, store).unwrap();
+    daemon.put_file("hello.txt", b"hello owner").unwrap();
+    daemon.refresh_live_heads().unwrap();
+    let (live, parts) = daemon
+        .into_live(
+            Duration::from_secs(5),
+            &wyrd_core::live::LiveConfig::default(),
+        )
+        .unwrap();
+    // The mount's backend holds the same shared arcs the socket
+    // serves: projection, wants, and the single mutation queue.
+    let mut backend = FuseBackend::shared_with_wants(
+        Arc::clone(&parts.projection),
+        Arc::clone(&parts.wants),
+        Arc::clone(&parts.mutations),
+        parts.open_timeout,
+        &parts.budgets,
+    );
+    backend.set_quarantine(Arc::clone(live.quarantine_queue()));
+    backend.set_scrub(Arc::clone(live.scrub_queue()));
+    // Held through the socket serving below: the mount's shape is a
+    // live backend beside a bound socket over the same arcs.
+    // The interface binds beside the backend through the shared
+    // service — the same call the mount and the headless runner
+    // make — at the drive-directory socket.
+    let service = OwnerService::bind(
+        OwnerHandles::for_live(
+            &parts,
+            Arc::clone(live.quarantine_queue()),
+            Arc::clone(live.scrub_queue()),
+            Arc::clone(live.waker()),
+        ),
+        &dir,
+    )
+    .expect("the mounted owner binds its socket");
+    assert_eq!(
+        service.socket_path(),
+        super::socket_path_for(&dir),
+        "the shared service binds the drive-directory socket"
+    );
+    let stop: &'static AtomicBool = Box::leak(Box::new(AtomicBool::new(false)));
+    let loop_thread = spawn_loop(live, stop);
+    let mut client =
+        OwnerClient::connect(&super::socket_path_for(&dir)).expect("the mounted owner answers");
+    let (node, _, _) = client
+        .lookup("hello.txt")
+        .expect("lookup serves while mounted");
+    assert!(
+        matches!(node, WireNode::File { size: 11, .. }),
+        "lookup serves the seeded file while mounted: {node:?}"
+    );
+    let (bytes, _, _) = client.read("hello.txt").expect("read serves while mounted");
+    assert_eq!(bytes, b"hello owner");
+    let outcome = client
+        .submit(WireMutationKind::Mkdir {
+            path: "via-mounted-socket".to_string(),
+        })
+        .expect("submit forwards while mounted");
+    assert_eq!(outcome, WireMutationOutcome::Done);
+    match client.reconcile_lookup("via-mounted-socket") {
+        Ok(Some((WireNode::Dir { .. }, _, _))) => {}
+        other => panic!("the submitted directory serves while mounted: {other:?}"),
+    }
+
+    stop.store(true, Ordering::Relaxed);
+    spawn_loop_done(loop_thread);
+    drop(backend);
+    drop(service);
+    assert!(
+        !super::socket_path_for(&dir).exists(),
+        "shutdown removes the socket so no client mistakes an absent owner for a listening one"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Shutdown removes the socket file exactly once, while the live
+/// node (and its store lock) is still held: a late drop never unlinks
+/// a successor owner's socket bound at the same path (F1). Holds the
+/// composed live node across the shutdown — the composer order — then
+/// binds a real second service as the successor before the old guard
+/// drops, and asserts the successor's socket survives it.
+#[test]
+fn owner_service_shutdown_removes_once_and_spares_a_successor() {
+    let (engine, dir) = scratch_drive();
+    let store = wyrd_format::FsObjectStore::open(dir.clone()).unwrap();
+    let mut daemon = wyrd_core::node::WyrdNode::new(engine, store).unwrap();
+    daemon.refresh_live_heads().unwrap();
+    let (live, parts) = daemon
+        .into_live(
+            Duration::from_secs(5),
+            &wyrd_core::live::LiveConfig::default(),
+        )
+        .unwrap();
+    let socket_path = super::socket_path_for(&dir);
+    let mut first =
+        super::OwnerService::bind(OwnerHandles::from_parts(&parts), &dir).expect("bind serves");
+    assert!(socket_path.exists(), "bind creates the socket file");
+    first.shutdown();
+    assert!(
+        !socket_path.exists(),
+        "shutdown removes the socket while the live node is still held"
+    );
+    // A successor owner binds at the same path while the old guard is
+    // still alive (the race F1 closes by ordering): the late drop must
+    // not touch it, and the at-most-once removal makes that structural.
+    let mut second =
+        super::OwnerService::bind(OwnerHandles::from_parts(&parts), &dir).expect("re-bind serves");
+    assert!(
+        socket_path.exists(),
+        "the successor rebinds the same path after a clean shutdown"
+    );
+    drop(first);
+    assert!(
+        socket_path.exists(),
+        "the late drop never unlinks the successor's socket"
+    );
+    second.shutdown();
+    assert!(
+        !socket_path.exists(),
+        "the successor's own shutdown removes its socket"
+    );
+    drop(second);
+    drop(parts);
+    drop(live);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// An absent or refused socket is unavailable — never an empty
 /// drive, never a success, never evidence about any request.
 #[test]

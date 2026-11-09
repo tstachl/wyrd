@@ -30,7 +30,7 @@
 
 use std::io::{Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -197,6 +197,97 @@ impl OwnerHandles {
         self.quarantine = Some(quarantine);
         self.scrub = Some(scrub);
         self
+    }
+
+    /// Build from the live split the way every owner-mode composer
+    /// does: the shared projection, wants, mutation queue, policy
+    /// channel, freshness, observation, and pause switch from the
+    /// parts, plus the loop's repair queues and pacing signal. The
+    /// mount and the headless runner share this constructor so the
+    /// socket serves the same handles either presentation serves.
+    pub fn for_live(
+        parts: &LiveParts<OwnerView>,
+        quarantine: Arc<QuarantineQueue>,
+        scrub: Arc<ScrubQueue>,
+        waker: Arc<WakeSignal>,
+    ) -> Self {
+        Self::from_parts(parts)
+            .with_repair(quarantine, scrub)
+            .with_waker(waker)
+    }
+}
+
+/// The bound owner interface for one run: the socket path, its stop
+/// flag, and the serving thread. Both owner-mode composers (the
+/// headless runner and the mount) bind through here, so the socket
+/// lifecycle is one copy: bind-before-serve (an owner that cannot
+/// serve refuses instead of running deaf), stop-with-the-loop, and
+/// remove-on-the-way-out so a later owner never inherits a stale
+/// entry. The guard stops on drop, so an early return never leaks a
+/// serving socket behind a dead owner.
+pub struct OwnerService {
+    socket_path: PathBuf,
+    stop: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+    /// Whether the socket file has been removed. Shutdown removes at
+    /// most once: after an explicit shutdown the drop is a no-op, so
+    /// a late drop can never unlink a successor owner's socket file
+    /// bound at the same path.
+    removed: bool,
+}
+
+impl OwnerService {
+    /// Bind the drive-directory socket and serve the shared handles
+    /// until [`OwnerService::shutdown`]. The caller holds the store
+    /// lock (single owner by kernel enforcement), so no competing
+    /// binder races the stale-socket reclaim.
+    pub fn bind(handles: OwnerHandles, drive_dir: &Path) -> std::io::Result<Self> {
+        let server = OwnerServer::new(handles);
+        let socket_path = super::socket_path_for(drive_dir);
+        let listener = bind_listener(&socket_path)?;
+        let stop = Arc::new(AtomicBool::new(false));
+        let thread = {
+            let stop = Arc::clone(&stop);
+            std::thread::spawn(move || server.serve_on(&listener, &stop))
+        };
+        Ok(OwnerService {
+            socket_path,
+            stop,
+            thread: Some(thread),
+            removed: false,
+        })
+    }
+
+    /// The bound socket path, for diagnostics and tests.
+    pub fn socket_path(&self) -> &Path {
+        &self.socket_path
+    }
+
+    /// Stop serving, join the accept thread, and remove the socket
+    /// file. Idempotent: a second call (including the drop) neither
+    /// rejoins nor re-removes. A thread that ended unexpectedly logs,
+    /// never panics — the run's own outcome already carries the
+    /// verdict. Call while the store lock is still held (after the
+    /// transport tail, before the live node drops): the removal must
+    /// precede the lock release, or a successor owner binding the
+    /// same path races this unlink.
+    pub fn shutdown(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(thread) = self.thread.take() {
+            if thread.join().is_err() {
+                tracing::warn!("owner interface thread ended unexpectedly");
+            }
+        }
+        if !self.removed {
+            self.removed = true;
+            let _ = std::fs::remove_file(&self.socket_path);
+        }
+    }
+}
+
+impl Drop for OwnerService {
+    fn drop(&mut self) {
+        self.shutdown();
     }
 }
 
