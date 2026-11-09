@@ -21,7 +21,7 @@ wyrd [--config <path>] init [--identity-file <path>] [--passphrase-file <path>] 
 wyrd [--config <path>] mount [--relay <url>...] [--verbose] [--interval <secs>] \
     [--identity-file <path>] [--passphrase-file <path>] <drive_dir> <mountpoint>
 wyrd [--config <path>] export [--identity-file <path>] [--passphrase-file <path>] <drive_dir> <out_dir>
-wyrd [--config <path>] member [--identity-file <path>] [--passphrase-file <path>] <drive_dir> (list | log | status | remove <device> [--yes] | rotate | set-owner <device> | invite <device> <encryption-key> <out> [--reader] | reissue <device> <out>)
+wyrd [--config <path>] member [--identity-file <path>] [--passphrase-file <path>] <drive_dir> (list | log | status | remove <device> [--yes] | leave [--yes] | rotate | set-owner <device> | invite <device> <encryption-key> <out> [--reader] | reissue <device> <out>)
 wyrd [--config <path>] device [--identity-file <path>] [--passphrase-file <path>] <drive_dir> (id | pairing-request <out> | join <invitation>)
 wyrd [--config <path>] sync [--relay <url>...] [--identity-file <path>] [--passphrase-file <path>] <drive_dir> (status | now)
 wyrd [--config <path>] vault [--relay <url>...] [--log-file <path>] [--identity-file <path>] [--passphrase-file <path>] <drive_dir> [start | status]

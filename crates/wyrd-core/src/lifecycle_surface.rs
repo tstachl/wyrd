@@ -28,6 +28,14 @@
 //!    about the directory. Local forget is a separate destructive
 //!    operation with its own authority and confirmation, never an
 //!    implicit half of close.
+//!
+//! The CLI wires only the leave refusal today (`MemberAction::Leave`);
+//! `render_not_a_member`, `render_quit_note`, and
+//! `render_export_requirement` are reserved copy for the application
+//! host (the window that attaches as a non-owner consumer of the
+//! drive-owner interface): close and export already report through
+//! their existing channels (the mount teardown verdict, exit 78 on a
+//! held store), so no CLI call site prints those notes yet.
 
 use wyrd_format::DeviceId;
 

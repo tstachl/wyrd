@@ -803,8 +803,15 @@ mod tests_shutdown_order {
     /// Quit tears down in the documented order: the transport tail
     /// stops the mailbox under its deadline first, closes bulk
     /// graceful-or-abort second, and closes serving last — every
-    /// stage bounded, none skipped, and a failed stage still runs
-    /// the ones after it (here: a clean serving close reports `Ok`).
+    /// stage bounded. Serving is a real loopback endpoint (no fake
+    /// exists by design), so its position is pinned by recording its
+    /// completion after the shared tail returns: the call returns
+    /// only after the serving close reports, which follows the
+    /// mailbox and bulk closes in the function body. The
+    /// session → admission → loop half of the documented order lives
+    /// in `lifecycle` (queue-half unit tests) and the Lima mount
+    /// legs; this test pins the tail every composer runs after its
+    /// loop joins.
     #[test]
     fn quit_tears_down_in_documented_order() {
         let dir = std::env::temp_dir().join(format!(
@@ -840,10 +847,11 @@ mod tests_shutdown_order {
             outcome.serving.is_ok(),
             "the serving close runs last and reports"
         );
+        order.lock().unwrap().push("serving");
         assert_eq!(
             *order.lock().unwrap(),
-            vec!["mailbox", "bulk"],
-            "mailbox stops before bulk closes; serving runs after both by construction"
+            vec!["mailbox", "bulk", "serving"],
+            "mailbox stops before bulk closes, and the tail returns only after the serving close"
         );
         assert_eq!(
             *deadlines.lock().unwrap(),
