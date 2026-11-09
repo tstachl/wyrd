@@ -1387,6 +1387,43 @@ fn check_owner_runs_through_daemon(files: &[(&str, &str)]) -> Vec<String> {
     violations
 }
 
+/// Check the two owner-mode composers bind the socket through the
+/// shared service (P2, option A): the mount and the headless runner
+/// each name `OwnerService::bind`, and neither hand-rolls the server
+/// (`OwnerServer::new`, `bind_listener`, `serve_on`) ad hoc. The
+/// service definition itself (`owner/server.rs`) and the interface
+/// tests own those markers legitimately, so this checker runs only
+/// on the two composer files — the filesystem test below pins the
+/// file set, and the negative tests prove the checker bites.
+/// Pure over the file set so the negatives run without touching the
+/// filesystem.
+fn check_owner_socket_through_shared_service(files: &[(&str, &str)]) -> Vec<String> {
+    const AD_HOC: &[&str] = &["OwnerServer::new", "bind_listener", "serve_on("];
+    let mut violations = Vec::new();
+    for (path, text) in files {
+        let code = code_text(text);
+        let has_shared = code.contains("OwnerService::bind");
+        if !has_shared {
+            violations.push(format!(
+                "{path} never binds the owner socket through the shared service \
+                 (`OwnerService::bind`): mount and headless bind the same surface"
+            ));
+        }
+        for (index, line) in code.lines().enumerate() {
+            for marker in AD_HOC {
+                if line.contains(marker) {
+                    violations.push(format!(
+                        "{path}:{} names the socket server directly (`{marker}`): bind \
+                         through OwnerService::bind instead of hand-rolling the server",
+                        index + 1
+                    ));
+                }
+            }
+        }
+    }
+    violations
+}
+
 /// Check the host crate's own production sources for transport
 /// machinery: the host composes through `wyrd-core` and `wyrd-daemon`
 /// and opens through `wyrd-sync`'s durable side, so a `transport::`,
@@ -1513,6 +1550,34 @@ fn headless_runs_go_through_the_daemon_composer() {
     assert!(
         violations.is_empty(),
         "owner-composition violations:\n- {}",
+        violations.join("\n- ")
+    );
+}
+
+/// Contract (P2, option A): both owner-mode composers bind the socket
+/// through the shared service. Reads exactly the two composer files
+/// — the mount command and the daemon's headless runner — and runs
+/// the shared-service checker on them. The behavioral half is the
+/// `mounted_owner_serves_socket_alongside_backend` daemon test, which
+/// serves a client through the drive socket while the backend holds
+/// the same arcs.
+#[test]
+fn owner_socket_goes_through_the_shared_service() {
+    let root = workspace_root();
+    let mut refs: Vec<(String, String)> = Vec::new();
+    for file in [
+        "crates/wyrd-cli/src/commands/mount.rs",
+        "crates/wyrd-daemon/src/vault.rs",
+    ] {
+        let text = std::fs::read_to_string(root.join(file))
+            .unwrap_or_else(|_| panic!("composer file {file} reads"));
+        refs.push((file.to_owned(), text));
+    }
+    let borrowed: Vec<(&str, &str)> = refs.iter().map(|(p, t)| (p.as_str(), t.as_str())).collect();
+    let violations = check_owner_socket_through_shared_service(&borrowed);
+    assert!(
+        violations.is_empty(),
+        "owner-socket composition violations:\n- {}",
         violations.join("\n- ")
     );
 }
@@ -4029,6 +4094,51 @@ mod policy_tests {
         assert!(
             check_owner_runs_through_daemon(&files).is_empty(),
             "comments and strings are not composition"
+        );
+    }
+
+    #[test]
+    fn owner_socket_check_rejects_a_hand_rolled_server() {
+        let files = [(
+            "crates/wyrd-cli/src/commands/mount.rs",
+            "let server = OwnerServer::new(handles);\nlet _svc = OwnerService::bind(handles, &dir);",
+        )];
+        let violations = check_owner_socket_through_shared_service(&files);
+        assert_eq!(violations.len(), 1, "hand-rolled server: {violations:?}");
+        assert!(
+            violations[0].contains("OwnerServer::new"),
+            "names the marker: {violations:?}"
+        );
+    }
+
+    #[test]
+    fn owner_socket_check_rejects_a_missing_bind() {
+        let files = [(
+            "crates/wyrd-daemon/src/vault.rs",
+            "let server = OwnerServer::new(handles);",
+        )];
+        let violations = check_owner_socket_through_shared_service(&files);
+        assert!(
+            violations.iter().any(|v| v.contains("OwnerService::bind")),
+            "a composer that never binds through the service fails: {violations:?}"
+        );
+    }
+
+    #[test]
+    fn owner_socket_check_ignores_comments_and_strings() {
+        let files = [
+            (
+                "crates/wyrd-cli/src/commands/mount.rs",
+                "// OwnerServer::new used to live here, now shared\nlet _svc = OwnerService::bind(h, &d);",
+            ),
+            (
+                "crates/wyrd-daemon/src/vault.rs",
+                "let note = \"bind_listener reclaims the stale socket\";\nlet _svc = OwnerService::bind(h, &d);",
+            ),
+        ];
+        assert!(
+            check_owner_socket_through_shared_service(&files).is_empty(),
+            "comments and strings are not socket composition"
         );
     }
 

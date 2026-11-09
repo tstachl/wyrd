@@ -43,11 +43,13 @@ pub const REGISTRY_VERSION: u32 = 1;
 pub const REGISTRY_FILENAME: &str = "drives.json";
 
 /// Supervision mode for one registered drive. Only headless owner
-/// mode exists today: mounting through the registry waits on the P2
-/// owner-socket decision, which either moves the server into the
-/// shared composition or marks mount non-desktop. Unknown modes
-/// from newer writers are skipped per entry with a reason — a
-/// future mode must never fail the whole file.
+/// mode exists today: mounting through the registry waits on the
+/// installer follow-up (P2 landed — `wyrd mount` serves the socket
+/// through the shared `OwnerService` when run manually — but the
+/// registry's managed `mount` mode, service template, and enablement
+/// UX still travel with that issue). Unknown modes from newer writers
+/// are skipped per entry with a reason — a future mode must never
+/// fail the whole file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ServiceMode {
     Vault,
@@ -209,7 +211,7 @@ fn validate_entry(key: &str, entry: &RegistryEntry) -> Result<(), String> {
     }
     if !matches!(entry.mode, ServiceMode::Vault) {
         return Err(
-            "unknown service mode: mount and later modes wait on the P2 owner-socket decision"
+            "unknown service mode: registry-managed mount mode travels with the installer follow-up (P2 landed: manual `wyrd mount` serves the socket)"
                 .to_string(),
         );
     }

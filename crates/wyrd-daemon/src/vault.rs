@@ -654,26 +654,22 @@ where
     // projection, the loop-published slots, and the single queue,
     // peer-checked at the drive-directory socket. The composer
     // wires the loop's repair queues the way the mount composer
-    // wires its backend.
-    let server = crate::owner::OwnerServer::new(
-        crate::owner::OwnerHandles::from_parts(&parts)
-            .with_repair(
-                Arc::clone(live.quarantine_queue()),
-                Arc::clone(live.scrub_queue()),
-            )
-            .with_waker(Arc::clone(live.waker())),
-    );
-    // Bind before spawning: an owner that cannot serve its
-    // interface refuses the run instead of running deaf. The store
-    // lock is held throughout the run, so no competing owner can
-    // race the stale-socket reclaim.
-    let socket_path = crate::owner::socket_path_for(&drive_dir);
-    let listener = crate::owner::server::bind_listener(&socket_path).map_err(OwnerError::Io)?;
-    let server_stop = Arc::new(AtomicBool::new(false));
-    let server_thread = {
-        let server_stop = Arc::clone(&server_stop);
-        std::thread::spawn(move || server.serve_on(&listener, &server_stop))
-    };
+    // wires its backend — through the shared `OwnerService`, so
+    // headless and mount bind the same surface. Bind before
+    // spawning: an owner that cannot serve its interface refuses
+    // the run instead of running deaf. The store lock is held
+    // throughout the run, so no competing owner can race the
+    // stale-socket reclaim.
+    let mut owner_service = crate::owner::OwnerService::bind(
+        crate::owner::OwnerHandles::for_live(
+            &parts,
+            Arc::clone(live.quarantine_queue()),
+            Arc::clone(live.scrub_queue()),
+            Arc::clone(live.waker()),
+        ),
+        &drive_dir,
+    )
+    .map_err(OwnerError::Io)?;
     // No presentation backend is attached yet: the parts are owned
     // but never served, the queue stays open but nobody submits, so
     // passes only ever see intake and fetch work. The queue handle
@@ -704,16 +700,12 @@ where
     // still-serving socket. A submission admitted before the stop
     // resolves through the teardown drain or refuses `Shutdown` at
     // admission close: no consumer waits past this join without a
-    // terminal answer.
-    server_stop.store(true, Ordering::Relaxed);
-    if server_thread.join().is_err() {
-        tracing::warn!("owner interface thread ended unexpectedly");
-    }
-    // The socket belongs to the run: remove it on the way out so a
-    // later owner never inherits a stale entry and no client
-    // mistakes an absent owner for a listening one. The store lock
-    // releases with the engine drop after this return.
-    let _ = std::fs::remove_file(&socket_path);
+    // terminal answer. The socket belongs to the run: shutdown
+    // removes it on the way out so a later owner never inherits a
+    // stale entry and no client mistakes an absent owner for a
+    // listening one. The store lock releases with the engine drop
+    // after this return.
+    owner_service.shutdown();
     outcome.map_err(OwnerError::from)
 }
 

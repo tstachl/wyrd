@@ -1,7 +1,9 @@
 //! The `mount` command: diagnostics, preflight, the serving
-//! endpoint, the session thread, the loop join, and the ordered
-//! teardown. Owns the mount's lifecycle end to end; the shutdown
-//! latch and teardown bounds it honors live in
+//! endpoint, the owner socket (P2 option A: the shared `OwnerService`
+//! beside the FUSE backend, so a mounted drive still answers the
+//! desktop over `owner.sock`), the session thread, the loop join,
+//! and the ordered teardown. Owns the mount's lifecycle end to end;
+//! the shutdown latch and teardown bounds it honors live in
 //! `wyrd_daemon::process`.
 use crate::logging::init_mount_diagnostics;
 use crate::probes::combine_status;
@@ -18,6 +20,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use wyrd_core::mailbox::LiveMailbox;
 use wyrd_daemon::fuse::FuseBackend;
+use wyrd_daemon::owner::{OwnerHandles, OwnerService};
 use wyrd_daemon::posture::PostureRecorder;
 use wyrd_daemon::process::{
     bind_bulk_source, check_startup_retention, install_shutdown_handler, SHUTDOWN,
@@ -239,6 +242,23 @@ pub(crate) fn mount(
     // sync, and vault.
     install_role_dir(&mut live, &drive_dir);
     install_serving(&mut live, &serving).map_err(CliError::Serving)?;
+    // The drive-owner interface serves beside the mount through the
+    // shared `OwnerService`: the same handles either presentation
+    // serves, peer-checked at the drive-directory socket (P2,
+    // option A). Bind before presenting: an owner that cannot serve
+    // its interface refuses the run instead of running deaf. The
+    // guard stops and removes the socket on drop, so every post-bind
+    // failure path below tears the interface down with the run.
+    let _owner_service = OwnerService::bind(
+        OwnerHandles::for_live(
+            &parts,
+            Arc::clone(live.quarantine_queue()),
+            Arc::clone(live.scrub_queue()),
+            Arc::clone(live.waker()),
+        ),
+        &drive_dir,
+    )
+    .map_err(CliError::Serving)?;
     // Endpoint ownership (and shutdown below) stays here; the loop
     // holds only the cloneable readiness handle the install took.
     // The composer builds its presentation backend from the node's

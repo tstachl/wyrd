@@ -32,7 +32,9 @@
 //! the exit status. Mailbox stop and both endpoint closes run under
 //! deadlines; the bulk drop between them releases an owned
 //! current-thread runtime whose task-drop does not wait, so it carries
-//! no deadline. The composer order itself is not unit-pinned — the
+//! no deadline. The owner socket (`OwnerService`, P2 option A) serves
+//! through the tail beside the backend and is removed on the way out,
+//! so no client mistakes a torn-down owner for a listening one. The composer order itself is not unit-pinned — the
 //! composer is binary-only, so the Lima suite is the order evidence —
 //! but the queue half of the contract is: the teardown-sequence tests
 //! pin that post-return submissions execute and admission closes only
