@@ -280,7 +280,7 @@ fn plaintext_held_retry_charges_only_fresh_bytes() {
     // retry retains only fresh sealed bytes, so it must admit, while
     // re-charging the already-held plaintext would falsely refuse.
     let quota = sealed_len + 1;
-    debug_assert!(
+    assert!(
         quota <= sealed_len + plain_len,
         "the ceiling must stay at or below the double-charged total to pin the boundary"
     );
@@ -304,6 +304,77 @@ fn plaintext_held_retry_charges_only_fresh_bytes() {
     assert!(
         matches!(attempt.aggregate, FetchOutcome::Fulfilled(())),
         "a plaintext-held retry admits on fresh bytes alone: {:?}",
+        attempt.aggregate
+    );
+    assert!(refusals.is_empty(), "an admitted retry records no refusal");
+    assert!(
+        vault
+            .sealed(&crate::seal::blob_root(&sealed.encode()))
+            .unwrap()
+            .is_some(),
+        "the retry imported the missing sealed bytes into the vault"
+    );
+    assert!(
+        objects.has(&content).unwrap(),
+        "the already-held plaintext object is still held"
+    );
+}
+
+/// Both representations already held: the retry retains nothing new,
+/// so even a ceiling below the full double-charged total admits as a
+/// no-op with no refusal recorded.
+#[test]
+fn both_held_retry_admits_as_noop() {
+    let epoch = 2;
+    let keyring = keyring_with_secret(epoch);
+    let dir = TestDir::new("fetch-limits-both-held");
+    let vault = Vault::open(&dir.path).unwrap();
+    let plaintext = vec![0x5C; 64];
+    let (candidate, sealed, content) =
+        sealed_candidate(&keyring, epoch, ObjectKind::Chunk, &plaintext);
+    vault.import(&sealed.encode()).unwrap();
+    let mut objects = MemoryObjectStore::default();
+    objects
+        .insert_verified(ObjectKind::Chunk, &content, &plaintext)
+        .unwrap();
+    assert!(
+        vault
+            .sealed(&crate::seal::blob_root(&sealed.encode()))
+            .unwrap()
+            .is_some()
+            && objects.has(&content).unwrap(),
+        "the fixture establishes the both-held state: vault-held and plaintext-held"
+    );
+    let sealed_len = sealed.encode().len() as u64;
+    let plain_len = plaintext.len() as u64;
+    // Below the full double-charged total, so the unadjusted charge
+    // would refuse; the held sides charge zero fresh bytes, so the
+    // retry still admits.
+    let quota = sealed_len + 1;
+    assert!(
+        quota <= sealed_len + plain_len,
+        "the ceiling must stay at or below the double-charged total to pin the boundary"
+    );
+    let retained = wyrd_format::RetainedBytes::new();
+    let gate = RetentionGate::new(Some(quota), Some(retained), vault.seen_handle());
+    let refusals = RefusalLedger::load(&dir.path).unwrap();
+    let mut bulk = MemoryBulkSource::default();
+    bulk.publish_sealed(sealed.storage_id(), sealed.encode());
+    bulk.publish_transport(sealed.encode());
+    let attempt = object(
+        &member_drive(),
+        &mut bulk,
+        &keyring,
+        &mut objects,
+        &vault,
+        &content,
+        std::slice::from_ref(&candidate),
+        &gate,
+        &refusals,
+    );
+    assert!(
+        matches!(attempt.aggregate, FetchOutcome::Fulfilled(())),
+        "a both-held retry admits as a no-op: {:?}",
         attempt.aggregate
     );
     assert!(refusals.is_empty(), "an admitted retry records no refusal");
