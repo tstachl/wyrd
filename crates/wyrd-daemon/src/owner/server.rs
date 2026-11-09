@@ -52,9 +52,10 @@ use super::wire::{
     map_policy_error, PathParams, RawRequest, SubmitParams, WireAttr, WireDirEntry, WireError,
     WireErrorCode, WireFreshness, WireLiveness, WireMailboxHealth, WireMutationError,
     WireMutationKind, WireMutationOutcome, WireNode, WireOk, WireParentToken, WirePolicyRow,
-    WireResponse, WireResult, WireSyncReport, WireSyncStatus, OP_CAPTURE_PARENT, OP_FRESHNESS,
-    OP_LIVENESS, OP_LOOKUP, OP_OBSERVE, OP_PAUSE, OP_POLICY_EVICT, OP_POLICY_PIN, OP_POLICY_STATUS,
-    OP_POLICY_UNPIN, OP_READ, OP_READDIR, OP_RESUME, OP_STAT, OP_SUBMIT, WIRE_VERSION,
+    WirePolicyStatus, WireResponse, WireResult, WireSyncReport, WireSyncStatus, OP_CAPTURE_PARENT,
+    OP_FRESHNESS, OP_LIVENESS, OP_LOOKUP, OP_OBSERVE, OP_PAUSE, OP_POLICY_EVICT, OP_POLICY_PIN,
+    OP_POLICY_STATUS, OP_POLICY_UNPIN, OP_READ, OP_READDIR, OP_RESUME, OP_STAT, OP_SUBMIT,
+    WIRE_VERSION,
 };
 
 /// Bind the drive-directory socket: reclaim a stale entry from an
@@ -902,9 +903,11 @@ impl OwnerServer {
     /// Answer one on-demand status read from the loop-thread executor.
     /// No periodic census exists: every status is a bounded walk at
     /// request time, with a `complete` flag naming whether the
-    /// traversal budget covered the subtree. The serving generation
-    /// and durable revision ride the answer so the consumer correlates
-    /// it with the freshness judgment instead of assuming recency.
+    /// traversal budget covered the subtree. The generation and
+    /// revision ride the loop's answer — captured from the same
+    /// published generation the walk read — so the consumer
+    /// correlates the answer with the freshness judgment instead of
+    /// assuming recency.
     fn op_policy_status(
         &self,
         params: serde_json::Value,
@@ -915,28 +918,29 @@ impl OwnerServer {
                 format!("bad policy-status params: {error}"),
             )
         })?;
-        let projection = self.current_projection()?;
-        let generation = projection.generation();
-        let revision = projection.revision();
         match self
             .handles
             .policy
             .submit(PolicyRequest::Status { path: params.path })
         {
-            Ok(PolicyResponse::Status(bounded)) => Ok(WireOk::PolicyStatus {
-                files: bounded
-                    .census
-                    .files
-                    .iter()
-                    .map(WirePolicyRow::from)
-                    .collect(),
-                conflicts: bounded.census.conflicts.clone(),
-                dirs: bounded.census.dirs,
-                symlinks_skipped: bounded.census.symlinks_skipped,
-                complete: bounded.complete,
+            Ok(PolicyResponse::Status {
+                census: bounded,
                 generation,
                 revision,
-            }),
+            }) => {
+                let census = &bounded.census;
+                Ok(WireOk::PolicyStatus {
+                    status: WirePolicyStatus {
+                        files: census.files.iter().map(WirePolicyRow::from).collect(),
+                        conflicts: census.conflicts.clone(),
+                        dirs: census.dirs,
+                        symlinks_skipped: census.symlinks_skipped,
+                        complete: bounded.complete,
+                    },
+                    generation,
+                    revision,
+                })
+            }
             Ok(_) => Err((
                 WireErrorCode::Engine,
                 "policy channel answered status with the wrong outcome".to_string(),

@@ -14,11 +14,11 @@ use super::wire::{
     WireFreshnessState, WireHeadClasses, WireHeadSummary, WireKind, WireLiveness,
     WireMailboxHealth, WireMailboxView, WireMaterializationSummary, WireMutationError,
     WireMutationKind, WireMutationOutcome, WireNode, WireOk, WireOutboxTotals, WireParentToken,
-    WirePeerHandle, WirePendingObligations, WirePolicyRow, WirePresence, WireQueueDepth,
-    WireReconciliationCounters, WireResponse, WireResult, WireRetentionPolicy, WireSyncStatus,
-    OP_CAPTURE_PARENT, OP_FRESHNESS, OP_LIVENESS, OP_LOOKUP, OP_OBSERVE, OP_PAUSE, OP_POLICY_EVICT,
-    OP_POLICY_PIN, OP_POLICY_STATUS, OP_POLICY_UNPIN, OP_READ, OP_READDIR, OP_RESUME, OP_STAT,
-    OP_SUBMIT, WIRE_VERSION,
+    WirePeerHandle, WirePendingObligations, WirePolicyRow, WirePolicyStatus, WirePresence,
+    WireQueueDepth, WireReconciliationCounters, WireResponse, WireResult, WireRetentionPolicy,
+    WireSyncStatus, OP_CAPTURE_PARENT, OP_FRESHNESS, OP_LIVENESS, OP_LOOKUP, OP_OBSERVE, OP_PAUSE,
+    OP_POLICY_EVICT, OP_POLICY_PIN, OP_POLICY_STATUS, OP_POLICY_UNPIN, OP_READ, OP_READDIR,
+    OP_RESUME, OP_STAT, OP_SUBMIT, WIRE_VERSION,
 };
 
 use std::collections::BTreeSet;
@@ -2838,6 +2838,10 @@ fn golden_vectors_pin_the_wire() {
                     "freshness" => OP_FRESHNESS,
                     "pause" => OP_PAUSE,
                     "resume" => OP_RESUME,
+                    "policy-pin" => OP_POLICY_PIN,
+                    "policy-unpin" => OP_POLICY_UNPIN,
+                    "policy-evict" => OP_POLICY_EVICT,
+                    "policy-status" => OP_POLICY_STATUS,
                     other => panic!("unknown vector operation: {other}"),
                 };
                 assert_eq!(
@@ -2867,16 +2871,31 @@ fn golden_vectors_pin_the_wire() {
                         matches!(*ok, WireOk::Submitted { .. }),
                         "the submit sample answers a submit"
                     ),
+                    ("policy-pin", WireResult::Ok(ok)) => assert!(
+                        matches!(*ok, WireOk::PolicyPinned { .. }),
+                        "the policy-pin sample answers a pin"
+                    ),
+                    ("policy-status", WireResult::Ok(ok)) => assert!(
+                        matches!(
+                            *ok,
+                            WireOk::PolicyStatus {
+                                status: WirePolicyStatus { complete: true, .. },
+                                ..
+                            }
+                        ),
+                        "the policy-status sample answers a complete status"
+                    ),
                     other => panic!("unexpected ok sample: {other:?}"),
                 }
             }
-            "not-found" | "unknown-version" => {
+            "not-found" | "unknown-version" | "pinned-present" => {
                 let response: WireResponse = serde_json::from_value(vector.json.clone())
                     .unwrap_or_else(|error| {
                         panic!("{} parses as a response: {error}", vector.name)
                     });
                 let expected = match shape {
                     "not-found" => WireErrorCode::NotFound,
+                    "pinned-present" => WireErrorCode::PinnedPresent,
                     _ => WireErrorCode::UnknownVersion,
                 };
                 match response.result {
@@ -3150,12 +3169,27 @@ fn policy_wire_field_names_are_pinned() {
     .unwrap();
     assert_eq!(keys(&row), set(&["path", "policy", "presence"]));
 
-    let status = serde_json::to_value(&WireOk::PolicyStatus {
+    let status_body = serde_json::to_value(&WirePolicyStatus {
         files: Vec::new(),
         conflicts: Vec::new(),
         dirs: 0,
         symlinks_skipped: 0,
         complete: true,
+    })
+    .unwrap();
+    assert_eq!(
+        keys(&status_body),
+        set(&["files", "conflicts", "dirs", "symlinks_skipped", "complete"])
+    );
+
+    let status = serde_json::to_value(&WireOk::PolicyStatus {
+        status: WirePolicyStatus {
+            files: Vec::new(),
+            conflicts: Vec::new(),
+            dirs: 0,
+            symlinks_skipped: 0,
+            complete: true,
+        },
         generation: 0,
         revision: 0,
     })
@@ -3163,15 +3197,7 @@ fn policy_wire_field_names_are_pinned() {
     assert_eq!(keys(&status), set(&["PolicyStatus",]));
     assert_eq!(
         keys(&status["PolicyStatus"]),
-        set(&[
-            "files",
-            "conflicts",
-            "dirs",
-            "symlinks_skipped",
-            "complete",
-            "generation",
-            "revision"
-        ])
+        set(&["status", "generation", "revision"])
     );
 
     let pinned = serde_json::to_value(&WireOk::PolicyPinned {
@@ -3219,19 +3245,17 @@ fn owner_interface_forwards_policy_unchanged() {
     }
 
     // Status through the interface: one reachable file, PINNED, with
-    // the serving generation and durable revision attached.
+    // the generation and revision the loop actually walked attached.
     match policy_ok(&server, OP_POLICY_STATUS, "seed.txt") {
         WireOk::PolicyStatus {
-            files,
-            complete,
+            status,
             generation,
             revision,
-            ..
         } => {
-            assert!(complete, "a one-file walk fits the budget");
-            assert_eq!(files.len(), 1);
-            assert_eq!(files[0].policy, WireRetentionPolicy::Pinned);
-            assert_eq!(files[0].path, "seed.txt");
+            assert!(status.complete, "a one-file walk fits the budget");
+            assert_eq!(status.files.len(), 1);
+            assert_eq!(status.files[0].policy, WireRetentionPolicy::Pinned);
+            assert_eq!(status.files[0].path, "seed.txt");
             let _ = (generation, revision);
         }
         other => panic!("unexpected status result: {other:?}"),
@@ -3258,13 +3282,139 @@ fn owner_interface_forwards_policy_unchanged() {
     // The refused evict above committed nothing observable: status
     // after the unpin/evict pair reports REMOTE_ONLY.
     match policy_ok(&server, OP_POLICY_STATUS, "seed.txt") {
-        WireOk::PolicyStatus { files, .. } => {
-            assert_eq!(files[0].policy, WireRetentionPolicy::RemoteOnly);
+        WireOk::PolicyStatus { status, .. } => {
+            assert_eq!(status.files[0].policy, WireRetentionPolicy::RemoteOnly);
         }
         other => panic!("unexpected trailing status: {other:?}"),
     }
 
     stop.store(true, Ordering::Relaxed);
+    let summary = loop_thread.join().unwrap();
+    assert!(summary.is_ok(), "the loop ends clean on stop");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// The DG-1 negative invariant for the policy path: while the live
+/// owner holds the drive, the offline opener fails closed — and the
+/// interface-committed facts equal an in-process pin on a twin drive.
+///
+/// The held half uses the lock probe, which is the same authority as
+/// the open path (`try_lock` on the store LOCK file): the CLI's
+/// `open_policy_node` reaches the same lock through
+/// `Engine::open_keystore` → `DurableStore::open` → `StoreLocked`,
+/// so `Held` here is the offline command failing closed. The parity
+/// half pins the same seeded file through the interface and
+/// in-process (`pin_subtree` on a twin with identical bytes, hence
+/// identical chunk identities) and compares every policy/presence
+/// row — the durable `Fact::Materialization` batch is the same batch
+/// either way.
+#[test]
+fn policy_command_reaches_a_mounted_drive() {
+    use wyrd_sync::durable::{probe_lock, LockProbe};
+
+    let (server, _parts, dir, stop, loop_thread) = running_parts();
+
+    // While the loop holds the store, the offline path fails closed.
+    // `running_parts` holds `FsObjectStore` open in the live node and
+    // the engine holds the durable lock beside it.
+    assert_eq!(
+        probe_lock(&dir).expect("the probe reads the lock, not state"),
+        LockProbe::Held,
+        "the live owner holds the drive: the offline policy command fails closed here"
+    );
+
+    // The interface pin commits through the held owner.
+    match policy_ok(&server, OP_POLICY_PIN, "seed.txt") {
+        WireOk::PolicyPinned { pinned, .. } => assert_eq!(pinned, 1),
+        other => panic!("unexpected pin result: {other:?}"),
+    }
+
+    // Twin drive, same bytes (hence same chunk identities), pinned
+    // in process: the durable facts must match the interface commit
+    // row for row.
+    let (twin_engine, twin_dir) = scratch_drive();
+    let twin_store = wyrd_format::FsObjectStore::open(twin_dir.clone()).unwrap();
+    let mut twin: wyrd_core::node::WyrdNode<crate::vault::OwnerView> =
+        wyrd_core::node::WyrdNode::new(twin_engine, twin_store).expect("twin composes");
+    twin.put_file("seed.txt", b"seed").expect("twin seeds");
+    twin.refresh_live_heads().expect("twin installs its head");
+    {
+        let (engine, view) = twin.parts_mut();
+        wyrd_core::policy::pin_subtree(engine, view, "seed.txt").expect("twin pins in process");
+    }
+    let twin_census = {
+        let (engine, view) = twin.parts();
+        wyrd_core::policy::residency_census(engine, view, "seed.txt").expect("twin reads back")
+    };
+    match policy_ok(&server, OP_POLICY_STATUS, "seed.txt") {
+        WireOk::PolicyStatus { status, .. } => {
+            assert_eq!(
+                status.files.len(),
+                twin_census.files.len(),
+                "interface and in-process walks name the same files"
+            );
+            for (row, file) in status.files.iter().zip(twin_census.files.iter()) {
+                assert_eq!(row.path, file.path);
+                assert_eq!(row.policy, WireRetentionPolicy::from(&file.policy));
+                assert_eq!(row.presence, WirePresence::from(&file.local));
+            }
+        }
+        other => panic!("unexpected status result: {other:?}"),
+    }
+
+    stop.store(true, Ordering::Relaxed);
+    let summary = loop_thread.join().unwrap();
+    assert!(summary.is_ok(), "the loop ends clean on stop");
+    drop(twin);
+    std::fs::remove_dir_all(dir).unwrap();
+    std::fs::remove_dir_all(twin_dir).unwrap();
+}
+
+/// The shared client serves the whole policy surface over the
+/// socket: pin, status, the `PinnedPresent` refusal, unpin, and
+/// evict, against the running loop — the Tauri-shaped path, not just
+/// the in-process dispatch half above.
+#[test]
+fn client_serves_the_policy_surface() {
+    let (engine, dir) = scratch_drive();
+    let store = wyrd_format::FsObjectStore::open(dir.clone()).unwrap();
+    let mut daemon = wyrd_core::node::WyrdNode::new(engine, store).unwrap();
+    daemon.put_file("seed.txt", b"seed").unwrap();
+    daemon.refresh_live_heads().unwrap();
+    let (live, parts) = daemon
+        .into_live(
+            Duration::from_secs(5),
+            &wyrd_core::live::LiveConfig::default(),
+        )
+        .unwrap();
+    let server = OwnerServer::new(OwnerHandles::from_parts(&parts));
+    let stop: &'static AtomicBool = Box::leak(Box::new(AtomicBool::new(false)));
+    let (socket_path, serve_thread) = serve_parts(server, "policysock", &dir, stop);
+    let loop_thread = spawn_loop(live, stop);
+
+    let mut client = OwnerClient::connect(&socket_path).expect("the owner answers");
+    let (pinned, already, files, _) = client.policy_pin("seed.txt").expect("pin commits");
+    assert_eq!((pinned, already, files), (1, 0, 1));
+    let (status, generation, revision) = client.policy_status("seed.txt").expect("status serves");
+    assert!(status.complete, "a one-file walk fits the budget");
+    assert_eq!(status.files.len(), 1);
+    assert_eq!(status.files[0].policy, WireRetentionPolicy::Pinned);
+    let _ = (generation, revision);
+    match client.policy_evict("seed.txt") {
+        Err(ClientError::Refused(error)) => {
+            assert_eq!(error.code, WireErrorCode::PinnedPresent)
+        }
+        other => panic!("evict against a pin refuses distinctly: {other:?}"),
+    }
+    let (released, _, _, _) = client.policy_unpin("seed.txt").expect("unpin releases");
+    assert_eq!(released, 1);
+    let (evicted, _, _, _) = client
+        .policy_evict("seed.txt")
+        .expect("evict succeeds unpinned");
+    assert_eq!(evicted, 1);
+
+    stop.store(true, Ordering::Relaxed);
+    serve_thread.join().unwrap();
     let summary = loop_thread.join().unwrap();
     assert!(summary.is_ok(), "the loop ends clean on stop");
     std::fs::remove_dir_all(dir).unwrap();

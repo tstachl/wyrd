@@ -26,9 +26,10 @@ use super::server::{socket_path_for, MAX_FRAME_BYTES};
 use super::wire::{
     PathParams, RawRequest, SubmitParams, WireAttr, WireDirEntry, WireError, WireErrorCode,
     WireFreshness, WireLiveness, WireMutationKind, WireMutationOutcome, WireNode, WireOk,
-    WireParentToken, WireResponse, WireResult, WireSyncStatus, OP_CAPTURE_PARENT, OP_FRESHNESS,
-    OP_LIVENESS, OP_LOOKUP, OP_OBSERVE, OP_PAUSE, OP_READ, OP_READDIR, OP_RESUME, OP_STAT,
-    OP_SUBMIT, WIRE_VERSION,
+    WireParentToken, WirePolicyStatus, WireResponse, WireResult, WireSyncStatus, OP_CAPTURE_PARENT,
+    OP_FRESHNESS, OP_LIVENESS, OP_LOOKUP, OP_OBSERVE, OP_PAUSE, OP_POLICY_EVICT, OP_POLICY_PIN,
+    OP_POLICY_STATUS, OP_POLICY_UNPIN, OP_READ, OP_READDIR, OP_RESUME, OP_STAT, OP_SUBMIT,
+    WIRE_VERSION,
 };
 
 /// How long one request waits for the owner's terminal answer. The
@@ -320,6 +321,94 @@ impl OwnerClient {
         match self.transact(OP_RESUME, serde_json::Value::Null)? {
             WireOk::Paused { paused } => Ok(paused),
             other => Err(unexpected(OP_RESUME, other)),
+        }
+    }
+
+    /// Promise retention for every chunk under a path: `(pinned,
+    /// already_pinned, files, dirs)`. Idempotent — re-pinning commits
+    /// nothing. A success means exactly what an in-process pin's
+    /// success means; refusals arrive as `Refused` with their own
+    /// codes, never collapsed.
+    pub fn policy_pin(&mut self, path: &str) -> Result<(u64, u64, u64, u64), ClientError> {
+        match self.transact(
+            OP_POLICY_PIN,
+            PathParams {
+                path: path.to_string(),
+            },
+        )? {
+            WireOk::PolicyPinned {
+                pinned,
+                already_pinned,
+                files,
+                dirs,
+            } => Ok((pinned, already_pinned, files, dirs)),
+            other => Err(unexpected(OP_POLICY_PIN, other)),
+        }
+    }
+
+    /// Release the retention promise for every pinned chunk under a
+    /// path: `(released, already_unpinned, files, dirs)`. Never
+    /// refuses; the executor owns that invariant, the client only
+    /// carries it.
+    pub fn policy_unpin(&mut self, path: &str) -> Result<(u64, u64, u64, u64), ClientError> {
+        match self.transact(
+            OP_POLICY_UNPIN,
+            PathParams {
+                path: path.to_string(),
+            },
+        )? {
+            WireOk::PolicyUnpinned {
+                released,
+                already_unpinned,
+                files,
+                dirs,
+            } => Ok((released, already_unpinned, files, dirs)),
+            other => Err(unexpected(OP_POLICY_UNPIN, other)),
+        }
+    }
+
+    /// Return unpinned content under a path to `REMOTE_ONLY` policy:
+    /// `(released, already_remote, files, dirs)`. Intent only — no
+    /// bytes are deleted. A pinned subtree refuses with
+    /// `PinnedPresent` before committing anything.
+    pub fn policy_evict(&mut self, path: &str) -> Result<(u64, u64, u64, u64), ClientError> {
+        match self.transact(
+            OP_POLICY_EVICT,
+            PathParams {
+                path: path.to_string(),
+            },
+        )? {
+            WireOk::PolicyEvicted {
+                released,
+                already_remote,
+                files,
+                dirs,
+            } => Ok((released, already_remote, files, dirs)),
+            other => Err(unexpected(OP_POLICY_EVICT, other)),
+        }
+    }
+
+    /// One on-demand status read: the reachable rows plus the walk
+    /// coverage, with the serving generation and durable revision the
+    /// loop actually walked. No periodic census exists — every call
+    /// is a bounded walk, and `complete: false` is a prefix, never
+    /// the whole.
+    pub fn policy_status(
+        &mut self,
+        path: &str,
+    ) -> Result<(WirePolicyStatus, u64, u64), ClientError> {
+        match self.transact(
+            OP_POLICY_STATUS,
+            PathParams {
+                path: path.to_string(),
+            },
+        )? {
+            WireOk::PolicyStatus {
+                status,
+                generation,
+                revision,
+            } => Ok((status, generation, revision)),
+            other => Err(unexpected(OP_POLICY_STATUS, other)),
         }
     }
 

@@ -1,18 +1,302 @@
 [
-  {"name": "lookup/request", "json": {"v": 1, "id": 7, "op": "lookup", "params": {"path": "hello.txt"}}},
-  {"name": "stat/request", "json": {"v": 1, "id": 7, "op": "stat", "params": {"path": "hello.txt"}}},
-  {"name": "readdir/request", "json": {"v": 1, "id": 7, "op": "readdir", "params": {"path": ""}}},
-  {"name": "read/request", "json": {"v": 1, "id": 7, "op": "read", "params": {"path": "hello.txt"}}},
-  {"name": "observe/request", "json": {"v": 1, "id": 7, "op": "observe", "params": null}},
-  {"name": "liveness/request", "json": {"v": 1, "id": 7, "op": "liveness", "params": null}},
-  {"name": "freshness/request", "json": {"v": 1, "id": 7, "op": "freshness", "params": null}},
-  {"name": "capture-parent/request", "json": {"v": 1, "id": 7, "op": "capture-parent", "params": {"path": ""}}},
-  {"name": "submit/request", "json": {"v": 1, "id": 7, "op": "submit", "params": {"kind": {"Mkdir": {"path": "via-client"}}}}},
-  {"name": "submit-create/request", "json": {"v": 1, "id": 7, "op": "submit", "params": {"kind": {"CreateFile": {"path": "child.txt", "parent": {"instance": 9, "counter": 3}}}}}},
-  {"name": "pause/request", "json": {"v": 1, "id": 7, "op": "pause", "params": null}},
-  {"name": "resume/request", "json": {"v": 1, "id": 7, "op": "resume", "params": null}},
-  {"name": "lookup/ok", "json": {"v": 1, "id": 7, "result": {"ok": {"Lookup": {"node": {"File": {"size": 11, "executable": false, "chunks": ["aa"]}}, "generation": 3, "revision": 9}}}}},
-  {"name": "submit/ok", "json": {"v": 1, "id": 7, "result": {"ok": {"Submitted": {"outcome": "Done"}}}}},
-  {"name": "refused/not-found", "json": {"v": 1, "id": 7, "result": {"err": {"code": "NotFound", "message": "no such path"}}}},
-  {"name": "refused/unknown-version", "json": {"v": 1, "id": 7, "result": {"err": {"code": "UnknownVersion", "message": "unsupported wire version 999, want 1"}}}}
+  {
+    "name": "lookup/request",
+    "json": {
+      "v": 1,
+      "id": 7,
+      "op": "lookup",
+      "params": {
+        "path": "hello.txt"
+      }
+    }
+  },
+  {
+    "name": "stat/request",
+    "json": {
+      "v": 1,
+      "id": 7,
+      "op": "stat",
+      "params": {
+        "path": "hello.txt"
+      }
+    }
+  },
+  {
+    "name": "readdir/request",
+    "json": {
+      "v": 1,
+      "id": 7,
+      "op": "readdir",
+      "params": {
+        "path": ""
+      }
+    }
+  },
+  {
+    "name": "read/request",
+    "json": {
+      "v": 1,
+      "id": 7,
+      "op": "read",
+      "params": {
+        "path": "hello.txt"
+      }
+    }
+  },
+  {
+    "name": "observe/request",
+    "json": {
+      "v": 1,
+      "id": 7,
+      "op": "observe",
+      "params": null
+    }
+  },
+  {
+    "name": "liveness/request",
+    "json": {
+      "v": 1,
+      "id": 7,
+      "op": "liveness",
+      "params": null
+    }
+  },
+  {
+    "name": "freshness/request",
+    "json": {
+      "v": 1,
+      "id": 7,
+      "op": "freshness",
+      "params": null
+    }
+  },
+  {
+    "name": "capture-parent/request",
+    "json": {
+      "v": 1,
+      "id": 7,
+      "op": "capture-parent",
+      "params": {
+        "path": ""
+      }
+    }
+  },
+  {
+    "name": "submit/request",
+    "json": {
+      "v": 1,
+      "id": 7,
+      "op": "submit",
+      "params": {
+        "kind": {
+          "Mkdir": {
+            "path": "via-client"
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "submit-create/request",
+    "json": {
+      "v": 1,
+      "id": 7,
+      "op": "submit",
+      "params": {
+        "kind": {
+          "CreateFile": {
+            "path": "child.txt",
+            "parent": {
+              "instance": 9,
+              "counter": 3
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "pause/request",
+    "json": {
+      "v": 1,
+      "id": 7,
+      "op": "pause",
+      "params": null
+    }
+  },
+  {
+    "name": "resume/request",
+    "json": {
+      "v": 1,
+      "id": 7,
+      "op": "resume",
+      "params": null
+    }
+  },
+  {
+    "name": "lookup/ok",
+    "json": {
+      "v": 1,
+      "id": 7,
+      "result": {
+        "ok": {
+          "Lookup": {
+            "node": {
+              "File": {
+                "size": 11,
+                "executable": false,
+                "chunks": [
+                  "aa"
+                ]
+              }
+            },
+            "generation": 3,
+            "revision": 9
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "submit/ok",
+    "json": {
+      "v": 1,
+      "id": 7,
+      "result": {
+        "ok": {
+          "Submitted": {
+            "outcome": "Done"
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "refused/not-found",
+    "json": {
+      "v": 1,
+      "id": 7,
+      "result": {
+        "err": {
+          "code": "NotFound",
+          "message": "no such path"
+        }
+      }
+    }
+  },
+  {
+    "name": "refused/unknown-version",
+    "json": {
+      "v": 1,
+      "id": 7,
+      "result": {
+        "err": {
+          "code": "UnknownVersion",
+          "message": "unsupported wire version 999, want 1"
+        }
+      }
+    }
+  },
+  {
+    "name": "policy-pin/request",
+    "json": {
+      "v": 1,
+      "id": 7,
+      "op": "policy-pin",
+      "params": {
+        "path": "docs"
+      }
+    }
+  },
+  {
+    "name": "policy-unpin/request",
+    "json": {
+      "v": 1,
+      "id": 7,
+      "op": "policy-unpin",
+      "params": {
+        "path": "docs"
+      }
+    }
+  },
+  {
+    "name": "policy-evict/request",
+    "json": {
+      "v": 1,
+      "id": 7,
+      "op": "policy-evict",
+      "params": {
+        "path": "docs"
+      }
+    }
+  },
+  {
+    "name": "policy-status/request",
+    "json": {
+      "v": 1,
+      "id": 7,
+      "op": "policy-status",
+      "params": {
+        "path": "docs"
+      }
+    }
+  },
+  {
+    "name": "policy-pin/ok",
+    "json": {
+      "v": 1,
+      "id": 7,
+      "result": {
+        "ok": {
+          "PolicyPinned": {
+            "pinned": 3,
+            "already_pinned": 1,
+            "files": 2,
+            "dirs": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "policy-status/ok",
+    "json": {
+      "v": 1,
+      "id": 7,
+      "result": {
+        "ok": {
+          "PolicyStatus": {
+            "status": {
+              "files": [
+                {
+                  "path": "a.txt",
+                  "policy": "PINNED",
+                  "presence": "ABSENT"
+                }
+              ],
+              "conflicts": [],
+              "dirs": 1,
+              "symlinks_skipped": 0,
+              "complete": true
+            },
+            "generation": 3,
+            "revision": 9
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "refused/pinned-present",
+    "json": {
+      "v": 1,
+      "id": 7,
+      "result": {
+        "err": {
+          "code": "PinnedPresent",
+          "message": "evict refused at docs: 2 pinned objects still require retention; unpin them first"
+        }
+      }
+    }
+  }
 ]

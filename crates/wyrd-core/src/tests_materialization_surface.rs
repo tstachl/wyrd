@@ -3,8 +3,8 @@
 //! surfaces print verbatim.
 
 use crate::materialization_surface::{
-    EVICT_CONFIRM, FETCHED_STILL_REMOTE_ONLY, POLICY_PINNED_WORD, POLICY_REMOTE_ONLY_WORD,
-    PRESENCE_ABSENT_WORD, PRESENCE_PRESENT_WORD,
+    EVICT_CONFIRM, EVICT_RELEASED_NOTE, FETCHED_STILL_REMOTE_ONLY, POLICY_PINNED_WORD,
+    POLICY_REMOTE_ONLY_WORD, PRESENCE_ABSENT_WORD, PRESENCE_PRESENT_WORD,
 };
 
 #[test]
@@ -28,5 +28,13 @@ fn evict_confirmation_names_release_and_kept_bytes() {
     assert_eq!(
         EVICT_CONFIRM,
         "Evict this content from the device's retention policy? This releases the device's retention promise. The action does not delete the bytes currently stored on this device."
+    );
+}
+
+#[test]
+fn evict_receipt_states_the_completed_fact() {
+    assert_eq!(
+        EVICT_RELEASED_NOTE,
+        "eviction released the retention promise only: no bytes deleted, files that stay fully local keep reading"
     );
 }

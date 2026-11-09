@@ -981,7 +981,11 @@ where
         }
         // One published generation for the whole drain: every request
         // observes the same serving state, and a concurrent local
-        // write cannot mix generations into one drain.
+        // write cannot mix generations into one drain. The generation
+        // and revision are captured here, beside the walk, so a
+        // status answer reports the pair it was actually served from —
+        // never a pair the server read before submitting while a
+        // publication landed between the two.
         let projection = match self.projection.read() {
             Ok(slot) => Arc::clone(&slot),
             Err(_) => {
@@ -998,6 +1002,8 @@ where
                 return;
             }
         };
+        let generation = projection.generation();
+        let revision = projection.revision();
         // The effective role, loaded lazily once per drain and only
         // when a status request needs it: pin, unpin, and evict act on
         // stored facts and never consult the role, so a torn role file
@@ -1054,7 +1060,11 @@ where
                         posture,
                         POLICY_STATUS_TRAVERSAL_BUDGET,
                     )
-                    .map(PolicyResponse::Status)
+                    .map(|census| PolicyResponse::Status {
+                        census,
+                        generation,
+                        revision,
+                    })
                 }
             };
             crate::policy_channel::PolicyChannel::complete(reply, result);

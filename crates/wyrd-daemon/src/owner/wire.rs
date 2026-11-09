@@ -1006,11 +1006,7 @@ pub enum WireOk {
         dirs: u64,
     },
     PolicyStatus {
-        files: Vec<WirePolicyRow>,
-        conflicts: Vec<String>,
-        dirs: u64,
-        symlinks_skipped: u64,
-        complete: bool,
+        status: WirePolicyStatus,
         generation: u64,
         revision: u64,
     },
@@ -1594,12 +1590,32 @@ pub enum WirePresence {
 }
 
 /// One reachable file's policy/presence row. Reachable content only —
-/// the per-file table the `policy status` surface renders.
+/// the per-file table the `policy status` surface renders. File-level
+/// only by choice: per-chunk identities stay out of the wire (the
+/// aggregate counts answer the retention question without listing
+/// content addressing over the socket).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WirePolicyRow {
     pub path: String,
     pub policy: WireRetentionPolicy,
     pub presence: WirePresence,
+}
+
+/// The on-demand status answer: every reachable row plus the walk
+/// coverage, without the serving generation and durable revision —
+/// those ride the [`WireOk::PolicyStatus`] envelope beside it, the
+/// way read results carry theirs, so the consumer correlates the
+/// answer with the freshness judgment instead of assuming recency.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WirePolicyStatus {
+    pub files: Vec<WirePolicyRow>,
+    pub conflicts: Vec<String>,
+    pub dirs: u64,
+    pub symlinks_skipped: u64,
+    /// Whether the traversal budget covered the subtree: `false` is
+    /// a prefix, never the whole, and the consumer narrows the path
+    /// or accepts the aggregate as partial.
+    pub complete: bool,
 }
 
 impl From<&wyrd_core::policy::RetentionPolicy> for WireRetentionPolicy {
@@ -1622,10 +1638,23 @@ impl From<&wyrd_core::policy::LocalPresence> for WirePresence {
 
 impl From<&wyrd_core::policy::FileResidency> for WirePolicyRow {
     fn from(file: &wyrd_core::policy::FileResidency) -> Self {
+        // Exhaustive destructure: a new source field fails here, and
+        // the explicit omission below names the wire-size choice —
+        // per-chunk vectors stay out of the answer, so a future
+        // field cannot be silently ignored (nor silently added to
+        // the wire). The same disclosure-map habit as every `From`
+        // above.
+        let wyrd_core::policy::FileResidency {
+            path,
+            chunks: _,
+            pinned_chunks: _,
+            policy,
+            local,
+        } = file;
         WirePolicyRow {
-            path: file.path.clone(),
-            policy: WireRetentionPolicy::from(&file.policy),
-            presence: WirePresence::from(&file.local),
+            path: path.clone(),
+            policy: WireRetentionPolicy::from(policy),
+            presence: WirePresence::from(local),
         }
     }
 }

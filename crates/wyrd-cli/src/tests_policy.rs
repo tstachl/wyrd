@@ -515,7 +515,21 @@ fn storage_surface_never_says_free_space() {
     let status = policy_status_render("", "docs", &census);
     let rendered_none = policy_budgets_render(&census, &quota_none, &budgets);
     let rendered_some = policy_budgets_render(&census, &quota_some, &budgets);
-    for output in [&status, &rendered_none, &rendered_some] {
+    // The action receipts are storage surfaces too: `evict_render`'s
+    // note rides beside byte-adjacent words ("no bytes deleted"), so
+    // it is scanned like the reports above rather than trusted by
+    // inspection.
+    let evicted = evict_render(
+        "docs",
+        &wyrd_core::policy::EvictReport {
+            files: 1,
+            dirs: 1,
+            symlinks_skipped: 0,
+            released: 2,
+            already_remote: 0,
+        },
+    );
+    for output in [&status, &rendered_none, &rendered_some, &evicted] {
         let lower = output.to_lowercase();
         for forbidden in FORBIDDEN_STORAGE_WORDS {
             assert!(

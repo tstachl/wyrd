@@ -31,7 +31,7 @@ pub(crate) use crate::commands::member::{
 use crate::commands::mount::mount;
 #[cfg(test)]
 pub(crate) use crate::commands::policy::{
-    pin_render, policy_budgets_render, policy_status_render, role_section_render,
+    evict_render, pin_render, policy_budgets_render, policy_status_render, role_section_render,
     role_status_render, RetentionAccounting,
 };
 use crate::commands::policy::{policy, role_set};

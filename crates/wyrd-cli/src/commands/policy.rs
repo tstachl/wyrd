@@ -13,7 +13,7 @@ use crate::drive_config::{CredentialProvenance, LoadedConfig, RelayResolution};
 use crate::CliError;
 use std::path::{Path, PathBuf};
 use wyrd_core::materialization_surface::{
-    EVICT_CONFIRM, FETCHED_STILL_REMOTE_ONLY, POLICY_PINNED_WORD, POLICY_REMOTE_ONLY_WORD,
+    EVICT_RELEASED_NOTE, FETCHED_STILL_REMOTE_ONLY, POLICY_PINNED_WORD, POLICY_REMOTE_ONLY_WORD,
     PRESENCE_ABSENT_WORD, PRESENCE_PRESENT_WORD,
 };
 use wyrd_core::policy::{
@@ -315,7 +315,7 @@ pub(crate) fn evict_render(path: &str, report: &wyrd_core::policy::EvictReport) 
         report.dirs,
         display_policy_path(path),
     );
-    out.push_str(&format!("{EVICT_CONFIRM}\n"));
+    out.push_str(&format!("{EVICT_RELEASED_NOTE}\n"));
     if report.symlinks_skipped > 0 {
         out.push_str(&format!(
             "note: {} symlinks skipped (a link names no content of its own)\n",

@@ -52,8 +52,15 @@ pub const FETCHED_STILL_REMOTE_ONLY: &str = "Content fetched through access is s
 
 /// What evict asks: release the retention promise, keep the bytes.
 /// The action does not delete the bytes currently stored on this
-/// device (OD-21-C).
+/// device (OD-21-C). Dialog copy for the application host's
+/// confirmation — the CLI receipt below states the completed fact
+/// instead of asking.
 pub const EVICT_CONFIRM: &str = "Evict this content from the device's retention policy? This releases the device's retention promise. The action does not delete the bytes currently stored on this device.";
+
+/// What an evict completed: the promise is released, the bytes stay.
+/// Receipt copy for the CLI — declarative, past tense — beside the
+/// dialog copy above, which asks.
+pub const EVICT_RELEASED_NOTE: &str = "eviction released the retention promise only: no bytes deleted, files that stay fully local keep reading";
 
 #[cfg(test)]
 #[path = "tests_materialization_surface.rs"]

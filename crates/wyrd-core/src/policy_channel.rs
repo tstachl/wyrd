@@ -39,13 +39,21 @@ pub enum PolicyRequest {
 }
 
 /// What the loop answers: the report the operation committed, or the
-/// bounded census the status walk produced.
+/// bounded census the status walk produced. Status carries the
+/// serving generation and durable revision the loop actually walked —
+/// captured from the same published generation the walk read — so
+/// the server reports the pair it was served from instead of one it
+/// read before submitting.
 #[derive(Debug)]
 pub enum PolicyResponse {
     Pinned(PinReport),
     Unpinned(UnpinReport),
     Evicted(EvictReport),
-    Status(BoundedCensus),
+    Status {
+        census: BoundedCensus,
+        generation: u64,
+        revision: u64,
+    },
 }
 
 fn channel_closed() -> PolicyError {
