@@ -12,7 +12,9 @@
 # so a native green means the same thing as an act green. Doctests
 # moved to rust-slow.yaml in Nov-09: 2 listed doctests do not justify a
 # second workspace compile on every PR (see
-# docs/design/test-review.md). Only the audit step reaches the
+# docs/design/test-review.md). The trust-boundary half of the doctest
+# (the VerifiedSnapshot compile_fail pin) stays on this gate as the
+# wyrd-contracts source-text test. Only the audit step reaches the
 # network (advisory DB), and only for the DB. No artifacts (no
 # provider Blossom yet), no secrets, no Docker.
 version: 1

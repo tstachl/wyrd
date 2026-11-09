@@ -13,28 +13,41 @@ records the decision, the issues track the work.
 
 ## Inventory
 
-Rust tests by `#[test]` count, 2026-11-09, at `55160edf`:
+Rust tests by `#[test]` count, regenerated 2026-11-09 at
+`2e7fe48b` with:
+
+```sh
+for c in wyrd-sync wyrd-core wyrd-daemon wyrd-cli wyrd-contracts wyrd-format wyrd-view wyrd-host wyrd-embed wyrd-namespace; do
+  printf '%s %s\n' "$c" "$(grep -rh '#\[test' "crates/$c/src" "crates/$c/tests" 2>/dev/null | wc -l)"
+done
+```
+
+(The `crates/$c/tests` half counts only `wyrd-cli` and
+`wyrd-host`; every other crate keeps its tests beside the code.
+`wyrd-contracts/tests/fixtures` holds fixture data, not tests.)
 
 | Crate | Test functions |
 | --- | --- |
-| `wyrd-sync` | 956 |
-| `wyrd-core` | 357 |
-| `wyrd-daemon` | 277 |
-| `wyrd-cli` | 252 |
-| `wyrd-contracts` | 218 |
+| `wyrd-sync` | 957 |
+| `wyrd-core` | 368 |
+| `wyrd-daemon` | 286 |
+| `wyrd-cli` | 273 |
+| `wyrd-contracts` | 224 (4 `#[ignore]`d: 2 fixture-regenerating, 2 blocked on future versions) |
 | `wyrd-format` | 177 |
 | `wyrd-view` | 49 |
 | `wyrd-host` | 4 |
 | `wyrd-embed` | 2 |
 | `wyrd-namespace` | 0 |
 
-Shell and end-to-end evidence: 17 `test-*.sh` harness suites and
-4 libraries, 14 `tests/gate` bats files plus 1 driver, 1 `tests/drive`
-bats file, the Lima scripts, and the 2,286-line
+Total: 2,340. Shell and end-to-end evidence: 16 `test-*.sh`
+harness suites and 4 libraries (`find tests -name 'test-*.sh'`
+lists all 16, all under `tests/harness/`), 13 `tests/gate`
+bats files plus 1 driver, 1 `tests/drive` bats file, the Lima
+scripts, and the 2,286-line
 `tests/microvm/alpha-microvm-legs.sh`. Rust doctests are 2 listed
 (1 `compile_fail` in `wyrd-view`, 1 `ignore` in `wyrd-core`); the
-rest of the fenced blocks are `text`/`toml`/`ignore` and never
-compile.
+rest of the fenced blocks are `text`/`toml` (26 `text`, 1 `toml`,
+each closed by a plain fence) and never compile.
 
 The baseline in `.config/nextest.toml` records 1,415 tests in 206
 seconds on 2026-10-05. The current tree carries more tests than
@@ -64,32 +77,53 @@ delete the invariant.
 
 ## Executive summary
 
-The suite is not massively redundant. Roughly 2,140 of 2,292 Rust
-tests are **keep** without change. Roughly 152 are merge, move, or
+The suite is not massively redundant. Roughly 2,190 of 2,340 Rust
+tests are **keep** without change. Roughly 150 are merge, move, or
 remove candidates. Deleting them saves little run time. Most are
 fast unit tests. The run-time cost is not the count. It is four
 placements and two serial groups.
 
-1. Doctests compile the whole workspace on every pull request for
-   2 listed examples. They belong on `master`, not on the pull-request
-   gate. The plain consequence: a doctest that stops compiling on a
-   product branch now breaks on `master`, not on that branch. A
-   local `cargo test --workspace --doc` run is the only branch-level
-   backstop; the doc-links hook checks Markdown links, not doctest
-   compilation.
-2. Eight multi-second live-relay tests still run on the
-   pull-request gate. They belong in the `slow` profile with
-   the floods. Their measured cost is at most the 28 to 36
-   second critical path (see below). If the contracts serial
-   tail dominates, the wall saving is smaller. The move still
-   removes load and contention.
-3. `wyrd-contracts` runs one binary serially (measured 52
-   seconds for 215 tests on this machine, `default` profile)
+1. The `VerifiedSnapshot` doctest is a trust-boundary pin, not one
+   of "2 listed examples." Only one doctest in the workspace
+   compiles, the `compile_fail` on `VerifiedSnapshot`, and it
+   guarantees that no downstream crate can put an unverified
+   snapshot into a view head in safe code
+   (`view_contracts.rs:169` names it as the pin for that
+   property). Removing `unsafe` from the trait breaks the three
+   test-harness `unsafe impl`s on a pull request, but a
+   deliberate fix-the-errors change would silence that, and only
+   the doctest would notice. The pin stays on the pull-request
+   gate as the source-text contract
+   `verified_snapshot_capability_stays_unsafe_with_a_compile_fail_pin`
+   in `wyrd-contracts` (the trait stays `unsafe`, the doctest
+   stays in its failing shape); the full doctest build stays on
+   `master` (`rust-slow.yaml`), and `nix flake check` still
+   evaluates the derivation, so plain `nix flake check` builds
+   it too — the doctest is not branch-invisible.
+2. Six multi-second tests moved to the `slow` profile; two
+   resource-bound pins stay in `default` (see below). Of the
+   eight measured, only `heterogeneous` uses a relay — the other
+   seven are in-process flood, quota and budget tests — so the
+   "live-relay" label was wrong. Five of the eight run below the
+   stated 9-second rule and in parallel, so they save almost
+   nothing individually. The two that stay
+   (`serving_mount_refuses_push`, 4.8s local, and
+   `concurrent_senders_never_exceed`, 0.9s local, 5.7s
+   combined) are a write-refusal pin and a byte bound, and
+   resource bounds earn their place on the gate by the rule in
+   "How a test earns its place." The honest rule is not the 9s
+   line: scale-class tests (multi-relay, floods, ceiling-scale
+   admission, ~20s heavyweights) go to `slow`; measured fast
+   pins stay. If the contracts serial tail dominates, the wall
+   saving is smaller and the move reads as load reduction. The
+   measured `default` wall after the move is recorded below.
+3. `wyrd-contracts` runs one binary serially
    and the mailbox flood group runs serially. Both are correct
    load control, but the contracts serial group is the largest
    single tail in the `default` profile on this machine.
-4. Two files each exceed 2,500 lines (`wyrd-cli` sync,
-   `wyrd-daemon` owner). They are correct in content and hard to
+4. Three files exceed 2,500 lines (`wyrd-cli` sync,
+   `wyrd-daemon` owner, `wyrd-contracts` layer contracts at
+   4,165). They are correct in content and hard to
    review. They need splits, not deletions.
 
 The cross-host gate phases, the Lima suite, and the harness
@@ -124,10 +158,17 @@ to its risk if it goes quiet.
 - Secret hygiene inventory in `keys/hygiene.rs`. It names every
   scrubbed leaf. Three duplicate locks elsewhere remove
   cleanly (see below).
+- The `VerifiedSnapshot` trust pin: the `compile_fail` doctest
+  plus the `wyrd-contracts` source-text contract
+  (`verified_snapshot_capability_stays_unsafe_with_a_compile_fail_pin`).
+  Together they guarantee no downstream crate puts an
+  unverified snapshot into a view head in safe code, on the
+  pull-request gate as well as on `master`. Do not move the
+  doctest without moving the pin.
 
 ## Per-crate findings
 
-### `wyrd-sync` (956 tests)
+### `wyrd-sync` (957 tests)
 
 Keep almost all. The authorization, membership, durable,
 reconciliation, fetch strike, and serving files each pin a
@@ -172,13 +213,14 @@ Slow candidates still in `default`:
   (3.6s local, 15 scenario builds). Move to `slow` in this branch.
   Grouping hygiene more than wall savings.
 - `concurrent_senders_never_exceed_the_byte_bound` (0.9s local,
-  256 MiB alloc) and `serving_mount_refuses_push` (4.8s local).
-  Move to `slow` in this branch. Grouping hygiene more than
-  wall savings.
+  256 MiB alloc) and `serving_mount_refuses_push` (4.8s local)
+  stay in `default`. They are a byte bound and a write-refusal
+  pin; resource bounds earn their place on the gate. Grouping
+  hygiene does not move pins.
 
 ### `wyrd-core`, `wyrd-format`, `wyrd-view`, `wyrd-namespace`
 
-Zero removals. 583 tests stay.
+Zero removals. 594 tests stay.
 
 - `live/tests_prereq.rs` (40 tests) is a catch-all sink. Split
   it by cluster into deferral, quota, head-gate, and quiet
@@ -192,8 +234,12 @@ Zero removals. 583 tests stay.
   error variant. Do not collapse it.
 - `wyrd-namespace` carries 0 tests for safety-critical
   surface (`AuthorizedSnapshot`, symlink confinement,
-  budgets). Add 5 to 10 direct unit tests in its own crate.
-  This is a gap, not a cut.
+  budgets). This is a locality gap, not a coverage gap:
+  `wyrd-view/tests_symlink.rs` covers confinement, cycles and
+  budgets through the view. Add 5 to 10 direct unit tests in
+  its own crate anyway: the crate is provider-neutral, so a
+  mobile provider needs a conformance suite that does not drag
+  in the view. This is a gap, not a cut.
 
 ### `wyrd-daemon`, `wyrd-cli`, `wyrd-host`, `wyrd-embed`
 
@@ -205,7 +251,7 @@ harnesses.
   and `core/tests_handles.rs` (22) each prove one layer of
   the fold (`write-path.md` DG-1). Keep all three. Rename
   does not change evidence.
-- `owner/tests_owner.rs` (33, 2,525 lines) is the normative
+- `owner/tests_owner.rs` (41, 3,033 lines) is the normative
   `owner-interface.md` contract. Split it into wire,
   dispatch, socket, submit, and framing files. No deletion.
 - `cli/tests_sync.rs` (70, 3,048 lines) mixes status spine,
@@ -234,7 +280,7 @@ harnesses.
 
 No removal except the layer helper corpus.
 
-- `layer_contracts.rs` is 4,126 lines: 21 live-repo tests
+- `layer_contracts.rs` is 4,165 lines: 21 live-repo tests
   plus 86 private checker unit tests. The checker negatives
   are needed. A checker that always says "ok" proves nothing,
   so the live tests would pass vacuously. The corpus is
@@ -260,7 +306,7 @@ No removal except the layer helper corpus.
   pull request. The current placement (manual only) is
   correct. Log `--step` prefix selection remains the lever
   if an Odin run is too long.
-- All 17 harness `test-*.sh` suites stay. Each pins one
+- All 16 harness `test-*.sh` suites stay. Each pins one
   grammar or timeout discipline whose regression would
   surface only after a 30-minute Odin run. Total pull-request
   cost is seconds.
@@ -272,12 +318,19 @@ No removal except the layer helper corpus.
 
 The `nextest.toml` lanes are the right shape: `local` for the
 edit loop, `default` for the pull-request gate, `slow` for
-`master` only. The maintenance rule (name every test at 9
-seconds or more that stays in `default`) is correct.
+`master` only. The maintenance rule (tests measured at 9s or more
+stay named in the `local` filter, per `.config/nextest.toml`) is
+correct as a floor, but it is not the move rule. The move rule is
+scale-class: multi-relay, flood/saturation, ceiling-scale
+admission, and ~20s heavyweights go to `slow`; measured fast
+pins stay in `default` even when they were measured in the same
+pass. Five of the eight measured below run under 9s and in
+parallel; moving those saved almost no wall on its own.
 
-This branch changes the `default` filter to exclude eight
-additional substrings and restates them in `slow` verbatim
-(profiles do not inherit filters):
+The `default` filter excludes six additional substrings and
+restates them in `slow` verbatim (profiles do not inherit
+filters). Two measured tail members stay in `default` as
+resource-bound pins (see the executive summary):
 
 - `per_sender_quota` (spam-scale quota proof)
 - `heterogeneous` (cross-implementation cover)
@@ -285,9 +338,6 @@ additional substrings and restates them in `slow` verbatim
 - `capped_walk_pages_dial_hangs`
 - `oversize_flood_retains_nothing`
 - `torn_commit_in_any_pass`
-- `concurrent_senders_never_exceed`
-- `serving_mount_refuses_push` (push-denied pin; now `slow`
-  with the rest of serving evidence)
 
 Measured Nov-09, local `slow` profile, one run (serial, as
 `slow` runs):
@@ -306,24 +356,50 @@ Measured Nov-09, local `slow` profile, one run (serial, as
 
 In `default` these run in parallel, so the saving is at most
 the longest single test (28 to 36s), not the serial sum. If
-the 52s contracts serial tail dominates, the wall saving is
-smaller and the move reads as load reduction. The heterogeneous
-test is the honest trade: it was the only `default` proof of
-the real-relay path. On `master` it still runs. On a pull
-request it does not. If reviewers want it on every pull
-request again, restore the one `heterogeneous` substring to
-`default` (remove it from the `default` exclusion, keep it in
-`slow` and `local`). Do not re-add the whole tail.
+the contracts serial tail dominates, the wall saving is
+smaller and the move reads as load reduction. The
+heterogeneous test is the honest trade: it was the
+`default` proof of the cross-implementation path — the
+real-relay path itself keeps `default` cover through the
+`LocalRelay`-backed CLI sync tests
+(`wyrd-cli/tests/sync_config.rs`), but no multi-relay
+mailbox cover runs on pull requests anymore. On `master`
+it still runs. On a pull request it does not. That cover is
+master-only, stated plainly. If reviewers want it on every
+pull request again, restore the one `heterogeneous`
+substring to `default` (remove it from the `default`
+exclusion, keep it in `slow` and `local`). Do not re-add
+the whole tail.
 
-Doctests move with the tail. `rust.yaml` no longer builds
-`rust-doctests` on the pull-request gate. `rust-slow.yaml`
-(`on: push: branches: [master]`) builds it on `master`
-pushes. The derivation stays so `nix flake check` still
-evaluates it. No KDF coverage is lost: `rust-check` still
-runs the production feature-graph gate
+The full doctest build moved with the tail. `rust.yaml` no
+longer builds `rust-doctests` on the pull-request gate.
+`rust-slow.yaml` (`on: push: branches: [master]`) builds it
+on `master` pushes. The derivation stays so `nix flake check`
+still builds it. The trust-boundary half of the doctest —
+the `VerifiedSnapshot` `compile_fail` pin — stays on the
+gate as the `wyrd-contracts` source-text test
+`verified_snapshot_capability_stays_unsafe_with_a_compile_fail_pin`.
+No KDF coverage is lost: `rust-check` still runs the
+production feature-graph gate
 (`cargo tree -e normal,features`).
 
+Measured `default` wall after the move (local machine,
+`cargo nextest run --workspace --no-fail-fast`, this branch at
+`2e7fe48b` plus the fix): 2,321 passed, 0 failed, 34 skipped,
+211s wall. The two kept pins run inside it
+(`serving_mount_refuses_push` 5.0s,
+`concurrent_senders_never_exceed` 1.3s on this run). Against
+the Oct-05 P0 baseline (1,415 tests, 206s on a different
+machine) the suite grew ~900 tests for ~5s of wall on this
+machine — parallel, plus the moved serial tail. The
+before/after saving of the move itself is bounded above by
+the longest moved test in parallel (28–36s for
+`heterogeneous`) and in practice smaller under the contracts
+serial tail: load reduction, not a wall rescue.
+
 ## What this branch does
+
+The landed Nov-09 change:
 
 1. `.config/nextest.toml`: exclude the names above from
    `default`, include them in `slow`, restate them in
@@ -344,6 +420,36 @@ runs the production feature-graph gate
 No contract text changes. No test file moves. Each removal
 is byte-for-byte covered by the hygiene inventory test.
 
+## Follow-up corrections (this change)
+
+Review of the landed change found four corrections, all in
+this change:
+
+1. Two measured tail members stay in `default`:
+   `concurrent_senders_never_exceed` and
+   `serving_mount_refuses_push` leave the `default`
+   exclusion and the `slow` inclusion (they stay excluded
+   from `local`). Rationale and measured cost are in the
+   executive summary.
+2. The trust-boundary pin: new `wyrd-contracts` test
+   `verified_snapshot_capability_stays_unsafe_with_a_compile_fail_pin`
+   keeps the `VerifiedSnapshot` `compile_fail` doctest on the
+   pull-request gate (trait stays `unsafe`, doctest stays in
+   its failing shape). The full doctest build stays on
+   `master`.
+3. Stale gate claims fixed: `tests_crossimpl.rs:108` and the
+   `tests_interop.rs` cross-reference now say the
+   `slow` (master-only) gate, and the "only default proof"
+   claim is corrected (the `LocalRelay`-backed CLI sync
+   tests cover the real-relay path in `default`; what moved
+   is the multi-relay cover, now master-only).
+4. This document: inventory regenerated at the current commit
+   with the generating command recorded, counts corrected
+   (13 gate bats, 16 harness suites, 4,165-line
+   `layer_contracts.rs`), the move rule stated as
+   scale-class, and the `wyrd-namespace` gap reframed as a
+   locality gap with the mobile-conformance argument.
+
 ## Follow-up work (not in this branch)
 
 Track each item as a separate issue. Do not bundle them into
@@ -356,13 +462,16 @@ this branch.
    one table file. Collapse about 25 restart rows to one
    sweep.
 3. Split `tests_prereq.rs` (40), `owner/tests_owner.rs`
-   (33), `cli/tests_sync.rs` (70), and `fuse/tests_write.rs`
+   (41), `cli/tests_sync.rs` (70), and `fuse/tests_write.rs`
    (33). Deduplicate five view fakes and four mailbox fakes.
 4. Parameterize the triads named above and convert
    `cli/tests_sync.rs` plus `tests_snapshot.rs` prose
    asserts to structural parses.
-5. Add direct `wyrd-namespace` unit tests. Re-measure the
-   `default` profile wall and re-apply the 9-second rule.
+5. Add direct `wyrd-namespace` unit tests as the mobile
+   conformance suite (locality gap, not coverage gap). The
+   `default`-wall re-measure for the slow-lane move is done
+   in this change; the scale-class rule replaces the 9-second
+   re-application.
 
 ## Method and limits
 
@@ -378,6 +487,14 @@ Argon2 production params). Timings vary by machine and load
 locally). The next full `cargo nextest run` with timing
 output should replace single-run numbers. If a moved test
 proves cheap on that run, move it back.
+
+The follow-up corrections in this change re-measured the
+`default` profile wall (`cargo nextest run --workspace`,
+local machine) after moving the two resource-bound pins
+back; the number is recorded in the slow-lane section above.
+Inventory counts in this file regenerate with the shell
+loop in "Inventory" at the stated commit — re-run it
+instead of hand-editing the table.
 
 Hygiene verification: `keys/hygiene.rs` names
 `DriveRootKey` and `EphemeralScalar` in both
