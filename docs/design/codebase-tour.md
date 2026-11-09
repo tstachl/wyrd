@@ -26,7 +26,11 @@ the words that mislead, and the order to read them in.
    ops) and `node.rs` (head projection).
 6. `wyrd-daemon` — composes core, view, and backends. `vault.rs`
    runs the headless owner; `fuse/backend/` is the FUSE backend;
-   `owner/` is the cross-process op-submission socket.
+   `owner/` is the cross-process op-submission socket: the server
+   plus the domain-to-wire `mapping`, over the owned protocol types
+   in `wyrd-owner-client` (`wire.rs`, `client.rs`, `transport.rs` —
+   no domain edge, so consumers link the interface without the
+   authoring surface).
 7. `wyrd-cli` — the binary process host. `main.rs` dispatches; one
    module per command family in `commands/`; `composer.rs` holds
    the live-node plumbing shared by `mount`, `sync now`, and

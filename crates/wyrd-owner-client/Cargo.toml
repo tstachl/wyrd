@@ -1,0 +1,14 @@
+[package]
+name = "wyrd-owner-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Wyrd's drive-owner client: the owned protocol types, socket transport constants, and non-owning client for the drive-owner interface. Depends on no domain crate — wyrd-daemon performs every domain-to-wire mapping — so desktop and future consumers link the interface without the authoring surface."
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+hex.workspace = true
+
+[lints]
+workspace = true

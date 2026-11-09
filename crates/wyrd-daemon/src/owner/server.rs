@@ -30,7 +30,7 @@
 
 use std::io::{Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -48,15 +48,19 @@ use wyrd_core::want::{WantError, WantRegistry};
 
 use crate::vault::OwnerView;
 
-use super::wire::{
-    map_policy_error, PathParams, RawRequest, SubmitParams, WireAttr, WireDirEntry, WireError,
-    WireErrorCode, WireFreshness, WireLiveness, WireMailboxHealth, WireMutationError,
-    WireMutationKind, WireMutationOutcome, WireNode, WireOk, WireParentToken, WirePolicyRow,
-    WirePolicyStatus, WireResponse, WireResult, WireSyncReport, WireSyncStatus, OP_CAPTURE_PARENT,
-    OP_FRESHNESS, OP_LIVENESS, OP_LOOKUP, OP_OBSERVE, OP_PAUSE, OP_POLICY_EVICT, OP_POLICY_PIN,
-    OP_POLICY_STATUS, OP_POLICY_UNPIN, OP_READ, OP_READDIR, OP_RESUME, OP_STAT, OP_SUBMIT,
-    WIRE_VERSION,
+use super::mapping::{
+    map_policy_error, mutation_kind_from_wire, wire_attr, wire_dir_entry, wire_freshness,
+    wire_mailbox_health, wire_mutation_error, wire_mutation_outcome, wire_node, wire_policy_row,
+    wire_sync_report, wire_sync_status,
 };
+use super::wire::{
+    PathParams, RawRequest, SubmitParams, WireError, WireErrorCode, WireLiveness,
+    WireMailboxHealth, WireMutationKind, WireOk, WireParentToken, WirePolicyStatus, WireResponse,
+    WireResult, OP_CAPTURE_PARENT, OP_FRESHNESS, OP_LIVENESS, OP_LOOKUP, OP_OBSERVE, OP_PAUSE,
+    OP_POLICY_EVICT, OP_POLICY_PIN, OP_POLICY_STATUS, OP_POLICY_UNPIN, OP_READ, OP_READDIR,
+    OP_RESUME, OP_STAT, OP_SUBMIT, WIRE_VERSION,
+};
+use wyrd_owner_client::transport::MAX_FRAME_BYTES;
 
 /// Bind the drive-directory socket: reclaim a stale entry from an
 /// unclean shutdown, then bind. The caller holds the store lock
@@ -70,22 +74,6 @@ pub fn bind_listener(socket_path: &Path) -> std::io::Result<UnixListener> {
     Ok(listener)
 }
 
-/// The socket file name inside the drive directory. Beside the
-/// store, never inside it: the store reads named files, and a
-/// socket entry is not a store input. Removed on clean shutdown;
-/// a stale entry from an unclean shutdown is unlinked at bind while
-/// the store lock is held, so no competing owner can race the
-/// reclaim.
-pub const OWNER_SOCKET_NAME: &str = "owner.sock";
-
-/// Derive the interface socket path from the drive directory
-/// (OD-16-B): no discovery service, the path is the convention, and
-/// the File Provider extension reaches it inside the app-group
-/// location the drive directory lives in.
-pub fn socket_path_for(drive_dir: &Path) -> PathBuf {
-    drive_dir.join(OWNER_SOCKET_NAME)
-}
-
 /// Largest whole-file read the interface serves in one request.
 /// Bounds one request's memory and the response frame together: the
 /// hex encoding doubles the bytes on the wire, so 32 MiB reads stay
@@ -94,11 +82,6 @@ pub fn socket_path_for(drive_dir: &Path) -> PathBuf {
 /// truncated, never streamed past the cap. Paged reads are a future
 /// additive operation, not a silent behavior of this one.
 pub const DEFAULT_MAX_READ_BYTES: u64 = 32 << 20;
-
-/// Largest single frame (request or response) in bytes: the read
-/// bound plus JSON and hex overhead, rounded up. A frame past this
-/// closes the connection; the client treats the break as unconfirmed.
-pub const MAX_FRAME_BYTES: usize = 96 << 20;
 
 /// Largest file content one submit may carry, in decoded bytes: the
 /// commit and append bodies of the submit, summed across fold
@@ -532,7 +515,7 @@ impl OwnerServer {
             .lookup(&params.path)
             .map_err(map_view_error)?;
         Ok(WireOk::Lookup {
-            node: WireNode::from(&node),
+            node: wire_node(&node),
             generation: projection.generation(),
             revision: projection.revision(),
         })
@@ -551,7 +534,7 @@ impl OwnerServer {
             .stat(&params.path)
             .map_err(map_view_error)?;
         Ok(WireOk::Stat {
-            attr: WireAttr::from(&attr),
+            attr: wire_attr(&attr),
             generation: projection.generation(),
             revision: projection.revision(),
         })
@@ -571,7 +554,7 @@ impl OwnerServer {
             .map_err(map_view_error)?;
         let entries = projection.view().readdir(&node).map_err(map_view_error)?;
         Ok(WireOk::Readdir {
-            entries: entries.iter().map(WireDirEntry::from).collect(),
+            entries: entries.iter().map(wire_dir_entry).collect(),
             generation: projection.generation(),
             revision: projection.revision(),
         })
@@ -650,7 +633,7 @@ impl OwnerServer {
         })?;
         match slot.as_ref() {
             Some(observation) => Ok(WireOk::Observe {
-                status: WireSyncStatus::from(&observation.status),
+                status: wire_sync_status(&observation.status),
             }),
             // Reachable owner, no completed pass: explicit, never a
             // healthy-looking default.
@@ -672,8 +655,8 @@ impl OwnerServer {
         match slot.as_ref() {
             Some(observation) => Ok(WireOk::Liveness {
                 liveness: WireLiveness {
-                    health: WireMailboxHealth::from(&observation.health),
-                    report: Some(WireSyncReport::from(&observation.report)),
+                    health: wire_mailbox_health(&observation.health),
+                    report: Some(wire_sync_report(&observation.report)),
                     passes: observation.passes,
                     paused,
                 },
@@ -724,7 +707,7 @@ impl OwnerServer {
             )
         })?;
         Ok(WireOk::Freshness {
-            freshness: WireFreshness::from(&*slot),
+            freshness: wire_freshness(&slot),
         })
     }
 
@@ -758,7 +741,7 @@ impl OwnerServer {
             // so the desktop surfaces a fault instead of retrying a
             // stale-parent loop forever.
             Err(error) => {
-                let mapped = WireMutationError::from(&error);
+                let mapped = wire_mutation_error(&error);
                 Err((mapped.code, mapped.message))
             }
         }
@@ -791,13 +774,13 @@ impl OwnerServer {
                 ),
             ));
         }
-        let kind = params.kind.to_kind(self.instance)?;
+        let kind = mutation_kind_from_wire(&params.kind, self.instance)?;
         match self.handles.mutations.submit(kind) {
             Ok(outcome) => Ok(WireOk::Submitted {
-                outcome: WireMutationOutcome::from(&outcome),
+                outcome: wire_mutation_outcome(&outcome),
             }),
             Err(error) => {
-                let mapped = WireMutationError::from(&error);
+                let mapped = wire_mutation_error(&error);
                 Err((mapped.code, mapped.message))
             }
         }
@@ -931,7 +914,7 @@ impl OwnerServer {
                 let census = &bounded.census;
                 Ok(WireOk::PolicyStatus {
                     status: WirePolicyStatus {
-                        files: census.files.iter().map(WirePolicyRow::from).collect(),
+                        files: census.files.iter().map(wire_policy_row).collect(),
                         conflicts: census.conflicts.clone(),
                         dirs: census.dirs,
                         symlinks_skipped: census.symlinks_skipped,

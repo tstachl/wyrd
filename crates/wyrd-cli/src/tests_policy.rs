@@ -638,6 +638,7 @@ fn storage_surface_names_its_budgets_offline_defaults() {
 /// asserts the row table, not just the words.
 #[test]
 fn status_render_and_wire_agree_on_every_row() {
+    use wyrd_daemon::owner::mapping::wire_policy_row;
     use wyrd_daemon::owner::WireOk;
     use wyrd_daemon::owner::{WirePolicyRow, WirePolicyStatus, WirePresence, WireRetentionPolicy};
 
@@ -663,7 +664,7 @@ fn status_render_and_wire_agree_on_every_row() {
         symlinks_skipped: 1,
     };
     let rendered = policy_status_render("", "docs", &census);
-    let wire_rows: Vec<WirePolicyRow> = census.files.iter().map(WirePolicyRow::from).collect();
+    let wire_rows: Vec<WirePolicyRow> = census.files.iter().map(wire_policy_row).collect();
     let wire = WireOk::PolicyStatus {
         status: WirePolicyStatus {
             files: wire_rows.clone(),

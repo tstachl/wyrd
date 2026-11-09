@@ -5276,6 +5276,7 @@ dependencies = [
  "tracing-subscriber",
  "wyrd-core",
  "wyrd-format",
+ "wyrd-owner-client",
  "wyrd-sync",
  "wyrd-view",
 ]
@@ -5321,6 +5322,15 @@ version = "0.3.0-alpha"
 dependencies = [
  "thiserror 2.0.20",
  "wyrd-format",
+]
+
+[[package]]
+name = "wyrd-owner-client"
+version = "0.3.0-alpha"
+dependencies = [
+ "hex",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

@@ -19,10 +19,11 @@ Listed in dependency order. Dependencies point only at rows above, and `wyrd-con
 |---|---|---|
 | `wyrd-format` | Content addressing, typed identities, chunking, Merkle snapshot DAG, canonical plaintext formats | blake3, serde, thiserror; never networking, async, or FUSE |
 | `wyrd-namespace` | Provider-neutral namespace and verified read surface | `wyrd-format`, thiserror only |
+| `wyrd-owner-client` | Owned drive-owner protocol types and non-owning socket client; no domain edge, even transitively | serde, serde_json, hex only; never `wyrd-*` |
 | `wyrd-sync` | iroh transport, encryption, storage addressing, capabilities, authorization, replication | `wyrd-format`, `wyrd-namespace`, iroh stack, nostr crate |
 | `wyrd-core` | Embeddable local node: namespace, snapshots, mutations, materialization, sync control | format, namespace, sync; never presentation |
 | `wyrd-view` | Filesystem-shaped read surface; never mounts or authors content | `wyrd-format`, `wyrd-namespace` |
-| `wyrd-daemon` | Composes the core, view and presentation backends | `wyrd-core`, `wyrd-view` |
+| `wyrd-daemon` | Composes the core, view and presentation backends | `wyrd-core`, `wyrd-view`, `wyrd-owner-client` |
 | `wyrd-host` | Desktop host process: owns a drive through `wyrd-core`, runs the live loop under daemon supervision | `wyrd-core`, `wyrd-daemon` |
 | `wyrd-cli` | Binary process host over the daemon's public API | `wyrd-daemon` |
 | `wyrd-embed` | Proves the core lifecycle works without daemon, CLI or presentation | `wyrd-core`, `wyrd-sync`, `wyrd-format`, `wyrd-view` |
