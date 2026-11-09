@@ -253,7 +253,7 @@ edit loop, `default` for the pull-request gate, `slow` for
 `master` only. The maintenance rule (name every test at 9
 seconds or more that stays in `default`) is correct.
 
-This branch changes the `default` filter to exclude ten
+This branch changes the `default` filter to exclude eight
 additional substrings and restates them in `slow` verbatim
 (profiles do not inherit filters):
 
