@@ -318,11 +318,14 @@ pub(crate) fn leaf_verdict(
 ///
 /// The file description is dropped after the check: the store and its
 /// callers re-name the leaf by path for every later open, so the
-/// check binds the leaf only at verify time. A writer of a parent
-/// directory could substitute the leaf afterwards; the LOCK flock
-/// serializes cooperating Wyrd processes, not parent writers, so
-/// deployment keeps ancestor directories out of other users' write
-/// reach (see `docs/design/cli.md`, "Drive custody files").
+/// check binds the leaf only at verify time. Post-verify writes under
+/// an open `DurableStore` are serialized by the LOCK flock (the
+/// store, vault, and escrow paths run with it held); the standalone
+/// pairing staging holds no LOCK and relies on `create_new` plus the
+/// same ancestor protection. Neither serializes a parent-directory
+/// writer, so deployment keeps ancestor directories out of other
+/// users' write reach (see `docs/design/cli.md`, "Drive custody
+/// files").
 #[cfg(unix)]
 fn verify_preexisting_dir(path: &Path) -> std::io::Result<()> {
     use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
