@@ -268,35 +268,49 @@ verdict.
   (notifications, conflicts, storage usage in issues 18–26), so the
   scaffold sets the precedent now.
 
-## Layer gate (crate-level, honestly described)
+## Layer gate (two tiers, honestly described)
 
 `wyrd-desktop` gets a `MemberPolicy` entry in
 `crates/wyrd-contracts/src/layer_contracts.rs`
-(`policy_for`, alongside the `wyrd-host` entry): workspace edges
-limited to `wyrd-daemon`, externals limited to Tauri,
+(`policy_for`, alongside the `wyrd-host` entry): direct workspace
+edges limited to `wyrd-daemon`, externals limited to Tauri,
 `serde`/`serde_json`, and error/`thiserror` plumbing. Every other
-workspace edge — `wyrd-core`, `wyrd-sync`, `wyrd-view`,
+direct workspace edge — `wyrd-core`, `wyrd-sync`, `wyrd-view`,
 `wyrd-format`, `wyrd-host`, `wyrd-cli` — is a violation, with a
-negative test that names each rejected edge the way the existing
-host-composition checks do.
-
-That gate enforces the crate boundary, not the symbol boundary, and
-the note states this plainly: allowing `wyrd-daemon` permits every
-public API that crate exposes, not just `owner::client` and
-`owner::wire`. The "client is the transport, not a back door into
-server internals" line holds by import discipline inside the crate,
-not by mechanical proof. The structural fix is a narrowly scoped
-`wyrd-owner-client` crate holding the shared client and wire types,
-with `wyrd-daemon` (serving side) and `wyrd-desktop` (consuming side)
-both depending on it and the desktop policy permitting only that
-edge. That extraction is recommended follow-up work, not a scaffold
-prerequisite — it must not create churn before the first client
-exists — but the scaffold lands with the limitation written down
-here rather than implied away. Unknown members already fail closed
+negative test that names each prohibited edge the way the existing
+host-composition checks do. Unknown members already fail closed
 ("add it deliberately, do not work around this test"), so the crate
-cannot exist in the workspace without its policy. The rejected shape
-(UI owning the drive) is therefore a red gate at crate
-granularity, with symbol granularity an explicit hardening step.
+cannot exist in the workspace without its policy.
+
+The direct tier is not the whole invariant, and the note does not
+pretend it is. The intended property is reachability: the desktop
+dependency closure must not reach `wyrd-core` or any authoring
+capability, even transitively. A direct-edge allow on `wyrd-daemon`
+cannot establish that, because the daemon's own manifest reaches
+`wyrd-core` — `desktop → daemon → core` is three allowed edges that
+link the authoring surface into the desktop crate. The gate has
+precedent for exactly this shape:
+`view_link_graph_excludes_sync_and_iroh` and
+`consumer_link_graph_excludes_presentation` walk the
+member-declared production closure, not just direct edges. The
+scaffold therefore adds a third check of the same kind — a desktop
+link-graph test excluding `wyrd-core` (and, through it, the sync
+authoring surface) from the desktop closure — so the policy looks
+green only when the architecture claim holds.
+
+Decision rule, applied before the desktop crate is wired (stage 1):
+resolve the closure against the intended invariant. If consuming
+the shared client through `wyrd-daemon` reaches daemon composition
+or core authoring capabilities — which the manifests say it does,
+and the new link-graph test confirms mechanically — extract the
+narrowly scoped `wyrd-owner-client` crate first (shared client and
+wire types; `wyrd-daemon` keeps the server and composition,
+`wyrd-desktop` depends only on the consumer surface) and point the
+desktop policy at that edge instead. The extraction is therefore
+conditional-required by a mechanical check, not pre-committed crate
+proliferation and not deferred multi-consumer hardening: no green
+link-graph test, no desktop wiring. Its backlog issue tracks the
+work; stage 1 runs the check that decides it.
 
 ## Nix GUI dependencies (ported from the enesis editor)
 
@@ -405,8 +419,12 @@ installer issue; auto-update is explicitly v0.8.
    both are specified.
 1. Scaffold: `crates/wyrd-desktop` with the IPC surface over
    `OwnerClient`, the frontend directory with `tauri.conf.json`
-   wiring, the `layer_contracts` policy plus negatives, and the Nix
-   stanzas. No views; the shell compiles and the gate holds. The
+   wiring, the `layer_contracts` policy plus negatives, the desktop
+   link-graph test, and the Nix stanzas. No views; the shell compiles
+   and the gate holds. First act inside this stage is the closure
+   decision rule: if the link-graph test reaches daemon composition
+   or core authoring, the `wyrd-owner-client` extraction lands here,
+   before the desktop crate is wired. The
    IPC behavioral tests above land here, against the real client
    types on a real owner.
 2. Three views against the live interface — never against mocked
@@ -431,9 +449,10 @@ installer issue; auto-update is explicitly v0.8.
    check covers the chosen id.
 5. Settings hand-off (issue 25): reference that issue; duplicate no
    field definitions here.
-6. `wyrd-owner-client` extraction: recommended hardening follow-up
-   after the first real client exists; the note states the current
-   gate's crate-level limit honestly until then.
+6. `wyrd-owner-client` extraction: conditional-required by the
+   link-graph decision rule in the layer-gate section, not by future
+   consumer count. The backlog issue tracks the work; stage 1 runs
+   the check that decides it.
 
 ## Persistent-format impact
 
