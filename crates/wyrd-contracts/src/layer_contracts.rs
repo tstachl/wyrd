@@ -141,7 +141,7 @@ fn policy_for(member: &str) -> Option<MemberPolicy> {
         // The mount-free view: format and the provider-neutral model
         // below, nothing else. No edge on `wyrd-core` by design — the
         // view links no transport, not even transitively (checked by
-        // `fuse_link_graph_excludes_sync_and_iroh` below).
+        // `view_link_graph_excludes_sync_and_iroh` below).
         "wyrd-view" => Some(MemberPolicy {
             workspace_allow: &["wyrd-format", "wyrd-namespace"],
             external_allow: &["thiserror"],
@@ -372,7 +372,7 @@ fn dev_deps(manifest: &toml::Table) -> DepSet {
 /// direct check exempts dev-dependencies by design, so this pin is
 /// what makes a widening deliberate instead of silent. Pure over the
 /// edge set so the negative test proves it bites.
-fn check_fuse_dev_deps(deps: &DepSet, workspace_deps: &toml::Table) -> Vec<String> {
+fn check_view_dev_deps(deps: &DepSet, workspace_deps: &toml::Table) -> Vec<String> {
     let names: BTreeSet<String> = deps
         .iter()
         .map(|(key, value)| effective_name(key, value, workspace_deps))
@@ -1281,7 +1281,7 @@ fn check_link_graph(member: &str, graph: &BTreeMap<String, MemberEdges>) -> Vec<
 /// manifests (dev-dependencies excluded, as in the direct check) and
 /// walks the closure from the view crate.
 #[test]
-fn fuse_link_graph_excludes_sync_and_iroh() {
+fn view_link_graph_excludes_sync_and_iroh() {
     let root = workspace_root();
     let root_manifest = read_manifest(&root);
     let members: Vec<String> = root_manifest
@@ -1316,12 +1316,12 @@ fn fuse_link_graph_excludes_sync_and_iroh() {
 /// without this pin a transport edge could hide in the test profile
 /// while every suite stays green.
 #[test]
-fn fuse_dev_deps_stay_pinned() {
+fn view_dev_deps_stay_pinned() {
     let root = workspace_root();
     let root_manifest = read_manifest(&root);
     let workspace_deps = workspace_dep_table(&root_manifest);
-    let fuse = read_manifest(&root.join("crates/wyrd-view"));
-    let violations = check_fuse_dev_deps(&dev_deps(&fuse), &workspace_deps);
+    let view = read_manifest(&root.join("crates/wyrd-view"));
+    let violations = check_view_dev_deps(&dev_deps(&view), &workspace_deps);
     assert!(
         violations.is_empty(),
         "dev-dep violations:\n- {}",
@@ -3744,8 +3744,8 @@ mod policy_tests {
     }
 
     #[test]
-    fn fuse_dev_dep_widening_is_rejected() {
-        let violations = check_fuse_dev_deps(&deps(&["wyrd-core", "tokio"]), &empty_ws());
+    fn view_dev_dep_widening_is_rejected() {
+        let violations = check_view_dev_deps(&deps(&["wyrd-core", "tokio"]), &empty_ws());
         assert_eq!(violations.len(), 1, "widened dev-deps: {violations:?}");
         assert!(
             violations[0].contains("tokio"),
@@ -3754,8 +3754,8 @@ mod policy_tests {
     }
 
     #[test]
-    fn fuse_dev_dep_pin_passes_exact() {
-        let violations = check_fuse_dev_deps(&deps(&["wyrd-core"]), &empty_ws());
+    fn view_dev_dep_pin_passes_exact() {
+        let violations = check_view_dev_deps(&deps(&["wyrd-core"]), &empty_ws());
         assert!(
             violations.is_empty(),
             "exactly wyrd-core must pass: {violations:?}"

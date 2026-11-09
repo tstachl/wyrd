@@ -221,15 +221,15 @@ fi
 WYRD_HOST_BIN=""
 if [[ $HOST_LEG -eq 1 ]]; then
   echo "==> building the $LINUX_SYSTEM wyrd-host binary on the host"
-  APP_OUT="$(nix build "$ROOT#packages.$LINUX_SYSTEM.wyrd-host" --no-link --print-out-paths 2>/dev/null | tail -n 1)"
-  WYRD_HOST_BIN="$APP_OUT/bin/wyrd-host"
+  HOST_OUT="$(nix build "$ROOT#packages.$LINUX_SYSTEM.wyrd-host" --no-link --print-out-paths 2>/dev/null | tail -n 1)"
+  WYRD_HOST_BIN="$HOST_OUT/bin/wyrd-host"
   echo "    $WYRD_HOST_BIN"
   if (cd / && limactl shell "$INSTANCE" -- test -x "$WYRD_HOST_BIN" 2>/dev/null); then
     echo "    guest already carries $WYRD_HOST_BIN, skipping export"
   else
     echo "==> exporting the wyrd-host closure for the guest"
-    readarray -t APP_CLOSURE < <(nix-store -qR "$APP_OUT")
-    nix-store --export "${APP_CLOSURE[@]}" > "$SHARE/wyrd-host-closure.nar"
+    readarray -t HOST_CLOSURE < <(nix-store -qR "$HOST_OUT")
+    nix-store --export "${HOST_CLOSURE[@]}" > "$SHARE/wyrd-host-closure.nar"
   fi
 fi
 REV="$(python3 -c "import json; print(json.load(open('$ROOT/flake.lock'))['nodes']['nixpkgs']['locked']['rev'])")"

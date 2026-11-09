@@ -162,7 +162,7 @@
 //!     `wyrd-format → wyrd-sync → wyrd-core → presentation`, and the
 //!     policy fails closed on unknown crates or edges
 //!     (`docs/architecture.md`, crate map).
-//!     `fuse_link_graph_excludes_sync_and_iroh` is the transitive half:
+//!     `view_link_graph_excludes_sync_and_iroh` is the transitive half:
 //!     the view crate's production-edge closure reaches neither
 //!     `wyrd-sync` nor any `iroh*` package.
 //!
@@ -331,8 +331,6 @@
 #[cfg(test)]
 mod egress_contracts;
 #[cfg(test)]
-mod fuse_contracts;
-#[cfg(test)]
 mod join_contracts;
 #[cfg(test)]
 mod layer_contracts;
@@ -364,3 +362,5 @@ mod terminal_contracts;
 mod upgrade_contracts;
 #[cfg(test)]
 mod vault_contracts;
+#[cfg(test)]
+mod view_contracts;
