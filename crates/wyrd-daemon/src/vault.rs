@@ -706,3 +706,150 @@ where
     let _ = std::fs::remove_file(&socket_path);
     outcome.map_err(OwnerError::from)
 }
+
+#[cfg(test)]
+mod tests_shutdown_order {
+    //! The quit half of the lifecycle: the transport tail shuts down
+    //! in the documented teardown order with every stage bounded.
+    //! The session → admission → loop half lives in `lifecycle` (and
+    //! its queue-half tests); this pins the tail every composer runs
+    //! after its loop joins: mailbox first, bulk second, serving
+    //! last — and a failed serving close never skips the closes
+    //! before it, because the order below closes them first
+    //! unconditionally.
+    use super::*;
+    use std::sync::Mutex;
+    use wyrd_format::{BaoRoot, SnapshotId, StorageId};
+    use wyrd_sync::bulk::{BulkError, BulkSource, SealedManifest};
+    use wyrd_sync::runtime::{RouteReport, RuntimeState};
+    use wyrd_sync::serving::Vault;
+    use wyrd_sync::transport::mailbox::{
+        Delivery, DeliveryId, Disposition, MailboxEnvelope, MailboxError, SendReport,
+    };
+
+    struct OrderMailbox {
+        order: Arc<Mutex<Vec<&'static str>>>,
+        deadlines: Arc<Mutex<Vec<Duration>>>,
+    }
+
+    impl Mailbox for OrderMailbox {
+        fn send(&mut self, _envelope: MailboxEnvelope) -> Result<SendReport, MailboxError> {
+            unimplemented!("shutdown-order fake never sends")
+        }
+        fn recv(&mut self) -> Result<Option<Delivery>, MailboxError> {
+            unimplemented!("shutdown-order fake never receives")
+        }
+        fn settle(
+            &mut self,
+            _id: DeliveryId,
+            _disposition: Disposition,
+        ) -> Result<(), MailboxError> {
+            unimplemented!("shutdown-order fake never settles")
+        }
+        fn shutdown(&mut self, deadline: Duration) {
+            self.order.lock().unwrap().push("mailbox");
+            self.deadlines.lock().unwrap().push(deadline);
+        }
+    }
+
+    struct OrderBulk {
+        order: Arc<Mutex<Vec<&'static str>>>,
+        deadlines: Arc<Mutex<Vec<Duration>>>,
+    }
+
+    impl wyrd_sync::bulk::AttemptBudget for OrderBulk {}
+
+    impl BulkSource for OrderBulk {
+        fn fetch_root_manifest(
+            &mut self,
+            _snapshot: &SnapshotId,
+            _max: usize,
+        ) -> Result<Option<SealedManifest>, BulkError> {
+            unimplemented!("shutdown-order fake never fetches")
+        }
+        fn fetch_snapshot(
+            &mut self,
+            _snapshot: &SnapshotId,
+            _max: usize,
+        ) -> Result<Option<Vec<u8>>, BulkError> {
+            unimplemented!("shutdown-order fake never fetches")
+        }
+        fn fetch_sealed(
+            &mut self,
+            _storage: &StorageId,
+            _max: usize,
+        ) -> Result<Option<Vec<u8>>, BulkError> {
+            unimplemented!("shutdown-order fake never fetches")
+        }
+        fn fetch_transport(
+            &mut self,
+            _root: &BaoRoot,
+            _max: usize,
+        ) -> Result<Option<Vec<u8>>, BulkError> {
+            unimplemented!("shutdown-order fake never fetches")
+        }
+    }
+
+    impl RoutePublishing for OrderBulk {
+        fn publish_routes(&mut self, _state: &RuntimeState) -> Result<RouteReport, EngineError> {
+            unimplemented!("shutdown-order fake never publishes")
+        }
+        fn shutdown(&mut self, deadline: Duration) {
+            self.order.lock().unwrap().push("bulk");
+            self.deadlines.lock().unwrap().push(deadline);
+        }
+    }
+
+    /// Quit tears down in the documented order: the transport tail
+    /// stops the mailbox under its deadline first, closes bulk
+    /// graceful-or-abort second, and closes serving last — every
+    /// stage bounded, none skipped, and a failed stage still runs
+    /// the ones after it (here: a clean serving close reports `Ok`).
+    #[test]
+    fn quit_tears_down_in_documented_order() {
+        let dir = std::env::temp_dir().join(format!(
+            "wyrd-quit-order-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let vault = Vault::open(&dir).unwrap();
+        let serving = ServingEndpoint::open_loopback(&vault, &dir).unwrap();
+        let order = Arc::new(Mutex::new(Vec::new()));
+        let deadlines = Arc::new(Mutex::new(Vec::new()));
+        let mut mailbox = OrderMailbox {
+            order: Arc::clone(&order),
+            deadlines: Arc::clone(&deadlines),
+        };
+        let bulk = OrderBulk {
+            order: Arc::clone(&order),
+            deadlines: Arc::clone(&deadlines),
+        };
+        // Distinct deadlines per stage: the recording tells which
+        // bound each stage ran under, not just that it ran.
+        let bounds = TransportDeadlines {
+            mailbox: Duration::from_secs(5),
+            bulk: Duration::from_secs(7),
+            serving: Duration::from_secs(60),
+        };
+        let outcome = shutdown_transport(&mut mailbox, Some(bulk), serving, &bounds);
+        assert!(
+            outcome.serving.is_ok(),
+            "the serving close runs last and reports"
+        );
+        assert_eq!(
+            *order.lock().unwrap(),
+            vec!["mailbox", "bulk"],
+            "mailbox stops before bulk closes; serving runs after both by construction"
+        );
+        assert_eq!(
+            *deadlines.lock().unwrap(),
+            vec![Duration::from_secs(5), Duration::from_secs(7)],
+            "every stage runs under its own bounded deadline"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

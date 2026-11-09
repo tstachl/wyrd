@@ -298,6 +298,16 @@ pub(crate) enum MemberAction {
         #[arg(long)]
         yes: bool,
     },
+    /// Leave the drive: end your own participation where the
+    /// trust contract admits it, and be told precisely what to ask
+    /// the owner for where it does not. A non-owner authors nothing
+    /// and is told the owner must remove it; the sole owner authors
+    /// `Remove(self)` with the terminal warning and needs `--yes`.
+    Leave {
+        /// Confirm a sole-owner leave (the drive freezes permanently).
+        #[arg(long)]
+        yes: bool,
+    },
     /// Force a fresh epoch secret (owner-only). Membership unchanged.
     Rotate,
     /// Hand ownership to a member (owner-only). v0 ownership is a

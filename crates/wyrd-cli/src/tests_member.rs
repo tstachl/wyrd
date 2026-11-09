@@ -802,3 +802,101 @@ fn rotate_copy_does_not_claim_the_device_key_changed() {
     let tip = fixture.open().membership_log().known_state().expect("tip");
     assert_eq!(tip.epoch, 1, "refused controls author nothing");
 }
+
+/// A non-owner asking to leave authors nothing: the plan refuses,
+/// the CLI exits clean having authored no transition, the canonical
+/// tip does not advance, and the owner's member list is unchanged —
+/// including the leaver, who is still seated owner-side (its own log
+/// learns the admission through intake, so local seating is never
+/// consulted).
+#[test]
+fn member_leave_as_non_owner_authors_nothing() {
+    let fixture = Fixture::new();
+    let newcomer = join_second_device(&fixture);
+    let tip_before = fixture
+        .open()
+        .membership_log()
+        .known_state()
+        .expect("tip")
+        .transition_id;
+
+    let engine = Engine::open_keystore(
+        newcomer.drive.clone(),
+        "newcomer-pass",
+        read_identity(&newcomer.identity_file).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        matches!(leave_plan(&engine), Ok(LeavePlan::RefuseNonOwner)),
+        "a non-owner is refused, never planned as an author"
+    );
+    drop(engine);
+
+    command(vec![
+        "member".into(),
+        newcomer.drive.display().to_string(),
+        "--identity-file".into(),
+        newcomer.identity_file.display().to_string(),
+        "--passphrase-file".into(),
+        newcomer
+            ._temp
+            .0
+            .join("newcomer-passphrase")
+            .display()
+            .to_string(),
+        "leave".into(),
+    ])
+    .unwrap();
+    let after = fixture.open();
+    let tip_after = after
+        .membership_log()
+        .known_state()
+        .expect("tip")
+        .transition_id;
+    assert_eq!(
+        tip_before, tip_after,
+        "a non-owner leave authors no membership event"
+    );
+    let list = member_list_report(&after).unwrap();
+    assert!(
+        list.contains(&format!("member {}", newcomer.device)),
+        "the leaver is still seated: {list}"
+    );
+}
+
+/// The sole owner leaves by removing itself: without `--yes` the
+/// CLI refuses before authoring; with it the owner set empties and
+/// the terminal sentence travels with the confirmation.
+#[test]
+fn member_leave_as_sole_owner_needs_confirmation_and_freezes() {
+    use wyrd_core::member_surface::SOLE_OWNER_TERMINAL;
+    let fixture = Fixture::new();
+    assert!(
+        matches!(leave_plan(&fixture.open()), Ok(LeavePlan::SoleOwner)),
+        "the owner plans as the sole-owner path"
+    );
+    let error = command(fixture.args(vec!["leave".into()])).unwrap_err();
+    assert!(
+        matches!(error, CliError::Usage(_)),
+        "unacknowledged sole-owner leave refuses: {error:?}"
+    );
+    let tip = fixture.open().membership_log().known_state().expect("tip");
+    assert_eq!(tip.epoch, 1, "the refusal authors nothing");
+
+    command(fixture.args(vec!["leave".into(), "--yes".into()])).unwrap();
+    let engine = fixture.open();
+    let tip = engine.membership_log().known_state().expect("tip");
+    assert_eq!(tip.epoch, 2, "leave commits exactly one epoch");
+    assert!(
+        engine
+            .membership_log()
+            .owners_of(&tip.transition_id)
+            .expect("owners")
+            .is_empty(),
+        "sole-owner leave empties the owner set"
+    );
+    assert!(
+        SOLE_OWNER_TERMINAL.contains("terminal"),
+        "terminal sentence pinned at the surface (content asserted there)"
+    );
+}

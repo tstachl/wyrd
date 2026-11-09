@@ -54,7 +54,11 @@ mutation queue), then admission close and the loop join, then
 transport (mailbox, bulk source, serving) under bounded deadlines.
 Bulk closes graceful-or-abort (always success; a wedged drain warns
 and aborts), so only loop, session, and serving outcomes fold into
-the exit status.
+the exit status. Close is quit only: it stops the process in this
+order and promises nothing about the directory — local content,
+membership records, credentials, and drive metadata stay exactly as
+they stand. A failed shutdown step fails the run loudly; close never
+reports a failed teardown as clean.
 A process holding a file open on the mount delays the session join
 until it closes — unmount refuses a busy mount — so SIGINT waits
 for the last descriptor; the stop budgets bind the unmount itself,
@@ -170,6 +174,17 @@ characters (x-only pubkeys).
   "transition leaves a membership conflict frozen; resolve it first":
   nothing new is canonical while frozen, so the conflict resolves
   before any of the three commits.
+- `leave [--yes]`: end your own participation. A non-owner
+  authors nothing and is told the owner must remove it, with the
+  local device id in copyable form (`member remove <device>` is the
+  owner's command, not yours); the shared membership is unchanged
+  and local departure is not membership removal. The sole owner
+  authors `Remove(self)` with the terminal warning, so `--yes` is
+  required and the confirmation carries the terminal consequence.
+  Every leave outcome carries the canonical removal sentences —
+  what a removed device keeps and that history is never
+  re-encrypted — and no leave output uses `deleted`, `erased`,
+  `reclaimed`, or `wiped`.
 - `rotate`: force a fresh epoch secret. Membership unchanged; every
   current member and reader is owed the new-epoch wrap. The
   confirmation says exactly that — a fresh epoch secret, nothing

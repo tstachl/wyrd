@@ -9,6 +9,7 @@ use crate::CliError;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use wyrd_core::lifecycle_surface::render_leave_refusal;
 use wyrd_core::member_surface::{
     render_frozen_notice, render_handover_confirmation, render_removal_confirmation,
     render_rotation_confirmation, SOLE_OWNER_TERMINAL,
@@ -105,6 +106,41 @@ pub(crate) fn member(
                 render_removal_confirmation(&device, transition.epoch, carried, terminal)
             );
             Ok(())
+        }
+        MemberAction::Leave { yes } => {
+            // Quit and leave stay distinct internally: leaving
+            // membership is a membership transition (or a refusal
+            // that authors none), closing a drive is the
+            // supervisor's orderly shutdown. This arm only ever
+            // decides the membership half; sequencing, confirmation,
+            // and error propagation stay here in the runner, never
+            // in the surface.
+            match leave_plan(&engine)? {
+                LeavePlan::SoleOwner => {
+                    let this = engine.device();
+                    require_last_owner_confirmation(&engine, &this, yes)?;
+                    let (transition, carried) =
+                        transition_with_carry(&mut engine, &drive_dir, |engine| {
+                            engine.remove_device(engine.device())
+                        })?;
+                    let terminal = engine
+                        .membership_log()
+                        .owners_of(&transition.transition_id())
+                        .map(|owners| owners.is_empty())
+                        .unwrap_or(false);
+                    print!(
+                        "{}",
+                        render_removal_confirmation(&this, transition.epoch, carried, terminal)
+                    );
+                    Ok(())
+                }
+                LeavePlan::RefuseNonOwner => {
+                    // Authors nothing: the refusal is the whole
+                    // outcome, and the tip below is unchanged.
+                    print!("{}", render_leave_refusal(&engine.device()));
+                    Ok(())
+                }
+            }
         }
         MemberAction::Rotate => {
             let (transition, carried) =
@@ -317,6 +353,37 @@ fn write_invitation(out: &Path, file: &mut fs::File, bytes: &[u8]) -> Result<(),
         });
     }
     Ok(())
+}
+
+/// What `member leave` decided from the canonical tip: the
+/// caller is an owner (may author `Remove(self)`), or it is not (be
+/// refused, author nothing). Seating is deliberately not consulted:
+/// a joined device learns its own admission through the normal
+/// intake path, so its local tip may not seat it yet — owner-side it
+/// is seated, and either way only the owner can change membership.
+/// Pure inspection — the runner owns the confirmation and the
+/// authoring. Built as a value (not printed) so tests assert the
+/// decision without capturing stdout.
+pub(crate) enum LeavePlan {
+    SoleOwner,
+    RefuseNonOwner,
+}
+
+/// Inspect the canonical tip and classify this device's leave: an
+/// owner in the pre-transition set may leave by removing itself;
+/// anyone else must ask the owner. Authors nothing either way.
+pub(crate) fn leave_plan(engine: &Engine) -> Result<LeavePlan, CliError> {
+    let log = engine.membership_log();
+    let Some(tip) = log.known_state() else {
+        return Err(CliError::Engine(
+            wyrd_sync::runtime::EngineError::NoCanonicalMembership,
+        ));
+    };
+    let owners = log.owners_of(&tip.transition_id).unwrap_or_default();
+    if owners.contains(&engine.device()) {
+        return Ok(LeavePlan::SoleOwner);
+    }
+    Ok(LeavePlan::RefuseNonOwner)
 }
 
 /// Removing the sole owner is valid but terminal (epochs.md): it
