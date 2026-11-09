@@ -13,6 +13,7 @@
 //! of the node. This crate's [`core`] module holds the host-side
 //! composition tests; [`lifecycle`] owns supervision.
 
+pub mod bootstrap;
 pub mod core;
 #[cfg(feature = "mount")]
 pub mod fuse;

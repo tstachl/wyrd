@@ -80,16 +80,14 @@ test pinned by that issue (`lookup`/`read`/`submit` over `owner.sock`
 while mounted, or the mount-docs exclusion) is the shell's
 precondition, not its work.
 
-## Blocking open question: bootstrap and discovery
+## Bootstrap and discovery: registry file plus OS services (proposed)
 
-This note describes the steady-state connection. It does not solve
-the first connection, and the scaffold must not begin until the
-answer is specified. Before any drive exists there is no
-`<drive_dir>/owner.sock` to connect to, and the interface runs no
-discovery service — so how does a fresh installation reach its first
-drive? Creating and joining drives is in scope for the UI, which
-means the UI must be able to establish an owner conversation before
-any drive directory exists. The candidate shapes:
+The first connection is specified here; the scaffold must not begin
+until this section is approved, and stage 0 stays blocking until
+then. Before any drive exists there is no `<drive_dir>/owner.sock`
+to connect to, and the interface runs no discovery service — so the
+installation-to-first-drive path needs a bootstrap contract. The
+candidate shapes were:
 
 1. A separately installed service owns a stable endpoint and manages
    drive registration; the UI always talks to the stable endpoint
@@ -99,20 +97,158 @@ any drive directory exists. The candidate shapes:
 3. The UI supervises the owner process itself.
 
 Option 3 changes OD-06-E and requires an explicit scope decision;
-it must not be introduced silently as a bootstrap convenience. The
-P2 socket-composition decision does not answer this question either:
-making `wyrd mount` expose the socket still leaves a new
-installation with no owner to discover before anything is mounted.
-The stage-0 gate (below) resolves the bootstrap and discovery
-contract — endpoint, provisioning, and first-drive path — before any
-frontend scaffolding. A direction under consideration, not a
-decision: an installer-provisioned owner with a stable local
-bootstrap endpoint, followed by drive-specific owner connections —
-which would avoid introducing a general-purpose control plane solely
-to solve initial discovery. The choice belongs to stage 0 and must
-be demonstrable (a first-drive path that runs), not merely
-described. Views are built against the real client types
-on a real owner, never against mocks that invent owner behavior.
+it is rejected here — it must not arrive silently as a bootstrap
+convenience. The P2 socket-composition decision does not answer this
+question either: making `wyrd mount` expose the socket still leaves
+a new installation with no owner to discover before anything is
+mounted.
+
+The proposed shape is option 2, with the endpoint as a file, not a
+socket: no new daemon, no new protocol, no general-purpose control
+plane. Three pieces, all precedented in-tree:
+
+- **A per-user drive registry**, created at install time with
+  owner-only permissions — and owned, at the filesystem level, by
+  the user account, with the desktop application's registration
+  flow as its normal writer. It is per-user configuration, not
+  privileged system state, so no installer-side registry manager is
+  introduced; "owned by the installer" means the installer creates
+  and perms the file, nothing more. Each entry holds drive facts
+  (`name`, `drive_dir`, relay set, service name, mode) and never
+  secrets. Updates are crash-safe: write to a temporary file in the
+  same directory, sync it, atomically replace, and sync the
+  directory, so an interrupted registration can never leave a
+  truncated registry that makes every drive undiscoverable. The UI
+  treats every entry as untrusted configuration: it validates paths
+  before use and still authenticates each owner connection with the
+  existing local peer-credential and protocol checks — registry
+  content is discovery metadata, never proof of drive identity or
+  authorization. Proposed locations, not frozen:
+  `XDG_STATE_HOME/wyrd/drives.json` on Linux,
+  `~/Library/Application Support/Wyrd/drives.json` on macOS,
+  resolved through the platform path APIs the frontend already uses.
+  JSON, not TOML, deliberately: the daemon already carries
+  `serde_json`, and the registry must add no third-party dependency
+  to its closure — the format follows the dependency rule, and the
+  registration flow (not hand-editing) is the writer.
+- **Per-drive owner services**, installed from a template the
+  installer ships: a launchd agent per drive on macOS, a systemd
+  user unit per drive on Linux — the same shapes `nix/drive`
+  already supervises declaratively, but provisioned imperatively at
+  registration time for non-Nix users. The OS service manager owns
+  the process lifecycle: enablement is startup-at-login, and a UI
+  that exits or crashes never takes the owner down with it, because
+  launchd/systemd — not the UI — is the parent. The service runs
+  `wyrd vault` with the registration's credential files (never a
+  bare env-keyed binary: the supervised owner must load secrets in
+  service context, and only the file-credential form works there),
+  routed through the `wyrd-supervise` wrapper from `nix/drive`
+  (OD-34-C). Managers cannot distinguish the binary's collapsed
+  exit codes on their own — every CLI failure is 2 except the
+  terminal held-drive 78 — so the wrapper maps the wait status
+  onto the exit the supervisor's policy wants, exactly as the Nix
+  services already do: launchd `KeepAlive` restarts the wrapper's
+  exit 0 and never its 78; systemd `Restart=on-failure` with
+  `RestartPreventExitStatus=78`, backoff, and start limits. A bare
+  owner binary cannot express this distinction, so a managed
+  service without the wrapper beside the `wyrd` binary is refused
+  with that pointer instead of installed. A stale socket entry
+  from an unclean shutdown is reclaimed at bind while the store
+  lock is held, so a restarted owner never wedges on its
+  predecessor's socket. The UI distinguishes the lifecycle states
+  the policy produces: a restarting owner reads as temporarily
+  unavailable (starting / retrying, with the loop's pause switch
+  and pass count telling quiet apart from dead), while a disabled
+  drive stays registered with its service stopped and an
+  unregistered drive simply disappears from discovery — disabling
+  stops the service without touching drive data, and only an
+  explicit shutdown of the service is a deliberate stop, as
+  opposed to a crash the manager will retry. The absence drill
+  covers the temporary case; the permanent cases get their own
+  first-class states, never an error toast.
+- **Owner credential loading independent of the UI.** The owner
+  must obtain its secrets without the UI alive: at login, at
+  restart, at 3 a.m. with nobody watching. Secrets live in the OS
+  keychain / credential files (issue 25 owns the mechanism), and
+  the service's loading behavior must work in the actual service
+  context — a launchd user agent or systemd user unit, not a login
+  shell. The sharp edge is macOS, where keychain access can depend
+  on login and unlock state: the installer requests the needed
+  keychain access at registration time, and the exact ACLs travel
+  with the settings contract, but the requirement is fixed here —
+  if the secrets are unreachable in service context, the drive
+  reads as registered but unavailable, never as broken, and the UI
+  says exactly that.
+- **A fixed handoff sequence** for create and join, with
+  initialization as an explicit owner-side provisioning operation
+  that runs before anything is registered. Creating is
+  `Engine::create` (new single-device drive; fails if the directory
+  already holds one); joining is `Engine::join` (sealed
+  invitation file; commits genesis, and the
+  admission itself still arrives through normal intake, so the join
+  is not complete until the loop confirms it). Both run in the same
+  ownership model as everything else — exclusive keystore access,
+  no UI-held store — and neither is a mutation through the UI: the
+  UI never acquires authoring capability, it only drives the
+  provisioning flow whose terminal states the owner defines. The
+  order is fixed: initialize → verify the open (`open_keystore`
+  succeeds) → write the registry entry → install, enable, and start
+  the per-drive service → verify the socket. Registration and
+  enablement happen only after initialization succeeds, never
+  speculatively. A managed service needs at least one relay: a
+  headless `wyrd vault` refuses a relay-less drive, so supervision
+  without relays is refused with that pointer instead of installing
+  a definition that can never verify. Partial completion has
+  explicit recovery, and a drive is reported ready only when its
+  socket verifies this session — never because its registry entry
+  exists:
+  - initialization fails (directory already holds a drive, bad
+    invitation) → nothing is registered; the error surfaces, and a
+    retry that finds an existing drive reconciles instead of
+    re-creating (`create` refuses; the flow detects and re-verifies);
+  - initialization succeeds but the registry write fails → the
+    drive exists on disk, unregistered; registration retries
+    idempotently;
+  - registry written but service installation or enablement fails
+    → registered but unavailable; enablement retries, readiness
+    is withheld;
+  - service starts but the socket never verifies → registered but
+    unavailable, same handling.
+  The UI's drive states mirror exactly this: not registered,
+  provisioning incomplete, registered but unavailable, verified
+  available. No larger provisioning state machine is invented; the
+  owner stays authoritative for actual drive state, and the
+  registry entry is a claim to verify, never proof of health.
+
+Why a file instead of the stable-socket endpoint the review
+preferred: a socket endpoint needs a always-on manager process
+speaking a new protocol with its own auth, lifecycle, and failure
+modes — a control plane built solely to solve initial discovery.
+The registry file plus the OS service manager provides the same
+properties (stable location, installer-provisioned, UI-independent
+lifecycle) with two precedented mechanisms and zero new privileged
+code. Per-socket peer authentication stays exactly where the
+interface puts it: same-UID checks at each drive socket.
+
+P2 interplay: this contract works under either P2 outcome. If the
+owner server moves into the shared composition, registered desktop
+drives may run mounted; if `wyrd mount` is marked non-desktop,
+registered drives run headless and the UI remains the only consumer.
+The registry records the mode per drive; it does not decide P2.
+
+Stage-0 exit: the handoff runs end to end through the built
+command — `wyrd bootstrap` registers, a separately spawned `wyrd
+vault` owns and serves, a non-owner `OwnerClient` gets a terminal
+`observe` answer out of the drive socket, and SIGTERM shuts the
+owner down clean — pinned as the `bootstrap_then_vault` CLI
+integration test, with the supervise wait-status mapping pinned by
+the existing `test-supervise.sh` harness leg. What stays manual,
+documented on the bootstrap issue: enablement and restart under a
+real launchd agent / systemd user unit, which no CI sandbox
+provides. The installer mechanics (template, enablement UX,
+keychain wiring) stay with the installer issue; what stage 0
+freezes is the registry shape, the service template's supervision
+contract, and the handoff order above.
 
 ## Shape: backend crate plus frontend directory
 
@@ -268,35 +404,53 @@ verdict.
   (notifications, conflicts, storage usage in issues 18–26), so the
   scaffold sets the precedent now.
 
-## Layer gate (crate-level, honestly described)
+## Layer gate (two tiers, honestly described)
 
 `wyrd-desktop` gets a `MemberPolicy` entry in
 `crates/wyrd-contracts/src/layer_contracts.rs`
-(`policy_for`, alongside the `wyrd-host` entry): workspace edges
-limited to `wyrd-daemon`, externals limited to Tauri,
+(`policy_for`, alongside the `wyrd-host` entry): direct workspace
+edges limited to `wyrd-daemon`, externals limited to Tauri,
 `serde`/`serde_json`, and error/`thiserror` plumbing. Every other
-workspace edge — `wyrd-core`, `wyrd-sync`, `wyrd-view`,
+direct workspace edge — `wyrd-core`, `wyrd-sync`, `wyrd-view`,
 `wyrd-format`, `wyrd-host`, `wyrd-cli` — is a violation, with a
-negative test that names each rejected edge the way the existing
-host-composition checks do.
-
-That gate enforces the crate boundary, not the symbol boundary, and
-the note states this plainly: allowing `wyrd-daemon` permits every
-public API that crate exposes, not just `owner::client` and
-`owner::wire`. The "client is the transport, not a back door into
-server internals" line holds by import discipline inside the crate,
-not by mechanical proof. The structural fix is a narrowly scoped
-`wyrd-owner-client` crate holding the shared client and wire types,
-with `wyrd-daemon` (serving side) and `wyrd-desktop` (consuming side)
-both depending on it and the desktop policy permitting only that
-edge. That extraction is recommended follow-up work, not a scaffold
-prerequisite — it must not create churn before the first client
-exists — but the scaffold lands with the limitation written down
-here rather than implied away. Unknown members already fail closed
+negative test that names each prohibited edge the way the existing
+host-composition checks do. Unknown members already fail closed
 ("add it deliberately, do not work around this test"), so the crate
-cannot exist in the workspace without its policy. The rejected shape
-(UI owning the drive) is therefore a red gate at crate
-granularity, with symbol granularity an explicit hardening step.
+cannot exist in the workspace without its policy.
+
+The direct tier is not the whole invariant, and the note does not
+pretend it is. The intended property is reachability: the desktop
+dependency closure must not reach `wyrd-core` or any authoring
+capability, even transitively. A direct-edge allow on `wyrd-daemon`
+cannot establish that, because the daemon's own manifest reaches
+`wyrd-core` — `desktop → daemon → core` is three allowed edges that
+link the authoring surface into the desktop crate. The gate has
+precedent for exactly this shape:
+`view_link_graph_excludes_sync_and_iroh` and
+`consumer_link_graph_excludes_presentation` walk the
+member-declared production closure, not just direct edges. The
+scaffold therefore adds a third check of the same kind — a desktop
+transitive Cargo dependency-closure test excluding `wyrd-core`
+(and, through it, the sync authoring surface) from the desktop
+closure — so the policy looks green only when the architecture
+claim holds. Like its precedents it walks member-declared
+production edges, not the final linked binary; the name says
+exactly that, and `cargo tree` in CI remains the full-graph
+backstop.
+
+Decision rule, applied before the desktop crate is wired (stage 1):
+resolve the closure against the intended invariant. If consuming
+the shared client through `wyrd-daemon` reaches daemon composition
+or core authoring capabilities — which the manifests say it does,
+and the new closure test confirms mechanically — extract the
+narrowly scoped `wyrd-owner-client` crate first (shared client and
+wire types; `wyrd-daemon` keeps the server and composition,
+`wyrd-desktop` depends only on the consumer surface) and point the
+desktop policy at that edge instead. The extraction is therefore
+conditional-required by a mechanical check, not pre-committed crate
+proliferation and not deferred multi-consumer hardening: no green
+closure test, no desktop wiring. Its backlog issue tracks the
+work; stage 1 runs the check that decides it.
 
 ## Nix GUI dependencies (ported from the enesis editor)
 
@@ -405,8 +559,15 @@ installer issue; auto-update is explicitly v0.8.
    both are specified.
 1. Scaffold: `crates/wyrd-desktop` with the IPC surface over
    `OwnerClient`, the frontend directory with `tauri.conf.json`
-   wiring, the `layer_contracts` policy plus negatives, and the Nix
-   stanzas. No views; the shell compiles and the gate holds. The
+   wiring, the `layer_contracts` policy plus negatives, the desktop
+   transitive dependency-closure test (member-declared production
+   edges, after the `view`/`embed` precedent — not a linked-binary
+   audit; `cargo tree` in CI remains the full-graph backstop), and
+   the Nix stanzas. No views; the shell compiles
+   and the gate holds. First act inside this stage is the closure
+   decision rule: if the closure test reaches daemon composition
+   or core authoring, the `wyrd-owner-client` extraction lands here,
+   before the desktop crate is wired. The
    IPC behavioral tests above land here, against the real client
    types on a real owner.
 2. Three views against the live interface — never against mocked
@@ -418,10 +579,11 @@ installer issue; auto-update is explicitly v0.8.
 
 1. P2 owner socket: blocking prerequisite, resolved before the
    scaffold (stage 0).
-2. First-drive bootstrap and discovery: blocking open question,
-   resolved before the scaffold alongside the P2 (stage 0). Option 3
-   (UI supervises the owner) is out without an explicit OD-06-E
-   scope decision.
+2. First-drive bootstrap and discovery: decided as proposed in
+   the bootstrap section (registry file + OS per-drive services,
+   option 3 rejected without an OD-06-E scope change). Stays
+   blocking until the stage-0 rehearsal runs green and the review
+   approves; the installer mechanics stay with the installer issue.
 3. Frontend framework: leave to the implementing PR, with the
    constraints now in the note (no drive model, no socket or
    filesystem access, no protocol networking, no framework without
@@ -431,11 +593,14 @@ installer issue; auto-update is explicitly v0.8.
    check covers the chosen id.
 5. Settings hand-off (issue 25): reference that issue; duplicate no
    field definitions here.
-6. `wyrd-owner-client` extraction: recommended hardening follow-up
-   after the first real client exists; the note states the current
-   gate's crate-level limit honestly until then.
+6. `wyrd-owner-client` extraction: conditional-required by the
+   closure decision rule in the layer-gate section, not by future
+   consumer count. The backlog issue tracks the work; stage 1 runs
+   the check that decides it.
 
 ## Persistent-format impact
 
-None. The shell forwards existing mutation and status shapes and
-adds no durable fact, envelope, or protocol byte.
+The per-user registry file (`drives.json`, schema version 1, reader
+refuses newer versions loudly). Nothing else: the shell and its
+provisioning forward existing mutation and status shapes and add no
+durable drive fact, envelope, or protocol byte.

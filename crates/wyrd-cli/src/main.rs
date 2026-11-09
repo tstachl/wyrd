@@ -14,6 +14,7 @@ use wyrd_daemon::process::{install_shutdown_handler, SHUTDOWN};
 // names these through `main`.
 #[cfg(test)]
 pub(crate) use crate::args::Credentials;
+use crate::commands::bootstrap::bootstrap;
 use crate::commands::device::device;
 #[cfg(test)]
 pub(crate) use crate::commands::device::{
@@ -357,6 +358,11 @@ fn command(args: Vec<String>) -> Result<(), CliError> {
             credentials,
             ..
         } => load_credentials(drive_dir, credentials, cli.config.as_deref())?,
+        Command::Bootstrap {
+            drive_dir,
+            credentials,
+            ..
+        } => load_credentials(drive_dir, credentials, cli.config.as_deref())?,
         #[cfg(feature = "mount")]
         Command::Mount {
             drive_dir,
@@ -439,6 +445,32 @@ fn command(args: Vec<String>) -> Result<(), CliError> {
             Engine::create(drive_dir, &passphrase, identity)?;
             Ok(())
         }
+        Command::Bootstrap {
+            name,
+            drive_dir,
+            relays,
+            credentials,
+            invitation_file,
+            registry,
+            owner_bin,
+            supervise_bin,
+            no_service,
+        } => bootstrap(
+            crate::commands::bootstrap::BootstrapArgs {
+                name,
+                drive_dir,
+                relays,
+                credentials,
+                invitation_file,
+                registry,
+                owner_bin,
+                supervise_bin,
+                no_service,
+            },
+            identity,
+            &passphrase,
+            config.as_ref(),
+        ),
         #[cfg(feature = "mount")]
         Command::Mount {
             drive_dir,
