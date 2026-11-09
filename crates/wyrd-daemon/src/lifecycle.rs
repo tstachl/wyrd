@@ -6,8 +6,10 @@
 //! declares the mutation queue dead until every teardown action
 //! capable of submitting a mutation has finished. In practice the
 //! queue stays open and drained from the first stop trip until the
-//! composer has joined the presentation session — the only teardown
-//! submitter — and closes admission itself.
+//! composer has joined the presentation session — the
+//! presentation-side submission boundary (the owner socket beside it
+//! is the second submitter; a socket submit racing the close answers
+//! `Shutdown`, never a hang) — and closes admission itself.
 //!
 //! Termination propagates through calls the composer (`main.rs`)
 //! wires at the thread boundaries:

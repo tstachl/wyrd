@@ -2566,34 +2566,54 @@ fn mounted_owner_serves_socket_alongside_backend() {
 }
 
 /// Shutdown removes the socket file exactly once, while the live
-/// state is still held: a late drop never unlinks a successor
-/// owner's socket bound at the same path (F1). Holds the composed
-/// parts across the shutdown — the composer order, where the live
-/// node (and its store lock) outlives the removal — then simulates
-/// the successor by recreating the path before the guard drops.
+/// node (and its store lock) is still held: a late drop never unlinks
+/// a successor owner's socket bound at the same path (F1). Holds the
+/// composed live node across the shutdown — the composer order — then
+/// binds a real second service as the successor before the old guard
+/// drops, and asserts the successor's socket survives it.
 #[test]
 fn owner_service_shutdown_removes_once_and_spares_a_successor() {
-    let (parts, dir) = composed_parts();
+    let (engine, dir) = scratch_drive();
+    let store = wyrd_format::FsObjectStore::open(dir.clone()).unwrap();
+    let mut daemon = wyrd_core::node::WyrdNode::new(engine, store).unwrap();
+    daemon.refresh_live_heads().unwrap();
+    let (live, parts) = daemon
+        .into_live(
+            Duration::from_secs(5),
+            &wyrd_core::live::LiveConfig::default(),
+        )
+        .unwrap();
     let socket_path = super::socket_path_for(&dir);
-    let mut service =
+    let mut first =
         super::OwnerService::bind(OwnerHandles::from_parts(&parts), &dir).expect("bind serves");
     assert!(socket_path.exists(), "bind creates the socket file");
-    service.shutdown();
+    first.shutdown();
     assert!(
         !socket_path.exists(),
-        "shutdown removes the socket while the parts are still held"
+        "shutdown removes the socket while the live node is still held"
     );
-    // A successor owner binds at the same path before the old guard
-    // drops (the race F1 closes by ordering): the late drop must not
-    // touch it, and the at-most-once removal makes that structural.
-    std::fs::write(&socket_path, b"successor").unwrap();
-    drop(service);
-    assert_eq!(
-        std::fs::read(&socket_path).unwrap(),
-        b"successor",
-        "the late drop never unlinks the successor's file"
+    // A successor owner binds at the same path while the old guard is
+    // still alive (the race F1 closes by ordering): the late drop must
+    // not touch it, and the at-most-once removal makes that structural.
+    let mut second =
+        super::OwnerService::bind(OwnerHandles::from_parts(&parts), &dir).expect("re-bind serves");
+    assert!(
+        socket_path.exists(),
+        "the successor rebinds the same path after a clean shutdown"
     );
-    std::fs::remove_file(&socket_path).unwrap();
+    drop(first);
+    assert!(
+        socket_path.exists(),
+        "the late drop never unlinks the successor's socket"
+    );
+    second.shutdown();
+    assert!(
+        !socket_path.exists(),
+        "the successor's own shutdown removes its socket"
+    );
+    drop(second);
+    drop(parts);
+    drop(live);
     std::fs::remove_dir_all(dir).unwrap();
 }
 
