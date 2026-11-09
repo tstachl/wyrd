@@ -80,16 +80,14 @@ test pinned by that issue (`lookup`/`read`/`submit` over `owner.sock`
 while mounted, or the mount-docs exclusion) is the shell's
 precondition, not its work.
 
-## Blocking open question: bootstrap and discovery
+## Bootstrap and discovery: registry file plus OS services (proposed)
 
-This note describes the steady-state connection. It does not solve
-the first connection, and the scaffold must not begin until the
-answer is specified. Before any drive exists there is no
-`<drive_dir>/owner.sock` to connect to, and the interface runs no
-discovery service — so how does a fresh installation reach its first
-drive? Creating and joining drives is in scope for the UI, which
-means the UI must be able to establish an owner conversation before
-any drive directory exists. The candidate shapes:
+The first connection is specified here; the scaffold must not begin
+until this section is approved, and stage 0 stays blocking until
+then. Before any drive exists there is no `<drive_dir>/owner.sock`
+to connect to, and the interface runs no discovery service — so the
+installation-to-first-drive path needs a bootstrap contract. The
+candidate shapes were:
 
 1. A separately installed service owns a stable endpoint and manages
    drive registration; the UI always talks to the stable endpoint
@@ -99,20 +97,69 @@ any drive directory exists. The candidate shapes:
 3. The UI supervises the owner process itself.
 
 Option 3 changes OD-06-E and requires an explicit scope decision;
-it must not be introduced silently as a bootstrap convenience. The
-P2 socket-composition decision does not answer this question either:
-making `wyrd mount` expose the socket still leaves a new
-installation with no owner to discover before anything is mounted.
-The stage-0 gate (below) resolves the bootstrap and discovery
-contract — endpoint, provisioning, and first-drive path — before any
-frontend scaffolding. A direction under consideration, not a
-decision: an installer-provisioned owner with a stable local
-bootstrap endpoint, followed by drive-specific owner connections —
-which would avoid introducing a general-purpose control plane solely
-to solve initial discovery. The choice belongs to stage 0 and must
-be demonstrable (a first-drive path that runs), not merely
-described. Views are built against the real client types
-on a real owner, never against mocks that invent owner behavior.
+it is rejected here — it must not arrive silently as a bootstrap
+convenience. The P2 socket-composition decision does not answer this
+question either: making `wyrd mount` expose the socket still leaves
+a new installation with no owner to discover before anything is
+mounted.
+
+The proposed shape is option 2, with the endpoint as a file, not a
+socket: no new daemon, no new protocol, no general-purpose control
+plane. Three pieces, all precedented in-tree:
+
+- **A per-user drive registry**, owned by the installer: one entry
+  per drive (`name`, `drive_dir`, relay set, service name). Never
+  secrets — paths at most, in the style of `nix/drive/options.nix`
+  (`identityFile`/`passphraseFile` are paths, never store strings);
+  key material lives in the OS keychain / credential files per the
+  settings contract (issue 25). Proposed locations, not frozen:
+  `XDG_STATE_HOME/wyrd/drives.toml` on Linux,
+  `~/Library/Application Support/Wyrd/drives.toml` on macOS,
+  resolved through the platform path APIs the frontend already uses.
+  Owner-only permissions; the registry is read by the UI and the
+  installer, written by the installer-side registration flow.
+- **Per-drive owner services**, installed from a template the
+  installer ships: a launchd agent per drive on macOS, a systemd
+  user unit per drive on Linux — the same shapes `nix/drive`
+  already supervises declaratively, but provisioned imperatively at
+  registration time for non-Nix users. The OS service manager owns
+  the process lifecycle: enablement is startup-at-login, and a UI
+  that exits or crashes never takes the owner down with it, because
+  launchd/systemd — not the UI — is the parent.
+- **A fixed handoff sequence** for create and join. The UI collects
+  name, directory, passphrase, and relays; secrets land in the
+  keychain / credential files; the registration flow writes the
+  registry entry and installs/enables the per-drive service; the
+  owner binds `<drive_dir>/owner.sock` under the store lock; the UI
+  connects with `OwnerClient::connect_drive` and verifies with
+  `observe`/`liveness` before showing the drive. Discovery is
+  reading the registry file. No network discovery, no stable
+  socket, nothing to supervise.
+
+Why a file instead of the stable-socket endpoint the review
+preferred: a socket endpoint needs a always-on manager process
+speaking a new protocol with its own auth, lifecycle, and failure
+modes — a control plane built solely to solve initial discovery.
+The registry file plus the OS service manager provides the same
+properties (stable location, installer-provisioned, UI-independent
+lifecycle) with two precedented mechanisms and zero new privileged
+code. Per-socket peer authentication stays exactly where the
+interface puts it: same-UID checks at each drive socket.
+
+P2 interplay: this contract works under either P2 outcome. If the
+owner server moves into the shared composition, registered desktop
+drives may run mounted; if `wyrd mount` is marked non-desktop,
+registered drives run headless and the UI remains the only consumer.
+The registry records the mode per drive; it does not decide P2.
+
+Stage-0 exit: the handoff runs end to end with existing pieces —
+registry entry, supervised owner start with the parent gone,
+framed `observe` answered over the drive socket to a non-owner
+process — recorded as a rehearsal, not asserted as prose. The
+installer mechanics (template, enablement UX, keychain wiring) stay
+with the installer issue; what stage 0 freezes is the registry
+shape, the service template's supervision contract, and the handoff
+order above.
 
 ## Shape: backend crate plus frontend directory
 
@@ -436,10 +483,11 @@ installer issue; auto-update is explicitly v0.8.
 
 1. P2 owner socket: blocking prerequisite, resolved before the
    scaffold (stage 0).
-2. First-drive bootstrap and discovery: blocking open question,
-   resolved before the scaffold alongside the P2 (stage 0). Option 3
-   (UI supervises the owner) is out without an explicit OD-06-E
-   scope decision.
+2. First-drive bootstrap and discovery: decided as proposed in
+   the bootstrap section (registry file + OS per-drive services,
+   option 3 rejected without an OD-06-E scope change). Stays
+   blocking until the stage-0 rehearsal runs green and the review
+   approves; the installer mechanics stay with the installer issue.
 3. Frontend framework: leave to the implementing PR, with the
    constraints now in the note (no drive model, no socket or
    filesystem access, no protocol networking, no framework without
