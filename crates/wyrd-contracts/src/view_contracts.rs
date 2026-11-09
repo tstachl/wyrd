@@ -2,10 +2,12 @@
 //! descendants, snapshot-stable descriptors, and the open/read/head
 //! lifecycle under concurrency and head advancement.
 
+use std::path::PathBuf;
 #[cfg(feature = "mount")]
 use wyrd_daemon::fuse::FuseBackend;
 #[cfg(feature = "mount")]
 use wyrd_format::TransitionId;
+
 use wyrd_format::{Entry, MemoryObjectStore, ObjectKind, ObjectStore, Tree};
 use wyrd_sync::durable::AuthorizeSnapshot;
 use wyrd_view::{DriveView, Kind, Node, ViewError};
@@ -593,4 +595,50 @@ fn disappeared_then_recreated_paths_serve_the_new_bytes() {
         "the recreated path serves its own bytes"
     );
     backend.release_handle(handle).unwrap();
+}
+
+/// The workspace root above this crate: two levels up from
+/// `crates/wyrd-contracts`.
+fn workspace_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("crates dir")
+        .parent()
+        .expect("workspace root")
+        .to_path_buf()
+}
+
+/// The `VerifiedSnapshot` capability stays an `unsafe` trait and
+/// keeps its `compile_fail` doctest. Safe code must never put an
+/// unverified snapshot into a view head: removing `unsafe` from the
+/// trait breaks the three harness `unsafe impl`s loudly, but a
+/// deliberate fix-the-errors change would then pass the pull-request
+/// gate silently — only the doctest would notice, and the doctest
+/// build runs on `master` only (`rust-slow.yaml`). This test keeps
+/// both halves of the pin on the gate: the trait shape and the
+/// doctest shape that fails compilation while the trait is unsafe.
+#[test]
+fn verified_snapshot_capability_stays_unsafe_with_a_compile_fail_pin() {
+    let head = std::fs::read_to_string(workspace_root().join("crates/wyrd-view/src/view/head.rs"))
+        .expect("the view head source reads");
+    assert!(
+        head.contains("pub unsafe trait VerifiedSnapshot"),
+        "the capability stays an unsafe trait: safe code must not implement it"
+    );
+    let fence = head
+        .find("```compile_fail")
+        .expect("the compile_fail doctest exists on VerifiedSnapshot");
+    let doctest = &head[fence..];
+    let close = doctest
+        .find("\n/// ```\n")
+        .expect("the compile_fail doctest fence closes");
+    let doctest = &doctest[..close];
+    assert!(
+        doctest.contains("impl VerifiedSnapshot for"),
+        "the doctest implements the capability in safe code, which must not compile"
+    );
+    assert!(
+        doctest.contains("into_snapshot"),
+        "the doctest exercises the capability method, not just the trait name"
+    );
 }

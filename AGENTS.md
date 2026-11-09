@@ -25,7 +25,7 @@ cargo fast-daemon
 cargo fast-all                       # run before pushing
 cargo nextest run                    # default PR gate
 cargo test --workspace --doc
-cargo nextest run --profile slow     # live-relay tests, excluded from the PR gate
+cargo nextest run --profile slow     # master-only supplement, excluded from the PR gate
 cargo test -p wyrd-cli
 ```
 

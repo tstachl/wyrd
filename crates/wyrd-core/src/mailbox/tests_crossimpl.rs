@@ -105,8 +105,8 @@ impl RealRelay {
 /// its own database and query path, not the fake's store.
 ///
 /// This is the deterministic half of the cross-implementation story:
-/// both relays are localhost, so it runs in the default gate. The live
-/// public-relay half stays opt-in in `tests_interop.rs` — real
+/// both relays are localhost, so it runs in the `slow` (master-only)
+/// gate. The live public-relay half stays opt-in in `tests_interop.rs` — real
 /// internet policy on top of this real implementation behavior.
 #[test]
 fn heterogeneous_relays_cover_publication_replay_outage_and_recovery() {

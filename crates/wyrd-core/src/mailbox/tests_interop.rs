@@ -50,7 +50,7 @@ use std::time::Duration;
 // job — they prove a moment, not a standing guarantee. The
 // deterministic cross-implementation episode (fake plus a
 // locally-spawned real relay, full outage/recovery) lives in
-// `tests_crossimpl.rs` and runs in the default gate; this group
+// `tests_crossimpl.rs` and runs in the `slow` (master-only) gate; this group
 // adds live public-relay policy on top of that behavior.
 
 /// Public relay URL for the opt-in interop group: `WYRD_TEST_RELAY_URL`
