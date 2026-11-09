@@ -2347,7 +2347,9 @@ fn fn_is_fixture_gated(raw_lines: &[&str], code_lines: &[&str], def_idx: usize) 
 /// future `pub(crate) async fn` / `pub unsafe fn` / `pub const fn` /
 /// `pub extern "C" fn` authoring body attributed to itself instead of
 /// the previous function. Runs on stripped code lines, so comments and
-/// string literals never match; `fn`-pointer types (`fn(u32)`) and
+/// string literals never match (the ABI string is already gone on
+/// production scan lines — the skip keeps direct unstripped calls
+/// correct too); `fn`-pointer types (`fn(u32)`) and
 /// `Fn` bounds never match either (`fn` must stand alone, followed by
 /// a name).
 fn is_fn_def(line: &str) -> bool {
@@ -2494,15 +2496,16 @@ fn check_node_authoring_confined(files: &[(&str, &str)]) -> Vec<String> {
     violations
 }
 
-/// Contract (F2), source half: no production `wyrd-core` export
-/// authors a snapshot outside the live pass. `WyrdNode::put_file` and
-/// `remove` survive only as `test-fixtures`-gated bodies in
-/// `node.rs`; the loop authors only through `live/apply.rs`. A new
-/// second authority — a renamed direct-write entry, an ungated
-/// helper, a `LiveNode` shortcut around the queue — fails here before
-/// it ships beside the quota/fold/staleness channel. The manifest
-/// half above keeps the gate itself test-only; this is the source
-/// check that makes the retirement a gate rather than a note.
+/// Contract (F2), source half: within `node.rs` and `live/`, no
+/// production authoring sits outside the live pass or a gated fixture.
+/// `WyrdNode::put_file` and `remove` survive only as
+/// `test-fixtures`-gated bodies in `node.rs`; the loop authors only
+/// through `live/apply.rs`. A new second authority inside that scope —
+/// a renamed direct-write entry, an ungated helper, a `LiveNode`
+/// shortcut around the queue — fails here before it ships beside the
+/// quota/fold/staleness channel. The manifest half above keeps the
+/// gate itself test-only; this is the source check that makes the
+/// retirement a gate rather than a note.
 #[test]
 fn node_authoring_stays_in_the_live_pass_or_fixtures() {
     let root = workspace_root();
