@@ -23,11 +23,15 @@
 //!   byte-identical.
 
 pub mod auth;
+pub mod client;
 pub mod server;
 #[cfg(test)]
 mod tests_owner;
 pub mod wire;
 
+pub use client::{
+    decode_read_bytes, ClientError, OwnerClient, CLIENT_WIRE_VERSION, DEFAULT_RESPONSE_TIMEOUT,
+};
 pub use server::{
     bind_listener, socket_path_for, OwnerHandles, OwnerServer, DEFAULT_MAX_READ_BYTES,
     MAX_FRAME_BYTES, MAX_OWNER_CONNECTIONS, MAX_SUBMIT_CONTENT_BYTES, OWNER_SOCKET_NAME,
