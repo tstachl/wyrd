@@ -1,14 +1,14 @@
-// page/check.ts — pin marketing claims to their backing docs sections.
+// apps/marketing/check.ts — pin marketing claims to their backing docs sections.
 //
 // The page stays hand-written and docs stay the source of truth for facts.
-// This checker links the two: each slot in page/map.json cites the docs
+// This checker links the two: each slot in apps/marketing/map.json cites the docs
 // sections that back it, and map.lock.json pins those sections by hash.
 // When a cited section drifts, the check fails and a human re-reads the
 // slot before re-pinning. Copy rules (mustContain/forbids) catch the
 // present-tense-overclaim class of bug; they never rewrite copy.
 //
-// Verify:  bun run page/check.ts
-// Re-pin:   bun run page/check.ts --update
+// Verify:  bun run apps/marketing/check.ts
+// Re-pin:   bun run apps/marketing/check.ts --update
 
 interface Back {
   file: string;
@@ -31,7 +31,7 @@ interface LockFile {
   hashes: Record<string, string>;
 }
 
-const root = decodeURIComponent(new URL("../", import.meta.url).pathname);
+const root = decodeURIComponent(new URL("../../", import.meta.url).pathname);
 const read = (rel: string): Promise<string> => Bun.file(root + rel).text();
 
 // Extract a markdown section by exact heading line. Ends at the next
@@ -63,7 +63,7 @@ function slotBody(page: string, name: string): string | null {
   return m ? m[1] : null;
 }
 
-const map: MapFile = JSON.parse(await read("page/map.json"));
+const map: MapFile = JSON.parse(await read("apps/marketing/map.json"));
 const page = await read(map.page);
 const update = Bun.argv.includes("--update");
 let lock: LockFile = { version: 1, hashes: {} };
@@ -133,7 +133,7 @@ for (const s of map.slots) {
           `drift under slot "${s.slot}": ${back.file} ${JSON.stringify(back.heading)} changed.`,
           ...quotedBody(body),
           ...quotedSection(text),
-          `copy rules mustContain ${JSON.stringify(s.mustContain)} forbids ${JSON.stringify(s.forbids)} — re-read the copy against the section above, then re-pin with: bun run --allow-write page/check.ts --update`,
+          `copy rules mustContain ${JSON.stringify(s.mustContain)} forbids ${JSON.stringify(s.forbids)} — re-read the copy against the section above, then re-pin with: bun run --allow-write apps/marketing/check.ts --update`,
         ].join("\n"),
       );
     }

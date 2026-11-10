@@ -1,16 +1,16 @@
 # Native static-site workflow (port of the former
 # .ngit/act/workflows/page.yml).
 #
-# Static site for https://wyrd.enesis.md/ from `page/` (self-contained
+# Static site for https://wyrd.enesis.md/ from `apps/marketing/` (self-contained
 # index.html + fonts + svg, no build step): one job checks that
-# marketing claims stay pinned to docs (page/check.ts fails on drift or
+# marketing claims stay pinned to docs (apps/marketing/check.ts fails on drift or
 # present-tense overclaims), then deploys via wrangler to the
 # wyrd-enesis-md Pages project.
 #
-# Master pushes only, scoped to page/** so Rust changes never trigger
+# Master pushes only, scoped to apps/marketing/** so Rust changes never trigger
 # it. PR jobs cannot request secrets even for maintainer PRs, so there
-# is no PR preview leg: PRs touching page/** get the local
-# `bun run page/check.ts` plus the doc-links hook, and the deploy runs
+# is no PR preview leg: PRs touching apps/marketing/** get the local
+# `bun run apps/marketing/check.ts` plus the doc-links hook, and the deploy runs
 # once the push lands on master.
 version: 1
 system: x86_64-linux
@@ -21,7 +21,7 @@ on:
   push:
     branches: [master]
     paths:
-      - "page/**"
+      - "apps/marketing/**"
       - ".ngit/nix/workflows/page.yaml"
 
 jobs:

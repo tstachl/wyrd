@@ -140,14 +140,14 @@ in
       pass_filenames = false;
     };
 
-    # Marketing honesty gate: claims on page/index.html stay pinned to
-    # their backing docs/ sections (page/map.json + page/map.lock.json).
+    # Marketing honesty gate: claims on apps/marketing/index.html stay pinned to
+    # their backing docs/ sections (apps/marketing/map.json + apps/marketing/map.lock.json).
     # Runs only when the page, the mapping, or the docs change.
     page-check = {
       enable = true;
       name = "page docs mapping";
-      entry = "bun run page/check.ts";
-      files = "^(page/|docs/|README\\.md)";
+      entry = "bun run apps/marketing/check.ts";
+      files = "^(apps/marketing/|docs/|README\\.md)";
       pass_filenames = false;
     };
 
