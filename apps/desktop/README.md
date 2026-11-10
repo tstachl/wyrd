@@ -37,5 +37,13 @@ the shadcn-svelte paths so further primitives arrive via its CLI.
   values in `src/lib/ipc/errors.test.ts` (`bun test`) are copied
   from the Rust taxonomy test; full Rust-to-TS wire agreement
   lands with the command layer.
+- Visual identity follows the C · Held logo (`wyrd-logo.html` at the
+  workspace root): Ink `#121614`, Bone `#ECE7DA`, Amber `#E3A13B` +
+  Smoke `#4A4F4B` as Tailwind theme tokens in `src/app.css`, Amber
+  the sole accent. Type is Space Grotesk, self-hosted
+  (`src/lib/assets/fonts/`); IBM Plex Mono for machine text arrives
+  with the first view that renders hashes. The Held mark component
+  (`src/lib/components/held-mark.svelte`) and favicon
+  (`public/held.svg`) reuse the logo geometry verbatim.
 - Production frontend is static, locally bundled assets only: no
   remote frontend, CDN, external app server, or remote fonts.
