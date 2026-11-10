@@ -64,7 +64,10 @@ on:
 
 jobs:
   # Fast gates: deps once, then check + clippy reuse it in the same
-  # store, then the audit run command (network for the advisory DB).
+  # store, then the mount-free check + clippy lanes (the
+  # `--no-default-features` build is a shipped configuration, so it
+  # rides the fast gate instead of only the local hook), then the
+  # audit run command (network for the advisory DB).
   # Build steps lead; the run step closes — no run before build.
   gates-fast:
     steps:
@@ -74,6 +77,10 @@ jobs:
           build: checks.x86_64-linux.rust-check
       - clippy:
           build: checks.x86_64-linux.rust-clippy
+      - check-nomount:
+          build: checks.x86_64-linux.rust-check-nomount
+      - clippy-nomount:
+          build: checks.x86_64-linux.rust-clippy-nomount
       - audit:
           run: rust.audit
   # Test gate: deps once, then the test suite reuses it in the
