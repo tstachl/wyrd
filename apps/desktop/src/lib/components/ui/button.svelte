@@ -38,12 +38,13 @@
   let {
     variant = "default",
     size = "default",
+    type = "button",
     class: className,
     children,
     ...rest
   }: Props = $props();
 </script>
 
-<button class={cn(buttonVariants({ variant, size }), className)} {...rest}>
+<button type={type} class={cn(buttonVariants({ variant, size }), className)} {...rest}>
   {@render children()}
 </button>

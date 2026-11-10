@@ -17,6 +17,14 @@ export default defineConfig({
       $lib: fileURLToPath(new URL("./src/lib", import.meta.url)),
     },
   },
+  server: {
+    // Brand assets live in `apps/shared/brand/`, outside the Vite
+    // root. Allow serving them in `bun run dev:ui`; the production
+    // build bundles them into `dist/` and needs no exception.
+    fs: {
+      allow: [".."],
+    },
+  },
   build: {
     outDir: "dist",
     emptyOutDir: true,

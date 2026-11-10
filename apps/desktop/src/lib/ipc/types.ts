@@ -3,8 +3,10 @@
 // Source of truth: `BackendError` in
 // `crates/wyrd-desktop/src/backend.rs` (`#[serde(tag = "kind",
 // rename_all = "lowercase")]`, `Refused` flattening `WireError`).
-// Refusal codes are the exact `WireErrorCode` variant names in
-// `crates/wyrd-owner-client/src/wire.rs`.
+// Known refusal codes are the `WireErrorCode` variant names in
+// `crates/wyrd-owner-client/src/wire.rs`; `BackendRefused.code`
+// stays `string` so a code newer than this frontend is preserved
+// verbatim instead of misclassified (see `isWireErrorCode`).
 //
 // This mirror is checked against fixtures copied from the Rust
 // test `error_taxonomy_serializes_typed` (see `errors.test.ts`).
