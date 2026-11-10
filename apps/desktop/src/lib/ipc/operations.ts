@@ -1,13 +1,19 @@
 // Per-operation wrappers over the Tauri command surface
 // (`crates/wyrd-desktop/src/commands.rs`). One wrapper per
 // command, same name, same arguments — this module invents no
-// command names and no argument shapes. Each wrapper forwards
-// through the single `invokeCommand` path and returns the typed
-// `IpcResult`; result shapes are mirrored in `./results.ts`.
+// command names and no argument shapes. Owner-operation wrappers
+// forward through the single `invokeCommand` path and return the
+// typed `IpcResult`; the local queries (`listDrives`,
+// `driveSettings`) forward through `invokeValue` and return their
+// state structs directly — unknown states ride inside the payload,
+// and any rejection throws. Result shapes are mirrored in
+// `./results.ts`.
 
-import { invokeCommand } from "./client.js";
+import { invokeCommand, invokeValue } from "./client.js";
 import type { IpcResult } from "./types.js";
 import type {
+  DriveSettingsState,
+  RegistryState,
   Served,
   WireAttr,
   WireDirEntry,
@@ -70,4 +76,21 @@ export function reconcileLookup(
  */
 export function reconnect(): Promise<IpcResult<null>> {
   return invokeCommand<null>("reconnect");
+}
+
+/**
+ * Every registered drive plus per-drive reachability, verified this
+ * session. Infallible: unknown states ride inside the payload.
+ */
+export function listDrives(): Promise<RegistryState> {
+  return invokeValue<RegistryState>("list_drives");
+}
+
+/**
+ * This drive's configured bounds, as configured — never defaults,
+ * never effective posture. Infallible: unknown states ride inside
+ * the payload.
+ */
+export function driveSettings(): Promise<DriveSettingsState> {
+  return invokeValue<DriveSettingsState>("drive_settings");
 }

@@ -44,3 +44,22 @@ export async function invokeCommand<T>(
   }
   return { ok: true, value };
 }
+
+/**
+ * Invoke an infallible local query (`list_drives`,
+ * `drive_settings`). These commands answer state structs, never the
+ * owner taxonomy, so any rejection is a transport failure or a shell
+ * bug — never an owner answer — and throws `IpcTransportError`.
+ * Unknown states (missing files, version skew, version-skewed or
+ * malformed content) ride inside the payload, never as rejections.
+ */
+export async function invokeValue<T>(
+  command: string,
+  args?: Record<string, unknown>,
+): Promise<T> {
+  try {
+    return await invoke<T>(command, args);
+  } catch (raw: unknown) {
+    throw new IpcTransportError(raw);
+  }
+}

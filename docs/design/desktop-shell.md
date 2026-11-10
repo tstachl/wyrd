@@ -373,14 +373,19 @@ verdict.
 
 ## Frontend: three views and the unavailable state
 
-- Drive lifecycle: create, join, leave.
+- Drive lifecycle: registered drives, each verified this
+  session, and the drive this shell serves — creation, joining,
+  and leaving stay outside the shell per the lifecycle-authority
+  OD below (discovery and availability here, execution in the
+  provisioning and membership flows).
 - Status/posture: durable observation, liveness, freshness — the
   three kept distinct (a live socket is not a durable fact; a paused
   owner is reachable and quiet, not down).
-- Settings: everything the app persists, handed off to the settings
-  surface (issue 25). The owner holds secrets; the UI never sees key
-  material beyond the member-hosted disclosure bound, and the
-  credential path uses no env vars and no terminal.
+- Settings: what the app persists, handed off to the settings
+  surface (issue 25) and shown read-only per the
+  settings-ownership OD below. The owner holds secrets; the UI
+  never sees key material beyond the member-hosted disclosure
+  bound, and the credential path uses no env vars and no terminal.
 - The unavailable state is a first-class view, not an error toast.
   Owner down means an explicit unavailable screen; the shell never
   opens the store itself. Owner back means the shell resumes without
@@ -406,6 +411,41 @@ verdict.
   display follows. This distinction carries the later views
   (notifications, conflicts, storage usage in issues 18–26), so the
   scaffold sets the precedent now.
+- Cached-state semantics are normative for the shell, not a style
+  preference (OD, decided stage 2): a last successful observation
+  displays as historical/stale information, stamped with when it was
+  observed; current availability derives only from live socket
+  outcomes (a fresh terminal success marks available, an
+  `Unavailable` answer marks unavailable, an `Unconfirmed` outcome
+  changes nothing); owner unavailable never means the drive is
+  empty, a failed observation never means membership is absent,
+  cached posture is never current posture, and a past success never
+  proves the next operation. The presentation model enforces these
+  rules; individual views do not re-decide them.
+- Drive lifecycle is observational in stage 2 (OD, decided option
+  B): the lifecycle view discovers registered drives, probes each
+  owner's availability this session, and shows membership and
+  posture facts from `observe` — it never creates, joins, or
+  leaves. Creation and joining belong to the provisioning workflow,
+  leaving belongs to membership authorship, and both stay with
+  their existing authorities and follow-up work (installer issue
+  for provisioning UX, service enablement, and credential handling).
+  The view guides toward those flows instead of executing them.
+  Spawning the CLI from the backend was rejected: binary discovery,
+  version skew, process lifecycle, secrets-adjacent paths, dialog
+  permissions, and CLI-output-as-UX would establish a second
+  integration surface that the stage exists to avoid.
+- Settings are read-only in stage 2 (OD, decided): the settings
+  view deserializes the existing `settings.json` schema through a
+  private presentation model (`DriveSettingsView`) and presents one
+  drive's configured bounds — never defaults, never effective
+  runtime posture, relays untouched. The shell never writes the
+  file: a second writer would need an explicit ownership,
+  concurrency (atomic rename does not stop lost updates), and
+  runtime-application contract that does not exist yet. Editing
+  waits on either narrowly scoped owner operations (for
+  runtime-mutable values) or the installer/configuration workflow
+  with an explicit restart contract (for startup-only values).
 
 ## Layer gate (two tiers, honestly described)
 
@@ -544,7 +584,12 @@ installer issue; auto-update is explicitly v0.8.
   every outstanding outcome unknown and requires reconciliation
   after reconnect.
 - Human-path rehearsal (shared with the installer issue): install,
-  create drive, see it, quit cleanly — no terminal.
+  create drive, see it, quit cleanly — no terminal. The create
+  step belongs to installer integration (provisioning UX, service
+  enablement, credential handling travel with that issue): stage 2
+  proves the shell observes, presents, and shuts down gracefully,
+  and the integrated rehearsal proves install → create → discover
+  → quit once provisioning lands there.
 - No new wire bytes, so no new golden vectors: the backend speaks
   through the shared client, already pinned by `vectors.json`. Any
   drift in the mapped types fails the existing field-name snapshot,
@@ -584,7 +629,11 @@ installer issue; auto-update is explicitly v0.8.
    surface, proven by the Linux builder; plugins a shipped view
    needs wait for the first view.
 2. Three views against the live interface — never against mocked
-   owner behavior.
+   owner behavior. The lifecycle view is observational (registry
+   plus per-drive availability probes; provisioning execution
+   stays with the installer follow-up) and the settings view is
+   read-only; the unavailable state, graceful-quit drain, and
+   presentation-cache discipline ship here.
 3. Packaging inputs consumed by the installer issue; human-path
    rehearsal.
 
