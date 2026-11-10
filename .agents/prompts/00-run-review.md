@@ -2,8 +2,9 @@
 
 Goal: produce three independent, evidence-only reviews at one commit
 from a clean, isolated worktree. Reviews are historical evidence, not
-policy (see `docs/reviews/README.md`). Reviews live on ngit as labeled
-issues; nothing is committed to the repo.
+policy). Reviews live on ngit as labeled
+issues; find them with `gate issue list --label review:architecture`
+(and `review:security`, `review:code-quality`, `review:release`).
 
 The orchestrator (human or parent agent) owns provenance, cohesion,
 and posting. Each reviewer owns only its report text.

@@ -95,4 +95,6 @@ the status accurately and link to that evidence.
 - Status claims use the vocabulary above.
 - Review reports live verbatim on ngit as `review:*` issues. Findings
   become issues; contracts change through issues, not through edits to
-  old reports. See `docs/reviews/README.md` for the finding workflow.
+  old reports. The finding workflow: verify each finding against the
+  current commit, classify it, track accepted work as issues, and leave
+  the original issue body unchanged.
