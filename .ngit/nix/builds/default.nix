@@ -35,12 +35,40 @@ let
     src = craneLib.cleanCargoSource src;
     strictDeps = true;
     nativeBuildInputs = [ pkgs.pkg-config ];
-    buildInputs = [ pkgs.fuse ];
+    # Native GUI closure for the Tauri link (`wyrd-desktop`):
+    # build- and runtime GUI closure, mirroring devenv.nix. This
+    # file is only ever realised on x86_64-linux (flake `checks`),
+    # so no platform guard — but the set must stay GUI-only and
+    # mirror devenv.nix's Linux Tauri stanza (no Android SDK, no
+    # GStreamer/media stack). Rides with the `tauri` crate link per
+    # the desktop carrier rule, never blind beside it.
+    buildInputs = [ pkgs.fuse ] ++ guiInputs pkgs;
     # Same dev profile as the gates: without this the hook default
     # (release) builds release artifacts nobody consumes, and every
     # gate recompiles the world in dev instead of sharing.
     env = { CARGO_PROFILE = ""; };
   };
+
+  # Native GUI closure for the Tauri link, shared by every gate
+  # through `gateArgs` (and by `rustDeps` above): same set, same
+  # rule. Keep the two in sync — a package here but not there (or
+  # the reverse) fails the sys-crate probes in one leg only.
+  guiInputs = pkgs: with pkgs; [
+    glib
+    glib-networking
+    gsettings-desktop-schemas
+    gtk3
+    webkitgtk_4_1
+    libsoup_3
+    gdk-pixbuf
+    cairo
+    pango
+    harfbuzz
+    atk
+    dbus
+    librsvg
+    libayatana-appindicator
+  ];
 
   # Common gate inputs: shared artifacts plus the native prelude for
   # build scripts (fuser's pkg-config probe; libfuse2 link probe),
@@ -63,7 +91,7 @@ let
     strictDeps = true;
     doInstallCargoArtifacts = false;
     nativeBuildInputs = [ pkgs.pkg-config ];
-    buildInputs = [ pkgs.fuse ];
+    buildInputs = [ pkgs.fuse ] ++ guiInputs pkgs;
     env = { CARGO_PROFILE = ""; };
   };
 

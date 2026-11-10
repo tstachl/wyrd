@@ -197,4 +197,14 @@ in
   # detection). Input is pinned to the release tag in a detached
   # worktree, never the working copy.
   scripts.build.exec = "${./.ngit/scripts/build.sh} \"$@\"";
+
+  # Desktop development: `wyrd-desktop` runs the Tauri app in dev
+  # mode. The Tauri project lives in `crates/wyrd-desktop`
+  # (non-default split layout), so the script enters that directory
+  # first — the hook paths in `tauri.conf.json` assume it. Extra
+  # arguments forward to `cargo tauri dev` (e.g. `-- --drive-dir …`
+  # once the binary runs).
+  scripts.wyrd-desktop.exec = ''
+    cd "$DEVENV_ROOT/crates/wyrd-desktop" && exec cargo tauri dev "$@"
+  '';
 }

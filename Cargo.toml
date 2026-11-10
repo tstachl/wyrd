@@ -94,6 +94,16 @@ serde_json = "1"
 # structured diagnostics (daemon backends, CLI mount log, live sync loop)
 tracing = "0.1"
 
+# desktop runtime (wyrd-desktop only): Tauri v2 application toolkit and
+# its build script. The crate is pinned to the repo's cargo-tauri
+# minor (2.12: the CLI and the linked crate must agree);
+# `tauri-build` versions independently (2.x line) and only needs the
+# same major. The layer gate reserves the `tauri` edge for this
+# crate alone. `tauri-build` is a build-dependency, which the
+# dependency-DAG checker does not count as a production edge.
+tauri = "2.12"
+tauri-build = "2"
+
 # FUSE boundary error mapping (daemon adapter only)
 libc = "0.2"
 

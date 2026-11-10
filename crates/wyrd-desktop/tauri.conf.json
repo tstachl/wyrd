@@ -5,8 +5,8 @@
   "identifier": "md.enesis.wyrd",
   "build": {
     "frontendDist": "../../apps/desktop/dist",
-    "beforeDevCommand": "bun --cwd ../../apps/desktop run dev",
-    "beforeBuildCommand": "bun --cwd ../../apps/desktop run build"
+    "beforeDevCommand": "cd \"$(dirname \"$(cargo locate-project --workspace --message-format plain)\")/apps/desktop\" && bun run dev",
+    "beforeBuildCommand": "cd \"$(dirname \"$(cargo locate-project --workspace --message-format plain)\")/apps/desktop\" && bun run build"
   },
   "app": {
     "windows": [

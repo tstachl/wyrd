@@ -402,3 +402,143 @@ fn submit_forwards_through_the_single_queue_and_commits() {
 
     owner.shutdown();
 }
+
+/// Command-layer proofs: the same taxonomy, driven through the
+/// registered Tauri commands on the mock runtime — no event loop,
+/// no real webview — against the same real owner. The mock stands
+/// in for the transport only: every answer below is produced by the
+/// daemon's server over a live loop, and the invoked command names
+/// and argument shapes are the registered ones verbatim, so a
+/// name/argument drift between the handler and the frontend fails
+/// here.
+///
+/// Sandbox note: building the mock webview resolves a data
+/// directory, and on Linux an unset one falls back to the app
+/// local data dir plus `create_dir_all` — which the CI sandbox
+/// denies. Each proof sets an explicit per-test data directory
+/// under the temp dir (already writable: the owner sockets live
+/// there), skipping the home-directory resolution entirely.
+///
+/// One mock app managing the backend, plus its webview: the pair
+/// every command proof invokes through. The app never runs — the
+/// mock runtime answers invokes without an event loop.
+fn mock_app_with(
+    backend: DesktopBackend,
+    tag: &str,
+) -> (
+    tauri::App<tauri::test::MockRuntime>,
+    tauri::WebviewWindow<tauri::test::MockRuntime>,
+    std::path::PathBuf,
+) {
+    let app = tauri::test::mock_builder()
+        .manage(wyrd_desktop::AppState::new(backend))
+        .invoke_handler(wyrd_desktop::invoke_handler())
+        .build(tauri::generate_context!())
+        .expect("the mock app builds");
+    let data_dir = std::env::temp_dir().join(format!(
+        "wyrd-desktop-webview-{}-{}",
+        std::process::id(),
+        tag
+    ));
+    std::fs::create_dir_all(&data_dir).expect("the webview data dir builds");
+    let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .data_directory(data_dir.clone())
+        .build()
+        .expect("the mock webview builds");
+    (app, webview, data_dir)
+}
+
+/// Invoke one command on the mock webview: the JSON the command
+/// layer answers with, success or taxonomy error alike.
+fn invoke(
+    webview: &tauri::WebviewWindow<tauri::test::MockRuntime>,
+    cmd: &str,
+    args: serde_json::Value,
+) -> Result<serde_json::Value, serde_json::Value> {
+    let request = tauri::webview::InvokeRequest {
+        cmd: cmd.into(),
+        callback: tauri::ipc::CallbackFn(0),
+        error: tauri::ipc::CallbackFn(1),
+        url: "tauri://localhost"
+            .parse()
+            .expect("the local origin parses"),
+        body: tauri::ipc::InvokeBody::Json(args),
+        headers: Default::default(),
+        invoke_key: tauri::test::INVOKE_KEY.into(),
+    };
+    tauri::test::get_ipc_response(webview, request).map(|body| {
+        body.deserialize::<serde_json::Value>()
+            .expect("response deserializes")
+    })
+}
+
+/// Refusals keep their codes through the command boundary: a
+/// missing path refuses `NotFound` from `lookup`, with the
+/// taxonomy tag intact in the rejection JSON.
+#[test]
+fn commands_preserve_refusal_codes() {
+    let owner = running_owner();
+    let backend = backend_for(&owner);
+    let (_app, webview, data_dir) = mock_app_with(backend, "refusals");
+
+    match invoke(
+        &webview,
+        "lookup",
+        serde_json::json!({"path": "no-such-path.txt"}),
+    ) {
+        Err(error) => {
+            assert_eq!(error["kind"], "refused");
+            assert_eq!(error["code"], "NotFound");
+        }
+        ok => panic!("a missing path refuses through the command: {ok:?}"),
+    }
+
+    std::fs::remove_dir_all(&data_dir).expect("the webview data dir cleans up");
+    owner.shutdown();
+}
+
+/// Availability returns without restart, through the commands: the
+/// lookup serves while the owner is up, stays unconfirmed while it
+/// is unreachable, and serves again after an explicit `reconnect`
+/// — all on the one mock app, which never restarts.
+#[test]
+fn commands_recover_availability_without_restart() {
+    let mut owner = running_owner();
+    let backend = backend_for(&owner);
+    let (_app, webview, data_dir) = mock_app_with(backend, "recovery");
+
+    assert!(
+        invoke(&webview, "lookup", serde_json::json!({"path": "seed.txt"})).is_ok(),
+        "the command serves while the owner is up"
+    );
+
+    // Owner alive but unreachable: the command stays unconfirmed —
+    // never success, never recast as unavailable.
+    owner.stop_serving();
+    match invoke(&webview, "lookup", serde_json::json!({"path": "seed.txt"})) {
+        Err(error) => assert_eq!(error["kind"], "unconfirmed"),
+        ok => panic!("an unreachable owner stays unconfirmed: {ok:?}"),
+    }
+
+    // Explicit reconnect while still down reports unavailable,
+    // honestly: no connection was minted.
+    match invoke(&webview, "reconnect", serde_json::json!({})) {
+        Err(error) => assert_eq!(error["kind"], "unavailable"),
+        ok => panic!("reconnect with no owner reports unavailable: {ok:?}"),
+    }
+
+    // Owner back: the same app's explicit reconnect mints a new
+    // instance, and the lookup serves again. No restart anywhere.
+    owner.serve_again();
+    assert!(
+        invoke(&webview, "reconnect", serde_json::json!({})).is_ok(),
+        "explicit reconnect mints a new instance"
+    );
+    assert!(
+        invoke(&webview, "lookup", serde_json::json!({"path": "seed.txt"})).is_ok(),
+        "availability returns on the same app without restart"
+    );
+
+    std::fs::remove_dir_all(&data_dir).expect("the webview data dir cleans up");
+    owner.shutdown();
+}

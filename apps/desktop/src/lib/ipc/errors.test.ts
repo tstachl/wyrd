@@ -3,8 +3,8 @@
 // the Rust test `error_taxonomy_serializes_typed` in
 // `crates/wyrd-desktop/src/backend.rs` — they pin the JSON shape
 // the frontend must keep reading, not a second implementation of
-// it. Full Rust-to-TS wire agreement lands with the Tauri command
-// layer (first view).
+// it. Result-shape fixtures live in `results.test.ts`, copied from
+// `result_shapes_serialize_verbatim`.
 //
 // Run: `bun test` from `apps/desktop/`.
 
