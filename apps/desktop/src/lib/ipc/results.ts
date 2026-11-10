@@ -13,9 +13,8 @@
 //
 // Fixtures pinning these shapes live in `results.test.ts`, copied
 // from the Rust test `result_shapes_serialize_verbatim` in
-// `crates/wyrd-desktop/src/commands.rs`. Full Rust-to-TS
-// wire-agreement proofs land with the first view; until then this
-// file must not gain shapes the Rust side does not produce.
+// `crates/wyrd-desktop/src/commands.rs`. Nothing here may add a
+// shape the Rust side does not produce.
 
 export type WireKind = "File" | "Dir" | "Symlink" | "Conflict";
 
