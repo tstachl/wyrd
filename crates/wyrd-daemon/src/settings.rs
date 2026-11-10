@@ -47,7 +47,10 @@ pub const SETTINGS_FILENAME: &str = "settings.json";
 #[serde(deny_unknown_fields)]
 pub struct DriveSettingsSection {
     /// Ceiling on retained object bytes (`None` — absent — is
-    /// unlimited). Wires its accountant when applied, always.
+    /// unlimited). Wires its accountant when applied, always. Zero
+    /// is allowed and means what it says: every write refuses, so
+    /// composing zero over a non-empty store fails fast at the
+    /// startup cross-check instead of discovering it per write.
     #[serde(default)]
     pub retained_bytes_quota: Option<u64>,
     /// Wants admitted per sync pass.
@@ -65,10 +68,13 @@ pub struct DriveSettingsSection {
 }
 
 /// The whole file: one version plus per-drive sections keyed by
-/// absolute drive directory. Sections for drives that do not exist
-/// are inert data, never an error — a setting outlives a deleted
-/// drive the way a preference outlives an uninstalled drive.
+/// absolute drive directory. Unknown top-level keys are refused
+/// with their name, like unknown section keys. Sections for drives
+/// that do not exist are inert data, never an error — a setting
+/// outlives a deleted drive the way a preference outlives an
+/// uninstalled drive.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AppSettingsFile {
     pub version: u32,
     pub drives: BTreeMap<String, DriveSettingsSection>,
@@ -87,27 +93,49 @@ impl Default for AppSettingsFile {
 /// per-user state, resolved through the same platform conventions
 /// as the drive registry. The writer creates it with owner-only
 /// permissions; registration and settings flows are its normal
-/// writers, never hand-editing.
-pub fn default_settings_path() -> PathBuf {
+/// writers, never hand-editing. Fails loudly when no per-user
+/// directory resolves (no `HOME`, no `XDG_STATE_HOME`): falling
+/// back to a cwd-relative file could place settings inside a drive
+/// directory, which the upgrade contract forbids — so there is no
+/// fallback, only an error naming both variables.
+pub fn default_settings_path() -> Result<PathBuf, String> {
+    resolve_settings_path(
+        std::env::var("HOME").ok().as_deref(),
+        std::env::var("XDG_STATE_HOME").ok().as_deref(),
+    )
+}
+
+/// Pure half of [`default_settings_path`]: resolve the per-user
+/// settings path from explicit inputs so the no-home refusal pins
+/// without touching the process environment.
+pub fn resolve_settings_path(
+    home: Option<&str>,
+    xdg_state_home: Option<&str>,
+) -> Result<PathBuf, String> {
     #[cfg(target_os = "macos")]
-    {
-        if let Some(home) = std::env::var_os("HOME") {
-            return PathBuf::from(home)
+    if let Some(home) = home {
+        if !home.is_empty() {
+            return Ok(PathBuf::from(home)
                 .join("Library/Application Support/Wyrd")
-                .join(SETTINGS_FILENAME);
+                .join(SETTINGS_FILENAME));
         }
     }
-    if let Ok(dir) = std::env::var("XDG_STATE_HOME") {
+    if let Some(dir) = xdg_state_home {
         if !dir.is_empty() {
-            return PathBuf::from(dir).join("wyrd").join(SETTINGS_FILENAME);
+            return Ok(PathBuf::from(dir).join("wyrd").join(SETTINGS_FILENAME));
         }
     }
-    if let Some(home) = std::env::var_os("HOME") {
-        return PathBuf::from(home)
-            .join(".local/state/wyrd")
-            .join(SETTINGS_FILENAME);
+    if let Some(home) = home {
+        if !home.is_empty() {
+            return Ok(PathBuf::from(home)
+                .join(".local/state/wyrd")
+                .join(SETTINGS_FILENAME));
+        }
     }
-    PathBuf::from(SETTINGS_FILENAME)
+    Err(
+        "no per-user state directory: set HOME or XDG_STATE_HOME to locate settings.json"
+            .to_string(),
+    )
 }
 
 /// The `open` demand-wait the composers pass at the split when the
@@ -133,9 +161,13 @@ pub fn split_file_overrides(drive_dir: &Path) -> Result<(Option<u64>, BudgetOver
     Ok((quota, rest))
 }
 /// The lookup key for one drive's section: the absolute drive
-/// directory as a string. Relative arguments resolve against the
-/// current directory so the same drive finds its section however
-/// it was named on the command line.
+/// directory as an exact string. Relative arguments resolve once
+/// against the current directory; `/abs/drive`, `drive`, and
+/// `./drive` are different spellings and only the spelling that
+/// matches the stored key finds its section — the same spelling
+/// finds the same section every time, and no spelling is
+/// canonicalized through symlinks. A drive path containing `..`
+/// can never match a stored section (stored keys refuse `..`).
 pub fn settings_key_for(drive_dir: &Path) -> String {
     if drive_dir.is_absolute() {
         drive_dir.to_string_lossy().into_owned()
@@ -283,9 +315,11 @@ pub fn overrides_for_path(
     }
 }
 
-/// Overrides for one drive from the default settings path.
+/// Overrides for one drive from the default settings path. A
+/// missing file is empty overrides; an unresolvable per-user
+/// directory is a loud refusal, never a cwd-relative guess.
 pub fn overrides_for(drive_dir: &Path) -> Result<BudgetOverrides, String> {
-    overrides_for_path(&default_settings_path(), drive_dir)
+    overrides_for_path(&default_settings_path()?, drive_dir)
 }
 
 #[cfg(test)]
@@ -366,6 +400,68 @@ mod tests {
         .unwrap();
         let refused = read_settings(&path).unwrap_err();
         assert!(refused.contains("admit_all"), "{refused}");
+    }
+
+    #[test]
+    fn an_unknown_top_level_key_is_refused_with_its_name() {
+        let dir = scratch("unknown-top");
+        let path = dir.join("settings.json");
+        std::fs::write(&path, r#"{"version": 1, "drives": {}, "setting": 1}"#).unwrap();
+        let refused = read_settings(&path).unwrap_err();
+        assert!(refused.contains("setting"), "{refused}");
+    }
+
+    #[test]
+    fn the_per_user_path_fails_loudly_with_no_home_and_no_xdg() {
+        let refused = resolve_settings_path(None, None).unwrap_err();
+        assert!(
+            refused.contains("HOME") && refused.contains("XDG_STATE_HOME"),
+            "{refused}"
+        );
+        // Empty strings are unset, not directories.
+        let refused = resolve_settings_path(Some(""), Some("")).unwrap_err();
+        assert!(refused.contains("HOME"), "{refused}");
+        // A set HOME resolves per-user, never cwd-relative.
+        let resolved = resolve_settings_path(Some("/home/op"), None).unwrap();
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            resolved,
+            PathBuf::from("/home/op")
+                .join("Library/Application Support/Wyrd")
+                .join(SETTINGS_FILENAME)
+        );
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(
+            resolved,
+            PathBuf::from("/home/op")
+                .join(".local/state/wyrd")
+                .join(SETTINGS_FILENAME)
+        );
+        let resolved = resolve_settings_path(Some("/home/op"), Some("/run/user/1000")).unwrap();
+        // XDG wins over the `~/.local/state` fallback everywhere; on
+        // macOS a set HOME takes the Application Support path first,
+        // like the drive registry.
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            resolved,
+            PathBuf::from("/home/op")
+                .join("Library/Application Support/Wyrd")
+                .join(SETTINGS_FILENAME)
+        );
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(
+            resolved,
+            PathBuf::from("/run/user/1000")
+                .join("wyrd")
+                .join(SETTINGS_FILENAME)
+        );
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            resolve_settings_path(None, Some("/run/user/1000")).unwrap(),
+            PathBuf::from("/run/user/1000")
+                .join("wyrd")
+                .join(SETTINGS_FILENAME)
+        );
     }
 
     #[test]

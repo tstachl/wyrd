@@ -1302,6 +1302,7 @@ pub(crate) fn sync_now(
         None
     };
     let (mut live, parts) = daemon.into_live(open_timeout, &config)?;
+    live.set_configured_relays(relays.len());
     // The role directory installs whether or not a serving surface
     // exists: a serving-less `sync now` retains like its role too.
     install_role_dir(&mut live, &drive_dir);

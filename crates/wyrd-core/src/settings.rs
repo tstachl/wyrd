@@ -45,7 +45,10 @@ use crate::view::NamespaceView;
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct BudgetOverrides {
     /// Ceiling on retained object bytes (`None` — the default — is
-    /// unlimited). Always wires its accountant when set.
+    /// unlimited). Always wires its accountant when set. Zero is
+    /// allowed and means what it says: every write refuses, so a
+    /// zero quota over a non-empty store fails fast at the startup
+    /// cross-check instead of discovering it per write.
     pub retained_bytes_quota: Option<u64>,
     /// Wants admitted per sync pass.
     pub max_admit_per_pass: Option<usize>,

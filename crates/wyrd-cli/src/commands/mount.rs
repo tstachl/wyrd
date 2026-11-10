@@ -219,6 +219,7 @@ pub(crate) fn mount(
     // The loop and the serving backend share the config's budgets
     // through `into_live` below.
     let (mut live, parts) = daemon.into_live(open_timeout, &config)?;
+    live.set_configured_relays(relays.len());
     // The mount's posture observer rides the node's pass hook and the
     // loop's failure closure through one shared count, exactly like
     // the vault's observer rides the daemon composer's: ready on the
