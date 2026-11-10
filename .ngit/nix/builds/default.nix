@@ -35,10 +35,9 @@ let
     src = craneLib.cleanCargoSource src;
     strictDeps = true;
     nativeBuildInputs = [ pkgs.pkg-config ];
-    # Native GUI closure for the Tauri link (`wyrd-desktop`): the
-    # `-sys` crates probe the build-time half at compile time via
-    # pkg-config, and the runtime half (GIO modules, appindicator)
-    # must resolve on the builder too. This file is only ever realised on x86_64-linux (flake `checks`),
+    # Native GUI closure for the Tauri link (`wyrd-desktop`):
+    # build- and runtime GUI closure, mirroring devenv.nix. This
+    # file is only ever realised on x86_64-linux (flake `checks`),
     # so no platform guard — but the set must stay GUI-only and
     # mirror devenv.nix's Linux Tauri stanza (no Android SDK, no
     # GStreamer/media stack). Rides with the `tauri` crate link per
