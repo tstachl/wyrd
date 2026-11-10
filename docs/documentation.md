@@ -25,7 +25,7 @@ to change it without creating a second source of truth.
 | Platform composition, constraints, open decisions | `docs/platforms/` |
 | How to cut a release | `docs/releases/release-process.md` |
 | How to work (issues, PRs, review, merge) | `docs/collaboration-workflow.md` |
-| What a past review claimed | `docs/reviews/archive/` (evidence, not policy) |
+| What a past review claimed | ngit `review:*` issues (evidence, not policy) |
 | What is planned and in what order | `ROADMAP.md` |
 
 ## Authority
@@ -93,6 +93,6 @@ the status accurately and link to that evidence.
 - Terminology follows the defining document (e.g. the three senses of
   "recovery"); do not redefine terms locally.
 - Status claims use the vocabulary above.
-- Review reports stay verbatim in `docs/reviews/archive/`. Findings
+- Review reports live verbatim on ngit as `review:*` issues. Findings
   become issues; contracts change through issues, not through edits to
   old reports. See `docs/reviews/README.md` for the finding workflow.

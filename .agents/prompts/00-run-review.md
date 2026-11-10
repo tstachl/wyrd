@@ -2,10 +2,11 @@
 
 Goal: produce three independent, evidence-only reviews at one commit
 from a clean, isolated worktree. Reviews are historical evidence, not
-policy (see `docs/reviews/README.md`).
+policy (see `docs/reviews/README.md`). Reviews live on ngit as labeled
+issues; nothing is committed to the repo.
 
 The orchestrator (human or parent agent) owns provenance, cohesion,
-and the `README.md` index. Each reviewer owns only its archive file.
+and posting. Each reviewer owns only its report text.
 This separation buys independence and prevents write races.
 
 ## Setup (manual, before spawning)
@@ -27,33 +28,33 @@ Do not attach two worktrees to the same branch.
 ## Preconditions
 
 - Worktree pinned and clean (`git status --porcelain` empty).
-- Output dir: `docs/reviews/archive/`; files are untracked and stay
-  unstaged/uncommitted until the human reviews and commits them.
 - Model slug derived from deployment name (e.g. `crouton-alpha`).
+- Reviews are posted as ngit issues, one per reviewer:
+  `gate issue create --subject "review(<type>): <model> <date> @ <sha>" --type chore --priority P3 --milestone release:backlog --label review:<type> --body-file <report>` with `<type>` one of `architecture`, `security`, `code-quality`, `release`. No review files are written to the repo; reports stay in temp files until posted.
 
 ## Fan-out
 
 Spawn exactly three isolated subagents, one per prompt:
 
-- `01-architecture-review.md` → `{date}-{model}-architecture-review.md`
-- `02-security-review.md` → `{date}-{model}-security-review.md`
-- `03-codebase-review.md` → `{date}-{model}-codebase-review.md`
+- `01-architecture-review.md` → `review(architecture):`
+- `02-security-review.md` → `review(security):`
+- `03-codebase-review.md` → `review(code-quality):`
 
 Each subagent:
-- Reads only its prompt file + repo source/contracts. Must NOT read
-  `docs/reviews/` (avoids cross-contamination).
+- Reads only its prompt file + repo source/contracts. Must NOT search
+  existing review issues (avoids cross-contamination).
 - Records SHA/status itself (`git rev-parse HEAD`); never accepts a
   pasted SHA on trust.
-- Writes only its own archive file; does NOT edit `README.md`.
-- Returns: path, SHA, finding counts by class, skipped checks.
+- Returns its full report text plus SHA, finding counts by class, and
+  skipped checks. Writes no repo files; does NOT create the issue.
 - Leaves everything unstaged/uncommitted.
 
 ## Synthesis (orchestrator, after all three complete)
 
-- Verify the three files exist, unstaged/uncommitted (`git status`).
-- Spot-check that each records the same SHA.
-- Append the three blurbs to `docs/reviews/README.md` Index in one edit.
-- Report paths + one-line finding summary per review; offer next step
+- Post the three reports as ngit issues with the subjects and
+  `review:<type>` labels above; collect the three nevents.
+- Spot-check that each report records the same SHA.
+- Report nevents + one-line finding summary per review; offer next step
   (issue tree / fix) only on explicit request.
 
 ## Rules

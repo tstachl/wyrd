@@ -32,6 +32,16 @@ path = "~/.local/state/gate/invocations.jsonl"
 [issues]
 types = ["bug", "enhancement", "chore"]
 priorities = ["P0", "P1", "P2", "P3", "P4"]
+# Namespaced review labels for point-in-time external reviews, which live
+# on ngit as issues (`review(<type>): <model> <date> @ <sha>`). Applied
+# via `gate issue create/label --label`; `review:*` swaps within its
+# family. Listed here so the taxonomy stays in one place.
+labels = [
+  "review:architecture",
+  "review:security",
+  "review:code-quality",
+  "review:release",
+]
 milestones = [
   "release:v0.1.0-alpha",
   "release:v0.2.0-alpha",
