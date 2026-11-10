@@ -1,0 +1,5 @@
+# Bun workspace config for the desktop frontend.
+[test]
+# The Tauri mock bridge needs `window`/`crypto` (see `test-setup.ts`).
+# Preloading here makes both `bun test` and `bun run test` work.
+preload = ["./test-setup.ts"]

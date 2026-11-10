@@ -24,6 +24,9 @@ repomix*
 # Logs
 *.log
 
+# JavaScript dependencies (workspace toolchain is bun; lockfile stays tracked)
+node_modules/
+
 # OS
 .DS_Store
 
