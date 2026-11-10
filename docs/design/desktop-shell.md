@@ -385,15 +385,16 @@ verdict.
   Owner down means an explicit unavailable screen; the shell never
   opens the store itself. Owner back means the shell resumes without
   restart.
-- Framework choice is intentionally open (reviewer input wanted):
-  plain web against the backend IPC surface, no store of drive state
-  outside what the owner reports. No mocks that invent interface
-  semantics in tests; test against the real client types. The
+- Framework choice, decided: Svelte 5 + shadcn-svelte, no SvelteKit
+  (local desktop app: no SSR, routing infrastructure, or server
+  endpoints). Plain Svelte against the backend IPC surface, no store
+  of drive state outside what the owner reports. No mocks that invent
+  interface semantics in tests; test against the real client types. The
   frontend keeps no direct filesystem access to the drive, no direct
   owner-socket access, and no networking of its own to implement
   protocol operations; every interface response keeps its typed
-  semantics end to end. No state-management framework unless actual
-  complexity warrants it — three views do not.
+  semantics end to end. Runes-based presentation cache only — never a
+  second drive model (see the presentation-cache section below).
 - Frontend state is a presentation cache, never a second drive
   model. Transient presentation state is fine and expected: selected
   view, open dialogs, form input, pending-request indicators, last
@@ -595,10 +596,10 @@ installer issue; auto-update is explicitly v0.8.
    option 3 rejected without an OD-06-E scope change). Stays
    blocking until the stage-0 rehearsal runs green and the review
    approves; the installer mechanics stay with the installer issue.
-3. Frontend framework: leave to the implementing PR, with the
-   constraints now in the note (no drive model, no socket or
-   filesystem access, no protocol networking, no framework without
-   warranted complexity).
+3. Frontend framework: decided with the implementing PR (Svelte 5 +
+   shadcn-svelte, no SvelteKit), under the constraints in the note
+   (no drive model, no socket or filesystem access, no protocol
+   networking, presentation cache only).
 4. App identifier and bundle metadata: decide before packaging and
    capability configuration; confirm the existing app-id marker
    check covers the chosen id. The scaffold's `tauri.conf.json`

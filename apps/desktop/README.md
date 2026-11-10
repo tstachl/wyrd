@@ -5,12 +5,37 @@ toolchain in `devenv.nix`): no Rust code, no Cargo membership, invisible
 to the dependency-DAG checker by construction. No deno anywhere: this
 workspace's JavaScript toolchain is bun.
 
-- The three views live here and talk to the backend through Tauri IPC
+Framework decision (v0.4): Svelte 5 + shadcn-svelte, no SvelteKit.
+The file/member/conflict/vault/status surface warranted component
+composition, reactive presentation state, and accessible primitives;
+a local desktop app needs none of SSR, routing infrastructure, or
+server endpoints, so SvelteKit stays out. `components.json` records
+the shadcn-svelte paths so further primitives arrive via its CLI.
+
+- The views live here and talk to the backend through Tauri IPC
   only — never to the socket, never to the wire bytes.
-- `src/main.ts` is the scaffold entry point; views land here per
-  `docs/design/desktop-shell.md` stage 2.
+  `src/lib/ipc/client.ts` is the single invoke path; per-operation
+  wrappers land with the Tauri command layer (first view), whose
+  argument names do not exist yet. The backend answer taxonomy is
+  mirrored in `src/lib/ipc/types.ts` exactly (`kind`-tagged,
+  refusal codes verbatim); transport failure is `IpcTransportError`
+  and is never mapped into the taxonomy.
+- `src/App.svelte` is the shell entry (`src/main.ts` mounts it);
+  frontend state is a presentation cache
+  (`src/lib/state/presentation.svelte.ts`), never a second drive
+  model. The unavailable state stays a first-class view.
 - Build with `bun run build` (emits `dist/`), develop with
-  `bun run dev` (rebuilds on change). Both are wired from the backend
-  crate's `tauri.conf.json` (`frontendDist` points at `dist/`).
-- No framework without warranted complexity: three views do not
-  warrant one. No mocks that invent interface semantics in tests.
+  `bun run dev` (watch-builds `dist/`). Both are wired from the backend
+  crate's `tauri.conf.json` (`frontendDist` points at `dist/`): Tauri
+  serves `dist/` itself, so no dev-server URL is configured until a
+  view defines a dev server. `bun run dev:ui` starts the Vite dev
+  server for component iteration without the backend.
+- Gate on `bun run typecheck` (`svelte-check`): `bun build`
+  transpiles only and does not typecheck. No `any` at IPC
+  boundaries; the four variants are handled exhaustively.
+- No mocks that invent interface semantics in tests. Fixture
+  values in `src/lib/ipc/errors.test.ts` (`bun test`) are copied
+  from the Rust taxonomy test; full Rust-to-TS wire agreement
+  lands with the command layer.
+- Production frontend is static, locally bundled assets only: no
+  remote frontend, CDN, external app server, or remote fonts.

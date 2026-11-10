@@ -2,9 +2,29 @@
   "name": "wyrd-desktop-frontend",
   "version": "0.4.0",
   "private": true,
+  "type": "module",
   "description": "Wyrd desktop management UI: three views against the drive-owner interface, served through the Tauri backend IPC surface only.",
   "scripts": {
-    "dev": "bun build src/main.ts --outdir dist --watch",
-    "build": "bun build src/main.ts --outdir dist && cp index.html dist/"
+    "dev": "vite build --watch",
+    "build": "vite build",
+    "dev:ui": "vite",
+    "preview": "vite preview",
+    "typecheck": "svelte-check --tsconfig ./tsconfig.json"
+  },
+  "dependencies": {
+    "@sveltejs/vite-plugin-svelte": "5",
+    "@tailwindcss/vite": "4",
+    "@tauri-apps/api": "2",
+    "clsx": "^2.1.1",
+    "svelte": "5",
+    "tailwind-merge": "^3.7.0",
+    "tailwind-variants": "^4.0.2",
+    "tailwindcss": "4",
+    "vite": "7"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.4",
+    "svelte-check": "4",
+    "typescript": "5"
   }
 }
