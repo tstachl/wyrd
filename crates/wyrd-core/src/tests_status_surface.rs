@@ -7,6 +7,7 @@ use super::{
     render_status_detail, render_status_summary, IntakeDeferral, CANNOT_TELL_MISSING_HISTORY,
     DELIVERY_IS_RELAY_ACCEPTANCE,
 };
+use crate::notifications::FORBIDDEN_FRESHNESS_WORDS;
 use crate::status::observe;
 use wyrd_format::{DeviceId, Entry, ObjectKind, ObjectStore, Tree};
 use wyrd_sync::keys::{DeviceEncryptionSecret, DeviceIdentitySecret};
@@ -118,19 +119,12 @@ fn status_surface_states_its_own_blind_spot() {
 
     for rendering in &renderings {
         let lower = rendering.to_lowercase();
-        for forbidden in [
-            "in sync",
-            "up to date",
-            "up-to-date",
-            "up to-date",
-            "all files synced",
-            "fully synchronised",
-            "fully synchronized",
-            "connected",
-            "delivered",
-        ] {
+        // The shared list (issue 26's extension of this surface's
+        // own): one constant, pinned in `notifications`, so the two
+        // surfaces cannot drift apart.
+        for forbidden in FORBIDDEN_FRESHNESS_WORDS {
             assert!(
-                !lower.contains(forbidden),
+                !lower.contains(*forbidden),
                 "surface must never claim remote freshness ({forbidden}):\n{rendering}"
             );
         }
