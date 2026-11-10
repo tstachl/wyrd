@@ -404,73 +404,61 @@ fn submit_forwards_through_the_single_queue_and_commits() {
 }
 
 /// Command-layer proofs: the same taxonomy, driven through the
-/// registered Tauri commands on the mock runtime — no webview, no
-/// event loop — against the same real owner. The mock stands in
+/// command functions on the mock runtime — no webview, no event
+/// loop — against the same real owner. The mock stands in
 /// for the transport only: every answer below is produced by the
-/// daemon's server over a live loop, and command names are the
-/// backend method names verbatim.
+/// daemon's server over a live loop, and the invoked functions are
+/// the registered commands themselves.
 ///
-/// One mock app managing the backend, plus its webview: the pair
-/// every command proof invokes through. The app never runs — the
-/// mock runtime answers invokes without an event loop.
-fn mock_app_with(
-    backend: DesktopBackend,
-) -> (
-    tauri::App<tauri::test::MockRuntime>,
-    tauri::WebviewWindow<tauri::test::MockRuntime>,
-) {
+/// Why no mock webview: building one performs filesystem IO the CI
+/// sandbox denies (`EACCES`), while the mock runtime itself needs
+/// none. The commands run against a real `AppHandle` from the mock
+/// app — with the real registered handler compiled in, so a
+/// runtime mismatch between handler and app fails to compile — and
+/// error values are additionally asserted through their serde JSON,
+/// which is the rejection encoding the frontend reads.
+///
+/// One mock app managing the backend: the handle every command
+/// proof invokes through. The app never runs — the mock runtime
+/// answers without an event loop.
+fn mock_handle_with(backend: DesktopBackend) -> tauri::AppHandle<tauri::test::MockRuntime> {
     let app = tauri::test::mock_builder()
         .manage(wyrd_desktop::AppState::new(backend))
         .invoke_handler(wyrd_desktop::invoke_handler())
         .build(tauri::generate_context!())
         .expect("the mock app builds");
-    let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
-        .build()
-        .expect("the mock webview builds");
-    (app, webview)
+    app.handle().clone()
 }
 
-/// Invoke one command on the mock webview: the JSON the command
-/// layer answers with, success or taxonomy error alike.
-fn invoke(
-    webview: &tauri::WebviewWindow<tauri::test::MockRuntime>,
-    cmd: &str,
-    args: serde_json::Value,
-) -> Result<serde_json::Value, serde_json::Value> {
-    let request = tauri::webview::InvokeRequest {
-        cmd: cmd.into(),
-        callback: tauri::ipc::CallbackFn(0),
-        error: tauri::ipc::CallbackFn(1),
-        url: "tauri://localhost"
-            .parse()
-            .expect("the local origin parses"),
-        body: tauri::ipc::InvokeBody::Json(args),
-        headers: Default::default(),
-        invoke_key: tauri::test::INVOKE_KEY.into(),
-    };
-    tauri::test::get_ipc_response(webview, request).map(|body| {
-        body.deserialize::<serde_json::Value>()
-            .expect("response deserializes")
-    })
+/// Run one command to completion on the mock runtime, the way an
+/// invoke would dispatch it.
+fn run_command<T>(future: impl std::future::Future<Output = T>) -> T {
+    tauri::async_runtime::block_on(future)
 }
 
+/// The rejection JSON the frontend reads for one error value.
+fn rejection_json(error: &BackendError) -> serde_json::Value {
+    serde_json::to_value(error).expect("errors serialize")
+}
 /// Refusals keep their codes through the command boundary: a
-/// missing path refuses `NotFound` from `lookup`, with the
-/// taxonomy tag intact in the rejection JSON.
+/// missing path refuses `NotFound` from the `lookup` command, with
+/// the taxonomy tag intact in the rejection JSON the frontend
+/// reads.
 #[test]
 fn commands_preserve_refusal_codes() {
     let owner = running_owner();
     let backend = backend_for(&owner);
-    let (_app, webview) = mock_app_with(backend);
+    let handle = mock_handle_with(backend);
 
-    match invoke(
-        &webview,
-        "lookup",
-        serde_json::json!({"path": "no-such-path.txt"}),
-    ) {
+    match run_command(wyrd_desktop::commands::lookup(
+        handle,
+        "no-such-path.txt".into(),
+    )) {
         Err(error) => {
-            assert_eq!(error["kind"], "refused");
-            assert_eq!(error["code"], "NotFound");
+            assert!(matches!(error, BackendError::Refused { .. }));
+            let json = rejection_json(&error);
+            assert_eq!(json["kind"], "refused");
+            assert_eq!(json["code"], "NotFound");
         }
         ok => panic!("a missing path refuses through the command: {ok:?}"),
     }
@@ -486,25 +474,38 @@ fn commands_preserve_refusal_codes() {
 fn commands_recover_availability_without_restart() {
     let mut owner = running_owner();
     let backend = backend_for(&owner);
-    let (_app, webview) = mock_app_with(backend);
+    let handle = mock_handle_with(backend);
 
     assert!(
-        invoke(&webview, "lookup", serde_json::json!({"path": "seed.txt"})).is_ok(),
+        run_command(wyrd_desktop::commands::lookup(
+            handle.clone(),
+            "seed.txt".into()
+        ))
+        .is_ok(),
         "the command serves while the owner is up"
     );
 
     // Owner alive but unreachable: the command stays unconfirmed —
     // never success, never recast as unavailable.
     owner.stop_serving();
-    match invoke(&webview, "lookup", serde_json::json!({"path": "seed.txt"})) {
-        Err(error) => assert_eq!(error["kind"], "unconfirmed"),
+    match run_command(wyrd_desktop::commands::lookup(
+        handle.clone(),
+        "seed.txt".into(),
+    )) {
+        Err(error) => {
+            assert!(matches!(error, BackendError::Unconfirmed { .. }));
+            assert_eq!(rejection_json(&error)["kind"], "unconfirmed");
+        }
         ok => panic!("an unreachable owner stays unconfirmed: {ok:?}"),
     }
 
     // Explicit reconnect while still down reports unavailable,
     // honestly: no connection was minted.
-    match invoke(&webview, "reconnect", serde_json::json!({})) {
-        Err(error) => assert_eq!(error["kind"], "unavailable"),
+    match run_command(wyrd_desktop::commands::reconnect(handle.clone())) {
+        Err(error) => {
+            assert!(matches!(error, BackendError::Unavailable { .. }));
+            assert_eq!(rejection_json(&error)["kind"], "unavailable");
+        }
         ok => panic!("reconnect with no owner reports unavailable: {ok:?}"),
     }
 
@@ -512,11 +513,11 @@ fn commands_recover_availability_without_restart() {
     // instance, and the lookup serves again. No restart anywhere.
     owner.serve_again();
     assert!(
-        invoke(&webview, "reconnect", serde_json::json!({})).is_ok(),
+        run_command(wyrd_desktop::commands::reconnect(handle.clone())).is_ok(),
         "explicit reconnect mints a new instance"
     );
     assert!(
-        invoke(&webview, "lookup", serde_json::json!({"path": "seed.txt"})).is_ok(),
+        run_command(wyrd_desktop::commands::lookup(handle, "seed.txt".into())).is_ok(),
         "availability returns on the same app without restart"
     );
 
