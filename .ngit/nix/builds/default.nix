@@ -96,6 +96,30 @@ let
       "cargo clippy --workspace --all-targets --color never -- -D warnings";
   });
 
+  # Mount-free check: the `--no-default-features` build is a shipped
+  # configuration (a machine without system libfuse builds and runs
+  # everything above the mount), so the fast gate compiles it. Same
+  # shared rust-deps artifacts as the other gates (compile-once
+  # shape); only workspace crates recompile under the other feature
+  # set.
+  rustCheckNomount = craneLib.mkCargoDerivation (gateArgs // {
+    pname = "wyrd";
+    pnameSuffix = "-check-nomount";
+    doCheck = false;
+    buildPhaseCargoCommand = "cargo check --workspace --no-default-features --color never";
+  });
+
+  # Mount-free clippy: all targets, warnings denied, same as the local
+  # hook's second invocation. Catches mount-gated imports leaking
+  # outside the feature gate.
+  rustClippyNomount = craneLib.mkCargoDerivation (gateArgs // {
+    pname = "wyrd";
+    pnameSuffix = "-clippy-nomount";
+    doCheck = false;
+    buildPhaseCargoCommand =
+      "cargo clippy --workspace --all-targets --no-default-features --color never -- -D warnings";
+  });
+
   # Nextest default profile: the PR gate.
   rustTests = craneLib.cargoNextest (gateArgs // {
     pname = "wyrd";
@@ -123,6 +147,8 @@ in
   rust-deps = rustDeps;
   rust-check = rustCheck;
   rust-clippy = rustClippy;
+  rust-check-nomount = rustCheckNomount;
+  rust-clippy-nomount = rustClippyNomount;
   rust-tests = rustTests;
   rust-slow-tests = rustSlowTests;
   rust-doctests = rustDoctests;

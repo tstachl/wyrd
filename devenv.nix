@@ -101,7 +101,9 @@ in
   '';
 
   git-hooks.hooks = {
-    # Mirrors CI (`workflow.yml`): workspace-wide, all targets (unit
+    # Mirrors CI (`rust.yaml` gates-fast: `rust-check` /
+    # `rust-clippy` plus the mount-free `rust-check-nomount` /
+    # `rust-clippy-nomount` lanes): workspace-wide, all targets (unit
     # tests included — bare `cargo clippy` never compiles them), with
     # warnings denied, in both feature configurations. A mount-gated
     # test import once shipped green locally and failed CI exactly
