@@ -13,12 +13,13 @@
 //! configuration files untrustworthy), and a newer schema version
 //! refuses loudly rather than guessing.
 //!
-//! The file holds only the five bounds the surface exposes
+//! The file holds the five surfaced bounds
 //! (`retained_bytes_quota`, `max_admit_per_pass`,
 //! `fetch_pass_budget_secs`, `max_mutation_wait_secs`,
-//! `open_timeout_secs`); relays are read-only on the surface and
-//! live in the drive deployment configuration, never here. Values
-//! convert into [`BudgetOverrides`](wyrd_core::settings::BudgetOverrides)
+//! `open_timeout_secs`) plus the notification records
+//! (`notified`); relays are read-only on the surface and live in
+//! the drive deployment configuration, never here. Values convert
+//! into [`BudgetOverrides`](wyrd_core::settings::BudgetOverrides)
 //! — the file never constructs a config itself, so it cannot build
 //! the quota-without-accountant mismatch — and command-line flags
 //! win over the file, which wins over compiled defaults.
@@ -39,8 +40,17 @@ pub const APP_SETTINGS_VERSION: u32 = 1;
 /// state directory.
 pub const SETTINGS_FILENAME: &str = "settings.json";
 
+/// Ceiling on notification records per drive section. Dedup needs
+/// recent keys, not history: a drive notifies a handful of
+/// conditions per run, and 128 is headroom, not a target.
+/// [`record_notified`] evicts the oldest stamps past the ceiling,
+/// so a long fetch with churning counts cannot grow the file
+/// without bound.
+pub const MAX_NOTIFIED_PER_DRIVE: usize = 128;
+
 /// One drive's settings section: the five surfaced bounds, all
-/// optional — absent keys leave the compiled defaults in place.
+/// optional — absent keys leave the compiled defaults in place —
+/// plus the notification records (OD-26-C, recommendation A).
 /// Durations are whole seconds on the wire; sub-second tuning is
 /// not a person-scale setting.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -65,6 +75,20 @@ pub struct DriveSettingsSection {
     /// Wall-clock budget for one `open` demand wait, in seconds.
     #[serde(default)]
     pub open_timeout_secs: Option<u64>,
+    /// Notification dedup records: notification key
+    /// ([`Notification::key`](wyrd_core::notifications::Notification::key))
+    /// to the application's own unix-seconds at recording — the
+    /// application's clock, never Wyrd's, labelled "notified unix"
+    /// anywhere shown. Absent on first run; additive under schema
+    /// version 1, so new readers still parse a file written before
+    /// it (a pre-notifications file simply has no records). A file
+    /// that carries it refuses on still-older v0.4 readers through
+    /// the usual unknown-key refusal — loud, never guessed — and
+    /// v0.4 is unreleased, so no migration ships for that skew.
+    /// Seeded into the notification center so a notification
+    /// recorded before a restart does not re-announce.
+    #[serde(default)]
+    pub notified: BTreeMap<String, u64>,
 }
 
 /// The whole file: one version plus per-drive sections keyed by
@@ -322,6 +346,70 @@ pub fn overrides_for(drive_dir: &Path) -> Result<BudgetOverrides, String> {
     overrides_for_path(&default_settings_path()?, drive_dir)
 }
 
+/// The application's own unix-seconds: the stamp recorded beside a
+/// notification key. std-only, like the storage screen's stamp; the
+/// core notifications module reads no clock at all, so this daemon
+/// helper is the one place the stamp is minted.
+pub fn app_unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|span| span.as_secs())
+        .unwrap_or(0)
+}
+
+/// Notification keys already recorded for one drive, for seeding
+/// the notification center. A missing file or missing section is
+/// an empty record — first run — never an error.
+pub fn notified_for_path(
+    settings_path: &Path,
+    drive_dir: &Path,
+) -> Result<BTreeMap<String, u64>, String> {
+    let file = read_settings(settings_path)?;
+    let key = settings_key_for(drive_dir);
+    Ok(file
+        .drives
+        .get(&key)
+        .map(|section| section.notified.clone())
+        .unwrap_or_default())
+}
+
+/// Record "notified about X" for one drive: read-modify-write
+/// through the crash-safe writer, preserving the budget section
+/// beside it. Refuses empty keys and control characters — a dedup
+/// key is a slug, and an unprintable slug is a bug at the call
+/// site, not data to persist.
+pub fn record_notified(
+    settings_path: &Path,
+    drive_dir: &Path,
+    key: &str,
+    app_unix_secs: u64,
+) -> Result<(), String> {
+    if key.is_empty() {
+        return Err("notification key must not be empty".to_string());
+    }
+    if key.bytes().any(|byte| byte < 0x20 || byte == 0x7f) {
+        return Err(format!(
+            "notification key {key:?} must not contain control characters"
+        ));
+    }
+    let mut file = read_settings(settings_path)?;
+    let drive_key = settings_key_for(drive_dir);
+    validate_key(&drive_key)?;
+    let notified = &mut file.drives.entry(drive_key).or_default().notified;
+    notified.insert(key.to_string(), app_unix_secs);
+    // Oldest stamps evict first: dedup keeps its window without
+    // growing the file past the ceiling.
+    while notified.len() > MAX_NOTIFIED_PER_DRIVE {
+        let oldest = notified
+            .iter()
+            .min_by_key(|(_, stamp)| *stamp)
+            .map(|(key, _)| key.clone())
+            .expect("non-empty map has an oldest entry");
+        notified.remove(&oldest);
+    }
+    write_settings(settings_path, &file)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -370,6 +458,7 @@ mod tests {
             fetch_pass_budget_secs: Some(11),
             max_mutation_wait_secs: Some(31),
             open_timeout_secs: Some(32),
+            notified: BTreeMap::new(),
         };
         write_settings(&path, &file_with(&drive_key(&dir), section.clone())).unwrap();
         let read = read_settings(&path).unwrap();
@@ -499,6 +588,86 @@ mod tests {
             settings_key_for(Path::new("some-drive")),
             cwd.join("some-drive").to_string_lossy()
         );
+    }
+
+    /// OD-26-C as an invariant: the "notified about X" record
+    /// round-trips beside the budget section, seeds the center, and
+    /// an absent record is first run, never an error. The stamps
+    /// are fixed fixtures, not clock reads — the record holds the
+    /// application's time, and the test holds it still.
+    #[test]
+    fn notified_records_round_trip_and_seed_the_center() {
+        let dir = scratch("notified");
+        let path = dir.join("settings.json");
+        let drive = dir.join("drive");
+
+        assert!(notified_for_path(&path, &drive).unwrap().is_empty());
+
+        record_notified(&path, &drive, "subscription-closed:1", 1_700_000_001).unwrap();
+        record_notified(&path, &drive, "epoch-frozen:5", 1_700_000_002).unwrap();
+
+        let seeded = notified_for_path(&path, &drive).unwrap();
+        assert_eq!(seeded.len(), 2);
+        assert_eq!(seeded["subscription-closed:1"], 1_700_000_001);
+        assert_eq!(seeded["epoch-frozen:5"], 1_700_000_002);
+
+        // The budget section beside the records still converts, and
+        // the raw file carries the records under their own key.
+        let file = read_settings(&path).unwrap();
+        let key = settings_key_for(&drive);
+        assert_eq!(file.drives[&key].notified, seeded);
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(raw.contains("\"notified\""), "{raw}");
+        assert!(raw.contains("subscription-closed:1"), "{raw}");
+
+        // A second drive's record does not disturb the first.
+        let other = dir.join("other");
+        record_notified(&path, &other, "drive-open-refused", 1_700_000_003).unwrap();
+        assert_eq!(notified_for_path(&path, &drive).unwrap(), seeded);
+        assert_eq!(
+            notified_for_path(&path, &other).unwrap()["drive-open-refused"],
+            1_700_000_003
+        );
+
+        // The stamp helper mints a plausible unix time.
+        assert!(app_unix_now() > 1_700_000_000);
+    }
+
+    /// Dedup keys are slugs: empty and control-character keys
+    /// refuse loudly instead of persisting a bug.
+    #[test]
+    fn notified_keys_refuse_empties_and_control_characters() {
+        let dir = scratch("notified-keys");
+        let path = dir.join("settings.json");
+        let drive = dir.join("drive");
+        let refused = record_notified(&path, &drive, "", 1_700_000_001).unwrap_err();
+        assert!(refused.contains("must not be empty"), "{refused}");
+        let refused =
+            record_notified(&path, &drive, "epoch-frozen:\u{7}", 1_700_000_001).unwrap_err();
+        assert!(refused.contains("control characters"), "{refused}");
+        assert!(!path.exists(), "no partial settings may remain");
+    }
+
+    /// The record is a bounded dedup window, not history: past the
+    /// ceiling the oldest stamps evict and the newest stay.
+    #[test]
+    fn notified_records_evict_oldest_past_the_ceiling() {
+        let dir = scratch("notified-cap");
+        let path = dir.join("settings.json");
+        let drive = dir.join("drive");
+        for index in 0..(MAX_NOTIFIED_PER_DRIVE + 5) {
+            record_notified(
+                &path,
+                &drive,
+                &format!("key-{index:04}"),
+                1_700_000_000 + index as u64,
+            )
+            .unwrap();
+        }
+        let seeded = notified_for_path(&path, &drive).unwrap();
+        assert_eq!(seeded.len(), MAX_NOTIFIED_PER_DRIVE);
+        assert!(!seeded.contains_key("key-0000"), "oldest evicts first");
+        assert!(seeded.contains_key(&format!("key-{:04}", MAX_NOTIFIED_PER_DRIVE + 4)));
     }
 
     /// OD-25-A as an invariant: writing, changing, and rewriting

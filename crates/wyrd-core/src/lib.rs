@@ -23,6 +23,7 @@ pub mod materialization_surface;
 pub mod member_surface;
 pub mod mutation;
 pub mod node;
+pub mod notifications;
 pub mod policy;
 pub mod policy_channel;
 pub mod projection;
