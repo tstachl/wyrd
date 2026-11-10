@@ -56,8 +56,8 @@ milestones = [
 # their own copy), so the path is checkout-relative.
 [review]
 prompt = ".agents/prompts/branch-review-wyrd.md"
-model = "openrouter/stealth/crouton-alpha"
-variant = "max"
+model = "opencode-go/longcat-2.5-free"
+variant = ""
 
 # Odin runner resource: the forced-command ssh path. The machine id comes
 # from the key entry server-side; nothing here can forge it.
