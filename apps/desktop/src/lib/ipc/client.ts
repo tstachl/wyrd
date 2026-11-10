@@ -2,11 +2,10 @@
 // only. No socket, no wire bytes, no drive directory, no protocol
 // networking of its own.
 //
-// Per-operation wrappers (lookup, liveness, submit, …) land with
-// the Tauri command layer (first view): command argument names do
-// not exist yet, and this module invents none. Until then, views
-// call `invokeCommand` with a command name from the backend
-// surface and unknown args.
+// Per-operation wrappers live in `./operations.ts`, one per
+// registered command (`crates/wyrd-desktop/src/commands.rs`), same
+// names and argument shapes. This module stays the single `invoke`
+// path underneath them and invents nothing.
 //
 // Answer discipline: success resolves `{ ok: true, value }`; an
 // owner answer rejects into `{ ok: false, error }` with the

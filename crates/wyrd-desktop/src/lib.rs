@@ -41,7 +41,9 @@ pub type AppState = std::sync::Mutex<DesktopBackend>;
 /// The registered command handler: the authoritative application
 /// IPC surface. Exactly one `generate_handler!` call, covering the
 /// [`commands`] surface — never several `invoke_handler` calls.
-pub fn invoke_handler() -> impl Fn(tauri::ipc::Invoke) -> bool {
+/// Generic over the runtime so the mock runtime drives the same
+/// handler in tests.
+pub fn invoke_handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool {
     tauri::generate_handler![
         commands::lookup,
         commands::stat,

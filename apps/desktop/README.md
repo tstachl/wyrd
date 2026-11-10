@@ -40,12 +40,15 @@ the shadcn-svelte paths so further primitives arrive via its CLI.
   (`crates/wyrd-desktop/icons/`, generated); the installable bundle
   still lands with the installer work.
 - Gate on `bun run typecheck` (`svelte-check`): `vite build`
-  transpiles only and does not typecheck. No `any` at IPC
-  boundaries; the four variants are handled exhaustively.
+  transpiles only and does not typecheck. Result shapes are mirrored
+  in `src/lib/ipc/results.ts` against the fixtures in
+  `result_shapes_serialize_verbatim`; no `any` at IPC boundaries,
+  and the four variants are handled exhaustively.
 - No mocks that invent interface semantics in tests. Fixture
   values in `src/lib/ipc/errors.test.ts` (`bun test`) are copied
-  from the Rust taxonomy test; full Rust-to-TS wire agreement
-  lands with the command layer.
+  from the Rust taxonomy test; result-shape fixtures in
+  `src/lib/ipc/results.test.ts` are copied from
+  `result_shapes_serialize_verbatim`.
 - Visual identity follows the C · Held mark, canonical in
   `apps/shared/brand/` (`held.svg`, `fonts/`, `tokens.json`: Ink
   `#121614`, Bone `#ECE7DA`, Amber `#E3A13B` + Smoke `#4A4F4B`).

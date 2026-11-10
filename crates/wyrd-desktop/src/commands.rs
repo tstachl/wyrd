@@ -28,7 +28,7 @@
 //! these, and the per-operation wrappers there land against this
 //! list — never against invented names.
 
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, Runtime};
 use wyrd_owner_client::{
     WireAttr, WireDirEntry, WireFreshness, WireLiveness, WireMutationKind, WireMutationOutcome,
     WireNode, WireParentToken, WireSyncStatus,
@@ -39,10 +39,11 @@ use super::{AppState, BackendError, DesktopBackend};
 /// Run one backend exchange on the blocking pool and report a dead
 /// worker as [`BackendError::Unconfirmed`]: after dispatch the
 /// outcome is unknown, so success and refusal are both dishonest.
-async fn exchange<T, F>(app: AppHandle, op: &'static str, call: F) -> Result<T, BackendError>
+async fn exchange<T, F, R>(app: AppHandle<R>, op: &'static str, call: F) -> Result<T, BackendError>
 where
     F: FnOnce(&DesktopBackend) -> Result<T, BackendError> + Send + 'static,
     T: Send + 'static,
+    R: Runtime,
 {
     tauri::async_runtime::spawn_blocking(move || {
         let backend = app.state::<AppState>();
@@ -53,33 +54,44 @@ where
         call(&guard)
     })
     .await
-    .unwrap_or_else(|join| {
-        Err(BackendError::Unconfirmed {
-            op: op.into(),
-            detail: format!("ipc worker failed: {join}"),
-        })
-    })
+    .unwrap_or_else(|join| Err(worker_failed(op, join)))
+}
+
+/// A dead blocking worker means the exchange was dispatched but no
+/// terminal answer was observed: [`BackendError::Unconfirmed`] by
+/// definition, never success, never a refusal.
+fn worker_failed(op: &'static str, join: impl std::fmt::Display) -> BackendError {
+    BackendError::Unconfirmed {
+        op: op.into(),
+        detail: format!("ipc worker failed: {join}"),
+    }
 }
 
 /// Look up one path: the node plus the serving generation and
 /// durable revision it was served from.
 #[tauri::command]
-pub async fn lookup(app: AppHandle, path: String) -> Result<(WireNode, u64, u64), BackendError> {
+pub async fn lookup<R: Runtime>(
+    app: AppHandle<R>,
+    path: String,
+) -> Result<(WireNode, u64, u64), BackendError> {
     exchange(app, "lookup", move |backend| backend.lookup(&path)).await
 }
 
 /// Stat one path: attributes plus serving generation and durable
 /// revision.
 #[tauri::command]
-pub async fn stat(app: AppHandle, path: String) -> Result<(WireAttr, u64, u64), BackendError> {
+pub async fn stat<R: Runtime>(
+    app: AppHandle<R>,
+    path: String,
+) -> Result<(WireAttr, u64, u64), BackendError> {
     exchange(app, "stat", move |backend| backend.stat(&path)).await
 }
 
 /// List one directory: entries plus serving generation and durable
 /// revision.
 #[tauri::command]
-pub async fn readdir(
-    app: AppHandle,
+pub async fn readdir<R: Runtime>(
+    app: AppHandle<R>,
     path: String,
 ) -> Result<(Vec<WireDirEntry>, u64, u64), BackendError> {
     exchange(app, "readdir", move |backend| backend.readdir(&path)).await
@@ -88,27 +100,30 @@ pub async fn readdir(
 /// Read one whole file, plus serving generation and durable
 /// revision.
 #[tauri::command]
-pub async fn read(app: AppHandle, path: String) -> Result<(Vec<u8>, u64, u64), BackendError> {
+pub async fn read<R: Runtime>(
+    app: AppHandle<R>,
+    path: String,
+) -> Result<(Vec<u8>, u64, u64), BackendError> {
     exchange(app, "read", move |backend| backend.read(&path)).await
 }
 
 /// The owner's durable observation: what a member may observe,
 /// never liveness.
 #[tauri::command]
-pub async fn observe(app: AppHandle) -> Result<WireSyncStatus, BackendError> {
+pub async fn observe<R: Runtime>(app: AppHandle<R>) -> Result<WireSyncStatus, BackendError> {
     exchange(app, "observe", move |backend| backend.observe()).await
 }
 
 /// Transport health plus the last pass report, pinned to the pass
 /// count. A separate object from the durable observation.
 #[tauri::command]
-pub async fn liveness(app: AppHandle) -> Result<WireLiveness, BackendError> {
+pub async fn liveness<R: Runtime>(app: AppHandle<R>) -> Result<WireLiveness, BackendError> {
     exchange(app, "liveness", move |backend| backend.liveness()).await
 }
 
 /// The projection freshness judgment.
 #[tauri::command]
-pub async fn freshness(app: AppHandle) -> Result<WireFreshness, BackendError> {
+pub async fn freshness<R: Runtime>(app: AppHandle<R>) -> Result<WireFreshness, BackendError> {
     exchange(app, "freshness", move |backend| backend.freshness()).await
 }
 
@@ -116,7 +131,10 @@ pub async fn freshness(app: AppHandle) -> Result<WireFreshness, BackendError> {
 /// against. `path` is the parent directory — `""` for the drive
 /// root — not the file path itself.
 #[tauri::command]
-pub async fn capture_parent(app: AppHandle, path: String) -> Result<WireParentToken, BackendError> {
+pub async fn capture_parent<R: Runtime>(
+    app: AppHandle<R>,
+    path: String,
+) -> Result<WireParentToken, BackendError> {
     exchange(app, "capture_parent", move |backend| {
         backend.capture_parent(&path)
     })
@@ -126,8 +144,8 @@ pub async fn capture_parent(app: AppHandle, path: String) -> Result<WireParentTo
 /// Forward one mutation to the owner's single queue and block for
 /// its terminal answer. The only mutation path.
 #[tauri::command]
-pub async fn submit(
-    app: AppHandle,
+pub async fn submit<R: Runtime>(
+    app: AppHandle<R>,
     kind: WireMutationKind,
 ) -> Result<WireMutationOutcome, BackendError> {
     exchange(app, "submit", move |backend| backend.submit(kind)).await
@@ -137,8 +155,8 @@ pub async fn submit(
 /// outcome and receive the verdict. The frontend never reconciles
 /// itself; absence is `Ok(None)`, never a refusal.
 #[tauri::command]
-pub async fn reconcile_lookup(
-    app: AppHandle,
+pub async fn reconcile_lookup<R: Runtime>(
+    app: AppHandle<R>,
     path: String,
 ) -> Result<Option<(WireNode, u64, u64)>, BackendError> {
     exchange(app, "reconcile_lookup", move |backend| {
@@ -153,7 +171,7 @@ pub async fn reconcile_lookup(
 /// nothing calls it automatically, and recovery proves nothing
 /// about the prior operation.
 #[tauri::command]
-pub async fn reconnect(app: AppHandle) -> Result<(), BackendError> {
+pub async fn reconnect<R: Runtime>(app: AppHandle<R>) -> Result<(), BackendError> {
     exchange(app, "reconnect", move |backend| backend.reconnect()).await
 }
 
@@ -279,5 +297,26 @@ mod tests {
             serde_json::to_value(&refusal).unwrap(),
             serde_json::json!({"code": "NotFound", "message": "no such path"})
         );
+    }
+
+    /// A dead blocking worker is unconfirmed by definition: the
+    /// exchange was dispatched, no terminal answer was observed, so
+    /// success and refusal are both dishonest. The `JoinError` here
+    /// is real — a blocking task that actually panicked — not a
+    /// fabricated error value.
+    #[test]
+    fn dead_worker_is_unconfirmed() {
+        let join = tauri::async_runtime::block_on(async {
+            tauri::async_runtime::spawn_blocking(|| panic!("worker died"))
+                .await
+                .unwrap_err()
+        });
+        match worker_failed("lookup", join) {
+            BackendError::Unconfirmed { op, detail } => {
+                assert_eq!(op, "lookup");
+                assert!(detail.contains("ipc worker failed"), "detail: {detail}");
+            }
+            other => panic!("a dead worker is unconfirmed: {other:?}"),
+        }
     }
 }

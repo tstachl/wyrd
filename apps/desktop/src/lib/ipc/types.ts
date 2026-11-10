@@ -10,9 +10,10 @@
 //
 // This mirror is checked against fixtures copied from the Rust
 // test `error_taxonomy_serializes_typed` (see `errors.test.ts`).
-// Full Rust-to-TS wire-agreement proofs land with the Tauri
-// command layer (first view); until then this file must not gain
-// per-operation shapes — command argument names do not exist yet.
+// Result-shape mirrors live in `./results.ts`, pinned by
+// `result_shapes_serialize_verbatim`; per-operation wrappers live
+// in `./operations.ts`. Nothing here may add a shape the Rust side
+// does not produce.
 
 export const WIRE_ERROR_CODES = [
   "UnknownVersion",

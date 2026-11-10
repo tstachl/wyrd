@@ -1,7 +1,9 @@
 # Dependency policy enforced by `cargo deny check` and the pre-push hooks in
 # devenv.nix. Reviewed 2026-09-19 against the full Cargo.lock license
 # inventory: every allowed license below appears in the current graph, and
-# every graph license is allowed. Re-review this list when adding a dependency
+# every graph license is allowed — except OR-expression alternatives a
+# crate never resolves to (e.g. `adler2`'s unused `0BSD` arm, satisfied
+# via MIT/Apache-2.0). Re-review this list when adding a dependency
 # under a license not already here — especially copyleft ones.
 #
 # License notes from that inventory:
