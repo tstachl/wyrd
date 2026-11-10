@@ -1,9 +1,9 @@
 @import "tailwindcss";
 
-/* Wyrd brand tokens, from the C · Held logo (wyrd-logo.html):
-   Ink #121614, Bone #ECE7DA, Amber #E3A13B + Smoke #4A4F4B.
-   Amber is the sole accent; Ink and Bone do all other work.
-   Locally bundled assets only: no remote fonts, no CDN. */
+/* Wyrd brand tokens, canonical in `apps/shared/brand/tokens.json`
+   (the C · Held mark: Ink #121614, Bone #ECE7DA, Amber #E3A13B +
+   Smoke #4A4F4B). Amber is the sole accent; Ink and Bone do all
+   other work. Locally bundled assets only: no remote fonts, no CDN. */
 @theme {
   --color-ink: #121614;
   --color-bone: #ece7da;
@@ -16,7 +16,7 @@
 
 @font-face {
   font-family: "Space Grotesk";
-  src: url("./lib/assets/fonts/space-grotesk.woff2") format("woff2");
+  src: url("../../shared/brand/fonts/space-grotesk.woff2") format("woff2");
   font-weight: 400 700;
   font-style: normal;
   font-display: swap;

@@ -9,7 +9,11 @@
 // Run: `bun test` from `apps/desktop/`.
 
 import { describe, expect, test } from "bun:test";
-import { asBackendError, describe as describeError } from "./errors.js";
+import {
+  asBackendError,
+  describe as describeError,
+  isWireErrorCode,
+} from "./errors.js";
 
 test("unavailable and unconfirmed stay distinct from the JSON alone", () => {
   const unavailable = asBackendError({
@@ -37,6 +41,19 @@ test("a refusal keeps its exact code", () => {
   if (refused?.kind !== "refused") throw new Error("unreachable");
   expect(refused.code).toBe("NotFound");
   expect(describeError(refused)).toContain("NotFound");
+});
+
+test("a refusal with an unknown code stays a refusal, verbatim", () => {
+  const refused = asBackendError({
+    kind: "refused",
+    code: "FutureCode",
+    message: "a newer owner",
+  });
+  expect(refused?.kind).toBe("refused");
+  if (refused?.kind !== "refused") throw new Error("unreachable");
+  expect(refused.code).toBe("FutureCode");
+  expect(isWireErrorCode(refused.code)).toBe(false);
+  expect(describeError(refused)).toContain("FutureCode");
 });
 
 test("incompatible parses with its detail", () => {

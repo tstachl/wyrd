@@ -61,7 +61,10 @@ export interface BackendUnconfirmed {
 
 export interface BackendRefused {
   kind: "refused";
-  code: WireErrorCode;
+  // Verbatim owner code. Known codes are the `WireErrorCode` union;
+  // an unknown code is still a terminal refusal — never a transport
+  // failure, never remapped. See `isWireErrorCode`.
+  code: string;
   message: string;
 }
 

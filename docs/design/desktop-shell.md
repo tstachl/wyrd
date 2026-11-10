@@ -387,7 +387,8 @@ verdict.
   restart.
 - Framework choice, decided: Svelte 5 + shadcn-svelte, no SvelteKit
   (local desktop app: no SSR, routing infrastructure, or server
-  endpoints). Plain Svelte against the backend IPC surface, no store
+  endpoints). Svelte components styled with Tailwind, built with
+  Vite, against the backend IPC surface; no store
   of drive state outside what the owner reports. No mocks that invent
   interface semantics in tests; test against the real client types. The
   frontend keeps no direct filesystem access to the drive, no direct

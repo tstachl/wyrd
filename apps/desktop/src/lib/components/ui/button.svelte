@@ -26,37 +26,24 @@
 
 <script lang="ts">
   import type { Snippet } from "svelte";
+  import type { HTMLButtonAttributes } from "svelte/elements";
   import { cn } from "$lib/utils.js";
 
-  interface Props {
+  interface Props extends HTMLButtonAttributes {
     variant?: ButtonVariant;
     size?: ButtonSize;
-    type?: "button" | "submit";
-    disabled?: boolean;
-    title?: string;
-    class?: string;
-    onclick?: (event: MouseEvent) => void;
     children: Snippet;
   }
 
   let {
     variant = "default",
     size = "default",
-    type = "button",
-    disabled = false,
-    title,
     class: className,
-    onclick,
     children,
+    ...rest
   }: Props = $props();
 </script>
 
-<button
-  {type}
-  {disabled}
-  {title}
-  class={cn(buttonVariants({ variant, size }), className)}
-  onclick={onclick}
->
+<button class={cn(buttonVariants({ variant, size }), className)} {...rest}>
   {@render children()}
 </button>

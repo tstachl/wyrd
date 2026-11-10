@@ -22,7 +22,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-function isWireErrorCode(value: unknown): value is WireErrorCode {
+/** Narrow to a known refusal code. Unknown codes stay refusal. */
+export function isWireErrorCode(value: unknown): value is WireErrorCode {
   return (
     typeof value === "string" &&
     (WIRE_ERROR_CODES as readonly string[]).includes(value)
@@ -61,8 +62,11 @@ export function asBackendError(value: unknown): BackendError | null {
       }
       return null;
     case "refused":
+      // Any string code parses: a refusal with a code newer than
+      // this frontend is still a terminal owner answer, never a
+      // transport failure. Callers narrow with `isWireErrorCode`.
       if (
-        isWireErrorCode(value["code"]) &&
+        typeof value["code"] === "string" &&
         typeof value["message"] === "string"
       ) {
         const error: BackendRefused = {

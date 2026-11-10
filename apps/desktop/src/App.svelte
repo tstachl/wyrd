@@ -4,10 +4,11 @@
   import { describe } from "$lib/ipc/errors.js";
   import { presentation } from "$lib/state/presentation.svelte.js";
 
-  const lastError =
+  const lastError = $derived(
     presentation.lastResult !== null && !presentation.lastResult.ok
       ? describe(presentation.lastResult.error)
-      : null;
+      : null,
+  );
 </script>
 
 <div class="flex min-h-screen bg-bone font-sans text-ink">

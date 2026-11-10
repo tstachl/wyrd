@@ -30,20 +30,20 @@ the shadcn-svelte paths so further primitives arrive via its CLI.
   serves `dist/` itself, so no dev-server URL is configured until a
   view defines a dev server. `bun run dev:ui` starts the Vite dev
   server for component iteration without the backend.
-- Gate on `bun run typecheck` (`svelte-check`): `bun build`
+- Gate on `bun run typecheck` (`svelte-check`): `vite build`
   transpiles only and does not typecheck. No `any` at IPC
   boundaries; the four variants are handled exhaustively.
 - No mocks that invent interface semantics in tests. Fixture
   values in `src/lib/ipc/errors.test.ts` (`bun test`) are copied
   from the Rust taxonomy test; full Rust-to-TS wire agreement
   lands with the command layer.
-- Visual identity follows the C · Held logo (`wyrd-logo.html` at the
-  workspace root): Ink `#121614`, Bone `#ECE7DA`, Amber `#E3A13B` +
-  Smoke `#4A4F4B` as Tailwind theme tokens in `src/app.css`, Amber
-  the sole accent. Type is Space Grotesk, self-hosted
-  (`src/lib/assets/fonts/`); IBM Plex Mono for machine text arrives
-  with the first view that renders hashes. The Held mark component
-  (`src/lib/components/held-mark.svelte`) and favicon
-  (`public/held.svg`) reuse the logo geometry verbatim.
+- Visual identity follows the C · Held mark, canonical in
+  `apps/shared/brand/` (`held.svg`, `fonts/`, `tokens.json`: Ink
+  `#121614`, Bone `#ECE7DA`, Amber `#E3A13B` + Smoke `#4A4F4B`).
+  Amber is the sole accent. Type is Space Grotesk, self-hosted and
+  bundled by Vite; IBM Plex Mono for machine text arrives with the
+  first view that renders hashes. The Held mark component
+  (`src/lib/components/held-mark.svelte`) reuses the logo geometry
+  verbatim.
 - Production frontend is static, locally bundled assets only: no
   remote frontend, CDN, external app server, or remote fonts.
