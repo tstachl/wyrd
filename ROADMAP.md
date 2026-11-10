@@ -59,6 +59,7 @@ Protocol identity, wire format, authorization model and control-plane contracts 
 - **Runtime sync:** durable membership, snapshot, manifest, capability and materialization state; crash recovery and restart reconciliation; transport identity distribution; bulk transport and fetch plan; serving router; relay interoperability across implementations (default gate; live public-relay runs are opt-in hand evidence, never CI).
 - **Filesystem:** FUSE mount via the daemon with fetch-on-open demand machinery. The mount serves read-write by default.
 - **Recovery foundations:** epoch-secret escrow records (T13), bootstrap custody create and reopen, and the recovery-snapshot flag and grafting rules (`docs/contracts/epochs.md`: content grafts, never lineage). Escrow is end to end for local custody, not for guardians.
+- **Repair:** generation-scoped terminal fetch state with waiter completion, local quarantine with re-want, local scrub for out-of-band loss, and fetch-failure diagnostics on the `sync now` run surface (`docs/design/peer-repair.md`, Part 1).
 - **Hardening:** decode-cost and allocation bounds, property coverage for canonical state transitions, fuzzing of envelope and decoder surfaces.
 
 **Open from runtime sync** (not v0.2 blockers):
@@ -89,7 +90,7 @@ Did not ship: the recovery grafting workflow (no CLI, daemon or embeddable-node 
 
 - **No content recovery path.** Stranded local content has no sanctioned way back until v0.3. Neither content nor root recovery exists in v0.2.
 - **Cooperative local store.** Concurrent non-cooperating writers are outside the supported concurrency model.
-- **No peer repair or scrub.** A corrupt or unreachable representation falls back to the next recorded one in the fetch walk. Route publication records one serving peer per snapshot, so alternates are representations, not providers. When none serves, the waiter fails bounded (`EIO`) and invalid bytes are never committed or served. Local bitrot is detected on read but never re-fetched, so it is a permanent read error. Fix: v0.3 (`docs/design/peer-repair.md`).
+- **No peer repair or scrub.** A corrupt or unreachable representation falls back to the next recorded one in the fetch walk. Route publication records one serving peer per snapshot, so alternates are representations, not providers. When none serves, the waiter fails bounded (`EIO`) and invalid bytes are never committed or served. Local bitrot is detected on read but never re-fetched, so it is a permanent read error. Fix: shipped in v0.3.0-alpha (`docs/design/peer-repair.md`).
 - **Unreachable history.** A known snapshot whose manifest chain can't be materialized in time fails `open()` with `EIO`. An announcement whose body never arrives leaves the snapshot unadopted, and a later snapshot built on it is `UnknownParent` (`ENOENT`, never a hang). Recovery needs a new announcement. Normative: `docs/design/fetch-on-open.md`.
 - **Delivery is relay-accepted, not recipient-received.** A `Delivered` fact needs at least one relay to accept the write, and acceptance is not evidence of storage. A peer absent past retention states its gap and the sender retransmits from its durable outbox. Normative: `docs/contracts/sync-and-peers.md`.
 - **Removal bounds acquisition, not knowledge.** A removed device keeps its local plaintext and can keep fetching content whose transport root it learned before removal. It learns no new roots, since later announcements are sealed under keys it never receives.
@@ -99,7 +100,7 @@ Did not ship: the recovery grafting workflow (no CLI, daemon or embeddable-node 
 
 Thesis: Wyrd is something an operator can safely run on one machine. Three parts, in dependency order.
 
-**Core: durability, recovery, observability.** Device-local durability levels, mutation accumulation versus snapshot commitment, explicit transaction and commit windows, crash semantics, content-recovery snapshots and sanctioned grafting, durable outbox semantics, restart-equivalence testing. Also the peer-repair loop and local scrub: generation-scoped terminal fetch state with waiter completion, local quarantine with re-want, and fetch-failure diagnostics. This lands before editors and mobile build on Wyrd.
+**Core: durability, recovery, observability.** Device-local durability levels, mutation accumulation versus snapshot commitment, explicit transaction and commit windows, crash semantics, content-recovery snapshots and sanctioned grafting, durable outbox semantics, restart-equivalence testing. The peer-repair loop and local scrub shipped in v0.3.0-alpha: generation-scoped terminal fetch state with waiter completion, local quarantine with re-want, and fetch-failure diagnostics on the `sync now` surface. This landed before editors and mobile build on Wyrd.
 
 Observability is real, not telemetry for its own sake: sync, peer, relay, pending work, fetch failures, materialization, queue and resource pressure, and convergence state, with explicit privacy boundaries (a vault is a different trust position from a client).
 

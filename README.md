@@ -40,7 +40,7 @@ A phone is not a replica; it is a materialized view of the drive. Pin and evict 
 ### 4. Content-Verified Integrity
 Because objects are addressed directly by their cryptographic hashes, integrity checking is low-overhead: if a chunk arrives corrupted, Wyrd detects the hash mismatch, refuses the bytes, and tries the next recorded representation inside the fetch walk — and, within one representation, its transport root before its storage address. That fallback, with post-fetch hash and AEAD verification, is the v0.2 repair story, and it is under test.
 
-There is no dedicated repair loop and no background scrub of the local store in v0.2 (the store verifies on read and fails closed). Route publication records one serving peer per snapshot, so the walk's alternates are representations, not providers: when no recorded representation serves, the read fails bounded instead of serving anything unverified. The machinery a repair loop will build on exists — the bulk transport contract, fetch-on-open demand machinery, and the real-iroh serving router (a serving peer answers fetches by transport root, and route updates rewire serving on address changes). The full repair design is recorded in `docs/design/peer-repair.md`. The tree is 0.3.0-alpha: the dedicated repair loop and local scrub land under `ROADMAP.md` v0.3 (durable operation and content recovery); this section describes the v0.2 fallback they build on.
+The v0.2 fallback is fetch-walk fallback across recorded representations with post-fetch verification, fail-closed, bounded `EIO` on exhaustion. Route publication records one serving peer per snapshot, so the walk's alternates are representations, not providers. The dedicated repair loop and local scrub shipped in v0.3.0-alpha: a representation that fails verification is discarded and its possession claim cleared (quarantine); claimed-but-absent bytes are unclaimed and re-fetched (scrub); both report counts by cause on `wyrd sync now`. Neither path rewrites logical history or removes retained objects. The full repair design is recorded in `docs/design/peer-repair.md`.
 
 ### 5. Zero-Trust Storage Peers
 Object contents are encrypted client-side before they ever leave the device. Vault peers store and replicate only opaque, encrypted blobs, so offsite backends can run on untrusted VPS providers or remote drives. The claim that holds is: **vaults cannot decrypt object contents**. Ciphertext reveals no paths, no names, no logical tree, and no plaintext equality (fresh nonces make ciphertext equality meaningless). Metadata confidentiality beyond that is best-effort (see `docs/contracts/trust.md`). Vaults still observe Storage IDs, ciphertext sizes, object kinds, object counts, timing, and traffic patterns—including repeated Storage IDs, upload frequency, snapshot-related traffic, and transport metadata—so cross-operation correlation is possible.
@@ -88,19 +88,20 @@ format and sync **protocol/core** layers implement them: content-addressed
 store, snapshot DAG, membership and authorization engines, epoch keys and
 capabilities, sealed objects and manifests, escrow records, the
 control-plane message set, ingest limits, and the control-plane transport
-boundary. The runtime is assembling: durable local state with crash
+boundary. The runtime is in place and under test: durable local state with crash
 recovery and restart reconciliation, author-side manifest generation,
 fetch-on-open demand machinery, author-signed snapshot announcements with
 transport identities, the real-iroh serving router (a serving endpoint
-over the durable vault answers peer fetches by transport root), and a
+over the durable vault answers peer fetches by transport root), a
 read-write FUSE mount via the daemon (`wyrd mount`, writes committing as
-snapshots) are in place and under test. The relay pool is supervised
+snapshots), and the v0.3 repair loop (quarantine, local scrub, and
+generation-scoped terminal fetch state, reported on `wyrd sync now`).
+The relay pool is supervised
 (`LiveMailbox` with relay-health polling and capped-backoff recovery,
 multi-relay operation under test) and proven across implementations
 in the default gate (fake plus real in-process relay); live
 public-relay runs stay opt-in hand evidence. Still pending:
-signer-client wiring (NIP-46),
-automatic peer repair, and garbage
+signer-client wiring (NIP-46) and garbage
 collection (post-v1 by contract).
 
 See `ROADMAP.md` for the current phase plan and issue links.

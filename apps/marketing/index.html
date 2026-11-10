@@ -570,7 +570,7 @@
             <span class="article-no">§4</span>
             <h3>Corruption is cheap to catch</h3>
             <!-- slot:rules/s4-body -->
-            <p>Every piece is addressed by its own hash, so a damaged chunk announces itself. A good copy can be fetched from another holder; fully automatic repair is still being built.</p>
+            <p>Every piece is addressed by its own hash, so a damaged chunk announces itself. A good copy can be fetched from another holder; a corrupted local copy is discarded and fetched again.</p>
             <!-- /slot:rules/s4-body -->
           </div>
           <div class="article">
@@ -638,6 +638,7 @@
               <li class="yes">Encrypted sync between peers over a real peer-to-peer transport</li>
               <li class="yes">A read-write mount to create, write, and browse like a folder</li>
               <li class="yes">A serving endpoint other devices can fetch from</li>
+              <li class="yes">Automatic repair of corrupted or lost local copies</li>
             </ul>
           </div>
           <div class="status-col">
@@ -645,7 +646,6 @@
             <!-- slot:status/not-yet -->
             <ul class="status-list">
               <li class="no">Garbage collection, so the store only grows for now</li>
-              <li class="no">Fully automatic repair of corrupted chunks</li>
               <li class="no">Recovery if every root-key holder is lost</li>
               <li class="no">Resilient multi-relay networking and remote signers</li>
             </ul>

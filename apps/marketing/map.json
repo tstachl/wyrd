@@ -9,8 +9,8 @@
         { "file": "README.md", "heading": "### 4. Content-Verified Integrity" },
         { "file": "docs/design/peer-repair.md", "heading": "## v0.2 behavior (shipped, tested)" }
       ],
-      "mustContain": ["fully automatic repair is still being built"],
-      "forbids": ["protocol repairs", "automatically repairs"]
+      "mustContain": ["corrupted local copy is discarded and fetched again"],
+      "forbids": ["protocol repairs"]
     },
     {
       "slot": "rules/s5-body",
@@ -26,7 +26,11 @@
         { "file": "README.md", "heading": "## Status" },
         { "file": "ROADMAP.md", "heading": "## v0.7: Production vault infrastructure and disaster recovery" }
       ],
-      "mustContain": ["Fully automatic repair of corrupted chunks"],
+      "mustContain": [
+        "Garbage collection",
+        "Recovery if every root-key holder is lost",
+        "Resilient multi-relay networking and remote signers"
+      ],
       "forbids": []
     },
     {
