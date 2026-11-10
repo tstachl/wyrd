@@ -170,6 +170,7 @@ in
     text = ''
       set -euo pipefail
       bun run apps/marketing/check.ts
+      bun run apps/shared/check.ts
     '';
   };
 
