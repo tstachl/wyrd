@@ -141,13 +141,15 @@ in
     };
 
     # Marketing honesty gate: claims on apps/marketing/index.html stay pinned to
-    # their backing docs/ sections (apps/marketing/map.json + apps/marketing/map.lock.json).
-    # Runs only when the page, the mapping, or the docs change.
+    # their backing docs/ sections (apps/marketing/map.json + apps/marketing/map.lock.json),
+    # plus the shared-brand pin (apps/shared/check.ts: marketing's vendored
+    # font copies, the Held geometry, and the token hex in both consumers).
+    # Runs only when the page, the mapping, the brand, or the docs change.
     page-check = {
       enable = true;
       name = "page docs mapping";
-      entry = "bun run apps/marketing/check.ts";
-      files = "^(apps/marketing/|docs/|README\\.md)";
+      entry = "bun run apps/marketing/check.ts && bun run apps/shared/check.ts";
+      files = "^(apps/marketing/|apps/shared/|apps/desktop/src/app\\.css|docs/|README\\.md)";
       pass_filenames = false;
     };
 

@@ -39,7 +39,8 @@ the shadcn-svelte paths so further primitives arrive via its CLI.
   unavailable view. Icons ship from the Held mark
   (`crates/wyrd-desktop/icons/`, generated); the installable bundle
   still lands with the installer work.
-- Gate on `bun run typecheck` (`svelte-check`): `vite build`
+- Gate on `bun run typecheck` (`svelte-check`) and
+  `bun run apps/shared/check.ts` (brand pin): `vite build`
   transpiles only and does not typecheck. Result shapes are mirrored
   in `src/lib/ipc/results.ts` against the fixtures in
   `result_shapes_serialize_verbatim`; no `any` at IPC boundaries,
