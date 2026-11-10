@@ -31,15 +31,16 @@ the shadcn-svelte paths so further primitives arrive via its CLI.
   serves `dist/` itself, so no dev-server URL is configured until a
   view defines a dev server. `bun run dev:ui` starts the Vite dev
   server for component iteration without the backend.
-- `bun run tauri -- dev` forwards to the environment's `cargo-tauri`
-  (devenv provides it). Always invoke from
-  `crates/wyrd-desktop/`: Tauri runs the hook commands from the
-  config's parent dir (`crates/`), and the hooks assume that.
-  There is no runnable app yet — no binary target, no
-  drive-connection bootstrap, no icons — so `cargo tauri dev` runs
-  the frontend watch and then stops at `a bin target must be
-  available for cargo run`. The launchable artifact lands with the
-  bootstrap/installer work.
+- Run the app with `cargo tauri dev` from `crates/wyrd-desktop/`
+  (or `bun run tauri -- dev`, which forwards to the environment's
+  `cargo-tauri`). Tauri runs the hook commands from the config's
+  parent dir (`crates/`), and the hooks assume that — always invoke
+  from the crate dir. The binary takes exactly one argument,
+  `--drive-dir <DIR>`, and exits (2) when the owner is unreachable
+  at startup; an owner lost after startup shows the unavailable
+  view. Icons ship from the Held mark (`crates/wyrd-desktop/icons/`,
+  generated); the installable bundle still lands with the installer
+  work.
 - Gate on `bun run typecheck` (`svelte-check`): `vite build`
   transpiles only and does not typecheck. No `any` at IPC
   boundaries; the four variants are handled exhaustively.
