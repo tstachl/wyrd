@@ -238,6 +238,9 @@ impl From<wyrd_daemon::OwnerError> for CliError {
             E::Engine(error) => CliError::Engine(error),
             E::Node(error) => CliError::WyrdNode(error),
             E::Retention(error) => CliError::Quota(error),
+            E::Settings(reason) => {
+                CliError::Usage(format!("application settings refused: {reason}"))
+            }
             E::Io(error) => CliError::Serving(error),
         }
     }

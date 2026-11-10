@@ -62,6 +62,14 @@ Releases are not required to write every format they read:
    then replay normalizes only the envelope layer and the payload
    clause of this invariant is acceptance-tested as ignored, not
    as passing.
+   Second documented exception: the application settings file
+   (`settings.json`, schema version 1) is authoritative local state
+   that derives from nothing durable — not signed archive state,
+   not a format a peer reads, not derived by replay — so it is a
+   fourth category outside this invariant's list, and it never
+   lives in a drive directory. It still carries an explicit version
+   and refuses newer versions loudly, and per-drive values are
+   sections inside the one per-user file.
 3. **Old formats remain readable for the supported window** (read rule
    above). No release performs destructive in-place rewriting of
    immutable objects, snapshots, or history.

@@ -938,6 +938,26 @@ where
         self.configured_relays = relays;
     }
 
+    /// The per-pass fetch budget the loop paces against: the running
+    /// value, fixed at composition. Read by the settings surface so
+    /// it reports what the node runs with, never a fresh default.
+    pub fn fetch_pass_budget(&self) -> Duration {
+        self.fetch_pass_budget
+    }
+
+    /// The held-mutation deadline the loop enforces: the running
+    /// value, fixed at composition.
+    pub fn max_mutation_wait(&self) -> Duration {
+        self.max_mutation_wait
+    }
+
+    /// Relays configured for this session: the running count the
+    /// durable status observes. The settings surface renders it
+    /// read-only.
+    pub fn configured_relay_count(&self) -> usize {
+        self.configured_relays
+    }
+
     /// The durable sync observation over the live engine: the same
     /// `status::observe` the CLI runs against an unheld drive,
     /// through the owner that holds it. Pure observation over

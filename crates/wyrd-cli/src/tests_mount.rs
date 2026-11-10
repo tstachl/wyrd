@@ -233,16 +233,18 @@ fn open_store_with_quota_wires_the_accountant_with_the_ceiling() {
     let temp = TempDir::new();
     let drive = temp.0.join("drive");
     // Unlimited: stock config, no accountant, interval untouched.
-    let (_store, config, retained) = crate::composer::open_store_with_quota(&drive, None).unwrap();
+    let (_store, config, retained, open_timeout) =
+        crate::composer::open_store_with_quota(&drive, None).unwrap();
     assert_eq!(config.budgets.retained_bytes_quota, None);
     assert!(retained.is_none());
+    assert_eq!(open_timeout, std::time::Duration::from_secs(30));
     assert_eq!(
         config.interval,
         LiveConfig::for_local_sync().interval,
         "no flag means the stock config"
     );
     // Set: the same tally the store charges, under the same ceiling.
-    let (mut store, config, retained) =
+    let (mut store, config, retained, _open_timeout) =
         crate::composer::open_store_with_quota(&drive, Some(1024)).unwrap();
     assert_eq!(config.budgets.retained_bytes_quota, Some(1024));
     let retained = retained.expect("a quota wires an accountant");

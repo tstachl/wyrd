@@ -180,7 +180,7 @@ pub(crate) fn mount(
     // check below and the loop compare against the same numbers —
     // and the same number gates both the authoring path and the
     // receive-path admission gate (DG-4 A).
-    let (store, mut config, _retained) =
+    let (store, mut config, _retained, open_timeout) =
         crate::composer::open_store_with_quota(&drive_dir, retained_quota)?;
     config.interval = std::time::Duration::from_secs(interval);
     // Fail fast on macOS before binding any endpoint: a missing
@@ -196,8 +196,9 @@ pub(crate) fn mount(
     // The startup cross-check runs after platform preflight and before
     // composition: a quota below what the mounted store already holds
     // would refuse every write, so starting is refused with both
-    // numbers instead. Unset quotas skip the walk — and the binary
-    // ships none, so this fires only for future configuration surfaces.
+    // numbers instead. Unset quotas skip the walk; a set quota
+    // arrives by flag or by the application settings file, so this
+    // fires for operator configuration, not only for tests.
     check_startup_retention(&config, &store, engine.vault().seen_bytes())?;
     let mut daemon = WyrdNode::new(engine, store)?;
     daemon.refresh_live_heads()?;
@@ -217,7 +218,7 @@ pub(crate) fn mount(
 
     // The loop and the serving backend share the config's budgets
     // through `into_live` below.
-    let (mut live, parts) = daemon.into_live(Duration::from_secs(30), &config)?;
+    let (mut live, parts) = daemon.into_live(open_timeout, &config)?;
     // The mount's posture observer rides the node's pass hook and the
     // loop's failure closure through one shared count, exactly like
     // the vault's observer rides the daemon composer's: ready on the

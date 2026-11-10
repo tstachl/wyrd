@@ -547,6 +547,9 @@ pub enum OwnerError {
     /// A configured retention quota the store already exceeds.
     #[error("retention quota refused at startup: {0}")]
     Retention(#[from] QuotaCheckError),
+    /// The application settings file refused to load or apply.
+    #[error("application settings refused: {0}")]
+    Settings(String),
     /// Serving bind or the supervised run failed at the io boundary.
     #[error("owner run failed: {0}")]
     Io(#[from] io::Error),
@@ -595,13 +598,21 @@ pub fn compose_headless_owner(
 /// receive-path admission (DG-4 A), with the store accountant wired
 /// so the comparison is against a maintained tally. `None` is
 /// unlimited (the dogfood default).
+///
+/// The application settings file supplies what the flag does not:
+/// its quota fills a `None` here (the flag wins), and its other
+/// budget bounds plus the open timeout apply onto the composition.
+/// A corrupt settings file refuses the composition loudly.
 pub fn compose_headless_owner_with_quota(
     engine: Engine,
     drive_dir: PathBuf,
     loopback: bool,
     retained_quota: Option<u64>,
 ) -> Result<ComposedHeadless, OwnerError> {
-    let (store, config) = match retained_quota {
+    let (file_quota, rest) =
+        crate::settings::split_file_overrides(&drive_dir).map_err(OwnerError::Settings)?;
+    let quota = retained_quota.or(file_quota);
+    let (store, quota_config) = match quota {
         Some(limit) => {
             let (config, retained) = LiveConfig::with_retained_quota(limit);
             let store =
@@ -615,12 +626,23 @@ pub fn compose_headless_owner_with_quota(
             (store, LiveConfig::for_local_sync())
         }
     };
+    // The quota above already wired its accountant; the remaining
+    // file bounds (admission, pass budgets, open timeout) apply
+    // here. `split_file_overrides` strips the quota from `rest`,
+    // so this cannot rebuild the mismatch.
+    let applied = crate::core::apply_budget_settings(
+        &quota_config,
+        crate::settings::DEFAULT_OPEN_TIMEOUT,
+        &rest,
+    )
+    .map_err(OwnerError::Settings)?;
+    let config = applied.config;
     crate::process::check_startup_retention(&config, &store, engine.vault().seen_bytes())?;
     let mut node = WyrdNode::new(engine, store)?;
     node.refresh_live_heads()?;
     let serving = node.open_serving(&drive_dir, loopback)?;
     let serving_id = hex::encode(serving.addr().id.as_bytes());
-    let (live, parts) = node.into_live(Duration::from_secs(30), &config)?;
+    let (live, parts) = node.into_live(applied.open_timeout, &config)?;
     Ok(ComposedHeadless {
         live,
         parts,

@@ -1265,7 +1265,7 @@ pub(crate) fn sync_now(
     // Same store+config pairing as mount: a quota travels with the
     // accountant that maintains it, so the same number gates the
     // authoring path and receive-path admission (DG-4 A).
-    let (store, config, _retained) =
+    let (store, config, _retained, open_timeout) =
         crate::composer::open_store_with_quota(&drive_dir, retained_quota)?;
     // Same startup cross-check as mount: headless runs compose a live
     // node too, so a misconfigured quota must fail here rather than
@@ -1301,7 +1301,7 @@ pub(crate) fn sync_now(
     } else {
         None
     };
-    let (mut live, parts) = daemon.into_live(Duration::from_secs(30), &config)?;
+    let (mut live, parts) = daemon.into_live(open_timeout, &config)?;
     // The role directory installs whether or not a serving surface
     // exists: a serving-less `sync now` retains like its role too.
     install_role_dir(&mut live, &drive_dir);
