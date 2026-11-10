@@ -21,6 +21,15 @@
       "forbids": []
     },
     {
+      "slot": "status/working",
+      "backs": [
+        { "file": "README.md", "heading": "## Status" },
+        { "file": "ROADMAP.md", "heading": "## Shipped foundations" }
+      ],
+      "mustContain": ["Automatic repair of corrupted or lost local copies"],
+      "forbids": []
+    },
+    {
       "slot": "status/not-yet",
       "backs": [
         { "file": "README.md", "heading": "## Status" },
