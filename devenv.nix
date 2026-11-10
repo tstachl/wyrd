@@ -101,14 +101,14 @@ in
   '';
 
   git-hooks.hooks = {
-    # Mirrors CI (`rust.yaml` gates-fast: `rust-check` /
-    # `rust-clippy` plus the mount-free `rust-check-nomount` /
-    # `rust-clippy-nomount` lanes): workspace-wide, all targets (unit
-    # tests included — bare `cargo clippy` never compiles them), with
-    # warnings denied, in both feature configurations. A mount-gated
-    # test import once shipped green locally and failed CI exactly
-    # here, because the default hook checked neither test targets nor
-    # the `--no-default-features` build.
+    # Mirrors the CI clippy lanes (`rust.yaml` gates-fast: `rust-clippy`
+    # plus the mount-free `rust-clippy-nomount` lane): workspace-wide,
+    # all targets (unit tests included — bare `cargo clippy` never
+    # compiles them), with warnings denied, in both feature
+    # configurations. A mount-gated test import once shipped green
+    # locally and failed CI exactly here, because the default hook
+    # checked neither test targets nor the `--no-default-features`
+    # build.
     clippy = {
       enable = true;
       # `language: system` hooks exec the entry directly with no
