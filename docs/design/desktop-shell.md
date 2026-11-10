@@ -583,13 +583,14 @@ installer issue; auto-update is explicitly v0.8.
   `Unconfirmed`, never recast as failures. Forced termination leaves
   every outstanding outcome unknown and requires reconciliation
   after reconnect.
-- Human-path rehearsal (shared with the installer issue): install,
-  create drive, see it, quit cleanly — no terminal. The create
-  step belongs to installer integration (provisioning UX, service
-  enablement, credential handling travel with that issue): stage 2
-  proves the shell observes, presents, and shuts down gracefully,
-  and the integrated rehearsal proves install → create → discover
-  → quit once provisioning lands there.
+- Human-path rehearsal (shared with the installer and runtime
+  provisioning issues): install, create drive, see it, quit
+  cleanly — no terminal. The create step belongs to runtime
+  provisioning (constrained CLI adapter plus independent
+  verification): stage 2 proves the shell observes, presents, and
+  shuts down gracefully, and the integrated rehearsal proves
+  install → create → discover → quit once provisioning lands
+  there.
 - No new wire bytes, so no new golden vectors: the backend speaks
   through the shared client, already pinned by `vectors.json`. Any
   drift in the mapped types fails the existing field-name snapshot,
@@ -631,11 +632,56 @@ installer issue; auto-update is explicitly v0.8.
 2. Three views against the live interface — never against mocked
    owner behavior. The lifecycle view is observational (registry
    plus per-drive availability probes; provisioning execution
-   stays with the installer follow-up) and the settings view is
-   read-only; the unavailable state, graceful-quit drain, and
-   presentation-cache discipline ship here.
+   arrives with runtime provisioning below) and the settings view
+   is read-only; the unavailable state, graceful-quit drain, and
+   presentation-cache discipline ship here. (Landed.)
 3. Packaging inputs consumed by the installer issue; human-path
    rehearsal.
+4. Multi-drive shell (issue A): one window, one backend
+   connection per drive, explicit drive identity in every
+   drive-scoped command, per-drive failure isolation, drive
+   selection, per-drive snapshots, drivless first-run. No process
+   spawning, no new plugins.
+5. Runtime provisioning (issue B): the constrained CLI adapter
+   for create/join/leave with verification-via-reread,
+   credential-file selection, sole-owner confirmation as operation
+   contract, and per-drive mode selection and reconfiguration.
+
+## Multi-drive commitment (decided, v0.4)
+
+One application instance manages multiple independently managed
+drives: one backend connection and independently observed
+lifecycle state per drive. Drive creation, joining, leaving, and
+materialization configuration are runtime, per-drive operations;
+installation provisions application artifacts and
+service/credential infrastructure, not a permanently singular
+drive. The wire protocol and identity contracts are unchanged,
+and the layer gate, the observer-only settings rule, and the
+normative cache semantics all carry over unmodified.
+
+The desktop may launch constrained, version-matched CLI lifecycle
+operations but never becomes a lifecycle or durable-store
+authority. The contract: the desktop invokes the installed CLI
+through a small Rust adapter with structured arguments (never
+shell-constructed); secret contents never cross IPC or argv;
+operations are non-interactive with explicit exit semantics; the
+desktop waits, then re-reads the registry and probes the socket
+independently, and observed state alone determines the display.
+No overlapping lifecycle operations on one drive, no implicit
+retries of destructive operations, version mismatch is a hard
+failure. Authority stays where it is: CLI/core hold lifecycle
+authority, the desktop is launcher plus observer, registry and
+socket are observed evidence, the frontend is presentation.
+
+Materialization mode is mutable per-device per-drive. Drive
+identity is immutable; membership is lifecycle; mode and relays
+are mutable device-by-drive configuration; credentials are
+replaceable; the platform default applies only at create/join and
+never silently overrides an existing choice. Changing mode is a
+lifecycle operation (stop the materializer, clear conflicting
+registrations, reconfigure, restart the service, verify), not a
+settings mutation. A drive's identity and membership stay
+uncoupled from how any particular device materializes it.
 
 ## Open questions for reviewers
 
