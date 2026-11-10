@@ -26,10 +26,27 @@
 yanked = "warn"
 unmaintained = "workspace"
 unsound = "all"
+# Scoped advisory ignores, each with its reason and re-review
+# condition. Nothing here downgrades a reachable risk silently.
+ignore = [
+  # RUSTSEC-2024-0429 (glib `VariantStrIter` unsoundness, fixed only
+  # in >=0.20.0): the stable Tauri 2.x tree pins the gtk-rs 0.18
+  # stack, so every Tauri 2.x app carries it. Linux-only
+  # GUI-variant iteration, unreachable from the desktop command
+  # surface (reads, status, single-queue submit — no GVariant
+  # iteration anywhere near it). Re-review when Tauri moves to gtk
+  # 0.20+. Decided 2026-11-10 for the desktop command-layer link.
+  "RUSTSEC-2024-0429",
+]
 
 [licenses]
 allow = [
   "Apache-2.0",
+  # Apache-2.0 with the LLVM patent-grant exception (OSI-approved,
+  # strictly more permissive than Apache-2.0, no copyleft): enters
+  # with the Tauri tree via `target-lexicon`. Re-reviewed 2026-11-10
+  # per the header rule for licenses not already here.
+  "Apache-2.0 WITH LLVM-exception",
   "BSD-2-Clause",
   "BSD-3-Clause",
   "BSL-1.0",
