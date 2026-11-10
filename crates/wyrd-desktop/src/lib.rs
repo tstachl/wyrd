@@ -27,8 +27,12 @@
 
 pub mod backend;
 pub mod commands;
+pub mod registry;
+pub mod settings_view;
 
 pub use backend::{BackendError, DesktopBackend};
+pub use registry::{DriveAvailability, DriveView, RegistryState, RegistryStatus};
+pub use settings_view::{DriveSettings, DriveSettingsView};
 
 /// The managed application state: the single backend owner, held
 /// under exclusive access. Commands reach it through an owned
@@ -38,11 +42,80 @@ pub use backend::{BackendError, DesktopBackend};
 /// (`state not managed`), not compile time.
 pub type AppState = std::sync::Mutex<DesktopBackend>;
 
+/// Outstanding IPC work, counted from dispatch to answer. The quit
+/// drain reads this — never the backend itself — so waiting never
+/// touches the owner connection: draining is a shell concern, and
+/// the count covers every command including the local registry and
+/// settings queries.
+#[derive(Debug, Clone, Default)]
+pub struct FlightTracker {
+    inner: std::sync::Arc<FlightTrackerInner>,
+}
+
+#[derive(Debug, Default)]
+struct FlightTrackerInner {
+    outstanding: std::sync::atomic::AtomicUsize,
+}
+
+impl FlightTracker {
+    /// A fresh tracker with nothing outstanding.
+    pub fn new() -> Self {
+        FlightTracker {
+            inner: std::sync::Arc::new(FlightTrackerInner {
+                outstanding: std::sync::atomic::AtomicUsize::new(0),
+            }),
+        }
+    }
+
+    /// One exchange dispatched. Callers hold the returned guard for
+    /// the exchange's whole life — dispatch queue included — so the
+    /// drain waits for work the runtime accepted but has not run yet.
+    /// The guard owns its count (no borrow of the app state), so it
+    /// moves freely into the blocking task.
+    pub(crate) fn enter(&self) -> FlightGuard {
+        self.inner
+            .outstanding
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        FlightGuard {
+            tracker: self.clone(),
+        }
+    }
+
+    /// How many exchanges are dispatched but unanswered.
+    pub fn outstanding(&self) -> usize {
+        self.inner
+            .outstanding
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+/// The RAII half of [`FlightTracker::enter`]: dropping settles the
+/// dispatch, exactly once, on every path including panics.
+pub(crate) struct FlightGuard {
+    tracker: FlightTracker,
+}
+
+impl Drop for FlightGuard {
+    fn drop(&mut self) {
+        self.tracker
+            .inner
+            .outstanding
+            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 /// The registered command handler: the authoritative application
 /// IPC surface. Exactly one `generate_handler!` call, covering the
 /// [`commands`] surface — never several `invoke_handler` calls.
 /// Generic over the runtime so the mock runtime drives the same
 /// handler in tests.
+///
+/// The local registry and settings queries return their state
+/// structs directly instead of the owner taxonomy: a dead blocking
+/// worker there is a shell bug, not an owner answer, so the failure
+/// surfaces as an explicit unreadable state inside the payload. Any
+/// other rejection of those commands is a transport failure, never
+/// an owner answer.
 pub fn invoke_handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool {
     tauri::generate_handler![
         commands::lookup,
@@ -56,5 +129,7 @@ pub fn invoke_handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> 
         commands::submit,
         commands::reconcile_lookup,
         commands::reconnect,
+        commands::list_drives,
+        commands::drive_settings,
     ]
 }

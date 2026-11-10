@@ -17,7 +17,11 @@ the shadcn-svelte paths so further primitives arrive via its CLI.
   `src/lib/ipc/client.ts` is the single invoke path;
   `src/lib/ipc/operations.ts` wraps each registered command by its
   exact name, and `src/lib/ipc/results.ts` mirrors the result
-  shapes. The backend answer taxonomy is mirrored in
+  shapes. Owner operations return the typed `IpcResult`; the
+  infallible local queries (`list_drives`, `drive_settings`) return
+  their state structs directly, with unknown states inside the
+  payload — any rejection of those is a transport failure, never
+  an owner answer. The backend answer taxonomy is mirrored in
   `src/lib/ipc/types.ts` exactly (`kind`-tagged, refusal codes
   verbatim); transport failure is `IpcTransportError` and is never
   mapped into the taxonomy.

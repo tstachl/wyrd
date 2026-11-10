@@ -34,7 +34,9 @@ use wyrd_owner_client::{
     WireNode, WireParentToken, WireSyncStatus,
 };
 
-use super::{AppState, BackendError, DesktopBackend};
+use super::registry::{self, RegistryState, RegistryStatus};
+use super::settings_view::{self, DriveSettings};
+use super::{AppState, BackendError, DesktopBackend, FlightTracker};
 
 /// Run one backend exchange on the blocking pool and report a dead
 /// worker as [`BackendError::Unconfirmed`]: after dispatch the
@@ -45,6 +47,10 @@ where
     T: Send + 'static,
     R: Runtime,
 {
+    // Counted from dispatch so the quit drain waits for work the
+    // runtime accepted but has not run yet. The guard owns its
+    // count, so the app handle still moves into the blocking task.
+    let _flight = app.state::<FlightTracker>().enter();
     tauri::async_runtime::spawn_blocking(move || {
         let backend = app.state::<AppState>();
         // Reclaim a poisoned guard like the backend itself does
@@ -65,6 +71,33 @@ fn worker_failed(op: &'static str, join: impl std::fmt::Display) -> BackendError
         op: op.into(),
         detail: format!("ipc worker failed: {join}"),
     }
+}
+
+/// Run one local query on the blocking pool and count it in
+/// flight. Unlike [`exchange`], the answer is a state struct, never
+/// the owner taxonomy: these queries read local files and probe
+/// sockets but forward no owner operation, so a dead worker is a
+/// shell bug and surfaces as an explicit unreadable state inside the
+/// payload — never success, never the taxonomy. The backend lock is
+/// held for the whole call, serializing with owner exchanges exactly
+/// like every command: one slow probe delays others, bounded by the
+/// probe timeout, and the count covers dispatch-queue time too.
+async fn query<T, F, B, R>(app: AppHandle<R>, op: &'static str, build_unreadable: B, call: F) -> T
+where
+    F: FnOnce(&DesktopBackend) -> T + Send + 'static,
+    B: FnOnce(String) -> T + Send + 'static,
+    T: Send + 'static,
+    R: Runtime,
+{
+    let _flight = app.state::<FlightTracker>().enter();
+    tauri::async_runtime::spawn_blocking(move || {
+        let backend = app.state::<AppState>();
+        // Reclaim a poisoned guard like the backend itself does.
+        let guard = backend.lock().unwrap_or_else(|poison| poison.into_inner());
+        call(&guard)
+    })
+    .await
+    .unwrap_or_else(|join| build_unreadable(format!("ipc worker failed for {op}: {join}")))
 }
 
 /// Look up one path: the node plus the serving generation and
@@ -173,6 +206,43 @@ pub async fn reconcile_lookup<R: Runtime>(
 #[tauri::command]
 pub async fn reconnect<R: Runtime>(app: AppHandle<R>) -> Result<(), BackendError> {
     exchange(app, "reconnect", move |backend| backend.reconnect()).await
+}
+
+/// Every registered drive plus per-drive reachability, verified
+/// this session. A local query, not an owner operation: the answer
+/// is a state struct (never the taxonomy), unreadable states ride
+/// inside the payload, and any other rejection is a transport
+/// failure. The backend lock is held for the whole call, so a
+/// registry with many entries serializes other commands behind the
+/// per-drive probe bound.
+#[tauri::command]
+pub async fn list_drives<R: Runtime>(app: AppHandle<R>) -> RegistryState {
+    query(
+        app,
+        "list_drives",
+        |reason| RegistryState {
+            status: RegistryStatus::Unreadable { reason },
+            drives: Vec::new(),
+            skipped: Vec::new(),
+        },
+        |backend| registry::list_drives_for(backend.drive_dir()),
+    )
+    .await
+}
+
+/// This drive's configured bounds, as configured — never defaults,
+/// never effective posture. A local query like [`list_drives`]:
+/// unknown states ride inside the payload, and only an explicit
+/// `Configured` carries values.
+#[tauri::command]
+pub async fn drive_settings<R: Runtime>(app: AppHandle<R>) -> DriveSettings {
+    query(
+        app,
+        "drive_settings",
+        |reason| DriveSettings::Unreadable { reason },
+        |backend| settings_view::drive_settings(backend.drive_dir()),
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -296,6 +366,127 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&refusal).unwrap(),
             serde_json::json!({"code": "NotFound", "message": "no such path"})
+        );
+    }
+
+    /// Every local-query shape the commands return, serialized once:
+    /// the frontend mirrors in `apps/desktop/src/lib/ipc/results.ts`
+    /// must read exactly this. Internally tagged enums carry their
+    /// tag alongside flattened content — any wrapper, rename, or
+    /// flattening here breaks the mirror, and this test is where
+    /// that breakage shows. The JSON below is copied into
+    /// `results.test.ts` verbatim.
+    #[test]
+    fn local_query_shapes_serialize_verbatim() {
+        use super::super::{DriveAvailability, DriveSettings, DriveSettingsView};
+        use super::super::{DriveView, RegistryState, RegistryStatus};
+
+        assert_eq!(
+            serde_json::to_value(DriveAvailability::Available).unwrap(),
+            serde_json::json!({"state": "available"})
+        );
+        assert_eq!(
+            serde_json::to_value(DriveAvailability::Unavailable {
+                detail: "no owner".to_string()
+            })
+            .unwrap(),
+            serde_json::json!({"state": "unavailable", "detail": "no owner"})
+        );
+        assert_eq!(
+            serde_json::to_value(DriveAvailability::Unknown {
+                detail: "no terminal answer".to_string()
+            })
+            .unwrap(),
+            serde_json::json!({"state": "unknown", "detail": "no terminal answer"})
+        );
+
+        let drive = DriveView {
+            name: "alpha".to_string(),
+            drive_dir: "/drives/alpha".to_string(),
+            relays: vec!["wss://relay.example".to_string()],
+            service: "drive-alpha".to_string(),
+            mode: "vault".to_string(),
+            current: true,
+            availability: DriveAvailability::Available,
+        };
+        assert_eq!(
+            serde_json::to_value(&drive).unwrap(),
+            serde_json::json!({
+                "name": "alpha",
+                "drive_dir": "/drives/alpha",
+                "relays": ["wss://relay.example"],
+                "service": "drive-alpha",
+                "mode": "vault",
+                "current": true,
+                "availability": {"state": "available"},
+            })
+        );
+
+        let ready = RegistryState {
+            status: RegistryStatus::Ready,
+            drives: vec![drive],
+            skipped: vec![
+                "entry \"bad\": key \"bad\" does not match entry name \"other\"".to_string(),
+            ],
+        };
+        assert_eq!(
+            serde_json::to_value(&ready).unwrap(),
+            serde_json::json!({
+                "status": "ready",
+                "drives": [{
+                    "name": "alpha",
+                    "drive_dir": "/drives/alpha",
+                    "relays": ["wss://relay.example"],
+                    "service": "drive-alpha",
+                    "mode": "vault",
+                    "current": true,
+                    "availability": {"state": "available"},
+                }],
+                "skipped": ["entry \"bad\": key \"bad\" does not match entry name \"other\""],
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(RegistryState {
+                status: RegistryStatus::Nofile,
+                drives: Vec::new(),
+                skipped: Vec::new(),
+            })
+            .unwrap(),
+            serde_json::json!({"status": "nofile", "drives": [], "skipped": []})
+        );
+        assert_eq!(
+            serde_json::to_value(RegistryStatus::Unreadable {
+                reason: "registry /x/drives.json is version 2, this shell reads 1".to_string()
+            })
+            .unwrap(),
+            serde_json::json!({"status": "unreadable", "reason": "registry /x/drives.json is version 2, this shell reads 1"})
+        );
+
+        assert_eq!(
+            serde_json::to_value(DriveSettings::Configured(DriveSettingsView {
+                retained_bytes_quota: Some(0),
+                max_admit_per_pass: Some(50),
+                fetch_pass_budget_secs: None,
+                max_mutation_wait_secs: None,
+                open_timeout_secs: Some(45),
+            }))
+            .unwrap(),
+            serde_json::json!({"state": "configured", "retained_bytes_quota": 0, "max_admit_per_pass": 50, "fetch_pass_budget_secs": null, "max_mutation_wait_secs": null, "open_timeout_secs": 45})
+        );
+        assert_eq!(
+            serde_json::to_value(DriveSettings::Nosection).unwrap(),
+            serde_json::json!({"state": "nosection"})
+        );
+        assert_eq!(
+            serde_json::to_value(DriveSettings::Nofile).unwrap(),
+            serde_json::json!({"state": "nofile"})
+        );
+        assert_eq!(
+            serde_json::to_value(DriveSettings::Unreadable {
+                reason: "settings /x/settings.json is version 2, this shell reads 1".to_string()
+            })
+            .unwrap(),
+            serde_json::json!({"state": "unreadable", "reason": "settings /x/settings.json is version 2, this shell reads 1"})
         );
     }
 

@@ -108,3 +108,109 @@ test("mutation errors keep code and message verbatim", () => {
   const error: WireMutationError = { code: "NotFound", message: "no such path" };
   expect(error).toEqual({ code: "NotFound", message: "no such path" });
 });
+
+// Fixtures for the local-query mirrors. Copied from the Rust test
+// `local_query_shapes_serialize_verbatim` in
+// `crates/wyrd-desktop/src/commands.rs` — they pin the JSON the
+// backend produces, not a second implementation of it. Internally
+// tagged enums carry their tag alongside flattened content.
+
+import type {
+  DriveAvailability,
+  DriveSettingsState,
+  DriveView,
+  RegistryState,
+} from "./results.js";
+
+test("drive availability states stay tagged and distinct", () => {
+  const available: DriveAvailability = { state: "available" };
+  expect(available).toEqual({ state: "available" });
+  const unavailable: DriveAvailability = {
+    state: "unavailable",
+    detail: "no owner",
+  };
+  expect(unavailable).toEqual({ state: "unavailable", detail: "no owner" });
+  const unknown: DriveAvailability = {
+    state: "unknown",
+    detail: "no terminal answer",
+  };
+  expect(unknown).toEqual({ state: "unknown", detail: "no terminal answer" });
+});
+
+test("drive view carries facts plus the live verdict", () => {
+  const drive: DriveView = {
+    name: "alpha",
+    drive_dir: "/drives/alpha",
+    relays: ["wss://relay.example"],
+    service: "drive-alpha",
+    mode: "vault",
+    current: true,
+    availability: { state: "available" },
+  };
+  expect(drive).toEqual({
+    name: "alpha",
+    drive_dir: "/drives/alpha",
+    relays: ["wss://relay.example"],
+    service: "drive-alpha",
+    mode: "vault",
+    current: true,
+    availability: { state: "available" },
+  });
+});
+
+test("registry states flatten the status without stutter", () => {
+  const ready: RegistryState = {
+    status: "ready",
+    drives: [
+      {
+        name: "alpha",
+        drive_dir: "/drives/alpha",
+        relays: ["wss://relay.example"],
+        service: "drive-alpha",
+        mode: "vault",
+        current: true,
+        availability: { state: "available" },
+      },
+    ],
+    skipped: ['entry "bad": key "bad" does not match entry name "other"'],
+  };
+  expect(ready.status).toBe("ready");
+  expect(ready.drives).toHaveLength(1);
+  const nofile: RegistryState = { status: "nofile", drives: [], skipped: [] };
+  expect(nofile).toEqual({ status: "nofile", drives: [], skipped: [] });
+  const unreadable: RegistryState = {
+    status: "unreadable",
+    reason: "registry /x/drives.json is version 2, this shell reads 1",
+    drives: [],
+    skipped: [],
+  };
+  expect(unreadable.reason).toContain("version 2");
+});
+
+test("drive settings distinguish configured from unknown", () => {
+  const configured: DriveSettingsState = {
+    state: "configured",
+    retained_bytes_quota: 0,
+    max_admit_per_pass: 50,
+    fetch_pass_budget_secs: null,
+    max_mutation_wait_secs: null,
+    open_timeout_secs: 45,
+  };
+  expect(configured).toEqual({
+    state: "configured",
+    retained_bytes_quota: 0,
+    max_admit_per_pass: 50,
+    fetch_pass_budget_secs: null,
+    max_mutation_wait_secs: null,
+    open_timeout_secs: 45,
+  });
+  const nosection: DriveSettingsState = { state: "nosection" };
+  expect(nosection).toEqual({ state: "nosection" });
+  const nofile: DriveSettingsState = { state: "nofile" };
+  expect(nofile).toEqual({ state: "nofile" });
+  const unreadable: DriveSettingsState = {
+    state: "unreadable",
+    reason: "settings /x/settings.json is version 2, this shell reads 1",
+  };
+  expect(unreadable.reason).toContain("version 2");
+});

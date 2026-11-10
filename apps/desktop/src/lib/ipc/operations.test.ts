@@ -11,11 +11,14 @@ import { beforeEach, expect, test } from "bun:test";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import {
   captureParent,
+  driveSettings,
+  listDrives,
   lookup,
   observe,
   reconnect,
   submit,
 } from "./operations.js";
+import { IpcTransportError } from "./client.js";
 
 beforeEach(() => {
   clearMocks();
@@ -78,4 +81,48 @@ test("captureParent names the parent, reconnect sends nothing", async () => {
     { cmd: "capture_parent", args: { path: "" } },
     { cmd: "reconnect", args: {} },
   ]);
+});
+
+test("listDrives sends no arguments and returns the state struct", async () => {
+  const seen: Array<{ cmd: string; args: unknown }> = [];
+  mockIPC((cmd, args) => {
+    seen.push({ cmd, args });
+    return { status: "nofile", drives: [], skipped: [] };
+  });
+  expect(await listDrives()).toEqual({ status: "nofile", drives: [], skipped: [] });
+  expect(seen).toEqual([{ cmd: "list_drives", args: {} }]);
+});
+
+test("driveSettings returns configured bounds verbatim", async () => {
+  mockIPC(() => ({
+    state: "configured",
+    retained_bytes_quota: 0,
+    max_admit_per_pass: 50,
+    fetch_pass_budget_secs: null,
+    max_mutation_wait_secs: null,
+    open_timeout_secs: 45,
+  }));
+  expect(await driveSettings()).toEqual({
+    state: "configured",
+    retained_bytes_quota: 0,
+    max_admit_per_pass: 50,
+    fetch_pass_budget_secs: null,
+    max_mutation_wait_secs: null,
+    open_timeout_secs: 45,
+  });
+});
+
+test("local-query rejections throw a transport error, never taxonomy", async () => {
+  mockIPC(() => {
+    throw { kind: "unavailable", detail: "no owner" };
+  });
+  // A rejection here is a shell bug, not an owner answer: even a
+  // taxonomy-shaped payload throws instead of masquerading as one.
+  // The mock stands in for the transport; the backend never
+  // rejects these commands with the taxonomy.
+  const seen = await listDrives().then(
+    () => null,
+    (error: unknown) => error,
+  );
+  expect(seen).toBeInstanceOf(IpcTransportError);
 });

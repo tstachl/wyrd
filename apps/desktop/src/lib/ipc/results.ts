@@ -285,3 +285,64 @@ export type WireMutationOutcome =
 
 /** Served generation + durable revision accompany every read. */
 export type Served<T> = [T, number, number];
+
+// Local-query mirrors (read-only registry and settings views).
+//
+// Source of truth: `DriveAvailability`, `DriveView`,
+// `RegistryStatus`, `RegistryState` in
+// `crates/wyrd-desktop/src/registry.rs`, and `DriveSettings`,
+// `DriveSettingsView` in
+// `crates/wyrd-desktop/src/settings_view.rs` — the TypeScript side
+// names the flattened payloads (`RegistryState`,
+// `DriveSettingsState`) while the tag vocabularies match
+// verbatim. Internally tagged enums carry their tag (`state` /
+// `status`) alongside flattened content. Fixtures pinning these
+// shapes live in `results.test.ts`,
+// copied from the Rust test `local_query_shapes_serialize_verbatim`
+// in `crates/wyrd-desktop/src/commands.rs`. Nothing here may add a
+// shape the Rust side does not produce.
+
+/** One drive's reachability, verified this session. Transport-level only. */
+export type DriveAvailability =
+  | { state: "available" }
+  | { state: "unavailable"; detail: string }
+  | { state: "unknown"; detail: string };
+
+/** One registered drive for the lifecycle view: facts plus the live verdict. */
+export interface DriveView {
+  name: string;
+  drive_dir: string;
+  relays: string[];
+  service: string;
+  mode: string;
+  /** The drive this shell instance serves, by exact path. Nothing marks current on a near-miss. */
+  current: boolean;
+  availability: DriveAvailability;
+}
+
+/** How the registry file itself read. Loud about unreadability, never guessing. */
+export type RegistryState =
+  | { status: "ready"; drives: DriveView[]; skipped: string[] }
+  | { status: "nofile"; drives: DriveView[]; skipped: string[] }
+  | {
+      status: "unreadable";
+      reason: string;
+      drives: DriveView[];
+      skipped: string[];
+    };
+
+/** One drive's configured bounds, as configured — never defaults, never effective posture. */
+export interface DriveSettingsView {
+  retained_bytes_quota: number | null;
+  max_admit_per_pass: number | null;
+  fetch_pass_budget_secs: number | null;
+  max_mutation_wait_secs: number | null;
+  open_timeout_secs: number | null;
+}
+
+/** What the settings file said about this drive. Missing and malformed are explicit unknown states. */
+export type DriveSettingsState =
+  | ({ state: "configured" } & DriveSettingsView)
+  | { state: "nofile" }
+  | { state: "nosection" }
+  | { state: "unreadable"; reason: string };

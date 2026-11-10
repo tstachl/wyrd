@@ -432,6 +432,7 @@ fn mock_app_with(
 ) {
     let app = tauri::test::mock_builder()
         .manage(wyrd_desktop::AppState::new(backend))
+        .manage(wyrd_desktop::FlightTracker::new())
         .invoke_handler(wyrd_desktop::invoke_handler())
         .build(tauri::generate_context!())
         .expect("the mock app builds");
@@ -538,6 +539,210 @@ fn commands_recover_availability_without_restart() {
         invoke(&webview, "lookup", serde_json::json!({"path": "seed.txt"})).is_ok(),
         "availability returns on the same app without restart"
     );
+
+    std::fs::remove_dir_all(&data_dir).expect("the webview data dir cleans up");
+    owner.shutdown();
+}
+
+/// Registry compatibility: entries the daemon's own writer stores
+/// read back through the desktop mirror byte-exact — names, dirs,
+/// relays, service, mode — so the lifecycle view agrees with the
+/// provisioning flow about which drives exist.
+#[test]
+fn registry_mirror_agrees_with_the_daemon_writer() {
+    use std::collections::BTreeMap;
+    use wyrd_daemon::bootstrap::{write_registry, RegistryEntry, ServiceMode};
+
+    let dir = std::env::temp_dir().join(format!("wyrd-desktop-compat-reg-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let drive = dir.join("drive");
+    std::fs::create_dir_all(&drive).unwrap();
+    let path = dir.join("drives.json");
+    let mut drives = BTreeMap::new();
+    drives.insert(
+        "alpha".to_string(),
+        RegistryEntry {
+            name: "alpha".to_string(),
+            drive_dir: drive.clone(),
+            relays: vec!["wss://relay.example".to_string()],
+            service: "drive-alpha".to_string(),
+            mode: ServiceMode::Vault,
+        },
+    );
+    write_registry(&path, &drives).expect("the daemon writer stores");
+
+    let state =
+        wyrd_desktop::registry::list_drives_at(&path, std::path::Path::new("/drives/nowhere"));
+    assert_eq!(
+        state.status,
+        wyrd_desktop::RegistryStatus::Ready,
+        "a daemon-written registry reads ready"
+    );
+    assert_eq!(state.drives.len(), 1);
+    let view = &state.drives[0];
+    assert_eq!(view.name, "alpha");
+    assert_eq!(view.drive_dir, drive.to_string_lossy());
+    assert_eq!(view.relays, vec!["wss://relay.example".to_string()]);
+    assert_eq!(view.service, "drive-alpha");
+    assert_eq!(view.mode, "vault");
+    assert!(
+        !view.current,
+        "a non-matching path marks nothing current rather than guessing"
+    );
+    // No owner serves the scratch drive: the probe reports no
+    // transport, which says nothing about any drive.
+    assert!(
+        matches!(
+            view.availability,
+            wyrd_desktop::DriveAvailability::Unavailable { .. }
+        ),
+        "no owner serves the scratch drive: {:?}",
+        view.availability
+    );
+    assert!(state.skipped.is_empty());
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Settings compatibility: a section the daemon's own writer
+/// stores — notification records included — reads back through the
+/// desktop mirror with the bounds intact and the records excluded.
+#[test]
+fn settings_mirror_agrees_with_the_daemon_writer() {
+    use std::collections::BTreeMap;
+    use wyrd_daemon::settings::{
+        write_settings, AppSettingsFile, DriveSettingsSection, APP_SETTINGS_VERSION,
+    };
+
+    let dir = std::env::temp_dir().join(format!(
+        "wyrd-desktop-compat-settings-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("settings.json");
+    let mut notified = BTreeMap::new();
+    notified.insert("sync.quiet".to_string(), 1700000000u64);
+    let mut drives = BTreeMap::new();
+    drives.insert(
+        "/drives/alpha".to_string(),
+        DriveSettingsSection {
+            retained_bytes_quota: Some(0),
+            max_admit_per_pass: Some(50),
+            fetch_pass_budget_secs: None,
+            max_mutation_wait_secs: Some(120),
+            open_timeout_secs: Some(45),
+            notified,
+        },
+    );
+    write_settings(
+        &path,
+        &AppSettingsFile {
+            version: APP_SETTINGS_VERSION,
+            drives,
+        },
+    )
+    .expect("the daemon writer stores");
+
+    match wyrd_desktop::settings_view::drive_settings_at(
+        &path,
+        std::path::Path::new("/drives/alpha"),
+    ) {
+        wyrd_desktop::DriveSettings::Configured(view) => {
+            assert_eq!(view.retained_bytes_quota, Some(0));
+            assert_eq!(view.max_admit_per_pass, Some(50));
+            assert_eq!(view.fetch_pass_budget_secs, None);
+            assert_eq!(view.max_mutation_wait_secs, Some(120));
+            assert_eq!(view.open_timeout_secs, Some(45));
+        }
+        state => panic!("a daemon-written section configures: {state:?}"),
+    }
+    assert_eq!(
+        wyrd_desktop::settings_view::drive_settings_at(&path, std::path::Path::new("/drives/beta")),
+        wyrd_desktop::DriveSettings::Nosection
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Reachability verifies this session against the live owner: the
+/// registry probe reports `Available` while the server answers and
+/// `Unavailable` once the socket is gone — never from cached state.
+#[test]
+fn registry_probe_verifies_against_the_live_owner() {
+    use std::collections::BTreeMap;
+    use wyrd_daemon::bootstrap::{write_registry, RegistryEntry, ServiceMode};
+
+    let mut owner = running_owner();
+    let dir = std::env::temp_dir().join(format!("wyrd-desktop-probe-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("drives.json");
+    let mut drives = BTreeMap::new();
+    drives.insert(
+        "live".to_string(),
+        RegistryEntry {
+            name: "live".to_string(),
+            drive_dir: owner.dir.clone(),
+            relays: Vec::new(),
+            service: "drive-live".to_string(),
+            mode: ServiceMode::Vault,
+        },
+    );
+    write_registry(&path, &drives).expect("the daemon writer stores");
+
+    let state = wyrd_desktop::registry::list_drives_at(&path, &owner.dir);
+    assert_eq!(state.drives.len(), 1);
+    assert!(
+        state.drives[0].current,
+        "the served drive marks current by exact path"
+    );
+    assert_eq!(
+        state.drives[0].availability,
+        wyrd_desktop::DriveAvailability::Available,
+        "the serving owner verifies this session"
+    );
+
+    owner.stop_serving();
+    let state = wyrd_desktop::registry::list_drives_at(&path, &owner.dir);
+    assert!(
+        matches!(
+            state.drives[0].availability,
+            wyrd_desktop::DriveAvailability::Unavailable { .. }
+        ),
+        "a gone socket probes unavailable: {:?}",
+        state.drives[0].availability
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
+    owner.shutdown();
+}
+
+/// The new commands answer through the registered surface with
+/// their names and empty argument shapes: the frontend invokes
+/// exactly these, and the payloads carry the state structs — never
+/// the owner taxonomy.
+#[test]
+fn local_queries_answer_through_the_commands() {
+    let owner = running_owner();
+    let backend = backend_for(&owner);
+    let (_app, webview, data_dir) = mock_app_with(backend, "queries");
+
+    match invoke(&webview, "list_drives", serde_json::json!({})) {
+        Ok(value) => {
+            assert!(
+                value.get("status").is_some(),
+                "a status rides along: {value}"
+            );
+            assert!(value.get("drives").is_some(), "entries ride along: {value}");
+            assert!(value.get("skipped").is_some(), "skips ride along: {value}");
+        }
+        Err(error) => panic!("list_drives answers its state struct: {error}"),
+    }
+    match invoke(&webview, "drive_settings", serde_json::json!({})) {
+        Ok(value) => {
+            assert!(value.get("state").is_some(), "a state rides along: {value}");
+        }
+        Err(error) => panic!("drive_settings answers its state struct: {error}"),
+    }
 
     std::fs::remove_dir_all(&data_dir).expect("the webview data dir cleans up");
     owner.shutdown();
