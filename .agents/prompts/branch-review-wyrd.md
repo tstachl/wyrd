@@ -101,7 +101,7 @@ devenv shell -- cargo clippy -p <pkg> 2>&1
 devenv shell -- cargo fmt --check 2>&1
 ```
 
-Path-to-package rule (no separate mapping to look up): `crates/<name>/**` → `-p <name>`; `nix/**`, `docs/**`, `page/**` → no cargo run; `tests/**` → gate phases (bats), never `cargo nextest`. Multi-crate diffs take an explicit `-p` list, still never bare.
+Path-to-package rule (no separate mapping to look up): `crates/<name>/**` → `-p <name>`; `nix/**`, `docs/**`, `apps/marketing/**` → no cargo run; `tests/**` → gate phases (bats), never `cargo nextest`. Multi-crate diffs take an explicit `-p` list, still never bare.
 
 * **Docs/changelog-only:** no test suite or clippy unless the PR claims code behavior. Run `cargo fmt --check` when applicable.
 * **Rust source:** run each gate once (retry only after a source change or to diagnose a failure).

@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "page": "page/index.html",
-  "lock": "page/map.lock.json",
+  "page": "apps/marketing/index.html",
+  "lock": "apps/marketing/map.lock.json",
   "slots": [
     {
       "slot": "rules/s4-body",
