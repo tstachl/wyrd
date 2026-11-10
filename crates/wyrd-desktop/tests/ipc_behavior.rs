@@ -428,6 +428,7 @@ fn mock_app_with(
 ) -> (
     tauri::App<tauri::test::MockRuntime>,
     tauri::WebviewWindow<tauri::test::MockRuntime>,
+    std::path::PathBuf,
 ) {
     let app = tauri::test::mock_builder()
         .manage(wyrd_desktop::AppState::new(backend))
@@ -441,10 +442,10 @@ fn mock_app_with(
     ));
     std::fs::create_dir_all(&data_dir).expect("the webview data dir builds");
     let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
-        .data_directory(data_dir)
+        .data_directory(data_dir.clone())
         .build()
         .expect("the mock webview builds");
-    (app, webview)
+    (app, webview, data_dir)
 }
 
 /// Invoke one command on the mock webview: the JSON the command
@@ -478,7 +479,7 @@ fn invoke(
 fn commands_preserve_refusal_codes() {
     let owner = running_owner();
     let backend = backend_for(&owner);
-    let (_app, webview) = mock_app_with(backend, "refusals");
+    let (_app, webview, data_dir) = mock_app_with(backend, "refusals");
 
     match invoke(
         &webview,
@@ -492,6 +493,7 @@ fn commands_preserve_refusal_codes() {
         ok => panic!("a missing path refuses through the command: {ok:?}"),
     }
 
+    std::fs::remove_dir_all(&data_dir).expect("the webview data dir cleans up");
     owner.shutdown();
 }
 
@@ -503,7 +505,7 @@ fn commands_preserve_refusal_codes() {
 fn commands_recover_availability_without_restart() {
     let mut owner = running_owner();
     let backend = backend_for(&owner);
-    let (_app, webview) = mock_app_with(backend, "recovery");
+    let (_app, webview, data_dir) = mock_app_with(backend, "recovery");
 
     assert!(
         invoke(&webview, "lookup", serde_json::json!({"path": "seed.txt"})).is_ok(),
@@ -537,5 +539,6 @@ fn commands_recover_availability_without_restart() {
         "availability returns on the same app without restart"
     );
 
+    std::fs::remove_dir_all(&data_dir).expect("the webview data dir cleans up");
     owner.shutdown();
 }
