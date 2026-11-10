@@ -40,6 +40,14 @@ pub const APP_SETTINGS_VERSION: u32 = 1;
 /// state directory.
 pub const SETTINGS_FILENAME: &str = "settings.json";
 
+/// Ceiling on notification records per drive section. Dedup needs
+/// recent keys, not history: a drive notifies a handful of
+/// conditions per run, and 128 is headroom, not a target.
+/// [`record_notified`] evicts the oldest stamps past the ceiling,
+/// so a long fetch with churning counts cannot grow the file
+/// without bound.
+pub const MAX_NOTIFIED_PER_DRIVE: usize = 128;
+
 /// One drive's settings section: the five surfaced bounds, all
 /// optional — absent keys leave the compiled defaults in place —
 /// plus the notification records (OD-26-C, recommendation A).
@@ -387,11 +395,18 @@ pub fn record_notified(
     let mut file = read_settings(settings_path)?;
     let drive_key = settings_key_for(drive_dir);
     validate_key(&drive_key)?;
-    file.drives
-        .entry(drive_key)
-        .or_default()
-        .notified
-        .insert(key.to_string(), app_unix_secs);
+    let notified = &mut file.drives.entry(drive_key).or_default().notified;
+    notified.insert(key.to_string(), app_unix_secs);
+    // Oldest stamps evict first: dedup keeps its window without
+    // growing the file past the ceiling.
+    while notified.len() > MAX_NOTIFIED_PER_DRIVE {
+        let oldest = notified
+            .iter()
+            .min_by_key(|(_, stamp)| *stamp)
+            .map(|(key, _)| key.clone())
+            .expect("non-empty map has an oldest entry");
+        notified.remove(&oldest);
+    }
     write_settings(settings_path, &file)
 }
 
@@ -631,6 +646,28 @@ mod tests {
             record_notified(&path, &drive, "epoch-frozen:\u{7}", 1_700_000_001).unwrap_err();
         assert!(refused.contains("control characters"), "{refused}");
         assert!(!path.exists(), "no partial settings may remain");
+    }
+
+    /// The record is a bounded dedup window, not history: past the
+    /// ceiling the oldest stamps evict and the newest stay.
+    #[test]
+    fn notified_records_evict_oldest_past_the_ceiling() {
+        let dir = scratch("notified-cap");
+        let path = dir.join("settings.json");
+        let drive = dir.join("drive");
+        for index in 0..(MAX_NOTIFIED_PER_DRIVE + 5) {
+            record_notified(
+                &path,
+                &drive,
+                &format!("key-{index:04}"),
+                1_700_000_000 + index as u64,
+            )
+            .unwrap();
+        }
+        let seeded = notified_for_path(&path, &drive).unwrap();
+        assert_eq!(seeded.len(), MAX_NOTIFIED_PER_DRIVE);
+        assert!(!seeded.contains_key("key-0000"), "oldest evicts first");
+        assert!(seeded.contains_key(&format!("key-{:04}", MAX_NOTIFIED_PER_DRIVE + 4)));
     }
 
     /// OD-25-A as an invariant: writing, changing, and rewriting

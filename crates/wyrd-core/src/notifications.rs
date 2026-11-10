@@ -34,10 +34,10 @@
 //!    no longer reporting anything must not announce.
 //!
 //! Naming distinction this issue owns: File Provider change
-//! notifications (`docs/mobile.md:1092`) are a different mechanism
-//! entirely — the OS being told a folder changed, not a person
-//! being told anything. Nothing here emits those, and nothing
-//! there is this capability.
+//! notifications (`docs/platforms/mobile.md:1092`) are a different
+//! mechanism entirely — the OS being told a folder changed, not a
+//! person being told anything. Nothing here emits those, and
+//! nothing there is this capability.
 //!
 //! When a host presenter exists to own person-visible copy, the
 //! rendering below migrates there and this module keeps the state
@@ -49,12 +49,14 @@
 
 use std::collections::BTreeSet;
 
-use wyrd_format::{DeviceId, StoreFailure};
+use wyrd_format::{DeviceId, StoreFailure, TransitionId};
 use wyrd_sync::durable::DurableError;
 use wyrd_sync::runtime::{DrainReport, ExecuteReport};
 
 use crate::mailbox::MailboxHealth;
-use crate::member_surface::{HISTORY_NEVER_REENCRYPTED, REMOVAL_BOUNDARY, SOLE_OWNER_TERMINAL};
+use crate::member_surface::{
+    render_frozen_notice, render_removal_confirmation, HISTORY_NEVER_REENCRYPTED, REMOVAL_BOUNDARY,
+};
 use crate::mutation::MutationError;
 
 /// Issue 18's forbidden-string list, extended for notifications,
@@ -89,12 +91,33 @@ pub const FORBIDDEN_FRESHNESS_WORDS: &[&str] = &[
 /// True when the text renders a span of time in any form: the word
 /// "ago", or a number beside a time unit. Counts without units
 /// ("3 outstanding", "epoch 5") are not times and do not match —
-/// the scan requires a digit run followed, after optional space,
-/// by a time-unit word.
+/// the scan requires a digit run at a token edge followed, after
+/// optional spaces or hyphens, by a time-unit word. The token edge
+/// is what keeps identity hex honest: a 64-character id may
+/// contain digit runs beside `d` or `s` mid-token, and those never
+/// match. Single `d` is still covered through the long `day` stem
+/// and "ago"; a bare "2d" token matches directly.
 pub fn contains_interval_rendering(text: &str) -> bool {
-    const UNITS: &[&str] = &[
-        "second", "minute", "hour", "day", "week", "month", "year", "sec", "min", "hr",
-    ];
+    const LONG: &[&str] = &["second", "minute", "hour", "day", "week", "month", "year"];
+    const SHORT: &[u8] = b"smhd";
+    fn is_token_edge(byte: u8) -> bool {
+        !(byte.is_ascii_alphanumeric() || byte == b'_')
+    }
+    fn is_boundary(rest: &str) -> bool {
+        match rest.as_bytes().first() {
+            None => true,
+            Some(byte) => is_token_edge(*byte),
+        }
+    }
+    fn is_plural_boundary(rest: &str) -> bool {
+        // A trailing "s" is still the unit ("minutes"); anything
+        // else joining the stem ("mind", "secular") is not.
+        if let Some(after) = rest.strip_prefix('s') {
+            is_boundary(after)
+        } else {
+            is_boundary(rest)
+        }
+    }
     let lower = text.to_lowercase();
     if lower.contains("ago") {
         return true;
@@ -102,49 +125,41 @@ pub fn contains_interval_rendering(text: &str) -> bool {
     let bytes = lower.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i].is_ascii_digit() {
-            let mut j = i;
-            while j < bytes.len() && bytes[j].is_ascii_digit() {
-                j += 1;
+        if !bytes[i].is_ascii_digit() {
+            i += 1;
+            continue;
+        }
+        // Mid-token digit runs (identity hex) are not quantities.
+        if i > 0 && !is_token_edge(bytes[i - 1]) {
+            while i < bytes.len() && bytes[i].is_ascii_alphanumeric() {
+                i += 1;
             }
-            while j < bytes.len() && bytes[j] == b' ' {
-                j += 1;
-            }
-            let rest = &lower[j..];
-            for unit in UNITS {
-                let Some(after) = rest.strip_prefix(unit) else {
-                    continue;
-                };
-                // Plural "s" is still a unit; anything else
-                // joining the stem (as in "minutes") is covered
-                // by the same prefix, while "mind" or "secular"
-                // must not match.
-                if after.is_empty()
-                    || after.starts_with(' ')
-                    || after.starts_with('\n')
-                    || after.starts_with('s')
-                    || after.starts_with(',')
-                    || after.starts_with('.')
-                {
-                    // "min" prefixes "mind"/"minor": require the
-                    // plural-or-boundary above, and for the
-                    // three-letter stems require it strictly.
-                    if *unit == "min" || *unit == "sec" || *unit == "hr" {
-                        let next = after.chars().next();
-                        if !matches!(
-                            next,
-                            None | Some(' ') | Some('\n') | Some('s') | Some(',') | Some('.')
-                        ) {
-                            continue;
-                        }
-                    }
+            continue;
+        }
+        let mut j = i;
+        while j < bytes.len() && bytes[j].is_ascii_digit() {
+            j += 1;
+        }
+        while j < bytes.len() && (bytes[j] == b' ' || bytes[j] == b'-') {
+            j += 1;
+        }
+        let rest = &lower[j..];
+        for unit in LONG {
+            if let Some(after) = rest.strip_prefix(unit) {
+                if is_plural_boundary(after) {
                     return true;
                 }
             }
-            i = j;
-        } else {
-            i += 1;
         }
+        if rest
+            .as_bytes()
+            .first()
+            .is_some_and(|byte| SHORT.contains(byte))
+            && is_boundary(&rest[1..])
+        {
+            return true;
+        }
+        i = j;
     }
     false
 }
@@ -295,6 +310,30 @@ pub const SILENT_OBSERVATIONS: &[(&str, &str)] = &[
         "relay acceptance counts",
         "the standing sentence covers delivery: acceptance is not receipt",
     ),
+    (
+        "DrainReport.accepted and duplicates",
+        "processed to a verdict: normal operation, not an interruption",
+    ),
+    (
+        "DrainReport.skipped and discarded",
+        "left unacked for redelivery, or terminal poison consumed: intake accounting for the run surface, not a person",
+    ),
+    (
+        "DrainReport.peers_observed",
+        "transport-named senders for the run surface: naming a sender is not a notification",
+    ),
+    (
+        "ExecuteReport.transport_errors and missing",
+        "absence retries and the blind close is the notifiable transition: a missing peer must never notify as such",
+    ),
+    (
+        "ExecuteReport.invalid and unavailable_keys",
+        "rejected arrivals and unheld capabilities retry with the next pass: still working, not wrong",
+    ),
+    (
+        "ExecuteReport.local_failures",
+        "fetch-path store refusals surface at the commit refusal, which notifies; the fetch count itself does not",
+    ),
 ];
 
 /// One person-visible notification: the kind plus the
@@ -317,8 +356,10 @@ pub enum Notification {
     EpochFrozen {
         /// The frozen epoch.
         epoch: u64,
-        /// Rival transition count needing the owner decision.
-        rivals: usize,
+        /// Rival transitions needing the owner decision. Rendered
+        /// by the member surface, which owns the freeze wording —
+        /// this surface names the transition and points there.
+        rivals: Vec<TransitionId>,
     },
     /// Pinned bytes have not arrived and the read is failing.
     PinnedBytesAbsent {
@@ -377,6 +418,16 @@ impl Notification {
     /// two observations of an unchanged drive key identically and
     /// the second proposes nothing. The same string is the
     /// settings-file record (OD-26-C).
+    ///
+    /// Condition-kinds key coarsely on purpose: a lock, a full
+    /// store, a frozen epoch, outstanding fetch work, or absent
+    /// pinned bytes is one ongoing condition, and re-announcing an
+    /// unchanged condition is what the repeat-suppression test
+    /// forbids. A repeat occurrence re-announces only after the
+    /// condition clears and [`NotificationCenter::clear_kind`]
+    /// re-arms it. Escalation carries its count (a growing blind
+    /// close is new information); identity-bearing kinds carry
+    /// theirs.
     pub fn key(&self) -> String {
         let slug = self.kind().slug();
         match self {
@@ -384,15 +435,13 @@ impl Notification {
             Notification::WriteRefusedConflict { heads } => format!("{slug}:{heads}"),
             Notification::WriteRefusedStorageFull => slug.to_owned(),
             Notification::EpochFrozen { epoch, .. } => format!("{slug}:{epoch}"),
-            Notification::PinnedBytesAbsent { pinned, missing } => {
-                format!("{slug}:{pinned}:{missing}")
-            }
+            Notification::PinnedBytesAbsent { .. } => slug.to_owned(),
             Notification::SubscriptionClosed { closed } => format!("{slug}:{closed}"),
             Notification::DeviceRemoved { device, epoch, .. } => {
                 format!("{slug}:{device}:{epoch}")
             }
             Notification::SelfRemoved { epoch, .. } => format!("{slug}:{epoch}"),
-            Notification::FetchOutstanding { outstanding } => format!("{slug}:{outstanding}"),
+            Notification::FetchOutstanding { .. } => slug.to_owned(),
         }
     }
 }
@@ -435,11 +484,14 @@ pub fn from_pinned_read_failure(pinned: usize, missing: usize) -> Option<Notific
     Some(Notification::PinnedBytesAbsent { pinned, missing })
 }
 
-/// Map a frozen epoch to its notification: the epoch plus the rival
-/// count needing the owner decision. The member surface owns the
-/// resolve wording; this names the transition and points there.
-pub fn from_epoch_freeze(epoch: u64, rivals: usize) -> Notification {
-    Notification::EpochFrozen { epoch, rivals }
+/// Map a frozen epoch to its notification: the epoch plus the
+/// rival transitions needing the owner decision. The wording stays
+/// with the member surface, which owns it.
+pub fn from_epoch_freeze(epoch: u64, rivals: &[TransitionId]) -> Notification {
+    Notification::EpochFrozen {
+        epoch,
+        rivals: rivals.to_vec(),
+    }
 }
 
 /// Map a mailbox-health sample to its notification: the blind
@@ -528,11 +580,7 @@ pub fn render_notification(notification: &Notification) -> String {
             "a write was refused: the store reported no space — the storage screen states what the measurements establish, and deletion reclaims nothing\n"
                 .to_owned()
         }
-        Notification::EpochFrozen { epoch, rivals } => {
-            format!(
-                "membership is frozen at epoch {epoch}: {rivals} rival transitions need an owner decision — resolve with: member resolve (only an owner resolves; nothing else authors while frozen)\n"
-            )
-        }
+        Notification::EpochFrozen { epoch, rivals } => render_frozen_notice(*epoch, rivals),
         Notification::PinnedBytesAbsent { pinned, missing } => {
             format!(
                 "a pinned file's bytes have not arrived and the read is failing ({pinned} pinned, {missing} absent) — fetching continues; this is bytes outstanding, not a verdict about any peer\n"
@@ -548,18 +596,7 @@ pub fn render_notification(notification: &Notification) -> String {
             epoch,
             carried,
             terminal,
-        } => {
-            let mut out = format!("removed {device} at epoch {epoch} ({carried} carried)\n");
-            out.push_str(REMOVAL_BOUNDARY);
-            out.push('\n');
-            out.push_str(HISTORY_NEVER_REENCRYPTED);
-            out.push('\n');
-            if *terminal {
-                out.push_str(SOLE_OWNER_TERMINAL);
-                out.push('\n');
-            }
-            out
-        }
+        } => render_removal_confirmation(device, *epoch, *carried, *terminal),
         Notification::SelfRemoved { epoch, carried } => {
             let mut out = format!(
                 "this device was removed by another drive's owner at epoch {epoch} ({carried} carried) — this device keeps what it already holds and can obtain nothing later\n"
@@ -571,8 +608,12 @@ pub fn render_notification(notification: &Notification) -> String {
             out
         }
         Notification::FetchOutstanding { outstanding } => {
+            // No cause named: `unfulfilled` mixes absent bytes,
+            // unheld epoch capabilities, and failed verification
+            // into one count, and the aggregate cannot attribute
+            // it. "Still fetching" is the whole claim.
             format!(
-                "still fetching ({outstanding} outstanding) — bytes announced but not yet local; this is work in progress, not a verdict about any peer\n"
+                "still fetching ({outstanding} outstanding) — work in progress, not a verdict about any peer\n"
             )
         }
     }
@@ -607,6 +648,20 @@ impl NotificationCenter {
     /// notification for a transition still pending in the queues.
     pub fn begin_teardown(&mut self) {
         self.teardown_begun = true;
+    }
+
+    /// Re-arm one kind after its condition clears: drops every seen
+    /// key under the kind's slug, so a genuinely new occurrence
+    /// proposes again. A successful drive open re-arms
+    /// `DriveOpenRefused`; a committed write re-arms
+    /// `WriteRefusedStorageFull`; a resolved epoch re-arms
+    /// `EpochFrozen`. Without a re-arm, a seeded record would
+    /// suppress a fresh occurrence across restarts — suppression
+    /// is for an unchanged condition, never for a new one.
+    pub fn clear_kind(&mut self, kind: NotificationKind) {
+        let prefix = format!("{}:", kind.slug());
+        self.seen
+            .retain(|key| *key != kind.slug() && !key.starts_with(&prefix));
     }
 
     /// Whether teardown began (admission close modelled).

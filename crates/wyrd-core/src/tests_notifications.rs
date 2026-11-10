@@ -5,6 +5,7 @@ use std::io::Error as IoError;
 
 use wyrd_format::DeviceId;
 use wyrd_format::ObjectStore;
+use wyrd_format::TransitionId;
 use wyrd_sync::durable::DurableError;
 use wyrd_sync::keys::{DeviceEncryptionSecret, DeviceIdentitySecret};
 use wyrd_sync::runtime::{DrainReport, Engine, ExecuteReport};
@@ -21,6 +22,13 @@ use wyrd_format::StoreFailure;
 
 fn removed_device() -> DeviceId {
     DeviceIdentitySecret::generate().unwrap().device_id()
+}
+
+fn rival_ids() -> Vec<TransitionId> {
+    vec![
+        TransitionId::from_bytes([0xA1; 32]),
+        TransitionId::from_bytes([0xB2; 32]),
+    ]
 }
 
 fn mailbox_health(closed: u64) -> MailboxHealth {
@@ -46,7 +54,7 @@ fn every_shape() -> Vec<Notification> {
         Notification::WriteRefusedStorageFull,
         Notification::EpochFrozen {
             epoch: 5,
-            rivals: 2,
+            rivals: rival_ids(),
         },
         Notification::PinnedBytesAbsent {
             pinned: 3,
@@ -92,7 +100,7 @@ fn notifications_only_carry_observed_transitions() {
             NotificationKind::WriteRefusedStorageFull => {
                 from_mutation_error(&MutationError::Store(StoreFailure::StorageFull))
             }
-            NotificationKind::EpochFrozen => Some(from_epoch_freeze(5, 2)),
+            NotificationKind::EpochFrozen => Some(from_epoch_freeze(5, &rival_ids())),
             NotificationKind::PinnedBytesAbsent => from_pinned_read_failure(3, 1),
             NotificationKind::SubscriptionClosed => from_mailbox_health(&mailbox_health(1)),
             NotificationKind::DeviceRemoved => {
@@ -113,7 +121,7 @@ fn notifications_only_carry_observed_transitions() {
     // The silence is explicit: the audit loops the rows below,
     // and the count pins the table against vacuous truth.
     assert!(
-        SILENT_OBSERVATIONS.len() > 5,
+        SILENT_OBSERVATIONS.len() > 15,
         "silence is a decision with a reason, never an omission"
     );
     for (observation, reason) in SILENT_OBSERVATIONS {
@@ -326,25 +334,143 @@ fn two_observations_of_an_unchanged_drive_notify_nothing() {
         center.propose(blind).is_none(),
         "the unchanged observation re-announces nothing"
     );
+
+    // And the lock refusal derives from a real observation, not a
+    // hand-built error: opening the held drive fails locked, the
+    // failure maps to its notification, and the rendering carries
+    // no forbidden claim.
+    let locked = Engine::open_keystore(
+        dir.clone(),
+        "core-test-pass",
+        DeviceIdentitySecret::generate().unwrap(),
+    );
+    let Err(wyrd_sync::runtime::EngineError::Durable(ref durable)) = locked else {
+        panic!("a held drive refuses the second open");
+    };
+    let notification = from_open_error(durable).expect("StoreLocked notifies");
+    assert_eq!(notification, Notification::DriveOpenRefused);
+    assert!(center.propose(notification.clone()).is_some());
+    let rendering = render_notification(&notification);
+    assert!(rendering.contains("store locked"), "{rendering}");
     std::fs::remove_dir_all(dir).unwrap();
 }
 
 /// The teardown order is the contract: after admission close, no
 /// notification is emitted — including for a transition still
 /// pending in the queues. Drives the center through a shutdown
-/// with a pending notification-producing transition.
+/// with every notification-producing transition pending: each
+/// would notify mid-run and none notifies once teardown began.
 #[test]
 fn a_notification_never_fires_after_teardown_begins() {
     let mut center = NotificationCenter::new([]);
+    // Mid-run, every shape proposes: the gate is teardown, not
+    // the kind.
+    for notification in every_shape() {
+        assert!(center.propose(notification).is_some());
+    }
     center.begin_teardown();
     assert!(center.teardown_begun());
-    // A pending transition that would notify mid-run notifies
-    // nothing once teardown began.
-    assert!(center.propose(Notification::DriveOpenRefused).is_none());
+    for notification in every_shape() {
+        assert!(
+            center.propose(notification.clone()).is_none(),
+            "no kind fires after admission close: {:?}",
+            notification.kind()
+        );
+    }
+    // The terminal removal arm is a shape too: still nothing.
     assert!(center
-        .propose(Notification::FetchOutstanding { outstanding: 4 })
+        .propose(Notification::DeviceRemoved {
+            device: removed_device(),
+            epoch: 7,
+            carried: 2,
+            terminal: true,
+        })
         .is_none());
-    assert!(center.propose(from_epoch_freeze(5, 2)).is_none());
+}
+
+/// The cross-restart half of repeat suppression: keys recorded
+/// before a restart (the settings-file record) seed the center,
+/// so a re-announced occurrence proposes nothing — until the
+/// condition clears and re-arms the kind.
+#[test]
+fn seeded_keys_suppress_repeat_proposals_until_re_armed() {
+    let locked = Notification::DriveOpenRefused;
+    let mut center = NotificationCenter::new([locked.key()]);
+    assert!(center.already_notified(&locked.key()));
+    assert_eq!(center.propose(locked), None);
+    // A new occurrence after the condition cleared re-arms and
+    // proposes again; the old condition's key stays suppressed
+    // for every other kind.
+    center.clear_kind(NotificationKind::DriveOpenRefused);
+    assert!(!center.already_notified(&Notification::DriveOpenRefused.key()));
+    assert!(center.propose(Notification::DriveOpenRefused).is_some());
+    assert!(center.propose(Notification::DriveOpenRefused).is_none());
+    // Re-arming one kind leaves every other kind suppressed.
+    let mut center = NotificationCenter::new(
+        every_shape()
+            .iter()
+            .map(Notification::key)
+            .collect::<Vec<_>>(),
+    );
+    center.clear_kind(NotificationKind::FetchOutstanding);
+    assert!(center
+        .propose(Notification::FetchOutstanding { outstanding: 9 })
+        .is_some());
+    assert!(center
+        .propose(Notification::WriteRefusedStorageFull)
+        .is_none());
+}
+
+/// The predicate's own pin: shorthand units and hyphenated spans
+/// match; bare counts, epochs, and identity hex do not. The hex
+/// case is the load-bearing one — rival and device ids render as
+/// 64 hex characters that may hold digit runs beside `d` or `s`
+/// mid-token, and those must never read as durations.
+#[test]
+fn interval_predicate_catches_shorthands_and_spares_counts() {
+    for text in [
+        "5 minutes ago",
+        "last synced",
+        "3h",
+        "2d",
+        "10s",
+        "5m",
+        "5-minute delay",
+        "2 hours",
+    ] {
+        // "last synced" is a literal-list hit, not a predicate
+        // hit; every other row must trip the predicate.
+        if text != "last synced" {
+            assert!(
+                super::contains_interval_rendering(text),
+                "an interval rendering matches: {text:?}"
+            );
+        }
+    }
+    assert!(FORBIDDEN_FRESHNESS_WORDS.contains(&"last synced"));
+    for text in [
+        "epoch 5",
+        "3 outstanding",
+        "removed a1b2c3d4e5 at epoch 4 (1 carried)",
+        "rivals: a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5",
+        "frozen at epoch 5",
+        "1 carried",
+    ] {
+        assert!(
+            !super::contains_interval_rendering(text),
+            "a count or identity is not an interval: {text:?}"
+        );
+    }
+    // A hex id ending in a digit-plus-unit pair is still one
+    // token: the digit run starts mid-token, so no match.
+    let edged = format!(
+        "removed {} at epoch 4",
+        TransitionId::from_bytes([0x4d; 32])
+    );
+    assert!(
+        !super::contains_interval_rendering(&edged),
+        "mid-token digit runs never match: {edged:?}"
+    );
 }
 
 /// A removal notification's rendered strings are matched against
