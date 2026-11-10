@@ -29,10 +29,13 @@ use super::host::{HostError, OpenHost};
 /// backends — and tests submitting through the live channel — can
 /// hold the mutation queue while the run is in flight.
 ///
-/// The desktop host composes unlimited in this release (no quota
-/// flag on this surface): operator-configured ceilings ride the
-/// `wyrd vault` / `mount` / `sync now` composers via
-/// `compose_headless_owner_with_quota`.
+/// The desktop host composes through the same application
+/// settings file as every other composer: `compose_headless_owner`
+/// delegates to `compose_headless_owner_with_quota(..., None)`,
+/// where a missing flag falls through to the file's quota and the
+/// file's other bounds and open timeout apply. There is no
+/// unlimited-only host mode — only an unset file section composes
+/// stock.
 pub fn compose(open: OpenHost, loopback: bool) -> Result<ComposedHeadless, HostError> {
     let OpenHost { engine, drive_dir } = open;
     let composed = wyrd_daemon::compose_headless_owner(engine, drive_dir, loopback)

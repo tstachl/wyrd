@@ -21,11 +21,18 @@ pub mod lifecycle;
 pub mod owner;
 pub mod posture;
 pub mod process;
+pub mod settings;
 pub mod vault;
 
 pub use core::{
-    FailureClass, LiveConfig, LiveError, LiveNode, LiveParts, LiveSummary, NodeError,
-    PendingObligations, ResourceBudgets, RuntimeMaterialization, SyncReport, WyrdNode,
+    apply_budget_settings, render_settings_surface, AppliedSettings, BudgetOverrides, FailureClass,
+    LiveConfig, LiveError, LiveNode, LiveParts, LiveSummary, NodeError, PendingObligations,
+    ResourceBudgets, RunningSettings, RuntimeMaterialization, SyncReport, WyrdNode,
+};
+pub use settings::{
+    default_settings_path, overrides_for, overrides_for_path, read_settings, settings_key_for,
+    split_file_overrides, write_settings, AppSettingsFile, DriveSettingsSection,
+    APP_SETTINGS_VERSION, DEFAULT_OPEN_TIMEOUT, SETTINGS_FILENAME,
 };
 // The composed view type, re-exported at the crate root so hosts build
 // their node over the same view the backend serves without depending

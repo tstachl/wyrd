@@ -19,9 +19,10 @@
 //! intentional family: the presence walk's bounded stats plus the
 //! scrub drain's batched claim-clear per pass.
 //!
-//! The `wyrd` binary itself takes no tuning flags
-//! today and runs defaults; these are library-level settings until a
-//! configuration surface lands. The sync-engine bounds
+//! The five surfaced bounds tune through the application settings
+//! file (`settings.json`: one per-user file, per-drive sections,
+//! flags winning over the file and the file over these defaults —
+//! see `wyrd-core::settings`); the sync-engine bounds
 //! (`MAX_PENDING_MESSAGES`, fetch backoff) stay constants: they are
 //! protocol-adjacent, not operational.
 //!

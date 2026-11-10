@@ -39,4 +39,8 @@ pub use wyrd_core::live::{
     STORE_MAX_CONSECUTIVE_ERRORS,
 };
 pub use wyrd_core::node::{NodeError, WriteError, WyrdNode};
+pub use wyrd_core::settings::{
+    apply_budget_settings, render_settings_surface, AppliedSettings, BudgetOverrides,
+    RunningSettings,
+};
 pub use wyrd_core::view::RuntimeMaterialization;

@@ -32,6 +32,7 @@ pub mod relay_posture;
 pub mod role;
 pub mod scrub;
 pub mod session;
+pub mod settings;
 pub mod status;
 pub mod status_surface;
 pub mod storage_surface;
