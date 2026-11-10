@@ -99,6 +99,10 @@ pub const FORBIDDEN_FRESHNESS_WORDS: &[&str] = &[
 /// and "ago"; a bare "2d" token matches directly.
 pub fn contains_interval_rendering(text: &str) -> bool {
     const LONG: &[&str] = &["second", "minute", "hour", "day", "week", "month", "year"];
+    // Three-letter shorthands. None can fire inside identity hex:
+    // `s`, `m`, and `h` never appear in hex, so a digit run
+    // followed by one is always real text.
+    const LONG3: &[&str] = &["sec", "min", "hr"];
     const SHORT: &[u8] = b"smhd";
     fn is_token_edge(byte: u8) -> bool {
         !(byte.is_ascii_alphanumeric() || byte == b'_')
@@ -144,7 +148,7 @@ pub fn contains_interval_rendering(text: &str) -> bool {
             j += 1;
         }
         let rest = &lower[j..];
-        for unit in LONG {
+        for unit in LONG.iter().chain(LONG3) {
             if let Some(after) = rest.strip_prefix(unit) {
                 if is_plural_boundary(after) {
                     return true;
@@ -580,7 +584,12 @@ pub fn render_notification(notification: &Notification) -> String {
             "a write was refused: the store reported no space — the storage screen states what the measurements establish, and deletion reclaims nothing\n"
                 .to_owned()
         }
-        Notification::EpochFrozen { epoch, rivals } => render_frozen_notice(*epoch, rivals),
+        Notification::EpochFrozen { epoch, rivals } => {
+            // The member surface owns the freeze wording and carries
+            // no trailing newline; every activity-list row ends with
+            // one, so the join stays row-per-line.
+            format!("{}\n", render_frozen_notice(*epoch, rivals))
+        }
         Notification::PinnedBytesAbsent { pinned, missing } => {
             format!(
                 "a pinned file's bytes have not arrived and the read is failing ({pinned} pinned, {missing} absent) — fetching continues; this is bytes outstanding, not a verdict about any peer\n"

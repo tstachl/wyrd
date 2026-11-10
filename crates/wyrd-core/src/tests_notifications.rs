@@ -157,6 +157,11 @@ fn no_notification_claims_convergence_or_freshness() {
     });
     for notification in &shapes {
         let rendering = render_notification(notification);
+        // Rows join row-per-line: every rendering ends with one.
+        assert!(
+            rendering.ends_with('\n'),
+            "activity-list rows end with a newline:\n{rendering:?}"
+        );
         let lower = rendering.to_lowercase();
         for forbidden in FORBIDDEN_FRESHNESS_WORDS {
             assert!(
@@ -437,6 +442,11 @@ fn interval_predicate_catches_shorthands_and_spares_counts() {
         "5m",
         "5-minute delay",
         "2 hours",
+        "5min",
+        "5 min",
+        "5-min",
+        "5sec",
+        "5hr",
     ] {
         // "last synced" is a literal-list hit, not a predicate
         // hit; every other row must trip the predicate.
