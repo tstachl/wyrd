@@ -10,7 +10,8 @@
     "dev:ui": "vite",
     "preview": "vite preview",
     "test": "bun test --preload ./test-setup.ts",
-    "typecheck": "svelte-check --tsconfig ./tsconfig.json"
+    "typecheck": "svelte-check --tsconfig ./tsconfig.json",
+    "tauri": "cargo-tauri"
   },
   "dependencies": {
     "@sveltejs/vite-plugin-svelte": "6",

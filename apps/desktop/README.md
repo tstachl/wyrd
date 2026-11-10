@@ -14,12 +14,13 @@ the shadcn-svelte paths so further primitives arrive via its CLI.
 
 - The views live here and talk to the backend through Tauri IPC
   only — never to the socket, never to the wire bytes.
-  `src/lib/ipc/client.ts` is the single invoke path; per-operation
-  wrappers land with the Tauri command layer (first view), whose
-  argument names do not exist yet. The backend answer taxonomy is
-  mirrored in `src/lib/ipc/types.ts` exactly (`kind`-tagged,
-  refusal codes verbatim); transport failure is `IpcTransportError`
-  and is never mapped into the taxonomy.
+  `src/lib/ipc/client.ts` is the single invoke path;
+  `src/lib/ipc/operations.ts` wraps each registered command by its
+  exact name, and `src/lib/ipc/results.ts` mirrors the result
+  shapes. The backend answer taxonomy is mirrored in
+  `src/lib/ipc/types.ts` exactly (`kind`-tagged, refusal codes
+  verbatim); transport failure is `IpcTransportError` and is never
+  mapped into the taxonomy.
 - `src/App.svelte` is the shell entry (`src/main.ts` mounts it);
   frontend state is a presentation cache
   (`src/lib/state/presentation.svelte.ts`), never a second drive
@@ -30,6 +31,15 @@ the shadcn-svelte paths so further primitives arrive via its CLI.
   serves `dist/` itself, so no dev-server URL is configured until a
   view defines a dev server. `bun run dev:ui` starts the Vite dev
   server for component iteration without the backend.
+- `bun run tauri -- dev` forwards to the environment's `cargo-tauri`
+  (devenv provides it). Always invoke from
+  `crates/wyrd-desktop/`: Tauri runs the hook commands from the
+  config's parent dir (`crates/`), and the hooks assume that.
+  There is no runnable app yet — no binary target, no
+  drive-connection bootstrap, no icons — so `cargo tauri dev` runs
+  the frontend watch and then stops at `a bin target must be
+  available for cargo run`. The launchable artifact lands with the
+  bootstrap/installer work.
 - Gate on `bun run typecheck` (`svelte-check`): `vite build`
   transpiles only and does not typecheck. No `any` at IPC
   boundaries; the four variants are handled exhaustively.
