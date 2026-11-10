@@ -1,9 +1,13 @@
 # Peer Repair: design note
 
-Status: v0.2 defers dedicated repair (this issue's sanctioned path).
-Part 1 shipped in v0.3: generation-scoped terminal fetch state with
-waiter completion (`Unavailable(generation)` plus reopen-on-new-waiter;
-quarantine, scrub, and diagnostics are the following children).
+Status: Part 1 shipped in v0.3.0-alpha. Generation-scoped terminal
+fetch state with waiter completion (`Unavailable(generation)` plus
+reopen-on-new-waiter), local quarantine with re-want (drained at
+`crates/wyrd-core/src/live/pass.rs:480`), local scrub for
+out-of-band loss (drained at `crates/wyrd-core/src/live/pass.rs:592`),
+and counts-only fetch-failure diagnostics on the `sync now` run
+surface are in the tree. Part 2 (replication serving) stays gated on
+measurement and v0.7.
 The v0.2 ship is fetch-walk fallback across recorded representations
 with post-fetch verification, fail-closed, bounded `EIO` on exhaustion.
 This note records the design the deferral points at, and the protocol

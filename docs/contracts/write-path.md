@@ -1029,8 +1029,10 @@ must not be implemented inside FUSE callbacks.
   (the append exception aside), and there is no three-way content merge.
 - Write coalescing across handles follows the DG-1 boundary table
   above (one snapshot per forcing event, folding all pending).
-- No automatic peer repair and no GC: superseded objects, manifests, and
-  heads are retained append-only.
+- No repair that rewrites or removes logical history, and no GC:
+  superseded objects, manifests, and heads are retained append-only.
+  Client-plane repair (quarantine and scrub) re-fetches verified bytes
+  and never mutates replicated state.
 - No cross-device moves.
 - No synthetic namespace entries for uncommitted state: `create` commits
   an empty file rather than exposing a pending name (architecture
