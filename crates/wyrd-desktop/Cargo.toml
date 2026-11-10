@@ -12,6 +12,15 @@ serde.workspace = true
 serde_json.workspace = true
 # Backend error plumbing only.
 thiserror.workspace = true
+# Desktop runtime: application toolkit for the command surface below.
+# Reserved for this crate by the layer gate (`tauri` edge).
+tauri.workspace = true
+
+[build-dependencies]
+# Embeds `tauri.conf.json` plus `capabilities/` at compile time for
+# the application context. A build-dependency, not a production edge:
+# the dependency-DAG checker counts `[dependencies]` tables only.
+tauri-build.workspace = true
 
 [dev-dependencies]
 # Integration tests spin a real owner (the daemon's server over a

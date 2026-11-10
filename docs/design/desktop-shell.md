@@ -500,12 +500,12 @@ GStreamer/media stack — Wyrd v0.4 has no camera or media path).
   (never `wyrd-daemon`: the `desktop → daemon → core` composition the
   closure test rejects is exactly what the extraction removed),
   `serde`/`serde_json`, error/`thiserror` plumbing, and the reserved
-  `tauri` toolkit edge; the `tauri` crate itself plus only the
-  plugins a shipped view needs link with the first view — the Linux
-  GUI closure cannot be compile-verified from a macOS dev machine, so
-  the link lands where a Linux builder attests it, not blind in the
-  scaffold. Linux-only `webkit2gtk` + `glib` pins match the
-  reference when the link lands.
+  `tauri` toolkit edge; the `tauri` crate itself (plus `tauri-build`
+  as a build-dependency, invisible to the layer gate) links with the
+  command layer — the Linux GUI closure rides with it and is proven
+  by the Linux builder, not from macOS. Only the plugins a shipped
+  view needs link with the first view. Linux-only `webkit2gtk` +
+  `glib` pins match the reference when the link lands.
   Reviewers: flag any plugin beyond `dialog`/`store`/`opener` scope
   creep at review time.
 
@@ -579,10 +579,10 @@ installer issue; auto-update is explicitly v0.8.
    closure decision rule required has landed, so the desktop crate
    wires straight to the consumer surface. The
    IPC behavioral tests above land here, against the real client
-   types on a real owner. The `tauri` crate link itself lands with
-   the first view: the Linux GUI closure cannot be compile-verified
-   from a macOS dev machine, so the link lands where a Linux
-   builder attests it.
+   types on a real owner. The `tauri` crate link and the command
+   wrappers land with the command layer against the already-pinned
+   surface, proven by the Linux builder; plugins a shipped view
+   needs wait for the first view.
 2. Three views against the live interface — never against mocked
    owner behavior.
 3. Packaging inputs consumed by the installer issue; human-path

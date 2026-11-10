@@ -17,6 +17,12 @@ dist/
 
 # Nix build out-links (`nix build` result symlinks)
 result*
+# ...but not the frontend's result-shape mirrors (matched by `result*`)
+!apps/desktop/src/lib/ipc/results.ts
+!apps/desktop/src/lib/ipc/results.test.ts
+
+# Tauri codegen (`tauri-build` output: schemas, embedded context)
+crates/wyrd-desktop/gen/
 
 # Repo packers (scratch files for review workflows)
 repomix*

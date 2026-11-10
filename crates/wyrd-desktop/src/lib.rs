@@ -14,22 +14,45 @@
 //! new connection ([`DesktopBackend::reconnect`]), never a resumed
 //! stream.
 //!
-//! The client is synchronous; the Tauri commands that will call these
-//! methods run them off the async runtime (blocking pool), so a
-//! 120-second response wait never stalls the event loop. The exact
-//! pool wiring lands with the Tauri command layer (first view); it is
-//! implementation detail, but the concurrency contract above is not.
+//! The client is synchronous; the Tauri commands in
+//! [`commands`] run each exchange on the blocking pool, so a
+//! 120-second response wait never stalls the event loop.
 //!
-//! The `tauri` crate itself is not linked yet, deliberately: the Linux
-//! GUI closure (WebKitGTK system dependencies) cannot be verified
-//! from this machine, and linking the toolkit before the Nix stanzas
-//! in this same scaffold are proven would break the Linux gates
-//! blind. The crate shape (app identity, `tauri.conf.json`, IPC
-//! surface, frontend directory) and the dependency boundary (the
-//! `layer_contracts` desktop policy and closure test) land here; the
-//! `#[tauri::command]` wrappers land with the first view against the
-//! already-pinned surface.
+//! The `tauri` runtime link lives here: `build.rs` embeds the
+//! application context (`tauri.conf.json` plus `capabilities/`),
+//! and [`invoke_handler`] registers the command surface exactly
+//! once. The Linux GUI closure (WebKitGTK system dependencies)
+//! rides with this link and is proven by the Linux builder, not
+//! from macOS.
 
 pub mod backend;
+pub mod commands;
 
 pub use backend::{BackendError, DesktopBackend};
+
+/// The managed application state: the single backend owner, held
+/// under exclusive access. Commands reach it through an owned
+/// [`tauri::AppHandle`] inside their blocking task — never a
+/// borrowed `State` reference across the boundary. The alias pins
+/// the exact `State` type: a wrong `State` type fails at runtime
+/// (`state not managed`), not compile time.
+pub type AppState = std::sync::Mutex<DesktopBackend>;
+
+/// The registered command handler: the authoritative application
+/// IPC surface. Exactly one `generate_handler!` call, covering the
+/// [`commands`] surface — never several `invoke_handler` calls.
+pub fn invoke_handler() -> impl Fn(tauri::ipc::Invoke) -> bool {
+    tauri::generate_handler![
+        commands::lookup,
+        commands::stat,
+        commands::readdir,
+        commands::read,
+        commands::observe,
+        commands::liveness,
+        commands::freshness,
+        commands::capture_parent,
+        commands::submit,
+        commands::reconcile_lookup,
+        commands::reconnect,
+    ]
+}
