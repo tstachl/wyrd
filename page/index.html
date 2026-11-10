@@ -4,9 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="description" content="Wyrd is a decentralized data substrate where data keeps its identity, history, and permissions independently of the machines that hold it.">
-<meta name="theme-color" content="#EAE2CC" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#ECE7DA" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#121614" media="(prefers-color-scheme: dark)">
 <title>Wyrd — the decentralized append-only drive that remembers</title>
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
 <link rel="canonical" href="https://wyrd.enesis.md/">
 <meta property="og:title" content="Wyrd — the decentralized append-only drive that remembers">
 <meta property="og:description" content="Wyrd is a decentralized data substrate where data keeps its identity, history, and permissions independently of the machines that hold it.">
@@ -17,20 +18,13 @@
 <meta name="twitter:description" content="A decentralized data substrate where data keeps its identity, history, and permissions.">
 <style>
   /* Self-hosted type (page/fonts/, latin subsets, no external requests).
-     Newsreader arrives as a variable font; the weight ranges below expose
-     exactly what the page uses. */
+     Space Grotesk is a variable font; the weight range below exposes
+     exactly what the page uses. Plex Mono speaks only for the machine. */
   @font-face{
-    font-family: 'Newsreader';
-    src: url('fonts/newsreader-roman.woff2') format('woff2');
-    font-weight: 400 600;
+    font-family: 'Space Grotesk';
+    src: url('fonts/space-grotesk.woff2') format('woff2');
+    font-weight: 400 700;
     font-style: normal;
-    font-display: swap;
-  }
-  @font-face{
-    font-family: 'Newsreader';
-    src: url('fonts/newsreader-italic.woff2') format('woff2');
-    font-weight: 400 500;
-    font-style: italic;
     font-display: swap;
   }
   @font-face{
@@ -46,60 +40,63 @@
     font-display: swap;
   }
   /*
-    Design plan (frontend-design pass):
+    Design plan (frontend-design pass, Held re-skin):
     Subject — Wyrd, an append-only drive. Audience — developers judging a
     pre-alpha. Job — make "nothing is ever erased" tangible, then hand over
     the CLI. One memorable thing: the hero is a working snapshot stepper,
     not a diagram. Everything else stays quiet.
-    Color — aged archive paper, iron-gall ink, verdigris seal, burnt copper
-    reserved for the single call to action. Verdigris leads; copper appears
-    almost nowhere else, so the CTA is unmistakable.
-    Type — Newsreader carries every human voice (headline, prose, asides);
-    Plex Mono speaks only for the machine (hashes, snapshots, CLI, the drive
-    listing). Small interface words use the system sans so mono never becomes
-    decoration.
-    Layout — left aligned throughout, asymmetric hero, whitespace instead of
-    rules except inside the § code where rules carry meaning.
+    Logo — C · Held: one unbroken line with a node at each peak. Three
+    devices, one chain. The mark carries the idea; the page reuses it in
+    the top bar, footer and favicon, and the stepper dots read as nodes on
+    that chain.
+    Color — Ink #121614, Bone #ECE7DA, Amber #E3A13B + Smoke #4A4F4B.
+    Amber is the sole accent: CTA, active states, focus. Ink and Bone do
+    all other work, so the CTA is unmistakable. The drive is the one Ink
+    surface on a Bone page; dark mode flips to the logo's Ink panel.
+    Type — Space Grotesk carries every human voice (wordmark at -0.03em,
+    headline, prose, UI); Plex Mono speaks only for the machine (hashes,
+    snapshots, CLI, the drive listing). No serif: the page stops dressing
+    as an archive and reads as a held chain.
+    Layout — left aligned throughout, asymmetric hero, whitespace instead
+    of rules except inside the § code where rules carry meaning.
   */
   :root{
     color-scheme: light dark;
 
-    --font-serif: 'Newsreader', Georgia, 'Times New Roman', serif;
+    --font-grot: 'Space Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
     --font-mono: 'IBM Plex Mono', 'SFMono-Regular', Consolas, monospace;
-    --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
 
-    --paper: #EAE2CC;
-    --ink: #1B1F1C;
-    --ink-soft: #565248;
-    --seal: #2E6B52;
-    --seal-deep: #1F4A38;
-    --ember: #A34A24;
-    --ember-deep: #7E381B;
-    --card-text: #FBF4E4;
+    --paper: #ECE7DA;
+    --ink: #121614;
+    --smoke: #4A4F4B;
+    --amber: #E3A13B;
+    --amber-deep: #9A6A1F;
+    --amber-hover: #C78D2E;
+    --line: #D6D0BD;
 
-    --slate: #141816;
-    --slate-raised: #1C2220;
-    --slate-line: #333B37;
-    --slate-text: #EDE6D2;
-    --slate-dim: #9AA294;
-    --mint: #8FD0B4;
+    --panel: #121614;
+    --panel-raised: #1C2220;
+    --panel-line: #333B37;
+    --panel-text: #ECE7DA;
+    --panel-dim: #A8B0A6;
+    --panel-amber: #E3A13B;
   }
 
   @media (prefers-color-scheme: dark){
     :root{
       --paper: #121614;
-      --ink: #E8E2D0;
-      --ink-soft: #A3A89B;
-      --seal: #7FBFA4;
-      --seal-deep: #A9DCC4;
-      --ember: #D0824A;
-      --ember-deep: #E59A62;
-      --card-text: #171310;
-      --slate: #1A201D;
-      --slate-raised: #222926;
-      --slate-line: #39423E;
-      --slate-text: #EDE6D2;
-      --slate-dim: #9AA294;
+      --ink: #ECE7DA;
+      --smoke: #A8B0A6;
+      --amber: #E3A13B;
+      --amber-deep: #E3A13B;
+      --amber-hover: #F0C369;
+      --line: #2E3531;
+      --panel: #1A201D;
+      --panel-raised: #222926;
+      --panel-line: #39423E;
+      --panel-text: #ECE7DA;
+      --panel-dim: #A8B0A6;
+      --panel-amber: #E3A13B;
     }
   }
 
@@ -111,15 +108,15 @@
     padding-bottom: env(safe-area-inset-bottom, 0px);
     background: var(--paper);
     color: var(--ink);
-    font-family: var(--font-serif);
-    font-size: 18px;
+    font-family: var(--font-grot);
+    font-size: 17px;
     line-height: 1.6;
     -webkit-font-smoothing: antialiased;
   }
   h1, h2, h3, p{ margin: 0; }
   a{ color: inherit; }
   a:focus-visible, button:focus-visible{
-    outline: 2px solid var(--ember);
+    outline: 2px solid var(--amber-deep);
     outline-offset: 3px;
     border-radius: 2px;
   }
@@ -131,8 +128,8 @@
   }
   .section .standfirst{
     margin-top: 14px;
-    font-size: 1.12rem;
-    color: var(--ink-soft);
+    font-size: 1.08rem;
+    color: var(--smoke);
   }
   .prose{ margin-top: 26px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px 36px; }
 
@@ -144,28 +141,37 @@
     background: var(--paper);
     background: color-mix(in srgb, var(--paper) 90%, transparent);
     backdrop-filter: blur(10px);
-    border-bottom: 1px solid var(--slate-line);
+    border-bottom: 1px solid var(--line);
   }
   .topbar .wrap{
     display: flex;
     align-items: baseline;
     justify-content: space-between;
     gap: 16px;
-    padding-top: 16px;
-    padding-bottom: 16px;
+    padding-top: 14px;
+    padding-bottom: 14px;
   }
   .wordmark{
-    font-style: italic;
-    font-weight: 500;
-    font-size: 1.4rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    font-weight: 600;
+    font-size: 1.35rem;
     text-decoration: none;
-    letter-spacing: -0.01em;
+    letter-spacing: -0.03em;
+    line-height: 1;
+  }
+  .wordmark svg{
+    width: 26px;
+    height: 26px;
+    flex: none;
+    color: var(--ink);
   }
   .topbar nav{ display: flex; gap: 22px; align-items: baseline; }
   .topbar nav a{
-    font-family: var(--font-ui);
-    font-size: 0.85rem;
-    color: var(--ink-soft);
+    font-size: 0.88rem;
+    font-weight: 500;
+    color: var(--smoke);
     text-decoration: none;
   }
   .topbar nav a:hover{ color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
@@ -179,32 +185,31 @@
     align-items: start;
   }
   .hero h1{
-    font-size: clamp(3rem, 7vw, 5.2rem);
-    line-height: 1.0;
-    letter-spacing: -0.02em;
-    font-weight: 500;
+    font-size: clamp(2.9rem, 7vw, 5rem);
+    line-height: 1.02;
+    letter-spacing: -0.03em;
+    font-weight: 600;
     text-wrap: balance;
   }
   .hero-sub{
     margin-top: 26px;
-    font-size: 1.2rem;
-    font-weight: 400;
+    font-size: 1.18rem;
+    font-weight: 500;
     line-height: 1.55;
     max-width: 34ch;
   }
   .hero-thesis{
     margin-top: 18px;
-    font-size: 1.05rem;
-    color: var(--ink-soft);
+    font-size: 1.02rem;
+    color: var(--smoke);
     max-width: 38ch;
   }
   .etymology{
     margin-top: 22px;
-    font-style: italic;
-    color: var(--ink-soft);
+    color: var(--smoke);
     font-size: 0.98rem;
     max-width: 40ch;
-    border-left: 2px solid var(--seal);
+    border-left: 3px solid var(--amber);
     padding-left: 14px;
   }
   .cta-row{
@@ -217,34 +222,32 @@
   .cta-run{
     display: inline-block;
     padding: 13px 26px;
-    background: var(--ember);
-    color: var(--card-text);
-    font-family: var(--font-ui);
+    background: var(--amber);
+    color: #121614;
     font-weight: 600;
     font-size: 0.95rem;
     text-decoration: none;
-    border-radius: 5px;
+    border-radius: 999px;
   }
-  .cta-run:hover{ background: var(--ember-deep); }
+  .cta-run:hover{ background: var(--amber-hover); }
   .cta-read{
-    font-family: var(--font-ui);
     font-size: 0.95rem;
-    color: var(--seal);
+    font-weight: 500;
+    color: var(--ink);
     text-decoration: underline;
     text-underline-offset: 4px;
   }
   .alpha-note{
     margin-top: 22px;
-    font-family: var(--font-ui);
-    font-size: 0.82rem;
-    color: var(--ink-soft);
+    font-size: 0.85rem;
+    color: var(--smoke);
   }
 
-  /* The drive: the one dark machine surface on the page */
+  /* The drive: the one Ink surface on the page */
   .drive{
-    background: var(--slate);
-    color: var(--slate-text);
-    border-radius: 10px;
+    background: var(--panel);
+    color: var(--panel-text);
+    border-radius: 12px;
     padding: 22px 22px 18px;
     box-shadow: 0 24px 60px -30px rgba(0, 0, 0, 0.55);
   }
@@ -254,34 +257,33 @@
     align-items: baseline;
     gap: 12px;
     padding-bottom: 14px;
-    border-bottom: 1px solid var(--slate-line);
+    border-bottom: 1px solid var(--panel-line);
   }
-  .drive-title{ font-family: var(--font-ui); font-size: 0.8rem; color: var(--slate-dim); }
-  .drive-store{ font-family: var(--font-mono); font-size: 0.78rem; color: var(--mint); white-space: nowrap; }
+  .drive-title{ font-size: 0.8rem; color: var(--panel-dim); }
+  .drive-store{ font-family: var(--font-mono); font-size: 0.78rem; color: var(--panel-amber); white-space: nowrap; }
   .drive-snap{ padding: 14px 0 4px; }
-  .drive-id{ font-family: var(--font-mono); font-size: 0.85rem; color: var(--slate-text); }
-  .drive-moment{ font-style: italic; color: var(--slate-dim); font-size: 0.95rem; margin-top: 2px; }
+  .drive-id{ font-family: var(--font-mono); font-size: 0.85rem; color: var(--panel-text); }
+  .drive-moment{ color: var(--panel-dim); font-size: 0.95rem; margin-top: 2px; }
   .drive-view{
     margin-top: 12px;
-    background: var(--slate-raised);
-    border: 1px solid var(--slate-line);
-    border-radius: 6px;
+    background: var(--panel-raised);
+    border: 1px solid var(--panel-line);
+    border-radius: 8px;
     padding: 14px 16px;
     min-height: 148px;
     font-family: var(--font-mono);
     font-size: 0.83rem;
     line-height: 1.7;
   }
-  .drive-view .absent{ color: var(--slate-dim); }
-  .drive-view .gone{ color: #E59A62; }
-  .drive-view .ok{ color: var(--mint); }
-  .drive-view .holders{ margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--slate-line); color: var(--slate-dim); }
-  .drive-view .holders b{ color: var(--slate-text); font-weight: 500; }
+  .drive-view .absent{ color: var(--panel-dim); }
+  .drive-view .gone{ color: #D08A4A; }
+  .drive-view .ok{ color: var(--panel-amber); }
+  .drive-view .holders{ margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--panel-line); color: var(--panel-dim); }
+  .drive-view .holders b{ color: var(--panel-text); font-weight: 500; }
   .drive-note{
     margin-top: 12px;
     font-size: 0.95rem;
-    font-style: italic;
-    color: var(--slate-dim);
+    color: var(--panel-dim);
     min-height: 3.2em;
   }
   .drive-steps{
@@ -290,26 +292,27 @@
     gap: 8px;
     margin-top: 12px;
     padding-top: 14px;
-    border-top: 1px solid var(--slate-line);
+    border-top: 1px solid var(--panel-line);
   }
   .drive-btn{
-    font-family: var(--font-ui);
+    font-family: var(--font-grot);
     font-size: 0.82rem;
+    font-weight: 500;
     background: transparent;
-    color: var(--slate-text);
-    border: 1px solid var(--slate-line);
-    border-radius: 5px;
+    color: var(--panel-text);
+    border: 1px solid var(--panel-line);
+    border-radius: 999px;
     padding: 7px 14px;
     cursor: pointer;
   }
-  .drive-btn:hover:not(:disabled){ border-color: var(--mint); color: var(--mint); }
+  .drive-btn:hover:not(:disabled){ border-color: var(--panel-amber); color: var(--panel-amber); }
   .drive-btn:disabled{ opacity: 0.35; cursor: default; }
   .drive-dots{ display: flex; gap: 8px; margin: 0 auto; }
   .drive-dot{
     width: 26px;
     height: 26px;
     border-radius: 50%;
-    border: 1px solid var(--slate-line);
+    border: 1px solid var(--panel-line);
     background: transparent;
     cursor: pointer;
     position: relative;
@@ -319,45 +322,45 @@
     position: absolute;
     inset: 8px;
     border-radius: 50%;
-    background: var(--slate-dim);
+    background: var(--panel-dim);
   }
-  .drive-dot[aria-current="true"]{ border-color: var(--mint); }
-  .drive-dot[aria-current="true"]::after{ background: var(--mint); }
+  .drive-dot[aria-current="true"]{ border-color: var(--panel-amber); }
+  .drive-dot[aria-current="true"]::after{ background: var(--panel-amber); }
 
   /* Sections */
   .section{ padding: clamp(48px, 7vw, 88px) 0; }
   .section h2{
     font-size: clamp(1.9rem, 3.4vw, 2.6rem);
     line-height: 1.12;
-    letter-spacing: -0.015em;
-    font-weight: 500;
+    letter-spacing: -0.02em;
+    font-weight: 600;
     text-wrap: balance;
   }
   .prose strong{ font-weight: 600; }
   .closing-line{
     margin-top: 30px;
-    font-size: 1.25rem;
+    font-size: 1.22rem;
     line-height: 1.5;
     text-wrap: pretty;
   }
-  .closing-line em{ color: var(--seal); }
+  .closing-line em{ color: var(--amber-deep); }
 
   /* The § code: the only ruled ledger on the page */
-  .code{ margin-top: 38px; border-bottom: 1px solid var(--slate-line); display: grid; grid-template-columns: 1fr 1fr; gap: 0 44px; }
+  .code{ margin-top: 38px; border-bottom: 1px solid var(--line); display: grid; grid-template-columns: 1fr 1fr; gap: 0 44px; }
   .article{
     display: grid;
     grid-template-columns: 56px 1fr;
     gap: 4px 18px;
     padding: 24px 0;
-    border-top: 1px solid var(--slate-line);
+    border-top: 1px solid var(--line);
   }
   .article-no{
-    font-style: italic;
+    font-weight: 600;
     font-size: 1.05rem;
-    color: var(--seal);
+    color: var(--amber-deep);
   }
-  .article h3{ font-size: 1.25rem; font-weight: 500; grid-column: 2; }
-  .article p{ grid-column: 2; margin-top: 8px; color: var(--ink-soft); font-size: 1rem; max-width: 60ch; }
+  .article h3{ font-size: 1.2rem; font-weight: 600; grid-column: 2; letter-spacing: -0.01em; }
+  .article p{ grid-column: 2; margin-top: 8px; color: var(--smoke); font-size: 1rem; max-width: 60ch; }
 
   /* Neighbours */
   .neighbours{ margin-top: 34px; display: grid; }
@@ -367,9 +370,9 @@
     gap: 6px 28px;
     padding: 20px 0;
   }
-  .neighbour + .neighbour{ border-top: 1px solid var(--slate-line); }
-  .neighbour h3{ font-family: var(--font-ui); font-weight: 600; font-size: 0.98rem; padding-top: 3px; }
-  .neighbour p{ color: var(--ink-soft); font-size: 1rem; max-width: 58ch; }
+  .neighbour + .neighbour{ border-top: 1px solid var(--line); }
+  .neighbour h3{ font-weight: 600; font-size: 0.98rem; padding-top: 3px; }
+  .neighbour p{ color: var(--smoke); font-size: 1rem; max-width: 58ch; }
 
   /* Status */
   .status-grid{
@@ -378,13 +381,13 @@
     grid-template-columns: 1fr 1fr;
     gap: clamp(28px, 5vw, 64px);
   }
-  .status-col h3{ font-family: var(--font-ui); font-weight: 600; font-size: 0.9rem; }
+  .status-col h3{ font-weight: 600; font-size: 0.95rem; }
   .status-list{ margin: 16px 0 0; padding: 0; list-style: none; display: grid; gap: 13px; }
   .status-list li{
     display: flex;
     gap: 12px;
     font-size: 0.99rem;
-    color: var(--ink-soft);
+    color: var(--smoke);
     line-height: 1.55;
   }
   .status-list li::before{
@@ -394,41 +397,42 @@
     border-radius: 50%;
     margin-top: 7px;
   }
-  .status-list li.yes::before{ background: var(--seal); }
-  .status-list li.no::before{ background: transparent; border: 1.5px solid var(--ember); }
-  .licence{ margin-top: 32px; font-size: 0.95rem; color: var(--ink-soft); }
-  .licence a{ color: var(--seal); text-decoration: underline; text-underline-offset: 3px; }
+  .status-list li.yes::before{ background: var(--amber); }
+  .status-list li.no::before{ background: transparent; border: 1.5px solid var(--amber-deep); }
+  .licence{ margin-top: 32px; font-size: 0.95rem; color: var(--smoke); }
+  .licence a{ color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
 
   /* Roadmap */
-  .map{ margin: 34px 0 0; padding: 0; border-top: 1px solid var(--slate-line); }
-  .map div{ display: grid; grid-template-columns: 64px 1fr; gap: 20px; padding: 11px 0; border-bottom: 1px solid var(--slate-line); }
-  .map dt{ font-family: var(--font-mono); font-size: 0.85rem; color: var(--seal); padding-top: 4px; }
+  .map{ margin: 34px 0 0; padding: 0; border-top: 1px solid var(--line); }
+  .map div{ display: grid; grid-template-columns: 64px 1fr; gap: 20px; padding: 11px 0; border-bottom: 1px solid var(--line); }
+  .map dt{ font-family: var(--font-mono); font-size: 0.85rem; color: var(--amber-deep); padding-top: 4px; }
   .map dd{ margin: 0; font-size: 0.99rem; }
-  .map-note{ margin-top: 26px; font-size: 0.95rem; color: var(--ink-soft); }
-  .map-note a{ color: var(--seal); text-decoration: underline; text-underline-offset: 3px; }
+  .map-note{ margin-top: 26px; font-size: 0.95rem; color: var(--smoke); }
+  .map-note a{ color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
 
   /* Run it */
   .cli{
     margin-top: 28px;
-    background: var(--slate);
-    color: var(--slate-text);
-    border-radius: 10px;
+    background: var(--panel);
+    color: var(--panel-text);
+    border-radius: 12px;
     padding: 22px 24px;
     overflow-x: auto;
   }
   .cli pre{ margin: 0; }
   .cli code{ font-family: var(--font-mono); font-size: 0.85rem; line-height: 1.8; white-space: pre; tab-size: 2; }
-  .cli .c{ color: var(--slate-dim); }
-  .run-note{ margin-top: 20px; font-size: 0.95rem; color: var(--ink-soft); }
-  .run-note a{ color: var(--seal); text-decoration: underline; text-underline-offset: 3px; }
+  .cli .c{ color: var(--panel-dim); }
+  .run-note{ margin-top: 20px; font-size: 0.95rem; color: var(--smoke); }
+  .run-note a{ color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
   .run-note code{ font-family: var(--font-mono); font-size: 0.87em; }
 
-  footer{ padding: 40px 0 calc(48px + env(safe-area-inset-bottom, 0px)); border-top: 1px solid var(--slate-line); }
+  footer{ padding: 40px 0 calc(48px + env(safe-area-inset-bottom, 0px)); border-top: 1px solid var(--line); }
   .footer-grid{ display: flex; flex-wrap: wrap; justify-content: space-between; gap: 18px; align-items: baseline; }
-  .footer-word{ font-style: italic; font-size: 1.2rem; }
-  .footer-tag{ font-size: 0.9rem; color: var(--ink-soft); margin-top: 4px; }
-  .footer-links{ display: flex; gap: 22px; font-family: var(--font-ui); font-size: 0.85rem; }
-  .footer-links a{ color: var(--ink-soft); }
+  .footer-word{ font-weight: 600; font-size: 1.2rem; letter-spacing: -0.03em; display: inline-flex; align-items: center; gap: 10px; }
+  .footer-word svg{ width: 22px; height: 22px; color: var(--ink); }
+  .footer-tag{ font-size: 0.9rem; color: var(--smoke); margin-top: 4px; }
+  .footer-links{ display: flex; gap: 22px; font-size: 0.85rem; font-weight: 500; }
+  .footer-links a{ color: var(--smoke); }
   .footer-links a:hover{ color: var(--ink); }
 
   @media (max-width: 920px){
@@ -438,7 +442,7 @@
     .code{ grid-template-columns: 1fr; }
   }
   @media (max-width: 640px){
-    body{ font-size: 17px; }
+    body{ font-size: 16.5px; }
     .status-grid{ grid-template-columns: 1fr; }
     .neighbour{ grid-template-columns: 1fr; gap: 6px; }
     .article{ grid-template-columns: 40px 1fr; }
@@ -479,7 +483,7 @@
 
   <header class="topbar">
     <div class="wrap">
-      <a class="wordmark" href="#top">wyrd</a>
+      <a class="wordmark" href="#top" aria-label="Wyrd — top"><svg viewBox="0 0 256 256" aria-hidden="true"><path d="M48 62 L88 211.3 L128 62 L168 211.3 L208 62" fill="none" stroke="currentColor" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"/><circle cx="48" cy="62" r="22" fill="currentColor"/><circle cx="128" cy="62" r="22" fill="currentColor"/><circle cx="208" cy="62" r="22" fill="currentColor"/></svg>wyrd</a>
       <nav aria-label="Page">
         <a class="nav-hide" href="#concept">Idea</a>
         <a class="nav-hide" href="#rules">Rules</a>
@@ -698,7 +702,7 @@ wyrd mount ./mydrive ./mnt --identity-file ./identity.bin --passphrase-file ./pa
     <div class="wrap">
       <div class="footer-grid">
         <div>
-          <div class="footer-word">wyrd</div>
+          <div class="footer-word"><svg viewBox="0 0 256 256" aria-hidden="true"><path d="M48 62 L88 211.3 L128 62 L168 211.3 L208 62" fill="none" stroke="currentColor" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"/><circle cx="48" cy="62" r="22" fill="currentColor"/><circle cx="128" cy="62" r="22" fill="currentColor"/><circle cx="208" cy="62" r="22" fill="currentColor"/></svg>wyrd</div>
           <div class="footer-tag">A decentralized data substrate, kept honestly.</div>
         </div>
         <div class="footer-links">
