@@ -13,6 +13,10 @@ Upstream docs (v2): `https://v2.tauri.app/develop/` (dev server, commands,
 state, tests/mocking), `https://v2.tauri.app/start/prerequisites/` (Linux
 system deps), `https://v2.tauri.app/develop/configuration-files/`.
 
+Canonical home for the shell shape: `docs/design/desktop-shell.md` (status
+Proposed/Open — this skill summarizes it; the design note and
+`docs/contracts/owner-interface.md` win every conflict with this skill).
+
 ## How to read this skill
 
 - **Normative invariants** must hold unless an explicit architecture decision
@@ -47,7 +51,8 @@ Current surface (provisional, not a closed enumeration): `lookup`, `stat`,
 explicit interface decision and must preserve single-owner and
 mutation-authority invariants. Never add a command merely to expose
 convenient frontend functionality. `pause`/`resume` stay out until a UI
-requirement names them.
+requirement names them. Until the `#[tauri::command]` wrappers land (first
+view), "command" below means the `DesktopBackend` method surface.
 
 - Forward, never interpret. Refusals travel through as data with codes
   intact; two refusals are never collapsed. Preserved in
@@ -112,7 +117,7 @@ requirement names them.
   automatically replayed.
 - Shutdown lifecycle: closing a window and terminating the owner are
   separate events. Desktop shutdown must not kill the independently managed
-  owner (no UI-supervised ownership without an OD-16-E scope change). No UI
+  owner (no UI-supervised ownership without an OD-06-E scope change). No UI
   shutdown hook may claim a mutation succeeded because the window closed
   cleanly.
 
@@ -211,20 +216,22 @@ green, macOS desktop builds against system frameworks.
   validate ownership/permissions, no attacker-controlled path substitution,
   peer identity per the interface's same-UID rule where available.
   Establishing transport is not proof of the intended owner.
-- Installer (issue 07) provisions two independently running processes that
-  find each other via the socket. No discovery service, no UI-supervised
-  owner.
+- Installer (issue 07, proposed — see `docs/design/desktop-shell.md`): two
+  independently running processes that find each other via the socket. No
+  discovery service, no UI-supervised owner.
 
 ## Testing
 
 - Backend IPC proofs (`tests/ipc_behavior.rs`) run against the real client
   types on a real owner (composed view + live loop over a real socket).
-  Never mock owner behavior. Minimum matrix: unavailable preserved,
-  post-dispatch break stays unconfirmed, refusal codes exact and pairwise
-  distinguishable, reconnect mints a new instance with no replay,
+  Never mock owner behavior. Required coverage matrix (two rows are pending
+  the `#[tauri::command]` layer, which is not landed yet): unavailable
+  preserved, post-dispatch break stays unconfirmed, refusal codes exact and
+  pairwise distinguishable, reconnect mints a new instance with no replay,
   reconcile-absence `Ok(None)` / reconcile-presence / reconcile-break
   stays unconfirmed, `submit`-only mutation, availability returns without
-  restart, in-flight forced-termination outcomes stay uncertain. Add:
+  restart (pending command layer), in-flight forced-termination outcomes
+  stay uncertain (pending command layer). Add:
   concurrent submissions cannot bypass the single queue, stale/delayed
   responses from an old connection cannot overwrite newer state or be
   mistaken for a new submission, frontend rendering preserves refusal codes.
