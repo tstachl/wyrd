@@ -35,7 +35,10 @@
 //! new mail is pulled before a retry is re-offered while there is room,
 //! so one poisoned message cannot starve the inbox; at saturation the
 //! channel is left unread and held mail rotates instead, so the engine
-//! can always drain room free. Framing-level garbage (wrong kind, missing or
+//! can always drain room free — except that a handover settling `Retry`
+//! past a bounded count is evicted relay-held instead of staying pinned,
+//! so a retry-only flood (parked unknown-epoch mail) drains room free
+//! and the relay replays the evicted wraps later. Framing-level garbage (wrong kind, missing or
 //! foreign recipient tag, failed signature) is rejected at the boundary
 //! and never queued; because it is not persisted, it costs only one
 //! rejection per relay redelivery. Wyrd-level poison (an envelope that
@@ -248,6 +251,8 @@ mod tests_outage;
 #[cfg(test)]
 mod tests_poison;
 #[cfg(test)]
+mod tests_retry_evict;
+#[cfg(test)]
 mod tests_shutdown;
 #[cfg(test)]
 mod tests_signer_boundary;
@@ -352,6 +357,20 @@ fn check_relay_event_size(event: &Event) -> Result<(), MailboxError> {
 /// resubscribe that may never come.
 const MAX_UNACKED_DELIVERIES: usize = 1024;
 
+/// Most `Retry` settlements one held handover survives before it is
+/// evicted relay-held: the handover leaves `unacked` without joining
+/// the durable seen log or the session poison cache, so the relay —
+/// which retains everything the saturated channel never pulled — replays
+/// it later under a fresh delivery id. Bounds the park-and-hold wedge
+/// (1024 unknown-epoch envelopes settling `Retry` forever stall intake
+/// and pin the settlement watermark): after this many retries the head
+/// drains instead of pinning, and a later replay converges through the
+/// normal heal (an epoch key arriving after eviction opens the
+/// redelivered wrap). Short-term heals are unaffected — the catch-up
+/// path heals in a handful of passes — while a permanently retried
+/// delivery cannot pin a slot for the process lifetime.
+const MAX_HELD_RETRIES: u32 = 100;
+
 /// Most acked wrap ids retained in the dedupe store. The store is a
 /// FIFO over distinct acks: beyond the bound the oldest ack is evicted
 /// (its wrap may redeliver once, converging through engine
@@ -435,12 +454,16 @@ impl BoundedIds {
 }
 
 /// One held handover: the local id the engine settles, the wrapper event
-/// id that keys dedupe across restarts, and the envelope.
+/// id that keys dedupe across restarts, the envelope, and how many times
+/// the engine has settled it `Retry`. The count bounds park-and-hold:
+/// past [`MAX_HELD_RETRIES`] the handover is evicted relay-held instead
+/// of staying pinned.
 #[derive(Debug)]
 struct Held {
     id: DeliveryId,
     wrap_id: EventId,
     envelope: MailboxEnvelope,
+    retries: u32,
 }
 
 /// A live Nostr mailbox for one device, over NIP-59 gift wraps. The relay
@@ -511,7 +534,10 @@ pub struct LiveMailbox<S> {
     /// otherwise rotates this deque front-to-back, re-offering each
     /// delivery under its stable id. Overflow is never pulled from the
     /// notification channel while the bound is full (backpressure, not
-    /// loss), so this length is the whole bound.
+    /// loss), so this length is the whole bound — except that a handover
+    /// settling `Retry` past [`MAX_HELD_RETRIES`] is evicted relay-held
+    /// instead of staying pinned, so the bound drains even under a
+    /// retry-only flood and the relay replays the evicted wrap later.
     unacked: VecDeque<Held>,
     /// Delivery ids consumed this session, as a low-water mark plus the
     /// above-mark outstanding set: ids are minted densely from 1 per
@@ -520,12 +546,11 @@ pub struct LiveMailbox<S> {
     /// without retaining every consumed id for the mailbox lifetime.
     /// The outstanding set stays near the unacked depth while every
     /// predecessor settles terminally — it only holds settled ids
-    /// whose predecessors are still held. A predecessor held
-    /// indefinitely (a delivery deferred on an unknown epoch that
-    /// settles `Retry` forever) pins the watermark: every later
-    /// settled id lands in `outstanding` and stays for the process
-    /// lifetime, so the set itself is unbounded in that shape and
-    /// only the per-id cost (~8 bytes) is small.
+    /// whose predecessors are still held. A predecessor held under
+    /// `Retry` pins the watermark only up to MAX_HELD_RETRIES
+    /// settlements, then evicts relay-held and lets the mark advance,
+    /// so the set stays bounded by the retry budget times the unacked
+    /// depth instead of growing for the process lifetime.
     settled_below: u64,
     outstanding: HashSet<DeliveryId>,
     next_delivery: u64,
@@ -884,12 +909,12 @@ where
     }
 
     /// Forget a settled handover: drop it from the held queue and
-    /// advance the settlement watermark. Shared by consumption and
-    /// poison — both are terminal, so both must keep the watermark
-    /// moving whenever predecessors settle terminally too. If a
-    /// predecessor is held indefinitely (endless `Retry`), the mark
-    /// cannot advance past it and later settled ids accumulate in
-    /// `outstanding` — see the field docs.
+    /// advance the settlement watermark. Shared by consumption, poison,
+    /// and retry-budget eviction — all three leave the id dead (a
+    /// redelivery mints a fresh id), so all three must keep the watermark
+    /// moving whenever predecessors settle too. A predecessor held under
+    /// `Retry` pins the mark only up to MAX_HELD_RETRIES settlements,
+    /// then evicts and lets the mark advance — see the field docs.
     fn forget_held(&mut self, pos: usize, id: DeliveryId) {
         self.unacked.remove(pos);
         // Idempotent-settlement bookkeeping: ids are dense
@@ -1040,6 +1065,7 @@ where
                 id,
                 wrap_id: wrap.id,
                 envelope: envelope.clone(),
+                retries: 0,
             });
             return Ok(Some(Delivery::new(id, envelope)));
         }
@@ -1078,8 +1104,21 @@ where
                     }
                     // Retry leaves the delivery held; recv rotates held mail
                     // round-robin, so a retry is re-offered on a later pass
-                    // behind everything else.
-                    Disposition::Retry => {}
+                    // behind everything else. Past MAX_HELD_RETRIES the
+                    // handover is evicted relay-held instead of staying
+                    // pinned: it leaves unacked without joining the seen
+                    // log or the poison cache, so the relay replays it
+                    // later under a fresh id. The watermark still advances
+                    // past the evicted id (see forget_held), so eviction
+                    // cannot pin later settlements in outstanding.
+                    Disposition::Retry => {
+                        let retries = self.unacked[pos].retries.saturating_add(1);
+                        if retries >= MAX_HELD_RETRIES {
+                            self.forget_held(pos, id);
+                        } else {
+                            self.unacked[pos].retries = retries;
+                        }
+                    }
                 }
                 Ok(())
             }
