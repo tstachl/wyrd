@@ -38,8 +38,13 @@ before Stage 2, and Stage 0/1 proceed without them.
 
 Bundle identities: app `md.enesis.wyrd` (from `tauri.conf.json`),
 extension `md.enesis.wyrd.fileprovider`, group
-`group.md.enesis.wyrd` granted literally as written (verified in
-the Xcode-built artifact; no team prefix). The container
+`group.md.enesis.wyrd`. The entitlement value is granted literally
+as written (verified in the Xcode-built artifact), but the container
+directory macOS materialises for a third-party team gains the team
+prefix: `~/Library/Group Containers/JU2RFHWQPH.group.md.enesis.wyrd`
+for the development team (Apple-owned groups stay unprefixed;
+third-party groups on this machine show the same form, e.g.
+`W5364U7YZB.group.io.tailscale.ipn.macsys`). The container
 materializes only under a team-signed build with provisioning.
 Deployment target macOS 13.0.
 
@@ -75,12 +80,15 @@ The proposed scheme, therefore:
 
 - On macOS the owner serves each drive's interface socket **also**
   inside the App Group container:
-  `~/Library/Group Containers/<group>/Sockets/<drive>.sock`,
+  `~/Library/Group Containers/<TeamID>.<group>/Sockets/<drive>.sock`,
   one socket per drive. The daemon is unsandboxed and binds there;
   the extension holds the group entitlement and connects there.
-  `<group>` is `group.md.enesis.wyrd` as granted; Stage 1 probes
-  exactly this path form under a team-signed build and records the
-  team and build type.
+  `<TeamID>.<group>` is `JU2RFHWQPH.group.md.enesis.wyrd` for the
+  development team: the entitlement value stays literal, the
+  directory gains the team prefix. Stage 1 probes the container
+  directory form with the stub name `wyrd-probe.sock` under a
+  team-signed build and records the team and build type; the
+  per-drive filename form arrives with Stage 2.
 - `socket_path_for` stays the cross-platform default; the group
   container path is a macOS-additive override proposal, never a
   replacement. Linux behavior is unchanged.
@@ -105,17 +113,25 @@ revisited; nothing in Stage 1 depends on it beyond the probe.
 
 The repo holds the canonical Swift sources; the local throwaway
 Xcode project references them (never copies) and provides the
-team-signed containing app plus domain registration. Procedure:
+team-signed containing app plus domain registration. Order
+matters: the container does not exist until the system creates it,
+so the app runs before the listener. Procedure:
 
-1. Start a stub listener at the production path:
-   `python3 -c` one-liner in `Sources/SocketProbe.swift`.
-2. Build and run the containing app from Xcode (team
+1. Build and run the containing app from Xcode (team
    `JU2RFHWQPH`, development signing), add one domain.
-3. Open the domain in Finder: `hello.txt` and `notes/` enumerate
+2. Read the resolved socket path from the probe log
+   (`md.enesis.wyrd.fileprovider`, category `domain`): the first
+   pass logs `unreachable <path>: …`, and `<path>` is the
+   team-prefixed location to listen on.
+3. Start a stub listener at exactly that path (recipe in
+   `Sources/SocketProbe.swift`; never `mkdir` the container
+   yourself — that creates a decoy the extension cannot reach),
+   then re-trigger the extension (reopen the domain).
+4. Open the domain in Finder: `hello.txt` and `notes/` enumerate
    from canned data; opening `hello.txt` hydrates canned bytes.
-4. Read the probe outcome in Console (`md.enesis.wyrd.fileprovider`,
-   category `domain`): `reachable: …` passes the gate.
-5. Record the macOS version and signing identity with the result.
+5. Read the probe outcome in Console: `reachable: …` passes the
+   gate.
+6. Record the macOS version and signing identity with the result.
 
 One domain for the spike; per-drive domains and isolation arrive
 with Stage 3, under the invariants above.

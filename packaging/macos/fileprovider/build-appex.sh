@@ -73,9 +73,15 @@ cp "$HERE/Info.plist" "$CONTENTS/Info.plist"
 # The development entitlements travel with every build, including
 # ad-hoc ones: embedding is harmless, but the App Group container
 # only materializes under a team-signed build with provisioning.
-# The group id is granted literally as written — Xcode does not
-# team-prefix App Group ids — so no substitution happens here.
+# The entitlement value is granted literally as written, but the
+# container directory gains the team prefix
+# (<TeamID>.group.md.enesis.wyrd), so no substitution happens here.
 # Stage 1 probes the team-signed form and records it.
+# TEAM_ID is ignored and always has been: warn rather than let an
+# old caller believe the group id was rewritten.
+if [ -n "${TEAM_ID:-}" ]; then
+    echo "warning: TEAM_ID is ignored; the group id signs as written." >&2
+fi
 ENTITLEMENTS="$HERE/WyrdFileProvider.entitlements"
 
 codesign --force --sign "$SIGN_IDENTITY" \

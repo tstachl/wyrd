@@ -4,8 +4,8 @@
 // unavailable on macOS — the extension implements
 // `NSFileProviderReplicatedExtension`, one instance per domain
 // (hence per drive). Enumeration, lookup, and hydration serve
-// canned data; mutation stays `fatalError` for Stage 3; the
-// owner-socket client arrives in Stage 2. Imports stay within the
+// canned data; mutation returns `cannotSynchronize` until Stage 3;
+// the owner-socket client arrives in Stage 2. Imports stay within the
 // owner boundary pinned by
 // `fileprovider_swift_stays_within_the_owner_boundary`: platform
 // frameworks and the reachability probe only, never store or
@@ -26,8 +26,19 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
         super.init()
         // Stage 1 entry gate: the sandbox premise, logged where the
         // Console can see it. A stub listener (see SocketProbe) must
-        // be waiting; the owner is not involved yet.
-        log.info("socket probe: \(SocketProbe.run(), privacy: .public)")
+        // be waiting; the owner is not involved yet. Off the init
+        // path — a blocking probe must never stall domain
+        // initialisation — and at persisted levels, so `log show`
+        // records the gate result after the fact.
+        let log = self.log
+        DispatchQueue.global(qos: .utility).async {
+            let outcome = SocketProbe.run()
+            if outcome.hasPrefix("reachable:") {
+                log.notice("\(outcome, privacy: .public)")
+            } else {
+                log.error("\(outcome, privacy: .public)")
+            }
+        }
     }
 
     func invalidate() {
@@ -107,7 +118,13 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
             NSFileProviderItem?, NSFileProviderItemFields, Bool, Error?
         ) -> Void
     ) -> Progress {
-        fatalError("Stage 3 owns creation")
+        // Read-only until Stage 3: fail closed, never crash. A stray
+        // system write (e.g. `.DS_Store`) must surface an error, not
+        // a Finder-visible extension crash loop.
+        completionHandler(
+            nil, [], false, NSFileProviderError(.cannotSynchronize)
+        )
+        return Progress()
     }
 
     func modifyItem(
@@ -121,7 +138,10 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
             NSFileProviderItem?, NSFileProviderItemFields, Bool, Error?
         ) -> Void
     ) -> Progress {
-        fatalError("Stage 3 owns mutation")
+        completionHandler(
+            nil, [], false, NSFileProviderError(.cannotSynchronize)
+        )
+        return Progress()
     }
 
     func deleteItem(
@@ -131,6 +151,7 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
         request: NSFileProviderRequest,
         completionHandler: @escaping (Error?) -> Void
     ) -> Progress {
-        fatalError("Stage 3 owns deletion")
+        completionHandler(NSFileProviderError(.cannotSynchronize))
+        return Progress()
     }
 }
