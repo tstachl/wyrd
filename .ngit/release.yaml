@@ -52,11 +52,14 @@
 #      the hash matches. CI uploads with an ephemeral key, so the hash
 #      comparison is the trust anchor: never skip it.
 #   8. Build the Linux legs locally: `flatpak-builder --repo` from
-#      `flatpak/md.enesis.wyrd.yaml` against the verified tarball, then
+#      `packaging/linux/md.enesis.wyrd.yaml` against the verified tarball, then
 #      `flatpak build-bundle --gpg-sign <packaging key>` per arch, and
 #      verify each bundle by installing it in a clean container or VM. The
 #      bundle signature is the Linux half of the signed-artifact clause; a
 #      `.dmg` or `notarytool` run evidences nothing about Linux.
+#      Run from `packaging/linux/`: the manifest's `type: dir` source is
+#      the relative `staging/` beside it, holding the staged `wyrd-host`
+#      binary per the manifest's preparation comment — not repo root.
 #   9. Human-path rehearsal, the acceptance test: on each shipped platform a
 #      person with no terminal and no prior knowledge of Wyrd follows the
 #      install-create-see-add-device path (create a drive, see it in the

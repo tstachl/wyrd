@@ -93,7 +93,7 @@ fn release_assets_cover_every_platform_tag() {
     // line: a marker embedded in a longer line does not count.
     // Structure only: the bundle itself builds at release time on the
     // publisher's machine.
-    let flatpak = fs::read_to_string(root.join("flatpak/md.enesis.wyrd.yaml"))
+    let flatpak = fs::read_to_string(root.join("packaging/linux/md.enesis.wyrd.yaml"))
         .expect("the Flatpak manifest exists");
     for marker in ["app-id: md.enesis.wyrd", "command: wyrd-host"]
         .iter()
