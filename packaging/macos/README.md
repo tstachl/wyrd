@@ -1,12 +1,19 @@
 # macOS packaging (`packaging/macos/`)
 
+Status: Proposed. This note holds the adapter layout and the
+sandbox/socket scheme under open decision; on any conflict the
+normative contracts win — the drive-owner interface
+(`docs/contracts/owner-interface.md`) for transport and the File
+Provider issue for OD-17-A/B/C and the OD-8 outcome.
+
 Platform packaging outside Cargo and Nix: the Swift File Provider
 adapter and its build script. Nothing here is a Cargo workspace
 member (a member must be a Rust crate); the adapter's boundary is
 enforced by the `fileprovider_swift_stays_within_the_owner_boundary`
 contract instead of a `MemberPolicy` allow-list — the OD-8
-refinement. See the File Provider issue for the OD-17-A/B/C
-decisions; identity and conflict-surface decisions are a hard gate
+refinement, proposed on the issue thread and awaiting decision.
+See the File Provider issue for the OD-17-A/B/C
+decisions (`nostr:nevent1qqsqz3tuhx8vvucgzrdtfc0y49sfs0mc3v7xratvxhg999plxp97e0gpz9mhxue69uhkwunpwdczuap49eehgvak3m0`); identity and conflict-surface decisions are a hard gate
 before Stage 2, and Stage 0/1 proceed without them.
 
 ## Layout
@@ -35,13 +42,21 @@ Deployment target macOS 13.0.
 The extension implements `NSFileProviderReplicatedExtension`
 (one instance per domain, hence per drive). The legacy
 `NSFileProviderExtension` class API is unavailable on macOS in
-current SDKs — the build script proves this by failing against it.
+current SDKs — observed while building (an early stub against the
+class failed to compile against the macOS SDK).
 The report's V1 vocabulary maps as: `startProvidingItem` →
 `fetchContents`, with `request: NSFileProviderRequest` threading
 through enumeration, lookup, hydration, and mutation. Recorded on
-the issue thread.
+the issue thread (`nostr:nevent1qqsqz3tuhx8vvucgzrdtfc0y49sfs0mc3v7xratvxhg999plxp97e0gpz9mhxue69uhkwunpwdczuap49eehgvak3m0`).
 
-## Sandbox and socket architecture (Stage 0 acceptance)
+## Sandbox and socket scheme (Stage 0 proposal)
+
+Status: Proposed — the normative transport is one socket at
+`<drive_dir>/owner.sock`, and that path is the sandbox boundary
+(`docs/contracts/owner-interface.md:14-19,41`). What follows is the
+scheme Stage 1 will probe, not a settled change; if the probe or
+the contract review rejects it, this section changes, not the
+contract.
 
 The extension runs sandboxed inside `fileproviderd`. A sandboxed
 process reaches its container, its App Group containers, and
@@ -50,16 +65,19 @@ requires filesystem access to the socket node, so the owner socket
 at its drive-derived location is unreachable from the extension:
 App Group alignment does not make arbitrary paths accessible.
 
-The scheme, therefore:
+The proposed scheme, therefore:
 
 - On macOS the owner serves each drive's interface socket **also**
   inside the App Group container:
-  `~/Library/Group Containers/group.md.enesis.wyrd/Sockets/<drive>.sock`,
+  `~/Library/Group Containers/<group>/Sockets/<drive>.sock`,
   one socket per drive. The daemon is unsandboxed and binds there;
   the extension holds the group entitlement and connects there.
+  `<group>` is `group.md.enesis.wyrd`, prefixed by the team
+  identifier on developer-signed builds; Stage 1 probes exactly
+  this path form and records which build type produced it.
 - `socket_path_for` stays the cross-platform default; the group
-  container path is a macOS-additive override, never a replacement.
-  Linux behavior is unchanged.
+  container path is a macOS-additive override proposal, never a
+  replacement. Linux behavior is unchanged.
 - Stale sockets resolve through existing semantics: unlink-before-bind
   on serve, connect failure surfaces `Unavailable`, the extension
   reconnects on demand and never assumes a persistent connection.
@@ -77,11 +95,24 @@ revisited; nothing in Stage 1 depends on it beyond the probe.
 
 - One File Provider domain per registered drive, domain identity
   stable and distinct.
-- Every item identifier is scoped to its drive.
+- Every item identifier is scoped to its drive. The identifier
+  contract itself — rename behavior, deletion/recreation,
+  persistence across restarts — is the open OD-17-A decision;
+  "drive-scoped" here states the scoping invariant only.
 - Every socket connection targets the correct drive's owner.
 - Removing one domain cannot affect another drive.
 - No singleton state in the adapter: a single-drive prototype must
   not become the architecture.
+
+## Stage 2 owner-client seam (intent, undecided)
+
+The extension speaks the owner protocol (u32 big-endian length
+prefix plus JSON, `docs/contracts/owner-interface.md:21-30`) from
+Swift. Candidate shapes: a Swift protocol client reimplementing the
+framing against shared golden fixtures, or a helper binary. The
+decision lands with Stage 2, and the import allow-list widens then
+to name the chosen module. Until then the boundary rule pins the
+import surface only.
 
 ## Release distinction
 

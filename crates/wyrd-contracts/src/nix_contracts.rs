@@ -174,6 +174,41 @@ fn the_nix_module_declares_exactly_one_owner_per_drive() {
     }
 }
 
+/// The Swift import surface the adapter may use: platform
+/// frameworks and the socket client only. This pins the import
+/// surface, not file or API access — a future rule owns shapes like
+/// `Process` or drive-path construction.
+fn allowed_swift_import(module: &str) -> bool {
+    ["Foundation", "FileProvider", "Darwin", "os"].contains(&module)
+}
+
+/// Import violations in an explicit file list: path to offending
+/// module. Pure so the negative tests prove the checker bites
+/// without touching the filesystem. Import lines fail closed: a
+/// line starting with `import` or `@import` that does not resolve
+/// to one allowed shape is a violation, never a silent skip.
+fn check_swift_imports(files: &[(&str, &str)]) -> Vec<String> {
+    let mut violations = Vec::new();
+    for (path, text) in files {
+        for line in text.lines().map(str::trim_start) {
+            let rest = line
+                .strip_prefix("import ")
+                .or_else(|| line.strip_prefix("@import "));
+            if let Some(rest) = rest {
+                let module = rest
+                    .split([' ', '(', ';'])
+                    .next()
+                    .unwrap_or(rest)
+                    .trim_end_matches(['?', '!']);
+                if module.is_empty() || !allowed_swift_import(module) {
+                    violations.push(format!("{path} imports {module}"));
+                }
+            }
+        }
+    }
+    violations
+}
+
 /// The macOS File Provider adapter stays a dumb owner-client: its
 /// Swift sources import platform frameworks and the socket client
 /// only — never store, engine, or sync internals. The adapter is not
@@ -181,33 +216,61 @@ fn the_nix_module_declares_exactly_one_owner_per_drive() {
 /// the executable form of the OD-8 boundary.
 #[test]
 fn fileprovider_swift_stays_within_the_owner_boundary() {
-    let dir = workspace_root().join("packaging/macos/fileprovider/Sources");
-    let mut sources: Vec<_> = fs::read_dir(&dir)
-        .expect("fileprovider Sources is readable")
-        .collect::<Result<Vec<_>, _>>()
-        .expect("fileprovider Sources entries are readable")
-        .into_iter()
-        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "swift"))
+    let root = workspace_root();
+    let (files, errors) = collect_files(
+        &root.join("packaging/macos/fileprovider/Sources"),
+        &root,
+        "swift",
+    );
+    assert!(
+        errors.is_empty(),
+        "source walk errors:\n- {}",
+        errors.join("\n- ")
+    );
+    // Never pass vacuously: an empty file set would check nothing.
+    assert!(!files.is_empty(), "the adapter holds Swift sources");
+    let borrowed: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(p, t)| (p.as_str(), t.as_str()))
         .collect();
-    // Never pass vacuously: an empty source set would check nothing.
-    assert!(!sources.is_empty(), "the adapter holds Swift sources");
-    sources.sort_by_key(|entry| entry.file_name());
-    for entry in &sources {
-        let text = fs::read_to_string(entry.path()).expect("Swift source is readable");
-        for line in text.lines().map(str::trim_start) {
-            let module = line.strip_prefix("import ").map(|rest| {
-                rest.split([' ', '('])
-                    .next()
-                    .unwrap_or(rest)
-                    .trim_end_matches(['?', '!'])
-            });
-            if let Some(module) = module {
-                assert!(
-                    ["Foundation", "FileProvider", "Darwin", "os"].contains(&module),
-                    "{} imports {module}: outside the owner boundary",
-                    entry.file_name().to_string_lossy()
-                );
-            }
-        }
+    let violations = check_swift_imports(&borrowed);
+    assert!(
+        violations.is_empty(),
+        "owner-boundary violations:\n- {}",
+        violations.join("\n- ")
+    );
+}
+
+#[cfg(test)]
+mod policy_tests {
+    use super::*;
+
+    #[test]
+    fn disallowed_import_is_rejected() {
+        let files = [("Sources/Bad.swift", "import WyrdSync\n")];
+        let violations = check_swift_imports(&files);
+        assert_eq!(violations.len(), 1);
+        assert!(violations[0].contains("WyrdSync"));
+    }
+
+    #[test]
+    fn objc_import_fails_closed() {
+        let files = [("Sources/Bad.swift", "@import WyrdSync;\n")];
+        assert_eq!(check_swift_imports(&files).len(), 1);
+    }
+
+    #[test]
+    fn qualified_import_fails_closed() {
+        let files = [("Sources/Bad.swift", "import struct Foundation.URL\n")];
+        assert_eq!(check_swift_imports(&files).len(), 1);
+    }
+
+    #[test]
+    fn allowed_imports_pass() {
+        let files = [(
+            "Sources/Good.swift",
+            "import Foundation\nimport FileProvider\nimport os\n",
+        )];
+        assert!(check_swift_imports(&files).is_empty());
     }
 }

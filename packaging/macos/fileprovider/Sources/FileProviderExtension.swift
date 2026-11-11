@@ -6,11 +6,10 @@
 // hydration, and mutation arrive in Stages 1–3; the owner-socket
 // client arrives in Stage 2. Imports stay within the owner boundary
 // pinned by `fileprovider_swift_stays_within_the_owner_boundary`:
-// platform frameworks and the socket client only, never store or
-// engine.
+// platform frameworks only (the socket client lands in Stage 2),
+// never store or engine.
 
 import FileProvider
-import os
 
 final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
     let domain: NSFileProviderDomain

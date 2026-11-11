@@ -7,7 +7,8 @@
 //! This crate is the owner process, not the management UI and not a
 //! platform adapter: the window attaches later as a non-owner consumer
 //! of the drive-owner interface (issue 16), and the File Provider
-//! adapter is a separate member (issue 17).
+//! adapter is a separate adapter outside Cargo (issue 17; layout
+//! proposed in `packaging/macos/README.md`, pending decision).
 //!
 //! Dependency rule, enforced by
 //! `wyrd-contracts`' host composition check: this crate's production

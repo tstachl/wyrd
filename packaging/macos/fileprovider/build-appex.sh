@@ -8,6 +8,7 @@
 # Environment: ARCH (default: host arch), SIGN_IDENTITY (default:
 # ad-hoc `-`), MIN_MACOS (default: 13.0).
 set -eu
+set -o pipefail 2>/dev/null || true
 
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 OUT=${1:-"$HERE/build"}
@@ -23,6 +24,13 @@ TOOLCHAIN=${TOOLCHAIN:-/Library/Developer/CommandLineTools}
 SWIFTC=$TOOLCHAIN/usr/bin/swiftc
 SDK=${SDK:-$TOOLCHAIN/SDKs/MacOSX.sdk}
 unset DEVELOPER_DIR
+
+if [ ! -x "$SWIFTC" ]; then
+    echo "error: no Swift toolchain at $SWIFTC." >&2
+    echo "Install the macOS Command Line Tools (xcode-select --install)" >&2
+    echo "or point TOOLCHAIN at a full Xcode installation." >&2
+    exit 1
+fi
 
 APPEX=$OUT/WyrdFileProvider.appex
 CONTENTS=$APPEX/Contents
@@ -41,8 +49,13 @@ mkdir -p "$MACOS"
 
 cp "$HERE/Info.plist" "$CONTENTS/Info.plist"
 
+# The development entitlements travel with every build, including
+# ad-hoc ones: embedding is harmless, but the App Group container
+# only materializes under a team-signed build with provisioning.
+# Stage 1 probes the team-signed form.
 codesign --force --sign "$SIGN_IDENTITY" \
     --identifier md.enesis.wyrd.fileprovider \
+    --entitlements "$HERE/WyrdFileProvider.entitlements" \
     "$APPEX"
 
 echo "built $APPEX"
