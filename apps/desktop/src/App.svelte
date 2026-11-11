@@ -42,16 +42,22 @@
       : presentation.availabilityFor(selectedDriveDir),
   );
 
+  const selectedResult = $derived(
+    selectedDriveDir === null
+      ? null
+      : presentation.lastResultFor(selectedDriveDir),
+  );
+
   const lastError = $derived(
-    presentation.lastResult !== null && !presentation.lastResult.ok
-      ? describe(presentation.lastResult.error)
+    selectedResult !== null && !selectedResult.ok
+      ? describe(selectedResult.error)
       : null,
   );
   const unavailableDetail = $derived(
-    presentation.lastResult !== null &&
-      !presentation.lastResult.ok &&
-      presentation.lastResult.error.kind === "unavailable"
-      ? presentation.lastResult.error.detail
+    selectedResult !== null &&
+      !selectedResult.ok &&
+      selectedResult.error.kind === "unavailable"
+      ? selectedResult.error.detail
       : null,
   );
   const busy = $derived(presentation.pendingRequests > 0);
@@ -193,6 +199,13 @@
       );
       return;
     }
+    // Re-derive availability from a live outcome regardless of the
+    // selected view: a settings-only re-read never touches the
+    // taxonomy, so without this probe the overlay would persist
+    // after a successful reconnect on the Settings view. The probe
+    // marks available on a terminal answer and unavailable where no
+    // transport answers — it proves nothing about prior work.
+    await readOwner(driveDir, () => liveness(driveDir));
     await refreshCurrent();
   }
 

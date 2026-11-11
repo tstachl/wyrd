@@ -771,6 +771,28 @@ fn local_queries_answer_through_the_commands() {
         Err(error) => panic!("drive_settings answers its state struct: {error}"),
     }
 
+    // An invalid drive identity answers the explicit unreadable
+    // state — never the taxonomy, never a silent resolution
+    // against the process directory.
+    match invoke(
+        &webview,
+        "drive_settings",
+        serde_json::json!({"driveDir": "relative/path"}),
+    ) {
+        Ok(value) => {
+            assert_eq!(
+                value.get("state"),
+                Some(&serde_json::Value::String("unreadable".to_string())),
+                "a relative drive reads unreadable: {value}"
+            );
+            assert!(
+                value.get("reason").is_some(),
+                "the refusal names its reason: {value}"
+            );
+        }
+        Err(error) => panic!("drive_settings never rejects with the taxonomy: {error}"),
+    }
+
     std::fs::remove_dir_all(&data_dir).expect("the webview data dir cleans up");
     owner.shutdown();
 }

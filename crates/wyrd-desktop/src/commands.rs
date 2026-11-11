@@ -280,10 +280,19 @@ pub async fn list_drives<R: Runtime>(app: AppHandle<R>) -> RegistryState {
 /// never effective posture. A local query like [`list_drives`]:
 /// unknown states ride inside the payload, and only an explicit
 /// `Configured` carries values. `drive_dir` selects the section
-/// without touching any owner connection.
+/// without touching any owner connection. An invalid drive identity
+/// answers the explicit unreadable state, never the taxonomy and
+/// never a silent resolution against the process directory.
 #[tauri::command]
 pub async fn drive_settings<R: Runtime>(app: AppHandle<R>, drive_dir: String) -> DriveSettings {
-    let dir = std::path::PathBuf::from(drive_dir);
+    let dir = match super::AppState::validate_drive_dir(&drive_dir) {
+        Ok(dir) => dir,
+        Err(error) => {
+            return DriveSettings::Unreadable {
+                reason: error.to_string(),
+            };
+        }
+    };
     query(
         app,
         "drive_settings",

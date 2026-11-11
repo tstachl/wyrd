@@ -12,7 +12,7 @@
 //! client is sequential (`&mut self` per exchange) and poisons
 //! itself on the first unconfirmed answer, so concurrent callers on
 //! one drive serialize on that drive's instance. Recovery is a new
-//! connection ([`DesktopBackend::reconnect`]), never a resumed
+//! connection ([`AppState::reconnect_drive`]), never a resumed
 //! stream — per drive, never touching other drives' connections.
 //!
 //! The client is synchronous; the Tauri commands in
@@ -140,19 +140,30 @@ impl AppState {
 
     /// Resolve the drive directory the frontend named: the absolute
     /// drive directory as an exact string — the same rule as the
-    /// settings keys. Relative spellings refuse loudly instead of
+    /// settings keys (absolute, no `..`, no control bytes) and the
+    /// registry entries. Anything else refuses loudly instead of
     /// resolving against the process directory: the frontend's
     /// selection is presentation state, never an authorization
     /// boundary, and the backend must not guess which drive a
-    /// relative path meant.
-    fn validate_drive_dir(drive_dir: &str) -> Result<PathBuf, BackendError> {
-        let path = PathBuf::from(drive_dir);
-        if !path.is_absolute() {
-            return Err(BackendError::Incompatible {
-                detail: format!("drive_dir {drive_dir:?} must be absolute"),
-            });
+    /// relative or non-canonical spelling meant. The strictness is
+    /// also what keeps "one connection per drive" true: a spelling
+    /// like `/drives/a/../b` must never key a second map entry for
+    /// the same directory.
+    ///
+    /// A refusal here is a local argument refusal through the
+    /// `Incompatible` kind — the fixed error channel of the owner
+    /// commands — never an owner answer: no socket was touched, and
+    /// the frontend renders it as a shell bug, not owner state.
+    /// (The local `drive_settings` query instead answers its
+    /// explicit unreadable state.) Unreachable through the shipped
+    /// UI, which only sends registry-validated paths; the rule
+    /// exists so a second integration surface can never smuggle a
+    /// second meaning for one drive through this boundary.
+    pub(crate) fn validate_drive_dir(drive_dir: &str) -> Result<PathBuf, BackendError> {
+        match validate_drive_dir_str(drive_dir) {
+            Ok(path) => Ok(path),
+            Err(reason) => Err(BackendError::Incompatible { detail: reason }),
         }
-        Ok(path)
     }
 
     /// The connection for one drive, connecting lazily on first use.
@@ -210,6 +221,36 @@ impl Default for AppState {
     }
 }
 
+/// The drive-identity rule, shared by every command boundary that
+/// takes a drive directory: the absolute drive directory as an
+/// exact string — the same rule as the settings keys
+/// (`settings_view::settings_key_for` plus its key validation) and
+/// the registry entries. Empty, relative, `..`-carrying, and
+/// control-byte spellings all refuse with their reason, so no
+/// caller resolves against the process directory and no
+/// non-canonical spelling keys a second map entry for one drive.
+fn validate_drive_dir_str(drive_dir: &str) -> Result<PathBuf, String> {
+    if drive_dir.is_empty() {
+        return Err("drive_dir must not be empty".to_string());
+    }
+    let path = PathBuf::from(drive_dir);
+    if !path.is_absolute() {
+        return Err(format!("drive_dir {drive_dir:?} must be absolute"));
+    }
+    if path
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err(format!("drive_dir {drive_dir:?} must not contain .."));
+    }
+    if drive_dir.bytes().any(|byte| byte < 0x20 || byte == 0x7f) {
+        return Err(format!(
+            "drive_dir {drive_dir:?} must not contain control characters"
+        ));
+    }
+    Ok(path)
+}
+
 /// The registered command handler: the authoritative application
 /// IPC surface. Exactly one `generate_handler!` call, covering the
 /// [`commands`] surface — never several `invoke_handler` calls.
@@ -238,4 +279,38 @@ pub fn invoke_handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> 
         commands::list_drives,
         commands::drive_settings,
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The drive-identity rule refuses exactly the settings-key
+    /// violations: empty, relative, `..`, and control bytes — while
+    /// an absolute clean path validates. No caller resolves
+    /// against the process directory.
+    #[test]
+    fn drive_identity_follows_the_settings_key_rule() {
+        assert!(validate_drive_dir_str("/drives/alpha").is_ok());
+        for bad in [
+            "",
+            "drives/alpha",
+            "/drives/a/../b",
+            "/drives/al\x00pha",
+            "/drives/al\npha",
+        ] {
+            assert!(
+                validate_drive_dir_str(bad).is_err(),
+                "drive identity refuses {bad:?}"
+            );
+        }
+        // The command boundary reports the refusal through its
+        // fixed error channel, never as an owner answer.
+        match AppState::validate_drive_dir("drives/alpha") {
+            Err(BackendError::Incompatible { detail }) => {
+                assert!(detail.contains("absolute"), "detail: {detail}");
+            }
+            other => panic!("a relative drive refuses loudly: {other:?}"),
+        }
+    }
 }

@@ -305,16 +305,31 @@ pub fn list_drives_at(registry_path: &Path) -> RegistryState {
     }
     let mut drives = Vec::new();
     let mut skipped = Vec::new();
+    // One connection per drive needs one entry per directory: two
+    // names for one drive_dir would key two map entries (and two
+    // list rows under one key) for the same owner socket. The first
+    // name in registry order wins; later duplicates skip loudly
+    // with their reason, exactly like invalid entries.
+    let mut seen_dirs = std::collections::HashSet::new();
     for (key, entry) in file.drives {
         match validate_entry(&key, &entry) {
-            Ok(()) => drives.push(DriveView {
-                name: entry.name.clone(),
-                drive_dir: entry.drive_dir.to_string_lossy().into_owned(),
-                relays: entry.relays.clone(),
-                service: entry.service.clone(),
-                mode: entry.mode.clone(),
-                availability: probe_drive(&entry.drive_dir),
-            }),
+            Ok(()) => {
+                if !seen_dirs.insert(entry.drive_dir.clone()) {
+                    skipped.push(format!(
+                        "entry {key:?}: duplicate drive_dir {} (first name wins)",
+                        entry.drive_dir.display()
+                    ));
+                    continue;
+                }
+                drives.push(DriveView {
+                    name: entry.name.clone(),
+                    drive_dir: entry.drive_dir.to_string_lossy().into_owned(),
+                    relays: entry.relays.clone(),
+                    service: entry.service.clone(),
+                    mode: entry.mode.clone(),
+                    availability: probe_drive(&entry.drive_dir),
+                })
+            }
             Err(reason) => skipped.push(format!("entry {key:?}: {reason}")),
         }
     }
@@ -463,6 +478,56 @@ mod tests {
         assert_eq!(state.skipped.len(), 1, "the invalid entry skips loudly");
         assert!(
             state.skipped[0].contains("does not match"),
+            "skip reason: {}",
+            state.skipped[0]
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Two names for one directory collapse to one drive: the first
+    /// name wins and the duplicate skips loudly. Without this the
+    /// frontend's drive-dir-keyed lists would render two rows under
+    /// one key, and the backend would hold two connections for one
+    /// socket.
+    #[test]
+    fn duplicate_drive_dirs_skip_loudly() {
+        let dir =
+            std::env::temp_dir().join(format!("wyrd-desktop-reg-{}-dupes", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let drive = dir.join("drive");
+        std::fs::create_dir_all(&drive).unwrap();
+        let path = dir.join("drives.json");
+        std::fs::write(
+            &path,
+            serde_json::json!({
+                "version": 1,
+                "drives": {
+                    "alpha": {
+                        "name": "alpha",
+                        "drive_dir": drive.to_string_lossy(),
+                        "relays": [],
+                        "service": "drive-alpha",
+                        "mode": "vault",
+                    },
+                    "beta": {
+                        "name": "beta",
+                        "drive_dir": drive.to_string_lossy(),
+                        "relays": [],
+                        "service": "drive-beta",
+                        "mode": "vault",
+                    },
+                },
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let state = list_drives_at(&path);
+        assert_eq!(state.status, RegistryStatus::Ready);
+        assert_eq!(state.drives.len(), 1, "one directory lists one drive");
+        assert_eq!(state.drives[0].name, "alpha", "the first name wins");
+        assert_eq!(state.skipped.len(), 1, "the duplicate skips loudly");
+        assert!(
+            state.skipped[0].contains("duplicate drive_dir"),
             "skip reason: {}",
             state.skipped[0]
         );

@@ -70,7 +70,10 @@ let selectedView = $state<ShellView>("status");
 /** The explicitly selected drive, by absolute directory. Null before the first selection. */
 let selectedDriveDir = $state<string | null>(null);
 let pendingRequests = $state(0);
-let lastResult = $state<IpcResult<unknown> | null>(null);
+/** The last owner answer per drive, keyed by absolute drive
+ * directory. One drive's error never renders on another drive's
+ * view: derivations read only the selected drive's slot. */
+let lastResults = $state<Record<string, IpcResult<unknown>>>({});
 /** A local query (registry/settings) failed outside the taxonomy — transport or shell bug. Not an owner answer. */
 let transportNotice = $state<string | null>(null);
 /** Per-drive availability, keyed by absolute drive directory. Absent means unknown (never probed this session). */
@@ -95,8 +98,14 @@ export const presentation = {
   get pendingRequests(): number {
     return pendingRequests;
   },
-  get lastResult(): IpcResult<unknown> | null {
-    return lastResult;
+  /**
+   * One drive's last owner answer — null where that drive has no
+   * terminal answer this session. Views and overlays read only
+   * their own drive's slot, so concurrent per-drive refreshes
+   * never bleed one drive's error onto another's view.
+   */
+  lastResultFor(driveDir: string): IpcResult<unknown> | null {
+    return lastResults[driveDir] ?? null;
   },
   get transportNotice(): string | null {
     return transportNotice;
@@ -161,11 +170,11 @@ export const presentation = {
   finishRequest(): void {
     pendingRequests = Math.max(0, pendingRequests - 1);
   },
-  settleRequest(driveDir: string | null, result: IpcResult<unknown>): void {
+  settleRequest(driveDir: string, result: IpcResult<unknown>): void {
     pendingRequests = Math.max(0, pendingRequests - 1);
-    lastResult = result;
-    if (!result.ok && result.error.kind === "unavailable" && driveDir !== null) {
-      availabilityByDrive[driveDir] = "unavailable";
+    lastResults[driveDir] = result;
+    if (!result.ok && result.error.kind === "unavailable") {
+      this.markUnavailable(driveDir);
     }
     // Every other outcome leaves availability untouched: success
     // paths call `markAvailable` explicitly once their terminal
