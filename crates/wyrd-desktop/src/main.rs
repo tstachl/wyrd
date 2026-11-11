@@ -61,11 +61,11 @@ const QUIT_DRAIN_POLL: Duration = Duration::from_millis(50);
 /// map and the lifecycle view carries first-run.
 fn drive_dir_from_argv() -> Result<Option<PathBuf>, String> {
     let mut args = std::env::args().skip(1);
-    let mut drive_dir: Option<PathBuf> = None;
+    let mut drive_dir: Option<String> = None;
     while let Some(arg) = args.next() {
         if arg == "--drive-dir" {
             match args.next() {
-                Some(dir) if drive_dir.is_none() => drive_dir = Some(PathBuf::from(dir)),
+                Some(dir) if drive_dir.is_none() => drive_dir = Some(dir),
                 Some(_) => return Err("duplicate --drive-dir".to_string()),
                 None => return Err("--drive-dir needs a directory".to_string()),
             }
@@ -73,7 +73,18 @@ fn drive_dir_from_argv() -> Result<Option<PathBuf>, String> {
             return Err(format!("unexpected argument: {arg}"));
         }
     }
-    Ok(drive_dir)
+    // The argv surface joins the shared drive-identity inventory: a
+    // relative or `..`-carrying spelling exits here instead of
+    // keying a map entry no command could ever address (and a
+    // second connection for a drive the registry names
+    // absolutely).
+    match drive_dir {
+        None => Ok(None),
+        Some(dir) => match wyrd_desktop::validate_drive_path(&dir, "drive_dir") {
+            Ok(path) => Ok(Some(path)),
+            Err(reason) => Err(reason),
+        },
+    }
 }
 
 fn main() {

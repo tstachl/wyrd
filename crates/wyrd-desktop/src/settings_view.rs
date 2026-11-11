@@ -159,7 +159,8 @@ fn validate_key(key: &str) -> Result<(), String> {
     // One rule for every drive path in the crate: the shared
     // command-boundary validator, so the settings reader can never
     // accept a spelling the connection map refuses (or vice versa).
-    super::validate_drive_dir_str(key).map(|_| ())
+    // The noun names the settings artifact, not the wire argument.
+    super::validate_drive_path(key, "settings drive key").map(|_| ())
 }
 
 fn unreadable(reason: String) -> DriveSettings {

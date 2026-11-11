@@ -149,10 +149,6 @@ export const presentation = {
   markAvailable(driveDir: string): void {
     setAvailable(driveDir);
   },
-  /** An `Unavailable` answer is the only path here: no transport, owner state unknown. Per drive. */
-  markUnavailable(driveDir: string): void {
-    setUnavailable(driveDir);
-  },
   clearTransportNotice(): void {
     transportNotice = null;
   },

@@ -161,7 +161,7 @@ impl AppState {
     /// a second integration surface can never smuggle a second
     /// meaning for one drive through this boundary.
     pub(crate) fn validate_drive_dir(drive_dir: &str) -> Result<PathBuf, BackendError> {
-        match validate_drive_dir_str(drive_dir) {
+        match validate_drive_path(drive_dir, "drive_dir") {
             Ok(path) => Ok(path),
             Err(reason) => Err(BackendError::Incompatible { detail: reason }),
         }
@@ -222,31 +222,36 @@ impl Default for AppState {
     }
 }
 
-/// The drive-identity rule, shared by every command boundary that
-/// takes a drive directory: the absolute drive directory as an
-/// exact string — the same rule as the settings keys
+/// The drive-identity rule, shared by every drive-identity
+/// surface in the crate: the absolute drive directory as an exact
+/// string — the same rule as the settings keys
 /// (`settings_view::settings_key_for` plus its key validation) and
 /// the registry entries. Empty, relative, `..`-carrying, and
 /// control-byte spellings all refuse with their reason, so no
 /// caller resolves against the process directory and no
 /// non-canonical spelling keys a second map entry for one drive.
-fn validate_drive_dir_str(drive_dir: &str) -> Result<PathBuf, String> {
-    if drive_dir.is_empty() {
-        return Err("drive_dir must not be empty".to_string());
+///
+/// `noun` names the artifact at fault in the reason text: the
+/// command boundary and the registry say `drive_dir`, the settings
+/// reader says `settings drive key` — the same rule, attributed to
+/// the surface that rejected it.
+pub fn validate_drive_path(value: &str, noun: &str) -> Result<PathBuf, String> {
+    if value.is_empty() {
+        return Err(format!("{noun} must not be empty"));
     }
-    let path = PathBuf::from(drive_dir);
+    let path = PathBuf::from(value);
     if !path.is_absolute() {
-        return Err(format!("drive_dir {drive_dir:?} must be absolute"));
+        return Err(format!("{noun} {value:?} must be absolute"));
     }
     if path
         .components()
         .any(|component| matches!(component, std::path::Component::ParentDir))
     {
-        return Err(format!("drive_dir {drive_dir:?} must not contain .."));
+        return Err(format!("{noun} {value:?} must not contain .."));
     }
-    if drive_dir.bytes().any(|byte| byte < 0x20 || byte == 0x7f) {
+    if value.bytes().any(|byte| byte < 0x20 || byte == 0x7f) {
         return Err(format!(
-            "drive_dir {drive_dir:?} must not contain control characters"
+            "{noun} {value:?} must not contain control characters"
         ));
     }
     Ok(path)
@@ -292,7 +297,7 @@ mod tests {
     /// against the process directory.
     #[test]
     fn drive_identity_follows_the_settings_key_rule() {
-        assert!(validate_drive_dir_str("/drives/alpha").is_ok());
+        assert!(validate_drive_path("/drives/alpha", "drive_dir").is_ok());
         for bad in [
             "",
             "drives/alpha",
@@ -301,10 +306,15 @@ mod tests {
             "/drives/al\npha",
         ] {
             assert!(
-                validate_drive_dir_str(bad).is_err(),
+                validate_drive_path(bad, "drive_dir").is_err(),
                 "drive identity refuses {bad:?}"
             );
         }
+        // The noun travels into the reason: the settings surface
+        // names its artifact, not the wire argument.
+        assert!(validate_drive_path("drives/alpha", "settings drive key")
+            .unwrap_err()
+            .contains("settings drive key"),);
         // The command boundary reports the refusal through its
         // fixed error channel, never as an owner answer.
         match AppState::validate_drive_dir("drives/alpha") {

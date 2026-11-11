@@ -178,7 +178,7 @@ fn validate_entry(key: &str, entry: &RegistryEntryParse) -> Result<(), String> {
     // The lossy render feeds the validator exactly like the old
     // control-byte check did; non-UTF8 spellings were never
     // loadable paths here.
-    super::validate_drive_dir_str(&entry.drive_dir.to_string_lossy()).map(|_| ())?;
+    super::validate_drive_path(&entry.drive_dir.to_string_lossy(), "drive_dir").map(|_| ())?;
     if entry.mode != "vault" {
         return Err(
             "unknown service mode: registry-managed mount mode travels with the installer follow-up"
@@ -509,6 +509,56 @@ mod tests {
             state.skipped[0].contains("duplicate drive_dir"),
             "skip reason: {}",
             state.skipped[0]
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Relative and `..`-carrying directories skip with their rule
+    /// reasons: they pin the registry call site of the shared
+    /// drive-identity rule, so the lifecycle view can never list a
+    /// spelling the connection map refuses.
+    #[test]
+    fn non_canonical_drive_dirs_skip_loudly() {
+        let dir =
+            std::env::temp_dir().join(format!("wyrd-desktop-reg-{}-noncanon", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("drives.json");
+        std::fs::write(
+            &path,
+            serde_json::json!({
+                "version": 1,
+                "drives": {
+                    "relative": {
+                        "name": "relative",
+                        "drive_dir": "drives/relative",
+                        "relays": [],
+                        "service": "drive-relative",
+                        "mode": "vault",
+                    },
+                    "dotdot": {
+                        "name": "dotdot",
+                        "drive_dir": "/drives/a/../b",
+                        "relays": [],
+                        "service": "drive-dotdot",
+                        "mode": "vault",
+                    },
+                },
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let state = list_drives_at(&path);
+        assert_eq!(state.status, RegistryStatus::Ready);
+        assert!(
+            state.drives.is_empty(),
+            "no non-canonical spelling lists: {:?}",
+            state.drives
+        );
+        assert_eq!(state.skipped.len(), 2, "both entries skip loudly");
+        assert!(
+            state.skipped.iter().all(|reason| reason.contains("must")),
+            "skip reasons name the rule: {:?}",
+            state.skipped
         );
         std::fs::remove_dir_all(&dir).unwrap();
     }
