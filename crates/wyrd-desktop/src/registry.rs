@@ -86,11 +86,9 @@ pub enum DriveAvailability {
 }
 
 /// One registered drive for the lifecycle view: validated facts
-/// plus the live verdict. `current` marks the drive this shell
-/// instance serves (`--drive-dir`): the frontend never learns its
-/// own path except through this list, and entries only ever match
-/// by exact path — a symlinked spelling that does not match marks
-/// nothing current rather than guessing.
+/// plus the live verdict. `mode` is a display string end to end —
+/// the shell shows the registry's service mode and never interprets
+/// it. Drives match by exact path only.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct DriveView {
     pub name: String,
@@ -98,7 +96,6 @@ pub struct DriveView {
     pub relays: Vec<String>,
     pub service: String,
     pub mode: String,
-    pub current: bool,
     pub availability: DriveAvailability,
 }
 
@@ -257,11 +254,10 @@ fn probe_drive(drive_dir: &Path) -> DriveAvailability {
     availability_of(client.liveness())
 }
 
-/// Read the registry at an explicit path, probe every valid entry,
-/// and mark the drive this shell serves. The explicit path and the
-/// current drive exist for tests; production passes the default
-/// derivation and the backend's drive directory.
-pub fn list_drives_at(registry_path: &Path, current_drive: &Path) -> RegistryState {
+/// Read the registry at an explicit path and probe every valid
+/// entry. The explicit path exists for tests; production passes the
+/// default derivation.
+pub fn list_drives_at(registry_path: &Path) -> RegistryState {
     let bytes = match std::fs::read(registry_path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -317,7 +313,6 @@ pub fn list_drives_at(registry_path: &Path, current_drive: &Path) -> RegistrySta
                 relays: entry.relays.clone(),
                 service: entry.service.clone(),
                 mode: entry.mode.clone(),
-                current: entry.drive_dir == current_drive,
                 availability: probe_drive(&entry.drive_dir),
             }),
             Err(reason) => skipped.push(format!("entry {key:?}: {reason}")),
@@ -330,10 +325,9 @@ pub fn list_drives_at(registry_path: &Path, current_drive: &Path) -> RegistrySta
     }
 }
 
-/// Read the default registry, probe every valid entry, and mark
-/// the drive this shell serves.
-pub fn list_drives_for(current_drive: &Path) -> RegistryState {
-    list_drives_at(&default_registry_path(), current_drive)
+/// Read the default registry and probe every valid entry.
+pub fn list_drives() -> RegistryState {
+    list_drives_at(&default_registry_path())
 }
 
 #[cfg(test)]
@@ -385,7 +379,7 @@ mod tests {
             "missing.json"
         ));
         let _ = std::fs::remove_file(&path);
-        let state = list_drives_at(&path, Path::new("/drives/nowhere"));
+        let state = list_drives_at(&path);
         assert_eq!(state.status, RegistryStatus::Nofile);
         assert!(state.drives.is_empty());
         assert!(state.skipped.is_empty());
@@ -400,7 +394,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let newer = dir.join("newer.json");
         std::fs::write(&newer, r#"{"version": 2, "drives": {}}"#).unwrap();
-        match list_drives_at(&newer, Path::new("/drives/nowhere")).status {
+        match list_drives_at(&newer).status {
             RegistryStatus::Unreadable { reason } => {
                 assert!(reason.contains("version 2"), "reason: {reason}");
                 assert!(reason.contains("reads 1"), "reason: {reason}");
@@ -411,7 +405,7 @@ mod tests {
         std::fs::write(&broken, r#"{"version": 1, "drives": {"#).unwrap();
         assert!(
             matches!(
-                list_drives_at(&broken, Path::new("/drives/nowhere")).status,
+                list_drives_at(&broken).status,
                 RegistryStatus::Unreadable { .. }
             ),
             "a malformed registry is unreadable, never guessed"
@@ -454,7 +448,7 @@ mod tests {
             .to_string(),
         )
         .unwrap();
-        let state = list_drives_at(&path, Path::new("/drives/nowhere"));
+        let state = list_drives_at(&path);
         assert_eq!(state.status, RegistryStatus::Ready);
         assert_eq!(state.drives.len(), 1, "only the valid entry verifies");
         assert_eq!(state.drives[0].name, "good");

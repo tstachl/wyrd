@@ -144,7 +144,6 @@ test("drive view carries facts plus the live verdict", () => {
     relays: ["wss://relay.example"],
     service: "drive-alpha",
     mode: "vault",
-    current: true,
     availability: { state: "available" },
   };
   expect(drive).toEqual({
@@ -153,7 +152,6 @@ test("drive view carries facts plus the live verdict", () => {
     relays: ["wss://relay.example"],
     service: "drive-alpha",
     mode: "vault",
-    current: true,
     availability: { state: "available" },
   });
 });
@@ -168,7 +166,6 @@ test("registry states flatten the status without stutter", () => {
         relays: ["wss://relay.example"],
         service: "drive-alpha",
         mode: "vault",
-        current: true,
         availability: { state: "available" },
       },
     ],

@@ -1,16 +1,25 @@
 //! The Wyrd desktop application: a non-owning Tauri client of the
-//! drive-owner interface.
+//! drive-owner interface, one window over many independently managed
+//! drives.
 //!
-//! Startup takes exactly one argument: the drive directory whose
-//! owner socket this instance serves (`--drive-dir <DIR>`). No
-//! environment variables, no config-file search, no discovery
-//! service — the installer provisions the owner and launches this
-//! binary against its drive, and the drive-owner bootstrap contract
-//! (`docs/design/desktop-shell.md`) owns everything fancier. A
-//! missing or unreachable owner is fatal at startup (exit 2 with
-//! the reason on stderr): an owner that goes down *after* startup
-//! shows the UI's unavailable view instead, and coming back
-//! resumes without restart.
+//! Startup takes zero or one argument: an optional drive directory
+//! to pre-connect (`--drive-dir <DIR>`). No environment variables,
+//! no config-file search, no discovery service — the installer
+//! provisions the owner and may launch this binary against its
+//! drive, and the drive-owner bootstrap contract
+//! (`docs/design/desktop-shell.md`) owns everything fancier. The
+//! shell keeps no implicit active drive: the argument only warms
+//! the connection map, and the frontend's selection is presentation
+//! state, never an authorization boundary.
+//!
+//! Nothing about startup is fatal: a missing argument, an unknown
+//! drive directory, or an unreachable owner starts the empty shell
+//! anyway. The lifecycle view then shows the registry (driveless
+//! first-run where nothing is registered yet) with per-drive
+//! reachability, and each stopped owner reads as its own
+//! unavailable state. An owner that goes down *after* startup
+//! shows the same per-drive unavailable view instead, and coming
+//! back resumes without restart.
 //!
 //! Shutdown drains outstanding work first. Closing the window
 //! prevents the close, waits until every dispatched exchange has
@@ -45,10 +54,12 @@ const QUIT_DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
 /// when the last answer lands, sparse enough to stay out of the way.
 const QUIT_DRAIN_POLL: Duration = Duration::from_millis(50);
 
-/// Usage: `wyrd-desktop --drive-dir <DIR>`. Hand-rolled argv: the
+/// Usage: `wyrd-desktop [--drive-dir <DIR>]`. Hand-rolled argv: the
 /// layer gate reserves this crate's third-party edges for the Tauri
-/// toolkit, serde, and error plumbing — no CLI parser.
-fn drive_dir_from_argv() -> Result<PathBuf, String> {
+/// toolkit, serde, and error plumbing — no CLI parser. The argument
+/// is optional: without it the shell starts with an empty connection
+/// map and the lifecycle view carries first-run.
+fn drive_dir_from_argv() -> Result<Option<PathBuf>, String> {
     let mut args = std::env::args().skip(1);
     let mut drive_dir: Option<PathBuf> = None;
     while let Some(arg) = args.next() {
@@ -62,7 +73,7 @@ fn drive_dir_from_argv() -> Result<PathBuf, String> {
             return Err(format!("unexpected argument: {arg}"));
         }
     }
-    drive_dir.ok_or_else(|| "usage: wyrd-desktop --drive-dir <DIR>".to_string())
+    Ok(drive_dir)
 }
 
 fn main() {
@@ -73,19 +84,21 @@ fn main() {
             std::process::exit(2);
         }
     };
-    let backend = match DesktopBackend::connect(&drive_dir) {
-        Ok(backend) => backend,
-        Err(error) => {
-            eprintln!("wyrd-desktop: {error}");
-            eprintln!("wyrd-desktop: start the owner for this drive, then relaunch");
-            std::process::exit(2);
+    let state = AppState::new();
+    // Best-effort pre-connect: where the owner answers, the map
+    // starts warm; where it does not, startup still succeeds and
+    // the lifecycle view reports the drive unavailable per-drive.
+    if let Some(dir) = drive_dir {
+        match DesktopBackend::connect(&dir) {
+            Ok(backend) => state.insert(backend),
+            Err(error) => eprintln!("wyrd-desktop: pre-connect {dir:?} failed: {error}"),
         }
-    };
+    }
     // One drain per process: a second close request while draining
     // is already covered by the spawned task, never a second drain.
     static DRAINING: AtomicBool = AtomicBool::new(false);
     tauri::Builder::default()
-        .manage(AppState::new(backend))
+        .manage(state)
         .manage(FlightTracker::new())
         .invoke_handler(invoke_handler())
         .on_window_event(|window, event| {

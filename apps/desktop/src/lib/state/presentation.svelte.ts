@@ -2,24 +2,32 @@
 //
 // The frontend displays what the owner last reported and marks it
 // as such; when the reports change, the display follows. What may
-// live here: selected view, open dialogs, form input,
-// pending-request indicators, last observed response. What must
-// not: drive membership, lifecycle, materialization policy,
+// live here: selected view, selected drive, open dialogs, form
+// input, pending-request indicators, last observed response. What
+// must not: drive membership, lifecycle, materialization policy,
 // durable status, mutation outcomes — those live in the owner.
 // See `docs/design/desktop-shell.md`, "Frontend: three views and
 // the unavailable state".
+//
+// The selected drive is presentation state, never an authorization
+// boundary: every drive-scoped command carries the absolute drive
+// directory as an exact string, and the backend resolves the
+// connection from it. Selecting a drive never authorizes access to
+// another drive's connection.
 //
 // Cached-state semantics (normative for this shell):
 //
 // - A last successful observation displays as historical/stale
 //   information, stamped with when it was observed. It never
 //   becomes evidence of current owner state.
-// - Current availability derives only from live socket outcomes:
-//   a fresh terminal success marks available, an `Unavailable`
-//   answer marks unavailable. An `Unconfirmed` outcome changes
-//   nothing — the prior state stands, and the view marks its data
-//   stale. Cached data, including freshly re-rendered cached data,
-//   never marks available.
+// - Current availability derives only from live socket outcomes,
+//   per drive: a fresh terminal success marks that drive
+//   available, an `Unavailable` answer marks that drive
+//   unavailable. An `Unconfirmed` outcome changes nothing — the
+//   prior state stands, and the view marks its data stale. Cached
+//   data, including freshly re-rendered cached data, never marks
+//   available. One drive's outcome never changes another drive's
+//   availability.
 // - Owner unavailable does not mean the drive is empty; a failed
 //   observation does not mean membership is absent; cached posture
 //   is not current posture; a past success never proves the next
@@ -58,26 +66,31 @@ export interface StatusSnapshot {
   freshness: WireFreshness;
 }
 
-let availability = $state<OwnerAvailability>("unknown");
 let selectedView = $state<ShellView>("status");
+/** The explicitly selected drive, by absolute directory. Null before the first selection. */
+let selectedDriveDir = $state<string | null>(null);
 let pendingRequests = $state(0);
 let lastResult = $state<IpcResult<unknown> | null>(null);
 /** A local query (registry/settings) failed outside the taxonomy — transport or shell bug. Not an owner answer. */
 let transportNotice = $state<string | null>(null);
-let statusSnapshot = $state<Stamped<StatusSnapshot> | null>(null);
+/** Per-drive availability, keyed by absolute drive directory. Absent means unknown (never probed this session). */
+let availabilityByDrive = $state<Record<string, OwnerAvailability>>({});
 let lifecycleSnapshot = $state<Stamped<RegistryState> | null>(null);
-let settingsSnapshot = $state<Stamped<DriveSettingsState> | null>(null);
+/** Per-drive status snapshots, keyed by absolute drive directory. */
+let statusSnapshots = $state<Record<string, Stamped<StatusSnapshot>>>({});
+/** Per-drive settings snapshots, keyed by absolute drive directory. */
+let settingsSnapshots = $state<Record<string, Stamped<DriveSettingsState>>>({});
 
 function stamp<T>(data: T): Stamped<T> {
   return { data, observedAtMs: Date.now() };
 }
 
 export const presentation = {
-  get availability(): OwnerAvailability {
-    return availability;
-  },
   get selectedView(): ShellView {
     return selectedView;
+  },
+  get selectedDriveDir(): string | null {
+    return selectedDriveDir;
   },
   get pendingRequests(): number {
     return pendingRequests;
@@ -88,28 +101,38 @@ export const presentation = {
   get transportNotice(): string | null {
     return transportNotice;
   },
-  get statusSnapshot(): Stamped<StatusSnapshot> | null {
-    return statusSnapshot;
-  },
   get lifecycleSnapshot(): Stamped<RegistryState> | null {
     return lifecycleSnapshot;
   },
-  get settingsSnapshot(): Stamped<DriveSettingsState> | null {
-    return settingsSnapshot;
+  /** This drive's last status answer, stamped — null where this drive never answered this session. */
+  statusSnapshotFor(driveDir: string): Stamped<StatusSnapshot> | null {
+    return statusSnapshots[driveDir] ?? null;
+  },
+  /** This drive's last settings answer, stamped — null where this drive never answered this session. */
+  settingsSnapshotFor(driveDir: string): Stamped<DriveSettingsState> | null {
+    return settingsSnapshots[driveDir] ?? null;
+  },
+  /** This drive's availability: `unknown` where never probed this session. */
+  availabilityFor(driveDir: string): OwnerAvailability {
+    return availabilityByDrive[driveDir] ?? "unknown";
   },
   selectView(view: ShellView): void {
     selectedView = view;
   },
-  /**
-   * Call only after a fresh terminal owner success. Cached answers
-   * — including cache hits re-rendered now — must never call this.
-   */
-  markAvailable(): void {
-    availability = "available";
+  selectDrive(driveDir: string): void {
+    selectedDriveDir = driveDir;
   },
-  /** An `Unavailable` answer is the only path here: no transport, owner state unknown. */
-  markUnavailable(): void {
-    availability = "unavailable";
+  /**
+   * Call only after a fresh terminal owner success for that drive.
+   * Cached answers — including cache hits re-rendered now — must
+   * never call this. Never touches another drive's availability.
+   */
+  markAvailable(driveDir: string): void {
+    availabilityByDrive[driveDir] = "available";
+  },
+  /** An `Unavailable` answer is the only path here: no transport, owner state unknown. Per drive. */
+  markUnavailable(driveDir: string): void {
+    availabilityByDrive[driveDir] = "unavailable";
   },
   clearTransportNotice(): void {
     transportNotice = null;
@@ -117,14 +140,14 @@ export const presentation = {
   noteTransportFailure(detail: string): void {
     transportNotice = detail;
   },
-  storeStatus(data: StatusSnapshot): void {
-    statusSnapshot = stamp(data);
-  },
   storeLifecycle(data: RegistryState): void {
     lifecycleSnapshot = stamp(data);
   },
-  storeSettings(data: DriveSettingsState): void {
-    settingsSnapshot = stamp(data);
+  storeStatus(driveDir: string, data: StatusSnapshot): void {
+    statusSnapshots[driveDir] = stamp(data);
+  },
+  storeSettings(driveDir: string, data: DriveSettingsState): void {
+    settingsSnapshots[driveDir] = stamp(data);
   },
   trackRequest(): void {
     pendingRequests += 1;
@@ -138,11 +161,11 @@ export const presentation = {
   finishRequest(): void {
     pendingRequests = Math.max(0, pendingRequests - 1);
   },
-  settleRequest(result: IpcResult<unknown>): void {
+  settleRequest(driveDir: string | null, result: IpcResult<unknown>): void {
     pendingRequests = Math.max(0, pendingRequests - 1);
     lastResult = result;
-    if (!result.ok && result.error.kind === "unavailable") {
-      availability = "unavailable";
+    if (!result.ok && result.error.kind === "unavailable" && driveDir !== null) {
+      availabilityByDrive[driveDir] = "unavailable";
     }
     // Every other outcome leaves availability untouched: success
     // paths call `markAvailable` explicitly once their terminal

@@ -8,11 +8,12 @@
 //! (`docs/contracts/owner-interface.md`).
 //!
 //! One [`DesktopBackend`] per drive connection, held under exclusive
-//! access: the shared client is sequential (`&mut self` per exchange)
-//! and poisons itself on the first unconfirmed answer, so concurrent
-//! callers serialize on the backend's single instance. Recovery is a
-//! new connection ([`DesktopBackend::reconnect`]), never a resumed
-//! stream.
+//! access and keyed by drive directory in [`AppState`]: the shared
+//! client is sequential (`&mut self` per exchange) and poisons
+//! itself on the first unconfirmed answer, so concurrent callers on
+//! one drive serialize on that drive's instance. Recovery is a new
+//! connection ([`DesktopBackend::reconnect`]), never a resumed
+//! stream — per drive, never touching other drives' connections.
 //!
 //! The client is synchronous; the Tauri commands in
 //! [`commands`] run each exchange on the blocking pool, so a
@@ -34,13 +35,23 @@ pub use backend::{BackendError, DesktopBackend};
 pub use registry::{DriveAvailability, DriveView, RegistryState, RegistryStatus};
 pub use settings_view::{DriveSettings, DriveSettingsView};
 
-/// The managed application state: the single backend owner, held
-/// under exclusive access. Commands reach it through an owned
-/// [`tauri::AppHandle`] inside their blocking task — never a
-/// borrowed `State` reference across the boundary. The alias pins
-/// the exact `State` type: a wrong `State` type fails at runtime
-/// (`state not managed`), not compile time.
-pub type AppState = std::sync::Mutex<DesktopBackend>;
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+
+/// The managed application state: the drive connection map.
+///
+/// One [`DesktopBackend`] per drive, keyed by the absolute drive
+/// directory as an exact string. The map tracks connections to
+/// owners — never durable stores, never ownership. Each backend
+/// holds its connection under exclusive access, and commands clone
+/// the drive's `Arc` out of the map under a short lock, then run
+/// without holding the map: one drive's poisoned connection or slow
+/// owner never blocks another drive's commands. Application-wide
+/// failure and individual drive failure stay distinct states.
+pub struct AppState {
+    inner: Mutex<BTreeMap<PathBuf, Arc<DesktopBackend>>>,
+}
 
 /// Outstanding IPC work, counted from dispatch to answer. The quit
 /// drain reads this — never the backend itself — so waiting never
@@ -101,6 +112,101 @@ impl Drop for FlightGuard {
             .inner
             .outstanding
             .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+impl AppState {
+    /// An empty connection map: no drive connects at startup.
+    /// Commands connect lazily on first use per drive; the
+    /// installer-provided `--drive-dir` pre-connects through
+    /// [`AppState::insert`] where the owner answers, and startup
+    /// never fails where it does not.
+    pub fn new() -> Self {
+        AppState {
+            inner: Mutex::new(BTreeMap::new()),
+        }
+    }
+
+    /// Insert a pre-connected backend (startup's `--drive-dir`).
+    /// Replaces any existing connection for the same drive.
+    pub fn insert(&self, backend: DesktopBackend) {
+        let drive = backend.drive_dir().to_owned();
+        let mut held = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        held.insert(drive, Arc::new(backend));
+    }
+
+    /// Resolve the drive directory the frontend named: the absolute
+    /// drive directory as an exact string — the same rule as the
+    /// settings keys. Relative spellings refuse loudly instead of
+    /// resolving against the process directory: the frontend's
+    /// selection is presentation state, never an authorization
+    /// boundary, and the backend must not guess which drive a
+    /// relative path meant.
+    fn validate_drive_dir(drive_dir: &str) -> Result<PathBuf, BackendError> {
+        let path = PathBuf::from(drive_dir);
+        if !path.is_absolute() {
+            return Err(BackendError::Incompatible {
+                detail: format!("drive_dir {drive_dir:?} must be absolute"),
+            });
+        }
+        Ok(path)
+    }
+
+    /// The connection for one drive, connecting lazily on first use.
+    /// The map lock covers only the lookup and the insert — never
+    /// the socket connect or any owner exchange — so one drive's
+    /// slow or poisoned owner never blocks another drive. A
+    /// concurrent first use may connect twice; the second insert
+    /// wins and the extra socket drops, which is harmless.
+    pub fn connection_for(&self, drive_dir: &str) -> Result<Arc<DesktopBackend>, BackendError> {
+        let path = Self::validate_drive_dir(drive_dir)?;
+        {
+            let held = self
+                .inner
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            if let Some(backend) = held.get(&path) {
+                return Ok(Arc::clone(backend));
+            }
+        }
+        let fresh = DesktopBackend::connect(&path)?;
+        let mut held = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        match held.get(&path) {
+            Some(existing) => Ok(Arc::clone(existing)),
+            None => {
+                let backend = Arc::new(fresh);
+                held.insert(path, Arc::clone(&backend));
+                Ok(backend)
+            }
+        }
+    }
+
+    /// Drop the connection for one drive and mint a new instance
+    /// against the same drive — that drive only. Every other
+    /// drive's connection is untouched. Where no connection exists
+    /// yet, this establishes one: retry after `Unavailable` must
+    /// work without a prior success.
+    pub fn reconnect_drive(&self, drive_dir: &str) -> Result<(), BackendError> {
+        let path = Self::validate_drive_dir(drive_dir)?;
+        let fresh = DesktopBackend::connect(&path)?;
+        let mut held = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        held.insert(path, Arc::new(fresh));
+        Ok(())
+    }
+}
+
+impl Default for AppState {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

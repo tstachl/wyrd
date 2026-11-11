@@ -422,8 +422,8 @@ fn submit_forwards_through_the_single_queue_and_commits() {
 /// One mock app managing the backend, plus its webview: the pair
 /// every command proof invokes through. The app never runs — the
 /// mock runtime answers invokes without an event loop.
-fn mock_app_with(
-    backend: DesktopBackend,
+fn mock_app_with_state(
+    state: wyrd_desktop::AppState,
     tag: &str,
 ) -> (
     tauri::App<tauri::test::MockRuntime>,
@@ -431,7 +431,7 @@ fn mock_app_with(
     std::path::PathBuf,
 ) {
     let app = tauri::test::mock_builder()
-        .manage(wyrd_desktop::AppState::new(backend))
+        .manage(state)
         .manage(wyrd_desktop::FlightTracker::new())
         .invoke_handler(wyrd_desktop::invoke_handler())
         .build(tauri::generate_context!())
@@ -447,6 +447,21 @@ fn mock_app_with(
         .build()
         .expect("the mock webview builds");
     (app, webview, data_dir)
+}
+
+/// One mock app managing a pre-connected backend: the pair every
+/// single-drive command proof invokes through.
+fn mock_app_with(
+    backend: DesktopBackend,
+    tag: &str,
+) -> (
+    tauri::App<tauri::test::MockRuntime>,
+    tauri::WebviewWindow<tauri::test::MockRuntime>,
+    std::path::PathBuf,
+) {
+    let state = wyrd_desktop::AppState::new();
+    state.insert(backend);
+    mock_app_with_state(state, tag)
 }
 
 /// Invoke one command on the mock webview: the JSON the command
@@ -485,7 +500,7 @@ fn commands_preserve_refusal_codes() {
     match invoke(
         &webview,
         "lookup",
-        serde_json::json!({"path": "no-such-path.txt"}),
+        serde_json::json!({"driveDir": owner.dir.to_string_lossy(), "path": "no-such-path.txt"}),
     ) {
         Err(error) => {
             assert_eq!(error["kind"], "refused");
@@ -508,22 +523,34 @@ fn commands_recover_availability_without_restart() {
     let backend = backend_for(&owner);
     let (_app, webview, data_dir) = mock_app_with(backend, "recovery");
 
+    let drive = owner.dir.to_string_lossy().into_owned();
+    let lookup = |path: &str| {
+        invoke(
+            &webview,
+            "lookup",
+            serde_json::json!({"driveDir": drive, "path": path}),
+        )
+    };
     assert!(
-        invoke(&webview, "lookup", serde_json::json!({"path": "seed.txt"})).is_ok(),
+        lookup("seed.txt").is_ok(),
         "the command serves while the owner is up"
     );
 
     // Owner alive but unreachable: the command stays unconfirmed —
     // never success, never recast as unavailable.
     owner.stop_serving();
-    match invoke(&webview, "lookup", serde_json::json!({"path": "seed.txt"})) {
+    match lookup("seed.txt") {
         Err(error) => assert_eq!(error["kind"], "unconfirmed"),
         ok => panic!("an unreachable owner stays unconfirmed: {ok:?}"),
     }
 
     // Explicit reconnect while still down reports unavailable,
     // honestly: no connection was minted.
-    match invoke(&webview, "reconnect", serde_json::json!({})) {
+    match invoke(
+        &webview,
+        "reconnect",
+        serde_json::json!({"driveDir": drive}),
+    ) {
         Err(error) => assert_eq!(error["kind"], "unavailable"),
         ok => panic!("reconnect with no owner reports unavailable: {ok:?}"),
     }
@@ -532,11 +559,16 @@ fn commands_recover_availability_without_restart() {
     // instance, and the lookup serves again. No restart anywhere.
     owner.serve_again();
     assert!(
-        invoke(&webview, "reconnect", serde_json::json!({})).is_ok(),
+        invoke(
+            &webview,
+            "reconnect",
+            serde_json::json!({"driveDir": drive}),
+        )
+        .is_ok(),
         "explicit reconnect mints a new instance"
     );
     assert!(
-        invoke(&webview, "lookup", serde_json::json!({"path": "seed.txt"})).is_ok(),
+        lookup("seed.txt").is_ok(),
         "availability returns on the same app without restart"
     );
 
@@ -571,8 +603,7 @@ fn registry_mirror_agrees_with_the_daemon_writer() {
     );
     write_registry(&path, &drives).expect("the daemon writer stores");
 
-    let state =
-        wyrd_desktop::registry::list_drives_at(&path, std::path::Path::new("/drives/nowhere"));
+    let state = wyrd_desktop::registry::list_drives_at(&path);
     assert_eq!(
         state.status,
         wyrd_desktop::RegistryStatus::Ready,
@@ -585,10 +616,6 @@ fn registry_mirror_agrees_with_the_daemon_writer() {
     assert_eq!(view.relays, vec!["wss://relay.example".to_string()]);
     assert_eq!(view.service, "drive-alpha");
     assert_eq!(view.mode, "vault");
-    assert!(
-        !view.current,
-        "a non-matching path marks nothing current rather than guessing"
-    );
     // No owner serves the scratch drive: the probe reports no
     // transport, which says nothing about any drive.
     assert!(
@@ -689,12 +716,8 @@ fn registry_probe_verifies_against_the_live_owner() {
     );
     write_registry(&path, &drives).expect("the daemon writer stores");
 
-    let state = wyrd_desktop::registry::list_drives_at(&path, &owner.dir);
+    let state = wyrd_desktop::registry::list_drives_at(&path);
     assert_eq!(state.drives.len(), 1);
-    assert!(
-        state.drives[0].current,
-        "the served drive marks current by exact path"
-    );
     assert_eq!(
         state.drives[0].availability,
         wyrd_desktop::DriveAvailability::Available,
@@ -702,7 +725,7 @@ fn registry_probe_verifies_against_the_live_owner() {
     );
 
     owner.stop_serving();
-    let state = wyrd_desktop::registry::list_drives_at(&path, &owner.dir);
+    let state = wyrd_desktop::registry::list_drives_at(&path);
     assert!(
         matches!(
             state.drives[0].availability,
@@ -737,7 +760,11 @@ fn local_queries_answer_through_the_commands() {
         }
         Err(error) => panic!("list_drives answers its state struct: {error}"),
     }
-    match invoke(&webview, "drive_settings", serde_json::json!({})) {
+    match invoke(
+        &webview,
+        "drive_settings",
+        serde_json::json!({"driveDir": owner.dir.to_string_lossy()}),
+    ) {
         Ok(value) => {
             assert!(value.get("state").is_some(), "a state rides along: {value}");
         }
@@ -746,4 +773,72 @@ fn local_queries_answer_through_the_commands() {
 
     std::fs::remove_dir_all(&data_dir).expect("the webview data dir cleans up");
     owner.shutdown();
+}
+
+/// Per-drive failure isolation, through the commands: two live
+/// owners behind one connection map, no pre-connected backend — the
+/// map connects lazily from the explicit drive identity, so there
+/// is no implicit active drive. One socket dying invalidates
+/// nothing else: the other drive keeps serving, and an explicit
+/// reconnect of the healthy drive touches only that drive.
+#[test]
+fn per_drive_failure_isolation_through_the_commands() {
+    let mut first = running_owner();
+    let second = running_owner();
+    assert_ne!(first.dir, second.dir, "two drives, two sockets");
+
+    let state = wyrd_desktop::AppState::new();
+    let (_app, webview, data_dir) = mock_app_with_state(state, "isolation");
+
+    let lookup = |drive: &std::path::Path| {
+        invoke(
+            &webview,
+            "lookup",
+            serde_json::json!({"driveDir": drive.to_string_lossy(), "path": "seed.txt"}),
+        )
+    };
+    assert!(
+        lookup(&first.dir).is_ok(),
+        "the first drive serves with no pre-connected backend"
+    );
+    assert!(
+        lookup(&second.dir).is_ok(),
+        "the second drive serves on the same app"
+    );
+
+    // One socket dies: that drive stays unconfirmed while the other
+    // keeps serving on the same map.
+    first.stop_serving();
+    match lookup(&first.dir) {
+        Err(error) => assert_eq!(error["kind"], "unconfirmed"),
+        ok => panic!("the downed drive stays unconfirmed: {ok:?}"),
+    }
+    assert!(
+        lookup(&second.dir).is_ok(),
+        "the surviving drive is unaffected by the other's dead socket"
+    );
+
+    // Reconnecting the healthy drive touches only that drive: it
+    // still serves, and the downed drive stays unconfirmed.
+    assert!(
+        invoke(
+            &webview,
+            "reconnect",
+            serde_json::json!({"driveDir": second.dir.to_string_lossy()}),
+        )
+        .is_ok(),
+        "explicit reconnect of the healthy drive mints its own instance"
+    );
+    assert!(
+        lookup(&second.dir).is_ok(),
+        "the healthy drive serves after its own reconnect"
+    );
+    match lookup(&first.dir) {
+        Err(error) => assert_eq!(error["kind"], "unconfirmed"),
+        ok => panic!("the downed drive is still unconfirmed: {ok:?}"),
+    }
+
+    std::fs::remove_dir_all(&data_dir).expect("the webview data dir cleans up");
+    first.shutdown();
+    second.shutdown();
 }

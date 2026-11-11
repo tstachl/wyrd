@@ -9,6 +9,7 @@ terminal answer, stamped — never a claim about right now. -->
   import ObservedNote from "./ObservedNote.svelte";
 
   interface Props {
+    driveLabel: string;
     snapshot: Stamped<StatusSnapshot> | null;
     pending: boolean;
     error: string | null;
@@ -16,7 +17,7 @@ terminal answer, stamped — never a claim about right now. -->
     onRefresh: () => void;
   }
 
-  let { snapshot, pending, error, transportNotice, onRefresh }: Props = $props();
+  let { driveLabel, snapshot, pending, error, transportNotice, onRefresh }: Props = $props();
 </script>
 
 <div class="flex items-center justify-between">
@@ -25,6 +26,7 @@ terminal answer, stamped — never a claim about right now. -->
     {pending ? "Reading…" : "Refresh"}
   </Button>
 </div>
+<p class="mt-1 text-xs text-smoke">{driveLabel}</p>
 
 {#if error !== null}
   <p class="mt-2 text-sm" role="alert">{error}</p>

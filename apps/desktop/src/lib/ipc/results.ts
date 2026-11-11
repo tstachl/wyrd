@@ -308,15 +308,13 @@ export type DriveAvailability =
   | { state: "unavailable"; detail: string }
   | { state: "unknown"; detail: string };
 
-/** One registered drive for the lifecycle view: facts plus the live verdict. */
+/** One registered drive for the lifecycle view: facts plus the live verdict. No implicit active drive — the frontend's selection is presentation state, never an authorization boundary. */
 export interface DriveView {
   name: string;
   drive_dir: string;
   relays: string[];
   service: string;
   mode: string;
-  /** The drive this shell instance serves, by exact path. Nothing marks current on a near-miss. */
-  current: boolean;
   availability: DriveAvailability;
 }
 
