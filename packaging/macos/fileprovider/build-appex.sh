@@ -42,7 +42,18 @@ mkdir -p "$MACOS"
 
 # The contract test walks Sources recursively; the build compiles
 # the same set, so a nested file is never checked-but-omitted.
-set -- $(find "$HERE/Sources" -name '*.swift' -print)
+# Capture first: an unquoted $(find …) would split on whitespace
+# and discard find's status, silently compiling a partial list.
+sources=$(find "$HERE/Sources" -name '*.swift' -print) || {
+    echo "error: cannot enumerate $HERE/Sources" >&2
+    exit 1
+}
+IFS='
+'
+set -f
+set -- $sources
+unset IFS
+set +f
 if [ "$#" -eq 0 ]; then
     echo "error: no Swift sources under $HERE/Sources" >&2
     exit 1
@@ -68,6 +79,10 @@ cp "$HERE/Info.plist" "$CONTENTS/Info.plist"
 # exists. Stage 1 probes the team-signed form and records it.
 ENTITLEMENTS_SRC="$HERE/WyrdFileProvider.entitlements"
 if [ -n "${TEAM_ID:-}" ]; then
+    if [ "$SIGN_IDENTITY" = "-" ]; then
+        echo "warning: TEAM_ID is set but SIGN_IDENTITY is ad-hoc;" >&2
+        echo "the group container still will not exist." >&2
+    fi
     ENTITLEMENTS_BUILD="$OUT/WyrdFileProvider.entitlements"
     sed "s/group\\.md\\.enesis\\.wyrd/$TEAM_ID.group.md.enesis.wyrd/" \
         "$ENTITLEMENTS_SRC" > "$ENTITLEMENTS_BUILD"

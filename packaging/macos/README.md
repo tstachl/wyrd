@@ -27,8 +27,9 @@ before Stage 2, and Stage 0/1 proceed without them.
   written unprefixed in the checked-in file; `build-appex.sh`
   rewrites it with `TEAM_ID` before signing, and the container
   becomes `~/Library/Group Containers/<TEAM_ID>.group.md.enesis.wyrd/`.
-  Without `TEAM_ID` the file signs as-is and no container exists. Production signing, notarization,
-  and the production group container are the license-gated tail.
+  Without `TEAM_ID` the file signs as-is and no container exists.
+  Production signing, notarization, and the production group
+  container are the license-gated tail.
 - `fileprovider/build-appex.sh` — script-driven build: `swiftc`
   against the macOS SDK, manual appex assembly, `codesign`. No
   `.xcodeproj`, no Xcode IDE, no XcodeGen. Verify with
