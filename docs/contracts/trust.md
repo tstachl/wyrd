@@ -514,7 +514,9 @@ immutable relay mailbox envelopes; consumption is the receiver's durable
 seen-event-id dedupe log (FIFO-bounded at 65,536 entries, fsynced at
 each ack, survives restarts). Terminal poison settles memory-only
 through the bounded session cache instead: never durable, forgotten
-on crash, redelivery re-poisons at bounded cost. Delivery is
+on crash, redelivery re-poisons at bounded cost. A `Retry`-retained
+handover evicts relay-held past 100 settlements and is re-admitted
+under a fresh id by the replay the eviction requests. Delivery is
 at-least-once: a wrap whose
   ack aged out of retention may redeliver after a restart or resubscribe,
    converging through engine idempotency — the engine dedupes the inner

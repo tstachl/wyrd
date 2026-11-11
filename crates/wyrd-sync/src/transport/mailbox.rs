@@ -262,9 +262,14 @@ pub trait Mailbox {
     /// Hand over the next envelope addressed to this mailbox's owner,
     /// if any. The handover does NOT consume the envelope: it stays
     /// available for redelivery until settled with [`Disposition::Ack`]
-    /// or [`Disposition::Poison`].
+    /// or [`Disposition::Poison`] — except that a `Retry`-retained
+    /// handover survives only an implementation-defined retry budget
+    /// (the live mailbox evicts past 100 `Retry` settlements): the
+    /// evicted envelope is relay-held and a later replay re-admits it
+    /// under a fresh id, so redelivery is fresh-id, not stable-id, past
+    /// the budget.
     /// A later `recv` MAY re-offer an unsettled delivery, always under
-    /// the same id; the drain loop offers each id once per pass, so a
+    /// the same id while it stays held; the drain loop offers each id once per pass, so a
     /// pass always terminates. Ids must be stable across re-offers and
     /// unique per envelope: a cursor derived from queue position (which
     /// shifts when predecessors are acked) violates this — derive
@@ -290,7 +295,10 @@ pub trait Mailbox {
     /// Settle one handover: `Ack` consumes (the relay may discard the
     /// envelope), `Poison` consumes terminal poison memory-only (the
     /// relay may discard the envelope, but nothing is recorded
-    /// durably), `Retry` retains it for redelivery. Consumption is
+    /// durably), `Retry` retains it for redelivery up to the
+    /// implementation's retry budget, past which the handover is
+    /// evicted relay-held and a later replay re-admits it under a fresh
+    /// id. Consumption is
     /// durable but not eternal under bounded retention — see `recv`.
     /// Settling is idempotent — a repeated settle of any kind is a
     /// no-op — and dropping a [`Delivery`] without settling is an

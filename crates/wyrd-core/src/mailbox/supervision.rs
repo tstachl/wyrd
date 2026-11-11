@@ -109,10 +109,15 @@ impl MailboxHealth {
 pub(super) struct SupervisorState {
     pub(super) stream_alive: AtomicBool,
     pub(super) connected_relays: AtomicUsize,
-    /// Set by the drainer when the handover channel is full: the SDK
-    /// broadcast may have dropped events its lag hides, so the next due
-    /// supervisor tick replays via a fresh subscription. Cleared when
-    /// that replay subscription succeeds.
+    /// Set when a relay replay is due: the drainer sets it when the
+    /// handover channel is full (the SDK broadcast may drop events its
+    /// lag hides), and the mailbox sets it when it evicts a
+    /// retry-budget-exhausted handover (a live subscription never
+    /// re-sends an already-delivered event, so the evicted wrap needs a
+    /// replay to come back). The next due supervisor tick replays via a
+    /// fresh subscription; cleared when that replay subscription
+    /// succeeds. Replays are paced by the episode cooldown, and a
+    /// trigger while an episode runs coalesces into it.
     pub(super) saturated: AtomicBool,
     /// Saturation replays issued, lifetime total (see `saturated`).
     pub(super) saturation_recoveries: AtomicU64,
@@ -550,9 +555,11 @@ pub(super) async fn supervise(ctx: SupervisorContext, total_relays: usize) {
         if total_relays == 0 {
             continue;
         }
-        // Saturation recovery: the drainer flagged a full handover
-        // channel, so the SDK broadcast may have dropped events its lag
-        // hides. The replay runs as a spawned episode like every other
+        // Saturation recovery: a replay is due — the drainer flagged a
+        // full handover channel, or the mailbox evicted a
+        // retry-exhausted handover that only a replay can bring back —
+        // so the SDK broadcast may have dropped events its lag hides
+        // (or a live subscription simply never re-sends delivered ones). The replay runs as a spawned episode like every other
         // recovery path: the tick loop never waits on the resubscribe
         // lock, so a wedged holder stalls at most one replay, never
         // supervision. The flag is claimed before spawning: saturation

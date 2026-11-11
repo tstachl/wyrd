@@ -15,6 +15,199 @@ use wyrd_sync::serving::ServingEndpoint;
 
 use std::time::{Duration, Instant};
 
+/// Heal after eviction over a live relay: a keyless announcement the
+/// recipient cannot open parks `Retry`-held, exhausts the mailbox retry
+/// budget, and evicts relay-held — then the withheld admission lands,
+/// the epoch key installs, and the eviction-requested replay re-admits
+/// the wrap under a fresh id where it opens. No restart: the live
+/// replay the eviction requests is the recovery path. Proves the
+/// policy's central claim — eviction delays the heal by at most one
+/// replay, it never consumes the message.
+#[test]
+fn evicted_unknown_epoch_heals_through_live_replay_after_key_lands() {
+    let relay = MiniRelay::spawn();
+    let url = relay.url().to_string();
+    let owner_dir = temp_path("catchup-evict-owner");
+    let recipient_dir = temp_path("catchup-evict-recipient");
+    let drive_pass = "test-pass";
+    let owner_identity = DeviceIdentitySecret::generate().unwrap();
+    let recipient_identity = DeviceIdentitySecret::generate().unwrap();
+    let recipient_encryption = DeviceEncryptionSecret::generate().unwrap();
+    let owner_keys = keys_for(&owner_identity);
+    let recipient_keys = keys_for(&recipient_identity);
+    let recipient_device = recipient_identity.device_id();
+
+    let mut owner = Engine::create(owner_dir.clone(), drive_pass, owner_identity.clone()).unwrap();
+    let invitation = owner
+        .admit_device(recipient_device, recipient_encryption.encryption_key())
+        .unwrap()
+        .invitation;
+    let mut recipient = Engine::accept_invitation(
+        recipient_dir.clone(),
+        drive_pass,
+        recipient_identity.clone(),
+        recipient_encryption.clone(),
+        &invitation,
+    )
+    .unwrap();
+
+    let mut owner_mailbox = live_mailbox(
+        &owner_keys,
+        std::slice::from_ref(&url),
+        temp_path("catchup-evict-owner-seen"),
+    );
+    let mut recipient_mailbox = live_mailbox(
+        &recipient_keys,
+        std::slice::from_ref(&url),
+        temp_path("catchup-evict-recipient-seen"),
+    );
+
+    // Baseline: the admission converges over the live relay.
+    assert_eq!(
+        owner
+            .deliver_pending(&mut owner_mailbox, &mut PublishBudget::unbounded())
+            .unwrap(),
+        2
+    );
+    let setup = drain_until(&mut recipient, &mut recipient_mailbox, 2);
+    assert_eq!(setup.accepted, 2);
+
+    // One ordinary snapshot the recipient records immediately.
+    let mut author_objects = MemoryObjectStore::default();
+    let payload = b"evict-ordinary".to_vec();
+    let chunk = author_objects.insert(ObjectKind::Chunk, &payload).unwrap();
+    let tree = Tree::from_entries(vec![Entry::file(
+        "payload",
+        payload.len() as u64,
+        false,
+        vec![chunk],
+    )
+    .unwrap()])
+    .unwrap()
+    .insert_into(&mut author_objects)
+    .unwrap();
+    let authored = owner.author_snapshot(&author_objects, tree).unwrap();
+    assert_eq!(
+        owner
+            .announce_snapshot(&authored, &mut owner_mailbox, None)
+            .unwrap(),
+        1
+    );
+    let ordinary = drain_until(&mut recipient, &mut recipient_mailbox, 1);
+    assert_eq!(ordinary.accepted, 1);
+
+    // A membership change plus a snapshot bound to the admission before
+    // the transition itself publishes: the announcement reaches the
+    // recipient keyless and parks `Retry`-held.
+    let device_c_identity = DeviceIdentitySecret::generate().unwrap();
+    let device_c_encryption = DeviceEncryptionSecret::generate().unwrap();
+    owner
+        .admit_device(
+            device_c_identity.device_id(),
+            device_c_encryption.encryption_key(),
+        )
+        .unwrap();
+    let payload_c = b"evict-keyless".to_vec();
+    let chunk_c = author_objects
+        .insert(ObjectKind::Chunk, &payload_c)
+        .unwrap();
+    let tree_c = Tree::from_entries(vec![Entry::file(
+        "payload",
+        payload_c.len() as u64,
+        false,
+        vec![chunk_c],
+    )
+    .unwrap()])
+    .unwrap()
+    .insert_into(&mut author_objects)
+    .unwrap();
+    let authored_c = owner.author_snapshot(&author_objects, tree_c).unwrap();
+    let snapshot_c = authored_c.snapshot().snapshot_id();
+    assert_eq!(
+        owner
+            .announce_snapshot(&authored_c, &mut owner_mailbox, None)
+            .unwrap(),
+        2,
+        "post-admission snapshot announces to both members"
+    );
+    let start = Instant::now();
+    loop {
+        let report = recipient.drain(&mut recipient_mailbox).unwrap();
+        if report.skipped >= 1 {
+            break;
+        }
+        assert!(
+            start.elapsed() < DELIVERY_TIMEOUT,
+            "keyless announcement parks Retry-held"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let watermark_before_evict = recipient_mailbox.settled_below();
+    assert!(
+        recipient
+            .runtime_state()
+            .unwrap()
+            .announcement(&snapshot_c)
+            .is_none(),
+        "keyless announcement not recorded before its epoch lands"
+    );
+
+    // Drain past the retry budget: the parked handover evicts
+    // relay-held and the watermark advances past it. The eviction
+    // requests a live replay, which may re-admit the wrap before this
+    // loop ends — either order converges below, so loop a fixed count
+    // past the budget instead of waiting for a transient empty.
+    for _ in 0..MAX_HELD_RETRIES + 20 {
+        let _ = recipient.drain(&mut recipient_mailbox).unwrap();
+    }
+    assert!(
+        recipient_mailbox.settled_below() > watermark_before_evict,
+        "eviction advances the watermark past the parked handover"
+    );
+    assert!(
+        recipient
+            .runtime_state()
+            .unwrap()
+            .announcement(&snapshot_c)
+            .is_none(),
+        "evicted announcement still not recorded before the heal"
+    );
+
+    // Heal: publishing the withheld admission converges the new epoch.
+    // The evicted wrap comes back through the eviction-requested live
+    // replay (or a re-admission already did) and opens now the key is
+    // held — loop until recorded, covering both arrival orders.
+    let sent = owner
+        .deliver_pending(&mut owner_mailbox, &mut PublishBudget::unbounded())
+        .unwrap();
+    assert!(sent >= 2, "admission transition plus capabilities publish");
+    let start = Instant::now();
+    loop {
+        let _ = recipient.drain(&mut recipient_mailbox).unwrap();
+        if recipient
+            .runtime_state()
+            .unwrap()
+            .announcement(&snapshot_c)
+            .is_some()
+        {
+            break;
+        }
+        assert!(
+            start.elapsed() < DELIVERY_TIMEOUT,
+            "evicted announcement heals through the live replay after its epoch lands"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(recipient.pending_count(), 0, "nothing held after the heal");
+
+    drop(recipient_mailbox);
+    drop(owner_mailbox);
+    drop(recipient);
+    drop(owner);
+    std::fs::remove_dir_all(owner_dir).unwrap();
+    std::fs::remove_dir_all(recipient_dir).unwrap();
+}
+
 /// History catch-up over a real relay: an admitted peer disconnects,
 /// misses several ordinary snapshots plus an admission it never saw,
 /// then reconnects and acquires the full history closure — snapshot

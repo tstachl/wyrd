@@ -8,10 +8,16 @@ use std::time::Duration;
 
 /// Park-and-hold wedge (B1): 1024 deliveries settling `Retry` forever
 /// must not pin new mail. After the retry budget evicts each parked
-/// handover relay-held, the bound drains and a fresh delivery arrives.
+/// handover relay-held, the bound drains and a fresh delivery arrives —
+/// through replayed evictions still settling `Retry`, the production
+/// disposition for unknown-epoch mail.
 #[test]
 fn retry_budget_evicts_parked_head_so_new_mail_delivers() {
     const EXTRA: usize = 1;
+    // Replayed evictions settle Retry like production unknown-epoch
+    // mail, so the fresh arrival below converges only after the replayed
+    // window re-evicts: bound the whole episode generously.
+    const EPISODE: Duration = Duration::from_secs(240);
     let relay = MiniRelay::spawn();
     let url = relay.url().to_string();
     let sender = sender_keys();
@@ -38,18 +44,13 @@ fn retry_budget_evicts_parked_head_so_new_mail_delivers() {
         "one retry keeps the window pinned"
     );
 
-    // Retry each parked handover to the budget: the 100th Retry evicts
-    // relay-held instead of staying pinned.
+    // Retry each parked handover exactly to the budget: 100 settlements
+    // per id, the last of which evicts relay-held instead of staying
+    // pinned.
     for id in &ids {
-        for _ in 1..MAX_HELD_RETRIES {
+        for _ in 0..MAX_HELD_RETRIES {
             mailbox.settle(*id, Disposition::Retry).unwrap();
         }
-    }
-    // The last settlement of each id is the evicting one: after the
-    // loop every parked handover has been retried MAX_HELD_RETRIES
-    // times and evicted, so the bound drains.
-    for id in &ids {
-        mailbox.settle(*id, Disposition::Retry).unwrap();
     }
     assert!(
         mailbox.unacked.is_empty(),
@@ -71,9 +72,10 @@ fn retry_budget_evicts_parked_head_so_new_mail_delivers() {
 
     // Fresh mail delivers into the drained bound. A saturation replay
     // may have re-admitted evicted park-... wraps as fresh handovers
-    // ahead of it — drain those (Ack, so they converge) until the fresh
-    // content arrives. Without the retry budget the parked window would
-    // never drain and this loop would time out on the wedged inbox.
+    // ahead of it — those settle Retry, exactly as production
+    // unknown-epoch mail would, until their own budget re-evicts them.
+    // Without the retry budget the parked window would never drain and
+    // this loop would time out on the wedged inbox.
     relay.inject(seal_rumor(
         &sender,
         receiver_key,
@@ -87,10 +89,90 @@ fn retry_budget_evicts_parked_head_so_new_mail_delivers() {
             mailbox.settle(delivery.id(), Disposition::Ack).unwrap();
             break;
         }
-        mailbox.settle(delivery.id(), Disposition::Ack).unwrap();
+        mailbox.settle(delivery.id(), Disposition::Retry).unwrap();
+        assert!(
+            start.elapsed() < EPISODE,
+            "fresh mail arrives through retry-held replayed evictions"
+        );
+    }
+}
+
+/// Eviction requests the replay that brings the wrap back: a small
+/// parked set evicts, the supervisor's replay episode re-drives relay
+/// history, and the evicted wraps are re-offered under fresh delivery
+/// ids — same process, no restart.
+#[test]
+fn eviction_requests_replay_that_reoffers_fresh_ids() {
+    const PARKED: usize = 8;
+    let relay = MiniRelay::spawn();
+    let url = relay.url().to_string();
+    let sender = sender_keys();
+    let receiver = keys();
+    let receiver_key = receiver.public_key();
+    let relays = vec![url];
+    let seen_path = temp_path("seen-retry-replay");
+
+    let mut mailbox = live_mailbox(&receiver, &relays, seen_path.clone());
+    wait_for_subscription(&relay, DELIVERY_TIMEOUT);
+    // Small enough to stay clear of the channel-full saturation flag:
+    // no replay fires before the eviction below, so the episode this
+    // test observes is eviction-triggered.
+    assert_eq!(mailbox.health().saturation_recoveries, 0);
+
+    let mut parked = std::collections::HashSet::new();
+    for index in 0..PARKED {
+        relay.inject(seal_rumor(
+            &sender,
+            receiver_key,
+            format!("replay-park-{index}"),
+        ));
+    }
+    let ids = wait_for_distinct_deliveries(&mut mailbox, PARKED, DELIVERY_TIMEOUT);
+    for id in &ids {
+        for _ in 0..MAX_HELD_RETRIES {
+            mailbox.settle(*id, Disposition::Retry).unwrap();
+        }
+    }
+    assert!(
+        mailbox.unacked.is_empty(),
+        "parked mail evicts before the replay"
+    );
+
+    // The eviction requests a replay: the first request is always due,
+    // so the episode fires without waiting out a cooldown.
+    let start = std::time::Instant::now();
+    while mailbox.health().saturation_recoveries < 1 {
         assert!(
             start.elapsed() < DELIVERY_TIMEOUT,
-            "fresh mail arrives through replayed evictions"
+            "eviction triggers a replay episode"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    // The replay re-offers every evicted wrap under a fresh id with the
+    // same content.
+    let mut reoffered = std::collections::HashSet::new();
+    while reoffered.len() < PARKED {
+        assert!(
+            start.elapsed() < DELIVERY_TIMEOUT,
+            "evicted wraps are re-offered after the replay"
+        );
+        if let Some(delivery) = mailbox.recv().unwrap() {
+            assert!(
+                !ids.contains(&delivery.id()),
+                "re-offer mints a fresh delivery id"
+            );
+            parked.insert(delivery.envelope().ciphertext.clone());
+            reoffered.insert(delivery.id());
+            mailbox.settle(delivery.id(), Disposition::Ack).unwrap();
+        } else {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+    assert_eq!(reoffered.len(), PARKED, "every evicted wrap comes back");
+    for index in 0..PARKED {
+        assert!(
+            parked.contains(&format!("replay-park-{index}")),
+            "replayed content matches the evicted wrap"
         );
     }
 }
@@ -134,7 +216,10 @@ fn evicted_retry_mail_redelivers_after_restart() {
     // Restart on the same durable path: the poison cache is gone and
     // the seen log holds nothing, so every evicted wrap is offered
     // again — and a fresh wrap injected after the restart delivers
-    // through the replay.
+    // through the replay. Redelivered park mail settles Retry, the
+    // production disposition for still-unopenable mail; the window has
+    // room for all of it plus the fresh wrap, so no second eviction is
+    // needed to prove the arrival.
     let mut replay = live_mailbox(&receiver, &relays, seen_path.clone());
     relay.inject(seal_rumor(
         &sender,
@@ -156,7 +241,7 @@ fn evicted_retry_mail_redelivers_after_restart() {
                 fresh_seen = true;
             } else {
                 redelivered += 1;
-                replay.settle(delivery.id(), Disposition::Ack).unwrap();
+                replay.settle(delivery.id(), Disposition::Retry).unwrap();
             }
         } else {
             std::thread::sleep(Duration::from_millis(10));
