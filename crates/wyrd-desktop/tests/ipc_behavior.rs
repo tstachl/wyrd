@@ -892,3 +892,35 @@ fn insert_refuses_a_dotdot_alias_for_a_live_drive() {
     }
     owner.shutdown();
 }
+
+/// The encoding refusal is pinned too: a backend connected through
+/// a non-UTF-8 alias of a live drive reaches the owner (the OS
+/// resolves the alias), but inserting it refuses with the encoding
+/// reason — no uncheckable spelling can key the map.
+///
+/// Linux-only: macOS (APFS) cannot represent the non-UTF-8 input at
+/// all, so the refusal is unreachable there by construction; CI on
+/// Linux runs this case.
+#[cfg(target_os = "linux")]
+#[test]
+fn insert_refuses_a_non_utf8_alias_for_a_live_drive() {
+    use std::os::unix::ffi::OsStrExt;
+    let owner = running_owner();
+    let odd = owner.dir.join(std::ffi::OsStr::from_bytes(b"odd-\xff-dir"));
+    std::fs::create_dir_all(&odd).expect("the non-UTF-8 parent exists");
+    let alias = odd.join("..");
+    let backend =
+        DesktopBackend::connect(&alias).expect("the OS resolves the alias to the live socket");
+    backend
+        .lookup("seed.txt")
+        .expect("the alias reaches the live owner");
+    let state = wyrd_desktop::AppState::new();
+    match state.insert(backend) {
+        Err(reason) => assert!(
+            reason.contains("is not valid UTF-8"),
+            "the refusal names the encoding: {reason}"
+        ),
+        Ok(()) => panic!("a non-UTF-8 path must never key the connection map"),
+    }
+    owner.shutdown();
+}
