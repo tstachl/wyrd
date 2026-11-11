@@ -51,12 +51,13 @@ pub struct MailboxHealth {
     /// Relays registered at construction. Zero means the mailbox was built
     /// for offline boundary use, where "live" is stream-alive alone.
     pub total_relays: usize,
-    /// Saturation replays issued to recover suspected SDK broadcast lag,
-    /// lifetime total. A replay sends CLOSE before REQ under the stable
-    /// subscription ID and converges through seen/held dedupe; the count
-    /// keeps that recovery observable. It counts replay subscriptions
-    /// successfully requested, not confirmed redelivery — a replay whose
-    /// history is itself dropped schedules the next one instead.
+    /// Replay episodes issued — broadcast-lag recovery plus
+    /// engine-requested key-install re-drives — lifetime total. A replay
+    /// sends CLOSE before REQ under the stable subscription ID and
+    /// converges through seen/held dedupe; the count keeps that recovery
+    /// observable. It counts replay subscriptions successfully requested,
+    /// not confirmed redelivery — a replay whose history is itself
+    /// dropped schedules the next one instead.
     pub saturation_recoveries: u64,
     /// Supervisor tick-loop iterations, lifetime total. The loop ticks
     /// through in-flight recovery episodes, so this count proves the
@@ -111,13 +112,14 @@ pub(super) struct SupervisorState {
     pub(super) connected_relays: AtomicUsize,
     /// Set when a relay replay is due: the drainer sets it when the
     /// handover channel is full (the SDK broadcast may drop events its
-    /// lag hides), and the mailbox sets it when it evicts a
-    /// retry-budget-exhausted handover (a live subscription never
-    /// re-sends an already-delivered event, so the evicted wrap needs a
-    /// replay to come back). The next due supervisor tick replays via a
-    /// fresh subscription; cleared when that replay subscription
-    /// succeeds. Replays are paced by the episode cooldown, and a
-    /// trigger while an episode runs coalesces into it.
+    /// lag hides), and the engine sets it through `request_replay`
+    /// when it installs an epoch key that may open evicted mail (a
+    /// live subscription never re-sends an already-delivered event, so
+    /// only a replay brings the evicted wrap back). The next due
+    /// supervisor tick replays via a fresh subscription; the flag is
+    /// consumed only when an episode is actually claimed, so a trigger
+    /// arriving while an episode runs is preserved for the next due
+    /// tick. Replays are paced by the episode cooldown.
     pub(super) saturated: AtomicBool,
     /// Saturation replays issued, lifetime total (see `saturated`).
     pub(super) saturation_recoveries: AtomicU64,
@@ -213,6 +215,25 @@ pub(super) fn saturation_replay_due(last: Option<Instant>, now: Instant) -> bool
         None => true,
         Some(previous) => now.duration_since(previous) >= SATURATION_REPLAY_COOLDOWN,
     }
+}
+
+/// Whether this tick claims a replay episode: split out of the tick
+/// loop so the ordering is unit-testable. The episode is claimed
+/// before the request flag is consumed, so a trigger arriving while
+/// an episode runs is preserved for the next due tick instead of
+/// being cleared by this one. A replay copy arriving while its wrap
+/// is still held collapses in held-dedupe, so the in-flight replay is
+/// not a substitute for the preserved request: the trigger after the
+/// REQ still needs the next replay.
+pub(super) fn replay_claim(due: bool, saturated: &AtomicBool, episode: &AtomicBool) -> bool {
+    if !due || !saturated.load(Ordering::Relaxed) {
+        return false;
+    }
+    if episode.swap(true, Ordering::Relaxed) {
+        return false;
+    }
+    saturated.store(false, Ordering::Relaxed);
+    true
 }
 
 /// Drainer-recovery backoff bounds: first retry after one second, doubling
@@ -556,26 +577,26 @@ pub(super) async fn supervise(ctx: SupervisorContext, total_relays: usize) {
             continue;
         }
         // Saturation recovery: a replay is due — the drainer flagged a
-        // full handover channel, or the mailbox evicted a
-        // retry-exhausted handover that only a replay can bring back —
-        // so the SDK broadcast may have dropped events its lag hides
-        // (or a live subscription simply never re-sends delivered ones). The replay runs as a spawned episode like every other
-        // recovery path: the tick loop never waits on the resubscribe
-        // lock, so a wedged holder stalls at most one replay, never
-        // supervision. The flag is claimed before spawning: saturation
-        // observed mid-replay re-arms for the next due tick instead of
-        // being wiped by this episode's completion, and a trigger while
-        // an episode is in flight coalesces into it. A failed replay
-        // re-arms too — nothing was replayed, so a later due tick must
-        // retry rather than wait for a fresh saturation episode.
+        // full handover channel, or the engine signalled a key install
+        // that may open evicted mail — so the SDK broadcast may have
+        // dropped events its lag hides (or a live subscription simply
+        // never re-sends delivered ones). The replay runs as a spawned
+        // episode like every other recovery path: the tick loop never
+        // waits on the resubscribe lock, so a wedged holder stalls at
+        // most one replay, never supervision (see `replay_claim` for
+        // the claim ordering: a trigger while an episode runs is
+        // preserved, never cleared). A failed replay re-arms too —
+        // nothing was replayed, so a later due tick must retry rather
+        // than wait for a fresh trigger.
         let last_replay = *health
             .saturation_replay_at
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
-        if saturation_replay_due(last_replay, Instant::now())
-            && health.saturated.swap(false, Ordering::Relaxed)
-            && !health.saturation_episode.swap(true, Ordering::Relaxed)
-        {
+        if replay_claim(
+            saturation_replay_due(last_replay, Instant::now()),
+            &health.saturated,
+            &health.saturation_episode,
+        ) {
             let episode = SupervisorContext {
                 client: Arc::clone(&client),
                 filter: filter.clone(),

@@ -208,6 +208,14 @@ pub(super) fn drain(
             peers.insert(sender);
         }
         mailbox.settle(delivery.id(), disposition)?;
+        // An epoch key installed while classifying this envelope may
+        // open evicted unknown-epoch mail: request one replay so it
+        // comes back under a fresh id now that its key is held. The
+        // flag is consumed once per pass at most — one install batch
+        // earns one replay, and unhealable mail earns none.
+        if engine.take_epoch_key_news() {
+            mailbox.request_replay();
+        }
     }
     report.peers_observed = peers.into_iter().collect();
     Ok(report)
@@ -524,6 +532,10 @@ fn note_committed_facts(engine: &mut Engine, facts: &[Fact]) {
                 let epoch = index as u64 + 1;
                 if !engine.epoch_keys.contains_key(&epoch) {
                     engine.add_epoch_key(epoch, Zeroizing::new(secret.control_key(&drive, epoch)));
+                    // News for the drain loop: a freshly installed key
+                    // may open evicted unknown-epoch mail, so the next
+                    // settle requests a mailbox replay to bring it back.
+                    engine.epoch_key_news = true;
                 }
             }
         }

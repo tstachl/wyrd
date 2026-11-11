@@ -37,9 +37,9 @@
 //! channel is left unread and held mail rotates instead, so the engine
 //! can always drain room free — except that a handover settling `Retry`
 //! past a bounded count is evicted relay-held instead of staying pinned,
-//! and the eviction requests a relay replay: a retry-only flood (parked
-//! unknown-epoch mail) drains room free and the supervisor's replay
-//! re-admits the evicted wraps. Framing-level garbage (wrong kind, missing or
+//! so a retry-only flood (parked unknown-epoch mail) drains room free.
+//! The evicted wraps come back only through a replay the engine
+//! requests when it installs an epoch key that may open them. Framing-level garbage (wrong kind, missing or
 //! foreign recipient tag, failed signature) is rejected at the boundary
 //! and never queued; because it is not persisted, it costs only one
 //! rejection per relay redelivery. Wyrd-level poison (an envelope that
@@ -360,19 +360,19 @@ const MAX_UNACKED_DELIVERIES: usize = 1024;
 
 /// Most `Retry` settlements one held handover survives before it is
 /// evicted relay-held: the handover leaves `unacked` without joining
-/// the durable seen log or the session poison cache, and the eviction
-/// requests a relay replay (supervisor saturation episode), which
-/// re-admits the wrap later under a fresh delivery id. Bounds the
-/// park-and-hold wedge (1024 unknown-epoch envelopes settling `Retry`
-/// forever stall intake and pin the settlement watermark): after this
-/// many retries the head drains instead of pinning, and a later replay
-/// converges through the normal heal (an epoch key arriving after
-/// eviction opens the redelivered wrap). Short-term heals are
-/// unaffected — the catch-up path heals in a handful of passes —
-/// while a permanently retried delivery cannot pin a slot for the
-/// process lifetime. Replays are paced by the episode cooldown, so an
-/// evicted wrap is unavailable for at most one cooldown window plus
-/// the passes its redelivery then needs to evict again.
+/// the durable seen log or the session poison cache. Eviction requests
+/// no replay by itself — unhealable mail must cost no steady-state
+/// work — so an evicted wrap comes back only through a replay the
+/// engine requests when it installs an epoch key that may open it
+/// (or through an unrelated saturation replay, reconnect, or
+/// restart). Bounds the park-and-hold wedge (1024 unknown-epoch
+/// envelopes settling `Retry` forever stall intake and pin the
+/// settlement watermark): after this many retries the head drains
+/// instead of pinning, and a later key install brings the evicted wrap
+/// back through the normal heal. Short-term heals are unaffected —
+/// the catch-up path heals in a handful of passes — while a
+/// permanently retried delivery cannot pin a slot for the process
+/// lifetime.
 const MAX_HELD_RETRIES: u32 = 100;
 
 /// Most acked wrap ids retained in the dedupe store. The store is a
@@ -541,7 +541,9 @@ pub struct LiveMailbox<S> {
     /// loss), so this length is the whole bound — except that a handover
     /// settling `Retry` past [`MAX_HELD_RETRIES`] is evicted relay-held
     /// instead of staying pinned, so the bound drains even under a
-    /// retry-only flood and the relay replays the evicted wrap later.
+    /// retry-only flood. An evicted wrap returns only through a replay
+    /// the engine requests on epoch-key install (or an unrelated
+    /// saturation replay, reconnect, or restart).
     unacked: VecDeque<Held>,
     /// Delivery ids consumed this session, as a low-water mark plus the
     /// above-mark outstanding set: ids are minted densely from 1 per
@@ -1119,26 +1121,19 @@ where
                     // behind everything else. Past MAX_HELD_RETRIES the
                     // handover is evicted relay-held instead of staying
                     // pinned: it leaves unacked without joining the seen
-                    // log or the poison cache, and the eviction requests a
-                    // relay replay (the supervisor's saturation episode
-                    // re-drives full history, which re-admits the evicted
-                    // wrap under a fresh id). The watermark still advances
-                    // past the evicted id (see forget_held), so eviction
-                    // cannot pin later settlements in outstanding.
+                    // log or the poison cache. Eviction requests no replay
+                    // by itself — unhealable mail must cost no
+                    // steady-state work — so an evicted wrap comes back
+                    // only through a replay the engine requests when it
+                    // installs an epoch key that may open it (or through
+                    // an unrelated saturation replay, reconnect, or
+                    // restart). The watermark still advances past the
+                    // evicted id (see forget_held), so eviction cannot
+                    // pin later settlements in outstanding.
                     Disposition::Retry => {
                         let retries = self.unacked[pos].retries.saturating_add(1);
                         if retries >= MAX_HELD_RETRIES {
                             self.forget_held(pos, id);
-                            // A live subscription never re-sends an event it
-                            // already delivered, so an evicted wrap needs a
-                            // replay to come back. Reuse the saturation
-                            // replay flag (documented as replay-due, not
-                            // strictly channel-full): the next due tick
-                            // replays, paced by the episode cooldown, and a
-                            // trigger while an episode runs coalesces into
-                            // it — the in-flight REQ replays everything the
-                            // relay retains, including this wrap.
-                            self.health.saturated.store(true, Ordering::Relaxed);
                         } else {
                             self.unacked[pos].retries = retries;
                         }
@@ -1166,6 +1161,19 @@ where
             .relay_recovery_attempts
             .load(Ordering::Relaxed)
             .saturating_add(self.health.stream_recovery_attempts.load(Ordering::Relaxed))
+    }
+
+    /// Heal-signal replay: the engine installed an epoch key that may
+    /// open evicted unknown-epoch mail, so request one relay-history
+    /// replay. A live subscription never re-sends an event it already
+    /// delivered, and eviction deliberately requests nothing by
+    /// itself — without this signal an evicted wrap would wait for an
+    /// unrelated resubscribe, reconnect, or restart that may never
+    /// come. The supervisor paces replays by the episode cooldown;
+    /// a trigger while an episode runs is preserved for the next due
+    /// tick (see `replay_claim`).
+    fn request_replay(&mut self) {
+        self.health.saturated.store(true, Ordering::Relaxed);
     }
 
     /// The trait's bounded backstop, wired to the inherent task

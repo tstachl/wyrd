@@ -151,12 +151,14 @@ fn evicted_unknown_epoch_heals_through_live_replay_after_key_lands() {
             .is_none(),
         "keyless announcement not recorded before its epoch lands"
     );
+    // Small traffic, channel never full, eviction requests no replay:
+    // no replay episode fires before the heal below.
+    assert_eq!(recipient_mailbox.health().saturation_recoveries, 0);
 
     // Drain past the retry budget: the parked handover evicts
-    // relay-held and the watermark advances past it. The eviction
-    // requests a live replay, which may re-admit the wrap before this
-    // loop ends — either order converges below, so loop a fixed count
-    // past the budget instead of waiting for a transient empty.
+    // relay-held and the watermark advances past it. Eviction requests
+    // no replay, so the wrap stays gone until the heal below — loop a
+    // fixed count past the budget instead of waiting on a transient.
     for _ in 0..MAX_HELD_RETRIES + 20 {
         let _ = recipient.drain(&mut recipient_mailbox).unwrap();
     }
@@ -173,10 +175,10 @@ fn evicted_unknown_epoch_heals_through_live_replay_after_key_lands() {
         "evicted announcement still not recorded before the heal"
     );
 
-    // Heal: publishing the withheld admission converges the new epoch.
-    // The evicted wrap comes back through the eviction-requested live
-    // replay (or a re-admission already did) and opens now the key is
-    // held — loop until recorded, covering both arrival orders.
+    // Heal: publishing the withheld admission converges the new epoch
+    // and installs its key, which requests one replay; the evicted wrap
+    // comes back through that key-install replay and opens now the key
+    // is held — loop until recorded.
     let sent = owner
         .deliver_pending(&mut owner_mailbox, &mut PublishBudget::unbounded())
         .unwrap();
@@ -194,10 +196,14 @@ fn evicted_unknown_epoch_heals_through_live_replay_after_key_lands() {
         }
         assert!(
             start.elapsed() < DELIVERY_TIMEOUT,
-            "evicted announcement heals through the live replay after its epoch lands"
+            "evicted announcement heals through the key-install replay after its epoch lands"
         );
         std::thread::sleep(Duration::from_millis(50));
     }
+    assert!(
+        recipient_mailbox.health().saturation_recoveries >= 1,
+        "the key install requests the replay that brings the wrap back"
+    );
     assert_eq!(recipient.pending_count(), 0, "nothing held after the heal");
 
     drop(recipient_mailbox);

@@ -263,11 +263,22 @@ pub trait Mailbox {
     /// if any. The handover does NOT consume the envelope: it stays
     /// available for redelivery until settled with [`Disposition::Ack`]
     /// or [`Disposition::Poison`] — except that a `Retry`-retained
-    /// handover survives only an implementation-defined retry budget
-    /// (the live mailbox evicts past 100 `Retry` settlements): the
-    /// evicted envelope is relay-held and a later replay re-admits it
-    /// under a fresh id, so redelivery is fresh-id, not stable-id, past
-    /// the budget.
+    /// handover survives only an implementation-defined retry budget:
+    /// past it the handover is evicted relay-held, and a later replay
+    /// re-admits it under a fresh id, so redelivery is fresh-id, not
+    /// stable-id, past the budget. The engine requests that replay
+    /// when it installs an epoch key that may open the evicted mail
+    /// (see `request_replay`) — eviction alone never replays, so
+    /// unhealable mail costs no steady-state work.
+    /// A later `recv` MAY re-offer an unsettled delivery, always under
+    /// the same id while it stays held; the drain loop offers each id once per pass, so a
+    /// pass always terminates. Ids are stable across re-offers and
+    /// unique per envelope while the handover stays held: a cursor derived from queue position (which
+    /// shifts when predecessors are acked) violates this — derive
+    /// cursors from content or a monotonic counter instead. Past the
+    /// retry budget the same envelope may return under a fresh id —
+    /// engines already dedupe the inner message id from durable facts,
+    /// so the envelope layer makes no stronger promise.
     /// A later `recv` MAY re-offer an unsettled delivery, always under
     /// the same id while it stays held; the drain loop offers each id once per pass, so a
     /// pass always terminates. Ids must be stable across re-offers and
@@ -297,13 +308,25 @@ pub trait Mailbox {
     /// relay may discard the envelope, but nothing is recorded
     /// durably), `Retry` retains it for redelivery up to the
     /// implementation's retry budget, past which the handover is
-    /// evicted relay-held and a later replay re-admits it under a fresh
-    /// id. Consumption is
+    /// evicted relay-held (see `recv` for the fresh-id redelivery and
+    /// the replay trigger). Consumption is
     /// durable but not eternal under bounded retention — see `recv`.
     /// Settling is idempotent — a repeated settle of any kind is a
     /// no-op — and dropping a [`Delivery`] without settling is an
     /// implicit `Retry`.
     fn settle(&mut self, id: DeliveryId, disposition: Disposition) -> Result<(), MailboxError>;
+
+    /// Request a relay-history replay: the next due supervisor tick
+    /// re-drives retained history, re-admitting evicted wraps under
+    /// fresh ids. The engine calls this when it installs an epoch key
+    /// that may open evicted mail — the only heal signal, so replays
+    /// track potential heals instead of evictions, and unhealable mail
+    /// costs no steady-state work. Defaults to a no-op — in-memory
+    /// fakes own no relay history, and stay compiling without an
+    /// opinion — so every real transport MUST override this: a silent
+    /// default on a live mailbox would strand evicted mail past its
+    /// heal.
+    fn request_replay(&mut self) {}
 
     /// Monotonic count of transport reconnects this mailbox has
     /// observed: relay re-attachments, stream re-drives, saturation
@@ -360,7 +383,8 @@ pub struct MailboxSnapshot {
     pub connected_relays: usize,
     /// Relays registered at construction.
     pub total_relays: usize,
-    /// Saturation replays issued this session, lifetime total.
+    /// Replay episodes issued this session (broadcast-lag recovery or
+    /// key-install re-drive), lifetime total.
     pub saturation_recoveries: u64,
     /// Supervisor tick-loop iterations, lifetime total.
     pub supervisor_ticks: u64,
@@ -403,7 +427,9 @@ impl MailboxSnapshot {
 }
 
 /// Mailbox-scoped identity for one handover: stable across re-offers
-/// of the same envelope, unique per envelope. Opaque to the engine,
+/// of the same envelope while the handover stays held, unique per
+/// held envelope. Past the retry budget the same envelope may return
+/// under a fresh id. Opaque to the engine,
 /// which only compares ids within a pass; minted by mailbox
 /// implementations (a relay pool uses cursor ids, the fake a counter).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -411,7 +437,9 @@ pub struct DeliveryId(u64);
 
 impl DeliveryId {
     /// Mint an id (mailbox implementations only; must be stable across
-    /// re-offers of one envelope and unique per envelope).
+    /// re-offers of one envelope while it stays held and unique per
+    /// held envelope; past the retry budget the same envelope may be
+    /// re-admitted under a fresh id).
     pub fn new(value: u64) -> Self {
         DeliveryId(value)
     }
@@ -434,12 +462,14 @@ pub struct Delivery {
 
 impl Delivery {
     /// Hand over `envelope` under `id` (mailbox implementations only;
-    /// ids must be stable across re-offers and unique per envelope).
+    /// ids must be stable across re-offers while the handover stays
+    /// held and unique per held envelope; past the retry budget the
+    /// same envelope may return under a fresh id).
     pub fn new(id: DeliveryId, envelope: MailboxEnvelope) -> Self {
         Delivery { id, envelope }
     }
 
-    /// This handover's stable id.
+    /// This handover's id: stable across re-offers while held.
     pub fn id(&self) -> DeliveryId {
         self.id
     }
@@ -477,8 +507,11 @@ pub enum Disposition {
     /// per-delivery cost (one reject, no growth). Safe to repeat for
     /// the same reason as `Ack`.
     Poison,
-    /// Leave for redelivery: the engine holds nothing for this
-    /// envelope, so the relay MUST retain it.
+    /// Leave for redelivery, up to the implementation's retry budget:
+    /// the engine holds nothing for this envelope, so the relay MUST
+    /// retain it. Past the budget the mailbox evicts the handover
+    /// relay-held; the engine requests a replay when it installs an
+    /// epoch key that may open it (see `request_replay`).
     Retry,
 }
 
