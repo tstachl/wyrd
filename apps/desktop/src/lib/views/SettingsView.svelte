@@ -11,13 +11,14 @@ file; application of the values is the running owner's business. -->
   import ObservedNote from "./ObservedNote.svelte";
 
   interface Props {
+    driveLabel: string;
     snapshot: Stamped<DriveSettingsState> | null;
     pending: boolean;
     transportNotice: string | null;
     onRefresh: () => void;
   }
 
-  let { snapshot, pending, transportNotice, onRefresh }: Props = $props();
+  let { driveLabel, snapshot, pending, transportNotice, onRefresh }: Props = $props();
 </script>
 
 <div class="flex items-center justify-between">
@@ -26,6 +27,7 @@ file; application of the values is the running owner's business. -->
     {pending ? "Reading…" : "Refresh"}
   </Button>
 </div>
+<p class="mt-1 text-xs text-smoke">{driveLabel}</p>
 
 {#if transportNotice !== null}
   <p class="mt-2 text-sm" role="alert">{transportNotice}</p>

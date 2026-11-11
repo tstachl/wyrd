@@ -1,16 +1,28 @@
 //! The Wyrd desktop application: a non-owning Tauri client of the
-//! drive-owner interface.
+//! drive-owner interface, one window over many independently managed
+//! drives.
 //!
-//! Startup takes exactly one argument: the drive directory whose
-//! owner socket this instance serves (`--drive-dir <DIR>`). No
-//! environment variables, no config-file search, no discovery
-//! service — the installer provisions the owner and launches this
-//! binary against its drive, and the drive-owner bootstrap contract
-//! (`docs/design/desktop-shell.md`) owns everything fancier. A
-//! missing or unreachable owner is fatal at startup (exit 2 with
-//! the reason on stderr): an owner that goes down *after* startup
-//! shows the UI's unavailable view instead, and coming back
-//! resumes without restart.
+//! Startup takes zero or one argument: an optional drive directory
+//! to pre-connect (`--drive-dir <DIR>`). No environment variables,
+//! no config-file search, no discovery service — the installer
+//! provisions the owner and may launch this binary against its
+//! drive, and the drive-owner bootstrap contract
+//! (`docs/design/desktop-shell.md`) owns everything fancier. The
+//! shell keeps no implicit active drive: the argument only warms
+//! the connection map, and the frontend's selection is presentation
+//! state, never an authorization boundary.
+//!
+//! Nothing about startup is fatal except the argument itself: a
+//! missing argument, an unknown drive directory, or an unreachable
+//! owner starts the empty shell anyway. A malformed `--drive-dir`
+//! (relative, `..`-carrying, or control-byte spelling) exits 2 with
+//! the drive-identity rule reason — it can never key the connection
+//! map. The lifecycle view then shows the registry (driveless
+//! first-run where nothing is registered yet) with per-drive
+//! reachability, and each stopped owner reads as its own
+//! unavailable state. An owner that goes down *after* startup
+//! shows the same per-drive unavailable view instead, and coming
+//! back resumes without restart.
 //!
 //! Shutdown drains outstanding work first. Closing the window
 //! prevents the close, waits until every dispatched exchange has
@@ -45,16 +57,31 @@ const QUIT_DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
 /// when the last answer lands, sparse enough to stay out of the way.
 const QUIT_DRAIN_POLL: Duration = Duration::from_millis(50);
 
-/// Usage: `wyrd-desktop --drive-dir <DIR>`. Hand-rolled argv: the
+/// Usage: `wyrd-desktop [--drive-dir <DIR>]`. Hand-rolled argv: the
 /// layer gate reserves this crate's third-party edges for the Tauri
-/// toolkit, serde, and error plumbing — no CLI parser.
-fn drive_dir_from_argv() -> Result<PathBuf, String> {
-    let mut args = std::env::args().skip(1);
-    let mut drive_dir: Option<PathBuf> = None;
+/// toolkit, serde, and error plumbing — no CLI parser. The argument
+/// is optional: without it the shell starts with an empty connection
+/// map and the lifecycle view carries first-run.
+fn drive_dir_from_argv() -> Result<Option<PathBuf>, String> {
+    parse_drive_dir_arg(std::env::args().skip(1))
+}
+
+/// Pure half of [`drive_dir_from_argv`]: parse and validate one
+/// optional `--drive-dir` from explicit tokens, so the argv call
+/// site pins like the registry call site. Validation joins the
+/// shared drive-identity inventory before any socket is touched: a
+/// relative or `..`-carrying spelling exits 2 with the rule reason
+/// instead of keying a map entry no command could address.
+fn parse_drive_dir_arg<I>(args: I) -> Result<Option<PathBuf>, String>
+where
+    I: IntoIterator<Item = String>,
+{
+    let mut raw: Option<String> = None;
+    let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         if arg == "--drive-dir" {
             match args.next() {
-                Some(dir) if drive_dir.is_none() => drive_dir = Some(PathBuf::from(dir)),
+                Some(dir) if raw.is_none() => raw = Some(dir),
                 Some(_) => return Err("duplicate --drive-dir".to_string()),
                 None => return Err("--drive-dir needs a directory".to_string()),
             }
@@ -62,7 +89,10 @@ fn drive_dir_from_argv() -> Result<PathBuf, String> {
             return Err(format!("unexpected argument: {arg}"));
         }
     }
-    drive_dir.ok_or_else(|| "usage: wyrd-desktop --drive-dir <DIR>".to_string())
+    match raw {
+        None => Ok(None),
+        Some(dir) => wyrd_desktop::validate_drive_path(&dir, "drive_dir").map(Some),
+    }
 }
 
 fn main() {
@@ -73,19 +103,29 @@ fn main() {
             std::process::exit(2);
         }
     };
-    let backend = match DesktopBackend::connect(&drive_dir) {
-        Ok(backend) => backend,
-        Err(error) => {
-            eprintln!("wyrd-desktop: {error}");
-            eprintln!("wyrd-desktop: start the owner for this drive, then relaunch");
-            std::process::exit(2);
+    let state = AppState::new();
+    // Best-effort pre-connect: where the owner answers, the map
+    // starts warm; where it does not, startup still succeeds and
+    // the lifecycle view reports the drive unavailable per-drive.
+    // The insert re-validates as the map's structural chokepoint;
+    // argv already validated, so its refusal here is unreachable —
+    // loud, never silent.
+    if let Some(dir) = drive_dir {
+        match DesktopBackend::connect(&dir) {
+            Ok(backend) => {
+                if let Err(reason) = state.insert(backend) {
+                    eprintln!("wyrd-desktop: pre-connect {dir:?} refused: {reason}");
+                    std::process::exit(2);
+                }
+            }
+            Err(error) => eprintln!("wyrd-desktop: pre-connect {dir:?} failed: {error}"),
         }
-    };
+    }
     // One drain per process: a second close request while draining
     // is already covered by the spawned task, never a second drain.
     static DRAINING: AtomicBool = AtomicBool::new(false);
     tauri::Builder::default()
-        .manage(AppState::new(backend))
+        .manage(state)
         .manage(FlightTracker::new())
         .invoke_handler(invoke_handler())
         .on_window_event(|window, event| {
@@ -116,4 +156,54 @@ fn main() {
         })
         .run(tauri::generate_context!())
         .expect("wyrd-desktop: failed to run the Tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The argv call site pins like the registry call site: a valid
+    /// absolute path parses, and relative, `..`, control-byte,
+    /// duplicate, missing-value, and unexpected spellings refuse
+    /// with their reasons — before any socket is touched.
+    fn args(words: Vec<&str>) -> Vec<String> {
+        words.into_iter().map(str::to_owned).collect()
+    }
+
+    #[test]
+    fn argv_parsing_enforces_the_drive_identity_rule() {
+        assert_eq!(
+            parse_drive_dir_arg(args(vec![])).unwrap(),
+            None,
+            "no argument starts empty"
+        );
+        assert_eq!(
+            parse_drive_dir_arg(args(vec!["--drive-dir", "/drives/alpha"])).unwrap(),
+            Some(PathBuf::from("/drives/alpha")),
+            "a valid absolute path parses"
+        );
+        for bad in [
+            vec!["--drive-dir", "drives/alpha"],
+            vec!["--drive-dir", "/drives/a/../b"],
+            vec!["--drive-dir", "/drives/al\x00pha"],
+        ] {
+            let label = format!("{bad:?}");
+            assert!(
+                parse_drive_dir_arg(args(bad)).is_err(),
+                "argv refuses {label}"
+            );
+        }
+        assert!(
+            parse_drive_dir_arg(args(vec!["--drive-dir", "/a", "--drive-dir", "/b"])).is_err(),
+            "a duplicate flag refuses"
+        );
+        assert!(
+            parse_drive_dir_arg(args(vec!["--drive-dir"])).is_err(),
+            "a missing value refuses"
+        );
+        assert!(
+            parse_drive_dir_arg(args(vec!["--other"])).is_err(),
+            "an unexpected argument refuses"
+        );
+    }
 }

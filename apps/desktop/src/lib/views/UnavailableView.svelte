@@ -7,15 +7,17 @@ until re-read through the owner. -->
   import Button from "$lib/components/ui/button.svelte";
 
   interface Props {
+    driveLabel: string;
     detail: string | null;
     pending: boolean;
     onRetry: () => void;
   }
 
-  let { detail, pending, onRetry }: Props = $props();
+  let { driveLabel, detail, pending, onRetry }: Props = $props();
 </script>
 
 <h1 class="text-2xl font-semibold tracking-tight">Owner unavailable</h1>
+<p class="mt-1 text-xs text-smoke">{driveLabel} — other drives are unaffected.</p>
 <p class="mt-2 text-sm text-smoke">
   The drive owner is not answering. This says nothing about the drive's contents — the shell does not
   open the store itself, so there is nothing stale or empty to show, only the absence of an answer.

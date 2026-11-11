@@ -86,11 +86,9 @@ pub enum DriveAvailability {
 }
 
 /// One registered drive for the lifecycle view: validated facts
-/// plus the live verdict. `current` marks the drive this shell
-/// instance serves (`--drive-dir`): the frontend never learns its
-/// own path except through this list, and entries only ever match
-/// by exact path — a symlinked spelling that does not match marks
-/// nothing current rather than guessing.
+/// plus the live verdict. `mode` is a display string end to end —
+/// the shell shows the registry's service mode and never interprets
+/// it. Drives match by exact path only.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct DriveView {
     pub name: String,
@@ -98,7 +96,6 @@ pub struct DriveView {
     pub relays: Vec<String>,
     pub service: String,
     pub mode: String,
-    pub current: bool,
     pub availability: DriveAvailability,
 }
 
@@ -147,11 +144,6 @@ fn valid_token(value: &str) -> bool {
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
 
-fn has_dotdot(path: &Path) -> bool {
-    path.components()
-        .any(|component| matches!(component, std::path::Component::ParentDir))
-}
-
 /// The daemon's entry rules, mirrored: the shell must agree with
 /// the writer about which entries are valid, or the lifecycle view
 /// would show drives the owner tooling refuses (and vice versa).
@@ -180,18 +172,13 @@ fn validate_entry(key: &str, entry: &RegistryEntryParse) -> Result<(), String> {
             entry.service
         ));
     }
-    if !entry.drive_dir.is_absolute() {
-        return Err(format!(
-            "drive_dir {} must be absolute",
-            entry.drive_dir.display()
-        ));
-    }
-    if has_dotdot(&entry.drive_dir) {
-        return Err(format!(
-            "drive_dir {} must not contain ..",
-            entry.drive_dir.display()
-        ));
-    }
+    // One rule for every drive path in the crate: the shared
+    // command-boundary validator, so the registry reader can never
+    // list a spelling the connection map refuses (or vice versa).
+    // The lossy render feeds the validator exactly like the old
+    // control-byte check did; non-UTF8 spellings were never
+    // loadable paths here.
+    super::validate_drive_path(&entry.drive_dir.to_string_lossy(), "drive_dir").map(|_| ())?;
     if entry.mode != "vault" {
         return Err(
             "unknown service mode: registry-managed mount mode travels with the installer follow-up"
@@ -207,17 +194,6 @@ fn validate_entry(key: &str, entry: &RegistryEntryParse) -> Result<(), String> {
         return Err(
             "relays must be non-empty URLs without whitespace or control bytes".to_string(),
         );
-    }
-    if entry
-        .drive_dir
-        .to_string_lossy()
-        .bytes()
-        .any(|byte| byte < 0x20 || byte == 0x7f)
-    {
-        return Err(format!(
-            "drive_dir {} must not contain control characters",
-            entry.drive_dir.display()
-        ));
     }
     Ok(())
 }
@@ -257,11 +233,10 @@ fn probe_drive(drive_dir: &Path) -> DriveAvailability {
     availability_of(client.liveness())
 }
 
-/// Read the registry at an explicit path, probe every valid entry,
-/// and mark the drive this shell serves. The explicit path and the
-/// current drive exist for tests; production passes the default
-/// derivation and the backend's drive directory.
-pub fn list_drives_at(registry_path: &Path, current_drive: &Path) -> RegistryState {
+/// Read the registry at an explicit path and probe every valid
+/// entry. The explicit path exists for tests; production passes the
+/// default derivation.
+pub fn list_drives_at(registry_path: &Path) -> RegistryState {
     let bytes = match std::fs::read(registry_path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -309,17 +284,31 @@ pub fn list_drives_at(registry_path: &Path, current_drive: &Path) -> RegistrySta
     }
     let mut drives = Vec::new();
     let mut skipped = Vec::new();
+    // One connection per drive needs one entry per directory: two
+    // names for one drive_dir would key two map entries (and two
+    // list rows under one key) for the same owner socket. The first
+    // name in registry order wins; later duplicates skip loudly
+    // with their reason, exactly like invalid entries.
+    let mut seen_dirs = std::collections::HashSet::new();
     for (key, entry) in file.drives {
         match validate_entry(&key, &entry) {
-            Ok(()) => drives.push(DriveView {
-                name: entry.name.clone(),
-                drive_dir: entry.drive_dir.to_string_lossy().into_owned(),
-                relays: entry.relays.clone(),
-                service: entry.service.clone(),
-                mode: entry.mode.clone(),
-                current: entry.drive_dir == current_drive,
-                availability: probe_drive(&entry.drive_dir),
-            }),
+            Ok(()) => {
+                if !seen_dirs.insert(entry.drive_dir.clone()) {
+                    skipped.push(format!(
+                        "entry {key:?}: duplicate drive_dir {} (first name wins)",
+                        entry.drive_dir.display()
+                    ));
+                    continue;
+                }
+                drives.push(DriveView {
+                    name: entry.name.clone(),
+                    drive_dir: entry.drive_dir.to_string_lossy().into_owned(),
+                    relays: entry.relays.clone(),
+                    service: entry.service.clone(),
+                    mode: entry.mode.clone(),
+                    availability: probe_drive(&entry.drive_dir),
+                })
+            }
             Err(reason) => skipped.push(format!("entry {key:?}: {reason}")),
         }
     }
@@ -330,10 +319,9 @@ pub fn list_drives_at(registry_path: &Path, current_drive: &Path) -> RegistrySta
     }
 }
 
-/// Read the default registry, probe every valid entry, and mark
-/// the drive this shell serves.
-pub fn list_drives_for(current_drive: &Path) -> RegistryState {
-    list_drives_at(&default_registry_path(), current_drive)
+/// Read the default registry and probe every valid entry.
+pub fn list_drives() -> RegistryState {
+    list_drives_at(&default_registry_path())
 }
 
 #[cfg(test)]
@@ -385,7 +373,7 @@ mod tests {
             "missing.json"
         ));
         let _ = std::fs::remove_file(&path);
-        let state = list_drives_at(&path, Path::new("/drives/nowhere"));
+        let state = list_drives_at(&path);
         assert_eq!(state.status, RegistryStatus::Nofile);
         assert!(state.drives.is_empty());
         assert!(state.skipped.is_empty());
@@ -400,7 +388,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let newer = dir.join("newer.json");
         std::fs::write(&newer, r#"{"version": 2, "drives": {}}"#).unwrap();
-        match list_drives_at(&newer, Path::new("/drives/nowhere")).status {
+        match list_drives_at(&newer).status {
             RegistryStatus::Unreadable { reason } => {
                 assert!(reason.contains("version 2"), "reason: {reason}");
                 assert!(reason.contains("reads 1"), "reason: {reason}");
@@ -411,7 +399,7 @@ mod tests {
         std::fs::write(&broken, r#"{"version": 1, "drives": {"#).unwrap();
         assert!(
             matches!(
-                list_drives_at(&broken, Path::new("/drives/nowhere")).status,
+                list_drives_at(&broken).status,
                 RegistryStatus::Unreadable { .. }
             ),
             "a malformed registry is unreadable, never guessed"
@@ -454,7 +442,7 @@ mod tests {
             .to_string(),
         )
         .unwrap();
-        let state = list_drives_at(&path, Path::new("/drives/nowhere"));
+        let state = list_drives_at(&path);
         assert_eq!(state.status, RegistryStatus::Ready);
         assert_eq!(state.drives.len(), 1, "only the valid entry verifies");
         assert_eq!(state.drives[0].name, "good");
@@ -471,6 +459,106 @@ mod tests {
             state.skipped[0].contains("does not match"),
             "skip reason: {}",
             state.skipped[0]
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Two names for one directory collapse to one drive: the first
+    /// name wins and the duplicate skips loudly. Without this the
+    /// frontend's drive-dir-keyed lists would render two rows under
+    /// one key, and the backend would hold two connections for one
+    /// socket.
+    #[test]
+    fn duplicate_drive_dirs_skip_loudly() {
+        let dir =
+            std::env::temp_dir().join(format!("wyrd-desktop-reg-{}-dupes", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let drive = dir.join("drive");
+        std::fs::create_dir_all(&drive).unwrap();
+        let path = dir.join("drives.json");
+        std::fs::write(
+            &path,
+            serde_json::json!({
+                "version": 1,
+                "drives": {
+                    "alpha": {
+                        "name": "alpha",
+                        "drive_dir": drive.to_string_lossy(),
+                        "relays": [],
+                        "service": "drive-alpha",
+                        "mode": "vault",
+                    },
+                    "beta": {
+                        "name": "beta",
+                        "drive_dir": drive.to_string_lossy(),
+                        "relays": [],
+                        "service": "drive-beta",
+                        "mode": "vault",
+                    },
+                },
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let state = list_drives_at(&path);
+        assert_eq!(state.status, RegistryStatus::Ready);
+        assert_eq!(state.drives.len(), 1, "one directory lists one drive");
+        assert_eq!(state.drives[0].name, "alpha", "the first name wins");
+        assert_eq!(state.skipped.len(), 1, "the duplicate skips loudly");
+        assert!(
+            state.skipped[0].contains("duplicate drive_dir"),
+            "skip reason: {}",
+            state.skipped[0]
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Relative and `..`-carrying directories skip with their rule
+    /// reasons: they pin the registry call site of the shared
+    /// drive-identity rule, so the lifecycle view can never list a
+    /// spelling the connection map refuses.
+    #[test]
+    fn non_canonical_drive_dirs_skip_loudly() {
+        let dir =
+            std::env::temp_dir().join(format!("wyrd-desktop-reg-{}-noncanon", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("drives.json");
+        std::fs::write(
+            &path,
+            serde_json::json!({
+                "version": 1,
+                "drives": {
+                    "relative": {
+                        "name": "relative",
+                        "drive_dir": "drives/relative",
+                        "relays": [],
+                        "service": "drive-relative",
+                        "mode": "vault",
+                    },
+                    "dotdot": {
+                        "name": "dotdot",
+                        "drive_dir": "/drives/a/../b",
+                        "relays": [],
+                        "service": "drive-dotdot",
+                        "mode": "vault",
+                    },
+                },
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let state = list_drives_at(&path);
+        assert_eq!(state.status, RegistryStatus::Ready);
+        assert!(
+            state.drives.is_empty(),
+            "no non-canonical spelling lists: {:?}",
+            state.drives
+        );
+        assert_eq!(state.skipped.len(), 2, "both entries skip loudly");
+        assert!(
+            state.skipped.iter().all(|reason| reason.contains("must")),
+            "skip reasons name the rule: {:?}",
+            state.skipped
         );
         std::fs::remove_dir_all(&dir).unwrap();
     }

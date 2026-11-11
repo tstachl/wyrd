@@ -92,10 +92,12 @@ impl From<ClientError> for BackendError {
 /// under exclusive access. Concurrent Tauri commands serialize on
 /// the mutex; when one request poisons the connection, every
 /// operation after it resolves `Unconfirmed` without touching the
-/// socket, and [`DesktopBackend::reconnect`] mints a new instance.
-/// Outstanding operations at reconnect time resolve `Unconfirmed` —
+/// socket, and recovery mints a new instance. Outstanding
+/// operations at reconnect time resolve `Unconfirmed` —
 /// reconnection never replays a mutation and never converts an
-/// unconfirmed outcome into success.
+/// unconfirmed outcome into success. Production recovery goes
+/// through the connection map ([`crate::AppState::reconnect_drive`]);
+/// the method below is the single-instance primitive it rests on.
 #[derive(Debug)]
 pub struct DesktopBackend {
     drive_dir: PathBuf,
@@ -116,7 +118,11 @@ impl DesktopBackend {
     }
 
     /// Drop the current connection and mint a new instance against
-    /// the same drive. Recovery is a new connection, never a resumed
+    /// the same drive. The single-instance primitive under the
+    /// connection map's per-drive recovery: the map resolves its
+    /// drive and replaces the whole backend instead of calling
+    /// this, so one drive's recovery never touches another drive's
+    /// connection. Recovery is a new connection, never a resumed
     /// stream: outstanding operations resolve `Unconfirmed`, and the
     /// new instance replays nothing. A failed reconnect keeps the old
     /// (poisoned) instance in place and reports `Unavailable` — the

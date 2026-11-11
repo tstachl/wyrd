@@ -1,5 +1,6 @@
 //! The Tauri command surface: one command per backend operation,
-//! forwarding through the single [`DesktopBackend`].
+//! forwarding through one [`DesktopBackend`] per drive, keyed by
+//! explicit drive identity.
 //!
 //! Discipline, inherited from the backend and the interface
 //! contract:
@@ -41,7 +42,17 @@ use super::{AppState, BackendError, DesktopBackend, FlightTracker};
 /// Run one backend exchange on the blocking pool and report a dead
 /// worker as [`BackendError::Unconfirmed`]: after dispatch the
 /// outcome is unknown, so success and refusal are both dishonest.
-async fn exchange<T, F, R>(app: AppHandle<R>, op: &'static str, call: F) -> Result<T, BackendError>
+///
+/// The drive's connection is cloned out of the map under a short
+/// lock, then the exchange runs without holding the map: one
+/// drive's poisoned connection or slow owner never blocks another
+/// drive's commands.
+async fn exchange<T, F, R>(
+    app: AppHandle<R>,
+    op: &'static str,
+    drive_dir: String,
+    call: F,
+) -> Result<T, BackendError>
 where
     F: FnOnce(&DesktopBackend) -> Result<T, BackendError> + Send + 'static,
     T: Send + 'static,
@@ -52,12 +63,9 @@ where
     // count, so the app handle still moves into the blocking task.
     let _flight = app.state::<FlightTracker>().enter();
     tauri::async_runtime::spawn_blocking(move || {
-        let backend = app.state::<AppState>();
-        // Reclaim a poisoned guard like the backend itself does
-        // (`DesktopBackend::with_client`): a panic while held must
-        // not brick later calls.
-        let guard = backend.lock().unwrap_or_else(|poison| poison.into_inner());
-        call(&guard)
+        let state = app.state::<AppState>();
+        let backend = state.connection_for(&drive_dir)?;
+        call(&backend)
     })
     .await
     .unwrap_or_else(|join| Err(worker_failed(op, join)))
@@ -78,36 +86,36 @@ fn worker_failed(op: &'static str, join: impl std::fmt::Display) -> BackendError
 /// the owner taxonomy: these queries read local files and probe
 /// sockets but forward no owner operation, so a dead worker is a
 /// shell bug and surfaces as an explicit unreadable state inside the
-/// payload — never success, never the taxonomy. The backend lock is
-/// held for the whole call, serializing with owner exchanges exactly
-/// like every command: one slow probe delays others, bounded by the
+/// payload — never success, never the taxonomy. Local queries hold
+/// no owner connection and take no map lock: one slow registry
+/// probe never wedges another drive's exchanges, bounded by the
 /// probe timeout, and the count covers dispatch-queue time too.
 async fn query<T, F, B, R>(app: AppHandle<R>, op: &'static str, build_unreadable: B, call: F) -> T
 where
-    F: FnOnce(&DesktopBackend) -> T + Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
     B: FnOnce(String) -> T + Send + 'static,
     T: Send + 'static,
     R: Runtime,
 {
     let _flight = app.state::<FlightTracker>().enter();
-    tauri::async_runtime::spawn_blocking(move || {
-        let backend = app.state::<AppState>();
-        // Reclaim a poisoned guard like the backend itself does.
-        let guard = backend.lock().unwrap_or_else(|poison| poison.into_inner());
-        call(&guard)
-    })
-    .await
-    .unwrap_or_else(|join| build_unreadable(format!("ipc worker failed for {op}: {join}")))
+    tauri::async_runtime::spawn_blocking(call)
+        .await
+        .unwrap_or_else(|join| build_unreadable(format!("ipc worker failed for {op}: {join}")))
 }
 
 /// Look up one path: the node plus the serving generation and
-/// durable revision it was served from.
+/// durable revision it was served from. `drive_dir` names the drive
+/// explicitly — the backend keeps no implicit active drive.
 #[tauri::command]
 pub async fn lookup<R: Runtime>(
     app: AppHandle<R>,
+    drive_dir: String,
     path: String,
 ) -> Result<(WireNode, u64, u64), BackendError> {
-    exchange(app, "lookup", move |backend| backend.lookup(&path)).await
+    exchange(app, "lookup", drive_dir, move |backend| {
+        backend.lookup(&path)
+    })
+    .await
 }
 
 /// Stat one path: attributes plus serving generation and durable
@@ -115,9 +123,10 @@ pub async fn lookup<R: Runtime>(
 #[tauri::command]
 pub async fn stat<R: Runtime>(
     app: AppHandle<R>,
+    drive_dir: String,
     path: String,
 ) -> Result<(WireAttr, u64, u64), BackendError> {
-    exchange(app, "stat", move |backend| backend.stat(&path)).await
+    exchange(app, "stat", drive_dir, move |backend| backend.stat(&path)).await
 }
 
 /// List one directory: entries plus serving generation and durable
@@ -125,9 +134,13 @@ pub async fn stat<R: Runtime>(
 #[tauri::command]
 pub async fn readdir<R: Runtime>(
     app: AppHandle<R>,
+    drive_dir: String,
     path: String,
 ) -> Result<(Vec<WireDirEntry>, u64, u64), BackendError> {
-    exchange(app, "readdir", move |backend| backend.readdir(&path)).await
+    exchange(app, "readdir", drive_dir, move |backend| {
+        backend.readdir(&path)
+    })
+    .await
 }
 
 /// Read one whole file, plus serving generation and durable
@@ -135,29 +148,45 @@ pub async fn readdir<R: Runtime>(
 #[tauri::command]
 pub async fn read<R: Runtime>(
     app: AppHandle<R>,
+    drive_dir: String,
     path: String,
 ) -> Result<(Vec<u8>, u64, u64), BackendError> {
-    exchange(app, "read", move |backend| backend.read(&path)).await
+    exchange(app, "read", drive_dir, move |backend| backend.read(&path)).await
 }
 
 /// The owner's durable observation: what a member may observe,
 /// never liveness.
 #[tauri::command]
-pub async fn observe<R: Runtime>(app: AppHandle<R>) -> Result<WireSyncStatus, BackendError> {
-    exchange(app, "observe", move |backend| backend.observe()).await
+pub async fn observe<R: Runtime>(
+    app: AppHandle<R>,
+    drive_dir: String,
+) -> Result<WireSyncStatus, BackendError> {
+    exchange(app, "observe", drive_dir, move |backend| backend.observe()).await
 }
 
 /// Transport health plus the last pass report, pinned to the pass
 /// count. A separate object from the durable observation.
 #[tauri::command]
-pub async fn liveness<R: Runtime>(app: AppHandle<R>) -> Result<WireLiveness, BackendError> {
-    exchange(app, "liveness", move |backend| backend.liveness()).await
+pub async fn liveness<R: Runtime>(
+    app: AppHandle<R>,
+    drive_dir: String,
+) -> Result<WireLiveness, BackendError> {
+    exchange(app, "liveness", drive_dir, move |backend| {
+        backend.liveness()
+    })
+    .await
 }
 
 /// The projection freshness judgment.
 #[tauri::command]
-pub async fn freshness<R: Runtime>(app: AppHandle<R>) -> Result<WireFreshness, BackendError> {
-    exchange(app, "freshness", move |backend| backend.freshness()).await
+pub async fn freshness<R: Runtime>(
+    app: AppHandle<R>,
+    drive_dir: String,
+) -> Result<WireFreshness, BackendError> {
+    exchange(app, "freshness", drive_dir, move |backend| {
+        backend.freshness()
+    })
+    .await
 }
 
 /// Capture the parent-directory incarnation a create must send
@@ -166,9 +195,10 @@ pub async fn freshness<R: Runtime>(app: AppHandle<R>) -> Result<WireFreshness, B
 #[tauri::command]
 pub async fn capture_parent<R: Runtime>(
     app: AppHandle<R>,
+    drive_dir: String,
     path: String,
 ) -> Result<WireParentToken, BackendError> {
-    exchange(app, "capture_parent", move |backend| {
+    exchange(app, "capture_parent", drive_dir, move |backend| {
         backend.capture_parent(&path)
     })
     .await
@@ -179,9 +209,13 @@ pub async fn capture_parent<R: Runtime>(
 #[tauri::command]
 pub async fn submit<R: Runtime>(
     app: AppHandle<R>,
+    drive_dir: String,
     kind: WireMutationKind,
 ) -> Result<WireMutationOutcome, BackendError> {
-    exchange(app, "submit", move |backend| backend.submit(kind)).await
+    exchange(app, "submit", drive_dir, move |backend| {
+        backend.submit(kind)
+    })
+    .await
 }
 
 /// Backend-owned recovery: reconcile a path after an unconfirmed
@@ -190,31 +224,43 @@ pub async fn submit<R: Runtime>(
 #[tauri::command]
 pub async fn reconcile_lookup<R: Runtime>(
     app: AppHandle<R>,
+    drive_dir: String,
     path: String,
 ) -> Result<Option<(WireNode, u64, u64)>, BackendError> {
-    exchange(app, "reconcile_lookup", move |backend| {
+    exchange(app, "reconcile_lookup", drive_dir, move |backend| {
         backend.reconcile_lookup(&path)
     })
     .await
 }
 
-/// Drop the current connection and mint a new instance against the
-/// same drive. The frontend calls this explicitly (the unavailable
-/// view's retry) after an [`BackendError::Unconfirmed`] answer;
-/// nothing calls it automatically, and recovery proves nothing
-/// about the prior operation.
+/// Drop the connection for one drive and mint a new instance
+/// against the same drive — that drive only. The frontend calls
+/// this explicitly (the unavailable view's retry) after an
+/// [`BackendError::Unconfirmed`] answer; nothing calls it
+/// automatically, and recovery proves nothing about the prior
+/// operation. Where no connection exists yet, this establishes one.
 #[tauri::command]
-pub async fn reconnect<R: Runtime>(app: AppHandle<R>) -> Result<(), BackendError> {
-    exchange(app, "reconnect", move |backend| backend.reconnect()).await
+pub async fn reconnect<R: Runtime>(
+    app: AppHandle<R>,
+    drive_dir: String,
+) -> Result<(), BackendError> {
+    let _flight = app.state::<FlightTracker>().enter();
+    let drive = drive_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        state.reconnect_drive(&drive)
+    })
+    .await
+    .unwrap_or_else(|join| Err(worker_failed("reconnect", join)))
 }
 
 /// Every registered drive plus per-drive reachability, verified
 /// this session. A local query, not an owner operation: the answer
 /// is a state struct (never the taxonomy), unreadable states ride
 /// inside the payload, and any other rejection is a transport
-/// failure. The backend lock is held for the whole call, so a
-/// registry with many entries serializes other commands behind the
-/// per-drive probe bound.
+/// failure. It takes no drive identity — it lists every drive — and
+/// holds no owner connection: one slow probe never wedges another
+/// drive's exchanges. The view carries no implicit active drive.
 #[tauri::command]
 pub async fn list_drives<R: Runtime>(app: AppHandle<R>) -> RegistryState {
     query(
@@ -225,22 +271,31 @@ pub async fn list_drives<R: Runtime>(app: AppHandle<R>) -> RegistryState {
             drives: Vec::new(),
             skipped: Vec::new(),
         },
-        |backend| registry::list_drives_for(backend.drive_dir()),
+        registry::list_drives,
     )
     .await
 }
 
-/// This drive's configured bounds, as configured — never defaults,
+/// One drive's configured bounds, as configured — never defaults,
 /// never effective posture. A local query like [`list_drives`]:
 /// unknown states ride inside the payload, and only an explicit
-/// `Configured` carries values.
+/// `Configured` carries values. `drive_dir` selects the section
+/// without touching any owner connection. An invalid drive identity
+/// answers the explicit unreadable state, never the taxonomy and
+/// never a silent resolution against the process directory.
 #[tauri::command]
-pub async fn drive_settings<R: Runtime>(app: AppHandle<R>) -> DriveSettings {
+pub async fn drive_settings<R: Runtime>(app: AppHandle<R>, drive_dir: String) -> DriveSettings {
+    let dir = match super::validate_drive_path(&drive_dir, "drive_dir") {
+        Ok(dir) => dir,
+        Err(reason) => {
+            return DriveSettings::Unreadable { reason };
+        }
+    };
     query(
         app,
         "drive_settings",
         |reason| DriveSettings::Unreadable { reason },
-        |backend| settings_view::drive_settings(backend.drive_dir()),
+        move || settings_view::drive_settings(&dir),
     )
     .await
 }
@@ -406,7 +461,6 @@ mod tests {
             relays: vec!["wss://relay.example".to_string()],
             service: "drive-alpha".to_string(),
             mode: "vault".to_string(),
-            current: true,
             availability: DriveAvailability::Available,
         };
         assert_eq!(
@@ -417,7 +471,6 @@ mod tests {
                 "relays": ["wss://relay.example"],
                 "service": "drive-alpha",
                 "mode": "vault",
-                "current": true,
                 "availability": {"state": "available"},
             })
         );
@@ -439,7 +492,6 @@ mod tests {
                     "relays": ["wss://relay.example"],
                     "service": "drive-alpha",
                     "mode": "vault",
-                    "current": true,
                     "availability": {"state": "available"},
                 }],
                 "skipped": ["entry \"bad\": key \"bad\" does not match entry name \"other\""],
