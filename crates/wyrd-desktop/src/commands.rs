@@ -29,10 +29,11 @@
 //! these, and the per-operation wrappers there land against this
 //! list — never against invented names.
 
+use std::path::PathBuf;
 use tauri::{AppHandle, Manager, Runtime};
 use wyrd_owner_client::{
-    WireAttr, WireDirEntry, WireFreshness, WireLiveness, WireMutationKind, WireMutationOutcome,
-    WireNode, WireParentToken, WireSyncStatus,
+    OwnerClient, WireAttr, WireDirEntry, WireFreshness, WireLiveness, WireMutationKind,
+    WireMutationOutcome, WireNode, WireParentToken, WireSyncStatus,
 };
 
 use super::registry::{self, RegistryState, RegistryStatus};
@@ -300,6 +301,336 @@ pub async fn drive_settings<R: Runtime>(app: AppHandle<R>, drive_dir: String) ->
     .await
 }
 
+/// One completed lifecycle operation plus the observed state that
+/// decides the display. Infallible like the other local queries:
+/// `result` carries the operation outcome (exit codes only — CLI
+/// stderr travels as opaque display detail and is never parsed for
+/// lifecycle facts), `observed` is the registry re-read plus
+/// per-drive socket probe taken *after* the process completed, and
+/// `membership` is the operated drive's membership tip re-observed
+/// through the owner. Observed state determines the display; the
+/// result indicates the operation outcome, never authoritative
+/// lifecycle state.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ProvisionReport {
+    pub result: super::provision::ProvisionResult,
+    pub observed: RegistryState,
+    /// The operated drive's membership as the owner reports it now:
+    /// the tip epoch and member count from a terminal `observe`
+    /// answer, or `None` where the owner did not answer. The leave
+    /// contract's independent membership check — exit 0 alone never
+    /// means "left", and CLI text never decides membership.
+    pub membership: Option<MembershipObservation>,
+}
+
+/// The operated drive's membership tip as re-observed after the
+/// operation: terminal owner answer only, never guessed.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct MembershipObservation {
+    pub epoch: Option<u64>,
+    pub known_members: usize,
+}
+
+/// Create one drive through the installed CLI (`bootstrap` without
+/// an invitation file), then re-read and probe. All arguments are
+/// owned strings; secret *paths* travel, never contents. `mode` is
+/// the platform default `vault` — any other value refuses with the
+/// installer-follow-up pointer before any process spawns.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProvisionCreateArgs {
+    pub name: String,
+    pub drive_dir: String,
+    pub relays: Vec<String>,
+    pub identity_file: String,
+    pub passphrase_file: String,
+    pub mode: String,
+    pub no_service: bool,
+}
+
+/// Join one drive: create plus the sealed invitation file selected
+/// out-of-band (file dialog) and travelling as a path.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProvisionJoinArgs {
+    pub name: String,
+    pub drive_dir: String,
+    pub relays: Vec<String>,
+    pub identity_file: String,
+    pub passphrase_file: String,
+    pub invitation_file: String,
+    pub mode: String,
+    pub no_service: bool,
+}
+
+/// Leave one drive. `acknowledged` carries the sole-owner terminal
+/// confirmation to the `--yes` boundary.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProvisionLeaveArgs {
+    pub drive_dir: String,
+    pub identity_file: String,
+    pub passphrase_file: String,
+    pub acknowledged: bool,
+}
+
+/// Create one drive through the installed CLI (`bootstrap` without
+/// an invitation file), then re-read and probe. All arguments are
+/// owned strings; secret *paths* travel, never contents. `mode` is
+/// the platform default `vault` — any other value refuses with the
+/// installer-follow-up pointer before any process spawns.
+#[tauri::command]
+pub async fn provision_create<R: Runtime>(
+    app: AppHandle<R>,
+    args: ProvisionCreateArgs,
+) -> ProvisionReport {
+    run_provision(
+        app,
+        "provision_create",
+        args.drive_dir.clone(),
+        move |state, dir| {
+            let request = super::provision::ProvisionRequest {
+                name: args.name,
+                drive_dir: dir,
+                relays: args.relays,
+                identity_file: PathBuf::from(args.identity_file),
+                passphrase_file: PathBuf::from(args.passphrase_file),
+                invitation_file: None,
+                registry_path: None,
+                owner_bin: None,
+                supervise_bin: None,
+                no_service: args.no_service,
+                mode: args.mode,
+            };
+            let cli = state.cli_bin();
+            match cli {
+                Ok(bin) => super::provision::run_bootstrap(
+                    &bin,
+                    &request,
+                    super::provision::PROVISION_TIMEOUT,
+                ),
+                Err(reason) => super::provision::ProvisionOutcome {
+                    result: super::provision::ProvisionResult::VersionMismatch { reason },
+                    stderr: String::new(),
+                    code: None,
+                },
+            }
+        },
+    )
+    .await
+}
+
+/// Join one drive through the installed CLI (`bootstrap` with the
+/// sealed invitation file at `invitation_file`), then re-read and
+/// probe. The invitation file is selected out-of-band (file dialog)
+/// and travels as a path — the adapter reads at most its bounded
+/// bytes through the CLI, never its interpretation.
+#[tauri::command]
+pub async fn provision_join<R: Runtime>(
+    app: AppHandle<R>,
+    args: ProvisionJoinArgs,
+) -> ProvisionReport {
+    run_provision(
+        app,
+        "provision_join",
+        args.drive_dir.clone(),
+        move |state, dir| {
+            let request = super::provision::ProvisionRequest {
+                name: args.name,
+                drive_dir: dir,
+                relays: args.relays,
+                identity_file: PathBuf::from(args.identity_file),
+                passphrase_file: PathBuf::from(args.passphrase_file),
+                invitation_file: Some(PathBuf::from(args.invitation_file)),
+                registry_path: None,
+                owner_bin: None,
+                supervise_bin: None,
+                no_service: args.no_service,
+                mode: args.mode,
+            };
+            let cli = state.cli_bin();
+            match cli {
+                Ok(bin) => super::provision::run_bootstrap(
+                    &bin,
+                    &request,
+                    super::provision::PROVISION_TIMEOUT,
+                ),
+                Err(reason) => super::provision::ProvisionOutcome {
+                    result: super::provision::ProvisionResult::VersionMismatch { reason },
+                    stderr: String::new(),
+                    code: None,
+                },
+            }
+        },
+    )
+    .await
+}
+
+/// Leave the drive through the installed CLI (`member leave`), then
+/// re-observe membership and lifecycle. `acknowledged` carries the
+/// sole-owner terminal confirmation to the `--yes` boundary — a
+/// frontend omitting the dialog cannot bypass it. A non-owner leave
+/// authors nothing (exit 0 refusal); the re-observation proves the
+/// membership is unchanged.
+#[tauri::command]
+pub async fn provision_leave<R: Runtime>(
+    app: AppHandle<R>,
+    args: ProvisionLeaveArgs,
+) -> ProvisionReport {
+    run_provision(
+        app,
+        "provision_leave",
+        args.drive_dir.clone(),
+        move |state, dir| {
+            let request = super::provision::LeaveRequest {
+                drive_dir: dir,
+                identity_file: PathBuf::from(args.identity_file),
+                passphrase_file: PathBuf::from(args.passphrase_file),
+                acknowledged: args.acknowledged,
+            };
+            let cli = state.cli_bin();
+            match cli {
+                Ok(bin) => {
+                    super::provision::run_leave(&bin, &request, super::provision::PROVISION_TIMEOUT)
+                }
+                Err(reason) => super::provision::ProvisionOutcome {
+                    result: super::provision::ProvisionResult::VersionMismatch { reason },
+                    stderr: String::new(),
+                    code: None,
+                },
+            }
+        },
+    )
+    .await
+}
+
+/// Run one lifecycle operation serialized per drive: validate the
+/// identity, claim the flight (refuse `Busy` when held), run the
+/// blocking CLI exchange, release the flight, then re-read the
+/// registry, probe every drive, and re-observe the operated drive's
+/// membership — verification-via-reread on every path, including
+/// timeouts and spawn failures. Everything runs on the blocking
+/// pool (the registry probe fans out over sockets with a per-drive
+/// bound and must never park an async runtime worker). A dead
+/// blocking worker resolves `Unknown`, never success: the outcome
+/// is unknown by definition, and only the observed state decides
+/// the display. The flight releases through an RAII guard, so a
+/// panicking exchange can never wedge the drive as busy — and the
+/// CLI process itself is killed and reaped past the timeout before
+/// the release, so no two operations can overlap.
+async fn run_provision<R, F>(
+    app: AppHandle<R>,
+    op: &'static str,
+    drive_dir: String,
+    call: F,
+) -> ProvisionReport
+where
+    F: FnOnce(&super::AppState, PathBuf) -> super::provision::ProvisionOutcome + Send + 'static,
+    R: Runtime,
+{
+    let _flight = app.state::<FlightTracker>().enter();
+    tauri::async_runtime::spawn_blocking(move || {
+        // Validate the drive identity before touching the flight map:
+        // a non-canonical spelling must never key a second flight
+        // for one drive.
+        let dir = match super::validate_drive_path(&drive_dir, "drive_dir") {
+            Ok(dir) => dir,
+            Err(reason) => {
+                return ProvisionReport {
+                    result: super::provision::ProvisionResult::ExpectedFailure { detail: reason },
+                    observed: registry::list_drives(),
+                    membership: None,
+                };
+            }
+        };
+        let state = app.state::<super::AppState>();
+        if !state.claim_flight(&dir) {
+            return ProvisionReport {
+                result: super::provision::ProvisionResult::Busy { drive_dir },
+                observed: registry::list_drives(),
+                membership: observe_membership(&dir),
+            };
+        }
+        let _release = FlightRelease::claim(&state, dir.clone());
+        let outcome = call(&state, dir.clone());
+        // The flight releases only after the observation below: the
+        // observation is part of the operation, so a second request
+        // on the same drive waits for the full verified picture
+        // instead of interleaving with it. (The process itself is
+        // already gone — the adapter kills and reaps past the
+        // timeout — so holding here serializes observation, never
+        // process overlap.)
+        let report = ProvisionReport {
+            result: outcome.result,
+            observed: registry::list_drives(),
+            membership: observe_membership(&dir),
+        };
+        drop(_release);
+        report
+    })
+    .await
+    .unwrap_or_else(|join| ProvisionReport {
+        result: super::provision::ProvisionResult::Unknown {
+            detail: format!("ipc worker failed for {op}: {join}"),
+        },
+        // A dead worker is a shell bug, never an owner answer: report
+        // the registry as unreadable with the reason instead of
+        // probing sockets from the fallback path.
+        observed: RegistryState {
+            status: RegistryStatus::Unreadable {
+                reason: format!("ipc worker failed for {op}: {join}"),
+            },
+            drives: Vec::new(),
+            skipped: Vec::new(),
+        },
+        membership: None,
+    })
+}
+
+/// Releases one drive's lifecycle flight when dropped: the flight
+/// frees on every path through the exchange — normal return and
+/// panic alike — so a failed exchange can never wedge the drive as
+/// `Busy` until restart. Created only after a successful claim, and
+/// dropped explicitly before the post-run observation (double release
+/// is a harmless no-op).
+struct FlightRelease<'a> {
+    state: &'a super::AppState,
+    drive: PathBuf,
+}
+
+impl<'a> FlightRelease<'a> {
+    fn claim(state: &'a super::AppState, drive: PathBuf) -> Self {
+        FlightRelease { state, drive }
+    }
+}
+
+impl Drop for FlightRelease<'_> {
+    fn drop(&mut self) {
+        self.state.release_flight(&self.drive);
+    }
+}
+
+/// Independently re-observe the operated drive's membership: a
+/// terminal `observe` answer carries the tip epoch and member count;
+/// no transport, no terminal answer, or any refusal yields `None` —
+/// membership unknown, never guessed from CLI text.
+///
+/// Bounded like the registry probe (5 s): a wedged owner must cost
+/// seconds on a finished operation, never the client's default
+/// response wait. Connects directly with the probe timeout instead
+/// of going through the connection map — the same shape as the
+/// registry's per-drive probe.
+fn observe_membership(drive_dir: &std::path::Path) -> Option<MembershipObservation> {
+    const MEMBERSHIP_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+    let client = OwnerClient::connect_drive(drive_dir).ok()?;
+    let mut client = client.with_timeout(MEMBERSHIP_PROBE_TIMEOUT).ok()?;
+    let status = client.observe().ok()?;
+    Some(MembershipObservation {
+        epoch: status.tip.as_ref().map(|tip| tip.epoch),
+        known_members: status.known_members,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -561,5 +892,75 @@ mod tests {
             }
             other => panic!("a dead worker is unconfirmed: {other:?}"),
         }
+    }
+
+    /// The provisioning report serializes verbatim: the frontend
+    /// mirror in `apps/desktop/src/lib/ipc/results.ts` must read
+    /// exactly this. Internally tagged result kinds stay lowercase
+    /// (matching the `BackendError` kind vocabulary); the observed
+    /// registry nests under `observed` and the membership tip under
+    /// `membership`. The JSON below is copied into `results.test.ts`
+    /// verbatim.
+    #[test]
+    fn provision_report_serializes_verbatim() {
+        use super::super::provision::ProvisionResult;
+        use super::super::{RegistryState, RegistryStatus};
+        let report = super::ProvisionReport {
+            result: ProvisionResult::Completed {
+                detail: "drive alpha verified available (socket /drives/alpha/owner.sock)"
+                    .to_string(),
+            },
+            observed: RegistryState {
+                status: RegistryStatus::Nofile,
+                drives: Vec::new(),
+                skipped: Vec::new(),
+            },
+            membership: Some(super::MembershipObservation {
+                epoch: Some(2),
+                known_members: 1,
+            }),
+        };
+        assert_eq!(
+            serde_json::to_value(&report).unwrap(),
+            serde_json::json!({
+                "result": {"result": "completed", "detail": "drive alpha verified available (socket /drives/alpha/owner.sock)"},
+                "observed": {"status": "nofile", "drives": [], "skipped": []},
+                "membership": {"epoch": 2, "known_members": 1},
+            })
+        );
+        let busy = super::ProvisionReport {
+            result: ProvisionResult::Busy {
+                drive_dir: "/drives/alpha".to_string(),
+            },
+            observed: RegistryState {
+                status: RegistryStatus::Nofile,
+                drives: Vec::new(),
+                skipped: Vec::new(),
+            },
+            membership: None,
+        };
+        assert_eq!(
+            serde_json::to_value(&busy).unwrap(),
+            serde_json::json!({
+                "result": {"result": "busy", "drive_dir": "/drives/alpha"},
+                "observed": {"status": "nofile", "drives": [], "skipped": []},
+                "membership": null,
+            })
+        );
+        // Args arrive camelCase on the wire (Tauri maps them) and the
+        // struct renames accordingly: a frontend-shaped payload must
+        // deserialize.
+        let args: super::ProvisionCreateArgs = serde_json::from_value(serde_json::json!({
+            "name": "alpha",
+            "driveDir": "/drives/alpha",
+            "relays": ["wss://relay.example"],
+            "identityFile": "/keys/identity",
+            "passphraseFile": "/keys/passphrase",
+            "mode": "vault",
+            "noService": true,
+        }))
+        .expect("camelCase args deserialize");
+        assert_eq!(args.drive_dir, "/drives/alpha");
+        assert!(args.no_service);
     }
 }

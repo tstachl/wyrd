@@ -33,6 +33,33 @@ is transient — no drive data is affected.
 
 ## [Unreleased]
 
+### Added
+
+- Runtime provisioning through the constrained CLI adapter
+  (`nostr:nevent1qqsx9357fqqfup9g7kurf7gdcgtjf8qaceay3a90wzxjw6sresg69eqpz9mhxue69uhkwunpwdczuap49eehgcl6hz9`):
+  the desktop shell creates, joins, and leaves drives by invoking
+  the installed, version-matched `wyrd` CLI through a small
+  `std::process`-only Rust adapter — structured argv arrays (never
+  shell-constructed), secret paths only (contents never cross IPC or
+  argv), non-interactive runs with explicit exit semantics (0
+  success, 2 expected failure, 78 terminal held-drive), per-drive
+  flight serialization (a second operation refuses `busy`, never
+  queues), `__build_info` version match as a hard failure, and
+  verification-via-reread (registry re-read plus independent socket
+  probe) after every operation — observed state decides the
+  display, exit codes only indicate operation outcomes. Join takes
+  the sealed invitation file, leave carries the sole-owner terminal
+  acknowledgement to the `--yes` boundary, and a non-owner leave
+  authors nothing (the re-observation proves it). Mode selection at
+  create/join is the platform default `vault`; other modes refuse
+  with the installer-follow-up pointer, and mode reconfiguration
+  stays with the installer follow-up (no service-management CLI
+  surface exists yet). Native file pickers (`tauri-plugin-dialog`,
+  `dialog:allow-open`) select credential and invitation paths; the
+  layer gate reserves the plugin alongside `tauri`. Frontend:
+  create/join/leave forms in the Drives view with outcome plus
+  observation display, IPC mirrors and wrapper arg-shape pins.
+
 ### Changed
 
 - Rename `wyrd-app` to `wyrd-host` (binary too)

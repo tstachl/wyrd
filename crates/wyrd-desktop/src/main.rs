@@ -127,6 +127,7 @@ fn main() {
     tauri::Builder::default()
         .manage(state)
         .manage(FlightTracker::new())
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(invoke_handler())
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {

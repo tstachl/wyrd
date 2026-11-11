@@ -15,6 +15,11 @@ thiserror.workspace = true
 # Desktop runtime: application toolkit for the command surface below.
 # Reserved for this crate by the layer gate (`tauri` edge).
 tauri.workspace = true
+# Native file pickers for credential and invitation paths (first
+# shipped view needing it: runtime provisioning). Secrets never
+# cross the picked paths — only path strings travel to the CLI
+# adapter. Reserved alongside `tauri` by the layer gate.
+tauri-plugin-dialog.workspace = true
 
 [build-dependencies]
 # Embeds `tauri.conf.json` plus `capabilities/` at compile time for

@@ -924,3 +924,238 @@ fn insert_refuses_a_non_utf8_alias_for_a_live_drive() {
     }
     owner.shutdown();
 }
+
+/// Provisioning refuses a non-canonical drive identity before any
+/// process spawns: the report is `incomplete` at stage `validate`,
+/// and the observed registry still re-reads — verification runs on
+/// every path, including argument refusals.
+#[test]
+fn provision_commands_refuse_a_non_canonical_drive_identity() {
+    let (_app, webview, data_dir) = mock_app_with_state(wyrd_desktop::AppState::new(), "prov-bad");
+    let report = invoke(
+        &webview,
+        "provision_create",
+        serde_json::json!({
+            "args": {
+                "name": "alpha",
+                "driveDir": "drives/alpha",
+                "relays": [],
+                "identityFile": "/keys/identity",
+                "passphraseFile": "/keys/passphrase",
+                "mode": "vault",
+                "noService": true,
+            }
+        }),
+    )
+    .expect("provisioning reports infallibly");
+    assert_eq!(report["result"]["result"], "expectedfailure");
+    assert_eq!(report["membership"], serde_json::Value::Null);
+    assert!(
+        report["observed"]["status"].is_string(),
+        "the registry still re-reads on refusal: {report}"
+    );
+    std::fs::remove_dir_all(&data_dir).expect("the webview data dir cleans up");
+}
+
+/// A second lifecycle operation on the same drive refuses `busy`:
+/// the flight guard serializes per drive, never queues behind a
+/// service restart. The first flight is held open by the test (no
+/// process runs); the observed registry still re-reads.
+#[test]
+fn provision_commands_refuse_busy_while_a_flight_is_held() {
+    let state = wyrd_desktop::AppState::new();
+    let drive = std::path::PathBuf::from("/drives/alpha");
+    assert!(state.claim_flight(&drive), "the test holds the flight");
+    let (_app, webview, data_dir) = mock_app_with_state(state, "prov-busy");
+    let report = invoke(
+        &webview,
+        "provision_leave",
+        serde_json::json!({
+            "args": {
+                "driveDir": "/drives/alpha",
+                "identityFile": "/keys/identity",
+                "passphraseFile": "/keys/passphrase",
+                "acknowledged": false,
+            }
+        }),
+    )
+    .expect("provisioning reports infallibly");
+    assert_eq!(report["result"]["result"], "busy");
+    assert_eq!(report["result"]["drive_dir"], "/drives/alpha");
+    assert_eq!(report["membership"], serde_json::Value::Null);
+    assert!(
+        report["observed"]["status"].is_string(),
+        "the registry still re-reads on busy: {report}"
+    );
+    std::fs::remove_dir_all(&data_dir).expect("the webview data dir cleans up");
+}
+
+/// The full create path through a fake CLI: version check passes,
+/// the canned line exits 0, and the report pairs the completion
+/// with the post-run registry observation — the same
+/// verification-via-reread the shipped command performs, with no
+/// mock. What the text says is display detail; the code decides.
+/// The fake answers `__build_info` with the workspace version
+/// the adapter requires.
+#[test]
+fn provision_create_completes_through_a_fake_cli() {
+    let dir = std::env::temp_dir().join(format!("wyrd-desktop-ipc-fakecli-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let cli = dir.join("wyrd");
+    let version = env!("CARGO_PKG_VERSION");
+    std::fs::write(
+        &cli,
+        format!(
+            "#!/bin/sh\nif [ \"$1\" = \"__build_info\" ]; then\necho \"update build: {version}\"\nexit 0\nfi\necho \"drive alpha verified available (socket /drives/alpha/owner.sock)\"\nexit 0\n"
+        ),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let state = wyrd_desktop::AppState::new();
+    state.set_cli_override(cli);
+    let (_app, webview, data_dir) = mock_app_with_state(state, "prov-ready");
+    let report = invoke(
+        &webview,
+        "provision_create",
+        serde_json::json!({
+            "args": {
+                "name": "alpha",
+                "driveDir": "/drives/alpha",
+                "relays": ["wss://relay.example"],
+                "identityFile": "/keys/identity",
+                "passphraseFile": "/keys/passphrase",
+                "mode": "vault",
+                "noService": true,
+            }
+        }),
+    )
+    .expect("provisioning reports infallibly");
+    assert_eq!(
+        report["result"]["result"], "completed",
+        "fake exit 0 completes without parsing its text: {report}"
+    );
+    assert_eq!(report["membership"], serde_json::Value::Null);
+    assert!(
+        report["observed"]["status"].is_string(),
+        "the post-run observation rides along: {report}"
+    );
+    std::fs::remove_dir_all(&data_dir).expect("the webview data dir cleans up");
+    std::fs::remove_dir_all(&dir).unwrap_or(());
+}
+
+/// The flight releases after a normal operation: a second
+/// lifecycle call on the same drive runs instead of refusing busy.
+/// The first call drives the fake CLI to exit 0 (the fake ignores
+/// the nonexistent drive); the second proves the set is empty.
+#[test]
+fn provision_flight_releases_after_a_normal_operation() {
+    let dir = std::env::temp_dir().join(format!(
+        "wyrd-desktop-ipc-fakecli-{}-release",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let cli = dir.join("wyrd");
+    let version = env!("CARGO_PKG_VERSION");
+    std::fs::write(
+        &cli,
+        format!(
+            "#!/bin/sh\nif [ \"$1\" = \"__build_info\" ]; then\necho \"update build: {version}\"\nexit 0\nfi\nexit 0\n"
+        ),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let state = wyrd_desktop::AppState::new();
+    state.set_cli_override(cli);
+    let (_app, webview, data_dir) = mock_app_with_state(state, "prov-release");
+    let create = serde_json::json!({
+        "args": {
+            "name": "alpha",
+            "driveDir": "/drives/alpha",
+            "relays": [],
+            "identityFile": "/keys/identity",
+            "passphraseFile": "/keys/passphrase",
+            "mode": "vault",
+            "noService": true,
+        }
+    });
+    let first = invoke(&webview, "provision_create", create.clone())
+        .expect("provisioning reports infallibly");
+    assert_eq!(first["result"]["result"], "completed");
+    let second =
+        invoke(&webview, "provision_create", create).expect("provisioning reports infallibly");
+    assert_ne!(
+        second["result"]["result"], "busy",
+        "the flight released after the first operation: {second}"
+    );
+    std::fs::remove_dir_all(&data_dir).expect("the webview data dir cleans up");
+    std::fs::remove_dir_all(&dir).unwrap_or(());
+}
+
+/// Leave re-observes membership through the owner: a fake exit-0
+/// leave against a live drive reports `completed`, and the report
+/// carries the membership tip the owner actually serves — the
+/// leave contract's independent check, never CLI text.
+#[test]
+fn provision_leave_reobserves_membership_through_the_owner() {
+    let owner = running_owner();
+    let dir = std::env::temp_dir().join(format!(
+        "wyrd-desktop-ipc-fakecli-{}-leave",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let cli = dir.join("wyrd");
+    let version = env!("CARGO_PKG_VERSION");
+    std::fs::write(
+        &cli,
+        format!(
+            "#!/bin/sh\nif [ \"$1\" = \"__build_info\" ]; then\necho \"update build: {version}\"\nexit 0\nfi\nexit 0\n"
+        ),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let state = wyrd_desktop::AppState::new();
+    state.set_cli_override(cli);
+    let (_app, webview, data_dir) = mock_app_with_state(state, "prov-leave-member");
+    let drive = owner.dir.to_string_lossy().into_owned();
+    let report = invoke(
+        &webview,
+        "provision_leave",
+        serde_json::json!({
+            "args": {
+                "driveDir": drive,
+                "identityFile": "/keys/identity",
+                "passphraseFile": "/keys/passphrase",
+                "acknowledged": false,
+            }
+        }),
+    )
+    .expect("provisioning reports infallibly");
+    assert_eq!(
+        report["result"]["result"], "completed",
+        "fake exit 0 completes: {report}"
+    );
+    let membership = &report["membership"];
+    assert!(
+        membership.is_object(),
+        "the live owner answers the membership re-observation: {report}"
+    );
+    assert!(
+        membership["known_members"].as_u64().unwrap_or(0) >= 1,
+        "the single-device drive names its member: {report}"
+    );
+    std::fs::remove_dir_all(&data_dir).expect("the webview data dir cleans up");
+    std::fs::remove_dir_all(&dir).unwrap_or(());
+    owner.shutdown();
+}

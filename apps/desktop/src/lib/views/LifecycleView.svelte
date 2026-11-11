@@ -1,16 +1,17 @@
-<!-- Lifecycle, observational: the registered drives, each
-verified this session, and the explicitly selected drive.
-Creation, joining, and leaving live outside this shell — in the
-provisioning and membership flows the installer owns — so this
-view observes and guides instead of executing. The selection is
-presentation state only: it never authorizes backend access, and
-every command carries the drive directory explicitly. -->
+<!-- Lifecycle, observational plus runtime provisioning: the
+registered drives, each verified this session, and the explicitly
+selected drive — plus create, join, and leave through the
+constrained CLI adapter. The selection stays presentation state
+only: it never authorizes backend access, and every command carries
+the drive directory explicitly. -->
 <script lang="ts">
   import Button from "$lib/components/ui/button.svelte";
   import type { Stamped } from "$lib/state/presentation.svelte.js";
-  import type { RegistryState } from "$lib/ipc/results.js";
+  import type { ProvisionReport, RegistryState } from "$lib/ipc/results.js";
+  import type { ProvisionCreateArgs, ProvisionJoinArgs, ProvisionLeaveArgs } from "$lib/ipc/operations.js";
   import { availabilityLabel } from "./format.js";
   import ObservedNote from "./ObservedNote.svelte";
+  import ProvisioningView from "./ProvisioningView.svelte";
 
   interface Props {
     snapshot: Stamped<RegistryState> | null;
@@ -19,9 +20,12 @@ every command carries the drive directory explicitly. -->
     transportNotice: string | null;
     onRefresh: () => void;
     onSelect: (driveDir: string) => void;
+    onCreate: (args: ProvisionCreateArgs) => Promise<ProvisionReport>;
+    onJoin: (args: ProvisionJoinArgs) => Promise<ProvisionReport>;
+    onLeave: (args: ProvisionLeaveArgs) => Promise<ProvisionReport>;
   }
 
-  let { snapshot, selectedDriveDir, pending, transportNotice, onRefresh, onSelect }: Props = $props();
+  let { snapshot, selectedDriveDir, pending, transportNotice, onRefresh, onSelect, onCreate, onJoin, onLeave }: Props = $props();
 </script>
 
 <div class="flex items-center justify-between">
@@ -46,17 +50,10 @@ every command carries the drive directory explicitly. -->
     </p>
   {:else if registry.status === "nofile" || registry.drives.length === 0}
     <p class="mt-4 text-sm text-smoke">
-      No drives registered yet. This shell observes drives that the installation and owner flows
-      register — it never provisions or authors membership itself.
+      No drives registered yet. Create one below or join from a sealed invitation — the drive
+      appears here once the registry names it. Only one window is needed: every registered drive
+      is managed from here.
     </p>
-    <section aria-label="First drive guidance" class="mt-4 rounded-md border border-ink/15 px-3 py-2 text-sm text-smoke">
-      <p>
-        Until runtime provisioning lands in this shell, create or join a drive from the terminal:
-        run <code>wyrd bootstrap</code> to register a drive, then return here — the drive appears
-        in this view once the registry names it. Only one window is needed: every registered drive
-        is managed from here.
-      </p>
-    </section>
   {:else}
     <section aria-label="Registered drives" class="mt-6">
       <h2 class="text-sm font-semibold tracking-wide text-smoke uppercase">Registered drives</h2>
@@ -92,12 +89,20 @@ every command carries the drive directory explicitly. -->
 
   <section aria-label="Lifecycle guidance" class="mt-6 rounded-md border border-ink/15 px-3 py-2 text-sm text-smoke">
     <p>
-      Drive creation, joining, and leaving are provisioning and membership operations — they run in the
-      installation and owner flows, not in this shell. Until runtime provisioning lands, use
-      <code>wyrd bootstrap</code> to register a drive. This view verifies what those flows registered and
-      whether each drive's owner answers; it never provisions or authors membership itself.
+      This view verifies what the provisioning and membership flows registered and whether each
+      drive's owner answers. Creation and joining run through the installed CLI above; leaving
+      authors membership where the trust contract admits it. Observed state decides what you
+      see here — never the operation's exit code alone.
     </p>
   </section>
+
+  <ProvisioningView
+    pending={pending}
+    onCreate={onCreate}
+    onJoin={onJoin}
+    onLeave={onLeave}
+    onDone={onRefresh}
+  />
 
   <ObservedNote observedAtMs={snapshot.observedAtMs} />
 {/if}

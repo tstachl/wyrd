@@ -344,3 +344,35 @@ export type DriveSettingsState =
   | { state: "nofile" }
   | { state: "nosection" }
   | { state: "unreadable"; reason: string };
+
+// Provisioning mirrors (constrained CLI adapter surface).
+//
+// Source of truth: `ProvisionResult` in
+// `crates/wyrd-desktop/src/provision.rs` and `ProvisionReport` in
+// `crates/wyrd-desktop/src/commands.rs` — only the exit code is
+// ever mapped, CLI text rides as opaque detail, and the observed
+// registry nests under `observed` with the membership tip under
+// `membership`. Nothing here may add a shape the Rust side does
+// not produce.
+
+/** The adapter's verdict on the operation — never lifecycle state. Only the exit code decides; CLI text rides along as opaque display detail. */
+export type ProvisionResult =
+  | { result: "completed"; detail: string }
+  | { result: "expectedfailure"; detail: string }
+  | { result: "helddrive"; detail: string }
+  | { result: "versionmismatch"; reason: string }
+  | { result: "busy"; drive_dir: string }
+  | { result: "unknown"; detail: string };
+
+/** The operated drive's membership tip as re-observed: terminal owner answer only, never guessed. */
+export interface MembershipObservation {
+  epoch: number | null;
+  known_members: number;
+}
+
+/** One completed lifecycle operation plus the post-run observation. Infallible: unknown states ride inside. */
+export interface ProvisionReport {
+  result: ProvisionResult;
+  observed: RegistryState;
+  membership: MembershipObservation | null;
+}

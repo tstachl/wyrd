@@ -1,6 +1,6 @@
 {
   "identifier": "default",
-  "description": "Least-privilege baseline for the Wyrd desktop shell: the frontend invokes the registered custom commands only, with no Tauri core or plugin API access.",
+  "description": "Least-privilege baseline for the Wyrd desktop shell: the frontend invokes the registered custom commands only, plus the native file picker for credential and invitation paths (runtime provisioning). No other Tauri core or plugin API access.",
   "windows": ["main"],
-  "permissions": []
+  "permissions": ["dialog:allow-open"]
 }

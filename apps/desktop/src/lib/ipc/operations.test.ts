@@ -15,6 +15,9 @@ import {
   listDrives,
   lookup,
   observe,
+  provisionCreate,
+  provisionJoin,
+  provisionLeave,
   reconnect,
   submit,
 } from "./operations.js";
@@ -137,4 +140,85 @@ test("local-query rejections throw a transport error, never taxonomy", async () 
     (error: unknown) => error,
   );
   expect(seen).toBeInstanceOf(IpcTransportError);
+});
+
+test("provisioning wrappers send one args object per command", async () => {
+  const seen: Array<{ cmd: string; args: unknown }> = [];
+  mockIPC((cmd, args) => {
+    seen.push({ cmd, args });
+    return {
+      result: { result: "completed", detail: "ready" },
+      observed: { status: "nofile", drives: [], skipped: [] },
+    };
+  });
+  const created = await provisionCreate({
+    name: "alpha",
+    driveDir: "/drives/alpha",
+    relays: ["wss://relay.example"],
+    identityFile: "/keys/identity",
+    passphraseFile: "/keys/passphrase",
+    mode: "vault",
+    noService: false,
+  });
+  expect(created.observed.status).toBe("nofile");
+  const joined = await provisionJoin({
+    name: "beta",
+    driveDir: "/drives/beta",
+    relays: [],
+    identityFile: "/keys/identity",
+    passphraseFile: "/keys/passphrase",
+    invitationFile: "/tmp/invite.sealed",
+    mode: "vault",
+    noService: true,
+  });
+  expect(joined.result.result).toBe("completed");
+  const left = await provisionLeave({
+    driveDir: "/drives/alpha",
+    identityFile: "/keys/identity",
+    passphraseFile: "/keys/passphrase",
+    acknowledged: true,
+  });
+  expect(left.result.result).toBe("completed");
+  expect(seen).toEqual([
+    {
+      cmd: "provision_create",
+      args: {
+        args: {
+          name: "alpha",
+          driveDir: "/drives/alpha",
+          relays: ["wss://relay.example"],
+          identityFile: "/keys/identity",
+          passphraseFile: "/keys/passphrase",
+          mode: "vault",
+          noService: false,
+        },
+      },
+    },
+    {
+      cmd: "provision_join",
+      args: {
+        args: {
+          name: "beta",
+          driveDir: "/drives/beta",
+          relays: [],
+          identityFile: "/keys/identity",
+          passphraseFile: "/keys/passphrase",
+          invitationFile: "/tmp/invite.sealed",
+          mode: "vault",
+          noService: true,
+        },
+      },
+    },
+    {
+      cmd: "provision_leave",
+      args: {
+        args: {
+          driveDir: "/drives/alpha",
+          identityFile: "/keys/identity",
+          passphraseFile: "/keys/passphrase",
+          acknowledged: true,
+        },
+      },
+    },
+  ]);
 });

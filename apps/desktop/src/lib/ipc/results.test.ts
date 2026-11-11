@@ -10,6 +10,8 @@
 
 import { expect, test } from "bun:test";
 import type {
+  ProvisionReport,
+  ProvisionResult,
   Served,
   WireAttr,
   WireDirEntry,
@@ -210,4 +212,33 @@ test("drive settings distinguish configured from unknown", () => {
     reason: "settings /x/settings.json is version 2, this shell reads 1",
   };
   expect(unreadable.reason).toContain("version 2");
+});
+
+test("provisioning report pairs the outcome with the observation", () => {
+  // Copied from the Rust test `provision_report_serializes_verbatim`
+  // in `crates/wyrd-desktop/src/commands.rs` — pins the JSON the
+  // backend produces, not a second implementation of it.
+  const ready: ProvisionReport = {
+    result: {
+      result: "completed",
+      detail: "drive alpha verified available (socket /drives/alpha/owner.sock)",
+    },
+    observed: { status: "nofile", drives: [], skipped: [] },
+    membership: { epoch: 2, known_members: 1 },
+  };
+  expect(ready.result.result).toBe("completed");
+  expect(ready.observed.status).toBe("nofile");
+  expect(ready.membership).toEqual({ epoch: 2, known_members: 1 });
+  const busy: ProvisionReport = {
+    result: { result: "busy", drive_dir: "/drives/alpha" },
+    observed: { status: "nofile", drives: [], skipped: [] },
+    membership: null,
+  };
+  expect(busy.result).toEqual({ result: "busy", drive_dir: "/drives/alpha" });
+  expect(busy.membership).toBeNull();
+  const failed: ProvisionResult = {
+    result: "expectedfailure",
+    detail: "error: drive alpha registered but unavailable: verify-socket",
+  };
+  expect(failed.result).toBe("expectedfailure");
 });

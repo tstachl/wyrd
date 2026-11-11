@@ -8,8 +8,17 @@
     listDrives,
     liveness,
     observe,
+    provisionCreate,
+    provisionJoin,
+    provisionLeave,
     reconnect,
   } from "$lib/ipc/operations.js";
+  import type {
+    ProvisionCreateArgs,
+    ProvisionJoinArgs,
+    ProvisionLeaveArgs,
+  } from "$lib/ipc/operations.js";
+  import type { ProvisionReport } from "$lib/ipc/results.js";
   import type { IpcResult } from "$lib/ipc/types.js";
   import type { DriveView } from "$lib/ipc/results.js";
   import { presentation } from "$lib/state/presentation.svelte.js";
@@ -158,6 +167,31 @@
     );
   }
 
+  /**
+   * One lifecycle operation through the CLI adapter: infallible
+   * like the other local queries — the report carries the outcome
+   * plus the post-run observation, and a transport throw (the
+   * backend itself unreachable) surfaces as a notice, never as an
+   * outcome. The registry re-read follows every operation.
+   */
+  async function runProvision(call: () => Promise<ProvisionReport>): Promise<ProvisionReport> {
+    presentation.trackRequest();
+    try {
+      const report = await call();
+      presentation.clearTransportNotice();
+      return report;
+    } catch (error: unknown) {
+      const detail =
+        error instanceof IpcTransportError
+          ? "The shell backend did not answer (transport failure, not an owner answer)."
+          : `Unexpected provisioning failure: ${String(error)}`;
+      presentation.noteTransportFailure(detail);
+      throw new Error(detail);
+    } finally {
+      presentation.finishRequest();
+    }
+  }
+
   function refreshCurrent(): Promise<void> {
     switch (presentation.selectedView) {
       case "status":
@@ -290,8 +324,7 @@
     {:else if presentation.selectedView === "status"}
       {#if selectedDriveDir === null}
         <p class="mt-4 text-sm text-smoke">
-          No drive selected. Open Drives to register or select one — creation and joining run in the
-          installation and owner flows, not in this shell.
+          No drive selected. Open Drives to create, join, or select one.
         </p>
       {:else}
         {@const snapshot = presentation.statusSnapshotFor(selectedDriveDir)}
@@ -312,11 +345,13 @@
         transportNotice={presentation.transportNotice}
         onRefresh={() => void refreshLifecycle()}
         onSelect={(driveDir) => selectDrive(driveDir)}
+        onCreate={(args: ProvisionCreateArgs) => runProvision(() => provisionCreate(args))}
+        onJoin={(args: ProvisionJoinArgs) => runProvision(() => provisionJoin(args))}
+        onLeave={(args: ProvisionLeaveArgs) => runProvision(() => provisionLeave(args))}
       />
     {:else if selectedDriveDir === null}
       <p class="mt-4 text-sm text-smoke">
-        No drive selected. Open Drives to register or select one — creation and joining run in the
-        installation and owner flows, not in this shell.
+        No drive selected. Open Drives to create, join, or select one.
       </p>
     {:else}
       {@const snapshot = presentation.settingsSnapshotFor(selectedDriveDir)}

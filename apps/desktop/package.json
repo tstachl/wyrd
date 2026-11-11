@@ -16,6 +16,7 @@
     "@sveltejs/vite-plugin-svelte": "6",
     "@tailwindcss/vite": "4",
     "@tauri-apps/api": "2",
+    "@tauri-apps/plugin-dialog": "2",
     "clsx": "^2.1.1",
     "svelte": "5",
     "tailwind-merge": "^3.7.0",

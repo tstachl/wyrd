@@ -20,7 +20,7 @@ Listed in dependency order. Dependencies point only at rows above, and `wyrd-con
 | `wyrd-format` | Content addressing, typed identities, chunking, Merkle snapshot DAG, canonical plaintext formats | blake3, serde, thiserror; never networking, async, or FUSE |
 | `wyrd-namespace` | Provider-neutral namespace and verified read surface | `wyrd-format`, thiserror only |
 | `wyrd-owner-client` | Owned drive-owner protocol types and non-owning socket client; no domain edge, even transitively | serde, serde_json, hex only; never `wyrd-*` |
-| `wyrd-desktop` | Desktop management UI backend: non-owning Tauri client of the drive-owner interface; never opens a drive | `wyrd-owner-client` only; reserved `tauri` toolkit edge, serde, thiserror |
+| `wyrd-desktop` | Desktop management UI backend: non-owning Tauri client of the drive-owner interface; never opens a drive | `wyrd-owner-client` only; reserved `tauri` toolkit + `tauri-plugin-dialog` file-picker edges, serde, thiserror |
 | `wyrd-sync` | iroh transport, encryption, storage addressing, capabilities, authorization, replication | `wyrd-format`, `wyrd-namespace`, iroh stack, nostr crate |
 | `wyrd-core` | Embeddable local node: namespace, snapshots, mutations, materialization, sync control | format, namespace, sync; never presentation |
 | `wyrd-view` | Filesystem-shaped read surface; never mounts or authors content | `wyrd-format`, `wyrd-namespace` |
