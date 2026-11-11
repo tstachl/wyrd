@@ -217,15 +217,24 @@ fn policy_for(member: &str) -> Option<MemberPolicy> {
         // `wyrd-owner-client` only — never the store, never the
         // authoring surface, never presentation. `tauri` is the
         // reserved toolkit edge for the command layer that lands
-        // with the first view; `serde`/`serde_json` are the typed
-        // IPC answers, `thiserror` the backend error plumbing.
+        // with the first view; `tauri-plugin-dialog` is the native
+        // file picker for credential and invitation paths (first
+        // shipped view needing it: runtime provisioning — paths
+        // travel, never secret contents); `serde`/`serde_json` are
+        // the typed IPC answers, `thiserror` the backend error plumbing.
         // Every other direct workspace edge — `wyrd-core`,
         // `wyrd-sync`, `wyrd-view`, `wyrd-format`, `wyrd-host`,
         // `wyrd-cli`, `wyrd-daemon` — is a violation, and the
         // transitive closure test below pins the reachability half.
         "wyrd-desktop" => Some(MemberPolicy {
             workspace_allow: &["wyrd-owner-client"],
-            external_allow: &["tauri", "serde", "serde_json", "thiserror"],
+            external_allow: &[
+                "tauri",
+                "tauri-plugin-dialog",
+                "serde",
+                "serde_json",
+                "thiserror",
+            ],
         }),
         _ => None,
     }

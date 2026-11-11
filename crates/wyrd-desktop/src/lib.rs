@@ -28,18 +28,21 @@
 
 pub mod backend;
 pub mod commands;
+pub mod provision;
 pub mod registry;
 pub mod settings_view;
 
 pub use backend::{BackendError, DesktopBackend};
+pub use provision::{LeaveRequest, ProvisionRequest, ProvisionResult, PROVISION_TIMEOUT};
 pub use registry::{DriveAvailability, DriveView, RegistryState, RegistryStatus};
 pub use settings_view::{DriveSettings, DriveSettingsView};
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-/// The managed application state: the drive connection map.
+/// The managed application state: the drive connection map plus the
+/// provisioning flight map.
 ///
 /// One [`DesktopBackend`] per drive, keyed by the absolute drive
 /// directory as an exact string. The map tracks connections to
@@ -49,8 +52,19 @@ use std::sync::{Arc, Mutex};
 /// without holding the map: one drive's poisoned connection or slow
 /// owner never blocks another drive's commands. Application-wide
 /// failure and individual drive failure stay distinct states.
+///
+/// Provisioning flights serialize per drive: at most one CLI
+/// lifecycle operation runs on a drive at a time. A second request
+/// while one is in flight is refused with an explicit busy state,
+/// never queued behind a service restart.
 pub struct AppState {
     inner: Mutex<BTreeMap<PathBuf, Arc<DesktopBackend>>>,
+    flights: Mutex<HashSet<PathBuf>>,
+    /// Explicit CLI binary for tests. Production stays `None` so
+    /// every operation resolves the fixed co-installed sibling —
+    /// the frontend can never name an arbitrary binary (no IPC
+    /// command sets this; only Rust callers, i.e. tests, do).
+    cli_override: Mutex<Option<PathBuf>>,
 }
 
 /// Outstanding IPC work, counted from dispatch to answer. The quit
@@ -124,7 +138,36 @@ impl AppState {
     pub fn new() -> Self {
         AppState {
             inner: Mutex::new(BTreeMap::new()),
+            flights: Mutex::new(HashSet::new()),
+            cli_override: Mutex::new(None),
         }
+    }
+
+    /// Point the provisioning adapter at an explicit CLI binary.
+    /// Test-only seam: production never calls this, so the shipped
+    /// shell always resolves the fixed co-installed sibling and the
+    /// frontend — which has no IPC command reaching this — can never
+    /// name an arbitrary binary.
+    pub fn set_cli_override(&self, path: PathBuf) {
+        let mut held = self
+            .cli_override
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        *held = Some(path);
+    }
+
+    /// The CLI binary one provisioning run uses: the test override
+    /// where set, else the fixed co-installed sibling (never `PATH`).
+    pub(crate) fn cli_bin(&self) -> Result<PathBuf, String> {
+        let held = self
+            .cli_override
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        if let Some(path) = held.clone() {
+            return Ok(path);
+        }
+        drop(held);
+        provision::resolve_cli_bin(None)
     }
 
     /// Insert a pre-connected backend (startup's `--drive-dir`).
@@ -233,6 +276,30 @@ impl AppState {
         held.insert(path, Arc::new(fresh));
         Ok(())
     }
+
+    /// Try to claim the lifecycle flight for one drive: at most one
+    /// CLI operation runs on a drive at a time. Returns `true` when
+    /// the caller owns the flight and must call
+    /// [`AppState::release_flight`] after the process completes;
+    /// `false` when another operation is already in flight — the
+    /// caller refuses with an explicit busy state, never queues.
+    pub fn claim_flight(&self, drive_dir: &std::path::Path) -> bool {
+        let mut held = self
+            .flights
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        held.insert(drive_dir.to_owned())
+    }
+
+    /// Release a claimed lifecycle flight, exactly once per
+    /// successful [`AppState::claim_flight`].
+    pub fn release_flight(&self, drive_dir: &std::path::Path) {
+        let mut held = self
+            .flights
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        held.remove(drive_dir);
+    }
 }
 
 impl Default for AppState {
@@ -308,6 +375,9 @@ pub fn invoke_handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> 
         commands::reconnect,
         commands::list_drives,
         commands::drive_settings,
+        commands::provision_create,
+        commands::provision_join,
+        commands::provision_leave,
     ]
 }
 

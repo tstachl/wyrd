@@ -344,3 +344,28 @@ export type DriveSettingsState =
   | { state: "nofile" }
   | { state: "nosection" }
   | { state: "unreadable"; reason: string };
+
+// Provisioning mirrors (constrained CLI adapter surface).
+//
+// Source of truth: `ProvisionResult` in
+// `crates/wyrd-desktop/src/provision.rs` and `ProvisionReport` in
+// `crates/wyrd-desktop/src/commands.rs` — the result kinds stay
+// lowercase, matching the `BackendError` kind vocabulary, and the
+// observed registry rides along flattened. Nothing here may add a
+// shape the Rust side does not produce.
+
+/** The adapter's verdict on the operation — never lifecycle state. Observed state decides the display. */
+export type ProvisionResult =
+  | { result: "verifiedavailable"; detail: string }
+  | { result: "registeredbutunavailable"; reason: string }
+  | { result: "incomplete"; stage: string; reason: string }
+  | { result: "helddrive"; detail: string }
+  | { result: "versionmismatch"; reason: string }
+  | { result: "busy"; drive_dir: string }
+  | { result: "unknown"; detail: string };
+
+/** One completed lifecycle operation plus the post-run observation. Infallible: unknown states ride inside. */
+export interface ProvisionReport {
+  result: ProvisionResult;
+  observed: RegistryState;
+}

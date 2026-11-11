@@ -103,6 +103,10 @@ tracing = "0.1"
 # dependency-DAG checker does not count as a production edge.
 tauri = "2.12"
 tauri-build = "2"
+# Native file pickers for credential and invitation paths (first
+# shipped view needing it: runtime provisioning). Same 2.x line as
+# the toolkit; reserved alongside `tauri` by the layer gate.
+tauri-plugin-dialog = "2"
 
 # FUSE boundary error mapping (daemon adapter only)
 libc = "0.2"

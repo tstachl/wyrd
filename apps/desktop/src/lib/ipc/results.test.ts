@@ -10,6 +10,8 @@
 
 import { expect, test } from "bun:test";
 import type {
+  ProvisionReport,
+  ProvisionResult,
   Served,
   WireAttr,
   WireDirEntry,
@@ -210,4 +212,30 @@ test("drive settings distinguish configured from unknown", () => {
     reason: "settings /x/settings.json is version 2, this shell reads 1",
   };
   expect(unreadable.reason).toContain("version 2");
+});
+
+test("provisioning report pairs the outcome with the observation", () => {
+  // Copied from the Rust test `provision_report_serializes_verbatim`
+  // in `crates/wyrd-desktop/src/commands.rs` — pins the JSON the
+  // backend produces, not a second implementation of it.
+  const ready: ProvisionReport = {
+    result: {
+      result: "verifiedavailable",
+      detail: "drive alpha verified available (socket /drives/alpha/owner.sock)",
+    },
+    observed: { status: "nofile", drives: [], skipped: [] },
+  };
+  expect(ready.result.result).toBe("verifiedavailable");
+  expect(ready.observed.status).toBe("nofile");
+  const busy: ProvisionReport = {
+    result: { result: "busy", drive_dir: "/drives/alpha" },
+    observed: { status: "nofile", drives: [], skipped: [] },
+  };
+  expect(busy.result).toEqual({ result: "busy", drive_dir: "/drives/alpha" });
+  const confirm: ProvisionResult = {
+    result: "incomplete",
+    stage: "confirm",
+    reason: "sole-owner leave needs explicit acknowledgement",
+  };
+  expect(confirm.stage).toBe("confirm");
 });

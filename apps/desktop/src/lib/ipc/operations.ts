@@ -19,6 +19,7 @@ import { invokeCommand, invokeValue } from "./client.js";
 import type { IpcResult } from "./types.js";
 import type {
   DriveSettingsState,
+  ProvisionReport,
   RegistryState,
   Served,
   WireAttr,
@@ -112,4 +113,56 @@ export function listDrives(): Promise<RegistryState> {
  */
 export function driveSettings(driveDir: string): Promise<DriveSettingsState> {
   return invokeValue<DriveSettingsState>("drive_settings", { driveDir });
+}
+
+// Provisioning operations (constrained CLI adapter surface). One
+// wrapper per command, same names and argument shapes — this module
+// invents nothing. Secret paths travel, never contents; every call
+// returns the operation outcome plus the post-run observation, and
+// observed state decides the display. Infallible: outcomes ride
+// inside the payload, rejections throw `IpcTransportError`.
+
+export interface ProvisionCreateArgs {
+  name: string;
+  driveDir: string;
+  relays: string[];
+  identityFile: string;
+  passphraseFile: string;
+  mode: string;
+  noService: boolean;
+}
+
+export interface ProvisionJoinArgs extends ProvisionCreateArgs {
+  invitationFile: string;
+}
+
+export interface ProvisionLeaveArgs {
+  driveDir: string;
+  identityFile: string;
+  passphraseFile: string;
+  acknowledged: boolean;
+}
+
+/**
+ * Create one drive through the installed CLI, then re-read and
+ * probe. `mode` is the platform default `vault`.
+ */
+export function provisionCreate(args: ProvisionCreateArgs): Promise<ProvisionReport> {
+  return invokeValue<ProvisionReport>("provision_create", { args });
+}
+
+/**
+ * Join one drive through the installed CLI with the sealed
+ * invitation file, then re-read and probe.
+ */
+export function provisionJoin(args: ProvisionJoinArgs): Promise<ProvisionReport> {
+  return invokeValue<ProvisionReport>("provision_join", { args });
+}
+
+/**
+ * Leave the drive through the installed CLI, then re-observe.
+ * `acknowledged` carries the sole-owner terminal confirmation.
+ */
+export function provisionLeave(args: ProvisionLeaveArgs): Promise<ProvisionReport> {
+  return invokeValue<ProvisionReport>("provision_leave", { args });
 }
