@@ -866,3 +866,29 @@ fn per_drive_failure_isolation_through_the_commands() {
     first.shutdown();
     second.shutdown();
 }
+
+/// The map is a pinned chokepoint, not a convention: a backend
+/// connected through a `..` alias of a live drive reaches the
+/// owner (the OS resolves the alias), but inserting it refuses
+/// with the rule reason — the alias can never key a second entry
+/// for the same socket.
+#[test]
+fn insert_refuses_a_dotdot_alias_for_a_live_drive() {
+    let owner = running_owner();
+    std::fs::create_dir_all(owner.dir.join("sub")).expect("the alias parent exists");
+    let alias = owner.dir.join("sub").join("..");
+    let backend =
+        DesktopBackend::connect(&alias).expect("the OS resolves the alias to the live socket");
+    backend
+        .lookup("seed.txt")
+        .expect("the alias reaches the live owner");
+    let state = wyrd_desktop::AppState::new();
+    match state.insert(backend) {
+        Err(reason) => assert!(
+            reason.contains("must not contain .."),
+            "the refusal names the rule: {reason}"
+        ),
+        Ok(()) => panic!("a `..`-carrying path must never key the connection map"),
+    }
+    owner.shutdown();
+}

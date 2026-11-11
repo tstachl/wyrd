@@ -137,13 +137,23 @@ impl AppState {
     /// validated (startup's argv) never trip this; it exists so no
     /// future caller can smuggle an unvalidated path into the map.
     pub fn insert(&self, backend: DesktopBackend) -> Result<(), String> {
-        let drive = backend.drive_dir().to_owned();
-        validate_drive_path(&drive.to_string_lossy(), "drive_dir")?;
+        // The value checked is the value keyed: refuse paths that
+        // are not valid UTF-8 outright, and store the `PathBuf` the
+        // rule returns — never the raw path beside it.
+        let validated = match backend.drive_dir().to_str() {
+            Some(dir) => validate_drive_path(dir, "drive_dir")?,
+            None => {
+                return Err(format!(
+                    "drive_dir {} is not valid UTF-8",
+                    backend.drive_dir().display()
+                ));
+            }
+        };
         let mut held = self
             .inner
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
-        held.insert(drive, Arc::new(backend));
+        held.insert(validated, Arc::new(backend));
         Ok(())
     }
 
