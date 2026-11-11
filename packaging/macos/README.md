@@ -38,18 +38,26 @@ before Stage 2, and Stage 0/1 proceed without them.
 
 Bundle identities: app `md.enesis.wyrd` (from `tauri.conf.json`),
 extension `md.enesis.wyrd.fileprovider`, group
-`group.md.enesis.wyrd`. Both the entitlement value and the container
-directory are the literal group id — the system applies no team
-prefix. Verified live 2026-11-11: the system materialised
-`~/Library/Group Containers/group.md.enesis.wyrd/` for team
-`JU2RFHWQPH` under development signing, confirmed by the probe log
-and `fileproviderd`'s own dump. (Prefixed directories on this
-machine, e.g. `W5364U7YZB.group.io.tailscale.ipn.macsys`, are
-groups whose ids literally contain the team prefix — an old naming
-convention, not system behaviour; that misreading caused two review
-rounds of wrong documentation, corrected here.) The container
-materializes only under a team-signed build with provisioning.
-Deployment target macOS 13.0.
+`group.md.enesis.wyrd`. Observed 2026-11-11 under development
+signing on macOS 15.8.2: the system materialised the container at
+the literal group id,
+`~/Library/Group Containers/group.md.enesis.wyrd/`, with no team
+prefix — confirmed by the probe log and `fileproviderd`'s own
+dump. Treat that as this build's resolved path, not a platform
+law: it is verified for development signing only, and other
+signing types (Developer ID, notarised distribution) are
+unverified. (Prefixed directories on this machine, e.g.
+`W5364U7YZB.group.io.tailscale.ipn.macsys`, read most plausibly
+as groups whose ids literally contain the team prefix — an old
+naming convention — but that reading is inferred, not verified.)
+Accordingly: the extension resolves through `containerURL` and
+never hardcodes, and Stage 2 must confirm the daemon-side bind
+lands where the extension resolves before the scheme settles —
+an unsandboxed daemon without the group entitlement cannot call
+`containerURL`, so whatever rule it uses to compute the directory
+needs the same live confirmation this build gave the extension
+side. The container materializes only under a team-signed build
+with provisioning. Deployment target macOS 13.0.
 
 ## Protocol (Stage 0 finding)
 
@@ -86,11 +94,13 @@ The proposed scheme, therefore:
   `~/Library/Group Containers/<group>/Sockets/<drive>.sock`,
   one socket per drive. The daemon is unsandboxed and binds there;
   the extension holds the group entitlement and connects there.
-  `<group>` is the literal `group.md.enesis.wyrd` — value and
-  directory alike, verified live 2026-11-11. Stage 1 probes the
-  container directory form with the stub name `wyrd-probe.sock`
-  under a team-signed build and records the team and build type;
-  the per-drive filename form arrives with Stage 2.
+  `<group>` is the literal `group.md.enesis.wyrd` as observed on
+  the development build (see Bundle identities above for the
+  qualification). Stage 1 probes the container directory form
+  with the stub name `wyrd-probe.sock` under a team-signed build
+  and records the team and build type; the per-drive filename
+  form arrives with Stage 2, which must also live-confirm the
+  daemon's computed bind path against the extension-resolved one.
 - `socket_path_for` stays the cross-platform default; the group
   container path is a macOS-additive override proposal, never a
   replacement. Linux behavior is unchanged.
@@ -169,6 +179,16 @@ of the domain (no probe line until then); if `fileproviderd`
 wedges after a failed first launch (observed once as
 `dead-on-arrival` followed by no relaunch), remove and re-add the
 domain from the containing app to reset the backend binding.
+
+Post-fix hydration observed 2026-11-11 (same machine, identity,
+and build line): after `documentSize`, a freshly re-added domain
+lists `hello.txt` at 26 bytes and opening it yields the canned
+text. Debugging note: Xcode tracks the symlink's mtime, not the
+target's, so editing repo sources alone does not trigger a
+rebuild — Clean Build Folder first, and re-point the local
+project's symlinks after any branch move (an entire evening of
+0-byte reads traced to the local project compiling `master`
+sources without the fix).
 
 One domain for the spike; per-drive domains and isolation arrive
 with Stage 3, under the invariants above.

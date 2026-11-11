@@ -5,11 +5,12 @@
 // bind and the real client arrive in Stage 2; this file then grows
 // into the framing layer.
 //
-// Naming rule: the App Group container directory is the literal
-// group id (`group.md.enesis.wyrd`) — the system applies no team
-// prefix. Verified live 2026-11-11: the system materialised
-// `~/Library/Group Containers/group.md.enesis.wyrd/` for the
-// development team, confirmed by the probe log and fileproviderd.
+// Naming rule (observed, development signing, macOS 15.8.2 —
+// not a platform law): the App Group container directory is the
+// literal group id (`group.md.enesis.wyrd`), confirmed by the
+// probe log and fileproviderd on the 2026-11-11 live run.
+// Other signing types are unverified; Stage 2 must live-confirm
+// the daemon's computed bind path against the resolved one.
 // The probe resolves the directory through `containerURL`, never
 // from a hardcoded path — the listener recipe below does the same
 // by reading the resolved path back out of the probe log.
