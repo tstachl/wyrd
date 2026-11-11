@@ -83,7 +83,7 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("wyrd-hello-\(UUID().uuidString).txt")
         do {
-            try "hello from the Wyrd spike\n".write(
+            try CannedItem.helloContents.write(
                 to: url,
                 atomically: true,
                 encoding: .utf8

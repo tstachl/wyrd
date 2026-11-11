@@ -11,6 +11,11 @@ import UniformTypeIdentifiers
 
 /// One canned item: the working set root, `hello.txt`, or `notes/`.
 final class CannedItem: NSObject, NSFileProviderItem {
+    /// The exact bytes `fetchContents` hydrates for `hello.txt`.
+    /// Single source: `documentSize` and the hydrated file both
+    /// derive from it, so Finder never materialises a 0-byte
+    /// placeholder for content that exists.
+    static let helloContents = "hello from the Wyrd spike\n"
     static let root = CannedItem(
         identifier: .rootContainer,
         parent: .rootContainer,
@@ -65,5 +70,12 @@ final class CannedItem: NSObject, NSFileProviderItem {
             contentVersion: "stage1-canned".data(using: .utf8)!,
             metadataVersion: "stage1-canned".data(using: .utf8)!
         )
+    }
+
+    var documentSize: NSNumber? {
+        // Folders report no size; without this Finder materialises a
+        // 0-byte placeholder for hello.txt and the hydrated bytes
+        // never visibly arrive.
+        isFolder ? nil : NSNumber(value: Self.helloContents.utf8.count)
     }
 }
