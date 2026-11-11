@@ -129,13 +129,22 @@ impl AppState {
 
     /// Insert a pre-connected backend (startup's `--drive-dir`).
     /// Replaces any existing connection for the same drive.
-    pub fn insert(&self, backend: DesktopBackend) {
+    ///
+    /// The map is the chokepoint for the identity rule: the
+    /// backend's drive directory is re-validated here with the
+    /// shared rule, and a violation refuses the insert instead of
+    /// keying a second entry for one drive. Callers that already
+    /// validated (startup's argv) never trip this; it exists so no
+    /// future caller can smuggle an unvalidated path into the map.
+    pub fn insert(&self, backend: DesktopBackend) -> Result<(), String> {
         let drive = backend.drive_dir().to_owned();
+        validate_drive_path(&drive.to_string_lossy(), "drive_dir")?;
         let mut held = self
             .inner
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
         held.insert(drive, Arc::new(backend));
+        Ok(())
     }
 
     /// Resolve the drive directory the frontend named: the absolute
@@ -235,6 +244,11 @@ impl Default for AppState {
 /// command boundary and the registry say `drive_dir`, the settings
 /// reader says `settings drive key` — the same rule, attributed to
 /// the surface that rejected it.
+///
+/// `pub` because startup's argv validation lives in the binary
+/// target outside this crate: the pre-connect exit-2 contract must
+/// call the rule before any socket is touched. The structural
+/// guarantee stays inside the crate at [`AppState::insert`].
 pub fn validate_drive_path(value: &str, noun: &str) -> Result<PathBuf, String> {
     if value.is_empty() {
         return Err(format!("{noun} must not be empty"));
@@ -314,7 +328,7 @@ mod tests {
         // names its artifact, not the wire argument.
         assert!(validate_drive_path("drives/alpha", "settings drive key")
             .unwrap_err()
-            .contains("settings drive key"),);
+            .contains("settings drive key"));
         // The command boundary reports the refusal through its
         // fixed error channel, never as an owner answer.
         match AppState::validate_drive_dir("drives/alpha") {

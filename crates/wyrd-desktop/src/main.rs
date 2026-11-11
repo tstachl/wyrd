@@ -12,9 +12,12 @@
 //! the connection map, and the frontend's selection is presentation
 //! state, never an authorization boundary.
 //!
-//! Nothing about startup is fatal: a missing argument, an unknown
-//! drive directory, or an unreachable owner starts the empty shell
-//! anyway. The lifecycle view then shows the registry (driveless
+//! Nothing about startup is fatal except the argument itself: a
+//! missing argument, an unknown drive directory, or an unreachable
+//! owner starts the empty shell anyway. A malformed `--drive-dir`
+//! (relative, `..`-carrying, or control-byte spelling) exits 2 with
+//! the drive-identity rule reason — it can never key the connection
+//! map. The lifecycle view then shows the registry (driveless
 //! first-run where nothing is registered yet) with per-drive
 //! reachability, and each stopped owner reads as its own
 //! unavailable state. An owner that goes down *after* startup
@@ -60,12 +63,25 @@ const QUIT_DRAIN_POLL: Duration = Duration::from_millis(50);
 /// is optional: without it the shell starts with an empty connection
 /// map and the lifecycle view carries first-run.
 fn drive_dir_from_argv() -> Result<Option<PathBuf>, String> {
-    let mut args = std::env::args().skip(1);
-    let mut drive_dir: Option<String> = None;
+    parse_drive_dir_arg(std::env::args().skip(1))
+}
+
+/// Pure half of [`drive_dir_from_argv`]: parse and validate one
+/// optional `--drive-dir` from explicit tokens, so the argv call
+/// site pins like the registry call site. Validation joins the
+/// shared drive-identity inventory before any socket is touched: a
+/// relative or `..`-carrying spelling exits 2 with the rule reason
+/// instead of keying a map entry no command could address.
+fn parse_drive_dir_arg<I>(args: I) -> Result<Option<PathBuf>, String>
+where
+    I: IntoIterator<Item = String>,
+{
+    let mut raw: Option<String> = None;
+    let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         if arg == "--drive-dir" {
             match args.next() {
-                Some(dir) if drive_dir.is_none() => drive_dir = Some(dir),
+                Some(dir) if raw.is_none() => raw = Some(dir),
                 Some(_) => return Err("duplicate --drive-dir".to_string()),
                 None => return Err("--drive-dir needs a directory".to_string()),
             }
@@ -73,17 +89,9 @@ fn drive_dir_from_argv() -> Result<Option<PathBuf>, String> {
             return Err(format!("unexpected argument: {arg}"));
         }
     }
-    // The argv surface joins the shared drive-identity inventory: a
-    // relative or `..`-carrying spelling exits here instead of
-    // keying a map entry no command could ever address (and a
-    // second connection for a drive the registry names
-    // absolutely).
-    match drive_dir {
+    match raw {
         None => Ok(None),
-        Some(dir) => match wyrd_desktop::validate_drive_path(&dir, "drive_dir") {
-            Ok(path) => Ok(Some(path)),
-            Err(reason) => Err(reason),
-        },
+        Some(dir) => wyrd_desktop::validate_drive_path(&dir, "drive_dir").map(Some),
     }
 }
 
@@ -99,9 +107,17 @@ fn main() {
     // Best-effort pre-connect: where the owner answers, the map
     // starts warm; where it does not, startup still succeeds and
     // the lifecycle view reports the drive unavailable per-drive.
+    // The insert re-validates as the map's structural chokepoint;
+    // argv already validated, so its refusal here is unreachable —
+    // loud, never silent.
     if let Some(dir) = drive_dir {
         match DesktopBackend::connect(&dir) {
-            Ok(backend) => state.insert(backend),
+            Ok(backend) => {
+                if let Err(reason) = state.insert(backend) {
+                    eprintln!("wyrd-desktop: pre-connect {dir:?} refused: {reason}");
+                    std::process::exit(2);
+                }
+            }
             Err(error) => eprintln!("wyrd-desktop: pre-connect {dir:?} failed: {error}"),
         }
     }
@@ -140,4 +156,54 @@ fn main() {
         })
         .run(tauri::generate_context!())
         .expect("wyrd-desktop: failed to run the Tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The argv call site pins like the registry call site: a valid
+    /// absolute path parses, and relative, `..`, control-byte,
+    /// duplicate, missing-value, and unexpected spellings refuse
+    /// with their reasons — before any socket is touched.
+    fn args(words: Vec<&str>) -> Vec<String> {
+        words.into_iter().map(str::to_owned).collect()
+    }
+
+    #[test]
+    fn argv_parsing_enforces_the_drive_identity_rule() {
+        assert_eq!(
+            parse_drive_dir_arg(args(vec![])).unwrap(),
+            None,
+            "no argument starts empty"
+        );
+        assert_eq!(
+            parse_drive_dir_arg(args(vec!["--drive-dir", "/drives/alpha"])).unwrap(),
+            Some(PathBuf::from("/drives/alpha")),
+            "a valid absolute path parses"
+        );
+        for bad in [
+            vec!["--drive-dir", "drives/alpha"],
+            vec!["--drive-dir", "/drives/a/../b"],
+            vec!["--drive-dir", "/drives/al\x00pha"],
+        ] {
+            let label = format!("{bad:?}");
+            assert!(
+                parse_drive_dir_arg(args(bad)).is_err(),
+                "argv refuses {label}"
+            );
+        }
+        assert!(
+            parse_drive_dir_arg(args(vec!["--drive-dir", "/a", "--drive-dir", "/b"])).is_err(),
+            "a duplicate flag refuses"
+        );
+        assert!(
+            parse_drive_dir_arg(args(vec!["--drive-dir"])).is_err(),
+            "a missing value refuses"
+        );
+        assert!(
+            parse_drive_dir_arg(args(vec!["--other"])).is_err(),
+            "an unexpected argument refuses"
+        );
+    }
 }

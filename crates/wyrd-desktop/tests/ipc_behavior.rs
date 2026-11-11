@@ -460,7 +460,9 @@ fn mock_app_with(
     std::path::PathBuf,
 ) {
     let state = wyrd_desktop::AppState::new();
-    state.insert(backend);
+    state
+        .insert(backend)
+        .expect("test backends connect to valid scratch drives");
     mock_app_with_state(state, tag)
 }
 
