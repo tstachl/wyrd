@@ -144,11 +144,6 @@ fn valid_token(value: &str) -> bool {
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
 
-fn has_dotdot(path: &Path) -> bool {
-    path.components()
-        .any(|component| matches!(component, std::path::Component::ParentDir))
-}
-
 /// The daemon's entry rules, mirrored: the shell must agree with
 /// the writer about which entries are valid, or the lifecycle view
 /// would show drives the owner tooling refuses (and vice versa).
@@ -177,18 +172,13 @@ fn validate_entry(key: &str, entry: &RegistryEntryParse) -> Result<(), String> {
             entry.service
         ));
     }
-    if !entry.drive_dir.is_absolute() {
-        return Err(format!(
-            "drive_dir {} must be absolute",
-            entry.drive_dir.display()
-        ));
-    }
-    if has_dotdot(&entry.drive_dir) {
-        return Err(format!(
-            "drive_dir {} must not contain ..",
-            entry.drive_dir.display()
-        ));
-    }
+    // One rule for every drive path in the crate: the shared
+    // command-boundary validator, so the registry reader can never
+    // list a spelling the connection map refuses (or vice versa).
+    // The lossy render feeds the validator exactly like the old
+    // control-byte check did; non-UTF8 spellings were never
+    // loadable paths here.
+    super::validate_drive_dir_str(&entry.drive_dir.to_string_lossy()).map(|_| ())?;
     if entry.mode != "vault" {
         return Err(
             "unknown service mode: registry-managed mount mode travels with the installer follow-up"
@@ -204,17 +194,6 @@ fn validate_entry(key: &str, entry: &RegistryEntryParse) -> Result<(), String> {
         return Err(
             "relays must be non-empty URLs without whitespace or control bytes".to_string(),
         );
-    }
-    if entry
-        .drive_dir
-        .to_string_lossy()
-        .bytes()
-        .any(|byte| byte < 0x20 || byte == 0x7f)
-    {
-        return Err(format!(
-            "drive_dir {} must not contain control characters",
-            entry.drive_dir.display()
-        ));
     }
     Ok(())
 }

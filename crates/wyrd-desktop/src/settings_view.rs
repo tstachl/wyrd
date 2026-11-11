@@ -156,25 +156,10 @@ fn settings_key_for(drive_dir: &Path) -> String {
 }
 
 fn validate_key(key: &str) -> Result<(), String> {
-    if key.is_empty() {
-        return Err("settings drive key must not be empty".to_string());
-    }
-    let path = Path::new(key);
-    if !path.is_absolute() {
-        return Err(format!("settings drive key {key:?} must be absolute"));
-    }
-    if path
-        .components()
-        .any(|component| matches!(component, std::path::Component::ParentDir))
-    {
-        return Err(format!("settings drive key {key:?} must not contain .."));
-    }
-    if key.bytes().any(|byte| byte < 0x20 || byte == 0x7f) {
-        return Err(format!(
-            "settings drive key {key:?} must not contain control characters"
-        ));
-    }
-    Ok(())
+    // One rule for every drive path in the crate: the shared
+    // command-boundary validator, so the settings reader can never
+    // accept a spelling the connection map refuses (or vice versa).
+    super::validate_drive_dir_str(key).map(|_| ())
 }
 
 fn unreadable(reason: String) -> DriveSettings {

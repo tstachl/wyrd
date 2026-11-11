@@ -285,12 +285,10 @@ pub async fn list_drives<R: Runtime>(app: AppHandle<R>) -> RegistryState {
 /// never a silent resolution against the process directory.
 #[tauri::command]
 pub async fn drive_settings<R: Runtime>(app: AppHandle<R>, drive_dir: String) -> DriveSettings {
-    let dir = match super::AppState::validate_drive_dir(&drive_dir) {
+    let dir = match super::validate_drive_dir_str(&drive_dir) {
         Ok(dir) => dir,
-        Err(error) => {
-            return DriveSettings::Unreadable {
-                reason: error.to_string(),
-            };
+        Err(reason) => {
+            return DriveSettings::Unreadable { reason };
         }
     };
     query(

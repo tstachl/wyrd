@@ -152,13 +152,14 @@ impl AppState {
     ///
     /// A refusal here is a local argument refusal through the
     /// `Incompatible` kind — the fixed error channel of the owner
-    /// commands — never an owner answer: no socket was touched, and
-    /// the frontend renders it as a shell bug, not owner state.
-    /// (The local `drive_settings` query instead answers its
-    /// explicit unreadable state.) Unreachable through the shipped
-    /// UI, which only sends registry-validated paths; the rule
-    /// exists so a second integration surface can never smuggle a
-    /// second meaning for one drive through this boundary.
+    /// commands — never an owner answer: no socket was touched. The
+    /// frontend's taxonomy renderer labels that kind "Incompatible
+    /// owner", which overstates a local refusal; that wording gap is
+    /// why the local `drive_settings` query answers its explicit
+    /// unreadable state instead. Unreachable through the shipped UI,
+    /// which only sends registry-validated paths; the rule exists so
+    /// a second integration surface can never smuggle a second
+    /// meaning for one drive through this boundary.
     pub(crate) fn validate_drive_dir(drive_dir: &str) -> Result<PathBuf, BackendError> {
         match validate_drive_dir_str(drive_dir) {
             Ok(path) => Ok(path),

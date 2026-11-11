@@ -88,6 +88,16 @@ function stamp<T>(data: T): Stamped<T> {
   return { data, observedAtMs: Date.now() };
 }
 
+/** Module-level so no caller can lose `this`: mark one drive available. */
+function setAvailable(driveDir: string): void {
+  availabilityByDrive[driveDir] = "available";
+}
+
+/** Module-level so no caller can lose `this`: mark one drive unavailable. */
+function setUnavailable(driveDir: string): void {
+  availabilityByDrive[driveDir] = "unavailable";
+}
+
 export const presentation = {
   get selectedView(): ShellView {
     return selectedView;
@@ -137,11 +147,11 @@ export const presentation = {
    * never call this. Never touches another drive's availability.
    */
   markAvailable(driveDir: string): void {
-    availabilityByDrive[driveDir] = "available";
+    setAvailable(driveDir);
   },
   /** An `Unavailable` answer is the only path here: no transport, owner state unknown. Per drive. */
   markUnavailable(driveDir: string): void {
-    availabilityByDrive[driveDir] = "unavailable";
+    setUnavailable(driveDir);
   },
   clearTransportNotice(): void {
     transportNotice = null;
@@ -174,7 +184,7 @@ export const presentation = {
     pendingRequests = Math.max(0, pendingRequests - 1);
     lastResults[driveDir] = result;
     if (!result.ok && result.error.kind === "unavailable") {
-      this.markUnavailable(driveDir);
+      setUnavailable(driveDir);
     }
     // Every other outcome leaves availability untouched: success
     // paths call `markAvailable` explicitly once their terminal
