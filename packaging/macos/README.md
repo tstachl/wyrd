@@ -24,10 +24,9 @@ before Stage 2, and Stage 0/1 proceed without them.
   principal class `WyrdFileProvider.FileProviderExtension`).
 - `fileprovider/WyrdFileProvider.entitlements` — development
   entitlements: App Sandbox plus the App Group. The group id is
-  written unprefixed in the checked-in file; `build-appex.sh`
-  rewrites it with `TEAM_ID` before signing, and the container
-  becomes `~/Library/Group Containers/<TEAM_ID>.group.md.enesis.wyrd/`.
-  Without `TEAM_ID` the file signs as-is and no container exists.
+  granted literally as written — Xcode does not team-prefix App
+  Group ids — so the script performs no substitution. The container
+  materializes only under a team-signed build with provisioning.
   Production signing, notarization, and the production group
   container are the license-gated tail.
 - `fileprovider/build-appex.sh` — script-driven build: `swiftc`
@@ -39,9 +38,14 @@ before Stage 2, and Stage 0/1 proceed without them.
 
 Bundle identities: app `md.enesis.wyrd` (from `tauri.conf.json`),
 extension `md.enesis.wyrd.fileprovider`, group
-`group.md.enesis.wyrd` written unprefixed in the entitlements file
-and rewritten with `TEAM_ID` at build time (`TEAM_ID.group.md.enesis.wyrd`;
-without it the file signs as-is and no container materializes).
+`group.md.enesis.wyrd`. The entitlement value is granted literally
+as written (verified in the Xcode-built artifact), but the container
+directory macOS materialises for a third-party team gains the team
+prefix: `~/Library/Group Containers/JU2RFHWQPH.group.md.enesis.wyrd`
+for the development team (Apple-owned groups stay unprefixed;
+third-party groups on this machine show the same form, e.g.
+`W5364U7YZB.group.io.tailscale.ipn.macsys`). The container
+materializes only under a team-signed build with provisioning.
 Deployment target macOS 13.0.
 
 ## Protocol (Stage 0 finding)
@@ -76,12 +80,15 @@ The proposed scheme, therefore:
 
 - On macOS the owner serves each drive's interface socket **also**
   inside the App Group container:
-  `~/Library/Group Containers/<group>/Sockets/<drive>.sock`,
+  `~/Library/Group Containers/<TeamID>.<group>/Sockets/<drive>.sock`,
   one socket per drive. The daemon is unsandboxed and binds there;
   the extension holds the group entitlement and connects there.
-  `<group>` is `TEAM_ID.group.md.enesis.wyrd` as produced by the
-  build; Stage 1 probes exactly this path form under a team-signed
-  build and records the team and build type.
+  `<TeamID>.<group>` is `JU2RFHWQPH.group.md.enesis.wyrd` for the
+  development team: the entitlement value stays literal, the
+  directory gains the team prefix. Stage 1 probes the container
+  directory form with the stub name `wyrd-probe.sock` under a
+  team-signed build and records the team and build type; the
+  per-drive filename form arrives with Stage 2.
 - `socket_path_for` stays the cross-platform default; the group
   container path is a macOS-additive override proposal, never a
   replacement. Linux behavior is unchanged.
@@ -91,12 +98,65 @@ The proposed scheme, therefore:
 - `<drive>` must be a stable per-drive fingerprint, coordinated with
   the multi-drive registry (in progress elsewhere) — Stage 2 detail.
 
-This analysis is the Stage 0 confirmation. The live proof — owner
-and extension running under their actual entitlements, socket at the
-production path, owner restart and stale-socket handling, distinct
-sockets for multiple drives — is Stage 1's entry gate, before any
-adapter logic. If the live proof fails, the transport boundary is
+This analysis is the Stage 0 confirmation. The live proof comes
+in two halves. Stage 1's entry gate, before any adapter logic,
+proves the sandbox premise against a stub listener: the sandboxed
+extension, running under its real entitlements, connects to a
+listening socket at the production group-container path, and the
+outcome lands in the Console log. No owner is involved, so owner
+restart, stale-socket handling, and distinct multi-drive sockets
+stay with Stage 2, beside the real client and the daemon-side
+bind. If the Stage 1 probe fails, the transport boundary is
 revisited; nothing in Stage 1 depends on it beyond the probe.
+
+## Stage 1 live run (manual, macOS only)
+
+The repo holds the canonical Swift sources; the local throwaway
+Xcode project references them (never copies) and provides the
+team-signed containing app plus domain registration. Order
+matters: the container does not exist until the system creates it,
+so the app runs before the listener. Procedure:
+
+1. Build and run the containing app from Xcode (team
+   `JU2RFHWQPH`, development signing), add one domain.
+2. Read the resolved socket path from the probe log
+   (`md.enesis.wyrd.fileprovider`, category `domain`): the first
+   pass logs `unreachable <path>: …`, and `<path>` is the
+   team-prefixed location to listen on. If the log says `no group
+   container for group.md.enesis.wyrd` instead, the entitlement is
+   not effective in the running build (ad-hoc signing, missing
+   provisioning) — fix signing and rerun; there is no path to
+   listen on yet.
+3. Start a stub listener at exactly that path — `mkdir -p`
+   only the `Sockets` directory inside the resolved container,
+   never the container itself (that would create a decoy the
+   extension cannot reach) — then force the extension to
+   re-instantiate: quit and relaunch the containing app.
+   Reopening the domain alone may not re-run a surviving
+   extension process, in which case no second probe line appears.
+
+   ```sh
+   p='<path from the probe log>'
+   mkdir -p "$(dirname "$p")"
+   rm -f "$p"
+   python3 - "$p" <<'EOF'
+   import socket, sys
+   s = socket.socket(socket.AF_UNIX)
+   s.bind(sys.argv[1])
+   s.listen(1)
+   print('listening', sys.argv[1], flush=True)
+   s.accept()
+   EOF
+   ```
+4. Open the domain in Finder: `hello.txt` and `notes/` enumerate
+   from canned data; opening `hello.txt` hydrates canned bytes.
+5. Read the probe outcome in Console: `reachable: …` passes the
+   gate. (`listener busy` means the stub exists but cannot take
+   the connection — restart the listener, not the theory.)
+6. Record the macOS version and signing identity with the result.
+
+One domain for the spike; per-drive domains and isolation arrive
+with Stage 3, under the invariants above.
 
 ## Multi-drive invariants (established now)
 
