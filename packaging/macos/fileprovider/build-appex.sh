@@ -59,4 +59,4 @@ codesign --force --sign "$SIGN_IDENTITY" \
     "$APPEX"
 
 echo "built $APPEX"
-codesign -dv "$APPEX" 2>&1 | head -n 4
+codesign -dv "$APPEX" 2>&1 | sed -n '1,4p'
