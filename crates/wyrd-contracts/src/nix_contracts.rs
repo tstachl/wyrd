@@ -206,9 +206,28 @@ fn check_swift_imports(files: &[(&str, &str)]) -> Vec<String> {
 }
 
 /// The module an import segment brings in, or `None` when the
-/// segment is not an import at all.
+/// segment is not an import at all. Access-level modifiers
+/// (`public`, `package`, `internal`, `fileprivate`, `private`,
+/// `open`) and attribute prefixes (`@testable`, `@_exported`) count:
+/// anything starting an import that does not resolve is the
+/// caller's violation, never a skip.
 fn import_module(segment: &str) -> Option<&str> {
     let words: Vec<&str> = segment.split_whitespace().collect();
+    let mut words = words.as_slice();
+    if let Some((&first, rest)) = words.split_first() {
+        if [
+            "public",
+            "package",
+            "internal",
+            "fileprivate",
+            "private",
+            "open",
+        ]
+        .contains(&first)
+        {
+            words = rest;
+        }
+    }
     let (head, tail) = (words.first()?, &words[1..]);
     let after_import = if *head == "import" || *head == "@import" {
         tail
@@ -261,20 +280,27 @@ fn fileprovider_swift_stays_within_the_owner_boundary() {
 #[cfg(test)]
 mod policy_tests {
     use super::*;
+    use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     #[test]
     fn nested_source_is_discovered_and_checked() {
+        struct ScratchDir(PathBuf);
+        impl Drop for ScratchDir {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
         static NEXT: AtomicU64 = AtomicU64::new(0);
-        let root = std::env::temp_dir().join(format!(
+        let root = ScratchDir(std::env::temp_dir().join(format!(
             "wyrd-swift-walk-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
-        let nested = root.join("Sources").join("Nested");
+        )));
+        let nested = root.0.join("Sources").join("Nested");
         fs::create_dir_all(&nested).expect("scratch nested dir is creatable");
         fs::write(nested.join("Bad.swift"), "import WyrdSync\n").expect("scratch file is writable");
-        let (files, errors) = collect_files(&root.join("Sources"), &root, "swift");
+        let (files, errors) = collect_files(&root.0.join("Sources"), &root.0, "swift");
         assert!(
             errors.is_empty(),
             "scratch walk errors: {}",
@@ -286,7 +312,6 @@ mod policy_tests {
             .map(|(p, t)| (p.as_str(), t.as_str()))
             .collect();
         assert_eq!(check_swift_imports(&borrowed).len(), 1);
-        fs::remove_dir_all(&root).expect("scratch cleanup");
     }
 
     #[test]
@@ -309,6 +334,15 @@ mod policy_tests {
         assert_eq!(check_swift_imports(&files).len(), 1);
         let files = [("Sources/Bad.swift", "@_exported import WyrdSync\n")];
         assert_eq!(check_swift_imports(&files).len(), 1);
+    }
+
+    #[test]
+    fn access_modifier_import_fails_closed() {
+        for modifier in ["public", "package", "internal", "fileprivate", "private"] {
+            let source = format!("{modifier} import WyrdSync\n");
+            let files = [("Sources/Bad.swift", source.as_str())];
+            assert_eq!(check_swift_imports(&files).len(), 1, "{modifier}");
+        }
     }
 
     #[test]

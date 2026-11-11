@@ -24,9 +24,10 @@ before Stage 2, and Stage 0/1 proceed without them.
   principal class `WyrdFileProvider.FileProviderExtension`).
 - `fileprovider/WyrdFileProvider.entitlements` — development
   entitlements: App Sandbox plus the App Group. The group id is
-  written unprefixed; the team prefix resolves at install time
-  under provisioning. Ad-hoc builds carry the entitlements but
-  materialize no container. Production signing, notarization,
+  written unprefixed in the checked-in file; `build-appex.sh`
+  rewrites it with `TEAM_ID` before signing, and the container
+  becomes `~/Library/Group Containers/<TEAM_ID>.group.md.enesis.wyrd/`.
+  Without `TEAM_ID` the file signs as-is and no container exists. Production signing, notarization,
   and the production group container are the license-gated tail.
 - `fileprovider/build-appex.sh` — script-driven build: `swiftc`
   against the macOS SDK, manual appex assembly, `codesign`. No
@@ -38,8 +39,8 @@ before Stage 2, and Stage 0/1 proceed without them.
 Bundle identities: app `md.enesis.wyrd` (from `tauri.conf.json`),
 extension `md.enesis.wyrd.fileprovider`, group
 `group.md.enesis.wyrd` written unprefixed in the entitlements file
-(the team prefix resolves at install time under provisioning; an
-ad-hoc build has no team identity and materializes no container).
+and rewritten with `TEAM_ID` at build time (`TEAM_ID.group.md.enesis.wyrd`;
+without it the file signs as-is and no container materializes).
 Deployment target macOS 13.0.
 
 ## Protocol (Stage 0 finding)
@@ -77,10 +78,9 @@ The proposed scheme, therefore:
   `~/Library/Group Containers/<group>/Sockets/<drive>.sock`,
   one socket per drive. The daemon is unsandboxed and binds there;
   the extension holds the group entitlement and connects there.
-  `<group>` is `group.md.enesis.wyrd` as written in the
-  entitlements file, resolved with the team prefix at install time;
-  Stage 1 probes exactly this path form under a team-signed build
-  and records the build type.
+  `<group>` is `TEAM_ID.group.md.enesis.wyrd` as produced by the
+  build; Stage 1 probes exactly this path form under a team-signed
+  build and records the team and build type.
 - `socket_path_for` stays the cross-platform default; the group
   container path is a macOS-additive override proposal, never a
   replacement. Linux behavior is unchanged.
