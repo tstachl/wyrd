@@ -36,6 +36,29 @@ before Stage 2, and Stage 0/1 proceed without them.
   (Linux-only runners), so the contract test is the automated leg
   and the script is human-verified evidence.
 
+## Toolchain shells (devenv)
+
+Two shells, one default. The default devenv shell is the
+reproducible Rust environment and injects the Nix Apple SDK
+(`DEVELOPER_DIR`/`SDKROOT`), which hijacks the `/usr/bin` shims
+away from the system Apple toolchain. `build-appex.sh` undoes
+that injection process-locally and discovers the toolchain
+conventionally (`xcode-select -p`, `xcrun --sdk macosx`), so it
+builds in both shells. For interactive Apple-native work (Swift
+outside the script, Xcode runs, future signing), enter the
+explicit escape hatch instead:
+
+```sh
+devenv --profile native-apple shell
+```
+
+which nulls the Nix SDK, unsets the injected variables (genuinely
+unset, per `test -z "${VAR+x}"`), and drops the Nix `xcrun`
+shadow from `PATH`. No hostname/user auto-activation, direnv
+stays on the default shell, at most two profiles. A deliberate
+Xcode selection is `TOOLCHAIN=<developer dir>` (with `SWIFTC` and
+`SDK` as finer overrides); never export `DEVELOPER_DIR` for it.
+
 Bundle identities: app `md.enesis.wyrd` (from `tauri.conf.json`),
 extension `md.enesis.wyrd.fileprovider`, group
 `group.md.enesis.wyrd`. Observed 2026-11-11 under development
