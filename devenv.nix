@@ -31,6 +31,45 @@ in
   languages.rust.enable = true;
   languages.rust.toolchainFile = ./rust-toolchain.toml;
 
+  # Toolchain-selection profiles (needs devenv >= 1.9; local: 2.4.0).
+  # At most two profiles, explicit activation only
+  # (`devenv --profile <name> shell`): no hostname/user
+  # auto-activation — the same command must not behave differently
+  # depending on where an agent runs it. direnv stays on the default
+  # shell; no secrets in committed configuration. A future
+  # `macos-signing` profile would `extends = [ "native-apple" ]`
+  # with narrowly scoped release tooling only.
+  profiles.native-apple.module = {
+    # Null the Nix Apple SDK: the default shell injects
+    # DEVELOPER_DIR/SDKROOT, hijacking the /usr/bin shims away from
+    # the system Apple toolchain that Swift builds, Xcode runs, and
+    # Stage 4 signing need. Nulling restores conventional Apple
+    # discovery (xcode-select, xcrun). Rust under this profile is
+    # informational, not a guarantee: the contract is that the
+    # default shell stays hermetic; the native profile is explicitly
+    # allowed different SDK semantics.
+    apple.sdk = null;
+
+    # Nulling the SDK does not stop the Darwin cc-wrapper setup hook,
+    # which unconditionally exports DEVELOPER_DIR/SDKROOT at shell
+    # entry (nixpkgs darwin-sdk-setup.bash). enterShell runs after
+    # the hooks, so unset here — genuinely unset, not empty, which
+    # is what `test -z "${VAR+x}"` asserts downstream. This is
+    # shell-local to the profile; the default shell is untouched.
+    #
+    # Same story for PATH: Nix's xcbuild xcrun shadows /usr/bin/xcrun
+    # and knows no macOS SDK ("unable to find sdk: 'macosx'"), so
+    # drop its entry — narrowly, by name, leaving every other entry
+    # alone. Scripts additionally address /usr/bin/xcode-select and
+    # /usr/bin/xcrun by absolute path, so they survive the shadow in
+    # both shells.
+    enterShell = ''
+      unset DEVELOPER_DIR SDKROOT
+      PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -v xcbuild | paste -sd: -)
+      export PATH
+    '';
+  };
+
   packages = with unstable; [
     bats
     cargo-audit

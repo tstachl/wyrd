@@ -6,7 +6,10 @@
 #
 # Usage: packaging/macos/fileprovider/build-appex.sh [out-dir]
 # Environment: ARCH (default: host arch), SIGN_IDENTITY (default:
-# ad-hoc `-`), MIN_MACOS (default: 13.0).
+# ad-hoc `-`), MIN_MACOS (default: 13.0), TOOLCHAIN (default: the
+# active developer directory), SDK (default: the resolved macOS
+# SDK). Works in the default devenv shell and under
+# `devenv --profile native-apple shell` alike.
 set -eu
 set -o pipefail 2>/dev/null || true
 
@@ -16,14 +19,56 @@ ARCH=${ARCH:-$(uname -m)}
 SIGN_IDENTITY=${SIGN_IDENTITY:--}
 MIN_MACOS=${MIN_MACOS:-13.0}
 
-# The devenv shell exports a Nix DEVELOPER_DIR that hijacks the
-# /usr/bin shims, so the CLT toolchain is addressed directly. The
-# CLT ships swiftc, the macOS SDK (FileProvider included), and
-# codesign: no full Xcode install, no .xcodeproj, no XcodeGen.
-TOOLCHAIN=${TOOLCHAIN:-/Library/Developer/CommandLineTools}
-SWIFTC=$TOOLCHAIN/usr/bin/swiftc
-SDK=${SDK:-$TOOLCHAIN/SDKs/MacOSX.sdk}
-unset DEVELOPER_DIR
+# Toolchain discovery is conventional and script-local: the system
+# tools are addressed by absolute path, because under the default
+# devenv shell Nix shadows them (a Nix DEVELOPER_DIR hijacks the
+# /usr/bin shims; a Nix xcbuild xcrun knows no macOS SDK). No
+# shell-wide exports, no hardcoded CLT path.
+XCODE_SELECT=/usr/bin/xcode-select
+XCRUN=/usr/bin/xcrun
+
+# The Nix-injected values must not leak into discovery: unset them
+# in this process (script-local; the calling shell is untouched)
+# and then assert the clean state exactly — genuinely unset, not
+# merely empty. A deliberate Xcode selection is expressed through
+# TOOLCHAIN, never by exporting DEVELOPER_DIR here.
+unset DEVELOPER_DIR SDKROOT
+if [ -n "${DEVELOPER_DIR+x}" ] || [ -n "${SDKROOT+x}" ]; then
+    echo "error: cannot establish a clean Apple toolchain environment;" >&2
+    echo "DEVELOPER_DIR or SDKROOT survived. Enter the Apple-native" >&2
+    echo "shell instead: devenv --profile native-apple shell" >&2
+    exit 1
+fi
+
+# Developer directory from the system selector; aborts with usage
+# guidance when neither the CLT nor Xcode is installed.
+if [ -n "${TOOLCHAIN:-}" ]; then
+    DEVDIR=$TOOLCHAIN
+else
+    DEVDIR=$($XCODE_SELECT -p 2>/dev/null) || {
+        echo "error: no Apple developer tools found." >&2
+        echo "Install the macOS Command Line Tools (xcode-select" >&2
+        echo "--install) or point TOOLCHAIN at a developer directory." >&2
+        exit 1
+    }
+fi
+# The compiler and the SDK resolve through xcrun against that
+# directory, so both the CLT layout ($DEVDIR/usr/bin) and the
+# Xcode layout ($DEVDIR/Toolchains/...) work unchanged.
+SWIFTC=${SWIFTC:-$($XCRUN --sdk macosx --find swiftc 2>/dev/null)} || {
+    echo "error: no swiftc for the macOS SDK under $DEVDIR." >&2
+    exit 1
+}
+SDK=${SDK:-$($XCRUN --sdk macosx --show-sdk-path 2>/dev/null)} || {
+    echo "error: no macOS SDK under $DEVDIR." >&2
+    exit 1
+}
+# Sanity, per the profile contract: the tools that answer are the
+# system ones — execute, don't just resolve.
+swift --version >/dev/null 2>&1 || {
+    echo "error: the Swift toolchain does not run." >&2
+    exit 1
+}
 
 if [ ! -x "$SWIFTC" ]; then
     echo "error: no Swift toolchain at $SWIFTC." >&2
