@@ -220,22 +220,25 @@ test("provisioning report pairs the outcome with the observation", () => {
   // backend produces, not a second implementation of it.
   const ready: ProvisionReport = {
     result: {
-      result: "verifiedavailable",
+      result: "completed",
       detail: "drive alpha verified available (socket /drives/alpha/owner.sock)",
     },
     observed: { status: "nofile", drives: [], skipped: [] },
+    membership: { epoch: 2, known_members: 1 },
   };
-  expect(ready.result.result).toBe("verifiedavailable");
+  expect(ready.result.result).toBe("completed");
   expect(ready.observed.status).toBe("nofile");
+  expect(ready.membership).toEqual({ epoch: 2, known_members: 1 });
   const busy: ProvisionReport = {
     result: { result: "busy", drive_dir: "/drives/alpha" },
     observed: { status: "nofile", drives: [], skipped: [] },
+    membership: null,
   };
   expect(busy.result).toEqual({ result: "busy", drive_dir: "/drives/alpha" });
-  const confirm: ProvisionResult = {
-    result: "incomplete",
-    stage: "confirm",
-    reason: "sole-owner leave needs explicit acknowledgement",
+  expect(busy.membership).toBeNull();
+  const failed: ProvisionResult = {
+    result: "expectedfailure",
+    detail: "error: drive alpha registered but unavailable: verify-socket",
   };
-  expect(confirm.stage).toBe("confirm");
+  expect(failed.result).toBe("expectedfailure");
 });

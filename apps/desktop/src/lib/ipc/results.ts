@@ -354,18 +354,24 @@ export type DriveSettingsState =
 // observed registry rides along flattened. Nothing here may add a
 // shape the Rust side does not produce.
 
-/** The adapter's verdict on the operation — never lifecycle state. Observed state decides the display. */
+/** The adapter's verdict on the operation — never lifecycle state. Only the exit code decides; CLI text rides along as opaque display detail. */
 export type ProvisionResult =
-  | { result: "verifiedavailable"; detail: string }
-  | { result: "registeredbutunavailable"; reason: string }
-  | { result: "incomplete"; stage: string; reason: string }
+  | { result: "completed"; detail: string }
+  | { result: "expectedfailure"; detail: string }
   | { result: "helddrive"; detail: string }
   | { result: "versionmismatch"; reason: string }
   | { result: "busy"; drive_dir: string }
   | { result: "unknown"; detail: string };
 
+/** The operated drive's membership tip as re-observed: terminal owner answer only, never guessed. */
+export interface MembershipObservation {
+  epoch: number | null;
+  known_members: number;
+}
+
 /** One completed lifecycle operation plus the post-run observation. Infallible: unknown states ride inside. */
 export interface ProvisionReport {
   result: ProvisionResult;
   observed: RegistryState;
+  membership: MembershipObservation | null;
 }

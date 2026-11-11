@@ -147,7 +147,7 @@ test("provisioning wrappers send one args object per command", async () => {
   mockIPC((cmd, args) => {
     seen.push({ cmd, args });
     return {
-      result: { result: "verifiedavailable", detail: "ready" },
+      result: { result: "completed", detail: "ready" },
       observed: { status: "nofile", drives: [], skipped: [] },
     };
   });
@@ -171,14 +171,14 @@ test("provisioning wrappers send one args object per command", async () => {
     mode: "vault",
     noService: true,
   });
-  expect(joined.result.result).toBe("verifiedavailable");
+  expect(joined.result.result).toBe("completed");
   const left = await provisionLeave({
     driveDir: "/drives/alpha",
     identityFile: "/keys/identity",
     passphraseFile: "/keys/passphrase",
     acknowledged: true,
   });
-  expect(left.result.result).toBe("verifiedavailable");
+  expect(left.result.result).toBe("completed");
   expect(seen).toEqual([
     {
       cmd: "provision_create",

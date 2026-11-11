@@ -303,17 +303,32 @@ pub async fn drive_settings<R: Runtime>(app: AppHandle<R>, drive_dir: String) ->
 
 /// One completed lifecycle operation plus the observed state that
 /// decides the display. Infallible like the other local queries:
-/// `result` carries the operation outcome (exit codes and fixed CLI
-/// prefixes only — CLI stderr travels as opaque display detail and
-/// is never parsed for lifecycle facts), and `observed` is the
-/// registry re-read plus per-drive socket probe taken *after* the
-/// process completed. Observed state determines the display; the
+/// `result` carries the operation outcome (exit codes only — CLI
+/// stderr travels as opaque display detail and is never parsed for
+/// lifecycle facts), `observed` is the registry re-read plus
+/// per-drive socket probe taken *after* the process completed, and
+/// `membership` is the operated drive's membership tip re-observed
+/// through the owner. Observed state determines the display; the
 /// result indicates the operation outcome, never authoritative
 /// lifecycle state.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ProvisionReport {
     pub result: super::provision::ProvisionResult,
     pub observed: RegistryState,
+    /// The operated drive's membership as the owner reports it now:
+    /// the tip epoch and member count from a terminal `observe`
+    /// answer, or `None` where the owner did not answer. The leave
+    /// contract's independent membership check — exit 0 alone never
+    /// means "left", and CLI text never decides membership.
+    pub membership: Option<MembershipObservation>,
+}
+
+/// The operated drive's membership tip as re-observed after the
+/// operation: terminal owner answer only, never guessed.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct MembershipObservation {
+    pub epoch: Option<u64>,
+    pub known_members: usize,
 }
 
 /// Create one drive through the installed CLI (`bootstrap` without
@@ -489,13 +504,20 @@ pub async fn provision_leave<R: Runtime>(
     .await
 }
 
-/// Run one lifecycle operation serialized per drive: claim the
-/// flight (refuse `Busy` when held), run the blocking CLI exchange
-/// off the async runtime, release the flight, then re-read the
-/// registry and probe every drive — verification-via-reread on every
-/// path, including timeouts and spawn failures. A dead blocking
-/// worker resolves `Unknown`, never success: the outcome is unknown
-/// by definition, and only the observed state decides the display.
+/// Run one lifecycle operation serialized per drive: validate the
+/// identity, claim the flight (refuse `Busy` when held), run the
+/// blocking CLI exchange, release the flight, then re-read the
+/// registry, probe every drive, and re-observe the operated drive's
+/// membership — verification-via-reread on every path, including
+/// timeouts and spawn failures. Everything runs on the blocking
+/// pool (the registry probe fans out over sockets with a per-drive
+/// bound and must never park an async runtime worker). A dead
+/// blocking worker resolves `Unknown`, never success: the outcome
+/// is unknown by definition, and only the observed state decides
+/// the display. The flight releases through an RAII guard, so a
+/// panicking exchange can never wedge the drive as busy — and the
+/// CLI process itself is killed and reaped past the timeout before
+/// the release, so no two operations can overlap.
 async fn run_provision<R, F>(
     app: AppHandle<R>,
     op: &'static str,
@@ -506,57 +528,89 @@ where
     F: FnOnce(&super::AppState, PathBuf) -> super::provision::ProvisionOutcome + Send + 'static,
     R: Runtime,
 {
-    use std::path::PathBuf as StdPathBuf;
     let _flight = app.state::<FlightTracker>().enter();
-    // Validate the drive identity before touching the flight map:
-    // a non-canonical spelling must never key a second flight for
-    // one drive.
-    let dir: StdPathBuf = match super::validate_drive_path(&drive_dir, "drive_dir") {
-        Ok(dir) => dir,
-        Err(reason) => {
+    tauri::async_runtime::spawn_blocking(move || {
+        // Validate the drive identity before touching the flight map:
+        // a non-canonical spelling must never key a second flight
+        // for one drive.
+        let dir = match super::validate_drive_path(&drive_dir, "drive_dir") {
+            Ok(dir) => dir,
+            Err(reason) => {
+                return ProvisionReport {
+                    result: super::provision::ProvisionResult::ExpectedFailure { detail: reason },
+                    observed: registry::list_drives(),
+                    membership: None,
+                };
+            }
+        };
+        let state = app.state::<super::AppState>();
+        if !state.claim_flight(&dir) {
             return ProvisionReport {
-                result: super::provision::ProvisionResult::Incomplete {
-                    stage: "validate".to_string(),
-                    reason,
-                },
+                result: super::provision::ProvisionResult::Busy { drive_dir },
                 observed: registry::list_drives(),
+                membership: observe_membership(&state, &dir),
             };
         }
-    };
-    // Claim the per-drive flight without holding the map across the
-    // exchange: the blocking task owns the claim and the release.
-    let claimed = {
-        let state = app.state::<super::AppState>();
-        state.claim_flight(&dir)
-    };
-    if !claimed {
-        return ProvisionReport {
-            result: super::provision::ProvisionResult::Busy { drive_dir },
-            observed: registry::list_drives(),
-        };
-    }
-    // The exchange runs first, the flight releases inside the same
-    // blocking task, and only then does the re-read observe what the
-    // CLI left behind — never the reverse.
-    let outcome = tauri::async_runtime::spawn_blocking(move || {
-        let state = app.state::<super::AppState>();
+        let _release = FlightRelease::claim(&state, dir.clone());
         let outcome = call(&state, dir.clone());
-        state.release_flight(&dir);
-        outcome
+        // Release before observing: the process is gone (the adapter
+        // kills and reaps past the timeout), so the next operation
+        // can never overlap this one — but the observation still
+        // happens before any report is returned.
+        drop(_release);
+        ProvisionReport {
+            result: outcome.result,
+            observed: registry::list_drives(),
+            membership: observe_membership(&state, &dir),
+        }
     })
     .await
-    .unwrap_or_else(|join| super::provision::ProvisionOutcome {
+    .unwrap_or_else(|join| ProvisionReport {
         result: super::provision::ProvisionResult::Unknown {
             detail: format!("ipc worker failed for {op}: {join}"),
         },
-        stderr: String::new(),
-        code: None,
-    });
-    let observed = registry::list_drives();
-    ProvisionReport {
-        result: outcome.result,
-        observed,
+        observed: registry::list_drives(),
+        membership: None,
+    })
+}
+
+/// Releases one drive's lifecycle flight when dropped: the flight
+/// frees on every path through the exchange — normal return and
+/// panic alike — so a failed exchange can never wedge the drive as
+/// `Busy` until restart. Created only after a successful claim, and
+/// dropped explicitly before the post-run observation (double release
+/// is a harmless no-op).
+struct FlightRelease<'a> {
+    state: &'a super::AppState,
+    drive: PathBuf,
+}
+
+impl<'a> FlightRelease<'a> {
+    fn claim(state: &'a super::AppState, drive: PathBuf) -> Self {
+        FlightRelease { state, drive }
     }
+}
+
+impl Drop for FlightRelease<'_> {
+    fn drop(&mut self) {
+        self.state.release_flight(&self.drive);
+    }
+}
+
+/// Independently re-observe the operated drive's membership: a
+/// terminal `observe` answer carries the tip epoch and member count;
+/// no transport, no terminal answer, or any refusal yields `None` —
+/// membership unknown, never guessed from CLI text.
+fn observe_membership(
+    state: &super::AppState,
+    drive_dir: &std::path::Path,
+) -> Option<MembershipObservation> {
+    let backend = state.connection_for(&drive_dir.to_string_lossy()).ok()?;
+    let status = backend.observe().ok()?;
+    Some(MembershipObservation {
+        epoch: status.tip.as_ref().map(|tip| tip.epoch),
+        known_members: status.known_members,
+    })
 }
 
 #[cfg(test)]
@@ -826,14 +880,15 @@ mod tests {
     /// mirror in `apps/desktop/src/lib/ipc/results.ts` must read
     /// exactly this. Internally tagged result kinds stay lowercase
     /// (matching the `BackendError` kind vocabulary); the observed
-    /// registry rides along flattened. The JSON below is copied into
-    /// `results.test.ts` verbatim.
+    /// registry nests under `observed` and the membership tip under
+    /// `membership`. The JSON below is copied into `results.test.ts`
+    /// verbatim.
     #[test]
     fn provision_report_serializes_verbatim() {
         use super::super::provision::ProvisionResult;
         use super::super::{RegistryState, RegistryStatus};
         let report = super::ProvisionReport {
-            result: ProvisionResult::VerifiedAvailable {
+            result: ProvisionResult::Completed {
                 detail: "drive alpha verified available (socket /drives/alpha/owner.sock)"
                     .to_string(),
             },
@@ -842,12 +897,17 @@ mod tests {
                 drives: Vec::new(),
                 skipped: Vec::new(),
             },
+            membership: Some(super::MembershipObservation {
+                epoch: Some(2),
+                known_members: 1,
+            }),
         };
         assert_eq!(
             serde_json::to_value(&report).unwrap(),
             serde_json::json!({
-                "result": {"result": "verifiedavailable", "detail": "drive alpha verified available (socket /drives/alpha/owner.sock)"},
+                "result": {"result": "completed", "detail": "drive alpha verified available (socket /drives/alpha/owner.sock)"},
                 "observed": {"status": "nofile", "drives": [], "skipped": []},
+                "membership": {"epoch": 2, "known_members": 1},
             })
         );
         let busy = super::ProvisionReport {
@@ -859,10 +919,15 @@ mod tests {
                 drives: Vec::new(),
                 skipped: Vec::new(),
             },
+            membership: None,
         };
         assert_eq!(
-            serde_json::to_value(&busy).unwrap()["result"],
-            serde_json::json!({"result": "busy", "drive_dir": "/drives/alpha"})
+            serde_json::to_value(&busy).unwrap(),
+            serde_json::json!({
+                "result": {"result": "busy", "drive_dir": "/drives/alpha"},
+                "observed": {"status": "nofile", "drives": [], "skipped": []},
+                "membership": null,
+            })
         );
         // Args arrive camelCase on the wire (Tauri maps them) and the
         // struct renames accordingly: a frontend-shaped payload must

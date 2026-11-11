@@ -34,6 +34,7 @@ entered by hand elsewhere. -->
   let error: string | null = $state(null);
 
   const busy = $derived(pending || working);
+  const credentialsReady = $derived(identityFile.trim() !== "" && passphraseFile.trim() !== "");
 
   function relayList(): string[] {
     return relays.split(/[,\s]+/).map((r) => r.trim()).filter((r) => r.length > 0);
@@ -42,12 +43,10 @@ entered by hand elsewhere. -->
   function describeResult(value: ProvisionReport): string {
     const result = value.result;
     switch (result.result) {
-      case "verifiedavailable":
-        return `Ready: ${result.detail}`;
-      case "registeredbutunavailable":
-        return `Registered but unavailable: ${result.reason} — the observation below says what actually answers.`;
-      case "incomplete":
-        return `Incomplete at ${result.stage}: ${result.reason}.`;
+      case "completed":
+        return `Exit 0 — the CLI reported no error. Only the observation below says what happened: ${result.detail}`;
+      case "expectedfailure":
+        return `Exit 2 — expected failure. Only the observation below says what actually exists: ${result.detail}`;
       case "helddrive":
         return `Held drive (another process holds it — not retried): ${result.detail}`;
       case "versionmismatch":
@@ -57,6 +56,13 @@ entered by hand elsewhere. -->
       case "unknown":
         return `Outcome unknown: ${result.detail}. The observation below decides.`;
     }
+  }
+
+  function describeMembership(value: ProvisionReport): string {
+    const membership = value.membership;
+    if (membership === null) return "Membership: unknown (the owner did not answer).";
+    const epoch = membership.epoch === null ? "no tip yet" : `epoch ${membership.epoch}`;
+    return `Membership: ${membership.known_members} member(s), ${epoch}.`;
   }
 
   function observedSummary(value: ProvisionReport): string {
@@ -161,7 +167,7 @@ entered by hand elsewhere. -->
     <Button
       variant="default"
       size="sm"
-      disabled={busy || driveDir.trim() === ""}
+      disabled={busy || driveDir.trim() === "" || !credentialsReady || !acknowledged}
       onclick={() => void run(() => onLeave({ driveDir, identityFile, passphraseFile, acknowledged }))}
     >
       {working ? "Leaving…" : "Leave drive"}
@@ -171,7 +177,7 @@ entered by hand elsewhere. -->
     <Button
       variant="default"
       size="sm"
-      disabled={busy || name.trim() === "" || driveDir.trim() === ""}
+      disabled={busy || name.trim() === "" || driveDir.trim() === "" || !credentialsReady}
       onclick={() =>
         void run(() =>
           onCreate({ name, driveDir, relays: relayList(), identityFile, passphraseFile, mode: "vault", noService: false }),
@@ -184,7 +190,7 @@ entered by hand elsewhere. -->
     <Button
       variant="default"
       size="sm"
-      disabled={busy || name.trim() === "" || driveDir.trim() === "" || invitationFile.trim() === ""}
+      disabled={busy || name.trim() === "" || driveDir.trim() === "" || invitationFile.trim() === "" || !credentialsReady}
       onclick={() =>
         void run(() =>
           onJoin({
@@ -203,13 +209,14 @@ entered by hand elsewhere. -->
     </Button>
   {/if}
 
-  {#if error !== null}
-    <p class="mt-3 text-sm" role="alert">The shell backend did not answer: {error}</p>
+    {#if error !== null}
+    <p class="mt-3 text-sm" role="alert">{error}</p>
   {/if}
   {#if report !== null}
     <div class="mt-3 rounded-md bg-ink px-3 py-2 text-sm text-bone" role="status">
       <p>{describeResult(report)}</p>
       <p class="mt-1 text-bone/70">{observedSummary(report)}</p>
+      <p class="mt-1 text-bone/70">{describeMembership(report)}</p>
     </div>
   {/if}
 </section>

@@ -96,22 +96,27 @@ pub struct LeaveRequest {
 }
 
 /// The adapter's verdict on the *operation*. Never lifecycle state:
-/// the caller re-reads the registry and probes the socket after every
-/// variant (including timeouts and spawn failures), and only the
-/// observed state decides the display.
+/// the caller pairs every variant with a registry re-read, a socket
+/// probe, and (for the operated drive) a membership observation, and
+/// only that observed state decides the display.
+///
+/// Deliberately coarse, per the settled contract
+/// (`docs/design/desktop-shell.md`): only the exit code decides.
+/// CLI stdout/stderr travel as opaque display detail and are never
+/// parsed for lifecycle facts — not even the fixed success line.
+/// Exit 0 reports no error (including the non-owner leave refusal,
+/// which authors nothing); exit 2 reports an expected failure; 78
+/// is the terminal held-drive.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(tag = "result", rename_all = "lowercase")]
 pub enum ProvisionResult {
-    /// Exit 0 with the `verified available` line: the socket answered
-    /// this session. The re-read still decides the display.
-    VerifiedAvailable { detail: String },
-    /// Exit 0 or 2 where the drive is registered but the owner does
-    /// not answer: `registered but unavailable: {stage}: …`, or a
-    /// non-owner leave refusal (authors nothing, exit 0).
-    RegisteredButUnavailable { reason: String },
-    /// Exit 2 `provisioning incomplete at {stage}: …`: nothing is
-    /// registered (or the registry write itself failed).
-    Incomplete { stage: String, reason: String },
+    /// Exit 0: the CLI reported no error. What actually happened is
+    /// decided by the paired observation alone — this never claims a
+    /// lifecycle state.
+    Completed { detail: String },
+    /// Exit 2: usage or expected failure. Opaque detail; the paired
+    /// observation says what actually exists.
+    ExpectedFailure { detail: String },
     /// Exit 78: another process holds the drive. Terminal — the
     /// supervisor must not retry.
     HeldDrive { detail: String },
@@ -283,12 +288,13 @@ struct CliOutput {
 }
 
 /// Run `<cli> <argv…>` and wait up to `timeout`. `std::process` only:
-/// the wait runs on a plain thread and the caller parks on a channel
-/// with `recv_timeout`, so a wedged CLI can never wedge the adapter
-/// past the bound. The child is killed on expiry, but expiry never
-/// means failure of the operation itself — the CLI may have committed
-/// first, so every timeout resolves `Unknown` and triggers
-/// observation.
+/// the wait runs on a plain thread that polls `try_wait`, so a wedged
+/// CLI can never wedge the adapter past the bound. On expiry the
+/// child is killed and reaped before returning: the flight releases
+/// only after the process is gone, so a timeout can never overlap a
+/// later operation on the same drive. Expiry never means failure of
+/// the operation itself — the CLI may have committed first, so every
+/// timeout resolves `Unknown` and triggers observation.
 fn run_cli(cli_bin: &Path, argv: &[OsString], timeout: Duration) -> CliOutput {
     let mut command = std::process::Command::new(cli_bin);
     command.args(argv);
@@ -298,7 +304,7 @@ fn run_cli(cli_bin: &Path, argv: &[OsString], timeout: Duration) -> CliOutput {
     command.stdin(std::process::Stdio::null());
     command.stdout(std::process::Stdio::piped());
     command.stderr(std::process::Stdio::piped());
-    let child = match command.spawn() {
+    let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => {
             return CliOutput {
@@ -310,36 +316,60 @@ fn run_cli(cli_bin: &Path, argv: &[OsString], timeout: Duration) -> CliOutput {
             };
         }
     };
-    let (sender, receiver) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let output = child.wait_with_output();
-        let _ = sender.send(output);
-    });
-    match receiver.recv_timeout(timeout) {
-        Ok(Ok(output)) => CliOutput {
-            code: output.status.code(),
-            status_success: output.status.success(),
-            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-            timed_out: false,
-        },
-        Ok(Err(error)) => CliOutput {
-            code: None,
-            status_success: false,
-            stdout: String::new(),
-            stderr: format!("cannot collect CLI output: {error}"),
-            timed_out: false,
-        },
-        Err(_) => CliOutput {
-            code: None,
-            status_success: false,
-            stdout: String::new(),
-            stderr: format!(
-                "CLI did not complete within {}s; outcome unknown — re-reading observed state",
-                timeout.as_secs()
-            ),
-            timed_out: true,
-        },
+    // Poll for completion; kill and reap past the bound. The output
+    // pipes stay bounded by the CLI's own chatter (a trusted,
+    // terse binary) — but the wait itself is bounded regardless.
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let output = child.wait_with_output();
+                return match output {
+                    Ok(output) => CliOutput {
+                        code: output.status.code().or(status.code()),
+                        status_success: output.status.success(),
+                        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+                        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+                        timed_out: false,
+                    },
+                    Err(error) => CliOutput {
+                        code: status.code(),
+                        status_success: status.success(),
+                        stdout: String::new(),
+                        stderr: format!("cannot collect CLI output: {error}"),
+                        timed_out: false,
+                    },
+                };
+            }
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline {
+                    // Best-effort kill, then reap: the flight must
+                    // never release while the process is still alive.
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return CliOutput {
+                        code: None,
+                        status_success: false,
+                        stdout: String::new(),
+                        stderr: format!(
+                            "CLI did not complete within {}s and was stopped; outcome unknown — re-reading observed state",
+                            timeout.as_secs()
+                        ),
+                        timed_out: true,
+                    };
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => {
+                return CliOutput {
+                    code: None,
+                    status_success: false,
+                    stdout: String::new(),
+                    stderr: format!("cannot wait on CLI process: {error}"),
+                    timed_out: false,
+                };
+            }
+        }
     }
 }
 
@@ -350,127 +380,32 @@ fn describe_code(code: Option<i32>) -> String {
     }
 }
 
+/// Truncate display text to `max` bytes without splitting a
+/// multi-byte character: the cut lands on the last character
+/// boundary at or under `max`, so non-ASCII drive directories
+/// echoed in CLI output can never panic the adapter.
 fn truncate(text: &str, max: usize) -> String {
     let trimmed = text.trim();
     if trimmed.len() <= max {
-        trimmed.to_string()
-    } else {
-        format!("{}…", trimmed[..max].trim_end())
+        return trimmed.to_string();
     }
+    let mut end = max;
+    while end > 0 && !trimmed.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", trimmed[..end].trim_end())
 }
 
-/// Map a completed `bootstrap` run onto the operation verdict. Only
-/// the exit code and the fixed CLI prefixes decide: `verified
-/// available` (ready), `registered but unavailable:` / `provisioning
-/// incomplete at` (expected non-ready states), 78 (terminal
-/// held-drive). Everything after those prefixes is opaque detail.
-fn map_bootstrap_output(output: &CliOutput) -> ProvisionOutcome {
-    if output.timed_out {
-        return ProvisionOutcome {
-            result: ProvisionResult::Unknown {
-                detail: output.stderr.clone(),
-            },
-            stderr: output.stderr.clone(),
-            code: None,
-        };
-    }
-    // Spawn failure surfaces here as code None without a timeout.
-    if output.code.is_none() {
-        return ProvisionOutcome {
-            result: ProvisionResult::Unknown {
-                detail: output.stderr.clone(),
-            },
-            stderr: output.stderr.clone(),
-            code: None,
-        };
-    }
-    let code = output.code.unwrap_or(2);
-    let stdout = output.stdout.clone();
-    let stderr = output.stderr.clone();
-    if output.status_success && stdout.contains("verified available") {
-        return ProvisionOutcome {
-            result: ProvisionResult::VerifiedAvailable {
-                detail: truncate(&stdout, 300),
-            },
-            stderr,
-            code: Some(code),
-        };
-    }
-    if code == EXIT_HELD_DRIVE {
-        return ProvisionOutcome {
-            result: ProvisionResult::HeldDrive {
-                detail: truncate(&stderr, 500),
-            },
-            stderr,
-            code: Some(code),
-        };
-    }
-    // Both non-ready states print on stderr with fixed prefixes; a
-    // non-owner-shaped refusal cannot occur for bootstrap, so every
-    // exit-2 line here is one of the two provisioning states.
-    if stderr.contains("provisioning incomplete at ") {
-        let (stage, reason) = split_incomplete(&stderr);
-        return ProvisionOutcome {
-            result: ProvisionResult::Incomplete { stage, reason },
-            stderr,
-            code: Some(code),
-        };
-    }
-    if stderr.contains("registered but unavailable:") {
-        return ProvisionOutcome {
-            result: ProvisionResult::RegisteredButUnavailable {
-                reason: truncate(&stderr, 500),
-            },
-            stderr,
-            code: Some(code),
-        };
-    }
-    // Anything else at exit 2 is an expected CLI failure (usage,
-    // credentials, invitation decode): registered-nothing is the safe
-    // reading, so `Incomplete` with the opaque detail — the re-read
-    // decides what actually exists.
-    ProvisionOutcome {
-        result: ProvisionResult::Incomplete {
-            stage: "cli".to_string(),
-            reason: truncate(&stderr, 500),
-        },
-        stderr,
-        code: Some(code),
-    }
-}
-
-/// Split `provisioning incomplete at {stage}: {rest}` into its stage
-/// and reason. The stage token is the CLI's fixed vocabulary
-/// (`validate | initialize | verify-open | read-registry |
-/// write-registry`); anything unparseable keeps the whole line as
-/// the reason under stage `cli` — never a panic on opaque text.
-fn split_incomplete(stderr: &str) -> (String, String) {
-    let marker = "provisioning incomplete at ";
-    match stderr.find(marker) {
-        Some(index) => {
-            let rest = stderr[index + marker.len()..].trim();
-            let mut parts = rest.splitn(2, ':');
-            let stage = parts.next().unwrap_or("cli").trim().to_string();
-            let reason = parts.next().unwrap_or("").trim().to_string();
-            let reason = if reason.is_empty() {
-                truncate(stderr, 500)
-            } else {
-                truncate(&reason, 500)
-            };
-            (stage, reason)
-        }
-        None => ("cli".to_string(), truncate(stderr, 500)),
-    }
-}
-
-/// Map a completed `member leave` run onto the operation verdict. The
-/// sharp edge is the non-owner refusal: it authors nothing and exits
-/// 0, so exit 0 alone never means "left" — the membership
-/// re-observation decides. The CLI prints `only an owner can remove
-/// a device:` for that case; the adapter reports it as
-/// `RegisteredButUnavailable` (registered, membership unchanged) and
-/// the re-read proves it.
-fn map_leave_output(output: &CliOutput) -> ProvisionOutcome {
+/// Map a completed process run onto the operation verdict. Only the
+/// exit code decides: 0 reports no error (stdout/stderr ride along
+/// as opaque display detail), 2 is an expected failure, 78 is the
+/// terminal held-drive. No prefix is matched, no lifecycle fact is
+/// derived — the paired observation alone decides what the display
+/// says. Shared by `bootstrap` and `member leave`: both CLIs obey
+/// the same exit contract, and both need the same honesty (a
+/// non-owner leave exits 0 while authoring nothing, so exit 0 must
+/// never mean "left").
+fn map_exit_output(output: &CliOutput) -> ProvisionOutcome {
     if output.timed_out || output.code.is_none() {
         return ProvisionOutcome {
             result: ProvisionResult::Unknown {
@@ -481,50 +416,27 @@ fn map_leave_output(output: &CliOutput) -> ProvisionOutcome {
         };
     }
     let code = output.code.unwrap_or(2);
-    let combined = format!("{}\n{}", output.stdout, output.stderr);
+    // Opaque detail only: the full CLI text (trimmed and bounded)
+    // travels for display, never for mapping.
+    let detail = truncate(&format!("{}\n{}", output.stdout, output.stderr), 500);
+    let stderr = output.stderr.clone();
+    if output.status_success {
+        return ProvisionOutcome {
+            result: ProvisionResult::Completed { detail },
+            stderr,
+            code: Some(code),
+        };
+    }
     if code == EXIT_HELD_DRIVE {
         return ProvisionOutcome {
-            result: ProvisionResult::HeldDrive {
-                detail: truncate(&combined, 500),
-            },
-            stderr: output.stderr.clone(),
-            code: Some(code),
-        };
-    }
-    if output.status_success {
-        if combined.contains("only an owner can remove a device:") {
-            return ProvisionOutcome {
-                result: ProvisionResult::RegisteredButUnavailable {
-                    reason: "non-owner leave refused: authors nothing".to_string(),
-                },
-                stderr: output.stderr.clone(),
-                code: Some(code),
-            };
-        }
-        return ProvisionOutcome {
-            result: ProvisionResult::VerifiedAvailable {
-                detail: truncate(&combined, 300),
-            },
-            stderr: output.stderr.clone(),
-            code: Some(code),
-        };
-    }
-    if combined.contains("pass --yes to confirm") {
-        return ProvisionOutcome {
-            result: ProvisionResult::Incomplete {
-                stage: "confirm".to_string(),
-                reason: "sole-owner leave needs explicit acknowledgement".to_string(),
-            },
-            stderr: output.stderr.clone(),
+            result: ProvisionResult::HeldDrive { detail },
+            stderr,
             code: Some(code),
         };
     }
     ProvisionOutcome {
-        result: ProvisionResult::Incomplete {
-            stage: "cli".to_string(),
-            reason: truncate(&combined, 500),
-        },
-        stderr: output.stderr.clone(),
+        result: ProvisionResult::ExpectedFailure { detail },
+        stderr,
         code: Some(code),
     }
 }
@@ -532,8 +444,9 @@ fn map_leave_output(output: &CliOutput) -> ProvisionOutcome {
 /// Run one `bootstrap` provisioning through the version-matched CLI:
 /// version check first (hard failure on mismatch), then the structured
 /// argv run, then the exit-code map. Every path — including timeouts
-/// and spawn failures — returns an outcome the caller pairs with a
-/// registry re-read and socket probe; no path reports lifecycle state.
+/// (killed and reaped) and spawn failures — returns an outcome the
+/// caller pairs with a registry re-read, socket probes, and a
+/// membership re-observation; no path reports lifecycle state.
 pub fn run_bootstrap(
     cli_bin: &Path,
     request: &ProvisionRequest,
@@ -550,17 +463,14 @@ pub fn run_bootstrap(
         Ok(argv) => argv,
         Err(reason) => {
             return ProvisionOutcome {
-                result: ProvisionResult::Incomplete {
-                    stage: "validate".to_string(),
-                    reason,
-                },
+                result: ProvisionResult::ExpectedFailure { detail: reason },
                 stderr: String::new(),
                 code: None,
             };
         }
     };
     let output = run_cli(cli_bin, &argv, timeout);
-    map_bootstrap_output(&output)
+    map_exit_output(&output)
 }
 
 /// Run one `member leave` through the version-matched CLI, with the
@@ -576,7 +486,7 @@ pub fn run_leave(cli_bin: &Path, request: &LeaveRequest, timeout: Duration) -> P
     }
     let argv = leave_argv(request);
     let output = run_cli(cli_bin, &argv, timeout);
-    map_leave_output(&output)
+    map_exit_output(&output)
 }
 
 #[cfg(test)]
@@ -723,11 +633,15 @@ mod tests {
         );
     }
 
-    /// Bootstrap exit mapping uses codes plus fixed prefixes only:
-    /// ready, registered-but-unavailable, incomplete, and the
-    /// terminal 78 each land exactly once.
+    /// Exit mapping uses the exit code only — never the CLI text.
+    /// Exit 0 completes (the paired observation decides what that
+    /// means — a non-owner leave also exits 0 while authoring
+    /// nothing), exit 2 is an expected failure with opaque detail,
+    /// 78 is the terminal held-drive, and timeouts resolve unknown.
     #[test]
-    fn bootstrap_exit_mapping_uses_codes_and_prefixes() {
+    fn exit_mapping_uses_the_code_only() {
+        // Exit 0 with the success line: completed, and the opaque
+        // detail rides along for display — never for mapping.
         let ready = CliOutput {
             code: Some(0),
             status_success: true,
@@ -736,33 +650,59 @@ mod tests {
             stderr: String::new(),
             timed_out: false,
         };
+        match map_exit_output(&ready).result {
+            ProvisionResult::Completed { detail } => {
+                assert!(detail.contains("verified available"), "detail: {detail}")
+            }
+            other => panic!("exit 0 completes: {other:?}"),
+        }
+        // A non-owner leave refusal also exits 0: completed as well —
+        // exit 0 must never mean "left". The membership observation
+        // decides.
+        let refusal = CliOutput {
+            code: Some(0),
+            status_success: true,
+            stdout: "only an owner can remove a device: ask the owner to run: member remove <id>\n"
+                .to_string(),
+            stderr: String::new(),
+            timed_out: false,
+        };
         assert!(matches!(
-            map_bootstrap_output(&ready).result,
-            ProvisionResult::VerifiedAvailable { .. }
+            map_exit_output(&refusal).result,
+            ProvisionResult::Completed { .. }
         ));
-        let unavailable = CliOutput {
+        // Exit 2 with any text: expected failure, detail opaque.
+        let failed = CliOutput {
             code: Some(2),
             status_success: false,
             stdout: String::new(),
             stderr: "error: drive alpha registered but unavailable: verify-socket: owner.sock never appeared\n".to_string(),
             timed_out: false,
         };
-        assert!(matches!(
-            map_bootstrap_output(&unavailable).result,
-            ProvisionResult::RegisteredButUnavailable { .. }
-        ));
-        let incomplete = CliOutput {
+        match map_exit_output(&failed).result {
+            ProvisionResult::ExpectedFailure { detail } => {
+                assert!(
+                    detail.contains("registered but unavailable"),
+                    "detail: {detail}"
+                )
+            }
+            other => panic!("exit 2 fails expectedly: {other:?}"),
+        }
+        // An unacknowledged sole-owner leave (exit 2) is the same
+        // shape: no confirm-stage taxonomy, just opaque detail plus
+        // observation.
+        let unacked = CliOutput {
             code: Some(2),
             status_success: false,
             stdout: String::new(),
-            stderr: "error: provisioning incomplete at initialize: drive exists and is locked\n"
+            stderr: "error: Removing the sole owner is valid but terminal: pass --yes to confirm\n"
                 .to_string(),
             timed_out: false,
         };
-        match map_bootstrap_output(&incomplete).result {
-            ProvisionResult::Incomplete { stage, .. } => assert_eq!(stage, "initialize"),
-            other => panic!("incomplete maps with its stage: {other:?}"),
-        }
+        assert!(matches!(
+            map_exit_output(&unacked).result,
+            ProvisionResult::ExpectedFailure { .. }
+        ));
         let held = CliOutput {
             code: Some(78),
             status_success: false,
@@ -771,7 +711,7 @@ mod tests {
             timed_out: false,
         };
         assert!(matches!(
-            map_bootstrap_output(&held).result,
+            map_exit_output(&held).result,
             ProvisionResult::HeldDrive { .. }
         ));
         let timed_out = CliOutput {
@@ -782,40 +722,73 @@ mod tests {
             timed_out: true,
         };
         assert!(matches!(
-            map_bootstrap_output(&timed_out).result,
+            map_exit_output(&timed_out).result,
             ProvisionResult::Unknown { .. }
         ));
     }
 
-    /// The non-owner leave refusal exits 0 but authors nothing: the
-    /// adapter reports it as membership-unchanged, and the re-read
-    /// proves it — exit 0 alone never means "left".
+    /// Truncation never splits a multi-byte character: the cut lands
+    /// on a character boundary even when the budget falls mid-glyph,
+    /// so non-ASCII drive directories in CLI output cannot panic.
     #[test]
-    fn non_owner_leave_refusal_maps_membership_unchanged() {
-        let refusal = CliOutput {
-            code: Some(0),
-            status_success: true,
-            stdout: "only an owner can remove a device: ask the owner to run: member remove <id>\n"
-                .to_string(),
-            stderr: String::new(),
-            timed_out: false,
-        };
-        assert!(matches!(
-            map_leave_output(&refusal).result,
-            ProvisionResult::RegisteredButUnavailable { .. }
-        ));
-        let confirmed = CliOutput {
-            code: Some(2),
-            status_success: false,
-            stdout: String::new(),
-            stderr: "error: Removing the sole owner is valid but terminal: pass --yes to confirm\n"
-                .to_string(),
-            timed_out: false,
-        };
-        match map_leave_output(&confirmed).result {
-            ProvisionResult::Incomplete { stage, .. } => assert_eq!(stage, "confirm"),
-            other => panic!("unacknowledged sole-owner leave lands on confirm: {other:?}"),
+    fn truncate_never_splits_a_character() {
+        assert_eq!(truncate("hello", 10), "hello");
+        assert_eq!(truncate("  padded  ", 10), "padded");
+        let text = "drive /drives/\u{00e9}t\u{00e9} ready";
+        assert!(truncate(text, 100).contains("\u{00e9}t\u{00e9}"));
+        // A budget landing inside the two-byte \u{00e9} shortens to the
+        // boundary instead of panicking.
+        let cut = truncate(text, 15);
+        assert!(cut.is_ascii() || cut.len() <= 18, "cut: {cut}");
+        // Full multi-byte stress: every budget is a valid string.
+        let wide = "\u{65e5}\u{672c}\u{8a9e}\u{30c6}\u{30b9}\u{30c8} drive";
+        for max in 0..=wide.len() + 4 {
+            let out = truncate(wide, max);
+            assert!(out.len() <= max + 3, "budget {max}: {out}");
         }
+    }
+
+    /// A wedged CLI is killed and reaped past the timeout: the
+    /// adapter resolves unknown, the process is gone, and no thread
+    /// is left waiting on it.
+    #[test]
+    fn wedged_cli_is_killed_past_the_timeout() {
+        let dir =
+            std::env::temp_dir().join(format!("wyrd-desktop-fakecli-{}-wedge", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cli = dir.join("wyrd");
+        // Answers the version check instantly, then sleeps past any
+        // test timeout on every other argv.
+        let version = env!("CARGO_PKG_VERSION");
+        std::fs::write(
+            &cli,
+            format!(
+                "#!/bin/sh\nif [ \"$1\" = \"__build_info\" ]; then\necho \"update build: {version}\"\nexit 0\nfi\nsleep 30\nexit 0\n"
+            ),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let start = std::time::Instant::now();
+        let outcome = run_bootstrap(&cli, &create_request(), Duration::from_secs(2));
+        assert!(
+            start.elapsed() < Duration::from_secs(20),
+            "the wait is bounded by the timeout"
+        );
+        assert!(
+            matches!(outcome.result, ProvisionResult::Unknown { .. }),
+            "a wedged CLI resolves unknown: {:?}",
+            outcome.result
+        );
+        // The child was killed and reaped: no `sleep 30` outlives the
+        // adapter. (Reaping is structural — the wait loop kills then
+        // waits — so the assertion is the bounded return above; a
+        // leaked child would wedge the next claim, pinned by the IPC
+        // flight test.)
+        std::fs::remove_dir_all(&dir).unwrap_or(());
     }
 
     /// Write a fake `wyrd` CLI: a shell script answering
@@ -848,24 +821,28 @@ mod tests {
     }
 
     /// End to end through a fake CLI binary: version check passes
-    /// against the workspace version, the structured argv run
-    /// reports the canned ready line, and the outcome is verified
-    /// available — the full `run_bootstrap` path the IPC command
-    /// drives, with no mock.
+    /// against the workspace version, the structured argv run exits
+    /// 0, and the outcome completes with the opaque CLI text — the
+    /// full `run_bootstrap` path the IPC command drives, with no
+    /// mock. What the text says is display detail; the code decides.
     #[test]
-    fn run_bootstrap_reports_verified_available_through_a_fake_cli() {
+    fn run_bootstrap_completes_through_a_fake_cli() {
+        let dir =
+            std::env::temp_dir().join(format!("wyrd-desktop-fakecli-{}-ready", std::process::id()));
         let cli = fake_cli(
             "ready",
             "drive alpha verified available (socket /drives/alpha/owner.sock)",
             0,
         );
         let outcome = run_bootstrap(&cli, &create_request(), Duration::from_secs(30));
-        assert!(
-            matches!(outcome.result, ProvisionResult::VerifiedAvailable { .. }),
-            "fake ready maps verified: {:?}",
-            outcome.result
-        );
+        match &outcome.result {
+            ProvisionResult::Completed { detail } => {
+                assert!(detail.contains("verified available"), "detail: {detail}")
+            }
+            other => panic!("fake exit 0 completes: {other:?}"),
+        }
         assert_eq!(outcome.code, Some(0));
+        std::fs::remove_dir_all(&dir).unwrap_or(());
     }
 
     /// A version-skewed CLI is a hard failure before any lifecycle
@@ -893,16 +870,19 @@ mod tests {
             "skew refuses before the lifecycle argv runs: {:?}",
             outcome.result
         );
+        std::fs::remove_dir_all(&dir).unwrap_or(());
     }
 
     /// A failing fake CLI maps through the exit-code table: exit 2
-    /// with the incomplete prefix lands on its stage, and the opaque
-    /// detail never decides lifecycle state by itself.
+    /// is an expected failure with opaque detail, and the re-read —
+    /// not the detail — decides lifecycle state.
     #[test]
-    fn run_leave_reports_incomplete_through_a_fake_cli() {
+    fn run_leave_fails_expectedly_through_a_fake_cli() {
+        let dir = std::env::temp_dir().join(format!(
+            "wyrd-desktop-fakecli-{}-leave-refused",
+            std::process::id()
+        ));
         let cli = fake_cli("leave-refused", "", 2);
-        // The body stdout is empty here; exercise the mapping with
-        // a direct unit instead: exit 2 with no prefix is stage cli.
         let outcome = run_leave(
             &cli,
             &LeaveRequest {
@@ -913,11 +893,38 @@ mod tests {
             },
             Duration::from_secs(30),
         );
-        // The fake prints nothing, so the map lands on stage cli —
-        // the shape the re-read disambiguates, never the detail.
-        match outcome.result {
-            ProvisionResult::Incomplete { stage, .. } => assert_eq!(stage, "cli"),
-            other => panic!("empty exit-2 leave lands on cli: {other:?}"),
-        }
+        assert!(
+            matches!(outcome.result, ProvisionResult::ExpectedFailure { .. }),
+            "exit 2 fails expectedly: {:?}",
+            outcome.result
+        );
+        std::fs::remove_dir_all(&dir).unwrap_or(());
+    }
+
+    /// Join runs the same collapsed path as create: the invitation
+    /// argv is structured (pinned above) and an exit-0 join
+    /// completes with opaque detail through the fake CLI.
+    #[test]
+    fn run_join_completes_through_a_fake_cli() {
+        let dir = std::env::temp_dir().join(format!(
+            "wyrd-desktop-fakecli-{}-join-ready",
+            std::process::id()
+        ));
+        let cli = fake_cli(
+            "join-ready",
+            "drive beta verified available (socket /drives/beta/owner.sock)",
+            0,
+        );
+        let mut request = create_request();
+        request.name = "beta".to_string();
+        request.drive_dir = PathBuf::from("/drives/beta");
+        request.invitation_file = Some(PathBuf::from("/tmp/invite.sealed"));
+        let outcome = run_bootstrap(&cli, &request, Duration::from_secs(30));
+        assert!(
+            matches!(outcome.result, ProvisionResult::Completed { .. }),
+            "fake exit-0 join completes: {:?}",
+            outcome.result
+        );
+        std::fs::remove_dir_all(&dir).unwrap_or(());
     }
 }
