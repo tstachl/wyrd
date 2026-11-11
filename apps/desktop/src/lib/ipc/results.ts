@@ -349,10 +349,11 @@ export type DriveSettingsState =
 //
 // Source of truth: `ProvisionResult` in
 // `crates/wyrd-desktop/src/provision.rs` and `ProvisionReport` in
-// `crates/wyrd-desktop/src/commands.rs` — the result kinds stay
-// lowercase, matching the `BackendError` kind vocabulary, and the
-// observed registry rides along flattened. Nothing here may add a
-// shape the Rust side does not produce.
+// `crates/wyrd-desktop/src/commands.rs` — only the exit code is
+// ever mapped, CLI text rides as opaque detail, and the observed
+// registry nests under `observed` with the membership tip under
+// `membership`. Nothing here may add a shape the Rust side does
+// not produce.
 
 /** The adapter's verdict on the operation — never lifecycle state. Only the exit code decides; CLI text rides along as opaque display detail. */
 export type ProvisionResult =

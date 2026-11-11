@@ -23,13 +23,11 @@
 //! - Version mismatch is a hard failure, never silent fallback.
 //!
 //! Layering: `std::process` only — no new Cargo edge, so the
-//! `wyrd-desktop` dependency-DAG policy is untouched. CLI stderr
-//! travels as opaque display detail and is never parsed for lifecycle
-//! facts; the only stable signals are the exit codes above plus the
-//! fixed stdout prefixes the CLI contract pins (`verified available`,
-//! `provisioning incomplete at`, `registered but unavailable:`,
-//! `pass --yes to confirm`, `removed … at epoch`, `only an owner can
-//! remove a device:`).
+//! `wyrd-desktop` dependency-DAG policy is untouched. CLI stdout and
+//! stderr travel as opaque display detail and are never parsed for
+//! lifecycle facts; the only stable signal is the exit code (0
+//! success, 2 usage-or-expected-failure, 78 terminal held-drive),
+//! paired with independent re-observation.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -114,8 +112,9 @@ pub enum ProvisionResult {
     /// decided by the paired observation alone — this never claims a
     /// lifecycle state.
     Completed { detail: String },
-    /// Exit 2: usage or expected failure. Opaque detail; the paired
-    /// observation says what actually exists.
+    /// Exit 2 or an adapter-side refusal: usage, expected failure,
+    /// or a validation refusal that never spawned a process. Opaque
+    /// detail; the paired observation says what actually exists.
     ExpectedFailure { detail: String },
     /// Exit 78: another process holds the drive. Terminal — the
     /// supervisor must not retry.
@@ -277,8 +276,8 @@ pub fn leave_argv(request: &LeaveRequest) -> Vec<OsString> {
 }
 
 /// Raw completed-process capture: exit code, stdout, stderr, and
-/// whether the wait timed out. Stderr is opaque display detail —
-/// callers map only on the code plus the fixed prefixes below.
+/// whether the wait timed out. Stdout/stderr are opaque display
+/// detail — callers map on the exit code alone, never on text.
 struct CliOutput {
     code: Option<i32>,
     status_success: bool,
@@ -406,16 +405,26 @@ fn truncate(text: &str, max: usize) -> String {
 /// non-owner leave exits 0 while authoring nothing, so exit 0 must
 /// never mean "left").
 fn map_exit_output(output: &CliOutput) -> ProvisionOutcome {
-    if output.timed_out || output.code.is_none() {
+    if output.timed_out {
         return ProvisionOutcome {
             result: ProvisionResult::Unknown {
                 detail: output.stderr.clone(),
             },
             stderr: output.stderr.clone(),
-            code: output.code,
+            code: None,
         };
     }
-    let code = output.code.unwrap_or(2);
+    // A missing code without a timeout is a spawn or collection
+    // failure: the outcome is unknown, same as a timeout.
+    let Some(code) = output.code else {
+        return ProvisionOutcome {
+            result: ProvisionResult::Unknown {
+                detail: output.stderr.clone(),
+            },
+            stderr: output.stderr.clone(),
+            code: None,
+        };
+    };
     // Opaque detail only: the full CLI text (trimmed and bounded)
     // travels for display, never for mapping.
     let detail = truncate(&format!("{}\n{}", output.stdout, output.stderr), 500);
@@ -749,8 +758,11 @@ mod tests {
     }
 
     /// A wedged CLI is killed and reaped past the timeout: the
-    /// adapter resolves unknown, the process is gone, and no thread
-    /// is left waiting on it.
+    /// adapter resolves unknown, the spawned process is gone, and no
+    /// wait is left hanging on it. (The kill targets the spawned
+    /// shell itself; a grandchild it spawned is the shell's problem,
+    /// not the adapter's — which is why this test asserts the
+    /// bounded return and the release, not process-table absence.)
     #[test]
     fn wedged_cli_is_killed_past_the_timeout() {
         let dir =
@@ -783,11 +795,11 @@ mod tests {
             "a wedged CLI resolves unknown: {:?}",
             outcome.result
         );
-        // The child was killed and reaped: no `sleep 30` outlives the
-        // adapter. (Reaping is structural — the wait loop kills then
-        // waits — so the assertion is the bounded return above; a
-        // leaked child would wedge the next claim, pinned by the IPC
-        // flight test.)
+        // The wait was bounded by the timeout, and the reaped child
+        // leaves the flight free: the IPC flight test pins the
+        // release, and a leaked child would wedge the next claim.
+        // (The shell script's own `sleep` grandchild is not the
+        // adapter's to reap.)
         std::fs::remove_dir_all(&dir).unwrap_or(());
     }
 

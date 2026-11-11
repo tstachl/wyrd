@@ -32,8 +32,8 @@
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager, Runtime};
 use wyrd_owner_client::{
-    WireAttr, WireDirEntry, WireFreshness, WireLiveness, WireMutationKind, WireMutationOutcome,
-    WireNode, WireParentToken, WireSyncStatus,
+    OwnerClient, WireAttr, WireDirEntry, WireFreshness, WireLiveness, WireMutationKind,
+    WireMutationOutcome, WireNode, WireParentToken, WireSyncStatus,
 };
 
 use super::registry::{self, RegistryState, RegistryStatus};
@@ -548,28 +548,41 @@ where
             return ProvisionReport {
                 result: super::provision::ProvisionResult::Busy { drive_dir },
                 observed: registry::list_drives(),
-                membership: observe_membership(&state, &dir),
+                membership: observe_membership(&dir),
             };
         }
         let _release = FlightRelease::claim(&state, dir.clone());
         let outcome = call(&state, dir.clone());
-        // Release before observing: the process is gone (the adapter
-        // kills and reaps past the timeout), so the next operation
-        // can never overlap this one — but the observation still
-        // happens before any report is returned.
-        drop(_release);
-        ProvisionReport {
+        // The flight releases only after the observation below: the
+        // observation is part of the operation, so a second request
+        // on the same drive waits for the full verified picture
+        // instead of interleaving with it. (The process itself is
+        // already gone — the adapter kills and reaps past the
+        // timeout — so holding here serializes observation, never
+        // process overlap.)
+        let report = ProvisionReport {
             result: outcome.result,
             observed: registry::list_drives(),
-            membership: observe_membership(&state, &dir),
-        }
+            membership: observe_membership(&dir),
+        };
+        drop(_release);
+        report
     })
     .await
     .unwrap_or_else(|join| ProvisionReport {
         result: super::provision::ProvisionResult::Unknown {
             detail: format!("ipc worker failed for {op}: {join}"),
         },
-        observed: registry::list_drives(),
+        // A dead worker is a shell bug, never an owner answer: report
+        // the registry as unreadable with the reason instead of
+        // probing sockets from the fallback path.
+        observed: RegistryState {
+            status: RegistryStatus::Unreadable {
+                reason: format!("ipc worker failed for {op}: {join}"),
+            },
+            drives: Vec::new(),
+            skipped: Vec::new(),
+        },
         membership: None,
     })
 }
@@ -601,12 +614,17 @@ impl Drop for FlightRelease<'_> {
 /// terminal `observe` answer carries the tip epoch and member count;
 /// no transport, no terminal answer, or any refusal yields `None` —
 /// membership unknown, never guessed from CLI text.
-fn observe_membership(
-    state: &super::AppState,
-    drive_dir: &std::path::Path,
-) -> Option<MembershipObservation> {
-    let backend = state.connection_for(&drive_dir.to_string_lossy()).ok()?;
-    let status = backend.observe().ok()?;
+///
+/// Bounded like the registry probe (5 s): a wedged owner must cost
+/// seconds on a finished operation, never the client's default
+/// response wait. Connects directly with the probe timeout instead
+/// of going through the connection map — the same shape as the
+/// registry's per-drive probe.
+fn observe_membership(drive_dir: &std::path::Path) -> Option<MembershipObservation> {
+    const MEMBERSHIP_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+    let client = OwnerClient::connect_drive(drive_dir).ok()?;
+    let mut client = client.with_timeout(MEMBERSHIP_PROBE_TIMEOUT).ok()?;
+    let status = client.observe().ok()?;
     Some(MembershipObservation {
         epoch: status.tip.as_ref().map(|tip| tip.epoch),
         known_members: status.known_members,
