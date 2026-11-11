@@ -93,8 +93,9 @@ the status accurately and link to that evidence.
 - Terminology follows the defining document (e.g. the three senses of
   "recovery"); do not redefine terms locally.
 - Status claims use the vocabulary above.
-- Review reports live verbatim on ngit as `review:*` issues. Findings
-  become issues; contracts change through issues, not through edits to
-  old reports. The finding workflow: verify each finding against the
-  current commit, classify it, track accepted work as issues, and leave
-  the original issue body unchanged.
+- Review reports live verbatim on ngit as `review:*` issues. For each
+  actionable finding: verify it against the current commit, classify it
+  (confirmed, already fixed, duplicate, rejected, or unresolved pending
+  a decision), track accepted work as issues, and leave the original
+  issue body unchanged. A stale finding must never read as a current
+  defect.

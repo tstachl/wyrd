@@ -2,9 +2,10 @@
 
 Goal: produce three independent, evidence-only reviews at one commit
 from a clean, isolated worktree. Reviews are historical evidence, not
-policy). Reviews live on ngit as labeled
-issues; find them with `gate issue list --label review:architecture`
-(and `review:security`, `review:code-quality`, `review:release`).
+policy. Reviews live on ngit as labeled
+issues; find them with `gate issue list --status open,applied --label review:architecture`
+(and `review:security`, `review:code-quality`, `review:release`; plain
+`gate issue list` hides `applied` issues by default).
 
 The orchestrator (human or parent agent) owns provenance, cohesion,
 and posting. Each reviewer owns only its report text.

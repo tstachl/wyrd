@@ -67,9 +67,6 @@ check_file() {
 }
 
 while IFS= read -r md; do
-  # Archived reviews are frozen evidence: their links may point at
-  # paths that have since moved. They are exempt by design.
-  case "$md" in docs/reviews/archive/*) continue ;; esac
   check_file "$md"
 done < <((git ls-files '*.md'; git ls-files --others --exclude-standard '*.md') | grep -v '^vendor/' | sort -u)
 
