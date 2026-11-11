@@ -333,13 +333,29 @@ them. The rules, all inherited from the interface contract:
   links the durable side, never serves presentation. If a future
   contributor reaches for `wyrd-core`, `wyrd-sync`, `wyrd-view`, or
   `wyrd-format` from this crate, the gate (next section) refuses.
-- One client per drive connection, held under exclusive access. The
-  shared client is sequential (`&mut self` per exchange) and poisons
-  itself on the first `Unconfirmed`, so concurrent Tauri commands
-  serialize on the backend's single instance; when one request
-  poisons the connection, every operation after it resolves
-  `Unconfirmed` without touching the socket, and reconnection mints
-  a new instance. Outstanding operations at reconnect time resolve
+- Drive identity rides in every drive-scoped command, never in
+  backend state. Each command that touches a drive takes the
+  absolute drive directory as an exact string — the same rule as
+  the settings keys — and the backend resolves the connection
+  from it. The frontend's selected drive is presentation state,
+  never an authorization boundary: there is no implicit active
+  drive in backend state, and a selection must never authorize
+  access to another drive's connection (no confused deputy across
+  drives). Authorization stays with the owner connection — the
+  socket's same-UID and protocol checks — not with the path
+  string, and registry content stays discovery metadata, never
+  proof of identity.
+- One client per drive connection, held under exclusive access.
+  The shared client is sequential (`&mut self` per exchange) and
+  poisons itself on the first `Unconfirmed`, so concurrent Tauri
+  commands serialize on that drive's single instance; when one
+  request poisons the connection, every operation on that drive
+  after it resolves `Unconfirmed` without touching the socket,
+  and reconnection mints a new instance for that drive only. A
+  poisoned connection for one drive leaves every other drive's
+  connections untouched — per-drive failure isolation is a
+  property of the connection map, not an accident of scheduling.
+  Outstanding operations at reconnect time resolve
   `Unconfirmed` — reconnection never replays a mutation and never
   converts an unconfirmed outcome into success. The implementing PR
   demonstrates these properties; the exact blocking-pool wiring is
@@ -375,9 +391,11 @@ verdict.
 
 - Drive lifecycle: registered drives, each verified this
   session, and the drive this shell serves — creation, joining,
-  and leaving stay outside the shell per the lifecycle-authority
-  OD below (discovery and availability here, execution in the
-  provisioning and membership flows).
+  and leaving stay outside the shell in stage 2 per the
+  lifecycle-authority OD below (discovery and availability here,
+  execution in the provisioning and membership flows). Stage 5
+  adds the constrained launcher; the shell never becomes the
+  authority.
 - Status/posture: durable observation, liveness, freshness — the
   three kept distinct (a live socket is not a durable fact; a paused
   owner is reachable and quiet, not down).
@@ -427,14 +445,27 @@ verdict.
   owner's availability this session, and shows membership and
   posture facts from `observe` — it never creates, joins, or
   leaves. Creation and joining belong to the provisioning workflow,
-  leaving belongs to membership authorship, and both stay with
-  their existing authorities and follow-up work (installer issue
-  for provisioning UX, service enablement, and credential handling).
-  The view guides toward those flows instead of executing them.
-  Spawning the CLI from the backend was rejected: binary discovery,
-  version skew, process lifecycle, secrets-adjacent paths, dialog
-  permissions, and CLI-output-as-UX would establish a second
-  integration surface that the stage exists to avoid.
+  leaving belongs to membership authorship, and in stage 2 both
+  stay with their existing authorities and follow-up work
+  (installer issue for provisioning UX, service enablement, and
+  credential handling). The view guides toward those flows instead
+  of executing them. Spawning the CLI from the backend was rejected
+  for stage 2: binary discovery, version skew, process lifecycle,
+  secrets-adjacent paths, dialog permissions, and CLI-output-as-UX
+  would establish a second integration surface that the stage
+  exists to avoid. Stage 5 supersedes that rejection under the
+  multi-drive commitment below — not by re-arguing it, but because
+  each cited concern gets an explicit control: the installer ships
+  the version-matched CLI beside the UI (no discovery); mismatch
+  is a hard failure (no skew); the adapter waits for process
+  completion and the desktop exiting mid-operation is a forced
+  termination that reconciles on next launch (no lifecycle);
+  secret contents never cross IPC or argv, only file paths (no
+  secrets-adjacent surfaces); the dialog plugin links only with
+  the shipped view that needs it (no open capability); and the
+  adapter uses only exit codes plus independent re-observation,
+  with CLI stderr as opaque display detail that is never parsed
+  (no CLI-output-as-UX).
 - Settings are read-only in stage 2 (OD, decided): the settings
   view deserializes the existing `settings.json` schema through a
   private presentation model (`DriveSettingsView`) and presents one
@@ -569,6 +600,14 @@ documented as behavior (issue 17 owns the extension, not this note).
 Distribution mechanics (archives, signing, updates) stay with the
 installer issue; auto-update is explicitly v0.8.
 
+The installer also ships the `wyrd` CLI beside the UI as a
+version-matched pair: stage 5 drives lifecycle operations through
+it, so the rehearsal cannot pass unless the installed CLI answers
+the shell's version check. A missing or mismatched CLI is a hard
+failure at the first lifecycle operation, never a silent fallback
+— discovery is by fixed co-installation path, never `PATH`
+search.
+
 ## Verification
 
 - `layer_contracts` gate green on the new crate, including the
@@ -583,13 +622,21 @@ installer issue; auto-update is explicitly v0.8.
   `Unconfirmed`, never recast as failures. Forced termination leaves
   every outstanding outcome unknown and requires reconciliation
   after reconnect.
-- Human-path rehearsal (shared with the installer issue): install,
-  create drive, see it, quit cleanly — no terminal. The create
-  step belongs to installer integration (provisioning UX, service
-  enablement, credential handling travel with that issue): stage 2
-  proves the shell observes, presents, and shuts down gracefully,
-  and the integrated rehearsal proves install → create → discover
-  → quit once provisioning lands there.
+- Human-path rehearsal (packaging in stage 3, completion in
+  stage 5): install, create drive, see it, quit cleanly — no
+  terminal. The create step belongs to runtime provisioning
+  (constrained CLI adapter plus independent verification): stage
+  2 proves the shell observes, presents, and shuts down
+  gracefully, the multi-drive shell proves per-drive observation
+  and first-run, and the integrated rehearsal proves install →
+  create → discover → quit once provisioning lands in stage 5.
+- Multi-drive acceptance (stage 4): one owner's socket dying
+  invalidates neither other drives' snapshots nor their
+  connections (per-drive isolation proof against two live
+  owners); every drive-scoped command carries the absolute drive
+  directory and the backend keeps no implicit active drive
+  (selection-as-presentation proof); driveless first-run renders
+  the empty lifecycle view instead of exiting.
 - No new wire bytes, so no new golden vectors: the backend speaks
   through the shared client, already pinned by `vectors.json`. Any
   drift in the mapped types fails the existing field-name snapshot,
@@ -631,11 +678,104 @@ installer issue; auto-update is explicitly v0.8.
 2. Three views against the live interface — never against mocked
    owner behavior. The lifecycle view is observational (registry
    plus per-drive availability probes; provisioning execution
-   stays with the installer follow-up) and the settings view is
-   read-only; the unavailable state, graceful-quit drain, and
-   presentation-cache discipline ship here.
+   arrives with runtime provisioning below) and the settings view
+   is read-only; the unavailable state, graceful-quit drain, and
+   presentation-cache discipline ship here. (Landed.)
 3. Packaging inputs consumed by the installer issue; human-path
    rehearsal.
+4. Multi-drive shell (nostr:nevent1qqsta3wx4nfzx5md5ww9649nvlunrht8wewa605vkzgc68z682rsjqcpz9mhxue69uhkwunpwdczuap49eehgvfc4fr):
+   one window, one backend connection per drive, explicit drive
+   identity (absolute drive directory) in every drive-scoped
+   command with no implicit active drive and no authorization from
+   frontend selection, per-drive failure isolation, drive
+   selection, per-drive snapshots, driveless first-run. No process
+   spawning, no new plugins.
+5. Runtime provisioning (nostr:nevent1qqsx9357fqqfup9g7kurf7gdcgtjf8qaceay3a90wzxjw6sresg69eqpz9mhxue69uhkwunpwdczuap49eehgcl6hz9):
+   the constrained CLI adapter for create/join/leave with
+   verification-via-reread, credential-file selection,
+   sole-owner confirmation as operation contract (`--yes` at the
+   CLI boundary), and per-drive mode selection and
+   reconfiguration.
+
+## Multi-drive commitment (decided, v0.4)
+
+One application instance manages multiple independently managed
+drives: one backend connection and independently observed
+lifecycle state per drive. Drive creation, joining, leaving, and
+materialization configuration are runtime, per-drive operations;
+installation provisions application artifacts and
+service/credential infrastructure, not a permanently singular
+drive. The wire protocol and identity contracts are unchanged,
+and the layer gate, the observer-only settings rule, and the
+normative cache semantics all carry over unmodified.
+
+`mode` below is the registry entry's service mode — how this
+device runs and surfaces the drive (`vault` headless owner,
+`mount` FUSE projection, File Provider when issue 17 lands) — not
+the contract's materialization policy (`docs/contracts/sync-and-peers.md`,
+"Materialization policy vs peer role": what the device retains —
+`full`, `partial`, `on-demand`). The two axes are independent: a
+device may surface a drive through FUSE while retaining it fully,
+or through File Provider while retaining on demand. "The
+materializer" below means whichever service-mode integration
+currently surfaces the drive.
+
+The desktop may launch constrained, version-matched CLI lifecycle
+operations but never becomes a lifecycle or durable-store
+authority. The contract: the desktop invokes the installed CLI
+through a small Rust adapter with structured arguments (never
+shell-constructed); secret contents never cross IPC or argv, only
+credential file paths; operations are non-interactive with
+explicit exit semantics; the desktop waits, then re-reads the
+registry and probes the socket independently, and observed state
+alone determines the display. The adapter uses only the CLI's
+exit codes (0 success, 2 usage-or-expected-failure, 78 terminal
+held-drive) plus re-observation: CLI stderr travels as opaque
+display detail and is never parsed, so a refusal the adapter
+cannot distinguish still resolves through what the owner and
+registry actually say afterwards. No overlapping lifecycle
+operations on one drive — a second request while one is in flight
+is refused with an explicit per-drive busy state, never queued
+behind a service restart; no implicit retries of destructive
+operations — a timeout or process failure triggers observation,
+never re-execution; version mismatch is a hard failure. An
+interrupted mode change recovers like the bootstrap
+partial-completion model: every stage (stop, clear, reconfigure,
+restart, verify) is a registry-plus-socket claim the next
+observation re-verifies, never an assumed step. Authority stays
+where it is: CLI/core hold lifecycle authority, the desktop is
+launcher plus observer, registry and socket are observed evidence,
+the frontend is presentation.
+
+Sole-owner leave confirmation is operation contract, not UI
+convention: the UI explains the consequences and the CLI boundary
+requires `--yes`, so a frontend that omits the dialog cannot
+bypass the destructive-operation requirement. After completion
+the desktop independently re-observes membership and lifecycle
+state either way.
+
+Mode is a display string end to end: the shell shows the
+registry's service mode and never interprets it. Service mode is
+mutable per-device per-drive. Drive identity is
+immutable; membership is lifecycle; mode and relays are mutable
+device-by-drive configuration; credential files and secrets are
+replaceable while device identity stays immutable — replacing a
+device means removing the old membership and admitting the new
+key, never rotating identity in place; the platform default
+applies only at create/join and never silently overrides an
+existing choice. Changing mode is a lifecycle operation (stop the
+materializer, clear conflicting registrations, reconfigure,
+restart the service, verify), not a settings mutation. A drive's
+identity and membership stay uncoupled from how any particular
+device materializes it.
+
+Canonical homes: the two staged issues hold the operation
+contract (identity strings, confirmation enforcement, busy
+states, recovery steps); this note holds the architecture
+(connection map, authority split, staging, verification). The
+guardrails repeated above point at their issue-canonical
+wording; on any divergence the issues win for operations and
+this note wins for architecture.
 
 ## Open questions for reviewers
 
@@ -668,4 +808,9 @@ installer issue; auto-update is explicitly v0.8.
 The per-user registry file (`drives.json`, schema version 1, reader
 refuses newer versions loudly). Nothing else: the shell and its
 provisioning forward existing mutation and status shapes and add no
-durable drive fact, envelope, or protocol byte.
+durable drive fact, envelope, or protocol byte. New service-mode
+values are data under the unchanged schema: a reader that does not
+know a mode skips that entry with a reason, so an older desktop
+omits the drive from its list (with the skip shown) rather than
+reporting it unavailable — forward compatibility holds at entry
+granularity.
