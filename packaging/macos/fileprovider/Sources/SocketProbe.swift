@@ -5,11 +5,11 @@
 // bind and the real client arrive in Stage 2; this file then grows
 // into the framing layer.
 //
-// Naming rule: the entitlement value stays literal
-// (`group.md.enesis.wyrd`), but the container directory macOS
-// materialises for a third-party team gains the team prefix:
-// `~/Library/Group Containers/<TeamID>.group.md.enesis.wyrd`
-// (`JU2RFHWQPH.group.md.enesis.wyrd` for the development team).
+// Naming rule: the App Group container directory is the literal
+// group id (`group.md.enesis.wyrd`) — the system applies no team
+// prefix. Verified live 2026-11-11: the system materialised
+// `~/Library/Group Containers/group.md.enesis.wyrd/` for the
+// development team, confirmed by the probe log and fileproviderd.
 // The probe resolves the directory through `containerURL`, never
 // from a hardcoded path — the listener recipe below does the same
 // by reading the resolved path back out of the probe log.

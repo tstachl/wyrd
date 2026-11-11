@@ -73,9 +73,8 @@ cp "$HERE/Info.plist" "$CONTENTS/Info.plist"
 # The development entitlements travel with every build, including
 # ad-hoc ones: embedding is harmless, but the App Group container
 # only materializes under a team-signed build with provisioning.
-# The entitlement value is granted literally as written, but the
-# container directory gains the team prefix
-# (<TeamID>.group.md.enesis.wyrd), so no substitution happens here.
+# Value and container directory are the literal group id — no team
+# prefix, verified live 2026-11-11 — so no substitution happens here.
 # Stage 1 probes the team-signed form and records it.
 # TEAM_ID is ignored and always has been: warn rather than let an
 # old caller believe the group id was rewritten.
