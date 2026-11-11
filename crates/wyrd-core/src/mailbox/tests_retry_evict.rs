@@ -229,8 +229,11 @@ fn evicted_retry_mail_redelivers_after_restart() {
     let deadline = Duration::from_secs(60);
     let start = std::time::Instant::now();
     let mut fresh_seen = false;
-    let mut redelivered = 0;
-    while !fresh_seen || redelivered < PARKED {
+    // Distinct evicted contents, not receptions: held park mail is
+    // re-offered every rotation while it settles Retry, so counting
+    // receptions would spin with the scheduler instead of converging.
+    let mut redelivered = std::collections::HashSet::new();
+    while !fresh_seen || redelivered.len() < PARKED {
         assert!(
             start.elapsed() < deadline,
             "evicted mail redelivers and fresh mail arrives"
@@ -240,7 +243,7 @@ fn evicted_retry_mail_redelivers_after_restart() {
                 replay.settle(delivery.id(), Disposition::Ack).unwrap();
                 fresh_seen = true;
             } else {
-                redelivered += 1;
+                redelivered.insert(delivery.envelope().ciphertext.clone());
                 replay.settle(delivery.id(), Disposition::Retry).unwrap();
             }
         } else {
@@ -248,5 +251,5 @@ fn evicted_retry_mail_redelivers_after_restart() {
         }
     }
     assert!(fresh_seen, "fresh mail delivers after restart");
-    assert_eq!(redelivered, PARKED, "every evicted wrap redelivers");
+    assert_eq!(redelivered.len(), PARKED, "every evicted wrap redelivers");
 }
