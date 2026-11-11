@@ -24,6 +24,9 @@ result*
 # Tauri codegen (`tauri-build` output: schemas, embedded context)
 crates/wyrd-desktop/gen/
 
+# macOS appex build output (`build-appex.sh`; unsigned, local only)
+packaging/macos/fileprovider/build/
+
 # Repo packers (scratch files for review workflows)
 repomix*
 

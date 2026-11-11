@@ -173,3 +173,41 @@ fn the_nix_module_declares_exactly_one_owner_per_drive() {
         );
     }
 }
+
+/// The macOS File Provider adapter stays a dumb owner-client: its
+/// Swift sources import platform frameworks and the socket client
+/// only — never store, engine, or sync internals. The adapter is not
+/// a Cargo member, so this scan (not a `MemberPolicy` allow-list) is
+/// the executable form of the OD-8 boundary.
+#[test]
+fn fileprovider_swift_stays_within_the_owner_boundary() {
+    let dir = workspace_root().join("packaging/macos/fileprovider/Sources");
+    let mut sources: Vec<_> = fs::read_dir(&dir)
+        .expect("fileprovider Sources is readable")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("fileprovider Sources entries are readable")
+        .into_iter()
+        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "swift"))
+        .collect();
+    // Never pass vacuously: an empty source set would check nothing.
+    assert!(!sources.is_empty(), "the adapter holds Swift sources");
+    sources.sort_by_key(|entry| entry.file_name());
+    for entry in &sources {
+        let text = fs::read_to_string(entry.path()).expect("Swift source is readable");
+        for line in text.lines().map(str::trim_start) {
+            let module = line.strip_prefix("import ").map(|rest| {
+                rest.split([' ', '('])
+                    .next()
+                    .unwrap_or(rest)
+                    .trim_end_matches(['?', '!'])
+            });
+            if let Some(module) = module {
+                assert!(
+                    ["Foundation", "FileProvider", "Darwin", "os"].contains(&module),
+                    "{} imports {module}: outside the owner boundary",
+                    entry.file_name().to_string_lossy()
+                );
+            }
+        }
+    }
+}
