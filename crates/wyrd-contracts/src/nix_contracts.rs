@@ -173,3 +173,202 @@ fn the_nix_module_declares_exactly_one_owner_per_drive() {
         );
     }
 }
+
+/// The Swift import surface the adapter may use: platform
+/// frameworks and the socket client only. This pins the import
+/// surface, not file or API access — a future rule owns shapes like
+/// `Process` or drive-path construction.
+fn allowed_swift_import(module: &str) -> bool {
+    ["Foundation", "FileProvider", "Darwin", "os"].contains(&module)
+}
+
+/// Import violations in an explicit file list: path to offending
+/// module. Pure so the negative tests prove the checker bites
+/// without touching the filesystem. Import lines fail closed:
+/// attribute prefixes (`@testable`, `@_exported`), tab separators,
+/// and semicolon-joined imports all resolve; a line that starts an
+/// import and resolves to no allowed shape is a violation, never a
+/// silent skip.
+fn check_swift_imports(files: &[(&str, &str)]) -> Vec<String> {
+    let mut violations = Vec::new();
+    for (path, text) in files {
+        for line in text.lines().map(str::trim_start) {
+            for segment in line.split(';') {
+                if let Some(module) = import_module(segment.trim_start()) {
+                    if module.is_empty() || !allowed_swift_import(module) {
+                        violations.push(format!("{path} imports {module}"));
+                    }
+                }
+            }
+        }
+    }
+    violations
+}
+
+/// The module an import segment brings in, or `None` when the
+/// segment is not an import at all. Access-level modifiers
+/// (`public`, `package`, `internal`, `fileprivate`, `private`,
+/// `open`) and attribute prefixes (`@testable`, `@_exported`) count:
+/// anything starting an import that does not resolve is the
+/// caller's violation, never a skip.
+fn import_module(segment: &str) -> Option<&str> {
+    let words: Vec<&str> = segment.split_whitespace().collect();
+    let mut words = words.as_slice();
+    if let Some((&first, rest)) = words.split_first() {
+        if [
+            "public",
+            "package",
+            "internal",
+            "fileprivate",
+            "private",
+            "open",
+        ]
+        .contains(&first)
+        {
+            words = rest;
+        }
+    }
+    let (head, tail) = (words.first()?, &words[1..]);
+    let after_import = if *head == "import" || *head == "@import" {
+        tail
+    } else if head.starts_with('@') && tail.first().is_some_and(|w| *w == "import") {
+        &tail[1..]
+    } else {
+        return None;
+    };
+    Some(
+        after_import
+            .first()
+            .copied()
+            .unwrap_or("")
+            .trim_end_matches(['?', '!', '(']),
+    )
+}
+
+/// The macOS File Provider adapter stays a dumb owner-client: its
+/// Swift sources import platform frameworks and the socket client
+/// only — never store, engine, or sync internals. The adapter is not
+/// a Cargo member, so this scan (not a `MemberPolicy` allow-list) is
+/// the executable form of the OD-8 boundary.
+#[test]
+fn fileprovider_swift_stays_within_the_owner_boundary() {
+    let root = workspace_root();
+    let (files, errors) = collect_files(
+        &root.join("packaging/macos/fileprovider/Sources"),
+        &root,
+        "swift",
+    );
+    assert!(
+        errors.is_empty(),
+        "source walk errors:\n- {}",
+        errors.join("\n- ")
+    );
+    // Never pass vacuously: an empty file set would check nothing.
+    assert!(!files.is_empty(), "the adapter holds Swift sources");
+    let borrowed: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(p, t)| (p.as_str(), t.as_str()))
+        .collect();
+    let violations = check_swift_imports(&borrowed);
+    assert!(
+        violations.is_empty(),
+        "owner-boundary violations:\n- {}",
+        violations.join("\n- ")
+    );
+}
+
+#[cfg(test)]
+mod policy_tests {
+    use super::*;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    #[test]
+    fn nested_source_is_discovered_and_checked() {
+        struct ScratchDir(PathBuf);
+        impl Drop for ScratchDir {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let root = ScratchDir(std::env::temp_dir().join(format!(
+            "wyrd-swift-walk-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        )));
+        let nested = root.0.join("Sources").join("Nested");
+        fs::create_dir_all(&nested).expect("scratch nested dir is creatable");
+        fs::write(nested.join("Bad.swift"), "import WyrdSync\n").expect("scratch file is writable");
+        let (files, errors) = collect_files(&root.0.join("Sources"), &root.0, "swift");
+        assert!(
+            errors.is_empty(),
+            "scratch walk errors: {}",
+            errors.join("; ")
+        );
+        assert_eq!(files.len(), 1, "the nested source is discovered");
+        let borrowed: Vec<(&str, &str)> = files
+            .iter()
+            .map(|(p, t)| (p.as_str(), t.as_str()))
+            .collect();
+        assert_eq!(check_swift_imports(&borrowed).len(), 1);
+    }
+
+    #[test]
+    fn disallowed_import_is_rejected() {
+        let files = [("Sources/Bad.swift", "import WyrdSync\n")];
+        let violations = check_swift_imports(&files);
+        assert_eq!(violations.len(), 1);
+        assert!(violations[0].contains("WyrdSync"));
+    }
+
+    #[test]
+    fn objc_import_fails_closed() {
+        let files = [("Sources/Bad.swift", "@import WyrdSync;\n")];
+        assert_eq!(check_swift_imports(&files).len(), 1);
+    }
+
+    #[test]
+    fn attribute_prefixed_import_fails_closed() {
+        let files = [("Sources/Bad.swift", "@testable import WyrdSync\n")];
+        assert_eq!(check_swift_imports(&files).len(), 1);
+        let files = [("Sources/Bad.swift", "@_exported import WyrdSync\n")];
+        assert_eq!(check_swift_imports(&files).len(), 1);
+    }
+
+    #[test]
+    fn access_modifier_import_fails_closed() {
+        for modifier in ["public", "package", "internal", "fileprivate", "private"] {
+            let source = format!("{modifier} import WyrdSync\n");
+            let files = [("Sources/Bad.swift", source.as_str())];
+            assert_eq!(check_swift_imports(&files).len(), 1, "{modifier}");
+        }
+    }
+
+    #[test]
+    fn tab_separated_import_fails_closed() {
+        let files = [("Sources/Bad.swift", "import\tWyrdSync\n")];
+        assert_eq!(check_swift_imports(&files).len(), 1);
+    }
+
+    #[test]
+    fn second_import_on_one_line_is_checked() {
+        let files = [("Sources/Bad.swift", "import Foundation; import WyrdSync\n")];
+        assert_eq!(check_swift_imports(&files).len(), 1);
+    }
+
+    #[test]
+    fn qualified_import_fails_closed() {
+        let files = [("Sources/Bad.swift", "import struct Foundation.URL\n")];
+        assert_eq!(check_swift_imports(&files).len(), 1);
+    }
+
+    #[test]
+    fn allowed_imports_pass() {
+        let files = [(
+            "Sources/Good.swift",
+            "import Foundation\nimport FileProvider\nimport os\n",
+        )];
+        assert!(check_swift_imports(&files).is_empty());
+    }
+}

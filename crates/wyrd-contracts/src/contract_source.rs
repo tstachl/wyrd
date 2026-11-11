@@ -227,9 +227,28 @@ pub(crate) fn code_text(text: &str) -> String {
 /// empty collection is returned, not failed, here — an empty walk
 /// proves nothing, so each rule names its own non-vacuity verdict.
 pub(crate) fn collect_rs_files(dir: &Path, root: &Path) -> (Vec<(String, String)>, Vec<String>) {
+    collect_files(dir, root, "rs")
+}
+
+/// Every file with the given extension under `dir`, with the same
+/// fail-closed walk as `collect_rs_files`: unreadable entries are
+/// errors, never silent skips; an empty collection is returned, not
+/// failed, here — an empty walk proves nothing, so each rule names
+/// its own non-vacuity verdict.
+pub(crate) fn collect_files(
+    dir: &Path,
+    root: &Path,
+    extension: &str,
+) -> (Vec<(String, String)>, Vec<String>) {
     let mut files: Vec<(String, String)> = Vec::new();
     let mut errors: Vec<String> = Vec::new();
-    fn walk(dir: &Path, root: &Path, files: &mut Vec<(String, String)>, errors: &mut Vec<String>) {
+    fn walk(
+        dir: &Path,
+        root: &Path,
+        extension: &str,
+        files: &mut Vec<(String, String)>,
+        errors: &mut Vec<String>,
+    ) {
         let entries = match fs::read_dir(dir) {
             Ok(entries) => entries,
             Err(err) => {
@@ -251,8 +270,8 @@ pub(crate) fn collect_rs_files(dir: &Path, root: &Path) -> (Vec<(String, String)
                 if path.file_name().is_some_and(|n| n == "target") {
                     continue;
                 }
-                walk(&path, root, files, errors);
-            } else if path.extension().is_some_and(|e| e == "rs") {
+                walk(&path, root, extension, files, errors);
+            } else if path.extension().is_some_and(|e| e == extension) {
                 let rel = path
                     .strip_prefix(root)
                     .unwrap_or(&path)
@@ -267,7 +286,7 @@ pub(crate) fn collect_rs_files(dir: &Path, root: &Path) -> (Vec<(String, String)
             }
         }
     }
-    walk(dir, root, &mut files, &mut errors);
+    walk(dir, root, extension, &mut files, &mut errors);
     files.sort();
     (files, errors)
 }
