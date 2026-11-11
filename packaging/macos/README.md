@@ -122,15 +122,24 @@ so the app runs before the listener. Procedure:
 2. Read the resolved socket path from the probe log
    (`md.enesis.wyrd.fileprovider`, category `domain`): the first
    pass logs `unreachable <path>: …`, and `<path>` is the
-   team-prefixed location to listen on.
+   team-prefixed location to listen on. If the log says `no group
+   container for group.md.enesis.wyrd` instead, the entitlement is
+   not effective in the running build (ad-hoc signing, missing
+   provisioning) — fix signing and rerun; there is no path to
+   listen on yet.
 3. Start a stub listener at exactly that path (recipe in
-   `Sources/SocketProbe.swift`; never `mkdir` the container
-   yourself — that creates a decoy the extension cannot reach),
-   then re-trigger the extension (reopen the domain).
+   `Sources/SocketProbe.swift`: `mkdir -p` only the `Sockets`
+   directory inside the resolved container, never the container
+   itself — that would create a decoy the extension cannot reach),
+   then force the extension to re-instantiate: quit and relaunch
+   the containing app. Reopening the domain alone may not re-run
+   a surviving extension process, in which case no second probe
+   line appears.
 4. Open the domain in Finder: `hello.txt` and `notes/` enumerate
    from canned data; opening `hello.txt` hydrates canned bytes.
 5. Read the probe outcome in Console: `reachable: …` passes the
-   gate.
+   gate. (`listener busy` means the stub exists but cannot take
+   the connection — restart the listener, not the theory.)
 6. Record the macOS version and signing identity with the result.
 
 One domain for the spike; per-drive domains and isolation arrive

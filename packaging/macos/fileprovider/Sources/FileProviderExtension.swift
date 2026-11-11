@@ -33,10 +33,10 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
         let log = self.log
         DispatchQueue.global(qos: .utility).async {
             let outcome = SocketProbe.run()
-            if outcome.hasPrefix("reachable:") {
-                log.notice("\(outcome, privacy: .public)")
+            if outcome.isReachable {
+                log.notice("\(outcome.message, privacy: .public)")
             } else {
-                log.error("\(outcome, privacy: .public)")
+                log.error("\(outcome.message, privacy: .public)")
             }
         }
     }
@@ -65,13 +65,7 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
         case CannedItem.notes.itemIdentifier:
             completionHandler(CannedItem.notes, nil)
         default:
-            completionHandler(
-                nil,
-                NSError(
-                    domain: NSFileProviderErrorDomain,
-                    code: NSFileProviderError.noSuchItem.rawValue
-                )
-            )
+            completionHandler(nil, Self.noSuchItem())
         }
         return Progress()
     }
@@ -83,14 +77,7 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
         completionHandler: @escaping (URL?, NSFileProviderItem?, Error?) -> Void
     ) -> Progress {
         guard itemIdentifier == CannedItem.hello.itemIdentifier else {
-            completionHandler(
-                nil,
-                nil,
-                NSError(
-                    domain: NSFileProviderErrorDomain,
-                    code: NSFileProviderError.noSuchItem.rawValue
-                )
-            )
+            completionHandler(nil, nil, Self.noSuchItem())
             return Progress()
         }
         let url = FileManager.default.temporaryDirectory
@@ -153,5 +140,12 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
     ) -> Progress {
         completionHandler(NSFileProviderError(.cannotSynchronize))
         return Progress()
+    }
+
+    private static func noSuchItem() -> NSError {
+        NSError(
+            domain: NSFileProviderErrorDomain,
+            code: NSFileProviderError.noSuchItem.rawValue
+        )
     }
 }
