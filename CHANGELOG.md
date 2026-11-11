@@ -106,6 +106,24 @@ is transient — no drive data is affected.
   delivered-but-never-ingested pairs still needs the sender half,
   which stays open on the issue.
 
+- Evict permanently-retried held mailbox deliveries relay-held
+  (`nostr:nevent1qqsquj8m9y3kc39z949622kg83u9fldnprdepk7u2xkkqmx0u7d3ddspz9mhxue69uhkwunpwdczuap49eehgluvsdp`):
+  1024 unknown-epoch envelopes settling `Retry` forever filled the
+  held window and pinned the settlement watermark, stalling all
+  control intake across restarts. A held handover now evicts after
+  100 `Retry` settlements: it leaves the window without joining the
+  durable seen log or the session poison cache, and the watermark
+  advances past it. Eviction requests no replay by itself, so
+  unhealable mail costs no steady-state work; when the engine installs
+  an epoch key that may open evicted mail it requests one replay, which
+  re-admits the wrap under a fresh id where the key opens it through the
+  normal heal. Short-term heals (a handful of passes) never reach the budget. The `Mailbox` trait documents the
+  retry-budget exception and the heal-signal replay, and `resource-limits.md` states the trigger.
+  Regression tests park the full window and prove fresh mail
+  delivers, prove eviction alone triggers no replay while unhealed,
+  prove restart redelivery, and prove a keyless announcement heals through the key-install replay
+  after its epoch lands.
+
 - Bump `rustls-webpki` 0.103.15 → 0.103.16, `webpki-roots` 1.0.9 →
   1.0.10 and `webpki-root-certs` 1.0.9 → 1.0.10
   (RUSTSEC-2026-0382: certificate verification may accept distrusted

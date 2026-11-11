@@ -31,4 +31,13 @@ impl Engine {
         self.inbox.add_epoch_key(epoch, key.clone());
         self.epoch_keys.insert(epoch, key);
     }
+
+    /// Consume the epoch-key news flag: true when intake installed a
+    /// key this pass that nothing has acted on yet. The drain loop
+    /// calls this once per settled delivery and requests a mailbox
+    /// replay on news, so evicted unknown-epoch mail comes back now
+    /// that its key is held.
+    pub(in crate::runtime) fn take_epoch_key_news(&mut self) -> bool {
+        std::mem::replace(&mut self.epoch_key_news, false)
+    }
 }

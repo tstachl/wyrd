@@ -61,6 +61,7 @@ impl Engine {
             vault,
             inbox: ControlInbox::new(drive),
             epoch_keys: BTreeMap::new(),
+            epoch_key_news: false,
             log: MembershipLog::new(drive),
             announcements: BTreeMap::new(),
             committed_capabilities: BTreeMap::new(),

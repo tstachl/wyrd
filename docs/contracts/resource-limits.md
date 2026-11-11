@@ -69,7 +69,7 @@ deployment file and renders read-only on the surface.
 | Mailbox relay wire message | 512 KiB normalized JSON (SDK) | SDK transport backstop before the parsed event reaches Wyrd |
 | Mailbox relay event | 256 KiB decoded event-payload estimate (const; content plus tag values, after SDK parsing) | rejected before NIP-59 unwrap; the relay retains it for redelivery |
 | Mailbox notification channel | 1024 events (const) | backpressure stalls the relay stream; the relay retains everything |
-| Mailbox held handovers | 1024 unacked (const) | `recv` stops pulling; held mail rotates so the engine drains free |
+| Mailbox held handovers | 1024 unacked (const) + 100 Retry settlements per handover (const) | `recv` stops pulling; held mail rotates so the engine drains free; a handover settling `Retry` past the budget evicts relay-held (watermark advances) and stays gone until the engine installs an epoch key that may open it, at which point the engine requests one replay that re-admits it under a fresh id — so a retry-only flood cannot pin the window and unhealable mail costs no steady-state work |
 | Mailbox poison ids (session) | 4096 wrap ids in memory (128 in tests), shared between pre-envelope framing garbage and engine discards (they evict each other) | engine-discarded wraps settle `Poison`: bounded cache, never durable; crash forgets, redelivery re-poisons |
 | Engine intake held messages | `MAX_PENDING_MESSAGES` 1024 (const) | over-limit deferrals shed without consuming; relay redelivers |
 | Engine intake committed facts per drain pass | `MAX_INTAKE_COMMITS_PER_PASS` 1024 (const) | over-budget committable envelopes shed without consuming (`RelayHeld`, counted under `deferred`); relay redelivers next pass |
@@ -249,8 +249,9 @@ surfaces:
   submit none, so their section reads zero. Local durability load
   reads here; sync load reads in the run report — the two must
   never be conflated when a window is measured.
-- `MailboxHealth::saturation_recoveries`: saturation replays issued
-  (a rising count means the relay stream is chronically choked).
+- `MailboxHealth::saturation_recoveries`: replay episodes issued
+  (broadcast-lag recovery or key-install re-drive; a rising count means
+  the relay stream is choked or evicted mail keeps healing).
 - `MailboxHealth::closed_subscriptions`: relay-sent subscription
   closures observed (a rising count means intake is blind on a relay
   whose TCP attachment still reads connected — auth-required,
@@ -272,9 +273,17 @@ surfaces:
 Recorded here because the acceptance criterion names it: saturation
 cannot silently lose control-plane work. At saturation `recv` stops
 pulling from the notification channel (backpressure, not loss) and
-held mail rotates so the engine drains room free; nothing is ever
-consumed-and-dropped, because the live stream has no cursor and a
-dropped event would wait for a resubscribe that may never come. The
+held mail rotates so the engine drains room free. Pulled handovers are
+never consumed-and-dropped by `recv` — the live stream has no cursor,
+so a dropped event would wait for a resubscribe that may never come —
+with one exception: a handover settling `Retry` past 100 settlements
+is evicted relay-held. The eviction itself requests no replay, so
+unhealable mail costs no steady-state work; when the engine installs
+an epoch key that may open evicted mail it requests one relay replay
+(the supervisor's saturation episode re-drives full history, paced by
+its cooldown), which re-admits the evicted wrap under a fresh delivery
+id. Eviction writes nothing durable and poisons nothing, so a later
+key install opens the redelivered wrap through the normal heal. The
 bounded seen-id log (65,536 acks) and poison cache (4096 entries)
 bound the durable and in-memory dedupe state. The SDK applies a 512 KiB
 normalized-JSON wire backstop, and the relay-event ceiling is checked

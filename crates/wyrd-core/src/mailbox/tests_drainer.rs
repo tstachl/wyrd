@@ -80,3 +80,43 @@ fn dropped_readiness_reports_a_transport_error_not_a_panic() {
         "drainer death surfaces as a reportable error"
     );
 }
+
+/// The replay-claim ordering: the episode is claimed before the
+/// request flag is consumed, so a trigger arriving while an episode
+/// runs is preserved for the next due tick instead of being cleared.
+/// Drives the extracted production predicate directly — the interleaving
+/// with a live episode is timing, but the ordering it must obey is not.
+#[test]
+fn replay_claim_preserves_a_trigger_while_an_episode_runs() {
+    use super::supervision::replay_claim;
+    use std::sync::atomic::Ordering;
+
+    // Idle tick: no request, no claim, nothing consumed.
+    let saturated = AtomicBool::new(false);
+    let episode = AtomicBool::new(false);
+    assert!(!replay_claim(true, &saturated, &episode));
+    assert!(!saturated.load(Ordering::Relaxed));
+
+    // Not due: the request survives for a later due tick.
+    saturated.store(true, Ordering::Relaxed);
+    assert!(!replay_claim(false, &saturated, &episode));
+    assert!(saturated.load(Ordering::Relaxed));
+
+    // Due with no episode in flight: claim and consume.
+    assert!(replay_claim(true, &saturated, &episode));
+    assert!(!saturated.load(Ordering::Relaxed));
+    assert!(episode.load(Ordering::Relaxed));
+
+    // Trigger while the episode runs: no claim, flag preserved.
+    saturated.store(true, Ordering::Relaxed);
+    assert!(!replay_claim(true, &saturated, &episode));
+    assert!(
+        saturated.load(Ordering::Relaxed),
+        "the in-flight episode must not swallow the request"
+    );
+
+    // Episode done, still due: the preserved request claims now.
+    episode.store(false, Ordering::Relaxed);
+    assert!(replay_claim(true, &saturated, &episode));
+    assert!(!saturated.load(Ordering::Relaxed));
+}

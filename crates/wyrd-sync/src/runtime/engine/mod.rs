@@ -673,6 +673,14 @@ pub struct Engine {
     /// drops key material the device still holds. Zeroizing values:
     /// revoked epochs must not linger in process memory.
     pub(super) epoch_keys: BTreeMap<u64, Zeroizing<[u8; 32]>>,
+    /// Whether intake installed an epoch key this pass that nothing has
+    /// acted on yet. `note_committed_facts` sets it on every fill-vacant
+    /// install; the drain loop consumes it once per pass and requests a
+    /// mailbox replay, so evicted unknown-epoch mail comes back now
+    /// that its key is held. Volatile, never rebuilt: a restart
+    /// replays through resubscribe anyway, and keys restored at open
+    /// never set it (nothing is evicted yet).
+    pub(super) epoch_key_news: bool,
     /// The drive's durable sealed-representation vault: authored
     /// envelopes (manifests, chunk seals, snapshot bodies) are imported
     /// here at write time and served from it after every restart. See
