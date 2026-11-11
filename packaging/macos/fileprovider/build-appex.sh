@@ -6,8 +6,7 @@
 #
 # Usage: packaging/macos/fileprovider/build-appex.sh [out-dir]
 # Environment: ARCH (default: host arch), SIGN_IDENTITY (default:
-# ad-hoc `-`), MIN_MACOS (default: 13.0), TEAM_ID (default: unset;
-# when set, the App Group id is rewritten with the team prefix).
+# ad-hoc `-`), MIN_MACOS (default: 13.0).
 set -eu
 set -o pipefail 2>/dev/null || true
 
@@ -72,24 +71,10 @@ cp "$HERE/Info.plist" "$CONTENTS/Info.plist"
 # The development entitlements travel with every build, including
 # ad-hoc ones: embedding is harmless, but the App Group container
 # only materializes under a team-signed build with provisioning.
-# TEAM_ID names that team: when set, the group id is rewritten to
-# <TEAM_ID>.group.md.enesis.wyrd and the container becomes
-# ~/Library/Group Containers/<TEAM_ID>.group.md.enesis.wyrd/.
-# Without it the checked-in file signs as-is and no container
-# exists. Stage 1 probes the team-signed form and records it.
-ENTITLEMENTS_SRC="$HERE/WyrdFileProvider.entitlements"
-if [ -n "${TEAM_ID:-}" ]; then
-    if [ "$SIGN_IDENTITY" = "-" ]; then
-        echo "warning: TEAM_ID is set but SIGN_IDENTITY is ad-hoc;" >&2
-        echo "the group container still will not exist." >&2
-    fi
-    ENTITLEMENTS_BUILD="$OUT/WyrdFileProvider.entitlements"
-    sed "s/group\\.md\\.enesis\\.wyrd/$TEAM_ID.group.md.enesis.wyrd/" \
-        "$ENTITLEMENTS_SRC" > "$ENTITLEMENTS_BUILD"
-    ENTITLEMENTS=$ENTITLEMENTS_BUILD
-else
-    ENTITLEMENTS=$ENTITLEMENTS_SRC
-fi
+# The group id is granted literally as written — Xcode does not
+# team-prefix App Group ids — so no substitution happens here.
+# Stage 1 probes the team-signed form and records it.
+ENTITLEMENTS="$HERE/WyrdFileProvider.entitlements"
 
 codesign --force --sign "$SIGN_IDENTITY" \
     --identifier md.enesis.wyrd.fileprovider \
