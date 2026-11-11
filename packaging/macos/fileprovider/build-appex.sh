@@ -7,8 +7,9 @@
 # Usage: packaging/macos/fileprovider/build-appex.sh [out-dir]
 # Environment: ARCH (default: host arch), SIGN_IDENTITY (default:
 # ad-hoc `-`), MIN_MACOS (default: 13.0), TOOLCHAIN (default: the
-# active developer directory), SDK (default: the resolved macOS
-# SDK). Works in the default devenv shell and under
+# active developer directory), SWIFTC (default: resolved from the
+# developer directory), SDK (default: the resolved macOS SDK).
+# Works in the default devenv shell and under
 # `devenv --profile native-apple shell` alike.
 set -eu
 set -o pipefail 2>/dev/null || true
@@ -27,16 +28,22 @@ MIN_MACOS=${MIN_MACOS:-13.0}
 XCODE_SELECT=/usr/bin/xcode-select
 XCRUN=/usr/bin/xcrun
 
-# The Nix-injected values must not leak into discovery: unset them
-# in this process (script-local; the calling shell is untouched)
-# and then assert the clean state exactly — genuinely unset, not
-# merely empty. A deliberate Xcode selection is expressed through
-# TOOLCHAIN, never by exporting DEVELOPER_DIR here.
+# The Nix-injected values must not leak into discovery. Record the
+# incoming state first (a leaking outer shell is worth knowing
+# about), then unset in this process (script-local; the calling
+# shell is untouched) and assert the clean state exactly —
+# genuinely unset, not merely empty. A deliberate Xcode selection
+# is expressed through TOOLCHAIN, never by exporting DEVELOPER_DIR
+# here.
+if [ -n "${DEVELOPER_DIR+x}" ] || [ -n "${SDKROOT+x}" ]; then
+    echo "note: removing Nix-injected DEVELOPER_DIR/SDKROOT for this build." >&2
+fi
 unset DEVELOPER_DIR SDKROOT
 if [ -n "${DEVELOPER_DIR+x}" ] || [ -n "${SDKROOT+x}" ]; then
     echo "error: cannot establish a clean Apple toolchain environment;" >&2
-    echo "DEVELOPER_DIR or SDKROOT survived. Enter the Apple-native" >&2
-    echo "shell instead: devenv --profile native-apple shell" >&2
+    echo "DEVELOPER_DIR or SDKROOT survived unsetting (readonly?)." >&2
+    echo "Enter the Apple-native shell instead:" >&2
+    echo "devenv --profile native-apple shell" >&2
     exit 1
 fi
 
@@ -54,19 +61,24 @@ else
 fi
 # The compiler and the SDK resolve through xcrun against that
 # directory, so both the CLT layout ($DEVDIR/usr/bin) and the
-# Xcode layout ($DEVDIR/Toolchains/...) work unchanged.
-SWIFTC=${SWIFTC:-$($XCRUN --sdk macosx --find swiftc 2>/dev/null)} || {
+# Xcode layout ($DEVDIR/Toolchains/...) work unchanged. DEVDIR is
+# passed as DEVELOPER_DIR to the lookup only (never exported), so
+# a TOOLCHAIN override actually selects the toolchain instead of
+# silently resolving the active developer directory.
+SWIFTC=${SWIFTC:-$(DEVELOPER_DIR=$DEVDIR $XCRUN --sdk macosx --find swiftc 2>/dev/null)} || {
     echo "error: no swiftc for the macOS SDK under $DEVDIR." >&2
     exit 1
 }
-SDK=${SDK:-$($XCRUN --sdk macosx --show-sdk-path 2>/dev/null)} || {
+SDK=${SDK:-$(DEVELOPER_DIR=$DEVDIR $XCRUN --sdk macosx --show-sdk-path 2>/dev/null)} || {
     echo "error: no macOS SDK under $DEVDIR." >&2
     exit 1
 }
-# Sanity, per the profile contract: the tools that answer are the
-# system ones — execute, don't just resolve.
-swift --version >/dev/null 2>&1 || {
-    echo "error: the Swift toolchain does not run." >&2
+# Sanity, per the profile contract: the selected compiler runs,
+# and the PATH swift is reported so a shadow is visible.
+echo "swiftc: $SWIFTC" >&2
+echo "swift on PATH: $(command -v swift)" >&2
+"$SWIFTC" --version >/dev/null 2>&1 || {
+    echo "error: the selected Swift toolchain does not run." >&2
     exit 1
 }
 
