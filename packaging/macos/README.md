@@ -38,15 +38,26 @@ before Stage 2, and Stage 0/1 proceed without them.
 
 Bundle identities: app `md.enesis.wyrd` (from `tauri.conf.json`),
 extension `md.enesis.wyrd.fileprovider`, group
-`group.md.enesis.wyrd`. The entitlement value is granted literally
-as written (verified in the Xcode-built artifact), but the container
-directory macOS materialises for a third-party team gains the team
-prefix: `~/Library/Group Containers/JU2RFHWQPH.group.md.enesis.wyrd`
-for the development team (Apple-owned groups stay unprefixed;
-third-party groups on this machine show the same form, e.g.
-`W5364U7YZB.group.io.tailscale.ipn.macsys`). The container
-materializes only under a team-signed build with provisioning.
-Deployment target macOS 13.0.
+`group.md.enesis.wyrd`. Observed 2026-11-11 under development
+signing on macOS 15.8.2: the system materialised the container at
+the literal group id,
+`~/Library/Group Containers/group.md.enesis.wyrd/`, with no team
+prefix — confirmed by the probe log and `fileproviderd`'s own
+dump. Treat that as this build's resolved path, not a platform
+law: it is verified for development signing only, and other
+signing types (Developer ID, notarised distribution) are
+unverified. (Prefixed directories on this machine, e.g.
+`W5364U7YZB.group.io.tailscale.ipn.macsys`, read most plausibly
+as groups whose ids literally contain the team prefix — an old
+naming convention — but that reading is inferred, not verified.)
+Accordingly: the extension resolves through `containerURL` and
+never hardcodes, and Stage 2 must confirm the daemon-side bind
+lands where the extension resolves before the scheme settles —
+an unsandboxed daemon without the group entitlement cannot call
+`containerURL`, so whatever rule it uses to compute the directory
+needs the same live confirmation this build gave the extension
+side. The container materializes only under a team-signed build
+with provisioning. Deployment target macOS 13.0.
 
 ## Protocol (Stage 0 finding)
 
@@ -80,15 +91,16 @@ The proposed scheme, therefore:
 
 - On macOS the owner serves each drive's interface socket **also**
   inside the App Group container:
-  `~/Library/Group Containers/<TeamID>.<group>/Sockets/<drive>.sock`,
+  `~/Library/Group Containers/<group>/Sockets/<drive>.sock`,
   one socket per drive. The daemon is unsandboxed and binds there;
   the extension holds the group entitlement and connects there.
-  `<TeamID>.<group>` is `JU2RFHWQPH.group.md.enesis.wyrd` for the
-  development team: the entitlement value stays literal, the
-  directory gains the team prefix. Stage 1 probes the container
-  directory form with the stub name `wyrd-probe.sock` under a
-  team-signed build and records the team and build type; the
-  per-drive filename form arrives with Stage 2.
+  `<group>` is the literal `group.md.enesis.wyrd` as observed on
+  the development build (see Bundle identities above for the
+  qualification). Stage 1 probes the container directory form
+  with the stub name `wyrd-probe.sock` under a team-signed build
+  and records the team and build type; the per-drive filename
+  form arrives with Stage 2, which must also live-confirm the
+  daemon's computed bind path against the extension-resolved one.
 - `socket_path_for` stays the cross-platform default; the group
   container path is a macOS-additive override proposal, never a
   replacement. Linux behavior is unchanged.
@@ -122,7 +134,7 @@ so the app runs before the listener. Procedure:
 2. Read the resolved socket path from the probe log
    (`md.enesis.wyrd.fileprovider`, category `domain`): the first
    pass logs `unreachable <path>: …`, and `<path>` is the
-   team-prefixed location to listen on. If the log says `no group
+   resolved location to listen on. If the log says `no group
    container for group.md.enesis.wyrd` instead, the entitlement is
    not effective in the running build (ad-hoc signing, missing
    provisioning) — fix signing and rerun; there is no path to
@@ -155,6 +167,29 @@ so the app runs before the listener. Procedure:
    the connection — restart the listener, not the theory.)
 6. Record the macOS version and signing identity with the result.
 
+Recorded run 2026-11-11 (this procedure, first live pass): macOS
+15.8.2 (24H232), `Apple Development: Thomas Stachl (XZQVCF66WX)`
+team `JU2RFHWQPH`, development signing. Probe logged `reachable:
+…/Group Containers/group.md.enesis.wyrd/Sockets/wyrd-probe.sock`
+(persisted, retrievable via `log show`); a later pass with no
+listener logged `unreachable …: Connection refused` at `error`.
+Finder enumerated `hello.txt` and `notes/` from canned data.
+Run notes: the extension launches lazily on first Finder access
+of the domain (no probe line until then); if `fileproviderd`
+wedges after a failed first launch (observed once as
+`dead-on-arrival` followed by no relaunch), remove and re-add the
+domain from the containing app to reset the backend binding.
+
+Post-fix hydration observed 2026-11-11 (same machine, identity,
+and build line): after `documentSize`, a freshly re-added domain
+lists `hello.txt` at 26 bytes and opening it yields the canned
+text. Debugging note: Xcode tracks the symlink's mtime, not the
+target's, so editing repo sources alone does not trigger a
+rebuild — Clean Build Folder first, and re-point the local
+project's symlinks after any branch move (an entire evening of
+0-byte reads traced to the local project compiling `master`
+sources without the fix).
+
 One domain for the spike; per-drive domains and isolation arrive
 with Stage 3, under the invariants above.
 
@@ -164,8 +199,10 @@ with Stage 3, under the invariants above.
   stable and distinct.
 - Every item identifier is scoped to its drive. The identifier
   contract itself — rename behavior, deletion/recreation,
-  persistence across restarts — is the open OD-17-A decision;
-  "drive-scoped" here states the scoping invariant only.
+  persistence across restarts — is decided as OD-17-A (drive-scoped
+  stable entry identity supplied by the owner); the owner/model
+  contract work gates Stage 2. "Drive-scoped" here states the
+  scoping invariant only.
 - Every socket connection targets the correct drive's owner.
 - Removing one domain cannot affect another drive.
 - No singleton state in the adapter: a single-drive prototype must

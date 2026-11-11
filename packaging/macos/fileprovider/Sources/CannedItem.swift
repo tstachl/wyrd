@@ -11,46 +11,54 @@ import UniformTypeIdentifiers
 
 /// One canned item: the working set root, `hello.txt`, or `notes/`.
 final class CannedItem: NSObject, NSFileProviderItem {
+    /// The exact bytes `fetchContents` hydrates for `hello.txt`.
+    /// Single source: `documentSize` and the hydrated file both
+    /// derive from it, so Finder never materialises a 0-byte
+    /// placeholder for content that exists.
+    static let helloContents = "hello from the Wyrd spike\n"
     static let root = CannedItem(
         identifier: .rootContainer,
         parent: .rootContainer,
         filename: "Wyrd",
         contentType: .folder,
-        isFolder: true
+        documentSize: nil
     )
     static let hello = CannedItem(
         identifier: NSFileProviderItemIdentifier("hello.txt"),
         parent: .rootContainer,
         filename: "hello.txt",
         contentType: .plainText,
-        isFolder: false
+        documentSize: helloContents.utf8.count
     )
     static let notes = CannedItem(
         identifier: NSFileProviderItemIdentifier("notes"),
         parent: .rootContainer,
         filename: "notes",
         contentType: .folder,
-        isFolder: true
+        documentSize: nil
     )
 
     let itemIdentifier: NSFileProviderItemIdentifier
     let parentItemIdentifier: NSFileProviderItemIdentifier
     let filename: String
     let contentType: UTType
-    private let isFolder: Bool
+    /// Byte count for files, nil for folders. Passed per item at
+    /// construction so a second canned file cannot silently borrow
+    /// hello's size.
+    private let size: Int?
 
     init(
         identifier: NSFileProviderItemIdentifier,
         parent: NSFileProviderItemIdentifier,
         filename: String,
         contentType: UTType,
-        isFolder: Bool
+        documentSize: Int?
     ) {
         self.itemIdentifier = identifier
         self.parentItemIdentifier = parent
         self.filename = filename
         self.contentType = contentType
-        self.isFolder = isFolder
+        self.size = documentSize
         super.init()
     }
 
@@ -65,5 +73,12 @@ final class CannedItem: NSObject, NSFileProviderItem {
             contentVersion: "stage1-canned".data(using: .utf8)!,
             metadataVersion: "stage1-canned".data(using: .utf8)!
         )
+    }
+
+    var documentSize: NSNumber? {
+        // Without this Finder materialises a 0-byte placeholder for
+        // hello.txt and the hydrated bytes never visibly arrive.
+        guard let size else { return nil }
+        return NSNumber(value: size)
     }
 }
