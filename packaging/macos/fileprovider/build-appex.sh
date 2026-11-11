@@ -36,16 +36,15 @@ XCRUN=/usr/bin/xcrun
 # is expressed through TOOLCHAIN, never by exporting DEVELOPER_DIR
 # here.
 if [ -n "${DEVELOPER_DIR+x}" ] || [ -n "${SDKROOT+x}" ]; then
-    echo "note: removing Nix-injected DEVELOPER_DIR/SDKROOT for this build." >&2
+    echo "note: removing inherited DEVELOPER_DIR/SDKROOT for this build." >&2
 fi
-unset DEVELOPER_DIR SDKROOT
-if [ -n "${DEVELOPER_DIR+x}" ] || [ -n "${SDKROOT+x}" ]; then
-    echo "error: cannot establish a clean Apple toolchain environment;" >&2
-    echo "DEVELOPER_DIR or SDKROOT survived unsetting (readonly?)." >&2
+unset DEVELOPER_DIR SDKROOT || {
+    echo "error: cannot unset DEVELOPER_DIR/SDKROOT (readonly?);" >&2
+    echo "cannot establish a clean Apple toolchain environment." >&2
     echo "Enter the Apple-native shell instead:" >&2
     echo "devenv --profile native-apple shell" >&2
     exit 1
-fi
+}
 
 # Developer directory from the system selector; aborts with usage
 # guidance when neither the CLT nor Xcode is installed.
@@ -77,17 +76,16 @@ SDK=${SDK:-$(DEVELOPER_DIR=$DEVDIR $XCRUN --sdk macosx --show-sdk-path 2>/dev/nu
 # and the PATH swift is reported so a shadow is visible.
 echo "swiftc: $SWIFTC" >&2
 echo "swift on PATH: $(command -v swift)" >&2
-"$SWIFTC" --version >/dev/null 2>&1 || {
-    echo "error: the selected Swift toolchain does not run." >&2
-    exit 1
-}
-
 if [ ! -x "$SWIFTC" ]; then
     echo "error: no Swift toolchain at $SWIFTC." >&2
     echo "Install the macOS Command Line Tools (xcode-select --install)" >&2
     echo "or point TOOLCHAIN at a full Xcode installation." >&2
     exit 1
 fi
+"$SWIFTC" --version >/dev/null 2>&1 || {
+    echo "error: the selected Swift toolchain does not run." >&2
+    exit 1
+}
 
 APPEX=$OUT/WyrdFileProvider.appex
 CONTENTS=$APPEX/Contents

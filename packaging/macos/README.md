@@ -55,7 +55,9 @@ devenv --profile native-apple shell
 which nulls the Nix SDK, unsets the injected variables (genuinely
 unset, per `test -z "${VAR+x}"`), and drops the Nix `xcrun`
 shadow from `PATH`. No hostname/user auto-activation, direnv
-stays on the default shell, at most two profiles.
+stays on the default shell, at most two profiles. A deliberate
+Xcode selection is `TOOLCHAIN=<developer dir>` (with `SWIFTC` and
+`SDK` as finer overrides); never export `DEVELOPER_DIR` for it.
 
 Bundle identities: app `md.enesis.wyrd` (from `tauri.conf.json`),
 extension `md.enesis.wyrd.fileprovider`, group
