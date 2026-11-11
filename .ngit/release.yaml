@@ -52,7 +52,7 @@
 #      the hash matches. CI uploads with an ephemeral key, so the hash
 #      comparison is the trust anchor: never skip it.
 #   8. Build the Linux legs locally: `flatpak-builder --repo` from
-#      `flatpak/md.enesis.wyrd.yaml` against the verified tarball, then
+#      `packaging/linux/md.enesis.wyrd.yaml` against the verified tarball, then
 #      `flatpak build-bundle --gpg-sign <packaging key>` per arch, and
 #      verify each bundle by installing it in a clean container or VM. The
 #      bundle signature is the Linux half of the signed-artifact clause; a
