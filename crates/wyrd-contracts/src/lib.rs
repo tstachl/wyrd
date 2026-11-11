@@ -329,15 +329,27 @@
 //!     refuses it identically.
 
 #[cfg(test)]
+mod contract_source;
+#[cfg(test)]
+mod deps_contracts;
+#[cfg(test)]
 mod egress_contracts;
+#[cfg(test)]
+mod fixture_authoring_contracts;
 #[cfg(test)]
 mod join_contracts;
 #[cfg(test)]
-mod layer_contracts;
+mod kdf_release_contracts;
+#[cfg(test)]
+mod nix_contracts;
 #[cfg(test)]
 mod node_contracts;
 #[cfg(test)]
+mod nostr_scope_contracts;
+#[cfg(test)]
 mod owner_contracts;
+#[cfg(test)]
+mod owner_interface_contracts;
 #[cfg(test)]
 mod ownership_contracts;
 #[cfg(test)]
@@ -354,6 +366,8 @@ mod serving_contracts;
 mod shared_drive_semantics;
 #[cfg(test)]
 mod support;
+#[cfg(test)]
+mod surface_contracts;
 #[cfg(test)]
 mod sync_contracts;
 #[cfg(test)]
