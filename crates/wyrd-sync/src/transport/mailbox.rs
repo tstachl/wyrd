@@ -279,12 +279,6 @@ pub trait Mailbox {
     /// retry budget the same envelope may return under a fresh id —
     /// engines already dedupe the inner message id from durable facts,
     /// so the envelope layer makes no stronger promise.
-    /// A later `recv` MAY re-offer an unsettled delivery, always under
-    /// the same id while it stays held; the drain loop offers each id once per pass, so a
-    /// pass always terminates. Ids must be stable across re-offers and
-    /// unique per envelope: a cursor derived from queue position (which
-    /// shifts when predecessors are acked) violates this — derive
-    /// cursors from content or a monotonic counter instead.
     /// Delivery is at-least-once: bounded-retention implementations may
     /// redeliver long-ago-acked mail after eviction, so engines must be
     /// idempotent over redelivery (dedupe the inner message id from

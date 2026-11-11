@@ -1056,7 +1056,8 @@ where
         // so a dropped event would wait for a resubscribe that may never
         // come. The one exception is the `Retry` budget in `settle`,
         // which evicts a permanently retried handover relay-held and
-        // requests the replay that brings it back.
+        // requests nothing by itself; the engine requests a replay when
+        // it installs an epoch key that may open the evicted wrap.
         while self.unacked.len() < MAX_UNACKED_DELIVERIES {
             let Some(wrap) = self.next_wrap()? else {
                 break;

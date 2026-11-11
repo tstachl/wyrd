@@ -101,11 +101,14 @@ fn retry_budget_evicts_parked_head_so_new_mail_delivers() {
 }
 
 /// Eviction alone triggers no replay while the mail stays unhealed:
-/// a small parked set evicts, a full test cooldown passes with no
-/// replay episode, and fresh mail still delivers through the drained
-/// window. Unhealable mail must cost no steady-state work — the replay
-/// comes only from the engine's key-install signal (pinned by the
-/// catchup heal test), never from eviction itself.
+/// a small parked set evicts, a quiet window passes with no replay
+/// episode, and fresh mail still delivers through the drained window.
+/// Unhealable mail must cost no steady-state work — the replay comes
+/// only from the engine's key-install signal (pinned by the catchup
+/// heal test), never from eviction itself. The window is decisive
+/// rather than cooldown-long: with no prior replay any set flag would
+/// fire on the first supervisor tick (~50 ms in tests), so seconds of
+/// silence prove the flag was never set.
 #[test]
 fn eviction_requests_no_replay_while_unhealed() {
     const PARKED: usize = 4;
@@ -139,9 +142,9 @@ fn eviction_requests_no_replay_while_unhealed() {
     assert!(mailbox.unacked.is_empty(), "parked mail evicts");
     assert_eq!(mailbox.settled_below(), PARKED as u64);
 
-    // Past one full test cooldown with no heal and no other trigger:
-    // no replay episode may fire on eviction alone.
-    std::thread::sleep(Duration::from_secs(25));
+    // Well past the first-tick replay latency with no heal and no
+    // other trigger: no replay episode may fire on eviction alone.
+    std::thread::sleep(Duration::from_secs(5));
     assert_eq!(
         mailbox.health().saturation_recoveries,
         0,

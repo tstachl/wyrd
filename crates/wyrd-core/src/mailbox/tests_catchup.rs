@@ -18,11 +18,11 @@ use std::time::{Duration, Instant};
 /// Heal after eviction over a live relay: a keyless announcement the
 /// recipient cannot open parks `Retry`-held, exhausts the mailbox retry
 /// budget, and evicts relay-held — then the withheld admission lands,
-/// the epoch key installs, and the eviction-requested replay re-admits
-/// the wrap under a fresh id where it opens. No restart: the live
-/// replay the eviction requests is the recovery path. Proves the
-/// policy's central claim — eviction delays the heal by at most one
-/// replay, it never consumes the message.
+/// the epoch key installs, and the key-install-requested replay
+/// re-admits the wrap under a fresh id where it opens. No restart: the
+/// live replay the key install requests is the recovery path. Proves
+/// the policy's central claim — eviction never consumes the message,
+/// and the replay that heals it fires exactly when the key lands.
 #[test]
 fn evicted_unknown_epoch_heals_through_live_replay_after_key_lands() {
     let relay = MiniRelay::spawn();
