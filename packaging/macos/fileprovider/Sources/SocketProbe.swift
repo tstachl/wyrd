@@ -106,24 +106,32 @@ enum SocketProbe {
                 detail: "unreachable \(path): cannot set non-blocking (\(errnoString()))"
             )
         }
-        var rc = attemptConnect(fd: fd, path: path)
-        if rc != 0, errno == EINTR {
-            // Interrupted before connecting: one retry, then judge.
-            rc = attemptConnect(fd: fd, path: path)
-        }
+        let rc = attemptConnect(fd: fd, path: path)
+        let connectErrno = errno
         if rc == 0 {
             return .reachable(path: path)
         }
-        if errno == EAGAIN || errno == EALREADY {
-            // The listener exists but cannot take the connection —
-            // a busy stub, not a failed sandbox premise.
-            return .unreachable(detail: "listener busy \(path): \(errnoString())")
-        }
-        guard errno == EINPROGRESS else {
-            return .unreachable(detail: "unreachable \(path): \(errnoString())")
+        // EINTR and EINPROGRESS both leave the outcome unknown: fall
+        // through to the poll/SO_ERROR path, which resolves it,
+        // rather than re-issuing connect — a second connect on an
+        // in-flight socket misreports EALREADY/EISCONN.
+        if connectErrno != EINPROGRESS, connectErrno != EINTR {
+            if connectErrno == EAGAIN || connectErrno == EALREADY {
+                // The listener exists but cannot take the
+                // connection — a busy stub, not a failed premise.
+                return .unreachable(
+                    detail: "listener busy \(path): \(errorString(connectErrno))"
+                )
+            }
+            return .unreachable(
+                detail: "unreachable \(path): \(errorString(connectErrno))"
+            )
         }
         var pfd = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
-        let ready = poll(&pfd, 1, 2000)
+        var ready = poll(&pfd, 1, 2000)
+        if ready < 0, errno == EINTR {
+            ready = poll(&pfd, 1, 2000)
+        }
         if ready == 0 {
             return .unreachable(detail: "unreachable \(path): connect timed out")
         }
@@ -132,11 +140,15 @@ enum SocketProbe {
         }
         var err: Int32 = 0
         var len = socklen_t(MemoryLayout<Int32>.size)
-        getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len)
+        guard getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len) == 0 else {
+            return .unreachable(
+                detail: "unreachable \(path): cannot read connect result (\(errnoString()))"
+            )
+        }
         if err == 0 {
             return .reachable(path: path)
         }
-        return .unreachable(detail: "unreachable \(path): \(String(cString: strerror(err)))")
+        return .unreachable(detail: "unreachable \(path): \(errorString(err))")
     }
 
     private static func attemptConnect(fd: Int32, path: String) -> Int32 {
@@ -157,6 +169,10 @@ enum SocketProbe {
     }
 
     private static func errnoString() -> String {
-        String(cString: strerror(errno))
+        errorString(errno)
+    }
+
+    private static func errorString(_ code: Int32) -> String {
+        String(cString: strerror(code))
     }
 }
