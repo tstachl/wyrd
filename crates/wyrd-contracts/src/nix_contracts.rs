@@ -177,9 +177,18 @@ fn the_nix_module_declares_exactly_one_owner_per_drive() {
 /// The Swift import surface the adapter may use: platform
 /// frameworks and the socket client only. This pins the import
 /// surface, not file or API access — a future rule owns shapes like
-/// `Process` or drive-path construction.
+/// `Process` or drive-path construction. `UniformTypeIdentifiers`
+/// joined in Stage 1: item content types require it, and it is the
+/// same trust class as Foundation.
 fn allowed_swift_import(module: &str) -> bool {
-    ["Foundation", "FileProvider", "Darwin", "os"].contains(&module)
+    [
+        "Foundation",
+        "FileProvider",
+        "UniformTypeIdentifiers",
+        "Darwin",
+        "os",
+    ]
+    .contains(&module)
 }
 
 /// Import violations in an explicit file list: path to offending

@@ -90,12 +90,35 @@ The proposed scheme, therefore:
 - `<drive>` must be a stable per-drive fingerprint, coordinated with
   the multi-drive registry (in progress elsewhere) — Stage 2 detail.
 
-This analysis is the Stage 0 confirmation. The live proof — owner
-and extension running under their actual entitlements, socket at the
-production path, owner restart and stale-socket handling, distinct
-sockets for multiple drives — is Stage 1's entry gate, before any
-adapter logic. If the live proof fails, the transport boundary is
+This analysis is the Stage 0 confirmation. The live proof comes
+in two halves. Stage 1's entry gate, before any adapter logic,
+proves the sandbox premise against a stub listener: the sandboxed
+extension, running under its real entitlements, connects to a
+listening socket at the production group-container path, and the
+outcome lands in the Console log. No owner is involved, so owner
+restart, stale-socket handling, and distinct multi-drive sockets
+stay with Stage 2, beside the real client and the daemon-side
+bind. If the Stage 1 probe fails, the transport boundary is
 revisited; nothing in Stage 1 depends on it beyond the probe.
+
+## Stage 1 live run (manual, macOS only)
+
+The repo holds the canonical Swift sources; the local throwaway
+Xcode project references them (never copies) and provides the
+team-signed containing app plus domain registration. Procedure:
+
+1. Start a stub listener at the production path:
+   `python3 -c` one-liner in `Sources/SocketProbe.swift`.
+2. Build and run the containing app from Xcode (team
+   `JU2RFHWQPH`, development signing), add one domain.
+3. Open the domain in Finder: `hello.txt` and `notes/` enumerate
+   from canned data; opening `hello.txt` hydrates canned bytes.
+4. Read the probe outcome in Console (`md.enesis.wyrd.fileprovider`,
+   category `domain`): `reachable: …` passes the gate.
+5. Record the macOS version and signing identity with the result.
+
+One domain for the spike; per-drive domains and isolation arrive
+with Stage 3, under the invariants above.
 
 ## Multi-drive invariants (established now)
 

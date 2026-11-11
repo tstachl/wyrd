@@ -62,7 +62,9 @@ fi
     -target "$ARCH-apple-macos$MIN_MACOS" \
     -sdk "$SDK" \
     -O \
+    -emit-library \
     -module-name WyrdFileProvider \
+    -Xlinker -bundle \
     -o "$MACOS/WyrdFileProvider" \
     "$@"
 
