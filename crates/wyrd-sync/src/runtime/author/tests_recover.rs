@@ -495,3 +495,151 @@ fn recover_writes_nothing_for_a_non_owner() {
         "no orphaned graft tree is inserted"
     );
 }
+
+/// Read one grafted entry's identity out of an authored recovery
+/// snapshot, through the same decode any reader performs.
+fn grafted_identity(
+    objects: &MemoryObjectStore,
+    grafted: &crate::durable::AuthorizedSnapshot,
+    name: &str,
+) -> Option<wyrd_format::EntryIdentity> {
+    let bytes = objects.get(&grafted.snapshot().tree).unwrap().unwrap();
+    Tree::decode(&bytes)
+        .unwrap()
+        .entries()
+        .iter()
+        .find(|entry| entry.name.as_str() == name)
+        .unwrap_or_else(|| panic!("{name} grafted"))
+        .identity
+}
+
+fn identified_file(
+    objects: &mut MemoryObjectStore,
+    name: &str,
+    bytes: &[u8],
+    identity: wyrd_format::EntryIdentity,
+) -> Entry {
+    let chunk = objects.insert(ObjectKind::Chunk, bytes).unwrap();
+    Entry::file(name, bytes.len() as u64, false, vec![chunk])
+        .unwrap()
+        .with_identity(identity)
+}
+
+/// Restoring the same entry preserves its token: the live head
+/// carries the identical token at the same name, so the graft is
+/// genuinely the same entry.
+#[test]
+fn recovery_graft_preserves_identity_for_the_same_live_entry() {
+    let (_dir, mut engine, _) = owner_engine("recover-same-entry");
+    let mut objects = MemoryObjectStore::default();
+    let token = wyrd_format::EntryIdentity::from_bytes([0x51; 32]);
+    let base = Tree::from_entries(vec![identified_file(&mut objects, "a.txt", b"a", token)])
+        .unwrap()
+        .insert_into(&mut objects)
+        .unwrap();
+    let base_id = engine
+        .author_snapshot(&objects, base)
+        .unwrap()
+        .snapshot()
+        .snapshot_id();
+    // The live head carries the same entry with the same token.
+    let child = Tree::from_entries(vec![identified_file(&mut objects, "a.txt", b"a2", token)])
+        .unwrap()
+        .insert_into(&mut objects)
+        .unwrap();
+    author_with_parents(&mut engine, &objects, child, vec![base_id]).unwrap();
+
+    let grafted = engine
+        .recover(&mut objects, base_id, &["a.txt".to_owned()], false, &[])
+        .unwrap();
+    assert_eq!(
+        grafted_identity(&objects, &grafted, "a.txt"),
+        Some(token),
+        "the same entry keeps its token through the graft"
+    );
+}
+
+/// Recreation mints: the live head carries a different token at
+/// the name (delete-plus-recreate), so the graft must not resurrect
+/// the historical token.
+#[test]
+fn recovery_graft_mints_where_live_differs() {
+    let (_dir, mut engine, _) = owner_engine("recover-recreated");
+    let mut objects = MemoryObjectStore::default();
+    let old = wyrd_format::EntryIdentity::from_bytes([0x52; 32]);
+    let live = wyrd_format::EntryIdentity::from_bytes([0x53; 32]);
+    let base = Tree::from_entries(vec![identified_file(&mut objects, "a.txt", b"a", old)])
+        .unwrap()
+        .insert_into(&mut objects)
+        .unwrap();
+    let base_id = engine
+        .author_snapshot(&objects, base)
+        .unwrap()
+        .snapshot()
+        .snapshot_id();
+    let child = Tree::from_entries(vec![identified_file(&mut objects, "a.txt", b"a2", live)])
+        .unwrap()
+        .insert_into(&mut objects)
+        .unwrap();
+    author_with_parents(&mut engine, &objects, child, vec![base_id]).unwrap();
+
+    let grafted = engine
+        .recover(&mut objects, base_id, &["a.txt".to_owned()], false, &[])
+        .unwrap();
+    let grafted = grafted_identity(&objects, &grafted, "a.txt").unwrap();
+    assert_ne!(grafted, old, "the retired token never resurrects");
+    assert_ne!(grafted, live, "the graft is a new entry, not the live one");
+}
+
+/// A graft over a deleted name mints: nothing live carries the
+/// historical token, so preservation has no subject.
+#[test]
+fn recovery_graft_mints_deleted_names() {
+    let (_dir, mut engine, _) = owner_engine("recover-deleted");
+    let mut objects = MemoryObjectStore::default();
+    let retired = wyrd_format::EntryIdentity::from_bytes([0x54; 32]);
+    let base = Tree::from_entries(vec![
+        identified_file(&mut objects, "gone.txt", b"gone", retired),
+        identified_file(
+            &mut objects,
+            "stays.txt",
+            b"stays",
+            wyrd_format::EntryIdentity::from_bytes([0x55; 32]),
+        ),
+    ])
+    .unwrap()
+    .insert_into(&mut objects)
+    .unwrap();
+    let base_id = engine
+        .author_snapshot(&objects, base)
+        .unwrap()
+        .snapshot()
+        .snapshot_id();
+    // The live head dropped the name: deletion retired the token.
+    let child = tree(&mut objects, &[("c.txt", b"c")]);
+    author_with_parents(&mut engine, &objects, child, vec![base_id]).unwrap();
+
+    let grafted = engine
+        .recover(&mut objects, base_id, &["gone.txt".to_owned()], false, &[])
+        .unwrap();
+    let grafted = grafted_identity(&objects, &grafted, "gone.txt").unwrap();
+    assert_ne!(grafted, retired, "restoration never resurrects");
+}
+
+/// `--content` syntheses are new entries by construction: they
+/// always carry a fresh token.
+#[test]
+fn recovery_content_synthesis_mints() {
+    let (_dir, mut engine, _) = owner_engine("recover-synth-mint");
+    let mut objects = MemoryObjectStore::default();
+    let (base_id, _) = base_and_child(&mut engine, &mut objects);
+    let loose = objects.insert(ObjectKind::Chunk, b"loose").unwrap();
+    let grafted = engine
+        .recover(&mut objects, base_id, &[], false, &[loose])
+        .unwrap();
+    let name = loose.to_string();
+    assert!(
+        grafted_identity(&objects, &grafted, &name).is_some(),
+        "the synthesized entry carries a fresh token"
+    );
+}

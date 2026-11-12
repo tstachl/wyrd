@@ -331,8 +331,20 @@ where
             }
         };
         let chunks = chunk::insert_chunks(&mut *store, data).map_err(WriteError::Store)?;
-        let entry = Entry::file(file_name, data.len() as u64, false, chunks)?;
-        let root = wyrd_format::mutation::put(&mut *store, base, path, entry)?;
+        let mut entry = Entry::file(file_name, data.len() as u64, false, chunks)?;
+        // Fixture authoring mints deterministically from a per-call
+        // counter: fixtures must be byte-stable across runs, so no OS
+        // randomness here. Leaf first, then intermediates in walk
+        // order — distinct within the call, stable across runs. The
+        // live loop mints fresh per creation; tests asserting
+        // lifecycle behavior compose the loop instead.
+        let mut counter = 0u8;
+        let mut fixture_mint = || {
+            counter = counter.wrapping_add(1);
+            Ok(wyrd_format::EntryIdentity::from_bytes([counter; 32]))
+        };
+        entry.identity = Some(fixture_mint()?);
+        let root = wyrd_format::mutation::put(&mut *store, base, path, entry, &mut fixture_mint)?;
         let authorized = self.engine.author_pending_write(&*store, root, pending)?;
         drop(store);
         self.install_authored_head(authorized.clone());

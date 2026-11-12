@@ -57,28 +57,46 @@ pub enum WireKind {
     Conflict,
 }
 
-/// The wire form of `Attr`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// The wire form of `Attr`. `identity` is the entry's stable
+/// token as lowercase hex, or `None` for entries that predate
+/// identity support and for synthetic states. It defaults for
+/// mixed-version skew during rollout: a pre-identity reader sees
+/// no token instead of failing the parse.
+///
+/// `Clone` but not `Copy`: the token rides as an owned hex
+/// string, and attr answers are cheap to clone explicitly.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WireAttr {
     pub kind: WireKind,
     pub size: u64,
     pub executable: bool,
+    #[serde(default)]
+    pub identity: Option<String>,
 }
 
 /// The wire form of `Node`. Recursive through [`WireConflictVersion`],
-/// like the source.
+/// like the source. File, dir, and symlink nodes carry the entry's
+/// stable token as lowercase hex (`None` for pre-identity entries);
+/// merged and conflicted states are synthetic views and carry none
+/// (each conflict version carries its head's token).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WireNode {
     File {
         size: u64,
         executable: bool,
         chunks: Vec<String>,
+        #[serde(default)]
+        identity: Option<String>,
     },
     Dir {
         subtree: String,
+        #[serde(default)]
+        identity: Option<String>,
     },
     Symlink {
         target: String,
+        #[serde(default)]
+        identity: Option<String>,
     },
     MergedDir {
         subtrees: Vec<(String, String)>,

@@ -219,6 +219,8 @@ pub enum EngineError {
     UnresolvedMergePath(String),
     #[error("merged tree failed construction: {0}")]
     MergeTreeInvalid(String),
+    #[error("entry identity mint failed: {0}")]
+    EntryIdentityMint(String),
     #[error("no snapshot {0} in the local DAG to recover from")]
     UnknownRecoverySource(SnapshotId),
     #[error("recovery selection names {0:?}, which the source snapshot does not contain")]

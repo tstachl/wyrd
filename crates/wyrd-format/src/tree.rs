@@ -7,13 +7,25 @@
 //! duplicates are impossible, and no metadata beyond the exec bit exists —
 //! the explicit not-represented list in `object-model.md` is a feature.
 //!
+//! Every entry carries an optional stable [`EntryIdentity`]: minted once
+//! per entry, preserved across renames and content modifications, retired
+//! on deletion. Entries that predate identity support carry `None` and
+//! encode exactly the legacy bytes (their ContentIds are unchanged); new
+//! entries encode under identity-bearing kind bytes. See the module docs
+//! on [`Entry`] and `docs/contracts/object-model.md` for the lifecycle.
+//!
 //! Payload layout (canonical, byte-for-byte):
 //!
 //! ```text
 //! u32 LE                  entry count
 //! entries, sorted by component bytes:
-//!   u8                    kind (0 = file, 1 = dir, 2 = symlink)
+//!   u8                    kind (0x00 = file, 0x01 = dir, 0x02 = symlink,
+//!                              0x10 = file + identity,
+//!                              0x11 = dir + identity,
+//!                              0x12 = symlink + identity)
 //!   u32 LE + bytes        component (UTF-8)
+//!   identity (new kinds only):
+//!           32 bytes      EntryIdentity (opaque, random)
 //!   file:     u64 LE      size
 //!             u8          executable (0 | 1)
 //!             u32 LE + ContentIds   chunk ids
@@ -21,7 +33,7 @@
 //!   symlink:  u32 LE + bytes        target (UTF-8)
 //! ```
 
-use crate::identity::{u32_le, ContentId, ObjectKind, ID_LEN};
+use crate::identity::{u32_le, ContentId, EntryIdentity, ObjectKind, ID_LEN};
 use crate::store::ObjectStore;
 use std::cmp::Ordering;
 use thiserror::Error;
@@ -87,10 +99,22 @@ pub enum EntryContent {
     Symlink { target: String },
 }
 
-/// One tree entry: a path component plus its kind-scoped content.
+/// One tree entry: a path component, its stable identity, and its
+/// kind-scoped content.
+///
+/// The identity is the entry's sameness across time and devices:
+/// rename and content modification preserve it, deletion retires it,
+/// and recreation at the same path mints a new one. It is `None`
+/// only for entries that predate identity support (decoded from
+/// legacy kind bytes) — never synthesized, never reconstructed from
+/// path or content. A kind change is delete-plus-recreate, so a
+/// replacement across kinds always mints; same-kind replacement
+/// preserves. Allocation lives with the owner (wyrd-core draws the
+/// randomness); this layer carries and preserves.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
     pub name: Component,
+    pub identity: Option<EntryIdentity>,
     pub content: EntryContent,
 }
 
@@ -103,6 +127,7 @@ impl Entry {
     ) -> Result<Self, ComponentError> {
         Ok(Self {
             name: Component::new(name)?,
+            identity: None,
             content: EntryContent::File {
                 size,
                 executable,
@@ -114,6 +139,7 @@ impl Entry {
     pub fn dir(name: impl Into<String>, subtree: ContentId) -> Result<Self, ComponentError> {
         Ok(Self {
             name: Component::new(name)?,
+            identity: None,
             content: EntryContent::Dir { subtree },
         })
     }
@@ -124,10 +150,20 @@ impl Entry {
     ) -> Result<Self, ComponentError> {
         Ok(Self {
             name: Component::new(name)?,
+            identity: None,
             content: EntryContent::Symlink {
                 target: target.into(),
             },
         })
+    }
+
+    /// Attach the owner's minted identity to a newly created entry.
+    /// Preservation needs no call: every mutation that keeps an
+    /// entry (rename, same-kind replace, interior rebind) carries
+    /// the existing identity through untouched.
+    pub fn with_identity(mut self, identity: EntryIdentity) -> Self {
+        self.identity = Some(identity);
+        self
     }
 }
 
@@ -222,6 +258,10 @@ impl Tree {
     }
 
     /// The canonical payload encoding (see the module docs).
+    /// Identity-bearing entries encode under kind bytes `0x10`-`0x12`
+    /// with the 32 identity bytes after the component; legacy entries
+    /// (identity `None`) encode exactly the pre-identity bytes, so
+    /// old trees keep their ContentIds bit for bit.
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
         out.extend_from_slice(&u32_le(self.entries.len()));
@@ -231,10 +271,17 @@ impl Tree {
                 EntryContent::Dir { .. } => 0x01,
                 EntryContent::Symlink { .. } => 0x02,
             };
+            let kind = match entry.identity {
+                Some(_) => kind | 0x10,
+                None => kind,
+            };
             out.push(kind);
             let name = entry.name.as_str();
             out.extend_from_slice(&u32_le(name.len()));
             out.extend_from_slice(name.as_bytes());
+            if let Some(identity) = &entry.identity {
+                out.extend_from_slice(identity.as_bytes());
+            }
             match &entry.content {
                 EntryContent::File {
                     size,
@@ -293,6 +340,23 @@ impl Tree {
             pos += name_len;
             let name = Component::new(name)?;
 
+            // Identity-bearing kinds (`0x10`-`0x12`) carry the 32
+            // opaque bytes right after the component; legacy kinds
+            // (`0x00`-`0x02`) carry none, and decode to entries
+            // without identity.
+            let identity = if kind & 0x10 != 0 {
+                need(pos, ID_LEN)?;
+                let id = EntryIdentity::from_bytes(
+                    payload[pos..pos + ID_LEN]
+                        .try_into()
+                        .expect("bounds checked"),
+                );
+                pos += ID_LEN;
+                Some(id)
+            } else {
+                None
+            };
+
             // Canonical order is strictly increasing: equal means a
             // duplicate (impossible in a canonical tree), less means the
             // payload was written unsorted.
@@ -307,7 +371,7 @@ impl Tree {
             }
 
             let content = match kind {
-                0x00 => {
+                0x00 | 0x10 => {
                     need(pos, 13)?;
                     let size = u64::from_le_bytes(
                         payload[pos..pos + 8].try_into().expect("bounds checked"),
@@ -338,7 +402,7 @@ impl Tree {
                         chunks,
                     }
                 }
-                0x01 => {
+                0x01 | 0x11 => {
                     need(pos, ID_LEN)?;
                     let subtree = ContentId::from_bytes(
                         payload[pos..pos + ID_LEN]
@@ -348,7 +412,7 @@ impl Tree {
                     pos += ID_LEN;
                     EntryContent::Dir { subtree }
                 }
-                0x02 => {
+                0x02 | 0x12 => {
                     need(pos, 4)?;
                     let target_len = u32le(payload, pos) as usize;
                     pos += 4;
@@ -361,7 +425,11 @@ impl Tree {
                 }
                 unknown => return Err(TreeError::UnknownEntryKind(unknown)),
             };
-            entries.push(Entry { name, content });
+            entries.push(Entry {
+                name,
+                identity,
+                content,
+            });
         }
         if pos != len {
             return Err(TreeError::TrailingBytes);
@@ -597,6 +665,109 @@ mod tests {
         payload.extend_from_slice(&(1u32).to_le_bytes());
         payload.extend_from_slice(b"x");
         assert_eq!(Tree::decode(&payload), Err(TreeError::UnknownEntryKind(3)));
+    }
+
+    #[test]
+    fn decode_rejects_identity_kind_with_unknown_base() {
+        // The identity bit alone names nothing: 0x13 has the bit set
+        // but no valid base kind.
+        let mut payload = 1u32.to_le_bytes().to_vec();
+        payload.push(0x13);
+        payload.extend_from_slice(&(1u32).to_le_bytes());
+        payload.extend_from_slice(b"x");
+        payload.extend_from_slice(&[0xA5; 32]);
+        assert_eq!(
+            Tree::decode(&payload),
+            Err(TreeError::UnknownEntryKind(0x13))
+        );
+    }
+
+    /// Fixed identities for tests: distinct, deterministic, never
+    /// minted — allocation randomness belongs to the owner layer.
+    fn id(seed: u8) -> EntryIdentity {
+        EntryIdentity::from_bytes([seed; 32])
+    }
+
+    /// Legacy bytes (pre-identity kinds) decode to entries without
+    /// identity and re-encode byte-identically: old trees keep
+    /// their ContentIds bit for bit.
+    #[test]
+    fn legacy_entries_decode_without_identity_and_round_trip() {
+        let tree = Tree::from_entries(vec![
+            file_entry("a.txt", 5, false),
+            Entry::symlink("link", "target/path").unwrap(),
+        ])
+        .unwrap();
+        let bytes = tree.encode();
+        // Legacy kinds by construction: the first entry kind byte is
+        // the file kind, not its identity-bearing twin.
+        assert_eq!(bytes[4], 0x00);
+        let decoded = Tree::decode(&bytes).unwrap();
+        assert!(decoded.entries().iter().all(|e| e.identity.is_none()));
+        assert_eq!(decoded.encode(), bytes);
+        assert_eq!(decoded.content_id(), tree.content_id());
+    }
+
+    /// Identity-bearing entries of every kind round-trip with the
+    /// identity intact, and identical content under distinct
+    /// identities yields distinct trees: identity, not content,
+    /// distinguishes entries.
+    #[test]
+    fn identity_entries_round_trip_and_distinguish() {
+        let child = Tree::from_entries(vec![file_entry("nested", 4, false)]).unwrap();
+        let tree = Tree::from_entries(vec![
+            Entry::file("script.sh", 3, true, vec![chunk_id(1), chunk_id(2)])
+                .unwrap()
+                .with_identity(id(1)),
+            Entry::symlink("link", "target/path")
+                .unwrap()
+                .with_identity(id(2)),
+            Entry::dir("sub", child.content_id())
+                .unwrap()
+                .with_identity(id(3)),
+            Entry::file("empty", 0, false, Vec::new())
+                .unwrap()
+                .with_identity(id(4)),
+        ])
+        .unwrap();
+        let decoded = Tree::decode(&tree.encode()).unwrap();
+        assert_eq!(decoded, tree);
+        // Canonical bytewise order: empty, link, script.sh, sub.
+        for (entry, seed) in decoded.entries().iter().zip([4u8, 2, 1, 3]) {
+            assert_eq!(entry.identity, Some(id(seed)), "entry {:?}", entry.name);
+        }
+        // Same content, different identities: different trees, different ids.
+        let same_content = |seed: u8| {
+            Tree::from_entries(vec![file_entry("a.txt", 5, false).with_identity(id(seed))]).unwrap()
+        };
+        let one = same_content(11);
+        let two = same_content(22);
+        assert_eq!(one.encode().len(), two.encode().len());
+        assert_ne!(one.encode(), two.encode());
+        assert_ne!(one.content_id(), two.content_id());
+    }
+
+    /// Mixed trees (legacy siblings beside identity entries) decode
+    /// and encode: a rebuilt legacy tree keeps legacy bytes where
+    /// the entries are untouched.
+    #[test]
+    fn mixed_legacy_and_identity_entries_coexist() {
+        let tree = Tree::from_entries(vec![
+            file_entry("legacy.txt", 1, false),
+            file_entry("new.txt", 2, false).with_identity(id(7)),
+        ])
+        .unwrap();
+        let decoded = Tree::decode(&tree.encode()).unwrap();
+        assert_eq!(decoded, tree);
+        let by_name = |name: &str| {
+            decoded
+                .entries()
+                .iter()
+                .find(|e| e.name.as_str() == name)
+                .unwrap()
+        };
+        assert_eq!(by_name("legacy.txt").identity, None);
+        assert_eq!(by_name("new.txt").identity, Some(id(7)));
     }
 
     #[test]

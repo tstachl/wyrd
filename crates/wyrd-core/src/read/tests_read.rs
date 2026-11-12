@@ -136,6 +136,7 @@ impl NamespaceView for FakeView {
                 size: outcome.bytes().len() as u64,
                 executable: false,
                 chunks: vec![Self::file_id(path)],
+                identity: None,
             });
         }
         if self
@@ -148,6 +149,7 @@ impl NamespaceView for FakeView {
         {
             return Ok(Node::Dir {
                 subtree: Self::file_id(path),
+                identity: None,
             });
         }
         Err(ViewError::NotFound)
@@ -160,6 +162,7 @@ impl NamespaceView for FakeView {
                 kind: Kind::File,
                 size,
                 executable: false,
+                identity: None,
             }),
             _ => Err(ViewError::NotAFile),
         }

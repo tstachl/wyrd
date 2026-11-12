@@ -74,6 +74,7 @@ fn attrs_present_the_mounting_user() {
         1,
         &Node::Dir {
             subtree: ContentId::from_bytes([0x02; 32]),
+            identity: None,
         },
     );
     let (uid, gid) = current_owner();

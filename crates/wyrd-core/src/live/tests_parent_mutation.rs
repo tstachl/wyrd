@@ -4,7 +4,7 @@ use std::sync::{RwLockReadGuard, RwLockWriteGuard};
 use wyrd_format::{Entry, EntryContent, MemoryObjectStore, ObjectStore, Tree};
 use wyrd_sync::keys::DeviceIdentitySecret;
 
-struct TreeView {
+pub(super) struct TreeView {
     store: Arc<RwLock<MemoryObjectStore>>,
     materialization: RuntimeMaterialization,
     heads: Vec<Head>,
@@ -32,10 +32,15 @@ impl TreeView {
                 size: *size,
                 executable: *executable,
                 chunks: chunks.clone(),
+                identity: entry.identity,
             },
-            EntryContent::Dir { subtree } => Node::Dir { subtree: *subtree },
+            EntryContent::Dir { subtree } => Node::Dir {
+                subtree: *subtree,
+                identity: entry.identity,
+            },
             EntryContent::Symlink { target } => Node::Symlink {
                 target: target.clone(),
+                identity: entry.identity,
             },
         }
     }
@@ -87,15 +92,24 @@ impl NamespaceView for TreeView {
 
     fn lookup(&self, path: &str) -> Result<Node, ViewError> {
         let Some(head) = self.heads.first() else {
-            return Ok(Node::MergedDir {
-                subtrees: Vec::new(),
-            });
+            // Headless, like the real view: only the root address
+            // resolves (to an empty directory); every other path is
+            // absent, so headless creates proceed instead of
+            // reporting the empty drive as already existing.
+            let mut parts = path.split('/').filter(|component| !component.is_empty());
+            return match parts.next() {
+                None => Ok(Node::MergedDir {
+                    subtrees: Vec::new(),
+                }),
+                Some(_) => Err(ViewError::NotFound),
+            };
         };
         let mut node = Node::Dir {
             subtree: head.snapshot().tree,
+            identity: None,
         };
         for component in path.split('/').filter(|component| !component.is_empty()) {
-            let Node::Dir { subtree } = node else {
+            let Node::Dir { subtree, .. } = node else {
                 return Err(ViewError::NotADirectory);
             };
             let tree = self.load(&subtree)?;
@@ -112,26 +126,39 @@ impl NamespaceView for TreeView {
     fn stat(&self, path: &str) -> Result<crate::view::Attr, ViewError> {
         Ok(match self.lookup(path)? {
             Node::File {
-                size, executable, ..
+                size,
+                executable,
+                identity,
+                ..
             } => crate::view::Attr {
                 kind: Kind::File,
                 size,
                 executable,
+                identity,
             },
-            Node::Dir { .. } | Node::MergedDir { .. } => crate::view::Attr {
+            Node::Dir { identity, .. } => crate::view::Attr {
                 kind: Kind::Dir,
                 size: 0,
                 executable: false,
+                identity,
             },
-            Node::Symlink { .. } => crate::view::Attr {
+            Node::MergedDir { .. } => crate::view::Attr {
+                kind: Kind::Dir,
+                size: 0,
+                executable: false,
+                identity: None,
+            },
+            Node::Symlink { identity, .. } => crate::view::Attr {
                 kind: Kind::Symlink,
                 size: 0,
                 executable: false,
+                identity,
             },
             Node::Conflict { .. } => crate::view::Attr {
                 kind: Kind::Conflict,
                 size: 0,
                 executable: false,
+                identity: None,
             },
         })
     }
@@ -140,12 +167,34 @@ impl NamespaceView for TreeView {
         Err(ViewError::NotADirectory)
     }
 
-    fn open_file(&self, _node: &Node) -> Result<OpenFile, ViewError> {
-        Err(ViewError::NotAFile)
+    fn open_file(&self, node: &Node) -> Result<OpenFile, ViewError> {
+        // Functional opens: the store holds every chunk the tests
+        // author, so appends and truncating setattrs can read back
+        // what commits wrote — the same bytes a peer would fetch.
+        match node {
+            Node::File { chunks, size, .. } => Ok(OpenFile::new(chunks.clone(), *size)),
+            _ => Err(ViewError::NotAFile),
+        }
     }
 
-    fn read(&self, _file: &OpenFile, _offset: u64, _len: usize) -> Result<Vec<u8>, ViewError> {
-        Err(ViewError::NotAFile)
+    fn read(&self, file: &OpenFile, offset: u64, len: usize) -> Result<Vec<u8>, ViewError> {
+        let store = self
+            .store
+            .read()
+            .map_err(|_| ViewError::Store(StoreFailure::Transient, "poisoned".into()))?;
+        let mut image = Vec::new();
+        for chunk in file.chunks() {
+            let bytes = store
+                .get(chunk)
+                .map_err(|error| ViewError::Store(StoreFailure::Transient, format!("{error:?}")))?
+                .ok_or(ViewError::NotMaterialized { content: *chunk })?;
+            image.extend_from_slice(&bytes);
+        }
+        let start = usize::try_from(offset)
+            .unwrap_or(usize::MAX)
+            .min(image.len());
+        let end = start.saturating_add(len).min(image.len());
+        Ok(image[start..end].to_vec())
     }
 }
 
@@ -179,7 +228,7 @@ fn scratch_parent_drive(
     (engine, dir, store, root, head)
 }
 
-fn live_over_tree(
+pub(super) fn live_over_tree(
     engine: Engine,
     store: MemoryObjectStore,
     heads: &[AuthorizedSnapshot],
@@ -206,6 +255,16 @@ fn live_over_tree(
     )
     .expect("the default config carries no quota, so composition cannot be refused")
     .0
+}
+
+/// Deterministic mint for direct tree setups: every creation draws
+/// the same fixed identity. Tests asserting lifecycle behavior mint
+/// their own.
+fn test_mint() -> impl FnMut() -> Result<
+    wyrd_format::EntryIdentity,
+    wyrd_format::MutationError<wyrd_format::MemoryStoreError>,
+> {
+    || Ok(wyrd_format::EntryIdentity::from_bytes([0xE1; 32]))
 }
 
 #[test]
@@ -297,6 +356,7 @@ fn create_rejects_a_replaced_parent() {
             without_parent,
             "parent",
             Entry::dir("parent", replacement).unwrap(),
+            &mut test_mint(),
         )
         .unwrap()
     };
@@ -344,7 +404,9 @@ fn guarded_setattrs_refuses_a_replaced_path() {
             .insert(wyrd_format::ObjectKind::Chunk, b"original")
             .unwrap();
         let entry = Entry::file("child", 8, false, vec![chunk]).unwrap();
-        let next = wyrd_format::mutation::put(&mut *store, root, "parent/child", entry).unwrap();
+        let next =
+            wyrd_format::mutation::put(&mut *store, root, "parent/child", entry, &mut test_mint())
+                .unwrap();
         (next, FileIdentity::new(8, false, vec![chunk]))
     };
     live.engine
@@ -356,8 +418,14 @@ fn guarded_setattrs_refuses_a_replaced_path() {
             .insert(wyrd_format::ObjectKind::Chunk, b"replacement")
             .unwrap();
         let entry = Entry::file("child", 11, false, vec![chunk]).unwrap();
-        let next =
-            wyrd_format::mutation::put(&mut *store, first_root, "parent/child", entry).unwrap();
+        let next = wyrd_format::mutation::put(
+            &mut *store,
+            first_root,
+            "parent/child",
+            entry,
+            &mut test_mint(),
+        )
+        .unwrap();
         (next, FileIdentity::new(11, false, vec![chunk]))
     };
     live.engine

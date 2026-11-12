@@ -31,7 +31,7 @@ use std::time::Duration;
 
 use wyrd_core::live::LiveParts;
 use wyrd_core::view::{Attr, ConflictVersion, DirEntry, Kind, Node};
-use wyrd_format::{ContentId, SnapshotId};
+use wyrd_format::{ContentId, EntryIdentity, SnapshotId};
 use wyrd_sync::keys::DeviceIdentitySecret;
 use wyrd_sync::runtime::Engine;
 
@@ -148,12 +148,15 @@ fn interface_value_types_round_trip() {
         size: 11,
         executable: false,
         chunks: vec![ContentId::from_bytes([0x01; 32])],
+        identity: Some(EntryIdentity::from_bytes([0xA0; 32])),
     };
     let dir = Node::Dir {
         subtree: ContentId::from_bytes([0x02; 32]),
+        identity: None,
     };
     let symlink = Node::Symlink {
         target: "hello.txt".to_string(),
+        identity: Some(EntryIdentity::from_bytes([0xA1; 32])),
     };
     let merged = Node::MergedDir {
         subtrees: vec![
@@ -195,12 +198,34 @@ fn interface_value_types_round_trip() {
         size: 1,
         executable: false,
         chunks: vec!["not-hex".to_string()],
+        identity: None,
     };
     assert!(node_from_wire(&bad).is_err());
     let short = WireNode::Dir {
         subtree: "abcd".to_string(),
+        identity: None,
     };
     assert!(node_from_wire(&short).is_err());
+    // An invalid identity fails the mapping, never decodes to a
+    // wrong entry: the token is load-bearing for sameness.
+    let bad_identity = WireNode::Symlink {
+        target: "x".to_string(),
+        identity: Some("zz".to_string()),
+    };
+    assert!(node_from_wire(&bad_identity).is_err());
+    // Absence stays absence through the round trip: pre-identity
+    // data never gains a token in transit.
+    let legacy = WireNode::Dir {
+        subtree: hex::encode([0x02; 32]),
+        identity: None,
+    };
+    assert_eq!(
+        node_from_wire(&legacy).unwrap(),
+        Node::Dir {
+            subtree: ContentId::from_bytes([0x02; 32]),
+            identity: None,
+        }
+    );
 }
 
 /// Attributes, entries, and kinds round-trip through JSON unchanged.
@@ -211,19 +236,35 @@ fn wire_attr_and_entry_round_trip() {
             kind,
             size: 9,
             executable: true,
+            identity: Some(EntryIdentity::from_bytes([0xB0; 32])),
         };
         let wire = wire_attr(&attr);
-        let back: WireAttr = serde_json::from_value(serde_json::to_value(wire).unwrap()).unwrap();
+        let back: WireAttr = serde_json::from_value(serde_json::to_value(&wire).unwrap()).unwrap();
         assert_eq!(back, wire);
-        assert_eq!(attr_from_wire(back), attr);
+        assert_eq!(attr_from_wire(back).unwrap(), attr);
         assert_eq!(kind_from_wire(wire.kind), kind);
     }
+    // A pre-identity reader's payload (no identity key) still
+    // parses: the token defaults to absence instead of failing.
+    let legacy_json = serde_json::json!({"kind": "File", "size": 1, "executable": false});
+    let legacy: WireAttr = serde_json::from_value(legacy_json).unwrap();
+    assert_eq!(legacy.identity, None);
+    assert_eq!(
+        attr_from_wire(legacy).unwrap(),
+        Attr {
+            kind: Kind::File,
+            size: 1,
+            executable: false,
+            identity: None,
+        }
+    );
     let entry = DirEntry {
         name: "hello.txt".to_string(),
         node: Node::File {
             size: 11,
             executable: false,
             chunks: vec![],
+            identity: None,
         },
     };
     let wire = wire_dir_entry(&entry);

@@ -91,7 +91,14 @@ fn export_round_trips_a_real_drive_to_a_plain_tree() {
         ("link", Entry::symlink("link", "hello.txt").unwrap()),
         ("empty", Entry::dir("empty", empty).unwrap()),
     ] {
-        root = wyrd_format::put(&mut store, root, path, entry).unwrap();
+        root = wyrd_format::put(&mut store, root, path, entry, &mut || {
+            Ok(wyrd_format::EntryIdentity::from_bytes(
+                wyrd_format::ContentId::derive(wyrd_format::ObjectKind::Chunk, path.as_bytes())
+                    .as_bytes()
+                    .to_owned(),
+            ))
+        })
+        .unwrap();
     }
     engine.author_snapshot(&store, root).unwrap();
     let mut node: WyrdNode<DriveView<MemoryObjectStore, RuntimeMaterialization>> =

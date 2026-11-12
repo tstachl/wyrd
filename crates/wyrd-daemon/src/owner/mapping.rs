@@ -22,7 +22,7 @@ use wyrd_core::status::{
     ConvergenceState, HeadClasses, HeadSummary, MailboxView, PeerHandle, QueueDepth, SyncStatus,
 };
 use wyrd_core::view::{Attr, ConflictVersion, DirEntry, Kind, Node};
-use wyrd_format::{ContentId, SnapshotId};
+use wyrd_format::{ContentId, EntryIdentity, SnapshotId};
 use wyrd_sync::membership::KnownState;
 use wyrd_sync::runtime::{
     DrainReport, DurabilityLevel, ExecuteReport, MaterializationSummary, OutboxTotals,
@@ -71,20 +71,30 @@ pub fn wire_attr(attr: &Attr) -> WireAttr {
         kind,
         size,
         executable,
+        identity,
     } = *attr;
     WireAttr {
         kind: wire_kind(kind),
         size,
         executable,
+        identity: identity.map(|id| hex_id(id.as_bytes())),
     }
 }
 
-pub fn attr_from_wire(attr: WireAttr) -> Attr {
-    Attr {
+pub fn attr_from_wire(attr: WireAttr) -> Result<Attr, String> {
+    Ok(Attr {
         kind: kind_from_wire(attr.kind),
         size: attr.size,
         executable: attr.executable,
-    }
+        identity: attr
+            .identity
+            .map(|hex| {
+                parse_id(&hex)
+                    .map(EntryIdentity::from_bytes)
+                    .map_err(|error| format!("invalid entry identity {hex:?}: {error}"))
+            })
+            .transpose()?,
+    })
 }
 /// Map `Node` to its wire form. Exhaustive destructure:
 /// a new source field fails the build here, not on the wire.
@@ -94,16 +104,20 @@ pub fn wire_node(node: &Node) -> WireNode {
             size,
             executable,
             chunks,
+            identity,
         } => WireNode::File {
             size: *size,
             executable: *executable,
             chunks: chunks.iter().map(|id| hex_id(id.as_bytes())).collect(),
+            identity: identity.map(|id| hex_id(id.as_bytes())),
         },
-        Node::Dir { subtree } => WireNode::Dir {
+        Node::Dir { subtree, identity } => WireNode::Dir {
             subtree: hex_id(subtree.as_bytes()),
+            identity: identity.map(|id| hex_id(id.as_bytes())),
         },
-        Node::Symlink { target } => WireNode::Symlink {
+        Node::Symlink { target, identity } => WireNode::Symlink {
             target: target.clone(),
+            identity: identity.map(|id| hex_id(id.as_bytes())),
         },
         Node::MergedDir { subtrees } => WireNode::MergedDir {
             subtrees: subtrees
@@ -135,6 +149,7 @@ pub fn node_from_wire(node: &WireNode) -> Result<Node, String> {
             size,
             executable,
             chunks,
+            identity,
         } => {
             let mut ids = Vec::with_capacity(chunks.len());
             for raw in chunks {
@@ -144,13 +159,16 @@ pub fn node_from_wire(node: &WireNode) -> Result<Node, String> {
                 size: *size,
                 executable: *executable,
                 chunks: ids,
+                identity: wire_identity(identity)?,
             })
         }
-        WireNode::Dir { subtree } => Ok(Node::Dir {
+        WireNode::Dir { subtree, identity } => Ok(Node::Dir {
             subtree: ContentId::from_bytes(parse_id(subtree)?),
+            identity: wire_identity(identity)?,
         }),
-        WireNode::Symlink { target } => Ok(Node::Symlink {
+        WireNode::Symlink { target, identity } => Ok(Node::Symlink {
             target: target.clone(),
+            identity: wire_identity(identity)?,
         }),
         WireNode::MergedDir { subtrees } => {
             let mut pairs = Vec::with_capacity(subtrees.len());
@@ -174,6 +192,18 @@ pub fn node_from_wire(node: &WireNode) -> Result<Node, String> {
         }
     }
 }
+/// Parse an optional wire identity: absent stays absent (pre-identity
+/// data), present must be 32 hex bytes — never silently dropped.
+fn wire_identity(hex: &Option<String>) -> Result<Option<EntryIdentity>, String> {
+    hex.as_deref()
+        .map(|raw| {
+            parse_id(raw)
+                .map(EntryIdentity::from_bytes)
+                .map_err(|error| format!("invalid entry identity {raw:?}: {error}"))
+        })
+        .transpose()
+}
+
 /// Map `DirEntry` to its wire form. Exhaustive destructure:
 /// a new source field fails the build here, not on the wire.
 pub fn wire_dir_entry(entry: &DirEntry) -> WireDirEntry {

@@ -31,8 +31,8 @@ pub use chunk::Chunk;
 pub use envelope::{Envelope, EnvelopeError};
 pub use fs_store::{FsObjectStore, FsStoreError};
 pub use identity::{
-    BaoRoot, ContentId, DeviceEncryptionKey, DeviceId, DriveId, ObjectKind, SnapshotId, StorageId,
-    TransitionId,
+    BaoRoot, ContentId, DeviceEncryptionKey, DeviceId, DriveId, EntryIdentity, ObjectKind,
+    SnapshotId, StorageId, TransitionId,
 };
 pub use manifest::{ChildManifest, Manifest, ManifestEntry, ManifestError, CHILD_LEN, ENTRY_LEN};
 pub use membership::{Change, MembershipError, MembershipTransition};

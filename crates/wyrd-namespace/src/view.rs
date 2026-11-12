@@ -25,7 +25,8 @@ use std::collections::{HashSet, VecDeque};
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use wyrd_format::{
-    Component, ContentId, FetchStatus, ObjectKind, ObjectStore, Snapshot, StoreFailure,
+    Component, ContentId, EntryIdentity, FetchStatus, ObjectKind, ObjectStore, Snapshot,
+    StoreFailure,
 };
 
 /// The residency policy for content the local store does not hold: a
@@ -118,18 +119,29 @@ impl Head {
 pub struct ViewLockError;
 
 /// What `lookup` resolves a path to.
+///
+/// File, dir, and symlink nodes carry the entry's stable identity:
+/// the same entry across renames, edits, restarts, and
+/// peer-originated changes resolves to the same token. The token is
+/// `None` for entries that predate identity support, and for the
+/// synthetic states below — `MergedDir` and `Conflict` are merged
+/// views, not single entries, so they carry no identity of their
+/// own (each conflict version carries its head's token).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Node {
     File {
         size: u64,
         executable: bool,
         chunks: Vec<ContentId>,
+        identity: Option<EntryIdentity>,
     },
     Dir {
         subtree: ContentId,
+        identity: Option<EntryIdentity>,
     },
     Symlink {
         target: String,
+        identity: Option<EntryIdentity>,
     },
     /// Every head resolves this path to a directory, but the directory
     /// contents differ: a DAG conflict that is not a path conflict. The
@@ -145,9 +157,7 @@ pub enum Node {
     /// readable: version-qualified lookup paths (`foo@N`, counted in
     /// SnapshotId byte order) address the versions, and nothing
     /// synthetic is ever listed by `readdir`.
-    Conflict {
-        versions: Vec<ConflictVersion>,
-    },
+    Conflict { versions: Vec<ConflictVersion> },
 }
 
 /// One head's resolution of a conflicted path.
@@ -157,12 +167,14 @@ pub struct ConflictVersion {
     pub node: Node,
 }
 
-/// File attributes for `stat`.
+/// File attributes for `stat`. The identity mirrors the node's:
+/// `stat` is how readers observe entry sameness without listing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Attr {
     pub kind: Kind,
     pub size: u64,
     pub executable: bool,
+    pub identity: Option<EntryIdentity>,
 }
 
 /// Node kinds, including conflicted paths.
@@ -640,7 +652,7 @@ fn resolve_symlink_components<V: NamespaceView>(
                 };
                 match child {
                     Node::Conflict { .. } => return Err(ConfinementError::Conflict),
-                    Node::Symlink { target: next } => {
+                    Node::Symlink { target: next, .. } => {
                         state.hops = state.hops.saturating_add(1);
                         if state.hops > MAX_SYMLINK_HOPS {
                             return Err(ConfinementError::HopLimit {

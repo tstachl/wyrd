@@ -12,6 +12,7 @@
 //! strictly. Empty directories are not pruned on `remove`.
 
 use crate::identity::ContentId;
+use crate::identity::EntryIdentity;
 use crate::store::ObjectStore;
 use crate::tree::{Component, ComponentError, Entry, EntryContent, Tree, TreeError};
 use thiserror::Error;
@@ -53,6 +54,8 @@ pub enum MutationError<E: std::fmt::Debug> {
     NotFound(String),
     #[error("{0:?} already exists")]
     AlreadyExists(String),
+    #[error("entry identity mint failed: {0}")]
+    Mint(String),
     #[error("{0:?} is not empty")]
     DirectoryNotEmpty(String),
     #[error("invalid rename: {0}")]
@@ -64,24 +67,32 @@ pub enum MutationError<E: std::fmt::Debug> {
 /// Insert or replace the entry at `path`, creating intermediate
 /// directories, and return the new root `ContentId`. The entry's name must
 /// equal the final path component.
+///
+/// The leaf entry is the caller's: its identity is whatever the caller
+/// decided (minted for a creation, preserved for a modification).
+/// Newly created intermediate directories need identities of their
+/// own, drawn from `mint` — the owner supplies the randomness, so
+/// this pure function never draws it. Rebound intermediates keep
+/// their existing identities untouched.
 pub fn put<S: ObjectStore>(
     store: &mut S,
     root: ContentId,
     path: &str,
     entry: Entry,
+    mint: &mut dyn FnMut() -> Result<EntryIdentity, MutationError<S::Error>>,
 ) -> Result<ContentId, MutationError<S::Error>>
 where
     S::Error: std::fmt::Debug,
 {
     let components = parse_path(path)?;
     let tree = load_tree(store, &root)?;
-    put_node(store, tree, &components, entry, true)
+    put_node(store, tree, &components, entry, true, Some(mint))
 }
 
 /// Insert or replace the entry at `path` without creating intermediate
 /// directories. Every parent component must already exist and be a
 /// directory; otherwise the operation returns `NotFound` or
-/// `NotADirectory`.
+/// `NotADirectory`. The leaf identity is the caller's decision alone.
 pub fn put_strict<S: ObjectStore>(
     store: &mut S,
     root: ContentId,
@@ -93,7 +104,7 @@ where
 {
     let components = parse_path(path)?;
     let tree = load_tree(store, &root)?;
-    put_node(store, tree, &components, entry, false)
+    put_node(store, tree, &components, entry, false, None)
 }
 
 /// Remove the entry at `path` and return the new root `ContentId`.
@@ -118,17 +129,22 @@ where
 /// `NotADirectory`. An existing entry at the path is `AlreadyExists`,
 /// regardless of kind, so the daemon can map it to `EEXIST` without
 /// re-resolving.
+///
+/// The new directory is a new entry: `identity` is the owner's mint,
+/// supplied by the caller (creation is the caller's decision; this
+/// function only enforces the strict-parents rule).
 pub fn mkdir<S: ObjectStore>(
     store: &mut S,
     root: ContentId,
     path: &str,
+    identity: EntryIdentity,
 ) -> Result<ContentId, MutationError<S::Error>>
 where
     S::Error: std::fmt::Debug,
 {
     let components = parse_path(path)?;
     let tree = load_tree(store, &root)?;
-    mkdir_node(store, tree, &components)
+    mkdir_node(store, tree, &components, identity)
 }
 
 /// Remove the empty directory at `path` and return the new root
@@ -220,6 +236,10 @@ where
             .last()
             .expect("path components are non-empty")
             .clone(),
+        // The move preserves the entry: only the name is rebound, so
+        // the identity travels with the content. A replaced
+        // destination retires with the entry it displaces.
+        identity: source.identity,
         content: source.content.clone(),
     };
     let without_source = remove_node(store, tree, &from_components)?;
@@ -275,6 +295,7 @@ fn put_node<S: ObjectStore>(
     rest: &[Component],
     entry: Entry,
     create_intermediates: bool,
+    mut mint: Option<&mut dyn FnMut() -> Result<EntryIdentity, MutationError<S::Error>>>,
 ) -> Result<ContentId, MutationError<S::Error>>
 where
     S::Error: std::fmt::Debug,
@@ -291,19 +312,30 @@ where
         }
         upsert(&mut entries, entry);
     } else {
-        let child = match entries.iter().find(|candidate| candidate.name == *head) {
+        // Rebinding an intermediate preserves its entry: only the
+        // subtree reference changes, so the identity rides along
+        // untouched. A newly created intermediate is a new entry
+        // and mints its own identity.
+        let (child, preserved) = match entries.iter().find(|candidate| candidate.name == *head) {
             Some(existing) => match &existing.content {
-                EntryContent::Dir { subtree } => load_tree(store, subtree)?,
+                EntryContent::Dir { subtree } => (load_tree(store, subtree)?, existing.identity),
                 _ => return Err(MutationError::NotADirectory(head.as_str().to_string())),
             },
-            None if create_intermediates => Tree::empty(),
+            None if create_intermediates => {
+                let minted = mint
+                    .as_mut()
+                    .ok_or_else(|| MutationError::Mint("strict parents never mint".to_string()))?(
+                )?;
+                (Tree::empty(), Some(minted))
+            }
             None => return Err(MutationError::NotFound(head.as_str().to_string())),
         };
-        let new_subtree = put_node(store, child, tail, entry, create_intermediates)?;
+        let new_subtree = put_node(store, child, tail, entry, create_intermediates, mint)?;
         upsert(
             &mut entries,
             Entry {
                 name: head.clone(),
+                identity: preserved,
                 content: EntryContent::Dir {
                     subtree: new_subtree,
                 },
@@ -352,6 +384,7 @@ fn mkdir_node<S: ObjectStore>(
     store: &mut S,
     tree: Tree,
     rest: &[Component],
+    identity: EntryIdentity,
 ) -> Result<ContentId, MutationError<S::Error>>
 where
     S::Error: std::fmt::Debug,
@@ -368,22 +401,24 @@ where
             .map_err(MutationError::Store)?;
         entries.push(Entry {
             name: head.clone(),
+            identity: Some(identity),
             content: EntryContent::Dir { subtree: empty },
         });
     } else {
-        let subtree = match entries.iter().find(|candidate| candidate.name == *head) {
+        let (subtree, preserved) = match entries.iter().find(|candidate| candidate.name == *head) {
             Some(existing) => match &existing.content {
-                EntryContent::Dir { subtree } => *subtree,
+                EntryContent::Dir { subtree } => (*subtree, existing.identity),
                 _ => return Err(MutationError::NotADirectory(head.as_str().to_string())),
             },
             None => return Err(MutationError::NotFound(head.as_str().to_string())),
         };
         let child = load_tree(store, &subtree)?;
-        let new_subtree = mkdir_node(store, child, tail)?;
+        let new_subtree = mkdir_node(store, child, tail, identity)?;
         upsert(
             &mut entries,
             Entry {
                 name: head.clone(),
+                identity: preserved,
                 content: EntryContent::Dir {
                     subtree: new_subtree,
                 },
@@ -515,9 +550,11 @@ where
             },
         }
     } else {
-        let subtree = match entries.iter().find(|candidate| candidate.name == *head) {
+        // Rebinding an intermediate preserves its entry, like
+        // `put_node`: only the subtree reference changes.
+        let (subtree, preserved) = match entries.iter().find(|candidate| candidate.name == *head) {
             Some(existing) => match &existing.content {
-                EntryContent::Dir { subtree } => *subtree,
+                EntryContent::Dir { subtree } => (*subtree, existing.identity),
                 _ => return Err(MutationError::NotADirectory(head.as_str().to_string())),
             },
             None => return Err(MutationError::NotFound(head.as_str().to_string())),
@@ -528,6 +565,7 @@ where
             &mut entries,
             Entry {
                 name: head.clone(),
+                identity: preserved,
                 content: EntryContent::Dir {
                     subtree: new_subtree,
                 },

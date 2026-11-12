@@ -35,6 +35,22 @@ is transient — no drive data is affected.
 
 ### Added
 
+- Stable entry identity in the owner/model contract
+  (`nostr:nevent1qqsxf3d3js87fea6edpk6dyl3zw76de7ku4t6jlll9cz2tua9d40xtcpz9mhxue69uhkwunpwdczuap49eehgzhuu57`,
+  OD-17-A gate for File Provider Stage 2): every filesystem entry
+  carries an opaque, drive-scoped `EntryIdentity` token — minted once
+  per entry by the owner (OS CSPRNG), carried in the tree entry's
+  canonical payload (new kinds `0x10`/`0x11`/`0x12`; legacy
+  `0x00`-`0x02` entries decode with no token and re-encode
+  byte-identically, so old ContentIds are unchanged), preserved across
+  renames, content modifications, restarts, and peer-originated
+  changes, retired on delete and re-minted on recreate. The owner
+  interface exposes the token on `lookup`/`stat`/`readdir` (additive
+  optional `identity` wire field), and every backend observes the same
+  token — no path-plus-hash identifiers, no adapter-side authoritative
+  mapping, no content matching. Normative lifecycle, encoding,
+  transfer, and authority rules in `docs/contracts/object-model.md`.
+
 - Runtime provisioning through the constrained CLI adapter
   (`nostr:nevent1qqsx9357fqqfup9g7kurf7gdcgtjf8qaceay3a90wzxjw6sresg69eqpz9mhxue69uhkwunpwdczuap49eehgcl6hz9`):
   the desktop shell creates, joins, and leaves drives by invoking

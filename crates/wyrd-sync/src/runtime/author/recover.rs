@@ -17,7 +17,9 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
-use wyrd_format::{ContentId, Entry, EntryContent, ObjectKind, ObjectStore, SnapshotId, Tree};
+use wyrd_format::{
+    ContentId, Entry, EntryContent, EntryIdentity, ObjectKind, ObjectStore, SnapshotId, Tree,
+};
 
 use super::merge::{check_local, load_root};
 use super::snapshot::{author_recovery, check_recovery_owner};
@@ -144,12 +146,20 @@ pub struct RecoveryPreview {
 }
 
 /// Resolve the graft over the plan: read the source, validate
-/// the selection, return both. The one decision both paths share
-/// — [`preview`] adds the locality gate and returns names,
-/// [`recover`] adds the owner gate then the locality gate and
-/// authors. Splitting resolution from gating keeps the commit's
-/// owner-before-locality precedence exactly where it was before
-/// the preview extraction.
+/// the selection, normalize entry identities, and return both.
+/// The one decision both paths share — [`preview`] adds the
+/// locality gate and returns names, [`recover`] adds the owner
+/// gate then the locality gate and authors. Splitting resolution
+/// from gating keeps the commit's owner-before-locality
+/// precedence exactly where it was before the preview extraction.
+///
+/// Identity normalization happens once, here, so preview and
+/// commit agree on the graft: a taken entry keeps its historical
+/// token only where a live root entry at the same name carries
+/// the identical `Some` token (genuinely the same entry); every
+/// other graft mints — recreation after deletion is a new entry,
+/// and historical restoration never resurrects a retired
+/// identity.
 ///
 /// [`preview`]: self::preview
 /// [`recover`]: self::recover
@@ -166,7 +176,46 @@ where
 {
     let plan = plan(engine, objects, from)?;
     let taken = select(objects, &plan, takes, all, contents)?;
+    let taken = normalize_graft_identities(engine, objects, taken)?;
     Ok((plan, taken))
+}
+
+/// Mint one entry identity for a recovery graft from the OS
+/// CSPRNG: recovery authors new root entries, so allocation lives
+/// with the authoring owner like every other creation.
+fn mint_graft_identity() -> Result<EntryIdentity, EngineError> {
+    let mut bytes = [0u8; 32];
+    getrandom::getrandom(&mut bytes)
+        .map_err(|error| EngineError::EntryIdentityMint(error.to_string()))?;
+    Ok(EntryIdentity::from_bytes(bytes))
+}
+
+/// Normalize graft identities per the restoration rule above.
+/// Live identities come from the current eligible heads' roots —
+/// the same roots the `AlreadyLive` signal reads — so the
+/// comparison sees exactly what the graft would displace or join.
+fn normalize_graft_identities<S: ObjectStore>(
+    engine: &Engine,
+    objects: &S,
+    taken: Vec<Entry>,
+) -> Result<Vec<Entry>, EngineError>
+where
+    S::Error: std::fmt::Debug,
+{
+    let rebuilt = engine.store.rebuild(engine.device)?;
+    let live = live_root_identities(engine, objects, &rebuilt)?;
+    let mut grafted = Vec::with_capacity(taken.len());
+    for mut entry in taken {
+        let same = matches!(
+            live.get(entry.name.as_str()),
+            Some(tokens) if tokens.iter().any(|token| *token == entry.identity && token.is_some())
+        );
+        if !same {
+            entry.identity = Some(mint_graft_identity()?);
+        }
+        grafted.push(entry);
+    }
+    Ok(grafted)
 }
 
 /// Resolve the operator selection over the plan: `--all` takes
@@ -302,11 +351,29 @@ fn live_root_names<S: ObjectStore>(
 where
     S::Error: std::fmt::Debug,
 {
+    Ok(live_root_identities(engine, objects, rebuilt)?
+        .into_keys()
+        .collect())
+}
+
+/// Every current eligible head's root entries with their
+/// identities: the live side of the graft-identity comparison.
+/// One name maps to one token per head; divergent heads may name
+/// different tokens for the same name, and every token counts —
+/// sameness is per (name, token), never per name alone.
+fn live_root_identities<S: ObjectStore>(
+    engine: &Engine,
+    objects: &S,
+    rebuilt: &Rebuilt,
+) -> Result<BTreeMap<String, Vec<Option<EntryIdentity>>>, EngineError>
+where
+    S::Error: std::fmt::Debug,
+{
     let mut dag = SnapshotDag::new(engine.drive);
     for body in rebuilt.runtime.snapshot_bodies.values() {
         dag.observe(body.clone());
     }
-    let mut names = BTreeSet::new();
+    let mut live: BTreeMap<String, Vec<Option<EntryIdentity>>> = BTreeMap::new();
     for head in dag.eligible_heads(&rebuilt.log) {
         let body = rebuilt
             .runtime
@@ -314,10 +381,12 @@ where
             .get(&head)
             .ok_or(EngineError::NotEligibleHead(head))?;
         for entry in load_root(objects, body.tree)?.entries() {
-            names.insert(entry.name.as_str().to_owned());
+            live.entry(entry.name.as_str().to_owned())
+                .or_default()
+                .push(entry.identity);
         }
     }
-    Ok(names)
+    Ok(live)
 }
 
 /// Classify one adopted entry without failing: the same two doors
@@ -462,7 +531,9 @@ fn worse(first: RecoveryStatus, second: RecoveryStatus) -> RecoveryStatus {
 /// knows a path for: a decodable tree becomes a directory entry, a
 /// plain blob becomes a file entry, both named by the id's hex so
 /// the graft stays self-describing. An id with no local bytes is
-/// not a selection problem — it fails closed naming the id.
+/// not a selection problem — it fails closed naming the id. A
+/// synthesis carries no historical token; normalization mints its
+/// identity with every other new graft.
 fn synthesize_entry<S: ObjectStore>(objects: &S, id: ContentId) -> Result<Entry, EngineError>
 where
     S::Error: std::fmt::Debug,

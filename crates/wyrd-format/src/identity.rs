@@ -168,6 +168,21 @@ derivation connects it to ContentId or StorageId, and a wrong root only
 fails a transfer, because identity is the AEAD tag plus content check on
 arrival (object-model.md decision 26)."
 );
+define_id!(
+    EntryIdentity,
+    "An opaque, stable filesystem-entry identity: minted once per entry,
+random 256-bit, never derived from content, path, or any Nostr identity.
+Two entries with identical content hold distinct identities; one entry
+keeps its identity across renames, content modifications, restarts, and
+peer-originated changes; deletion retires it permanently and recreation
+at the same path mints a new one. Scoped to its drive by contract — the
+(File Provider) item identifier derives from `DriveId + EntryIdentity`,
+never from this token alone. Minting draws from the OS CSPRNG at the
+owner layer (wyrd-core); the format layer only carries the identifier.
+Entries that predate identity support carry no token (`None` on the
+entry), never a synthesized one: reconstruction through path, content,
+or matching is not an acceptable substitute."
+);
 
 impl ContentId {
     /// Derive the Content ID for the canonical payload of the given kind.

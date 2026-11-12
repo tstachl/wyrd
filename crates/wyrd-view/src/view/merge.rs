@@ -48,7 +48,7 @@ fn all_dirs(
     present
         .iter()
         .map(|(snapshot, node)| match node {
-            Node::Dir { subtree } => Some((*snapshot, *subtree)),
+            Node::Dir { subtree, .. } => Some((*snapshot, *subtree)),
             _ => None,
         })
         .collect()

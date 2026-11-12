@@ -126,6 +126,7 @@ where
                 size,
                 executable,
                 chunks,
+                identity: None,
             })
         } else {
             Err(ViewError::NotFound)
@@ -140,6 +141,7 @@ where
                 kind: Kind::File,
                 size,
                 executable,
+                identity: None,
             }),
             _ => Err(ViewError::NotADirectory),
         }

@@ -66,6 +66,18 @@ Map expiry to `Timeout`. Tell the consumer to retry. The hex
 encoding doubles the bytes on the wire, so the 32 MiB bound keeps
 every accepted response under the 96 MiB frame ceiling.
 
+Every read answer that names an entry carries its stable identity
+(`object-model.md`, "Entry identity"): `lookup`, `stat`, and
+`readdir` expose the token as lowercase hex in an optional
+`identity` field. The token is `None` for entries that predate
+identity support and for synthetic states (`MergedDir` and
+`Conflict` carry no token of their own; each conflict version
+carries its head's token). The field is additive under the v1
+"only optional fields" rule, and it defaults on parse so a
+pre-identity reader degrades to "no token reported" instead of
+failing. Consumers answer "is this the same entry I saw before?"
+from the token, never from path, content, or matching.
+
 ## Durable observation
 
 Answer `observe` from the loop-published slot. Return

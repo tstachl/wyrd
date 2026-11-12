@@ -541,9 +541,10 @@ This is a deliberate POSIX divergence: POSIX lets a writable descriptor
 survive `rename`/`unlink` and write to the unlinked inode. Wyrd has no
 inode and no GC — a write to a node unreachable from the live tree could
 not appear in any snapshot — so v0 rejects rather than accepting a write
-that could never commit. True node-identity survival (following a renamed
-node, or an unlinked open file) is future work that would need a stable
-entry identity; it is out of scope here.
+that could never commit. Renames preserve entry identity
+(`object-model.md`, "Entry identity"), so the renamed entry stays the
+same entry; an unlinked-then-written file still cannot commit, because
+the path no longer resolves.
 
 **`O_APPEND` is the explicit content exception.** Append is
 position-independent, so an append handle does not compare content
@@ -845,11 +846,14 @@ the file identity).
 
 `rename` notes: cross-directory rename within the drive is allowed
 (unchanged subtrees are reused; only the two path walks are rebuilt).
-There are no hard links, so entry identity is the *pathname*, not a
-shared node — `rename(p, p)` is the only same-identity case, and it is a
-no-op. Both paths are parsed as canonical components before the
-mutation, so `rename("a//b", "c/./d")` cannot smuggle a non-canonical
-spelling.
+There are no hard links: one entry, one identity. A rename preserves
+the moved entry's identity — only the name is rebound — and retires
+a replaced destination's identity with the entry it displaces.
+`rename(p, p)` is a no-op returning the input root unchanged. Both
+paths are parsed as canonical components before the mutation, so
+`rename("a//b", "c/./d")` cannot smuggle a non-canonical spelling.
+A kind change is delete-plus-recreate: a replacement across kinds
+always mints a new identity, never preserves.
 
 **Final-component symlinks are never followed.** `unlink`, `rmdir`,
 `rename`, and metadata operations target the directory entry itself, not
@@ -916,7 +920,8 @@ heads.
    committed namespace changes. This is the directory analogue of the
    immutable file-descriptor rule.
 3. An entry whose kind changed (file ↔ directory) is a different node in
-   the new tree; the inode table never reuses an inode number, so no
+   the new tree — a kind change is delete-plus-recreate, so the new entry
+   mints a new identity — and the inode table never reuses an inode number, so no
    handle silently changes meaning. A handle to a removed path serves its
    captured identity until `release`.
 

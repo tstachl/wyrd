@@ -29,10 +29,14 @@ fn wire_field_names_are_pinned() {
         size: 1,
         executable: false,
         chunks: vec![],
+        identity: Some("ab".repeat(32)),
     })
     .unwrap();
     assert_eq!(keys(&node), set(&["File"]));
-    assert_eq!(keys(&node["File"]), set(&["size", "executable", "chunks"]));
+    assert_eq!(
+        keys(&node["File"]),
+        set(&["size", "executable", "chunks", "identity"])
+    );
 
     let status = serde_json::to_value(&WireSyncStatus {
         tip: None,
