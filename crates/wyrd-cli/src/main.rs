@@ -524,8 +524,18 @@ fn command(args: Vec<String>) -> Result<(), CliError> {
             drive_dir, action, ..
         } => device(drive_dir, action, &passphrase, identity),
         Command::Drive {
-            drive_dir, action, ..
-        } => drive(drive_dir, action, &passphrase, identity),
+            drive_dir,
+            action,
+            credentials,
+            ..
+        } => drive(
+            drive_dir,
+            action,
+            &passphrase,
+            identity,
+            &credentials,
+            config.as_ref(),
+        ),
         Command::Sync {
             drive_dir,
             relays,

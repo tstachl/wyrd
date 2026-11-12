@@ -547,6 +547,49 @@ pub(crate) enum DriveAction {
         #[arg(long)]
         yes: bool,
     },
+    /// Reconfigure this registered drive's supervision in place:
+    /// stop and clear the old service definition, rewrite the
+    /// registry entry, reinstall and restart when managed, and verify
+    /// the owner socket. The entry is resolved by this drive's
+    /// directory (exact match, never a guess across duplicates). Only
+    /// `vault` reconfigures today — any other mode refuses with the
+    /// installer-follow-up pointer before anything stops, like
+    /// provisioning. With `--relay` flags the relay set is replaced;
+    /// without them the registered set is kept, so a
+    /// credential-path-only reconfigure never clears relays by
+    /// accident. A live owner holding the drive refuses with the
+    /// store lock: stop the service first, the same rule every other
+    /// offline writer states.
+    Reconfigure {
+        /// Target service mode: `vault` today. Any other value
+        /// refuses with the installer-follow-up pointer.
+        #[arg(long, value_name = "MODE")]
+        mode: String,
+        /// Control-plane relay; repeatable. When at least one is
+        /// given the registered set is replaced; with none given the
+        /// registered set is kept.
+        #[arg(long, value_name = "URL")]
+        relay: Vec<String>,
+        /// Registry file elsewhere than the platform default.
+        #[arg(long, value_name = "PATH")]
+        registry: Option<PathBuf>,
+        /// Owner binary for the service definition elsewhere than
+        /// the `wyrd` beside this command. The service runs
+        /// `wyrd vault` with the same credential files.
+        #[arg(long, value_name = "PATH")]
+        owner_bin: Option<PathBuf>,
+        /// `wyrd-supervise` wrapper for the service definition
+        /// elsewhere than beside the `wyrd` binary. The restart
+        /// policy rests on the wrapper's wait-status mapping, so a
+        /// managed service without it is refused.
+        #[arg(long, value_name = "PATH")]
+        supervise_bin: Option<PathBuf>,
+        /// Rewrite the entry without installing or enabling any OS
+        /// service: the old definition is disabled and cleared, and
+        /// the owner stays supervised by whoever starts it.
+        #[arg(long)]
+        no_service: bool,
+    },
 }
 
 /// One vault action. `Start` is the 22b process; `Status` is the 22c

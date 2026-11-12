@@ -437,6 +437,37 @@ first and retry. A failed directory removal after the commit reports
 loudly with the removal already standing: remove the directory by
 hand, the membership half is done.
 
+### `drive reconfigure` — supervision change in place
+
+Stop, clear, reconfigure, restart, verify — in that order — over the
+drive's registry entry, resolved by this drive's directory (exact
+match; zero matches and duplicates both refuse). The name, service
+label, and directory never change: identity never reconfigures. Only
+`vault` reconfigures today; any other mode refuses with the
+installer-follow-up pointer before anything stops, like
+provisioning — registry-managed mount mode, its service template,
+and desktop registry-write authority still travel with that
+follow-up. With `--relay` flags the relay set is replaced; without
+them the registered set is kept, so a credential-path-only
+reconfigure never clears relays by accident. A relay-less managed
+service is refused before anything is created, like provisioning;
+`--no-service` disables the old definition and rewrites the entry
+without installing a new one.
+
+Like the other offline writers, reconfiguration is a transient
+owner: the keystore must open, so a live owner holding the drive
+refuses with `StoreLocked` and the registry stays untouched — stop
+the service first and retry. The service definition is stopped and
+cleared before the rewrite, so no manager restarts a stale
+definition over the new entry; the rewrite carries skipped entries
+forward and warns loudly instead of silently discarding them. Ready
+is reported only when the socket verifies this session — a
+rewritten entry alone reports reconfigured-but-unavailable, never
+ready. The desktop drives this surface through its constrained
+adapter (structured argv, secret paths only, version check first,
+exit codes plus independent registry, socket, and membership
+re-observation) and never writes the registry itself.
+
 ### `sync` — headless sync without mounting
 
 The two commands have deliberately different contracts:

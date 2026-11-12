@@ -249,6 +249,14 @@ pub enum BootstrapError {
         #[source]
         source: Box<BootstrapError>,
     },
+    /// Stopping (disabling) the managed service before a
+    /// reconfiguration failed.
+    #[error("stop {name}: {source}")]
+    StopService {
+        name: String,
+        #[source]
+        source: Box<BootstrapError>,
+    },
     /// Per-drive services exist only on Unix managers.
     #[error("per-drive services are implemented for Unix (launchd agent, systemd user unit)")]
     ServicesUnsupported,
@@ -655,31 +663,22 @@ pub fn render_systemd_unit(
     )
 }
 
-/// Install the per-drive service definition for this platform and
-/// return its path. Writes atomically with owner-only permissions:
-/// a half-written unit must never be what the manager loads.
-/// Installation writes the definition; enabling and starting are
-/// separate steps so registration can report exactly which one
-/// failed.
+/// Where the per-drive service definition lives on this
+/// platform: the launchd agent property list on macOS, the systemd
+/// user unit elsewhere. Shared by installation (write it) and
+/// reconfiguration (stop and clear it): both must name the same
+/// file, or a reconfigure would disable one definition while the
+/// manager loads another.
 #[cfg(unix)]
-pub fn install_service(
-    entry: &RegistryEntry,
-    owner: &SupervisedOwner,
-) -> Result<PathBuf, BootstrapError> {
+fn service_definition_path(entry: &RegistryEntry) -> PathBuf {
     #[cfg(target_os = "macos")]
     {
         let dir = std::env::var_os("HOME")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("/tmp"))
             .join("Library/LaunchAgents");
-        std::fs::create_dir_all(&dir).map_err(|source| BootstrapError::CreateDir {
-            path: dir.clone(),
-            source,
-        })?;
         let label = format!("md.enesis.wyrd.{}", entry.service);
-        let path = dir.join(format!("{label}.plist"));
-        write_service_file(&path, &render_launchd_plist(&label, owner, entry))?;
-        Ok(path)
+        dir.join(format!("{label}.plist"))
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -692,11 +691,38 @@ pub fn install_service(
                     .join(".config")
             })
             .join("systemd/user");
-        std::fs::create_dir_all(&dir).map_err(|source| BootstrapError::CreateDir {
-            path: dir.clone(),
-            source,
-        })?;
-        let path = dir.join(format!("wyrd-{}.service", entry.service));
+        dir.join(format!("wyrd-{}.service", entry.service))
+    }
+}
+
+/// Install the per-drive service definition for this platform and
+/// return its path. Writes atomically with owner-only permissions:
+/// a half-written unit must never be what the manager loads.
+/// Installation writes the definition; enabling and starting are
+/// separate steps so registration can report exactly which one
+/// failed.
+#[cfg(unix)]
+pub fn install_service(
+    entry: &RegistryEntry,
+    owner: &SupervisedOwner,
+) -> Result<PathBuf, BootstrapError> {
+    let dir = service_definition_path(entry)
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("/tmp"));
+    std::fs::create_dir_all(&dir).map_err(|source| BootstrapError::CreateDir {
+        path: dir.clone(),
+        source,
+    })?;
+    let path = service_definition_path(entry);
+    #[cfg(target_os = "macos")]
+    {
+        let label = format!("md.enesis.wyrd.{}", entry.service);
+        write_service_file(&path, &render_launchd_plist(&label, owner, entry))?;
+        Ok(path)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
         write_service_file(
             &path,
             &render_systemd_unit(&format!("Wyrd drive {}", entry.name), owner, entry),
@@ -805,6 +831,46 @@ pub fn start_service(entry: &RegistryEntry) -> Result<(), BootstrapError> {
             }
         })
     }
+}
+
+/// Stop and clear the per-drive service definition before a
+/// reconfiguration: disable the manager unit (or unload the agent)
+/// so a restart cannot bring the old definition back over the new
+/// registry entry. A missing definition file means the drive was
+/// never managed on this machine — nothing to clear, not an error.
+/// Runs before the registry rewrite, so a failure stops with the
+/// old entry still standing and the old definition still on disk.
+#[cfg(unix)]
+pub fn disable_service(entry: &RegistryEntry) -> Result<(), BootstrapError> {
+    let definition = service_definition_path(entry);
+    if !definition.exists() {
+        return Ok(());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let label = format!("md.enesis.wyrd.{}", entry.service);
+        run("launchctl", &["unload", &definition.to_string_lossy()]).map_err(|source| {
+            BootstrapError::StopService {
+                name: label,
+                source: Box::new(source),
+            }
+        })
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let unit = format!("wyrd-{}.service", entry.service);
+        run("systemctl", &["--user", "disable", "--now", &unit]).map_err(|source| {
+            BootstrapError::StopService {
+                name: unit,
+                source: Box::new(source),
+            }
+        })
+    }
+}
+
+#[cfg(not(unix))]
+pub fn disable_service(_entry: &RegistryEntry) -> Result<(), BootstrapError> {
+    Err(BootstrapError::ServicesUnsupported)
 }
 
 #[cfg(unix)]
@@ -937,6 +1003,8 @@ pub enum ProvisionFailureKind {
     EnableService,
     /// Service start (or load verification) failed.
     StartService,
+    /// Service stop (disable) before a reconfiguration failed.
+    StopService,
     /// The owner socket never verified this session.
     VerifySocket,
 }
@@ -964,6 +1032,7 @@ impl ProvisionFailureKind {
             | ProvisionFailureKind::EnableService
             | ProvisionFailureKind::StartService
             | ProvisionFailureKind::VerifySocket => None,
+            ProvisionFailureKind::StopService => Some("stop-service"),
         }
     }
 }
@@ -1161,6 +1230,302 @@ pub fn provision(config: ProvisionConfig) -> ProvisionState {
     // stays unavailable, never verified. `Unconfirmed` and
     // `Unavailable` likewise never verify: the outcome is unknown
     // or the owner is down.
+    if !wait_for_socket(&config.drive_dir, config.verify_timeout) {
+        return ProvisionState::RegisteredButUnavailable {
+            entry,
+            skipped,
+            kind: ProvisionFailureKind::VerifySocket,
+            reason: "verify-socket: owner.sock never appeared".to_string(),
+        };
+    }
+    match OwnerClient::connect_drive(&config.drive_dir)
+        .and_then(|client| client.with_timeout(config.verify_timeout))
+    {
+        Ok(mut client) => match client.observe() {
+            Ok(_) => ProvisionState::VerifiedAvailable {
+                entry,
+                skipped: skipped.clone(),
+            },
+            Err(ClientError::Refused(error)) if error.code == WireErrorCode::Unobserved => {
+                ProvisionState::VerifiedAvailable {
+                    entry,
+                    skipped: skipped.clone(),
+                }
+            }
+            Err(error) => ProvisionState::RegisteredButUnavailable {
+                entry,
+                skipped: skipped.clone(),
+                kind: ProvisionFailureKind::VerifySocket,
+                reason: format!("verify-socket: {error}"),
+            },
+        },
+        Err(error) => ProvisionState::RegisteredButUnavailable {
+            entry,
+            skipped,
+            kind: ProvisionFailureKind::VerifySocket,
+            reason: format!("verify-socket: {error}"),
+        },
+    }
+}
+
+/// What a mode reconfiguration changes about one registered
+/// drive. The entry is looked up by its drive directory — the one
+/// identity the `drive` command already carries — and must resolve
+/// to exactly one registry key, never a guess across duplicates.
+pub struct ReconfigureConfig {
+    pub drive_dir: PathBuf,
+    /// Replacement relay set. `None` keeps the registered set; the
+    /// CLI passes `Some` only when the operator named `--relay`
+    /// flags, so a credential-path-only reconfigure never clears
+    /// relays by accident.
+    pub relays: Option<Vec<String>>,
+    /// Target service mode, as the display string the registry
+    /// carries. Only `vault` reconfigures today: any other value
+    /// refuses with the installer-follow-up pointer before anything
+    /// stops, exactly like provisioning — the mount template and
+    /// enablement UX still travel with that follow-up.
+    pub mode: String,
+    pub identity: DeviceIdentitySecret,
+    pub passphrase: String,
+    pub registry_path: PathBuf,
+    /// The `wyrd` binary whose `vault` subcommand the service runs.
+    /// Defaults to the `wyrd` beside the reconfiguring command; the
+    /// installer ships both together.
+    pub wyrd_bin: Option<PathBuf>,
+    /// `wyrd-supervise`: the wait-status mapper the restart policy
+    /// rests on. Managing a service without it is refused — a bare
+    /// owner binary cannot express the terminal distinction — so an
+    /// explicit path is required wherever the layout differs.
+    pub supervise_bin: Option<PathBuf>,
+    /// Hardened credential files for the service definition,
+    /// resolved the way `load_credentials` resolves them. Paths,
+    /// never secrets, travel here.
+    pub identity_file: PathBuf,
+    pub passphrase_file: PathBuf,
+    /// Reinstall, enable, and restart the per-drive service after
+    /// the rewrite. Off disables the old service and rewrites the
+    /// entry without installing a new definition: registration only.
+    pub manage_service: bool,
+    /// How long one socket verification waits for a terminal answer.
+    /// An expiry is `Unconfirmed`, never success.
+    pub verify_timeout: Duration,
+}
+
+/// Reconfigure one registered drive in place: validate the target,
+/// prove the keystore still opens (a live owner holding the store
+/// refuses here — stop the service first, the same rule every other
+/// offline writer states), read the registry, stop and clear the
+/// old service definition, rewrite the entry carrying skipped
+/// entries forward, reinstall and restart when managed, then verify
+/// the socket. The fixed order keeps every refusal honest: the
+/// registry is rewritten only after the old service is stopped,
+/// and the drive is reported ready only when its socket verifies
+/// this session — never because the entry was rewritten.
+pub fn reconfigure(config: ReconfigureConfig) -> ProvisionState {
+    if config.mode != "vault" {
+        return ProvisionState::ProvisioningIncomplete {
+            stage: "validate",
+            kind: ProvisionFailureKind::Validate,
+            reason: BootstrapError::UnknownServiceMode.to_string(),
+        };
+    }
+    let relays = match config.relays {
+        Some(relays) => relays,
+        None => match read_registry(&config.registry_path) {
+            Ok(registry) => registry
+                .drives
+                .values()
+                .find(|entry| entry.drive_dir == config.drive_dir)
+                .map(|entry| entry.relays.clone())
+                .unwrap_or_default(),
+            Err(_) => Vec::new(),
+        },
+    };
+    let candidate = RegistryEntry {
+        service: String::new(),
+        name: String::new(),
+        drive_dir: config.drive_dir.clone(),
+        relays: relays.clone(),
+        mode: ServiceMode::Vault,
+    };
+    if config.manage_service && candidate.relays.is_empty() {
+        return ProvisionState::ProvisioningIncomplete {
+            stage: "validate",
+            kind: ProvisionFailureKind::Validate,
+            reason: "managing a service needs at least one --relay: \
+                a relay-less vault serves nothing peers can discover; \
+                register with --no-service instead"
+                .to_string(),
+        };
+    }
+
+    // 1. Prove the keystore opens before touching anything else. A
+    // long-lived owner holding the drive refuses with the store
+    // lock; the registry and the service definition stay untouched.
+    if let Err(error) = Engine::open_keystore(
+        config.drive_dir.clone(),
+        &config.passphrase,
+        config.identity.clone(),
+    ) {
+        return ProvisionState::ProvisioningIncomplete {
+            stage: "verify-open",
+            kind: ProvisionFailureKind::VerifyOpen,
+            reason: error.to_string(),
+        };
+    }
+
+    // 2. Read the registry and resolve the entry by directory. Zero
+    // matches means the drive was never registered (or was
+    // registered under another spelling — directories match by
+    // exact path only); several means conflicting registrations
+    // that only the operator can untangle, never this command.
+    let mut registry = match read_registry(&config.registry_path) {
+        Ok(registry) => registry,
+        Err(error) => {
+            return ProvisionState::ProvisioningIncomplete {
+                stage: "read-registry",
+                kind: ProvisionFailureKind::ReadRegistry,
+                reason: error.to_string(),
+            };
+        }
+    };
+    let mut matches: Vec<String> = registry
+        .drives
+        .iter()
+        .filter(|(_, entry)| entry.drive_dir == config.drive_dir)
+        .map(|(key, _)| key.clone())
+        .collect();
+    matches.sort();
+    let key = match matches.len() {
+        0 => {
+            return ProvisionState::ProvisioningIncomplete {
+                stage: "validate",
+                kind: ProvisionFailureKind::Validate,
+                reason: format!(
+                    "no registry entry for {}: register with `wyrd bootstrap` first",
+                    config.drive_dir.display()
+                ),
+            };
+        }
+        1 => matches.pop().expect("one match"),
+        _ => {
+            return ProvisionState::ProvisioningIncomplete {
+                stage: "validate",
+                kind: ProvisionFailureKind::Validate,
+                reason: format!(
+                    "conflicting registry entries for {}: {} — resolve the duplicate by hand first",
+                    config.drive_dir.display(),
+                    matches.join(", ")
+                ),
+            };
+        }
+    };
+    let mut entry = registry.drives.get(&key).expect("key resolved").clone();
+
+    // 3. Stop and clear the old service definition before the
+    // rewrite, so no manager restarts the stale definition over
+    // the new entry. A drive that was never managed has no
+    // definition file — nothing to clear, not an error.
+    if let Err(error) = disable_service(&entry) {
+        return ProvisionState::ProvisioningIncomplete {
+            stage: "stop-service",
+            kind: ProvisionFailureKind::StopService,
+            reason: format!("stop-service: {error}"),
+        };
+    }
+
+    // 4. Rewrite the entry in place: the name, service label, and
+    // directory stay put (identity never reconfigures); the relay
+    // set and credential paths follow the new configuration.
+    // Skipped entries carry forward, so a rotten entry is surfaced
+    // by the caller instead of silently discarded on rewrite.
+    entry.relays = relays;
+    entry.mode = ServiceMode::Vault;
+    registry.drives.insert(key, entry.clone());
+    if let Err(error) = write_registry(&config.registry_path, &registry.drives) {
+        return ProvisionState::ProvisioningIncomplete {
+            stage: "write-registry",
+            kind: ProvisionFailureKind::WriteRegistry,
+            reason: error.to_string(),
+        };
+    }
+    let skipped = registry.skipped;
+
+    // 5. Reinstall, enable, and restart when managed — the same
+    // handoff provisioning runs, over the same wrapper contract.
+    if config.manage_service {
+        let wyrd_bin = match &config.wyrd_bin {
+            Some(path) => path.clone(),
+            None => match sibling_bin("wyrd") {
+                Some(path) => path,
+                None => {
+                    return ProvisionState::RegisteredButUnavailable {
+                        entry,
+                        skipped: skipped.clone(),
+                        kind: ProvisionFailureKind::NoWyrdBinary,
+                        reason: "no wyrd binary: pass --owner-bin (no wyrd beside this command)"
+                            .to_string(),
+                    };
+                }
+            },
+        };
+        let supervise_bin = match &config.supervise_bin {
+            Some(path) => path.clone(),
+            None => match sibling_bin("wyrd-supervise") {
+                Some(path) => path,
+                None => {
+                    return ProvisionState::RegisteredButUnavailable {
+                        entry,
+                        skipped: skipped.clone(),
+                        kind: ProvisionFailureKind::NoSuperviseBinary,
+                        reason: "no wyrd-supervise: pass --supervise-bin \
+                            (the restart policy needs the wrapper; \
+                            a bare owner binary cannot express it)"
+                            .to_string(),
+                    };
+                }
+            },
+        };
+        let owner = SupervisedOwner {
+            supervise_bin,
+            wyrd_bin,
+            identity_file: config.identity_file.clone(),
+            passphrase_file: config.passphrase_file.clone(),
+        };
+        let definition = match install_service(&entry, &owner) {
+            Ok(path) => path,
+            Err(error) => {
+                return ProvisionState::RegisteredButUnavailable {
+                    entry,
+                    skipped: skipped.clone(),
+                    kind: ProvisionFailureKind::InstallService,
+                    reason: format!("install-service: {error}"),
+                };
+            }
+        };
+        if let Err(error) = enable_service(&entry, &definition) {
+            return ProvisionState::RegisteredButUnavailable {
+                entry,
+                skipped: skipped.clone(),
+                kind: ProvisionFailureKind::EnableService,
+                reason: format!("enable-service: {error}"),
+            };
+        }
+        if let Err(error) = start_service(&entry) {
+            return ProvisionState::RegisteredButUnavailable {
+                entry,
+                skipped: skipped.clone(),
+                kind: ProvisionFailureKind::StartService,
+                reason: format!("start-service: {error}"),
+            };
+        }
+    }
+
+    // 6. Verify the socket: ready means a terminal owner answer
+    // this session, exactly like provisioning. With
+    // `--no-service` and no manually supervised owner, the socket
+    // never appears and readiness is withheld — registered, never
+    // verified.
     if !wait_for_socket(&config.drive_dir, config.verify_timeout) {
         return ProvisionState::RegisteredButUnavailable {
             entry,
@@ -1412,10 +1777,11 @@ mod tests {
     /// and detail: missing programs never spawn, failing programs
     /// report their own text. The service-stage `ProvisionFailureKind`
     /// variants (`NoWyrdBinary`, `NoSuperviseBinary`,
-    /// `InstallService`, `EnableService`, `StartService`) and the
-    /// service-manager `BootstrapError` variants beneath them
-    /// (`Spawn`, `CommandFailed`, `ReloadUnits`, `AgentNotLoaded`,
-    /// `RestartService`) stay literal-adjacent to their reason
+    /// `InstallService`, `EnableService`, `StartService`,
+    /// `StopService`) and the service-manager `BootstrapError`
+    /// variants beneath them (`Spawn`, `CommandFailed`,
+    /// `ReloadUnits`, `AgentNotLoaded`, `RestartService`,
+    /// `StopService`) stay literal-adjacent to their reason
     /// strings — reaching them end to end would touch a real
     /// manager, as the provision kind test documents.
     #[test]
@@ -1643,12 +2009,22 @@ mod tests {
                 "restart wyrd-drive-demo.service: spawn systemctl: missing".to_string(),
             ),
             (
+                BootstrapError::StopService {
+                    name: "wyrd-drive-demo.service".to_string(),
+                    source: Box::new(BootstrapError::Spawn {
+                        program: "systemctl".to_string(),
+                        source: io(ErrorKind::NotFound, "missing"),
+                    }),
+                },
+                "stop wyrd-drive-demo.service: spawn systemctl: missing".to_string(),
+            ),
+            (
                 BootstrapError::ServicesUnsupported,
                 "per-drive services are implemented for Unix (launchd agent, systemd user unit)"
                     .to_string(),
             ),
         ];
-        assert_eq!(cases.len(), 26, "every variant pins its message");
+        assert_eq!(cases.len(), 27, "every variant pins its message");
         for (error, expected) in cases {
             assert_eq!(error.to_string(), expected, "Display changed");
         }
@@ -1850,6 +2226,250 @@ mod tests {
         );
         assert!(!dir.join("drive").exists());
         assert!(!registry.exists());
+    }
+
+    pub(super) fn reconfigure_no_service(
+        dir: &Path,
+        registry: &Path,
+        relays: Option<Vec<String>>,
+        mode: &str,
+    ) -> ReconfigureConfig {
+        ReconfigureConfig {
+            drive_dir: dir.join("drive"),
+            relays,
+            mode: mode.to_string(),
+            identity: identity(),
+            passphrase: "bootstrap-test-pass".to_string(),
+            registry_path: registry.to_path_buf(),
+            wyrd_bin: Some(dir.join("wyrd")),
+            supervise_bin: Some(dir.join("wyrd-supervise")),
+            identity_file: dir.join("identity"),
+            passphrase_file: dir.join("passphrase"),
+            manage_service: false,
+            verify_timeout: Duration::from_secs(10),
+        }
+    }
+
+    /// Reconfigure rewrites the entry and verifies the socket: the
+    /// relay set is replaced, the stub owner's pre-first-pass
+    /// refusal verifies like provisioning, and the registry carries
+    /// the new set.
+    #[test]
+    fn reconfigure_rewrites_relays_and_verifies_the_socket() {
+        let dir = scratch("reconfigure");
+        let registry = dir.join("drives.json");
+        let first = provision(provision_no_service(&dir, &registry, "demo"));
+        assert!(
+            matches!(first, ProvisionState::RegisteredButUnavailable { .. }),
+            "no owner serves the fresh drive: {first:?}"
+        );
+        let sock = dir.join("drive").join("owner.sock");
+        let server = stub_owner(sock, 1, "Unobserved");
+        let report = reconfigure(reconfigure_no_service(
+            &dir,
+            &registry,
+            Some(vec!["relay://new".to_string()]),
+            "vault",
+        ));
+        let ProvisionState::VerifiedAvailable { entry, .. } = report else {
+            panic!("a stubbed owner must verify: {report:?}");
+        };
+        assert_eq!(entry.relays, vec!["relay://new".to_string()]);
+        assert!(matches!(entry.mode, ServiceMode::Vault));
+        let read = read_registry(&registry).unwrap();
+        assert_eq!(read.drives["demo"].relays, vec!["relay://new".to_string()]);
+        server.join().unwrap();
+    }
+
+    /// `None` relays keep the registered set: a credential-path-only
+    /// reconfigure never clears relays by accident.
+    #[test]
+    fn reconfigure_keeps_relays_when_none_given() {
+        let dir = scratch("reconf-keep");
+        let registry = dir.join("drives.json");
+        let first = provision(provision_no_service(&dir, &registry, "demo"));
+        assert!(matches!(
+            first,
+            ProvisionState::RegisteredButUnavailable { .. }
+        ));
+        // Hand the entry a relay set, then reconfigure without one.
+        let mut read = read_registry(&registry).unwrap();
+        read.drives.get_mut("demo").unwrap().relays = vec!["relay://kept".to_string()];
+        write_registry(&registry, &read.drives).unwrap();
+        let sock = dir.join("drive").join("owner.sock");
+        let server = stub_owner(sock, 1, "Unobserved");
+        let report = reconfigure(reconfigure_no_service(&dir, &registry, None, "vault"));
+        let ProvisionState::VerifiedAvailable { entry, .. } = report else {
+            panic!("a stubbed owner must verify: {report:?}");
+        };
+        assert_eq!(entry.relays, vec!["relay://kept".to_string()]);
+        server.join().unwrap();
+    }
+
+    /// Non-vault modes refuse before anything stops: the registry
+    /// keeps the old entry and no service state is touched — the
+    /// mount template still travels with the installer follow-up.
+    #[test]
+    fn reconfigure_refuses_non_vault_modes_before_stopping() {
+        let dir = scratch("reconfigure-mode");
+        let registry = dir.join("drives.json");
+        let first = provision(provision_no_service(&dir, &registry, "demo"));
+        assert!(matches!(
+            first,
+            ProvisionState::RegisteredButUnavailable { .. }
+        ));
+        let before = std::fs::read(&registry).unwrap();
+        let report = reconfigure(reconfigure_no_service(&dir, &registry, None, "mount"));
+        match report {
+            ProvisionState::ProvisioningIncomplete {
+                kind,
+                stage,
+                reason,
+            } => {
+                assert_eq!(kind, ProvisionFailureKind::Validate);
+                assert_eq!(Some(stage), kind.stage());
+                assert!(
+                    reason.contains("installer follow-up"),
+                    "refusal points at the follow-up: {reason}"
+                );
+            }
+            other => panic!("a mount mode must refuse: {other:?}"),
+        }
+        assert_eq!(std::fs::read(&registry).unwrap(), before);
+        assert_eq!(
+            Some("stop-service"),
+            ProvisionFailureKind::StopService.stage()
+        );
+    }
+
+    /// No entry for the directory refuses without writing: the drive
+    /// exists (verify-open passes) but was registered elsewhere —
+    /// directories match by exact path only.
+    #[test]
+    fn reconfigure_refuses_an_unregistered_directory() {
+        let dir = scratch("reconfigure-elsewhere");
+        let registry = dir.join("drives.json");
+        let other = dir.join("other.json");
+        let first = provision(provision_no_service(&dir, &registry, "demo"));
+        assert!(matches!(
+            first,
+            ProvisionState::RegisteredButUnavailable { .. }
+        ));
+        let report = reconfigure(reconfigure_no_service(&dir, &other, None, "vault"));
+        match report {
+            ProvisionState::ProvisioningIncomplete {
+                kind,
+                stage,
+                reason,
+            } => {
+                assert_eq!(kind, ProvisionFailureKind::Validate);
+                assert_eq!(Some(stage), kind.stage());
+                assert!(reason.contains("no registry entry"), "{reason}");
+            }
+            other => panic!("an unregistered directory must refuse: {other:?}"),
+        }
+        assert!(!other.exists(), "a refusal writes nothing");
+    }
+
+    /// Duplicate registrations for one directory refuse loudly with
+    /// both key names: the command never guesses across conflicts.
+    #[test]
+    fn reconfigure_refuses_conflicting_registrations() {
+        let dir = scratch("reconfigure-dupe");
+        let registry = dir.join("drives.json");
+        let first = provision(provision_no_service(&dir, &registry, "demo"));
+        assert!(matches!(
+            first,
+            ProvisionState::RegisteredButUnavailable { .. }
+        ));
+        let raw = serde_json::json!({
+            "version": 1,
+            "drives": {
+                "demo": {
+                    "name": "demo",
+                    "drive_dir": dir.join("drive").to_string_lossy(),
+                    "relays": [],
+                    "service": "drive-demo",
+                    "mode": "vault",
+                },
+                "alias": {
+                    "name": "alias",
+                    "drive_dir": dir.join("drive").to_string_lossy(),
+                    "relays": [],
+                    "service": "drive-alias",
+                    "mode": "vault",
+                },
+            },
+        });
+        std::fs::write(&registry, serde_json::to_vec(&raw).unwrap()).unwrap();
+        let report = reconfigure(reconfigure_no_service(&dir, &registry, None, "vault"));
+        match report {
+            ProvisionState::ProvisioningIncomplete { kind, reason, .. } => {
+                assert_eq!(kind, ProvisionFailureKind::Validate);
+                assert!(
+                    reason.contains("demo") && reason.contains("alias"),
+                    "conflict names both keys: {reason}"
+                );
+            }
+            other => panic!("a duplicate registration must refuse: {other:?}"),
+        }
+        // Both entries survive the refusal.
+        let read = read_registry(&registry).unwrap();
+        assert!(read.drives.contains_key("demo") && read.drives.contains_key("alias"));
+    }
+
+    /// A wrong passphrase fails the open before the registry is
+    /// read: the file keeps its bytes exactly.
+    #[test]
+    fn reconfigure_verify_open_failure_leaves_the_registry_untouched() {
+        let dir = scratch("reconfigure-locked");
+        let registry = dir.join("drives.json");
+        let first = provision(provision_no_service(&dir, &registry, "demo"));
+        assert!(matches!(
+            first,
+            ProvisionState::RegisteredButUnavailable { .. }
+        ));
+        let before = std::fs::read(&registry).unwrap();
+        let mut config = reconfigure_no_service(&dir, &registry, None, "vault");
+        config.passphrase = "wrong-pass".to_string();
+        match reconfigure(config) {
+            ProvisionState::ProvisioningIncomplete { kind, stage, .. } => {
+                assert_eq!(kind, ProvisionFailureKind::VerifyOpen);
+                assert_eq!(Some(stage), kind.stage());
+            }
+            other => panic!("a wrong passphrase must stop at verify-open: {other:?}"),
+        }
+        assert_eq!(std::fs::read(&registry).unwrap(), before);
+    }
+
+    /// A managed reconfigure without relays refuses at validation,
+    /// before any service state moves: reaching the stop/install
+    /// steps end to end would touch a real manager, so the managed
+    /// path past validation stays literal-adjacent like the
+    /// provision kind test — hermetic tests stop here.
+    #[test]
+    fn reconfigure_refuses_a_relay_less_managed_service() {
+        let dir = scratch("reconfigure-norelay");
+        let registry = dir.join("drives.json");
+        let first = provision(provision_no_service(&dir, &registry, "demo"));
+        assert!(matches!(
+            first,
+            ProvisionState::RegisteredButUnavailable { .. }
+        ));
+        let mut config = reconfigure_no_service(&dir, &registry, Some(Vec::new()), "vault");
+        config.manage_service = true;
+        match reconfigure(config) {
+            ProvisionState::ProvisioningIncomplete {
+                kind,
+                stage,
+                reason,
+            } => {
+                assert_eq!(kind, ProvisionFailureKind::Validate);
+                assert_eq!(Some(stage), kind.stage());
+                assert!(reason.contains("--no-service"), "{reason}");
+            }
+            other => panic!("a relay-less managed reconfigure must refuse: {other:?}"),
+        }
     }
 }
 

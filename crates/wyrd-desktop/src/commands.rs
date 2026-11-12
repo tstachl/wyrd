@@ -504,6 +504,68 @@ pub async fn provision_leave<R: Runtime>(
     .await
 }
 
+/// Reconfigure one registered drive through the installed CLI
+/// (`drive reconfigure`), then re-read and probe. All arguments are
+/// owned strings; secret *paths* travel, never contents. `mode` is
+/// the platform default `vault` — any other value refuses with the
+/// installer-follow-up pointer before any process spawns. `relays`
+/// replaces the registered set when non-empty and keeps it when
+/// empty, so a credential-path-only reconfigure never clears relays
+/// by accident. Serialized against the per-drive flight like every
+/// other lifecycle operation, with registry, socket, and membership
+/// re-observation after the process completes.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProvisionReconfigureArgs {
+    pub drive_dir: String,
+    pub relays: Vec<String>,
+    pub identity_file: String,
+    pub passphrase_file: String,
+    pub mode: String,
+    pub no_service: bool,
+}
+
+/// Reconfigure one registered drive through the installed CLI
+/// (`drive reconfigure`), then re-read and probe.
+#[tauri::command]
+pub async fn provision_reconfigure<R: Runtime>(
+    app: AppHandle<R>,
+    args: ProvisionReconfigureArgs,
+) -> ProvisionReport {
+    run_provision(
+        app,
+        "provision_reconfigure",
+        args.drive_dir.clone(),
+        move |state, dir| {
+            let request = super::provision::ReconfigureRequest {
+                drive_dir: dir,
+                relays: args.relays,
+                identity_file: PathBuf::from(args.identity_file),
+                passphrase_file: PathBuf::from(args.passphrase_file),
+                registry_path: None,
+                owner_bin: None,
+                supervise_bin: None,
+                no_service: args.no_service,
+                mode: args.mode,
+            };
+            let cli = state.cli_bin();
+            match cli {
+                Ok(bin) => super::provision::run_reconfigure(
+                    &bin,
+                    &request,
+                    super::provision::PROVISION_TIMEOUT,
+                ),
+                Err(reason) => super::provision::ProvisionOutcome {
+                    result: super::provision::ProvisionResult::VersionMismatch { reason },
+                    stderr: String::new(),
+                    code: None,
+                },
+            }
+        },
+    )
+    .await
+}
+
 /// Run one lifecycle operation serialized per drive: validate the
 /// identity, claim the flight (refuse `Busy` when held), run the
 /// blocking CLI exchange, release the flight, then re-read the

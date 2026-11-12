@@ -385,3 +385,154 @@ fn drive_deletion_confirmation_renders_boundary_and_locality() {
         );
     }
 }
+
+/// Hand-write one registry entry for the fixture drive: the
+/// registration flow itself would touch a real service manager, so
+/// hermetic CLI tests stage the file directly — the daemon suite
+/// owns the provisioning handoff.
+fn write_registry_entry(registry: &Path, name: &str, drive: &Path, relays: &[&str]) {
+    let relays: Vec<String> = relays.iter().map(|relay| relay.to_string()).collect();
+    let raw = serde_json::json!({
+        "version": 1,
+        "drives": {
+            name: {
+                "name": name,
+                "drive_dir": drive.to_string_lossy(),
+                "relays": relays,
+                "service": format!("drive-{name}"),
+                "mode": "vault",
+            }
+        },
+    });
+    fs::write(registry, serde_json::to_vec(&raw).unwrap()).unwrap();
+}
+
+fn registry_relays(registry: &Path, name: &str) -> Vec<String> {
+    let raw: serde_json::Value = serde_json::from_slice(&fs::read(registry).unwrap()).unwrap();
+    raw["drives"][name]["relays"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|relay| relay.as_str().unwrap().to_string())
+        .collect()
+}
+
+/// Reconfigure replaces the relay set through the CLI surface: the
+/// entry is rewritten and the run reports reconfigured-but-
+/// unavailable (no owner serves the scratch drive). A planted
+/// `owner.sock` file keeps the socket wait instant — connecting to a
+/// non-socket fails fast, and only the registry outcome is asserted.
+#[test]
+fn drive_reconfigure_replaces_relays_and_reports_unavailable() {
+    let fixture = Fixture::new();
+    let registry = fixture._temp.0.join("drives.json");
+    write_registry_entry(&registry, "alpha", &fixture.drive, &["relay://old"]);
+    // Instant wait: the path exists, so no polling; the connect
+    // fails because no owner serves it.
+    fs::write(fixture.drive.join("owner.sock"), b"not a socket").unwrap();
+    let error = command(fixture.args(vec![
+        "reconfigure".into(),
+        "--mode".into(),
+        "vault".into(),
+        "--relay".into(),
+        "relay://new".into(),
+        "--registry".into(),
+        registry.display().to_string(),
+        "--no-service".into(),
+    ]))
+    .unwrap_err();
+    assert!(
+        matches!(error, CliError::Usage(_)),
+        "no owner verifies: {error:?}"
+    );
+    assert!(
+        error.to_string().contains("reconfigured but unavailable"),
+        "run reports the stage: {error}"
+    );
+    assert_eq!(
+        registry_relays(&registry, "alpha"),
+        vec!["relay://new".to_string()],
+        "the entry carries the new set"
+    );
+}
+
+/// No `--relay` flags keep the registered set: a
+/// credential-path-only reconfigure never clears relays by accident.
+#[test]
+fn drive_reconfigure_keeps_relays_without_relay_flags() {
+    let fixture = Fixture::new();
+    let registry = fixture._temp.0.join("drives.json");
+    write_registry_entry(&registry, "alpha", &fixture.drive, &["relay://kept"]);
+    fs::write(fixture.drive.join("owner.sock"), b"not a socket").unwrap();
+    let error = command(fixture.args(vec![
+        "reconfigure".into(),
+        "--mode".into(),
+        "vault".into(),
+        "--registry".into(),
+        registry.display().to_string(),
+        "--no-service".into(),
+    ]))
+    .unwrap_err();
+    assert!(matches!(error, CliError::Usage(_)), "{error:?}");
+    assert_eq!(
+        registry_relays(&registry, "alpha"),
+        vec!["relay://kept".to_string()],
+        "the registered set survives"
+    );
+}
+
+/// A mount target refuses before anything stops: the refusal names
+/// the installer follow-up and the registry keeps its bytes exactly.
+#[test]
+fn drive_reconfigure_refuses_non_vault_modes_before_stopping() {
+    let fixture = Fixture::new();
+    let registry = fixture._temp.0.join("drives.json");
+    write_registry_entry(&registry, "alpha", &fixture.drive, &["relay://old"]);
+    let before = fs::read(&registry).unwrap();
+    let error = command(fixture.args(vec![
+        "reconfigure".into(),
+        "--mode".into(),
+        "mount".into(),
+        "--registry".into(),
+        registry.display().to_string(),
+        "--no-service".into(),
+    ]))
+    .unwrap_err();
+    assert!(
+        matches!(error, CliError::Usage(_)),
+        "refusal, not an inline warning: {error:?}"
+    );
+    assert!(
+        error.to_string().contains("installer follow-up"),
+        "refusal points at the follow-up: {error}"
+    );
+    assert_eq!(fs::read(&registry).unwrap(), before);
+}
+
+/// An unregistered directory refuses without writing: the drive
+/// opens (the keystore is real) but no entry names it.
+#[test]
+fn drive_reconfigure_refuses_an_unregistered_directory() {
+    let fixture = Fixture::new();
+    let registry = fixture._temp.0.join("absent.json");
+    let error = command(fixture.args(vec![
+        "reconfigure".into(),
+        "--mode".into(),
+        "vault".into(),
+        "--relay".into(),
+        "relay://new".into(),
+        "--registry".into(),
+        registry.display().to_string(),
+        "--no-service".into(),
+    ]))
+    .unwrap_err();
+    assert!(
+        matches!(error, CliError::Usage(_)),
+        "refusal names the missing registration: {error:?}"
+    );
+    assert!(
+        error.to_string().contains("no registry entry"),
+        "refusal says what to do: {error}"
+    );
+    assert!(!registry.exists(), "a refusal writes nothing");
+}

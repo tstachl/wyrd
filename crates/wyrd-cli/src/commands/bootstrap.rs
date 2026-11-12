@@ -122,7 +122,7 @@ pub(crate) fn bootstrap(
 /// working — but loud. The list travels in the provisioning result
 /// itself, because re-reading after the write would find nothing
 /// left to report.
-fn warn_skipped(skipped: &[String]) {
+pub(crate) fn warn_skipped(skipped: &[String]) {
     for skipped in skipped {
         eprintln!("warning: registry entry skipped: {skipped}");
     }
@@ -131,7 +131,7 @@ fn warn_skipped(skipped: &[String]) {
 /// Canonicalize a file that must exist (credential files were
 /// just read): resolves symlinks and guarantees absoluteness, so
 /// the service definition names one unambiguous path.
-fn canonicalize(path: &PathBuf) -> Result<PathBuf, CliError> {
+pub(crate) fn canonicalize(path: &PathBuf) -> Result<PathBuf, CliError> {
     std::fs::canonicalize(path).map_err(|source| CliError::Io {
         path: path.clone(),
         source,
@@ -141,7 +141,7 @@ fn canonicalize(path: &PathBuf) -> Result<PathBuf, CliError> {
 /// Absolutize a path that need not exist yet (binaries): joins
 /// relative paths onto the working directory without touching the
 /// filesystem.
-fn absolutize(path: PathBuf) -> PathBuf {
+pub(crate) fn absolutize(path: PathBuf) -> PathBuf {
     if path.is_absolute() {
         return path;
     }
