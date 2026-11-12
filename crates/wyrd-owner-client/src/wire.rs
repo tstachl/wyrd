@@ -19,10 +19,14 @@ use serde::{Deserialize, Serialize};
 
 /// The wire protocol version this module speaks. A request whose `v`
 /// differs is refused with [`WireErrorCode::UnknownVersion`] — never
-/// interpreted under the wrong schema, never silently accepted. A
-/// future version adds optional fields and documents what an older
-/// consumer does with unknown values; it never re-means a field.
-pub const WIRE_VERSION: u32 = 1;
+/// interpreted under the wrong schema, never silently accepted. v2
+/// adds the required identity precondition on entry-addressed
+/// mutations (see `WireMutationKind`); v1 payloads cannot express
+/// it and v1 servers silently ignore it, so both directions refuse
+/// across the boundary instead of running mixed. A future version
+/// adds optional fields and documents what an older consumer does
+/// with unknown values; it never re-means a field.
+pub const WIRE_VERSION: u32 = 2;
 
 /// Operation names. Plain strings on purpose (see `RawRequest`): an
 /// unknown name is a refusal with the name echoed back, not a parse
@@ -598,6 +602,13 @@ pub enum WireErrorCode {
     InvalidRename,
     Stale,
     StaleParent,
+    /// The path resolved to a different entry than the caller's
+    /// expected identity (delete-plus-recreate, path reuse, kind
+    /// change, or a legacy entry that never had one). Distinct from
+    /// `Stale` (same entry, changed content base), from
+    /// `Conflicted`, and from `NotFound` — even where a
+    /// presentation surface renders two with the same error.
+    StaleEntry,
     TooMany,
     NeedContent,
     Shutdown,
@@ -652,7 +663,13 @@ pub struct WireFoldMember {
 /// The wire form of `MutationKind`: all nine operations the owner
 /// forwards verbatim to the single queue. The interface interprets
 /// nothing — the parent's precondition is captured by the consumer
-/// (`capture-parent`) and re-checked by the owner.
+/// (`capture-parent`) and re-checked by the owner. Entry-addressed
+/// operations additionally carry the caller's expected entry
+/// identity as lowercase hex (`expected_identity`, required since
+/// v2): the owner validates it at execution, inside the serialized
+/// queue, and refuses a mismatch instead of landing on the wrong
+/// entry. Creations address absent paths and carry no entry
+/// precondition; their parent token covers the parent instead.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WireMutationKind {
     Mkdir {
@@ -667,27 +684,33 @@ pub enum WireMutationKind {
         base: WireFileIdentity,
         executable: bool,
         content_hex: String,
+        expected_identity: String,
     },
     AppendFile {
         path: String,
         content_hex: String,
+        expected_identity: String,
     },
     Unlink {
         path: String,
+        expected_identity: String,
     },
     Rmdir {
         path: String,
+        expected_identity: String,
     },
     Rename {
         from: String,
         to: String,
         no_replace: bool,
+        expected_identity: String,
     },
     SetAttrs {
         path: String,
         size: Option<u64>,
         executable: Option<bool>,
         base: Option<WireFileIdentity>,
+        expected_identity: String,
     },
     Fold {
         members: Vec<WireFoldMember>,

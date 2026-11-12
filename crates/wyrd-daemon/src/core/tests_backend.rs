@@ -113,6 +113,7 @@ fn a_mutation_whose_budget_expired_before_evaluation_times_out() {
     let mutations = std::sync::Arc::clone(live.mutations());
     let submitter = std::thread::spawn(move || {
         mutations.submit(wyrd_core::mutation::MutationKind::AppendFile {
+            expected: None,
             path: "wait.txt".to_string(),
             content: b"x".to_vec(),
         })

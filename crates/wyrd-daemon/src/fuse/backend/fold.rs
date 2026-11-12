@@ -101,6 +101,7 @@ fn taken_kind(taken: &TakenMember) -> MutationKind {
         MutationKind::AppendFile {
             path: taken.path.clone(),
             content: taken.content.clone(),
+            expected: None,
         }
     } else {
         MutationKind::CommitFile {
@@ -108,6 +109,7 @@ fn taken_kind(taken: &TakenMember) -> MutationKind {
             base: taken.base.clone(),
             executable: taken.executable,
             content: taken.content.clone(),
+            expected: None,
         }
     }
 }
@@ -267,8 +269,8 @@ where
     fn forcer_skip_paths(kind: &MutationKind) -> Vec<String> {
         match kind {
             MutationKind::Mkdir { path }
-            | MutationKind::Unlink { path }
-            | MutationKind::Rmdir { path }
+            | MutationKind::Unlink { path, .. }
+            | MutationKind::Rmdir { path, .. }
             | MutationKind::CreateFile { path, .. } => vec![path.clone()],
             MutationKind::Rename { from, to, .. } => vec![from.clone(), to.clone()],
             _ => Vec::new(),

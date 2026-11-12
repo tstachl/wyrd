@@ -529,6 +529,7 @@ fn fold_commits_one_snapshot_for_many_members() {
                             base: base_a,
                             executable: false,
                             content: b"A2".to_vec(),
+                            expected: None,
                         },
                         forcer: false,
                     },
@@ -536,6 +537,7 @@ fn fold_commits_one_snapshot_for_many_members() {
                         kind: MutationKind::AppendFile {
                             path: "b.txt".to_string(),
                             content: b"+b".to_vec(),
+                            expected: None,
                         },
                         forcer: false,
                     },

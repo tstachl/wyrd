@@ -56,6 +56,7 @@ fn o_trunc_open_refuses_a_same_path_replacement() {
             size,
             executable,
             base,
+            ..
         } => {
             assert_eq!(path, "f.txt");
             assert_eq!(*size, Some(0));
@@ -428,10 +429,10 @@ fn spawn_drainer(
                         .map(|member| member.kind.clone());
                     let forcer = match forcer_kind {
                         Some(
-                            MutationKind::CommitFile { .. }
-                            | MutationKind::AppendFile { .. }
+                            MutationKind::CommitFile { expected: None, .. }
+                            | MutationKind::AppendFile { expected: None, .. }
                             | MutationKind::CreateFile { .. }
-                            | MutationKind::SetAttrs { .. },
+                            | MutationKind::SetAttrs { expected: None, .. },
                         ) => FoldForcerOutcome::Applied(Box::new(MutationOutcome::Committed(
                             FileIdentity::new(5, false, Vec::new()),
                         ))),
@@ -839,15 +840,14 @@ fn namespace_op_folds_pending_writes_with_it() {
                 .find(|member| member.forcer)
                 .expect("a namespace fold has a forcer");
             assert!(
-                matches!(forcer.kind, MutationKind::SetAttrs { .. }),
+                matches!(forcer.kind, MutationKind::SetAttrs { expected: None, .. }),
                 "the namespace op is the forcer, saw {:?}",
                 forcer.kind
             );
             assert!(
-                members.iter().any(
-                    |member| !member.forcer
-                        && matches!(&member.kind, MutationKind::CommitFile { path, content, .. } if path == "f.txt" && content == b"dirty")
-                ),
+                members.iter().any(|member| !member.forcer
+                    && matches!(&member.kind, MutationKind::CommitFile {
+    expected: None, path, content, .. } if path == "f.txt" && content == b"dirty")),
                 "the pending write rides as a member with its image, saw {members:?}"
             );
             batch.record(
@@ -970,7 +970,10 @@ fn rename_submits_a_lone_forcer_fold() {
             assert_eq!(members.len(), 1, "a lone rename folds alone");
             assert!(members[0].forcer, "the rename carries the privilege");
             assert!(
-                matches!(&members[0].kind, MutationKind::Rename { .. }),
+                matches!(
+                    &members[0].kind,
+                    MutationKind::Rename { expected: None, .. }
+                ),
                 "the forcer is the rename itself, saw {:?}",
                 members[0].kind
             );
@@ -1030,9 +1033,10 @@ fn dirty_release_folds_the_handle() {
             assert!(
                 members.iter().any(|member| member.forcer
                     && matches!(
-                        &member.kind,
-                        MutationKind::CommitFile { path, content, .. } if path == "f.txt" && content == b"dirty"
-                    )),
+                                        &member.kind,
+                                        MutationKind::CommitFile {
+                    expected: None, path, content, .. } if path == "f.txt" && content == b"dirty"
+                                    )),
                 "the release fold commits the dirty image as its forcer, saw {members:?}"
             );
         }
@@ -1318,7 +1322,7 @@ struct FoldSummary {
 fn summarize(kind: &MutationKind, summaries: &mut Vec<FoldSummary>) {
     let (path, tag, bytes) = match kind {
         MutationKind::CommitFile { path, content, .. } => (path.clone(), "commit", content.clone()),
-        MutationKind::AppendFile { path, content } => (path.clone(), "append", content.clone()),
+        MutationKind::AppendFile { path, content, .. } => (path.clone(), "append", content.clone()),
         MutationKind::SetAttrs { path, size, .. } => {
             summaries.push(FoldSummary {
                 path: path.clone(),
@@ -1378,10 +1382,10 @@ fn spawn_summarizing_drainer(
                         .map(|member| member.kind.clone());
                     let forcer = match forcer_kind {
                         Some(
-                            MutationKind::CommitFile { .. }
-                            | MutationKind::AppendFile { .. }
+                            MutationKind::CommitFile { expected: None, .. }
+                            | MutationKind::AppendFile { expected: None, .. }
                             | MutationKind::CreateFile { .. }
-                            | MutationKind::SetAttrs { .. },
+                            | MutationKind::SetAttrs { expected: None, .. },
                         ) => FoldForcerOutcome::Applied(Box::new(MutationOutcome::Committed(
                             FileIdentity::new(5, false, Vec::new()),
                         ))),

@@ -125,6 +125,7 @@ where
                     size: Some(0),
                     executable: None,
                     base: Some(observed.clone()),
+                    expected: None,
                 })? {
                     MutationOutcome::Committed(committed) => committed,
                     // Already empty: the guarded commit authored no root,

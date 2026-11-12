@@ -874,6 +874,7 @@ fn at_the_ceiling_a_content_identical_commit_is_still_refused() {
     let error = node
         .apply_mutation(
             &MutationKind::CommitFile {
+                expected: None,
                 path: "f".into(),
                 base: FileIdentity::new(held.len() as u64, false, vec![chunk]),
                 executable: false,
@@ -987,6 +988,7 @@ fn reinserting_held_content_is_not_charged_twice() {
     let payload = b"the very same bytes";
     node.apply_mutation(
         &MutationKind::CommitFile {
+            expected: None,
             path: "f".into(),
             base: FileIdentity::new(11, false, vec![chunk]),
             executable: false,
@@ -1001,6 +1003,7 @@ fn reinserting_held_content_is_not_charged_twice() {
     for _ in 0..4 {
         node.apply_mutation(
             &MutationKind::CommitFile {
+                expected: None,
                 path: "f".into(),
                 base: FileIdentity::new(payload.len() as u64, false, vec![chunk]),
                 executable: false,
@@ -1772,6 +1775,7 @@ fn fold_at_the_ceiling_restores_every_member() {
                 members: vec![
                     FoldMember {
                         kind: MutationKind::CommitFile {
+                            expected: None,
                             path: "f".into(),
                             base: FileIdentity::new(11, false, Vec::new()),
                             executable: false,
@@ -1867,6 +1871,7 @@ fn fold_defers_for_remote_content_and_retries_pinned() {
         members: vec![
             FoldMember {
                 kind: MutationKind::AppendFile {
+                    expected: None,
                     path: "f".into(),
                     content: b"more".to_vec(),
                 },
@@ -1957,12 +1962,14 @@ fn write_stats_count_snapshots_by_source() {
             .expect("mkdir commits");
         queue
             .submit(MutationKind::AppendFile {
+                expected: None,
                 path: "f".into(),
                 content: b"!".to_vec(),
             })
             .expect("append commits");
         queue
             .submit(MutationKind::SetAttrs {
+                expected: None,
                 path: "f".into(),
                 size: None,
                 executable: Some(true),
@@ -1971,6 +1978,7 @@ fn write_stats_count_snapshots_by_source() {
             .expect("setattr commits");
         queue
             .submit(MutationKind::Rename {
+                expected: None,
                 from: "f".into(),
                 to: "g".into(),
                 no_replace: false,
@@ -1993,6 +2001,7 @@ fn write_stats_count_snapshots_by_source() {
         assert!(
             queue
                 .submit(MutationKind::Unlink {
+                    expected: None,
                     path: "nope".into()
                 })
                 .is_err(),
@@ -2145,6 +2154,7 @@ fn apply_entry_defers_a_real_evaluation_with_its_want() {
     let fold = crate::mutation::MutationKind::Fold {
         members: vec![FoldMember {
             kind: crate::mutation::MutationKind::AppendFile {
+                expected: None,
                 path: "f".into(),
                 content: b"more".to_vec(),
             },
@@ -2192,6 +2202,7 @@ fn apply_entry_without_demand_names_but_registers_nothing() {
     let fold = crate::mutation::MutationKind::Fold {
         members: vec![FoldMember {
             kind: crate::mutation::MutationKind::AppendFile {
+                expected: None,
                 path: "f".into(),
                 content: b"more".to_vec(),
             },
@@ -2246,6 +2257,7 @@ fn apply_entry_under_saturation_still_defers() {
     let fold = crate::mutation::MutationKind::Fold {
         members: vec![FoldMember {
             kind: crate::mutation::MutationKind::AppendFile {
+                expected: None,
                 path: "f".into(),
                 content: b"more".to_vec(),
             },

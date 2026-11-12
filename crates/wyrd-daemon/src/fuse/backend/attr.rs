@@ -255,7 +255,10 @@ where
             return Err(fuser::Errno::EROFS);
         }
         let token = self.begin_remove(&path)?;
-        let result = self.force_op(MutationKind::Unlink { path: path.clone() });
+        let result = self.force_op(MutationKind::Unlink {
+            path: path.clone(),
+            expected: None,
+        });
         self.finish_remove(&path, token, result.is_ok());
         result.map(|_| ())
     }
@@ -267,7 +270,10 @@ where
             return Err(fuser::Errno::EROFS);
         }
         let token = self.begin_remove(&path)?;
-        let result = self.force_op(MutationKind::Rmdir { path: path.clone() });
+        let result = self.force_op(MutationKind::Rmdir {
+            path: path.clone(),
+            expected: None,
+        });
         self.finish_remove(&path, token, result.is_ok());
         result.map(|_| ())
     }
@@ -299,6 +305,10 @@ where
             from: from.clone(),
             to: to.clone(),
             no_replace,
+            // In-process path: the inode table rebinds on success
+            // and already retired the source mapping; identity
+            // preconditions ride the owner wire, not FUSE handles.
+            expected: None,
         })?;
         if let Ok(mut inodes) = self.inodes.write() {
             inodes.renamed(&from, &to);
@@ -343,6 +353,7 @@ where
             // on whatever the path names now. Only the `O_TRUNC` half
             // of an open is identity-bound.
             base: None,
+            expected: None,
         })?;
         for handle in &clean {
             let _ = self.repin_handle(handle, &path);
@@ -403,6 +414,7 @@ where
                 size,
                 executable,
                 base: None,
+                expected: None,
             })?;
             return Ok(());
         }
@@ -411,6 +423,7 @@ where
             size,
             executable,
             base: None,
+            expected: None,
         })?;
         Ok(())
     }

@@ -433,9 +433,15 @@ where
                 )?;
                 Ok(outcome)
             }
-            MutationKind::CommitFile { path, .. } => {
+            MutationKind::CommitFile { path, expected, .. } => {
                 let heads = self.eval_heads(pinned, path)?;
                 let tree = match heads.as_slice() {
+                    // No heads at all: with an identity precondition
+                    // the path cannot resolve, so this is NotFound;
+                    // without one the legacy stale refusal stands.
+                    [] if expected.is_some() => {
+                        return Err(MutationError::NotFound(path.clone()));
+                    }
                     [] => return Err(MutationError::Stale(path.clone())),
                     [head] => head.snapshot().tree,
                     _ => return Err(MutationError::Conflicted { heads: heads.len() }),
@@ -451,10 +457,13 @@ where
                 )?;
                 Ok(outcome)
             }
-            MutationKind::AppendFile { path, .. } => {
+            MutationKind::AppendFile { path, expected, .. } => {
                 let heads = self.eval_heads(pinned, path)?;
                 let tree = match heads.as_slice() {
                     [head] => head.snapshot().tree,
+                    [] if expected.is_some() => {
+                        return Err(MutationError::NotFound(path.clone()));
+                    }
                     [] => return Err(MutationError::Stale(path.clone())),
                     _ => return Err(MutationError::Conflicted { heads: heads.len() }),
                 };
@@ -472,7 +481,7 @@ where
                 }
                 Ok(outcome)
             }
-            MutationKind::Unlink { path } => {
+            MutationKind::Unlink { path, .. } => {
                 let heads = self.eval_heads(pinned, path)?;
                 let tree = self.single_tree(&heads, path)?;
                 let (root, outcome) = self.build_root(kind, &heads, tree)?;
@@ -487,7 +496,7 @@ where
                 self.invalidate_parent_for_namespace_mutation(kind);
                 Ok(outcome)
             }
-            MutationKind::Rmdir { path } => {
+            MutationKind::Rmdir { path, .. } => {
                 let heads = self.eval_heads(pinned, path)?;
                 let tree = self.single_tree(&heads, path)?;
                 let (root, outcome) = self.build_root(kind, &heads, tree)?;
@@ -554,6 +563,55 @@ where
     /// Returns the new root plus the outcome the mutation would have
     /// reported alone. Authoring and parent invalidation stay with the
     /// caller: a fold authors once for all its winners.
+    ///
+    /// Entry-identity preconditions (`expected`) are enforced here,
+    /// inside the serialized apply, so no interleaving mutation can
+    /// slip between the resolution and the format mutation. See
+    /// `check_expected_identity`.
+    /// Enforce an entry-identity precondition against the node the
+    /// path resolves to now. Runs inside the serialized apply, so the
+    /// resolution and the format mutation below are atomic with
+    /// respect to every other mutation. Four outcomes stay distinct:
+    /// same token proceeds (the arm still applies its own content
+    /// and kind checks); a different token — including a legacy
+    /// entry that never had one — is `StaleEntry`; a missing path
+    /// is `NotFound`; a conflicted path is `Conflicted`. `None`
+    /// expected skips the check entirely: in-process legacy callers
+    /// (FUSE handles carry their own stale-base boundary) keep
+    /// exactly their current behavior.
+    fn check_expected_identity(
+        expected: &Option<EntryIdentity>,
+        node: Option<&Node>,
+        path: &str,
+        heads: &[AuthorizedSnapshot],
+    ) -> Result<(), MutationError> {
+        let Some(wanted) = expected else {
+            return Ok(());
+        };
+        match node {
+            None => Err(MutationError::NotFound(path.to_string())),
+            Some(Node::Conflict { .. }) => Err(MutationError::Conflicted { heads: heads.len() }),
+            Some(node) => {
+                let found = match node {
+                    Node::File { identity, .. }
+                    | Node::Dir { identity, .. }
+                    | Node::Symlink { identity, .. }
+                    | Node::MergedDir { identity, .. } => *identity,
+                    Node::Conflict { .. } => None,
+                };
+                if found.as_ref() == Some(wanted) {
+                    Ok(())
+                } else {
+                    Err(MutationError::StaleEntry {
+                        path: path.to_string(),
+                        expected: *wanted,
+                        found,
+                    })
+                }
+            }
+        }
+    }
+
     fn build_root(
         &self,
         kind: &MutationKind,
@@ -613,12 +671,15 @@ where
                 base,
                 executable,
                 content,
+                expected,
             } => {
+                let node = self.current_node(heads, path)?;
+                Self::check_expected_identity(expected, node.as_ref(), path, heads)?;
                 // The stale-handle boundary: commit only if the path still
-                // carries exactly the identity this handle opened against.
-                // A content change, kind change, or removal fails closed
-                // with no merge and no snapshot.
-                let preserved = match self.current_node(heads, path)? {
+                // carries `base`. A content change fails closed with no
+                // merge and no snapshot; an identity, kind, or existence
+                // divergence was already classified above.
+                let preserved = match node {
                     Some(Node::File {
                         size,
                         executable,
@@ -655,8 +716,14 @@ where
                     )),
                 ))
             }
-            MutationKind::AppendFile { path, content } => {
-                let (executable, preserved) = match self.current_node(heads, path)? {
+            MutationKind::AppendFile {
+                path,
+                content,
+                expected,
+            } => {
+                let node = self.current_node(heads, path)?;
+                Self::check_expected_identity(expected, node.as_ref(), path, heads)?;
+                let (executable, preserved) = match node {
                     Some(Node::File {
                         size,
                         executable,
@@ -703,8 +770,10 @@ where
                     )),
                 ))
             }
-            MutationKind::Unlink { path } => {
-                match self.current_node(heads, path)? {
+            MutationKind::Unlink { path, expected } => {
+                let node = self.current_node(heads, path)?;
+                Self::check_expected_identity(expected, node.as_ref(), path, heads)?;
+                match node {
                     Some(Node::Dir { .. } | Node::MergedDir { .. }) => {
                         return Err(MutationError::IsDirectory(path.clone()));
                     }
@@ -716,7 +785,9 @@ where
                     .map_err(format_write_error)?;
                 Ok((root, MutationOutcome::Done))
             }
-            MutationKind::Rmdir { path } => {
+            MutationKind::Rmdir { path, expected } => {
+                let node = self.current_node(heads, path)?;
+                Self::check_expected_identity(expected, node.as_ref(), path, heads)?;
                 self.demand_path_trees(heads, path)?;
                 let mut store = self.store.write().map_err(|_| MutationError::Lock)?;
                 let root = wyrd_format::mutation::rmdir(&mut *store, tree, path)
@@ -727,7 +798,10 @@ where
                 from,
                 to,
                 no_replace,
+                expected,
             } => {
+                let node = self.current_node(heads, from)?;
+                Self::check_expected_identity(expected, node.as_ref(), from, heads)?;
                 self.demand_path_trees(heads, from)?;
                 self.demand_path_trees(heads, to)?;
                 if *no_replace && self.current_node(heads, to)?.is_some() {
@@ -743,23 +817,25 @@ where
                 size,
                 executable,
                 base,
+                expected,
             } => {
-                let (current_size, current_exec, chunks, preserved) =
-                    match self.current_node(heads, path)? {
-                        Some(Node::File {
-                            size,
-                            executable,
-                            chunks,
-                            identity,
-                        }) => (size, executable, chunks, identity),
-                        // A size change on a non-file is EISDIR; an exec
-                        // change is a no-op (only files represent exec).
-                        Some(_) if size.is_some() => {
-                            return Err(MutationError::IsDirectory(path.clone()));
-                        }
-                        Some(_) => return Ok((tree, MutationOutcome::Done)),
-                        None => return Err(MutationError::NotFound(path.clone())),
-                    };
+                let node = self.current_node(heads, path)?;
+                Self::check_expected_identity(expected, node.as_ref(), path, heads)?;
+                let (current_size, current_exec, chunks, preserved) = match node {
+                    Some(Node::File {
+                        size,
+                        executable,
+                        chunks,
+                        identity,
+                    }) => (size, executable, chunks, identity),
+                    // A size change on a non-file is EISDIR; an exec
+                    // change is a no-op (only files represent exec).
+                    Some(_) if size.is_some() => {
+                        return Err(MutationError::IsDirectory(path.clone()));
+                    }
+                    Some(_) => return Ok((tree, MutationOutcome::Done)),
+                    None => return Err(MutationError::NotFound(path.clone())),
+                };
                 // The identity guard, checked before anything is
                 // read or written: an identity-bound `setattr` (the
                 // `O_TRUNC` half of an open) applies only to the exact
@@ -844,8 +920,8 @@ where
             | MutationKind::CreateFile { path, .. }
             | MutationKind::CommitFile { path, .. }
             | MutationKind::AppendFile { path, .. }
-            | MutationKind::Unlink { path }
-            | MutationKind::Rmdir { path }
+            | MutationKind::Unlink { path, .. }
+            | MutationKind::Rmdir { path, .. }
             | MutationKind::SetAttrs { path, .. } => vec![path.as_str()],
             MutationKind::Rename { to, .. } => vec![to.as_str()],
             MutationKind::Fold { .. } => vec![],
@@ -888,6 +964,7 @@ where
                 size,
                 executable: _,
                 base,
+                ..
             } => {
                 let (current_size, current_exec, chunks) = match self.current_node(heads, path)? {
                     Some(Node::File {
@@ -1328,8 +1405,8 @@ where
     fn invalidate_parent_for_namespace_mutation(&self, kind: &MutationKind) {
         match kind {
             MutationKind::Mkdir { path }
-            | MutationKind::Unlink { path }
-            | MutationKind::Rmdir { path } => self.mutations.invalidate_parent_subtree(path),
+            | MutationKind::Unlink { path, .. }
+            | MutationKind::Rmdir { path, .. } => self.mutations.invalidate_parent_subtree(path),
             MutationKind::Rename { from, to, .. } => {
                 self.mutations.invalidate_parent_subtree(from);
                 self.mutations.invalidate_parent_subtree(to);

@@ -215,6 +215,9 @@ fn refusals_keep_their_codes_through_the_backend() {
     }
     match backend.submit(WireMutationKind::Unlink {
         path: "no-such-path.txt".to_string(),
+        // A missing path refuses NotFound whatever token is offered:
+        // the identity check cannot match what does not exist.
+        expected_identity: "ab".repeat(32),
     }) {
         Err(BackendError::Refused { error }) => assert_eq!(error.code, WireErrorCode::NotFound),
         other => panic!("an unlink of a missing path refuses NotFound: {other:?}"),
@@ -378,21 +381,36 @@ fn submit_forwards_through_the_single_queue_and_commits() {
     };
     match backend.lookup("from-ui.txt") {
         Ok((node, _, _)) => match node {
-            wyrd_owner_client::WireNode::File { size, .. } => {
-                assert_eq!(size, 0, "the created file starts empty")
+            wyrd_owner_client::WireNode::File { size, identity, .. } => {
+                assert_eq!(size, 0, "the created file starts empty");
+                identity.expect("the created file carries its token")
             }
             other => panic!("the created path serves a file: {other:?}"),
         },
         other => panic!("the created path serves: {other:?}"),
     };
     // The round trip preserves content: what was committed reads back.
+    // The commit carries the looked-up token: the queue binds the
+    // write to the observed entry, not just the path.
     let content_hex: String = b"ui bytes".iter().map(|b| format!("{b:02x}")).collect();
+    let expected_identity = match backend
+        .lookup("from-ui.txt")
+        .expect("the created path serves")
+        .0
+    {
+        wyrd_owner_client::WireNode::File {
+            identity: Some(token),
+            ..
+        } => token,
+        other => panic!("the created file carries its token: {other:?}"),
+    };
     backend
         .submit(WireMutationKind::CommitFile {
             path: "from-ui.txt".to_string(),
             base: created,
             executable: false,
             content_hex,
+            expected_identity,
         })
         .expect("commit submits through the single queue");
     match backend.read("from-ui.txt") {

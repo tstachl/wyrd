@@ -276,7 +276,7 @@ pub(super) fn mutation_errno(error: &MutationError) -> fuser::Errno {
         // available in time: distinct from EIO so callers can tell
         // "retry may succeed" from "something is wrong".
         MutationError::TimedOut => fuser::Errno::ETIMEDOUT,
-        MutationError::StaleParent(_) => fuser::Errno::ESTALE,
+        MutationError::StaleParent(_) | MutationError::StaleEntry { .. } => fuser::Errno::ESTALE,
         MutationError::Conflicted { .. }
         | MutationError::Stale(_)
         | MutationError::Lock

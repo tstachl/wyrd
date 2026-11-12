@@ -707,16 +707,19 @@ mod tests {
         );
 
         // `SetAttrs` pins `Option` handling: absent fields are
-        // `null`, never dropped keys.
+        // `null`, never dropped keys. The identity precondition is
+        // required since v2: absent fails parse, never a silent
+        // path-only mutation.
         let kind = WireMutationKind::SetAttrs {
             path: "notes.txt".to_string(),
             size: None,
             executable: Some(true),
             base: None,
+            expected_identity: "ab".repeat(32),
         };
         assert_eq!(
             serde_json::to_value(&kind).unwrap(),
-            serde_json::json!({"SetAttrs": {"path": "notes.txt", "size": null, "executable": true, "base": null}})
+            serde_json::json!({"SetAttrs": {"path": "notes.txt", "size": null, "executable": true, "base": null, "expected_identity": "abababababababababababababababababababababababababababababababab"}})
         );
 
         let outcome = WireMutationOutcome::Created(WireFileIdentity {

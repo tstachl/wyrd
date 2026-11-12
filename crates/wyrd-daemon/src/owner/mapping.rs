@@ -196,6 +196,15 @@ pub fn node_from_wire(node: &WireNode) -> Result<Node, String> {
         }
     }
 }
+/// Parse a required wire identity: the mutation precondition must
+/// name 32 hex bytes — absent or malformed is `Malformed`, never a
+/// silent path-only mutation.
+fn wire_expected_identity(hex: &str) -> Result<EntryIdentity, String> {
+    parse_id(hex)
+        .map(EntryIdentity::from_bytes)
+        .map_err(|error| format!("invalid expected identity {hex:?}: {error}"))
+}
+
 /// Parse an optional wire identity: absent stays absent (pre-identity
 /// data), present must be 32 hex bytes — never silently dropped.
 fn wire_identity(hex: &Option<String>) -> Result<Option<EntryIdentity>, String> {
@@ -719,6 +728,7 @@ pub fn mutation_kind_from_wire(
             base,
             executable,
             content_hex,
+            expected_identity,
         } => Ok(MutationKind::CommitFile {
             path: path.clone(),
             base: file_identity_from_wire(base)
@@ -726,28 +736,49 @@ pub fn mutation_kind_from_wire(
             executable: *executable,
             content: hex::decode(content_hex)
                 .map_err(|error| malformed(format!("commit content is not hex: {error}")))?,
+            expected: Some(wire_expected_identity(expected_identity).map_err(malformed)?),
         }),
-        WireMutationKind::AppendFile { path, content_hex } => Ok(MutationKind::AppendFile {
+        WireMutationKind::AppendFile {
+            path,
+            content_hex,
+            expected_identity,
+        } => Ok(MutationKind::AppendFile {
             path: path.clone(),
             content: hex::decode(content_hex)
                 .map_err(|error| malformed(format!("append content is not hex: {error}")))?,
+            expected: Some(wire_expected_identity(expected_identity).map_err(malformed)?),
         }),
-        WireMutationKind::Unlink { path } => Ok(MutationKind::Unlink { path: path.clone() }),
-        WireMutationKind::Rmdir { path } => Ok(MutationKind::Rmdir { path: path.clone() }),
+        WireMutationKind::Unlink {
+            path,
+            expected_identity,
+        } => Ok(MutationKind::Unlink {
+            path: path.clone(),
+            expected: Some(wire_expected_identity(expected_identity).map_err(malformed)?),
+        }),
+        WireMutationKind::Rmdir {
+            path,
+            expected_identity,
+        } => Ok(MutationKind::Rmdir {
+            path: path.clone(),
+            expected: Some(wire_expected_identity(expected_identity).map_err(malformed)?),
+        }),
         WireMutationKind::Rename {
             from,
             to,
             no_replace,
+            expected_identity,
         } => Ok(MutationKind::Rename {
             from: from.clone(),
             to: to.clone(),
             no_replace: *no_replace,
+            expected: Some(wire_expected_identity(expected_identity).map_err(malformed)?),
         }),
         WireMutationKind::SetAttrs {
             path,
             size,
             executable,
             base,
+            expected_identity,
         } => Ok(MutationKind::SetAttrs {
             path: path.clone(),
             size: *size,
@@ -757,6 +788,7 @@ pub fn mutation_kind_from_wire(
                 .map(file_identity_from_wire)
                 .transpose()
                 .map_err(|message| (WireErrorCode::Malformed, message))?,
+            expected: Some(wire_expected_identity(expected_identity).map_err(malformed)?),
         }),
         WireMutationKind::Fold { members } => {
             let mut kinds = Vec::with_capacity(members.len());
@@ -789,6 +821,7 @@ pub fn wire_mutation_error(error: &MutationError) -> WireMutationError {
         MutationError::DirectoryNotEmpty(_) => WireErrorCode::DirectoryNotEmpty,
         MutationError::InvalidRename(_) => WireErrorCode::InvalidRename,
         MutationError::Stale(_) => WireErrorCode::Stale,
+        MutationError::StaleEntry { .. } => WireErrorCode::StaleEntry,
         MutationError::StaleParent(_) => WireErrorCode::StaleParent,
         MutationError::TooLarge(_) => WireErrorCode::TooLarge,
         MutationError::TooMany { .. } => WireErrorCode::TooMany,

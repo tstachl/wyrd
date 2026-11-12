@@ -230,6 +230,7 @@ fn a_step_two_chunk_refusal_names_the_backing_store() {
     let (error, logged) = with_capture(tracing::Level::DEBUG, || {
         node.apply_mutation(
             &MutationKind::CommitFile {
+                expected: None,
                 path: "f".into(),
                 base: FileIdentity::new(held.len() as u64, false, vec![chunk]),
                 executable: false,

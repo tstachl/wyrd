@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use wyrd_format::{ContentId, StoreFailure};
+use wyrd_format::{ContentId, EntryIdentity, StoreFailure};
 
 use super::parents::{FileIdentity, ParentToken};
 use super::queue::Reply;
@@ -222,6 +222,21 @@ pub enum MutationError {
     /// longer current. POSIX `ESTALE`.
     #[error("stale parent for {0:?}: the directory changed before create")]
     StaleParent(String),
+    /// The path resolved to a different entry than the caller's
+    /// expected identity — delete-plus-recreate, path reuse, kind
+    /// change, or a legacy entry that never had an identity. POSIX
+    /// `ESTALE`, like [`MutationError::StaleParent`]: the reference
+    /// is old, not the content. A terminal refusal with no merge
+    /// and no snapshot. Distinct from `Stale` (same entry, changed
+    /// content base), from `Conflicted`, and from `NotFound`, even
+    /// where a presentation surface renders two with the same
+    /// error.
+    #[error("stale entry identity for {path:?}: expected {expected}, found {found:?}")]
+    StaleEntry {
+        path: String,
+        expected: EntryIdentity,
+        found: Option<EntryIdentity>,
+    },
     /// The operation exceeds a representable or budgeted size. POSIX
     /// `EFBIG`.
     #[error("resulting size {0} exceeds the supported bound")]
@@ -315,27 +330,49 @@ pub enum MutationKind {
     /// Commit a writable handle's full logical image onto the current
     /// head, accepted only if the path still carries `base`. `executable`
     /// is the handle's buffered exec bit for the committed entry.
+    /// `expected` is the entry identity the caller resolved: when set,
+    /// the path must still carry exactly that entry, or the commit
+    /// fails with [`MutationError::StaleEntry`] instead of landing
+    /// on a replacement. `None` is the in-process legacy path (the
+    /// handle's own stale-base check still applies).
     CommitFile {
         path: String,
         base: FileIdentity,
         executable: bool,
         content: Vec<u8>,
+        expected: Option<EntryIdentity>,
     },
     /// Append `content` to the current head's file at `path`. Unlike
     /// [`CommitFile`](MutationKind::CommitFile) there is no content
     /// comparison: append is position-independent and observes an
     /// intervening commit, but still requires the path to exist as a
-    /// regular file (never creates, never resurrects).
-    AppendFile { path: String, content: Vec<u8> },
+    /// regular file (never creates, never resurrects). `expected`
+    /// binds the append to the observed entry, like `CommitFile`.
+    AppendFile {
+        path: String,
+        content: Vec<u8>,
+        expected: Option<EntryIdentity>,
+    },
     /// Remove the file or symlink at `path`; a directory is `EISDIR`.
-    Unlink { path: String },
-    /// Remove the empty directory at `path`.
-    Rmdir { path: String },
+    /// `expected` binds the removal to the observed entry.
+    Unlink {
+        path: String,
+        expected: Option<EntryIdentity>,
+    },
+    /// Remove the empty directory at `path`. `expected` binds the
+    /// removal to the observed entry.
+    Rmdir {
+        path: String,
+        expected: Option<EntryIdentity>,
+    },
     /// Move `from` to `to`. `no_replace` is `RENAME_NOREPLACE`.
+    /// `expected` binds the move to the observed source entry;
+    /// the destination keeps its existing replace semantics.
     Rename {
         from: String,
         to: String,
         no_replace: bool,
+        expected: Option<EntryIdentity>,
     },
     /// One `setattr`: apply the requested size and/or exec change as a
     /// single namespace mutation, publishing exactly one root or none.
@@ -350,11 +387,18 @@ pub enum MutationKind {
     /// half of an open is bound to the identity that open observed, so
     /// a same-path replacement can never have the truncation applied to
     /// it.
+    ///
+    /// `expected` is the entry-identity precondition for owner
+    /// clients that resolved the path first: when set, the path must
+    /// still carry exactly that entry, or the mutation is
+    /// [`MutationError::StaleEntry`]. In-process callers leave it
+    /// `None` and keep the content-base check only.
     SetAttrs {
         path: String,
         size: Option<u64>,
         executable: Option<bool>,
         base: Option<FileIdentity>,
+        expected: Option<EntryIdentity>,
     },
     /// One commit-forcing event's whole pending set plus itself,
     /// applied as a single snapshot (`docs/contracts/write-path.md`, DG-1
@@ -399,41 +443,60 @@ impl std::fmt::Debug for MutationKind {
                 base,
                 executable,
                 content,
+                expected,
             } => f
                 .debug_struct("CommitFile")
                 .field("path", path)
                 .field("base", base)
                 .field("executable", executable)
                 .field("content_len", &content.len())
+                .field("expected", expected)
                 .finish(),
-            MutationKind::AppendFile { path, content } => f
+            MutationKind::AppendFile {
+                path,
+                content,
+                expected,
+            } => f
                 .debug_struct("AppendFile")
                 .field("path", path)
                 .field("content_len", &content.len())
+                .field("expected", expected)
                 .finish(),
-            MutationKind::Unlink { path } => f.debug_struct("Unlink").field("path", path).finish(),
-            MutationKind::Rmdir { path } => f.debug_struct("Rmdir").field("path", path).finish(),
+            MutationKind::Unlink { path, expected } => f
+                .debug_struct("Unlink")
+                .field("path", path)
+                .field("expected", expected)
+                .finish(),
+            MutationKind::Rmdir { path, expected } => f
+                .debug_struct("Rmdir")
+                .field("path", path)
+                .field("expected", expected)
+                .finish(),
             MutationKind::Rename {
                 from,
                 to,
                 no_replace,
+                expected,
             } => f
                 .debug_struct("Rename")
                 .field("from", from)
                 .field("to", to)
                 .field("no_replace", no_replace)
+                .field("expected", expected)
                 .finish(),
             MutationKind::SetAttrs {
                 path,
                 size,
                 executable,
                 base,
+                expected,
             } => f
                 .debug_struct("SetAttrs")
                 .field("path", path)
                 .field("size", size)
                 .field("executable", executable)
                 .field("base", base)
+                .field("expected", expected)
                 .finish(),
             MutationKind::Fold { members } => {
                 f.debug_struct("Fold").field("members", members).finish()

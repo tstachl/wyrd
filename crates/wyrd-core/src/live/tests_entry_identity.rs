@@ -129,6 +129,7 @@ fn commit(node: &mut LiveNode<TreeView>, path: &str, content: &[u8]) {
     };
     node.apply_mutation(
         &MutationKind::CommitFile {
+            expected: None,
             path: path.into(),
             base,
             executable: false,
@@ -162,6 +163,7 @@ fn content_modification_preserves_identity() {
     assert_eq!(created, committed, "commit preserves");
     node.apply_mutation(
         &MutationKind::AppendFile {
+            expected: None,
             path: "f.txt".into(),
             content: b" plus more".to_vec(),
         },
@@ -172,6 +174,7 @@ fn content_modification_preserves_identity() {
     assert_eq!(created, appended, "append preserves");
     node.apply_mutation(
         &MutationKind::SetAttrs {
+            expected: None,
             path: "f.txt".into(),
             size: None,
             executable: Some(true),
@@ -201,6 +204,7 @@ fn rename_preserves_identity() {
         .expect("destination parent exists");
     node.apply_mutation(
         &MutationKind::Rename {
+            expected: None,
             from: "from.txt".into(),
             to: "sub/to.txt".into(),
             no_replace: false,
@@ -232,6 +236,7 @@ fn delete_retires_and_recreate_mints() {
     commit(&mut node, "f.txt", b"data");
     node.apply_mutation(
         &MutationKind::Unlink {
+            expected: None,
             path: "f.txt".into(),
         },
         None,
@@ -264,8 +269,14 @@ fn directory_lifecycle_mints_and_retires() {
     node.apply_mutation(&MutationKind::Mkdir { path: "d".into() }, None)
         .expect("mkdir applies");
     let created = require_token(&node, "d");
-    node.apply_mutation(&MutationKind::Rmdir { path: "d".into() }, None)
-        .expect("rmdir applies");
+    node.apply_mutation(
+        &MutationKind::Rmdir {
+            expected: None,
+            path: "d".into(),
+        },
+        None,
+    )
+    .expect("rmdir applies");
     assert_eq!(observed(&node, "d"), None);
     node.apply_mutation(&MutationKind::Mkdir { path: "d".into() }, None)
         .expect("re-mkdir applies");
@@ -321,6 +332,7 @@ fn stale_commit_preserves_the_replacement_identity() {
     // Same-path replacement: unlink plus create mints anew.
     node.apply_mutation(
         &MutationKind::Unlink {
+            expected: None,
             path: "f.txt".into(),
         },
         None,
@@ -332,6 +344,7 @@ fn stale_commit_preserves_the_replacement_identity() {
     let error = node
         .apply_mutation(
             &MutationKind::CommitFile {
+                expected: None,
                 path: "f.txt".into(),
                 base: stale_base,
                 executable: false,
@@ -542,6 +555,7 @@ fn peer_originated_rename_preserves_identity() {
     node_b
         .apply_mutation(
             &MutationKind::Rename {
+                expected: None,
                 from: "f".into(),
                 to: "renamed.txt".into(),
                 no_replace: false,
@@ -654,6 +668,7 @@ fn fuse_and_owner_views_agree_across_rename() {
     };
     node.apply_mutation(
         &MutationKind::Rename {
+            expected: None,
             from: "from.txt".into(),
             to: "to.txt".into(),
             no_replace: false,

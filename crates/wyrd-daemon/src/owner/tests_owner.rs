@@ -1024,6 +1024,22 @@ fn liveness_keeps_paused_quiet_and_offline_distinct() {
 // ---------------------------------------------------------------------------
 
 /// Submit one mutation through dispatch and unwrap the success.
+/// Look up a directory's entry token for a mutation precondition:
+/// the client discipline is resolve-then-submit, never a blind
+/// path.
+fn dir_identity(server: &OwnerServer, path: &str) -> String {
+    match dispatch_ok(server, OP_LOOKUP, path) {
+        WireOk::Lookup { node, .. } => match node {
+            WireNode::Dir {
+                identity: Some(token),
+                ..
+            } => token,
+            other => panic!("{path} serves a token-bearing dir: {other:?}"),
+        },
+        other => panic!("{path} serves: {other:?}"),
+    }
+}
+
 fn submit_ok(server: &OwnerServer, kind: super::wire::WireMutationKind) -> WireMutationOutcome {
     let response = server.dispatch(RawRequest {
         v: WIRE_VERSION,
@@ -1147,6 +1163,7 @@ fn owner_interface_forwards_a_mutation_unchanged() {
             from: "via-iface/sub".to_string(),
             to: "via-iface/renamed".to_string(),
             no_replace: true,
+            expected_identity: dir_identity(&server, "via-iface/sub"),
         },
     );
     assert_eq!(outcome, WireMutationOutcome::Done);
@@ -1346,11 +1363,13 @@ fn submit_refusals_carry_distinct_codes() {
     );
     assert_eq!(error.code, WireErrorCode::StaleParent);
 
-    // Missing path through unlink.
+    // Missing path through unlink (any offered token: nothing
+    // resolves, so the identity check has nothing to compare).
     let error = submit_err(
         &server,
         WireMutationKind::Unlink {
             path: "missing.txt".to_string(),
+            expected_identity: "ab".repeat(32),
         },
     );
     assert_eq!(error.code, WireErrorCode::NotFound);
@@ -1457,27 +1476,33 @@ fn wire_mutation_kinds_round_trip() {
             base: identity.clone(),
             executable: false,
             content_hex: "636f6e74656e74".to_string(),
+            expected_identity: "cd".repeat(32),
         },
         WireMutationKind::AppendFile {
             path: "b".to_string(),
             content_hex: "00".to_string(),
+            expected_identity: "cd".repeat(32),
         },
         WireMutationKind::Unlink {
             path: "b".to_string(),
+            expected_identity: "cd".repeat(32),
         },
         WireMutationKind::Rmdir {
             path: "a".to_string(),
+            expected_identity: "cd".repeat(32),
         },
         WireMutationKind::Rename {
             from: "a".to_string(),
             to: "c".to_string(),
             no_replace: true,
+            expected_identity: "cd".repeat(32),
         },
         WireMutationKind::SetAttrs {
             path: "b".to_string(),
             size: Some(3),
             executable: None,
             base: Some(identity.clone()),
+            expected_identity: "cd".repeat(32),
         },
         WireMutationKind::Fold {
             members: vec![WireFoldMember {
@@ -2189,6 +2214,9 @@ fn over_limit_submit_is_a_typed_toolarge_not_silence() {
             kind: WireMutationKind::AppendFile {
                 path: "hello.txt".to_string(),
                 content_hex,
+                // Unreached: the submit bound refuses before the
+                // queue, so any well-formed token parses.
+                expected_identity: "ab".repeat(32),
             },
         })
         .unwrap(),
@@ -2508,6 +2536,8 @@ fn client_submit_forwards_and_refusals_carry_their_codes() {
 
     match client.submit(WireMutationKind::Rmdir {
         path: "nope".to_string(),
+        // Missing paths refuse NotFound whatever token is offered.
+        expected_identity: "ab".repeat(32),
     }) {
         Err(ClientError::Refused(error)) => assert_eq!(error.code, WireErrorCode::NotFound),
         other => panic!("removing a missing dir refuses NotFound: {other:?}"),

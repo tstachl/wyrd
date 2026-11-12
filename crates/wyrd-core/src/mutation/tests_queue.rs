@@ -53,27 +53,33 @@ fn debug_rendering_redacts_file_content() {
             parent: ParentToken(1),
         },
         MutationKind::CommitFile {
+            expected: None,
             path: "/vault/docs".into(),
             base: base.clone(),
             executable: false,
             content: marker.to_vec(),
         },
         MutationKind::AppendFile {
+            expected: None,
             path: "/vault/docs".into(),
             content: binary.to_vec(),
         },
         MutationKind::Unlink {
+            expected: None,
             path: "/vault/docs".into(),
         },
         MutationKind::Rmdir {
+            expected: None,
             path: "/vault/docs".into(),
         },
         MutationKind::Rename {
+            expected: None,
             from: "/vault/a".into(),
             to: "/vault/b".into(),
             no_replace: true,
         },
         MutationKind::SetAttrs {
+            expected: None,
             path: "/vault/docs".into(),
             size: Some(3),
             executable: Some(true),
@@ -102,6 +108,7 @@ fn debug_rendering_redacts_file_content() {
     let commit = format!(
         "{:?}",
         MutationKind::CommitFile {
+            expected: None,
             path: "/vault/docs".into(),
             base,
             executable: false,
@@ -121,6 +128,7 @@ fn debug_rendering_redacts_file_content() {
     let append = format!(
         "{:?}",
         MutationKind::AppendFile {
+            expected: None,
             path: "/vault/docs".into(),
             content: binary.to_vec(),
         }
@@ -133,6 +141,7 @@ fn debug_rendering_redacts_file_content() {
         request: MutationRequest {
             id: MutationId(7),
             kind: MutationKind::AppendFile {
+                expected: None,
                 path: "/vault/docs".into(),
                 content: binary.to_vec(),
             },

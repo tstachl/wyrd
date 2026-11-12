@@ -441,6 +441,7 @@ fn guarded_setattrs_refuses_a_replaced_path() {
     assert_eq!(
         live.apply_mutation(
             &MutationKind::SetAttrs {
+                expected: None,
                 path: "parent/child".to_string(),
                 size: Some(0),
                 executable: None,
@@ -469,6 +470,7 @@ fn guarded_setattrs_refuses_a_replaced_path() {
 
     match live.apply_mutation(
         &MutationKind::SetAttrs {
+            expected: None,
             path: "parent/child".to_string(),
             size: Some(0),
             executable: None,
