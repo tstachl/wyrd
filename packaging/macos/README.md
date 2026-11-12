@@ -310,6 +310,42 @@ collapsed boolean, never a guess.
   parent capture and submit — tempting through the File Provider
   lifecycle, explicitly out of scope.
 
+## Stage 2 live proof (manual, macOS only)
+
+Observed 2026-11-12 on the development machine (same team
+identity line as Stage 1): a fresh `wyrd init` drive served by
+`wyrd vault` with the dev bootstrap
+(`WYRD_FILEPROVIDER_GROUP_CONTAINER` plus
+`WYRD_FILEPROVIDER_DRIVE_ID`, both set).
+
+- The daemon logged the triple it bound:
+  `primary=…/owner.sock`,
+  `group=…/Group Containers/group.md.enesis.wyrd/Sockets/add3245c6d69f1dd.sock`,
+  `link=…/Sockets/by-drive/<drive-hex>.sock`.
+- A client through the readlinked alias served `readdir ""`
+  (empty fresh drive, generation 0, revision 2), `stat ""`
+  (`Dir`, legacy-shaped root with no token), and refused an
+  unknown path with `NotFound` — the same shapes the Harness
+  checks against the stub.
+- Owner restart: stopping and re-running the vault rebound the
+  identical alias path (the fingerprint is deterministic) and
+  served immediately.
+- Shutdown removed all three paths (primary, group socket,
+  alias); the stale Stage 1 `wyrd-probe.sock` beside them is
+  untouched and unrelated.
+- No macFUSE on this machine, so the drive stayed empty: content
+  flows through the same tested dispatch (daemon unit tests with
+  seeded files, Harness round-trip with content), not through
+  this run.
+
+Remaining manual step (in-Finder): repoint the throwaway
+containing app at the current `Sources/` (eight new files join
+the four Stage 1 symlinks), register the domain with the drive
+id as its identifier, and run the Stage 1 Finder procedure
+against the live owner — enumerate, hydrate, rename-preserve,
+delete/recreate, peer rename, legacy rows, merged disagreement,
+and `fileproviderd` recovery.
+
 ## Release distinction
 
 - Unsigned/ad-hoc integration: development and manual testing only.
