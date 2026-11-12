@@ -158,6 +158,128 @@
     }
   },
   {
+    "name": "stat/ok",
+    "json": {
+      "v": 1,
+      "id": 7,
+      "result": {
+        "ok": {
+          "Stat": {
+            "attr": {
+              "kind": "File",
+              "size": 26,
+              "executable": false,
+              "identity": "ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34"
+            },
+            "generation": 3,
+            "revision": 9
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "readdir/ok",
+    "json": {
+      "v": 1,
+      "id": 7,
+      "result": {
+        "ok": {
+          "Readdir": {
+            "entries": [
+              {
+                "name": "hello.txt",
+                "node": {
+                  "File": {
+                    "size": 26,
+                    "executable": false,
+                    "chunks": ["aa"],
+                    "identity": "ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34"
+                  }
+                }
+              },
+              {
+                "name": "notes",
+                "node": {
+                  "Dir": {
+                    "subtree": "bb",
+                    "identity": "cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12"
+                  }
+                }
+              },
+              {
+                "name": "legacy.bin",
+                "node": {
+                  "File": {
+                    "size": 3,
+                    "executable": false,
+                    "chunks": ["cc"]
+                  }
+                }
+              },
+              {
+                "name": "agreed",
+                "node": {
+                  "MergedDir": {
+                    "subtrees": [["dd", "ee"]],
+                    "identity": "ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34"
+                  }
+                }
+              },
+              {
+                "name": "disagreed",
+                "node": {
+                  "MergedDir": {
+                    "subtrees": [["dd", "ee"], ["ff", "00"]],
+                    "identity": null
+                  }
+                }
+              },
+              {
+                "name": "split.txt",
+                "node": {
+                  "Conflict": {
+                    "versions": [
+                      {
+                        "snapshot": "11",
+                        "node": {
+                          "File": {
+                            "size": 1,
+                            "executable": false,
+                            "chunks": ["11"],
+                            "identity": "ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34"
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            ],
+            "generation": 3,
+            "revision": 9
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "read/ok",
+    "json": {
+      "v": 1,
+      "id": 7,
+      "result": {
+        "ok": {
+          "Read": {
+            "bytes_hex": "68656c6c6f",
+            "generation": 3,
+            "revision": 9
+          }
+        }
+      }
+    }
+  },
+  {
     "name": "submit/ok",
     "json": {
       "v": 1,
@@ -180,6 +302,58 @@
         "err": {
           "code": "NotFound",
           "message": "no such path"
+        }
+      }
+    }
+  },
+  {
+    "name": "refused/too-large",
+    "json": {
+      "v": 1,
+      "id": 7,
+      "result": {
+        "err": {
+          "code": "TooLarge",
+          "message": "file exceeds the 32 MiB single-read bound"
+        }
+      }
+    }
+  },
+  {
+    "name": "refused/timeout",
+    "json": {
+      "v": 1,
+      "id": 7,
+      "result": {
+        "err": {
+          "code": "Timeout",
+          "message": "remote content did not materialize in time; retry"
+        }
+      }
+    }
+  },
+  {
+    "name": "refused/conflicted",
+    "json": {
+      "v": 1,
+      "id": 7,
+      "result": {
+        "err": {
+          "code": "Conflicted",
+          "message": "path is conflicted across heads"
+        }
+      }
+    }
+  },
+  {
+    "name": "refused/unavailable",
+    "json": {
+      "v": 1,
+      "id": 7,
+      "result": {
+        "err": {
+          "code": "Unavailable",
+          "message": "owner generation not yet servable"
         }
       }
     }

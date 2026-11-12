@@ -697,16 +697,47 @@ where
     // the run instead of running deaf. The store lock is held
     // throughout the run, so no competing owner can race the
     // stale-socket reclaim.
-    let owner_service = crate::owner::OwnerService::bind(
-        crate::owner::OwnerHandles::for_live(
-            &parts,
-            Arc::clone(live.quarantine_queue()),
-            Arc::clone(live.scrub_queue()),
-            Arc::clone(live.waker()),
-        ),
-        &drive_dir,
-    )
-    .map_err(OwnerError::Io)?;
+    // the loop's repair queues the way the mount composer wires its
+    // backend — through the shared `OwnerService`, so headless and
+    // mount bind the same surface. Stage 2 dev bootstrap: when the
+    // App Group container (and the drive it serves) is explicitly
+    // configured, bind the group socket beside the drive-directory
+    // one from the same server — one instance identity, one uid
+    // check. A malformed bootstrap refuses the run; absent means the
+    // drive-directory socket only. Bind before spawning: an owner
+    // that cannot serve refuses instead of running deaf. The store
+    // lock is held throughout the run, so no competing owner can
+    // race the stale-socket reclaim.
+    let owner_service = match crate::owner::server::group_container_from_env() {
+        None => crate::owner::OwnerService::bind(
+            crate::owner::OwnerHandles::for_live(
+                &parts,
+                Arc::clone(live.quarantine_queue()),
+                Arc::clone(live.scrub_queue()),
+                Arc::clone(live.waker()),
+            ),
+            &drive_dir,
+        )
+        .map_err(OwnerError::Io)?,
+        Some(Ok(config)) => crate::owner::OwnerService::bind_with_group_container(
+            crate::owner::OwnerHandles::for_live(
+                &parts,
+                Arc::clone(live.quarantine_queue()),
+                Arc::clone(live.scrub_queue()),
+                Arc::clone(live.waker()),
+            ),
+            &drive_dir,
+            &config.drive,
+            &config.group_container,
+        )
+        .map_err(OwnerError::Io)?,
+        Some(Err(detail)) => {
+            return Err(OwnerError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                detail,
+            )));
+        }
+    };
     // No presentation backend is attached yet: the parts are owned
     // but never served, the queue stays open but nobody submits, so
     // passes only ever see intake and fetch work. The queue handle

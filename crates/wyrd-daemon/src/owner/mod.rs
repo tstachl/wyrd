@@ -48,8 +48,10 @@ pub use mapping::{
     wire_sync_status,
 };
 pub use server::{
-    bind_listener, OwnerHandles, OwnerServer, OwnerService, DEFAULT_MAX_READ_BYTES,
-    MAX_OWNER_CONNECTIONS, MAX_SUBMIT_CONTENT_BYTES, READ_DEMAND_TIMEOUT,
+    bind_listener, group_container_from_env, group_socket_path, group_symlink_path,
+    GroupContainerConfig, OwnerHandles, OwnerServer, OwnerService, DEFAULT_MAX_READ_BYTES,
+    FILEPROVIDER_DRIVE_ID_ENV, FILEPROVIDER_GROUP_CONTAINER_ENV, MAX_OWNER_CONNECTIONS,
+    MAX_SUBMIT_CONTENT_BYTES, READ_DEMAND_TIMEOUT,
 };
 pub use wyrd_owner_client::{socket_path_for, MAX_FRAME_BYTES, OWNER_SOCKET_NAME};
 

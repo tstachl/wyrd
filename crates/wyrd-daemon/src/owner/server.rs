@@ -45,6 +45,7 @@ use wyrd_core::scrub::ScrubQueue;
 use wyrd_core::view::{NamespaceView, Node, ViewError};
 use wyrd_core::wake::WakeSignal;
 use wyrd_core::want::{WantError, WantRegistry};
+use wyrd_format::DriveId;
 
 use crate::vault::OwnerView;
 
@@ -72,6 +73,148 @@ pub fn bind_listener(socket_path: &Path) -> std::io::Result<UnixListener> {
     let listener = UnixListener::bind(socket_path)?;
     listener.set_nonblocking(true)?;
     Ok(listener)
+}
+
+/// Env bootstrap for the Stage 2 File Provider socket (dev only, not
+/// a registry): the absolute path of the macOS App Group container.
+/// Set together with [`FILEPROVIDER_DRIVE_ID_ENV`]. Absent (both
+/// unset) means the owner serves the drive-directory socket only —
+/// the Linux behavior and the CI behavior. One set without the other
+/// is a misconfiguration and refuses the run; a malformed value
+/// refuses too, never a silent primary-only fallback.
+pub const FILEPROVIDER_GROUP_CONTAINER_ENV: &str = "WYRD_FILEPROVIDER_GROUP_CONTAINER";
+
+/// The explicitly configured drive, as 64 lowercase hex chars, paired
+/// with [`FILEPROVIDER_GROUP_CONTAINER_ENV`]. Stage 2 has no
+/// multi-drive registry yet, so the drive behind the group socket is
+/// stated here; the registry owns this association in production.
+/// The daemon never invents it, never guesses a single-drive
+/// default.
+pub const FILEPROVIDER_DRIVE_ID_ENV: &str = "WYRD_FILEPROVIDER_DRIVE_ID";
+
+/// The resolved dev bootstrap: where to bind, and for which drive.
+#[derive(Debug)]
+pub struct GroupContainerConfig {
+    /// The existing App Group container directory. The daemon creates
+    /// only `Sockets/` (and `by-drive/`) inside it, never the
+    /// container itself — a hand-created container is a decoy the
+    /// sandboxed extension cannot reach.
+    pub group_container: PathBuf,
+    /// The drive the group socket serves, explicitly configured.
+    pub drive: DriveId,
+}
+
+/// Read the Stage 2 dev bootstrap from the environment: `None` when
+/// neither variable is set, `Some(Err)` on any partial or malformed
+/// configuration (fail closed, never a silent fallback).
+pub fn group_container_from_env() -> Option<Result<GroupContainerConfig, String>> {
+    let container = std::env::var_os(FILEPROVIDER_GROUP_CONTAINER_ENV).map(PathBuf::from);
+    let drive_hex = std::env::var(FILEPROVIDER_DRIVE_ID_ENV).ok();
+    match (container, drive_hex) {
+        (None, None) => None,
+        (Some(group_container), Some(drive_hex)) => Some(parse_group_config(group_container, &drive_hex)),
+        (None, Some(_)) => Some(Err(format!(
+            "{FILEPROVIDER_GROUP_CONTAINER_ENV} is unset while {FILEPROVIDER_DRIVE_ID_ENV} is set; set both or neither"
+        ))),
+        (Some(_), None) => Some(Err(format!(
+            "{FILEPROVIDER_DRIVE_ID_ENV} is unset while {FILEPROVIDER_GROUP_CONTAINER_ENV} is set; set both or neither"
+        ))),
+    }
+}
+
+fn parse_group_config(
+    group_container: PathBuf,
+    drive_hex: &str,
+) -> Result<GroupContainerConfig, String> {
+    if !group_container.is_absolute() {
+        return Err(format!(
+            "{FILEPROVIDER_GROUP_CONTAINER_ENV} must be absolute: {}",
+            group_container.display()
+        ));
+    }
+    if !group_container.is_dir() {
+        return Err(format!(
+            "{FILEPROVIDER_GROUP_CONTAINER_ENV} names no existing container directory (the daemon never creates it): {}",
+            group_container.display()
+        ));
+    }
+    let bytes = hex::decode(drive_hex)
+        .map_err(|error| format!("{FILEPROVIDER_DRIVE_ID_ENV} is not hex: {error}"))?;
+    let raw: [u8; 32] = bytes.try_into().map_err(|bytes: Vec<u8>| {
+        format!(
+            "{FILEPROVIDER_DRIVE_ID_ENV} must be 32 bytes (64 hex chars), got {} bytes",
+            bytes.len()
+        )
+    })?;
+    if drive_hex.chars().any(|c| c.is_ascii_uppercase()) {
+        return Err(format!("{FILEPROVIDER_DRIVE_ID_ENV} must be lowercase hex"));
+    }
+    Ok(GroupContainerConfig {
+        group_container,
+        drive: DriveId::from_bytes(raw),
+    })
+}
+
+/// The App Group socket for a drive:
+/// `<container>/Sockets/<fingerprint>.sock`. The filename derives
+/// from [`DriveId::fileprovider_socket_fingerprint`]; the daemon is
+/// the only computer of it, the Swift extension resolves the
+/// [`group_symlink_path`] instead, so the derivation cannot drift
+/// between the two sides.
+pub fn group_socket_path(group_container: &Path, drive: &DriveId) -> PathBuf {
+    group_container
+        .join("Sockets")
+        .join(format!("{}.sock", drive.fileprovider_socket_fingerprint()))
+}
+
+/// The stable alias the extension resolves:
+/// `<container>/Sockets/by-drive/<drive-hex>.sock`, a symlink to the
+/// fingerprint filename beside it. The domain carries the drive id,
+/// so the extension needs no hash — and no second derivation that
+/// could disagree with the daemon's.
+pub fn group_symlink_path(group_container: &Path, drive: &DriveId) -> PathBuf {
+    group_container
+        .join("Sockets")
+        .join("by-drive")
+        .join(format!("{drive}.sock"))
+}
+
+/// Bind the group socket with a live-endpoint check: an existing
+/// entry that still connects is a live owner — never unlink it, fail
+/// closed (`AddrInUse`) instead. A dead entry unlinks like the
+/// primary's stale reclaim. The caller holds the store lock, so the
+/// only competing binder is a cross-drive fingerprint collision,
+/// which also fails here rather than stealing the path.
+fn bind_group_listener(socket_path: &Path) -> std::io::Result<UnixListener> {
+    if socket_path.exists() {
+        match UnixStream::connect(socket_path) {
+            Ok(_) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::AddrInUse,
+                    format!(
+                        "fileprovider socket already served: {}",
+                        socket_path.display()
+                    ),
+                ));
+            }
+            Err(_) => {
+                let _ = std::fs::remove_file(socket_path);
+            }
+        }
+    }
+    bind_listener(socket_path)
+}
+
+/// Publish (or republish) the `by-drive` symlink beside the group
+/// socket. The target is the bare fingerprint filename, relative so
+/// the alias survives container moves.
+fn publish_group_symlink(link: &Path, fingerprint_file_name: &str) -> std::io::Result<()> {
+    if let Some(parent) = link.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let _ = std::fs::remove_file(link);
+    std::os::unix::fs::symlink(format!("../{fingerprint_file_name}"), link)?;
+    Ok(())
 }
 
 /// Largest whole-file read the interface serves in one request.
@@ -229,6 +372,9 @@ pub struct OwnerService {
     socket_path: PathBuf,
     stop: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
+    group_socket_path: Option<PathBuf>,
+    group_thread: Option<std::thread::JoinHandle<()>>,
+    group_symlink: Option<PathBuf>,
     /// Whether the socket file has been removed. Shutdown removes at
     /// most once: after an explicit shutdown the drop is a no-op, so
     /// a late drop can never unlink a successor owner's socket file
@@ -254,6 +400,76 @@ impl OwnerService {
             socket_path,
             stop,
             thread: Some(thread),
+            group_socket_path: None,
+            group_thread: None,
+            group_symlink: None,
+            removed: false,
+        })
+    }
+
+    /// Bind the drive-directory socket **and** the App Group socket
+    /// for the explicitly configured drive, serving both from one
+    /// [`OwnerServer`] (one owner-instance identity, one uid check).
+    /// All-or-nothing: a group-side failure unbinds the primary and
+    /// refuses, so the owner never runs half-bound — deaf to the
+    /// extension but alive to the CLI. The caller holds the store
+    /// lock throughout, as with [`OwnerService::bind`]. Stage 2 dev
+    /// bootstrap only; the multi-drive registry owns this
+    /// association in production.
+    pub fn bind_with_group_container(
+        handles: OwnerHandles,
+        drive_dir: &Path,
+        drive: &DriveId,
+        group_container: &Path,
+    ) -> std::io::Result<Self> {
+        let server = Arc::new(OwnerServer::new(handles));
+        let socket_path = super::socket_path_for(drive_dir);
+        let listener = bind_listener(&socket_path)?;
+        let group_path = group_socket_path(group_container, drive);
+        let link_path = group_symlink_path(group_container, drive);
+        // Create only `Sockets/` inside the resolved container, never
+        // the container itself (a hand-created container is a decoy).
+        if let Some(sockets) = group_path.parent() {
+            if let Err(error) = std::fs::create_dir_all(sockets) {
+                let _ = std::fs::remove_file(&socket_path);
+                return Err(error);
+            }
+        }
+        let group_listener = match bind_group_listener(&group_path) {
+            Ok(listener) => listener,
+            Err(error) => {
+                let _ = std::fs::remove_file(&socket_path);
+                return Err(error);
+            }
+        };
+        let fingerprint_file_name = format!("{}.sock", drive.fileprovider_socket_fingerprint());
+        if let Err(error) = publish_group_symlink(&link_path, &fingerprint_file_name) {
+            let _ = std::fs::remove_file(&socket_path);
+            let _ = std::fs::remove_file(&group_path);
+            return Err(error);
+        }
+        let stop = Arc::new(AtomicBool::new(false));
+        let thread = {
+            let (server, stop, listener) = (Arc::clone(&server), Arc::clone(&stop), listener);
+            std::thread::spawn(move || server.serve_on(&listener, &stop))
+        };
+        let group_thread = {
+            let (server, stop) = (Arc::clone(&server), Arc::clone(&stop));
+            std::thread::spawn(move || server.serve_on(&group_listener, &stop))
+        };
+        tracing::info!(
+            primary = %socket_path.display(),
+            group = %group_path.display(),
+            link = %link_path.display(),
+            "owner interface serving drive-directory and fileprovider sockets"
+        );
+        Ok(OwnerService {
+            socket_path,
+            stop,
+            thread: Some(thread),
+            group_socket_path: Some(group_path),
+            group_thread: Some(group_thread),
+            group_symlink: Some(link_path),
             removed: false,
         })
     }
@@ -261,6 +477,12 @@ impl OwnerService {
     /// The bound socket path, for diagnostics and tests.
     pub fn socket_path(&self) -> &Path {
         &self.socket_path
+    }
+
+    /// The bound App Group socket path, when
+    /// [`OwnerService::bind_with_group_container`] configured one.
+    pub fn group_socket_path(&self) -> Option<&Path> {
+        self.group_socket_path.as_deref()
     }
 
     /// Stop serving, join the accept thread, and remove the socket
@@ -278,8 +500,19 @@ impl OwnerService {
                 tracing::warn!("owner interface thread ended unexpectedly");
             }
         }
+        if let Some(thread) = self.group_thread.take() {
+            if thread.join().is_err() {
+                tracing::warn!("owner interface group thread ended unexpectedly");
+            }
+        }
         if !self.removed {
             self.removed = true;
+            if let Some(link) = self.group_symlink.take() {
+                let _ = std::fs::remove_file(&link);
+            }
+            if let Some(path) = self.group_socket_path.take() {
+                let _ = std::fs::remove_file(&path);
+            }
             let _ = std::fs::remove_file(&self.socket_path);
         }
     }
