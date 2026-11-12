@@ -4,10 +4,10 @@
 // externally tagged enums encode as single-key objects
 // (`{"ok": {"Lookup": {...}}}`), and absent identity keys decode
 // as `nil` (legacy entries) exactly like Rust's `#[serde(default)]`.
-// Stage 2 covered lookup, stat, readdir, read. Stage 3 (sub-PR 1)
-// adds the mutation vocabulary — capture-parent, submit, and the
-// nine mutation kinds with their required identity preconditions —
-// for wire proof; no UI path constructs a mutation yet.
+// Stage 2 covered lookup, stat, readdir, read. Stage 3 adds the
+// mutation vocabulary — capture-parent, submit, and the nine
+// mutation kinds with their required identity preconditions —
+// spoken live by the mutation callbacks in sub-PR 2.
 
 import Foundation
 

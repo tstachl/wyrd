@@ -363,6 +363,43 @@ against the live owner — enumerate, hydrate, rename-preserve,
 delete/recreate, peer rename, legacy rows, merged disagreement,
 and `fileproviderd` recovery.
 
+## Stage 3 mutation callbacks (sub-PR 2)
+
+Live create/modify/delete through the owner's single queue with
+sub-PR 1 identity preconditions — no parallel commit path. The
+conservative capability matrix: token-bearing files accept
+write/rename/reparent/delete; token-bearing directories accept
+the same (write doubles as adding children); symlinks, legacy
+rows, and merged disagreements stay read-only; trash is never
+advertised, delete is permanent, trash moves fail closed.
+
+Behavioral rules the callbacks implement: create file as
+capture-parent + CreateFile + CommitFile (empty files supported,
+`.DS_Store` excluded via `excludedFromSync`); create dir as
+`Mkdir`; `AlreadyExists` renders `filenameCollision` for the
+system to rename; content changes are whole-file `CommitFile`
+against the looked-up base with a baseVersion check (mismatch is
+`cannotSynchronize`, never overwrite/merge/retry); renames carry
+`noReplace`; `StaleParent` recaptures and retries once;
+unconfirmed submits reconcile by re-reading before any retry;
+folds are never sent; contents past 32 MiB refuse client-side;
+symlinks refuse closed. Atomicity is NOT declared (no
+`NSExtensionFileProviderAppliesChangesAtomically` key):
+create-then-commit exposes an intermediary. Working-set signal:
+the replicated extension honors only `.workingSet`, so every
+confirmed mutation signals the working set. Cancellation reports
+`NSUserCancelledError` pre-submit; a commit that already reached
+its terminal answer reports the answer. Remote change
+notification stays out by OD-17-C decision A: an open Finder
+window needs reopening to show a peer's write.
+
+Harness proof: the stub grew a stateful mutation namespace
+(`mut-*` paths plus a scripted one-shot `StaleParent` fixture),
+and the driver exercises the full write round-trip —
+capabilities, mkdir, create, modify, rename-preserve,
+collision, delete, recapture, oversize, legacy refusal,
+baseVersion discipline — plus the usual TSan run.
+
 ## Release distinction
 
 - Unsigned/ad-hoc integration: development and manual testing only.

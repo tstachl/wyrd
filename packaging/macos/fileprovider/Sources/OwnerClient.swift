@@ -35,8 +35,8 @@ enum OwnerClientError: Error {
 /// Operation names: the exact wire vocabulary. Reads plus the
 /// two mutation-side operations: `capture-parent` binds a create
 /// to its parent incarnation, `submit` forwards one mutation to
-/// the owner's single queue. No UI path constructs a mutation in
-/// Stage 3 sub-PR 1; the Harness exercises both against a stub.
+/// the owner's single queue. Spoken live by the Stage 3 mutation
+/// callbacks.
 enum OwnerOp {
     static let lookup = "lookup"
     static let stat = "stat"
@@ -132,9 +132,9 @@ final class OwnerClient {
 
     /// Forward one mutation to the owner's single queue and block
     /// for its terminal answer. A sent request is not a committed
-    /// write: only the terminal answer says what happened. No UI
-    /// path calls this in Stage 3 sub-PR 1; the Harness proves the
-    /// shape against a stub.
+    /// write: only the terminal answer says what happened. Spoken
+    /// live by the Stage 3 mutation callbacks; the Harness proves
+    /// the shape against a stub.
     func submit(kind: OwnerMutationKind) throws -> OwnerMutationOutcome {
         let response = try roundTrip(
             op: OwnerOp.submit,

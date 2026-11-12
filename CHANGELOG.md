@@ -35,6 +35,22 @@ is transient — no drive data is affected.
 
 ### Added
 
+- Live File Provider mutation callbacks (File Provider Stage 3,
+  sub-PR 2,
+  `nostr:nevent1qqs82n3y0m2f0sdg97qlnz2e40jvxsthjg9k420hw9dyj9c0alvn9gqpz9mhxue69uhkwunpwdczuap49eehg2qcvct`):
+  create/modify/delete run through the owner's single queue with
+  identity preconditions — capture-parent + CreateFile + CommitFile
+  for files (empty supported, `.DS_Store` excluded), Mkdir for
+  directories, whole-content CommitFile with baseVersion check for
+  modifies, `noReplace` Rename for moves, Unlink/Rmdir for
+  permanent deletes (no trash model). `AlreadyExists` renders
+  `filenameCollision`, `DirectoryNotEmpty` is preserved,
+  `StaleParent` recaptures once, unconfirmed submits reconcile by
+  re-reading before retrying, oversize content refuses at 32 MiB,
+  symlinks and legacy rows stay read-only, atomicity is not
+  declared, and every confirmed mutation signals the working set.
+  Proven by the Harness against a stateful stub (plus TSan).
+
 - Identity-conditional mutations in the owner queue (File Provider
   Stage 3 prerequisite,
   `nostr:nevent1qqs90mu07xgmx9j68nh0fm6xgl6u8dt29pu3urjqcjd3wsk3fqq5lwgpz9mhxue69uhkwunpwdczuap49eehgd8k9qj`):

@@ -1,9 +1,12 @@
-// Stage 2 live item: an `NSFileProviderItem` translated from an
+// Stage 3 live item: an `NSFileProviderItem` translated from an
 // owner answer, never invented. Identity comes from the owner's
 // token (stable) or the enumerated path (legacy); versions derive
 // from the owner coordinate, so a rename, edit, or restart moves
-// the item's version exactly when the owner state moves. Read-only:
-// every capability except reading is absent until Stage 3.
+// the item's version exactly when the owner state moves. Writable
+// exactly where the owner accepts a precondition-bound write:
+// token-bearing files and directories. Symlinks, legacy rows,
+// merged-disagreement rows, and conflicts stay read-only; trash
+// is never advertised anywhere.
 
 import FileProvider
 import Foundation
@@ -30,6 +33,12 @@ final class LiveItem: NSObject, NSFileProviderItem {
     /// nothing here claims that property.
     let isSymlinkRow: Bool
     private let size: UInt64?
+    /// Whether the owner accepts precondition-bound writes to this
+    /// row: token-bearing files and directories only. Symlinks,
+    /// legacy rows, and merged-disagreement rows are read-only —
+    /// the mutation surface fails them closed, and this keeps the
+    /// UI from offering what the owner refuses.
+    private let isWritableRow: Bool
     private let contentVersionData: Data
     private let metadataVersionData: Data
 
@@ -47,21 +56,27 @@ final class LiveItem: NSObject, NSFileProviderItem {
         var fileSize: UInt64?
         var directory = false
         var symlink = false
+        let writable: Bool
         switch row.node {
         case .file(let size, _, _, let identity):
             fileSize = size
+            writable = identity != nil
             identityTag = Self.identityTag(identity: identity, relativePath: relativePath)
         case .dir(_, let identity):
             directory = true
+            writable = identity != nil
             identityTag = Self.identityTag(identity: identity, relativePath: relativePath)
         case .symlink(_, let identity):
             // Presented under the entry's name with a data type;
             // hydration fails closed (symlink presentation is a
             // Stage 3 question, and fabricated content would lie).
+            // Never writable: the owner has no symlink authoring.
             symlink = true
+            writable = false
             identityTag = Self.identityTag(identity: identity, relativePath: relativePath)
         case .mergedDir(_, let identity):
             directory = true
+            writable = identity != nil
             identityTag = Self.identityTag(identity: identity, relativePath: relativePath)
         case .conflict:
             return nil
@@ -81,6 +96,7 @@ final class LiveItem: NSObject, NSFileProviderItem {
             self.contentType = .data
         }
         self.size = fileSize
+        self.isWritableRow = writable
         // Identity is content identity's opposite: the token is
         // stable across content changes, so the version must move
         // with the owner coordinate (and size, which the owner
@@ -104,7 +120,22 @@ final class LiveItem: NSObject, NSFileProviderItem {
     }
 
     var capabilities: NSFileProviderItemCapabilities {
-        [.allowsReading]
+        // The root accepts children but is never renamed or
+        // deleted. Token-bearing files and directories accept the
+        // full conservative set (write covers adding subitems for
+        // directories); symlinks, legacy rows, and
+        // merged-disagreement rows stay read-only. Trash is never
+        // advertised: delete is permanent, trash moves fail closed.
+        if itemIdentifier == .rootContainer {
+            return [.allowsReading, .allowsWriting]
+        }
+        guard isWritableRow else {
+            return [.allowsReading]
+        }
+        return [
+            .allowsReading, .allowsWriting, .allowsRenaming,
+            .allowsReparenting, .allowsDeleting,
+        ]
     }
 
     var itemVersion: NSFileProviderItemVersion {

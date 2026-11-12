@@ -17,10 +17,18 @@ enum LiveStoreError: Error {
     /// The identifier names nothing: invalid, retired, or deleted.
     case notFound(String)
     /// Deterministic failure: conflicted, too large, undecodable,
-    /// budget-exceeded, or a protocol violation. Never retry blind.
+    /// budget-exceeded, stale precondition, or a protocol violation.
+    /// Never retry blind.
     case sync(String)
-    /// Temporary: the owner is unreachable or its generation is not
-    /// servable yet. The system retries; the adapter holds no state.
+    /// A mutation refusal the system resolves itself: a name
+    /// collision (the system renames and re-issues) or a
+    /// non-empty directory (the system re-creates from metadata).
+    /// Carried separately so the callback renders the system's
+    /// own resolution instead of a sync failure.
+    case refused(code: String, message: String)
+    /// Temporary: the owner is unreachable, its generation is not
+    /// servable yet, or an unconfirmed write reached no verdict.
+    /// The system retries; the adapter holds no state.
     case temporary(String)
 }
 
@@ -28,7 +36,7 @@ final class LiveStore {
     let driveHex: String
     var config: SocketConfig
     let resolver: PathResolver
-    private let log: Logger
+    let log: Logger
 
     init(driveHex: String, log: Logger, socketPathOverride: String? = nil) {
         self.driveHex = driveHex
@@ -269,7 +277,7 @@ final class LiveStore {
 
     // MARK: - Internals
 
-    private func liveClient() throws -> OwnerClient {
+    func liveClient() throws -> OwnerClient {
         let path: String
         do {
             path = try config.socketPath()
@@ -305,7 +313,7 @@ final class LiveStore {
     /// token, not by path) — Stage 3 work. The item surface above
     /// carries no such window: the item is built from the verified
     /// node itself.
-    private func stableNode(
+    func stableNode(
         identifier: NSFileProviderItemIdentifier,
         identityHex: String,
         client: OwnerClient
@@ -354,13 +362,13 @@ final class LiveStore {
     /// A looked-up node carries the requested token: files, dirs,
     /// and symlinks by their entry token, merged dirs by the agreed
     /// token. Conflict rows never match — the walk classifies them.
-    private func nodeMatches(node: OwnerNode, identityHex: String) -> Bool {
+    func nodeMatches(node: OwnerNode, identityHex: String) -> Bool {
         nodeIdentity(node)?.lowercased() == identityHex.lowercased()
     }
 
     /// One `lookup` with error mapping. Conflict rows return as
     /// nodes (the caller classifies); every refusal maps.
-    private func lookupNode(path: String, client: OwnerClient) throws -> (
+    func lookupNode(path: String, client: OwnerClient) throws -> (
         node: OwnerNode, generation: UInt64, revision: UInt64
     ) {
         do {
@@ -373,7 +381,7 @@ final class LiveStore {
     /// Build the item for a classified node. Conflict rows and
     /// excluded rows fail closed — every caller classifies first,
     /// and this is the backstop if one does not.
-    private func buildItem(
+    func buildItem(
         node: OwnerNode,
         path: String,
         parent: NSFileProviderItemIdentifier,
