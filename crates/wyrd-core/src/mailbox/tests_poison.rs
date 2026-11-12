@@ -1,6 +1,6 @@
 use super::mini_relay::MiniRelay;
 use super::tests_harness::{keys, live_mailbox, seal_rumor, sender_keys, temp_path};
-use super::tests_harness::{wait_for_subscription, DELIVERY_TIMEOUT};
+use super::tests_harness::{wait_for_distinct_deliveries, wait_for_subscription, DELIVERY_TIMEOUT};
 use super::*;
 use std::time::{Duration, Instant};
 
@@ -240,8 +240,14 @@ fn poison_and_ack_share_the_settlement_watermark() {
 /// by design (held mail only leaves on terminal settlement), so this
 /// converges on the bound itself: `recv` admits new mail only while
 /// the window is unfull and `Retry` keeps deliveries held, so the
-/// held count rises monotonically to exactly the window. The loop
-/// exits the moment the bound engages: retry keeping a held delivery
+/// held count rises monotonically to exactly the window. Each id
+/// settles `Retry` exactly once — `recv` re-offers held mail under
+/// its stable id when no new wraps are available, so settling
+/// whatever `recv` returns would spend the retry budget on early ids
+/// and evict them (see `MAX_HELD_RETRIES`); distinct collection
+/// keeps this a single-retry-per-id bound proof, while the sibling
+/// eviction tests pin the repeated-retry drain. The loop exits the
+/// moment the bound engages: retry keeping a held delivery
 /// (stable id, later mail unstarved) is pinned by
 /// `retry_requeues_behind_other_mail`, exact saturation with overflow
 /// retention by the sibling backpressure test — neither is
@@ -298,18 +304,20 @@ fn retry_flood_holds_at_most_one_window() {
         relay.inject(event);
     }
     let start = Instant::now();
-    while mailbox.unacked.len() < MAX_UNACKED_DELIVERIES {
-        assert!(start.elapsed() < DEADLINE, "retry flood fills the window");
-        if let Some(delivery) = mailbox.recv().unwrap() {
-            mailbox.settle(delivery.id(), Disposition::Retry).unwrap();
-            assert!(
-                mailbox.unacked.len() <= MAX_UNACKED_DELIVERIES,
-                "held handovers bounded under retry flood"
-            );
-        } else {
-            std::thread::sleep(Duration::from_millis(10));
-        }
+    // Distinct collection first: settling whatever `recv` returns
+    // would re-settle rotation re-offers of already-held ids, spending
+    // their retry budget and evicting them under a slow relay. One
+    // `Retry` per id keeps every handover held, so the watermark must
+    // not move.
+    let ids = wait_for_distinct_deliveries(&mut mailbox, MAX_UNACKED_DELIVERIES, DEADLINE);
+    for id in &ids {
+        mailbox.settle(*id, Disposition::Retry).unwrap();
+        assert!(
+            mailbox.unacked.len() <= MAX_UNACKED_DELIVERIES,
+            "held handovers bounded under retry flood"
+        );
     }
+    assert!(start.elapsed() < DEADLINE, "retry flood fills the window");
     assert_eq!(
         mailbox.settled_below(),
         0,
