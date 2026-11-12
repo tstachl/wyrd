@@ -102,6 +102,7 @@ pub(crate) fn bootstrap(
             entry,
             reason,
             skipped,
+            ..
         } => {
             warn_skipped(&skipped);
             Err(CliError::Usage(format!(
@@ -109,9 +110,9 @@ pub(crate) fn bootstrap(
                 entry.name
             )))
         }
-        ProvisionState::ProvisioningIncomplete { stage, reason } => Err(CliError::Usage(format!(
-            "provisioning incomplete at {stage}: {reason}"
-        ))),
+        ProvisionState::ProvisioningIncomplete { stage, reason, .. } => Err(CliError::Usage(
+            format!("provisioning incomplete at {stage}: {reason}"),
+        )),
     }
 }
 
