@@ -18,7 +18,7 @@ use wyrd_sync::keys::DeviceIdentitySecret;
 use wyrd_sync::runtime::Engine;
 
 use crate::args::DriveAction;
-use crate::commands::member::{require_last_owner_confirmation, transition_with_carry};
+use crate::commands::member::{carry_pending, require_last_owner_confirmation};
 use crate::CliError;
 
 /// What `drive delete` did: the authored self-removal plus the
@@ -85,8 +85,23 @@ pub(crate) fn delete_drive(
     // Terminal acknowledgement first: without `--yes` the refusal
     // carries the terminal consequence and authors nothing.
     require_last_owner_confirmation(&engine, &this, yes)?;
-    let (transition, carried) =
-        transition_with_carry(&mut engine, &drive_dir, |engine| engine.remove_device(this))?;
+    // Stage the carry, then commit the self-removal. From here the
+    // membership half is durable: every error below leaves a
+    // committed terminal transition behind, so the forget half must
+    // not depend on the drain. The carry is a no-op for a removed
+    // author (it holds no new-epoch material and drains nothing), so
+    // a drain failure is reported loudly and forgotten anyway —
+    // stranding a terminal drive with its directory present and no
+    // retry would be worse than a warning on stderr.
+    engine.stage_carry_heads()?;
+    let transition = engine.remove_device(this)?;
+    let carried = match carry_pending(&mut engine, &drive_dir) {
+        Ok(carried) => carried,
+        Err(error) => {
+            eprintln!("warning: carry drain failed after the removal committed: {error}");
+            0
+        }
+    };
     // The deletion transition names exactly one change: this device's
     // own removal. The engine constructs it literally, and the named
     // contract test pins the shape; anything else would mean the

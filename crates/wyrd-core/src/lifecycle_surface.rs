@@ -100,10 +100,12 @@ pub fn render_not_a_member(device: &DeviceId) -> String {
 /// changed. The first clause names the removed path so the person
 /// can verify the absence; the second carries the negative invariant
 /// the decision exists to keep honest — no other member's copy
-/// changed, and every byte ever written stays stored where it was.
-/// Worded to survive the forget-euphemism ban: "gone" and "removed",
-/// never "deleted", "erased", "reclaimed", "freed", or "wiped".
-pub const DELETION_LOCALITY: &str = "the local directory is gone and nothing else changed: no other member's copy changed and every byte ever written stays stored where it was";
+/// changed — plus the precise local boundary: the removed files'
+/// blocks stay recoverable from this device until overwritten, like
+/// any removed file. Worded to survive the forget-euphemism ban:
+/// "gone" and "removed", never "deleted", "erased", "reclaimed",
+/// "freed", or "wiped".
+pub const DELETION_LOCALITY: &str = "the local directory is gone and nothing else changed: no other member's copy changed, and the removed files' blocks stay recoverable from this device until overwritten, like any removed file";
 
 /// Render the deletion confirmation: the removed line (the device,
 /// the epoch, the carried count) followed by the canonical boundary
@@ -124,7 +126,7 @@ pub fn render_deletion_confirmation(
     out.push('\n');
     out.push_str(HISTORY_NEVER_REENCRYPTED);
     out.push('\n');
-    out.push_str(&format!("local directory {}: ", dir.display()));
+    out.push_str(&format!("{}: ", dir.display()));
     out.push_str(DELETION_LOCALITY);
     out.push('\n');
     if terminal {

@@ -540,8 +540,8 @@ pub(crate) enum DriveAction {
     /// (owner-only, terminal — the owner set empties) and remove the
     /// local directory. Needs `--yes`. A non-owner is refused and a
     /// frozen drive resolves first, both before the directory is
-    /// touched. Nothing else changes: no other member's copy is
-    /// touched and every byte ever written stays stored where it was.
+    /// touched. No other member's copy changes; the removed files'
+    /// blocks stay recoverable from this device until overwritten.
     Delete {
         /// Confirm the terminal removal (the drive freezes permanently).
         #[arg(long)]

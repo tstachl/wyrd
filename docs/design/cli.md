@@ -423,8 +423,9 @@ conflict-resolution pointer before the directory is touched. The
 confirmation renders the canonical removal sentences verbatim
 (`docs/contracts/trust.md` "What removal does and does not do") plus
 the locality — the directory is gone and nothing else changed — and
-never claims more: no other member's copy changes and every byte ever
-written stays stored where it was. Removing the directory is a
+never claims more: no other member's copy changes, and the removed
+files' blocks stay recoverable from this device until overwritten,
+like any removed file. Removing the directory is a
 filesystem operation over ciphertext and the keyring file, not a
 cryptographic erasure, and v0 defines no key-erasure primitive.
 

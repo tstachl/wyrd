@@ -303,8 +303,11 @@ pub(crate) fn transition_with_carry(
 }
 
 /// Drain the durable carry queue, returning the number carried. The
-/// store opens only when obligations are pending.
-fn carry_pending(engine: &mut Engine, drive_dir: &Path) -> Result<usize, CliError> {
+/// store opens only when obligations are pending. Shared with `drive
+/// delete`, which tolerates a drain failure after its removal commit
+/// (the carry is a no-op for a removed author) instead of stranding
+/// a terminal drive with its directory present.
+pub(crate) fn carry_pending(engine: &mut Engine, drive_dir: &Path) -> Result<usize, CliError> {
     if engine.pending_carries()?.is_empty() {
         return Ok(0);
     }
