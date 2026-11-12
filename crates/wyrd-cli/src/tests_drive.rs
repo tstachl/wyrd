@@ -386,6 +386,14 @@ fn drive_deletion_confirmation_renders_boundary_and_locality() {
     }
 }
 
+/// Registry entry names unique to this process run: the daemon
+/// disable path resolves the platform definition for `drive-<name>`
+/// when the CLI passes no override, and hermetic CLI tests must
+/// never stop or clear a developer's real service of the same name.
+fn unique_reconf_name(tag: &str) -> String {
+    format!("reconf-{tag}-{}", std::process::id())
+}
+
 /// Hand-write one registry entry for the fixture drive: the
 /// registration flow itself would touch a real service manager, so
 /// hermetic CLI tests stage the file directly — the daemon suite
@@ -425,8 +433,9 @@ fn registry_relays(registry: &Path, name: &str) -> Vec<String> {
 #[test]
 fn drive_reconfigure_replaces_relays_and_reports_unavailable() {
     let fixture = Fixture::new();
+    let name = unique_reconf_name("replace");
     let registry = fixture._temp.0.join("drives.json");
-    write_registry_entry(&registry, "alpha", &fixture.drive, &["relay://old"]);
+    write_registry_entry(&registry, &name, &fixture.drive, &["relay://old"]);
     // Instant wait: the path exists, so no polling; the connect
     // fails because no owner serves it.
     fs::write(fixture.drive.join("owner.sock"), b"not a socket").unwrap();
@@ -450,7 +459,7 @@ fn drive_reconfigure_replaces_relays_and_reports_unavailable() {
         "run reports the stage: {error}"
     );
     assert_eq!(
-        registry_relays(&registry, "alpha"),
+        registry_relays(&registry, &name),
         vec!["relay://new".to_string()],
         "the entry carries the new set"
     );
@@ -461,8 +470,9 @@ fn drive_reconfigure_replaces_relays_and_reports_unavailable() {
 #[test]
 fn drive_reconfigure_keeps_relays_without_relay_flags() {
     let fixture = Fixture::new();
+    let name = unique_reconf_name("keep");
     let registry = fixture._temp.0.join("drives.json");
-    write_registry_entry(&registry, "alpha", &fixture.drive, &["relay://kept"]);
+    write_registry_entry(&registry, &name, &fixture.drive, &["relay://kept"]);
     fs::write(fixture.drive.join("owner.sock"), b"not a socket").unwrap();
     let error = command(fixture.args(vec![
         "reconfigure".into(),
@@ -475,7 +485,7 @@ fn drive_reconfigure_keeps_relays_without_relay_flags() {
     .unwrap_err();
     assert!(matches!(error, CliError::Usage(_)), "{error:?}");
     assert_eq!(
-        registry_relays(&registry, "alpha"),
+        registry_relays(&registry, &name),
         vec!["relay://kept".to_string()],
         "the registered set survives"
     );
@@ -486,8 +496,9 @@ fn drive_reconfigure_keeps_relays_without_relay_flags() {
 #[test]
 fn drive_reconfigure_refuses_non_vault_modes_before_stopping() {
     let fixture = Fixture::new();
+    let name = unique_reconf_name("mount");
     let registry = fixture._temp.0.join("drives.json");
-    write_registry_entry(&registry, "alpha", &fixture.drive, &["relay://old"]);
+    write_registry_entry(&registry, &name, &fixture.drive, &["relay://old"]);
     let before = fs::read(&registry).unwrap();
     let error = command(fixture.args(vec![
         "reconfigure".into(),
@@ -535,4 +546,35 @@ fn drive_reconfigure_refuses_an_unregistered_directory() {
         "refusal says what to do: {error}"
     );
     assert!(!registry.exists(), "a refusal writes nothing");
+}
+
+/// A live owner holding the store fails closed with the terminal
+/// held-drive exit (78, never retried by the supervisor): the
+/// registry keeps its bytes exactly, like every other offline
+/// writer's lock refusal.
+#[test]
+fn drive_reconfigure_refuses_a_held_drive_with_78() {
+    let fixture = Fixture::new();
+    let name = unique_reconf_name("held");
+    let registry = fixture._temp.0.join("drives.json");
+    write_registry_entry(&registry, &name, &fixture.drive, &["relay://old"]);
+    let before = fs::read(&registry).unwrap();
+    // Hold the store open: a second opener fails the lock, the same
+    // contention the sync lock test pins.
+    let _held = fixture.open();
+    let error = command(fixture.args(vec![
+        "reconfigure".into(),
+        "--mode".into(),
+        "vault".into(),
+        "--registry".into(),
+        registry.display().to_string(),
+        "--no-service".into(),
+    ]))
+    .unwrap_err();
+    assert_eq!(
+        error.exit_code(),
+        78,
+        "a held drive exits held-drive: {error:?}"
+    );
+    assert_eq!(fs::read(&registry).unwrap(), before);
 }

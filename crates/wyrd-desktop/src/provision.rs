@@ -1180,4 +1180,44 @@ mod tests {
         );
         std::fs::remove_dir_all(&dir).unwrap_or(());
     }
+
+    /// A wedged CLI is killed and reaped past the timeout on the
+    /// reconfigure path too: the outcome resolves unknown and
+    /// triggers observation, never re-execution.
+    #[test]
+    fn run_reconfigure_times_out_to_unknown() {
+        let dir = std::env::temp_dir().join(format!(
+            "wyrd-desktop-fakecli-{}-reconf-wedge",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cli = dir.join("wyrd");
+        // Answers the version check instantly, then sleeps past any
+        // test timeout on every other argv.
+        let version = env!("CARGO_PKG_VERSION");
+        std::fs::write(
+            &cli,
+            format!(
+                "#!/bin/sh\nif [ \"$1\" = \"__build_info\" ]; then\necho \"update build: {version}\"\nexit 0\nfi\nsleep 30\nexit 0\n"
+            ),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let start = std::time::Instant::now();
+        let outcome = run_reconfigure(&cli, &reconfigure_request(), Duration::from_secs(2));
+        assert!(
+            start.elapsed() < Duration::from_secs(20),
+            "the wait is bounded by the timeout"
+        );
+        assert!(
+            matches!(outcome.result, ProvisionResult::Unknown { .. }),
+            "a wedged reconfigure resolves unknown: {:?}",
+            outcome.result
+        );
+        std::fs::remove_dir_all(&dir).unwrap_or(());
+    }
 }

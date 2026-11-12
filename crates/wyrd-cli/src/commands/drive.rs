@@ -1,5 +1,6 @@
 //! The `drive` command: local drive lifecycle beyond membership —
-//! deleting this drive's local copy after authoring your own removal.
+//! deleting this drive's local copy after authoring your own removal,
+//! and reconfiguring a registered drive's supervision in place.
 //!
 //! Delete composes two operations that already exist: the owner
 //! authors `Remove(self)` through the engine (which enforces
@@ -9,6 +10,17 @@
 //! refusal — non-owner, unacknowledged terminal, frozen, locked store
 //! — leaves it untouched. A mounted drive fails closed with the
 //! store lock: stop the service first, the same rule `member` states.
+//!
+//! Reconfigure resolves the registry entry by drive directory (exact
+//! match; zero or duplicate matches refuse without writing), stops
+//! and clears the old service definition, proves the keystore still
+//! opens, installs the new definition when managed, rewrites the
+//! entry carrying skipped entries forward, and verifies the socket.
+//! One operator at a time: concurrent direct CLI invocations can
+//! interleave past the store open (the desktop flight serializes
+//! only its own calls), so serialize reconfigurations against any
+//! other lifecycle operation on the drive — the last writer wins the
+//! entry while each rewrite stays atomic.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -205,8 +217,12 @@ fn reconfigure_drive(
     // accident.
     let relays = if relay.is_empty() { None } else { Some(relay) };
     let registry_path = registry.clone().unwrap_or_else(default_registry_path);
+    // The daemon reports the lock refusal as data (the state shape
+    // carries kinds, never typed errors); the CLI restores the
+    // terminal held-drive exit the supervisor keys on, so keep the
+    // directory for that arm.
     let report = reconfigure(ReconfigureConfig {
-        drive_dir,
+        drive_dir: drive_dir.clone(),
         relays,
         mode,
         identity,
@@ -216,6 +232,7 @@ fn reconfigure_drive(
         supervise_bin,
         identity_file,
         passphrase_file,
+        service_definition: None,
         manage_service: !no_service,
         verify_timeout: Duration::from_secs(30),
     });
@@ -242,9 +259,23 @@ fn reconfigure_drive(
             )))
         }
         wyrd_daemon::bootstrap::ProvisionState::ProvisioningIncomplete {
-            stage, reason, ..
-        } => Err(CliError::Usage(format!(
-            "reconfiguration incomplete at {stage}: {reason}"
-        ))),
+            stage,
+            kind,
+            reason,
+        } => {
+            if matches!(
+                kind,
+                wyrd_daemon::bootstrap::ProvisionFailureKind::StoreLocked
+            ) {
+                // A live owner holding the drive is the terminal
+                // held-drive case (exit 78, never retried by the
+                // supervisor): stop the service first, the same rule
+                // every other offline writer states.
+                return Err(CliError::VaultLocked { drive: drive_dir });
+            }
+            Err(CliError::Usage(format!(
+                "reconfiguration incomplete at {stage}: {reason}"
+            )))
+        }
     }
 }

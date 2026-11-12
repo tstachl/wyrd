@@ -23,7 +23,7 @@ wyrd [--config <path>] mount [--relay <url>...] [--verbose] [--interval <secs>] 
 wyrd [--config <path>] export [--identity-file <path>] [--passphrase-file <path>] <drive_dir> <out_dir>
 wyrd [--config <path>] member [--identity-file <path>] [--passphrase-file <path>] <drive_dir> (list | log | status | remove <device> [--yes] | leave [--yes] | rotate | set-owner <device> | invite <device> <encryption-key> <out> [--reader] | reissue <device> <out>)
 wyrd [--config <path>] device [--identity-file <path>] [--passphrase-file <path>] <drive_dir> (id | keys | pairing-request <out> | join <invitation>)
-wyrd [--config <path>] drive [--identity-file <path>] [--passphrase-file <path>] <drive_dir> delete [--yes]
+wyrd [--config <path>] drive [--identity-file <path>] [--passphrase-file <path>] <drive_dir> (delete [--yes] | reconfigure --mode <mode> [--relay <url>...] [--registry <path>] [--owner-bin <path>] [--supervise-bin <path>] [--no-service])
 wyrd [--config <path>] sync [--relay <url>...] [--identity-file <path>] [--passphrase-file <path>] <drive_dir> (status | now)
 wyrd [--config <path>] vault [--relay <url>...] [--log-file <path>] [--identity-file <path>] [--passphrase-file <path>] <drive_dir> [start | status]
 wyrd [--config <path>] policy <drive_dir> \
@@ -439,34 +439,48 @@ hand, the membership half is done.
 
 ### `drive reconfigure` — supervision change in place
 
-Stop, clear, reconfigure, restart, verify — in that order — over the
-drive's registry entry, resolved by this drive's directory (exact
-match; zero matches and duplicates both refuse). The name, service
-label, and directory never change: identity never reconfigures. Only
-`vault` reconfigures today; any other mode refuses with the
+Validate, resolve, stop and clear, open, install, rewrite, restart,
+verify — in that order — over the drive's registry entry, resolved
+by this drive's directory (exact match; zero matches and duplicates
+both refuse without writing). The name, service label, and directory
+never change: identity never reconfigures. Only `vault`
+reconfigures today; any other mode refuses with the
 installer-follow-up pointer before anything stops, like
 provisioning — registry-managed mount mode, its service template,
 and desktop registry-write authority still travel with that
 follow-up. With `--relay` flags the relay set is replaced; without
 them the registered set is kept, so a credential-path-only
-reconfigure never clears relays by accident. A relay-less managed
-service is refused before anything is created, like provisioning;
-`--no-service` disables the old definition and rewrites the entry
-without installing a new one.
+reconfigure never clears relays by accident. Relay values validate
+before anything stops, and a relay-less managed service is refused
+before anything is created, like provisioning.
 
-Like the other offline writers, reconfiguration is a transient
-owner: the keystore must open, so a live owner holding the drive
-refuses with `StoreLocked` and the registry stays untouched — stop
-the service first and retry. The service definition is stopped and
-cleared before the rewrite, so no manager restarts a stale
-definition over the new entry; the rewrite carries skipped entries
-forward and warns loudly instead of silently discarding them. Ready
-is reported only when the socket verifies this session — a
-rewritten entry alone reports reconfigured-but-unavailable, never
-ready. The desktop drives this surface through its constrained
-adapter (structured argv, secret paths only, version check first,
-exit codes plus independent registry, socket, and membership
-re-observation) and never writes the registry itself.
+Stopping the managed service is the command's own work: the old
+definition is disabled persistently — so no login or reload
+resurrects it — and its file removed before the keystore opens, so
+a managed drive reaches its own stop instead of failing on the store
+lock. Only a manually supervised owner — `wyrd vault` in a terminal,
+outside any manager — still holds the lock past the stop: that
+refusal is the terminal held-drive exit (78, never retried by the
+supervisor), and the registry stays untouched — stop it first and
+retry. Every failure past the stop is retried by re-running, which
+converges from the stopped-and-cleared state.
+
+The rewrite carries skipped entries forward byte-identical (a future
+mode or a rotten entry survives the rewrite) and warns loudly about
+them instead of silently discarding them. Ready is reported only
+when the socket verifies this session — a rewritten entry alone
+reports reconfigured-but-unavailable, never ready; a socket that
+appears mid-wait retries the connect until the deadline, so a
+freshly restarted owner still binding does not read as unavailable.
+
+One operator at a time: concurrent direct CLI invocations can
+interleave past the store open (the desktop flight serializes only
+its own calls), so serialize reconfigurations against any other
+lifecycle operation on the drive — the last writer wins the entry
+while each rewrite stays atomic. The desktop drives this surface
+through its constrained adapter (structured argv, secret paths only,
+version check first, exit codes plus independent registry, socket,
+and membership re-observation) and never writes the registry itself.
 
 ### `sync` — headless sync without mounting
 
