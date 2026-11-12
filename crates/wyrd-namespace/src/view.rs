@@ -169,10 +169,15 @@ pub enum Node {
     Conflict { versions: Vec<ConflictVersion> },
 }
 
-/// One head's resolution of a conflicted path.
+/// One head's resolution of a conflicted path. `timestamp` is the
+/// head snapshot's authoring timestamp (ms, display and tiebreak
+/// only — never authorization, per `object-model.md`): presentation
+/// surfaces label versions by `(snapshot, timestamp)` without
+/// exposing peer identity.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConflictVersion {
     pub snapshot: wyrd_format::SnapshotId,
+    pub timestamp: u64,
     pub node: Node,
 }
 

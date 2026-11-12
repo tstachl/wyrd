@@ -123,6 +123,15 @@ instead of failing. A pre-identity reader likewise tolerates new
 payloads, because the wire types do not deny unknown fields. Consumers answer "is this the same entry I
 saw before?" from the token, never from path, content, or matching.
 
+Each conflict version carries its head snapshot's id and
+authoring timestamp (milliseconds, display and tiebreak only —
+never authorization, never peer identity). The timestamp defaults
+to `0` on parse ("unknown"), so a pre-timestamp reader degrades
+instead of failing; both sides ship together, so the default only
+covers mixed-version skew during rollout. Presentation surfaces
+label versions by `(snapshot, timestamp)` in snapshot-id byte
+order, which implies no authoritative head.
+
 ## Durable observation
 
 Answer `observe` from the loop-published slot. Return

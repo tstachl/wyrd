@@ -403,6 +403,11 @@ def answer_covered(name, body, path):
     expected = body.get("expected_identity")
     if not isinstance(expected, str) or len(expected) != 64:
         return result_err("Malformed", "a covered kind carries expected_identity")
+    if path == "split.txt":
+        # The conflict fixture: a live conflicted path refuses every
+        # covered kind as Conflicted, exactly like the owner — the
+        # inspector must surface it, never write through it.
+        return result_err("Conflicted", "path is conflicted across heads")
     if path in STATE:
         entry = STATE[path]
         if expected != entry["identity"]:

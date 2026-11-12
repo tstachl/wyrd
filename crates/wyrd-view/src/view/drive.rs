@@ -128,12 +128,14 @@ where
     }
 
     /// The literal walk: every component is a stored name, merged
-    /// across heads.
+    /// across heads. Each resolution carries its head's timestamp so
+    /// conflict versions label by `(snapshot, timestamp)`.
     fn lookup_literal(&self, components: &[Component]) -> Result<Node, ViewError> {
         let mut resolutions = Vec::with_capacity(self.heads.len());
         for head in &self.heads {
             resolutions.push((
                 head.snapshot_id(),
+                head.timestamp,
                 self.resolve_one(&head.tree, components)?,
             ));
         }
@@ -163,6 +165,18 @@ where
             }
             _ => Err(ViewError::NotADirectory),
         }
+    }
+
+    /// The head timestamp for a snapshot id, or `0` where the id
+    /// names no installed head. Snapshot ids flowing through merged
+    /// directories are head ids by construction, so a miss means a
+    /// torn-down head raced the walk — never a fabricated label.
+    fn timestamp_of(&self, snapshot: &wyrd_format::SnapshotId) -> u64 {
+        self.heads
+            .iter()
+            .find(|head| head.snapshot_id() == *snapshot)
+            .map(|head| head.timestamp)
+            .unwrap_or(0)
     }
 
     /// Attributes for a path: `lookup` plus the attr projection.
@@ -211,6 +225,9 @@ where
     /// The union of children across per-head directory subtrees, each
     /// name resolved across every source (absence included, so a child
     /// deleted in one head conflicts rather than vanishing).
+    /// Timestamps re-resolve from heads: subtree pairs carry head ids
+    /// by construction, so nested conflicts label exactly like literal
+    /// ones.
     fn readdir_union(
         &self,
         subtrees: Vec<(wyrd_format::SnapshotId, ContentId)>,
@@ -232,7 +249,7 @@ where
                 let mut resolutions = Vec::with_capacity(trees.len());
                 for (snapshot, tree) in &trees {
                     let node = tree.get(&name).map(leaf);
-                    resolutions.push((*snapshot, node));
+                    resolutions.push((*snapshot, self.timestamp_of(snapshot), node));
                 }
                 Ok(DirEntry {
                     name: name.as_str().to_string(),
@@ -469,7 +486,7 @@ fn child_node(tree: &Tree, name: &str) -> Option<Node> {
 
 fn versioned_child(
     component: &str,
-    resolutions: Vec<(wyrd_format::SnapshotId, Option<Node>)>,
+    resolutions: Vec<(wyrd_format::SnapshotId, u64, Option<Node>)>,
 ) -> Result<Option<Node>, ViewError> {
     let Some(component) = Component::new(component.to_owned()).ok() else {
         return Ok(None);
@@ -669,6 +686,7 @@ where
             };
             resolutions.push((
                 head.snapshot_id(),
+                head.timestamp,
                 Some(Node::Dir {
                     subtree: head.tree,
                     identity: None,
@@ -718,11 +736,19 @@ where
                             limit_exceeded: true,
                         });
                     };
-                    literal_resolutions.push((*snapshot, child_node(&tree, component)));
+                    literal_resolutions.push((
+                        *snapshot,
+                        self.timestamp_of(snapshot),
+                        child_node(&tree, component),
+                    ));
                     if let (Some(target), Some(resolutions)) =
                         (versioned.as_ref(), versioned_resolutions.as_mut())
                     {
-                        resolutions.push((*snapshot, child_node(&tree, &target.name)));
+                        resolutions.push((
+                            *snapshot,
+                            self.timestamp_of(snapshot),
+                            child_node(&tree, &target.name),
+                        ));
                     }
                 }
                 let literal = match merge(literal_resolutions) {

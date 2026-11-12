@@ -143,6 +143,7 @@ impl FakeView {
                     .iter()
                     .map(|(marker, version)| ConflictVersion {
                         snapshot: SnapshotId::from_bytes([*marker; 32]),
+                        timestamp: u64::from(*marker),
                         node: self.node(version),
                     })
                     .collect(),

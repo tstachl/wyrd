@@ -23,11 +23,21 @@ enum WyrdItemIdentifier: Equatable {
     /// disagreement): the current relative path, hex-encoded.
     /// Unstable by contract — never an EntryIdentity.
     case legacy(pathHex: String)
+    /// A synthetic conflict report for a conflicted logical
+    /// location: the drive plus the conflicted relative path,
+    /// hex-encoded. Deterministic per (drive, path) — never a peer
+    /// identity, never an arbitrary head's EntryIdentity. The
+    /// identifier names the location, not the conflict's content:
+    /// invalidation rides the item version (which moves with the
+    /// conflict's versions) and disappearance (resolution 404s).
+    case conflict(driveHex: String, pathHex: String)
 
     /// The identifier prefix for identity-bearing entries.
     static let stablePrefix = "wyrd:v1:"
     /// The identifier prefix for rows without owner identity.
     static let legacyPrefix = "wyrd:legacy:v1:"
+    /// The identifier prefix for synthetic conflict reports.
+    static let conflictPrefix = "wyrd:conflict:v1:"
 
     /// Parse a raw identifier string for the configured drive.
     /// Cross-drive identifiers fail: `nil` means "not ours", never
@@ -59,6 +69,22 @@ enum WyrdItemIdentifier: Equatable {
             }
             return .legacy(pathHex: pathHex)
         }
+        if raw.hasPrefix(conflictPrefix) {
+            let rest = String(raw.dropFirst(conflictPrefix.count))
+            let parts = rest.split(separator: ":", omittingEmptySubsequences: false)
+            guard parts.count == 2 else { return nil }
+            let drive = String(parts[0])
+            let pathHex = String(parts[1])
+            guard drive == driveHex.lowercased(),
+                isLowerHex(drive, count: 64)
+            else {
+                return nil
+            }
+            guard conflictPath(pathHex: pathHex) != nil else {
+                return nil
+            }
+            return .conflict(driveHex: drive, pathHex: pathHex)
+        }
         return nil
     }
 
@@ -77,6 +103,30 @@ enum WyrdItemIdentifier: Equatable {
 
     /// Decode a legacy identifier back to its relative path.
     static func legacyPath(pathHex: String) -> String? {
+        guard let bytes = try? HexCodec.decode(pathHex) else { return nil }
+        let data = Data(bytes)
+        guard let path = String(data: data, encoding: .utf8),
+            !path.isEmpty,
+            !path.contains("\0")
+        else {
+            return nil
+        }
+        return path
+    }
+
+    /// Render a synthetic conflict-report identifier for a conflicted
+    /// relative path. The path is hex-encoded UTF-8, like the legacy
+    /// form, but the namespace is separate and drive-scoped: a report
+    /// is keyed by (drive, logical location), never by content.
+    static func conflictID(driveHex: String, path: String) -> String {
+        let hex = path.utf8.map { String(format: "%02x", $0) }.joined()
+        return "\(conflictPrefix)\(driveHex.lowercased()):\(hex)"
+    }
+
+    /// Decode a conflict identifier back to its conflicted relative
+    /// path. Same grammar as the legacy form; a separate function so
+    /// the two namespaces never share a decoder.
+    static func conflictPath(pathHex: String) -> String? {
         guard let bytes = try? HexCodec.decode(pathHex) else { return nil }
         let data = Data(bytes)
         guard let path = String(data: data, encoding: .utf8),

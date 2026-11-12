@@ -536,14 +536,18 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
     /// edit changes the digest, so it fails here; a race between
     /// this check and the submit — same facts at check time, moved
     /// after — meets the owner's content-base refusal instead.
+    /// Report versions (`wyrd-conflict-v1:`) never match an entry
+    /// version: reports are read-only, so a modify built on one
+    /// fails closed without overwriting.
     static func baseVersionMatches(
-        _ base: NSFileProviderItemVersion, current: LiveItem
+        _ base: NSFileProviderItemVersion, current: NSFileProviderItem
     ) -> Bool {
         if base.contentVersion == NSFileProviderItemVersion.beforeFirstSyncComponent {
             return true
         }
         guard let disk = versionFacts(base.contentVersion),
-            let live = versionFacts(current.itemVersion.contentVersion)
+            let currentVersion = current.itemVersion,
+            let live = versionFacts(currentVersion.contentVersion)
         else {
             return false
         }

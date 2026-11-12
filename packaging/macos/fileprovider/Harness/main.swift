@@ -120,6 +120,23 @@ do {
             "readdir keeps a legacy row without an identity key")
         check(entries.contains { if case .mergedDir(_, let id) = $0.node { return id == nil } else { return false } },
             "readdir keeps a merged-disagreed row with a null identity")
+        if let conflictRow = entries.first(where: { if case .conflict = $0.node { return true } else { return false } }) {
+            if case .conflict(let versions) = conflictRow.node {
+                checkEqual(versions.count, 2, "the conflict row carries two head versions")
+                checkEqual(
+                    versions.map { $0.snapshot }, ["11", "22"],
+                    "versions label by snapshot id")
+                checkEqual(
+                    versions.map { $0.timestamp }, [1720000000000, 1720000060000],
+                    "versions label by head timestamp")
+            } else {
+                print("FAIL: conflict row decodes versions")
+                failures += 1
+            }
+        } else {
+            print("FAIL: readdir keeps a conflict row")
+            failures += 1
+        }
     } else {
         print("FAIL: readdir/ok shape")
         failures += 1
@@ -295,10 +312,25 @@ let log = Logger(subsystem: "md.enesis.wyrd.harness", category: "harness")
 let store = LiveStore(driveHex: driveHex, log: log, socketPathOverride: socketPath)
 
 do {
-    let (items, storeAnchor) = try store.enumerate(container: .rootContainer)
+    let (items, reports, storeAnchor) = try store.enumerate(container: .rootContainer)
     checkEqual(storeAnchor, WyrdSyncAnchor(generation: 3, revision: 9), "enumeration anchor is the owner coordinate")
     checkEqual(items.count, 5, "conflict rows are excluded, siblings enumerate")
     check(!items.contains { $0.filename == "split.txt" }, "the conflicted name never surfaces")
+    checkEqual(reports.count, 1, "one conflict row yields one report")
+    if let report = reports.first {
+        checkEqual(report.filename, "split.txt.wyrd-conflict.txt", "the report name derives from the conflicted name")
+        checkEqual(report.capabilities, [.allowsReading], "reports are read-only")
+        check(
+            report.itemIdentifier.rawValue.hasPrefix(WyrdItemIdentifier.conflictPrefix),
+            "reports carry the synthetic conflict namespace")
+        checkEqual(
+            report.itemIdentifier.rawValue,
+            WyrdItemIdentifier.conflictID(driveHex: driveHex, path: "split.txt"),
+            "the report identifier is the deterministic (drive, path) key")
+    } else {
+        print("FAIL: conflict report enumerates")
+        failures += 1
+    }
     if let hello = items.first(where: { $0.filename == "hello.txt" }) {
         checkEqual(hello.itemIdentifier.rawValue, stable, "hello.txt carries the stable identifier")
         checkEqual(hello.documentSize?.uint64Value, 26, "hello.txt size comes from the owner")
@@ -760,22 +792,27 @@ do {
     // First-sync skips — the owner precondition stays authoritative.
     let current = try store.item(for: NSFileProviderItemIdentifier(
         WyrdItemIdentifier.stableID(driveHex: driveHex, identityHex: identityHex)))
+    guard let currentVersion = current.itemVersion ?? nil else {
+        print("FAIL: current item carries a version")
+        failures += 1
+        throw HarnessError.socket("no version")
+    }
     check(
         FileProviderExtension.baseVersionMatches(
-            current.itemVersion, current: current),
+            currentVersion, current: current),
         "matching base version passes")
-    let facts = FileProviderExtension.versionFacts(current.itemVersion.contentVersion)
+    let facts = FileProviderExtension.versionFacts(currentVersion.contentVersion)
     check(facts != nil, "our versions parse into per-entry facts")
     if let facts {
         let unrelatedWrite = NSFileProviderItemVersion(
             contentVersion: Data("wyrd-cv2:99:99:\(facts.size):\(facts.rest)".utf8),
-            metadataVersion: current.itemVersion.metadataVersion)
+            metadataVersion: currentVersion.metadataVersion)
         check(
             FileProviderExtension.baseVersionMatches(unrelatedWrite, current: current),
             "a newer coordinate with the same entry facts still matches")
         let changedEntry = NSFileProviderItemVersion(
             contentVersion: Data("wyrd-cv2:3:9:12345:\(facts.rest)".utf8),
-            metadataVersion: current.itemVersion.metadataVersion)
+            metadataVersion: currentVersion.metadataVersion)
         check(
             !FileProviderExtension.baseVersionMatches(changedEntry, current: current),
             "a changed size fails")
@@ -788,7 +825,7 @@ do {
             : "dead:deadbeef"
         let sameSizeEdit = NSFileProviderItemVersion(
             contentVersion: Data("wyrd-cv2:3:9:\(facts.size):\(foreignRest)".utf8),
-            metadataVersion: current.itemVersion.metadataVersion)
+            metadataVersion: currentVersion.metadataVersion)
         check(
             !FileProviderExtension.baseVersionMatches(sameSizeEdit, current: current),
             "a same-size content edit fails")
@@ -796,14 +833,14 @@ do {
         // versions fail closed on shape, never on parse).
         let legacy = NSFileProviderItemVersion(
             contentVersion: Data("wyrd-cv1:3:9:\(facts.size):\(facts.rest)".utf8),
-            metadataVersion: current.itemVersion.metadataVersion)
+            metadataVersion: currentVersion.metadataVersion)
         check(
             FileProviderExtension.versionFacts(legacy.contentVersion) != nil,
             "legacy versions still parse")
     }
     let stale = NSFileProviderItemVersion(
         contentVersion: Data("wyrd-cv1:0:0:0:i:dead".utf8),
-        metadataVersion: current.itemVersion.metadataVersion)
+        metadataVersion: currentVersion.metadataVersion)
     check(
         !FileProviderExtension.baseVersionMatches(stale, current: current),
         "a foreign entry fails")
@@ -812,7 +849,7 @@ do {
         "a foreign version string parses to nothing")
     let first = NSFileProviderItemVersion(
         contentVersion: NSFileProviderItemVersion.beforeFirstSyncComponent,
-        metadataVersion: current.itemVersion.metadataVersion)
+        metadataVersion: currentVersion.metadataVersion)
     check(
         FileProviderExtension.baseVersionMatches(first, current: current),
         "first-sync base skips the check")
@@ -1003,8 +1040,15 @@ do {
         base: OwnerFileIdentity(size: peerSize, executable: false, chunks: peerChunks),
         executable: false, contentHex: "62626262", expectedIdentity: peerToken))
     let now = try store.item(for: observed.itemIdentifier)
+    guard let beforeVersion = before.itemVersion ?? nil,
+        let nowItem = now as? LiveItem
+    else {
+        print("FAIL: same-size items carry versions")
+        failures += 1
+        throw HarnessError.socket("no version")
+    }
     check(
-        !FileProviderExtension.baseVersionMatches(before.itemVersion, current: now),
+        !FileProviderExtension.baseVersionMatches(beforeVersion, current: nowItem),
         "a same-size remote edit invalidates the stored base")
     let (kept, _) = try store.contents(for: observed.itemIdentifier)
     checkEqual(
@@ -1076,10 +1120,11 @@ do {
 do {
     // Post-mutation enumeration serves what the callbacks wrote:
     // the working set re-observes the new state on next read.
-    let (items, _) = try store.enumerate(container: .rootContainer)
+    let (items, reports, _) = try store.enumerate(container: .rootContainer)
     check(items.contains { $0.filename == "mut-dir" }, "created dir enumerates")
+    checkEqual(reports.count, 1, "the conflict report survives mutations elsewhere")
     let dirID = items.first(where: { $0.filename == "mut-dir" })!.itemIdentifier
-    let (children, _) = try store.enumerate(container: dirID)
+    let (children, _, _) = try store.enumerate(container: dirID)
     let names = Set(children.map { $0.filename })
     for expected in ["mut-renamed.txt", "mut-empty.txt", "mut-base.txt"] {
         check(names.contains(expected), "\(expected) enumerates after mutation")
@@ -1088,6 +1133,244 @@ do {
     check(!names.contains("mut-other.txt"), "the deleted entry stays gone")
 } catch {
     print("FAIL: post-mutation enumeration: \(error)")
+    failures += 1
+}
+
+// MARK: - Conflict inspector (Stage 3 sub-PR 3)
+
+// Synthetic namespace grammar: deterministic (drive, path),
+// drive-scoped, never a peer identity or a head's token.
+do {
+    let reportID = WyrdItemIdentifier.conflictID(driveHex: driveHex, path: "split.txt")
+    guard case .conflict(let drive, let pathHex) = WyrdItemIdentifier.parse(reportID, driveHex: driveHex) else {
+        print("FAIL: report identifier parses")
+        failures += 1
+        throw HarnessError.socket("report identifier unparseable")
+    }
+    checkEqual(drive, driveHex, "report identifier is drive-scoped")
+    checkEqual(
+        WyrdItemIdentifier.conflictPath(pathHex: pathHex), "split.txt",
+        "report identifier decodes to the conflicted path")
+    check(
+        WyrdItemIdentifier.parse(reportID, driveHex: String(repeating: "43", count: 32)) == nil,
+        "cross-drive report identifiers are rejected")
+    check(
+        WyrdItemIdentifier.parse(
+            "\(WyrdItemIdentifier.conflictPrefix)\(driveHex):zzzz", driveHex: driveHex) == nil,
+        "malformed report identifiers are rejected")
+    check(
+        WyrdItemIdentifier.parse(
+            "\(WyrdItemIdentifier.conflictPrefix)\(driveHex)", driveHex: driveHex) == nil,
+        "truncated report identifiers are rejected")
+
+    // Report naming: derived, collision-proof, deterministic.
+    checkEqual(
+        conflictReportName(for: "split.txt"), "split.txt.wyrd-conflict.txt",
+        "the report name derives from the conflicted name")
+    checkEqual(
+        assignReportNames(conflictRows: ["a", "b"], realNames: []),
+        ["a.wyrd-conflict.txt", "b.wyrd-conflict.txt"],
+        "uncontended reports take the derived name")
+    checkEqual(
+        assignReportNames(conflictRows: ["a"], realNames: ["a.wyrd-conflict.txt"]),
+        ["a.wyrd-conflict-2.txt"],
+        "a taken report name disambiguates without shadowing")
+    check(
+        conflictTimestampLabel(0) == "unknown",
+        "a missing timestamp labels unknown, never zero-as-date")
+    check(
+        conflictTimestampLabel(1720000000000).contains("1720000000000"),
+        "a head timestamp labels with its milliseconds")
+
+    // The version moves with the conflict: same input digests
+    // identically, any version change moves the digest.
+    let v1 = OwnerConflictVersion(
+        snapshot: "11", timestamp: 1720000000000,
+        node: .file(size: 1, executable: false, chunks: ["11"], identity: nil))
+    let v2 = OwnerConflictVersion(
+        snapshot: "22", timestamp: 1720000060000,
+        node: .file(size: 2, executable: false, chunks: ["22"], identity: nil))
+    checkEqual(conflictDigest(versions: [v1, v2]), conflictDigest(versions: [v2, v1]),
+        "the digest orders by snapshot, never by serve order")
+    let edited = OwnerConflictVersion(
+        snapshot: "22", timestamp: 1720000060000,
+        node: .file(size: 2, executable: false, chunks: ["23"], identity: nil))
+    check(conflictDigest(versions: [v1, v2]) != conflictDigest(versions: [v1, edited]),
+        "a content change moves the conflict digest")
+} catch {
+    print("FAIL: report namespace checks: \(error)")
+    failures += 1
+}
+
+do {
+    // Live report round-trip against the stub: lookup, item, and
+    // hydration all serve the same conflict; the text labels heads
+    // by snapshot id plus timestamp, exposes no peer identity, and
+    // states the read-only contract.
+    let reportRaw = WyrdItemIdentifier.conflictID(driveHex: driveHex, path: "split.txt")
+    let reportNSID = NSFileProviderItemIdentifier(reportRaw)
+    let lookedUp = try store.item(for: reportNSID)
+    checkEqual(lookedUp.filename, "split.txt.wyrd-conflict.txt", "report lookup serves the report name")
+    checkEqual(lookedUp.capabilities, [.allowsReading], "report lookup is read-only")
+    guard let sized = lookedUp.documentSize ?? nil else {
+        print("FAIL: report lookup carries a size")
+        failures += 1
+        throw HarnessError.socket("no size")
+    }
+    let sizeValue = sized.uint64Value
+    check(sizeValue > 0, "report lookup carries a positive size")
+    let (reportBytes, hydratedItem) = try store.contents(for: reportNSID)
+    checkEqual(hydratedItem.itemIdentifier, reportNSID, "hydration returns the report item")
+    checkEqual(reportBytes.count, Int(sizeValue), "hydrated bytes match the advertised size")
+    guard let text = String(data: reportBytes, encoding: .utf8) else {
+        print("FAIL: report bytes decode as text")
+        failures += 1
+        throw HarnessError.socket("no text")
+    }
+    for expected in [
+        "Wyrd conflict report", "Path: split.txt", "Snapshot: 11", "Snapshot: 22",
+        "1720000000000", "1720000060000", "read-only",
+        "No version above is authoritative", "disappears once the drive state changes",
+    ] {
+        check(text.contains(expected), "the report states \(expected)")
+    }
+    if let first = text.range(of: "Snapshot: 11"),
+        let second = text.range(of: "Snapshot: 22") {
+        check(
+            first.lowerBound < second.lowerBound,
+            "versions list in snapshot id order")
+    } else {
+        print("FAIL: versions list in snapshot id order (labels missing)")
+        failures += 1
+    }
+    check(!text.contains("peer-"), "the report exposes no peer identity")
+    // Two enumerations agree: same conflict, same version.
+    let (_, again, _) = try store.enumerate(container: .rootContainer)
+    checkEqual(
+        again.first?.itemVersion.contentVersion, reportsFirstContentVersion(),
+        "re-enumeration serves the same report version")
+} catch {
+    print("FAIL: report round-trip: \(error)")
+    failures += 1
+}
+
+// Helper: re-enumerate and return the report version. Compared
+// against the enumeration above: the stub is static, so the
+// deterministic digest must serve byte-identical versions.
+func reportsFirstContentVersion() -> Data? {
+    do {
+        let (_, again, _) = try store.enumerate(container: .rootContainer)
+        return again.first?.itemVersion.contentVersion
+    } catch {
+        print("FAIL: report re-enumeration: \(error)")
+        failures += 1
+        return nil
+    }
+}
+
+do {
+    // Invalidation: a synthetic id over a non-conflicted path 404s
+    // (the conflict resolved), as does one over a missing path.
+    // The inspector disappears only on authoritative state change.
+    for path in ["hello.txt", "no-such.txt"] {
+        let raw = WyrdItemIdentifier.conflictID(driveHex: driveHex, path: path)
+        do {
+            _ = try store.item(for: NSFileProviderItemIdentifier(raw))
+            print("FAIL: report for \(path) serves without a conflict")
+            failures += 1
+        } catch let error as LiveStoreError {
+            if case .notFound = error {} else {
+                print("FAIL: report for \(path) 404s, got \(error)")
+                failures += 1
+            }
+        }
+        do {
+            _ = try store.contents(for: NSFileProviderItemIdentifier(raw))
+            print("FAIL: hydration for \(path) serves without a conflict")
+            failures += 1
+        } catch let error as LiveStoreError {
+            if case .notFound = error {} else {
+                print("FAIL: hydration for \(path) 404s, got \(error)")
+                failures += 1
+            }
+        }
+    }
+} catch {
+    print("FAIL: report invalidation: \(error)")
+    failures += 1
+}
+
+do {
+    // Negative non-mutation: no inspector operation writes. Delete,
+    // content write, and rename on a report fail closed as sync —
+    // never a refusal the system resolves, never a submit — and a
+    // submit aimed at the conflicted path itself refuses Conflicted
+    // (the stub mirrors the owner), so neither head moves.
+    let reportRaw = WyrdItemIdentifier.conflictID(driveHex: driveHex, path: "split.txt")
+    let reportNSID = NSFileProviderItemIdentifier(reportRaw)
+    do {
+        try store.delete(identifier: reportNSID)
+        print("FAIL: report delete commits")
+        failures += 1
+    } catch let error as LiveStoreError {
+        if case .sync = error {} else {
+            print("FAIL: report delete fails closed, got \(error)")
+            failures += 1
+        }
+    }
+    do {
+        _ = try store.writeContent(for: reportNSID, data: Data("x".utf8))
+        print("FAIL: report write commits")
+        failures += 1
+    } catch let error as LiveStoreError {
+        if case .sync = error {} else {
+            print("FAIL: report write fails closed, got \(error)")
+            failures += 1
+        }
+    }
+    do {
+        _ = try store.rename(
+            identifier: reportNSID, newParent: .rootContainer, newName: "moved.txt")
+        print("FAIL: report rename commits")
+        failures += 1
+    } catch let error as LiveStoreError {
+        if case .sync = error {} else {
+            print("FAIL: report rename fails closed, got \(error)")
+            failures += 1
+        }
+    }
+    do {
+        _ = try store.createFile(
+            parent: reportNSID, name: "nested.txt", contents: Data("x".utf8))
+        print("FAIL: create under a report commits")
+        failures += 1
+    } catch let error as LiveStoreError {
+        if case .notFound = error {} else {
+            print("FAIL: create under a report 404s, got \(error)")
+            failures += 1
+        }
+    }
+    // A covered write aimed at the conflicted path refuses
+    // Conflicted however well-formed the precondition is.
+    do {
+        _ = try OwnerClient(socketPath: socketPath).submit(kind: .commitFile(
+            path: "split.txt",
+            base: OwnerFileIdentity(size: 1, executable: false, chunks: ["11"]),
+            executable: false,
+            contentHex: "78",
+            expectedIdentity: String(repeating: "99", count: 32)))
+        print("FAIL: submit against a conflicted path commits")
+        failures += 1
+    } catch let error as OwnerClientError {
+        if case .refused(let refusal) = error {
+            checkEqual(refusal.code, "Conflicted", "conflicted submits refuse Conflicted")
+        } else {
+            print("FAIL: conflicted submit refuses Conflicted, got \(error)")
+            failures += 1
+        }
+    }
+} catch {
+    print("FAIL: negative non-mutation: \(error)")
     failures += 1
 }
 

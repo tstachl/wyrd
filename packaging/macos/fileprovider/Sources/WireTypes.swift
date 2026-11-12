@@ -346,10 +346,42 @@ enum OwnerNode: Codable {
     }
 }
 
-/// One conflict version: the head snapshot and its node.
+/// One conflict version: the head snapshot id, its authoring
+/// timestamp (ms, display only — never peer identity), and the
+/// head's node at the conflicted path. `timestamp` defaults to `0`
+/// on decode so a pre-timestamp payload degrades to "unknown"
+/// instead of failing; both sides ship together, so the default
+/// only covers mixed-version skew during rollout.
 struct OwnerConflictVersion: Codable {
     var snapshot: String
+    var timestamp: UInt64
     var node: OwnerNode
+
+    private enum Key: String, CodingKey {
+        case snapshot
+        case timestamp
+        case node
+    }
+
+    init(snapshot: String, timestamp: UInt64, node: OwnerNode) {
+        self.snapshot = snapshot
+        self.timestamp = timestamp
+        self.node = node
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: Key.self)
+        snapshot = try container.decode(String.self, forKey: .snapshot)
+        timestamp = try container.decodeIfPresent(UInt64.self, forKey: .timestamp) ?? 0
+        node = try container.decode(OwnerNode.self, forKey: .node)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: Key.self)
+        try container.encode(snapshot, forKey: .snapshot)
+        try container.encode(timestamp, forKey: .timestamp)
+        try container.encode(node, forKey: .node)
+    }
 }
 
 /// Decode lowercase hex to bytes. Rejects odd lengths and any

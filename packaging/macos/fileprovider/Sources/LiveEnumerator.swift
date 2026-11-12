@@ -26,9 +26,15 @@ final class LiveEnumerator: NSObject, NSFileProviderEnumerator {
     ) {
         // Single-shot enumeration: the page carries no state because
         // one `readdir` serves the whole container at one coordinate.
+        // Reports ride alongside ordinary items; both share the
+        // anchor the enumeration served.
         do {
-            let (items, anchor) = try store.enumerate(container: container)
-            observer.didEnumerate(items)
+            let (items, reports, anchor) = try store.enumerate(container: container)
+            var combined: [NSFileProviderItem] = []
+            combined.reserveCapacity(items.count + reports.count)
+            combined.append(contentsOf: items.map { $0 as NSFileProviderItem })
+            combined.append(contentsOf: reports.map { $0 as NSFileProviderItem })
+            observer.didEnumerate(combined)
             observer.finishEnumerating(
                 upTo: NSFileProviderPage(rawValue: Data(anchor.encode().utf8))
             )

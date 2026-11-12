@@ -88,7 +88,10 @@ final class LiveStore {
     /// The item for one identifier: resolve, verify the owner's
     /// token, build. A stale cache re-resolves once with the
     /// bounded walk; a conflict classification fails closed.
-    func item(for identifier: NSFileProviderItemIdentifier) throws -> LiveItem {
+    /// Synthetic report identifiers resolve through their embedded
+    /// path: a live conflict rebuilds the report, a resolved path
+    /// 404s (the inspector disappears only on state change).
+    func item(for identifier: NSFileProviderItemIdentifier) throws -> NSFileProviderItem {
         if identifier == .rootContainer {
             return try rootItem()
         }
@@ -121,6 +124,10 @@ final class LiveStore {
                 generation: generation,
                 revision: revision
             )
+        case .conflict(_, let pathHex):
+            return try resolveReport(
+                identifier: identifier, pathHex: pathHex, client: client
+            ).item
         case nil:
             throw LiveStoreError.notFound("identifier not parseable for this drive")
         }
@@ -130,41 +137,72 @@ final class LiveStore {
     /// then read. Directories and symlinks fail closed (the former
     /// needs no hydration; the latter's presentation is a Stage 3
     /// question). The owner bounds reads; an owner timeout retries
-    /// once on a fresh connection, then fails closed.
+    /// once on a fresh connection, then fails closed. Synthetic
+    /// report identifiers hydrate the generated report text — never
+    /// a version's bytes — re-rendered live so the served bytes
+    /// always describe the current conflict.
     func contents(for identifier: NSFileProviderItemIdentifier) throws -> (
-        bytes: Data, item: LiveItem
+        bytes: Data, item: NSFileProviderItem
     ) {
         if identifier == .rootContainer {
             throw LiveStoreError.sync("the root cannot hydrate")
         }
         let client = try liveClient()
         let parsed = WyrdItemIdentifier.parse(identifier.rawValue, driveHex: driveHex)
-        let node: OwnerNode
-        let path: String
-        let parent: NSFileProviderItemIdentifier
-        let generation: UInt64
-        let revision: UInt64
         switch parsed {
+        case .conflict(_, let pathHex):
+            let resolved = try resolveReport(
+                identifier: identifier, pathHex: pathHex, client: client)
+            let bytes = renderConflictReport(
+                path: resolved.item.conflictedPath,
+                driveHex: driveHex,
+                versions: resolved.versions,
+                generation: resolved.generation,
+                revision: resolved.revision)
+            return (bytes, resolved.item)
         case .stable(_, let identityHex):
             let resolved = try stableNode(
                 identifier: identifier,
                 identityHex: identityHex,
                 client: client
             )
-            (node, path, parent, generation, revision) = (
-                resolved.node, resolved.path, resolved.parent,
-                resolved.generation, resolved.revision
-            )
+            return try fileContents(
+                node: resolved.node,
+                path: resolved.path,
+                parent: resolved.parent,
+                generation: resolved.generation,
+                revision: resolved.revision,
+                client: client)
         case .legacy(let pathHex):
             guard let legacyPath = WyrdItemIdentifier.legacyPath(pathHex: pathHex) else {
                 throw LiveStoreError.notFound("legacy identifier undecodable")
             }
-            path = legacyPath
-            parent = try parentIdentifier(of: path, client: client)
-            (node, generation, revision) = try lookupNode(path: path, client: client)
+            let path = legacyPath
+            let parent = try parentIdentifier(of: path, client: client)
+            let (node, generation, revision) = try lookupNode(path: path, client: client)
+            return try fileContents(
+                node: node,
+                path: path,
+                parent: parent,
+                generation: generation,
+                revision: revision,
+                client: client)
         case nil:
             throw LiveStoreError.notFound("identifier not parseable for this drive")
         }
+    }
+
+    /// Build the item for a verified file node, then read it. Shared
+    /// by the stable and legacy hydration paths; reports never reach
+    /// here.
+    private func fileContents(
+        node: OwnerNode,
+        path: String,
+        parent: NSFileProviderItemIdentifier,
+        generation: UInt64,
+        revision: UInt64,
+        client: OwnerClient
+    ) throws -> (bytes: Data, item: NSFileProviderItem) {
         let item = try buildItem(
             node: node,
             path: path,
@@ -196,14 +234,16 @@ final class LiveStore {
     // MARK: - Enumeration
 
     /// Enumerate one container in a single owner coordinate: one
-    /// `readdir`, one anchor. Conflict rows are logged and skipped —
-    /// siblings enumerate regardless — and every row records its
-    /// identifier-to-path mapping for later lookup. Container
-    /// resolution is shared with the mutation surface
+    /// `readdir`, one anchor. Conflict rows yield one synthetic
+    /// report item each (never ordinary content); siblings enumerate
+    /// regardless. Every row records its identifier-to-path mapping
+    /// for later lookup, except synthetic reports, which decode
+    /// their path from their identifier and always read fresh.
+    /// Container resolution is shared with the mutation surface
     /// (`containerPath(for:client:)`), so enumeration and writes
     /// never disagree on what a container names.
     func enumerate(container: NSFileProviderItemIdentifier) throws -> (
-        items: [LiveItem], anchor: WyrdSyncAnchor
+        items: [LiveItem], reports: [ConflictReportItem], anchor: WyrdSyncAnchor
     ) {
         let client = try liveClient()
         let containerPath = try containerPath(for: container, client: client)
@@ -217,10 +257,10 @@ final class LiveStore {
             throw mapError(error, what: "readdir \(containerPath)")
         }
         var items: [LiveItem] = []
-        var skippedConflicts = 0
+        var conflictRows: [(name: String, versions: [OwnerConflictVersion])] = []
         for entry in entries {
-            if case .conflict = entry.node {
-                skippedConflicts += 1
+            if case .conflict(let versions) = entry.node {
+                conflictRows.append((entry.name, versions))
                 continue
             }
             let childPath = containerPath.isEmpty ? entry.name : "\(containerPath)/\(entry.name)"
@@ -240,12 +280,33 @@ final class LiveStore {
                 items.append(item)
             }
         }
-        if skippedConflicts > 0 {
+        // Report names disambiguate against real siblings in
+        // readdir order; `item(for:)` replays the same assignment,
+        // so the enumerated name and the looked-up name agree.
+        let realNames = Set(entries.map { $0.name })
+        let reportNames = assignReportNames(conflictRows: conflictRows.map { $0.name }, realNames: realNames)
+        var reports: [ConflictReportItem] = []
+        for (index, row) in conflictRows.enumerated() {
+            let childPath = containerPath.isEmpty ? row.name : "\(containerPath)/\(row.name)"
+            let identifier = NSFileProviderItemIdentifier(
+                WyrdItemIdentifier.conflictID(driveHex: driveHex, path: childPath))
+            reports.append(
+                ConflictReportItem(
+                    driveHex: driveHex,
+                    conflictedPath: childPath,
+                    reportName: reportNames[index],
+                    versions: row.versions,
+                    generation: generation,
+                    revision: revision,
+                    identifier: identifier,
+                    parent: containerId))
+        }
+        if !conflictRows.isEmpty {
             log.error(
-                "enumerated \(containerPath) with \(skippedConflicts) conflict rows excluded"
+                "enumerated \(containerPath) with \(conflictRows.count) conflict reports"
             )
         }
-        return (items, WyrdSyncAnchor(generation: generation, revision: revision))
+        return (items, reports, WyrdSyncAnchor(generation: generation, revision: revision))
     }
 
     /// The current anchor: the root's serving coordinate. A
@@ -358,6 +419,80 @@ final class LiveStore {
         } catch {
             throw mapError(error, what: "lookup \(path)")
         }
+    }
+
+    /// Resolve one synthetic report identifier through its embedded
+    /// path: the path must serve a live conflict, or the report is
+    /// gone. A non-conflict node means the conflict resolved (the
+    /// report disappears); a missing path 404s. Anything else maps
+    /// normally — a transport break stays temporary, never a guess.
+    /// The report name replays the enumeration assignment (readdir
+    /// the parent, disambiguate in order), so lookup and enumeration
+    /// agree on the filename.
+    func resolveReport(
+        identifier: NSFileProviderItemIdentifier,
+        pathHex: String,
+        client: OwnerClient
+    ) throws -> (
+        item: ConflictReportItem, versions: [OwnerConflictVersion],
+        generation: UInt64, revision: UInt64
+    ) {
+        guard let path = WyrdItemIdentifier.conflictPath(pathHex: pathHex) else {
+            throw LiveStoreError.notFound("report identifier undecodable")
+        }
+        let parent = try parentIdentifier(of: path, client: client)
+        let (node, generation, revision) = try lookupNode(path: path, client: client)
+        guard case .conflict(let versions) = node else {
+            // The conflict resolved (or the path never conflicted):
+            // the report is gone, exactly the invalidation rule.
+            throw LiveStoreError.notFound("no live conflict at \(path)")
+        }
+        let entryName = path.split(separator: "/").last.map(String.init) ?? path
+        let reportName = try assignedReportName(
+            entryName: entryName, parentPath: parentPath(of: path), client: client)
+        return (
+            ConflictReportItem(
+                driveHex: driveHex,
+                conflictedPath: path,
+                reportName: reportName,
+                versions: versions,
+                generation: generation,
+                revision: revision,
+                identifier: identifier,
+                parent: parent),
+            versions, generation, revision)
+    }
+
+    /// The report filename for one conflicted entry name, replaying
+    /// the enumeration assignment: the parent's real entry names
+    /// plus earlier conflict rows in readdir order take precedence.
+    /// Both enumeration and lookup run this over the same listing,
+    /// so both agree.
+    func assignedReportName(
+        entryName: String, parentPath: String, client: OwnerClient
+    ) throws -> String {
+        let siblings: [OwnerDirEntry]
+        do {
+            siblings = try client.readdir(path: parentPath).entries
+        } catch {
+            throw mapError(error, what: "readdir \(parentPath)")
+        }
+        let realNames = Set(siblings.map { $0.name })
+        let ordered = siblings.compactMap { entry -> String? in
+            if case .conflict = entry.node { return entry.name }
+            return nil
+        }
+        let assigned = assignReportNames(conflictRows: ordered, realNames: realNames)
+        guard let index = ordered.firstIndex(of: entryName) else {
+            throw LiveStoreError.notFound("no live conflict at \(entryName)")
+        }
+        return assigned[index]
+    }
+
+    /// The parent path of a relative path: `""` for a root child.
+    private func parentPath(of path: String) -> String {
+        guard let slash = path.lastIndex(of: "/") else { return "" }
+        return String(path[..<slash])
     }
 
     /// Build the item for a classified node. Conflict rows and

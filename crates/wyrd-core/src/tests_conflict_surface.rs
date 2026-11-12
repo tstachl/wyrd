@@ -148,6 +148,7 @@ fn conflict_surface_distinguishes_the_three_divergences() {
     let conflict = Node::Conflict {
         versions: vec![ConflictVersion {
             snapshot: SnapshotId::from_bytes([0xA1; 32]),
+            timestamp: 7,
             node: Node::File {
                 size: 1,
                 executable: false,

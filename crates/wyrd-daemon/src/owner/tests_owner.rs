@@ -185,10 +185,12 @@ fn interface_value_types_round_trip() {
         versions: vec![
             ConflictVersion {
                 snapshot: SnapshotId::from_bytes([0x20; 32]),
+                timestamp: 11,
                 node: file.clone(),
             },
             ConflictVersion {
                 snapshot: SnapshotId::from_bytes([0x21; 32]),
+                timestamp: 12,
                 node: dir.clone(),
             },
         ],

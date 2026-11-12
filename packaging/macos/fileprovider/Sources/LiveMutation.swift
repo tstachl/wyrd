@@ -48,14 +48,19 @@ extension LiveStore {
                 throw LiveStoreError.notFound("container undecodable")
             }
             return path
+        case .conflict:
+            // Reports are files about conflicts, never containers:
+            // nothing nests under one.
+            throw LiveStoreError.notFound("a conflict report is not a container")
         }
     }
 
     /// One stable, writable entry for mutation: the node, its path
     /// and parent, and the entry token the precondition binds.
-    /// Legacy rows, symlinks, conflicts, and the root fail closed —
-    /// the capabilities matrix advertises them read-only, and this
-    /// is the backstop if the system calls anyway.
+    /// Legacy rows, symlinks, conflicts, conflict reports, and the
+    /// root fail closed — the capabilities matrix advertises them
+    /// read-only, and this is the backstop if the system calls
+    /// anyway.
     func mutationTarget(
         for identifier: NSFileProviderItemIdentifier, client: OwnerClient
     ) throws -> (
@@ -88,6 +93,12 @@ extension LiveStore {
                 resolved.generation, resolved.revision, token)
         case .legacy:
             throw LiveStoreError.sync("legacy rows are not writable")
+        case .conflict:
+            // Reports describe conflicts; they never author. The
+            // capabilities matrix advertises read-only, and this is
+            // the backstop if the system calls anyway — a report
+            // write, rename, or delete fails here, never on a head.
+            throw LiveStoreError.sync("conflict reports are not writable")
         }
     }
 

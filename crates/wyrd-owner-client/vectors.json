@@ -283,6 +283,7 @@
                     "versions": [
                       {
                         "snapshot": "11",
+                        "timestamp": 1720000000000,
                         "node": {
                           "File": {
                             "size": 1,
@@ -291,6 +292,20 @@
                               "11"
                             ],
                             "identity": "ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34"
+                          }
+                        }
+                      },
+                      {
+                        "snapshot": "22",
+                        "timestamp": 1720000060000,
+                        "node": {
+                          "File": {
+                            "size": 2,
+                            "executable": false,
+                            "chunks": [
+                              "22"
+                            ],
+                            "identity": "cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12"
                           }
                         }
                       }

@@ -357,6 +357,62 @@ fn fileprovider_mutation_vocabulary_stays_owner_shaped() {
     }
 }
 
+/// Stage 3 sub-PR 3 surfaces live conflicts through a
+/// presentation-only inspector: one synthetic read-only report per
+/// conflicted path, keyed by (drive, location), labelled by
+/// snapshot id plus timestamp, hydrated from generated text only.
+/// The inspector authors nothing — the conflict floor (DG-3) holds
+/// in Swift exactly as it holds in Rust (`surface_contracts`):
+/// the resolution primitives never appear, while the synthetic
+/// namespace, the report shape, and the `Conflicted` mapping the
+/// negative tests pin all stay named. The Harness proves the
+/// behavior against the stub owner; this pins the vocabulary
+/// against drift.
+#[test]
+fn fileprovider_conflict_inspector_stays_presentation_only() {
+    let root = workspace_root();
+    let (files, errors) = collect_files(
+        &root.join("packaging/macos/fileprovider/Sources"),
+        &root,
+        "swift",
+    );
+    assert!(
+        errors.is_empty(),
+        "source walk errors:\n- {}",
+        errors.join("\n- ")
+    );
+    assert!(!files.is_empty(), "the adapter holds Swift sources");
+    let text = files
+        .iter()
+        .map(|(_, text)| text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    for required in [
+        "wyrd:conflict:v1:",
+        ".wyrd-conflict.txt",
+        "wyrd-conflict-v1:",
+        "conflict report",
+        "Conflicted",
+        "conflict reports are not writable",
+    ] {
+        assert!(text.contains(required), "the adapter names {required}");
+    }
+    for forbidden in [
+        "MergeSelection",
+        "merge_heads",
+        "mergeHeads",
+        "resolveConflict",
+        "ResolveConflict",
+        "keepBoth",
+        "keep-both",
+    ] {
+        assert!(
+            !text.contains(forbidden),
+            "the inspector must not name {forbidden}"
+        );
+    }
+}
+
 #[cfg(test)]
 mod policy_tests {
     use super::*;

@@ -402,6 +402,52 @@ capabilities, mkdir, create, modify, rename-preserve,
 collision, delete, recapture, oversize, legacy refusal,
 baseVersion discipline — plus the usual TSan run.
 
+## Stage 3 conflict inspector (sub-PR 3)
+
+Read-only conflict surfacing under the six OD-17-B constraints
+(parent-issue thread, final decision): one synthetic report file
+per conflicted path, generated from existing owner reads, with no
+new owner mutation operation and no new authoritative state in
+Swift.
+
+- **Mechanism:** the enumerator turns each conflict row into one
+  `ConflictReportItem` (`<name>.wyrd-conflict.txt`, `.plainText`)
+  instead of skipping it. The conflicted path itself never
+  enumerates as content.
+- **Identity:** `wyrd:conflict:v1:<drive>:<hex-path>` — keyed by
+  the conflicted logical location plus drive. Never a peer
+  identity, never an arbitrary head's token. The identifier names
+  the location; invalidation rides the item version (a digest over
+  the sorted per-version facts, so any version change moves it)
+  and disappearance (a resolved path 404s on lookup and
+  hydration).
+- **Labels:** snapshot id plus head authoring timestamp
+  (threaded from heads through merge to the wire with a
+  `0`-default for skew tolerance, see the owner-interface read
+  contract), in snapshot-id byte order for display only. The
+  report states that no version is authoritative.
+- **Capabilities:** `[.allowsReading]` only. Hydration serves the
+  generated report text re-rendered live — never a version's
+  bytes. No keep-both, no overwrite, no resolution. Delete,
+  modify, rename, and create-under-report fail closed in
+  `mutationTarget`/`containerPath` before any socket write; a
+  submit aimed at the conflicted path itself refuses `Conflicted`
+  at the owner, so neither head moves.
+- **Gates:** a live two-head drive demo (two replicas, one entry
+  edited on both sides while disconnected, reconnected,
+  reconciled; the report appears in Finder and disappears after
+  the owner-mediated resolution) plus Harness negative tests
+  proving inspector operations cannot mutate either head.
+  Orphan-state presentation stays deferred; resolution authoring
+  stays v0.5.
+
+Harness proof: the stub serves a two-version `split.txt`
+conflict with distinct snapshots and timestamps and refuses
+`Conflicted` on covered submits against it; the driver checks
+enumeration, naming, grammar, round-trip text, invalidation,
+version determinism, and the full negative set — plus the usual
+TSan run.
+
 ## Release distinction
 
 - Unsigned/ad-hoc integration: development and manual testing only.
