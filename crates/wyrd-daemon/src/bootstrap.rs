@@ -104,6 +104,156 @@ pub struct Registry {
     pub skipped: Vec<String>,
 }
 
+/// Every way the registry and service-definition I/O in this
+/// module can fail. Provisioning also fails at engine
+/// initialization and socket verification with other error text;
+/// those paths are outside this type. Variants carry
+/// the failing identity — paths, names, labels — so the desktop
+/// backend can branch on failure instead of parsing text.
+/// `Display` reproduces the historical message text exactly: the CLI
+/// renders `reason` verbatim and the desktop shell reads the same
+/// text. Batch discipline: [`read_registry`] counts validation
+/// failures as per-entry skip reasons and keeps going, while
+/// [`write_registry`] raises them and writes nothing.
+#[derive(Debug, thiserror::Error)]
+pub enum BootstrapError {
+    /// The registry file could not be read.
+    #[error("read {}: {source}", path.display())]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    /// The registry file is not valid JSON.
+    #[error("parse {}: {source}", path.display())]
+    Parse {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+    /// The registry schema version is newer than this build reads.
+    #[error("registry {} is version {found}, this build reads {REGISTRY_VERSION}", path.display())]
+    UnsupportedVersion { path: PathBuf, found: u32 },
+    /// A registry key does not match its entry's name.
+    #[error("key {key:?} does not match entry name {name:?}")]
+    KeyMismatch { key: String, name: String },
+    /// A drive name breaks the `[a-z0-9-]` token rule.
+    #[error("name {name:?} must be 1-64 chars of [a-z0-9-]")]
+    InvalidName { name: String },
+    /// A drive name leaves no room for the `drive-` service prefix.
+    #[error("name {name:?} leaves no room for the drive- service prefix (max 58 chars)")]
+    NameTooLongForServicePrefix { name: String },
+    /// A service name breaks the `[a-z0-9-]` token rule.
+    #[error("service {service:?} must be 1-64 chars of [a-z0-9-]")]
+    InvalidService { service: String },
+    /// A drive directory is not absolute.
+    #[error("drive_dir {} must be absolute", dir.display())]
+    RelativeDriveDir { dir: PathBuf },
+    /// A drive directory escapes through `..`.
+    #[error("drive_dir {} must not contain ..", dir.display())]
+    DriveDirHasDotDot { dir: PathBuf },
+    /// The entry names a service mode this build does not manage.
+    #[error("unknown service mode: registry-managed mount mode travels with the installer follow-up (P2 landed: manual `wyrd mount` serves the socket)")]
+    UnknownServiceMode,
+    /// A relay URL is empty or carries whitespace/control bytes.
+    #[error("relays must be non-empty URLs without whitespace or control bytes")]
+    InvalidRelays,
+    /// A drive directory carries control characters.
+    #[error("drive_dir {} must not contain control characters", dir.display())]
+    DriveDirHasControlChars { dir: PathBuf },
+    /// The candidate set fails validation: nothing was written.
+    #[error("refusing to write: {source}")]
+    RefusedWrite {
+        #[source]
+        source: Box<BootstrapError>,
+    },
+    /// The registry could not be encoded.
+    #[error("encode registry: {source}")]
+    Encode {
+        #[source]
+        source: serde_json::Error,
+    },
+    /// A directory for the registry or service file could not be created.
+    #[error("create {}: {source}", path.display())]
+    CreateDir {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    /// A registry or service file could not be written.
+    #[error("write {}: {source}", path.display())]
+    WriteFile {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    /// The atomic replace of a registry or service file failed.
+    #[error("replace {}: {source}", path.display())]
+    ReplaceFile {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    /// Owner-only permissions could not be applied.
+    #[error("chmod {}: {source}", path.display())]
+    Chmod {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    /// A written file could not be synced to disk.
+    #[error("sync {}: {source}", path.display())]
+    SyncFile {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    /// A service manager command could not be spawned.
+    #[error("spawn {program}: {source}")]
+    Spawn {
+        program: String,
+        #[source]
+        source: std::io::Error,
+    },
+    /// A service manager command ran and failed.
+    #[error("{program} {args} failed: {detail}")]
+    CommandFailed {
+        program: String,
+        args: String,
+        detail: String,
+    },
+    /// Enabling the service through its manager failed.
+    #[error("enable {name}: {source}")]
+    EnableService {
+        name: String,
+        #[source]
+        source: Box<BootstrapError>,
+    },
+    /// Reloading the user service manager failed.
+    #[error("reload user units: {source}")]
+    ReloadUnits {
+        #[source]
+        source: Box<BootstrapError>,
+    },
+    /// The managed service is not loaded after enablement.
+    #[error("start {label}: agent not loaded: {source}")]
+    AgentNotLoaded {
+        label: String,
+        #[source]
+        source: Box<BootstrapError>,
+    },
+    /// Restarting the managed service failed.
+    #[error("restart {unit}: {source}")]
+    RestartService {
+        unit: String,
+        #[source]
+        source: Box<BootstrapError>,
+    },
+    /// Per-drive services exist only on Unix managers.
+    #[error("per-drive services are implemented for Unix (launchd agent, systemd user unit)")]
+    ServicesUnsupported,
+}
+
 /// Where the registry lives when no explicit path is given:
 /// per-user state, resolved through platform conventions. The
 /// installer creates it with owner-only permissions; the
@@ -134,23 +284,29 @@ pub fn default_registry_path() -> PathBuf {
 /// registry, not an error — a fresh installation has registered
 /// nothing yet. A newer schema version refuses loudly. Invalid
 /// entries are skipped with reasons; valid ones are unaffected.
-pub fn read_registry(path: &Path) -> Result<Registry, String> {
+pub fn read_registry(path: &Path) -> Result<Registry, BootstrapError> {
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Ok(Registry::default());
         }
-        Err(error) => return Err(format!("read {}: {error}", path.display())),
+        Err(source) => {
+            return Err(BootstrapError::Read {
+                path: path.to_path_buf(),
+                source,
+            });
+        }
     };
-    let file: RegistryFile = serde_json::from_slice(&bytes)
-        .map_err(|error| format!("parse {}: {error}", path.display()))?;
+    let file: RegistryFile =
+        serde_json::from_slice(&bytes).map_err(|source| BootstrapError::Parse {
+            path: path.to_path_buf(),
+            source,
+        })?;
     if file.version != REGISTRY_VERSION {
-        return Err(format!(
-            "registry {} is version {}, this build reads {}",
-            path.display(),
-            file.version,
-            REGISTRY_VERSION
-        ));
+        return Err(BootstrapError::UnsupportedVersion {
+            path: path.to_path_buf(),
+            found: file.version,
+        });
     }
     let mut registry = Registry::default();
     for (key, entry) in file.drives {
@@ -158,7 +314,7 @@ pub fn read_registry(path: &Path) -> Result<Registry, String> {
             Ok(()) => {
                 registry.drives.insert(key, entry);
             }
-            Err(reason) => registry.skipped.push(format!("entry {key:?}: {reason}")),
+            Err(error) => registry.skipped.push(format!("entry {key:?}: {error}")),
         }
     }
     Ok(registry)
@@ -172,48 +328,40 @@ fn valid_token(value: &str) -> bool {
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
 
-fn validate_entry(key: &str, entry: &RegistryEntry) -> Result<(), String> {
+fn validate_entry(key: &str, entry: &RegistryEntry) -> Result<(), BootstrapError> {
     if key != entry.name {
-        return Err(format!(
-            "key {key:?} does not match entry name {:?}",
-            entry.name
-        ));
+        return Err(BootstrapError::KeyMismatch {
+            key: key.to_string(),
+            name: entry.name.clone(),
+        });
     }
     if !valid_token(&entry.name) {
-        return Err(format!(
-            "name {:?} must be 1-64 chars of [a-z0-9-]",
-            entry.name
-        ));
+        return Err(BootstrapError::InvalidName {
+            name: entry.name.clone(),
+        });
     }
     if entry.name.len() + "drive-".len() > 64 {
-        return Err(format!(
-            "name {:?} leaves no room for the drive- service prefix (max 58 chars)",
-            entry.name
-        ));
+        return Err(BootstrapError::NameTooLongForServicePrefix {
+            name: entry.name.clone(),
+        });
     }
     if !valid_token(&entry.service) {
-        return Err(format!(
-            "service {:?} must be 1-64 chars of [a-z0-9-]",
-            entry.service
-        ));
+        return Err(BootstrapError::InvalidService {
+            service: entry.service.clone(),
+        });
     }
     if !entry.drive_dir.is_absolute() {
-        return Err(format!(
-            "drive_dir {} must be absolute",
-            entry.drive_dir.display()
-        ));
+        return Err(BootstrapError::RelativeDriveDir {
+            dir: entry.drive_dir.clone(),
+        });
     }
     if has_dotdot(&entry.drive_dir) {
-        return Err(format!(
-            "drive_dir {} must not contain ..",
-            entry.drive_dir.display()
-        ));
+        return Err(BootstrapError::DriveDirHasDotDot {
+            dir: entry.drive_dir.clone(),
+        });
     }
     if !matches!(entry.mode, ServiceMode::Vault) {
-        return Err(
-            "unknown service mode: registry-managed mount mode travels with the installer follow-up (P2 landed: manual `wyrd mount` serves the socket)"
-                .to_string(),
-        );
+        return Err(BootstrapError::UnknownServiceMode);
     }
     if entry.relays.iter().any(|relay| {
         relay.is_empty()
@@ -221,9 +369,7 @@ fn validate_entry(key: &str, entry: &RegistryEntry) -> Result<(), String> {
                 .bytes()
                 .any(|byte| byte < 0x20 || byte == 0x7f || byte.is_ascii_whitespace())
     }) {
-        return Err(
-            "relays must be non-empty URLs without whitespace or control bytes".to_string(),
-        );
+        return Err(BootstrapError::InvalidRelays);
     }
     if entry
         .drive_dir
@@ -231,10 +377,9 @@ fn validate_entry(key: &str, entry: &RegistryEntry) -> Result<(), String> {
         .bytes()
         .any(|byte| byte < 0x20 || byte == 0x7f)
     {
-        return Err(format!(
-            "drive_dir {} must not contain control characters",
-            entry.drive_dir.display()
-        ));
+        return Err(BootstrapError::DriveDirHasControlChars {
+            dir: entry.drive_dir.clone(),
+        });
     }
     Ok(())
 }
@@ -248,19 +393,26 @@ fn has_dotdot(path: &Path) -> bool {
 /// directory, sync it, atomic replace, sync the directory. An
 /// interrupted write can never leave a truncated registry that
 /// makes every drive undiscoverable.
-pub fn write_registry(path: &Path, drives: &BTreeMap<String, RegistryEntry>) -> Result<(), String> {
+pub fn write_registry(
+    path: &Path,
+    drives: &BTreeMap<String, RegistryEntry>,
+) -> Result<(), BootstrapError> {
     for (key, entry) in drives {
-        validate_entry(key, entry).map_err(|reason| format!("refusing to write: {reason}"))?;
+        validate_entry(key, entry).map_err(|source| BootstrapError::RefusedWrite {
+            source: Box::new(source),
+        })?;
     }
     let file = RegistryFile {
         version: REGISTRY_VERSION,
         drives: drives.clone(),
     };
     let bytes =
-        serde_json::to_vec_pretty(&file).map_err(|error| format!("encode registry: {error}"))?;
+        serde_json::to_vec_pretty(&file).map_err(|source| BootstrapError::Encode { source })?;
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|error| format!("create {}: {error}", parent.display()))?;
+        std::fs::create_dir_all(parent).map_err(|source| BootstrapError::CreateDir {
+            path: parent.to_path_buf(),
+            source,
+        })?;
     }
     // Unique temporary sibling per writer: the rename stays atomic,
     // and concurrent writers fail on their own file instead of
@@ -268,10 +420,16 @@ pub fn write_registry(path: &Path, drives: &BTreeMap<String, RegistryEntry>) -> 
     // contract (one registration flow per user); the unique name
     // turns a violation into an error, not silent loss.
     let tmp = path.with_extension(format!("tmp.{}", std::process::id()));
-    std::fs::write(&tmp, &bytes).map_err(|error| format!("write {}: {error}", tmp.display()))?;
+    std::fs::write(&tmp, &bytes).map_err(|source| BootstrapError::WriteFile {
+        path: tmp.clone(),
+        source,
+    })?;
     restrict_owner_only(&tmp)?;
     sync_file(&tmp)?;
-    std::fs::rename(&tmp, path).map_err(|error| format!("replace {}: {error}", path.display()))?;
+    std::fs::rename(&tmp, path).map_err(|source| BootstrapError::ReplaceFile {
+        path: path.to_path_buf(),
+        source,
+    })?;
     restrict_owner_only(path)?;
     sync_dir(path);
     Ok(())
@@ -281,22 +439,30 @@ pub fn write_registry(path: &Path, drives: &BTreeMap<String, RegistryEntry>) -> 
 /// facts, not secrets, but it is still per-user state — no group or
 /// other access, ever.
 #[cfg(unix)]
-fn restrict_owner_only(path: &Path) -> Result<(), String> {
+fn restrict_owner_only(path: &Path) -> Result<(), BootstrapError> {
     use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
-        .map_err(|error| format!("chmod {}: {error}", path.display()))
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).map_err(|source| {
+        BootstrapError::Chmod {
+            path: path.to_path_buf(),
+            source,
+        }
+    })
 }
 
 #[cfg(not(unix))]
-fn restrict_owner_only(_path: &Path) -> Result<(), String> {
+fn restrict_owner_only(_path: &Path) -> Result<(), BootstrapError> {
     Ok(())
 }
 
-fn sync_file(path: &Path) -> Result<(), String> {
-    let file =
-        std::fs::File::open(path).map_err(|error| format!("sync {}: {error}", path.display()))?;
-    file.sync_all()
-        .map_err(|error| format!("sync {}: {error}", path.display()))
+fn sync_file(path: &Path) -> Result<(), BootstrapError> {
+    let file = std::fs::File::open(path).map_err(|source| BootstrapError::SyncFile {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    file.sync_all().map_err(|source| BootstrapError::SyncFile {
+        path: path.to_path_buf(),
+        source,
+    })
 }
 
 fn sync_dir(path: &Path) {
@@ -496,15 +662,20 @@ pub fn render_systemd_unit(
 /// separate steps so registration can report exactly which one
 /// failed.
 #[cfg(unix)]
-pub fn install_service(entry: &RegistryEntry, owner: &SupervisedOwner) -> Result<PathBuf, String> {
+pub fn install_service(
+    entry: &RegistryEntry,
+    owner: &SupervisedOwner,
+) -> Result<PathBuf, BootstrapError> {
     #[cfg(target_os = "macos")]
     {
         let dir = std::env::var_os("HOME")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("/tmp"))
             .join("Library/LaunchAgents");
-        std::fs::create_dir_all(&dir)
-            .map_err(|error| format!("create {}: {error}", dir.display()))?;
+        std::fs::create_dir_all(&dir).map_err(|source| BootstrapError::CreateDir {
+            path: dir.clone(),
+            source,
+        })?;
         let label = format!("md.enesis.wyrd.{}", entry.service);
         let path = dir.join(format!("{label}.plist"));
         write_service_file(&path, &render_launchd_plist(&label, owner, entry))?;
@@ -521,8 +692,10 @@ pub fn install_service(entry: &RegistryEntry, owner: &SupervisedOwner) -> Result
                     .join(".config")
             })
             .join("systemd/user");
-        std::fs::create_dir_all(&dir)
-            .map_err(|error| format!("create {}: {error}", dir.display()))?;
+        std::fs::create_dir_all(&dir).map_err(|source| BootstrapError::CreateDir {
+            path: dir.clone(),
+            source,
+        })?;
         let path = dir.join(format!("wyrd-{}.service", entry.service));
         write_service_file(
             &path,
@@ -535,12 +708,18 @@ pub fn install_service(entry: &RegistryEntry, owner: &SupervisedOwner) -> Result
 /// Atomic owner-only service write: temporary sibling, sync,
 /// replace — the manager never loads a half-written definition.
 #[cfg(unix)]
-fn write_service_file(path: &Path, contents: &str) -> Result<(), String> {
+fn write_service_file(path: &Path, contents: &str) -> Result<(), BootstrapError> {
     let tmp = path.with_extension(format!("tmp.{}", std::process::id()));
-    std::fs::write(&tmp, contents).map_err(|error| format!("write {}: {error}", tmp.display()))?;
+    std::fs::write(&tmp, contents).map_err(|source| BootstrapError::WriteFile {
+        path: tmp.clone(),
+        source,
+    })?;
     restrict_owner_only(&tmp)?;
     sync_file(&tmp)?;
-    std::fs::rename(&tmp, path).map_err(|error| format!("replace {}: {error}", path.display()))?;
+    std::fs::rename(&tmp, path).map_err(|source| BootstrapError::ReplaceFile {
+        path: path.to_path_buf(),
+        source,
+    })?;
     restrict_owner_only(path)
 }
 
@@ -548,8 +727,8 @@ fn write_service_file(path: &Path, contents: &str) -> Result<(), String> {
 pub fn install_service(
     _entry: &RegistryEntry,
     _owner: &SupervisedOwner,
-) -> Result<PathBuf, String> {
-    Err("per-drive services are implemented for Unix (launchd agent, systemd user unit)".into())
+) -> Result<PathBuf, BootstrapError> {
+    Err(BootstrapError::ServicesUnsupported)
 }
 
 /// Enable the installed service for startup-at-login. Separate
@@ -564,7 +743,7 @@ pub fn install_service(
 pub fn enable_service(
     entry: &RegistryEntry,
     #[cfg_attr(not(target_os = "macos"), allow(unused_variables))] definition: &Path,
-) -> Result<(), String> {
+) -> Result<(), BootstrapError> {
     #[cfg(target_os = "macos")]
     {
         let label = format!("md.enesis.wyrd.{}", entry.service);
@@ -573,16 +752,27 @@ pub fn enable_service(
         // new definition. Errors from the unload are ignored — the
         // service may never have loaded — but the load must succeed.
         let _ = run("launchctl", &["unload", &definition.to_string_lossy()]);
-        run("launchctl", &["load", "-w", &definition.to_string_lossy()])
-            .map_err(|error| format!("enable {label}: {error}"))
+        run("launchctl", &["load", "-w", &definition.to_string_lossy()]).map_err(|source| {
+            BootstrapError::EnableService {
+                name: label,
+                source: Box::new(source),
+            }
+        })
     }
     #[cfg(not(target_os = "macos"))]
     {
         let unit = format!("wyrd-{}.service", entry.service);
-        run("systemctl", &["--user", "daemon-reload"])
-            .map_err(|error| format!("reload user units: {error}"))?;
-        run("systemctl", &["--user", "enable", &unit])
-            .map_err(|error| format!("enable {unit}: {error}"))
+        run("systemctl", &["--user", "daemon-reload"]).map_err(|source| {
+            BootstrapError::ReloadUnits {
+                source: Box::new(source),
+            }
+        })?;
+        run("systemctl", &["--user", "enable", &unit]).map_err(|source| {
+            BootstrapError::EnableService {
+                name: unit,
+                source: Box::new(source),
+            }
+        })
     }
 }
 
@@ -591,12 +781,14 @@ pub fn enable_service(
 /// start path would double-start. On systemd enablement persists
 /// without starting, so this starts explicitly.
 #[cfg(unix)]
-pub fn start_service(entry: &RegistryEntry) -> Result<(), String> {
+pub fn start_service(entry: &RegistryEntry) -> Result<(), BootstrapError> {
     #[cfg(target_os = "macos")]
     {
         let label = format!("md.enesis.wyrd.{}", entry.service);
-        run("launchctl", &["list", &label])
-            .map_err(|error| format!("start {label}: agent not loaded: {error}"))?;
+        run("launchctl", &["list", &label]).map_err(|source| BootstrapError::AgentNotLoaded {
+            label,
+            source: Box::new(source),
+        })?;
         Ok(())
     }
     #[cfg(not(target_os = "macos"))]
@@ -606,26 +798,33 @@ pub fn start_service(entry: &RegistryEntry) -> Result<(), String> {
         // alone, and a re-run that changed relays or credential
         // paths must bring the new definition live instead of
         // verifying the still-running old owner.
-        run("systemctl", &["--user", "restart", &unit])
-            .map_err(|error| format!("restart {unit}: {error}"))
+        run("systemctl", &["--user", "restart", &unit]).map_err(|source| {
+            BootstrapError::RestartService {
+                unit,
+                source: Box::new(source),
+            }
+        })
     }
 }
 
 #[cfg(unix)]
-fn run(program: &str, args: &[&str]) -> Result<(), String> {
+fn run(program: &str, args: &[&str]) -> Result<(), BootstrapError> {
     let output = std::process::Command::new(program)
         .args(args)
         .output()
-        .map_err(|error| format!("spawn {program}: {error}"))?;
+        .map_err(|source| BootstrapError::Spawn {
+            program: program.to_string(),
+            source,
+        })?;
     if output.status.success() {
         return Ok(());
     }
     let detail = String::from_utf8_lossy(&output.stderr);
-    Err(format!(
-        "{program} {} failed: {}",
-        args.join(" "),
-        detail.trim()
-    ))
+    Err(BootstrapError::CommandFailed {
+        program: program.to_string(),
+        args: args.join(" "),
+        detail: detail.trim().to_string(),
+    })
 }
 
 /// How to initialize the drive before anything is registered.
@@ -708,10 +907,10 @@ pub fn provision(config: ProvisionConfig) -> ProvisionState {
         relays: config.relays.clone(),
         mode: ServiceMode::Vault,
     };
-    if let Err(reason) = validate_entry(&entry.name, &entry) {
+    if let Err(error) = validate_entry(&entry.name, &entry) {
         return ProvisionState::ProvisioningIncomplete {
             stage: "validate",
-            reason,
+            reason: error.to_string(),
         };
     }
     // A headless `wyrd vault` refuses a relay-less drive (it would
@@ -790,18 +989,18 @@ pub fn provision(config: ProvisionConfig) -> ProvisionState {
     // deleting rotten data on rewrite.
     let mut registry = match read_registry(&config.registry_path) {
         Ok(registry) => registry,
-        Err(reason) => {
+        Err(error) => {
             return ProvisionState::ProvisioningIncomplete {
                 stage: "read-registry",
-                reason,
+                reason: error.to_string(),
             };
         }
     };
     registry.drives.insert(entry.name.clone(), entry.clone());
-    if let Err(reason) = write_registry(&config.registry_path, &registry.drives) {
+    if let Err(error) = write_registry(&config.registry_path, &registry.drives) {
         return ProvisionState::ProvisioningIncomplete {
             stage: "write-registry",
-            reason,
+            reason: error.to_string(),
         };
     }
     let skipped = registry.skipped;
@@ -846,26 +1045,26 @@ pub fn provision(config: ProvisionConfig) -> ProvisionState {
         };
         let definition = match install_service(&entry, &owner) {
             Ok(path) => path,
-            Err(reason) => {
+            Err(error) => {
                 return ProvisionState::RegisteredButUnavailable {
                     entry,
                     skipped: skipped.clone(),
-                    reason: format!("install-service: {reason}"),
+                    reason: format!("install-service: {error}"),
                 };
             }
         };
-        if let Err(reason) = enable_service(&entry, &definition) {
+        if let Err(error) = enable_service(&entry, &definition) {
             return ProvisionState::RegisteredButUnavailable {
                 entry,
                 skipped: skipped.clone(),
-                reason: format!("enable-service: {reason}"),
+                reason: format!("enable-service: {error}"),
             };
         }
-        if let Err(reason) = start_service(&entry) {
+        if let Err(error) = start_service(&entry) {
             return ProvisionState::RegisteredButUnavailable {
                 entry,
                 skipped: skipped.clone(),
-                reason: format!("start-service: {reason}"),
+                reason: format!("start-service: {error}"),
             };
         }
     }
@@ -994,7 +1193,7 @@ mod tests {
 
         std::fs::write(&path, r#"{"version": 999, "drives": {}}"#).unwrap();
         let refused = read_registry(&path).unwrap_err();
-        assert!(refused.contains("version 999"), "{refused}");
+        assert!(refused.to_string().contains("version 999"), "{refused}");
     }
 
     #[test]
@@ -1034,7 +1233,7 @@ mod tests {
         bad.drive_dir = PathBuf::from("relative/path");
         drives.insert("bad".to_string(), bad);
         let refused = write_registry(&path, &drives).unwrap_err();
-        assert!(refused.contains("absolute"), "{refused}");
+        assert!(refused.to_string().contains("absolute"), "{refused}");
         assert!(!path.exists(), "no partial registry may remain");
     }
 
@@ -1043,6 +1242,240 @@ mod tests {
         let dir = scratch("missing");
         let read = read_registry(&dir.join("absent.json")).unwrap();
         assert!(read.drives.is_empty() && read.skipped.is_empty());
+    }
+
+    /// Every `Display` string pinned exactly: a future edit that
+    /// changes user-visible text fails here. Variants over foreign
+    /// errors (`Parse`, `Encode`) pin the format around the live
+    /// source error instead of the dependency's wording.
+    #[test]
+    fn bootstrap_display_reproduces_the_historical_messages_exactly() {
+        use std::io::{Error as IoError, ErrorKind};
+        let io = |kind: ErrorKind, message: &str| IoError::new(kind, message.to_owned());
+        let parse_source = serde_json::from_slice::<serde_json::Value>(b"xx").unwrap_err();
+        struct AlwaysFails;
+        impl Serialize for AlwaysFails {
+            fn serialize<S: serde::Serializer>(&self, _serializer: S) -> Result<S::Ok, S::Error> {
+                Err(serde::ser::Error::custom("boom"))
+            }
+        }
+        let encode_source = serde_json::to_vec(&AlwaysFails).unwrap_err();
+        let command = BootstrapError::CommandFailed {
+            program: "launchctl".to_string(),
+            args: "list missing".to_string(),
+            detail: "No such process".to_string(),
+        };
+        let cases: Vec<(BootstrapError, String)> = vec![
+            (
+                BootstrapError::Read {
+                    path: "/reg/drives.json".into(),
+                    source: io(ErrorKind::NotFound, "missing"),
+                },
+                "read /reg/drives.json: missing".to_string(),
+            ),
+            (
+                BootstrapError::Parse {
+                    path: "/reg/drives.json".into(),
+                    source: parse_source,
+                },
+                format!(
+                    "parse /reg/drives.json: {}",
+                    serde_json::from_slice::<serde_json::Value>(b"xx").unwrap_err()
+                ),
+            ),
+            (
+                BootstrapError::UnsupportedVersion {
+                    path: "/reg/drives.json".into(),
+                    found: 999,
+                },
+                format!("registry /reg/drives.json is version 999, this build reads {REGISTRY_VERSION}"),
+            ),
+            (
+                BootstrapError::KeyMismatch {
+                    key: "a".to_string(),
+                    name: "b".to_string(),
+                },
+                "key \"a\" does not match entry name \"b\"".to_string(),
+            ),
+            (
+                BootstrapError::InvalidName {
+                    name: "BAD NAME!".to_string(),
+                },
+                "name \"BAD NAME!\" must be 1-64 chars of [a-z0-9-]".to_string(),
+            ),
+            (
+                BootstrapError::NameTooLongForServicePrefix {
+                    name: "a-very-long-drive-name-that-leaves-no-room-at-all-xyz".to_string(),
+                },
+                "name \"a-very-long-drive-name-that-leaves-no-room-at-all-xyz\" leaves no room for the drive- service prefix (max 58 chars)".to_string(),
+            ),
+            (
+                BootstrapError::InvalidService {
+                    service: "BAD!".to_string(),
+                },
+                "service \"BAD!\" must be 1-64 chars of [a-z0-9-]".to_string(),
+            ),
+            (
+                BootstrapError::RelativeDriveDir {
+                    dir: "relative/path".into(),
+                },
+                "drive_dir relative/path must be absolute".to_string(),
+            ),
+            (
+                BootstrapError::DriveDirHasDotDot {
+                    dir: "/reg/../drive".into(),
+                },
+                "drive_dir /reg/../drive must not contain ..".to_string(),
+            ),
+            (BootstrapError::UnknownServiceMode, "unknown service mode: registry-managed mount mode travels with the installer follow-up (P2 landed: manual `wyrd mount` serves the socket)".to_string()),
+            (
+                BootstrapError::InvalidRelays,
+                "relays must be non-empty URLs without whitespace or control bytes".to_string(),
+            ),
+            (
+                BootstrapError::DriveDirHasControlChars {
+                    dir: "/reg/drive".into(),
+                },
+                "drive_dir /reg/drive must not contain control characters".to_string(),
+            ),
+            (
+                BootstrapError::RefusedWrite {
+                    source: Box::new(BootstrapError::RelativeDriveDir {
+                        dir: "relative/path".into(),
+                    }),
+                },
+                "refusing to write: drive_dir relative/path must be absolute".to_string(),
+            ),
+            (
+                BootstrapError::Encode {
+                    source: encode_source,
+                },
+                "encode registry: boom".to_string(),
+            ),
+            (
+                BootstrapError::CreateDir {
+                    path: "/reg".into(),
+                    source: io(ErrorKind::PermissionDenied, "denied"),
+                },
+                "create /reg: denied".to_string(),
+            ),
+            (
+                BootstrapError::WriteFile {
+                    path: "/reg/drives.json".into(),
+                    source: io(ErrorKind::StorageFull, "full"),
+                },
+                "write /reg/drives.json: full".to_string(),
+            ),
+            (
+                BootstrapError::ReplaceFile {
+                    path: "/reg/drives.json".into(),
+                    source: io(ErrorKind::PermissionDenied, "denied"),
+                },
+                "replace /reg/drives.json: denied".to_string(),
+            ),
+            (
+                BootstrapError::Chmod {
+                    path: "/reg/drives.json".into(),
+                    source: io(ErrorKind::PermissionDenied, "denied"),
+                },
+                "chmod /reg/drives.json: denied".to_string(),
+            ),
+            (
+                BootstrapError::SyncFile {
+                    path: "/reg/drives.json".into(),
+                    source: io(ErrorKind::Other, "sync lost"),
+                },
+                "sync /reg/drives.json: sync lost".to_string(),
+            ),
+            (
+                BootstrapError::Spawn {
+                    program: "launchctl".to_string(),
+                    source: io(ErrorKind::NotFound, "missing"),
+                },
+                "spawn launchctl: missing".to_string(),
+            ),
+            (
+                BootstrapError::CommandFailed {
+                    program: "launchctl".to_string(),
+                    args: "list missing".to_string(),
+                    detail: "No such process".to_string(),
+                },
+                "launchctl list missing failed: No such process".to_string(),
+            ),
+            (
+                BootstrapError::EnableService {
+                    name: "md.enesis.wyrd.drive-demo".to_string(),
+                    source: Box::new(command),
+                },
+                "enable md.enesis.wyrd.drive-demo: launchctl list missing failed: No such process"
+                    .to_string(),
+            ),
+            (
+                BootstrapError::ReloadUnits {
+                    source: Box::new(BootstrapError::Spawn {
+                        program: "systemctl".to_string(),
+                        source: io(ErrorKind::NotFound, "missing"),
+                    }),
+                },
+                "reload user units: spawn systemctl: missing".to_string(),
+            ),
+            (
+                BootstrapError::AgentNotLoaded {
+                    label: "md.enesis.wyrd.drive-demo".to_string(),
+                    source: Box::new(BootstrapError::CommandFailed {
+                        program: "launchctl".to_string(),
+                        args: "list md.enesis.wyrd.drive-demo".to_string(),
+                        detail: "No such process".to_string(),
+                    }),
+                },
+                "start md.enesis.wyrd.drive-demo: agent not loaded: launchctl list md.enesis.wyrd.drive-demo failed: No such process".to_string(),
+            ),
+            (
+                BootstrapError::RestartService {
+                    unit: "wyrd-drive-demo.service".to_string(),
+                    source: Box::new(BootstrapError::Spawn {
+                        program: "systemctl".to_string(),
+                        source: io(ErrorKind::NotFound, "missing"),
+                    }),
+                },
+                "restart wyrd-drive-demo.service: spawn systemctl: missing".to_string(),
+            ),
+            (
+                BootstrapError::ServicesUnsupported,
+                "per-drive services are implemented for Unix (launchd agent, systemd user unit)"
+                    .to_string(),
+            ),
+        ];
+        assert_eq!(cases.len(), 26, "every variant pins its message");
+        for (error, expected) in cases {
+            assert_eq!(error.to_string(), expected, "Display changed");
+        }
+    }
+
+    #[test]
+    fn bootstrap_failures_match_by_variant_not_by_text() {
+        let dir = scratch("typed");
+        let mut bad = entry("bad", &dir);
+        bad.name = "BAD NAME!".to_string();
+        let error = validate_entry("BAD NAME!", &bad).unwrap_err();
+        assert!(
+            matches!(error, BootstrapError::InvalidName { .. }),
+            "callers branch on the variant, never parse the message: {error}"
+        );
+        // The text readers keep working: Display is unchanged.
+        assert!(
+            error
+                .to_string()
+                .contains("must be 1-64 chars of [a-z0-9-]"),
+            "{error}"
+        );
+        let nested = BootstrapError::RefusedWrite {
+            source: Box::new(error),
+        };
+        assert!(
+            nested.to_string().starts_with("refusing to write: "),
+            "{nested}"
+        );
     }
 
     #[test]
