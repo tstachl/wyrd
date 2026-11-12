@@ -24,7 +24,11 @@ final class LiveItem: NSObject, NSFileProviderItem {
     let filename: String
     let contentType: UTType
     let isDirectory: Bool
-    let isSymlink: Bool
+    /// Presentation-internal symlink marker: File Provider has no
+    /// symlink kind, so symlinks present as ordinary files whose
+    /// hydration fails closed. Not the system's `isSymbolicLink` —
+    /// nothing here claims that property.
+    let isSymlinkRow: Bool
     private let size: UInt64?
     private let contentVersionData: Data
     private let metadataVersionData: Data
@@ -66,7 +70,7 @@ final class LiveItem: NSObject, NSFileProviderItem {
         self.parentItemIdentifier = parent
         self.filename = row.name
         self.isDirectory = directory
-        self.isSymlink = symlink
+        self.isSymlinkRow = symlink
         if directory {
             self.contentType = .folder
         } else if let ext = row.name.split(separator: ".").last.map(String.init),
@@ -111,7 +115,7 @@ final class LiveItem: NSObject, NSFileProviderItem {
     }
 
     var documentSize: NSNumber? {
-        guard let size, !isDirectory, !isSymlink else { return nil }
+        guard let size, !isDirectory, !isSymlinkRow else { return nil }
         return NSNumber(value: size)
     }
 }

@@ -66,3 +66,21 @@ final class LiveEnumerator: NSObject, NSFileProviderEnumerator {
         }
     }
 }
+
+/// The working set and trash have no owner rows in a read-only
+/// Stage 2 domain: enumerate them empty rather than erroring on
+/// every system sync. Item identity for these containers stays
+/// not-found — they are not entries.
+final class EmptyEnumerator: NSObject, NSFileProviderEnumerator {
+    func enumerateItems(
+        for observer: NSFileProviderEnumerationObserver,
+        startingAt page: NSFileProviderPage
+    ) {
+        observer.didEnumerate([])
+        observer.finishEnumerating(upTo: nil)
+    }
+
+    func invalidate() {
+        // Nothing held.
+    }
+}

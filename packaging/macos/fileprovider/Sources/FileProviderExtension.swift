@@ -78,6 +78,11 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
         for containerItemIdentifier: NSFileProviderItemIdentifier,
         request: NSFileProviderRequest
     ) throws -> NSFileProviderEnumerator {
+        if containerItemIdentifier == .workingSet
+            || containerItemIdentifier == .trashContainer
+        {
+            return EmptyEnumerator()
+        }
         if let liveStore {
             return LiveEnumerator(
                 container: containerItemIdentifier,

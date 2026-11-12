@@ -292,26 +292,32 @@ struct OwnerConflictVersion: Codable {
     var node: OwnerNode
 }
 
-/// Decode lowercase hex to bytes. Rejects odd lengths, uppercase,
-/// and non-hex — the wire only ever carries lowercase.
+/// Decode lowercase hex to bytes. Rejects odd lengths and any
+/// character outside `0-9a-f` — validated per character, never via
+/// a numeric parser that tolerates a leading `+` or uppercase.
 enum HexCodec {
     static func decode(_ hex: String) throws -> [UInt8] {
         guard hex.count % 2 == 0 else {
             throw HexError.oddLength
         }
+        func nibble(_ character: Character) throws -> UInt8 {
+            switch character {
+            case "0" ... "9":
+                return character.asciiValue! - Character("0").asciiValue!
+            case "a" ... "f":
+                return 10 + character.asciiValue! - Character("a").asciiValue!
+            default:
+                throw HexError.badDigit(String(character))
+            }
+        }
         var bytes: [UInt8] = []
         bytes.reserveCapacity(hex.count / 2)
         var index = hex.startIndex
         while index < hex.endIndex {
-            let next = hex.index(index, offsetBy: 2)
-            let pair = hex[index ..< next]
-            guard let byte = UInt8(pair, radix: 16),
-                pair == pair.lowercased()
-            else {
-                throw HexError.badDigit(String(pair))
-            }
-            bytes.append(byte)
-            index = next
+            let high = hex[index]
+            let low = hex[hex.index(after: index)]
+            bytes.append(try nibble(high) << 4 | nibble(low))
+            index = hex.index(index, offsetBy: 2)
         }
         return bytes
     }

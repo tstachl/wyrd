@@ -1,10 +1,13 @@
 # macOS packaging (`packaging/macos/`)
 
-Status: Proposed. This note holds the adapter layout and the
-sandbox/socket scheme under open decision; on any conflict the
-normative contracts win — the drive-owner interface
-(`docs/contracts/owner-interface.md`) for transport and the File
-Provider issue for OD-17-A/B/C and the OD-8 outcome.
+Status: Implemented behind an explicit dev bootstrap. This note
+holds the adapter layout and the sandbox/socket scheme; the
+normative transport (both sockets, the alias, authentication, and
+the shared connection bound) lives in
+`docs/contracts/owner-interface.md` (Transport), which this note
+defers to on any conflict — the drive-owner interface for
+transport and the File Provider issue for OD-17-A/B/C and the
+OD-8 outcome.
 
 Platform packaging outside Cargo and Nix: the Swift File Provider
 adapter and its build script. Nothing here is a Cargo workspace
@@ -13,8 +16,8 @@ enforced by the `fileprovider_swift_stays_within_the_owner_boundary`
 contract instead of a `MemberPolicy` allow-list — the OD-8
 refinement, proposed on the issue thread and awaiting decision.
 See the File Provider issue for the OD-17-A/B/C
-decisions (`nostr:nevent1qqsqz3tuhx8vvucgzrdtfc0y49sfs0mc3v7xratvxhg999plxp97e0gpz9mhxue69uhkwunpwdczuap49eehgvak3m0`); identity and conflict-surface decisions are a hard gate
-before Stage 2, and Stage 0/1 proceed without them.
+decisions (`nostr:nevent1qqsqz3tuhx8vvucgzrdtfc0y49sfs0mc3v7xratvxhg999plxp97e0gpz9mhxue69uhkwunpwdczuap49eehgvak3m0`); the identity and conflict-surface decisions gated
+Stage 2 and are recorded — Stage 2 implements against them.
 
 ## Layout
 
@@ -94,14 +97,15 @@ The report's V1 vocabulary maps as: `startProvidingItem` →
 through enumeration, lookup, hydration, and mutation. Recorded on
 the issue thread (`nostr:nevent1qqsqz3tuhx8vvucgzrdtfc0y49sfs0mc3v7xratvxhg999plxp97e0gpz9mhxue69uhkwunpwdczuap49eehgvak3m0`).
 
-## Sandbox and socket scheme (Stage 0 proposal)
+## Sandbox and socket scheme (implemented, dev bootstrap)
 
-Status: Proposed — the normative transport is one socket at
-`<drive_dir>/owner.sock`, and that path is the sandbox boundary
-(`docs/contracts/owner-interface.md:14-19,41`). What follows is the
-scheme Stage 1 will probe, not a settled change; if the probe or
-the contract review rejects it, this section changes, not the
-contract.
+Status: Implemented — the normative transport covers both sockets
+(`docs/contracts/owner-interface.md`, Transport): one socket at
+`<drive_dir>/owner.sock` (the sandbox boundary, unchanged), plus
+the macOS-additive group socket and alias for the File Provider
+extension. The dev bootstrap (explicit container plus drive) is
+the only configuration; the registry owns the production
+association.
 
 The extension runs sandboxed inside `fileproviderd`. A sandboxed
 process reaches its container, its App Group containers, and
@@ -110,7 +114,7 @@ requires filesystem access to the socket node, so the owner socket
 at its drive-derived location is unreachable from the extension:
 App Group alignment does not make arbitrary paths accessible.
 
-The proposed scheme, therefore:
+The scheme, therefore:
 
 - On macOS the owner serves each drive's interface socket **also**
   inside the App Group container:
@@ -130,11 +134,13 @@ The proposed scheme, therefore:
   also live-confirms the daemon's computed bind path against the
   extension-resolved one.
 - `socket_path_for` stays the cross-platform default; the group
-  container path is a macOS-additive override proposal, never a
+  container socket is a macOS-additive second listener, never a
   replacement. Linux behavior is unchanged.
-- Stale sockets resolve through existing semantics: unlink-before-bind
-  on serve, connect failure surfaces `Unavailable`, the extension
-  reconnects on demand and never assumes a persistent connection.
+- Stale sockets: unlink-before-bind on the drive-directory
+  socket; on the group socket a live endpoint fails the bind
+  closed instead of being unlinked. Connect failure surfaces
+  `Unavailable`, the extension reconnects on demand and never
+  assumes a persistent connection.
 - `<drive>` is the stable per-drive fingerprint from the Stage 2
   design contract below, coordinated with the multi-drive registry
   (in progress elsewhere) — the registry owns the

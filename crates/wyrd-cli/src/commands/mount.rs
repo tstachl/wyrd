@@ -200,6 +200,10 @@ pub(crate) fn mount(
     // arrives by flag or by the application settings file, so this
     // fires for operator configuration, not only for tests.
     check_startup_retention(&config, &store, engine.vault().seen_bytes())?;
+    // The drive served here is checked against the group-socket
+    // bootstrap at bind: a configured drive that is not this one
+    // refuses the run before anything binds.
+    let drive = engine.drive();
     let mut daemon = WyrdNode::new(engine, store)?;
     daemon.refresh_live_heads()?;
 
@@ -247,13 +251,15 @@ pub(crate) fn mount(
     // The drive-owner interface serves beside the mount through the
     // shared `OwnerService`: the same handles either presentation
     // serves, peer-checked at the drive-directory socket (P2,
-    // option A). Bind before presenting: an owner that cannot serve
-    // its interface refuses the run instead of running deaf. The
-    // guard is shut down explicitly after the transport tail while
-    // the live node (and its store lock) is still held — the removal
-    // must precede the lock release, or a successor owner binding
-    // the same path races this unlink; its drop is then a no-op.
-    let mut owner_service = OwnerService::bind(
+    // option A) — plus the App Group socket when the dev bootstrap
+    // names this drive. Bind before presenting: an owner that cannot
+    // serve its interface refuses the run instead of running deaf.
+    // The guard is shut down explicitly after the transport tail
+    // while the live node (and its store lock) is still held — the
+    // removal must precede the lock release, or a successor owner
+    // binding the same path races this unlink; its drop is then a
+    // no-op.
+    let mut owner_service = OwnerService::bind_for_composer(
         OwnerHandles::for_live(
             &parts,
             Arc::clone(live.quarantine_queue()),
@@ -261,6 +267,7 @@ pub(crate) fn mount(
             Arc::clone(live.waker()),
         ),
         &drive_dir,
+        drive,
     )
     .map_err(CliError::Serving)?;
     // Endpoint ownership (and shutdown below) stays here; the loop

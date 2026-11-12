@@ -3227,6 +3227,28 @@ fn group_drive() -> DriveId {
     DriveId::from_bytes([0x42; 32])
 }
 
+/// Env-touching group tests serialize on this lock: process-global
+/// environment is shared by every test thread in the binary, so two
+/// bootstrap tests must never interleave a set and a read.
+static GROUP_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Set the dev bootstrap pair for the test duration; removal on
+/// drop restores the absent state.
+struct GroupEnvGuard;
+impl GroupEnvGuard {
+    fn set(container: &std::path::Path, drive_hex: &str) -> Self {
+        std::env::set_var(super::server::FILEPROVIDER_GROUP_CONTAINER_ENV, container);
+        std::env::set_var(super::server::FILEPROVIDER_DRIVE_ID_ENV, drive_hex);
+        GroupEnvGuard
+    }
+}
+impl Drop for GroupEnvGuard {
+    fn drop(&mut self) {
+        std::env::remove_var(super::server::FILEPROVIDER_GROUP_CONTAINER_ENV);
+        std::env::remove_var(super::server::FILEPROVIDER_DRIVE_ID_ENV);
+    }
+}
+
 /// A fresh group container directory. Sockets live under a short
 /// `/tmp` base in tests: the `sun_path` ceiling (103 usable bytes on
 /// macOS) rules out nesting the container under the long scratch
@@ -3413,6 +3435,7 @@ fn group_bind_reclaims_stale_socket() {
 /// never a silent fallback.
 #[test]
 fn group_bootstrap_env_parsing() {
+    let _lock = GROUP_ENV_LOCK.lock().unwrap();
     struct EnvGuard;
     impl Drop for EnvGuard {
         fn drop(&mut self) {
@@ -3454,4 +3477,103 @@ fn group_bootstrap_env_parsing() {
         "a partial bootstrap refuses, never a silent primary-only fallback"
     );
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// A bootstrap naming a drive this owner does not serve refuses
+/// before anything binds: no primary, no group socket, no alias —
+/// the run never publishes another drive's tree under this drive's
+/// name. The positive half proves the check compares rather than
+/// merely parses: the same bootstrap with the served drive binds.
+#[test]
+fn group_bind_refuses_a_foreign_configured_drive() {
+    let _lock = GROUP_ENV_LOCK.lock().unwrap();
+    let (engine, dir) = scratch_drive();
+    let served = engine.drive();
+    let store = wyrd_format::FsObjectStore::open(dir.clone()).unwrap();
+    let mut daemon = wyrd_core::node::WyrdNode::new(engine, store).unwrap();
+    daemon.put_file("hello.txt", b"hello owner").unwrap();
+    daemon.refresh_live_heads().unwrap();
+    let (_live, parts) = daemon
+        .into_live(
+            Duration::from_secs(5),
+            &wyrd_core::live::LiveConfig::default(),
+        )
+        .unwrap();
+    let container = group_container();
+    // Foreign drive: must refuse, binding nothing.
+    let _guard = GroupEnvGuard::set(&container, &group_drive().to_string());
+    assert_ne!(
+        served,
+        group_drive(),
+        "the fixture drive differs from the served one"
+    );
+    match super::OwnerService::bind_for_composer(OwnerHandles::from_parts(&parts), &dir, served) {
+        Ok(_) => panic!("a foreign configured drive must refuse the bind"),
+        Err(error) => assert_eq!(
+            error.kind(),
+            std::io::ErrorKind::InvalidInput,
+            "the mismatch refuses explicitly: {error}"
+        ),
+    }
+    assert!(
+        !super::socket_path_for(&dir).exists(),
+        "a refused mismatch binds no primary either"
+    );
+    assert!(
+        !super::server::group_socket_path(&container, &group_drive()).exists(),
+        "a refused mismatch binds no group socket"
+    );
+    drop(_guard);
+    // Served drive: the same bootstrap now binds.
+    let _guard = GroupEnvGuard::set(&container, &served.to_string());
+    let service =
+        super::OwnerService::bind_for_composer(OwnerHandles::from_parts(&parts), &dir, served)
+            .expect("the served configured drive binds");
+    let link = super::server::group_symlink_path(&container, &served);
+    let mut grouped =
+        OwnerClient::connect(&resolve_group_alias_for_test(&link)).expect("the alias answers");
+    let (node, _, _) = grouped.lookup("hello.txt").expect("lookup serves");
+    assert!(
+        matches!(node, WireNode::File { size: 11, .. }),
+        "the matched bind serves the composed drive: {node:?}"
+    );
+    drop(service);
+    std::fs::remove_dir_all(dir).unwrap();
+    std::fs::remove_dir_all(container).unwrap();
+}
+
+/// Resolve the by-drive alias the way the Swift extension does:
+/// read the link, connect to the sibling target.
+fn resolve_group_alias_for_test(link: &std::path::Path) -> std::path::PathBuf {
+    let target = std::fs::read_link(link).expect("the alias is a symlink");
+    link.parent().expect("the alias has a parent").join(target)
+}
+
+/// A group-side publish failure unbinds the primary and refuses:
+/// the owner never runs half-bound, deaf to the extension but
+/// alive to the CLI. A file where `Sockets/` must be created
+/// forces the failure deterministically.
+#[test]
+fn group_bind_publish_failure_unbinds_primary() {
+    let (parts, dir) = composed_parts();
+    let container = group_container();
+    let drive = group_drive();
+    let sockets = container.join("Sockets");
+    std::fs::write(&sockets, b"a file where the sockets directory belongs").unwrap();
+    if super::OwnerService::bind_with_group_container(
+        OwnerHandles::from_parts(&parts),
+        &dir,
+        &drive,
+        &container,
+    )
+    .is_ok()
+    {
+        panic!("an unpublishable group path must refuse")
+    }
+    assert!(
+        !super::socket_path_for(&dir).exists(),
+        "the half-bound primary is removed on group failure"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+    std::fs::remove_dir_all(container).unwrap();
 }

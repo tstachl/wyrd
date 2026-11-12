@@ -162,7 +162,12 @@ final class OwnerClient {
             try writeAll(fd: fd, bytes: pointer, op: op)
         }
         let prefix = try readExactly(fd: fd, count: 4, op: op)
-        let lengthValue = prefix.withUnsafeBytes { $0.load(as: UInt32.self).bigEndian }
+        // Assemble the length byte-by-byte: a socket-read buffer
+        // carries no alignment guarantee, so no direct load.
+        let lengthValue = (UInt32(prefix[0]) << 24)
+            | (UInt32(prefix[1]) << 16)
+            | (UInt32(prefix[2]) << 8)
+            | UInt32(prefix[3])
         guard lengthValue <= UInt32(maxFrameBytes) else {
             throw OwnerClientError.unconfirmed(
                 op: op,
@@ -234,14 +239,17 @@ final class OwnerClient {
             tv_sec: Int(responseTimeout),
             tv_usec: 0
         )
-        setsockopt(
-            fd, SOL_SOCKET, SO_RCVTIMEO, &timeout,
-            socklen_t(MemoryLayout<timeval>.size)
-        )
-        setsockopt(
-            fd, SOL_SOCKET, SO_SNDTIMEO, &timeout,
-            socklen_t(MemoryLayout<timeval>.size)
-        )
+        let timeoutLength = socklen_t(MemoryLayout<timeval>.size)
+        guard setsockopt(
+            fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, timeoutLength
+        ) == 0,
+            setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, timeoutLength) == 0
+        else {
+            close(fd)
+            throw OwnerClientError.unavailable(
+                "cannot set socket timeouts (\(errorString(errno)))"
+            )
+        }
         return fd
     }
 
@@ -284,13 +292,27 @@ final class OwnerClient {
             let base = raw.baseAddress!.assumingMemoryBound(to: UInt8.self)
             while done < count {
                 let rc = Darwin.read(fd, base.advanced(by: done), count - done)
-                if rc <= 0 {
+                if rc > 0 {
+                    done += rc
+                    continue
+                }
+                if rc == 0 {
                     throw OwnerClientError.unconfirmed(
                         op: op,
                         detail: done == 0 ? "peer closed mid-frame" : "peer closed mid-body"
                     )
                 }
-                done += rc
+                // A read timeout surfaces EAGAIN/EWOULDBLOCK on a
+                // blocking socket with SO_RCVTIMEO: a deadline, not
+                // a severed connection — still unconfirmed, but
+                // named so the wait is diagnosable.
+                if errno == EAGAIN || errno == EWOULDBLOCK {
+                    throw OwnerClientError.unconfirmed(op: op, detail: "read timed out")
+                }
+                throw OwnerClientError.unconfirmed(
+                    op: op,
+                    detail: "read failed (\(errorString(errno)))"
+                )
             }
         }
         return out

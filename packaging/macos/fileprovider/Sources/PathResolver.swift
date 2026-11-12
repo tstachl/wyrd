@@ -30,9 +30,17 @@ enum WalkOutcome: Equatable {
 final class PathResolver {
     /// The traversal budget mirrors the policy-status walk: one
     /// prefix, never the whole drive unbounded.
-    static let walkBudget = 4096
+    static let defaultWalkBudget = 4096
 
     let driveHex: String
+    /// The walk budget, settable for tests; production uses the
+    /// default.
+    var walkBudget = defaultWalkBudget
+    /// File Provider callbacks overlap (enumeration with item and
+    /// content requests), so every map access serializes. The walk
+    /// itself runs outside the lock — it only reads the owner —
+    /// and records through it.
+    private let lock = NSLock()
     private var idToPath: [String: (path: String, parent: NSFileProviderItemIdentifier)] = [:]
 
     init(driveHex: String) {
@@ -43,14 +51,18 @@ final class PathResolver {
     /// rows by path — both verified on use, so a stale record only
     /// costs one walk, never a wrong item.
     func record(identifier: NSFileProviderItemIdentifier, path: String, parent: NSFileProviderItemIdentifier) {
-        idToPath[identifier.rawValue] = (path, parent)
+        lock.withLock {
+            idToPath[identifier.rawValue] = (path, parent)
+        }
     }
 
     /// The cached path and parent, if any.
     func cached(identifier: NSFileProviderItemIdentifier) -> (
         path: String, parent: NSFileProviderItemIdentifier
     )? {
-        idToPath[identifier.rawValue]
+        lock.withLock {
+            idToPath[identifier.rawValue]
+        }
     }
 
     /// Re-resolve one stable token with a bounded breadth-first walk
@@ -58,6 +70,7 @@ final class PathResolver {
     /// is its own connection; a transport break throws, it never
     /// resolves to a guess.
     func walk(identityHex: String, client: OwnerClient, log: Logger) throws -> WalkOutcome {
+        let budget = walkBudget
         let wanted = identityHex.lowercased()
         var queue: [(path: String, identifier: NSFileProviderItemIdentifier)] = [
             ("", .rootContainer)
@@ -76,7 +89,7 @@ final class PathResolver {
             }
             for entry in entries {
                 seen += 1
-                guard seen <= Self.walkBudget else {
+                guard seen <= budget else {
                     log.error("path walk exceeded its budget resolving an identifier")
                     return .budgetExceeded
                 }

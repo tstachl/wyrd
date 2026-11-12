@@ -238,12 +238,14 @@ pub const DEFAULT_MAX_READ_BYTES: u64 = 32 << 20;
 /// single over-bound submit.
 pub const MAX_SUBMIT_CONTENT_BYTES: usize = 32 << 20;
 
-/// Maximum simultaneous owner-interface connections. One thread
-/// serves each connection, so the accept loop enforces a small fixed
-/// pool: a connection past the bound is closed immediately — the
-/// client treats the break as unconfirmed — and an accept flood
-/// cannot grow threads without bound. Idle connections hold their
-/// slot; consumers keep few, short-lived connections.
+/// Maximum simultaneous owner-interface connections, shared by
+/// every accept loop on one server: a second listener is a second
+/// accept path, never a second budget. One thread serves each
+/// connection, so the accept loops share one fixed pool: a
+/// connection past the bound is closed immediately — the client
+/// treats the break as unconfirmed — and an accept flood cannot
+/// grow threads without bound. Idle connections hold their slot;
+/// consumers keep few, short-lived connections.
 pub const MAX_OWNER_CONNECTIONS: usize = 16;
 
 /// How long the read side blocks registering demand before failing
@@ -485,6 +487,46 @@ impl OwnerService {
         self.group_socket_path.as_deref()
     }
 
+    /// Bind for an owner-mode composer (`wyrd vault`, `wyrd mount`):
+    /// the drive-directory socket, plus the App Group socket when
+    /// the dev bootstrap names this drive. The configured drive is
+    /// checked against the drive actually served *before* anything
+    /// binds: a stale or mistyped `WYRD_FILEPROVIDER_DRIVE_ID`
+    /// refuses the run instead of publishing another drive's tree
+    /// under this drive's alias. Absent bootstrap means the
+    /// drive-directory socket only. Malformed or mismatched
+    /// configuration refuses; it never falls back silently.
+    pub fn bind_for_composer(
+        handles: OwnerHandles,
+        drive_dir: &Path,
+        served: DriveId,
+    ) -> std::io::Result<Self> {
+        match group_container_from_env() {
+            None => Self::bind(handles, drive_dir),
+            Some(Ok(config)) => {
+                if config.drive != served {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        format!(
+                            "{} names drive {} but this owner serves {}: refusing the group bind",
+                            FILEPROVIDER_DRIVE_ID_ENV, config.drive, served
+                        ),
+                    ));
+                }
+                Self::bind_with_group_container(
+                    handles,
+                    drive_dir,
+                    &served,
+                    &config.group_container,
+                )
+            }
+            Some(Err(detail)) => Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                detail,
+            )),
+        }
+    }
+
     /// Stop serving, join the accept thread, and remove the socket
     /// file. Idempotent: a second call (including the drop) neither
     /// rejoins nor re-removes. A thread that ended unexpectedly logs,
@@ -563,6 +605,10 @@ pub struct OwnerServer {
     /// before reaching the queue. Fresh randomness per server, so a
     /// restart never honors the previous run's captures.
     instance: u64,
+    /// The shared connection-slot counter: every accept loop on this
+    /// server — primary and group — draws from one pool, so the
+    /// second listener never doubles the ceiling.
+    slots: Arc<AtomicUsize>,
 }
 
 impl OwnerServer {
@@ -588,6 +634,7 @@ impl OwnerServer {
             handles,
             owner_uid: super::auth::owner_uid(),
             instance,
+            slots: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -623,11 +670,9 @@ impl OwnerServer {
     /// own teardown (teardown drain or admission close), so the
     /// join is bounded by the run, never by a silent waiter.
     pub fn serve_on(&self, listener: &UnixListener, stop: &AtomicBool) {
-        let active = AtomicUsize::new(0);
-        // Shared by the gate and every spawned guard: a shared
-        // reference, so each `move` closure copies it instead of
-        // moving the counter.
-        let slots = &active;
+        // The pool counter lives on the server, so every accept loop
+        // — primary and group — draws from one budget.
+        let slots: &AtomicUsize = &self.slots;
         std::thread::scope(|scope| {
             while !stop.load(Ordering::Relaxed) {
                 match listener.accept() {

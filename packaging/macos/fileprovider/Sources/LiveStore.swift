@@ -83,18 +83,31 @@ final class LiveStore {
         let parsed = WyrdItemIdentifier.parse(identifier.rawValue, driveHex: driveHex)
         switch parsed {
         case .stable(_, let identityHex):
-            let (path, parent) = try resolveStable(
+            let resolved = try stableNode(
                 identifier: identifier,
                 identityHex: identityHex,
                 client: client
             )
-            return try itemAt(path: path, parent: parent, client: client)
+            return try buildItem(
+                node: resolved.node,
+                path: resolved.path,
+                parent: resolved.parent,
+                generation: resolved.generation,
+                revision: resolved.revision
+            )
         case .legacy(let pathHex):
             guard let path = WyrdItemIdentifier.legacyPath(pathHex: pathHex) else {
                 throw LiveStoreError.notFound("legacy identifier undecodable")
             }
             let parent = try parentIdentifier(of: path, client: client)
-            return try itemAt(path: path, parent: parent, client: client)
+            let (node, generation, revision) = try lookupNode(path: path, client: client)
+            return try buildItem(
+                node: node,
+                path: path,
+                parent: parent,
+                generation: generation,
+                revision: revision
+            )
         case nil:
             throw LiveStoreError.notFound("identifier not parseable for this drive")
         }
@@ -113,14 +126,21 @@ final class LiveStore {
         }
         let client = try liveClient()
         let parsed = WyrdItemIdentifier.parse(identifier.rawValue, driveHex: driveHex)
+        let node: OwnerNode
         let path: String
         let parent: NSFileProviderItemIdentifier
+        let generation: UInt64
+        let revision: UInt64
         switch parsed {
         case .stable(_, let identityHex):
-            (path, parent) = try resolveStable(
+            let resolved = try stableNode(
                 identifier: identifier,
                 identityHex: identityHex,
                 client: client
+            )
+            (node, path, parent, generation, revision) = (
+                resolved.node, resolved.path, resolved.parent,
+                resolved.generation, resolved.revision
             )
         case .legacy(let pathHex):
             guard let legacyPath = WyrdItemIdentifier.legacyPath(pathHex: pathHex) else {
@@ -128,11 +148,18 @@ final class LiveStore {
             }
             path = legacyPath
             parent = try parentIdentifier(of: path, client: client)
+            (node, generation, revision) = try lookupNode(path: path, client: client)
         case nil:
             throw LiveStoreError.notFound("identifier not parseable for this drive")
         }
-        let item = try itemAt(path: path, parent: parent, client: client)
-        guard !item.isDirectory, !item.isSymlink else {
+        let item = try buildItem(
+            node: node,
+            path: path,
+            parent: parent,
+            generation: generation,
+            revision: revision
+        )
+        guard !item.isSymlinkRow, !item.isDirectory else {
             throw LiveStoreError.sync("only files hydrate")
         }
         let bytes: [UInt8]
@@ -173,11 +200,17 @@ final class LiveStore {
             }
             switch parsed {
             case .stable(_, let identityHex):
-                (containerPath, _) = try resolveStable(
+                let resolved = try stableNode(
                     identifier: container,
                     identityHex: identityHex,
                     client: client
                 )
+                switch resolved.node {
+                case .dir, .mergedDir:
+                    containerPath = resolved.path
+                default:
+                    throw LiveStoreError.notFound("container is not a directory")
+                }
             case .legacy(let pathHex):
                 guard let path = WyrdItemIdentifier.legacyPath(pathHex: pathHex) else {
                     throw LiveStoreError.notFound("container undecodable")
@@ -255,23 +288,50 @@ final class LiveStore {
         return NSFileProviderItemIdentifier(WyrdItemIdentifier.legacyID(path: path))
     }
 
-    /// Resolve a stable token: cache, verify with `lookup`, else one
-    /// bounded walk. A verified mismatch (rename, path reuse) walks;
-    /// a conflict classification fails closed; anything else 404s.
-    private func resolveStable(
+    /// Resolve one stable token to its serving node in a single
+    /// `lookup` on the fast path: the cached path verifies by
+    /// agreeing with the requested token, so a rename,
+    /// delete-plus-recreate, or path reuse can never return a
+    /// replacement under the old identifier. A mismatch falls
+    /// through to one bounded walk; a conflict classification fails
+    /// closed; anything else 404s. Transport breaks propagate, never
+    /// trigger a walk.
+    private func stableNode(
         identifier: NSFileProviderItemIdentifier,
         identityHex: String,
         client: OwnerClient
-    ) throws -> (path: String, parent: NSFileProviderItemIdentifier) {
+    ) throws -> (
+        node: OwnerNode, path: String, parent: NSFileProviderItemIdentifier,
+        generation: UInt64, revision: UInt64
+    ) {
         if let cached = resolver.cached(identifier: identifier) {
-            if verifyToken(identityHex: identityHex, path: cached.path, client: client) {
-                return cached
+            do {
+                let (node, generation, revision) = try client.lookup(path: cached.path)
+                if nodeMatches(node: node, identityHex: identityHex) {
+                    return (node, cached.path, cached.parent, generation, revision)
+                }
+                // Verified mismatch: the cache is stale. The walk
+                // below re-resolves (or classifies the conflict).
+            } catch let error as OwnerClientError {
+                switch error {
+                case .refused(let refusal) where refusal.code == "NotFound":
+                    break // Deleted path: the walk decides.
+                case .refused(let refusal) where refusal.code == "Conflicted":
+                    log.error("cached path is conflicted, failing closed")
+                    throw LiveStoreError.sync("entry is conflicted")
+                default:
+                    throw mapError(error, what: "lookup \(cached.path)")
+                }
             }
         }
         switch try resolver.walk(identityHex: identityHex, client: client, log: log) {
         case .found(let path, let parent):
             resolver.record(identifier: identifier, path: path, parent: parent)
-            return (path, parent)
+            let (node, generation, revision) = try lookupNode(path: path, client: client)
+            guard nodeMatches(node: node, identityHex: identityHex) else {
+                throw LiveStoreError.notFound("identifier moved during resolution")
+            }
+            return (node, path, parent, generation, revision)
         case .conflicted:
             log.error("stable identifier resolves to a conflicted entry, failing closed")
             throw LiveStoreError.sync("entry is conflicted")
@@ -282,39 +342,35 @@ final class LiveStore {
         }
     }
 
-    /// The cached path still names this token: `lookup` must agree.
-    /// A conflict at the cached path also fails closed here (the
-    /// token's entry exists but is conflicted), while any other
-    /// mismatch falls through to the walk.
-    private func verifyToken(identityHex: String, path: String, client: OwnerClient) -> Bool {
-        guard let (node, _, _) = try? client.lookup(path: path) else {
-            return false
-        }
-        switch node {
-        case .conflict:
-            return false
-        default:
-            return nodeIdentity(node)?.lowercased() == identityHex.lowercased()
-        }
+    /// A looked-up node carries the requested token: files, dirs,
+    /// and symlinks by their entry token, merged dirs by the agreed
+    /// token. Conflict rows never match — the walk classifies them.
+    private func nodeMatches(node: OwnerNode, identityHex: String) -> Bool {
+        nodeIdentity(node)?.lowercased() == identityHex.lowercased()
     }
 
-    /// One item at a known path: `lookup` classifies (conflict fails
-    /// closed), the token must agree with a stable identifier, then
-    /// build. `nil` from the builder is unreachable here (conflicts
-    /// return above), so it fails closed too.
-    private func itemAt(
-        path: String,
-        parent: NSFileProviderItemIdentifier,
-        client: OwnerClient
-    ) throws -> LiveItem {
-        let node: OwnerNode
-        let generation: UInt64
-        let revision: UInt64
+    /// One `lookup` with error mapping. Conflict rows return as
+    /// nodes (the caller classifies); every refusal maps.
+    private func lookupNode(path: String, client: OwnerClient) throws -> (
+        node: OwnerNode, generation: UInt64, revision: UInt64
+    ) {
         do {
-            (node, generation, revision) = try client.lookup(path: path)
+            return try client.lookup(path: path)
         } catch {
             throw mapError(error, what: "lookup \(path)")
         }
+    }
+
+    /// Build the item for a classified node. Conflict rows and
+    /// excluded rows fail closed — every caller classifies first,
+    /// and this is the backstop if one does not.
+    private func buildItem(
+        node: OwnerNode,
+        path: String,
+        parent: NSFileProviderItemIdentifier,
+        generation: UInt64,
+        revision: UInt64
+    ) throws -> LiveItem {
         if case .conflict = node {
             throw LiveStoreError.sync("entry is conflicted")
         }

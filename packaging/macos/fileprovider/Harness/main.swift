@@ -4,6 +4,7 @@
 // (`stub_owner.py`, started by `run-harness.sh`). Compiled with the
 // adapter sources into a CLI binary; never part of the appex.
 
+import Dispatch
 import FileProvider
 import Foundation
 import os
@@ -371,6 +372,58 @@ check({
     if case .sync = store.mapError(OwnerClientError.incompatible("bad"), what: "t") { return true }
     return false
 }(), "protocol violations map to sync")
+
+// MARK: - Resolver concurrency and budget
+
+// File Provider callbacks overlap: enumeration, item, and content
+// requests share one resolver. Hammer it concurrently — under
+// Thread Sanitizer this fails on an unserialized map.
+do {
+    let group = DispatchGroup()
+    let queue = DispatchQueue.global(qos: .utility)
+    let lock = NSLock()
+    var concurrentFailures = 0
+    for i in 0 ..< 20 {
+        queue.async(group: group) {
+            do {
+                if i % 3 == 0 {
+                    _ = try store.enumerate(container: .rootContainer)
+                } else if i % 3 == 1 {
+                    _ = try store.item(for: NSFileProviderItemIdentifier(stable))
+                } else {
+                    _ = try store.contents(for: NSFileProviderItemIdentifier(stable))
+                }
+            } catch {
+                lock.withLock { concurrentFailures += 1 }
+                print("FAIL: concurrent store use: \(error)")
+            }
+        }
+    }
+    group.wait()
+    checkEqual(concurrentFailures, 0, "concurrent enumerate/item/hydrate stay consistent")
+}
+
+// A tiny budget forces the budget-exceeded branch: fail closed,
+// never a guess.
+do {
+    let budgeted = LiveStore(
+        driveHex: driveHex, log: log, socketPathOverride: socketPath)
+    budgeted.resolver.walkBudget = 2
+    let overBudget = NSFileProviderItemIdentifier(
+        WyrdItemIdentifier.stableID(driveHex: driveHex, identityHex: String(repeating: "98", count: 32)))
+    do {
+        _ = try budgeted.item(for: overBudget)
+        print("FAIL: an over-budget walk resolves")
+        failures += 1
+    } catch let error as LiveStoreError {
+        if case .sync = error {
+            // Expected: the walk gave up loudly.
+        } else {
+            print("FAIL: an over-budget walk fails sync-closed, got \(error)")
+            failures += 1
+        }
+    }
+}
 
 if failures == 0 {
     print("harness: all checks passed")

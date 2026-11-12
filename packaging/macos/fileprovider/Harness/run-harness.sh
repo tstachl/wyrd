@@ -45,6 +45,15 @@ SWIFTC=${SWIFTC:-$(DEVELOPER_DIR=$DEVDIR $XCRUN --sdk macosx --find swiftc 2>/de
 SDK=${SDK:-$(DEVELOPER_DIR=$DEVDIR $XCRUN --sdk macosx --show-sdk-path 2>/dev/null)}
 
 mkdir -p "$OUT"
+# TSAN=1 rebuilds with the Thread Sanitizer: the concurrency
+# smoke test then fails on an unserialized resolver instead of
+# merely racing. Off by default (slower, noisier).
+TSAN=${TSAN:-0}
+if [ "$TSAN" = "1" ]; then
+    SANITIZE="-sanitize=thread"
+else
+    SANITIZE=""
+fi
 # The Harness compiles the adapter sources unchanged (the same set
 # the appex build compiles) plus the test driver: production code
 # never special-cases the harness beyond the documented socket
@@ -54,6 +63,7 @@ mkdir -p "$OUT"
     -target "$ARCH-apple-macos13.0" \
     -sdk "$SDK" \
     -O \
+    $SANITIZE \
     -o "$OUT/harness" \
     "$SOURCES"/*.swift "$HERE/main.swift"
 

@@ -569,6 +569,9 @@ pub struct ComposedHeadless {
     /// The drive directory the loop reads its materialization role
     /// from.
     pub drive_dir: PathBuf,
+    /// The drive this composition serves: the group-socket
+    /// bootstrap is checked against it before binding.
+    pub drive: wyrd_format::DriveId,
     /// The bound serving endpoint, installed on the loop by the run.
     pub serving: ServingEndpoint,
     /// The serving id for the ready line, hex-encoded here so every
@@ -638,6 +641,12 @@ pub fn compose_headless_owner_with_quota(
     .map_err(OwnerError::Settings)?;
     let config = applied.config;
     crate::process::check_startup_retention(&config, &store, engine.vault().seen_bytes())?;
+    // The drive served here travels into the composition: the
+    // group-socket bootstrap names a drive explicitly, and the run
+    // refuses a configured drive that is not this one — before
+    // binding anything — rather than publishing another drive's
+    // tree under this drive's alias.
+    let drive = engine.drive();
     let mut node = WyrdNode::new(engine, store)?;
     node.refresh_live_heads()?;
     let serving = node.open_serving(&drive_dir, loopback)?;
@@ -647,6 +656,7 @@ pub fn compose_headless_owner_with_quota(
         live,
         parts,
         drive_dir,
+        drive,
         serving,
         serving_id,
     })
@@ -683,61 +693,35 @@ where
         mut live,
         parts,
         drive_dir,
+        drive,
         serving,
         serving_id,
     } = composed;
     live.set_configured_relays(configured_relays);
     // The drive-owner interface serves from here: the shared
     // projection, the loop-published slots, and the single queue,
-    // peer-checked at the drive-directory socket. The composer
-    // wires the loop's repair queues the way the mount composer
-    // wires its backend — through the shared `OwnerService`, so
-    // headless and mount bind the same surface. Bind before
-    // spawning: an owner that cannot serve its interface refuses
-    // the run instead of running deaf. The store lock is held
-    // throughout the run, so no competing owner can race the
-    // stale-socket reclaim.
-    // the loop's repair queues the way the mount composer wires its
-    // backend — through the shared `OwnerService`, so headless and
-    // mount bind the same surface. Stage 2 dev bootstrap: when the
-    // App Group container (and the drive it serves) is explicitly
-    // configured, bind the group socket beside the drive-directory
-    // one from the same server — one instance identity, one uid
-    // check. A malformed bootstrap refuses the run; absent means the
-    // drive-directory socket only. Bind before spawning: an owner
-    // that cannot serve refuses instead of running deaf. The store
-    // lock is held throughout the run, so no competing owner can
-    // race the stale-socket reclaim.
-    let owner_service = match crate::owner::server::group_container_from_env() {
-        None => crate::owner::OwnerService::bind(
-            crate::owner::OwnerHandles::for_live(
-                &parts,
-                Arc::clone(live.quarantine_queue()),
-                Arc::clone(live.scrub_queue()),
-                Arc::clone(live.waker()),
-            ),
-            &drive_dir,
-        )
-        .map_err(OwnerError::Io)?,
-        Some(Ok(config)) => crate::owner::OwnerService::bind_with_group_container(
-            crate::owner::OwnerHandles::for_live(
-                &parts,
-                Arc::clone(live.quarantine_queue()),
-                Arc::clone(live.scrub_queue()),
-                Arc::clone(live.waker()),
-            ),
-            &drive_dir,
-            &config.drive,
-            &config.group_container,
-        )
-        .map_err(OwnerError::Io)?,
-        Some(Err(detail)) => {
-            return Err(OwnerError::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                detail,
-            )));
-        }
-    };
+    // peer-checked at the drive-directory socket — plus the App
+    // Group socket when the dev bootstrap names this drive (checked
+    // against the composed drive before anything binds, so a stale
+    // or mistyped value refuses instead of publishing another
+    // drive's tree). The composer wires the loop's repair queues
+    // the way the mount composer wires its backend — through the
+    // shared `OwnerService`, so headless and mount bind the same
+    // surface. Bind before spawning: an owner that cannot serve
+    // its interface refuses instead of running deaf. The store lock
+    // is held throughout the run, so no competing owner can race
+    // the stale-socket reclaim.
+    let owner_service = crate::owner::OwnerService::bind_for_composer(
+        crate::owner::OwnerHandles::for_live(
+            &parts,
+            Arc::clone(live.quarantine_queue()),
+            Arc::clone(live.scrub_queue()),
+            Arc::clone(live.waker()),
+        ),
+        &drive_dir,
+        drive,
+    )
+    .map_err(OwnerError::Io)?;
     // No presentation backend is attached yet: the parts are owned
     // but never served, the queue stays open but nobody submits, so
     // passes only ever see intake and fetch work. The queue handle
