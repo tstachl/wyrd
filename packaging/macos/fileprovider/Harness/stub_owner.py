@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Stage 2 stub owner: serves the Harness over a Unix socket with the
-framing and shapes of `vectors.json` (one request per connection,
+"""Stage 2+3 stub owner: serves the Harness over a Unix socket with
+the framing and shapes of `vectors.json` (one request per connection,
 like the real server). The conflict version token is patched to a
 distinct value so the Harness can isolate the conflicted
-classification from ordinary lookup. Temporary, local-only, never
-part of the appex."""
+classification from ordinary lookup. The submit side enforces the v2
+identity precondition exactly like the contract demands: a covered
+kind without one refuses Malformed, a wrong token refuses
+StaleEntry. Temporary, local-only, never part of the appex."""
 
 import json
 import socket
@@ -41,6 +43,15 @@ def result_ok(op_body):
 
 def result_err(code, message):
     return {"err": {"code": code, "message": message}}
+
+
+# Entry tokens the stub serves, mirroring the readdir sample.
+TOKENS = {}
+for _entry in READDIR_OK["result"]["ok"]["Readdir"]["entries"]:
+    _node = _entry["node"]
+    _kind = next(iter(_node))
+    if _kind != "Conflict" and _node[_kind].get("identity") is not None:
+        TOKENS[_entry["name"]] = _node[_kind]["identity"]
 
 
 def answer(op, params):
@@ -98,7 +109,60 @@ def answer(op, params):
                 {"Read": {"bytes_hex": "68656c6c6f", "generation": 3, "revision": 9}}
             )
         return result_err("NotFound", "no such path")
+    if op == "capture-parent":
+        return result_ok({"ParentToken": {"token": {"instance": 9, "counter": 3}}})
+    if op == "submit":
+        return answer_submit(params or {})
     return result_err("UnsupportedOperation", "unknown op %s" % op)
+
+
+COVERED = ("CommitFile", "AppendFile", "Unlink", "Rmdir", "Rename", "SetAttrs")
+
+
+def answer_submit(params):
+    kind = (params or {}).get("kind", {})
+    if len(kind) != 1:
+        return result_err("Malformed", "the submit names exactly one kind")
+    name, body = next(iter(kind.items()))
+    if name == "Fold":
+        return result_err("UnsupportedOperation", "the stub answers no folds")
+    if name == "Mkdir":
+        return result_ok({"Submitted": {"outcome": "Done"}})
+    if name == "CreateFile":
+        return result_ok(
+            {"Submitted": {"outcome": {"Created": {"size": 0, "executable": False, "chunks": []}}}}
+        )
+    if name not in COVERED:
+        return result_err("UnsupportedOperation", "unknown submit kind %s" % name)
+    # Entry-addressed kinds require the v2 precondition, exactly like
+    # the owner: absent is Malformed, never a silent path-only write.
+    expected = body.get("expected_identity")
+    if not isinstance(expected, str) or len(expected) != 64:
+        return result_err("Malformed", "a covered kind carries expected_identity")
+    path = body.get("from", body.get("path", ""))
+    if path not in TOKENS:
+        return result_err("NotFound", "no such path")
+    if expected != TOKENS[path]:
+        return result_err(
+            "StaleEntry",
+            "stale entry identity for %r: expected %s, found %s" % (path, expected, TOKENS[path]),
+        )
+    if name == "CommitFile":
+        size = len(bytes.fromhex(body.get("content_hex", "")))
+        return result_ok(
+            {
+                "Submitted": {
+                    "outcome": {
+                        "Committed": {
+                            "size": size,
+                            "executable": bool(body.get("executable", False)),
+                            "chunks": ["aa"],
+                        }
+                    }
+                }
+            }
+        )
+    return result_ok({"Submitted": {"outcome": "Done"}})
 
 
 def read_exact(conn, count):
@@ -129,11 +193,23 @@ def main():
             (length,) = struct.unpack(">I", prefix)
             body = read_exact(conn, length)
             request = json.loads(body.decode("utf-8"))
-            response = {
-                "v": 1,
-                "id": request["id"],
-                "result": answer(request["op"], request.get("params")),
-            }
+            if request.get("v") != 2:
+                response = {
+                    "v": 2,
+                    "id": request.get("id", 0),
+                    "result": {
+                        "err": {
+                            "code": "UnknownVersion",
+                            "message": "unsupported wire version %s, want 2" % (request.get("v"),),
+                        }
+                    },
+                }
+            else:
+                response = {
+                    "v": 2,
+                    "id": request["id"],
+                    "result": answer(request["op"], request.get("params")),
+                }
             payload = json.dumps(response).encode("utf-8")
             conn.sendall(struct.pack(">I", len(payload)) + payload)
         except ConnectionError:

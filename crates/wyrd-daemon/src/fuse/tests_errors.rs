@@ -9,7 +9,7 @@ use wyrd_view::ViewError;
 
 use wyrd_core::mutation::{MutationError, MutationKind, MutationOutcome, MutationQueue};
 
-use wyrd_format::{ContentId, StoreFailure};
+use wyrd_format::{ContentId, EntryIdentity, StoreFailure};
 
 /// The errno mapping is the POSIX contract at the mount boundary:
 /// pinned variant by variant.
@@ -90,6 +90,16 @@ fn mutation_errors_map_to_posix_errors() {
     );
     assert_eq!(
         mutation_errno(&MutationError::StaleParent("parent".into())),
+        fuser::Errno::ESTALE
+    );
+    // A wrong entry identity is the same class of staleness: the
+    // caller's reference, not the content, went out of date.
+    assert_eq!(
+        mutation_errno(&MutationError::StaleEntry {
+            path: "f".into(),
+            expected: EntryIdentity::from_bytes([0x42; 32]),
+            found: None,
+        }),
         fuser::Errno::ESTALE
     );
     // A classified store failure keeps its errno on the mutation

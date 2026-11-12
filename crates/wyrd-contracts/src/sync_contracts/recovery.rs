@@ -270,6 +270,7 @@ fn conflicted_drive_restores_fold_members_retryable() {
             members: vec![
                 FoldMember {
                     kind: MutationKind::CommitFile {
+                        expected: None,
                         path: "a.txt".to_string(),
                         base: FileIdentity::new(1, false, Vec::new()),
                         executable: false,

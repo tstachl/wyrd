@@ -2,7 +2,7 @@
   {
     "name": "lookup/request",
     "json": {
-      "v": 1,
+      "v": 2,
       "id": 7,
       "op": "lookup",
       "params": {
@@ -13,7 +13,7 @@
   {
     "name": "stat/request",
     "json": {
-      "v": 1,
+      "v": 2,
       "id": 7,
       "op": "stat",
       "params": {
@@ -24,7 +24,7 @@
   {
     "name": "readdir/request",
     "json": {
-      "v": 1,
+      "v": 2,
       "id": 7,
       "op": "readdir",
       "params": {
@@ -35,7 +35,7 @@
   {
     "name": "read/request",
     "json": {
-      "v": 1,
+      "v": 2,
       "id": 7,
       "op": "read",
       "params": {
@@ -46,7 +46,7 @@
   {
     "name": "observe/request",
     "json": {
-      "v": 1,
+      "v": 2,
       "id": 7,
       "op": "observe",
       "params": null
@@ -55,7 +55,7 @@
   {
     "name": "liveness/request",
     "json": {
-      "v": 1,
+      "v": 2,
       "id": 7,
       "op": "liveness",
       "params": null
@@ -64,7 +64,7 @@
   {
     "name": "freshness/request",
     "json": {
-      "v": 1,
+      "v": 2,
       "id": 7,
       "op": "freshness",
       "params": null
@@ -73,7 +73,7 @@
   {
     "name": "capture-parent/request",
     "json": {
-      "v": 1,
+      "v": 2,
       "id": 7,
       "op": "capture-parent",
       "params": {
@@ -84,7 +84,7 @@
   {
     "name": "submit/request",
     "json": {
-      "v": 1,
+      "v": 2,
       "id": 7,
       "op": "submit",
       "params": {
@@ -99,7 +99,7 @@
   {
     "name": "submit-create/request",
     "json": {
-      "v": 1,
+      "v": 2,
       "id": 7,
       "op": "submit",
       "params": {
@@ -116,9 +116,32 @@
     }
   },
   {
+    "name": "submit-commit/request",
+    "json": {
+      "v": 2,
+      "id": 7,
+      "op": "submit",
+      "params": {
+        "kind": {
+          "CommitFile": {
+            "path": "hello.txt",
+            "base": {
+              "size": 11,
+              "executable": false,
+              "chunks": ["aa"]
+            },
+            "executable": false,
+            "content_hex": "68656c6c6f20776f726c64",
+            "expected_identity": "ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34"
+          }
+        }
+      }
+    }
+  },
+  {
     "name": "pause/request",
     "json": {
-      "v": 1,
+      "v": 2,
       "id": 7,
       "op": "pause",
       "params": null
@@ -127,7 +150,7 @@
   {
     "name": "resume/request",
     "json": {
-      "v": 1,
+      "v": 2,
       "id": 7,
       "op": "resume",
       "params": null
@@ -136,7 +159,7 @@
   {
     "name": "lookup/ok",
     "json": {
-      "v": 1,
+      "v": 2,
       "id": 7,
       "result": {
         "ok": {
@@ -160,7 +183,7 @@
   {
     "name": "stat/ok",
     "json": {
-      "v": 1,
+      "v": 2,
       "id": 7,
       "result": {
         "ok": {
@@ -181,7 +204,7 @@
   {
     "name": "readdir/ok",
     "json": {
-      "v": 1,
+      "v": 2,
       "id": 7,
       "result": {
         "ok": {
@@ -193,7 +216,9 @@
                   "File": {
                     "size": 26,
                     "executable": false,
-                    "chunks": ["aa"],
+                    "chunks": [
+                      "aa"
+                    ],
                     "identity": "ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34"
                   }
                 }
@@ -213,7 +238,9 @@
                   "File": {
                     "size": 3,
                     "executable": false,
-                    "chunks": ["cc"]
+                    "chunks": [
+                      "cc"
+                    ]
                   }
                 }
               },
@@ -221,7 +248,12 @@
                 "name": "agreed",
                 "node": {
                   "MergedDir": {
-                    "subtrees": [["dd", "ee"]],
+                    "subtrees": [
+                      [
+                        "dd",
+                        "ee"
+                      ]
+                    ],
                     "identity": "ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34"
                   }
                 }
@@ -230,7 +262,16 @@
                 "name": "disagreed",
                 "node": {
                   "MergedDir": {
-                    "subtrees": [["dd", "ee"], ["ff", "00"]],
+                    "subtrees": [
+                      [
+                        "dd",
+                        "ee"
+                      ],
+                      [
+                        "ff",
+                        "00"
+                      ]
+                    ],
                     "identity": null
                   }
                 }
@@ -246,7 +287,9 @@
                           "File": {
                             "size": 1,
                             "executable": false,
-                            "chunks": ["11"],
+                            "chunks": [
+                              "11"
+                            ],
                             "identity": "ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34"
                           }
                         }
@@ -266,7 +309,7 @@
   {
     "name": "read/ok",
     "json": {
-      "v": 1,
+      "v": 2,
       "id": 7,
       "result": {
         "ok": {
@@ -282,7 +325,7 @@
   {
     "name": "submit/ok",
     "json": {
-      "v": 1,
+      "v": 2,
       "id": 7,
       "result": {
         "ok": {
@@ -296,7 +339,7 @@
   {
     "name": "refused/not-found",
     "json": {
-      "v": 1,
+      "v": 2,
       "id": 7,
       "result": {
         "err": {
@@ -309,7 +352,7 @@
   {
     "name": "refused/too-large",
     "json": {
-      "v": 1,
+      "v": 2,
       "id": 7,
       "result": {
         "err": {
@@ -322,7 +365,7 @@
   {
     "name": "refused/timeout",
     "json": {
-      "v": 1,
+      "v": 2,
       "id": 7,
       "result": {
         "err": {
@@ -335,7 +378,7 @@
   {
     "name": "refused/conflicted",
     "json": {
-      "v": 1,
+      "v": 2,
       "id": 7,
       "result": {
         "err": {
@@ -348,7 +391,7 @@
   {
     "name": "refused/unavailable",
     "json": {
-      "v": 1,
+      "v": 2,
       "id": 7,
       "result": {
         "err": {
@@ -359,14 +402,27 @@
     }
   },
   {
+    "name": "refused/stale-entry",
+    "json": {
+      "v": 2,
+      "id": 7,
+      "result": {
+        "err": {
+          "code": "StaleEntry",
+          "message": "stale entry identity for \"hello.txt\": expected ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34, found Some(cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12)"
+        }
+      }
+    }
+  },
+  {
     "name": "refused/unknown-version",
     "json": {
-      "v": 1,
+      "v": 2,
       "id": 7,
       "result": {
         "err": {
           "code": "UnknownVersion",
-          "message": "unsupported wire version 999, want 1"
+          "message": "unsupported wire version 999, want 2"
         }
       }
     }
@@ -374,7 +430,7 @@
   {
     "name": "policy-pin/request",
     "json": {
-      "v": 1,
+      "v": 2,
       "id": 7,
       "op": "policy-pin",
       "params": {
@@ -385,7 +441,7 @@
   {
     "name": "policy-unpin/request",
     "json": {
-      "v": 1,
+      "v": 2,
       "id": 7,
       "op": "policy-unpin",
       "params": {
@@ -396,7 +452,7 @@
   {
     "name": "policy-evict/request",
     "json": {
-      "v": 1,
+      "v": 2,
       "id": 7,
       "op": "policy-evict",
       "params": {
@@ -407,7 +463,7 @@
   {
     "name": "policy-status/request",
     "json": {
-      "v": 1,
+      "v": 2,
       "id": 7,
       "op": "policy-status",
       "params": {
@@ -418,7 +474,7 @@
   {
     "name": "policy-pin/ok",
     "json": {
-      "v": 1,
+      "v": 2,
       "id": 7,
       "result": {
         "ok": {
@@ -435,7 +491,7 @@
   {
     "name": "policy-status/ok",
     "json": {
-      "v": 1,
+      "v": 2,
       "id": 7,
       "result": {
         "ok": {
@@ -463,7 +519,7 @@
   {
     "name": "refused/pinned-present",
     "json": {
-      "v": 1,
+      "v": 2,
       "id": 7,
       "result": {
         "err": {

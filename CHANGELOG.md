@@ -35,6 +35,22 @@ is transient — no drive data is affected.
 
 ### Added
 
+- Identity-conditional mutations in the owner queue (File Provider
+  Stage 3 prerequisite,
+  `nostr:nevent1qqs90mu07xgmx9j68nh0fm6xgl6u8dt29pu3urjqcjd3wsk3fqq5lwgpz9mhxue69uhkwunpwdczuap49eehgd8k9qj`):
+  every entry-addressed mutation (`CommitFile`, `AppendFile`,
+  `Unlink`, `Rmdir`, `Rename` on its `from` path, `SetAttrs`) carries
+  the caller's expected `EntryIdentity`, validated inside the
+  serialized queue before anything commits. Four outcomes stay
+  distinct: same token proceeds (existing content/base checks
+  unchanged), a different token — including a legacy entry that
+  never had one — refuses as the new `StaleEntry` (FUSE: `ESTALE`),
+  a missing path refuses `NotFound` (no longer collapsed into
+  `Stale`), and a conflicted path refuses `Conflicted`. In-process
+  callers pass no precondition and keep exactly their current
+  behavior. Normative rule in
+  `docs/contracts/owner-interface.md` (mutation submission).
+
 - Stable entry identity in the owner/model contract
   (`nostr:nevent1qqsxf3d3js87fea6edpk6dyl3zw76de7ku4t6jlll9cz2tua9d40xtcpz9mhxue69uhkwunpwdczuap49eehgzhuu57`,
   OD-17-A gate for File Provider Stage 2): every filesystem entry
@@ -78,6 +94,16 @@ is transient — no drive data is affected.
 
 ### Changed
 
+- Drive-owner wire v1 to v2 (File Provider Stage 3 prerequisite,
+  same issue as above): entry-addressed mutations carry a required
+  `expected_identity` precondition, so mixed versions refuse
+  loudly with `UnknownVersion` in both directions instead of
+  running path-only under an identity-conditional client (or vice
+  versa). Clients and servers ship together; a same-release pair
+  never sees the refusal, and a mixed pair gets an explicit
+  upgrade directive instead of silent downgrade. Nothing else
+  changes: reads, parent tokens, folds, and every refusal keep
+  their v1 meaning.
 - Rename `wyrd-app` to `wyrd-host` (binary too)
   (`nostr:nevent1qqsp69pryzjygnr760tl5gkmwp3eg8g2kxvjh7t6pu8nuhpzj8kqn2qpz9mhxue69uhkwunpwdczuap49eehg3m42y0`):
   the headless owner process already says "host" everywhere

@@ -93,7 +93,9 @@ fn mutation_tag(error: &MutationError) -> &'static str {
         MutationError::AlreadyExists(_) => "already-exists",
         MutationError::DirectoryNotEmpty(_) => "directory-not-empty",
         MutationError::Invalid(_) | MutationError::InvalidRename(_) => "invalid",
-        MutationError::Stale(_) | MutationError::StaleParent(_) => "stale",
+        MutationError::Stale(_)
+        | MutationError::StaleParent(_)
+        | MutationError::StaleEntry { .. } => "stale",
         MutationError::TooLarge(_) | MutationError::TooMany { .. } => "too-large",
         MutationError::TimedOut => "timed-out",
         MutationError::Saturated => "saturated",
@@ -307,6 +309,7 @@ impl Embedded {
             return Outcome::Err(mutation_tag(&error));
         }
         self.submit(MutationKind::AppendFile {
+            expected: None,
             path,
             content: bytes.to_vec(),
         })
@@ -322,6 +325,7 @@ impl Embedded {
 
     fn rename(&self, from: &str, to: &str) -> Outcome {
         self.submit(MutationKind::Rename {
+            expected: None,
             from: from.to_string(),
             to: to.to_string(),
             no_replace: false,
@@ -330,18 +334,21 @@ impl Embedded {
 
     fn unlink(&self, path: &str) -> Outcome {
         self.submit(MutationKind::Unlink {
+            expected: None,
             path: path.to_string(),
         })
     }
 
     fn rmdir(&self, path: &str) -> Outcome {
         self.submit(MutationKind::Rmdir {
+            expected: None,
             path: path.to_string(),
         })
     }
 
     fn set_size(&self, path: &str, size: u64) -> Outcome {
         self.submit(MutationKind::SetAttrs {
+            expected: None,
             path: path.to_string(),
             size: Some(size),
             executable: None,
@@ -364,6 +371,7 @@ impl Embedded {
         match self.queue.submit(MutationKind::Fold {
             members: vec![FoldMember {
                 kind: MutationKind::CommitFile {
+                    expected: None,
                     path: path.to_string(),
                     base,
                     executable: false,
@@ -417,6 +425,7 @@ impl Embedded {
             return Outcome::Err(mutation_tag(&error));
         }
         self.submit(MutationKind::AppendFile {
+            expected: None,
             path,
             content: bytes.to_vec(),
         })

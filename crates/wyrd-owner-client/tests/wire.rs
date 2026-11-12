@@ -169,6 +169,80 @@ fn wire_field_names_are_pinned() {
     assert_eq!(keys(&response["result"]["err"]), set(&["code", "message"]));
 }
 
+/// The entry-addressed mutations carry the required identity
+/// precondition since v2; creations and folds do not (the parent
+/// token, respectively the members, carry their own).
+#[test]
+fn mutation_kinds_carry_the_identity_precondition() {
+    fn keys(value: &serde_json::Value) -> BTreeSet<String> {
+        value
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<BTreeSet<_>>()
+    }
+    fn op_keys(kind: &WireMutationKind) -> BTreeSet<String> {
+        let value = serde_json::to_value(&RawRequest {
+            v: WIRE_VERSION,
+            id: 7,
+            op: OP_SUBMIT.to_string(),
+            params: serde_json::to_value(SubmitParams { kind: kind.clone() }).unwrap(),
+        })
+        .unwrap();
+        let kind_object = value["params"]["kind"]
+            .as_object()
+            .expect("one variant object");
+        assert_eq!(kind_object.len(), 1, "externally tagged, one variant");
+        keys(kind_object.values().next().unwrap())
+    }
+    for (name, body) in [
+        (
+            "CommitFile",
+            WireMutationKind::CommitFile {
+                path: "f".to_string(),
+                base: WireFileIdentity {
+                    size: 0,
+                    executable: false,
+                    chunks: vec![],
+                },
+                executable: false,
+                content_hex: String::new(),
+                expected_identity: "ab".repeat(32),
+            },
+        ),
+        (
+            "Unlink",
+            WireMutationKind::Unlink {
+                path: "f".to_string(),
+                expected_identity: "ab".repeat(32),
+            },
+        ),
+        (
+            "Rename",
+            WireMutationKind::Rename {
+                from: "a".to_string(),
+                to: "b".to_string(),
+                no_replace: true,
+                expected_identity: "ab".repeat(32),
+            },
+        ),
+    ] {
+        let shape = op_keys(&body);
+        assert!(
+            shape.contains("expected_identity"),
+            "{name} carries the precondition"
+        );
+    }
+    let mkdir = op_keys(&WireMutationKind::Mkdir {
+        path: "d".to_string(),
+    });
+    assert!(
+        !mkdir.contains("expected_identity"),
+        "creations carry no entry precondition"
+    );
+}
+
 #[test]
 fn liveness_without_paused_parses_as_running() {
     let legacy = serde_json::json!({
@@ -212,11 +286,16 @@ fn golden_vectors_pin_the_wire() {
             "request" => {
                 let request: RawRequest = serde_json::from_value(vector.json.clone())
                     .unwrap_or_else(|error| panic!("{} parses as a request: {error}", vector.name));
-                assert_eq!(request.v, WIRE_VERSION, "{} carries version 1", vector.name);
+                assert_eq!(
+                    request.v, WIRE_VERSION,
+                    "{} carries the wire version",
+                    vector.name
+                );
                 let expected_op = match kind {
                     "capture-parent" => OP_CAPTURE_PARENT,
                     "submit" => OP_SUBMIT,
                     "submit-create" => OP_SUBMIT,
+                    "submit-commit" => OP_SUBMIT,
                     "lookup" => OP_LOOKUP,
                     "stat" => OP_STAT,
                     "readdir" => OP_READDIR,
@@ -342,7 +421,7 @@ fn golden_vectors_pin_the_wire() {
                 }
             }
             "not-found" | "unknown-version" | "pinned-present" | "too-large" | "timeout"
-            | "conflicted" | "unavailable" => {
+            | "conflicted" | "unavailable" | "stale-entry" => {
                 let response: WireResponse = serde_json::from_value(vector.json.clone())
                     .unwrap_or_else(|error| {
                         panic!("{} parses as a response: {error}", vector.name)
@@ -354,6 +433,7 @@ fn golden_vectors_pin_the_wire() {
                     "timeout" => WireErrorCode::Timeout,
                     "conflicted" => WireErrorCode::Conflicted,
                     "unavailable" => WireErrorCode::Unavailable,
+                    "stale-entry" => WireErrorCode::StaleEntry,
                     _ => WireErrorCode::UnknownVersion,
                 };
                 match response.result {
@@ -380,11 +460,24 @@ fn golden_vectors_pin_the_wire() {
         {
             let mut expected = (body.len() as u32).to_be_bytes().to_vec();
             expected.extend_from_slice(
-                b"{\"v\":1,\"id\":7,\"op\":\"lookup\",\"params\":{\"path\":\"hello.txt\"}}",
+                b"{\"v\":2,\"id\":7,\"op\":\"lookup\",\"params\":{\"path\":\"hello.txt\"}}",
             );
             expected
         },
         "the lookup request frames byte-for-byte"
+    );
+    // The submit-commit request carries the required identity
+    // precondition: a v2 payload without it is malformed, never a
+    // silent path-only mutation.
+    let commit = vectors
+        .iter()
+        .find(|vector| vector.name == "submit-commit/request")
+        .unwrap();
+    let request: RawRequest = serde_json::from_value(commit.json.clone()).unwrap();
+    let body = serde_json::to_vec(&request).unwrap();
+    assert!(
+        String::from_utf8_lossy(&body).contains("expected_identity"),
+        "the commit sample carries the precondition"
     );
 }
 

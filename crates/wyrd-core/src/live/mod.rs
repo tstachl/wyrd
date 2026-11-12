@@ -1235,3 +1235,7 @@ mod pause_tests;
 #[cfg(test)]
 #[path = "tests_entry_identity.rs"]
 mod entry_identity_tests;
+
+#[cfg(test)]
+#[path = "tests_entry_precondition.rs"]
+mod entry_precondition_tests;

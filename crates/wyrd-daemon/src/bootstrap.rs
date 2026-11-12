@@ -1755,7 +1755,7 @@ mod tests {
                     .and_then(|value| value.get("id")?.as_u64())
                     .unwrap_or(0);
                 let reply = serde_json::json!({
-                    "v": 1,
+                    "v": crate::owner::WIRE_VERSION,
                     "id": id,
                     "result": {"err": {"code": code, "message": "stub refusal"}},
                 });

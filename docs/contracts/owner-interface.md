@@ -1,4 +1,4 @@
-# Drive-owner interface (v1)
+# Drive-owner interface (v2)
 
 Status: Normative. Scope: the cross-process operations a non-owner consumer may submit, and the durability and exactly-once behavior the owner owes in return. Authority: this interface owns the boundary; engine, mutation, durability, synchronization, and trust logic live in their own contracts and are not duplicated here.
 
@@ -70,12 +70,27 @@ drive directory owner-only. The path is the sandbox boundary.
 
 ## Versioning
 
-Tag every request and response with `"v": 1`. Refuse other versions
+Tag every request and response with `"v": 2`. Refuse other versions
 with `UnknownVersion`. Name the wanted version in the message. Add
 only optional fields in later versions. Never re-mean a field.
 Refuse unknown operations with `UnsupportedOperation`. Echo the name
 in the message. Never ignore an unsupported request. Never answer it
 with success.
+
+v1 to v2: the entry-addressed mutations (`CommitFile`,
+`AppendFile`, `Unlink`, `Rmdir`, `Rename`, `SetAttrs`, and `Fold`
+members of those kinds) carry a required `expected_identity`
+(lowercase hex EntryIdentity). v1 has no such field, so a v1
+payload can never express the precondition — and a v1 server
+silently ignores it when present. Both directions therefore
+refuse across the boundary with `UnknownVersion`: a v1 client
+against a v2 server, and a v2 client against a v1 server, fail
+closed with an explicit upgrade directive instead of running
+path-only mutations under an identity-conditional client (or
+vice versa). Both sides ship together, so the only skew window
+is a mixed-release deployment, which refuses loudly rather than
+drifting silently. v2 changes nothing else: reads, parent
+tokens, folds, and every refusal code keep their v1 meaning.
 
 ## Read operations
 
@@ -101,12 +116,11 @@ Every read answer that names an entry carries its stable identity
 identity support; a conflicted path reports `None` (each conflict
 version carries its head's token), while a merged directory
 reports the agreed token when every merged head carries the
-identical `Some` token, else `None`. The field is additive under the v1
-"only optional fields" rule, and it carries `#[serde(default)]`
-so a new reader parses pre-identity payloads (which omit the key)
-as "no token reported" instead of failing. A pre-identity reader
-likewise tolerates new payloads, because the wire types do not
-deny unknown fields. Consumers answer "is this the same entry I
+identical `Some` token, else `None`. The field stays optional
+with `#[serde(default)]` across v1 and v2, so a new reader parses
+pre-identity payloads (which omit the key) as "no token reported"
+instead of failing. A pre-identity reader likewise tolerates new
+payloads, because the wire types do not deny unknown fields. Consumers answer "is this the same entry I
 saw before?" from the token, never from path, content, or matching.
 
 ## Durable observation
@@ -162,6 +176,25 @@ consumer side. Never reuse a token across an owner restart.
 Refuse nested folds at the wire. Let the queue enforce the rest.
 Forward all nine operations verbatim.
 
+Every entry-addressed mutation carries the caller's expected
+`EntryIdentity` for the path it mutates (`CommitFile`,
+`AppendFile`, `Unlink`, `Rmdir`, `Rename` on its `from` path,
+`SetAttrs`; creations address absent paths and are covered by
+the parent token instead). The owner validates the precondition
+inside the serialized queue, at execution: the path must still
+resolve to exactly that entry when the mutation runs. Four
+conditions stay distinct. Same identity with a changed content
+base is a stale content base. A different identity — including
+a legacy entry that never had one — is a stale entry reference.
+A conflicted path is refused as conflicted. A missing path is
+`NotFound`. Never collapse two into one, even where a
+presentation surface renders two with the same error. A refused
+precondition commits nothing and authors no snapshot: a rename,
+delete-plus-recreate, or path reuse between the caller's lookup
+and the queue's execution fails closed instead of landing on
+the wrong entry. `Fold` members carry their own preconditions;
+the fold caution in Crash answers stands.
+
 Bound one submit's carried content: a submit whose decoded file
 content (commit and append bodies, summed across fold members)
 exceeds 32 MiB is refused with `TooLarge` before any decode or
@@ -191,8 +224,8 @@ the consumer never infers state from silence. Setting the switch
 pokes the loop's pacing signal, so the loop re-checks promptly
 rather than waiting out its idle deadline.
 
-Wire shape note (pre-freeze): `pause`, `resume`, and the `paused`
-liveness field are new in v1's current shape. `paused` defaults to
+Wire shape note: `pause`, `resume`, and the `paused` liveness
+field arrived in v1 and are unchanged in v2. `paused` defaults to
 `false` on parse, so a pre-pause reader degrades to "running"
 instead of failing; both sides ship together, so the default only
 covers mixed-version skew during rollout.

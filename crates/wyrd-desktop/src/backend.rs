@@ -276,7 +276,10 @@ mod tests {
             "the frontend tells them apart from the JSON alone"
         );
         // The wire version the refusal decodes under is the pinned
-        // one: the taxonomy never drifts off the interface version.
-        assert_eq!(WIRE_VERSION, 1);
+        // one on both sides of the interface: the taxonomy never
+        // drifts off the interface version, and client and server
+        // agree on it by construction (a bump touches both crates,
+        // and this assert names the pair).
+        assert_eq!(WIRE_VERSION, wyrd_daemon::owner::WIRE_VERSION);
     }
 }

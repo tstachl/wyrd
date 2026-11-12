@@ -1024,6 +1024,22 @@ fn liveness_keeps_paused_quiet_and_offline_distinct() {
 // ---------------------------------------------------------------------------
 
 /// Submit one mutation through dispatch and unwrap the success.
+/// Look up a directory's entry token for a mutation precondition:
+/// the client discipline is resolve-then-submit, never a blind
+/// path.
+fn dir_identity(server: &OwnerServer, path: &str) -> String {
+    match dispatch_ok(server, OP_LOOKUP, path) {
+        WireOk::Lookup { node, .. } => match node {
+            WireNode::Dir {
+                identity: Some(token),
+                ..
+            } => token,
+            other => panic!("{path} serves a token-bearing dir: {other:?}"),
+        },
+        other => panic!("{path} serves: {other:?}"),
+    }
+}
+
 fn submit_ok(server: &OwnerServer, kind: super::wire::WireMutationKind) -> WireMutationOutcome {
     let response = server.dispatch(RawRequest {
         v: WIRE_VERSION,
@@ -1147,6 +1163,7 @@ fn owner_interface_forwards_a_mutation_unchanged() {
             from: "via-iface/sub".to_string(),
             to: "via-iface/renamed".to_string(),
             no_replace: true,
+            expected_identity: dir_identity(&server, "via-iface/sub"),
         },
     );
     assert_eq!(outcome, WireMutationOutcome::Done);
@@ -1346,11 +1363,13 @@ fn submit_refusals_carry_distinct_codes() {
     );
     assert_eq!(error.code, WireErrorCode::StaleParent);
 
-    // Missing path through unlink.
+    // Missing path through unlink (any offered token: nothing
+    // resolves, so the identity check has nothing to compare).
     let error = submit_err(
         &server,
         WireMutationKind::Unlink {
             path: "missing.txt".to_string(),
+            expected_identity: "ab".repeat(32),
         },
     );
     assert_eq!(error.code, WireErrorCode::NotFound);
@@ -1457,27 +1476,33 @@ fn wire_mutation_kinds_round_trip() {
             base: identity.clone(),
             executable: false,
             content_hex: "636f6e74656e74".to_string(),
+            expected_identity: "cd".repeat(32),
         },
         WireMutationKind::AppendFile {
             path: "b".to_string(),
             content_hex: "00".to_string(),
+            expected_identity: "cd".repeat(32),
         },
         WireMutationKind::Unlink {
             path: "b".to_string(),
+            expected_identity: "cd".repeat(32),
         },
         WireMutationKind::Rmdir {
             path: "a".to_string(),
+            expected_identity: "cd".repeat(32),
         },
         WireMutationKind::Rename {
             from: "a".to_string(),
             to: "c".to_string(),
             no_replace: true,
+            expected_identity: "cd".repeat(32),
         },
         WireMutationKind::SetAttrs {
             path: "b".to_string(),
             size: Some(3),
             executable: None,
             base: Some(identity.clone()),
+            expected_identity: "cd".repeat(32),
         },
         WireMutationKind::Fold {
             members: vec![WireFoldMember {
@@ -2189,6 +2214,9 @@ fn over_limit_submit_is_a_typed_toolarge_not_silence() {
             kind: WireMutationKind::AppendFile {
                 path: "hello.txt".to_string(),
                 content_hex,
+                // Unreached: the submit bound refuses before the
+                // queue, so any well-formed token parses.
+                expected_identity: "ab".repeat(32),
             },
         })
         .unwrap(),
@@ -2508,6 +2536,8 @@ fn client_submit_forwards_and_refusals_carry_their_codes() {
 
     match client.submit(WireMutationKind::Rmdir {
         path: "nope".to_string(),
+        // Missing paths refuse NotFound whatever token is offered.
+        expected_identity: "ab".repeat(32),
     }) {
         Err(ClientError::Refused(error)) => assert_eq!(error.code, WireErrorCode::NotFound),
         other => panic!("removing a missing dir refuses NotFound: {other:?}"),
@@ -3582,4 +3612,117 @@ fn connection_slot_reservation_is_bounded() {
         super::server::try_acquire_slot(&counter).is_none(),
         "the pool stays at the bound"
     );
+}
+
+/// A v1 request against a v2 server refuses as UnknownVersion naming
+/// the want: the old wire cannot express the identity precondition,
+/// so cross-version submission fails closed instead of running
+/// path-only under a conditional client.
+#[test]
+fn submit_refuses_the_old_wire_version() {
+    let (server, _parts, dir, stop, loop_thread) = running_parts();
+    let response = server.dispatch(RawRequest {
+        v: 1,
+        id: 7,
+        op: OP_LOOKUP.to_string(),
+        params: serde_json::to_value(PathParams {
+            path: "".to_string(),
+        })
+        .unwrap(),
+    });
+    match response.result {
+        WireResult::Err(error) => {
+            assert_eq!(error.code, WireErrorCode::UnknownVersion);
+            assert!(
+                error.message.contains("want 2"),
+                "the refusal names the current version: {}",
+                error.message
+            );
+            assert_eq!(
+                response.v, WIRE_VERSION,
+                "refusals carry the serving version"
+            );
+        }
+        other => panic!("a v1 request refuses: {other:?}"),
+    }
+    stop.store(true, Ordering::Relaxed);
+    spawn_loop_done(loop_thread);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// The identity precondition is enforced inside the serialized
+/// queue: a wrong token refuses StaleEntry (naming expected and
+/// found), a missing path refuses NotFound, and the matching token
+/// commits. The wrong-token case proves the four-way split — stale
+/// entry is neither stale content nor a missing path.
+#[test]
+fn submit_enforces_the_expected_identity() {
+    let (server, _parts, dir, stop, loop_thread) = running_parts();
+    let (identity, base) = match dispatch_ok(&server, OP_LOOKUP, "seed.txt") {
+        WireOk::Lookup { node, .. } => match node {
+            WireNode::File {
+                size,
+                executable,
+                chunks,
+                identity: Some(token),
+            } => (
+                token,
+                WireFileIdentity {
+                    size,
+                    executable,
+                    chunks,
+                },
+            ),
+            other => panic!("seed.txt serves a token-bearing file: {other:?}"),
+        },
+        other => panic!("seed.txt serves: {other:?}"),
+    };
+    // Wrong token, right base: the entry check fires first.
+    let wrong = "ff".repeat(32);
+    let error = submit_err(
+        &server,
+        WireMutationKind::CommitFile {
+            path: "seed.txt".to_string(),
+            base: base.clone(),
+            executable: false,
+            content_hex: "00".to_string(),
+            expected_identity: wrong.clone(),
+        },
+    );
+    assert_eq!(error.code, WireErrorCode::StaleEntry);
+    assert!(
+        error.message.contains(&wrong) && error.message.contains(&identity),
+        "the refusal names expected and found: {}",
+        error.message
+    );
+    // Missing path with a token: NotFound, never StaleEntry.
+    let error = submit_err(
+        &server,
+        WireMutationKind::CommitFile {
+            path: "missing.txt".to_string(),
+            base: base.clone(),
+            executable: false,
+            content_hex: "00".to_string(),
+            expected_identity: wrong,
+        },
+    );
+    assert_eq!(error.code, WireErrorCode::NotFound);
+    // Matching token: the write commits.
+    let outcome = submit_ok(
+        &server,
+        WireMutationKind::CommitFile {
+            path: "seed.txt".to_string(),
+            base,
+            executable: false,
+            content_hex: "00".to_string(),
+            expected_identity: identity,
+        },
+    );
+    assert!(
+        matches!(outcome, WireMutationOutcome::Committed(_)),
+        "the matching token commits: {outcome:?}"
+    );
+    stop.store(true, Ordering::Relaxed);
+    spawn_loop_done(loop_thread);
+    std::fs::remove_dir_all(dir).unwrap();
 }
