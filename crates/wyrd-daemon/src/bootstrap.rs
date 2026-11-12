@@ -104,7 +104,10 @@ pub struct Registry {
     pub skipped: Vec<String>,
 }
 
-/// Every way first-drive provisioning I/O can fail. Variants carry
+/// Every way the registry and service-definition I/O in this
+/// module can fail. Provisioning also fails at engine
+/// initialization and socket verification with other error text;
+/// those paths are outside this type. Variants carry
 /// the failing identity — paths, names, labels — so the desktop
 /// backend can branch on failure instead of parsing text.
 /// `Display` reproduces the historical message text exactly: the CLI
@@ -1239,6 +1242,214 @@ mod tests {
         let dir = scratch("missing");
         let read = read_registry(&dir.join("absent.json")).unwrap();
         assert!(read.drives.is_empty() && read.skipped.is_empty());
+    }
+
+    /// Every `Display` string pinned exactly: a future edit that
+    /// changes user-visible text fails here. Variants over foreign
+    /// errors (`Parse`, `Encode`) pin the format around the live
+    /// source error instead of the dependency's wording.
+    #[test]
+    fn bootstrap_display_reproduces_the_historical_messages_exactly() {
+        use std::io::{Error as IoError, ErrorKind};
+        let io = |kind: ErrorKind, message: &str| IoError::new(kind, message.to_owned());
+        let parse_source = serde_json::from_slice::<serde_json::Value>(b"xx").unwrap_err();
+        struct AlwaysFails;
+        impl Serialize for AlwaysFails {
+            fn serialize<S: serde::Serializer>(&self, _serializer: S) -> Result<S::Ok, S::Error> {
+                Err(serde::ser::Error::custom("boom"))
+            }
+        }
+        let encode_source = serde_json::to_vec(&AlwaysFails).unwrap_err();
+        let command = BootstrapError::CommandFailed {
+            program: "launchctl".to_string(),
+            args: "list missing".to_string(),
+            detail: "No such process".to_string(),
+        };
+        let cases: Vec<(BootstrapError, String)> = vec![
+            (
+                BootstrapError::Read {
+                    path: "/reg/drives.json".into(),
+                    source: io(ErrorKind::NotFound, "missing"),
+                },
+                "read /reg/drives.json: missing".to_string(),
+            ),
+            (
+                BootstrapError::Parse {
+                    path: "/reg/drives.json".into(),
+                    source: parse_source,
+                },
+                format!(
+                    "parse /reg/drives.json: {}",
+                    serde_json::from_slice::<serde_json::Value>(b"xx").unwrap_err()
+                ),
+            ),
+            (
+                BootstrapError::UnsupportedVersion {
+                    path: "/reg/drives.json".into(),
+                    found: 999,
+                },
+                format!("registry /reg/drives.json is version 999, this build reads {REGISTRY_VERSION}"),
+            ),
+            (
+                BootstrapError::KeyMismatch {
+                    key: "a".to_string(),
+                    name: "b".to_string(),
+                },
+                "key \"a\" does not match entry name \"b\"".to_string(),
+            ),
+            (
+                BootstrapError::InvalidName {
+                    name: "BAD NAME!".to_string(),
+                },
+                "name \"BAD NAME!\" must be 1-64 chars of [a-z0-9-]".to_string(),
+            ),
+            (
+                BootstrapError::NameTooLongForServicePrefix {
+                    name: "a-very-long-drive-name-that-leaves-no-room-at-all-xyz".to_string(),
+                },
+                "name \"a-very-long-drive-name-that-leaves-no-room-at-all-xyz\" leaves no room for the drive- service prefix (max 58 chars)".to_string(),
+            ),
+            (
+                BootstrapError::InvalidService {
+                    service: "BAD!".to_string(),
+                },
+                "service \"BAD!\" must be 1-64 chars of [a-z0-9-]".to_string(),
+            ),
+            (
+                BootstrapError::RelativeDriveDir {
+                    dir: "relative/path".into(),
+                },
+                "drive_dir relative/path must be absolute".to_string(),
+            ),
+            (
+                BootstrapError::DriveDirHasDotDot {
+                    dir: "/reg/../drive".into(),
+                },
+                "drive_dir /reg/../drive must not contain ..".to_string(),
+            ),
+            (BootstrapError::UnknownServiceMode, "unknown service mode: registry-managed mount mode travels with the installer follow-up (P2 landed: manual `wyrd mount` serves the socket)".to_string()),
+            (
+                BootstrapError::InvalidRelays,
+                "relays must be non-empty URLs without whitespace or control bytes".to_string(),
+            ),
+            (
+                BootstrapError::DriveDirHasControlChars {
+                    dir: "/reg/drive".into(),
+                },
+                "drive_dir /reg/drive must not contain control characters".to_string(),
+            ),
+            (
+                BootstrapError::RefusedWrite {
+                    source: Box::new(BootstrapError::RelativeDriveDir {
+                        dir: "relative/path".into(),
+                    }),
+                },
+                "refusing to write: drive_dir relative/path must be absolute".to_string(),
+            ),
+            (
+                BootstrapError::Encode {
+                    source: encode_source,
+                },
+                "encode registry: boom".to_string(),
+            ),
+            (
+                BootstrapError::CreateDir {
+                    path: "/reg".into(),
+                    source: io(ErrorKind::PermissionDenied, "denied"),
+                },
+                "create /reg: denied".to_string(),
+            ),
+            (
+                BootstrapError::WriteFile {
+                    path: "/reg/drives.json".into(),
+                    source: io(ErrorKind::StorageFull, "full"),
+                },
+                "write /reg/drives.json: full".to_string(),
+            ),
+            (
+                BootstrapError::ReplaceFile {
+                    path: "/reg/drives.json".into(),
+                    source: io(ErrorKind::PermissionDenied, "denied"),
+                },
+                "replace /reg/drives.json: denied".to_string(),
+            ),
+            (
+                BootstrapError::Chmod {
+                    path: "/reg/drives.json".into(),
+                    source: io(ErrorKind::PermissionDenied, "denied"),
+                },
+                "chmod /reg/drives.json: denied".to_string(),
+            ),
+            (
+                BootstrapError::SyncFile {
+                    path: "/reg/drives.json".into(),
+                    source: io(ErrorKind::Other, "sync lost"),
+                },
+                "sync /reg/drives.json: sync lost".to_string(),
+            ),
+            (
+                BootstrapError::Spawn {
+                    program: "launchctl".to_string(),
+                    source: io(ErrorKind::NotFound, "missing"),
+                },
+                "spawn launchctl: missing".to_string(),
+            ),
+            (
+                BootstrapError::CommandFailed {
+                    program: "launchctl".to_string(),
+                    args: "list missing".to_string(),
+                    detail: "No such process".to_string(),
+                },
+                "launchctl list missing failed: No such process".to_string(),
+            ),
+            (
+                BootstrapError::EnableService {
+                    name: "md.enesis.wyrd.drive-demo".to_string(),
+                    source: Box::new(command),
+                },
+                "enable md.enesis.wyrd.drive-demo: launchctl list missing failed: No such process"
+                    .to_string(),
+            ),
+            (
+                BootstrapError::ReloadUnits {
+                    source: Box::new(BootstrapError::Spawn {
+                        program: "systemctl".to_string(),
+                        source: io(ErrorKind::NotFound, "missing"),
+                    }),
+                },
+                "reload user units: spawn systemctl: missing".to_string(),
+            ),
+            (
+                BootstrapError::AgentNotLoaded {
+                    label: "md.enesis.wyrd.drive-demo".to_string(),
+                    source: Box::new(BootstrapError::CommandFailed {
+                        program: "launchctl".to_string(),
+                        args: "list md.enesis.wyrd.drive-demo".to_string(),
+                        detail: "No such process".to_string(),
+                    }),
+                },
+                "start md.enesis.wyrd.drive-demo: agent not loaded: launchctl list md.enesis.wyrd.drive-demo failed: No such process".to_string(),
+            ),
+            (
+                BootstrapError::RestartService {
+                    unit: "wyrd-drive-demo.service".to_string(),
+                    source: Box::new(BootstrapError::Spawn {
+                        program: "systemctl".to_string(),
+                        source: io(ErrorKind::NotFound, "missing"),
+                    }),
+                },
+                "restart wyrd-drive-demo.service: spawn systemctl: missing".to_string(),
+            ),
+            (
+                BootstrapError::ServicesUnsupported,
+                "per-drive services are implemented for Unix (launchd agent, systemd user unit)"
+                    .to_string(),
+            ),
+        ];
+        assert_eq!(cases.len(), 26, "every variant pins its message");
+        for (error, expected) in cases {
+            assert_eq!(error.to_string(), expected, "Display changed");
+        }
     }
 
     #[test]
