@@ -83,7 +83,17 @@ fn scratch_drive() -> (Engine, std::path::PathBuf) {
 /// with no loop running: the read-side baseline. Returns the parts
 /// (for the server) and the directory (for socket tests and cleanup).
 fn composed_parts() -> (LiveParts<OwnerView>, std::path::PathBuf) {
+    let (parts, dir, _) = composed_parts_with_drive();
+    (parts, dir)
+}
+
+/// Compose the scratch drive and report the drive it serves: the
+/// group-bind tests configure the bootstrap with this drive, so a
+/// bind that names any other drive is a foreign bind by
+/// construction.
+fn composed_parts_with_drive() -> (LiveParts<OwnerView>, std::path::PathBuf, DriveId) {
     let (engine, dir) = scratch_drive();
+    let drive = engine.drive();
     let store = wyrd_format::FsObjectStore::open(dir.clone()).unwrap();
     let mut daemon = wyrd_core::node::WyrdNode::new(engine, store).unwrap();
     daemon.put_file("hello.txt", b"hello owner").unwrap();
@@ -95,7 +105,7 @@ fn composed_parts() -> (LiveParts<OwnerView>, std::path::PathBuf) {
             &wyrd_core::live::LiveConfig::default(),
         )
         .unwrap();
-    (parts, dir)
+    (parts, dir, drive)
 }
 
 /// Dispatch one operation against `server` and unwrap the success.
@@ -3314,19 +3324,18 @@ fn group_socket_paths_derive_from_drive() {
 /// The group bind serves the same handles on both sockets: a lookup
 /// through the by-drive symlink answers exactly what the
 /// drive-directory socket answers. Shutdown removes the primary,
-/// the group socket, and the alias.
+/// the group socket, and the alias. The bind goes through the
+/// composer entry point with the served drive configured, so the
+/// low-level publish path is never exercised unguarded.
 #[test]
 fn group_bind_serves_primary_and_symlink() {
-    let (parts, dir) = composed_parts();
+    let _lock = GROUP_ENV_LOCK.lock().unwrap();
+    let (parts, dir, drive) = composed_parts_with_drive();
     let container = group_container();
-    let drive = group_drive();
-    let service = super::OwnerService::bind_with_group_container(
-        OwnerHandles::from_parts(&parts),
-        &dir,
-        &drive,
-        &container,
-    )
-    .expect("the group bind serves");
+    let _guard = GroupEnvGuard::set(&container, &drive.to_string());
+    let service =
+        super::OwnerService::bind_for_composer(OwnerHandles::from_parts(&parts), &dir, drive)
+            .expect("the group bind serves");
     let group_path = super::server::group_socket_path(&container, &drive);
     let link_path = super::server::group_symlink_path(&container, &drive);
     assert!(group_path.exists(), "the group socket is bound");
@@ -3370,18 +3379,15 @@ fn group_bind_serves_primary_and_symlink() {
 /// removed rather than left serving deaf to the extension.
 #[test]
 fn group_bind_live_socket_fails_closed() {
-    let (parts, dir) = composed_parts();
+    let _lock = GROUP_ENV_LOCK.lock().unwrap();
+    let (parts, dir, drive) = composed_parts_with_drive();
     let container = group_container();
-    let drive = group_drive();
+    let _guard = GroupEnvGuard::set(&container, &drive.to_string());
     let group_path = super::server::group_socket_path(&container, &drive);
     std::fs::create_dir_all(group_path.parent().expect("the group socket has a parent")).unwrap();
     let _occupant = UnixListener::bind(&group_path).expect("the test occupies the group path");
-    let result = super::OwnerService::bind_with_group_container(
-        OwnerHandles::from_parts(&parts),
-        &dir,
-        &drive,
-        &container,
-    );
+    let result =
+        super::OwnerService::bind_for_composer(OwnerHandles::from_parts(&parts), &dir, drive);
     match result {
         Ok(_) => panic!("a live group endpoint must refuse the bind"),
         Err(error) => assert_eq!(
@@ -3403,19 +3409,16 @@ fn group_bind_live_socket_fails_closed() {
 /// socket: connect fails, the file unlinks, the bind proceeds.
 #[test]
 fn group_bind_reclaims_stale_socket() {
-    let (parts, dir) = composed_parts();
+    let _lock = GROUP_ENV_LOCK.lock().unwrap();
+    let (parts, dir, drive) = composed_parts_with_drive();
     let container = group_container();
-    let drive = group_drive();
+    let _guard = GroupEnvGuard::set(&container, &drive.to_string());
     let group_path = super::server::group_socket_path(&container, &drive);
     std::fs::create_dir_all(group_path.parent().expect("the group socket has a parent")).unwrap();
     std::fs::write(&group_path, b"dead entry from an unclean shutdown").unwrap();
-    let service = super::OwnerService::bind_with_group_container(
-        OwnerHandles::from_parts(&parts),
-        &dir,
-        &drive,
-        &container,
-    )
-    .expect("a stale group entry reclaims");
+    let service =
+        super::OwnerService::bind_for_composer(OwnerHandles::from_parts(&parts), &dir, drive)
+            .expect("a stale group entry reclaims");
     let mut grouped = OwnerClient::connect(&resolve_group_alias(
         &super::server::group_symlink_path(&container, &drive),
     ))
@@ -3487,18 +3490,7 @@ fn group_bootstrap_env_parsing() {
 #[test]
 fn group_bind_refuses_a_foreign_configured_drive() {
     let _lock = GROUP_ENV_LOCK.lock().unwrap();
-    let (engine, dir) = scratch_drive();
-    let served = engine.drive();
-    let store = wyrd_format::FsObjectStore::open(dir.clone()).unwrap();
-    let mut daemon = wyrd_core::node::WyrdNode::new(engine, store).unwrap();
-    daemon.put_file("hello.txt", b"hello owner").unwrap();
-    daemon.refresh_live_heads().unwrap();
-    let (_live, parts) = daemon
-        .into_live(
-            Duration::from_secs(5),
-            &wyrd_core::live::LiveConfig::default(),
-        )
-        .unwrap();
+    let (parts, dir, served) = composed_parts_with_drive();
     let container = group_container();
     // Foreign drive: must refuse, binding nothing.
     let _guard = GroupEnvGuard::set(&container, &group_drive().to_string());
@@ -3530,8 +3522,7 @@ fn group_bind_refuses_a_foreign_configured_drive() {
         super::OwnerService::bind_for_composer(OwnerHandles::from_parts(&parts), &dir, served)
             .expect("the served configured drive binds");
     let link = super::server::group_symlink_path(&container, &served);
-    let mut grouped =
-        OwnerClient::connect(&resolve_group_alias_for_test(&link)).expect("the alias answers");
+    let mut grouped = OwnerClient::connect(&resolve_group_alias(&link)).expect("the alias answers");
     let (node, _, _) = grouped.lookup("hello.txt").expect("lookup serves");
     assert!(
         matches!(node, WireNode::File { size: 11, .. }),
@@ -3542,31 +3533,19 @@ fn group_bind_refuses_a_foreign_configured_drive() {
     std::fs::remove_dir_all(container).unwrap();
 }
 
-/// Resolve the by-drive alias the way the Swift extension does:
-/// read the link, connect to the sibling target.
-fn resolve_group_alias_for_test(link: &std::path::Path) -> std::path::PathBuf {
-    let target = std::fs::read_link(link).expect("the alias is a symlink");
-    link.parent().expect("the alias has a parent").join(target)
-}
-
 /// A group-side publish failure unbinds the primary and refuses:
 /// the owner never runs half-bound, deaf to the extension but
 /// alive to the CLI. A file where `Sockets/` must be created
 /// forces the failure deterministically.
 #[test]
 fn group_bind_publish_failure_unbinds_primary() {
-    let (parts, dir) = composed_parts();
+    let _lock = GROUP_ENV_LOCK.lock().unwrap();
+    let (parts, dir, drive) = composed_parts_with_drive();
     let container = group_container();
-    let drive = group_drive();
+    let _guard = GroupEnvGuard::set(&container, &drive.to_string());
     let sockets = container.join("Sockets");
     std::fs::write(&sockets, b"a file where the sockets directory belongs").unwrap();
-    if super::OwnerService::bind_with_group_container(
-        OwnerHandles::from_parts(&parts),
-        &dir,
-        &drive,
-        &container,
-    )
-    .is_ok()
+    if super::OwnerService::bind_for_composer(OwnerHandles::from_parts(&parts), &dir, drive).is_ok()
     {
         panic!("an unpublishable group path must refuse")
     }
@@ -3576,4 +3555,31 @@ fn group_bind_publish_failure_unbinds_primary() {
     );
     std::fs::remove_dir_all(dir).unwrap();
     std::fs::remove_dir_all(container).unwrap();
+}
+
+/// The pool reservation is one atomic step: filling the pool to the
+/// bound refuses the next reservation, and freeing one slot admits
+/// exactly one more — no check-then-count overshoot, however many
+/// accept loops draw from the counter.
+#[test]
+fn connection_slot_reservation_is_bounded() {
+    use std::sync::atomic::AtomicUsize;
+    let counter = AtomicUsize::new(0);
+    let mut held = Vec::new();
+    for _ in 0..super::MAX_OWNER_CONNECTIONS {
+        held.push(
+            super::server::try_acquire_slot(&counter).expect("every slot under the bound reserves"),
+        );
+    }
+    assert!(
+        super::server::try_acquire_slot(&counter).is_none(),
+        "the bound refuses one more"
+    );
+    drop(held.pop());
+    let _readmitted =
+        super::server::try_acquire_slot(&counter).expect("a freed slot admits exactly one");
+    assert!(
+        super::server::try_acquire_slot(&counter).is_none(),
+        "the pool stays at the bound"
+    );
 }

@@ -247,7 +247,7 @@ with Stage 3, under the invariants above.
 ## Stage 2 owner-client seam (decided)
 
 The extension speaks the owner protocol (u32 big-endian length
-prefix plus JSON, `docs/contracts/owner-interface.md:21-30`) from
+prefix plus JSON, `docs/contracts/owner-interface.md:44-53`) from
 Swift, directly against the normative wire contract, with golden
 fixtures shared across Rust and Swift (`crates/wyrd-owner-client/vectors.json`,
 decoded by the Harness in `packaging/macos/fileprovider/Harness/`).
@@ -298,7 +298,11 @@ collapsed boolean, never a guess.
   fit `sun_path`).
 - **Daemon bind:** all-or-nothing — the drive-directory socket and
   the group socket serve from one `OwnerServer` (one
-  owner-instance identity, one uid check). A live endpoint at the
+  owner-instance identity, one uid check, one shared pool of at
+  most 16 connections across both accept loops). The composer
+  entry point checks the configured drive against the served
+  drive before anything binds (both `wyrd vault` and `wyrd
+  mount`); a mismatch refuses the run. A live endpoint at the
   group path is never unlinked (`AddrInUse`, primary unbound,
   run refused); a dead entry reclaims. Dev bootstrap only, via
   `WYRD_FILEPROVIDER_GROUP_CONTAINER` plus
@@ -310,6 +314,13 @@ collapsed boolean, never a guess.
   deterministic sync failure; `Unavailable` and transport breaks
   → temporary unavailability. A timeout is never proof an item
   disappeared.
+- **Residual window (documented):** the item surface is built
+  from the verified node itself, but hydration reads by path
+  after verification — a delete-plus-recreate between the verify
+  lookup and the read can return the replacement's bytes under
+  the old identifier and version. Identity-bound reads (the
+  owner answers by token, not by path) close it; planned for
+  Stage 3.
 - **Symlinks** enumerate under their name but hydration fails
   closed; their presentation is a Stage 3 question.
 - **Mutations** stay `cannotSynchronize` until Stage 3, including

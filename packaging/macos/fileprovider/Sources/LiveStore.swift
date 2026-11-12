@@ -291,11 +291,20 @@ final class LiveStore {
     /// Resolve one stable token to its serving node in a single
     /// `lookup` on the fast path: the cached path verifies by
     /// agreeing with the requested token, so a rename,
-    /// delete-plus-recreate, or path reuse can never return a
-    /// replacement under the old identifier. A mismatch falls
+    /// delete-plus-recreate, or path reuse never returns a
+    /// replacement *item* under the old identifier. A mismatch falls
     /// through to one bounded walk; a conflict classification fails
     /// closed; anything else 404s. Transport breaks propagate, never
     /// trigger a walk.
+    ///
+    /// Residual window (documented, not closed): hydration reads by
+    /// path after this verification, so a delete-plus-recreate
+    /// between the verify `lookup` and the `read` can return the
+    /// replacement's bytes under the old identifier and version.
+    /// Closing it needs identity-bound reads (the owner answers by
+    /// token, not by path) — Stage 3 work. The item surface above
+    /// carries no such window: the item is built from the verified
+    /// node itself.
     private func stableNode(
         identifier: NSFileProviderItemIdentifier,
         identityHex: String,

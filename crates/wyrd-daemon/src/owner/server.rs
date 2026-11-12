@@ -412,13 +412,15 @@ impl OwnerService {
     /// Bind the drive-directory socket **and** the App Group socket
     /// for the explicitly configured drive, serving both from one
     /// [`OwnerServer`] (one owner-instance identity, one uid check).
-    /// All-or-nothing: a group-side failure unbinds the primary and
-    /// refuses, so the owner never runs half-bound — deaf to the
-    /// extension but alive to the CLI. The caller holds the store
-    /// lock throughout, as with [`OwnerService::bind`]. Stage 2 dev
-    /// bootstrap only; the multi-drive registry owns this
-    /// association in production.
-    pub fn bind_with_group_container(
+    /// Private: composers enter through [`OwnerService::bind_for_composer`],
+    /// which checks the configured drive against the served one
+    /// before anything binds. All-or-nothing: a group-side failure
+    /// unbinds the primary and refuses, so the owner never runs
+    /// half-bound — deaf to the extension but alive to the CLI.
+    /// The caller holds the store lock throughout, as with
+    /// [`OwnerService::bind`]. Stage 2 dev bootstrap only; the
+    /// multi-drive registry owns this association in production.
+    fn bind_with_group_container(
         handles: OwnerHandles,
         drive_dir: &Path,
         drive: &DriveId,
@@ -581,7 +583,7 @@ pub const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 /// A held connection-pool slot, released back to the accept loop
 /// on drop: the served-thread count is the live pool size, so the
 /// gate in `serve_on` always observes the truth.
-struct ConnectionSlot<'a> {
+pub(crate) struct ConnectionSlot<'a> {
     active: &'a AtomicUsize,
 }
 
@@ -589,6 +591,19 @@ impl Drop for ConnectionSlot<'_> {
     fn drop(&mut self) {
         self.active.fetch_sub(1, Ordering::Relaxed);
     }
+}
+
+/// Reserve one connection-pool slot atomically: the increment
+/// happens inside the same compare-exchange as the bound check, so
+/// two accept loops racing on the last slot cannot both win.
+/// Returns the guard on success; the guard's drop frees the slot.
+pub(crate) fn try_acquire_slot(counter: &AtomicUsize) -> Option<ConnectionSlot<'_>> {
+    counter
+        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |held| {
+            (held < MAX_OWNER_CONNECTIONS).then_some(held + 1)
+        })
+        .ok()
+        .map(|_| ConnectionSlot { active: counter })
 }
 
 /// The owner-side interface server: peer-checked dispatch over the
@@ -607,8 +622,10 @@ pub struct OwnerServer {
     instance: u64,
     /// The shared connection-slot counter: every accept loop on this
     /// server — primary and group — draws from one pool, so the
-    /// second listener never doubles the ceiling.
-    slots: Arc<AtomicUsize>,
+    /// second listener never doubles the ceiling. A plain counter,
+    /// not a shared pointer: the server itself travels behind an
+    /// `Arc` where sharing is needed.
+    slots: AtomicUsize,
 }
 
 impl OwnerServer {
@@ -634,7 +651,7 @@ impl OwnerServer {
             handles,
             owner_uid: super::auth::owner_uid(),
             instance,
-            slots: Arc::new(AtomicUsize::new(0)),
+            slots: AtomicUsize::new(0),
         }
     }
 
@@ -683,14 +700,19 @@ impl OwnerServer {
                         // The pool gate, before any thread exists: an
                         // excess connection closes on drop,
                         // unconfirmed like every other broken
-                        // connection. The accept loop is the only
-                        // spawner, so a check-then-count here never
-                        // overshoots — concurrent exits only free
-                        // slots.
-                        if slots.load(Ordering::Relaxed) >= MAX_OWNER_CONNECTIONS {
-                            tracing::warn!("owner interface connection refused: pool saturated");
-                            continue;
-                        }
+                        // connection. The reservation is atomic
+                        // (compare-exchange on the shared counter),
+                        // so two accept loops can never both observe
+                        // a free slot and overshoot the bound.
+                        let slot = match try_acquire_slot(slots) {
+                            Some(slot) => slot,
+                            None => {
+                                tracing::warn!(
+                                    "owner interface connection refused: pool saturated"
+                                );
+                                continue;
+                            }
+                        };
                         // Accepted sockets inherit the listener's
                         // non-blocking flag: serve each connection
                         // blocking with timeouts, one thread per
@@ -701,9 +723,8 @@ impl OwnerServer {
                             Ok(()) => {
                                 let _ = stream.set_read_timeout(Some(CONN_POLL_INTERVAL));
                                 let _ = stream.set_write_timeout(Some(WRITE_TIMEOUT));
-                                slots.fetch_add(1, Ordering::Relaxed);
                                 scope.spawn(move || {
-                                    let _slot = ConnectionSlot { active: slots };
+                                    let _slot = slot;
                                     self.serve_connection(stream, stop)
                                 });
                             }

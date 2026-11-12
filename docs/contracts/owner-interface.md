@@ -18,12 +18,17 @@ Derive the path from the drive directory. Run no discovery service.
 Delete a stale socket entry at bind while the store lock is held.
 Remove the socket file on clean shutdown.
 
-On macOS only, the owner additionally serves the same interface
-inside the App Group container for the File Provider extension,
-which cannot reach the drive directory from its sandbox: one
-socket per drive at
+The owner additionally serves the same interface inside the App
+Group container for the File Provider extension, which cannot
+reach the drive directory from its sandbox: one socket per drive
+at
 `<container>/Sockets/<fingerprint>.sock` plus a
-`Sockets/by-drive/<drive-hex>.sock` symlink alias beside it. The
+`Sockets/by-drive/<drive-hex>.sock` symlink alias beside it. This
+second listener is an opt-in bootstrap for the macOS File
+Provider (enabled by the explicitly configured container-plus-
+drive pair, see the packaging note); it is compiled on every
+platform and binds wherever the pair is set, so the "macOS"
+scoping is the consumer, not a platform gate in the code. The
 filename derives from the served `DriveId`
 (`DriveId::fileprovider_socket_fingerprint`, 64-bit domain
 separated derivation, hex-encoded); the daemon is the only
