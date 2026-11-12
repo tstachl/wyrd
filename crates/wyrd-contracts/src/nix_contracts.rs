@@ -286,14 +286,17 @@ fn fileprovider_swift_stays_within_the_owner_boundary() {
     );
 }
 
-/// Stage 3 sub-PR 1 widens the Swift adapter's vocabulary to the
-/// owner mutation calls it must speak: the two mutation-side
-/// operations and the identity precondition every entry-addressed
-/// kind carries (the adapter never sends a mutation in this
-/// sub-PR — no UI path constructs one — but the wire proof needs
-/// the shapes). The boundary still forbids store, engine, sync and
-/// credential vocabulary. The Harness proves the framing against
-/// a stub owner; this pins the surface against drift.
+/// Stage 3 sub-PR 2 wires the Swift adapter's mutation vocabulary
+/// to live callbacks: create/modify/delete run capture-parent +
+/// submit with identity preconditions through the owner's single
+/// queue. The vocabulary stays owner-shaped — the two
+/// mutation-side operations and the required identity
+/// precondition, plus the refusal codes the callbacks render
+/// (`AlreadyExists` as filename collision, `DirectoryNotEmpty`,
+/// `StaleParent` with one recapture). The boundary still forbids
+/// store, engine, sync and credential vocabulary. The Harness
+/// proves the callbacks against a stateful stub owner; this pins
+/// the surface against drift.
 #[test]
 fn fileprovider_mutation_vocabulary_stays_owner_shaped() {
     let root = workspace_root();
@@ -321,6 +324,9 @@ fn fileprovider_mutation_vocabulary_stays_owner_shaped() {
         "\"submit\"",
         "\"capture-parent\"",
         "expected_identity",
+        "StaleParent",
+        "filenameCollision",
+        "directoryNotEmpty",
         "wyrd:v1:",
         "wyrd:legacy:v1:",
         "wyrd-anchor-v1:",

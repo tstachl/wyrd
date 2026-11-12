@@ -1,9 +1,12 @@
-// Stage 2 live item: an `NSFileProviderItem` translated from an
+// Stage 3 live item: an `NSFileProviderItem` translated from an
 // owner answer, never invented. Identity comes from the owner's
 // token (stable) or the enumerated path (legacy); versions derive
 // from the owner coordinate, so a rename, edit, or restart moves
-// the item's version exactly when the owner state moves. Read-only:
-// every capability except reading is absent until Stage 3.
+// the item's version exactly when the owner state moves. Writable
+// exactly where the owner accepts a precondition-bound write:
+// token-bearing files and directories. Symlinks, legacy rows,
+// merged-disagreement rows, and conflicts stay read-only; trash
+// is never advertised anywhere.
 
 import FileProvider
 import Foundation
@@ -22,6 +25,9 @@ final class LiveItem: NSObject, NSFileProviderItem {
     let itemIdentifier: NSFileProviderItemIdentifier
     let parentItemIdentifier: NSFileProviderItemIdentifier
     let filename: String
+    /// The owner-relative path this item was built from: the rename
+    /// source of truth a modify-then-write flow carries forward.
+    let relativePath: String
     let contentType: UTType
     let isDirectory: Bool
     /// Presentation-internal symlink marker: File Provider has no
@@ -30,6 +36,12 @@ final class LiveItem: NSObject, NSFileProviderItem {
     /// nothing here claims that property.
     let isSymlinkRow: Bool
     private let size: UInt64?
+    /// Whether the owner accepts precondition-bound writes to this
+    /// row: token-bearing files and directories only. Symlinks,
+    /// legacy rows, and merged-disagreement rows are read-only —
+    /// the mutation surface fails them closed, and this keeps the
+    /// UI from offering what the owner refuses.
+    private let isWritableRow: Bool
     private let contentVersionData: Data
     private let metadataVersionData: Data
 
@@ -43,32 +55,34 @@ final class LiveItem: NSObject, NSFileProviderItem {
         identifier: NSFileProviderItemIdentifier,
         parent: NSFileProviderItemIdentifier
     ) {
-        let identityTag: String
         var fileSize: UInt64?
         var directory = false
         var symlink = false
+        let writable: Bool
         switch row.node {
         case .file(let size, _, _, let identity):
             fileSize = size
-            identityTag = Self.identityTag(identity: identity, relativePath: relativePath)
+            writable = identity != nil
         case .dir(_, let identity):
             directory = true
-            identityTag = Self.identityTag(identity: identity, relativePath: relativePath)
-        case .symlink(_, let identity):
+            writable = identity != nil
+        case .symlink(_, _):
             // Presented under the entry's name with a data type;
             // hydration fails closed (symlink presentation is a
             // Stage 3 question, and fabricated content would lie).
+            // Never writable: the owner has no symlink authoring.
             symlink = true
-            identityTag = Self.identityTag(identity: identity, relativePath: relativePath)
+            writable = false
         case .mergedDir(_, let identity):
             directory = true
-            identityTag = Self.identityTag(identity: identity, relativePath: relativePath)
+            writable = identity != nil
         case .conflict:
             return nil
         }
         self.itemIdentifier = identifier
         self.parentItemIdentifier = parent
         self.filename = row.name
+        self.relativePath = relativePath
         self.isDirectory = directory
         self.isSymlinkRow = symlink
         if directory {
@@ -81,30 +95,54 @@ final class LiveItem: NSObject, NSFileProviderItem {
             self.contentType = .data
         }
         self.size = fileSize
-        // Identity is content identity's opposite: the token is
+        self.isWritableRow = writable
+        // Identity is entry identity's opposite: the token is
         // stable across content changes, so the version must move
-        // with the owner coordinate (and size, which the owner
-        // reports per answer) — never with a local counter.
+        // with the owner coordinate, the size, AND the per-entry
+        // content fact (chunks for files, subtree for directories).
+        // Generation and revision ride along for freshness, but the
+        // conflict check compares only the per-entry facts — an
+        // unrelated commit elsewhere must not invalidate this item,
+        // while a same-size remote edit must.
+        let tokenTag = nodeIdentity(row.node)?.lowercased() ?? "none"
+        let contentTag: String
+        switch row.node {
+        case .file(_, _, let chunks, _):
+            contentTag = chunks.joined(separator: ",")
+        case .dir(let subtree, _):
+            contentTag = subtree
+        case .mergedDir(let subtrees, _):
+            contentTag = subtrees.flatMap { $0 }.joined(separator: ",")
+        case .symlink, .conflict:
+            // Never compared: symlinks and conflicts are not
+            // writable, and their targets/versions carry no stable
+            // content grammar for the version string.
+            contentTag = ""
+        }
         let versionCore =
-            "wyrd-cv1:\(row.generation):\(row.revision):\(fileSize.map(String.init) ?? "-"):\(identityTag)"
+            "wyrd-cv2:\(row.generation):\(row.revision):\(fileSize.map(String.init) ?? "-"):\(tokenTag):\(contentTag)"
         self.contentVersionData = Data(versionCore.utf8)
-        self.metadataVersionData = Data("wyrd-mv1:\(row.generation):\(row.revision)".utf8)
+        self.metadataVersionData = Data("wyrd-mv2:\(row.generation):\(row.revision)".utf8)
         super.init()
     }
 
-    /// The version-stable tag for the row's identity: the owner's
-    /// token when reported, else the legacy path marker. Legacy
-    /// entries are unstable by contract (rename means a new item),
-    /// so the path is exactly the right tag.
-    private static func identityTag(identity: String?, relativePath: String) -> String {
-        if let identity {
-            return "i:\(identity.lowercased())"
-        }
-        return "l:\(relativePath)"
-    }
-
     var capabilities: NSFileProviderItemCapabilities {
-        [.allowsReading]
+        // The root accepts children but is never renamed or
+        // deleted. Token-bearing files and directories accept the
+        // full conservative set (write covers adding subitems for
+        // directories); symlinks, legacy rows, and
+        // merged-disagreement rows stay read-only. Trash is never
+        // advertised: delete is permanent, trash moves fail closed.
+        if itemIdentifier == .rootContainer {
+            return [.allowsReading, .allowsWriting]
+        }
+        guard isWritableRow else {
+            return [.allowsReading]
+        }
+        return [
+            .allowsReading, .allowsWriting, .allowsRenaming,
+            .allowsReparenting, .allowsDeleting,
+        ]
     }
 
     var itemVersion: NSFileProviderItemVersion {

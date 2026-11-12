@@ -557,6 +557,540 @@ enum HarnessError: Error {
     case socket(String)
 }
 
+// MARK: - Mutation callbacks (Stage 3 sub-PR 2)
+
+do {
+    // Capability matrix: token-bearing files and directories are
+    // writable without trash; symlinks, legacy rows, and
+    // disagreements stay read-only.
+    func capabilitiesCase(_ item: LiveItem?) -> NSFileProviderItemCapabilities? {
+        item?.capabilities
+    }
+    let fileRow = LiveRow(
+        name: "w.txt",
+        node: .file(size: 1, executable: false, chunks: [], identity: identityHex),
+        generation: 3, revision: 9)
+    let fileItem = try store.buildItem(
+        node: fileRow.node, path: "w.txt", parent: .rootContainer,
+        generation: 3, revision: 9)
+    let fileCaps = capabilitiesCase(fileItem) ?? []
+    check(fileCaps.contains(.allowsWriting), "files advertise writing")
+    check(fileCaps.contains(.allowsRenaming), "files advertise renaming")
+    check(fileCaps.contains(.allowsDeleting), "files advertise deleting")
+    check(!fileCaps.contains(.allowsTrashing), "files never advertise trash")
+    let dirItem = try store.buildItem(
+        node: .dir(subtree: "", identity: identityHex), path: "d",
+        parent: .rootContainer, generation: 3, revision: 9)
+    let dirCaps = capabilitiesCase(dirItem) ?? []
+    check(dirCaps.contains(.allowsWriting), "dirs advertise adding children")
+    check(!dirCaps.contains(.allowsTrashing), "dirs never advertise trash")
+    let linkItem = try store.buildItem(
+        node: .symlink(target: "w.txt", identity: identityHex), path: "l",
+        parent: .rootContainer, generation: 3, revision: 9)
+    checkEqual(
+        capabilitiesCase(linkItem) ?? [], [.allowsReading], "symlinks stay read-only")
+    let legacyItem = try store.buildItem(
+        node: .file(size: 1, executable: false, chunks: [], identity: nil),
+        path: "old.bin", parent: .rootContainer, generation: 3, revision: 9)
+    checkEqual(
+        capabilitiesCase(legacyItem) ?? [], [.allowsReading], "legacy rows stay read-only")
+    _ = fileCaps
+} catch {
+    print("FAIL: capability matrix: \(error)")
+    failures += 1
+}
+
+do {
+    // End-to-end write path against the stateful stub: mkdir,
+    // create-with-contents, modify, rename, delete.
+    let dir = try store.createDirectory(parent: .rootContainer, name: "mut-dir")
+    check(dir.isDirectory, "created dir serves as a directory")
+    // A duplicate create refuses as AlreadyExists — the callback
+    // renders filenameCollision, never a sync failure.
+    do {
+        _ = try store.createDirectory(parent: .rootContainer, name: "mut-dir")
+        print("FAIL: duplicate mkdir commits")
+        failures += 1
+    } catch let error as LiveStoreError {
+        if case .refused(let code, _) = error {
+            checkEqual(code, "AlreadyExists", "duplicate mkdir refuses collision")
+            checkEqual(
+                nsErrorForMutation(code: code, message: "", what: "t", log: log).code,
+                NSFileProviderError.filenameCollision,
+                "collision renders filenameCollision")
+        } else {
+            print("FAIL: duplicate mkdir refuses collision, got \(error)")
+            failures += 1
+        }
+    }
+    let dirID = dir.itemIdentifier
+    let file = try store.createFile(
+        parent: dirID, name: "mut-file.txt", contents: Data("mut-hello".utf8))
+    checkEqual(file.documentSize?.uint64Value, 9, "created file serves its bytes")
+    let (hydrated, _) = try store.contents(for: file.itemIdentifier)
+    checkEqual(
+        String(data: hydrated, encoding: .utf8), "mut-hello",
+        "created contents read back")
+    // Modify: size changes and the version moves.
+    let before = file.itemVersion
+    let modified = try store.writeContent(
+        for: file.itemIdentifier, data: Data("mut-hello!!".utf8))
+    checkEqual(modified.documentSize?.uint64Value, 11, "modified size comes from the owner")
+    check(
+        modified.itemVersion.contentVersion != before.contentVersion,
+        "modify moves the item version")
+    // Rename preserves the entry: the stable identifier is
+    // unchanged and resolves to the new name.
+    let moved = try store.rename(
+        identifier: file.itemIdentifier, newParent: dirID, newName: "mut-renamed.txt")
+    checkEqual(moved.itemIdentifier, file.itemIdentifier, "rename preserves the token")
+    let resolved = try store.item(for: file.itemIdentifier)
+    checkEqual(resolved.filename, "mut-renamed.txt", "token resolves to the new name")
+    // A no-op rename submits nothing and still resolves.
+    let noop = try store.rename(
+        identifier: file.itemIdentifier, newParent: dirID, newName: "mut-renamed.txt")
+    checkEqual(noop.filename, "mut-renamed.txt", "no-op rename resolves")
+    // Rename onto an existing name collides.
+    let other = try store.createFile(
+        parent: dirID, name: "mut-other.txt", contents: Data("x".utf8))
+    _ = other
+    do {
+        _ = try store.rename(
+            identifier: file.itemIdentifier, newParent: dirID, newName: "mut-other.txt")
+        print("FAIL: colliding rename commits")
+        failures += 1
+    } catch let error as LiveStoreError {
+        if case .refused(let code, _) = error {
+            checkEqual(code, "AlreadyExists", "colliding rename refuses collision")
+        } else {
+            print("FAIL: colliding rename refuses collision, got \(error)")
+            failures += 1
+        }
+    }
+    // Delete removes; a second delete reports success (already gone).
+    try store.delete(identifier: other.itemIdentifier)
+    do {
+        _ = try store.item(for: other.itemIdentifier)
+        print("FAIL: deleted entry still serves")
+        failures += 1
+    } catch let error as LiveStoreError {
+        if case .notFound = error {} else {
+            print("FAIL: deleted entry 404s, got \(error)")
+            failures += 1
+        }
+    }
+    try store.delete(identifier: other.itemIdentifier)
+    // Empty files are supported: no contents, just CreateFile.
+    let empty = try store.createFile(parent: dirID, name: "mut-empty.txt", contents: nil)
+    checkEqual(empty.documentSize?.uint64Value, 0, "empty files commit")
+    // Non-empty directories keep DirectoryNotEmpty.
+    do {
+        try store.delete(identifier: dirID)
+        print("FAIL: non-empty rmdir commits")
+        failures += 1
+    } catch let error as LiveStoreError {
+        if case .refused(let code, _) = error {
+            checkEqual(code, "DirectoryNotEmpty", "non-empty dir refuses")
+            checkEqual(
+                nsErrorForMutation(code: code, message: "", what: "t", log: log).code,
+                NSFileProviderError.directoryNotEmpty,
+                "non-empty renders directoryNotEmpty")
+        } else {
+            print("FAIL: non-empty dir refuses, got \(error)")
+            failures += 1
+        }
+    }
+    // Legacy rows are not writable, even for delete.
+    let legacyID = NSFileProviderItemIdentifier(
+        WyrdItemIdentifier.legacyID(path: "legacy.bin"))
+    do {
+        try store.delete(identifier: legacyID)
+        print("FAIL: legacy delete commits")
+        failures += 1
+    } catch let error as LiveStoreError {
+        if case .sync = error {} else {
+            print("FAIL: legacy delete fails closed, got \(error)")
+            failures += 1
+        }
+    }
+} catch {
+    print("FAIL: mutation round-trip: \(error)")
+    failures += 1
+}
+
+do {
+    // One StaleParent recaptures and retries: the stub scripts the
+    // first create under stale-dir to refuse, the retry commits.
+    // The fixture is hidden from readdir (so the Stage 2 counts
+    // hold) and recorded directly — the verify-lookup still checks
+    // the token on use.
+    let staleParentID = NSFileProviderItemIdentifier(
+        WyrdItemIdentifier.stableID(driveHex: driveHex, identityHex: String(repeating: "ed", count: 32)))
+    store.resolver.record(
+        identifier: staleParentID, path: "stale-dir", parent: .rootContainer)
+    // The recorded mapping verifies against the fixture's lookup.
+    let created = try store.createFile(
+        parent: staleParentID, name: "mut-stale.txt", contents: Data("s".utf8))
+    checkEqual(created.filename, "mut-stale.txt", "recaptured create commits")
+    // Oversize writes never reach the socket: the client refuses
+    // before any submit.
+    let huge = Data(repeating: 0, count: LiveStore.maxContentBytes + 1)
+    do {
+        _ = try store.createFile(parent: .rootContainer, name: "mut-huge.bin", contents: huge)
+        print("FAIL: oversize create submits")
+        failures += 1
+    } catch let error as LiveStoreError {
+        if case .sync(let message) = error {
+            check(message.contains("32 MiB"), "oversize refusal names the bound")
+        } else {
+            print("FAIL: oversize create fails closed, got \(error)")
+            failures += 1
+        }
+    }
+} catch {
+    print("FAIL: stale-parent recapture: \(error)")
+    failures += 1
+}
+
+do {
+    // Base-version discipline is per entry, not per drive: size,
+    // token, and content digest must match; the serving generation
+    // and revision move with every commit anywhere, so they are
+    // excluded (an unrelated write must not invalidate this item).
+    // First-sync skips — the owner precondition stays authoritative.
+    let current = try store.item(for: NSFileProviderItemIdentifier(
+        WyrdItemIdentifier.stableID(driveHex: driveHex, identityHex: identityHex)))
+    check(
+        FileProviderExtension.baseVersionMatches(
+            current.itemVersion, current: current),
+        "matching base version passes")
+    let facts = FileProviderExtension.versionFacts(current.itemVersion.contentVersion)
+    check(facts != nil, "our versions parse into per-entry facts")
+    if let facts {
+        let unrelatedWrite = NSFileProviderItemVersion(
+            contentVersion: Data("wyrd-cv2:99:99:\(facts.size):\(facts.rest)".utf8),
+            metadataVersion: current.itemVersion.metadataVersion)
+        check(
+            FileProviderExtension.baseVersionMatches(unrelatedWrite, current: current),
+            "a newer coordinate with the same entry facts still matches")
+        let changedEntry = NSFileProviderItemVersion(
+            contentVersion: Data("wyrd-cv2:3:9:12345:\(facts.rest)".utf8),
+            metadataVersion: current.itemVersion.metadataVersion)
+        check(
+            !FileProviderExtension.baseVersionMatches(changedEntry, current: current),
+            "a changed size fails")
+        // Same size, different content digest: the whole point of
+        // carrying chunks in the version. Tweak the digest tail so
+        // the size still matches.
+        let sizedRest = facts.rest.split(separator: ":", maxSplits: 1).map(String.init)
+        let foreignRest = sizedRest.count == 2
+            ? "\(sizedRest[0]):deadbeef"
+            : "dead:deadbeef"
+        let sameSizeEdit = NSFileProviderItemVersion(
+            contentVersion: Data("wyrd-cv2:3:9:\(facts.size):\(foreignRest)".utf8),
+            metadataVersion: current.itemVersion.metadataVersion)
+        check(
+            !FileProviderExtension.baseVersionMatches(sameSizeEdit, current: current),
+            "a same-size content edit fails")
+        // Legacy cv1 versions still parse (transitional cached
+        // versions fail closed on shape, never on parse).
+        let legacy = NSFileProviderItemVersion(
+            contentVersion: Data("wyrd-cv1:3:9:\(facts.size):\(facts.rest)".utf8),
+            metadataVersion: current.itemVersion.metadataVersion)
+        check(
+            FileProviderExtension.versionFacts(legacy.contentVersion) != nil,
+            "legacy versions still parse")
+    }
+    let stale = NSFileProviderItemVersion(
+        contentVersion: Data("wyrd-cv1:0:0:0:i:dead".utf8),
+        metadataVersion: current.itemVersion.metadataVersion)
+    check(
+        !FileProviderExtension.baseVersionMatches(stale, current: current),
+        "a foreign entry fails")
+    check(
+        FileProviderExtension.versionFacts(Data("not-a-version".utf8)) == nil,
+        "a foreign version string parses to nothing")
+    let first = NSFileProviderItemVersion(
+        contentVersion: NSFileProviderItemVersion.beforeFirstSyncComponent,
+        metadataVersion: current.itemVersion.metadataVersion)
+    check(
+        FileProviderExtension.baseVersionMatches(first, current: current),
+        "first-sync base skips the check")
+    // Single-completion gate: exactly one owner.
+    let gate = SingleCompletion()
+    check(gate.fire {}, "first completion owns the gate")
+    check(!gate.fire {}, "second completion is silent")
+    check(gate.isDone, "gate reports done")
+    // Working-set signal without a manager never throws: the
+    // Harness has no fileproviderd.
+    let domain = NSFileProviderDomain(
+        identifier: NSFileProviderDomainIdentifier(driveHex), displayName: "Wyrd")
+    signalWorkingSet(domain: domain, log: log)
+} catch {
+    print("FAIL: version and completion checks: \(error)")
+    failures += 1
+}
+
+do {
+    // Cancellation aborts before the first socket write and never
+    // invents an answer: a pre-cancelled mutation throws
+    // `.cancelled` without touching the transport.
+    let cancelled = MutationCancel()
+    cancelled.request()
+    check(cancelled.isRequested, "cancel records")
+    do {
+        _ = try store.createDirectory(
+            parent: .rootContainer, name: "mut-cancelled", cancel: cancelled)
+        print("FAIL: cancelled create submits")
+        failures += 1
+    } catch let error as LiveStoreError {
+        if case .cancelled = error {} else {
+            print("FAIL: cancelled create aborts, got \(error)")
+            failures += 1
+        }
+    }
+    // The mutation error table renders cancel as the Cocoa code the
+    // header names — an NSError, not a File Provider code.
+    if case .cancelled = LiveStoreError.cancelled("t") {
+        let rendered = FileProviderExtension.mutationError(
+            for: .cancelled("t"), what: "t", log: log)
+        check(
+            (rendered as NSError).domain == NSCocoaErrorDomain
+                && (rendered as NSError).code == NSUserCancelledError,
+            "cancel renders NSUserCancelledError")
+    }
+    // Transport-shaped mutation refusals stay temporary, never
+    // deterministic: the read table would call a mutation Timeout
+    // sync, which is the wrong lane for a write that may land.
+    check({
+        if case .temporary = store.mapMutationError(
+            OwnerClientError.refused(OwnerError(code: "Timeout", message: "x")),
+            what: "t") { return true }
+        return false
+    }(), "mutation Timeout maps to temporary")
+} catch {
+    print("FAIL: cancellation checks: \(error)")
+    failures += 1
+}
+
+do {
+    // Unconfirmed submits reconcile before any retry. The stub
+    // drops the first connection per (kind, path): `drop-before`
+    // closes before processing (nothing landed — retry converges),
+    // `drop-after` processes, then closes without answering (the
+    // write landed — report temporary, never claim success).
+    _ = try store.createDirectory(parent: .rootContainer, name: "drop-before")
+    _ = try store.createDirectory(parent: .rootContainer, name: "drop-after")
+    let beforeID = try store.enumerate(container: .rootContainer).items
+        .first(where: { $0.filename == "drop-before" })!.itemIdentifier
+    let dropped = try store.createFile(
+        parent: beforeID, name: "f.txt", contents: Data("dropped".utf8))
+    let (redropped, _) = try store.contents(for: dropped.itemIdentifier)
+    checkEqual(
+        String(data: redropped, encoding: .utf8), "dropped",
+        "a dropped-before create retries and converges")
+    // Same-size content is no proof: the commit that landed without
+    // an answer reports temporary, and the bytes are already there.
+    let afterID = try store.enumerate(container: .rootContainer).items
+        .first(where: { $0.filename == "drop-after" })!.itemIdentifier
+    do {
+        _ = try store.createFile(
+            parent: afterID, name: "g.txt", contents: Data("v1".utf8))
+        print("FAIL: dropped-after create claims success")
+        failures += 1
+    } catch let error as LiveStoreError {
+        if case .temporary = error {} else {
+            print("FAIL: dropped-after create reports temporary, got \(error)")
+            failures += 1
+        }
+    }
+    // The entry exists exactly once: the retry meets AlreadyExists,
+    // never a silent duplicate.
+    do {
+        _ = try store.createFile(
+            parent: afterID, name: "g.txt", contents: Data("v1".utf8))
+        print("FAIL: duplicate create commits")
+        failures += 1
+    } catch let error as LiveStoreError {
+        if case .refused(let code, _) = error {
+            checkEqual(code, "AlreadyExists", "the landed write blocks a duplicate")
+        } else {
+            print("FAIL: duplicate create collides, got \(error)")
+            failures += 1
+        }
+    }
+} catch {
+    print("FAIL: unconfirmed reconciliation: \(error)")
+    failures += 1
+}
+
+do {
+    // The full content base is checked, not just the size: a
+    // same-size edit with different chunks is still stale, and a
+    // tampered chunk list is stale too.
+    let dirID = try store.enumerate(container: .rootContainer).items
+        .first(where: { $0.filename == "mut-dir" })!.itemIdentifier
+    _ = try store.createFile(
+        parent: dirID, name: "mut-base.txt", contents: Data("1234".utf8))
+    let client = OwnerClient(socketPath: socketPath)
+    let (node, _, _) = try client.lookup(path: "mut-dir/mut-base.txt")
+    guard case .file(_, _, _, let identity?) = node else {
+        print("FAIL: base fixture serves a token-bearing file")
+        failures += 1
+        throw HarnessError.socket("no token")
+    }
+    _ = try store.writeContent(
+        for: try store.item(for: NSFileProviderItemIdentifier(
+            WyrdItemIdentifier.stableID(driveHex: driveHex, identityHex: identity))).itemIdentifier,
+        data: Data("12345678".utf8))
+    func submitCommit(base: OwnerFileIdentity) throws -> OwnerMutationOutcome {
+        try client.submit(kind: .commitFile(
+            path: "mut-dir/mut-base.txt", base: base, executable: false,
+            contentHex: "31323334", expectedIdentity: identity))
+    }
+    do {
+        _ = try submitCommit(base: OwnerFileIdentity(
+            size: 4, executable: false, chunks: ["aa"]))
+        print("FAIL: stale base commits")
+        failures += 1
+    } catch let error as OwnerClientError {
+        if case .refused(let refusal) = error {
+            checkEqual(refusal.code, "Stale", "a stale base refuses")
+        } else {
+            print("FAIL: stale base refuses Stale, got \(error)")
+            failures += 1
+        }
+    }
+    do {
+        _ = try submitCommit(base: OwnerFileIdentity(
+            size: 8, executable: false, chunks: ["bb"]))
+        print("FAIL: tampered chunks commit")
+        failures += 1
+    } catch let error as OwnerClientError {
+        if case .refused(let refusal) = error {
+            checkEqual(refusal.code, "Stale", "tampered chunks refuse")
+        } else {
+            print("FAIL: tampered chunks refuse Stale, got \(error)")
+            failures += 1
+        }
+    }
+} catch {
+    print("FAIL: content-base checks: \(error)")
+    failures += 1
+}
+
+do {
+    // The Finding-1 scenario at adapter level: a same-size remote
+    // edit lands after the system observed the item. The stored
+    // base version no longer matches — the digest moved — so a
+    // modify built on it fails closed without overwriting.
+    let dirID = try store.enumerate(container: .rootContainer).items
+        .first(where: { $0.filename == "mut-dir" })!.itemIdentifier
+    let observed = try store.createFile(
+        parent: dirID, name: "mut-ss.txt", contents: Data("aaaa".utf8))
+    let before = try store.item(for: observed.itemIdentifier)
+    // A peer writes the same size with different bytes, through a
+    // fresh base — exactly what the owner's queue accepts.
+    let peer = OwnerClient(socketPath: socketPath)
+    let (peerNode, _, _) = try peer.lookup(path: "mut-dir/mut-ss.txt")
+    guard case .file(let peerSize, _, let peerChunks, let peerToken?) = peerNode else {
+        print("FAIL: same-size fixture serves a token-bearing file")
+        failures += 1
+        throw HarnessError.socket("no token")
+    }
+    _ = try peer.submit(kind: .commitFile(
+        path: "mut-dir/mut-ss.txt",
+        base: OwnerFileIdentity(size: peerSize, executable: false, chunks: peerChunks),
+        executable: false, contentHex: "62626262", expectedIdentity: peerToken))
+    let now = try store.item(for: observed.itemIdentifier)
+    check(
+        !FileProviderExtension.baseVersionMatches(before.itemVersion, current: now),
+        "a same-size remote edit invalidates the stored base")
+    let (kept, _) = try store.contents(for: observed.itemIdentifier)
+    checkEqual(
+        String(data: kept, encoding: .utf8), "bbbb",
+        "the peer bytes stand; nothing overwrote them")
+} catch {
+    print("FAIL: same-size remote edit: \(error)")
+    failures += 1
+}
+
+do {
+    // The ambiguity branch of commit reconciliation: a commit that
+    // landed without an answer reports temporary, and the bytes are
+    // already there — never a false success, never a silent retry.
+    // Each (kind, path) drops once, so create and commit drop
+    // independently. The fixture dirs already exist from the
+    // unconfirmed-reconciliation block above.
+    let afterID = try store.enumerate(container: .rootContainer).items
+        .first(where: { $0.filename == "drop-after" })!.itemIdentifier
+    do {
+        _ = try store.createFile(parent: afterID, name: "k.txt", contents: nil)
+        print("FAIL: dropped-after create claims success")
+        failures += 1
+    } catch let error as LiveStoreError {
+        if case .temporary = error {} else {
+            print("FAIL: dropped-after create reports temporary, got \(error)")
+            failures += 1
+        }
+    }
+    // The entry exists exactly once: the retry meets AlreadyExists,
+    // never a silent duplicate.
+    do {
+        _ = try store.createFile(parent: afterID, name: "k.txt", contents: nil)
+        print("FAIL: duplicate create commits")
+        failures += 1
+    } catch let error as LiveStoreError {
+        if case .refused(let code, _) = error {
+            checkEqual(code, "AlreadyExists", "the landed create blocks a duplicate")
+        } else {
+            print("FAIL: duplicate create collides, got \(error)")
+            failures += 1
+        }
+    }
+    let kid = try store.enumerate(container: afterID).items
+        .first(where: { $0.filename == "k.txt" })!.itemIdentifier
+    do {
+        _ = try store.writeContent(for: kid, data: Data("kk".utf8))
+        print("FAIL: dropped-after commit claims success")
+        failures += 1
+    } catch let error as LiveStoreError {
+        if case .temporary = error {} else {
+            print("FAIL: dropped-after commit reports temporary, got \(error)")
+            failures += 1
+        }
+    }
+    let (kb, _) = try store.contents(for: kid)
+    checkEqual(
+        String(data: kb, encoding: .utf8), "kk",
+        "the dropped commit landed exactly once")
+    // A second write converges normally on the fresh base.
+    let reconverged = try store.writeContent(for: kid, data: Data("kkk".utf8))
+    checkEqual(
+        reconverged.documentSize?.uint64Value, 3, "retry converges on the fresh base")
+} catch {
+    print("FAIL: drop-after commit: \(error)")
+    failures += 1
+}
+
+do {
+    // Post-mutation enumeration serves what the callbacks wrote:
+    // the working set re-observes the new state on next read.
+    let (items, _) = try store.enumerate(container: .rootContainer)
+    check(items.contains { $0.filename == "mut-dir" }, "created dir enumerates")
+    let dirID = items.first(where: { $0.filename == "mut-dir" })!.itemIdentifier
+    let (children, _) = try store.enumerate(container: dirID)
+    let names = Set(children.map { $0.filename })
+    for expected in ["mut-renamed.txt", "mut-empty.txt", "mut-base.txt"] {
+        check(names.contains(expected), "\(expected) enumerates after mutation")
+    }
+    check(!names.contains("mut-file.txt"), "the renamed source name stays gone")
+    check(!names.contains("mut-other.txt"), "the deleted entry stays gone")
+} catch {
+    print("FAIL: post-mutation enumeration: \(error)")
+    failures += 1
+}
+
 if failures == 0 {
     print("harness: all checks passed")
 } else {

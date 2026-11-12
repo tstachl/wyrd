@@ -17,10 +17,23 @@ enum LiveStoreError: Error {
     /// The identifier names nothing: invalid, retired, or deleted.
     case notFound(String)
     /// Deterministic failure: conflicted, too large, undecodable,
-    /// budget-exceeded, or a protocol violation. Never retry blind.
+    /// budget-exceeded, stale precondition, or a protocol violation.
+    /// Never retry blind.
     case sync(String)
-    /// Temporary: the owner is unreachable or its generation is not
-    /// servable yet. The system retries; the adapter holds no state.
+    /// A mutation refusal the system resolves itself: a name
+    /// collision (the system renames and re-issues) or a
+    /// non-empty directory (the system re-creates from metadata).
+    /// Carried separately so the callback renders the system's
+    /// own resolution instead of a sync failure.
+    case refused(code: String, message: String)
+    /// The driver observed a recorded cancel before any socket
+    /// write and aborted: nothing was sent, so reporting
+    /// `NSUserCancelledError` is exact, never a guess about an
+    /// in-flight request.
+    case cancelled(String)
+    /// Temporary: the owner is unreachable, its generation is not
+    /// servable yet, or an unconfirmed write reached no verdict.
+    /// The system retries; the adapter holds no state.
     case temporary(String)
 }
 
@@ -28,7 +41,7 @@ final class LiveStore {
     let driveHex: String
     var config: SocketConfig
     let resolver: PathResolver
-    private let log: Logger
+    let log: Logger
 
     init(driveHex: String, log: Logger, socketPathOverride: String? = nil) {
         self.driveHex = driveHex
@@ -185,39 +198,16 @@ final class LiveStore {
     /// Enumerate one container in a single owner coordinate: one
     /// `readdir`, one anchor. Conflict rows are logged and skipped —
     /// siblings enumerate regardless — and every row records its
-    /// identifier-to-path mapping for later lookup.
+    /// identifier-to-path mapping for later lookup. Container
+    /// resolution is shared with the mutation surface
+    /// (`containerPath(for:client:)`), so enumeration and writes
+    /// never disagree on what a container names.
     func enumerate(container: NSFileProviderItemIdentifier) throws -> (
         items: [LiveItem], anchor: WyrdSyncAnchor
     ) {
         let client = try liveClient()
-        let containerPath: String
+        let containerPath = try containerPath(for: container, client: client)
         let containerId = container
-        if container == .rootContainer {
-            containerPath = ""
-        } else {
-            guard let parsed = WyrdItemIdentifier.parse(container.rawValue, driveHex: driveHex) else {
-                throw LiveStoreError.notFound("container not parseable for this drive")
-            }
-            switch parsed {
-            case .stable(_, let identityHex):
-                let resolved = try stableNode(
-                    identifier: container,
-                    identityHex: identityHex,
-                    client: client
-                )
-                switch resolved.node {
-                case .dir, .mergedDir:
-                    containerPath = resolved.path
-                default:
-                    throw LiveStoreError.notFound("container is not a directory")
-                }
-            case .legacy(let pathHex):
-                guard let path = WyrdItemIdentifier.legacyPath(pathHex: pathHex) else {
-                    throw LiveStoreError.notFound("container undecodable")
-                }
-                containerPath = path
-            }
-        }
         let entries: [OwnerDirEntry]
         let generation: UInt64
         let revision: UInt64
@@ -269,7 +259,7 @@ final class LiveStore {
 
     // MARK: - Internals
 
-    private func liveClient() throws -> OwnerClient {
+    func liveClient() throws -> OwnerClient {
         let path: String
         do {
             path = try config.socketPath()
@@ -305,7 +295,7 @@ final class LiveStore {
     /// token, not by path) — Stage 3 work. The item surface above
     /// carries no such window: the item is built from the verified
     /// node itself.
-    private func stableNode(
+    func stableNode(
         identifier: NSFileProviderItemIdentifier,
         identityHex: String,
         client: OwnerClient
@@ -354,13 +344,13 @@ final class LiveStore {
     /// A looked-up node carries the requested token: files, dirs,
     /// and symlinks by their entry token, merged dirs by the agreed
     /// token. Conflict rows never match — the walk classifies them.
-    private func nodeMatches(node: OwnerNode, identityHex: String) -> Bool {
+    func nodeMatches(node: OwnerNode, identityHex: String) -> Bool {
         nodeIdentity(node)?.lowercased() == identityHex.lowercased()
     }
 
     /// One `lookup` with error mapping. Conflict rows return as
     /// nodes (the caller classifies); every refusal maps.
-    private func lookupNode(path: String, client: OwnerClient) throws -> (
+    func lookupNode(path: String, client: OwnerClient) throws -> (
         node: OwnerNode, generation: UInt64, revision: UInt64
     ) {
         do {
@@ -373,7 +363,7 @@ final class LiveStore {
     /// Build the item for a classified node. Conflict rows and
     /// excluded rows fail closed — every caller classifies first,
     /// and this is the backstop if one does not.
-    private func buildItem(
+    func buildItem(
         node: OwnerNode,
         path: String,
         parent: NSFileProviderItemIdentifier,

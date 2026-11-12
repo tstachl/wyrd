@@ -61,6 +61,14 @@ final class LiveEnumerator: NSObject, NSFileProviderEnumerator {
             return NSFileProviderError(.noSuchItem)
         case .sync:
             return NSFileProviderError(.cannotSynchronize)
+        case .refused:
+            // Mutations never run through the enumerator; a refusal
+            // here is a protocol surprise, failed closed.
+            return NSFileProviderError(.cannotSynchronize)
+        case .cancelled:
+            // Enumerations are not cancellable through this table;
+            // a cancel here is a protocol surprise, failed closed.
+            return NSFileProviderError(.cannotSynchronize)
         case .temporary:
             return NSFileProviderError(.serverUnreachable)
         }
