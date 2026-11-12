@@ -12,10 +12,13 @@
 //! store lock: stop the service first, the same rule `member` states.
 //!
 //! Reconfigure resolves the registry entry by drive directory (exact
-//! match; zero or duplicate matches refuse without writing), stops
-//! and clears the old service definition, proves the keystore still
-//! opens, installs the new definition when managed, rewrites the
-//! entry carrying skipped entries forward, and verifies the socket.
+//! match; zero or duplicate matches refuse without writing), proves
+//! the keystore still opens (retrying once past a live managed
+//! lock, while any other open failure refuses with everything
+//! untouched), stops and clears the old service definition, installs
+//! the new definition when managed from the updated entry, rewrites
+//! the entry carrying skipped entries forward, and verifies the
+//! socket.
 //! One operator at a time: concurrent direct CLI invocations can
 //! interleave past the store open (the desktop flight serializes
 //! only its own calls), so serialize reconfigurations against any

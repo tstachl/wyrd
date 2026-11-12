@@ -415,6 +415,59 @@ fn write_registry_entry(registry: &Path, name: &str, drive: &Path, relays: &[&st
     fs::write(registry, serde_json::to_vec(&raw).unwrap()).unwrap();
 }
 
+/// A stub owner socket answering every request with the given
+/// refusal code: the real framed protocol over a Unix socket, so the
+/// command exercises its real client and refusal mapping — only the
+/// owner is fake. The accept loop is deadline-bounded so the thread
+/// always returns for `join`. Mirrors the daemon suite's stub; this
+/// binary cannot import it.
+fn stub_owner(
+    sock: PathBuf,
+    code: &'static str,
+    max_requests: usize,
+) -> std::thread::JoinHandle<()> {
+    if sock.exists() {
+        fs::remove_file(&sock).unwrap();
+    }
+    std::thread::spawn(move || {
+        let listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(60);
+        let mut served = 0;
+        while served < max_requests && std::time::Instant::now() < deadline {
+            let Ok((mut stream, _)) = listener.accept() else {
+                std::thread::sleep(Duration::from_millis(10));
+                continue;
+            };
+            served += 1;
+            stream
+                .set_read_timeout(Some(Duration::from_secs(30)))
+                .unwrap();
+            let mut len = [0u8; 4];
+            if std::io::Read::read_exact(&mut stream, &mut len).is_err() {
+                continue;
+            }
+            let len = u32::from_be_bytes(len) as usize;
+            let mut body = vec![0u8; len];
+            if std::io::Read::read_exact(&mut stream, &mut body).is_err() {
+                continue;
+            }
+            let id: u64 = serde_json::from_slice::<serde_json::Value>(&body)
+                .ok()
+                .and_then(|value| value.get("id")?.as_u64())
+                .unwrap_or(0);
+            let reply = serde_json::json!({
+                "v": wyrd_daemon::owner::WIRE_VERSION,
+                "id": id,
+                "result": {"err": {"code": code, "message": "stub refusal"}},
+            });
+            let body = serde_json::to_vec(&reply).unwrap();
+            let _ = std::io::Write::write_all(&mut stream, &(body.len() as u32).to_be_bytes());
+            let _ = std::io::Write::write_all(&mut stream, &body);
+        }
+    })
+}
+
 fn registry_relays(registry: &Path, name: &str) -> Vec<String> {
     let raw: serde_json::Value = serde_json::from_slice(&fs::read(registry).unwrap()).unwrap();
     raw["drives"][name]["relays"]
@@ -426,19 +479,48 @@ fn registry_relays(registry: &Path, name: &str) -> Vec<String> {
 }
 
 /// Reconfigure replaces the relay set through the CLI surface: the
-/// entry is rewritten and the run reports reconfigured-but-
-/// unavailable (no owner serves the scratch drive). A planted
-/// `owner.sock` file keeps the socket wait instant — connecting to a
-/// non-socket fails fast, and only the registry outcome is asserted.
+/// entry is rewritten and the run reports reconfigured-and-verified
+/// (a stub owner answers the pre-first-pass refusal this session).
 #[test]
-fn drive_reconfigure_replaces_relays_and_reports_unavailable() {
+fn drive_reconfigure_replaces_relays_and_verifies() {
     let fixture = Fixture::new();
     let name = unique_reconf_name("replace");
     let registry = fixture._temp.0.join("drives.json");
     write_registry_entry(&registry, &name, &fixture.drive, &["relay://old"]);
-    // Instant wait: the path exists, so no polling; the connect
-    // fails because no owner serves it.
-    fs::write(fixture.drive.join("owner.sock"), b"not a socket").unwrap();
+    // The stub answers the pre-first-pass refusal, so verification
+    // is fast and deterministic — no socket wait, no real manager.
+    let sock = fixture.drive.join("owner.sock");
+    let server = stub_owner(sock, "Unobserved", 1);
+    command(fixture.args(vec![
+        "reconfigure".into(),
+        "--mode".into(),
+        "vault".into(),
+        "--relay".into(),
+        "relay://new".into(),
+        "--registry".into(),
+        registry.display().to_string(),
+        "--no-service".into(),
+    ]))
+    .unwrap();
+    server.join().unwrap();
+    assert_eq!(
+        registry_relays(&registry, &name),
+        vec!["relay://new".to_string()],
+        "the entry carries the new set"
+    );
+}
+
+/// A terminal owner refusal still verifies nothing: the entry is
+/// rewritten and the run reports reconfigured-but-unavailable with
+/// the reason, fast and without a real manager.
+#[test]
+fn drive_reconfigure_reports_unavailable_on_owner_refusal() {
+    let fixture = Fixture::new();
+    let name = unique_reconf_name("refused");
+    let registry = fixture._temp.0.join("drives.json");
+    write_registry_entry(&registry, &name, &fixture.drive, &["relay://old"]);
+    let sock = fixture.drive.join("owner.sock");
+    let server = stub_owner(sock, "Store", 1);
     let error = command(fixture.args(vec![
         "reconfigure".into(),
         "--mode".into(),
@@ -450,9 +532,10 @@ fn drive_reconfigure_replaces_relays_and_reports_unavailable() {
         "--no-service".into(),
     ]))
     .unwrap_err();
+    server.join().unwrap();
     assert!(
         matches!(error, CliError::Usage(_)),
-        "no owner verifies: {error:?}"
+        "a refusing owner verifies nothing: {error:?}"
     );
     assert!(
         error.to_string().contains("reconfigured but unavailable"),
@@ -473,8 +556,9 @@ fn drive_reconfigure_keeps_relays_without_relay_flags() {
     let name = unique_reconf_name("keep");
     let registry = fixture._temp.0.join("drives.json");
     write_registry_entry(&registry, &name, &fixture.drive, &["relay://kept"]);
-    fs::write(fixture.drive.join("owner.sock"), b"not a socket").unwrap();
-    let error = command(fixture.args(vec![
+    let sock = fixture.drive.join("owner.sock");
+    let server = stub_owner(sock, "Unobserved", 1);
+    command(fixture.args(vec![
         "reconfigure".into(),
         "--mode".into(),
         "vault".into(),
@@ -482,8 +566,8 @@ fn drive_reconfigure_keeps_relays_without_relay_flags() {
         registry.display().to_string(),
         "--no-service".into(),
     ]))
-    .unwrap_err();
-    assert!(matches!(error, CliError::Usage(_)), "{error:?}");
+    .unwrap();
+    server.join().unwrap();
     assert_eq!(
         registry_relays(&registry, &name),
         vec!["relay://kept".to_string()],

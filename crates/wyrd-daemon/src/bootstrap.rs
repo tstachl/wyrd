@@ -947,7 +947,8 @@ pub fn disable_service(
         // unknown name, and that absence is expected (a never-managed
         // drive, or this operation's own earlier pass), never a stop
         // failure. The definition file below is removed either way.
-        if run("systemctl", &["--user", "is-enabled", "--quiet", &unit]).is_ok() {
+        let enabled = run("systemctl", &["--user", "is-enabled", "--quiet", &unit]).is_ok();
+        if enabled {
             // `disable --now` stops a running unit and removes the
             // enablement symlink in one step.
             run("systemctl", &["--user", "disable", "--now", &unit]).map_err(|source| {
@@ -956,9 +957,12 @@ pub fn disable_service(
                     source: Box::new(source),
                 }
             })?;
+        }
+        clear_definition(definition, &unit)?;
+        if enabled {
             // The manager drops the removed unit on its next reload;
-            // reload now so a stale in-memory unit cannot outlive the
-            // registry rewrite below.
+            // reload after the removal (not before) so a stale
+            // in-memory unit cannot outlive the registry rewrite below.
             run("systemctl", &["--user", "daemon-reload"]).map_err(|source| {
                 BootstrapError::StopService {
                     name: unit,
@@ -966,7 +970,7 @@ pub fn disable_service(
                 }
             })?;
         }
-        clear_definition(definition, &unit)
+        Ok(())
     }
 }
 
@@ -1423,16 +1427,6 @@ pub struct ReconfigureConfig {
     pub verify_timeout: Duration,
 }
 
-/// Reconfigure one registered drive in place: validate the target,
-/// prove the keystore still opens (a live owner holding the store
-/// refuses here — stop the service first, the same rule every other
-/// offline writer states), read the registry, stop and clear the
-/// old service definition, rewrite the entry carrying skipped
-/// entries forward, reinstall and restart when managed, then verify
-/// the socket. The fixed order keeps every refusal honest: the
-/// registry is rewritten only after the old service is stopped,
-/// and the drive is reported ready only when its socket verifies
-/// this session — never because the entry was rewritten.
 /// Install the per-drive service definition for a freshly
 /// reconfigured (or newly provisioned) entry. Shared by both
 /// handoffs so their install failures carry the same kind and
@@ -1470,14 +1464,44 @@ fn enable_and_start(
     Ok(())
 }
 
+/// What one verify attempt concluded.
+enum Attempt {
+    /// `Ok` or the pre-first-pass `Unobserved` refusal: done.
+    Verified,
+    /// A terminal refusal from a live owner: retrying cannot change it.
+    Answered(String),
+    /// No live answer (connect failure, `Unconfirmed`,
+    /// `Unavailable`): worth retrying while the deadline holds.
+    Silent(String),
+}
+
+/// One connect-plus-observe attempt against the drive socket.
+fn connect_observe(drive_dir: &Path, attempt_timeout: Duration) -> Attempt {
+    let outcome = OwnerClient::connect_drive(drive_dir)
+        .and_then(|client| client.with_timeout(attempt_timeout));
+    let outcome = outcome.and_then(|mut client| client.observe());
+    match outcome {
+        Ok(_) => Attempt::Verified,
+        Err(ClientError::Refused(error)) if error.code == WireErrorCode::Unobserved => {
+            Attempt::Verified
+        }
+        Err(ClientError::Refused(error)) => Attempt::Answered(format!("{error:?}")),
+        Err(error) => Attempt::Silent(error.to_string()),
+    }
+}
+
 /// Verify the owner socket answers terminally this session: `Ok` or
-/// the pre-first-pass `Unobserved` refusal. Every other refusal
-/// shape, `Unconfirmed`, and `Unavailable` never verify. When the
-/// socket appeared while waiting (`retry_connect`), a freshly
-/// started owner is still binding, so the connect retries until the
-/// deadline; a stale pre-existing socket gets one terminal attempt,
-/// like provisioning — the desktop's post-operation probe converges
-/// the display from the observed state either way.
+/// the pre-first-pass `Unobserved` refusal verifies; any other
+/// terminal refusal reports unavailable without retrying (a live
+/// owner answered). Silence — connect failures, `Unconfirmed`,
+/// `Unavailable` — retries until the deadline when `retry_connect`
+/// is set, so a freshly restarted owner still binding never reads
+/// as unavailable. A pre-existing socket whose connect fails is
+/// unlinked first: verification runs only after the keystore opened
+/// past the stop, so no live holder predates it and the file is
+/// stale by construction; the wait below then observes only the
+/// restarted owner binding. Without retry (provisioning) the first
+/// attempt decides, exactly as before.
 fn verify_owner_socket(
     drive_dir: &Path,
     verify_timeout: Duration,
@@ -1489,51 +1513,73 @@ fn verify_owner_socket(
             format!("verify-socket: {reason}"),
         )
     };
-    let preexisting = crate::owner::socket_path_for(drive_dir).exists();
-    if !wait_for_socket(drive_dir, verify_timeout) {
-        return Err(missing("owner.sock never appeared".to_string()));
+    if !retry_connect {
+        if !wait_for_socket(drive_dir, verify_timeout) {
+            return Err(missing("owner.sock never appeared".to_string()));
+        }
+        return match connect_observe(drive_dir, verify_timeout) {
+            Attempt::Verified => Ok(()),
+            Attempt::Answered(reason) | Attempt::Silent(reason) => Err(missing(reason)),
+        };
     }
-    let retry = retry_connect && !preexisting;
+    let sock = crate::owner::socket_path_for(drive_dir);
+    if sock.exists() {
+        match connect_observe(drive_dir, verify_timeout) {
+            Attempt::Verified => return Ok(()),
+            Attempt::Answered(reason) => return Err(missing(reason)),
+            Attempt::Silent(_) => {
+                let _ = std::fs::remove_file(&sock);
+            }
+        }
+    }
     let deadline = std::time::Instant::now() + verify_timeout;
     loop {
-        // Bound each attempt by the remaining budget so a wedged
-        // owner cannot stretch one attempt past the deadline.
+        // Bound every wait and attempt by the remaining budget so a
+        // wedged owner cannot stretch one step past the deadline.
         let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-        let attempt_timeout = if retry {
-            remaining.min(verify_timeout)
-        } else {
-            verify_timeout
-        };
-        let outcome = OwnerClient::connect_drive(drive_dir)
-            .and_then(|client| client.with_timeout(attempt_timeout))
-            .and_then(|mut client| client.observe());
-        let refusal = match outcome {
-            Ok(_) => return Ok(()),
-            Err(ClientError::Refused(error)) if error.code == WireErrorCode::Unobserved => {
-                return Ok(())
-            }
-            Err(error) => error.to_string(),
-        };
-        if !retry || std::time::Instant::now() >= deadline {
-            return Err(missing(refusal));
+        if !wait_for_socket(drive_dir, remaining) {
+            return Err(missing("owner.sock never appeared".to_string()));
         }
-        std::thread::sleep(Duration::from_millis(200));
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        match connect_observe(drive_dir, remaining.min(verify_timeout)) {
+            Attempt::Verified => return Ok(()),
+            Attempt::Answered(reason) => return Err(missing(reason)),
+            Attempt::Silent(reason) => {
+                if std::time::Instant::now() >= deadline {
+                    return Err(missing(reason));
+                }
+                std::thread::sleep(Duration::from_millis(200));
+            }
+        }
     }
 }
 
+/// Whether an open failure is store-lock contention (as opposed
+/// to a credential or state failure): only the lock carries the
+/// terminal held-drive kind through the reconfigure handoff.
+fn is_store_locked(error: &EngineError) -> bool {
+    matches!(
+        error,
+        EngineError::Durable(wyrd_sync::durable::DurableError::StoreLocked)
+    )
+}
+
 /// Reconfigure one registered drive in place: validate the target,
-/// read the registry and resolve the entry by directory, stop and
-/// clear the old service definition, prove the keystore still opens,
-/// install the new definition when managed, rewrite the entry, and
-/// verify the socket. The fixed order keeps every refusal honest:
-/// cheap checks precede the keystore open (no KDF on a refusal) and
-/// the stop (a managed drive reaches its own stop instead of
-/// refusing on the store lock); the registry is rewritten only after
-/// the old service is stopped and the new definition installed; the
-/// drive is reported ready only when its socket verifies this
-/// session — never because the entry was rewritten. Every failure
-/// past the stop is retried by re-running, which converges from the
-/// stopped-and-cleared state (the operation is idempotent there).
+/// read the registry and resolve the entry by directory, prove the
+/// keystore opens (a live managed lock stops the definition and
+/// retries once; any other open failure refuses with everything
+/// untouched), stop and clear the old service definition, install
+/// the new definition from the updated entry when managed, rewrite
+/// the entry, and verify the socket. The fixed order keeps every
+/// refusal honest: cheap checks precede the keystore open (no KDF on
+/// a refusal) and credential failures precede the stop (no outage on
+/// a typo); install and rewrite share one working copy, so the
+/// definition can never render the old relay set beside the new
+/// entry; the drive is reported ready only when its socket verifies
+/// this session — never because the entry was rewritten. Every
+/// failure past the stop is retried by re-running, which converges
+/// from the stopped-and-cleared state (the operation is idempotent
+/// there).
 pub fn reconfigure(config: ReconfigureConfig) -> ProvisionState {
     // 0. Validate the request before anything moves: no I/O, no
     // side effects, so a refusal touches nothing.
@@ -1591,7 +1637,7 @@ pub fn reconfigure(config: ReconfigureConfig) -> ProvisionState {
             };
         }
     };
-    let mut entry = registry.drives.get(&key).expect("key resolved").clone();
+    let stored = registry.drives.get(&key).expect("key resolved").clone();
 
     // 2. Candidate relays: flags replace the registered set, absence
     // keeps it — so a credential-path-only reconfigure never clears
@@ -1599,7 +1645,7 @@ pub fn reconfigure(config: ReconfigureConfig) -> ProvisionState {
     // bad relay refuses with the service still up.
     let relays = match config.relays {
         Some(relays) => relays,
-        None => entry.relays.clone(),
+        None => stored.relays.clone(),
     };
     if !valid_relays(&relays) {
         return ProvisionState::ProvisioningIncomplete {
@@ -1618,6 +1664,14 @@ pub fn reconfigure(config: ReconfigureConfig) -> ProvisionState {
                 .to_string(),
         };
     }
+
+    // The working copy from here on: install and rewrite share it, so
+    // a managed definition can never render the old relay set beside
+    // the new registry entry. Identity fields stay put (identity
+    // never reconfigures).
+    let mut updated = stored;
+    updated.relays = relays;
+    updated.mode = ServiceMode::Vault;
 
     // 3. Resolve the service binaries before stopping: a missing
     // binary refuses with the service still up, never with the drive
@@ -1659,11 +1713,64 @@ pub fn reconfigure(config: ReconfigureConfig) -> ProvisionState {
         (None, None)
     };
 
-    // 4. Stop and clear the old service definition before touching
-    // the store: a live managed owner stops here instead of failing
-    // the open below on the store lock. A drive that was never
-    // managed has no definition file — nothing to clear.
-    if let Err(error) = disable_service(&entry, config.service_definition.as_ref()) {
+    // 4. Prove the keystore opens before anything stops: credential
+    // failures (wrong passphrase, unreadable identity, unopenable
+    // store) refuse with the service still running and everything
+    // untouched. Only a live managed lock takes the stop path: stop
+    // and clear the definition, then retry the open once. A second
+    // failure stops here with the service already down — re-running
+    // converges. A live lock without management refuses outright
+    // (nothing to stop); only the lock refusal carries the terminal
+    // kind, every other open failure stays a usage error.
+    let open = || {
+        Engine::open_keystore(
+            config.drive_dir.clone(),
+            &config.passphrase,
+            config.identity.clone(),
+        )
+    };
+    match open() {
+        Ok(_) => {}
+        Err(error) if is_store_locked(&error) && config.manage_service => {
+            if let Err(error) = disable_service(&updated, config.service_definition.as_ref()) {
+                return ProvisionState::ProvisioningIncomplete {
+                    stage: "stop-service",
+                    kind: ProvisionFailureKind::StopService,
+                    reason: format!("stop-service: {error}"),
+                };
+            }
+            if let Err(error) = open() {
+                let kind = if is_store_locked(&error) {
+                    ProvisionFailureKind::StoreLocked
+                } else {
+                    ProvisionFailureKind::VerifyOpen
+                };
+                return ProvisionState::ProvisioningIncomplete {
+                    stage: "verify-open",
+                    kind,
+                    reason: error.to_string(),
+                };
+            }
+        }
+        Err(error) => {
+            let kind = if is_store_locked(&error) {
+                ProvisionFailureKind::StoreLocked
+            } else {
+                ProvisionFailureKind::VerifyOpen
+            };
+            return ProvisionState::ProvisioningIncomplete {
+                stage: "verify-open",
+                kind,
+                reason: error.to_string(),
+            };
+        }
+    }
+
+    // 5. Stop and clear the old service definition. Idempotent: a
+    // no-op when step 4 already stopped (the file is gone), and a
+    // missing definition file means the drive was never managed —
+    // nothing to clear.
+    if let Err(error) = disable_service(&updated, config.service_definition.as_ref()) {
         return ProvisionState::ProvisioningIncomplete {
             stage: "stop-service",
             kind: ProvisionFailureKind::StopService,
@@ -1671,36 +1778,12 @@ pub fn reconfigure(config: ReconfigureConfig) -> ProvisionState {
         };
     }
 
-    // 5. Prove the keystore opens. A manually supervised owner —
-    // `wyrd vault` in a terminal, outside any manager — still holds
-    // the lock here: stop it first, the same rule every other
-    // offline writer states. Only the lock refusal carries the
-    // terminal kind; every other open failure stays a usage error.
-    if let Err(error) = Engine::open_keystore(
-        config.drive_dir.clone(),
-        &config.passphrase,
-        config.identity.clone(),
-    ) {
-        let kind = if matches!(
-            &error,
-            EngineError::Durable(wyrd_sync::durable::DurableError::StoreLocked)
-        ) {
-            ProvisionFailureKind::StoreLocked
-        } else {
-            ProvisionFailureKind::VerifyOpen
-        };
-        return ProvisionState::ProvisioningIncomplete {
-            stage: "verify-open",
-            kind,
-            reason: error.to_string(),
-        };
-    }
-
-    // 6. Install the new definition when managed — before the
-    // registry rewrite, so a crash between them leaves the new
-    // definition beside the old entry (the next run reconciles
-    // forward) rather than the old definition over the new entry.
-    // Without management the definition is already cleared above.
+    // 6. Install the new definition when managed — from the updated
+    // entry, before the registry rewrite, so a crash between them
+    // leaves the new definition beside the old entry (the next run
+    // reconciles forward) rather than the old definition over the
+    // new entry. Without management the definition is already cleared
+    // above.
     let definition = if config.manage_service {
         let owner = SupervisedOwner {
             supervise_bin: supervise_bin.expect("resolved when managed"),
@@ -1708,7 +1791,7 @@ pub fn reconfigure(config: ReconfigureConfig) -> ProvisionState {
             identity_file: config.identity_file.clone(),
             passphrase_file: config.passphrase_file.clone(),
         };
-        match install_service_definition(&entry, &owner) {
+        match install_service_definition(&updated, &owner) {
             Ok(definition) => Some(definition),
             Err((kind, reason)) => {
                 return ProvisionState::ProvisioningIncomplete {
@@ -1722,15 +1805,11 @@ pub fn reconfigure(config: ReconfigureConfig) -> ProvisionState {
         None
     };
 
-    // 7. Rewrite the entry in place: the name, service label, and
-    // directory stay put (identity never reconfigures); the relay
-    // set follows the new configuration. Skipped entries carry
-    // forward verbatim inside the write, so a future mode or a
-    // rotten entry survives the rewrite and is surfaced by the
-    // caller instead of silently discarded.
-    entry.relays = relays;
-    entry.mode = ServiceMode::Vault;
-    registry.drives.insert(key, entry.clone());
+    // 7. Rewrite the entry in place. Skipped entries carry forward
+    // verbatim inside the write, so a future mode or a rotten entry
+    // survives the rewrite and is surfaced by the caller instead of
+    // silently discarded.
+    registry.drives.insert(key, updated.clone());
     if let Err(error) = write_registry(&config.registry_path, &registry.drives) {
         return ProvisionState::ProvisioningIncomplete {
             stage: "write-registry",
@@ -1745,9 +1824,9 @@ pub fn reconfigure(config: ReconfigureConfig) -> ProvisionState {
     // supervised owner, the socket never appears and readiness is
     // withheld — registered, never verified.
     if let Some(definition) = definition {
-        if let Err((kind, reason)) = enable_and_start(&entry, &definition) {
+        if let Err((kind, reason)) = enable_and_start(&updated, &definition) {
             return ProvisionState::RegisteredButUnavailable {
-                entry,
+                entry: updated,
                 skipped: skipped.clone(),
                 kind,
                 reason,
@@ -1755,9 +1834,12 @@ pub fn reconfigure(config: ReconfigureConfig) -> ProvisionState {
         }
     }
     match verify_owner_socket(&config.drive_dir, config.verify_timeout, true) {
-        Ok(()) => ProvisionState::VerifiedAvailable { entry, skipped },
+        Ok(()) => ProvisionState::VerifiedAvailable {
+            entry: updated,
+            skipped,
+        },
         Err((kind, reason)) => ProvisionState::RegisteredButUnavailable {
-            entry,
+            entry: updated,
             skipped,
             kind,
             reason,
@@ -2630,8 +2712,10 @@ mod tests {
         assert!(read.drives.contains_key("demo") && read.drives.contains_key("alias"));
     }
 
-    /// A wrong passphrase fails the open before the registry is
-    /// read: the file keeps its bytes exactly.
+    /// A wrong passphrase fails the open before anything stops:
+    /// the staged definition file survives, and the registry keeps
+    /// its bytes exactly. Credential failures must never take a
+    /// service down.
     #[test]
     fn reconfigure_verify_open_failure_leaves_the_registry_untouched() {
         let dir = scratch("reconfigure-locked");
@@ -2642,6 +2726,8 @@ mod tests {
             ProvisionState::RegisteredButUnavailable { .. }
         ));
         let before = std::fs::read(&registry).unwrap();
+        let definition = dir.join("wyrd-test-definition");
+        std::fs::write(&definition, "leftover").unwrap();
         let mut config = reconfigure_no_service(&dir, &registry, None, "vault");
         config.passphrase = "wrong-pass".to_string();
         match reconfigure(config) {
@@ -2651,7 +2737,77 @@ mod tests {
             }
             other => panic!("a wrong passphrase must stop at verify-open: {other:?}"),
         }
+        assert!(definition.exists(), "the stop never ran");
         assert_eq!(std::fs::read(&registry).unwrap(), before);
+    }
+
+    /// The open runs before the stop even when managed: a wrong
+    /// passphrase with a staged definition refuses at verify-open,
+    /// and the definition survives for the corrected retry. The
+    /// explicit binary paths resolve without a manager, and the open
+    /// fails before any service state moves, so the test is hermetic.
+    #[test]
+    fn reconfigure_proves_the_open_before_stopping() {
+        let dir = scratch("rec-firstopen");
+        let registry = dir.join("drives.json");
+        let first = provision(provision_no_service(&dir, &registry, "demo"));
+        assert!(matches!(
+            first,
+            ProvisionState::RegisteredButUnavailable { .. }
+        ));
+        let definition = dir.join("wyrd-test-definition");
+        std::fs::write(&definition, "leftover").unwrap();
+        let before = std::fs::read(&registry).unwrap();
+        let mut config = reconfigure_no_service(
+            &dir,
+            &registry,
+            Some(vec!["relay://kept".to_string()]),
+            "vault",
+        );
+        config.manage_service = true;
+        config.passphrase = "wrong-pass".to_string();
+        match reconfigure(config) {
+            ProvisionState::ProvisioningIncomplete { kind, stage, .. } => {
+                assert_eq!(kind, ProvisionFailureKind::VerifyOpen);
+                assert_eq!(Some(stage), kind.stage());
+            }
+            other => panic!("a wrong passphrase must stop at verify-open: {other:?}"),
+        }
+        assert!(definition.exists(), "the stop never ran");
+        assert_eq!(std::fs::read(&registry).unwrap(), before);
+    }
+
+    /// A live managed lock stops the definition and retries the open
+    /// once: the retry still fails here (the test holds the lock), so
+    /// the terminal kind reports, and the re-run converges after the
+    /// lock releases. Hermetic: the override names a missing file, so
+    /// the stop is a no-op and no manager is probed.
+    #[test]
+    fn reconfigure_retries_the_open_past_a_live_managed_lock() {
+        let dir = scratch("rec-retry");
+        let registry = dir.join("drives.json");
+        let first = provision(provision_no_service(&dir, &registry, "demo"));
+        assert!(matches!(
+            first,
+            ProvisionState::RegisteredButUnavailable { .. }
+        ));
+        let held =
+            Engine::open_keystore(dir.join("drive"), "bootstrap-test-pass", identity()).unwrap();
+        let mut config = reconfigure_no_service(
+            &dir,
+            &registry,
+            Some(vec!["relay://kept".to_string()]),
+            "vault",
+        );
+        config.manage_service = true;
+        match reconfigure(config) {
+            ProvisionState::ProvisioningIncomplete { kind, stage, .. } => {
+                assert_eq!(kind, ProvisionFailureKind::StoreLocked);
+                assert_eq!(Some(stage), kind.stage());
+            }
+            other => panic!("a held managed drive must report the lock: {other:?}"),
+        }
+        drop(held);
     }
 
     /// A managed reconfigure without relays refuses at validation,
@@ -2685,7 +2841,7 @@ mod tests {
     }
 
     /// A rewrite carries skipped entries forward verbatim: a future
-    /// `mount` entry survives a vault reconfigure with its bytes
+    /// `mount` entry survives a vault reconfigure with its value
     /// intact, and the caller still warns about the skip instead of
     /// silently forgetting the entry.
     #[test]
@@ -2730,7 +2886,7 @@ mod tests {
             serde_json::from_slice(&std::fs::read(&registry).unwrap()).unwrap();
         assert_eq!(
             after["drives"]["future"], future_raw,
-            "the unknown entry survives byte-identical"
+            "the unknown entry survives with its value intact"
         );
         assert_eq!(
             after["drives"]["demo"]["relays"],
@@ -2741,14 +2897,17 @@ mod tests {
 
     /// `--no-service` disables and clears: the definition file staged
     /// at the override path is gone after the run, and the entry is
-    /// rewritten. The override keeps the test hermetic — the
-    /// list/is-enabled probes only read the manager, and removal
-    /// touches the scratch file alone.
+    /// rewritten. The override keeps the removal hermetic, and the
+    /// unique service name keeps the manager probes hermetic too — a
+    /// developer's real `drive-demo` service must never see this
+    /// test's `list`/disable traffic.
     #[test]
     fn reconfigure_no_service_removes_the_definition_file() {
         let dir = scratch("rec-clear");
         let registry = dir.join("drives.json");
-        let first = provision(provision_no_service(&dir, &registry, "demo"));
+        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let name = format!("rectest-{n}");
+        let first = provision(provision_no_service(&dir, &registry, &name));
         assert!(matches!(
             first,
             ProvisionState::RegisteredButUnavailable { .. }
@@ -2855,6 +3014,46 @@ mod tests {
             panic!("a late owner must still verify: {report:?}");
         };
         server.join().unwrap();
+    }
+
+    /// The install renders the updated entry: a managed reconfigure
+    /// must carry the new relay set into the definition, never the
+    /// old one. Render-only (no manager): `reconfigure` installs from
+    /// the updated working copy, and this pins the content contract
+    /// that order serves. Live-manager execution stays out of
+    /// hermetic tests (it would touch a real manager).
+    #[test]
+    fn install_renders_the_updated_relay_set() {
+        let dir = scratch("rec-render");
+        let owner = SupervisedOwner {
+            supervise_bin: dir.join("wyrd-supervise"),
+            wyrd_bin: dir.join("wyrd"),
+            identity_file: dir.join("identity"),
+            passphrase_file: dir.join("passphrase"),
+        };
+        let mut updated = entry("demo", &dir);
+        updated.relays = vec!["relay://new".to_string()];
+        let argv = owner.argv(&updated, "0");
+        assert!(
+            argv.iter().any(|arg| arg == "relay://new"),
+            "the definition carries the new set: {argv:?}"
+        );
+        assert!(
+            !argv.iter().any(|arg| arg == "relay://example"),
+            "no stale relay survives: {argv:?}"
+        );
+        let plist = render_launchd_plist("md.enesis.wyrd.drive-demo", &owner, &updated);
+        assert!(plist.contains("relay://new"), "plist carries the new set");
+        assert!(
+            !plist.contains("relay://example"),
+            "plist carries no stale relay"
+        );
+        let unit = render_systemd_unit("Wyrd drive demo", &owner, &updated);
+        assert!(unit.contains("relay://new"), "unit carries the new set");
+        assert!(
+            !unit.contains("relay://example"),
+            "unit carries no stale relay"
+        );
     }
 }
 

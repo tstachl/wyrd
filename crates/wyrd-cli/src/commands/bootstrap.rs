@@ -116,12 +116,12 @@ pub(crate) fn bootstrap(
     }
 }
 
-/// Surface registry entries the read skipped: provision rewrites
-/// only the valid set, so a rotten entry would otherwise vanish
-/// without any user-visible signal. Non-fatal — discovery keeps
-/// working — but loud. The list travels in the provisioning result
-/// itself, because re-reading after the write would find nothing
-/// left to report.
+/// Surface registry entries the read skipped: the writer carries
+/// the valid set plus the skipped raws forward, so a rotten entry
+/// would otherwise vanish without any user-visible signal. Non-fatal
+/// — discovery keeps working — but loud. The list travels in the
+/// provisioning result itself, because re-reading after the write
+/// would find nothing left to report.
 pub(crate) fn warn_skipped(skipped: &[String]) {
     for skipped in skipped {
         eprintln!("warning: registry entry skipped: {skipped}");

@@ -439,7 +439,7 @@ hand, the membership half is done.
 
 ### `drive reconfigure` — supervision change in place
 
-Validate, resolve, stop and clear, open, install, rewrite, restart,
+Validate, resolve, open, stop and clear, install, rewrite, restart,
 verify — in that order — over the drive's registry entry, resolved
 by this drive's directory (exact match; zero matches and duplicates
 both refuse without writing). The name, service label, and directory
@@ -454,24 +454,29 @@ reconfigure never clears relays by accident. Relay values validate
 before anything stops, and a relay-less managed service is refused
 before anything is created, like provisioning.
 
-Stopping the managed service is the command's own work: the old
-definition is disabled persistently — so no login or reload
-resurrects it — and its file removed before the keystore opens, so
-a managed drive reaches its own stop instead of failing on the store
-lock. Only a manually supervised owner — `wyrd vault` in a terminal,
-outside any manager — still holds the lock past the stop: that
-refusal is the terminal held-drive exit (78, never retried by the
-supervisor), and the registry stays untouched — stop it first and
-retry. Every failure past the stop is retried by re-running, which
-converges from the stopped-and-cleared state.
+The keystore opens before anything stops, so a wrong passphrase or
+unreadable credentials refuse with the service still running and
+everything untouched. Only a live managed lock takes the stop path:
+the old definition is disabled persistently — so no login or reload
+resurrects it — and its file removed, then the open retries once. A
+second failure stops here with the service already down. A live lock
+without management refuses outright — stop the manually supervised
+owner first, the same rule every other offline writer states — and
+that refusal is the terminal held-drive exit (78, never retried by
+the supervisor), with the registry untouched. Every failure past the
+stop is retried by re-running, which converges from the
+stopped-and-cleared state. `--no-service` disables and clears the
+old definition and rewrites the entry without installing a new one.
 
-The rewrite carries skipped entries forward byte-identical (a future
-mode or a rotten entry survives the rewrite) and warns loudly about
-them instead of silently discarding them. Ready is reported only
-when the socket verifies this session — a rewritten entry alone
-reports reconfigured-but-unavailable, never ready; a socket that
-appears mid-wait retries the connect until the deadline, so a
-freshly restarted owner still binding does not read as unavailable.
+The rewrite carries skipped entries forward as verbatim values (a
+future mode or a rotten entry survives the rewrite) and warns loudly
+about them instead of silently discarding them. Ready is reported
+only when the socket verifies this session — a rewritten entry
+alone reports reconfigured-but-unavailable, never ready; a dead
+pre-existing socket is unlinked after the stop (no live holder can
+predate it), and a socket that appears mid-wait retries the connect
+until the deadline, so a freshly restarted owner still binding does
+not read as unavailable.
 
 One operator at a time: concurrent direct CLI invocations can
 interleave past the store open (the desktop flight serializes only
