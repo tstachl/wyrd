@@ -1410,11 +1410,14 @@ mod tests {
 
     /// `run` reports spawn and command failures with their program
     /// and detail: missing programs never spawn, failing programs
-    /// report their own text. Service-manager kinds
-    /// (`InstallService`, `EnableService`, `ReloadUnits`,
-    /// `AgentNotLoaded`, `RestartService`) stay literal-adjacent to
-    /// their reason strings — reaching them end to end would touch a
-    /// real manager, as the provision kind test documents.
+    /// report their own text. The service-stage `ProvisionFailureKind`
+    /// variants (`NoWyrdBinary`, `NoSuperviseBinary`,
+    /// `InstallService`, `EnableService`, `StartService`) and the
+    /// service-manager `BootstrapError` variants beneath them
+    /// (`Spawn`, `CommandFailed`, `ReloadUnits`, `AgentNotLoaded`,
+    /// `RestartService`) stay literal-adjacent to their reason
+    /// strings — reaching them end to end would touch a real
+    /// manager, as the provision kind test documents.
     #[test]
     fn service_commands_report_spawn_and_command_failures() {
         // `run` itself: missing program spawns nothing, a failing
