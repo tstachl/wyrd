@@ -886,13 +886,86 @@ pub enum ProvisionState {
     },
     RegisteredButUnavailable {
         entry: RegistryEntry,
+        kind: ProvisionFailureKind,
         reason: String,
         skipped: Vec<String>,
     },
     ProvisioningIncomplete {
         stage: &'static str,
+        kind: ProvisionFailureKind,
         reason: String,
     },
+}
+
+/// The machine-readable failure kind for a provisioning run that
+/// did not verify: one variant per terminal failure class (16
+/// return sites share 12 kinds), carried alongside (never instead
+/// of) the human-readable `reason`. Direct Rust callers match on
+/// this instead of parsing text; the rendered strings are
+/// unchanged. A new terminal `return` in `provision()` requires a
+/// variant here — the compiler enforces the field, only review
+/// enforces the right tag. Deliberately coarse — the desktop adapter
+/// still branches on exit codes plus independent re-observation
+/// alone and never parses CLI output, so this kind stops at the
+/// `ProvisionState` boundary by design. The intended consumer is the
+/// CLI/desktop adapter after a desktop-shell amendment; until then
+/// it serves direct Rust callers and pins classification in tests.
+/// `non_exhaustive` so adding a kind later is not a breaking change
+/// for downstream exhaustive matches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ProvisionFailureKind {
+    /// Entry validation refused before anything was created.
+    Validate,
+    /// The sealed invitation did not decode.
+    DecodeInvitation,
+    /// Engine creation or join failed.
+    Initialize,
+    /// The fresh open of the created drive failed.
+    VerifyOpen,
+    /// The registry could not be read.
+    ReadRegistry,
+    /// The registry entry could not be written.
+    WriteRegistry,
+    /// No `wyrd` binary for the service definition.
+    NoWyrdBinary,
+    /// No `wyrd-supervise` wrapper for the restart policy.
+    NoSuperviseBinary,
+    /// Service definition installation failed.
+    InstallService,
+    /// Service enablement failed.
+    EnableService,
+    /// Service start (or load verification) failed.
+    StartService,
+    /// The owner socket never verified this session.
+    VerifySocket,
+}
+
+impl ProvisionFailureKind {
+    /// The `stage` string `provision()` reports alongside this kind
+    /// at the `ProvisioningIncomplete` sites. `None` for the kinds
+    /// that only occur post-registration (`RegisteredButUnavailable`
+    /// carries no stage). Construction keeps the literal CLI strings;
+    /// the kind test asserts they agree, so a future edit that
+    /// changes one and not the other fails a test instead of
+    /// splitting display from machine kind.
+    #[cfg(test)]
+    fn stage(&self) -> Option<&'static str> {
+        match self {
+            ProvisionFailureKind::Validate => Some("validate"),
+            ProvisionFailureKind::DecodeInvitation => Some("initialize"),
+            ProvisionFailureKind::Initialize => Some("initialize"),
+            ProvisionFailureKind::VerifyOpen => Some("verify-open"),
+            ProvisionFailureKind::ReadRegistry => Some("read-registry"),
+            ProvisionFailureKind::WriteRegistry => Some("write-registry"),
+            ProvisionFailureKind::NoWyrdBinary
+            | ProvisionFailureKind::NoSuperviseBinary
+            | ProvisionFailureKind::InstallService
+            | ProvisionFailureKind::EnableService
+            | ProvisionFailureKind::StartService
+            | ProvisionFailureKind::VerifySocket => None,
+        }
+    }
 }
 
 /// The fixed handoff order: initialize → verify the open → write the
@@ -910,6 +983,7 @@ pub fn provision(config: ProvisionConfig) -> ProvisionState {
     if let Err(error) = validate_entry(&entry.name, &entry) {
         return ProvisionState::ProvisioningIncomplete {
             stage: "validate",
+            kind: ProvisionFailureKind::Validate,
             reason: error.to_string(),
         };
     }
@@ -921,6 +995,7 @@ pub fn provision(config: ProvisionConfig) -> ProvisionState {
     if config.manage_service && config.relays.is_empty() {
         return ProvisionState::ProvisioningIncomplete {
             stage: "validate",
+            kind: ProvisionFailureKind::Validate,
             reason: "managing a service needs at least one --relay: \
                 a relay-less vault serves nothing peers can discover; \
                 register with --no-service instead"
@@ -941,6 +1016,7 @@ pub fn provision(config: ProvisionConfig) -> ProvisionState {
             Err(error) => {
                 return ProvisionState::ProvisioningIncomplete {
                     stage: "initialize",
+                    kind: ProvisionFailureKind::Initialize,
                     reason: error.to_string(),
                 };
             }
@@ -951,6 +1027,7 @@ pub fn provision(config: ProvisionConfig) -> ProvisionState {
                 Err(error) => {
                     return ProvisionState::ProvisioningIncomplete {
                         stage: "initialize",
+                        kind: ProvisionFailureKind::DecodeInvitation,
                         reason: format!("decode invitation: {error}"),
                     };
                 }
@@ -965,6 +1042,7 @@ pub fn provision(config: ProvisionConfig) -> ProvisionState {
                 Err(error) => {
                     return ProvisionState::ProvisioningIncomplete {
                         stage: "initialize",
+                        kind: ProvisionFailureKind::Initialize,
                         reason: error.to_string(),
                     };
                 }
@@ -980,6 +1058,7 @@ pub fn provision(config: ProvisionConfig) -> ProvisionState {
     ) {
         return ProvisionState::ProvisioningIncomplete {
             stage: "verify-open",
+            kind: ProvisionFailureKind::VerifyOpen,
             reason: error.to_string(),
         };
     }
@@ -992,6 +1071,7 @@ pub fn provision(config: ProvisionConfig) -> ProvisionState {
         Err(error) => {
             return ProvisionState::ProvisioningIncomplete {
                 stage: "read-registry",
+                kind: ProvisionFailureKind::ReadRegistry,
                 reason: error.to_string(),
             };
         }
@@ -1000,6 +1080,7 @@ pub fn provision(config: ProvisionConfig) -> ProvisionState {
     if let Err(error) = write_registry(&config.registry_path, &registry.drives) {
         return ProvisionState::ProvisioningIncomplete {
             stage: "write-registry",
+            kind: ProvisionFailureKind::WriteRegistry,
             reason: error.to_string(),
         };
     }
@@ -1015,6 +1096,7 @@ pub fn provision(config: ProvisionConfig) -> ProvisionState {
                     return ProvisionState::RegisteredButUnavailable {
                         entry,
                         skipped: skipped.clone(),
+                        kind: ProvisionFailureKind::NoWyrdBinary,
                         reason: "no wyrd binary: pass --owner-bin (no wyrd beside this command)"
                             .to_string(),
                     };
@@ -1029,6 +1111,7 @@ pub fn provision(config: ProvisionConfig) -> ProvisionState {
                     return ProvisionState::RegisteredButUnavailable {
                         entry,
                         skipped: skipped.clone(),
+                        kind: ProvisionFailureKind::NoSuperviseBinary,
                         reason: "no wyrd-supervise: pass --supervise-bin \
                             (the restart policy needs the wrapper; \
                             a bare owner binary cannot express it)"
@@ -1049,6 +1132,7 @@ pub fn provision(config: ProvisionConfig) -> ProvisionState {
                 return ProvisionState::RegisteredButUnavailable {
                     entry,
                     skipped: skipped.clone(),
+                    kind: ProvisionFailureKind::InstallService,
                     reason: format!("install-service: {error}"),
                 };
             }
@@ -1057,6 +1141,7 @@ pub fn provision(config: ProvisionConfig) -> ProvisionState {
             return ProvisionState::RegisteredButUnavailable {
                 entry,
                 skipped: skipped.clone(),
+                kind: ProvisionFailureKind::EnableService,
                 reason: format!("enable-service: {error}"),
             };
         }
@@ -1064,6 +1149,7 @@ pub fn provision(config: ProvisionConfig) -> ProvisionState {
             return ProvisionState::RegisteredButUnavailable {
                 entry,
                 skipped: skipped.clone(),
+                kind: ProvisionFailureKind::StartService,
                 reason: format!("start-service: {error}"),
             };
         }
@@ -1079,6 +1165,7 @@ pub fn provision(config: ProvisionConfig) -> ProvisionState {
         return ProvisionState::RegisteredButUnavailable {
             entry,
             skipped,
+            kind: ProvisionFailureKind::VerifySocket,
             reason: "verify-socket: owner.sock never appeared".to_string(),
         };
     }
@@ -1099,12 +1186,14 @@ pub fn provision(config: ProvisionConfig) -> ProvisionState {
             Err(error) => ProvisionState::RegisteredButUnavailable {
                 entry,
                 skipped: skipped.clone(),
+                kind: ProvisionFailureKind::VerifySocket,
                 reason: format!("verify-socket: {error}"),
             },
         },
         Err(error) => ProvisionState::RegisteredButUnavailable {
             entry,
             skipped,
+            kind: ProvisionFailureKind::VerifySocket,
             reason: format!("verify-socket: {error}"),
         },
     }
@@ -1235,6 +1324,119 @@ mod tests {
         let refused = write_registry(&path, &drives).unwrap_err();
         assert!(refused.to_string().contains("absolute"), "{refused}");
         assert!(!path.exists(), "no partial registry may remain");
+    }
+
+    /// Every reachable terminal provision site carries its
+    /// machine-readable kind: direct callers match on `kind`, never
+    /// on `reason` text. Rendered text is pinned where the CLI owns
+    /// it (`crates/wyrd-cli/tests/bootstrap.rs`, contains-pins on
+    /// the state lines); this test pins the mapping from site to
+    /// kind, plus the `stage` agreement for the incomplete sites.
+    #[test]
+    fn provision_failures_carry_their_machine_readable_kind() {
+        use ProvisionFailureKind as Kind;
+        // Validation refuses before anything is created.
+        let dir = scratch("kind-validate");
+        let registry = dir.join("drives.json");
+        let mut config = provision_no_service(&dir, &registry, "BAD NAME!");
+        config.name = "BAD NAME!".to_string();
+        match provision(config) {
+            ProvisionState::ProvisioningIncomplete { kind, stage, .. } => {
+                assert_eq!(kind, Kind::Validate);
+                assert_eq!(Some(stage), kind.stage());
+            }
+            other => panic!("validation must stop first: {other:?}"),
+        }
+        // An undecodable invitation stops at initialization.
+        let dir = scratch("kind-invitation");
+        let registry = dir.join("drives.json");
+        let mut config = provision_no_service(&dir, &registry, "demo");
+        config.init = Init::Join {
+            sealed_invitation: b"not a sealed invitation".to_vec(),
+        };
+        match provision(config) {
+            ProvisionState::ProvisioningIncomplete { kind, stage, .. } => {
+                assert_eq!(kind, Kind::DecodeInvitation);
+                assert_eq!(Some(stage), kind.stage());
+            }
+            other => panic!("a bad invitation must stop at initialize: {other:?}"),
+        }
+        // A drive directory that is a regular file cannot be
+        // initialized as a store.
+        let dir = scratch("kind-initialize");
+        let blocker = dir.join("file");
+        std::fs::write(&blocker, b"x").unwrap();
+        let registry = dir.join("drives.json");
+        let mut config = provision_no_service(&dir, &registry, "demo");
+        config.drive_dir = blocker;
+        match provision(config) {
+            ProvisionState::ProvisioningIncomplete { kind, stage, .. } => {
+                assert_eq!(kind, Kind::Initialize);
+                assert_eq!(Some(stage), kind.stage());
+            }
+            other => panic!("a file cannot be initialized: {other:?}"),
+        }
+        // A registry path that is a directory cannot be read.
+        let dir = scratch("kind-read-registry");
+        let config = provision_no_service(&dir, &dir, "demo");
+        match provision(config) {
+            ProvisionState::ProvisioningIncomplete { kind, stage, .. } => {
+                assert_eq!(kind, Kind::ReadRegistry);
+                assert_eq!(Some(stage), kind.stage());
+            }
+            other => panic!("an unreadable registry must stop: {other:?}"),
+        }
+        // Managed-service binary lookup stops before any service
+        // operation: this is pinned by construction, not by test —
+        // exercising it end to end would install a real service
+        // definition whenever the test binary has version-matched
+        // siblings, so `NoWyrdBinary` and `NoSuperviseBinary` stay
+        // literal-adjacent to their reason strings like
+        // `WriteRegistry` and `VerifyOpen` below. (`WriteRegistry`
+        // needs a write failure after a successful read of the same
+        // path, and `VerifyOpen` needs a drive that creates but does
+        // not open; neither is reachable hermetically.)
+        // No owner socket verifies nothing, with the socket kind.
+        let dir = scratch("kind-socket");
+        let registry = dir.join("drives.json");
+        match provision(provision_no_service(&dir, &registry, "demo")) {
+            ProvisionState::RegisteredButUnavailable { kind, reason, .. } => {
+                assert_eq!(kind, Kind::VerifySocket);
+                assert!(reason.contains("verify-socket"), "{reason}");
+            }
+            other => panic!("a missing owner must never verify: {other:?}"),
+        }
+    }
+
+    /// `run` reports spawn and command failures with their program
+    /// and detail: missing programs never spawn, failing programs
+    /// report their own text. The service-stage `ProvisionFailureKind`
+    /// variants (`NoWyrdBinary`, `NoSuperviseBinary`,
+    /// `InstallService`, `EnableService`, `StartService`) and the
+    /// service-manager `BootstrapError` variants beneath them
+    /// (`Spawn`, `CommandFailed`, `ReloadUnits`, `AgentNotLoaded`,
+    /// `RestartService`) stay literal-adjacent to their reason
+    /// strings — reaching them end to end would touch a real
+    /// manager, as the provision kind test documents.
+    #[test]
+    fn service_commands_report_spawn_and_command_failures() {
+        // `run` itself: missing program spawns nothing, a failing
+        // program reports its own text.
+        match run("wyrd-definitely-missing-binary-xyz", &[]) {
+            Err(BootstrapError::Spawn { program, .. }) => {
+                assert_eq!(program, "wyrd-definitely-missing-binary-xyz");
+            }
+            other => panic!("a missing program must fail spawn: {other:?}"),
+        }
+        match run("sh", &["-c", "exit 3"]) {
+            Err(BootstrapError::CommandFailed {
+                program, detail, ..
+            }) => {
+                assert_eq!(program, "sh");
+                assert!(detail.is_empty(), "exit 3 carries no stderr: {detail:?}");
+            }
+            other => panic!("a failing program must report: {other:?}"),
+        }
     }
 
     #[test]
@@ -1778,16 +1980,13 @@ mod hardening_tests {
         config.manage_service = true;
         config.relays = vec![];
         let report = provision(config);
-        assert!(
-            matches!(
-                report,
-                ProvisionState::ProvisioningIncomplete {
-                    stage: "validate",
-                    ..
-                }
-            ),
-            "a relay-less managed service is refused, not installed"
-        );
+        match report {
+            ProvisionState::ProvisioningIncomplete { kind, stage, .. } => {
+                assert_eq!(kind, ProvisionFailureKind::Validate);
+                assert_eq!(Some(stage), kind.stage());
+            }
+            other => panic!("a relay-less managed service is refused, not installed: {other:?}"),
+        }
         assert!(
             !registry.exists(),
             "refusal precedes registration side effects"
