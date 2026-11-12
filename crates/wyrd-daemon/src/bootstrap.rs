@@ -898,14 +898,22 @@ pub enum ProvisionState {
 }
 
 /// The machine-readable failure kind for a provisioning run that
-/// did not verify: one variant per terminal site, carried alongside
-/// (never instead of) the human-readable `reason`. Direct Rust
-/// callers match on this instead of parsing text; the rendered
-/// strings are unchanged. Deliberately coarse — the desktop adapter
+/// did not verify: one variant per terminal failure class (16
+/// return sites share 12 kinds), carried alongside (never instead
+/// of) the human-readable `reason`. Direct Rust callers match on
+/// this instead of parsing text; the rendered strings are
+/// unchanged. A new terminal `return` in `provision()` requires a
+/// variant here — the compiler enforces the field, only review
+/// enforces the right tag. Deliberately coarse — the desktop adapter
 /// still branches on exit codes plus independent re-observation
 /// alone and never parses CLI output, so this kind stops at the
-/// `ProvisionState` boundary by design.
+/// `ProvisionState` boundary by design. The intended consumer is the
+/// CLI/desktop adapter after a desktop-shell amendment; until then
+/// it serves direct Rust callers and pins classification in tests.
+/// `non_exhaustive` so adding a kind later is not a breaking change
+/// for downstream exhaustive matches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ProvisionFailureKind {
     /// Entry validation refused before anything was created.
     Validate,
@@ -931,6 +939,33 @@ pub enum ProvisionFailureKind {
     StartService,
     /// The owner socket never verified this session.
     VerifySocket,
+}
+
+impl ProvisionFailureKind {
+    /// The `stage` string `provision()` reports alongside this kind
+    /// at the `ProvisioningIncomplete` sites. `None` for the kinds
+    /// that only occur post-registration (`RegisteredButUnavailable`
+    /// carries no stage). Construction keeps the literal CLI strings;
+    /// the kind test asserts they agree, so a future edit that
+    /// changes one and not the other fails a test instead of
+    /// splitting display from machine kind.
+    #[cfg(test)]
+    fn stage(&self) -> Option<&'static str> {
+        match self {
+            ProvisionFailureKind::Validate => Some("validate"),
+            ProvisionFailureKind::DecodeInvitation => Some("initialize"),
+            ProvisionFailureKind::Initialize => Some("initialize"),
+            ProvisionFailureKind::VerifyOpen => Some("verify-open"),
+            ProvisionFailureKind::ReadRegistry => Some("read-registry"),
+            ProvisionFailureKind::WriteRegistry => Some("write-registry"),
+            ProvisionFailureKind::NoWyrdBinary
+            | ProvisionFailureKind::NoSuperviseBinary
+            | ProvisionFailureKind::InstallService
+            | ProvisionFailureKind::EnableService
+            | ProvisionFailureKind::StartService
+            | ProvisionFailureKind::VerifySocket => None,
+        }
+    }
 }
 
 /// The fixed handoff order: initialize → verify the open → write the
@@ -1291,10 +1326,12 @@ mod tests {
         assert!(!path.exists(), "no partial registry may remain");
     }
 
-    /// Every terminal provision site carries its machine-readable
-    /// kind: direct callers match on `kind`, never on `reason` text.
-    /// The text stays pinned by the `Display` table above; this pins
-    /// the mapping from site to kind.
+    /// Every reachable terminal provision site carries its
+    /// machine-readable kind: direct callers match on `kind`, never
+    /// on `reason` text. Rendered text is pinned where the CLI owns
+    /// it (`crates/wyrd-cli/tests/bootstrap.rs`, contains-pins on
+    /// the state lines); this test pins the mapping from site to
+    /// kind, plus the `stage` agreement for the incomplete sites.
     #[test]
     fn provision_failures_carry_their_machine_readable_kind() {
         use ProvisionFailureKind as Kind;
@@ -1306,7 +1343,7 @@ mod tests {
         match provision(config) {
             ProvisionState::ProvisioningIncomplete { kind, stage, .. } => {
                 assert_eq!(kind, Kind::Validate);
-                assert_eq!(stage, "validate");
+                assert_eq!(Some(stage), kind.stage());
             }
             other => panic!("validation must stop first: {other:?}"),
         }
@@ -1320,7 +1357,7 @@ mod tests {
         match provision(config) {
             ProvisionState::ProvisioningIncomplete { kind, stage, .. } => {
                 assert_eq!(kind, Kind::DecodeInvitation);
-                assert_eq!(stage, "initialize");
+                assert_eq!(Some(stage), kind.stage());
             }
             other => panic!("a bad invitation must stop at initialize: {other:?}"),
         }
@@ -1335,7 +1372,7 @@ mod tests {
         match provision(config) {
             ProvisionState::ProvisioningIncomplete { kind, stage, .. } => {
                 assert_eq!(kind, Kind::Initialize);
-                assert_eq!(stage, "initialize");
+                assert_eq!(Some(stage), kind.stage());
             }
             other => panic!("a file cannot be initialized: {other:?}"),
         }
@@ -1345,7 +1382,7 @@ mod tests {
         match provision(config) {
             ProvisionState::ProvisioningIncomplete { kind, stage, .. } => {
                 assert_eq!(kind, Kind::ReadRegistry);
-                assert_eq!(stage, "read-registry");
+                assert_eq!(Some(stage), kind.stage());
             }
             other => panic!("an unreadable registry must stop: {other:?}"),
         }
@@ -1371,13 +1408,15 @@ mod tests {
         }
     }
 
-    /// Service-command failures map to their kinds without side
-    /// effects: every input names a definition, label, or unit that
-    /// does not exist, so managers only refuse.
+    /// `run` reports spawn and command failures with their program
+    /// and detail: missing programs never spawn, failing programs
+    /// report their own text. Service-manager kinds
+    /// (`InstallService`, `EnableService`, `ReloadUnits`,
+    /// `AgentNotLoaded`, `RestartService`) stay literal-adjacent to
+    /// their reason strings — reaching them end to end would touch a
+    /// real manager, as the provision kind test documents.
     #[test]
-    fn service_commands_map_failures_to_their_kinds() {
-        let dir = scratch("kind-service");
-        let owned = entry("absent", &dir);
+    fn service_commands_report_spawn_and_command_failures() {
         // `run` itself: missing program spawns nothing, a failing
         // program reports its own text.
         match run("wyrd-definitely-missing-binary-xyz", &[]) {
@@ -1395,27 +1434,6 @@ mod tests {
             }
             other => panic!("a failing program must report: {other:?}"),
         }
-        // Starting a service that was never installed verifies
-        // nothing: macOS checks the agent is loaded
-        // (`AgentNotLoaded`), systemd restarts the unit
-        // (`RestartService`). Both refuse a bogus identity without
-        // touching a real service.
-        #[cfg(target_os = "macos")]
-        match start_service(&owned) {
-            Err(BootstrapError::AgentNotLoaded { .. }) => {}
-            other => panic!("an absent agent must fail loaded-check: {other:?}"),
-        }
-        #[cfg(not(target_os = "macos"))]
-        match start_service(&owned) {
-            Err(BootstrapError::RestartService { .. }) => {}
-            other => panic!("an absent service must fail restart: {other:?}"),
-        }
-        // `enable_service` is pinned by construction, not by test:
-        // manager behavior for a bogus definition is
-        // environment-dependent (this machine's `launchctl` even
-        // reports success), and reaching further would touch a real
-        // manager — so `EnableService` and `ReloadUnits` stay
-        // literal-adjacent to their reason strings.
     }
 
     #[test]
@@ -1959,16 +1977,13 @@ mod hardening_tests {
         config.manage_service = true;
         config.relays = vec![];
         let report = provision(config);
-        assert!(
-            matches!(
-                report,
-                ProvisionState::ProvisioningIncomplete {
-                    stage: "validate",
-                    ..
-                }
-            ),
-            "a relay-less managed service is refused, not installed"
-        );
+        match report {
+            ProvisionState::ProvisioningIncomplete { kind, stage, .. } => {
+                assert_eq!(kind, ProvisionFailureKind::Validate);
+                assert_eq!(Some(stage), kind.stage());
+            }
+            other => panic!("a relay-less managed service is refused, not installed: {other:?}"),
+        }
         assert!(
             !registry.exists(),
             "refusal precedes registration side effects"
