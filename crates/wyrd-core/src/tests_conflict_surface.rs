@@ -171,6 +171,7 @@ fn conflict_surface_distinguishes_the_three_divergences() {
                 ContentId::from_bytes([0xD2; 32]),
             ),
         ],
+        identity: None,
     };
     assert_eq!(classify_node(&merged), NodeDivergence::DirectoryContent);
 

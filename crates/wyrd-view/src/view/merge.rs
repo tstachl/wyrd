@@ -1,4 +1,4 @@
-use wyrd_format::ContentId;
+use wyrd_format::{ContentId, EntryIdentity};
 
 use super::{ConflictVersion, Node, ViewError};
 
@@ -29,7 +29,15 @@ pub(crate) fn merge(
             return Ok(first.clone());
         }
         if let Some(subtrees) = all_dirs(&present) {
-            return Ok(Node::MergedDir { subtrees });
+            // The union serves as one directory; the identity it
+            // reports is the agreed token when every merged head
+            // carries the identical `Some` token, and `None`
+            // otherwise. Presentational only: the union never
+            // resolves, and differing tokens still merge.
+            return Ok(Node::MergedDir {
+                subtrees,
+                identity: agreed_identity(&present),
+            });
         }
     }
     Ok(Node::Conflict {
@@ -38,6 +46,28 @@ pub(crate) fn merge(
             .map(|(snapshot, node)| ConflictVersion { snapshot, node })
             .collect(),
     })
+}
+
+/// The token every merged head agrees on: `Some(T)` when each
+/// head carries the identical `Some(T)`, `None` when any head
+/// carries `None`, a different token, or a non-entry state. Only
+/// whole-directory unions consult it; conflict versions keep
+/// their own tokens.
+fn agreed_identity(present: &[(wyrd_format::SnapshotId, Node)]) -> Option<EntryIdentity> {
+    let mut tokens = present.iter().map(|(_, node)| match node {
+        Node::File { identity, .. }
+        | Node::Dir { identity, .. }
+        | Node::Symlink { identity, .. } => *identity,
+        // A nested union propagates its own agreement upward.
+        Node::MergedDir { identity, .. } => *identity,
+        Node::Conflict { .. } => None,
+    });
+    let first = tokens.next().flatten()?;
+    if tokens.all(|token| token == Some(first)) {
+        Some(first)
+    } else {
+        None
+    }
 }
 
 /// The per-head subtrees when every head resolves the path to a

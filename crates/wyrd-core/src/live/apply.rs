@@ -565,7 +565,13 @@ where
                 self.demand_path_trees(heads, path)?;
                 let mut store = self.store.write().map_err(|_| MutationError::Lock)?;
                 // A creation mints: the path held no entry, so no
-                // identity exists to preserve.
+                // identity exists to preserve. The mint runs before
+                // the format call's own existence check, so an
+                // EEXIST path spends one CSPRNG draw; checking
+                // existence first would need to replicate the
+                // format path parser here (the view resolves "",
+                // "/", and trailing slashes differently), and a
+                // second parser is worse than a wasted draw.
                 let identity = mint_entry_identity().map_err(|_| MutationError::Engine)?;
                 let root = wyrd_format::mutation::mkdir(&mut *store, tree, path, identity)
                     .map_err(format_write_error)?;

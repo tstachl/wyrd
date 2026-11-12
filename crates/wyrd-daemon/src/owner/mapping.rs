@@ -119,13 +119,14 @@ pub fn wire_node(node: &Node) -> WireNode {
             target: target.clone(),
             identity: identity.map(|id| hex_id(id.as_bytes())),
         },
-        Node::MergedDir { subtrees } => WireNode::MergedDir {
+        Node::MergedDir { subtrees, identity } => WireNode::MergedDir {
             subtrees: subtrees
                 .iter()
                 .map(|(snapshot, content)| {
                     (hex_id(snapshot.as_bytes()), hex_id(content.as_bytes()))
                 })
                 .collect(),
+            identity: identity.map(|id| hex_id(id.as_bytes())),
         },
         Node::Conflict { versions } => WireNode::Conflict {
             versions: versions.iter().map(wire_conflict_version).collect(),
@@ -170,7 +171,7 @@ pub fn node_from_wire(node: &WireNode) -> Result<Node, String> {
             target: target.clone(),
             identity: wire_identity(identity)?,
         }),
-        WireNode::MergedDir { subtrees } => {
+        WireNode::MergedDir { subtrees, identity } => {
             let mut pairs = Vec::with_capacity(subtrees.len());
             for (snapshot, content) in subtrees {
                 pairs.push((
@@ -178,7 +179,10 @@ pub fn node_from_wire(node: &WireNode) -> Result<Node, String> {
                     ContentId::from_bytes(parse_id(content)?),
                 ));
             }
-            Ok(Node::MergedDir { subtrees: pairs })
+            Ok(Node::MergedDir {
+                subtrees: pairs,
+                identity: wire_identity(identity)?,
+            })
         }
         WireNode::Conflict { versions } => {
             let mut out = Vec::with_capacity(versions.len());

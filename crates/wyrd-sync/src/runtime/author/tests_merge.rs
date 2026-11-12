@@ -882,3 +882,79 @@ fn merge_succeeds_over_a_pre_conflict_fork_on_a_frozen_drive() {
         "the merge closes the fork"
     );
 }
+
+/// Identity participates in merge agreement: byte-identical files
+/// under different tokens (delete-plus-recreate on one side) need
+/// an explicit merge decision, while the same token agrees
+/// silently. The author merge never resolves by itself.
+#[test]
+fn merge_agreement_includes_entry_identity() {
+    use wyrd_format::EntryIdentity;
+
+    let (_dir, mut engine, _) = owner_engine("merge-identity");
+    let mut objects = MemoryObjectStore::default();
+    let chunk = objects.insert(ObjectKind::Chunk, b"same bytes").unwrap();
+    let file_with = |token: u8| {
+        Entry::file("f", 10, false, vec![chunk])
+            .unwrap()
+            .with_identity(EntryIdentity::from_bytes([token; 32]))
+    };
+    let base = Tree::from_entries(vec![file_with(0x70)])
+        .unwrap()
+        .insert_into(&mut objects)
+        .unwrap();
+    let same_token = Tree::from_entries(vec![file_with(0x70)])
+        .unwrap()
+        .insert_into(&mut objects)
+        .unwrap();
+
+    // Same token on both forks: the path agrees, no spec needed.
+    let heads = forks(&mut engine, &mut objects, base, &[same_token, same_token]);
+    engine
+        .merge_preview(&objects, heads.clone(), None, &BTreeMap::new())
+        .expect("identical tokens agree silently");
+    engine
+        .merge_heads(&mut objects, heads.clone(), Some(heads[0]), BTreeMap::new())
+        .expect("the commit agrees too");
+}
+
+#[test]
+fn merge_diverging_tokens_need_a_decision() {
+    use wyrd_format::EntryIdentity;
+
+    let (_dir, mut engine, _) = owner_engine("merge-identity-diverges");
+    let mut objects = MemoryObjectStore::default();
+    let chunk = objects.insert(ObjectKind::Chunk, b"same bytes").unwrap();
+    let file_with = |token: u8| {
+        Entry::file("f", 10, false, vec![chunk])
+            .unwrap()
+            .with_identity(EntryIdentity::from_bytes([token; 32]))
+    };
+    let base = Tree::from_entries(vec![file_with(0x70)])
+        .unwrap()
+        .insert_into(&mut objects)
+        .unwrap();
+    let new_token = Tree::from_entries(vec![file_with(0x71)])
+        .unwrap()
+        .insert_into(&mut objects)
+        .unwrap();
+
+    // Different tokens, byte-identical content: the path conflicts.
+    let heads = forks(&mut engine, &mut objects, base, &[base, new_token]);
+    let preview_err = engine
+        .merge_preview(&objects, heads.clone(), None, &BTreeMap::new())
+        .unwrap_err();
+    assert!(
+        matches!(&preview_err, EngineError::UnresolvedMergePath(path) if path == "f"),
+        "different tokens need a decision, saw {preview_err:?}"
+    );
+    // And the decision resolves it: taking one side's token wins.
+    engine
+        .merge_heads(
+            &mut objects,
+            heads.clone(),
+            Some(heads[0]),
+            BTreeMap::from([("f".to_owned(), MergeSelection::Take(heads[1]))]),
+        )
+        .expect("an explicit decision merges");
+}

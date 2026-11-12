@@ -157,10 +157,10 @@ pub(crate) fn snapshot(
                 // still shows every row, so the operator sees what
                 // is graftable before narrowing. Both derive from
                 // the same plan basis the commit validates.
-                let store = FsObjectStore::open(drive_dir.to_path_buf())
+                let mut store = FsObjectStore::open(drive_dir.to_path_buf())
                     .map_err(|error| CliError::Store(error.to_string()))?;
                 let shown = recovery_plan_report(&engine.recovery_plan(&store, from)?);
-                match engine.recovery_preview(&store, from, &checked, all, &ids) {
+                match engine.recovery_preview(&mut store, from, &checked, all, &ids) {
                     Ok(preview) => {
                         print!("{shown}{}", recovery_dry_run_verdict(&preview));
                         return Ok(());

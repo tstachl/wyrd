@@ -166,7 +166,8 @@ full filesystem snapshot:
 | Field | Type | Notes |
 |---|---|---|
 | path components | UTF-8 | see path rules |
-| kind | enum | `file`, `dir`, `symlink` |
+| kind | enum | `file`, `dir`, `symlink`, each with or without identity (see encoding) |
+| identity | `EntryIdentity` (optional) | stable per entry; see "Entry identity" |
 | size | u64 | bytes; for `file` |
 | executable | bool | files only |
 | symlink target | UTF-8 | symlinks only |
@@ -195,8 +196,13 @@ of its canonical encoding. An empty directory is a valid, representable tree.
 ```
 u32 LE                  entry count
 entries, sorted bytewise by component:
-  u8                    kind (0 = file, 1 = dir, 2 = symlink)
+  u8                    kind (0x00 = file, 0x01 = dir, 0x02 = symlink,
+                              0x10 = file + identity,
+                              0x11 = dir + identity,
+                              0x12 = symlink + identity)
   u32 LE + bytes        component (UTF-8)
+  identity (new kinds only):
+          32 bytes      EntryIdentity (opaque, random)
   file:     u64 LE      size
             u8          executable (0 | 1)
             u32 LE + ContentIds   chunk ids (32 bytes each)
@@ -204,9 +210,13 @@ entries, sorted bytewise by component:
   symlink:  u32 LE + bytes        target (UTF-8, unvalidated)
 ```
 
-Decoders must reject non-canonical payloads: unsorted or duplicate
-components, unknown kind bytes, trailing bytes, components violating the
-path rules, or exec bytes other than 0/1.
+Decoders must accept both kind families and reject non-canonical
+payloads: unsorted or duplicate components, unknown kind bytes
+(including the identity bit on an unknown base kind, e.g. `0x13`),
+missing or trailing identity bytes, other trailing bytes,
+components violating the path rules, or exec bytes other than 0/1.
+Legacy entries (identity `None`) encode exactly the pre-identity
+bytes under kinds `0x00`-`0x02`.
 
 ## Entry identity
 
@@ -276,7 +286,16 @@ bit for bit — a new encoding is a new representation (upgrade
 contract invariant 1), and old objects stay readable under the
 current build. The ContentId derivation itself is unchanged
 (decision 30): the same payload under the same context yields the
-same id; new payloads naturally yield new ids.
+same id; new payloads naturally yield new ids. This is not an
+identity fork in the clause-127 sense: no derivation context
+moves, old bytes keep their meaning bit for bit, and the kind
+byte is self-describing — the fork clause covers changes that
+redefine what existing bytes mean, not additions a current
+decoder reads alongside them. The pre-1.0 cost is one-sided: a
+pre-identity decoder rejects the new kinds as `UnknownEntryKind`
+and fails closed. There is no negotiation and no legacy
+fallback; mixed-version peers stay readable in the old→new
+direction only, which the alpha window permits.
 
 **Transfer.** Replication is the existing snapshot transport: tree
 bytes travel peer-to-peer as content-addressed objects, installed
@@ -294,9 +313,11 @@ the token without creating a competing authority.
 
 Entries that predate identity support carry no token (`None`), never
 a synthesized one. `stat`/`readdir`/`lookup` expose `None` for them;
-merged and conflicted states are synthetic views, not single
-entries, and carry no token of their own (each conflict version
-carries its head's token).
+conflicted states are synthetic views, not single entries, and carry
+no token of their own (each conflict version carries its head's
+token). A merged directory reports the agreed token when every
+merged head carries the identical `Some` token, and `None`
+otherwise — presentational only, never a resolution.
 
 Two scope boundaries a reader must know:
 - **Size-vs-chunk consistency is the reader's job.** A file entry's

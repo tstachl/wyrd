@@ -100,6 +100,11 @@ pub enum WireNode {
     },
     MergedDir {
         subtrees: Vec<(String, String)>,
+        /// The agreed directory token, or null where heads disagree
+        /// or predate identity. Mirrors the `#[serde(default)]`
+        /// tolerance on the Rust side (see `WireAttr`).
+        #[serde(default)]
+        identity: Option<String>,
     },
     Conflict {
         versions: Vec<WireConflictVersion>,

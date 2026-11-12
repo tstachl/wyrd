@@ -97,7 +97,9 @@ impl Engine {
     /// selection: every check [`recover`] applies before
     /// authoring, minus the authoring and minus the owner gate
     /// (previewing reads history any keystore holder can read;
-    /// only authoring needs the owner). Read-only; the `--dry-run`
+    /// only authoring needs the owner). Read-only apart from the
+    /// content-addressed subtree objects normalization may insert
+    /// (re-running it changes nothing observable); the `--dry-run`
     /// front end shows the plan plus the graft names instead of
     /// committing. Same staleness note as [`merge_preview`]: the
     /// commit re-runs every gate itself.
@@ -106,7 +108,7 @@ impl Engine {
     /// [`merge_preview`]: Engine::merge_preview
     pub fn recovery_preview<S: ObjectStore>(
         &self,
-        objects: &S,
+        objects: &mut S,
         from: SnapshotId,
         takes: &[String],
         all: bool,

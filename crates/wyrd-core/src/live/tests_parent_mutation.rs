@@ -100,6 +100,7 @@ impl NamespaceView for TreeView {
             return match parts.next() {
                 None => Ok(Node::MergedDir {
                     subtrees: Vec::new(),
+                    identity: None,
                 }),
                 Some(_) => Err(ViewError::NotFound),
             };

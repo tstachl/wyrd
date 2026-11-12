@@ -115,6 +115,7 @@ where
             // (observed as ENXIO on macFUSE for every later op).
             return Ok(Node::MergedDir {
                 subtrees: Vec::new(),
+                identity: None,
             });
         }
         match self.lookup_literal(&components) {
@@ -188,7 +189,7 @@ where
                     })
                     .collect()
             }
-            Node::MergedDir { subtrees } => self.readdir_union(subtrees.clone()),
+            Node::MergedDir { subtrees, .. } => self.readdir_union(subtrees.clone()),
             Node::Conflict { versions } => {
                 let mut subtrees = Vec::with_capacity(versions.len());
                 for version in versions {
@@ -541,11 +542,11 @@ fn attr(node: &Node) -> Attr {
             identity: *identity,
         },
         // Merged and conflicted states are not single entries.
-        Node::MergedDir { .. } => Attr {
+        Node::MergedDir { identity, .. } => Attr {
             kind: Kind::Dir,
             size: 0,
             executable: false,
-            identity: None,
+            identity: *identity,
         },
         Node::Conflict { .. } => Attr {
             kind: Kind::Conflict,
@@ -647,6 +648,7 @@ where
             return Ok(LookupResult {
                 node: Some(Node::MergedDir {
                     subtrees: Vec::new(),
+                    identity: None,
                 }),
                 work: 1,
                 limit_exceeded: 1 > max_work,
@@ -696,7 +698,7 @@ where
                     limit_exceeded: tree.is_none() || work > max_work,
                 })
             }
-            Node::MergedDir { subtrees } => {
+            Node::MergedDir { subtrees, .. } => {
                 let versioned = Component::new(component.to_owned())
                     .ok()
                     .and_then(|component| grammar::parse_ref(&[component]));

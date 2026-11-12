@@ -178,7 +178,9 @@ peer-originated changes; deletion retires it permanently and recreation
 at the same path mints a new one. Scoped to its drive by contract — the
 (File Provider) item identifier derives from `DriveId + EntryIdentity`,
 never from this token alone. Minting draws from the OS CSPRNG at the
-owner layer (wyrd-core); the format layer only carries the identifier.
+authoring owner — the live loop (wyrd-core) for creations, recovery
+grafts (wyrd-sync) for restorations; the format layer only carries the
+identifier.
 Entries that predate identity support carry no token (`None` on the
 entry), never a synthesized one: reconstruction through path, content,
 or matching is not an acceptable substitute."

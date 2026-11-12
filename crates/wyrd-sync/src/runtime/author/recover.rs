@@ -146,43 +146,54 @@ pub struct RecoveryPreview {
 }
 
 /// Resolve the graft over the plan: read the source, validate
-/// the selection, normalize entry identities, and return both.
-/// The one decision both paths share — [`preview`] adds the
-/// locality gate and returns names, [`recover`] adds the owner
-/// gate then the locality gate and authors. Splitting resolution
-/// from gating keeps the commit's owner-before-locality
-/// precedence exactly where it was before the preview extraction.
+/// the selection, normalize entry identities at every depth, and
+/// return the plan, the graft, and the durable rebuild the gates
+/// ran against. The one decision the preview and commit paths
+/// share — [`preview`] adds the locality gate and returns names,
+/// [`recover`] adds the owner gate then the locality gate and
+/// authors. Splitting resolution from gating keeps the commit's
+/// owner-before-locality precedence exactly where it was before
+/// the preview extraction.
 ///
 /// Identity normalization happens once, here, so preview and
-/// commit agree on the graft: a taken entry keeps its historical
-/// token only where a live root entry at the same name carries
-/// the identical `Some` token (genuinely the same entry); every
-/// other graft mints — recreation after deletion is a new entry,
-/// and historical restoration never resurrects a retired
-/// identity.
+/// commit agree on the graft: a grafted entry keeps its
+/// historical token only where a live entry at the same full path
+/// carries the identical `Some` token (genuinely the same entry);
+/// every other grafted entry mints — recreation after deletion is
+/// a new entry at every depth it touches, and historical
+/// restoration never resurrects a retired identity, nested or
+/// otherwise. Normalization inserts rebuilt subtree objects for
+/// changed subtrees (content-addressed, so re-running it is a
+/// no-op); it commits nothing. Callers needing only names
+/// ([`preview`]) still observe the normalized graft.
 ///
 /// [`preview`]: self::preview
 /// [`recover`]: self::recover
 fn resolve<S: ObjectStore>(
     engine: &Engine,
-    objects: &S,
+    objects: &mut S,
     from: SnapshotId,
     takes: &[String],
     all: bool,
     contents: &[ContentId],
-) -> Result<(RecoveryPlan, Vec<Entry>), EngineError>
+) -> Result<(RecoveryPlan, Vec<Entry>, Rebuilt), EngineError>
 where
     S::Error: std::fmt::Debug,
 {
-    let plan = plan(engine, objects, from)?;
+    let rebuilt = engine.store.rebuild(engine.device)?;
+    let plan = plan_over(engine, objects, &rebuilt, from)?;
     let taken = select(objects, &plan, takes, all, contents)?;
-    let taken = normalize_graft_identities(engine, objects, taken)?;
-    Ok((plan, taken))
+    let live = live_path_identities(engine, objects, &rebuilt)?;
+    let mut grafted = Vec::with_capacity(taken.len());
+    for entry in taken {
+        grafted.push(normalize_entry(objects, &live, entry, String::new())?);
+    }
+    Ok((plan, grafted, rebuilt))
 }
 
 /// Mint one entry identity for a recovery graft from the OS
-/// CSPRNG: recovery authors new root entries, so allocation lives
-/// with the authoring owner like every other creation.
+/// CSPRNG: recovery authors new entries, so allocation lives with
+/// the authoring owner like every other creation.
 fn mint_graft_identity() -> Result<EntryIdentity, EngineError> {
     let mut bytes = [0u8; 32];
     getrandom::getrandom(&mut bytes)
@@ -190,32 +201,94 @@ fn mint_graft_identity() -> Result<EntryIdentity, EngineError> {
     Ok(EntryIdentity::from_bytes(bytes))
 }
 
-/// Normalize graft identities per the restoration rule above.
-/// Live identities come from the current eligible heads' roots —
-/// the same roots the `AlreadyLive` signal reads — so the
-/// comparison sees exactly what the graft would displace or join.
-fn normalize_graft_identities<S: ObjectStore>(
-    engine: &Engine,
-    objects: &S,
-    taken: Vec<Entry>,
-) -> Result<Vec<Entry>, EngineError>
+/// Normalize one grafted entry against the live tree: preserve the
+/// historical token only where a live entry at the same full path
+/// carries the identical `Some` token, else mint. Directories
+/// recurse: a changed descendant rebuilds the subtree chain
+/// bottom-up (tokens live in the parent's encoding), so a graft
+/// never re-exposes a retired identity at any depth. `path` is the
+/// parent's full graft path, empty at the root.
+fn normalize_entry<S: ObjectStore>(
+    objects: &mut S,
+    live: &BTreeMap<String, Vec<Option<EntryIdentity>>>,
+    entry: Entry,
+    path: String,
+) -> Result<Entry, EngineError>
 where
     S::Error: std::fmt::Debug,
 {
-    let rebuilt = engine.store.rebuild(engine.device)?;
-    let live = live_root_identities(engine, objects, &rebuilt)?;
-    let mut grafted = Vec::with_capacity(taken.len());
-    for mut entry in taken {
-        let same = matches!(
-            live.get(entry.name.as_str()),
-            Some(tokens) if tokens.iter().any(|token| *token == entry.identity && token.is_some())
-        );
-        if !same {
-            entry.identity = Some(mint_graft_identity()?);
+    let full = if path.is_empty() {
+        entry.name.as_str().to_owned()
+    } else {
+        format!("{path}/{}", entry.name.as_str())
+    };
+    let same = matches!(
+        live.get(&full),
+        Some(tokens) if tokens.iter().any(|token| *token == entry.identity && token.is_some())
+    );
+    let identity = if same {
+        entry.identity
+    } else {
+        Some(mint_graft_identity()?)
+    };
+    let content = match entry.content {
+        EntryContent::Dir { subtree } => {
+            let (normalized, _) = normalize_subtree(objects, live, subtree, &full)?;
+            EntryContent::Dir {
+                subtree: normalized,
+            }
         }
-        grafted.push(entry);
+        other => other,
+    };
+    Ok(Entry {
+        name: entry.name,
+        identity,
+        content,
+    })
+}
+
+/// Normalize every entry of one grafted subtree, rebuilding and
+/// reinserting it when any descendant's identity (or deeper
+/// subtree reference) changes. Returns the subtree reference the
+/// parent should carry plus whether it changed. Loads are
+/// address-checked like every other authoring walk: a present-but
+/// wrong object fails closed, never grafts corrupt bytes.
+fn normalize_subtree<S: ObjectStore>(
+    objects: &mut S,
+    live: &BTreeMap<String, Vec<Option<EntryIdentity>>>,
+    subtree: ContentId,
+    path: &str,
+) -> Result<(ContentId, bool), EngineError>
+where
+    S::Error: std::fmt::Debug,
+{
+    let bytes = objects
+        .get(&subtree)
+        .map_err(|error| EngineError::ObjectStore(format!("{error:?}")))?
+        .ok_or(EngineError::InvalidTree(subtree))?;
+    if ContentId::derive(ObjectKind::Tree, &bytes) != subtree {
+        return Err(EngineError::TreeMismatch(subtree));
     }
-    Ok(grafted)
+    let tree = Tree::decode(&bytes).map_err(|_| EngineError::InvalidTree(subtree))?;
+    let mut changed = false;
+    let mut entries = Vec::with_capacity(tree.entries().len());
+    for child in tree.entries().iter().cloned() {
+        let before = (child.identity, child.content.clone());
+        let normalized = normalize_entry(objects, live, child, path.to_owned())?;
+        changed |= normalized.identity != before.0 || normalized.content != before.1;
+        entries.push(normalized);
+    }
+    if !changed {
+        return Ok((subtree, false));
+    }
+    let rebuilt = Tree::from_entries(entries)
+        .map_err(|error| EngineError::RecoveryTreeInvalid(format!("{error:?}")))?;
+    let bytes = rebuilt.encode();
+    let id = objects
+        .insert(ObjectKind::Tree, &bytes)
+        .map_err(|error| EngineError::ObjectStore(format!("{error:?}")))?;
+    debug_assert_eq!(ContentId::derive(ObjectKind::Tree, &bytes), id);
+    Ok((id, true))
 }
 
 /// Resolve the operator selection over the plan: `--all` takes
@@ -261,19 +334,21 @@ where
 
 /// Preview a recovery over one source snapshot with a full
 /// selection: run every check [`recover`] applies before
-/// authoring — source readability, selection validity, and the
-/// locality gate — and return the plan, the graft names, and the
-/// adopted entries the commit would author. Rows and locality
-/// share one durable rebuild. Read-only; the dry run front ends
-/// show the names instead of committing, and [`recover`] resolves
-/// through the shared helper. No ownership check: previewing reads
-/// history the keystore holder can already read, while authoring
-/// stays owner-gated in [`recover`].
+/// authoring — source readability, selection validity,
+/// identity normalization, and the locality gate — and return
+/// the plan, the graft names, and the adopted entries the commit
+/// would author. Rows, locality, and normalization share one
+/// durable rebuild. Normalization may insert rebuilt subtree
+/// objects (content-addressed, so re-running it changes nothing
+/// observable); it commits nothing, and the dry run front ends
+/// show the names instead of committing. No ownership check:
+/// previewing reads history the keystore holder can already read,
+/// while authoring stays owner-gated in [`recover`].
 ///
 /// [`recover`]: self::recover
 pub(crate) fn preview<S: ObjectStore>(
     engine: &Engine,
-    objects: &S,
+    objects: &mut S,
     from: SnapshotId,
     takes: &[String],
     all: bool,
@@ -282,9 +357,7 @@ pub(crate) fn preview<S: ObjectStore>(
 where
     S::Error: std::fmt::Debug,
 {
-    let rebuilt = engine.store.rebuild(engine.device)?;
-    let plan = plan_over(engine, objects, &rebuilt, from)?;
-    let taken = select(objects, &plan, takes, all, contents)?;
+    let (plan, taken, rebuilt) = resolve(engine, objects, from, takes, all, contents)?;
     for entry in &taken {
         check_local(engine, objects, &rebuilt, entry)?;
     }
@@ -315,8 +388,7 @@ pub(crate) fn recover<S: ObjectStore>(
 where
     S::Error: std::fmt::Debug,
 {
-    let (_, taken) = resolve(engine, objects, from, takes, all, contents)?;
-    let rebuilt = engine.store.rebuild(engine.device)?;
+    let (_, taken, rebuilt) = resolve(engine, objects, from, takes, all, contents)?;
     // Same ownership projection `author_recovery` enforces, checked
     // before the graft-tree insert: a non-owner call must write
     // nothing at all, not even an orphaned tree object. The dry run
@@ -340,9 +412,11 @@ where
 }
 
 /// The root entry names every current eligible head holds: the
-/// already-live signal. Fails closed like the merge plan when a
-/// live head's tree does not decode — authoring over unreadable
-/// live state would mislabel every row.
+/// already-live signal, derived from the same full-path walk the
+/// graft comparison uses (root rows are the paths without a `/`).
+/// Fails closed like the merge plan when a live head's tree does
+/// not decode — authoring over unreadable live state would
+/// mislabel every row.
 fn live_root_names<S: ObjectStore>(
     engine: &Engine,
     objects: &S,
@@ -351,17 +425,22 @@ fn live_root_names<S: ObjectStore>(
 where
     S::Error: std::fmt::Debug,
 {
-    Ok(live_root_identities(engine, objects, rebuilt)?
+    Ok(live_path_identities(engine, objects, rebuilt)?
         .into_keys()
+        .filter(|path| !path.contains('/'))
         .collect())
 }
 
-/// Every current eligible head's root entries with their
-/// identities: the live side of the graft-identity comparison.
-/// One name maps to one token per head; divergent heads may name
-/// different tokens for the same name, and every token counts —
-/// sameness is per (name, token), never per name alone.
-fn live_root_identities<S: ObjectStore>(
+/// Every current eligible head's entries with their identities,
+/// keyed by full path: the live side of the graft-identity
+/// comparison. One path maps to one token per head; divergent
+/// heads may name different tokens for the same path, and every
+/// token counts — sameness is per (path, token), never per path
+/// alone. The walk mirrors [`probe_entry`]: subtrees load
+/// address-checked, an absent subtree fails closed like the merge
+/// plan (authoring over unreadable live state would mislabel
+/// every row).
+fn live_path_identities<S: ObjectStore>(
     engine: &Engine,
     objects: &S,
     rebuilt: &Rebuilt,
@@ -380,10 +459,33 @@ where
             .snapshot_bodies
             .get(&head)
             .ok_or(EngineError::NotEligibleHead(head))?;
-        for entry in load_root(objects, body.tree)?.entries() {
-            live.entry(entry.name.as_str().to_owned())
-                .or_default()
-                .push(entry.identity);
+        let root = load_root(objects, body.tree)?;
+        let mut stack: Vec<(String, Entry)> = root
+            .entries()
+            .iter()
+            .cloned()
+            .map(|entry| (entry.name.as_str().to_owned(), entry))
+            .collect();
+        let mut seen: HashSet<ContentId> = HashSet::new();
+        seen.insert(body.tree);
+        while let Some((path, entry)) = stack.pop() {
+            live.entry(path.clone()).or_default().push(entry.identity);
+            if let EntryContent::Dir { subtree } = entry.content {
+                if !seen.insert(subtree) {
+                    continue;
+                }
+                let bytes = objects
+                    .get(&subtree)
+                    .map_err(|error| EngineError::ObjectStore(format!("{error:?}")))?
+                    .ok_or(EngineError::InvalidTree(subtree))?;
+                if ContentId::derive(ObjectKind::Tree, &bytes) != subtree {
+                    return Err(EngineError::TreeMismatch(subtree));
+                }
+                let child = Tree::decode(&bytes).map_err(|_| EngineError::InvalidTree(subtree))?;
+                for grand in child.entries() {
+                    stack.push((format!("{path}/{}", grand.name.as_str()), grand.clone()));
+                }
+            }
         }
     }
     Ok(live)

@@ -152,6 +152,81 @@ fn distinct_identities_with_shared_content_conflict() {
     );
 }
 
+/// A directory both heads carry under the same token, with
+/// divergent children, serves as one merged directory that still
+/// reports the agreed token: the union is presentational, and the
+/// common descent stays observable.
+#[test]
+fn merged_directory_reports_the_agreed_token() {
+    let mut store = MemoryObjectStore::default();
+    let dir_token = token(0xF0);
+    let child_a = tree_of(&mut store, vec![file_with("a.txt", 1, token(0xF1))]);
+    let child_b = tree_of(&mut store, vec![file_with("b.txt", 1, token(0xF2))]);
+    let one = tree_of(
+        &mut store,
+        vec![
+            file_with("a.txt", 1, token(0xF1)),
+            Entry::dir("d", child_a).unwrap().with_identity(dir_token),
+        ],
+    );
+    let two = tree_of(
+        &mut store,
+        vec![
+            file_with("b.txt", 1, token(0xF2)),
+            Entry::dir("d", child_b).unwrap().with_identity(dir_token),
+        ],
+    );
+    let view = DriveView::new(
+        store,
+        FakeMaterialization::empty(),
+        heads(vec![snapshot(one), snapshot(two)]),
+    );
+    match view.lookup("d").unwrap() {
+        Node::MergedDir { identity, .. } => assert_eq!(
+            identity,
+            Some(dir_token),
+            "unanimous directory tokens stay observable through the union"
+        ),
+        other => panic!("divergent children merge, saw {other:?}"),
+    }
+    assert_eq!(
+        view.stat("d").unwrap().identity,
+        Some(dir_token),
+        "stat reports the agreed token too"
+    );
+}
+
+/// A directory the heads carry under different tokens still
+/// merges structurally — the union never resolves — but reports
+/// no token: disagreeing entries must not present as one.
+#[test]
+fn merged_directory_with_divergent_tokens_reports_none() {
+    let mut store = MemoryObjectStore::default();
+    let child = tree_of(&mut store, vec![file_with("a.txt", 1, token(0xF1))]);
+    let one = tree_of(
+        &mut store,
+        vec![Entry::dir("d", child).unwrap().with_identity(token(0xF3))],
+    );
+    let two = tree_of(
+        &mut store,
+        vec![Entry::dir("d", child).unwrap().with_identity(token(0xF4))],
+    );
+    let view = DriveView::new(
+        store,
+        FakeMaterialization::empty(),
+        heads(vec![snapshot(one), snapshot(two)]),
+    );
+    match view.lookup("d").unwrap() {
+        Node::MergedDir { identity, .. } => {
+            assert_eq!(
+                identity, None,
+                "divergent directory tokens present as no token"
+            )
+        }
+        other => panic!("divergent children merge, saw {other:?}"),
+    }
+}
+
 /// Transfer fidelity in miniature: tree bytes decoded into a
 /// fresh store (what a peer installs verbatim) serve the same
 /// token — no inference, no matching, just the bytes.

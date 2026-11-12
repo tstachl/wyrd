@@ -123,10 +123,10 @@ pub struct ViewLockError;
 /// File, dir, and symlink nodes carry the entry's stable identity:
 /// the same entry across renames, edits, restarts, and
 /// peer-originated changes resolves to the same token. The token is
-/// `None` for entries that predate identity support, and for the
-/// synthetic states below — `MergedDir` and `Conflict` are merged
-/// views, not single entries, so they carry no identity of their
-/// own (each conflict version carries its head's token).
+/// `None` for entries that predate identity support. `Conflict` is
+/// a synthetic view, not a single entry, so it carries no token of
+/// its own (each version carries its head's token). `MergedDir`
+/// carries the agreed token below.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Node {
     File {
@@ -148,8 +148,17 @@ pub enum Node {
     /// path itself serves as one directory — `readdir` lists the union
     /// of children, each resolved across the per-head subtrees, so a
     /// child that agrees everywhere serves normally.
+    ///
+    /// `identity` is the agreed token: `Some(T)` when every merged
+    /// head carries the identical `Some(T)` for this directory,
+    /// `None` otherwise (pre-identity entries, or heads that hold
+    /// different tokens at this path). It is presentational only —
+    /// a structural union never resolves, and differing tokens at
+    /// the same path still merge rather than conflict, with the
+    /// disagreement visible per child. See `merge` in `wyrd-view`.
     MergedDir {
         subtrees: Vec<(wyrd_format::SnapshotId, ContentId)>,
+        identity: Option<EntryIdentity>,
     },
     /// The heads disagree at this path. Versions list only the heads
     /// where the path resolves; absence elsewhere is part of the

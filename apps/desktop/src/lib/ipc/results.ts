@@ -34,7 +34,7 @@ export type WireNode =
   | { File: { size: number; executable: boolean; chunks: string[]; identity: string | null } }
   | { Dir: { subtree: string; identity: string | null } }
   | { Symlink: { target: string; identity: string | null } }
-  | { MergedDir: { subtrees: [string, string][] } }
+  | { MergedDir: { subtrees: [string, string][]; identity: string | null } }
   | { Conflict: { versions: WireConflictVersion[] } };
 
 export interface WireConflictVersion {

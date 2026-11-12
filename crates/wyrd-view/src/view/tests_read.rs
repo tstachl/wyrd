@@ -394,6 +394,7 @@ fn empty_drive_serves_an_empty_root() {
     );
     let empty = Node::MergedDir {
         subtrees: Vec::new(),
+        identity: None,
     };
     assert_eq!(view.lookup("").unwrap(), empty);
     assert_eq!(view.lookup("/").unwrap(), empty);

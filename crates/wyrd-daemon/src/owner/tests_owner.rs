@@ -169,6 +169,7 @@ fn interface_value_types_round_trip() {
                 ContentId::from_bytes([0x13; 32]),
             ),
         ],
+        identity: None,
     };
     let conflict = Node::Conflict {
         versions: vec![
