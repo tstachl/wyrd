@@ -31,7 +31,7 @@ function singleKey(value: object): string {
 
 test("served node: tuple array with an externally tagged node", () => {
   const served: Served<WireNode> = [
-    { File: { size: 11, executable: false, chunks: ["9be2"] } },
+    { File: { size: 11, executable: false, chunks: ["9be2"], identity: "ab".repeat(32) } },
     3, 7,
   ];
   expect(Array.isArray(served)).toBe(true);
@@ -43,7 +43,7 @@ test("served node: tuple array with an externally tagged node", () => {
 
 test("served attr keeps snake_case fields", () => {
   const served: Served<WireAttr> = [
-    { kind: "File", size: 11, executable: false },
+    { kind: "File", size: 11, executable: false, identity: null },
     3, 7,
   ];
   expect(served[0].kind).toBe("File");
@@ -54,7 +54,7 @@ test("directory entries nest tagged nodes", () => {
     [
       {
         name: "notes.txt",
-        node: { File: { size: 11, executable: false, chunks: ["9be2"] } },
+        node: { File: { size: 11, executable: false, chunks: ["9be2"], identity: "ab".repeat(32) } },
       },
     ],
     3, 7,

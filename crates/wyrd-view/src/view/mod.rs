@@ -57,6 +57,8 @@ mod merge;
 #[cfg(test)]
 mod tests_chunks;
 #[cfg(test)]
+mod tests_entry_identity;
+#[cfg(test)]
 mod tests_grammar;
 #[cfg(test)]
 mod tests_harness;

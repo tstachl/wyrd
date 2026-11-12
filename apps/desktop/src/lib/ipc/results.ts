@@ -22,13 +22,19 @@ export interface WireAttr {
   kind: WireKind;
   size: number;
   executable: boolean;
+  /** The entry's stable token as lowercase hex, or null for
+   * pre-identity entries and synthetic states. The Rust side
+   * carries `#[serde(default)]` tolerance; the mirror keeps the
+   * key required (possibly null) per the header policy — a missing
+   * key is a shape break the frontend must notice, not absorb. */
+  identity: string | null;
 }
 
 export type WireNode =
-  | { File: { size: number; executable: boolean; chunks: string[] } }
-  | { Dir: { subtree: string } }
-  | { Symlink: { target: string } }
-  | { MergedDir: { subtrees: [string, string][] } }
+  | { File: { size: number; executable: boolean; chunks: string[]; identity: string | null } }
+  | { Dir: { subtree: string; identity: string | null } }
+  | { Symlink: { target: string; identity: string | null } }
+  | { MergedDir: { subtrees: [string, string][]; identity: string | null } }
   | { Conflict: { versions: WireConflictVersion[] } };
 
 export interface WireConflictVersion {

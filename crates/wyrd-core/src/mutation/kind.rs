@@ -291,6 +291,9 @@ impl MutationError {
             F::Path(_) | F::NameMismatch { .. } => MutationError::Invalid(error.to_string()),
             F::Store(error) => MutationError::Store(error.failure()),
             F::MissingTree(_) | F::Tree(_) => MutationError::Store(StoreFailure::Transient),
+            // Entropy failure while minting an entry identity: fail
+            // closed like any authoring failure.
+            F::Mint(_) => MutationError::Engine,
         }
     }
 }

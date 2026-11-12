@@ -25,7 +25,8 @@ use std::collections::{HashSet, VecDeque};
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use wyrd_format::{
-    Component, ContentId, FetchStatus, ObjectKind, ObjectStore, Snapshot, StoreFailure,
+    Component, ContentId, EntryIdentity, FetchStatus, ObjectKind, ObjectStore, Snapshot,
+    StoreFailure,
 };
 
 /// The residency policy for content the local store does not hold: a
@@ -118,26 +119,46 @@ impl Head {
 pub struct ViewLockError;
 
 /// What `lookup` resolves a path to.
+///
+/// File, dir, and symlink nodes carry the entry's stable identity:
+/// the same entry across renames, edits, restarts, and
+/// peer-originated changes resolves to the same token. The token is
+/// `None` for entries that predate identity support. `Conflict` is
+/// a synthetic view, not a single entry, so it carries no token of
+/// its own (each version carries its head's token). `MergedDir`
+/// carries the agreed token below.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Node {
     File {
         size: u64,
         executable: bool,
         chunks: Vec<ContentId>,
+        identity: Option<EntryIdentity>,
     },
     Dir {
         subtree: ContentId,
+        identity: Option<EntryIdentity>,
     },
     Symlink {
         target: String,
+        identity: Option<EntryIdentity>,
     },
     /// Every head resolves this path to a directory, but the directory
     /// contents differ: a DAG conflict that is not a path conflict. The
     /// path itself serves as one directory — `readdir` lists the union
     /// of children, each resolved across the per-head subtrees, so a
     /// child that agrees everywhere serves normally.
+    ///
+    /// `identity` is the agreed token: `Some(T)` when every merged
+    /// head carries the identical `Some(T)` for this directory,
+    /// `None` otherwise (pre-identity entries, or heads that hold
+    /// different tokens at this path). It is presentational only —
+    /// a structural union never resolves, and differing tokens at
+    /// the same path still merge rather than conflict, with the
+    /// disagreement visible per child. See `merge` in `wyrd-view`.
     MergedDir {
         subtrees: Vec<(wyrd_format::SnapshotId, ContentId)>,
+        identity: Option<EntryIdentity>,
     },
     /// The heads disagree at this path. Versions list only the heads
     /// where the path resolves; absence elsewhere is part of the
@@ -145,9 +166,7 @@ pub enum Node {
     /// readable: version-qualified lookup paths (`foo@N`, counted in
     /// SnapshotId byte order) address the versions, and nothing
     /// synthetic is ever listed by `readdir`.
-    Conflict {
-        versions: Vec<ConflictVersion>,
-    },
+    Conflict { versions: Vec<ConflictVersion> },
 }
 
 /// One head's resolution of a conflicted path.
@@ -157,12 +176,14 @@ pub struct ConflictVersion {
     pub node: Node,
 }
 
-/// File attributes for `stat`.
+/// File attributes for `stat`. The identity mirrors the node's:
+/// `stat` is how readers observe entry sameness without listing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Attr {
     pub kind: Kind,
     pub size: u64,
     pub executable: bool,
+    pub identity: Option<EntryIdentity>,
 }
 
 /// Node kinds, including conflicted paths.
@@ -640,7 +661,7 @@ fn resolve_symlink_components<V: NamespaceView>(
                 };
                 match child {
                     Node::Conflict { .. } => return Err(ConfinementError::Conflict),
-                    Node::Symlink { target: next } => {
+                    Node::Symlink { target: next, .. } => {
                         state.hops = state.hops.saturating_add(1);
                         if state.hops > MAX_SYMLINK_HOPS {
                             return Err(ConfinementError::HopLimit {

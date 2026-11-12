@@ -490,6 +490,7 @@ fn fold_commits_one_snapshot_for_many_members() {
             size,
             executable,
             chunks,
+            ..
         } => FileIdentity::new(size, executable, chunks),
         other => panic!("a.txt is a file, saw {other:?}"),
     };

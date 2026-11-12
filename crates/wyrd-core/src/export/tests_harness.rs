@@ -128,12 +128,15 @@ impl FakeView {
                 size: declared.unwrap_or(self.arena[*arena].len() as u64),
                 executable: *executable,
                 chunks: vec![Self::file_id(*arena)],
+                identity: None,
             },
             FakeNode::Dir { index } => Node::Dir {
                 subtree: Self::dir_id(*index),
+                identity: None,
             },
             FakeNode::Symlink(target) => Node::Symlink {
                 target: target.clone(),
+                identity: None,
             },
             FakeNode::Conflict(versions) => Node::Conflict {
                 versions: versions
@@ -206,16 +209,18 @@ impl NamespaceView for FakeView {
             }
             return Ok(Node::Dir {
                 subtree: Self::dir_id(self.root),
+                identity: None,
             });
         }
         // Nested paths resolve by descending from the root: the
         // fake serves a real tree, not a flat map.
         let mut node = Node::Dir {
             subtree: Self::dir_id(self.root),
+            identity: None,
         };
         for component in key.split('/') {
             let children = match &node {
-                Node::Dir { subtree } => {
+                Node::Dir { subtree, .. } => {
                     let index = Self::dir_index(subtree).ok_or(ViewError::NotFound)?;
                     &self.dirs[index]
                 }
@@ -267,28 +272,32 @@ impl NamespaceView for FakeView {
                 kind: Kind::File,
                 size: *size,
                 executable: *executable,
+                identity: None,
             },
             Node::Dir { .. } | Node::MergedDir { .. } => Attr {
                 kind: Kind::Dir,
                 size: 0,
                 executable: false,
+                identity: None,
             },
             Node::Symlink { .. } => Attr {
                 kind: Kind::Symlink,
                 size: 0,
                 executable: false,
+                identity: None,
             },
             Node::Conflict { .. } => Attr {
                 kind: Kind::Conflict,
                 size: 0,
                 executable: false,
+                identity: None,
             },
         })
     }
 
     fn readdir(&self, node: &Node) -> Result<Vec<DirEntry>, ViewError> {
         match node {
-            Node::Dir { subtree } => {
+            Node::Dir { subtree, .. } => {
                 let index = Self::dir_index(subtree).ok_or(ViewError::NotADirectory)?;
                 Ok(self.dirs[index]
                     .iter()

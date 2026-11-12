@@ -22,6 +22,7 @@ fn cat_reads_a_materialized_file() {
             size: 11,
             executable: false,
             chunks: hello,
+            identity: None,
         }
     );
     let file = view.open(&node).unwrap();
@@ -45,6 +46,7 @@ fn stat_readdir_and_symlink() {
             kind: Kind::Dir,
             size: 0,
             executable: false,
+            identity: None,
         }
     );
     assert_eq!(view.stat("hello.txt").unwrap().size, 11);
@@ -392,6 +394,7 @@ fn empty_drive_serves_an_empty_root() {
     );
     let empty = Node::MergedDir {
         subtrees: Vec::new(),
+        identity: None,
     };
     assert_eq!(view.lookup("").unwrap(), empty);
     assert_eq!(view.lookup("/").unwrap(), empty);

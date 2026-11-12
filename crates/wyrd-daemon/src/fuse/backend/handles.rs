@@ -237,6 +237,7 @@ where
                 size,
                 executable,
                 chunks,
+                ..
             } => (
                 FileIdentity::new(*size, *executable, chunks.clone()),
                 projection

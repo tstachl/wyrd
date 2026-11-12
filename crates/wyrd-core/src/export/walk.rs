@@ -228,7 +228,7 @@ fn export_node<V: NamespaceView>(
             }
             Ok(())
         }
-        Node::Symlink { target } => {
+        Node::Symlink { target, .. } => {
             // The plain copy must stay self-contained: the same
             // targets the mount refuses never land on disk either.
             confine_symlink_target_with_budget(view, vpath, target, state.budget).map_err(

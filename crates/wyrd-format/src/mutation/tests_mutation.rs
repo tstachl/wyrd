@@ -12,6 +12,18 @@ fn file(name: &str, body: &[u8]) -> Entry {
     .unwrap()
 }
 
+/// Deterministic mint for tests: every creation draws the same fixed
+/// identity, so existing behavior tests stay byte-stable. Tests
+/// asserting distinctness mint their own identities explicitly.
+fn test_mint() -> impl FnMut() -> Result<EntryIdentity, MutationError<MemoryStoreMarker>> {
+    || Ok(EntryIdentity::from_bytes([0xE1; 32]))
+}
+
+/// Fixed identity for `mkdir` leaves in behavior tests.
+fn test_id() -> EntryIdentity {
+    EntryIdentity::from_bytes([0xE1; 32])
+}
+
 fn empty_root(store: &mut MemoryObjectStore) -> ContentId {
     Tree::empty().insert_into(store).unwrap()
 }
@@ -49,7 +61,14 @@ type MemoryStoreMarker = <MemoryObjectStore as ObjectStore>::Error;
 fn put_creates_nested_directories() {
     let mut store = MemoryObjectStore::default();
     let root = empty_root(&mut store);
-    let root = put(&mut store, root, "a/b/c.txt", file("c.txt", b"hello")).unwrap();
+    let root = put(
+        &mut store,
+        root,
+        "a/b/c.txt",
+        file("c.txt", b"hello"),
+        &mut test_mint(),
+    )
+    .unwrap();
 
     assert!(matches!(
         resolve(&store, root, "a"),
@@ -69,9 +88,30 @@ fn put_creates_nested_directories() {
 fn put_replaces_keeps_siblings_and_leaves_the_old_root() {
     let mut store = MemoryObjectStore::default();
     let root0 = empty_root(&mut store);
-    let root1 = put(&mut store, root0, "a.txt", file("a.txt", b"one")).unwrap();
-    let root2 = put(&mut store, root1, "b.txt", file("b.txt", b"bee")).unwrap();
-    let root3 = put(&mut store, root2, "a.txt", file("a.txt", b"new")).unwrap();
+    let root1 = put(
+        &mut store,
+        root0,
+        "a.txt",
+        file("a.txt", b"one"),
+        &mut test_mint(),
+    )
+    .unwrap();
+    let root2 = put(
+        &mut store,
+        root1,
+        "b.txt",
+        file("b.txt", b"bee"),
+        &mut test_mint(),
+    )
+    .unwrap();
+    let root3 = put(
+        &mut store,
+        root2,
+        "a.txt",
+        file("a.txt", b"new"),
+        &mut test_mint(),
+    )
+    .unwrap();
 
     assert_ne!(root3, root2, "a replace changes the root");
     assert!(matches!(
@@ -89,8 +129,22 @@ fn put_replaces_keeps_siblings_and_leaves_the_old_root() {
 fn remove_drops_the_entry_and_keeps_siblings() {
     let mut store = MemoryObjectStore::default();
     let root = empty_root(&mut store);
-    let root = put(&mut store, root, "a.txt", file("a.txt", b"one")).unwrap();
-    let root = put(&mut store, root, "keep.txt", file("keep.txt", b"two")).unwrap();
+    let root = put(
+        &mut store,
+        root,
+        "a.txt",
+        file("a.txt", b"one"),
+        &mut test_mint(),
+    )
+    .unwrap();
+    let root = put(
+        &mut store,
+        root,
+        "keep.txt",
+        file("keep.txt", b"two"),
+        &mut test_mint(),
+    )
+    .unwrap();
     let root = remove(&mut store, root, "a.txt").unwrap();
 
     assert!(matches!(
@@ -107,8 +161,22 @@ fn remove_drops_the_entry_and_keeps_siblings() {
 fn put_is_content_addressed() {
     let mut store = MemoryObjectStore::default();
     let root = empty_root(&mut store);
-    let a = put(&mut store, root, "a.txt", file("a.txt", b"same")).unwrap();
-    let b = put(&mut store, root, "a.txt", file("a.txt", b"same")).unwrap();
+    let a = put(
+        &mut store,
+        root,
+        "a.txt",
+        file("a.txt", b"same"),
+        &mut test_mint(),
+    )
+    .unwrap();
+    let b = put(
+        &mut store,
+        root,
+        "a.txt",
+        file("a.txt", b"same"),
+        &mut test_mint(),
+    )
+    .unwrap();
     assert_eq!(a, b, "identical content yields the same root");
 }
 
@@ -129,7 +197,7 @@ fn invalid_paths_are_rejected() {
     for path in ["", "a/", "/a", "a//b", "a/../b", "a/\0b", "."] {
         assert!(
             matches!(
-                put(&mut store, root, path, file("x", b"y")),
+                put(&mut store, root, path, file("x", b"y"), &mut test_mint()),
                 Err(MutationError::Path(_))
             ),
             "path {path:?} must be rejected"
@@ -142,7 +210,13 @@ fn a_mismatched_entry_name_is_rejected() {
     let mut store = MemoryObjectStore::default();
     let root = empty_root(&mut store);
     assert!(matches!(
-        put(&mut store, root, "a/b.txt", file("c.txt", b"x")),
+        put(
+            &mut store,
+            root,
+            "a/b.txt",
+            file("c.txt", b"x"),
+            &mut test_mint()
+        ),
         Err(MutationError::NameMismatch { .. })
     ));
 }
@@ -151,9 +225,9 @@ fn a_mismatched_entry_name_is_rejected() {
 fn descending_through_a_file_is_not_a_directory() {
     let mut store = MemoryObjectStore::default();
     let root = empty_root(&mut store);
-    let root = put(&mut store, root, "a", file("a", b"x")).unwrap();
+    let root = put(&mut store, root, "a", file("a", b"x"), &mut test_mint()).unwrap();
     assert!(matches!(
-        put(&mut store, root, "a/b", file("b", b"y")),
+        put(&mut store, root, "a/b", file("b", b"y"), &mut test_mint()),
         Err(MutationError::NotADirectory(_))
     ));
 }
@@ -173,7 +247,7 @@ fn mutating_a_missing_root_is_missing_tree() {
     let mut store = MemoryObjectStore::default();
     let absent = ContentId::from_bytes([0xAB; 32]);
     assert!(matches!(
-        put(&mut store, absent, "a", file("a", b"x")),
+        put(&mut store, absent, "a", file("a", b"x"), &mut test_mint()),
         Err(MutationError::MissingTree(_))
     ));
 }
@@ -194,8 +268,8 @@ fn path_depth_is_bounded() {
 fn nested_removal_rebuilds_the_parent_and_keeps_the_old_root() {
     let mut store = MemoryObjectStore::default();
     let root = empty_root(&mut store);
-    let root = put(&mut store, root, "a/b/c", file("c", b"c")).unwrap();
-    let with_x = put(&mut store, root, "a/x", file("x", b"x")).unwrap();
+    let root = put(&mut store, root, "a/b/c", file("c", b"c"), &mut test_mint()).unwrap();
+    let with_x = put(&mut store, root, "a/x", file("x", b"x"), &mut test_mint()).unwrap();
     let removed = remove(&mut store, with_x, "a/b/c").unwrap();
 
     assert_ne!(removed, with_x, "the rebuilt path changes the root");
@@ -222,7 +296,7 @@ fn nested_removal_rebuilds_the_parent_and_keeps_the_old_root() {
 fn removing_a_directory_leaf_keeps_the_directory_empty() {
     let mut store = MemoryObjectStore::default();
     let root = empty_root(&mut store);
-    let root = put(&mut store, root, "d/f", file("f", b"x")).unwrap();
+    let root = put(&mut store, root, "d/f", file("f", b"x"), &mut test_mint()).unwrap();
     let root = remove(&mut store, root, "d/f").unwrap();
 
     match resolve(&store, root, "d").unwrap() {
@@ -243,14 +317,15 @@ fn symlinks_are_not_traversed_on_put() {
         root,
         "s",
         Entry::symlink("s", "target").unwrap(),
+        &mut test_mint(),
     )
     .unwrap();
     assert!(matches!(
-        put(&mut store, root, "s/x", file("x", b"y")),
+        put(&mut store, root, "s/x", file("x", b"y"), &mut test_mint()),
         Err(MutationError::NotADirectory(_))
     ));
     // Replacing the symlink with a file is allowed.
-    let root = put(&mut store, root, "s", file("s", b"z")).unwrap();
+    let root = put(&mut store, root, "s", file("s", b"z"), &mut test_mint()).unwrap();
     assert!(matches!(
         resolve(&store, root, "s"),
         Ok(EntryContent::File { .. })
@@ -261,7 +336,7 @@ fn symlinks_are_not_traversed_on_put() {
 fn mkdir_creates_an_empty_directory() {
     let mut store = MemoryObjectStore::default();
     let root = empty_root(&mut store);
-    let root = mkdir(&mut store, root, "d").unwrap();
+    let root = mkdir(&mut store, root, "d", test_id()).unwrap();
 
     match resolve(&store, root, "d").unwrap() {
         EntryContent::Dir { subtree } => assert!(
@@ -277,11 +352,11 @@ fn mkdir_does_not_create_intermediate_directories() {
     let mut store = MemoryObjectStore::default();
     let root = empty_root(&mut store);
     assert!(matches!(
-        mkdir(&mut store, root, "a/b/c"),
+        mkdir(&mut store, root, "a/b/c", test_id()),
         Err(MutationError::NotFound(_))
     ));
-    let root = mkdir(&mut store, root, "a").unwrap();
-    let root = mkdir(&mut store, root, "a/b").unwrap();
+    let root = mkdir(&mut store, root, "a", test_id()).unwrap();
+    let root = mkdir(&mut store, root, "a/b", test_id()).unwrap();
     assert!(matches!(
         resolve(&store, root, "a/b"),
         Ok(EntryContent::Dir { .. })
@@ -292,18 +367,25 @@ fn mkdir_does_not_create_intermediate_directories() {
 fn mkdir_existing_entry_is_already_exists() {
     let mut store = MemoryObjectStore::default();
     let root = empty_root(&mut store);
-    let root = mkdir(&mut store, root, "d").unwrap();
+    let root = mkdir(&mut store, root, "d", test_id()).unwrap();
     assert!(matches!(
-        mkdir(&mut store, root, "d"),
+        mkdir(&mut store, root, "d", test_id()),
         Err(MutationError::AlreadyExists(_))
     ));
-    let root = put(&mut store, root, "f.txt", file("f.txt", b"x")).unwrap();
+    let root = put(
+        &mut store,
+        root,
+        "f.txt",
+        file("f.txt", b"x"),
+        &mut test_mint(),
+    )
+    .unwrap();
     assert!(matches!(
-        mkdir(&mut store, root, "f.txt"),
+        mkdir(&mut store, root, "f.txt", test_id()),
         Err(MutationError::AlreadyExists(_))
     ));
     assert!(matches!(
-        mkdir(&mut store, root, "f.txt/sub"),
+        mkdir(&mut store, root, "f.txt/sub", test_id()),
         Err(MutationError::NotADirectory(_))
     ));
 }
@@ -312,14 +394,14 @@ fn mkdir_existing_entry_is_already_exists() {
 fn rmdir_removes_only_empty_directories() {
     let mut store = MemoryObjectStore::default();
     let root = empty_root(&mut store);
-    let root = mkdir(&mut store, root, "d").unwrap();
+    let root = mkdir(&mut store, root, "d", test_id()).unwrap();
     let root = rmdir(&mut store, root, "d").unwrap();
     assert!(matches!(
         resolve(&store, root, "d"),
         Err(MutationError::NotFound(_))
     ));
 
-    let root = put(&mut store, root, "d/f", file("f", b"x")).unwrap();
+    let root = put(&mut store, root, "d/f", file("f", b"x"), &mut test_mint()).unwrap();
     assert!(matches!(
         rmdir(&mut store, root, "d"),
         Err(MutationError::DirectoryNotEmpty(_))
@@ -335,7 +417,14 @@ fn rmdir_removes_only_empty_directories() {
 fn rmdir_rejects_files_and_missing_paths() {
     let mut store = MemoryObjectStore::default();
     let root = empty_root(&mut store);
-    let root = put(&mut store, root, "f.txt", file("f.txt", b"x")).unwrap();
+    let root = put(
+        &mut store,
+        root,
+        "f.txt",
+        file("f.txt", b"x"),
+        &mut test_mint(),
+    )
+    .unwrap();
     assert!(matches!(
         rmdir(&mut store, root, "f.txt"),
         Err(MutationError::NotADirectory(_))
@@ -354,8 +443,22 @@ fn rmdir_rejects_files_and_missing_paths() {
 fn rename_moves_a_file_and_replaces_a_file() {
     let mut store = MemoryObjectStore::default();
     let root = empty_root(&mut store);
-    let root = put(&mut store, root, "a.txt", file("a.txt", b"one")).unwrap();
-    let root = put(&mut store, root, "b.txt", file("b.txt", b"two")).unwrap();
+    let root = put(
+        &mut store,
+        root,
+        "a.txt",
+        file("a.txt", b"one"),
+        &mut test_mint(),
+    )
+    .unwrap();
+    let root = put(
+        &mut store,
+        root,
+        "b.txt",
+        file("b.txt", b"two"),
+        &mut test_mint(),
+    )
+    .unwrap();
     let root = rename(&mut store, root, "a.txt", "b.txt").unwrap();
 
     assert!(matches!(
@@ -372,8 +475,8 @@ fn rename_moves_a_file_and_replaces_a_file() {
 fn rename_moves_a_subtree_across_directories() {
     let mut store = MemoryObjectStore::default();
     let root = empty_root(&mut store);
-    let root = put(&mut store, root, "a/b/c", file("c", b"c")).unwrap();
-    let root = mkdir(&mut store, root, "dst").unwrap();
+    let root = put(&mut store, root, "a/b/c", file("c", b"c"), &mut test_mint()).unwrap();
+    let root = mkdir(&mut store, root, "dst", test_id()).unwrap();
     let root = rename(&mut store, root, "a/b", "dst/b").unwrap();
 
     assert!(matches!(
@@ -395,8 +498,8 @@ fn rename_moves_a_subtree_across_directories() {
 fn rename_enforces_the_replacement_matrix() {
     let mut store = MemoryObjectStore::default();
     let root = empty_root(&mut store);
-    let root = put(&mut store, root, "f", file("f", b"x")).unwrap();
-    let root = mkdir(&mut store, root, "d").unwrap();
+    let root = put(&mut store, root, "f", file("f", b"x"), &mut test_mint()).unwrap();
+    let root = mkdir(&mut store, root, "d", test_id()).unwrap();
     // File onto a directory is refused even when the directory is empty.
     assert!(matches!(
         rename(&mut store, root, "f", "d"),
@@ -410,7 +513,7 @@ fn rename_enforces_the_replacement_matrix() {
     ));
 
     // Directory onto an empty directory replaces.
-    let root = mkdir(&mut store, root, "e").unwrap();
+    let root = mkdir(&mut store, root, "e", test_id()).unwrap();
     let root = rename(&mut store, root, "d", "e").unwrap();
     assert!(matches!(
         resolve(&store, root, "d"),
@@ -422,8 +525,15 @@ fn rename_enforces_the_replacement_matrix() {
     ));
 
     // Directory onto a non-empty directory is refused.
-    let root = mkdir(&mut store, root, "full").unwrap();
-    let root = put(&mut store, root, "full/k", file("k", b"k")).unwrap();
+    let root = mkdir(&mut store, root, "full", test_id()).unwrap();
+    let root = put(
+        &mut store,
+        root,
+        "full/k",
+        file("k", b"k"),
+        &mut test_mint(),
+    )
+    .unwrap();
     assert!(matches!(
         rename(&mut store, root, "e", "full"),
         Err(MutationError::DirectoryNotEmpty(_))
@@ -434,8 +544,8 @@ fn rename_enforces_the_replacement_matrix() {
 fn rename_rejects_descendant_moves_and_missing_parents() {
     let mut store = MemoryObjectStore::default();
     let root = empty_root(&mut store);
-    let root = mkdir(&mut store, root, "d").unwrap();
-    let root = put(&mut store, root, "d/f", file("f", b"x")).unwrap();
+    let root = mkdir(&mut store, root, "d", test_id()).unwrap();
+    let root = put(&mut store, root, "d/f", file("f", b"x"), &mut test_mint()).unwrap();
 
     assert!(matches!(
         rename(&mut store, root, "d", "d/sub"),
@@ -455,7 +565,14 @@ fn rename_rejects_descendant_moves_and_missing_parents() {
 fn rename_same_path_is_a_no_op() {
     let mut store = MemoryObjectStore::default();
     let root = empty_root(&mut store);
-    let root = put(&mut store, root, "a.txt", file("a.txt", b"x")).unwrap();
+    let root = put(
+        &mut store,
+        root,
+        "a.txt",
+        file("a.txt", b"x"),
+        &mut test_mint(),
+    )
+    .unwrap();
     assert_eq!(rename(&mut store, root, "a.txt", "a.txt").unwrap(), root);
 }
 
@@ -468,6 +585,7 @@ fn rename_moves_a_symlink_without_following_it() {
         root,
         "s",
         Entry::symlink("s", "target").unwrap(),
+        &mut test_mint(),
     )
     .unwrap();
     let root = rename(&mut store, root, "s", "t").unwrap();
@@ -486,13 +604,14 @@ fn rename_moves_a_symlink_without_following_it() {
 fn rename_trailing_slash_source_requires_a_directory() {
     let mut store = MemoryObjectStore::default();
     let root = empty_root(&mut store);
-    let root = mkdir(&mut store, root, "d").unwrap();
-    let root = put(&mut store, root, "f", file("f", b"x")).unwrap();
+    let root = mkdir(&mut store, root, "d", test_id()).unwrap();
+    let root = put(&mut store, root, "f", file("f", b"x"), &mut test_mint()).unwrap();
     let root = put(
         &mut store,
         root,
         "s",
         Entry::symlink("s", "target").unwrap(),
+        &mut test_mint(),
     )
     .unwrap();
 
@@ -523,9 +642,9 @@ fn rename_trailing_slash_source_requires_a_directory() {
 fn rename_trailing_slash_destination_requires_a_directory() {
     let mut store = MemoryObjectStore::default();
     let root = empty_root(&mut store);
-    let root = mkdir(&mut store, root, "d").unwrap();
-    let root = mkdir(&mut store, root, "e").unwrap();
-    let root = put(&mut store, root, "f", file("f", b"x")).unwrap();
+    let root = mkdir(&mut store, root, "d", test_id()).unwrap();
+    let root = mkdir(&mut store, root, "e", test_id()).unwrap();
+    let root = put(&mut store, root, "f", file("f", b"x"), &mut test_mint()).unwrap();
 
     // Directory onto an empty directory with a slash replaces.
     let root = rename(&mut store, root, "d", "e/").unwrap();
@@ -559,7 +678,7 @@ fn rename_trailing_slash_destination_requires_a_directory() {
 fn rename_rejects_non_canonical_paths_on_either_operand() {
     let mut store = MemoryObjectStore::default();
     let root = empty_root(&mut store);
-    let root = put(&mut store, root, "a", file("a", b"x")).unwrap();
+    let root = put(&mut store, root, "a", file("a", b"x"), &mut test_mint()).unwrap();
     for (from, to) in [
         ("", "b"),
         ("a", ""),
@@ -586,8 +705,8 @@ fn rename_rejects_non_canonical_paths_on_either_operand() {
 fn rename_through_a_file_parent_is_not_a_directory() {
     let mut store = MemoryObjectStore::default();
     let root = empty_root(&mut store);
-    let root = put(&mut store, root, "f", file("f", b"x")).unwrap();
-    let root = put(&mut store, root, "g", file("g", b"y")).unwrap();
+    let root = put(&mut store, root, "f", file("f", b"x"), &mut test_mint()).unwrap();
+    let root = put(&mut store, root, "g", file("g", b"y"), &mut test_mint()).unwrap();
     assert!(matches!(
         rename(&mut store, root, "g", "f/deep"),
         Err(MutationError::NotADirectory(_))
@@ -602,15 +721,16 @@ fn rename_through_a_file_parent_is_not_a_directory() {
 fn rename_replaces_symlinks_in_both_directions() {
     let mut store = MemoryObjectStore::default();
     let root = empty_root(&mut store);
-    let root = put(&mut store, root, "f", file("f", b"x")).unwrap();
+    let root = put(&mut store, root, "f", file("f", b"x"), &mut test_mint()).unwrap();
     let root = put(
         &mut store,
         root,
         "s",
         Entry::symlink("s", "target").unwrap(),
+        &mut test_mint(),
     )
     .unwrap();
-    let root = mkdir(&mut store, root, "d").unwrap();
+    let root = mkdir(&mut store, root, "d", test_id()).unwrap();
 
     // File onto symlink and symlink onto file both replace.
     let root = rename(&mut store, root, "f", "s").unwrap();
@@ -618,7 +738,14 @@ fn rename_replaces_symlinks_in_both_directions() {
         resolve(&store, root, "s"),
         Ok(EntryContent::File { .. })
     ));
-    let root = put(&mut store, root, "t", Entry::symlink("t", "other").unwrap()).unwrap();
+    let root = put(
+        &mut store,
+        root,
+        "t",
+        Entry::symlink("t", "other").unwrap(),
+        &mut test_mint(),
+    )
+    .unwrap();
     let root = rename(&mut store, root, "t", "s").unwrap();
     match resolve(&store, root, "s").unwrap() {
         EntryContent::Symlink { target } => assert_eq!(target, "other"),
@@ -631,6 +758,7 @@ fn rename_replaces_symlinks_in_both_directions() {
         root,
         "u",
         Entry::symlink("u", "target").unwrap(),
+        &mut test_mint(),
     )
     .unwrap();
     assert!(matches!(
@@ -647,9 +775,9 @@ fn rename_replaces_symlinks_in_both_directions() {
 fn failed_renames_leave_the_root_untouched() {
     let mut store = MemoryObjectStore::default();
     let root = empty_root(&mut store);
-    let root = put(&mut store, root, "f", file("f", b"x")).unwrap();
-    let root = mkdir(&mut store, root, "d").unwrap();
-    let root = put(&mut store, root, "d/k", file("k", b"k")).unwrap();
+    let root = put(&mut store, root, "f", file("f", b"x"), &mut test_mint()).unwrap();
+    let root = mkdir(&mut store, root, "d", test_id()).unwrap();
+    let root = put(&mut store, root, "d/k", file("k", b"k"), &mut test_mint()).unwrap();
 
     // Every failure returns no root; the input root keeps resolving.
     for (from, to) in [
@@ -681,8 +809,15 @@ fn failed_renames_leave_the_root_untouched() {
 fn namespace_mutations_keep_canonical_order_and_history() {
     let mut store = MemoryObjectStore::default();
     let root = empty_root(&mut store);
-    let root = put(&mut store, root, "z.txt", file("z.txt", b"z")).unwrap();
-    let root = mkdir(&mut store, root, "m").unwrap();
+    let root = put(
+        &mut store,
+        root,
+        "z.txt",
+        file("z.txt", b"z"),
+        &mut test_mint(),
+    )
+    .unwrap();
+    let root = mkdir(&mut store, root, "m", test_id()).unwrap();
     let root = rename(&mut store, root, "z.txt", "a.txt").unwrap();
 
     let bytes = store.get(&root).unwrap().unwrap();
@@ -694,4 +829,169 @@ fn namespace_mutations_keep_canonical_order_and_history() {
         .collect();
     assert_eq!(names, ["a.txt", "m"], "canonical order survives mutations");
     assert_eq!(decoded.content_id(), root);
+}
+
+/// Read one entry whole (identity included) for assertions.
+fn entry_at(store: &MemoryObjectStore, root: ContentId, path: &str) -> Entry {
+    let components = parse_path(path).unwrap();
+    let mut tree = load_tree(store, &root).unwrap();
+    for (index, component) in components.iter().enumerate() {
+        let entry = tree
+            .entries()
+            .iter()
+            .find(|candidate| candidate.name == *component)
+            .unwrap_or_else(|| panic!("{path} resolves"))
+            .clone();
+        if index + 1 == components.len() {
+            return entry;
+        }
+        match &entry.content {
+            EntryContent::Dir { subtree } => tree = load_tree(store, subtree).unwrap(),
+            _ => panic!("{path} walks through a directory"),
+        }
+    }
+    unreachable!("a non-empty path returns from the loop")
+}
+
+fn distinct_id(n: u8) -> EntryIdentity {
+    EntryIdentity::from_bytes([n; 32])
+}
+
+/// `put` keeps the caller's leaf identity and mints fresh
+/// identities for intermediates it creates: the leaf is the
+/// caller's decision, the intermediates are new entries.
+#[test]
+fn put_preserves_the_leaf_and_mints_intermediates() {
+    let mut store = MemoryObjectStore::default();
+    let root = empty_root(&mut store);
+    let mut counter = 0u8;
+    let mut mint = || {
+        counter += 1;
+        Ok(distinct_id(counter))
+    };
+    let leaf = file("c.txt", b"hello").with_identity(distinct_id(7));
+    let root = put(&mut store, root, "a/b/c.txt", leaf, &mut mint).unwrap();
+    assert_eq!(
+        entry_at(&store, root, "a/b/c.txt").identity,
+        Some(distinct_id(7))
+    );
+    let a = entry_at(&store, root, "a").identity;
+    let b = entry_at(&store, root, "a/b").identity;
+    assert!(a.is_some() && b.is_some(), "intermediates mint");
+    assert_ne!(a, b, "intermediates are distinct entries");
+    // Rebinding the same intermediates preserves them: a second
+    // leaf under the same parents keeps every existing identity.
+    let before_a = a;
+    let before_b = b;
+    let mut counter2 = 100u8;
+    let mut mint2 = || {
+        counter2 += 1;
+        Ok(distinct_id(counter2))
+    };
+    let root = put(
+        &mut store,
+        root,
+        "a/b/d.txt",
+        file("d.txt", b"bye").with_identity(distinct_id(8)),
+        &mut mint2,
+    )
+    .unwrap();
+    assert_eq!(entry_at(&store, root, "a").identity, before_a);
+    assert_eq!(entry_at(&store, root, "a/b").identity, before_b);
+    assert_eq!(
+        entry_at(&store, root, "a/b/d.txt").identity,
+        Some(distinct_id(8))
+    );
+}
+
+/// `mkdir` stamps the caller's identity on the new directory and
+/// preserves every rebound parent on the way down.
+#[test]
+fn mkdir_stamps_the_leaf_and_preserves_parents() {
+    let mut store = MemoryObjectStore::default();
+    let root = empty_root(&mut store);
+    let root = put(
+        &mut store,
+        root,
+        "p/q.txt",
+        file("q.txt", b"x").with_identity(distinct_id(3)),
+        &mut test_mint(),
+    )
+    .unwrap();
+    let parent_before = entry_at(&store, root, "p").identity;
+    let root = mkdir(&mut store, root, "p/new", distinct_id(9)).unwrap();
+    assert_eq!(
+        entry_at(&store, root, "p/new").identity,
+        Some(distinct_id(9))
+    );
+    assert_eq!(entry_at(&store, root, "p").identity, parent_before);
+}
+
+/// Rename preserves the moved identity and retires the replaced
+/// destination: the destination entry is deleted, not merged.
+#[test]
+fn rename_preserves_the_moved_identity_and_retires_the_replaced() {
+    let mut store = MemoryObjectStore::default();
+    let root = empty_root(&mut store);
+    let root = put(
+        &mut store,
+        root,
+        "from.txt",
+        file("from.txt", b"data").with_identity(distinct_id(5)),
+        &mut test_mint(),
+    )
+    .unwrap();
+    let root = put(
+        &mut store,
+        root,
+        "to.txt",
+        file("to.txt", b"old").with_identity(distinct_id(6)),
+        &mut test_mint(),
+    )
+    .unwrap();
+    let root = rename(&mut store, root, "from.txt", "to.txt").unwrap();
+    assert_eq!(
+        entry_at(&store, root, "to.txt").identity,
+        Some(distinct_id(5)),
+        "the moved entry keeps its identity over the replacement"
+    );
+    // The retired identity names no entry anymore.
+    for entry in Tree::decode(&store.get(&root).unwrap().unwrap())
+        .unwrap()
+        .entries()
+    {
+        assert_ne!(
+            entry.identity,
+            Some(distinct_id(6)),
+            "retired identity is gone"
+        );
+    }
+}
+
+/// A same-kind replace through `put` is the caller's decision:
+/// the format keeps whatever identity the caller supplies.
+#[test]
+fn put_replace_keeps_the_caller_supplied_identity() {
+    let mut store = MemoryObjectStore::default();
+    let root = empty_root(&mut store);
+    let root = put(
+        &mut store,
+        root,
+        "a.txt",
+        file("a.txt", b"one").with_identity(distinct_id(1)),
+        &mut test_mint(),
+    )
+    .unwrap();
+    let root = put(
+        &mut store,
+        root,
+        "a.txt",
+        file("a.txt", b"two").with_identity(distinct_id(2)),
+        &mut test_mint(),
+    )
+    .unwrap();
+    assert_eq!(
+        entry_at(&store, root, "a.txt").identity,
+        Some(distinct_id(2))
+    );
 }

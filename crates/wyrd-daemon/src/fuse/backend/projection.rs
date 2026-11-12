@@ -190,6 +190,7 @@ where
                 size,
                 executable,
                 chunks,
+                ..
             } => Ok(FileIdentity::new(*size, *executable, chunks.clone())),
             // `view.open` rejects non-files before either caller; this
             // arm is unreachable but keeps the derivation total.

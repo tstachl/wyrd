@@ -651,21 +651,23 @@ mod tests {
             size: 11,
             executable: false,
             chunks: vec!["9be2".to_string()],
+            identity: Some("ab".repeat(32)),
         };
         let served = serde_json::to_value((&node, 3u64, 7u64)).unwrap();
         assert_eq!(
             served,
-            serde_json::json!([{"File": {"size": 11, "executable": false, "chunks": ["9be2"]}}, 3, 7])
+            serde_json::json!([{"File": {"size": 11, "executable": false, "chunks": ["9be2"], "identity": "ab".repeat(32)}}, 3, 7])
         );
 
         let attr = WireAttr {
             kind: WireKind::File,
             size: 11,
             executable: false,
+            identity: None,
         };
         assert_eq!(
             serde_json::to_value((&attr, 3u64, 7u64)).unwrap(),
-            serde_json::json!([{"kind": "File", "size": 11, "executable": false}, 3, 7])
+            serde_json::json!([{"kind": "File", "size": 11, "executable": false, "identity": null}, 3, 7])
         );
 
         let entries = vec![WireDirEntry {
@@ -674,7 +676,7 @@ mod tests {
         }];
         assert_eq!(
             serde_json::to_value((&entries, 3u64, 7u64)).unwrap()[0],
-            serde_json::json!([{"name": "notes.txt", "node": {"File": {"size": 11, "executable": false, "chunks": ["9be2"]}}}])
+            serde_json::json!([{"name": "notes.txt", "node": {"File": {"size": 11, "executable": false, "chunks": ["9be2"], "identity": "ab".repeat(32)}}}])
         );
 
         let bytes = vec![104u8, 105u8];

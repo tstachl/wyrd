@@ -1412,4 +1412,31 @@ mod tests {
         assert_eq!(store.get(&id).unwrap(), Some(b"pristine".to_vec()));
         remove_scratch(&dir);
     }
+
+    /// Tree bytes carrying entry identities survive a store reopen:
+    /// the token is in the persisted bytes, so a restart serves the
+    /// same identity with no re-mint and no inference.
+    #[test]
+    fn tree_entry_identities_survive_reopen() {
+        use crate::{Entry, EntryIdentity, Tree};
+        let dir = scratch_dir();
+        let token = EntryIdentity::from_bytes([0xF1; 32]);
+        let tree_id = {
+            let mut store = FsObjectStore::open(dir.clone()).unwrap();
+            Tree::from_entries(vec![Entry::file("keep.txt", 4, false, vec![])
+                .unwrap()
+                .with_identity(token)])
+            .unwrap()
+            .insert_into(&mut store)
+            .unwrap()
+        };
+        // The store is dropped (and could be a process exit):
+        // reopening the same directory serves the token back.
+        let store = FsObjectStore::open(dir.clone()).unwrap();
+        let bytes = store.get(&tree_id).unwrap().unwrap();
+        let decoded = Tree::decode(&bytes).unwrap();
+        assert_eq!(decoded.content_id(), tree_id);
+        assert_eq!(decoded.entries()[0].identity, Some(token));
+        remove_scratch(&dir);
+    }
 }

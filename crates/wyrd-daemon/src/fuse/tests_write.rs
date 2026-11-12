@@ -33,6 +33,7 @@ fn o_trunc_open_refuses_a_same_path_replacement() {
             size,
             executable,
             chunks,
+            ..
         } => FileIdentity::new(*size, *executable, chunks.clone()),
         other => panic!("fixture is not a file: {other:?}"),
     };

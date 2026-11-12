@@ -109,6 +109,7 @@ fn conflict_surface_authors_no_snapshot() {
     let _ = render_freeze(&FreezeState::from_frozen_epoch(Some(2)));
     let _ = classify_node(&Node::Dir {
         subtree: ContentId::from_bytes([0xDD; 32]),
+        identity: None,
     });
     let (plan, _) = plan_two_heads_disagreeing();
     let outcome = inspect_differences(&plan, &branches, 64);
@@ -151,6 +152,7 @@ fn conflict_surface_distinguishes_the_three_divergences() {
                 size: 1,
                 executable: false,
                 chunks: vec![],
+                identity: None,
             },
         }],
     };
@@ -169,6 +171,7 @@ fn conflict_surface_distinguishes_the_three_divergences() {
                 ContentId::from_bytes([0xD2; 32]),
             ),
         ],
+        identity: None,
     };
     assert_eq!(classify_node(&merged), NodeDivergence::DirectoryContent);
 

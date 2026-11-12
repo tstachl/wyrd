@@ -92,6 +92,7 @@ fn real_names_win_over_the_version_grammar() {
             size: 3,
             executable: false,
             chunks: vec![z],
+            identity: None,
         }
     );
     let versioned = view.lookup("f.txt@2").unwrap();
@@ -145,6 +146,7 @@ fn version_grammar_descends_into_conflicted_dirs() {
                         size: 3,
                         executable: false,
                         chunks: vec![a],
+                        identity: None,
                     }
                 );
                 assert_eq!(
@@ -447,6 +449,7 @@ fn an_unresolved_kind_divergence_stays_fully_addressable() {
                 size: 3,
                 executable: false,
                 chunks: vec![a],
+                identity: None,
             }
         );
         let file_node = view.lookup(&file_q).unwrap();

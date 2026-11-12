@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use wyrd_format::{
-    Component, ContentId, EntryContent, FetchStatus, ObjectKind, ObjectStore, Snapshot, StoreError,
-    StoreFailure, Tree, MAX_PATH_DEPTH,
+    Component, ContentId, Entry, EntryContent, FetchStatus, ObjectKind, ObjectStore, Snapshot,
+    StoreError, StoreFailure, Tree, MAX_PATH_DEPTH,
 };
 
 use super::grammar;
@@ -115,6 +115,7 @@ where
             // (observed as ENXIO on macFUSE for every later op).
             return Ok(Node::MergedDir {
                 subtrees: Vec::new(),
+                identity: None,
             });
         }
         match self.lookup_literal(&components) {
@@ -157,7 +158,9 @@ where
         let rest = &components[target.index + 1..];
         match &selected.node {
             node if rest.is_empty() => Ok(node.clone()),
-            Node::Dir { subtree } => self.resolve_one(subtree, rest)?.ok_or(ViewError::NotFound),
+            Node::Dir { subtree, .. } => {
+                self.resolve_one(subtree, rest)?.ok_or(ViewError::NotFound)
+            }
             _ => Err(ViewError::NotADirectory),
         }
     }
@@ -174,24 +177,24 @@ where
     /// divergence conflicts.
     pub fn readdir(&self, node: &Node) -> Result<Vec<DirEntry>, ViewError> {
         match node {
-            Node::Dir { subtree } => {
+            Node::Dir { subtree, .. } => {
                 let tree = self.load_tree(subtree)?;
                 tree.entries()
                     .iter()
                     .map(|entry| {
                         Ok(DirEntry {
                             name: entry.name.as_str().to_string(),
-                            node: leaf(&entry.content),
+                            node: leaf(entry),
                         })
                     })
                     .collect()
             }
-            Node::MergedDir { subtrees } => self.readdir_union(subtrees.clone()),
+            Node::MergedDir { subtrees, .. } => self.readdir_union(subtrees.clone()),
             Node::Conflict { versions } => {
                 let mut subtrees = Vec::with_capacity(versions.len());
                 for version in versions {
                     match &version.node {
-                        Node::Dir { subtree } => subtrees.push((version.snapshot, *subtree)),
+                        Node::Dir { subtree, .. } => subtrees.push((version.snapshot, *subtree)),
                         // A conflict mixing dirs with non-dirs lists
                         // only the dir side; the non-dir versions stay
                         // visible on the conflict node itself.
@@ -228,7 +231,7 @@ where
             .map(|name| {
                 let mut resolutions = Vec::with_capacity(trees.len());
                 for (snapshot, tree) in &trees {
-                    let node = tree.get(&name).map(|entry| leaf(&entry.content));
+                    let node = tree.get(&name).map(leaf);
                     resolutions.push((*snapshot, node));
                 }
                 Ok(DirEntry {
@@ -323,7 +326,12 @@ where
         loop {
             let tree = self.load_tree(&tree_id)?;
             let Some((first, remaining)) = rest.split_first() else {
-                return Ok(Some(Node::Dir { subtree: tree_id }));
+                // The root is an address, not an entry: it carries no
+                // identity of its own.
+                return Ok(Some(Node::Dir {
+                    subtree: tree_id,
+                    identity: None,
+                }));
             };
             let Some(entry) = tree.get(first) else {
                 return Ok(None);
@@ -338,15 +346,20 @@ where
                         size: *size,
                         executable: *executable,
                         chunks: chunks.clone(),
+                        identity: entry.identity,
                     }));
                 }
                 EntryContent::Symlink { target } if remaining.is_empty() => {
                     return Ok(Some(Node::Symlink {
                         target: target.clone(),
+                        identity: entry.identity,
                     }));
                 }
                 EntryContent::Dir { subtree } if remaining.is_empty() => {
-                    return Ok(Some(Node::Dir { subtree: *subtree }));
+                    return Ok(Some(Node::Dir {
+                        subtree: *subtree,
+                        identity: entry.identity,
+                    }));
                 }
                 EntryContent::Dir { subtree } => {
                     tree_id = *subtree;
@@ -451,7 +464,7 @@ fn child_node(tree: &Tree, name: &str) -> Option<Node> {
     tree.entries()
         .binary_search_by(|entry| entry.name.as_str().cmp(name))
         .ok()
-        .map(|index| leaf(&tree.entries()[index].content))
+        .map(|index| leaf(&tree.entries()[index]))
 }
 
 fn versioned_child(
@@ -477,9 +490,9 @@ fn versioned_child(
     Ok(Some(selected.node.clone()))
 }
 
-/// A single tree entry's content as a node.
-fn leaf(content: &EntryContent) -> Node {
-    match content {
+/// A single tree entry's content as a node, carrying its identity.
+fn leaf(entry: &Entry) -> Node {
+    match &entry.content {
         EntryContent::File {
             size,
             executable,
@@ -488,38 +501,58 @@ fn leaf(content: &EntryContent) -> Node {
             size: *size,
             executable: *executable,
             chunks: chunks.clone(),
+            identity: entry.identity,
         },
-        EntryContent::Dir { subtree } => Node::Dir { subtree: *subtree },
+        EntryContent::Dir { subtree } => Node::Dir {
+            subtree: *subtree,
+            identity: entry.identity,
+        },
         EntryContent::Symlink { target } => Node::Symlink {
             target: target.clone(),
+            identity: entry.identity,
         },
     }
 }
 
-/// The attr projection of a node.
+/// The attr projection of a node, identity included: `stat`
+/// observes entry sameness without listing.
 fn attr(node: &Node) -> Attr {
     match node {
         Node::File {
-            size, executable, ..
+            size,
+            executable,
+            identity,
+            ..
         } => Attr {
             kind: Kind::File,
             size: *size,
             executable: *executable,
+            identity: *identity,
         },
-        Node::Dir { .. } | Node::MergedDir { .. } => Attr {
+        Node::Dir { identity, .. } => Attr {
             kind: Kind::Dir,
             size: 0,
             executable: false,
+            identity: *identity,
         },
-        Node::Symlink { target } => Attr {
+        Node::Symlink { target, identity } => Attr {
             kind: Kind::Symlink,
             size: target.len() as u64,
             executable: false,
+            identity: *identity,
+        },
+        // Merged and conflicted states are not single entries.
+        Node::MergedDir { identity, .. } => Attr {
+            kind: Kind::Dir,
+            size: 0,
+            executable: false,
+            identity: *identity,
         },
         Node::Conflict { .. } => Attr {
             kind: Kind::Conflict,
             size: 0,
             executable: false,
+            identity: None,
         },
     }
 }
@@ -615,6 +648,7 @@ where
             return Ok(LookupResult {
                 node: Some(Node::MergedDir {
                     subtrees: Vec::new(),
+                    identity: None,
                 }),
                 work: 1,
                 limit_exceeded: 1 > max_work,
@@ -633,7 +667,13 @@ where
                     limit_exceeded: true,
                 });
             };
-            resolutions.push((head.snapshot_id(), Some(Node::Dir { subtree: head.tree })));
+            resolutions.push((
+                head.snapshot_id(),
+                Some(Node::Dir {
+                    subtree: head.tree,
+                    identity: None,
+                }),
+            ));
         }
         Ok(LookupResult {
             node: Some(merge(resolutions)?),
@@ -649,7 +689,7 @@ where
         max_work: u64,
     ) -> Result<LookupResult, ViewError> {
         match parent {
-            Node::Dir { subtree } => {
+            Node::Dir { subtree, .. } => {
                 let (tree, work) = self.load_tree_for_resolution(subtree, max_work)?;
                 let node = tree.as_ref().and_then(|tree| child_node(tree, component));
                 Ok(LookupResult {
@@ -658,7 +698,7 @@ where
                     limit_exceeded: tree.is_none() || work > max_work,
                 })
             }
-            Node::MergedDir { subtrees } => {
+            Node::MergedDir { subtrees, .. } => {
                 let versioned = Component::new(component.to_owned())
                     .ok()
                     .and_then(|component| grammar::parse_ref(&[component]));

@@ -943,12 +943,15 @@ mod tests {
                     size: chunks.len() as u64,
                     executable: false,
                     chunks: chunks.clone(),
+                    identity: None,
                 },
                 Child::Dir(arena) => Node::Dir {
                     subtree: subtree_id(*arena),
+                    identity: None,
                 },
                 Child::Symlink => Node::Symlink {
                     target: "elsewhere".into(),
+                    identity: None,
                 },
                 Child::Conflict => Node::Conflict {
                     versions: Vec::new(),
@@ -1025,27 +1028,31 @@ mod tests {
                     kind: Kind::File,
                     size,
                     executable,
+                    identity: None,
                 },
                 Node::Dir { .. } | Node::MergedDir { .. } => Attr {
                     kind: Kind::Dir,
                     size: 0,
                     executable: false,
+                    identity: None,
                 },
                 Node::Symlink { .. } => Attr {
                     kind: Kind::Symlink,
                     size: 0,
                     executable: false,
+                    identity: None,
                 },
                 Node::Conflict { .. } => Attr {
                     kind: Kind::Conflict,
                     size: 0,
                     executable: false,
+                    identity: None,
                 },
             })
         }
 
         fn readdir(&self, node: &Node) -> Result<Vec<DirEntry>, ViewError> {
-            let Node::Dir { subtree } = node else {
+            let Node::Dir { subtree, .. } = node else {
                 return Err(ViewError::NotADirectory);
             };
             let arena = arena_of(subtree).ok_or(ViewError::NotADirectory)?;
@@ -1189,6 +1196,7 @@ mod tests {
             if path.is_empty() {
                 Ok(Node::Dir {
                     subtree: chain_id(0),
+                    identity: None,
                 })
             } else {
                 Err(ViewError::NotFound)
@@ -1203,17 +1211,19 @@ mod tests {
                     kind: Kind::File,
                     size,
                     executable,
+                    identity: None,
                 },
                 _ => Attr {
                     kind: Kind::Dir,
                     size: 0,
                     executable: false,
+                    identity: None,
                 },
             })
         }
 
         fn readdir(&self, node: &Node) -> Result<Vec<DirEntry>, ViewError> {
-            let Node::Dir { subtree } = node else {
+            let Node::Dir { subtree, .. } = node else {
                 return Err(ViewError::NotADirectory);
             };
             let depth = chain_depth(subtree).ok_or(ViewError::NotADirectory)?;
@@ -1223,6 +1233,7 @@ mod tests {
                         name: "chain".into(),
                         node: Node::Dir {
                             subtree: chain_id(1),
+                            identity: None,
                         },
                     },
                     DirEntry {
@@ -1231,6 +1242,7 @@ mod tests {
                             chunks: self.shallow.clone(),
                             size: 1,
                             executable: false,
+                            identity: None,
                         },
                     },
                 ]);
@@ -1240,6 +1252,7 @@ mod tests {
                     name: format!("d{depth}"),
                     node: Node::Dir {
                         subtree: chain_id(depth + 1),
+                        identity: None,
                     },
                 }]);
             }
@@ -1249,6 +1262,7 @@ mod tests {
                     chunks: self.deep.clone(),
                     size: 1,
                     executable: false,
+                    identity: None,
                 },
             }])
         }

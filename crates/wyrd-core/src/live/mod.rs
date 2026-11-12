@@ -7,8 +7,8 @@
 //! immutable generation under a short write lock.
 
 use wyrd_format::{
-    chunk, ContentId, DiscardRejectedRepresentation, Entry, FetchStatus, ObjectStore,
-    RetainedBytes, SharedStore, SnapshotId, StoreError, StoreFailure, Tree,
+    chunk, ContentId, DiscardRejectedRepresentation, Entry, EntryIdentity, FetchStatus,
+    ObjectStore, RetainedBytes, SharedStore, SnapshotId, StoreError, StoreFailure, Tree,
 };
 use wyrd_sync::closure::ClosureError;
 use wyrd_sync::durable::{AuthorizedSnapshot, DurableError};
@@ -1231,3 +1231,7 @@ mod publish_budget_tests;
 #[cfg(test)]
 #[path = "tests_pause.rs"]
 mod pause_tests;
+
+#[cfg(test)]
+#[path = "tests_entry_identity.rs"]
+mod entry_identity_tests;

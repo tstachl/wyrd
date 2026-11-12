@@ -223,15 +223,20 @@ fn attrs_present_files_dirs_and_conflicts() {
         size: 11,
         executable: true,
         chunks: vec![ContentId::from_bytes([0x01; 32])],
+        identity: None,
     };
     let (kind, size, executable) = attr_of(&file);
     assert_eq!(kind, fuser::FileType::RegularFile);
     assert_eq!((size, executable), (11, true));
     let (kind, _, _) = attr_of(&Node::Dir {
         subtree: ContentId::from_bytes([0x02; 32]),
+        identity: None,
     });
     assert_eq!(kind, fuser::FileType::Directory);
-    let (kind, _, _) = attr_of(&Node::Symlink { target: "x".into() });
+    let (kind, _, _) = attr_of(&Node::Symlink {
+        target: "x".into(),
+        identity: None,
+    });
     assert_eq!(kind, fuser::FileType::Symlink);
     let (kind, _, _) = attr_of(&Node::Conflict { versions: vec![] });
     assert_eq!(kind, fuser::FileType::Directory, "conflicts stay navigable");

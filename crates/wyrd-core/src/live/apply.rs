@@ -120,6 +120,19 @@ where
     mapped
 }
 
+/// Mint one entry identity from the OS CSPRNG: owner-side
+/// allocation for a newly created entry (create, mkdir, fresh
+/// intermediate, recovery graft). Entropy failure fails the mutation
+/// closed: an identity must be collision-resistant, so a degraded
+/// fallback is never acceptable — the caller maps this to `Engine`
+/// (format callers) or returns it directly.
+fn mint_entry_identity() -> Result<EntryIdentity, String> {
+    let mut bytes = [0u8; 32];
+    getrandom::getrandom(&mut bytes)
+        .map_err(|error| format!("entry identity mint failed: {error}"))?;
+    Ok(EntryIdentity::from_bytes(bytes))
+}
+
 /// Map a commit-phase format-mutation failure the same way:
 /// `from_format`'s store arm carries the same classification, so the
 /// same construction applies. Every caller is `build_root` (all
@@ -551,7 +564,16 @@ where
             MutationKind::Mkdir { path } => {
                 self.demand_path_trees(heads, path)?;
                 let mut store = self.store.write().map_err(|_| MutationError::Lock)?;
-                let root = wyrd_format::mutation::mkdir(&mut *store, tree, path)
+                // A creation mints: the path held no entry, so no
+                // identity exists to preserve. The mint runs before
+                // the format call's own existence check, so an
+                // EEXIST path spends one CSPRNG draw; checking
+                // existence first would need to replicate the
+                // format path parser here (the view resolves "",
+                // "/", and trailing slashes differently), and a
+                // second parser is worse than a wasted draw.
+                let identity = mint_entry_identity().map_err(|_| MutationError::Engine)?;
+                let root = wyrd_format::mutation::mkdir(&mut *store, tree, path, identity)
                     .map_err(format_write_error)?;
                 Ok((root, MutationOutcome::Done))
             }
@@ -570,10 +592,17 @@ where
                 }
                 let mut store = self.store.write().map_err(|_| MutationError::Lock)?;
                 let name = path.rsplit('/').next().unwrap_or(path);
+                // A creation mints: no entry existed at this path.
+                let identity = mint_entry_identity().map_err(|_| MutationError::Engine)?;
                 let entry = Entry::file(name, 0, false, Vec::new())
                     .map_err(|error| MutationError::Invalid(error.to_string()))?;
-                let root = wyrd_format::mutation::put_strict(&mut *store, tree, path, entry)
-                    .map_err(format_write_error)?;
+                let root = wyrd_format::mutation::put_strict(
+                    &mut *store,
+                    tree,
+                    path,
+                    entry.with_identity(identity),
+                )
+                .map_err(format_write_error)?;
                 Ok((
                     root,
                     MutationOutcome::Created(FileIdentity::new(0, false, Vec::new())),
@@ -589,26 +618,34 @@ where
                 // carries exactly the identity this handle opened against.
                 // A content change, kind change, or removal fails closed
                 // with no merge and no snapshot.
-                match self.current_node(heads, path)? {
+                let preserved = match self.current_node(heads, path)? {
                     Some(Node::File {
                         size,
                         executable,
                         chunks,
+                        identity,
                     }) => {
                         if FileIdentity::new(size, executable, chunks) != *base {
                             return Err(MutationError::Stale(path.clone()));
                         }
+                        identity
                     }
                     _ => return Err(MutationError::Stale(path.clone())),
-                }
+                };
                 let mut store = self.store.write().map_err(|_| MutationError::Lock)?;
                 let chunks =
                     chunk::insert_chunks(&mut *store, content).map_err(store_write_error)?;
                 let name = path.rsplit('/').next().unwrap_or(path);
-                let entry = Entry::file(name, content.len() as u64, *executable, chunks.clone())
-                    .map_err(|error| MutationError::Invalid(error.to_string()))?;
-                let root = wyrd_format::mutation::put(&mut *store, tree, path, entry)
-                    .map_err(format_write_error)?;
+                let mut entry =
+                    Entry::file(name, content.len() as u64, *executable, chunks.clone())
+                        .map_err(|error| MutationError::Invalid(error.to_string()))?;
+                // Content modification preserves the entry: the same
+                // entry keeps its identity under new bytes.
+                entry.identity = preserved;
+                let root = wyrd_format::mutation::put(&mut *store, tree, path, entry, &mut || {
+                    mint_entry_identity().map_err(wyrd_format::MutationError::Mint)
+                })
+                .map_err(format_write_error)?;
                 Ok((
                     root,
                     MutationOutcome::Committed(FileIdentity::new(
@@ -619,9 +656,12 @@ where
                 ))
             }
             MutationKind::AppendFile { path, content } => {
-                let executable = match self.current_node(heads, path)? {
+                let (executable, preserved) = match self.current_node(heads, path)? {
                     Some(Node::File {
-                        size, executable, ..
+                        size,
+                        executable,
+                        identity,
+                        ..
                     }) => {
                         let total = size
                             .checked_add(content.len() as u64)
@@ -629,7 +669,7 @@ where
                         if total > crate::session::MAX_WRITE_BUFFER_BYTES as u64 {
                             return Err(MutationError::TooLarge(total));
                         }
-                        executable
+                        (executable, identity)
                     }
                     _ => return Err(MutationError::Stale(path.clone())),
                 };
@@ -643,10 +683,14 @@ where
                 let chunks =
                     chunk::insert_chunks(&mut *store, &image).map_err(store_write_error)?;
                 let name = path.rsplit('/').next().unwrap_or(path);
-                let entry = Entry::file(name, image.len() as u64, executable, chunks.clone())
+                let mut entry = Entry::file(name, image.len() as u64, executable, chunks.clone())
                     .map_err(|error| MutationError::Invalid(error.to_string()))?;
-                let root = wyrd_format::mutation::put(&mut *store, tree, path, entry)
-                    .map_err(format_write_error)?;
+                // An append modifies the same entry: preserve it.
+                entry.identity = preserved;
+                let root = wyrd_format::mutation::put(&mut *store, tree, path, entry, &mut || {
+                    mint_entry_identity().map_err(wyrd_format::MutationError::Mint)
+                })
+                .map_err(format_write_error)?;
                 if root == tree {
                     return Ok((root, MutationOutcome::Done));
                 }
@@ -700,20 +744,22 @@ where
                 executable,
                 base,
             } => {
-                let (current_size, current_exec, chunks) = match self.current_node(heads, path)? {
-                    Some(Node::File {
-                        size,
-                        executable,
-                        chunks,
-                    }) => (size, executable, chunks),
-                    // A size change on a non-file is EISDIR; an exec
-                    // change is a no-op (only files represent exec).
-                    Some(_) if size.is_some() => {
-                        return Err(MutationError::IsDirectory(path.clone()));
-                    }
-                    Some(_) => return Ok((tree, MutationOutcome::Done)),
-                    None => return Err(MutationError::NotFound(path.clone())),
-                };
+                let (current_size, current_exec, chunks, preserved) =
+                    match self.current_node(heads, path)? {
+                        Some(Node::File {
+                            size,
+                            executable,
+                            chunks,
+                            identity,
+                        }) => (size, executable, chunks, identity),
+                        // A size change on a non-file is EISDIR; an exec
+                        // change is a no-op (only files represent exec).
+                        Some(_) if size.is_some() => {
+                            return Err(MutationError::IsDirectory(path.clone()));
+                        }
+                        Some(_) => return Ok((tree, MutationOutcome::Done)),
+                        None => return Err(MutationError::NotFound(path.clone())),
+                    };
                 // The identity guard, checked before anything is
                 // read or written: an identity-bound `setattr` (the
                 // `O_TRUNC` half of an open) applies only to the exact
@@ -764,10 +810,14 @@ where
                 };
                 let mut store = self.store.write().map_err(|_| MutationError::Lock)?;
                 let name = path.rsplit('/').next().unwrap_or(path);
-                let entry = Entry::file(name, new_size, want_exec, new_chunks.clone())
+                let mut entry = Entry::file(name, new_size, want_exec, new_chunks.clone())
                     .map_err(|error| MutationError::Invalid(error.to_string()))?;
-                let root = wyrd_format::mutation::put(&mut *store, tree, path, entry)
-                    .map_err(format_write_error)?;
+                // A setattr modifies the same entry: preserve it.
+                entry.identity = preserved;
+                let root = wyrd_format::mutation::put(&mut *store, tree, path, entry, &mut || {
+                    mint_entry_identity().map_err(wyrd_format::MutationError::Mint)
+                })
+                .map_err(format_write_error)?;
                 if root == tree {
                     return Ok((root, MutationOutcome::Done));
                 }
@@ -820,6 +870,7 @@ where
                     size,
                     executable,
                     chunks,
+                    ..
                 }) => {
                     if FileIdentity::new(size, executable, chunks) != *base {
                         return Err(MutationError::Stale(path.clone()));
@@ -843,6 +894,7 @@ where
                         size,
                         executable,
                         chunks,
+                        ..
                     }) => (size, executable, chunks),
                     Some(_) if size.is_some() => {
                         return Err(MutationError::IsDirectory(path.clone()));

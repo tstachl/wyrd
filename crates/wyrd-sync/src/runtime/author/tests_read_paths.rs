@@ -163,7 +163,7 @@ fn recover_dry_run_rebuilds_twice() {
     // Verdict, like the CLI's dry run: take the row the live head
     // lacks, whose bytes are local.
     let _verdict = engine
-        .recovery_preview(&objects, from, &["a.txt".to_owned()], false, &[])
+        .recovery_preview(&mut objects, from, &["a.txt".to_owned()], false, &[])
         .unwrap();
     assert_eq!(
         engine.store.rebuild_count() - before,

@@ -166,7 +166,8 @@ full filesystem snapshot:
 | Field | Type | Notes |
 |---|---|---|
 | path components | UTF-8 | see path rules |
-| kind | enum | `file`, `dir`, `symlink` |
+| kind | enum | `file`, `dir`, `symlink`, each with or without identity (see encoding) |
+| identity | `EntryIdentity` (optional) | stable per entry; see "Entry identity" |
 | size | u64 | bytes; for `file` |
 | executable | bool | files only |
 | symlink target | UTF-8 | symlinks only |
@@ -195,8 +196,13 @@ of its canonical encoding. An empty directory is a valid, representable tree.
 ```
 u32 LE                  entry count
 entries, sorted bytewise by component:
-  u8                    kind (0 = file, 1 = dir, 2 = symlink)
+  u8                    kind (0x00 = file, 0x01 = dir, 0x02 = symlink,
+                              0x10 = file + identity,
+                              0x11 = dir + identity,
+                              0x12 = symlink + identity)
   u32 LE + bytes        component (UTF-8)
+  identity (new kinds only):
+          32 bytes      EntryIdentity (opaque, random)
   file:     u64 LE      size
             u8          executable (0 | 1)
             u32 LE + ContentIds   chunk ids (32 bytes each)
@@ -204,9 +210,114 @@ entries, sorted bytewise by component:
   symlink:  u32 LE + bytes        target (UTF-8, unvalidated)
 ```
 
-Decoders must reject non-canonical payloads: unsorted or duplicate
-components, unknown kind bytes, trailing bytes, components violating the
-path rules, or exec bytes other than 0/1.
+Decoders must accept both kind families and reject non-canonical
+payloads: unsorted or duplicate components, unknown kind bytes
+(including the identity bit on an unknown base kind, e.g. `0x13`),
+missing or trailing identity bytes, other trailing bytes,
+components violating the path rules, or exec bytes other than 0/1.
+Legacy entries (identity `None`) encode exactly the pre-identity
+bytes under kinds `0x00`-`0x02`.
+
+## Entry identity
+
+Every filesystem entry carries a stable, opaque identity answered by
+the question "is this the same entry I saw before?" — across renames,
+edits, restarts, and peer-originated changes, for every presentation
+backend. Identity is an entry property, not a path, content, or
+process property:
+
+| Concept | Why it fails |
+|---|---|
+| Path | An address, not an identity: changes on rename, reusable after delete. |
+| ContentId | Identifies bytes, not entries: changes on every edit, shared by identical files. |
+| FUSE inode | Process-local, non-persistent: gone on restart, invisible to peers. |
+
+**Definition.** `EntryIdentity` is an opaque random 256-bit token minted
+once per entry (`wyrd_format::EntryIdentity`). It is scoped to its
+drive by contract — a File Provider item identifier derives from
+`DriveId + EntryIdentity`, never from the token alone — and it is
+never derived from content, path, or any Nostr identity. Two entries
+with identical content hold distinct identities.
+
+**Lifecycle (normative).** This table is the contract; readers
+(`stat`/`readdir` answers at minimum) expose the token, and every
+backend observes the same token for the same entry:
+
+| Operation | Identity behavior |
+|---|---|
+| Rename | Preserved |
+| Content modification | Preserved |
+| Delete | Retired permanently |
+| Delete + recreate at same path | New identity |
+| Owner restart | Preserved |
+| Extension restart | Preserved |
+| Peer-originated rename | Preserved |
+| Copy within drive | New identity |
+| Copy across drives | New identity |
+| Move across drives | New identity in the destination drive |
+| Concurrent changes on different heads | Same identity where both descend from the same entry |
+
+Identity establishes common descent, never a resolved state: two
+divergent heads sharing an identity are still two heads, and nothing
+about the shared token authorises treating them as mergeable.
+
+Snapshot restoration: restoring an existing entry preserves its
+identity if and only if it is genuinely the same entry; recreating an
+entry after deletion mints a new identity; historical restoration
+never resurrects a retired identity as a newly created entry.
+
+**Placement (decided).** Snapshot-visible: the token rides in the
+tree entry's canonical payload, so creation mints it, renames carry
+it, and peers observe the same identity with no inference. The
+considered owner-local alternative (each device assigns and preserves,
+à la the FUSE inode table made durable) cannot satisfy the
+peer-rename row: a device that never observed the entry cannot
+reconstruct its token through path, content, or matching, and a
+second durable mapping table would need its own reconciliation. No
+path-plus-hash identifiers, no adapter-side authoritative mapping,
+no content matching — anywhere.
+
+**Encoding.** Identity-bearing entries use kind bytes `0x10`
+(file), `0x11` (dir), `0x12` (symlink) with the 32 token bytes
+immediately after the component; legacy entries (identity `None`)
+encode exactly the pre-identity bytes under kinds `0x00`-`0x02`.
+Decoders accept both. Legacy trees therefore keep their ContentIds
+bit for bit — a new encoding is a new representation (upgrade
+contract invariant 1), and old objects stay readable under the
+current build. The ContentId derivation itself is unchanged
+(decision 30): the same payload under the same context yields the
+same id; new payloads naturally yield new ids. This is not an
+identity fork in the clause-127 sense: no derivation context
+moves, old bytes keep their meaning bit for bit, and the kind
+byte is self-describing — the fork clause covers changes that
+redefine what existing bytes mean, not additions a current
+decoder reads alongside them. The pre-1.0 cost is one-sided: a
+pre-identity decoder rejects the new kinds as `UnknownEntryKind`
+and fails closed. There is no negotiation and no legacy
+fallback; mixed-version peers stay readable in the old→new
+direction only, which the alpha window permits.
+
+**Transfer.** Replication is the existing snapshot transport: tree
+bytes travel peer-to-peer as content-addressed objects, installed
+verbatim, so the token needs no separate transfer protocol.
+Reconstruction through path, content, or heuristic matching is not
+an acceptable substitute — without verbatim transfer the
+peer-rename row is unsatisfiable.
+
+**Authority.** Three responsibilities, split deliberately:
+(1) allocation — the drive owner mints (the live loop draws the OS
+CSPRNG; the format layer only carries); (2) persistence — the
+canonical tree records the token; (3) replication — snapshots
+transport it. The Swift adapter (and every future backend) consumes
+the token without creating a competing authority.
+
+Entries that predate identity support carry no token (`None`), never
+a synthesized one. `stat`/`readdir`/`lookup` expose `None` for them;
+conflicted states are synthetic views, not single entries, and carry
+no token of their own (each conflict version carries its head's
+token). A merged directory reports the agreed token when every
+merged head carries the identical `Some` token, and `None`
+otherwise — presentational only, never a resolution.
 
 Two scope boundaries a reader must know:
 - **Size-vs-chunk consistency is the reader's job.** A file entry's

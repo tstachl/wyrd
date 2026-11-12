@@ -287,7 +287,7 @@ fn recovery_preview_matches_the_commit_verdict() {
     // A take previews the graft names without authoring, then
     // commits them under the recovery flag.
     let preview = engine
-        .recovery_preview(&objects, base_id, &takes, false, &[])
+        .recovery_preview(&mut objects, base_id, &takes, false, &[])
         .unwrap();
     assert_eq!(preview.plan.from, base_id, "the preview names its source");
     assert_eq!(preview.grafted, takes, "the preview names the graft");
@@ -327,7 +327,7 @@ fn recovery_preview_refuses_like_the_commit() {
         (vec![], false, vec![unknown_content]),
     ] {
         let preview_err = engine
-            .recovery_preview(&objects, base_id, &takes, all, &contents)
+            .recovery_preview(&mut objects, base_id, &takes, all, &contents)
             .unwrap_err();
         let commit_err = engine
             .recover(&mut objects, base_id, &takes, all, &contents)
@@ -356,7 +356,7 @@ fn recovery_preview_covers_content_ids() {
     let loose = objects.insert(ObjectKind::Chunk, b"loose").unwrap();
 
     let preview = engine
-        .recovery_preview(&objects, base_id, &[], false, &[loose])
+        .recovery_preview(&mut objects, base_id, &[], false, &[loose])
         .unwrap();
     assert_eq!(
         preview.grafted,
@@ -404,7 +404,7 @@ fn recover_refuses_non_owner_before_locality() {
     let takes = ["gone.txt".to_owned()];
     assert!(
         matches!(
-            engine.recovery_preview(&objects, source, &takes, false, &[]),
+            engine.recovery_preview(&mut objects, source, &takes, false, &[]),
             Err(EngineError::ChunkUnavailable(_))
         ),
         "the preview reports the locality verdict"
@@ -419,7 +419,7 @@ fn recover_refuses_non_owner_before_locality() {
     engine.device = key(20).1;
     assert!(
         matches!(
-            engine.recovery_preview(&objects, source, &takes, false, &[]),
+            engine.recovery_preview(&mut objects, source, &takes, false, &[]),
             Err(EngineError::ChunkUnavailable(_))
         ),
         "preview reads need no ownership, even failing ones"
@@ -446,7 +446,7 @@ fn recovery_preview_needs_no_ownership() {
     let (base_id, _) = base_and_child(&mut engine, &mut objects);
     engine.device = key(20).1;
     engine
-        .recovery_preview(&objects, base_id, &["a.txt".to_owned()], false, &[])
+        .recovery_preview(&mut objects, base_id, &["a.txt".to_owned()], false, &[])
         .expect("preview reads need no ownership");
     assert!(
         matches!(
@@ -493,5 +493,375 @@ fn recover_writes_nothing_for_a_non_owner() {
     assert!(
         !objects.has(&graft_id).unwrap(),
         "no orphaned graft tree is inserted"
+    );
+}
+
+/// Read one grafted entry's identity out of an authored recovery
+/// snapshot, through the same decode any reader performs.
+fn grafted_identity(
+    objects: &MemoryObjectStore,
+    grafted: &crate::durable::AuthorizedSnapshot,
+    name: &str,
+) -> Option<wyrd_format::EntryIdentity> {
+    let bytes = objects.get(&grafted.snapshot().tree).unwrap().unwrap();
+    Tree::decode(&bytes)
+        .unwrap()
+        .entries()
+        .iter()
+        .find(|entry| entry.name.as_str() == name)
+        .unwrap_or_else(|| panic!("{name} grafted"))
+        .identity
+}
+
+fn identified_file(
+    objects: &mut MemoryObjectStore,
+    name: &str,
+    bytes: &[u8],
+    identity: wyrd_format::EntryIdentity,
+) -> Entry {
+    let chunk = objects.insert(ObjectKind::Chunk, bytes).unwrap();
+    Entry::file(name, bytes.len() as u64, false, vec![chunk])
+        .unwrap()
+        .with_identity(identity)
+}
+
+/// Restoring the same entry preserves its token: the live head
+/// carries the identical token at the same name, so the graft is
+/// genuinely the same entry.
+#[test]
+fn recovery_graft_preserves_identity_for_the_same_live_entry() {
+    let (_dir, mut engine, _) = owner_engine("recover-same-entry");
+    let mut objects = MemoryObjectStore::default();
+    let token = wyrd_format::EntryIdentity::from_bytes([0x51; 32]);
+    let base = Tree::from_entries(vec![identified_file(&mut objects, "a.txt", b"a", token)])
+        .unwrap()
+        .insert_into(&mut objects)
+        .unwrap();
+    let base_id = engine
+        .author_snapshot(&objects, base)
+        .unwrap()
+        .snapshot()
+        .snapshot_id();
+    // The live head carries the same entry with the same token.
+    let child = Tree::from_entries(vec![identified_file(&mut objects, "a.txt", b"a2", token)])
+        .unwrap()
+        .insert_into(&mut objects)
+        .unwrap();
+    author_with_parents(&mut engine, &objects, child, vec![base_id]).unwrap();
+
+    let grafted = engine
+        .recover(&mut objects, base_id, &["a.txt".to_owned()], false, &[])
+        .unwrap();
+    assert_eq!(
+        grafted_identity(&objects, &grafted, "a.txt"),
+        Some(token),
+        "the same entry keeps its token through the graft"
+    );
+}
+
+/// Recreation mints: the live head carries a different token at
+/// the name (delete-plus-recreate), so the graft must not resurrect
+/// the historical token.
+#[test]
+fn recovery_graft_mints_where_live_differs() {
+    let (_dir, mut engine, _) = owner_engine("recover-recreated");
+    let mut objects = MemoryObjectStore::default();
+    let old = wyrd_format::EntryIdentity::from_bytes([0x52; 32]);
+    let live = wyrd_format::EntryIdentity::from_bytes([0x53; 32]);
+    let base = Tree::from_entries(vec![identified_file(&mut objects, "a.txt", b"a", old)])
+        .unwrap()
+        .insert_into(&mut objects)
+        .unwrap();
+    let base_id = engine
+        .author_snapshot(&objects, base)
+        .unwrap()
+        .snapshot()
+        .snapshot_id();
+    let child = Tree::from_entries(vec![identified_file(&mut objects, "a.txt", b"a2", live)])
+        .unwrap()
+        .insert_into(&mut objects)
+        .unwrap();
+    author_with_parents(&mut engine, &objects, child, vec![base_id]).unwrap();
+
+    let grafted = engine
+        .recover(&mut objects, base_id, &["a.txt".to_owned()], false, &[])
+        .unwrap();
+    let grafted = grafted_identity(&objects, &grafted, "a.txt").unwrap();
+    assert_ne!(grafted, old, "the retired token never resurrects");
+    assert_ne!(grafted, live, "the graft is a new entry, not the live one");
+}
+
+/// A graft over a deleted name mints: nothing live carries the
+/// historical token, so preservation has no subject.
+#[test]
+fn recovery_graft_mints_deleted_names() {
+    let (_dir, mut engine, _) = owner_engine("recover-deleted");
+    let mut objects = MemoryObjectStore::default();
+    let retired = wyrd_format::EntryIdentity::from_bytes([0x54; 32]);
+    let base = Tree::from_entries(vec![
+        identified_file(&mut objects, "gone.txt", b"gone", retired),
+        identified_file(
+            &mut objects,
+            "stays.txt",
+            b"stays",
+            wyrd_format::EntryIdentity::from_bytes([0x55; 32]),
+        ),
+    ])
+    .unwrap()
+    .insert_into(&mut objects)
+    .unwrap();
+    let base_id = engine
+        .author_snapshot(&objects, base)
+        .unwrap()
+        .snapshot()
+        .snapshot_id();
+    // The live head dropped the name: deletion retired the token.
+    let child = tree(&mut objects, &[("c.txt", b"c")]);
+    author_with_parents(&mut engine, &objects, child, vec![base_id]).unwrap();
+
+    let grafted = engine
+        .recover(&mut objects, base_id, &["gone.txt".to_owned()], false, &[])
+        .unwrap();
+    let grafted = grafted_identity(&objects, &grafted, "gone.txt").unwrap();
+    assert_ne!(grafted, retired, "restoration never resurrects");
+}
+
+/// `--content` syntheses are new entries by construction: they
+/// always carry a fresh token.
+#[test]
+fn recovery_content_synthesis_mints() {
+    let (_dir, mut engine, _) = owner_engine("recover-synth-mint");
+    let mut objects = MemoryObjectStore::default();
+    let (base_id, _) = base_and_child(&mut engine, &mut objects);
+    let loose = objects.insert(ObjectKind::Chunk, b"loose").unwrap();
+    let grafted = engine
+        .recover(&mut objects, base_id, &[], false, &[loose])
+        .unwrap();
+    let name = loose.to_string();
+    assert!(
+        grafted_identity(&objects, &grafted, &name).is_some(),
+        "the synthesized entry carries a fresh token"
+    );
+}
+
+/// Read one nested entry's identity out of an authored recovery
+/// snapshot: walk the graft path through the decoded trees.
+fn nested_identity(
+    objects: &MemoryObjectStore,
+    grafted: &crate::durable::AuthorizedSnapshot,
+    path: &[&str],
+) -> Option<wyrd_format::EntryIdentity> {
+    let mut tree_id = grafted.snapshot().tree;
+    for (index, name) in path.iter().enumerate() {
+        let bytes = objects.get(&tree_id).unwrap().unwrap();
+        let entry = Tree::decode(&bytes)
+            .unwrap()
+            .entries()
+            .iter()
+            .find(|entry| entry.name.as_str() == *name)
+            .unwrap_or_else(|| panic!("{name} grafted"))
+            .clone();
+        if index + 1 == path.len() {
+            return entry.identity;
+        }
+        match entry.content {
+            wyrd_format::EntryContent::Dir { subtree } => tree_id = subtree,
+            _ => panic!("{name} grafts a directory"),
+        }
+    }
+    unreachable!("a non-empty path returns from the loop")
+}
+
+/// A directory graft normalizes at every depth: the preserved
+/// root keeps its token, the surviving child keeps its token,
+/// and the restored-after-delete child mints — a retired nested
+/// identity never grafts back onto the live namespace.
+#[test]
+fn recovery_directory_graft_normalizes_nested_entries() {
+    let (_dir, mut engine, _) = owner_engine("recover-nested");
+    let mut objects = MemoryObjectStore::default();
+    let dir_token = wyrd_format::EntryIdentity::from_bytes([0x60; 32]);
+    let keep_token = wyrd_format::EntryIdentity::from_bytes([0x61; 32]);
+    let retired_token = wyrd_format::EntryIdentity::from_bytes([0x62; 32]);
+    let source_sub = Tree::from_entries(vec![
+        identified_file(&mut objects, "keep.txt", b"keep", keep_token),
+        identified_file(&mut objects, "drop.txt", b"dropped", retired_token),
+    ])
+    .unwrap()
+    .insert_into(&mut objects)
+    .unwrap();
+    let base = Tree::from_entries(vec![Entry::dir("d", source_sub)
+        .unwrap()
+        .with_identity(dir_token)])
+    .unwrap()
+    .insert_into(&mut objects)
+    .unwrap();
+    let base_id = engine
+        .author_snapshot(&objects, base)
+        .unwrap()
+        .snapshot()
+        .snapshot_id();
+    // The live head keeps `d` (same token) and `d/keep.txt`
+    // (same token, new bytes) but dropped `d/drop.txt`.
+    let live_sub = Tree::from_entries(vec![identified_file(
+        &mut objects,
+        "keep.txt",
+        b"keep v2",
+        keep_token,
+    )])
+    .unwrap()
+    .insert_into(&mut objects)
+    .unwrap();
+    let child = Tree::from_entries(vec![Entry::dir("d", live_sub)
+        .unwrap()
+        .with_identity(dir_token)])
+    .unwrap()
+    .insert_into(&mut objects)
+    .unwrap();
+    author_with_parents(&mut engine, &objects, child, vec![base_id]).unwrap();
+
+    let grafted = engine
+        .recover(&mut objects, base_id, &["d".to_owned()], false, &[])
+        .unwrap();
+    assert_eq!(
+        nested_identity(&objects, &grafted, &["d"]),
+        Some(dir_token),
+        "the same directory keeps its token"
+    );
+    assert_eq!(
+        nested_identity(&objects, &grafted, &["d", "keep.txt"]),
+        Some(keep_token),
+        "the surviving child keeps its token"
+    );
+    let restored = nested_identity(&objects, &grafted, &["d", "drop.txt"]).unwrap();
+    assert_ne!(
+        restored, retired_token,
+        "the restored child never resurrects its retired token"
+    );
+}
+
+/// An unrelated absent live subtree does not take recovery
+/// down: the comparison walks grafted paths only, and the plan
+/// signal reads roots alone. The live `d` subtree is remote-only
+/// (servable state); the grafted `target.txt` still preserves.
+#[test]
+fn recovery_ignores_absent_subtrees_outside_the_graft() {
+    use crate::authorization::test_util::sign_snapshot;
+    use crate::durable::{AuthorizeSnapshot, AuthorizedSnapshot, Fact};
+    use crate::membership::test_util::{drive as member_drive, key};
+    use wyrd_format::Snapshot;
+
+    let (_dir, mut engine, genesis) = owner_engine("recover-absent-live-subtree");
+    let mut objects = MemoryObjectStore::default();
+    let token = wyrd_format::EntryIdentity::from_bytes([0x63; 32]);
+    let base = Tree::from_entries(vec![identified_file(
+        &mut objects,
+        "target.txt",
+        b"v1",
+        token,
+    )])
+    .unwrap()
+    .insert_into(&mut objects)
+    .unwrap();
+    let base_id = engine
+        .author_snapshot(&objects, base)
+        .unwrap()
+        .snapshot()
+        .snapshot_id();
+    // The live head keeps `target.txt` under the same token but
+    // references a subtree whose bytes never landed: remote-only,
+    // still servable through the view's absence rule.
+    let missing = ContentId::from_bytes([0x99; 32]);
+    let live_tree = Tree::from_entries(vec![
+        Entry::dir("d", missing).unwrap(),
+        identified_file(&mut objects, "target.txt", b"v2", token),
+    ])
+    .unwrap()
+    .insert_into(&mut objects)
+    .unwrap();
+    let (owner_sk, owner_id) = key(10);
+    let mut body = Snapshot::new(vec![base_id], live_tree, owner_id, genesis, 1, 0, 1).unwrap();
+    sign_snapshot(&mut body, &owner_sk, &member_drive());
+    let live = AuthorizedSnapshot::authorize(body, &member_drive()).unwrap();
+    engine.commit_facts(&[Fact::SnapshotBody(live)]).unwrap();
+    assert_eq!(
+        engine.live_heads().unwrap().len(),
+        1,
+        "the crafted head is the eligible live head"
+    );
+
+    let plan = engine.recovery_plan(&objects, base_id).unwrap();
+    assert!(
+        plan.paths.iter().any(|row| row.path == "target.txt"),
+        "the plan classifies the source row despite the absent live subtree"
+    );
+    let preview = engine
+        .recovery_preview(
+            &mut objects,
+            base_id,
+            &["target.txt".to_owned()],
+            false,
+            &[],
+        )
+        .expect("preview tolerates the unrelated absent subtree");
+    assert_eq!(preview.grafted, ["target.txt".to_owned()]);
+    let grafted = engine
+        .recover(
+            &mut objects,
+            base_id,
+            &["target.txt".to_owned()],
+            false,
+            &[],
+        )
+        .expect("commit tolerates the unrelated absent subtree");
+    assert_eq!(
+        grafted_identity(&objects, &grafted, "target.txt"),
+        Some(token),
+        "the graft still preserves across the absent subtree"
+    );
+}
+
+/// A live subtree shared under two parents preserves under both:
+/// the comparison walks each graft path independently, so sharing
+/// never hides the second path's token.
+#[test]
+fn recovery_preserves_through_a_shared_live_subtree() {
+    let (_dir, mut engine, _) = owner_engine("recover-shared-subtree");
+    let mut objects = MemoryObjectStore::default();
+    let dir_a = wyrd_format::EntryIdentity::from_bytes([0x64; 32]);
+    let dir_b = wyrd_format::EntryIdentity::from_bytes([0x65; 32]);
+    let file = wyrd_format::EntryIdentity::from_bytes([0x66; 32]);
+    // One subtree, two parents: `a` sorts first, so a
+    // visit-once walk would consume the share under `a` and mint
+    // under `b`.
+    let shared = Tree::from_entries(vec![identified_file(&mut objects, "f", b"f", file)])
+        .unwrap()
+        .insert_into(&mut objects)
+        .unwrap();
+    let base = Tree::from_entries(vec![
+        Entry::dir("a", shared).unwrap().with_identity(dir_a),
+        Entry::dir("b", shared).unwrap().with_identity(dir_b),
+    ])
+    .unwrap()
+    .insert_into(&mut objects)
+    .unwrap();
+    let base_id = engine
+        .author_snapshot(&objects, base)
+        .unwrap()
+        .snapshot()
+        .snapshot_id();
+
+    let grafted = engine
+        .recover(&mut objects, base_id, &["b".to_owned()], false, &[])
+        .unwrap();
+    assert_eq!(
+        nested_identity(&objects, &grafted, &["b"]),
+        Some(dir_b),
+        "the grafted root keeps its token"
+    );
+    assert_eq!(
+        nested_identity(&objects, &grafted, &["b", "f"]),
+        Some(file),
+        "the token shared under the second parent preserves too"
     );
 }

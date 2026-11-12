@@ -61,10 +61,13 @@ impl MergePath {
     /// Whether every head holds the same entry-or-absent: agreed
     /// paths take themselves, and a spec line naming one is an
     /// error. Comparison is full entry equality — kind, size and
-    /// executable bit, chunks, subtree, or symlink target — so two
-    /// heads holding identical chunks under different recorded
-    /// metadata still count as conflicted, in the conservative
-    /// direction. (Names match by construction of the lookup.)
+    /// executable bit, chunks, subtree, or symlink target, plus the
+    /// entry identity — so two heads holding identical chunks under
+    /// different recorded metadata still count as conflicted, in
+    /// the conservative direction, and byte-identical restatements
+    /// under different tokens (delete-plus-recreate on one side)
+    /// require a merge decision rather than merging silently.
+    /// (Names match by construction of the lookup.)
     pub fn agreed(&self) -> bool {
         let mut versions = self.versions.values();
         let Some(first) = versions.next() else {

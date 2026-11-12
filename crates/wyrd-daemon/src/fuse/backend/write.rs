@@ -206,7 +206,7 @@ where
         self.claims_inode(parent_ino, &parent_path, parent_kind, parent_generation)?;
         match parent {
             Node::Dir { .. } => {}
-            Node::MergedDir { subtrees } if subtrees.is_empty() => {}
+            Node::MergedDir { subtrees, .. } if subtrees.is_empty() => {}
             Node::MergedDir { .. } | Node::Conflict { .. } => return Err(fuser::Errno::EIO),
             _ => return Err(fuser::Errno::ENOTDIR),
         }
