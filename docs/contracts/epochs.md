@@ -262,6 +262,17 @@ Membership freezes permanently. Recovery of such a drive requires the root
 custody / guardian mechanism (`trust.md`), which is reserved and post-v0.
 Implementations MUST warn before applying a last-owner removal.
 
+### Drive deletion: local forget plus owner-authored removal (OD-12-A/B/C, decided as recommended)
+
+Deleting a drive is local forget plus the owner-authored removal of this device: the surface authors `Remove(self)` through the owner and then removes the local directory, and it never touches another member's copy and never reclaims a byte anywhere.
+
+- **Owner-only (OD-12-C, option A).** Only the owner authors the removal half (`check_authority`: the author is an owner of the state being left). A device that is not an owner is refused before anything is authored and before the directory is touched, and told the owner must run `member remove <device>`. Local forget without the removal half is not offered: a device that only forgets stays in the owner-derived member set and keeps being queued new-epoch material, so the surface would report a departure that never happened.
+- **The surface removes the directory (OD-12-B, option A).** After the removal transition commits and the store is released, the surface removes the local drive directory. Removing it is a filesystem operation over ciphertext and the keyring file, not a cryptographic erasure: the blocks stay recoverable from the device until overwritten, and v0 defines no key-erasure primitive.
+- **Subordinate to retention, never a second statement of it.** What deletion does not do — erase another member's copy, reclaim disk, garbage-collect — is already decided in `retention-constraints.md` (retention is not deletion; reclamation needs a future authority; deletion is a state change and GC does not exist in v0). This subsection applies that document to the deletion flow and states no retention rule of its own; on any conflict the retention document wins.
+- **Frozen refuses.** A membership-frozen drive refuses the removal half with the conflict-resolution pointer (`FrozenConflictRemains`), like every other management control: nothing new is canonical while frozen, so the conflict resolves before the removal commits, and the directory is untouched.
+- **Sole-owner deletion is terminal.** In v0 ownership is a singleton, so every owner-authored self-removal empties the owner set (terminal state, above). Implementations MUST warn as a refusal without acknowledgement — never an inline note — before authoring it.
+- **Option (C) is refused.** There is no protocol operation that erases a drive for another member, and no surface may imply one exists: a second peer's view changes only through the transitions it observes, never through another device's local forget.
+
 ### Epoch bump triggers
 
 Admit, reader-admit, remove, rotate, owner-set change. One transition =

@@ -1,4 +1,4 @@
-use super::tests_harness::{device_of, owner_engine, stranger_engine};
+use super::tests_harness::{device_of, frozen_engine, owner_engine, stranger_engine};
 use crate::keys::{DeviceEncryptionSecret, DeviceIdentitySecret};
 use crate::membership::test_util::key;
 use crate::runtime::engine::EngineError;
@@ -87,6 +87,33 @@ fn remove_unknown_device_is_refused() {
         engine.remove_device(device_of(&stranger)),
         Err(EngineError::NotMember)
     ));
+}
+
+/// Deletion refuses on a frozen membership: the self-removal half of
+/// `drive delete` is `remove_device(self)`, and a frozen drive
+/// commits nothing new until the conflict resolves — so the surface
+/// (which removes the directory only after a successful commit)
+/// leaves the directory untouched by construction. This pins the
+/// refusal the surface relies on.
+#[test]
+fn drive_deletion_refuses_on_a_frozen_membership() {
+    let (_dir, mut engine, owner, _genesis, _winner, _rival) =
+        frozen_engine("drive-deletion-frozen");
+    assert_eq!(engine.device(), owner, "the frozen engine is the owner");
+    let tip_before = engine.log.known_state().expect("tip").transition_id;
+    assert!(
+        matches!(
+            engine.remove_device(owner),
+            Err(EngineError::FrozenConflictRemains)
+        ),
+        "self-removal refuses while frozen"
+    );
+    assert_eq!(
+        engine.log.known_state().expect("tip").transition_id,
+        tip_before,
+        "nothing authored while frozen"
+    );
+    assert_eq!(engine.log.frozen_at(), Some(2), "still frozen");
 }
 
 #[test]

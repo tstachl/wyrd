@@ -4,7 +4,7 @@ use crate::member_surface::{
 };
 
 fn banned(output: &str) -> Vec<&'static str> {
-    ["deleted", "erased", "reclaimed", "wiped"]
+    ["deleted", "erased", "reclaimed", "wiped", "freed"]
         .into_iter()
         .filter(|word| output.contains(*word))
         .collect()
@@ -119,4 +119,41 @@ fn export_requirement_names_unmounted_and_fail_closed() {
     let out = render_export_requirement();
     assert!(out.contains("un-mounted"), "precondition: {out}");
     assert!(out.contains("fails closed"), "no retry: {out}");
+}
+
+/// The deletion confirmation states that nothing is erased: it
+/// carries the canonical removal boundary and history sentences
+/// verbatim (the `docs/design/cli.md` remove-section sentences, owned
+/// normatively by `docs/contracts/trust.md`), plus the locality the
+/// deletion decision adds — and none of the words that would
+/// overstate the boundary.
+#[test]
+fn drive_deletion_states_that_nothing_is_erased() {
+    let device = DeviceId::from_bytes([0x44; 32]);
+    let dir = std::path::Path::new("/tmp/example-drive");
+    let out = render_deletion_confirmation(&device, 2, 0, dir, true);
+    assert!(
+        out.contains(REMOVAL_BOUNDARY),
+        "canonical boundary verbatim: {out}"
+    );
+    assert!(
+        out.contains(HISTORY_NEVER_REENCRYPTED),
+        "canonical history sentence: {out}"
+    );
+    assert!(out.contains(DELETION_LOCALITY), "locality sentence: {out}");
+    assert!(
+        out.contains(SOLE_OWNER_TERMINAL),
+        "terminal consequence travels with the confirmation: {out}"
+    );
+    assert!(
+        out.contains(&dir.display().to_string()),
+        "removed path named so the absence is verifiable: {out}"
+    );
+    for forbidden in ["deleted from other devices", "reclaimed", "freed", "erased"] {
+        assert!(
+            !out.contains(forbidden),
+            "no overstatement {forbidden:?}: {out}"
+        );
+    }
+    assert!(banned(&out).is_empty(), "no forget euphemism either: {out}");
 }

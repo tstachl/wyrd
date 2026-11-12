@@ -21,6 +21,9 @@ pub(crate) use crate::commands::device::{
     device_id_report, device_keys_report, join_confirmation_report, parse_device_id,
     parse_encryption_key,
 };
+#[cfg(test)]
+pub(crate) use crate::commands::drive::delete_drive;
+use crate::commands::drive::drive;
 use crate::commands::export::export;
 use crate::commands::member::member;
 #[cfg(test)]
@@ -392,6 +395,11 @@ fn command(args: Vec<String>) -> Result<(), CliError> {
             credentials,
             ..
         } => load_credentials(drive_dir, credentials, cli.config.as_deref())?,
+        Command::Drive {
+            drive_dir,
+            credentials,
+            ..
+        } => load_credentials(drive_dir, credentials, cli.config.as_deref())?,
         Command::Sync {
             drive_dir,
             credentials,
@@ -515,6 +523,9 @@ fn command(args: Vec<String>) -> Result<(), CliError> {
         Command::Device {
             drive_dir, action, ..
         } => device(drive_dir, action, &passphrase, identity),
+        Command::Drive {
+            drive_dir, action, ..
+        } => drive(drive_dir, action, &passphrase, identity),
         Command::Sync {
             drive_dir,
             relays,
@@ -647,6 +658,8 @@ mod update;
 mod tests_cli;
 #[cfg(test)]
 mod tests_device;
+#[cfg(test)]
+mod tests_drive;
 #[cfg(test)]
 mod tests_export;
 #[cfg(test)]
