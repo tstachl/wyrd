@@ -378,8 +378,10 @@ capture-parent + CreateFile + CommitFile (empty files supported,
 `.DS_Store` excluded via `excludedFromSync`); create dir as
 `Mkdir`; `AlreadyExists` renders `filenameCollision` for the
 system to rename; content changes are whole-file `CommitFile`
-against the looked-up base with a baseVersion check (mismatch is
-`cannotSynchronize`, never overwrite/merge/retry); renames carry
+against the checked base with a baseVersion check over per-entry
+facts (size, token, content digest — mismatch is
+`cannotSynchronize`, never overwrite/merge/retry, including
+same-size remote edits); renames carry the checked token with
 `noReplace`; `StaleParent` recaptures and retries once;
 unconfirmed submits reconcile by re-reading before any retry;
 folds are never sent; contents past 32 MiB refuse client-side;

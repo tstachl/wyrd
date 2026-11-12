@@ -161,7 +161,10 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
         // Record-only cancellation: the driver checks before every
         // socket write, so a cancel wins exactly when nothing was
         // sent; a terminal answer always owns the completion, even
-        // if a cancel arrived mid-flight.
+        // if a cancel arrived mid-flight. The one exception is the
+        // create-then-commit intermediary: a cancel between
+        // CreateFile and its CommitFile aborts with the empty file
+        // left behind (documented at the commit call site).
         let cancel = MutationCancel()
         progress.cancellationHandler = {
             cancel.request()
@@ -525,12 +528,14 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
     /// Whether the disk's base version still describes the owner's
     /// current item. A first-sync base (never known in sync) skips
     /// the check — the owner precondition remains authoritative.
-    /// Otherwise the per-entry facts (size and identity tag) must
-    /// match. The serving generation and revision are deliberately
-    /// excluded: they move with every commit anywhere on the drive,
-    /// so comparing them would fail closed on unrelated writes. A
-    /// same-size remote edit passes this check and meets the
-    /// owner's content-base refusal instead — layered, not merged.
+    /// Otherwise the per-entry facts (size plus the token and
+    /// content digest carried in the version) must match. The
+    /// serving generation and revision are deliberately excluded:
+    /// they move with every commit anywhere, so comparing them
+    /// would fail closed on unrelated writes. A same-size remote
+    /// edit changes the digest, so it fails here; a race between
+    /// this check and the submit — same facts at check time, moved
+    /// after — meets the owner's content-base refusal instead.
     static func baseVersionMatches(
         _ base: NSFileProviderItemVersion, current: LiveItem
     ) -> Bool {
@@ -545,20 +550,25 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
         return disk == live
     }
 
-    /// Split our `wyrd-cv1:generation:revision:size:tag` content
-    /// version into the per-entry facts. Anything else — a foreign
-    /// format, a truncated version — fails the match, never the
-    /// parse.
-    static func versionFacts(_ contentVersion: Data) -> (size: String, tag: String)? {
-        guard let raw = String(data: contentVersion, encoding: .utf8),
-            raw.hasPrefix("wyrd-cv1:")
-        else {
+    /// Split a `wyrd-cv2` (or legacy `wyrd-cv1`) content version into
+    /// the per-entry facts: the size and everything after it (token
+    /// plus content digest, or the legacy tag). The generation and
+    /// revision prefix is dropped by construction. Anything else —
+    /// a foreign format, a truncated version — parses to nothing
+    /// and fails the match, never the parse.
+    static func versionFacts(_ contentVersion: Data) -> (size: String, rest: String)? {
+        guard let raw = String(data: contentVersion, encoding: .utf8) else {
             return nil
         }
-        let rest = raw.dropFirst("wyrd-cv1:".count)
-        let parts = rest.split(
-            separator: ":", maxSplits: 3, omittingEmptySubsequences: false).map(String.init)
-        guard parts.count == 4 else { return nil }
-        return (parts[2], parts[3])
+        for prefix in ["wyrd-cv2:", "wyrd-cv1:"] as [String] {
+            if raw.hasPrefix(prefix) {
+                let parts = raw.dropFirst(prefix.count).split(
+                    separator: ":", maxSplits: 3, omittingEmptySubsequences: false
+                ).map(String.init)
+                guard parts.count == 4 else { return nil }
+                return (parts[2], parts[3])
+            }
+        }
+        return nil
     }
 }

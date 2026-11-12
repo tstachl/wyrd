@@ -55,7 +55,6 @@ final class LiveItem: NSObject, NSFileProviderItem {
         identifier: NSFileProviderItemIdentifier,
         parent: NSFileProviderItemIdentifier
     ) {
-        let identityTag: String
         var fileSize: UInt64?
         var directory = false
         var symlink = false
@@ -64,23 +63,19 @@ final class LiveItem: NSObject, NSFileProviderItem {
         case .file(let size, _, _, let identity):
             fileSize = size
             writable = identity != nil
-            identityTag = Self.identityTag(identity: identity, relativePath: relativePath)
         case .dir(_, let identity):
             directory = true
             writable = identity != nil
-            identityTag = Self.identityTag(identity: identity, relativePath: relativePath)
-        case .symlink(_, let identity):
+        case .symlink(_, _):
             // Presented under the entry's name with a data type;
             // hydration fails closed (symlink presentation is a
             // Stage 3 question, and fabricated content would lie).
             // Never writable: the owner has no symlink authoring.
             symlink = true
             writable = false
-            identityTag = Self.identityTag(identity: identity, relativePath: relativePath)
         case .mergedDir(_, let identity):
             directory = true
             writable = identity != nil
-            identityTag = Self.identityTag(identity: identity, relativePath: relativePath)
         case .conflict:
             return nil
         }
@@ -101,26 +96,34 @@ final class LiveItem: NSObject, NSFileProviderItem {
         }
         self.size = fileSize
         self.isWritableRow = writable
-        // Identity is content identity's opposite: the token is
+        // Identity is entry identity's opposite: the token is
         // stable across content changes, so the version must move
-        // with the owner coordinate (and size, which the owner
-        // reports per answer) — never with a local counter.
-        let versionCore =
-            "wyrd-cv1:\(row.generation):\(row.revision):\(fileSize.map(String.init) ?? "-"):\(identityTag)"
-        self.contentVersionData = Data(versionCore.utf8)
-        self.metadataVersionData = Data("wyrd-mv1:\(row.generation):\(row.revision)".utf8)
-        super.init()
-    }
-
-    /// The version-stable tag for the row's identity: the owner's
-    /// token when reported, else the legacy path marker. Legacy
-    /// entries are unstable by contract (rename means a new item),
-    /// so the path is exactly the right tag.
-    private static func identityTag(identity: String?, relativePath: String) -> String {
-        if let identity {
-            return "i:\(identity.lowercased())"
+        // with the owner coordinate, the size, AND the per-entry
+        // content fact (chunks for files, subtree for directories).
+        // Generation and revision ride along for freshness, but the
+        // conflict check compares only the per-entry facts — an
+        // unrelated commit elsewhere must not invalidate this item,
+        // while a same-size remote edit must.
+        let tokenTag = nodeIdentity(row.node)?.lowercased() ?? "none"
+        let contentTag: String
+        switch row.node {
+        case .file(_, _, let chunks, _):
+            contentTag = chunks.joined(separator: ",")
+        case .dir(let subtree, _):
+            contentTag = subtree
+        case .mergedDir(let subtrees, _):
+            contentTag = subtrees.flatMap { $0 }.joined(separator: ",")
+        case .symlink, .conflict:
+            // Never compared: symlinks and conflicts are not
+            // writable, and their targets/versions carry no stable
+            // content grammar for the version string.
+            contentTag = ""
         }
-        return "l:\(relativePath)"
+        let versionCore =
+            "wyrd-cv2:\(row.generation):\(row.revision):\(fileSize.map(String.init) ?? "-"):\(tokenTag):\(contentTag)"
+        self.contentVersionData = Data(versionCore.utf8)
+        self.metadataVersionData = Data("wyrd-mv2:\(row.generation):\(row.revision)".utf8)
+        super.init()
     }
 
     var capabilities: NSFileProviderItemCapabilities {

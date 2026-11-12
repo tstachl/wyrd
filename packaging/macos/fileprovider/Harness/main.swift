@@ -753,11 +753,11 @@ do {
 }
 
 do {
-    // Base-version discipline is per entry, not per drive: size and
-    // identity tag must match; the serving generation and revision
-    // move with every commit anywhere, so they are excluded (an
-    // unrelated write must not invalidate this item). First-sync
-    // skips — the owner precondition stays authoritative.
+    // Base-version discipline is per entry, not per drive: size,
+    // token, and content digest must match; the serving generation
+    // and revision move with every commit anywhere, so they are
+    // excluded (an unrelated write must not invalidate this item).
+    // First-sync skips — the owner precondition stays authoritative.
     let current = try store.item(for: NSFileProviderItemIdentifier(
         WyrdItemIdentifier.stableID(driveHex: driveHex, identityHex: identityHex)))
     check(
@@ -768,17 +768,38 @@ do {
     check(facts != nil, "our versions parse into per-entry facts")
     if let facts {
         let unrelatedWrite = NSFileProviderItemVersion(
-            contentVersion: Data("wyrd-cv1:99:99:\(facts.size):\(facts.tag)".utf8),
+            contentVersion: Data("wyrd-cv2:99:99:\(facts.size):\(facts.rest)".utf8),
             metadataVersion: current.itemVersion.metadataVersion)
         check(
             FileProviderExtension.baseVersionMatches(unrelatedWrite, current: current),
             "a newer coordinate with the same entry facts still matches")
         let changedEntry = NSFileProviderItemVersion(
-            contentVersion: Data("wyrd-cv1:3:9:12345:\(facts.tag)".utf8),
+            contentVersion: Data("wyrd-cv2:3:9:12345:\(facts.rest)".utf8),
             metadataVersion: current.itemVersion.metadataVersion)
         check(
             !FileProviderExtension.baseVersionMatches(changedEntry, current: current),
             "a changed size fails")
+        // Same size, different content digest: the whole point of
+        // carrying chunks in the version. Tweak the digest tail so
+        // the size still matches.
+        let sizedRest = facts.rest.split(separator: ":", maxSplits: 1).map(String.init)
+        let foreignRest = sizedRest.count == 2
+            ? "\(sizedRest[0]):deadbeef"
+            : "dead:deadbeef"
+        let sameSizeEdit = NSFileProviderItemVersion(
+            contentVersion: Data("wyrd-cv2:3:9:\(facts.size):\(foreignRest)".utf8),
+            metadataVersion: current.itemVersion.metadataVersion)
+        check(
+            !FileProviderExtension.baseVersionMatches(sameSizeEdit, current: current),
+            "a same-size content edit fails")
+        // Legacy cv1 versions still parse (transitional cached
+        // versions fail closed on shape, never on parse).
+        let legacy = NSFileProviderItemVersion(
+            contentVersion: Data("wyrd-cv1:3:9:\(facts.size):\(facts.rest)".utf8),
+            metadataVersion: current.itemVersion.metadataVersion)
+        check(
+            FileProviderExtension.versionFacts(legacy.contentVersion) != nil,
+            "legacy versions still parse")
     }
     let stale = NSFileProviderItemVersion(
         contentVersion: Data("wyrd-cv1:0:0:0:i:dead".utf8),
@@ -955,6 +976,100 @@ do {
     }
 } catch {
     print("FAIL: content-base checks: \(error)")
+    failures += 1
+}
+
+do {
+    // The Finding-1 scenario at adapter level: a same-size remote
+    // edit lands after the system observed the item. The stored
+    // base version no longer matches — the digest moved — so a
+    // modify built on it fails closed without overwriting.
+    let dirID = try store.enumerate(container: .rootContainer).items
+        .first(where: { $0.filename == "mut-dir" })!.itemIdentifier
+    let observed = try store.createFile(
+        parent: dirID, name: "mut-ss.txt", contents: Data("aaaa".utf8))
+    let before = try store.item(for: observed.itemIdentifier)
+    // A peer writes the same size with different bytes, through a
+    // fresh base — exactly what the owner's queue accepts.
+    let peer = OwnerClient(socketPath: socketPath)
+    let (peerNode, _, _) = try peer.lookup(path: "mut-dir/mut-ss.txt")
+    guard case .file(let peerSize, _, let peerChunks, let peerToken?) = peerNode else {
+        print("FAIL: same-size fixture serves a token-bearing file")
+        failures += 1
+        throw HarnessError.socket("no token")
+    }
+    _ = try peer.submit(kind: .commitFile(
+        path: "mut-dir/mut-ss.txt",
+        base: OwnerFileIdentity(size: peerSize, executable: false, chunks: peerChunks),
+        executable: false, contentHex: "62626262", expectedIdentity: peerToken))
+    let now = try store.item(for: observed.itemIdentifier)
+    check(
+        !FileProviderExtension.baseVersionMatches(before.itemVersion, current: now),
+        "a same-size remote edit invalidates the stored base")
+    let (kept, _) = try store.contents(for: observed.itemIdentifier)
+    checkEqual(
+        String(data: kept, encoding: .utf8), "bbbb",
+        "the peer bytes stand; nothing overwrote them")
+} catch {
+    print("FAIL: same-size remote edit: \(error)")
+    failures += 1
+}
+
+do {
+    // The ambiguity branch of commit reconciliation: a commit that
+    // landed without an answer reports temporary, and the bytes are
+    // already there — never a false success, never a silent retry.
+    // Each (kind, path) drops once, so create and commit drop
+    // independently. The fixture dirs already exist from the
+    // unconfirmed-reconciliation block above.
+    let afterID = try store.enumerate(container: .rootContainer).items
+        .first(where: { $0.filename == "drop-after" })!.itemIdentifier
+    do {
+        _ = try store.createFile(parent: afterID, name: "k.txt", contents: nil)
+        print("FAIL: dropped-after create claims success")
+        failures += 1
+    } catch let error as LiveStoreError {
+        if case .temporary = error {} else {
+            print("FAIL: dropped-after create reports temporary, got \(error)")
+            failures += 1
+        }
+    }
+    // The entry exists exactly once: the retry meets AlreadyExists,
+    // never a silent duplicate.
+    do {
+        _ = try store.createFile(parent: afterID, name: "k.txt", contents: nil)
+        print("FAIL: duplicate create commits")
+        failures += 1
+    } catch let error as LiveStoreError {
+        if case .refused(let code, _) = error {
+            checkEqual(code, "AlreadyExists", "the landed create blocks a duplicate")
+        } else {
+            print("FAIL: duplicate create collides, got \(error)")
+            failures += 1
+        }
+    }
+    let kid = try store.enumerate(container: afterID).items
+        .first(where: { $0.filename == "k.txt" })!.itemIdentifier
+    do {
+        _ = try store.writeContent(for: kid, data: Data("kk".utf8))
+        print("FAIL: dropped-after commit claims success")
+        failures += 1
+    } catch let error as LiveStoreError {
+        if case .temporary = error {} else {
+            print("FAIL: dropped-after commit reports temporary, got \(error)")
+            failures += 1
+        }
+    }
+    let (kb, _) = try store.contents(for: kid)
+    checkEqual(
+        String(data: kb, encoding: .utf8), "kk",
+        "the dropped commit landed exactly once")
+    // A second write converges normally on the fresh base.
+    let reconverged = try store.writeContent(for: kid, data: Data("kkk".utf8))
+    checkEqual(
+        reconverged.documentSize?.uint64Value, 3, "retry converges on the fresh base")
+} catch {
+    print("FAIL: drop-after commit: \(error)")
     failures += 1
 }
 

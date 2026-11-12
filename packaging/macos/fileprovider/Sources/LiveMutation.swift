@@ -92,10 +92,12 @@ extension LiveStore {
     }
 
     /// The item, base, and token for one writable entry in a
-    /// single lookup: the extension's check and its commit share
-    /// this precondition, so a remote edit between them meets the
+    /// single lookup: the extension's check and its commit send the
+    /// same base and token, so a remote edit between them meets the
     /// owner's refusal instead of being overwritten. `base` is set
-    /// for files (the commit base) and `nil` otherwise.
+    /// for files (the commit base) and `nil` otherwise. Same-size
+    /// content changes are detected one layer up, by comparing the
+    /// content digest carried in the item version — not here.
     func mutationItem(for identifier: NSFileProviderItemIdentifier) throws -> (
         item: LiveItem, base: OwnerFileIdentity?, token: String, path: String,
         parent: NSFileProviderItemIdentifier
@@ -219,8 +221,15 @@ extension LiveStore {
             throw LiveStoreError.temporary("create \(path) never reached a verdict")
         }
         // Step 2: contents, if any, against a fresh base and token.
+        // Cancellation is honored here too: aborting reports
+        // `NSUserCancelledError` and leaves the empty file the
+        // CreateFile committed — the documented intermediary, which
+        // the system reconciles through the normal collision path
+        // on retry.
         if !bytes.isEmpty {
-            try commitContent(path: path, bytes: bytes, contentHex: contentHex, client: client)
+            try commitContent(
+                path: path, bytes: bytes, contentHex: contentHex, client: client,
+                cancel: cancel)
         }
         // The resolver learns the new row through enumeration, but
         // record the identifier now so a follow-up lookup verifies
@@ -243,7 +252,7 @@ extension LiveStore {
         for identifier: NSFileProviderItemIdentifier, data: Data,
         cancel: MutationCancel? = nil
     ) throws -> LiveItem {
-        guard [UInt8](data).count <= Self.maxContentBytes else {
+        guard data.count <= Self.maxContentBytes else {
             throw LiveStoreError.sync(
                 "content exceeds the 32 MiB bound; save a smaller file")
         }

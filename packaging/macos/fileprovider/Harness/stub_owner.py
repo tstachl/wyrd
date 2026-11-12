@@ -14,6 +14,7 @@ there, so the Harness proves the adapter's write path end to end.
 to script one `StaleParent` for the recapture test. Temporary,
 local-only, never part of the appex."""
 
+import hashlib
 import json
 import socket
 import struct
@@ -80,6 +81,17 @@ def mint_token():
 STALE_ONCE = {STALE_DIR: True}
 
 
+# The served content base is derived from the content itself
+# (truncated SHA-256 over the bytes), exactly like a real owner's
+# content addressing: a same-size edit produces a different chunk
+# list, so size alone never identifies content. Empty content keeps
+# the legacy `aa` marker the vectors pin.
+def derive_chunks(content_hex):
+    if not content_hex:
+        return ["aa"]
+    return [hashlib.sha256(bytes.fromhex(content_hex)).hexdigest()[:32]]
+
+
 def state_node(path, entry):
     if entry["kind"] == "dir":
         return {"Dir": {"subtree": "", "identity": entry["identity"]}}
@@ -87,7 +99,7 @@ def state_node(path, entry):
         "File": {
             "size": entry["size"],
             "executable": False,
-            "chunks": ["aa"],
+            "chunks": derive_chunks(entry["content"]),
             "identity": entry["identity"],
         }
     }
@@ -314,13 +326,15 @@ def answer_stateful(name, body, path, entry):
         if entry["kind"] != "file":
             return result_err("IsDirectory", "not a file")
         # The full content base is checked, not just the size: a
-        # same-size edit with different chunks is still stale.
+        # same-size edit with different chunks is still stale. The
+        # expected chunks are derived from the currently served
+        # content, like a real owner's content addressing.
         base = body.get("base", {})
         if (
             not isinstance(base, dict)
             or base.get("size") != entry["size"]
             or base.get("executable") is not False
-            or base.get("chunks") != ["aa"]
+            or base.get("chunks") != derive_chunks(entry["content"])
         ):
             return result_err("Stale", "the content changed before commit")
         content = body.get("content_hex", "")
