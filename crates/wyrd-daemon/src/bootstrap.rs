@@ -753,12 +753,22 @@ fn service_definition_path(entry: &RegistryEntry) -> PathBuf {
 /// Installation writes the definition; enabling and starting are
 /// separate steps so registration can report exactly which one
 /// failed.
+///
+/// `definition_override` names the file directly (tests); `None`
+/// resolves the platform path. The reconfigure override covers
+/// clearing and installing together, so the two can never name
+/// different files.
 #[cfg(unix)]
 pub fn install_service(
     entry: &RegistryEntry,
     owner: &SupervisedOwner,
+    definition_override: Option<&PathBuf>,
 ) -> Result<PathBuf, BootstrapError> {
-    let dir = service_definition_path(entry)
+    let path = match definition_override {
+        Some(path) => path.clone(),
+        None => service_definition_path(entry),
+    };
+    let dir = path
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("/tmp"));
@@ -766,7 +776,6 @@ pub fn install_service(
         path: dir.clone(),
         source,
     })?;
-    let path = service_definition_path(entry);
     #[cfg(target_os = "macos")]
     {
         let label = format!("md.enesis.wyrd.{}", entry.service);
@@ -805,6 +814,7 @@ fn write_service_file(path: &Path, contents: &str) -> Result<(), BootstrapError>
 pub fn install_service(
     _entry: &RegistryEntry,
     _owner: &SupervisedOwner,
+    _definition_override: Option<&PathBuf>,
 ) -> Result<PathBuf, BootstrapError> {
     Err(BootstrapError::ServicesUnsupported)
 }
@@ -942,16 +952,27 @@ pub fn disable_service(
     #[cfg(not(target_os = "macos"))]
     {
         let unit = format!("wyrd-{}.service", entry.service);
-        // Only an enabled unit needs the manager's disable: on a
-        // never-enabled unit `disable --now` would fail on the
-        // unknown name, and that absence is expected (a never-managed
-        // drive, or this operation's own earlier pass), never a stop
-        // failure. The definition file below is removed either way.
+        // Only an enabled unit needs the manager's disable, and only
+        // an active unit needs its stop: on a never-enabled,
+        // never-active unit both would fail on the unknown name, and
+        // that absence is expected (a never-managed drive, or this
+        // operation's own earlier pass), never a stop failure. An
+        // active-but-disabled unit is stopped but not disabled. The
+        // definition file below is removed either way.
         let enabled = run("systemctl", &["--user", "is-enabled", "--quiet", &unit]).is_ok();
+        let active = run("systemctl", &["--user", "is-active", "--quiet", &unit]).is_ok();
+        if active {
+            // Stop the running unit; the enablement symlink is
+            // handled separately below.
+            run("systemctl", &["--user", "stop", &unit]).map_err(|source| {
+                BootstrapError::StopService {
+                    name: unit.clone(),
+                    source: Box::new(source),
+                }
+            })?;
+        }
         if enabled {
-            // `disable --now` stops a running unit and removes the
-            // enablement symlink in one step.
-            run("systemctl", &["--user", "disable", "--now", &unit]).map_err(|source| {
+            run("systemctl", &["--user", "disable", &unit]).map_err(|source| {
                 BootstrapError::StopService {
                     name: unit.clone(),
                     source: Box::new(source),
@@ -959,7 +980,7 @@ pub fn disable_service(
             })?;
         }
         clear_definition(definition, &unit)?;
-        if enabled {
+        if enabled || active {
             // The manager drops the removed unit on its next reload;
             // reload after the removal (not before) so a stale
             // in-memory unit cannot outlive the registry rewrite below.
@@ -1340,7 +1361,7 @@ pub fn provision(config: ProvisionConfig) -> ProvisionState {
             identity_file: config.identity_file.clone(),
             passphrase_file: config.passphrase_file.clone(),
         };
-        let definition = match install_service_definition(&entry, &owner) {
+        let definition = match install_service_definition(&entry, &owner, None) {
             Ok(definition) => definition,
             Err((kind, reason)) => {
                 return ProvisionState::RegisteredButUnavailable {
@@ -1413,9 +1434,10 @@ pub struct ReconfigureConfig {
     pub identity_file: PathBuf,
     pub passphrase_file: PathBuf,
     /// Explicit service definition path (tests); `None` resolves the
-    /// platform path. Hermetic tests must never stop or clear a
-    /// developer's real services, so they name a scratch path
-    /// instead — mirroring the registry and binary overrides above.
+    /// platform path. Clearing and installing share it, so the two
+    /// can never name different files — and hermetic tests name a
+    /// scratch path instead of a developer's real services, mirroring
+    /// the registry and binary overrides above.
     pub service_definition: Option<PathBuf>,
     /// Reinstall, enable, and restart the per-drive service after
     /// the rewrite. Off disables the old service, clears its
@@ -1427,6 +1449,17 @@ pub struct ReconfigureConfig {
     pub verify_timeout: Duration,
 }
 
+/// Apply the reconfigured relays and mode to the stored entry: the
+/// single place that builds the working copy install and rewrite
+/// share, so the two can never diverge (a managed definition can
+/// never render the old relay set beside the new registry entry).
+/// Identity fields — name, service, directory — stay put.
+fn updated_entry(mut stored: RegistryEntry, relays: Vec<String>) -> RegistryEntry {
+    stored.relays = relays;
+    stored.mode = ServiceMode::Vault;
+    stored
+}
+
 /// Install the per-drive service definition for a freshly
 /// reconfigured (or newly provisioned) entry. Shared by both
 /// handoffs so their install failures carry the same kind and
@@ -1434,8 +1467,9 @@ pub struct ReconfigureConfig {
 fn install_service_definition(
     entry: &RegistryEntry,
     owner: &SupervisedOwner,
+    definition_override: Option<&PathBuf>,
 ) -> Result<PathBuf, (ProvisionFailureKind, String)> {
-    install_service(entry, owner).map_err(|error| {
+    install_service(entry, owner, definition_override).map_err(|error| {
         (
             ProvisionFailureKind::InstallService,
             format!("install-service: {error}"),
@@ -1495,13 +1529,13 @@ fn connect_observe(drive_dir: &Path, attempt_timeout: Duration) -> Attempt {
 /// terminal refusal reports unavailable without retrying (a live
 /// owner answered). Silence — connect failures, `Unconfirmed`,
 /// `Unavailable` — retries until the deadline when `retry_connect`
-/// is set, so a freshly restarted owner still binding never reads
-/// as unavailable. A pre-existing socket whose connect fails is
-/// unlinked first: verification runs only after the keystore opened
-/// past the stop, so no live holder predates it and the file is
-/// stale by construction; the wait below then observes only the
-/// restarted owner binding. Without retry (provisioning) the first
-/// attempt decides, exactly as before.
+/// is set (managed reconfigure: a freshly restarted owner still
+/// binding never reads as unavailable). A pre-existing socket whose
+/// connect fails is unlinked first — it normally belongs to the
+/// stopped owner, and the wait below then observes only the
+/// restarted owner binding. Without retry (provisioning and
+/// `--no-service`) the first attempt decides, exactly as before:
+/// wait for appearance, then one terminal attempt.
 fn verify_owner_socket(
     drive_dir: &Path,
     verify_timeout: Duration,
@@ -1665,13 +1699,10 @@ pub fn reconfigure(config: ReconfigureConfig) -> ProvisionState {
         };
     }
 
-    // The working copy from here on: install and rewrite share it, so
-    // a managed definition can never render the old relay set beside
-    // the new registry entry. Identity fields stay put (identity
-    // never reconfigures).
-    let mut updated = stored;
-    updated.relays = relays;
-    updated.mode = ServiceMode::Vault;
+    // The working copy from here on: install and rewrite share the
+    // one entry `updated_entry` builds, so a managed definition can
+    // never render the old relay set beside the new registry entry.
+    let updated = updated_entry(stored, relays);
 
     // 3. Resolve the service binaries before stopping: a missing
     // binary refuses with the service still up, never with the drive
@@ -1791,7 +1822,7 @@ pub fn reconfigure(config: ReconfigureConfig) -> ProvisionState {
             identity_file: config.identity_file.clone(),
             passphrase_file: config.passphrase_file.clone(),
         };
-        match install_service_definition(&updated, &owner) {
+        match install_service_definition(&updated, &owner, config.service_definition.as_ref()) {
             Ok(definition) => Some(definition),
             Err((kind, reason)) => {
                 return ProvisionState::ProvisioningIncomplete {
@@ -1833,7 +1864,11 @@ pub fn reconfigure(config: ReconfigureConfig) -> ProvisionState {
             };
         }
     }
-    match verify_owner_socket(&config.drive_dir, config.verify_timeout, true) {
+    match verify_owner_socket(
+        &config.drive_dir,
+        config.verify_timeout,
+        config.manage_service,
+    ) {
         Ok(()) => ProvisionState::VerifiedAvailable {
             entry: updated,
             skipped,
@@ -3016,43 +3051,38 @@ mod tests {
         server.join().unwrap();
     }
 
-    /// The install renders the updated entry: a managed reconfigure
-    /// must carry the new relay set into the definition, never the
-    /// old one. Render-only (no manager): `reconfigure` installs from
-    /// the updated working copy, and this pins the content contract
-    /// that order serves. Live-manager execution stays out of
-    /// hermetic tests (it would touch a real manager).
+    /// The install writes the updated entry to the override path:
+    /// the managed handoff hermetically proven end to install, short
+    /// of the manager itself. `updated_entry` builds the working copy
+    /// `reconfigure` installs and rewrites, so asserting the written
+    /// file carries the new set pins the order through the real
+    /// serialize-and-write path. Enable/start stay out of hermetic
+    /// tests — they would touch a real manager.
     #[test]
-    fn install_renders_the_updated_relay_set() {
-        let dir = scratch("rec-render");
+    fn install_writes_the_updated_relay_set() {
+        let dir = scratch("rec-install");
         let owner = SupervisedOwner {
             supervise_bin: dir.join("wyrd-supervise"),
             wyrd_bin: dir.join("wyrd"),
             identity_file: dir.join("identity"),
             passphrase_file: dir.join("passphrase"),
         };
-        let mut updated = entry("demo", &dir);
-        updated.relays = vec!["relay://new".to_string()];
-        let argv = owner.argv(&updated, "0");
+        let stored = entry("demo", &dir);
+        let updated = updated_entry(stored, vec!["relay://new".to_string()]);
+        assert_eq!(updated.name, "demo");
+        assert_eq!(updated.service, "drive-demo");
+        assert_eq!(updated.mode, ServiceMode::Vault);
+        let definition = dir.join("wyrd-test-definition");
+        let written = install_service_definition(&updated, &owner, Some(&definition)).unwrap();
+        assert_eq!(written, definition);
+        let content = std::fs::read_to_string(&definition).unwrap();
         assert!(
-            argv.iter().any(|arg| arg == "relay://new"),
-            "the definition carries the new set: {argv:?}"
+            content.contains("relay://new"),
+            "the definition carries the new set"
         );
         assert!(
-            !argv.iter().any(|arg| arg == "relay://example"),
-            "no stale relay survives: {argv:?}"
-        );
-        let plist = render_launchd_plist("md.enesis.wyrd.drive-demo", &owner, &updated);
-        assert!(plist.contains("relay://new"), "plist carries the new set");
-        assert!(
-            !plist.contains("relay://example"),
-            "plist carries no stale relay"
-        );
-        let unit = render_systemd_unit("Wyrd drive demo", &owner, &updated);
-        assert!(unit.contains("relay://new"), "unit carries the new set");
-        assert!(
-            !unit.contains("relay://example"),
-            "unit carries no stale relay"
+            !content.contains("relay://example"),
+            "no stale relay survives"
         );
     }
 }

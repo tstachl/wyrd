@@ -472,11 +472,13 @@ The rewrite carries skipped entries forward as verbatim values (a
 future mode or a rotten entry survives the rewrite) and warns loudly
 about them instead of silently discarding them. Ready is reported
 only when the socket verifies this session — a rewritten entry
-alone reports reconfigured-but-unavailable, never ready; a dead
-pre-existing socket is unlinked after the stop (no live holder can
-predate it), and a socket that appears mid-wait retries the connect
-until the deadline, so a freshly restarted owner still binding does
-not read as unavailable.
+alone reports reconfigured-but-unavailable, never ready. In managed
+mode a dead pre-existing socket is unlinked after a failed connect
+(it normally belongs to the stopped owner), and a socket that
+appears mid-wait retries the connect until the deadline, so a
+freshly restarted owner still binding does not read as unavailable.
+With `--no-service` the wait ends in a single attempt, like
+provisioning.
 
 One operator at a time: concurrent direct CLI invocations can
 interleave past the store open (the desktop flight serializes only
