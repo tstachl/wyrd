@@ -50,15 +50,17 @@ pub(crate) fn merge(
 
 /// The token every merged head agrees on: `Some(T)` when each
 /// head carries the identical `Some(T)`, `None` when any head
-/// carries `None`, a different token, or a non-entry state. Only
-/// whole-directory unions consult it; conflict versions keep
-/// their own tokens.
+/// carries `None` or a different token. Only whole-directory
+/// unions consult it — `all_dirs` yields `Some` solely for
+/// all-`Dir` resolutions, so the non-`Dir` arms below are
+/// defensive unreachable, kept so a future caller broadening the
+/// inputs fails safe instead of agreeing loudly.
+/// Conflict versions keep their own tokens and never agree.
 fn agreed_identity(present: &[(wyrd_format::SnapshotId, Node)]) -> Option<EntryIdentity> {
     let mut tokens = present.iter().map(|(_, node)| match node {
         Node::File { identity, .. }
         | Node::Dir { identity, .. }
         | Node::Symlink { identity, .. } => *identity,
-        // A nested union propagates its own agreement upward.
         Node::MergedDir { identity, .. } => *identity,
         Node::Conflict { .. } => None,
     });
