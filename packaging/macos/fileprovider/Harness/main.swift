@@ -433,13 +433,6 @@ do {
     }
 }
 
-if failures == 0 {
-    print("harness: all checks passed")
-} else {
-    print("harness: \(failures) checks failed")
-    exit(1)
-}
-
 // MARK: - Mutation wire proof (no UI path sends these yet)
 
 do {

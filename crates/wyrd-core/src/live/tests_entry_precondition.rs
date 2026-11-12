@@ -222,6 +222,57 @@ fn unlink_checks_the_observed_entry() {
 }
 
 #[test]
+fn rename_with_trailing_slash_dir_source_commits() {
+    let (mut node, dir) = scratch_node("rename-trailing-slash");
+    node.apply_mutation(
+        &MutationKind::Mkdir {
+            path: "d".to_string(),
+        },
+        None,
+    )
+    .expect("mkdir commits");
+    let token = observed_token(&node, "d").expect("the dir carries an identity");
+    // The format layer accepts one trailing slash on a directory
+    // source; the identity lookup must see the same entry, not fail
+    // the view grammar first.
+    node.apply_mutation(
+        &MutationKind::Rename {
+            from: "d/".to_string(),
+            to: "moved".to_string(),
+            no_replace: false,
+            expected: Some(token),
+        },
+        None,
+    )
+    .expect("a trailing-slash rename of a dir commits with its token");
+    assert_eq!(
+        observed_token(&node, "moved"),
+        Some(token),
+        "the move preserves the entry"
+    );
+    // Without a precondition the call behaves exactly as before the
+    // identity work: the format rule still applies.
+    node.apply_mutation(
+        &MutationKind::Mkdir {
+            path: "e".to_string(),
+        },
+        None,
+    )
+    .expect("mkdir commits");
+    node.apply_mutation(
+        &MutationKind::Rename {
+            from: "e/".to_string(),
+            to: "moved-e".to_string(),
+            no_replace: false,
+            expected: None,
+        },
+        None,
+    )
+    .expect("a trailing-slash rename of a dir commits path-addressed");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn rename_checks_the_observed_source_entry() {
     let (mut node, dir) = scratch_node("rename-expected");
     let token = create_file(&mut node, "a.txt");
@@ -461,4 +512,46 @@ fn check_expected_identity_classifies_four_ways() {
         Err(MutationError::Conflicted { .. }) => {}
         other => panic!("a conflicted path refuses Conflicted: {other:?}"),
     }
+}
+
+#[test]
+fn fold_member_with_wrong_identity_refuses_stale_entry() {
+    let (mut node, dir) = scratch_node("fold-expected");
+    let token = create_file(&mut node, "f.txt");
+    let other = EntryIdentity::from_bytes([0x77; 32]);
+    match node.apply_mutation(
+        &MutationKind::Fold {
+            members: vec![FoldMember {
+                kind: MutationKind::CommitFile {
+                    path: "f.txt".to_string(),
+                    base: FileIdentity::new(0, false, Vec::new()),
+                    executable: false,
+                    content: b"folded".to_vec(),
+                    expected: Some(other),
+                },
+                forcer: true,
+            }],
+        },
+        None,
+    ) {
+        // Folds report per-member outcomes: a failed forcer aborts
+        // with nothing committed, but the fold itself stays Ok.
+        Ok(MutationOutcome::Fold {
+            forcer:
+                FoldForcerOutcome::Failed(MutationError::StaleEntry {
+                    expected, found, ..
+                }),
+            ..
+        }) => {
+            assert_eq!(expected, other);
+            assert_eq!(found, Some(token));
+        }
+        other => panic!("a folded mismatch refuses StaleEntry: {other:?}"),
+    }
+    assert_eq!(
+        observed_token(&node, "f.txt"),
+        Some(token),
+        "the refused fold commits nothing"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
 }

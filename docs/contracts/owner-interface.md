@@ -1,4 +1,4 @@
-# Drive-owner interface (v1)
+# Drive-owner interface (v2)
 
 Status: Normative. Scope: the cross-process operations a non-owner consumer may submit, and the durability and exactly-once behavior the owner owes in return. Authority: this interface owns the boundary; engine, mutation, durability, synchronization, and trust logic live in their own contracts and are not duplicated here.
 
@@ -116,12 +116,11 @@ Every read answer that names an entry carries its stable identity
 identity support; a conflicted path reports `None` (each conflict
 version carries its head's token), while a merged directory
 reports the agreed token when every merged head carries the
-identical `Some` token, else `None`. The field is additive under the v1
-"only optional fields" rule, and it carries `#[serde(default)]`
-so a new reader parses pre-identity payloads (which omit the key)
-as "no token reported" instead of failing. A pre-identity reader
-likewise tolerates new payloads, because the wire types do not
-deny unknown fields. Consumers answer "is this the same entry I
+identical `Some` token, else `None`. The field stays optional
+with `#[serde(default)]` across v1 and v2, so a new reader parses
+pre-identity payloads (which omit the key) as "no token reported"
+instead of failing. A pre-identity reader likewise tolerates new
+payloads, because the wire types do not deny unknown fields. Consumers answer "is this the same entry I
 saw before?" from the token, never from path, content, or matching.
 
 ## Durable observation
@@ -225,8 +224,8 @@ the consumer never infers state from silence. Setting the switch
 pokes the loop's pacing signal, so the loop re-checks promptly
 rather than waiting out its idle deadline.
 
-Wire shape note (pre-freeze): `pause`, `resume`, and the `paused`
-liveness field are new in v1's current shape. `paused` defaults to
+Wire shape note: `pause`, `resume`, and the `paused` liveness
+field arrived in v1 and are unchanged in v2. `paused` defaults to
 `false` on parse, so a pre-pause reader degrades to "running"
 instead of failing; both sides ship together, so the default only
 covers mixed-version skew during rollout.

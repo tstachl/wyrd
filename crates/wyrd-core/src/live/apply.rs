@@ -562,59 +562,11 @@ where
     /// only the format mutation itself lands on the evolving `tree`.
     /// Returns the new root plus the outcome the mutation would have
     /// reported alone. Authoring and parent invalidation stay with the
-    /// caller: a fold authors once for all its winners.
-    ///
-    /// Entry-identity preconditions (`expected`) are enforced here,
-    /// inside the serialized apply, so no interleaving mutation can
-    /// slip between the resolution and the format mutation. See
-    /// `check_expected_identity`.
-    /// Enforce an entry-identity precondition against the node the
-    /// path resolves to now. Runs inside the serialized apply, so the
-    /// resolution and the format mutation below are atomic with
-    /// respect to every other mutation. Four outcomes stay distinct:
-    /// same token proceeds (the arm still applies its own content
-    /// and kind checks); a different token — including a legacy
-    /// entry that never had one — is `StaleEntry`; a missing path
-    /// is `NotFound`; a conflicted path is `Conflicted`. `None`
-    /// expected skips the check entirely: in-process legacy callers
-    /// (FUSE handles carry their own stale-base boundary) keep
-    /// exactly their current behavior. `pub(super)` for the
-    /// decision-table unit tests: every `apply_mutation` arm
-    /// refuses multi-head drives before `build_root`, so the
-    /// `Conflict` branch below is defensive there and pinned here.
-    pub(super) fn check_expected_identity(
-        expected: &Option<EntryIdentity>,
-        node: Option<&Node>,
-        path: &str,
-        heads: &[AuthorizedSnapshot],
-    ) -> Result<(), MutationError> {
-        let Some(wanted) = expected else {
-            return Ok(());
-        };
-        match node {
-            None => Err(MutationError::NotFound(path.to_string())),
-            Some(Node::Conflict { .. }) => Err(MutationError::Conflicted { heads: heads.len() }),
-            Some(node) => {
-                let found = match node {
-                    Node::File { identity, .. }
-                    | Node::Dir { identity, .. }
-                    | Node::Symlink { identity, .. }
-                    | Node::MergedDir { identity, .. } => *identity,
-                    Node::Conflict { .. } => None,
-                };
-                if found.as_ref() == Some(wanted) {
-                    Ok(())
-                } else {
-                    Err(MutationError::StaleEntry {
-                        path: path.to_string(),
-                        expected: *wanted,
-                        found,
-                    })
-                }
-            }
-        }
-    }
-
+    /// caller: a fold authors once for all its winners. Entry-identity
+    /// preconditions (`expected`) are enforced inside the serialized
+    /// apply (see `check_expected_identity`), so no interleaving
+    /// mutation can slip between the resolution and the format
+    /// mutation.
     fn build_root(
         &self,
         kind: &MutationKind,
@@ -789,8 +741,20 @@ where
                 Ok((root, MutationOutcome::Done))
             }
             MutationKind::Rmdir { path, expected } => {
-                let node = self.current_node(heads, path)?;
-                Self::check_expected_identity(expected, node.as_ref(), path, heads)?;
+                // The identity lookup normalizes one trailing slash:
+                // the format layer rejects anything non-canonical
+                // itself, but the view grammar rejects even the
+                // single trailing slash the format deliberately
+                // accepts, so the lookup must strip it first to see
+                // the same entry. Skipped entirely for legacy
+                // in-process callers (their behavior is unchanged),
+                // and the format call below always sees the raw
+                // path with its own rule.
+                if expected.is_some() {
+                    let lookup = Self::without_single_trailing_slash(path);
+                    let node = self.current_node(heads, lookup)?;
+                    Self::check_expected_identity(expected, node.as_ref(), path, heads)?;
+                }
                 self.demand_path_trees(heads, path)?;
                 let mut store = self.store.write().map_err(|_| MutationError::Lock)?;
                 let root = wyrd_format::mutation::rmdir(&mut *store, tree, path)
@@ -803,8 +767,18 @@ where
                 no_replace,
                 expected,
             } => {
-                let node = self.current_node(heads, from)?;
-                Self::check_expected_identity(expected, node.as_ref(), from, heads)?;
+                // Same trailing-slash normalization as `Rmdir`: the
+                // format's rename accepts one trailing slash on a
+                // directory source, so the identity lookup strips it
+                // to see the same entry. The destination check below
+                // keeps the pre-existing view-grammar behavior
+                // deliberately: changing `AlreadyExists` semantics is
+                // out of scope for the precondition work.
+                if expected.is_some() {
+                    let lookup = Self::without_single_trailing_slash(from);
+                    let node = self.current_node(heads, lookup)?;
+                    Self::check_expected_identity(expected, node.as_ref(), from, heads)?;
+                }
                 self.demand_path_trees(heads, from)?;
                 self.demand_path_trees(heads, to)?;
                 if *no_replace && self.current_node(heads, to)?.is_some() {
@@ -908,6 +882,68 @@ where
             // A fold never nests: the submitter guarantees it, and this
             // backstop fails closed if one ever arrives.
             MutationKind::Fold { .. } => Err(MutationError::Engine),
+        }
+    }
+
+    /// Strip one trailing slash for identity lookup. Mirrors
+    /// `wyrd_format::mutation::split_trailing_slash` (the format
+    /// layer is the authority; this only makes the lookup see the
+    /// same entry the format call will act on): a single trailing
+    /// slash is significant on a rename source and names a
+    /// directory, while anything else non-canonical — doubled
+    /// slashes, the bare root — passes through untouched to fail
+    /// where it always did.
+    fn without_single_trailing_slash(path: &str) -> &str {
+        match path.strip_suffix('/') {
+            Some(stripped) if !stripped.is_empty() && !stripped.ends_with('/') => stripped,
+            _ => path,
+        }
+    }
+
+    /// Enforce an entry-identity precondition against the node the
+    /// path resolves to now. Runs inside the serialized apply, so the
+    /// resolution and the format mutation below are atomic with
+    /// respect to every other mutation. Four outcomes stay distinct:
+    /// same token proceeds (the arm still applies its own content
+    /// and kind checks); a different token — including a legacy
+    /// entry that never had one — is `StaleEntry`; a missing path
+    /// is `NotFound`; a conflicted path is `Conflicted`. `None`
+    /// expected skips the check entirely: in-process legacy callers
+    /// (FUSE handles carry their own stale-base boundary) keep
+    /// exactly their current behavior. `pub(super)` for the
+    /// decision-table unit tests: every `apply_mutation` arm
+    /// refuses multi-head drives before `build_root`, so the
+    /// `Conflict` branch below is defensive there and pinned here.
+    pub(super) fn check_expected_identity(
+        expected: &Option<EntryIdentity>,
+        node: Option<&Node>,
+        path: &str,
+        heads: &[AuthorizedSnapshot],
+    ) -> Result<(), MutationError> {
+        let Some(wanted) = expected else {
+            return Ok(());
+        };
+        match node {
+            None => Err(MutationError::NotFound(path.to_string())),
+            Some(Node::Conflict { .. }) => Err(MutationError::Conflicted { heads: heads.len() }),
+            Some(node) => {
+                let found = match node {
+                    Node::File { identity, .. }
+                    | Node::Dir { identity, .. }
+                    | Node::Symlink { identity, .. }
+                    | Node::MergedDir { identity, .. } => *identity,
+                    Node::Conflict { .. } => None,
+                };
+                if found.as_ref() == Some(wanted) {
+                    Ok(())
+                } else {
+                    Err(MutationError::StaleEntry {
+                        path: path.to_string(),
+                        expected: *wanted,
+                        found,
+                    })
+                }
+            }
         }
     }
 
