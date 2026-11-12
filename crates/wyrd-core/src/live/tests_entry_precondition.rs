@@ -10,7 +10,7 @@
 
 use super::parent_mutation_tests::{live_over_tree, TreeView};
 use super::*;
-use wyrd_format::{EntryIdentity, MemoryObjectStore, ObjectKind, ObjectStore, Tree};
+use wyrd_format::{EntryIdentity, MemoryObjectStore, Tree};
 use wyrd_sync::keys::DeviceIdentitySecret;
 use wyrd_sync::runtime::Engine;
 
@@ -387,49 +387,78 @@ fn legacy_entry_without_identity_refuses_stale_entry() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// The four-way decision, pinned without a live loop: the
+/// multi-head gate in `apply_mutation` fires before `build_root`,
+/// so the conflicted branch is defensive there and covered here.
 #[test]
-fn conflicted_drive_refuses_before_identity() {
-    let dir = std::env::temp_dir().join(format!(
-        "wyrd-core-precondition-conflict-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
-    let mut engine = Engine::create(
-        dir.clone(),
-        "core-test-pass",
-        DeviceIdentitySecret::generate().unwrap(),
-    )
-    .unwrap();
-    let mut store = MemoryObjectStore::default();
-    let chunk_a = store.insert(ObjectKind::Chunk, b"v1").unwrap();
-    let chunk_b = store.insert(ObjectKind::Chunk, b"v2").unwrap();
-    let root_a = Tree::from_entries(vec![Entry::file("f.txt", 2, false, vec![chunk_a]).unwrap()])
-        .unwrap()
-        .insert_into(&mut store)
-        .unwrap();
-    let root_b = Tree::from_entries(vec![Entry::file("f.txt", 2, false, vec![chunk_b]).unwrap()])
-        .unwrap()
-        .insert_into(&mut store)
-        .unwrap();
-    let head_a = engine.author_snapshot(&store, root_a).unwrap();
-    let head_b = engine.author_snapshot(&store, root_b).unwrap();
-    let mut node = live_over_tree(engine, store, &[head_a, head_b]);
+fn check_expected_identity_classifies_four_ways() {
     let wanted = EntryIdentity::from_bytes([0x42; 32]);
-    match node.apply_mutation(
-        &MutationKind::CommitFile {
-            path: "f.txt".to_string(),
-            base: FileIdentity::new(2, false, vec![chunk_a]),
-            executable: false,
-            content: b"v3".to_vec(),
-            expected: Some(wanted),
-        },
-        None,
+    let other = EntryIdentity::from_bytes([0x77; 32]);
+    let file = |identity: Option<EntryIdentity>| Node::File {
+        size: 1,
+        executable: false,
+        chunks: Vec::new(),
+        identity,
+    };
+    let heads: &[AuthorizedSnapshot] = &[];
+    // No precondition: everything passes through.
+    assert!(LiveNode::<TreeView>::check_expected_identity(
+        &None,
+        Some(&file(Some(wanted))),
+        "f",
+        heads
+    )
+    .is_ok());
+    assert!(LiveNode::<TreeView>::check_expected_identity(&None, None, "f", heads).is_ok());
+    // Same token: proceed; the arm still applies its own checks.
+    assert!(LiveNode::<TreeView>::check_expected_identity(
+        &Some(wanted),
+        Some(&file(Some(wanted))),
+        "f",
+        heads
+    )
+    .is_ok());
+    // Different token: stale entry, naming both sides.
+    match LiveNode::<TreeView>::check_expected_identity(
+        &Some(wanted),
+        Some(&file(Some(other))),
+        "f",
+        heads,
     ) {
-        Err(MutationError::Conflicted { heads }) => assert_eq!(heads, 2),
-        other => panic!("a conflicted drive refuses as Conflicted: {other:?}"),
+        Err(MutationError::StaleEntry {
+            path,
+            expected,
+            found,
+        }) => {
+            assert_eq!(path, "f");
+            assert_eq!(expected, wanted);
+            assert_eq!(found, Some(other));
+        }
+        other => panic!("a replaced entry refuses StaleEntry: {other:?}"),
     }
-    std::fs::remove_dir_all(dir).unwrap();
+    // Legacy entry without identity: stale entry with no found token.
+    match LiveNode::<TreeView>::check_expected_identity(
+        &Some(wanted),
+        Some(&file(None)),
+        "f",
+        heads,
+    ) {
+        Err(MutationError::StaleEntry { found, .. }) => assert_eq!(found, None),
+        other => panic!("a legacy entry refuses StaleEntry: {other:?}"),
+    }
+    // Missing path: NotFound, never Stale.
+    match LiveNode::<TreeView>::check_expected_identity(&Some(wanted), None, "gone", heads) {
+        Err(MutationError::NotFound(path)) => assert_eq!(path, "gone"),
+        other => panic!("a missing path refuses NotFound: {other:?}"),
+    }
+    // Conflicted path: refused as Conflicted.
+    match LiveNode::<TreeView>::check_expected_identity(
+        &Some(wanted),
+        Some(&Node::Conflict { versions: vec![] }),
+        "f",
+        heads,
+    ) {
+        Err(MutationError::Conflicted { .. }) => {}
+        other => panic!("a conflicted path refuses Conflicted: {other:?}"),
+    }
 }

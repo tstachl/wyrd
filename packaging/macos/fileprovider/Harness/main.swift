@@ -52,12 +52,20 @@ func reencode(_ json: [String: Any]) -> Data {
 let decoder = JSONDecoder()
 
 // Every request vector decodes; the op names the operation.
-for name in ["lookup", "stat", "readdir", "read"] {
+for name in ["lookup", "stat", "readdir", "read", "capture-parent", "submit", "submit-create", "submit-commit"] {
     let raw = reencode(vector(named: "\(name)/request"))
     do {
         let request = try decoder.decode(OwnerRequest.self, from: raw)
-        checkEqual(request.v, 1, "\(name) request version")
-        checkEqual(request.op, name, "\(name) request op")
+        checkEqual(request.v, 2, "\(name) request version")
+        let kind = String(name.split(separator: "/")[0])
+        let expectedOp: String
+        switch kind {
+        case "submit-create", "submit-commit":
+            expectedOp = "submit"
+        default:
+            expectedOp = kind
+        }
+        checkEqual(request.op, expectedOp, "\(name) request op")
         checkEqual(request.id, 7, "\(name) request id")
     } catch {
         print("FAIL: \(name)/request decodes: \(error)")
@@ -71,7 +79,7 @@ do {
     let raw = reencode(vector(named: "lookup/request"))
     let request = try decoder.decode(OwnerRequest.self, from: raw)
     let body = try JSONEncoder().encode(request)
-    let expectedJSON = "{\"v\":1,\"id\":7,\"op\":\"lookup\",\"params\":{\"path\":\"hello.txt\"}}"
+    let expectedJSON = "{\"v\":2,\"id\":7,\"op\":\"lookup\",\"params\":{\"path\":\"hello.txt\"}}"
     let bodyJSON = try JSONSerialization.jsonObject(with: body)
     let expectedParsed = try JSONSerialization.jsonObject(with: Data(expectedJSON.utf8))
     check(
@@ -423,6 +431,137 @@ do {
             failures += 1
         }
     }
+}
+
+if failures == 0 {
+    print("harness: all checks passed")
+} else {
+    print("harness: \(failures) checks failed")
+    exit(1)
+}
+
+// MARK: - Mutation wire proof (no UI path sends these yet)
+
+do {
+    let client = OwnerClient(socketPath: socketPath)
+    // capture-parent answers the drive-root token the stub mints.
+    let token = try client.captureParent(path: "")
+    check(token.instance == 9 && token.counter == 3, "capture-parent answers the stub token")
+    // A commit carrying hello.txt's token commits.
+    let committed = try client.submit(kind: .commitFile(
+        path: "hello.txt",
+        base: OwnerFileIdentity(size: 26, executable: false, chunks: ["aa"]),
+        executable: false,
+        contentHex: "68656c6c6f",
+        expectedIdentity: String(repeating: "ab12cd34", count: 8)
+    ))
+    if case .committed(let identity) = committed {
+        checkEqual(identity.size, 5, "the committed size comes from the content")
+    } else {
+        print("FAIL: a matching precondition commits: \(committed)")
+        failures += 1
+    }
+    // A wrong token refuses as StaleEntry, naming both sides.
+    do {
+        _ = try client.submit(kind: .unlink(
+            path: "hello.txt",
+            expectedIdentity: String(repeating: "99", count: 32)
+        ))
+        print("FAIL: a wrong token commits")
+        failures += 1
+    } catch let error as OwnerClientError {
+        if case .refused(let refusal) = error, refusal.code == "StaleEntry" {
+            check(
+                refusal.message.contains(String(repeating: "99", count: 4)),
+                "the refusal names the expected token")
+        } else {
+            print("FAIL: a wrong token refuses StaleEntry: \(error)")
+            failures += 1
+        }
+    }
+    // A precondition-less covered kind never leaves the client:
+    // the type system requires the token, so raw framing proves
+    // the server side refuses a missing one as Malformed — and a
+    // v1-framed request as UnknownVersion.
+    do {
+        let malformed = try rawRoundTrip(
+            socketPath: socketPath,
+            body: "{\"v\":2,\"id\":99,\"op\":\"submit\",\"params\":{\"kind\":{\"Unlink\":{\"path\":\"hello.txt\"}}}}")
+        checkEqual(malformed.code, "Malformed", "a missing precondition refuses Malformed")
+        let old = try rawRoundTrip(
+            socketPath: socketPath,
+            body: "{\"v\":1,\"id\":98,\"op\":\"lookup\",\"params\":{\"path\":\"hello.txt\"}}")
+        checkEqual(old.code, "UnknownVersion", "a v1 frame refuses UnknownVersion")
+        checkEqual(old.version, 2, "the refusal carries the serving version")
+    } catch {
+        print("FAIL: raw wire checks: \(error)")
+        failures += 1
+    }
+} catch {
+    print("FAIL: mutation wire proof: \(error)")
+    failures += 1
+}
+
+/// One raw framed exchange against the stub, bypassing
+/// `OwnerClient`: length-prefixed JSON out, length-prefixed JSON
+/// back, decoded just far enough to name the refusal code.
+func rawRoundTrip(socketPath: String, body: String) throws -> (code: String, version: Int) {
+    let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+    guard fd >= 0 else { throw HarnessError.socket("socket() failed") }
+    defer { close(fd) }
+    var addr = sockaddr_un()
+    memset(&addr, 0, MemoryLayout<sockaddr_un>.size)
+    addr.sun_family = sa_family_t(AF_UNIX)
+    let connected: Int32 = socketPath.withCString { cString in
+        withUnsafeMutableBytes(of: &addr.sun_path) { raw in
+            let dest = raw.baseAddress!.assumingMemoryBound(to: CChar.self)
+            strncpy(dest, cString, 103)
+        }
+        return withUnsafePointer(to: &addr) { ptr in
+            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sock in
+                connect(fd, sock, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        }
+    }
+    guard connected == 0 else { throw HarnessError.socket("connect refused") }
+    let bodyData = Data(body.utf8)
+    let length = UInt32(bodyData.count).bigEndian
+    withUnsafeBytes(of: length) { prefix in
+        _ = write(fd, prefix.baseAddress!, prefix.count)
+    }
+    _ = bodyData.withUnsafeBytes { pointer in
+        write(fd, pointer.baseAddress!, bodyData.count)
+    }
+    var prefix = [UInt8](repeating: 0, count: 4)
+    try prefix.withUnsafeMutableBytes { raw in
+        var done = 0
+        while done < 4 {
+            let chunk = read(fd, raw.baseAddress!.advanced(by: done), 4 - done)
+            guard chunk > 0 else { throw HarnessError.socket("short length") }
+            done += chunk
+        }
+    }
+    let lengthValue = (UInt32(prefix[0]) << 24) | (UInt32(prefix[1]) << 16)
+        | (UInt32(prefix[2]) << 8) | UInt32(prefix[3])
+    var payload = [UInt8](repeating: 0, count: Int(lengthValue))
+    let total = payload.count
+    try payload.withUnsafeMutableBytes { raw in
+        var done = 0
+        while done < total {
+            let chunk = read(fd, raw.baseAddress!.advanced(by: done), total - done)
+            guard chunk > 0 else { throw HarnessError.socket("short body") }
+            done += chunk
+        }
+    }
+    let json = try JSONSerialization.jsonObject(with: Data(payload)) as! [String: Any]
+    let version = json["v"] as! Int
+    let result = json["result"] as! [String: Any]
+    let err = result["err"] as! [String: Any]
+    return (code: err["code"] as! String, version: version)
+}
+
+enum HarnessError: Error {
+    case socket(String)
 }
 
 if failures == 0 {

@@ -32,13 +32,18 @@ enum OwnerClientError: Error {
     case incompatible(String)
 }
 
-/// Operation names: the exact wire vocabulary. Read-only — Stage 2
-/// performs enumeration, lookup, and hydration only.
+/// Operation names: the exact wire vocabulary. Reads plus the
+/// two mutation-side operations: `capture-parent` binds a create
+/// to its parent incarnation, `submit` forwards one mutation to
+/// the owner's single queue. No UI path constructs a mutation in
+/// Stage 3 sub-PR 1; the Harness exercises both against a stub.
 enum OwnerOp {
     static let lookup = "lookup"
     static let stat = "stat"
     static let readdir = "readdir"
     static let read = "read"
+    static let captureParent = "capture-parent"
+    static let submit = "submit"
 }
 
 /// Largest single frame in bytes, mirroring the owner's bound. A
@@ -60,7 +65,7 @@ final class OwnerClient {
     }
 
     func lookup(path: String) throws -> (node: OwnerNode, generation: UInt64, revision: UInt64) {
-        let response = try roundTrip(op: OwnerOp.lookup, path: path)
+        let response = try roundTrip(op: OwnerOp.lookup, params: .path(OwnerPathParams(path: path)))
         guard case .ok(let ok) = response.result else {
             throw refusedOrIncompatible(response: response, op: OwnerOp.lookup)
         }
@@ -71,7 +76,7 @@ final class OwnerClient {
     }
 
     func stat(path: String) throws -> (attr: OwnerAttr, generation: UInt64, revision: UInt64) {
-        let response = try roundTrip(op: OwnerOp.stat, path: path)
+        let response = try roundTrip(op: OwnerOp.stat, params: .path(OwnerPathParams(path: path)))
         guard case .ok(let ok) = response.result else {
             throw refusedOrIncompatible(response: response, op: OwnerOp.stat)
         }
@@ -84,7 +89,7 @@ final class OwnerClient {
     func readdir(path: String) throws -> (
         entries: [OwnerDirEntry], generation: UInt64, revision: UInt64
     ) {
-        let response = try roundTrip(op: OwnerOp.readdir, path: path)
+        let response = try roundTrip(op: OwnerOp.readdir, params: .path(OwnerPathParams(path: path)))
         guard case .ok(let ok) = response.result else {
             throw refusedOrIncompatible(response: response, op: OwnerOp.readdir)
         }
@@ -95,7 +100,7 @@ final class OwnerClient {
     }
 
     func read(path: String) throws -> (bytes: [UInt8], generation: UInt64, revision: UInt64) {
-        let response = try roundTrip(op: OwnerOp.read, path: path)
+        let response = try roundTrip(op: OwnerOp.read, params: .path(OwnerPathParams(path: path)))
         guard case .ok(let ok) = response.result else {
             throw refusedOrIncompatible(response: response, op: OwnerOp.read)
         }
@@ -107,6 +112,41 @@ final class OwnerClient {
         } catch {
             throw OwnerClientError.incompatible("read carried undecodable bytes: \(error)")
         }
+    }
+
+    /// Capture the parent-directory incarnation a create sends
+    /// against. `path` is the parent directory itself, never the
+    /// file: `""` for the drive root. The token is single-attempt —
+    /// a pass that replaces the namespace invalidates it — so the
+    /// caller re-captures on `StaleParent` instead of reusing it.
+    func captureParent(path: String) throws -> OwnerParentToken {
+        let response = try roundTrip(op: OwnerOp.captureParent, params: .path(OwnerPathParams(path: path)))
+        guard case .ok(let ok) = response.result else {
+            throw refusedOrIncompatible(response: response, op: OwnerOp.captureParent)
+        }
+        guard case .parentToken(let token) = ok else {
+            throw OwnerClientError.incompatible("capture-parent answered \(describe(ok))")
+        }
+        return token
+    }
+
+    /// Forward one mutation to the owner's single queue and block
+    /// for its terminal answer. A sent request is not a committed
+    /// write: only the terminal answer says what happened. No UI
+    /// path calls this in Stage 3 sub-PR 1; the Harness proves the
+    /// shape against a stub.
+    func submit(kind: OwnerMutationKind) throws -> OwnerMutationOutcome {
+        let response = try roundTrip(
+            op: OwnerOp.submit,
+            params: .submit(OwnerSubmitParams(kind: kind))
+        )
+        guard case .ok(let ok) = response.result else {
+            throw refusedOrIncompatible(response: response, op: OwnerOp.submit)
+        }
+        guard case .submitted(let outcome) = ok else {
+            throw OwnerClientError.incompatible("submit answered \(describe(ok))")
+        }
+        return outcome
     }
 
     private func refusedOrIncompatible(response: OwnerResponse, op: String) -> OwnerClientError {
@@ -122,13 +162,15 @@ final class OwnerClient {
         case .stat: return "Stat"
         case .readdir: return "Readdir"
         case .read: return "Read"
+        case .parentToken: return "ParentToken"
+        case .submitted: return "Submitted"
         }
     }
 
-    private func roundTrip(op: String, path: String) throws -> OwnerResponse {
+    private func roundTrip(op: String, params: OwnerParams) throws -> OwnerResponse {
         let id = nextId
         nextId &+= 1
-        let request = OwnerRequest(v: 1, id: id, op: op, params: OwnerPathParams(path: path))
+        let request = OwnerRequest(v: 2, id: id, op: op, params: params)
         let body: Data
         do {
             body = try JSONEncoder().encode(request)
@@ -142,8 +184,8 @@ final class OwnerClient {
         } catch {
             throw OwnerClientError.incompatible("cannot decode \(op) response: \(error)")
         }
-        guard response.v == 1 else {
-            throw OwnerClientError.incompatible("\(op) answered version \(response.v), want 1")
+        guard response.v == 2 else {
+            throw OwnerClientError.incompatible("\(op) answered version \(response.v), want 2")
         }
         guard response.id == id else {
             throw OwnerClientError.incompatible("\(op) echoed id \(response.id), want \(id)")

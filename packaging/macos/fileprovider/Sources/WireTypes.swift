@@ -4,8 +4,10 @@
 // externally tagged enums encode as single-key objects
 // (`{"ok": {"Lookup": {...}}}`), and absent identity keys decode
 // as `nil` (legacy entries) exactly like Rust's `#[serde(default)]`.
-// Read-only: lookup, stat, readdir, read. Nothing here names a
-// mutation operation.
+// Stage 2 covered lookup, stat, readdir, read. Stage 3 (sub-PR 1)
+// adds the mutation vocabulary — capture-parent, submit, and the
+// nine mutation kinds with their required identity preconditions —
+// for wire proof; no UI path constructs a mutation yet.
 
 import Foundation
 
@@ -15,13 +17,48 @@ struct OwnerPathParams: Codable {
 }
 
 /// One framed request: version, client-matched id, operation name,
-/// and path parameters (`null` where an op takes none — unused in
-/// Stage 2, kept so the shape matches the wire).
+/// and per-operation parameters (`null` where an op takes none).
+/// Path-addressed calls carry `{"path": ...}`; `submit` carries
+/// `{"kind": ...}`.
 struct OwnerRequest: Codable {
     var v: Int
     var id: UInt64
     var op: String
-    var params: OwnerPathParams?
+    var params: OwnerParams?
+}
+
+/// The per-operation parameters, encoded as the inner document
+/// (`{"path": ...}` or `{"kind": ...}`), never wrapped.
+enum OwnerParams: Codable {
+    case path(OwnerPathParams)
+    case submit(OwnerSubmitParams)
+
+    private enum Key: String, CodingKey {
+        case kind
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: Key.self)
+        if container.contains(.kind) {
+            self = .submit(try OwnerSubmitParams(from: decoder))
+        } else {
+            self = .path(try OwnerPathParams(from: decoder))
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        switch self {
+        case .path(let params):
+            try params.encode(to: encoder)
+        case .submit(let params):
+            try params.encode(to: encoder)
+        }
+    }
+}
+
+/// Parameters for `submit`: one of the nine mutation kinds.
+struct OwnerSubmitParams: Codable {
+    var kind: OwnerMutationKind
 }
 
 /// One framed response: the version, the echoed request id, and
@@ -69,20 +106,25 @@ enum OwnerResult: Codable {
     }
 }
 
-/// The read results Stage 2 consumes. Each carries the serving
-/// generation and durable revision it was served from, so the
-/// adapter correlates answers instead of assuming recency.
+/// The results the adapter consumes. Read results carry the
+/// serving generation and durable revision they were served from,
+/// so the adapter correlates answers instead of assuming
+/// recency. Mutation results are the queue's terminal answers.
 enum OwnerOk: Codable {
     case lookup(node: OwnerNode, generation: UInt64, revision: UInt64)
     case stat(attr: OwnerAttr, generation: UInt64, revision: UInt64)
     case readdir(entries: [OwnerDirEntry], generation: UInt64, revision: UInt64)
     case read(bytesHex: String, generation: UInt64, revision: UInt64)
+    case parentToken(OwnerParentToken)
+    case submitted(OwnerMutationOutcome)
 
     private enum Key: String, CodingKey {
         case Lookup
         case Stat
         case Readdir
         case Read
+        case ParentToken
+        case Submitted
     }
 
     private struct LookupBody: Codable {
@@ -109,6 +151,14 @@ enum OwnerOk: Codable {
         var revision: UInt64
     }
 
+    private struct ParentTokenBody: Codable {
+        var token: OwnerParentToken
+    }
+
+    private struct SubmittedBody: Codable {
+        var outcome: OwnerMutationOutcome
+    }
+
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: Key.self)
         if container.contains(.Lookup) {
@@ -123,11 +173,17 @@ enum OwnerOk: Codable {
         } else if container.contains(.Read) {
             let body = try container.decode(ReadBody.self, forKey: .Read)
             self = .read(bytesHex: body.bytes_hex, generation: body.generation, revision: body.revision)
+        } else if container.contains(.ParentToken) {
+            let body = try container.decode(ParentTokenBody.self, forKey: .ParentToken)
+            self = .parentToken(body.token)
+        } else if container.contains(.Submitted) {
+            let body = try container.decode(SubmittedBody.self, forKey: .Submitted)
+            self = .submitted(body.outcome)
         } else {
             throw DecodingError.dataCorrupted(
                 DecodingError.Context(
                     codingPath: decoder.codingPath,
-                    debugDescription: "ok names no known read result"
+                    debugDescription: "ok names no known result"
                 )
             )
         }
@@ -156,6 +212,10 @@ enum OwnerOk: Codable {
                 ReadBody(bytes_hex: bytesHex, generation: generation, revision: revision),
                 forKey: .Read
             )
+        case .parentToken(let token):
+            try container.encode(ParentTokenBody(token: token), forKey: .ParentToken)
+        case .submitted(let outcome):
+            try container.encode(SubmittedBody(outcome: outcome), forKey: .Submitted)
         }
     }
 }
@@ -325,5 +385,300 @@ enum HexCodec {
     enum HexError: Error {
         case oddLength
         case badDigit(String)
+    }
+}
+
+// MARK: - Stage 3 mutation types
+
+// The wire form of `WireParentToken`: the queue counter bound to
+// the owner instance that minted it. Never invented client-side,
+// never reused across an owner restart — a token from a dead
+// instance refuses as `StaleParent`.
+struct OwnerParentToken: Codable {
+    var instance: UInt64
+    var counter: UInt64
+}
+
+// The wire form of `WireFileIdentity`: the exact content base a
+// commit or guarded setattr sends against, and the exact identity
+// a successful outcome reports.
+struct OwnerFileIdentity: Codable {
+    var size: UInt64
+    var executable: Bool
+    var chunks: [String]
+}
+
+// The wire form of `WireMutationKind`: all nine operations the
+// owner forwards verbatim to the single queue. `expected_identity`
+// is the caller's entry precondition (lowercase hex, required
+// since wire v2): the owner validates it at execution inside the
+// serialized queue and refuses a mismatch instead of landing on
+// the wrong entry. Creations address absent paths and carry no
+// entry precondition; their parent token covers the parent
+// instead. `Fold` is mirrored for wire completeness but never
+// sent by the adapter.
+indirect enum OwnerMutationKind: Codable {
+    case mkdir(path: String)
+    case createFile(path: String, parent: OwnerParentToken)
+    case commitFile(
+        path: String,
+        base: OwnerFileIdentity,
+        executable: Bool,
+        contentHex: String,
+        expectedIdentity: String
+    )
+    case appendFile(path: String, contentHex: String, expectedIdentity: String)
+    case unlink(path: String, expectedIdentity: String)
+    case rmdir(path: String, expectedIdentity: String)
+    case rename(from: String, to: String, noReplace: Bool, expectedIdentity: String)
+    case setAttrs(
+        path: String,
+        size: UInt64?,
+        executable: Bool?,
+        base: OwnerFileIdentity?,
+        expectedIdentity: String
+    )
+    case fold(members: [OwnerFoldMember])
+
+    private enum Key: String, CodingKey {
+        case Mkdir
+        case CreateFile
+        case CommitFile
+        case AppendFile
+        case Unlink
+        case Rmdir
+        case Rename
+        case SetAttrs
+        case Fold
+    }
+
+    private struct MkdirBody: Codable {
+        var path: String
+    }
+
+    private struct CreateFileBody: Codable {
+        var path: String
+        var parent: OwnerParentToken
+    }
+
+    private struct CommitFileBody: Codable {
+        var path: String
+        var base: OwnerFileIdentity
+        var executable: Bool
+        var content_hex: String
+        var expected_identity: String
+    }
+
+    private struct AppendFileBody: Codable {
+        var path: String
+        var content_hex: String
+        var expected_identity: String
+    }
+
+    private struct UnlinkBody: Codable {
+        var path: String
+        var expected_identity: String
+    }
+
+    private struct RmdirBody: Codable {
+        var path: String
+        var expected_identity: String
+    }
+
+    private struct RenameBody: Codable {
+        var from: String
+        var to: String
+        var no_replace: Bool
+        var expected_identity: String
+    }
+
+    private struct SetAttrsBody: Codable {
+        var path: String
+        var size: UInt64?
+        var executable: Bool?
+        var base: OwnerFileIdentity?
+        var expected_identity: String
+    }
+
+    private struct FoldBody: Codable {
+        var members: [OwnerFoldMember]
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: Key.self)
+        if container.contains(.Mkdir) {
+            let body = try container.decode(MkdirBody.self, forKey: .Mkdir)
+            self = .mkdir(path: body.path)
+        } else if container.contains(.CreateFile) {
+            let body = try container.decode(CreateFileBody.self, forKey: .CreateFile)
+            self = .createFile(path: body.path, parent: body.parent)
+        } else if container.contains(.CommitFile) {
+            let body = try container.decode(CommitFileBody.self, forKey: .CommitFile)
+            self = .commitFile(
+                path: body.path,
+                base: body.base,
+                executable: body.executable,
+                contentHex: body.content_hex,
+                expectedIdentity: body.expected_identity
+            )
+        } else if container.contains(.AppendFile) {
+            let body = try container.decode(AppendFileBody.self, forKey: .AppendFile)
+            self = .appendFile(
+                path: body.path,
+                contentHex: body.content_hex,
+                expectedIdentity: body.expected_identity
+            )
+        } else if container.contains(.Unlink) {
+            let body = try container.decode(UnlinkBody.self, forKey: .Unlink)
+            self = .unlink(path: body.path, expectedIdentity: body.expected_identity)
+        } else if container.contains(.Rmdir) {
+            let body = try container.decode(RmdirBody.self, forKey: .Rmdir)
+            self = .rmdir(path: body.path, expectedIdentity: body.expected_identity)
+        } else if container.contains(.Rename) {
+            let body = try container.decode(RenameBody.self, forKey: .Rename)
+            self = .rename(
+                from: body.from,
+                to: body.to,
+                noReplace: body.no_replace,
+                expectedIdentity: body.expected_identity
+            )
+        } else if container.contains(.SetAttrs) {
+            let body = try container.decode(SetAttrsBody.self, forKey: .SetAttrs)
+            self = .setAttrs(
+                path: body.path,
+                size: body.size,
+                executable: body.executable,
+                base: body.base,
+                expectedIdentity: body.expected_identity
+            )
+        } else if container.contains(.Fold) {
+            let body = try container.decode(FoldBody.self, forKey: .Fold)
+            self = .fold(members: body.members)
+        } else {
+            throw DecodingError.dataCorrupted(
+                DecodingError.Context(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "mutation kind names no known operation"
+                )
+            )
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: Key.self)
+        switch self {
+        case .mkdir(let path):
+            try container.encode(MkdirBody(path: path), forKey: .Mkdir)
+        case .createFile(let path, let parent):
+            try container.encode(CreateFileBody(path: path, parent: parent), forKey: .CreateFile)
+        case .commitFile(let path, let base, let executable, let contentHex, let expectedIdentity):
+            try container.encode(
+                CommitFileBody(
+                    path: path,
+                    base: base,
+                    executable: executable,
+                    content_hex: contentHex,
+                    expected_identity: expectedIdentity
+                ),
+                forKey: .CommitFile
+            )
+        case .appendFile(let path, let contentHex, let expectedIdentity):
+            try container.encode(
+                AppendFileBody(path: path, content_hex: contentHex, expected_identity: expectedIdentity),
+                forKey: .AppendFile
+            )
+        case .unlink(let path, let expectedIdentity):
+            try container.encode(
+                UnlinkBody(path: path, expected_identity: expectedIdentity),
+                forKey: .Unlink
+            )
+        case .rmdir(let path, let expectedIdentity):
+            try container.encode(
+                RmdirBody(path: path, expected_identity: expectedIdentity),
+                forKey: .Rmdir
+            )
+        case .rename(let from, let to, let noReplace, let expectedIdentity):
+            try container.encode(
+                RenameBody(
+                    from: from,
+                    to: to,
+                    no_replace: noReplace,
+                    expected_identity: expectedIdentity
+                ),
+                forKey: .Rename
+            )
+        case .setAttrs(let path, let size, let executable, let base, let expectedIdentity):
+            try container.encode(
+                SetAttrsBody(
+                    path: path,
+                    size: size,
+                    executable: executable,
+                    base: base,
+                    expected_identity: expectedIdentity
+                ),
+                forKey: .SetAttrs
+            )
+        case .fold(let members):
+            try container.encode(FoldBody(members: members), forKey: .Fold)
+        }
+    }
+}
+
+// One folded member: a non-`Fold` operation plus whether it is the
+// commit-forcing event. Nesting a fold inside a fold refuses at
+// the wire.
+struct OwnerFoldMember: Codable {
+    var kind: OwnerMutationKind
+    var forcer: Bool
+}
+
+// The wire form of `WireMutationOutcome`: the terminal answer to a
+// submitted mutation. The adapter decodes the non-fold outcomes;
+// a fold outcome is a protocol violation here because the adapter
+// never submits folds.
+enum OwnerMutationOutcome: Codable {
+    case done
+    case created(OwnerFileIdentity)
+    case committed(OwnerFileIdentity)
+
+    init(from decoder: Decoder) throws {
+        if let single = try? decoder.singleValueContainer(),
+            let tag = try? single.decode(String.self), tag == "Done"
+        {
+            self = .done
+            return
+        }
+        let container = try decoder.container(keyedBy: OutcomeKey.self)
+        if container.contains(.Created) {
+            self = .created(try container.decode(OwnerFileIdentity.self, forKey: .Created))
+        } else if container.contains(.Committed) {
+            self = .committed(try container.decode(OwnerFileIdentity.self, forKey: .Committed))
+        } else {
+            throw DecodingError.dataCorrupted(
+                DecodingError.Context(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "mutation outcome names no known result"
+                )
+            )
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        switch self {
+        case .done:
+            var single = encoder.singleValueContainer()
+            try single.encode("Done")
+        case .created(let identity):
+            var container = encoder.container(keyedBy: OutcomeKey.self)
+            try container.encode(identity, forKey: .Created)
+        case .committed(let identity):
+            var container = encoder.container(keyedBy: OutcomeKey.self)
+            try container.encode(identity, forKey: .Committed)
+        }
+    }
+
+    private enum OutcomeKey: String, CodingKey {
+        case Created
+        case Committed
     }
 }

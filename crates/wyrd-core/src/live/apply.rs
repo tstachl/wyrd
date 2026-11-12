@@ -578,8 +578,11 @@ where
     /// is `NotFound`; a conflicted path is `Conflicted`. `None`
     /// expected skips the check entirely: in-process legacy callers
     /// (FUSE handles carry their own stale-base boundary) keep
-    /// exactly their current behavior.
-    fn check_expected_identity(
+    /// exactly their current behavior. `pub(super)` for the
+    /// decision-table unit tests: every `apply_mutation` arm
+    /// refuses multi-head drives before `build_root`, so the
+    /// `Conflict` branch below is defensive there and pinned here.
+    pub(super) fn check_expected_identity(
         expected: &Option<EntryIdentity>,
         node: Option<&Node>,
         path: &str,

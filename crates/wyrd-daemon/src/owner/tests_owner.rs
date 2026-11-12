@@ -3613,3 +3613,116 @@ fn connection_slot_reservation_is_bounded() {
         "the pool stays at the bound"
     );
 }
+
+/// A v1 request against a v2 server refuses as UnknownVersion naming
+/// the want: the old wire cannot express the identity precondition,
+/// so cross-version submission fails closed instead of running
+/// path-only under a conditional client.
+#[test]
+fn submit_refuses_the_old_wire_version() {
+    let (server, _parts, dir, stop, loop_thread) = running_parts();
+    let response = server.dispatch(RawRequest {
+        v: 1,
+        id: 7,
+        op: OP_LOOKUP.to_string(),
+        params: serde_json::to_value(PathParams {
+            path: "".to_string(),
+        })
+        .unwrap(),
+    });
+    match response.result {
+        WireResult::Err(error) => {
+            assert_eq!(error.code, WireErrorCode::UnknownVersion);
+            assert!(
+                error.message.contains("want 2"),
+                "the refusal names the current version: {}",
+                error.message
+            );
+            assert_eq!(
+                response.v, WIRE_VERSION,
+                "refusals carry the serving version"
+            );
+        }
+        other => panic!("a v1 request refuses: {other:?}"),
+    }
+    stop.store(true, Ordering::Relaxed);
+    spawn_loop_done(loop_thread);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// The identity precondition is enforced inside the serialized
+/// queue: a wrong token refuses StaleEntry (naming expected and
+/// found), a missing path refuses NotFound, and the matching token
+/// commits. The wrong-token case proves the four-way split — stale
+/// entry is neither stale content nor a missing path.
+#[test]
+fn submit_enforces_the_expected_identity() {
+    let (server, _parts, dir, stop, loop_thread) = running_parts();
+    let (identity, base) = match dispatch_ok(&server, OP_LOOKUP, "seed.txt") {
+        WireOk::Lookup { node, .. } => match node {
+            WireNode::File {
+                size,
+                executable,
+                chunks,
+                identity: Some(token),
+            } => (
+                token,
+                WireFileIdentity {
+                    size,
+                    executable,
+                    chunks,
+                },
+            ),
+            other => panic!("seed.txt serves a token-bearing file: {other:?}"),
+        },
+        other => panic!("seed.txt serves: {other:?}"),
+    };
+    // Wrong token, right base: the entry check fires first.
+    let wrong = "ff".repeat(32);
+    let error = submit_err(
+        &server,
+        WireMutationKind::CommitFile {
+            path: "seed.txt".to_string(),
+            base: base.clone(),
+            executable: false,
+            content_hex: "00".to_string(),
+            expected_identity: wrong.clone(),
+        },
+    );
+    assert_eq!(error.code, WireErrorCode::StaleEntry);
+    assert!(
+        error.message.contains(&wrong) && error.message.contains(&identity),
+        "the refusal names expected and found: {}",
+        error.message
+    );
+    // Missing path with a token: NotFound, never StaleEntry.
+    let error = submit_err(
+        &server,
+        WireMutationKind::CommitFile {
+            path: "missing.txt".to_string(),
+            base: base.clone(),
+            executable: false,
+            content_hex: "00".to_string(),
+            expected_identity: wrong,
+        },
+    );
+    assert_eq!(error.code, WireErrorCode::NotFound);
+    // Matching token: the write commits.
+    let outcome = submit_ok(
+        &server,
+        WireMutationKind::CommitFile {
+            path: "seed.txt".to_string(),
+            base,
+            executable: false,
+            content_hex: "00".to_string(),
+            expected_identity: identity,
+        },
+    );
+    assert!(
+        matches!(outcome, WireMutationOutcome::Committed(_)),
+        "the matching token commits: {outcome:?}"
+    );
+    stop.store(true, Ordering::Relaxed);
+    spawn_loop_done(loop_thread);
+    std::fs::remove_dir_all(dir).unwrap();
+}

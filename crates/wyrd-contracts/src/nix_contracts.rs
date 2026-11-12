@@ -286,14 +286,16 @@ fn fileprovider_swift_stays_within_the_owner_boundary() {
     );
 }
 
-/// Stage 2 pins the Swift adapter's read-only surface: the four
-/// operation names and the identifier/anchor vocabularies appear,
-/// and no mutation-side or crypto vocabulary does. The Harness
-/// proves behavior against a stub owner; this pins the surface
-/// against drift, so a Stage 3 mutation op cannot sneak in as an
-/// unreviewed literal.
+/// Stage 3 sub-PR 1 widens the Swift adapter's vocabulary to the
+/// owner mutation calls it must speak: the two mutation-side
+/// operations and the identity precondition every entry-addressed
+/// kind carries (the adapter never sends a mutation in this
+/// sub-PR — no UI path constructs one — but the wire proof needs
+/// the shapes). The boundary still forbids store, engine, sync and
+/// credential vocabulary. The Harness proves the framing against
+/// a stub owner; this pins the surface against drift.
 #[test]
-fn fileprovider_stage2_stays_read_only() {
+fn fileprovider_mutation_vocabulary_stays_owner_shaped() {
     let root = workspace_root();
     let (files, errors) = collect_files(
         &root.join("packaging/macos/fileprovider/Sources"),
@@ -316,6 +318,9 @@ fn fileprovider_stage2_stays_read_only() {
         "\"stat\"",
         "\"readdir\"",
         "\"read\"",
+        "\"submit\"",
+        "\"capture-parent\"",
+        "expected_identity",
         "wyrd:v1:",
         "wyrd:legacy:v1:",
         "wyrd-anchor-v1:",
@@ -325,18 +330,23 @@ fn fileprovider_stage2_stays_read_only() {
         assert!(text.contains(required), "the adapter names {required}");
     }
     for forbidden in [
-        "\"submit\"",
-        "\"capture-parent\"",
-        "CreateFile",
-        "Mkdir",
-        "ParentToken",
+        "DurableStore",
+        "Mailbox",
+        "Nostr",
+        "nostr",
+        "Engine",
+        "Vault",
         "CryptoKit",
         "BLAKE3",
         "blake3",
+        "Tauri",
+        "tauri",
+        "Keychain",
+        "NSXPC",
     ] {
         assert!(
             !text.contains(forbidden),
-            "the read-only adapter must not name {forbidden}"
+            "the adapter must not name {forbidden}"
         );
     }
 }
