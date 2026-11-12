@@ -206,6 +206,39 @@ impl StorageId {
     }
 }
 
+/// Domain-separation context for the File Provider socket fingerprint
+/// (Stage 2 design contract): the App Group socket filename derives
+/// from the canonical DriveId bytes under this context, never from a
+/// bare hash, so the derivation cannot collide with any content,
+/// storage, or membership identity.
+pub const FILEPROVIDER_SOCKET_CONTEXT: &str = "wyrd-fileprovider-socket-v1";
+
+/// Fingerprint width in bytes: 64 bits, hex-encoded to 16 lowercase
+/// characters in the socket filename. The filename must fit the
+/// `sun_path` ceiling (103 usable bytes on macOS) under a real home
+/// directory: `<container>/Sockets/` already spends ~62 + username
+/// bytes, so a 160-bit encoding would not bind for ordinary users.
+/// 64 bits is a local disambiguator, not a security identity — a
+/// handful of drives collide with probability ~k²/2⁶⁵ — and any
+/// collision fails closed at bind (the daemon never unlinks a live
+/// socket), never serves the wrong drive.
+pub const FILEPROVIDER_FINGERPRINT_BYTES: usize = 8;
+
+impl DriveId {
+    /// The App Group socket fingerprint for this drive: the first
+    /// [`FILEPROVIDER_FINGERPRINT_BYTES`] bytes of the
+    /// domain-separated derivation, hex-encoded. The daemon binds
+    /// `Sockets/<fingerprint>.sock` and publishes a
+    /// `by-drive/<drive-hex>.sock` symlink; the Swift extension
+    /// resolves only the symlink, so it never computes this hash —
+    /// one implementation, in this crate, shared by the daemon and
+    /// the design contract.
+    pub fn fileprovider_socket_fingerprint(&self) -> String {
+        let full = blake3::derive_key(FILEPROVIDER_SOCKET_CONTEXT, self.as_bytes());
+        hex::encode(&full[..FILEPROVIDER_FINGERPRINT_BYTES])
+    }
+}
+
 /// A collection length that does not fit the wire format's `u32` counts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 #[error("length {0} exceeds the u32 wire count")]
@@ -283,6 +316,37 @@ mod tests {
     fn unknown_kind_bytes_are_rejected() {
         assert_eq!(ObjectKind::from_byte(0x04), None);
         assert_eq!(ObjectKind::from_byte(0xFF), None);
+    }
+
+    #[test]
+    fn fileprovider_socket_fingerprint_is_stable_hex() {
+        let drive = DriveId::from_bytes([0x42; 32]);
+        let first = drive.fileprovider_socket_fingerprint();
+        assert_eq!(first.len(), FILEPROVIDER_FINGERPRINT_BYTES * 2);
+        assert!(
+            first
+                .chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+            "fingerprint is lowercase hex: {first}"
+        );
+        assert_eq!(
+            drive.fileprovider_socket_fingerprint(),
+            first,
+            "the fingerprint is deterministic per drive"
+        );
+        let other = DriveId::from_bytes([0x43; 32]);
+        assert_ne!(
+            other.fileprovider_socket_fingerprint(),
+            first,
+            "distinct drives must not share a socket filename"
+        );
+        // Golden row: changing the context string or the truncation
+        // must fail loudly here, never drift the daemon/extension
+        // socket agreement silently.
+        assert_eq!(
+            first, "399a8bbca022f440",
+            "golden fingerprint for the 0x42 drive"
+        );
     }
 
     #[test]

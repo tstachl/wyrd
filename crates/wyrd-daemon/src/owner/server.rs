@@ -45,6 +45,7 @@ use wyrd_core::scrub::ScrubQueue;
 use wyrd_core::view::{NamespaceView, Node, ViewError};
 use wyrd_core::wake::WakeSignal;
 use wyrd_core::want::{WantError, WantRegistry};
+use wyrd_format::DriveId;
 
 use crate::vault::OwnerView;
 
@@ -74,6 +75,148 @@ pub fn bind_listener(socket_path: &Path) -> std::io::Result<UnixListener> {
     Ok(listener)
 }
 
+/// Env bootstrap for the Stage 2 File Provider socket (dev only, not
+/// a registry): the absolute path of the macOS App Group container.
+/// Set together with [`FILEPROVIDER_DRIVE_ID_ENV`]. Absent (both
+/// unset) means the owner serves the drive-directory socket only —
+/// the Linux behavior and the CI behavior. One set without the other
+/// is a misconfiguration and refuses the run; a malformed value
+/// refuses too, never a silent primary-only fallback.
+pub const FILEPROVIDER_GROUP_CONTAINER_ENV: &str = "WYRD_FILEPROVIDER_GROUP_CONTAINER";
+
+/// The explicitly configured drive, as 64 lowercase hex chars, paired
+/// with [`FILEPROVIDER_GROUP_CONTAINER_ENV`]. Stage 2 has no
+/// multi-drive registry yet, so the drive behind the group socket is
+/// stated here; the registry owns this association in production.
+/// The daemon never invents it, never guesses a single-drive
+/// default.
+pub const FILEPROVIDER_DRIVE_ID_ENV: &str = "WYRD_FILEPROVIDER_DRIVE_ID";
+
+/// The resolved dev bootstrap: where to bind, and for which drive.
+#[derive(Debug)]
+pub struct GroupContainerConfig {
+    /// The existing App Group container directory. The daemon creates
+    /// only `Sockets/` (and `by-drive/`) inside it, never the
+    /// container itself — a hand-created container is a decoy the
+    /// sandboxed extension cannot reach.
+    pub group_container: PathBuf,
+    /// The drive the group socket serves, explicitly configured.
+    pub drive: DriveId,
+}
+
+/// Read the Stage 2 dev bootstrap from the environment: `None` when
+/// neither variable is set, `Some(Err)` on any partial or malformed
+/// configuration (fail closed, never a silent fallback).
+pub fn group_container_from_env() -> Option<Result<GroupContainerConfig, String>> {
+    let container = std::env::var_os(FILEPROVIDER_GROUP_CONTAINER_ENV).map(PathBuf::from);
+    let drive_hex = std::env::var(FILEPROVIDER_DRIVE_ID_ENV).ok();
+    match (container, drive_hex) {
+        (None, None) => None,
+        (Some(group_container), Some(drive_hex)) => Some(parse_group_config(group_container, &drive_hex)),
+        (None, Some(_)) => Some(Err(format!(
+            "{FILEPROVIDER_GROUP_CONTAINER_ENV} is unset while {FILEPROVIDER_DRIVE_ID_ENV} is set; set both or neither"
+        ))),
+        (Some(_), None) => Some(Err(format!(
+            "{FILEPROVIDER_DRIVE_ID_ENV} is unset while {FILEPROVIDER_GROUP_CONTAINER_ENV} is set; set both or neither"
+        ))),
+    }
+}
+
+fn parse_group_config(
+    group_container: PathBuf,
+    drive_hex: &str,
+) -> Result<GroupContainerConfig, String> {
+    if !group_container.is_absolute() {
+        return Err(format!(
+            "{FILEPROVIDER_GROUP_CONTAINER_ENV} must be absolute: {}",
+            group_container.display()
+        ));
+    }
+    if !group_container.is_dir() {
+        return Err(format!(
+            "{FILEPROVIDER_GROUP_CONTAINER_ENV} names no existing container directory (the daemon never creates it): {}",
+            group_container.display()
+        ));
+    }
+    let bytes = hex::decode(drive_hex)
+        .map_err(|error| format!("{FILEPROVIDER_DRIVE_ID_ENV} is not hex: {error}"))?;
+    let raw: [u8; 32] = bytes.try_into().map_err(|bytes: Vec<u8>| {
+        format!(
+            "{FILEPROVIDER_DRIVE_ID_ENV} must be 32 bytes (64 hex chars), got {} bytes",
+            bytes.len()
+        )
+    })?;
+    if drive_hex.chars().any(|c| c.is_ascii_uppercase()) {
+        return Err(format!("{FILEPROVIDER_DRIVE_ID_ENV} must be lowercase hex"));
+    }
+    Ok(GroupContainerConfig {
+        group_container,
+        drive: DriveId::from_bytes(raw),
+    })
+}
+
+/// The App Group socket for a drive:
+/// `<container>/Sockets/<fingerprint>.sock`. The filename derives
+/// from [`DriveId::fileprovider_socket_fingerprint`]; the daemon is
+/// the only computer of it, the Swift extension resolves the
+/// [`group_symlink_path`] instead, so the derivation cannot drift
+/// between the two sides.
+pub fn group_socket_path(group_container: &Path, drive: &DriveId) -> PathBuf {
+    group_container
+        .join("Sockets")
+        .join(format!("{}.sock", drive.fileprovider_socket_fingerprint()))
+}
+
+/// The stable alias the extension resolves:
+/// `<container>/Sockets/by-drive/<drive-hex>.sock`, a symlink to the
+/// fingerprint filename beside it. The domain carries the drive id,
+/// so the extension needs no hash — and no second derivation that
+/// could disagree with the daemon's.
+pub fn group_symlink_path(group_container: &Path, drive: &DriveId) -> PathBuf {
+    group_container
+        .join("Sockets")
+        .join("by-drive")
+        .join(format!("{drive}.sock"))
+}
+
+/// Bind the group socket with a live-endpoint check: an existing
+/// entry that still connects is a live owner — never unlink it, fail
+/// closed (`AddrInUse`) instead. A dead entry unlinks like the
+/// primary's stale reclaim. The caller holds the store lock, so the
+/// only competing binder is a cross-drive fingerprint collision,
+/// which also fails here rather than stealing the path.
+fn bind_group_listener(socket_path: &Path) -> std::io::Result<UnixListener> {
+    if socket_path.exists() {
+        match UnixStream::connect(socket_path) {
+            Ok(_) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::AddrInUse,
+                    format!(
+                        "fileprovider socket already served: {}",
+                        socket_path.display()
+                    ),
+                ));
+            }
+            Err(_) => {
+                let _ = std::fs::remove_file(socket_path);
+            }
+        }
+    }
+    bind_listener(socket_path)
+}
+
+/// Publish (or republish) the `by-drive` symlink beside the group
+/// socket. The target is the bare fingerprint filename, relative so
+/// the alias survives container moves.
+fn publish_group_symlink(link: &Path, fingerprint_file_name: &str) -> std::io::Result<()> {
+    if let Some(parent) = link.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let _ = std::fs::remove_file(link);
+    std::os::unix::fs::symlink(format!("../{fingerprint_file_name}"), link)?;
+    Ok(())
+}
+
 /// Largest whole-file read the interface serves in one request.
 /// Bounds one request's memory and the response frame together: the
 /// hex encoding doubles the bytes on the wire, so 32 MiB reads stay
@@ -95,12 +238,14 @@ pub const DEFAULT_MAX_READ_BYTES: u64 = 32 << 20;
 /// single over-bound submit.
 pub const MAX_SUBMIT_CONTENT_BYTES: usize = 32 << 20;
 
-/// Maximum simultaneous owner-interface connections. One thread
-/// serves each connection, so the accept loop enforces a small fixed
-/// pool: a connection past the bound is closed immediately — the
-/// client treats the break as unconfirmed — and an accept flood
-/// cannot grow threads without bound. Idle connections hold their
-/// slot; consumers keep few, short-lived connections.
+/// Maximum simultaneous owner-interface connections, shared by
+/// every accept loop on one server: a second listener is a second
+/// accept path, never a second budget. One thread serves each
+/// connection, so the accept loops share one fixed pool: a
+/// connection past the bound is closed immediately — the client
+/// treats the break as unconfirmed — and an accept flood cannot
+/// grow threads without bound. Idle connections hold their slot;
+/// consumers keep few, short-lived connections.
 pub const MAX_OWNER_CONNECTIONS: usize = 16;
 
 /// How long the read side blocks registering demand before failing
@@ -229,6 +374,9 @@ pub struct OwnerService {
     socket_path: PathBuf,
     stop: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
+    group_socket_path: Option<PathBuf>,
+    group_thread: Option<std::thread::JoinHandle<()>>,
+    group_symlink: Option<PathBuf>,
     /// Whether the socket file has been removed. Shutdown removes at
     /// most once: after an explicit shutdown the drop is a no-op, so
     /// a late drop can never unlink a successor owner's socket file
@@ -254,6 +402,78 @@ impl OwnerService {
             socket_path,
             stop,
             thread: Some(thread),
+            group_socket_path: None,
+            group_thread: None,
+            group_symlink: None,
+            removed: false,
+        })
+    }
+
+    /// Bind the drive-directory socket **and** the App Group socket
+    /// for the explicitly configured drive, serving both from one
+    /// [`OwnerServer`] (one owner-instance identity, one uid check).
+    /// Private: composers enter through [`OwnerService::bind_for_composer`],
+    /// which checks the configured drive against the served one
+    /// before anything binds. All-or-nothing: a group-side failure
+    /// unbinds the primary and refuses, so the owner never runs
+    /// half-bound — deaf to the extension but alive to the CLI.
+    /// The caller holds the store lock throughout, as with
+    /// [`OwnerService::bind`]. Stage 2 dev bootstrap only; the
+    /// multi-drive registry owns this association in production.
+    fn bind_with_group_container(
+        handles: OwnerHandles,
+        drive_dir: &Path,
+        drive: &DriveId,
+        group_container: &Path,
+    ) -> std::io::Result<Self> {
+        let server = Arc::new(OwnerServer::new(handles));
+        let socket_path = super::socket_path_for(drive_dir);
+        let listener = bind_listener(&socket_path)?;
+        let group_path = group_socket_path(group_container, drive);
+        let link_path = group_symlink_path(group_container, drive);
+        // Create only `Sockets/` inside the resolved container, never
+        // the container itself (a hand-created container is a decoy).
+        if let Some(sockets) = group_path.parent() {
+            if let Err(error) = std::fs::create_dir_all(sockets) {
+                let _ = std::fs::remove_file(&socket_path);
+                return Err(error);
+            }
+        }
+        let group_listener = match bind_group_listener(&group_path) {
+            Ok(listener) => listener,
+            Err(error) => {
+                let _ = std::fs::remove_file(&socket_path);
+                return Err(error);
+            }
+        };
+        let fingerprint_file_name = format!("{}.sock", drive.fileprovider_socket_fingerprint());
+        if let Err(error) = publish_group_symlink(&link_path, &fingerprint_file_name) {
+            let _ = std::fs::remove_file(&socket_path);
+            let _ = std::fs::remove_file(&group_path);
+            return Err(error);
+        }
+        let stop = Arc::new(AtomicBool::new(false));
+        let thread = {
+            let (server, stop, listener) = (Arc::clone(&server), Arc::clone(&stop), listener);
+            std::thread::spawn(move || server.serve_on(&listener, &stop))
+        };
+        let group_thread = {
+            let (server, stop) = (Arc::clone(&server), Arc::clone(&stop));
+            std::thread::spawn(move || server.serve_on(&group_listener, &stop))
+        };
+        tracing::info!(
+            primary = %socket_path.display(),
+            group = %group_path.display(),
+            link = %link_path.display(),
+            "owner interface serving drive-directory and fileprovider sockets"
+        );
+        Ok(OwnerService {
+            socket_path,
+            stop,
+            thread: Some(thread),
+            group_socket_path: Some(group_path),
+            group_thread: Some(group_thread),
+            group_symlink: Some(link_path),
             removed: false,
         })
     }
@@ -261,6 +481,52 @@ impl OwnerService {
     /// The bound socket path, for diagnostics and tests.
     pub fn socket_path(&self) -> &Path {
         &self.socket_path
+    }
+
+    /// The bound App Group socket path, when
+    /// [`OwnerService::bind_with_group_container`] configured one.
+    pub fn group_socket_path(&self) -> Option<&Path> {
+        self.group_socket_path.as_deref()
+    }
+
+    /// Bind for an owner-mode composer (`wyrd vault`, `wyrd mount`):
+    /// the drive-directory socket, plus the App Group socket when
+    /// the dev bootstrap names this drive. The configured drive is
+    /// checked against the drive actually served *before* anything
+    /// binds: a stale or mistyped `WYRD_FILEPROVIDER_DRIVE_ID`
+    /// refuses the run instead of publishing another drive's tree
+    /// under this drive's alias. Absent bootstrap means the
+    /// drive-directory socket only. Malformed or mismatched
+    /// configuration refuses; it never falls back silently.
+    pub fn bind_for_composer(
+        handles: OwnerHandles,
+        drive_dir: &Path,
+        served: DriveId,
+    ) -> std::io::Result<Self> {
+        match group_container_from_env() {
+            None => Self::bind(handles, drive_dir),
+            Some(Ok(config)) => {
+                if config.drive != served {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        format!(
+                            "{} names drive {} but this owner serves {}: refusing the group bind",
+                            FILEPROVIDER_DRIVE_ID_ENV, config.drive, served
+                        ),
+                    ));
+                }
+                Self::bind_with_group_container(
+                    handles,
+                    drive_dir,
+                    &served,
+                    &config.group_container,
+                )
+            }
+            Some(Err(detail)) => Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                detail,
+            )),
+        }
     }
 
     /// Stop serving, join the accept thread, and remove the socket
@@ -278,8 +544,19 @@ impl OwnerService {
                 tracing::warn!("owner interface thread ended unexpectedly");
             }
         }
+        if let Some(thread) = self.group_thread.take() {
+            if thread.join().is_err() {
+                tracing::warn!("owner interface group thread ended unexpectedly");
+            }
+        }
         if !self.removed {
             self.removed = true;
+            if let Some(link) = self.group_symlink.take() {
+                let _ = std::fs::remove_file(&link);
+            }
+            if let Some(path) = self.group_socket_path.take() {
+                let _ = std::fs::remove_file(&path);
+            }
             let _ = std::fs::remove_file(&self.socket_path);
         }
     }
@@ -306,7 +583,7 @@ pub const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 /// A held connection-pool slot, released back to the accept loop
 /// on drop: the served-thread count is the live pool size, so the
 /// gate in `serve_on` always observes the truth.
-struct ConnectionSlot<'a> {
+pub(crate) struct ConnectionSlot<'a> {
     active: &'a AtomicUsize,
 }
 
@@ -314,6 +591,19 @@ impl Drop for ConnectionSlot<'_> {
     fn drop(&mut self) {
         self.active.fetch_sub(1, Ordering::Relaxed);
     }
+}
+
+/// Reserve one connection-pool slot atomically: the increment
+/// happens inside the same compare-exchange as the bound check, so
+/// two accept loops racing on the last slot cannot both win.
+/// Returns the guard on success; the guard's drop frees the slot.
+pub(crate) fn try_acquire_slot(counter: &AtomicUsize) -> Option<ConnectionSlot<'_>> {
+    counter
+        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |held| {
+            (held < MAX_OWNER_CONNECTIONS).then_some(held + 1)
+        })
+        .ok()
+        .map(|_| ConnectionSlot { active: counter })
 }
 
 /// The owner-side interface server: peer-checked dispatch over the
@@ -330,6 +620,12 @@ pub struct OwnerServer {
     /// before reaching the queue. Fresh randomness per server, so a
     /// restart never honors the previous run's captures.
     instance: u64,
+    /// The shared connection-slot counter: every accept loop on this
+    /// server — primary and group — draws from one pool, so the
+    /// second listener never doubles the ceiling. A plain counter,
+    /// not a shared pointer: the server itself travels behind an
+    /// `Arc` where sharing is needed.
+    slots: AtomicUsize,
 }
 
 impl OwnerServer {
@@ -355,6 +651,7 @@ impl OwnerServer {
             handles,
             owner_uid: super::auth::owner_uid(),
             instance,
+            slots: AtomicUsize::new(0),
         }
     }
 
@@ -390,11 +687,9 @@ impl OwnerServer {
     /// own teardown (teardown drain or admission close), so the
     /// join is bounded by the run, never by a silent waiter.
     pub fn serve_on(&self, listener: &UnixListener, stop: &AtomicBool) {
-        let active = AtomicUsize::new(0);
-        // Shared by the gate and every spawned guard: a shared
-        // reference, so each `move` closure copies it instead of
-        // moving the counter.
-        let slots = &active;
+        // The pool counter lives on the server, so every accept loop
+        // — primary and group — draws from one budget.
+        let slots: &AtomicUsize = &self.slots;
         std::thread::scope(|scope| {
             while !stop.load(Ordering::Relaxed) {
                 match listener.accept() {
@@ -405,14 +700,19 @@ impl OwnerServer {
                         // The pool gate, before any thread exists: an
                         // excess connection closes on drop,
                         // unconfirmed like every other broken
-                        // connection. The accept loop is the only
-                        // spawner, so a check-then-count here never
-                        // overshoots — concurrent exits only free
-                        // slots.
-                        if slots.load(Ordering::Relaxed) >= MAX_OWNER_CONNECTIONS {
-                            tracing::warn!("owner interface connection refused: pool saturated");
-                            continue;
-                        }
+                        // connection. The reservation is atomic
+                        // (compare-exchange on the shared counter),
+                        // so two accept loops can never both observe
+                        // a free slot and overshoot the bound.
+                        let slot = match try_acquire_slot(slots) {
+                            Some(slot) => slot,
+                            None => {
+                                tracing::warn!(
+                                    "owner interface connection refused: pool saturated"
+                                );
+                                continue;
+                            }
+                        };
                         // Accepted sockets inherit the listener's
                         // non-blocking flag: serve each connection
                         // blocking with timeouts, one thread per
@@ -423,9 +723,8 @@ impl OwnerServer {
                             Ok(()) => {
                                 let _ = stream.set_read_timeout(Some(CONN_POLL_INTERVAL));
                                 let _ = stream.set_write_timeout(Some(WRITE_TIMEOUT));
-                                slots.fetch_add(1, Ordering::Relaxed);
                                 scope.spawn(move || {
-                                    let _slot = ConnectionSlot { active: slots };
+                                    let _slot = slot;
                                     self.serve_connection(stream, stop)
                                 });
                             }

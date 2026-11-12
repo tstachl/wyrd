@@ -18,16 +18,44 @@ Derive the path from the drive directory. Run no discovery service.
 Delete a stale socket entry at bind while the store lock is held.
 Remove the socket file on clean shutdown.
 
+The owner additionally serves the same interface inside the App
+Group container for the File Provider extension, which cannot
+reach the drive directory from its sandbox: one socket per drive
+at
+`<container>/Sockets/<fingerprint>.sock` plus a
+`Sockets/by-drive/<drive-hex>.sock` symlink alias beside it. This
+second listener is an opt-in bootstrap for the macOS File
+Provider (enabled by the explicitly configured container-plus-
+drive pair, see the packaging note); it is compiled on every
+platform and binds wherever the pair is set, so the "macOS"
+scoping is the consumer, not a platform gate in the code. The
+filename derives from the served `DriveId`
+(`DriveId::fileprovider_socket_fingerprint`, 64-bit domain
+separated derivation, hex-encoded); the daemon is the only
+computer of it, and the extension resolves the alias by
+readlink, never by hashing. The configured drive is checked
+against the drive actually served before anything binds: a
+mismatch refuses the run. The alias target must stay inside
+`Sockets/`; anything else fails closed. A live endpoint at the
+group path is never unlinked — the bind fails closed instead —
+while a dead entry reclaims. Both sockets serve from one server:
+one owner-instance identity, one uid check, and one shared
+connection pool of at most 16 concurrent connections across both
+accept paths. The group socket is a development bootstrap today
+(explicitly configured container plus drive, see the packaging
+note); the multi-drive registry owns the drive-to-domain
+association in production.
+
 Frame each message with a u32 big-endian length prefix followed by
 that many JSON bytes. Assemble frames explicitly: an idle
 connection re-polls on the read deadline, but a stall past the
 deadline with a partially assembled frame — a short length prefix
 or a short body — closes the connection, as does a length past 96
 MiB. A half-read frame is never dispatched. Serve at most 16
-concurrent connections: a connection past the bound is closed
-without an answer. Treat every broken
-connection as unconfirmed. Never treat it as success. Never treat
-it as failure.
+concurrent connections in total across every bound socket: a
+connection past the bound is closed without an answer. Treat
+every broken connection as unconfirmed. Never treat it as
+success. Never treat it as failure.
 
 ## Authentication
 

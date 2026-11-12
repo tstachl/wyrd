@@ -255,6 +255,71 @@ fn golden_vectors_pin_the_wire() {
                         matches!(*ok, WireOk::Lookup { .. }),
                         "the lookup sample answers a lookup"
                     ),
+                    ("stat", WireResult::Ok(ok)) => match *ok {
+                        WireOk::Stat {
+                            ref attr,
+                            generation,
+                            revision,
+                        } => {
+                            assert_eq!(generation, 3);
+                            assert_eq!(revision, 9);
+                            assert!(
+                                attr.identity.as_deref().map(str::len).unwrap_or(0) == 64,
+                                "the stat sample carries a 256-bit identity as 64 hex chars"
+                            );
+                        }
+                        ref other => panic!("the stat sample answers a stat: {other:?}"),
+                    },
+                    ("readdir", WireResult::Ok(ok)) => {
+                        match *ok {
+                            WireOk::Readdir {
+                                ref entries,
+                                generation,
+                                revision,
+                            } => {
+                                assert_eq!(generation, 3);
+                                assert_eq!(revision, 9);
+                                assert_eq!(entries.len(), 6, "the readdir sample covers identity-bearing, legacy, merged-agreed, merged-disagreed, and conflict rows");
+                                let kinds: Vec<&str> = entries
+                                    .iter()
+                                    .map(|entry| match entry.node {
+                                        WireNode::File { .. } => "file",
+                                        WireNode::Dir { .. } => "dir",
+                                        WireNode::Symlink { .. } => "symlink",
+                                        WireNode::MergedDir { .. } => "merged",
+                                        WireNode::Conflict { .. } => "conflict",
+                                    })
+                                    .collect();
+                                assert_eq!(
+                                    kinds,
+                                    vec!["file", "dir", "file", "merged", "merged", "conflict"]
+                                );
+                                assert!(
+                                    entries.iter().any(|entry| match &entry.node {
+                                        WireNode::File { identity, .. } => identity.is_none(),
+                                        _ => false,
+                                    }),
+                                    "the readdir sample keeps a legacy entry without an identity key"
+                                );
+                                assert!(
+                                    entries.iter().any(|entry| match &entry.node {
+                                        WireNode::MergedDir { identity, .. } => identity.is_none(),
+                                        _ => false,
+                                    }),
+                                    "the readdir sample keeps a merged-disagreed entry with a null identity"
+                                );
+                                assert!(
+                                    entries.iter().any(|entry| matches!(entry.node, WireNode::Conflict { .. })),
+                                    "the readdir sample keeps a conflict row the adapter must exclude"
+                                );
+                            }
+                            ref other => panic!("the readdir sample answers a readdir: {other:?}"),
+                        }
+                    }
+                    ("read", WireResult::Ok(ok)) => assert!(
+                        matches!(*ok, WireOk::Read { .. }),
+                        "the read sample answers a read"
+                    ),
                     ("submit", WireResult::Ok(ok)) => assert!(
                         matches!(*ok, WireOk::Submitted { .. }),
                         "the submit sample answers a submit"
@@ -276,7 +341,8 @@ fn golden_vectors_pin_the_wire() {
                     other => panic!("unexpected ok sample: {other:?}"),
                 }
             }
-            "not-found" | "unknown-version" | "pinned-present" => {
+            "not-found" | "unknown-version" | "pinned-present" | "too-large" | "timeout"
+            | "conflicted" | "unavailable" => {
                 let response: WireResponse = serde_json::from_value(vector.json.clone())
                     .unwrap_or_else(|error| {
                         panic!("{} parses as a response: {error}", vector.name)
@@ -284,6 +350,10 @@ fn golden_vectors_pin_the_wire() {
                 let expected = match shape {
                     "not-found" => WireErrorCode::NotFound,
                     "pinned-present" => WireErrorCode::PinnedPresent,
+                    "too-large" => WireErrorCode::TooLarge,
+                    "timeout" => WireErrorCode::Timeout,
+                    "conflicted" => WireErrorCode::Conflicted,
+                    "unavailable" => WireErrorCode::Unavailable,
                     _ => WireErrorCode::UnknownVersion,
                 };
                 match response.result {

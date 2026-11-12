@@ -1,27 +1,28 @@
-// Stage 1 entry gate: prove the sandboxed extension reaches a Unix
-// socket inside the App Group container. The probe connects to a
-// stub listener — not the owner — at the production path, so a pass
-// isolates the sandbox premise from all daemon work. The owner-side
-// bind and the real client arrive in Stage 2; this file then grows
-// into the framing layer.
+// Sandbox reachability probe: one connect attempt against an
+// explicit socket path. Stage 1 proved the premise against a stub
+// listener (`wyrd-probe.sock`, kept as `legacyStubPath` for canned
+// domains); Stage 2 probes the alias-resolved group socket, so a
+// pass isolates the sandbox premise from all daemon work while the
+// daemon-side bind proves the transport gate. This file stays a
+// reachability probe only — the framing layer lives in
+// `OwnerClient`, not here.
 //
 // Naming rule (observed, development signing, macOS 15.8.2 —
 // not a platform law): the App Group container directory is the
 // literal group id (`group.md.enesis.wyrd`), confirmed by the
 // probe log and fileproviderd on the 2026-11-11 live run.
-// Other signing types are unverified; Stage 2 must live-confirm
-// the daemon's computed bind path against the resolved one.
-// The probe resolves the directory through `containerURL`, never
-// from a hardcoded path — the listener recipe below does the same
-// by reading the resolved path back out of the probe log.
+// Other signing types are unverified; Stage 2 live-confirms the
+// daemon's computed bind path against the resolved one.
+// Paths resolve through `containerURL`, never from a hardcoded
+// path — the Stage 1 listener recipe below does the same by reading
+// the resolved path back out of the probe log.
 //
-// Procedure: run the containing app once first so the system
-// materialises the container, read the resolved path from the probe
-// log (`unreachable <path>` on the first pass), create only the
-// `Sockets` directory inside that resolved container, start the
-// listener there, then force the extension to re-instantiate (quit
-// and relaunch the containing app — reopening the domain alone may
-// not re-run a surviving extension process):
+// Stage 1 stub procedure (canned domains; run the containing app
+// once first so the system materialises the container, read the
+// resolved path from the probe log, create only the `Sockets`
+// directory inside that resolved container, start the listener
+// there, then force re-instantiation by quitting and relaunching
+// the containing app):
 //
 //   p='<path from the probe log>'
 //   mkdir -p "$(dirname "$p")"
@@ -71,21 +72,27 @@ enum ProbeOutcome {
 
 enum SocketProbe {
     static let groupIdentifier = "group.md.enesis.wyrd"
-    static let socketName = "wyrd-probe.sock"
 
-    /// Outcome of one connect attempt.
-    static func run() -> ProbeOutcome {
+    /// The Stage 1 stub name, kept for canned domains only: the
+    /// sandboxed extension, running under its real entitlements,
+    /// connects to a listening stub at the production group
+    /// path. Live domains probe their configured alias instead.
+    static func legacyStubPath() -> String? {
         guard let container = FileManager.default.containerURL(
             forSecurityApplicationGroupIdentifier: groupIdentifier
         ) else {
-            return .unreachable(
-                detail: "no group container for \(groupIdentifier)"
-            )
+            return nil
         }
-        let path = container
+        return container
             .appendingPathComponent("Sockets")
-            .appendingPathComponent(socketName)
+            .appendingPathComponent("wyrd-probe.sock")
             .path
+    }
+
+    /// Outcome of one connect attempt against an explicit socket
+    /// path: the caller resolves the path (alias or stub), the
+    /// probe only connects.
+    static func run(path: String) -> ProbeOutcome {
         let pathBytes = Array(path.utf8)
         guard pathBytes.count < 104 else {
             return .unreachable(
