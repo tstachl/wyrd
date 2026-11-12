@@ -289,8 +289,9 @@ pub(crate) fn member(
 /// store opens only when something is pending, so a fresh drive's
 /// transition never touches it. A failed drain reports loudly with
 /// the transition already durable at its epoch and the obligation
-/// still pending.
-fn transition_with_carry(
+/// still pending. Shared with `drive delete`, which authors its
+/// self-removal through the same path before removing the directory.
+pub(crate) fn transition_with_carry(
     engine: &mut Engine,
     drive_dir: &Path,
     author: impl FnOnce(&mut Engine) -> Result<MembershipTransition, EngineError>,
@@ -302,8 +303,11 @@ fn transition_with_carry(
 }
 
 /// Drain the durable carry queue, returning the number carried. The
-/// store opens only when obligations are pending.
-fn carry_pending(engine: &mut Engine, drive_dir: &Path) -> Result<usize, CliError> {
+/// store opens only when obligations are pending. Shared with `drive
+/// delete`, which tolerates a drain failure after its removal commit
+/// (the carry is a no-op for a removed author) instead of stranding
+/// a terminal drive with its directory present.
+pub(crate) fn carry_pending(engine: &mut Engine, drive_dir: &Path) -> Result<usize, CliError> {
     if engine.pending_carries()?.is_empty() {
         return Ok(0);
     }
@@ -392,7 +396,8 @@ pub(crate) fn leave_plan(engine: &Engine) -> Result<LeavePlan, CliError> {
 /// authoritative and would accept the transition either way. The
 /// refusal carries the terminal consequence itself (OD-14-B, option
 /// A), so the confirm control stays disabled until it has been read.
-fn require_last_owner_confirmation(
+/// Shared with `drive delete`, whose terminal consequence is identical.
+pub(crate) fn require_last_owner_confirmation(
     engine: &Engine,
     device: &DeviceId,
     yes: bool,

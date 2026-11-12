@@ -7,7 +7,7 @@ itself — every subcommand opens the drive through `WyrdNode` and the
 behavior lives in `wyrd-core` / `wyrd-daemon`. This document mirrors
 the `crates/wyrd-cli/src` module tree (`main.rs` dispatches; argument
 parsing in `args.rs`, one module per command family in `commands/`
-(`device`, `export`, `member`, `mount`, `policy`, `snapshot`,
+(`device`, `drive`, `export`, `member`, `mount`, `policy`, `snapshot`,
 `sync`, `vault`, declared in `commands.rs`), credentials in `credentials.rs`, drive
 config in `drive_config.rs`, the live-node composer host in `composer.rs`,
 diagnostics in `logging.rs`, posture in `posture.rs`, probes in
@@ -23,6 +23,7 @@ wyrd [--config <path>] mount [--relay <url>...] [--verbose] [--interval <secs>] 
 wyrd [--config <path>] export [--identity-file <path>] [--passphrase-file <path>] <drive_dir> <out_dir>
 wyrd [--config <path>] member [--identity-file <path>] [--passphrase-file <path>] <drive_dir> (list | log | status | remove <device> [--yes] | leave [--yes] | rotate | set-owner <device> | invite <device> <encryption-key> <out> [--reader] | reissue <device> <out>)
 wyrd [--config <path>] device [--identity-file <path>] [--passphrase-file <path>] <drive_dir> (id | keys | pairing-request <out> | join <invitation>)
+wyrd [--config <path>] drive [--identity-file <path>] [--passphrase-file <path>] <drive_dir> delete [--yes]
 wyrd [--config <path>] sync [--relay <url>...] [--identity-file <path>] [--passphrase-file <path>] <drive_dir> (status | now)
 wyrd [--config <path>] vault [--relay <url>...] [--log-file <path>] [--identity-file <path>] [--passphrase-file <path>] <drive_dir> [start | status]
 wyrd [--config <path>] policy <drive_dir> \
@@ -124,7 +125,7 @@ any format break.
 
 ### `member` — administer drive membership
 
-Offline commands (`member`, `snapshot`, `policy`) are transient
+Offline commands (`member`, `snapshot`, `policy`, `drive`) are transient
 owners: each opens the keystore and takes the exclusive store lock,
 so a long-lived owner holding the drive — `wyrd vault`, `wyrd mount`,
 or a desktop service — refuses them with `StoreLocked`. Stop the
@@ -408,6 +409,33 @@ wyrd member --identity-file ... --passphrase-file ... <owner-dir> invite <device
 #    owner's sealed invitation
 wyrd device --identity-file ... --passphrase-file ... <newcomer-dir> join invitation
 ```
+
+### `drive` — delete this drive's local copy
+
+Local forget plus your own removal, in that order: authors
+`Remove(self)` through the owner, then removes the local drive
+directory. Owner-only and terminal — in v0 ownership is a singleton,
+so the removal always empties the owner set and the drive freezes
+permanently, which is why `--yes` is required. A non-owner is refused
+before anything is authored or touched (the owner must run `member
+remove <device>`); a membership-frozen drive refuses with the
+conflict-resolution pointer before the directory is touched. The
+confirmation renders the canonical removal sentences verbatim
+(`docs/contracts/trust.md` "What removal does and does not do") plus
+the locality — the directory is gone and nothing else changed — and
+never claims more: no other member's copy changes, and the removed
+files' blocks stay recoverable from this device until overwritten,
+like any removed file. Removing the directory is a
+filesystem operation over ciphertext and the keyring file, not a
+cryptographic erasure, and v0 defines no key-erasure primitive.
+
+Like the other offline writers, `drive delete` is a transient owner:
+it opens the keystore and takes the exclusive store lock, so a
+long-lived owner holding the drive — `wyrd vault`, `wyrd mount`, or a
+desktop service — refuses it with `StoreLocked`. Stop the service
+first and retry. A failed directory removal after the commit reports
+loudly with the removal already standing: remove the directory by
+hand, the membership half is done.
 
 ### `sync` — headless sync without mounting
 

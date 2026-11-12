@@ -202,6 +202,18 @@ pub(crate) enum Command {
         #[command(flatten)]
         credentials: Credentials,
     },
+    /// Delete this drive's local copy: author your own removal, then
+    /// remove the local directory. Owner-only and terminal; a
+    /// non-owner is refused, a frozen drive resolves first, and no
+    /// other member's copy changes.
+    Drive {
+        /// Directory holding the drive's keystore and object store.
+        drive_dir: PathBuf,
+        #[command(subcommand)]
+        action: DriveAction,
+        #[command(flatten)]
+        credentials: Credentials,
+    },
     /// Headless sync: report sync state or run a bounded sync without
     /// mounting. Status never connects and never mutates durable
     /// state; `now` connects when given a relay (and refuses a
@@ -516,6 +528,24 @@ pub(crate) enum DeviceAction {
     Join {
         /// The sealed invitation file.
         invitation: PathBuf,
+    },
+}
+
+/// One local-drive lifecycle action. Only an owner deletes: the
+/// operation authors `Remove(self)` through the engine (which
+/// enforces owner-only) and then removes the local directory.
+#[derive(Debug, Subcommand)]
+pub(crate) enum DriveAction {
+    /// Delete this drive locally: author your own removal
+    /// (owner-only, terminal — the owner set empties) and remove the
+    /// local directory. Needs `--yes`. A non-owner is refused and a
+    /// frozen drive resolves first, both before the directory is
+    /// touched. No other member's copy changes; the removed files'
+    /// blocks stay recoverable from this device until overwritten.
+    Delete {
+        /// Confirm the terminal removal (the drive freezes permanently).
+        #[arg(long)]
+        yes: bool,
     },
 }
 

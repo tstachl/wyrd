@@ -29,6 +29,16 @@
 //!    operation with its own authority and confirmation, never an
 //!    implicit half of close.
 //!
+//! Drive deletion (OD-12-A/B/C, all decided as recommended) owns the
+//! local-forget half close refuses: the deleter authors `Remove(self)`
+//! through the owner and then removes the local directory. The copy
+//! below states the same boundary the removal confirmation states —
+//! acquisition ends, possession stays, history is never re-encrypted —
+//! plus the locality the deletion decision adds: this device's
+//! directory is gone and nothing else changed. It never paraphrases
+//! the canonical sentences, and it never uses a forget euphemism:
+//! no "deleted", no "erased", no "reclaimed", no "freed", no "wiped".
+//!
 //! The CLI wires only the leave refusal today (`MemberAction::Leave`);
 //! `render_not_a_member`, `render_quit_note`, and
 //! `render_export_requirement` are reserved copy for the application
@@ -84,6 +94,46 @@ pub fn render_leave_refusal(device: &DeviceId) -> String {
 /// sentence. Authors nothing by construction — a pure string.
 pub fn render_not_a_member(device: &DeviceId) -> String {
     format!("{LEAVE_NOT_A_MEMBER}\ndevice: {device}\n")
+}
+
+/// What deletion did: the local directory is gone and nothing else
+/// changed. The first clause names the removed path so the person
+/// can verify the absence; the second carries the negative invariant
+/// the decision exists to keep honest — no other member's copy
+/// changed — plus the precise local boundary: the removed files'
+/// blocks stay recoverable from this device until overwritten, like
+/// any removed file. Worded to survive the forget-euphemism ban:
+/// "gone" and "removed", never "deleted", "erased", "reclaimed",
+/// "freed", or "wiped".
+pub const DELETION_LOCALITY: &str = "the local directory is gone and nothing else changed: no other member's copy changed, and the removed files' blocks stay recoverable from this device until overwritten, like any removed file";
+
+/// Render the deletion confirmation: the removed line (the device,
+/// the epoch, the carried count) followed by the canonical boundary
+/// and history sentences verbatim, then the locality sentence, then
+/// the terminal sentence. In v0 ownership is a singleton, so an
+/// owner-authored self-removal always empties the owner set and the
+/// terminal sentence always applies; the flag stays so the renderer
+/// cannot silently drop the consequence it exists to carry.
+pub fn render_deletion_confirmation(
+    device: &DeviceId,
+    epoch: u64,
+    carried: usize,
+    dir: &std::path::Path,
+    terminal: bool,
+) -> String {
+    let mut out = format!("removed {device} at epoch {epoch} ({carried} carried)\n");
+    out.push_str(REMOVAL_BOUNDARY);
+    out.push('\n');
+    out.push_str(HISTORY_NEVER_REENCRYPTED);
+    out.push('\n');
+    out.push_str(&format!("{}: ", dir.display()));
+    out.push_str(DELETION_LOCALITY);
+    out.push('\n');
+    if terminal {
+        out.push_str(crate::member_surface::SOLE_OWNER_TERMINAL);
+        out.push('\n');
+    }
+    out
 }
 
 /// Render the quit note: the teardown order plus the no-forget

@@ -3,6 +3,7 @@
 //! imported across modules as `crate::commands::<family>::<item>`.
 pub(crate) mod bootstrap;
 pub(crate) mod device;
+pub(crate) mod drive;
 pub(crate) mod export;
 pub(crate) mod member;
 #[cfg(feature = "mount")]
