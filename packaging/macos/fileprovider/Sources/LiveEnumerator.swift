@@ -1,8 +1,9 @@
-// Stage 2 enumerator over live owner state. One `readdir` is one
-// enumeration in one owner coordinate, so every page shares the
-// coordinate and the returned anchor always describes the completed
-// enumeration. Conflict rows are excluded (logged, counted) and
-// never break sibling enumeration.
+// Stage 2 enumerator over live owner state, extended by the
+// Stage 3 inspector: one `readdir` is one enumeration in one owner
+// coordinate, so every page shares the coordinate and the returned
+// anchor always describes the completed enumeration. Each conflict
+// row yields one synthetic read-only report item (never ordinary
+// content); siblings enumerate regardless.
 
 import FileProvider
 import Foundation

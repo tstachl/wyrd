@@ -78,11 +78,39 @@ func conflictVersionDigest(_ version: OwnerConflictVersion) -> String {
     return "\(version.snapshot):\(version.timestamp):\(kind):\(detail)"
 }
 
+/// Escape a member-authored value for a line-oriented report:
+/// entry names and symlink targets are arbitrary bytes except `/`
+/// and NUL, so a newline could forge report structure (a fake
+/// `--- Version … ---` line or footer). Backslash and the common
+/// controls get short escapes; remaining C0 controls and DEL
+/// become `?`. Hex ids (snapshots, chunks, subtrees) are safe by
+/// construction and pass through untouched.
+func escapeReportValue(_ value: String) -> String {
+    var out = ""
+    out.reserveCapacity(value.count)
+    for scalar in value.unicodeScalars {
+        switch scalar.value {
+        case 0x5C:
+            out.append("\\\\")
+        case 0x0A:
+            out.append("\\n")
+        case 0x0D:
+            out.append("\\r")
+        case 0x09:
+            out.append("\\t")
+        case 0x00 ..< 0x20, 0x7F:
+            out.append("?")
+        default:
+            out.append(Character(scalar))
+        }
+    }
+    return out
+}
+
 /// A 64-bit FNV-1a digest over UTF-8, hex-rendered. Presentation
 /// identity only (version movement), never integrity: no crypto
 /// import, no new dependency.
-func conflictDigestHex(_ text: String) -> String {
-    var hash: UInt64 = 0xcbf29ce484222325
+func conflictDigestHex(_ text: String) -> String {    var hash: UInt64 = 0xcbf29ce484222325
     for byte in text.utf8 {
         hash ^= UInt64(byte)
         hash = hash &* 0x100000001b3
@@ -124,7 +152,7 @@ func renderConflictReport(
     let ordered = versions.sorted { $0.snapshot < $1.snapshot }
     var lines: [String] = []
     lines.append("Wyrd conflict report")
-    lines.append("Path: \(path)")
+    lines.append("Path: \(escapeReportValue(path))")
     lines.append("Drive: \(driveHex.lowercased())")
     lines.append("Serving generation: \(generation), revision: \(revision)")
     lines.append("Versions: \(ordered.count)")
@@ -150,7 +178,7 @@ func renderConflictReport(
             lines.append("Snapshot: \(version.snapshot)")
             lines.append("Timestamp: \(conflictTimestampLabel(version.timestamp))")
             lines.append("Kind: symlink")
-            lines.append("Target: \(target)")
+            lines.append("Target: \(escapeReportValue(target))")
         case .mergedDir(let subtrees, let identity):
             lines.append("--- Version \(index + 1) of \(ordered.count) ---")
             lines.append("Snapshot: \(version.snapshot)")

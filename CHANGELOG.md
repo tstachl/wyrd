@@ -35,6 +35,19 @@ is transient — no drive data is affected.
 
 ### Added
 
+- Read-only conflict inspector for File Provider (File Provider
+  Stage 3, sub-PR 3, OD-17-B,
+  `nostr:nevent1qqs869cm9h882c5nzkfdkdynhw87xkujhasfcsztxj32qfw36j8w0vcpz9mhxue69uhkwunpwdczuap49eehg4glfve`):
+  one synthetic read-only report file per conflicted path
+  (`<name>.wyrd-conflict.txt`), keyed by drive plus logical
+  location, labelled by head snapshot id plus authoring
+  timestamp, hydrated from generated text only. No new owner
+  mutation operation, no resolution authoring: mutations through
+  the inspector fail closed, and reports disappear only when the
+  drive state changes. Conflict versions carry the head
+  timestamp on the wire (defaulted on parse). Proven by the
+  Harness against a two-version stub conflict (plus TSan).
+
 - Live File Provider mutation callbacks (File Provider Stage 3,
   sub-PR 2,
   `nostr:nevent1qqs82n3y0m2f0sdg97qlnz2e40jvxsthjg9k420hw9dyj9c0alvn9gqpz9mhxue69uhkwunpwdczuap49eehg2qcvct`):

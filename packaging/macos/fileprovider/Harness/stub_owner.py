@@ -60,6 +60,50 @@ for _entry in READDIR_OK["result"]["ok"]["Readdir"]["entries"]:
     if _kind != "Conflict" and _node[_kind].get("identity") is not None:
         TOKENS[_entry["name"]] = _node[_kind]["identity"]
 
+# A nested conflict under `notes/`, exercising the replay path the
+# root fixture cannot: the report name must disambiguate against a
+# real sibling (`deep.txt.wyrd-conflict.txt` is a served file, so
+# the report becomes `deep.txt.wyrd-conflict-2.txt`) and lookup and
+# hydration must replay that assignment through the parent
+# listing. Tokens match the root conflict marker so the
+# conflicted/absent classifications keep one meaning.
+NESTED_CONFLICT_VERSIONS = [
+    {
+        "snapshot": "33",
+        "timestamp": 1720000120000,
+        "node": {
+            "File": {
+                "size": 3,
+                "executable": False,
+                "chunks": ["33"],
+                "identity": CONFLICT_TOKEN,
+            }
+        },
+    },
+    {
+        "snapshot": "44",
+        "timestamp": 1720000180000,
+        "node": {
+            "File": {
+                "size": 4,
+                "executable": False,
+                "chunks": ["44"],
+                "identity": CONFLICT_TOKEN,
+            }
+        },
+    },
+]
+NESTED_REAL_TOKEN = "dc" * 32
+TOKENS["notes/deep.txt.wyrd-conflict.txt"] = NESTED_REAL_TOKEN
+NESTED_REAL_NODE = {
+    "File": {
+        "size": 7,
+        "executable": False,
+        "chunks": ["dd"],
+        "identity": NESTED_REAL_TOKEN,
+    }
+}
+
 # The mutation namespace: path -> {kind, identity, size, content}.
 # Baseline vector paths stay static; everything the Harness creates
 # lives here under `mut-*` names (plus the scripted fixtures
@@ -143,6 +187,20 @@ def answer(op, params):
         if path == "notes":
             node = dict(READDIR_OK["result"]["ok"]["Readdir"]["entries"][1]["node"])
             return result_ok({"Lookup": {"node": node, "generation": 3, "revision": 9}})
+        if path == "notes/deep.txt":
+            return result_ok(
+                {
+                    "Lookup": {
+                        "node": {"Conflict": {"versions": NESTED_CONFLICT_VERSIONS}},
+                        "generation": 3,
+                        "revision": 9,
+                    }
+                }
+            )
+        if path == "notes/deep.txt.wyrd-conflict.txt":
+            return result_ok(
+                {"Lookup": {"node": NESTED_REAL_NODE, "generation": 3, "revision": 9}}
+            )
         if path == "split.txt":
             for entry in READDIR_OK["result"]["ok"]["Readdir"]["entries"]:
                 if entry["name"] == "split.txt":
@@ -222,8 +280,27 @@ def answer(op, params):
                 if parent_of(name) == path
             ]
             return result_ok({"Readdir": {"entries": entries, "generation": 3, "revision": 9}})
-        if path in ("notes", "agreed", "disagreed"):
+        if path in ("agreed", "disagreed"):
             return result_ok({"Readdir": {"entries": [], "generation": 3, "revision": 9}})
+        if path == "notes":
+            return result_ok(
+                {
+                    "Readdir": {
+                        "entries": [
+                            {
+                                "name": "deep.txt",
+                                "node": {"Conflict": {"versions": NESTED_CONFLICT_VERSIONS}},
+                            },
+                            {
+                                "name": "deep.txt.wyrd-conflict.txt",
+                                "node": NESTED_REAL_NODE,
+                            },
+                        ],
+                        "generation": 3,
+                        "revision": 9,
+                    }
+                }
+            )
         return result_err("NotFound", "no such directory")
     if op == "read":
         if path in STATE:
@@ -403,8 +480,8 @@ def answer_covered(name, body, path):
     expected = body.get("expected_identity")
     if not isinstance(expected, str) or len(expected) != 64:
         return result_err("Malformed", "a covered kind carries expected_identity")
-    if path == "split.txt":
-        # The conflict fixture: a live conflicted path refuses every
+    if path == "split.txt" or path == "notes/deep.txt":
+        # The conflict fixtures: a live conflicted path refuses every
         # covered kind as Conflicted, exactly like the owner — the
         # inspector must surface it, never write through it.
         return result_err("Conflicted", "path is conflicted across heads")

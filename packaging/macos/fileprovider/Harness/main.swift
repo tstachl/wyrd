@@ -1197,6 +1197,19 @@ do {
         node: .file(size: 2, executable: false, chunks: ["23"], identity: nil))
     check(conflictDigest(versions: [v1, v2]) != conflictDigest(versions: [v1, edited]),
         "a content change moves the conflict digest")
+    // Member-authored values render escaped: a newline in a name
+    // must not forge report structure.
+    checkEqual(escapeReportValue("plain"), "plain", "safe values pass through")
+    let evil = renderConflictReport(
+        path: "a\n--- Version 9 of 9 ---\nb", driveHex: driveHex,
+        versions: [v1], generation: 3, revision: 9)
+    let evilText = String(data: evil, encoding: .utf8)!
+    check(
+        evilText.contains("Path: a\\n--- Version 9 of 9 ---\\nb"),
+        "report values escape newlines")
+    check(
+        !evilText.split(separator: "\n").contains("--- Version 9 of 9 ---"),
+        "escaped text forges no report structure")
 } catch {
     print("FAIL: report namespace checks: \(error)")
     failures += 1
@@ -1266,6 +1279,46 @@ func reportsFirstContentVersion() -> Data? {
         failures += 1
         return nil
     }
+}
+
+do {
+    // Nested conflicts replay the enumeration assignment through
+    // the parent listing: the stub serves `notes/deep.txt` as a
+    // conflict beside a real `deep.txt.wyrd-conflict.txt` file, so
+    // the report disambiguates and lookup agrees with enumeration.
+    let notesID = NSFileProviderItemIdentifier(
+        WyrdItemIdentifier.stableID(
+            driveHex: driveHex,
+            identityHex: "cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12"))
+    let (noteItems, noteReports, _) = try store.enumerate(container: notesID)
+    checkEqual(noteItems.count, 1, "the nested container lists its real file")
+    checkEqual(
+        noteItems.first?.filename, "deep.txt.wyrd-conflict.txt",
+        "the real sibling keeps its name")
+    checkEqual(noteReports.count, 1, "the nested conflict yields one report")
+    guard let nested = noteReports.first else {
+        print("FAIL: nested report enumerates")
+        failures += 1
+        throw HarnessError.socket("no nested report")
+    }
+    checkEqual(
+        nested.filename, "deep.txt.wyrd-conflict-2.txt",
+        "the nested report disambiguates against the real sibling")
+    let relinked = try store.item(for: nested.itemIdentifier)
+    checkEqual(
+        relinked.filename, "deep.txt.wyrd-conflict-2.txt",
+        "nested lookup replays the assigned name")
+    let (nestedBytes, _) = try store.contents(for: nested.itemIdentifier)
+    let nestedText = String(data: nestedBytes, encoding: .utf8)!
+    check(
+        nestedText.contains("Path: notes/deep.txt"),
+        "the nested report names the full conflicted path")
+    check(
+        nestedText.contains("Snapshot: 33") && nestedText.contains("Snapshot: 44"),
+        "the nested report labels both heads")
+} catch {
+    print("FAIL: nested conflict: \(error)")
+    failures += 1
 }
 
 do {
