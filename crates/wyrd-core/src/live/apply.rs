@@ -741,15 +741,13 @@ where
                 Ok((root, MutationOutcome::Done))
             }
             MutationKind::Rmdir { path, expected } => {
-                // The identity lookup normalizes one trailing slash:
-                // the format layer rejects anything non-canonical
-                // itself, but the view grammar rejects even the
-                // single trailing slash the format deliberately
-                // accepts, so the lookup must strip it first to see
-                // the same entry. Skipped entirely for legacy
-                // in-process callers (their behavior is unchanged),
-                // and the format call below always sees the raw
-                // path with its own rule.
+                // The identity lookup strips one trailing slash so it
+                // sees the same entry a canonical path would name;
+                // unlike rename, the format layer has no trailing-slash
+                // rule here and still rejects the raw path itself, so
+                // this restores the pre-change errno rather than
+                // admitting anything new. Skipped entirely for legacy
+                // in-process callers (their behavior is unchanged).
                 if expected.is_some() {
                     let lookup = Self::without_single_trailing_slash(path);
                     let node = self.current_node(heads, lookup)?;

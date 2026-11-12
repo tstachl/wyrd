@@ -269,6 +269,28 @@ fn rename_with_trailing_slash_dir_source_commits() {
         None,
     )
     .expect("a trailing-slash rename of a dir commits path-addressed");
+    let moved_token = observed_token(&node, "moved-e").expect("the moved dir carries an identity");
+    // A wrong token through the same trailing-slash path still
+    // refuses instead of landing on whatever the normalized path
+    // resolves to: the normalization must never become a bypass.
+    let other = EntryIdentity::from_bytes([0x77; 32]);
+    match node.apply_mutation(
+        &MutationKind::Rename {
+            from: "moved-e/".to_string(),
+            to: "moved-e2".to_string(),
+            no_replace: true,
+            expected: Some(other),
+        },
+        None,
+    ) {
+        Err(MutationError::StaleEntry { .. }) => {}
+        other => panic!("a wrong token refuses StaleEntry: {other:?}"),
+    }
+    assert_eq!(
+        observed_token(&node, "moved-e"),
+        Some(moved_token),
+        "the refused rename commits nothing"
+    );
     std::fs::remove_dir_all(dir).unwrap();
 }
 

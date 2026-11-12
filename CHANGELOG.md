@@ -37,7 +37,7 @@ is transient — no drive data is affected.
 
 - Identity-conditional mutations in the owner queue (File Provider
   Stage 3 prerequisite,
-  `nostr:nevent1qqs90mu07xgmx9j68nh0fm6xgl6u8dt29pu3urjqcjd3wsk5lwfpz9mhxue69uhkwunpwdczuap49eehgd8k9qj`):
+  `nostr:nevent1qqs90mu07xgmx9j68nh0fm6xgl6u8dt29pu3urjqcjd3wsk3fqq5lwgpz9mhxue69uhkwunpwdczuap49eehgd8k9qj`):
   every entry-addressed mutation (`CommitFile`, `AppendFile`,
   `Unlink`, `Rmdir`, `Rename` on its `from` path, `SetAttrs`) carries
   the caller's expected `EntryIdentity`, validated inside the
