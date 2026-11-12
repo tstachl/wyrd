@@ -82,3 +82,59 @@ final class CannedItem: NSObject, NSFileProviderItem {
         return NSNumber(value: size)
     }
 }
+
+/// The Stage 1 canned lookup surface, kept for domains without a
+/// drive id. Stage 2 serves live identifiers; this path only runs
+/// when the domain is unconfigured.
+enum CannedLookup {
+    static func item(
+        for identifier: NSFileProviderItemIdentifier,
+        completionHandler: @escaping (NSFileProviderItem?, Error?) -> Void
+    ) {
+        switch identifier {
+        case .rootContainer:
+            completionHandler(CannedItem.root, nil)
+        case CannedItem.hello.itemIdentifier:
+            completionHandler(CannedItem.hello, nil)
+        case CannedItem.notes.itemIdentifier:
+            completionHandler(CannedItem.notes, nil)
+        default:
+            completionHandler(
+                nil,
+                NSError(
+                    domain: NSFileProviderErrorDomain,
+                    code: NSFileProviderError.noSuchItem.rawValue
+                )
+            )
+        }
+    }
+
+    static func fetchContents(
+        for itemIdentifier: NSFileProviderItemIdentifier,
+        completionHandler: @escaping (URL?, NSFileProviderItem?, Error?) -> Void
+    ) {
+        guard itemIdentifier == CannedItem.hello.itemIdentifier else {
+            completionHandler(
+                nil,
+                nil,
+                NSError(
+                    domain: NSFileProviderErrorDomain,
+                    code: NSFileProviderError.noSuchItem.rawValue
+                )
+            )
+            return
+        }
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wyrd-hello-\(UUID().uuidString).txt")
+        do {
+            try CannedItem.helloContents.write(
+                to: url,
+                atomically: true,
+                encoding: .utf8
+            )
+            completionHandler(url, CannedItem.hello, nil)
+        } catch {
+            completionHandler(nil, nil, error)
+        }
+    }
+}

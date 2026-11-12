@@ -1,15 +1,12 @@
-// Stage 1 spike: the extension serves the canned model and probes
-// the owner-socket path on launch. Note the protocol, not the
-// class: the legacy `NSFileProviderExtension` class API is
-// unavailable on macOS — the extension implements
-// `NSFileProviderReplicatedExtension`, one instance per domain
-// (hence per drive). Enumeration, lookup, and hydration serve
-// canned data; mutation returns `cannotSynchronize` until Stage 3;
-// the owner-socket client arrives in Stage 2. Imports stay within the
-// owner boundary pinned by
-// `fileprovider_swift_stays_within_the_owner_boundary`: platform
-// frameworks and the reachability probe only, never store or
-// engine.
+// Stage 2 extension: live owner reads when the domain carries a
+// drive id, canned Stage 1 data otherwise. The mode is per-domain
+// and explicit in the log — canned is never a silent fallback for a
+// misconfigured drive. Mutation stays read-only until Stage 3:
+// every write path fails closed with `cannotSynchronize`, never a
+// crash. The owner-socket client arrives in Stage 2 (Swift protocol
+// client against the normative framing); the import surface stays
+// within the owner boundary pinned by
+// `fileprovider_swift_stays_within_the_owner_boundary`.
 
 import FileProvider
 import os
@@ -20,19 +17,50 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
         subsystem: "md.enesis.wyrd.fileprovider",
         category: "domain"
     )
+    private let liveStore: LiveStore?
 
     required init(domain: NSFileProviderDomain) {
         self.domain = domain
-        super.init()
-        // Stage 1 entry gate: the sandbox premise, logged where the
-        // Console can see it. A stub listener (see SocketProbe) must
-        // be waiting; the owner is not involved yet. Off the init
-        // path — a blocking probe must never stall domain
-        // initialisation — and at persisted levels, so `log show`
-        // records the gate result after the fact.
+        if let driveHex = SocketConfig.domainDrive(domain.identifier.rawValue) {
+            let store = LiveStore(driveHex: driveHex, log: log)
+            self.liveStore = store
+            super.init()
+            log.notice("live drive \(driveHex, privacy: .public)")
+            probeLive(store: store)
+        } else {
+            self.liveStore = nil
+            super.init()
+            log.notice("canned mode: domain carries no drive id")
+            probeCanned()
+        }
+    }
+
+    private func probeLive(store: LiveStore) {
+        let log = self.log
+        let config = store.config
+        DispatchQueue.global(qos: .utility).async {
+            do {
+                let path = try config.socketPath()
+                let outcome = SocketProbe.run(path: path)
+                if outcome.isReachable {
+                    log.notice("\(outcome.message, privacy: .public)")
+                } else {
+                    log.error("\(outcome.message, privacy: .public)")
+                }
+            } catch {
+                log.error("socket unresolvable: \(String(describing: error))")
+            }
+        }
+    }
+
+    private func probeCanned() {
         let log = self.log
         DispatchQueue.global(qos: .utility).async {
-            let outcome = SocketProbe.run()
+            guard let stub = SocketProbe.legacyStubPath() else {
+                log.error("no group container for \(SocketProbe.groupIdentifier)")
+                return
+            }
+            let outcome = SocketProbe.run(path: stub)
             if outcome.isReachable {
                 log.notice("\(outcome.message, privacy: .public)")
             } else {
@@ -42,14 +70,22 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
     }
 
     func invalidate() {
-        // Stage 1 owns teardown.
+        // The store holds no persistent connection: every operation
+        // opens its own, so invalidation owns no teardown.
     }
 
     func enumerator(
         for containerItemIdentifier: NSFileProviderItemIdentifier,
         request: NSFileProviderRequest
     ) throws -> NSFileProviderEnumerator {
-        CannedEnumerator(container: containerItemIdentifier)
+        if let liveStore {
+            return LiveEnumerator(
+                container: containerItemIdentifier,
+                store: liveStore,
+                log: log
+            )
+        }
+        return CannedEnumerator(container: containerItemIdentifier)
     }
 
     func item(
@@ -57,15 +93,17 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
         request: NSFileProviderRequest,
         completionHandler: @escaping (NSFileProviderItem?, Error?) -> Void
     ) -> Progress {
-        switch identifier {
-        case .rootContainer:
-            completionHandler(CannedItem.root, nil)
-        case CannedItem.hello.itemIdentifier:
-            completionHandler(CannedItem.hello, nil)
-        case CannedItem.notes.itemIdentifier:
-            completionHandler(CannedItem.notes, nil)
-        default:
-            completionHandler(nil, Self.noSuchItem())
+        guard let liveStore else {
+            CannedLookup.item(for: identifier, completionHandler: completionHandler)
+            return Progress()
+        }
+        do {
+            completionHandler(try liveStore.item(for: identifier), nil)
+        } catch let error as LiveStoreError {
+            completionHandler(nil, nsError(for: error))
+        } catch {
+            log.error("unexpected item failure: \(String(describing: error))")
+            completionHandler(nil, NSFileProviderError(.cannotSynchronize))
         }
         return Progress()
     }
@@ -76,21 +114,24 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
         request: NSFileProviderRequest,
         completionHandler: @escaping (URL?, NSFileProviderItem?, Error?) -> Void
     ) -> Progress {
-        guard itemIdentifier == CannedItem.hello.itemIdentifier else {
-            completionHandler(nil, nil, Self.noSuchItem())
+        guard let liveStore else {
+            CannedLookup.fetchContents(
+                for: itemIdentifier,
+                completionHandler: completionHandler
+            )
             return Progress()
         }
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("wyrd-hello-\(UUID().uuidString).txt")
         do {
-            try CannedItem.helloContents.write(
-                to: url,
-                atomically: true,
-                encoding: .utf8
-            )
-            completionHandler(url, CannedItem.hello, nil)
+            let (bytes, item) = try liveStore.contents(for: itemIdentifier)
+            let url = FileManager.default.temporaryDirectory
+                .appendingPathComponent("wyrd-\(UUID().uuidString).bin")
+            try bytes.write(to: url)
+            completionHandler(url, item, nil)
+        } catch let error as LiveStoreError {
+            completionHandler(nil, nil, nsError(for: error))
         } catch {
-            completionHandler(nil, nil, error)
+            log.error("unexpected hydration failure: \(String(describing: error))")
+            completionHandler(nil, nil, NSFileProviderError(.cannotSynchronize))
         }
         return Progress()
     }
@@ -142,10 +183,14 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
         return Progress()
     }
 
-    private static func noSuchItem() -> NSError {
-        NSError(
-            domain: NSFileProviderErrorDomain,
-            code: NSFileProviderError.noSuchItem.rawValue
-        )
+    private func nsError(for error: LiveStoreError) -> NSFileProviderError {
+        switch error {
+        case .notFound:
+            return NSFileProviderError(.noSuchItem)
+        case .sync:
+            return NSFileProviderError(.cannotSynchronize)
+        case .temporary:
+            return NSFileProviderError(.serverUnreachable)
+        }
     }
 }

@@ -286,6 +286,61 @@ fn fileprovider_swift_stays_within_the_owner_boundary() {
     );
 }
 
+/// Stage 2 pins the Swift adapter's read-only surface: the four
+/// operation names and the identifier/anchor vocabularies appear,
+/// and no mutation-side or crypto vocabulary does. The Harness
+/// proves behavior against a stub owner; this pins the surface
+/// against drift, so a Stage 3 mutation op cannot sneak in as an
+/// unreviewed literal.
+#[test]
+fn fileprovider_stage2_stays_read_only() {
+    let root = workspace_root();
+    let (files, errors) = collect_files(
+        &root.join("packaging/macos/fileprovider/Sources"),
+        &root,
+        "swift",
+    );
+    assert!(
+        errors.is_empty(),
+        "source walk errors:\n- {}",
+        errors.join("\n- ")
+    );
+    assert!(!files.is_empty(), "the adapter holds Swift sources");
+    let text = files
+        .iter()
+        .map(|(_, text)| text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    for required in [
+        "\"lookup\"",
+        "\"stat\"",
+        "\"readdir\"",
+        "\"read\"",
+        "wyrd:v1:",
+        "wyrd:legacy:v1:",
+        "wyrd-anchor-v1:",
+        "by-drive",
+        "destinationOfSymbolicLink",
+    ] {
+        assert!(text.contains(required), "the adapter names {required}");
+    }
+    for forbidden in [
+        "\"submit\"",
+        "\"capture-parent\"",
+        "CreateFile",
+        "Mkdir",
+        "ParentToken",
+        "CryptoKit",
+        "BLAKE3",
+        "blake3",
+    ] {
+        assert!(
+            !text.contains(forbidden),
+            "the read-only adapter must not name {forbidden}"
+        );
+    }
+}
+
 #[cfg(test)]
 mod policy_tests {
     use super::*;

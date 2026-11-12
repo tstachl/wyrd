@@ -114,24 +114,31 @@ The proposed scheme, therefore:
 
 - On macOS the owner serves each drive's interface socket **also**
   inside the App Group container:
-  `~/Library/Group Containers/<group>/Sockets/<drive>.sock`,
-  one socket per drive. The daemon is unsandboxed and binds there;
-  the extension holds the group entitlement and connects there.
+  `~/Library/Group Containers/<group>/Sockets/<fingerprint>.sock`,
+  plus a `by-drive/<drive-hex>.sock` symlink alias beside it (see
+  the Stage 2 design contract below for the fingerprint, the
+  alias, and the dev bootstrap). One socket per drive. The daemon
+  is unsandboxed and binds there; the extension holds the group
+  entitlement, readlinks the alias, and connects to the sibling
+  target.
   `<group>` is the literal `group.md.enesis.wyrd` as observed on
   the development build (see Bundle identities above for the
-  qualification). Stage 1 probes the container directory form
+  qualification). Stage 1 probed the container directory form
   with the stub name `wyrd-probe.sock` under a team-signed build
-  and records the team and build type; the per-drive filename
-  form arrives with Stage 2, which must also live-confirm the
-  daemon's computed bind path against the extension-resolved one.
+  and recorded the team and build type; the per-drive filename
+  form is decided in the Stage 2 design contract below, which
+  also live-confirms the daemon's computed bind path against the
+  extension-resolved one.
 - `socket_path_for` stays the cross-platform default; the group
   container path is a macOS-additive override proposal, never a
   replacement. Linux behavior is unchanged.
 - Stale sockets resolve through existing semantics: unlink-before-bind
   on serve, connect failure surfaces `Unavailable`, the extension
   reconnects on demand and never assumes a persistent connection.
-- `<drive>` must be a stable per-drive fingerprint, coordinated with
-  the multi-drive registry (in progress elsewhere) — Stage 2 detail.
+- `<drive>` is the stable per-drive fingerprint from the Stage 2
+  design contract below, coordinated with the multi-drive registry
+  (in progress elsewhere) — the registry owns the
+  drive-to-domain association in production.
 
 This analysis is the Stage 0 confirmation. The live proof comes
 in two halves. Stage 1's entry gate, before any adapter logic,
@@ -221,25 +228,87 @@ with Stage 3, under the invariants above.
 - One File Provider domain per registered drive, domain identity
   stable and distinct.
 - Every item identifier is scoped to its drive. The identifier
-  contract itself — rename behavior, deletion/recreation,
-  persistence across restarts — is decided as OD-17-A (drive-scoped
-  stable entry identity supplied by the owner); the owner/model
-  contract work gates Stage 2. "Drive-scoped" here states the
-  scoping invariant only.
+  contract is decided (Stage 2 design contract below):
+  `wyrd:v1:<drive>:<identity>` for identity-bearing entries,
+  `wyrd:legacy:v1:` for rows without owner identity, no persistent
+  identity for conflicts. "Drive-scoped" here states the scoping
+  invariant only.
 - Every socket connection targets the correct drive's owner.
 - Removing one domain cannot affect another drive.
 - No singleton state in the adapter: a single-drive prototype must
   not become the architecture.
 
-## Stage 2 owner-client seam (intent, undecided)
+## Stage 2 owner-client seam (decided)
 
 The extension speaks the owner protocol (u32 big-endian length
 prefix plus JSON, `docs/contracts/owner-interface.md:21-30`) from
-Swift. Candidate shapes: a Swift protocol client reimplementing the
-framing against shared golden fixtures, or a helper binary. The
-decision lands with Stage 2, and the import allow-list widens then
-to name the chosen module. Until then the boundary rule pins the
+Swift, directly against the normative wire contract, with golden
+fixtures shared across Rust and Swift (`crates/wyrd-owner-client/vectors.json`,
+decoded by the Harness in `packaging/macos/fileprovider/Harness/`).
+No helper binary: that would add an executable, packaging, and
+lifecycle for a second owner-adjacent service. The cost is
+duplicated framing/JSON code, kept honest by the shared fixtures.
+The import allow-list is unchanged — the client needs only
+`Foundation` (JSON), `Darwin` (sockets), and the platform
+frameworks already allowed — so the boundary rule still pins the
 import surface only.
+
+Read-only: lookup, stat, readdir, read. Every operation opens a
+fresh connection (reconnect on demand is structural), and every
+refusal maps to exactly one of three outcomes — found,
+deterministic sync failure, temporary unavailability — never a
+collapsed boolean, never a guess.
+
+## Stage 2 design contract (agreed)
+
+- **Identifiers:** `wyrd:v1:<drive>:<identity>` (both 64-char
+  lowercase hex), reversible, drive-scoped, validated on parse.
+  Cross-drive identifiers are rejected; a zero identity never
+  encodes `None`. Legacy and merged-disagreement rows use
+  `wyrd:legacy:v1:<hex-path>`: unstable by contract (rename means
+  a new item), never written back. Conflicts carry no persistent
+  identity and never enumerate.
+- **Anchors:** `wyrd-anchor-v1:g<generation>:r<revision>`,
+  translated from the owner's serving coordinate. Enumeration is
+  one `readdir` in one coordinate; the returned anchor always
+  describes the completed enumeration.
+- **Consistency:** identifiers resolve through an
+  identifier-to-path map built during enumeration and verified on
+  use (the owner's token must agree). A miss re-resolves with a
+  bounded walk (4096 entries, mirroring the policy-status
+  budget) that classifies explicitly: found, conflicted (fail
+  closed), absent, or budget-exceeded (fail closed).
+- **Drive fingerprint:** the group socket filename derives from
+  `DriveId` via `blake3::derive_key("wyrd-fileprovider-socket-v1",
+  drive)` truncated to 64 bits (`wyrd_format::DriveId::fileprovider_socket_fingerprint`,
+  golden-pinned). 64 bits — not the decision's 160-bit example —
+  because the filename must fit `sun_path` (103 usable bytes on
+  macOS) under a real home directory; a handful of drives collide
+  with probability ~k²/2⁶⁵, and any collision fails closed at
+  bind. The daemon is the only computer of the hash; the
+  extension resolves the `by-drive/<drive-hex>.sock` symlink the
+  daemon publishes beside the socket (readlinked, then connected
+  through the sibling target, which is the only path that must
+  fit `sun_path`).
+- **Daemon bind:** all-or-nothing — the drive-directory socket and
+  the group socket serve from one `OwnerServer` (one
+  owner-instance identity, one uid check). A live endpoint at the
+  group path is never unlinked (`AddrInUse`, primary unbound,
+  run refused); a dead entry reclaims. Dev bootstrap only, via
+  `WYRD_FILEPROVIDER_GROUP_CONTAINER` plus
+  `WYRD_FILEPROVIDER_DRIVE_ID` (both or neither; malformed
+  refuses, never a silent primary-only fallback). The registry
+  owns this association in production.
+- **Errors:** `NotFound` → item-not-found; `Conflicted`,
+  `TooLarge`, `Timeout` (after one retry), protocol violations →
+  deterministic sync failure; `Unavailable` and transport breaks
+  → temporary unavailability. A timeout is never proof an item
+  disappeared.
+- **Symlinks** enumerate under their name but hydration fails
+  closed; their presentation is a Stage 3 question.
+- **Mutations** stay `cannotSynchronize` until Stage 3, including
+  parent capture and submit — tempting through the File Provider
+  lifecycle, explicitly out of scope.
 
 ## Release distinction
 
