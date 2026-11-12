@@ -386,6 +386,20 @@ enum HexCodec {
         case oddLength
         case badDigit(String)
     }
+
+    /// Encode bytes as lowercase hex, preallocated. The write path
+    /// stages up to 32 MiB, so per-byte `String(format:)` allocation
+    /// is not the shape — one pass into a reserved buffer.
+    static func encode(_ bytes: [UInt8]) -> String {
+        let digits = Array("0123456789abcdef".utf8)
+        var out = ""
+        out.reserveCapacity(bytes.count * 2)
+        for byte in bytes {
+            out.append(Character(UnicodeScalar(digits[Int(byte >> 4)])))
+            out.append(Character(UnicodeScalar(digits[Int(byte & 0x0F)])))
+        }
+        return out
+    }
 }
 
 // MARK: - Stage 3 mutation types

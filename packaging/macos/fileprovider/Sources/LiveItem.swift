@@ -25,6 +25,9 @@ final class LiveItem: NSObject, NSFileProviderItem {
     let itemIdentifier: NSFileProviderItemIdentifier
     let parentItemIdentifier: NSFileProviderItemIdentifier
     let filename: String
+    /// The owner-relative path this item was built from: the rename
+    /// source of truth a modify-then-write flow carries forward.
+    let relativePath: String
     let contentType: UTType
     let isDirectory: Bool
     /// Presentation-internal symlink marker: File Provider has no
@@ -84,6 +87,7 @@ final class LiveItem: NSObject, NSFileProviderItem {
         self.itemIdentifier = identifier
         self.parentItemIdentifier = parent
         self.filename = row.name
+        self.relativePath = relativePath
         self.isDirectory = directory
         self.isSymlinkRow = symlink
         if directory {

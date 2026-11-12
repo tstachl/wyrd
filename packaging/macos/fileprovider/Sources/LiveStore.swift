@@ -26,6 +26,11 @@ enum LiveStoreError: Error {
     /// Carried separately so the callback renders the system's
     /// own resolution instead of a sync failure.
     case refused(code: String, message: String)
+    /// The driver observed a recorded cancel before any socket
+    /// write and aborted: nothing was sent, so reporting
+    /// `NSUserCancelledError` is exact, never a guess about an
+    /// in-flight request.
+    case cancelled(String)
     /// Temporary: the owner is unreachable, its generation is not
     /// servable yet, or an unconfirmed write reached no verdict.
     /// The system retries; the adapter holds no state.
@@ -193,39 +198,16 @@ final class LiveStore {
     /// Enumerate one container in a single owner coordinate: one
     /// `readdir`, one anchor. Conflict rows are logged and skipped —
     /// siblings enumerate regardless — and every row records its
-    /// identifier-to-path mapping for later lookup.
+    /// identifier-to-path mapping for later lookup. Container
+    /// resolution is shared with the mutation surface
+    /// (`containerPath(for:client:)`), so enumeration and writes
+    /// never disagree on what a container names.
     func enumerate(container: NSFileProviderItemIdentifier) throws -> (
         items: [LiveItem], anchor: WyrdSyncAnchor
     ) {
         let client = try liveClient()
-        let containerPath: String
+        let containerPath = try containerPath(for: container, client: client)
         let containerId = container
-        if container == .rootContainer {
-            containerPath = ""
-        } else {
-            guard let parsed = WyrdItemIdentifier.parse(container.rawValue, driveHex: driveHex) else {
-                throw LiveStoreError.notFound("container not parseable for this drive")
-            }
-            switch parsed {
-            case .stable(_, let identityHex):
-                let resolved = try stableNode(
-                    identifier: container,
-                    identityHex: identityHex,
-                    client: client
-                )
-                switch resolved.node {
-                case .dir, .mergedDir:
-                    containerPath = resolved.path
-                default:
-                    throw LiveStoreError.notFound("container is not a directory")
-                }
-            case .legacy(let pathHex):
-                guard let path = WyrdItemIdentifier.legacyPath(pathHex: pathHex) else {
-                    throw LiveStoreError.notFound("container undecodable")
-                }
-                containerPath = path
-            }
-        }
         let entries: [OwnerDirEntry]
         let generation: UInt64
         let revision: UInt64

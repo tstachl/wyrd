@@ -91,6 +91,27 @@ extension LiveStore {
         }
     }
 
+    /// The item, base, and token for one writable entry in a
+    /// single lookup: the extension's check and its commit share
+    /// this precondition, so a remote edit between them meets the
+    /// owner's refusal instead of being overwritten. `base` is set
+    /// for files (the commit base) and `nil` otherwise.
+    func mutationItem(for identifier: NSFileProviderItemIdentifier) throws -> (
+        item: LiveItem, base: OwnerFileIdentity?, token: String, path: String,
+        parent: NSFileProviderItemIdentifier
+    ) {
+        let client = try liveClient()
+        let target = try mutationTarget(for: identifier, client: client)
+        let item = try buildItem(
+            node: target.node, path: target.path, parent: target.parent,
+            generation: target.generation, revision: target.revision)
+        var base: OwnerFileIdentity? = nil
+        if case .file(let size, let executable, let chunks, _) = target.node {
+            base = OwnerFileIdentity(size: size, executable: executable, chunks: chunks)
+        }
+        return (item, base, target.identityHex, target.path, target.parent)
+    }
+
     /// Validate a single entry name for mutation. The owner is the
     /// final judge (`Invalid`), but a slash or traversal name never
     /// reaches the socket.
@@ -103,16 +124,29 @@ extension LiveStore {
 
     // MARK: - Creates
 
+    /// Abort when the recorded cancel predates a socket write.
+    /// Checked before every submit, never after a terminal answer:
+    /// pre-submit aborts report `NSUserCancelledError` with nothing
+    /// sent; post-submit answers own the completion.
+    func checkCancel(_ cancel: MutationCancel?, what: String) throws {
+        if cancel?.isRequested == true {
+            throw LiveStoreError.cancelled(what)
+        }
+    }
+
     /// Create an empty directory and return its item. `AlreadyExists`
     /// survives as `refused` so the caller renders
     /// `filenameCollision`; every other refusal maps as usual.
     func createDirectory(
-        parent: NSFileProviderItemIdentifier, name: String
+        parent: NSFileProviderItemIdentifier, name: String,
+        cancel: MutationCancel? = nil
     ) throws -> LiveItem {
         let child = try validatedName(name)
+        try checkCancel(cancel, what: "mkdir \(child)")
         let client = try liveClient()
         let parentPath = try containerPath(for: parent, client: client)
         let path = parentPath.isEmpty ? child : "\(parentPath)/\(child)"
+        try checkCancel(cancel, what: "mkdir \(path)")
         do {
             _ = try client.submit(kind: .mkdir(path: path))
         } catch let error as OwnerClientError {
@@ -125,12 +159,16 @@ extension LiveStore {
     /// Create a file with `contents` (`nil` means empty, which is
     /// supported) through capture-parent + CreateFile + CommitFile.
     /// The parent token is recaptured once on `StaleParent`; an
-    /// unconfirmed `CreateFile` reconciles before any retry, and an
-    /// unconfirmed `CommitFile` reconciles against the served size.
+    /// unconfirmed `CreateFile` reconciles before any retry (absence
+    /// retries, ambiguity reports temporary — a serving entry never
+    /// proves our create landed), and an unconfirmed `CommitFile`
+    /// reconciles against the full pre-submit base.
     func createFile(
-        parent: NSFileProviderItemIdentifier, name: String, contents: Data?
+        parent: NSFileProviderItemIdentifier, name: String, contents: Data?,
+        cancel: MutationCancel? = nil
     ) throws -> LiveItem {
         let child = try validatedName(name)
+        try checkCancel(cancel, what: "create \(child)")
         let bytes = [UInt8](contents ?? Data())
         guard bytes.count <= Self.maxContentBytes else {
             throw LiveStoreError.sync(
@@ -139,30 +177,40 @@ extension LiveStore {
         let client = try liveClient()
         let parentPath = try containerPath(for: parent, client: client)
         let path = parentPath.isEmpty ? child : "\(parentPath)/\(child)"
-        let contentHex = bytes.map { String(format: "%02x", $0) }.joined()
+        let contentHex = HexCodec.encode(bytes)
         // Step 1: the empty file, with one StaleParent recapture.
-        var token = try client.captureParent(path: parentPath)
+        // Every owner call on this path maps transport breaks to
+        // temporary, never to a deterministic failure.
+        var parentToken: OwnerParentToken
+        do {
+            parentToken = try client.captureParent(path: parentPath)
+        } catch let error as OwnerClientError {
+            throw mapMutationError(error, what: "capture-parent \(parentPath)")
+        }
         var created = false
         for attempt in 0 ... 1 {
+            try checkCancel(cancel, what: "create \(path)")
             do {
-                _ = try client.submit(kind: .createFile(path: path, parent: token))
+                _ = try client.submit(kind: .createFile(path: path, parent: parentToken))
                 created = true
                 break
             } catch let error as OwnerClientError {
                 if case .refused(let refusal) = error, refusal.code == "StaleParent", attempt == 0 {
-                    token = try client.captureParent(path: parentPath)
+                    do {
+                        parentToken = try client.captureParent(path: parentPath)
+                    } catch let recapture as OwnerClientError {
+                        throw mapMutationError(recapture, what: "capture-parent \(parentPath)")
+                    }
                     continue
                 }
                 if case .unconfirmed = error {
                     switch try reconcileCreate(path: path, client: client) {
-                    case .committed:
-                        created = true
                     case .absent:
                         continue
-                    case .superseded(let detail), .unknown(let detail):
-                        throw LiveStoreError.temporary("create \(path) unconfirmed: \(detail)")
+                    case .committed, .superseded, .unknown:
+                        throw LiveStoreError.temporary(
+                            "create \(path) unconfirmed; retry the callback")
                     }
-                    break
                 }
                 throw mapMutationError(error, what: "create \(path)")
             }
@@ -191,29 +239,61 @@ extension LiveStore {
     /// token, then CommitFile. The caller's baseVersion check (the
     /// extension compares item versions) runs before this; a `Stale`
     /// here is a race that fails closed.
-    func writeContent(for identifier: NSFileProviderItemIdentifier, data: Data) throws -> LiveItem {
+    func writeContent(
+        for identifier: NSFileProviderItemIdentifier, data: Data,
+        cancel: MutationCancel? = nil
+    ) throws -> LiveItem {
+        guard [UInt8](data).count <= Self.maxContentBytes else {
+            throw LiveStoreError.sync(
+                "content exceeds the 32 MiB bound; save a smaller file")
+        }
+        let checked = try mutationItem(for: identifier)
+        guard let base = checked.base else {
+            throw LiveStoreError.sync("only files take content writes")
+        }
+        return try writeContent(
+            path: checked.path, parent: checked.parent, data: data,
+            base: base, token: checked.token, cancel: cancel)
+    }
+
+    /// Whole-content replacement against a caller-checked base and
+    /// token: the version check and the commit share one
+    /// precondition, so a remote edit between check and submit meets
+    /// the owner's refusal instead of being overwritten. `path` is
+    /// the entry's path as checked (post-rename when the caller
+    /// moved it first); no re-resolution runs between check and
+    /// submit.
+    func writeContent(
+        path: String,
+        parent: NSFileProviderItemIdentifier,
+        data: Data,
+        base: OwnerFileIdentity,
+        token: String,
+        cancel: MutationCancel? = nil
+    ) throws -> LiveItem {
         let bytes = [UInt8](data)
         guard bytes.count <= Self.maxContentBytes else {
             throw LiveStoreError.sync(
                 "content exceeds the 32 MiB bound; save a smaller file")
         }
-        let contentHex = bytes.map { String(format: "%02x", $0) }.joined()
+        let contentHex = HexCodec.encode(bytes)
         let client = try liveClient()
-        let target = try mutationTarget(for: identifier, client: client)
-        guard case .file = target.node else {
-            throw LiveStoreError.sync("only files take content writes")
+        try commitContent(
+            path: path, bytes: bytes, contentHex: contentHex,
+            base: base, token: token, client: client, cancel: cancel)
+        let (node, generation, revision) = try lookupNode(path: path, client: client)
+        guard nodeMatches(node: node, identityHex: token) else {
+            throw LiveStoreError.sync("committed entry fails verification")
         }
-        try commitContent(path: target.path, bytes: bytes, contentHex: contentHex, client: client)
-        let (node, generation, revision) = try lookupNode(path: target.path, client: client)
         return try buildItem(
-            node: node, path: target.path, parent: target.parent,
+            node: node, path: path, parent: parent,
             generation: generation, revision: revision)
     }
 
-    /// Commit `bytes` onto `path` against a fresh lookup base and
-    /// token, with one safe retry after an unconfirmed submit.
-    func commitContent(path: String, bytes: [UInt8], contentHex: String, client: OwnerClient) throws {
-        let (base, token): (OwnerFileIdentity, String) = try {
+    /// The fresh content base and entry token for `path`. Read once
+    /// by callers that bind a check to the commit they send.
+    func lookupBase(path: String, client: OwnerClient) throws -> (OwnerFileIdentity, String) {
+        do {
             let (node, _, _) = try client.lookup(path: path)
             guard case .file(let size, let executable, let chunks, let identity) = node,
                 let identity
@@ -221,8 +301,22 @@ extension LiveStore {
                 throw LiveStoreError.sync("commit target is not a token-bearing file")
             }
             return (OwnerFileIdentity(size: size, executable: executable, chunks: chunks), identity)
-        }()
+        } catch let error as OwnerClientError {
+            throw mapMutationError(error, what: "lookup base \(path)")
+        }
+    }
+
+    /// Commit `bytes` onto `path` against an explicit base and token
+    /// with one safe retry after an unconfirmed submit. The base and
+    /// token come from the caller's check (see `lookupBase`), never
+    /// from a second lookup that could launder a newer base.
+    func commitContent(
+        path: String, bytes: [UInt8], contentHex: String,
+        base: OwnerFileIdentity, token: String, client: OwnerClient,
+        cancel: MutationCancel? = nil
+    ) throws {
         for _ in 0 ... 1 {
+            try checkCancel(cancel, what: "commit \(path)")
             do {
                 _ = try client.submit(kind: .commitFile(
                     path: path, base: base, executable: false,
@@ -230,7 +324,9 @@ extension LiveStore {
                 return
             } catch let error as OwnerClientError {
                 if case .unconfirmed = error {
-                    switch try reconcileCommit(path: path, token: token, size: UInt64(bytes.count), client: client) {
+                    switch try reconcileCommit(
+                        path: path, preBase: base, token: token, client: client)
+                    {
                     case .committed:
                         return
                     case .absent:
@@ -247,6 +343,20 @@ extension LiveStore {
         throw LiveStoreError.temporary("commit \(path) never reached a verdict")
     }
 
+    /// Commit `bytes` onto `path` against a fresh lookup base and
+    /// token, with one safe retry after an unconfirmed submit.
+    /// For callers with no prior check (creates); checked callers
+    /// use the explicit-base variant above.
+    func commitContent(
+        path: String, bytes: [UInt8], contentHex: String, client: OwnerClient,
+        cancel: MutationCancel? = nil
+    ) throws {
+        let (base, token) = try lookupBase(path: path, client: client)
+        try commitContent(
+            path: path, bytes: bytes, contentHex: contentHex,
+            base: base, token: token, client: client, cancel: cancel)
+    }
+
     // MARK: - Rename and delete
 
     /// Move `identifier` under `newParent` as `newName`. The source
@@ -254,13 +364,20 @@ extension LiveStore {
     /// semantics refused with `AlreadyExists` (`noReplace: true`),
     /// so the system renames and re-issues on collision. A trash
     /// destination never reaches here — the extension fails it
-    /// closed before the socket.
+    /// closed before the socket. `expectedToken`, when set, is the
+    /// checked entry the move must land on: the submit carries it
+    /// instead of a re-read token, so a delete-plus-recreate
+    /// between the caller's check and the submit refuses instead of
+    /// moving the replacement.
     func rename(
         identifier: NSFileProviderItemIdentifier,
         newParent: NSFileProviderItemIdentifier,
-        newName: String
+        newName: String,
+        expectedToken: String? = nil,
+        cancel: MutationCancel? = nil
     ) throws -> LiveItem {
         let child = try validatedName(newName)
+        try checkCancel(cancel, what: "rename \(child)")
         let client = try liveClient()
         let target = try mutationTarget(for: identifier, client: client)
         let destParentPath = try containerPath(for: newParent, client: client)
@@ -274,16 +391,18 @@ extension LiveStore {
                 node: node, path: target.path, parent: newParent,
                 generation: generation, revision: revision)
         }
+        let bound = expectedToken ?? target.identityHex
         for _ in 0 ... 1 {
+            try checkCancel(cancel, what: "rename \(target.path)")
             do {
                 _ = try client.submit(kind: .rename(
                     from: target.path, to: destPath, noReplace: true,
-                    expectedIdentity: target.identityHex))
+                    expectedIdentity: bound))
                 break
             } catch let error as OwnerClientError {
                 if case .unconfirmed = error {
                     switch try reconcileRename(
-                        from: target.path, to: destPath, token: target.identityHex, client: client)
+                        from: target.path, to: destPath, token: bound, client: client)
                     {
                     case .committed:
                         break
@@ -300,7 +419,7 @@ extension LiveStore {
             }
         }
         let (node, generation, revision) = try lookupNode(path: destPath, client: client)
-        guard nodeMatches(node: node, identityHex: target.identityHex) else {
+        guard nodeMatches(node: node, identityHex: bound) else {
             throw LiveStoreError.sync("renamed entry fails verification")
         }
         let identifier = NSFileProviderItemIdentifier(
@@ -316,7 +435,11 @@ extension LiveStore {
     /// entry reports success (already deleted remotely); a
     /// non-empty directory keeps `DirectoryNotEmpty` as `refused`
     /// for the system to re-create.
-    func delete(identifier: NSFileProviderItemIdentifier) throws {
+    func delete(
+        identifier: NSFileProviderItemIdentifier,
+        cancel: MutationCancel? = nil
+    ) throws {
+        try checkCancel(cancel, what: "delete")
         let client = try liveClient()
         let target: (
             node: OwnerNode, path: String, parent: NSFileProviderItemIdentifier,
@@ -340,6 +463,7 @@ extension LiveStore {
             throw LiveStoreError.sync("entry is not deletable")
         }
         for _ in 0 ... 1 {
+            try checkCancel(cancel, what: "delete \(target.path)")
             do {
                 _ = try client.submit(kind: kind)
                 return
@@ -366,15 +490,16 @@ extension LiveStore {
 
     // MARK: - Reconciliation
 
-    /// Re-read after an unconfirmed create: the entry serves the
-    /// new path exactly when `CreateFile` landed.
+    /// Re-read after an unconfirmed create: absence proves the
+    /// create did not land and one retry is safe. A serving entry
+    /// proves nothing about *which* create landed — ours or a
+    /// concurrent replacement's — so it reads as unknown, never
+    /// committed: the system retries the whole callback and the
+    /// owner's `AlreadyExists` refusal sorts out the duplicate.
     func reconcileCreate(path: String, client: OwnerClient) throws -> MutationReconcile {
         do {
-            let (node, _, _) = try client.lookup(path: path)
-            if nodeIdentity(node) != nil {
-                return .committed
-            }
-            return .unknown("created path serves no token")
+            _ = try client.lookup(path: path)
+            return .unknown("an entry serves the path; ownership unproven")
         } catch let error as OwnerClientError {
             if case .refused(let refusal) = error, refusal.code == "NotFound" {
                 return .absent
@@ -383,22 +508,30 @@ extension LiveStore {
         }
     }
 
-    /// Re-read after an unconfirmed commit: the same token with the
-    /// new size proves the write; the same token with the old size
-    /// proves it did not land; a different token means someone
-    /// replaced the entry — fail closed, never write over it.
+    /// Re-read after an unconfirmed commit: the same entry still
+    /// carrying the pre-submit base proves the write did not land
+    /// (one retry is safe); a missing entry or a changed entry
+    /// proves someone else moved it (fail closed, never write over
+    /// a replacement); anything else — including a same-size edit,
+    /// which is indistinguishable from our own write — is unknown,
+    /// never committed. Size alone is not the content identity; the
+    /// full base (size, executable bit, chunks) is compared, and
+    /// ambiguity fails to temporary, never to success.
     func reconcileCommit(
-        path: String, token: String, size: UInt64, client: OwnerClient
+        path: String, preBase: OwnerFileIdentity, token: String, client: OwnerClient
     ) throws -> MutationReconcile {
         do {
             let (node, _, _) = try client.lookup(path: path)
-            guard case .file(let served, _, _, let identity) = node else {
+            guard case .file(let served, let executable, let chunks, let identity) = node else {
                 return .superseded("commit target is no longer a file")
             }
             guard identity?.lowercased() == token.lowercased() else {
                 return .superseded("entry changed under the commit")
             }
-            return served == size ? .committed : .absent
+            if served == preBase.size, executable == preBase.executable, chunks == preBase.chunks {
+                return .absent
+            }
+            return .unknown("the entry moved under the commit; ownership unproven")
         } catch let error as OwnerClientError {
             if case .refused(let refusal) = error, refusal.code == "NotFound" {
                 return .superseded("commit target is gone")
@@ -454,18 +587,25 @@ extension LiveStore {
 
     /// Map a mutation submit failure. Collisions and non-empty
     /// directories survive as `refused` so the callback renders
-    /// the system's own resolution; everything else reuses the
-    /// read table (missing → notFound, transient → temporary,
-    /// deterministic → sync).
+    /// the system's own resolution; transport-shaped refusals
+    /// (`Timeout`, `Unavailable`) stay temporary — the read table
+    /// would call a mutation `Timeout` deterministic, which is the
+    /// wrong lane for a write that may still land. Everything else
+    /// reuses the read table.
     func mapMutationError(_ error: Error, what: String) -> LiveStoreError {
         guard let clientError = error as? OwnerClientError else {
             log.error("unexpected mutation error for \(what): \(String(describing: error))")
             return .sync("unexpected failure for \(what)")
         }
-        if case .refused(let refusal) = clientError,
-            refusal.code == "AlreadyExists" || refusal.code == "DirectoryNotEmpty"
-        {
-            return .refused(code: refusal.code, message: refusal.message)
+        if case .refused(let refusal) = clientError {
+            switch refusal.code {
+            case "AlreadyExists", "DirectoryNotEmpty":
+                return .refused(code: refusal.code, message: refusal.message)
+            case "Timeout", "Unavailable":
+                return .temporary("\(what): \(refusal.message)")
+            default:
+                break
+            }
         }
         return mapError(error, what: what)
     }

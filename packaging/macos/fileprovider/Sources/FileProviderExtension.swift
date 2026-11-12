@@ -158,10 +158,13 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
     ) -> Progress {
         let progress = Progress(totalUnitCount: 1)
         let gate = SingleCompletion()
+        // Record-only cancellation: the driver checks before every
+        // socket write, so a cancel wins exactly when nothing was
+        // sent; a terminal answer always owns the completion, even
+        // if a cancel arrived mid-flight.
+        let cancel = MutationCancel()
         progress.cancellationHandler = {
-            gate.fire {
-                completionHandler(nil, [], false, userCancelledError())
-            }
+            cancel.request()
         }
         guard let liveStore else {
             gate.fire {
@@ -172,7 +175,7 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
         let domain = self.domain
         let log = self.log
         DispatchQueue.global(qos: .userInitiated).async {
-            if progress.isCancelled {
+            if cancel.isRequested {
                 gate.fire {
                     completionHandler(nil, [], false, userCancelledError())
                 }
@@ -222,39 +225,19 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
                 if itemTemplate.contentType == .folder {
                     created = try liveStore.createDirectory(
                         parent: itemTemplate.parentItemIdentifier,
-                        name: itemTemplate.filename)
+                        name: itemTemplate.filename,
+                        cancel: cancel)
                 } else {
-                    let data: Data?
-                    if let url {
-                        do {
-                            data = try Data(contentsOf: url)
-                        } catch {
-                            log.error(
-                                "cannot read staged contents: \(String(describing: error))")
-                            gate.fire {
-                                completionHandler(
-                                    nil, [], false,
-                                    NSFileProviderError(.cannotSynchronize))
-                            }
-                            return
-                        }
-                    } else {
-                        // Empty files are supported: no contents
-                        // means CreateFile alone, never a fabricated
-                        // byte.
-                        data = nil
-                    }
+                    // Empty files are supported: no contents means
+                    // CreateFile alone, never a fabricated byte. The
+                    // staged size is checked before loading, so an
+                    // oversize file refuses without materializing.
+                    let data = try Self.stagedOptionalContents(at: url, log: log)
                     created = try liveStore.createFile(
                         parent: itemTemplate.parentItemIdentifier,
                         name: itemTemplate.filename,
-                        contents: data)
-                }
-                if gate.isDone {
-                    // Cancel won the race after the owner committed:
-                    // the entry exists; the working-set signal (below)
-                    // reconciles the system's view.
-                    signalWorkingSet(domain: domain, log: log)
-                    return
+                        contents: data,
+                        cancel: cancel)
                 }
                 gate.fire {
                     completionHandler(created, [], false, nil)
@@ -290,10 +273,9 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
     ) -> Progress {
         let progress = Progress(totalUnitCount: 1)
         let gate = SingleCompletion()
+        let cancel = MutationCancel()
         progress.cancellationHandler = {
-            gate.fire {
-                completionHandler(nil, [], false, userCancelledError())
-            }
+            cancel.request()
         }
         guard let liveStore else {
             gate.fire {
@@ -304,7 +286,7 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
         let domain = self.domain
         let log = self.log
         DispatchQueue.global(qos: .userInitiated).async {
-            if progress.isCancelled {
+            if cancel.isRequested {
                 gate.fire {
                     completionHandler(nil, [], false, userCancelledError())
                 }
@@ -327,13 +309,16 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
                     }
                     return
                 }
-                // The current owner state is the conflict detector:
-                // a baseVersion that no longer matches means a
-                // remote edit landed first. No overwrite, no merge,
-                // no retry on a newer base — fail closed and let the
-                // system re-drive the change.
-                let current = try liveStore.item(for: item.itemIdentifier)
-                if !Self.baseVersionMatches(baseVersion, current: current) {
+                // Read once: the item, base, and token share one
+                // lookup, and the commit below sends that same base
+                // and token — never a re-read one. A remote edit
+                // landing between the check and the submit therefore
+                // meets the owner's refusal (Stale/StaleEntry)
+                // instead of being overwritten. No merge, no retry
+                // on a newer base: fail closed and let the system
+                // re-drive the change.
+                let checked = try liveStore.mutationItem(for: item.itemIdentifier)
+                if !Self.baseVersionMatches(baseVersion, current: checked.item) {
                     log.error("base version mismatch, refusing without overwrite")
                     gate.fire {
                         completionHandler(
@@ -348,17 +333,34 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
                 // rather than claimed or silently dropped.
                 let supported: NSFileProviderItemFields = [.filename, .parentItemIdentifier, .contents]
                 let pending = changedFields.subtracting(supported)
-                var result = current
-                var resultIdentifier = item.itemIdentifier
+                var result = checked.item
+                var resultPath = checked.path
+                var resultParent = checked.parent
                 if changedFields.contains(.filename) || changedFields.contains(.parentItemIdentifier) {
                     result = try liveStore.rename(
-                        identifier: resultIdentifier,
+                        identifier: item.itemIdentifier,
                         newParent: item.parentItemIdentifier,
-                        newName: item.filename)
-                    resultIdentifier = result.itemIdentifier
+                        newName: item.filename,
+                        expectedToken: checked.token,
+                        cancel: cancel)
+                    resultPath = result.relativePath
+                    resultParent = result.parentItemIdentifier
                 }
                 if changedFields.contains(.contents) {
-                    guard let newContents else {
+                    guard let base = checked.base else {
+                        // Only files take content writes; the
+                        // mutation surface already refused symlinks
+                        // and legacy rows, so this is a directory
+                        // with a contents flag — fail closed.
+                        log.error("content change on a non-file refused")
+                        gate.fire {
+                            completionHandler(
+                                nil, [], false,
+                                NSFileProviderError(.cannotSynchronize))
+                        }
+                        return
+                    }
+                    guard let stagedURL = newContents else {
                         // A content change with no staged bytes is
                         // not fabricable: fail the item closed.
                         log.error("content change without staged contents refused")
@@ -369,28 +371,13 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
                         }
                         return
                     }
-                    let data: Data
-                    do {
-                        data = try Data(contentsOf: newContents)
-                    } catch {
-                        log.error(
-                            "cannot read staged contents: \(String(describing: error))")
-                        gate.fire {
-                            completionHandler(
-                                nil, [], false,
-                                NSFileProviderError(.cannotSynchronize))
-                        }
-                        return
-                    }
-                    result = try liveStore.writeContent(for: resultIdentifier, data: data)
+                    let data = try Self.stagedContents(at: stagedURL, log: log)
+                    result = try liveStore.writeContent(
+                        path: resultPath, parent: resultParent, data: data,
+                        base: base, token: checked.token, cancel: cancel)
                 }
-                if gate.isDone {
-                    signalWorkingSet(domain: domain, log: log)
-                    return
-                }
-                let completed = result
                 gate.fire {
-                    completionHandler(completed, pending, false, nil)
+                    completionHandler(result, pending, false, nil)
                     signalWorkingSet(domain: domain, log: log)
                 }
             } catch let error as LiveStoreError {
@@ -419,8 +406,9 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
     ) -> Progress {
         let progress = Progress(totalUnitCount: 1)
         let gate = SingleCompletion()
+        let cancel = MutationCancel()
         progress.cancellationHandler = {
-            gate.fire { completionHandler(userCancelledError()) }
+            cancel.request()
         }
         guard let liveStore else {
             gate.fire {
@@ -431,7 +419,7 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
         let domain = self.domain
         let log = self.log
         DispatchQueue.global(qos: .userInitiated).async {
-            if progress.isCancelled {
+            if cancel.isRequested {
                 gate.fire { completionHandler(userCancelledError()) }
                 return
             }
@@ -443,11 +431,7 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
                 // same-path replacement safe. No baseVersion check:
                 // a content change on the same entry does not
                 // invalidate the user's delete of that entry.
-                try liveStore.delete(identifier: identifier)
-                if gate.isDone {
-                    signalWorkingSet(domain: domain, log: log)
-                    return
-                }
+                try liveStore.delete(identifier: identifier, cancel: cancel)
                 gate.fire {
                     completionHandler(nil)
                     signalWorkingSet(domain: domain, log: log)
@@ -471,7 +455,7 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
         return progress
     }
 
-    private func nsError(for error: LiveStoreError) -> NSFileProviderError {
+    private func nsError(for error: LiveStoreError) -> Error {
         switch error {
         case .notFound:
             return NSFileProviderError(.noSuchItem)
@@ -480,15 +464,21 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
         case .refused(let code, let message):
             return nsErrorForMutation(
                 code: code, message: message, what: "read", log: log)
+        case .cancelled:
+            return userCancelledError()
         case .temporary:
             return NSFileProviderError(.serverUnreachable)
         }
     }
 
     /// Render a mutation `LiveStoreError` at the write boundary.
+    /// `cancelled` renders the Cocoa cancel error (an `NSError`,
+    /// not a File Provider code — the header names the code, and
+    /// the domain matters), so the return is the `Error`
+    /// existential, not the File Provider error type.
     static func mutationError(
         for error: LiveStoreError, what: String, log: Logger
-    ) -> NSFileProviderError {
+    ) -> Error {
         switch error {
         case .notFound:
             return NSFileProviderError(.noSuchItem)
@@ -498,26 +488,77 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
         case .refused(let code, let message):
             return nsErrorForMutation(
                 code: code, message: message, what: what, log: log)
+        case .cancelled:
+            return userCancelledError()
         case .temporary(let message):
             log.error("mutation \(what) unavailable: \(message, privacy: .public)")
             return NSFileProviderError(.serverUnreachable)
         }
     }
 
-    /// Whether the disk's base version still matches the owner's
-    /// current item version. A first-sync base (never known in sync)
-    /// skips the check — the owner precondition remains
-    /// authoritative. Anything else must match byte for byte: the
-    /// version moves with every owner coordinate, size, and token
-    /// change, so a mismatch is a remote edit, never staleness to
-    /// overwrite.
+    /// Read staged file contents for a mutation. The staged size is
+    /// checked before loading, so an oversize file refuses without
+    /// materializing tens of megabytes.
+    static func stagedContents(at url: URL, log: Logger) throws -> Data {
+        do {
+            let values = try url.resourceValues(forKeys: [.fileSizeKey])
+            if let size = values.fileSize, UInt64(size) > UInt64(LiveStore.maxContentBytes) {
+                throw LiveStoreError.sync(
+                    "content exceeds the 32 MiB bound; save a smaller file")
+            }
+            return try Data(contentsOf: url)
+        } catch let error as LiveStoreError {
+            throw error
+        } catch {
+            log.error("cannot read staged contents: \(String(describing: error))")
+            throw LiveStoreError.sync("cannot read staged contents")
+        }
+    }
+
+    /// Read optional staged contents: a `nil` URL means empty, never
+    /// a fabricated byte.
+    static func stagedOptionalContents(at url: URL?, log: Logger) throws -> Data? {
+        guard let url else { return nil }
+        return try stagedContents(at: url, log: log)
+    }
+
+    /// Whether the disk's base version still describes the owner's
+    /// current item. A first-sync base (never known in sync) skips
+    /// the check — the owner precondition remains authoritative.
+    /// Otherwise the per-entry facts (size and identity tag) must
+    /// match. The serving generation and revision are deliberately
+    /// excluded: they move with every commit anywhere on the drive,
+    /// so comparing them would fail closed on unrelated writes. A
+    /// same-size remote edit passes this check and meets the
+    /// owner's content-base refusal instead — layered, not merged.
     static func baseVersionMatches(
         _ base: NSFileProviderItemVersion, current: LiveItem
     ) -> Bool {
-        let currentVersion = current.itemVersion
         if base.contentVersion == NSFileProviderItemVersion.beforeFirstSyncComponent {
             return true
         }
-        return base.contentVersion == currentVersion.contentVersion
+        guard let disk = versionFacts(base.contentVersion),
+            let live = versionFacts(current.itemVersion.contentVersion)
+        else {
+            return false
+        }
+        return disk == live
+    }
+
+    /// Split our `wyrd-cv1:generation:revision:size:tag` content
+    /// version into the per-entry facts. Anything else — a foreign
+    /// format, a truncated version — fails the match, never the
+    /// parse.
+    static func versionFacts(_ contentVersion: Data) -> (size: String, tag: String)? {
+        guard let raw = String(data: contentVersion, encoding: .utf8),
+            raw.hasPrefix("wyrd-cv1:")
+        else {
+            return nil
+        }
+        let rest = raw.dropFirst("wyrd-cv1:".count)
+        let parts = rest.split(
+            separator: ":", maxSplits: 3, omittingEmptySubsequences: false).map(String.init)
+        guard parts.count == 4 else { return nil }
+        return (parts[2], parts[3])
     }
 }

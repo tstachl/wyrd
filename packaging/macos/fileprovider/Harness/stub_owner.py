@@ -252,6 +252,32 @@ def committed(size):
     )
 
 
+class DropConnection(Exception):
+    """The stub drops the connection instead of answering: the
+    client's unconfirmed path, never a frame."""
+
+
+# One-shot drops keyed by (kind, path): the first submit with a
+# `drop-before/*` path closes before processing (nothing landed —
+# reconcile must find absence and retry); the first with a
+# `drop-after/*` path processes, then closes without answering
+# (the write landed — reconcile must report unknown, never claim
+# success or failure). Later submits run normally.
+DROP = {}
+
+
+def claim_drop(name, path):
+    if "/" not in path:
+        return None
+    if path.split("/")[0] not in ("drop-before", "drop-after"):
+        return None
+    key = (name, path)
+    if key in DROP:
+        return None
+    DROP[key] = True
+    return path.split("/")[0]
+
+
 BASELINE_NAMES = {"hello.txt", "notes", "legacy.bin", "agreed", "disagreed", "split.txt"}
 
 
@@ -287,8 +313,15 @@ def answer_stateful(name, body, path, entry):
     if name == "CommitFile":
         if entry["kind"] != "file":
             return result_err("IsDirectory", "not a file")
+        # The full content base is checked, not just the size: a
+        # same-size edit with different chunks is still stale.
         base = body.get("base", {})
-        if not isinstance(base, dict) or base.get("size") != entry["size"]:
+        if (
+            not isinstance(base, dict)
+            or base.get("size") != entry["size"]
+            or base.get("executable") is not False
+            or base.get("chunks") != ["aa"]
+        ):
             return result_err("Stale", "the content changed before commit")
         content = body.get("content_hex", "")
         entry["content"] = content
@@ -331,20 +364,40 @@ def answer_submit(params):
     name, body = next(iter(kind.items()))
     if name == "Fold":
         return result_err("UnsupportedOperation", "the stub answers no folds")
+    path = body.get("from", body.get("path", ""))
+    drop = claim_drop(name, path)
+    if drop == "drop-before":
+        raise DropConnection()
     if name == "Mkdir":
-        return answer_mkdir(body)
-    if name == "CreateFile":
-        return answer_create(body)
-    if name not in COVERED:
-        return result_err("UnsupportedOperation", "unknown submit kind %s" % name)
+        result = answer_mkdir(body)
+    elif name == "CreateFile":
+        result = answer_create(body)
+    elif name not in COVERED:
+        result = result_err("UnsupportedOperation", "unknown submit kind %s" % name)
+    else:
+        result = answer_covered(name, body, path)
+    if drop == "drop-after":
+        raise DropConnection()
+    return result
+
+
+def answer_covered(name, body, path):
     # Entry-addressed kinds require the v2 precondition, exactly like
     # the owner: absent is Malformed, never a silent path-only write.
+    # The token is compared on every path — the baseline fixtures
+    # and the stateful namespace alike.
     expected = body.get("expected_identity")
     if not isinstance(expected, str) or len(expected) != 64:
         return result_err("Malformed", "a covered kind carries expected_identity")
-    path = body.get("from", body.get("path", ""))
     if path in STATE:
-        return answer_stateful(name, body, path, STATE[path])
+        entry = STATE[path]
+        if expected != entry["identity"]:
+            return result_err(
+                "StaleEntry",
+                "stale entry identity for %r: expected %s, found %s"
+                % (path, expected, entry["identity"]),
+            )
+        return answer_stateful(name, body, path, entry)
     if path not in TOKENS:
         return result_err("NotFound", "no such path")
     if expected != TOKENS[path]:
@@ -405,6 +458,8 @@ def main():
                 }
             payload = json.dumps(response).encode("utf-8")
             conn.sendall(struct.pack(">I", len(payload)) + payload)
+        except DropConnection:
+            pass
         except ConnectionError:
             pass
         finally:

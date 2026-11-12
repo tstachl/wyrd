@@ -12,6 +12,11 @@ import Foundation
 import os
 
 /// Render a mutation refusal at the File Provider boundary.
+/// Collision and non-empty render the system's own resolution;
+/// `Timeout` and `Unavailable` never arrive from the store (it
+/// routes them to temporary first) and stay here only so the table
+/// names the transient lane; `NotFound` arrives only when probed
+/// directly (the store maps live answers to `.notFound` first).
 func nsErrorForMutation(code: String, message: String, what: String, log: Logger) -> NSFileProviderError {
     switch code {
     case "AlreadyExists":
@@ -61,7 +66,9 @@ enum MutationReconcile {
 /// first to arrive owns the completion, the loser is silent — so
 /// the system never sees a double completion, and a cancel after
 /// the owner's terminal answer still reports the answer
-/// (post-accept), not a cancellation.
+/// (post-accept), not a cancellation. The body runs after the lock
+/// releases: a completion handler that re-enters the gate (or the
+/// resolver) must never deadlock on it.
 final class SingleCompletion {
     private let lock = NSLock()
     private var done = false
@@ -70,16 +77,38 @@ final class SingleCompletion {
     /// whether this caller owned the completion.
     @discardableResult
     func fire(_ body: () -> Void) -> Bool {
-        lock.withLock {
+        let owned = lock.withLock { () -> Bool in
             guard !done else { return false }
             done = true
-            body()
             return true
         }
+        if owned {
+            body()
+        }
+        return owned
     }
 
     var isDone: Bool {
         lock.withLock { done }
+    }
+}
+
+/// Cooperative cancellation for one mutation. The progress
+/// handler records; the driver checks before every socket write.
+/// Recording — never completing — from the handler is what
+/// separates pre-submit (abort, report `NSUserCancelledError`)
+/// from post-submit (the terminal answer owns the completion, even
+/// if a cancel arrived mid-flight).
+final class MutationCancel {
+    private let lock = NSLock()
+    private var requested = false
+
+    func request() {
+        lock.withLock { requested = true }
+    }
+
+    var isRequested: Bool {
+        lock.withLock { requested }
     }
 }
 
@@ -94,9 +123,10 @@ func userCancelledError() -> NSError {
 /// container identifiers are ignored by the system — so every
 /// mutation signals the working set regardless of which container
 /// changed; the parent-vs-item distinction in the Stage 3 spec is
-/// about *what* changed, not the signal target. No manager (the
-/// Harness, a misconfigured domain) is a logged no-op, never a
-/// failure: the completion already told the system what changed.
+/// about *what* changed, not the signal target. The signal prompts
+/// the system to re-observe; the completion values stay
+/// authoritative. No manager (the Harness, a misconfigured domain)
+/// is a logged no-op, never a failure.
 func signalWorkingSet(domain: NSFileProviderDomain, log: Logger) {
     guard let manager = NSFileProviderManager(for: domain) else {
         log.error("no manager for domain, working set signal skipped")
