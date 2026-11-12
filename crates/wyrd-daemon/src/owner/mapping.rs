@@ -137,9 +137,14 @@ pub fn wire_node(node: &Node) -> WireNode {
 /// Map `ConflictVersion` to its wire form. Exhaustive destructure:
 /// a new source field fails the build here, not on the wire.
 pub fn wire_conflict_version(version: &ConflictVersion) -> WireConflictVersion {
-    let ConflictVersion { snapshot, node } = version;
+    let ConflictVersion {
+        snapshot,
+        timestamp,
+        node,
+    } = version;
     WireConflictVersion {
         snapshot: hex_id(snapshot.as_bytes()),
+        timestamp: *timestamp,
         node: Box::new(wire_node(node)),
     }
 }
@@ -189,6 +194,7 @@ pub fn node_from_wire(node: &WireNode) -> Result<Node, String> {
             for version in versions {
                 out.push(ConflictVersion {
                     snapshot: SnapshotId::from_bytes(parse_id(&version.snapshot)?),
+                    timestamp: version.timestamp,
                     node: node_from_wire(&version.node)?,
                 });
             }

@@ -115,10 +115,16 @@ pub enum WireNode {
     },
 }
 
-/// The wire form of `ConflictVersion`.
+/// The wire form of `ConflictVersion`. `timestamp` is the head
+/// snapshot's authoring timestamp (ms, display only); it defaults to
+/// `0` on parse so a pre-timestamp reader degrades to "unknown"
+/// instead of failing, and both sides ship together so the default
+/// only covers mixed-version skew during rollout.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WireConflictVersion {
     pub snapshot: String,
+    #[serde(default)]
+    pub timestamp: u64,
     pub node: Box<WireNode>,
 }
 

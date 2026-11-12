@@ -1,8 +1,9 @@
-// Stage 2 enumerator over live owner state. One `readdir` is one
-// enumeration in one owner coordinate, so every page shares the
-// coordinate and the returned anchor always describes the completed
-// enumeration. Conflict rows are excluded (logged, counted) and
-// never break sibling enumeration.
+// Stage 2 enumerator over live owner state, extended by the
+// Stage 3 inspector: one `readdir` is one enumeration in one owner
+// coordinate, so every page shares the coordinate and the returned
+// anchor always describes the completed enumeration. Each conflict
+// row yields one synthetic read-only report item (never ordinary
+// content); siblings enumerate regardless.
 
 import FileProvider
 import Foundation
@@ -26,9 +27,15 @@ final class LiveEnumerator: NSObject, NSFileProviderEnumerator {
     ) {
         // Single-shot enumeration: the page carries no state because
         // one `readdir` serves the whole container at one coordinate.
+        // Reports ride alongside ordinary items; both share the
+        // anchor the enumeration served.
         do {
-            let (items, anchor) = try store.enumerate(container: container)
-            observer.didEnumerate(items)
+            let (items, reports, anchor) = try store.enumerate(container: container)
+            var combined: [NSFileProviderItem] = []
+            combined.reserveCapacity(items.count + reports.count)
+            combined.append(contentsOf: items.map { $0 as NSFileProviderItem })
+            combined.append(contentsOf: reports.map { $0 as NSFileProviderItem })
+            observer.didEnumerate(combined)
             observer.finishEnumerating(
                 upTo: NSFileProviderPage(rawValue: Data(anchor.encode().utf8))
             )

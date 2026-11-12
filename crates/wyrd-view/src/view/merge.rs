@@ -10,22 +10,26 @@ use super::{ConflictVersion, Node, ViewError};
 /// differing leaf identity — is a path conflict. Presence versus
 /// deletion disagrees — deletion is a state change, so a path surviving
 /// in only some heads never serves quietly. Versions list only the
-/// heads where the path resolves.
+/// heads where the path resolves. Each resolution carries its head's
+/// `(snapshot, timestamp)` so conflict versions label by snapshot and
+/// timestamp without peer identity; merged directories drop the
+/// timestamps (they are not conflicts, and nested conflicts re-resolve
+/// timestamps from heads).
 pub(crate) fn merge(
-    resolutions: Vec<(wyrd_format::SnapshotId, Option<Node>)>,
+    resolutions: Vec<(wyrd_format::SnapshotId, u64, Option<Node>)>,
 ) -> Result<Node, ViewError> {
     let mut present = Vec::with_capacity(resolutions.len());
-    for (snapshot, node) in &resolutions {
+    for (snapshot, timestamp, node) in &resolutions {
         if let Some(node) = node {
-            present.push((*snapshot, node.clone()));
+            present.push((*snapshot, *timestamp, node.clone()));
         }
     }
     if present.is_empty() {
         return Err(ViewError::NotFound);
     }
     if present.len() == resolutions.len() {
-        let first = &present[0].1;
-        if present.iter().all(|(_, node)| node == first) {
+        let first = &present[0].2;
+        if present.iter().all(|(_, _, node)| node == first) {
             return Ok(first.clone());
         }
         if let Some(subtrees) = all_dirs(&present) {
@@ -43,7 +47,11 @@ pub(crate) fn merge(
     Ok(Node::Conflict {
         versions: present
             .into_iter()
-            .map(|(snapshot, node)| ConflictVersion { snapshot, node })
+            .map(|(snapshot, timestamp, node)| ConflictVersion {
+                snapshot,
+                timestamp,
+                node,
+            })
             .collect(),
     })
 }
@@ -56,8 +64,8 @@ pub(crate) fn merge(
 /// defensive unreachable, kept so a future caller broadening the
 /// inputs fails safe instead of agreeing loudly.
 /// Conflict versions keep their own tokens and never agree.
-fn agreed_identity(present: &[(wyrd_format::SnapshotId, Node)]) -> Option<EntryIdentity> {
-    let mut tokens = present.iter().map(|(_, node)| match node {
+fn agreed_identity(present: &[(wyrd_format::SnapshotId, u64, Node)]) -> Option<EntryIdentity> {
+    let mut tokens = present.iter().map(|(_, _, node)| match node {
         Node::File { identity, .. }
         | Node::Dir { identity, .. }
         | Node::Symlink { identity, .. } => *identity,
@@ -75,11 +83,11 @@ fn agreed_identity(present: &[(wyrd_format::SnapshotId, Node)]) -> Option<EntryI
 /// The per-head subtrees when every head resolves the path to a
 /// directory, or `None` when any head resolves to a different kind.
 fn all_dirs(
-    present: &[(wyrd_format::SnapshotId, Node)],
+    present: &[(wyrd_format::SnapshotId, u64, Node)],
 ) -> Option<Vec<(wyrd_format::SnapshotId, ContentId)>> {
     present
         .iter()
-        .map(|(snapshot, node)| match node {
+        .map(|(snapshot, _, node)| match node {
             Node::Dir { subtree, .. } => Some((*snapshot, *subtree)),
             _ => None,
         })

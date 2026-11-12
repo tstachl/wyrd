@@ -105,6 +105,13 @@ pub(super) fn snapshot(tree: ContentId) -> Snapshot {
     Snapshot::new(vec![], tree, device(), transition(), 1, 0, 1).unwrap()
 }
 
+/// A head snapshot with an explicit authoring timestamp: conflict
+/// versions must label by `(snapshot, timestamp)`, so tests that
+/// assert the label need distinct timestamps per head.
+pub(super) fn snapshot_at(tree: ContentId, timestamp: u64) -> Snapshot {
+    Snapshot::new(vec![], tree, device(), transition(), 1, 0, timestamp).unwrap()
+}
+
 pub(super) fn chunk(store: &mut MemoryObjectStore, data: &[u8]) -> ContentId {
     store.insert(ObjectKind::Chunk, data).unwrap()
 }

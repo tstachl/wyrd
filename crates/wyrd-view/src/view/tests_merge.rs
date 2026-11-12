@@ -33,8 +33,8 @@ fn divergent_heads_surface_file_conflict() {
         &mut store,
         vec![Entry::file("f.txt", 3, false, vec![b]).unwrap()],
     );
-    let snap_a = snapshot(root_a);
-    let snap_b = snapshot(root_b);
+    let snap_a = snapshot_at(root_a, 11);
+    let snap_b = snapshot_at(root_b, 12);
     let view = DriveView::new(
         store,
         FakeMaterialization::empty(),
@@ -47,7 +47,9 @@ fn divergent_heads_surface_file_conflict() {
     };
     assert_eq!(versions.len(), 2);
     assert_eq!(versions[0].snapshot, snap_a.snapshot_id());
+    assert_eq!(versions[0].timestamp, 11);
     assert_eq!(versions[1].snapshot, snap_b.snapshot_id());
+    assert_eq!(versions[1].timestamp, 12);
 
     // Reading through the conflict fails instead of picking a winner.
     assert_eq!(view.open(&node), Err(ViewError::Conflict));
@@ -375,6 +377,9 @@ fn merged_dir_child_kind_divergence_conflicts() {
     assert_eq!(versions.len(), 2);
     assert!(versions.iter().any(|v| matches!(v.node, Node::Dir { .. })));
     assert!(versions.iter().any(|v| matches!(v.node, Node::File { .. })));
+    // Nested conflicts label by head timestamp too: the union
+    // re-resolves timestamps from heads, never a zero default.
+    assert!(versions.iter().all(|v| v.timestamp == 1));
     // The conflict node lists only the dir side's children.
     let union = view.readdir(&entries[0].node).unwrap();
     assert_eq!(union.len(), 1);
