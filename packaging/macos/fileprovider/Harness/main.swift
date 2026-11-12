@@ -197,6 +197,89 @@ check(SocketConfig.domainDrive("short") == nil, "short domain ids are rejected")
 check(SocketConfig.domainDrive(String(repeating: "0", count: 64)) == nil, "zero domain ids are rejected")
 check(SocketConfig.domainDrive(driveHex.uppercased()) == driveHex, "domain ids normalize case")
 
+// MARK: - Alias resolution against a scratch container
+
+do {
+    let base = FileManager.default.temporaryDirectory
+        .appendingPathComponent("wyrd-harness-\(ProcessInfo.processInfo.processIdentifier)")
+    let sockets = base.appendingPathComponent("Sockets")
+    let byDrive = sockets.appendingPathComponent("by-drive")
+    try FileManager.default.createDirectory(at: byDrive, withIntermediateDirectories: true)
+    let fingerprint = "399a8bbca022f440.sock"
+    let real = sockets.appendingPathComponent(fingerprint)
+    // A bound socket proves nothing here; only the path shape
+    // matters, so a regular file stands in for the listener.
+    FileManager.default.createFile(atPath: real.path, contents: Data())
+    // Note: the string-path link creation below is deliberate.
+    // `createSymbolicLink(at:withDestinationURL:)` absolutizes a
+    // relative destination against the working directory; the
+    // daemon publishes the literal relative target, so the Harness
+    // must store the literal too.
+    try FileManager.default.createSymbolicLink(
+        atPath: byDrive.appendingPathComponent("\(driveHex).sock").path,
+        withDestinationPath: "../\(fingerprint)")
+    let resolved = try SocketConfig.resolve(container: base, driveHex: driveHex)
+    checkEqual(resolved, real.path, "the alias resolves to the sibling socket")
+    // Negative shapes fail closed, never to a guessed path.
+    do {
+        _ = try SocketConfig.resolve(container: base, driveHex: String(repeating: "98", count: 32))
+        print("FAIL: a missing alias resolves")
+        failures += 1
+    } catch let error as SocketConfigError {
+        if case .aliasMissing = error {
+            // Expected.
+        } else {
+            print("FAIL: a missing alias fails as aliasMissing, got \(error)")
+            failures += 1
+        }
+    } catch {
+        print("FAIL: a missing alias fails as aliasMissing, got \(error)")
+        failures += 1
+    }
+    try FileManager.default.removeItem(at: byDrive.appendingPathComponent("\(driveHex).sock"))
+    try FileManager.default.createSymbolicLink(
+        atPath: byDrive.appendingPathComponent("\(driveHex).sock").path,
+        withDestinationPath: "not-a-fingerprint.sock")
+    do {
+        _ = try SocketConfig.resolve(container: base, driveHex: driveHex)
+        print("FAIL: a non-fingerprint target resolves")
+        failures += 1
+    } catch let error as SocketConfigError {
+        if case .badTarget = error {
+            // Expected.
+        } else {
+            print("FAIL: a non-fingerprint target fails as badTarget, got \(error)")
+            failures += 1
+        }
+    } catch {
+        print("FAIL: a non-fingerprint target fails as badTarget, got \(error)")
+        failures += 1
+    }
+    try FileManager.default.removeItem(at: byDrive.appendingPathComponent("\(driveHex).sock"))
+    try FileManager.default.createSymbolicLink(
+        atPath: byDrive.appendingPathComponent("\(driveHex).sock").path,
+        withDestinationPath: "../../escape.sock")
+    do {
+        _ = try SocketConfig.resolve(container: base, driveHex: driveHex)
+        print("FAIL: an escaping alias resolves")
+        failures += 1
+    } catch let error as SocketConfigError {
+        if case .aliasEscapes = error {
+            // Expected.
+        } else {
+            print("FAIL: an escaping alias fails as aliasEscapes, got \(error)")
+            failures += 1
+        }
+    } catch {
+        print("FAIL: an escaping alias fails as aliasEscapes, got \(error)")
+        failures += 1
+    }
+    try FileManager.default.removeItem(at: base)
+} catch {
+    print("FAIL: alias resolution: \(error)")
+    failures += 1
+}
+
 // MARK: - Live store against the stub
 
 let log = Logger(subsystem: "md.enesis.wyrd.harness", category: "harness")

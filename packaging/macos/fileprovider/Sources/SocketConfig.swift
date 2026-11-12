@@ -59,6 +59,13 @@ struct SocketConfig {
         ) else {
             throw SocketConfigError.noGroupContainer(Self.groupIdentifier)
         }
+        return try Self.resolve(container: container, driveHex: driveHex)
+    }
+
+    /// Resolve against an explicit container URL (the Harness
+    /// exercises this with a scratch container; the appex passes the
+    /// entitled `containerURL`).
+    static func resolve(container: URL, driveHex: String) throws -> String {
         let alias = container
             .appendingPathComponent("Sockets")
             .appendingPathComponent("by-drive")
@@ -72,7 +79,17 @@ struct SocketConfig {
         guard !target.contains("/") || target.hasPrefix("../") else {
             throw SocketConfigError.aliasEscapes(target)
         }
-        let fileName = target.hasPrefix("../") ? String(target.dropFirst(3)) : target
+        let fileName: String
+        if target.hasPrefix("../") {
+            // One level: the alias lives in `by-drive/` beside the
+            // socket. Anything deeper still escapes.
+            fileName = String(target.dropFirst(3))
+            guard !fileName.contains("/") else {
+                throw SocketConfigError.aliasEscapes(target)
+            }
+        } else {
+            fileName = target
+        }
         guard isFingerprintSocket(fileName) else {
             throw SocketConfigError.badTarget(target)
         }
@@ -86,7 +103,7 @@ struct SocketConfig {
         return resolved
     }
 
-    private func isFingerprintSocket(_ fileName: String) -> Bool {
+    private static func isFingerprintSocket(_ fileName: String) -> Bool {
         guard fileName.hasSuffix(".sock") else { return false }
         let stem = String(fileName.dropLast(".sock".count))
         return stem.count == 16
