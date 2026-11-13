@@ -35,6 +35,21 @@ fn shell_entry(name: &str, dir: &Path) -> shell::RegistryEntryWrite {
     }
 }
 
+/// The two writers derive the same lockfile sibling: duplicated
+/// only because the layer gate forbids the desktop→daemon edge, so
+/// this assertion — not the convergence race — is what fails first
+/// if they ever diverge.
+#[test]
+fn both_writers_derive_the_same_lock_path() {
+    for file in ["drives.json", "other.json"] {
+        let path = std::path::PathBuf::from(file);
+        assert_eq!(
+            daemon::registry_lock_path(&path),
+            shell::registry_lock_path(&path),
+            "lockfile derivation must match for {file}"
+        );
+    }
+}
 /// Concurrent registration-flow and desktop writes converge: eight
 /// writers (four per side, one distinct key each) plus readers race
 /// on one registry, and the final file holds every key under both

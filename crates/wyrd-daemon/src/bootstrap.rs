@@ -487,10 +487,12 @@ fn lock_registry(path: &Path) -> Result<std::fs::File, BootstrapError> {
 /// validation) are carried forward verbatim from the existing file:
 /// a rewrite must never delete what this build does not understand.
 /// Keys the new map carries win; only absent keys merge back, so a
-/// re-registration that repairs an entry takes effect. The merge
-/// reads the file best-effort — a missing or unreadable file simply
-/// contributes nothing — while the candidate map itself is fully
-/// validated and refuses the write on any invalid entry.
+/// re-registration that repairs an entry takes effect. A missing
+/// file contributes nothing; a present-but-unreadable one (malformed
+/// JSON, newer schema, structurally corrupt entry) refuses the
+/// write — the reader reports such files loudly and the writer
+/// matches. The candidate map itself is fully validated and refuses
+/// the write on any invalid entry.
 pub fn write_registry(
     path: &Path,
     drives: &BTreeMap<String, RegistryEntry>,
@@ -540,6 +542,17 @@ pub fn write_registry(
                 });
             }
             for (key, value) in file.drives {
+                // Structural gate: the entry must decode like the
+                // reader requires. A structurally corrupt entry
+                // refuses the write as Parse — carrying it and
+                // reporting success would contradict the reader's
+                // loud verdict on the same file.
+                serde_json::from_value::<RegistryEntry>(value.clone()).map_err(|source| {
+                    BootstrapError::Parse {
+                        path: path.to_path_buf(),
+                        source,
+                    }
+                })?;
                 merged.entry(key).or_insert(value);
             }
         }
@@ -2121,6 +2134,28 @@ mod tests {
             "the newer file is never downgraded"
         );
     }
+
+    /// A structurally corrupt entry refuses the write: it decodes
+    /// as a raw value but not as a registry entry, exactly like the
+    /// reader, so carrying it and reporting success would contradict
+    /// the reader's loud verdict on the same file. Nothing is written.
+    #[test]
+    fn registry_write_refuses_structurally_corrupt_entries() {
+        let dir = scratch("refuse-corrupt");
+        let path = dir.join("drives.json");
+        let corrupt = r#"{"version": 1, "drives": {"x": {"drive_dir": "/d"}}}"#;
+        std::fs::write(&path, corrupt).unwrap();
+        let mut drives = BTreeMap::new();
+        drives.insert("new".to_string(), entry("new", &dir));
+        let refused = write_registry(&path, &drives).unwrap_err();
+        assert!(refused.to_string().contains("parse"), "{refused}");
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            corrupt.as_bytes(),
+            "the corrupt file is untouched"
+        );
+    }
+
     /// Concurrent writers converge without lost entries: every thread
     /// writes one distinct key through the same read-modify-write,
     /// and the registry lock serializes them, so the final read holds

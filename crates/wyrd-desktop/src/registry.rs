@@ -585,33 +585,66 @@ pub fn write_registry_at(
                 });
             }
             for (key, value) in file.drives {
+                // Structural gate: the entry must decode like the
+                // reader requires. A structurally corrupt entry
+                // refuses the write as Parse — carrying it and
+                // reporting success would contradict the reader's
+                // loud verdict on the same file. Entries that decode
+                // but fail validation (unknown modes) are still
+                // carried verbatim below.
+                serde_json::from_value::<RegistryEntryParse>(value.clone()).map_err(|source| {
+                    RegistryWriteError::Parse {
+                        path: path.to_path_buf(),
+                        source: std::io::Error::new(std::io::ErrorKind::InvalidData, source),
+                    }
+                })?;
                 merged.entry(key).or_insert(value);
             }
         }
     }
-    // Merged-set uniqueness: the reader skips duplicate drive_dirs
-    // (first name wins), so the writer refuses a merged set it would
-    // only half-list. Candidates and carried entries compare as
-    // parsed paths, exactly like the reader's dedup — including
-    // pre-existing duplicates, which surface here as a repair
-    // signal instead of silently persisting behind the view.
+    // Merged-set uniqueness, scoped exactly like the reader's
+    // dedup: only entries that pass validation occupy a drive_dir
+    // (`list_drives_at` skips the rest before deduping). Candidates
+    // all passed validation above; carried entries participate only
+    // when they validate too — a skipped legacy entry never gates a
+    // new registration. The writer refuses a set it would only
+    // half-list, and the refusal names the repair.
     {
-        let mut seen: std::collections::BTreeMap<PathBuf, &str> = std::collections::BTreeMap::new();
-        for (key, value) in &merged {
-            let dir = value
-                .get("drive_dir")
-                .and_then(serde_json::Value::as_str)
-                .ok_or_else(|| RegistryWriteError::RefusedWrite {
-                    reason: format!("entry {key:?} has no drive_dir to compare"),
-                })?;
-            let dir = PathBuf::from(dir);
-            if let Some(first) = seen.insert(dir.clone(), key.as_str()) {
+        let mut seen: std::collections::BTreeMap<PathBuf, String> =
+            std::collections::BTreeMap::new();
+        let mut occupy = |key: &str, dir: PathBuf| -> Result<(), RegistryWriteError> {
+            if let Some(first) = seen.insert(dir.clone(), key.to_string()) {
                 return Err(RegistryWriteError::RefusedWrite {
                     reason: format!(
                         "duplicate drive_dir {} (keys {first:?} and {key:?}; first wins in the reader)",
                         dir.display()
                     ),
                 });
+            }
+            Ok(())
+        };
+        for (key, entry) in drives {
+            occupy(key, entry.drive_dir.clone())?;
+        }
+        for (key, value) in &merged {
+            if drives.contains_key(key) {
+                continue;
+            }
+            // Structurally sound by the gate above; validation decides
+            // visibility, exactly as in the reader.
+            if let Ok(parsed) = serde_json::from_value::<RegistryEntryParse>(value.clone()) {
+                if validate_fields(
+                    key,
+                    &parsed.name,
+                    &parsed.drive_dir,
+                    &parsed.service,
+                    &parsed.mode,
+                    &parsed.relays,
+                )
+                .is_ok()
+                {
+                    occupy(key, parsed.drive_dir)?;
+                }
             }
         }
     }
@@ -984,11 +1017,6 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// Entries the reader skips are carried forward verbatim: a
-    /// rewrite must never delete what this build does not
-    /// understand — including a future mount mode the desktop
-    /// reader skips today.
-    ///
     /// A present-but-unreadable registry refuses the write instead
     /// of being replaced: malformed JSON fails loud, and a newer
     /// schema is never downgraded to version 1 with only the
@@ -1047,6 +1075,34 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    /// A structurally corrupt entry refuses the write: it decodes
+    /// as a raw value but not as a registry entry, exactly like the
+    /// reader, so carrying it and reporting success would contradict
+    /// the reader's loud verdict on the same file. Nothing is written.
+    /// (Unknown modes still carry: they decode structurally and only
+    /// fail validation.)
+    #[test]
+    fn desktop_write_refuses_structurally_corrupt_entries() {
+        let dir =
+            std::env::temp_dir().join(format!("wyrd-desktop-reg-{}-corrupt", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("drives.json");
+        let corrupt = r#"{"version": 1, "drives": {"x": {"drive_dir": "/d"}}}"#;
+        std::fs::write(&path, corrupt).unwrap();
+        let refused = write_registry_at(&path, &write_map(&dir, ["new"])).unwrap_err();
+        assert!(refused.to_string().contains("parse"), "{refused}");
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            corrupt.as_bytes(),
+            "the corrupt file is untouched"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Entries the reader skips are carried forward verbatim: a
+    /// rewrite must never delete what this build does not
+    /// understand — including a future mount mode the desktop
+    /// reader skips today.
     #[test]
     fn desktop_write_carries_skipped_entries_forward_verbatim() {
         let dir =
