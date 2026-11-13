@@ -44,17 +44,15 @@ pub const REGISTRY_VERSION: u32 = 1;
 /// the same path derivation.
 pub const REGISTRY_FILENAME: &str = "drives.json";
 
-/// Supervision mode for one registered drive. Only headless owner
-/// mode exists today: mounting through the registry waits on the
-/// installer follow-up (P2 landed — `wyrd mount` serves the socket
-/// through the shared `OwnerService` when run manually — but the
-/// registry's managed `mount` mode, service template, and enablement
-/// UX still travel with that issue). Unknown modes from newer writers
-/// are skipped per entry with a reason — a future mode must never
-/// fail the whole file.
+/// Supervision mode for one registered drive: the headless `vault`
+/// owner, or the `mount` mode that serves the FUSE projection beside
+/// the same owner interface. Unknown modes from newer writers are
+/// skipped per entry with a reason — a future mode must never fail
+/// the whole file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ServiceMode {
     Vault,
+    Mount,
     Unknown(String),
 }
 
@@ -62,6 +60,7 @@ impl Serialize for ServiceMode {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         match self {
             ServiceMode::Vault => serializer.serialize_str("vault"),
+            ServiceMode::Mount => serializer.serialize_str("mount"),
             ServiceMode::Unknown(mode) => serializer.serialize_str(mode),
         }
     }
@@ -72,6 +71,7 @@ impl<'de> Deserialize<'de> for ServiceMode {
         let mode = String::deserialize(deserializer)?;
         match mode.as_str() {
             "vault" => Ok(ServiceMode::Vault),
+            "mount" => Ok(ServiceMode::Mount),
             other => Ok(ServiceMode::Unknown(other.to_string())),
         }
     }
@@ -88,6 +88,12 @@ pub struct RegistryEntry {
     pub relays: Vec<String>,
     pub service: String,
     pub mode: ServiceMode,
+    /// FUSE mountpoint. `Some` in `mount` mode, `None` in `vault`
+    /// mode — a vault entry carrying one is invalid, like a mount
+    /// entry missing one. Optional with a default so pre-mount
+    /// registry files decode with `None`.
+    #[serde(default)]
+    pub mountpoint: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -160,8 +166,24 @@ pub enum BootstrapError {
     #[error("drive_dir {} must not contain ..", dir.display())]
     DriveDirHasDotDot { dir: PathBuf },
     /// The entry names a service mode this build does not manage.
-    #[error("unknown service mode: registry-managed mount mode travels with the installer follow-up (P2 landed: manual `wyrd mount` serves the socket)")]
+    #[error("unknown service mode: this build manages `vault` and `mount`")]
     UnknownServiceMode,
+    /// A `vault` entry carries a mountpoint it never uses.
+    #[error("vault mode carries no mountpoint: remove the mountpoint for a vault entry")]
+    UnexpectedMountpoint,
+    /// A `mount` entry names no mountpoint.
+    #[error("mount mode needs a mountpoint: pass --mountpoint with an absolute path")]
+    MissingMountpoint,
+    /// A mountpoint breaks the path rules.
+    #[error("invalid mountpoint: {reason}")]
+    InvalidMountpoint { reason: String },
+    /// The drive directory resolves to several registry keys under
+    /// the write lock: a concurrent registration duplicated the
+    /// entry between the pre-stop resolve and the rewrite.
+    #[error(
+        "conflicting registry entries for {dir}: {keys} — resolve the duplicate by hand first"
+    )]
+    ConflictingEntries { dir: PathBuf, keys: String },
     /// A relay URL is empty or carries whitespace/control bytes.
     #[error("relays must be non-empty URLs without whitespace or control bytes")]
     InvalidRelays,
@@ -408,8 +430,20 @@ fn validate_entry(key: &str, entry: &RegistryEntry) -> Result<(), BootstrapError
             dir: entry.drive_dir.clone(),
         });
     }
-    if !matches!(entry.mode, ServiceMode::Vault) {
-        return Err(BootstrapError::UnknownServiceMode);
+    match (&entry.mode, &entry.mountpoint) {
+        (ServiceMode::Vault, Some(_)) => {
+            return Err(BootstrapError::UnexpectedMountpoint);
+        }
+        (ServiceMode::Vault, None) => {}
+        (ServiceMode::Mount, None) => {
+            return Err(BootstrapError::MissingMountpoint);
+        }
+        (ServiceMode::Mount, Some(mountpoint)) => {
+            validate_mountpoint(&entry.drive_dir, mountpoint)?;
+        }
+        (ServiceMode::Unknown(_), _) => {
+            return Err(BootstrapError::UnknownServiceMode);
+        }
     }
     if !valid_relays(&entry.relays) {
         return Err(BootstrapError::InvalidRelays);
@@ -430,6 +464,46 @@ fn validate_entry(key: &str, entry: &RegistryEntry) -> Result<(), BootstrapError
 fn has_dotdot(path: &Path) -> bool {
     path.components()
         .any(|component| matches!(component, std::path::Component::ParentDir))
+}
+
+/// Mountpoint path rules, mirroring the drive-directory rules: the
+/// service template renders the mountpoint into the unit, so a
+/// relative, escaping, or control-carrying path is refused before
+/// anything is written. A mountpoint equal to the drive directory
+/// would mount the projection over the store itself, so it refuses
+/// too.
+fn validate_mountpoint(drive_dir: &Path, mountpoint: &Path) -> Result<(), BootstrapError> {
+    if !mountpoint.is_absolute() {
+        return Err(BootstrapError::InvalidMountpoint {
+            reason: format!("mountpoint {} must be absolute", mountpoint.display()),
+        });
+    }
+    if has_dotdot(mountpoint) {
+        return Err(BootstrapError::InvalidMountpoint {
+            reason: format!("mountpoint {} must not contain ..", mountpoint.display()),
+        });
+    }
+    if mountpoint
+        .to_string_lossy()
+        .bytes()
+        .any(|byte| byte < 0x20 || byte == 0x7f)
+    {
+        return Err(BootstrapError::InvalidMountpoint {
+            reason: format!(
+                "mountpoint {} must not contain control characters",
+                mountpoint.display()
+            ),
+        });
+    }
+    if mountpoint == drive_dir {
+        return Err(BootstrapError::InvalidMountpoint {
+            reason: format!(
+                "mountpoint {} must not equal the drive directory",
+                mountpoint.display()
+            ),
+        });
+    }
+    Ok(())
 }
 
 /// The inter-writer serialization for the registry: the registration
@@ -493,34 +567,61 @@ fn lock_registry(path: &Path) -> Result<std::fs::File, BootstrapError> {
 /// write — the reader reports such files loudly and the writer
 /// matches. The candidate map itself is fully validated and refuses
 /// the write on any invalid entry.
+///
+/// Whole-map replacement through the same locked path
+/// [`modify_registry`] provides: candidates validate before the lock
+/// (so a refusal touches nothing), then the replacement, merge, and
+/// crash-safe rename run under one lock hold.
 pub fn write_registry(
     path: &Path,
     drives: &BTreeMap<String, RegistryEntry>,
 ) -> Result<(), BootstrapError> {
     // Serialize against the desktop shell's writes (and concurrent
-    // registration flows): the lock covers the read below, the
-    // merge, and the rename, so two writers never interleave on one
-    // base. Held to end of scope — through the directory sync.
-    let _lock = lock_registry(path)?;
+    // registration flows): validation precedes the lock, and the
+    // lock covers the read below, the replacement, the merge, and
+    // the rename, so two writers never interleave on one base. Held
+    // to end of scope — through the directory sync.
     for (key, entry) in drives {
         validate_entry(key, entry).map_err(|source| BootstrapError::RefusedWrite {
             source: Box::new(source),
         })?;
     }
-    let mut merged: BTreeMap<String, serde_json::Value> = drives
-        .iter()
-        .map(|(key, entry)| {
-            serde_json::to_value(entry)
-                .map(|value| (key.clone(), value))
-                .map_err(|source| BootstrapError::Encode { source })
-        })
-        .collect::<Result<_, _>>()?;
-    // No silent best-effort: a present-but-unreadable registry
-    // (malformed JSON, newer schema) refuses the write instead of
-    // replacing the file with only the candidates. The reader
-    // reports such files loudly; the writer must match, or a
-    // downgraded or corrupted file would lose every existing entry
-    // without a sound. Only a missing file contributes nothing.
+    modify_registry(path, |valid| {
+        *valid = drives.clone();
+        Ok(())
+    })
+    .map(|_| ())
+}
+
+/// Locked read-modify-write for the registry call sites (create,
+/// reconfigure): the updater closure runs against the fresh valid
+/// map while the registry lock is held, and the merge plus the
+/// crash-safe rewrite happen under the same lock hold before it
+/// releases. Callers that read outside the lock and pass whole maps
+/// into `write_registry` can clobber a concurrent same-key update
+/// with their stale copy — keys still converge (the under-lock
+/// re-read carries absent keys), but the concurrent update to an
+/// already-present key is lost. Running the transformation under
+/// the lock closes that window: concurrent same-key updates
+/// serialize, and the last writer wins cleanly with no torn mix.
+///
+/// The closure sees the fresh valid entries and returns its result;
+/// the whole resulting map is validated like `write_registry`
+/// validates its candidates, carried entries merge verbatim, and the
+/// post-write skipped reasons return alongside — so the caller
+/// surfaces rotten data from the file it actually wrote, not from a
+/// pre-lock read.
+pub fn modify_registry<T>(
+    path: &Path,
+    modify: impl FnOnce(&mut BTreeMap<String, RegistryEntry>) -> Result<T, BootstrapError>,
+) -> Result<(T, Vec<String>), BootstrapError> {
+    // One lock hold for the read, the transformation, the merge,
+    // and the rename — the same serialization `write_registry`
+    // provides, extended over the caller's transformation so no
+    // stale copy can interleave between its read and its write.
+    let _lock = lock_registry(path)?;
+    let mut raws: BTreeMap<String, serde_json::Value> = BTreeMap::new();
+    let mut valid: BTreeMap<String, RegistryEntry> = BTreeMap::new();
     match std::fs::read(path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(source) => {
@@ -542,24 +643,46 @@ pub fn write_registry(
                 });
             }
             for (key, value) in file.drives {
-                // Structural gate: the entry must decode like the
-                // reader requires. A structurally corrupt entry
-                // refuses the write as Parse — carrying it and
-                // reporting success would contradict the reader's
-                // loud verdict on the same file.
-                serde_json::from_value::<RegistryEntry>(value.clone()).map_err(|source| {
-                    BootstrapError::Parse {
-                        path: path.to_path_buf(),
-                        source,
+                match serde_json::from_value::<RegistryEntry>(value.clone()) {
+                    Err(source) => {
+                        return Err(BootstrapError::Parse {
+                            path: path.to_path_buf(),
+                            source,
+                        });
                     }
-                })?;
-                merged.entry(key).or_insert(value);
+                    Ok(entry) => match validate_entry(&key, &entry) {
+                        Ok(()) => {
+                            valid.insert(key.clone(), entry);
+                            raws.insert(key, value);
+                        }
+                        Err(_) => {
+                            raws.insert(key, value);
+                        }
+                    },
+                }
             }
         }
     }
+    let result = modify(&mut valid)?;
+    for (key, entry) in &valid {
+        validate_entry(key, entry).map_err(|source| BootstrapError::RefusedWrite {
+            source: Box::new(source),
+        })?;
+    }
+    let mut merged: BTreeMap<String, serde_json::Value> = valid
+        .iter()
+        .map(|(key, entry)| {
+            serde_json::to_value(entry)
+                .map(|value| (key.clone(), value))
+                .map_err(|source| BootstrapError::Encode { source })
+        })
+        .collect::<Result<_, _>>()?;
+    for (key, value) in raws {
+        merged.entry(key).or_insert(value);
+    }
     let file = RegistryFile {
         version: REGISTRY_VERSION,
-        drives: merged,
+        drives: merged.clone(),
     };
     let bytes =
         serde_json::to_vec_pretty(&file).map_err(|source| BootstrapError::Encode { source })?;
@@ -569,12 +692,6 @@ pub fn write_registry(
             source,
         })?;
     }
-    // Unique temporary sibling per writer: the rename stays atomic,
-    // and concurrent writers fail on their own file instead of
-    // clobbering each other's. Writers are still serialized by the
-    // registry lock above (one logical writer role, two processes
-    // allowed); the unique name turns a lock violation into an
-    // error, not silent loss.
     let tmp = path.with_extension(format!("tmp.{}", std::process::id()));
     std::fs::write(&tmp, &bytes).map_err(|source| BootstrapError::WriteFile {
         path: tmp.clone(),
@@ -588,7 +705,30 @@ pub fn write_registry(
     })?;
     restrict_owner_only(path)?;
     sync_dir(path);
-    Ok(())
+    // Fresh skipped reasons from the file just written: every merged
+    // value that validates is valid, the rest is skipped with its
+    // reason — the same verdict `read_registry` would report.
+    let mut skipped = Vec::new();
+    for (key, value) in &merged {
+        let entry: Result<RegistryEntry, _> = serde_json::from_value(value.clone());
+        match entry {
+            Ok(entry) => {
+                if let Err(error) = validate_entry(key, &entry) {
+                    skipped.push(format!("entry {key:?}: {error}"));
+                }
+            }
+            Err(source) => {
+                skipped.push(format!(
+                    "entry {key:?}: {}",
+                    BootstrapError::Parse {
+                        path: path.to_path_buf(),
+                        source,
+                    }
+                ));
+            }
+        }
+    }
+    Ok((result, skipped))
 }
 
 /// Owner-only file permissions (Unix): the registry holds drive
@@ -674,13 +814,17 @@ fn systemd_quote(arg: &str) -> String {
 }
 
 /// The supervised owner command: the `wyrd-supervise` wrapper from
-/// `nix/drive` (OD-34-C) around `wyrd vault` with file credentials.
-/// Managers cannot distinguish the binary's collapsed exit codes on
-/// their own — every CLI failure is 2 except the terminal held-drive
-/// 78 — so the wrapper maps the wait status onto the exit the
-/// supervisor's policy wants (restart-worthy per manager, 78 never).
-/// Routing through the wrapper is what makes the restart policy
-/// below truthful; a bare owner binary cannot express it.
+/// `nix/drive` (OD-34-C) around `wyrd vault` or `wyrd mount` with
+/// file credentials. Managers cannot distinguish the binary's
+/// collapsed exit codes on their own — every CLI failure is 2 except
+/// the terminal held-drive 78 — so the wrapper maps the wait status
+/// onto the exit the supervisor's policy wants (restart-worthy per
+/// manager, 78 never). Routing through the wrapper is what makes the
+/// restart policy below truthful; a bare owner binary cannot express
+/// it. The mount argv mirrors the vault argv with the mount
+/// subcommand, its mountpoint, and the mount posture sidecar — the
+/// restart contract is identical, since a held mount is terminal the
+/// same way a held vault is.
 #[derive(Debug, Clone)]
 pub struct SupervisedOwner {
     /// `wyrd-supervise` (`nix/drive/supervise.py`): same installer
@@ -698,27 +842,45 @@ pub struct SupervisedOwner {
 
 impl SupervisedOwner {
     /// The full supervised argv: wrapper, per-manager restart
-    /// status, posture path, `--` separator, then the vault command.
+    /// status, posture path, `--` separator, then the vault or mount
+    /// command. Vault and mount share the credential and relay flags;
+    /// mount adds its mountpoint and serves the mount posture sidecar.
     pub fn argv(&self, entry: &RegistryEntry, restart_status: &str) -> Vec<String> {
+        let posture = match entry.mode {
+            ServiceMode::Mount => "mount.posture",
+            _ => "vault.posture",
+        };
         let mut argv = vec![
             self.supervise_bin.to_string_lossy().into_owned(),
             "--restart-status".to_string(),
             restart_status.to_string(),
             "--posture-path".to_string(),
-            entry
-                .drive_dir
-                .join("vault.posture")
-                .to_string_lossy()
-                .into_owned(),
+            entry.drive_dir.join(posture).to_string_lossy().into_owned(),
             "--".to_string(),
             self.wyrd_bin.to_string_lossy().into_owned(),
-            "vault".to_string(),
-            entry.drive_dir.to_string_lossy().into_owned(),
-            "--identity-file".to_string(),
-            self.identity_file.to_string_lossy().into_owned(),
-            "--passphrase-file".to_string(),
-            self.passphrase_file.to_string_lossy().into_owned(),
         ];
+        match entry.mode {
+            ServiceMode::Mount => {
+                argv.push("mount".to_string());
+                argv.push(entry.drive_dir.to_string_lossy().into_owned());
+                argv.push(
+                    entry
+                        .mountpoint
+                        .as_ref()
+                        .expect("mount entry carries a mountpoint: validate before argv")
+                        .to_string_lossy()
+                        .into_owned(),
+                );
+            }
+            _ => {
+                argv.push("vault".to_string());
+                argv.push(entry.drive_dir.to_string_lossy().into_owned());
+            }
+        }
+        argv.push("--identity-file".to_string());
+        argv.push(self.identity_file.to_string_lossy().into_owned());
+        argv.push("--passphrase-file".to_string());
+        argv.push(self.passphrase_file.to_string_lossy().into_owned());
         for relay in &entry.relays {
             argv.push("--relay".to_string());
             argv.push(relay.clone());
@@ -860,6 +1022,12 @@ pub fn install_service(
     owner: &SupervisedOwner,
     definition_override: Option<&PathBuf>,
 ) -> Result<PathBuf, BootstrapError> {
+    // Managed modes only: the template renders `vault` and `mount`
+    // argv, so an unknown future mode or a mismatched mountpoint
+    // refuses here instead of rendering a definition the manager
+    // would run deaf. Provisioning and reconfiguration validate
+    // before installing, so this is the backstop for direct callers.
+    validate_entry(&entry.name, entry)?;
     let path = match definition_override {
         Some(path) => path.clone(),
         None => service_definition_path(entry),
@@ -1160,13 +1328,19 @@ pub struct ProvisionConfig {
     pub name: String,
     pub drive_dir: PathBuf,
     pub relays: Vec<String>,
+    /// Target service mode: `vault` serves headless, `mount` serves
+    /// the FUSE projection. Unknown modes refuse at validation.
+    pub mode: ServiceMode,
+    /// FUSE mountpoint. Required in `mount` mode, refused in `vault`
+    /// mode — validated with the entry before anything is created.
+    pub mountpoint: Option<PathBuf>,
     pub identity: DeviceIdentitySecret,
     pub passphrase: String,
     pub init: Init,
     pub registry_path: PathBuf,
-    /// The `wyrd` binary whose `vault` subcommand the service runs.
-    /// Defaults to the `wyrd` beside the provisioning command; the
-    /// installer ships both together.
+    /// The `wyrd` binary whose `vault` or `mount` subcommand the
+    /// service runs. Defaults to the `wyrd` beside the provisioning
+    /// command; the installer ships both together.
     pub wyrd_bin: Option<PathBuf>,
     /// `wyrd-supervise` (`nix/drive/supervise.py`): the wait-status
     /// mapper the restart policy rests on. Defaults to the sibling
@@ -1309,7 +1483,8 @@ pub fn provision(config: ProvisionConfig) -> ProvisionState {
         name: config.name.clone(),
         drive_dir: config.drive_dir.clone(),
         relays: config.relays.clone(),
-        mode: ServiceMode::Vault,
+        mode: config.mode.clone(),
+        mountpoint: config.mountpoint.clone(),
     };
     if let Err(error) = validate_entry(&entry.name, &entry) {
         return ProvisionState::ProvisioningIncomplete {
@@ -1318,17 +1493,16 @@ pub fn provision(config: ProvisionConfig) -> ProvisionState {
             reason: error.to_string(),
         };
     }
-    // A headless `wyrd vault` refuses a relay-less drive (it would
-    // serve nothing peers can discover), so managing a service
-    // without relays is refused before anything is created or
-    // registered — with that pointer, not a definition that can
-    // never verify.
+    // A managed service refuses a relay-less drive (it would serve
+    // nothing peers can discover), so managing without relays is
+    // refused before anything is created or registered — with that
+    // pointer, not a definition that can never verify.
     if config.manage_service && config.relays.is_empty() {
         return ProvisionState::ProvisioningIncomplete {
             stage: "validate",
             kind: ProvisionFailureKind::Validate,
             reason: "managing a service needs at least one --relay: \
-                a relay-less vault serves nothing peers can discover; \
+                a relay-less drive serves nothing peers can discover; \
                 register with --no-service instead"
                 .to_string(),
         };
@@ -1394,28 +1568,34 @@ pub fn provision(config: ProvisionConfig) -> ProvisionState {
         };
     }
 
-    // 3. Write the registry entry, carrying the skipped entries
-    // forward so the caller surfaces them instead of silently
-    // deleting rotten data on rewrite.
-    let mut registry = match read_registry(&config.registry_path) {
-        Ok(registry) => registry,
+    // 3. Write the registry entry under the lock: the insert runs
+    // against the fresh map, so a concurrent same-key update cannot
+    // be clobbered by this caller's stale copy. The pre-write read
+    // classifies an unreadable registry as `ReadRegistry` before the
+    // write is attempted; the locked rewrite below is authoritative
+    // for the merge. Skipped entries carry forward verbatim inside
+    // the write, and the post-write reasons return — the caller
+    // surfaces what the file it wrote actually skips.
+    if let Err(error) = read_registry(&config.registry_path) {
+        return ProvisionState::ProvisioningIncomplete {
+            stage: "read-registry",
+            kind: ProvisionFailureKind::ReadRegistry,
+            reason: error.to_string(),
+        };
+    }
+    let skipped = match modify_registry(&config.registry_path, |drives| {
+        drives.insert(entry.name.clone(), entry.clone());
+        Ok(())
+    }) {
+        Ok(((), skipped)) => skipped,
         Err(error) => {
             return ProvisionState::ProvisioningIncomplete {
-                stage: "read-registry",
-                kind: ProvisionFailureKind::ReadRegistry,
+                stage: "write-registry",
+                kind: ProvisionFailureKind::WriteRegistry,
                 reason: error.to_string(),
             };
         }
     };
-    registry.drives.insert(entry.name.clone(), entry.clone());
-    if let Err(error) = write_registry(&config.registry_path, &registry.drives) {
-        return ProvisionState::ProvisioningIncomplete {
-            stage: "write-registry",
-            kind: ProvisionFailureKind::WriteRegistry,
-            reason: error.to_string(),
-        };
-    }
-    let skipped = registry.skipped;
 
     // 4. Install, enable, and start the per-drive service.
     if config.manage_service {
@@ -1507,15 +1687,19 @@ pub struct ReconfigureConfig {
     /// relays by accident.
     pub relays: Option<Vec<String>>,
     /// Target service mode, as the display string the registry
-    /// carries. Only `vault` reconfigures today: any other value
-    /// refuses with the installer-follow-up pointer before anything
-    /// stops, exactly like provisioning — the mount template and
-    /// enablement UX still travel with that follow-up.
-    pub mode: String,
+    /// carries. `vault` serves headless, `mount` serves the FUSE
+    /// projection; any other value refuses with the unknown-mode
+    /// pointer before anything stops, exactly like provisioning.
+    /// The mountpoint travels alongside: required for `mount`,
+    /// refused for `vault`.
+    pub mode: ServiceMode,
+    /// FUSE mountpoint for `mount` mode. `None` in `vault` mode.
+    pub mountpoint: Option<PathBuf>,
     pub identity: DeviceIdentitySecret,
     pub passphrase: String,
     pub registry_path: PathBuf,
-    /// The `wyrd` binary whose `vault` subcommand the service runs.
+    /// The `wyrd` binary whose `vault` or `mount` subcommand the
+    /// service runs.
     /// Defaults to the `wyrd` beside the reconfiguring command; the
     /// installer ships both together.
     pub wyrd_bin: Option<PathBuf>,
@@ -1545,14 +1729,21 @@ pub struct ReconfigureConfig {
     pub verify_timeout: Duration,
 }
 
-/// Apply the reconfigured relays and mode to the stored entry: the
-/// single place that builds the working copy install and rewrite
-/// share, so the two can never diverge (a managed definition can
-/// never render the old relay set beside the new registry entry).
-/// Identity fields — name, service, directory — stay put.
-fn updated_entry(mut stored: RegistryEntry, relays: Vec<String>) -> RegistryEntry {
+/// Apply the reconfigured relays, mode, and mountpoint to the
+/// stored entry: the single place that builds the working copy
+/// install and rewrite share, so the two can never diverge (a
+/// managed definition can never render the old relay set beside the
+/// new registry entry). Identity fields — name, service,
+/// directory — stay put.
+fn updated_entry(
+    mut stored: RegistryEntry,
+    relays: Vec<String>,
+    mode: ServiceMode,
+    mountpoint: Option<PathBuf>,
+) -> RegistryEntry {
     stored.relays = relays;
-    stored.mode = ServiceMode::Vault;
+    stored.mode = mode;
+    stored.mountpoint = mountpoint;
     stored
 }
 
@@ -1711,13 +1902,37 @@ fn is_store_locked(error: &EngineError) -> bool {
 /// from the stopped-and-cleared state (the operation is idempotent
 /// there).
 pub fn reconfigure(config: ReconfigureConfig) -> ProvisionState {
-    // 0. Validate the request before anything moves: no I/O, no
-    // side effects, so a refusal touches nothing.
-    if config.mode != "vault" {
+    // 0. Validate the mode and mountpoint before anything moves: no
+    // I/O, no side effects, so a refusal touches nothing. Unknown
+    // modes refuse here; mount without a mountpoint (or vault with
+    // one) refuses through the entry validation below.
+    if matches!(config.mode, ServiceMode::Unknown(_)) {
         return ProvisionState::ProvisioningIncomplete {
             stage: "validate",
             kind: ProvisionFailureKind::Validate,
             reason: BootstrapError::UnknownServiceMode.to_string(),
+        };
+    }
+    if let Some(mountpoint) = &config.mountpoint {
+        if matches!(config.mode, ServiceMode::Vault) {
+            return ProvisionState::ProvisioningIncomplete {
+                stage: "validate",
+                kind: ProvisionFailureKind::Validate,
+                reason: BootstrapError::UnexpectedMountpoint.to_string(),
+            };
+        }
+        if let Err(error) = validate_mountpoint(&config.drive_dir, mountpoint) {
+            return ProvisionState::ProvisioningIncomplete {
+                stage: "validate",
+                kind: ProvisionFailureKind::Validate,
+                reason: error.to_string(),
+            };
+        }
+    } else if matches!(config.mode, ServiceMode::Mount) {
+        return ProvisionState::ProvisioningIncomplete {
+            stage: "validate",
+            kind: ProvisionFailureKind::Validate,
+            reason: BootstrapError::MissingMountpoint.to_string(),
         };
     }
 
@@ -1726,7 +1941,7 @@ pub fn reconfigure(config: ReconfigureConfig) -> ProvisionState {
     // registered under another spelling — directories match by
     // exact path only); several means conflicting registrations
     // that only the operator can untangle, never this command.
-    let mut registry = match read_registry(&config.registry_path) {
+    let registry = match read_registry(&config.registry_path) {
         Ok(registry) => registry,
         Err(error) => {
             return ProvisionState::ProvisioningIncomplete {
@@ -1789,16 +2004,25 @@ pub fn reconfigure(config: ReconfigureConfig) -> ProvisionState {
             stage: "validate",
             kind: ProvisionFailureKind::Validate,
             reason: "managing a service needs at least one --relay: \
-                a relay-less vault serves nothing peers can discover; \
+                a relay-less drive serves nothing peers can discover; \
                 register with --no-service instead"
                 .to_string(),
         };
     }
 
     // The working copy from here on: install and rewrite share the
-    // one entry `updated_entry` builds, so a managed definition can
-    // never render the old relay set beside the new registry entry.
-    let updated = updated_entry(stored, relays);
+    // one entry `updated_entry` builds from the pre-stop read, so a
+    // managed definition can never render the old relay set beside
+    // the new registry entry. The authoritative rewrite below
+    // re-resolves under the lock and applies the same transformation
+    // to the fresh entry, so a concurrent same-key update between
+    // this read and the write cannot be clobbered by the stale copy.
+    let updated = updated_entry(
+        stored,
+        relays,
+        config.mode.clone(),
+        config.mountpoint.clone(),
+    );
 
     // 3. Resolve the service binaries before stopping: a missing
     // binary refuses with the service still up, never with the drive
@@ -1932,19 +2156,63 @@ pub fn reconfigure(config: ReconfigureConfig) -> ProvisionState {
         None
     };
 
-    // 7. Rewrite the entry in place. Skipped entries carry forward
-    // verbatim inside the write, so a future mode or a rotten entry
-    // survives the rewrite and is surfaced by the caller instead of
-    // silently discarded.
-    registry.drives.insert(key, updated.clone());
-    if let Err(error) = write_registry(&config.registry_path, &registry.drives) {
-        return ProvisionState::ProvisioningIncomplete {
-            stage: "write-registry",
-            kind: ProvisionFailureKind::WriteRegistry,
-            reason: error.to_string(),
-        };
-    }
-    let skipped = registry.skipped;
+    // 7. Rewrite the entry in place under the lock. The updater
+    // re-resolves by directory against the fresh map and applies the
+    // same transformation (relays, mode, mountpoint) the pre-stop
+    // read computed — so a concurrent same-key update between the
+    // pre-stop read and this write is preserved underneath the
+    // transformation instead of being clobbered by the stale working
+    // copy. Skipped entries carry forward verbatim inside the write,
+    // so a future mode or a rotten entry survives the rewrite and is
+    // surfaced by the caller instead of silently discarded.
+    let intended_relays = updated.relays.clone();
+    let intended_mode = updated.mode.clone();
+    let intended_mountpoint = updated.mountpoint.clone();
+    let (updated, skipped) = match modify_registry(&config.registry_path, |drives| {
+        let mut matches: Vec<String> = drives
+            .iter()
+            .filter(|(_, entry)| entry.drive_dir == config.drive_dir)
+            .map(|(key, _)| key.clone())
+            .collect();
+        matches.sort();
+        match matches.len() {
+            0 => Err(BootstrapError::Read {
+                path: config.registry_path.clone(),
+                source: std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!(
+                        "no registry entry for {}: register with `wyrd bootstrap` first",
+                        config.drive_dir.display()
+                    ),
+                ),
+            }),
+            1 => {
+                let key = matches.pop().expect("one match");
+                let stored = drives.get(&key).expect("key resolved").clone();
+                let updated = updated_entry(
+                    stored,
+                    intended_relays.clone(),
+                    intended_mode.clone(),
+                    intended_mountpoint.clone(),
+                );
+                drives.insert(key, updated.clone());
+                Ok(updated)
+            }
+            _ => Err(BootstrapError::ConflictingEntries {
+                dir: config.drive_dir.clone(),
+                keys: matches.join(", "),
+            }),
+        }
+    }) {
+        Ok((updated, skipped)) => (updated, skipped),
+        Err(error) => {
+            return ProvisionState::ProvisioningIncomplete {
+                stage: "write-registry",
+                kind: ProvisionFailureKind::WriteRegistry,
+                reason: error.to_string(),
+            };
+        }
+    };
 
     // 8. Enable, start, and verify when managed — the same handoff
     // provisioning runs. With `--no-service` and no manually
@@ -2044,6 +2312,18 @@ mod tests {
             relays: vec!["relay://example".to_string()],
             service: format!("drive-{name}"),
             mode: ServiceMode::Vault,
+            mountpoint: None,
+        }
+    }
+
+    pub(super) fn mount_entry(name: &str, dir: &Path, mountpoint: &Path) -> RegistryEntry {
+        RegistryEntry {
+            name: name.to_string(),
+            drive_dir: dir.join("drive"),
+            relays: vec!["relay://example".to_string()],
+            service: format!("drive-{name}"),
+            mode: ServiceMode::Mount,
+            mountpoint: Some(mountpoint.to_path_buf()),
         }
     }
 
@@ -2397,7 +2677,7 @@ mod tests {
                 },
                 "drive_dir /reg/../drive must not contain ..".to_string(),
             ),
-            (BootstrapError::UnknownServiceMode, "unknown service mode: registry-managed mount mode travels with the installer follow-up (P2 landed: manual `wyrd mount` serves the socket)".to_string()),
+            (BootstrapError::UnknownServiceMode, "unknown service mode: this build manages `vault` and `mount`".to_string()),
             (
                 BootstrapError::InvalidRelays,
                 "relays must be non-empty URLs without whitespace or control bytes".to_string(),
@@ -2594,6 +2874,202 @@ mod tests {
         assert!(unit.contains(&*owned.drive_dir.display().to_string()));
     }
 
+    #[test]
+    fn mount_templates_name_the_mountpoint_and_posture() {
+        let dir = scratch("templates-mount");
+        let owner = SupervisedOwner {
+            supervise_bin: PathBuf::from("/opt/wyrd/bin/wyrd-supervise"),
+            wyrd_bin: PathBuf::from("/opt/wyrd/bin/wyrd"),
+            identity_file: dir.join("identity"),
+            passphrase_file: dir.join("passphrase"),
+        };
+        // A mountpoint with spaces and an ampersand pins the
+        // operator-input escaping on both managers: the argv must
+        // carry it whole, never split or reinterpreted.
+        let mountpoint = dir.join("my mounts & more");
+        let owned = mount_entry("demo", &dir, &mountpoint);
+        let argv = owner.argv(&owned, "1");
+        assert!(argv.contains(&"mount".to_string()), "{argv:?}");
+        assert!(
+            argv.contains(&mountpoint.to_string_lossy().into_owned()),
+            "{argv:?}"
+        );
+        assert!(!argv.contains(&"vault".to_string()), "{argv:?}");
+        assert!(
+            argv.iter().any(|arg| arg.ends_with("mount.posture")),
+            "{argv:?}"
+        );
+        let plist = render_launchd_plist("md.enesis.wyrd.drive-demo", &owner, &owned);
+        assert!(plist.contains("my mounts &amp; more"), "{plist}");
+        assert!(plist.contains("mount.posture"));
+        assert!(plist.contains("<string>mount</string>"), "{plist}");
+        assert!(plist.contains("<key>SuccessfulExit</key>"), "{plist}");
+        let unit = render_systemd_unit("Wyrd drive demo", &owner, &owned);
+        assert!(unit.contains("Restart=on-failure"));
+        assert!(unit.contains("RestartPreventExitStatus=78"));
+        assert!(unit.contains("mount.posture"), "{unit}");
+        assert!(unit.contains(" mount "), "{unit}");
+    }
+
+    #[test]
+    fn mount_validation_pins_the_mountpoint_rules() {
+        let dir = scratch("mount-validate");
+        // Mount without a mountpoint refuses.
+        let mut missing = entry("demo", &dir);
+        missing.mode = ServiceMode::Mount;
+        assert!(matches!(
+            validate_entry("demo", &missing),
+            Err(BootstrapError::MissingMountpoint)
+        ));
+        // Vault with a mountpoint refuses.
+        let mut stray = entry("demo", &dir);
+        stray.mountpoint = Some(dir.join("mnt"));
+        assert!(matches!(
+            validate_entry("demo", &stray),
+            Err(BootstrapError::UnexpectedMountpoint)
+        ));
+        // Relative, escaping, and control-carrying mountpoints refuse.
+        let mut relative = mount_entry("demo", &dir, PathBuf::from("relative/mnt").as_path());
+        let error = validate_entry("demo", &relative).unwrap_err();
+        assert!(error.to_string().contains("must be absolute"), "{error}");
+        relative.mountpoint = Some(PathBuf::from("/ok/../evil"));
+        let error = validate_entry("demo", &relative).unwrap_err();
+        assert!(error.to_string().contains("must not contain .."), "{error}");
+        // A mountpoint equal to the drive directory would mount the
+        // projection over the store itself, so it refuses.
+        let drive = dir.join("drive");
+        let mut same = mount_entry("demo", &dir, drive.as_path());
+        same.drive_dir = drive.clone();
+        let error = validate_entry("demo", &same).unwrap_err();
+        assert!(error.to_string().contains("must not equal"), "{error}");
+        // Unknown future modes still skip with the generic reason.
+        let mut future = entry("demo", &dir);
+        future.mode = ServiceMode::Unknown("fuse".to_string());
+        let error = validate_entry("demo", &future).unwrap_err();
+        assert!(
+            error.to_string().contains("unknown service mode"),
+            "{error}"
+        );
+        assert!(
+            !error.to_string().contains("installer follow-up"),
+            "the follow-up pointer is retired: {error}"
+        );
+    }
+
+    #[test]
+    fn provision_mount_registers_and_verifies_the_socket() {
+        let dir = scratch("prov-mnt");
+        let registry = dir.join("drives.json");
+        let mountpoint = dir.join("mnt");
+        std::fs::create_dir_all(&mountpoint).unwrap();
+        let sock = dir.join("drive").join("owner.sock");
+        std::fs::create_dir_all(sock.parent().unwrap()).unwrap();
+        let server = stub_owner(sock, 1, "Unobserved");
+        let report = provision(provision_mount_no_service(
+            &dir,
+            &registry,
+            "demo",
+            &mountpoint,
+        ));
+        let ProvisionState::VerifiedAvailable { entry, .. } = report else {
+            panic!("a stubbed owner must verify a mount provision: {report:?}");
+        };
+        assert!(matches!(entry.mode, ServiceMode::Mount));
+        assert_eq!(entry.mountpoint, Some(mountpoint.clone()));
+        let read = read_registry(&registry).unwrap();
+        assert!(read.skipped.is_empty());
+        assert_eq!(read.drives["demo"].mountpoint, Some(mountpoint));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn provision_mount_without_a_mountpoint_refuses_before_creating() {
+        let dir = scratch("provision-mount-nomp");
+        let registry = dir.join("drives.json");
+        let mut config = provision_no_service(&dir, &registry, "demo");
+        config.mode = ServiceMode::Mount;
+        config.mountpoint = None;
+        let report = provision(config);
+        assert!(
+            matches!(
+                report,
+                ProvisionState::ProvisioningIncomplete {
+                    stage: "validate",
+                    ..
+                }
+            ),
+            "validation precedes initialization: {report:?}"
+        );
+        assert!(!dir.join("drive").exists());
+        assert!(!registry.exists());
+    }
+
+    /// Concurrent same-key updates through the locked path converge
+    /// on one update with no torn mix: two writers racing on one key
+    /// serialize under the lock, so the final entry is one writer's
+    /// whole update — never one writer's relays beside the other's
+    /// mode. Without the lock (a stale read plus a whole-map write)
+    /// the second rename would silently clobber the first update.
+    #[test]
+    fn concurrent_same_key_updates_converge_without_a_torn_mix() {
+        let dir = scratch("samekey");
+        let registry = dir.join("drives.json");
+        let first = provision(provision_no_service(&dir, &registry, "demo"));
+        assert!(matches!(
+            first,
+            ProvisionState::RegisteredButUnavailable { .. }
+        ));
+        let mountpoint = dir.join("mnt");
+        std::fs::create_dir_all(&mountpoint).unwrap();
+        let registry_clone = registry.clone();
+        let mountpoint_clone = mountpoint.clone();
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                modify_registry(&registry, |drives| {
+                    let stored = drives.get("demo").expect("demo registered").clone();
+                    let updated = updated_entry(
+                        stored,
+                        vec!["relay://a".to_string()],
+                        ServiceMode::Vault,
+                        None,
+                    );
+                    drives.insert("demo".to_string(), updated);
+                    Ok(())
+                })
+                .unwrap();
+            });
+            scope.spawn(|| {
+                modify_registry(&registry_clone, |drives| {
+                    let stored = drives.get("demo").expect("demo registered").clone();
+                    let updated = updated_entry(
+                        stored,
+                        vec!["relay://b".to_string()],
+                        ServiceMode::Mount,
+                        Some(mountpoint_clone.clone()),
+                    );
+                    drives.insert("demo".to_string(), updated);
+                    Ok(())
+                })
+                .unwrap();
+            });
+        });
+        let read = read_registry(&registry).unwrap();
+        let entry = &read.drives["demo"];
+        // One winner, whole: relays and mode/mountpoint agree with
+        // each other, never a mix of both writers.
+        match entry.relays.as_slice() {
+            [relay] if relay == "relay://a" => {
+                assert!(matches!(entry.mode, ServiceMode::Vault));
+                assert_eq!(entry.mountpoint, None);
+            }
+            [relay] if relay == "relay://b" => {
+                assert!(matches!(entry.mode, ServiceMode::Mount));
+                assert_eq!(entry.mountpoint, Some(mountpoint));
+            }
+            other => panic!("one writer must win whole: {other:?}"),
+        }
+    }
+
     /// A stub owner socket: answers every request with the given
     /// refusal code. It speaks the real framed protocol, so the
     /// handoff test exercises the real client, the real framing, and
@@ -2660,6 +3136,8 @@ mod tests {
             name: name.to_string(),
             drive_dir: dir.join("drive"),
             relays: vec![],
+            mode: ServiceMode::Vault,
+            mountpoint: None,
             identity: identity(),
             passphrase: "bootstrap-test-pass".to_string(),
             init: Init::Create,
@@ -2671,6 +3149,18 @@ mod tests {
             manage_service: false,
             verify_timeout: Duration::from_secs(10),
         }
+    }
+
+    pub(super) fn provision_mount_no_service(
+        dir: &Path,
+        registry: &Path,
+        name: &str,
+        mountpoint: &Path,
+    ) -> ProvisionConfig {
+        let mut config = provision_no_service(dir, registry, name);
+        config.mode = ServiceMode::Mount;
+        config.mountpoint = Some(mountpoint.to_path_buf());
+        config
     }
 
     #[test]
@@ -2741,12 +3231,14 @@ mod tests {
         dir: &Path,
         registry: &Path,
         relays: Option<Vec<String>>,
-        mode: &str,
+        mode: ServiceMode,
+        mountpoint: Option<PathBuf>,
     ) -> ReconfigureConfig {
         ReconfigureConfig {
             drive_dir: dir.join("drive"),
             relays,
-            mode: mode.to_string(),
+            mode,
+            mountpoint,
             identity: identity(),
             passphrase: "bootstrap-test-pass".to_string(),
             registry_path: registry.to_path_buf(),
@@ -2782,7 +3274,8 @@ mod tests {
             &dir,
             &registry,
             Some(vec!["relay://new".to_string()]),
-            "vault",
+            ServiceMode::Vault,
+            None,
         ));
         let ProvisionState::VerifiedAvailable { entry, .. } = report else {
             panic!("a stubbed owner must verify: {report:?}");
@@ -2811,7 +3304,13 @@ mod tests {
         write_registry(&registry, &read.drives).unwrap();
         let sock = dir.join("drive").join("owner.sock");
         let server = stub_owner(sock, 1, "Unobserved");
-        let report = reconfigure(reconfigure_no_service(&dir, &registry, None, "vault"));
+        let report = reconfigure(reconfigure_no_service(
+            &dir,
+            &registry,
+            None,
+            ServiceMode::Vault,
+            None,
+        ));
         let ProvisionState::VerifiedAvailable { entry, .. } = report else {
             panic!("a stubbed owner must verify: {report:?}");
         };
@@ -2819,11 +3318,12 @@ mod tests {
         server.join().unwrap();
     }
 
-    /// Non-vault modes refuse before anything stops: the registry
-    /// keeps the old entry and no service state is touched — the
-    /// mount template still travels with the installer follow-up.
+    /// Unknown modes refuse before anything stops: the registry
+    /// keeps the old entry and no service state is touched — only
+    /// `vault` and `mount` reconfigure, and anything else is a
+    /// validation refusal, not a guess.
     #[test]
-    fn reconfigure_refuses_non_vault_modes_before_stopping() {
+    fn reconfigure_refuses_unknown_modes_before_stopping() {
         let dir = scratch("reconfigure-mode");
         let registry = dir.join("drives.json");
         let first = provision(provision_no_service(&dir, &registry, "demo"));
@@ -2832,7 +3332,13 @@ mod tests {
             ProvisionState::RegisteredButUnavailable { .. }
         ));
         let before = std::fs::read(&registry).unwrap();
-        let report = reconfigure(reconfigure_no_service(&dir, &registry, None, "mount"));
+        let report = reconfigure(reconfigure_no_service(
+            &dir,
+            &registry,
+            None,
+            ServiceMode::Unknown("fuse".to_string()),
+            None,
+        ));
         match report {
             ProvisionState::ProvisioningIncomplete {
                 kind,
@@ -2842,17 +3348,51 @@ mod tests {
                 assert_eq!(kind, ProvisionFailureKind::Validate);
                 assert_eq!(Some(stage), kind.stage());
                 assert!(
-                    reason.contains("installer follow-up"),
-                    "refusal points at the follow-up: {reason}"
+                    reason.contains("unknown service mode"),
+                    "refusal names the unknown mode: {reason}"
                 );
             }
-            other => panic!("a mount mode must refuse: {other:?}"),
+            other => panic!("an unknown mode must refuse: {other:?}"),
         }
         assert_eq!(std::fs::read(&registry).unwrap(), before);
         assert_eq!(
             Some("stop-service"),
             ProvisionFailureKind::StopService.stage()
         );
+    }
+
+    /// Reconfigure moves a vault entry to mount: the mountpoint is
+    /// recorded, the stub owner's pre-first-pass refusal verifies
+    /// like provisioning, and the registry carries the new mode.
+    #[test]
+    fn reconfigure_moves_vault_to_mount_and_verifies_the_socket() {
+        let dir = scratch("rec-mnt");
+        let registry = dir.join("drives.json");
+        let first = provision(provision_no_service(&dir, &registry, "demo"));
+        assert!(matches!(
+            first,
+            ProvisionState::RegisteredButUnavailable { .. }
+        ));
+        let mountpoint = dir.join("mnt");
+        std::fs::create_dir_all(&mountpoint).unwrap();
+        let sock = dir.join("drive").join("owner.sock");
+        let server = stub_owner(sock, 1, "Unobserved");
+        let report = reconfigure(reconfigure_no_service(
+            &dir,
+            &registry,
+            None,
+            ServiceMode::Mount,
+            Some(mountpoint.clone()),
+        ));
+        let ProvisionState::VerifiedAvailable { entry, .. } = report else {
+            panic!("a stubbed owner must verify a mount reconfigure: {report:?}");
+        };
+        assert!(matches!(entry.mode, ServiceMode::Mount));
+        assert_eq!(entry.mountpoint, Some(mountpoint.clone()));
+        let read = read_registry(&registry).unwrap();
+        assert!(matches!(read.drives["demo"].mode, ServiceMode::Mount));
+        assert_eq!(read.drives["demo"].mountpoint, Some(mountpoint));
+        server.join().unwrap();
     }
 
     /// No entry for the directory refuses without writing: the drive
@@ -2868,7 +3408,13 @@ mod tests {
             first,
             ProvisionState::RegisteredButUnavailable { .. }
         ));
-        let report = reconfigure(reconfigure_no_service(&dir, &other, None, "vault"));
+        let report = reconfigure(reconfigure_no_service(
+            &dir,
+            &other,
+            None,
+            ServiceMode::Vault,
+            None,
+        ));
         match report {
             ProvisionState::ProvisioningIncomplete {
                 kind,
@@ -2915,7 +3461,13 @@ mod tests {
             },
         });
         std::fs::write(&registry, serde_json::to_vec(&raw).unwrap()).unwrap();
-        let report = reconfigure(reconfigure_no_service(&dir, &registry, None, "vault"));
+        let report = reconfigure(reconfigure_no_service(
+            &dir,
+            &registry,
+            None,
+            ServiceMode::Vault,
+            None,
+        ));
         match report {
             ProvisionState::ProvisioningIncomplete { kind, reason, .. } => {
                 assert_eq!(kind, ProvisionFailureKind::Validate);
@@ -2947,7 +3499,7 @@ mod tests {
         let before = std::fs::read(&registry).unwrap();
         let definition = dir.join("wyrd-test-definition");
         std::fs::write(&definition, "leftover").unwrap();
-        let mut config = reconfigure_no_service(&dir, &registry, None, "vault");
+        let mut config = reconfigure_no_service(&dir, &registry, None, ServiceMode::Vault, None);
         config.passphrase = "wrong-pass".to_string();
         match reconfigure(config) {
             ProvisionState::ProvisioningIncomplete { kind, stage, .. } => {
@@ -2981,7 +3533,8 @@ mod tests {
             &dir,
             &registry,
             Some(vec!["relay://kept".to_string()]),
-            "vault",
+            ServiceMode::Vault,
+            None,
         );
         config.manage_service = true;
         config.passphrase = "wrong-pass".to_string();
@@ -3016,7 +3569,8 @@ mod tests {
             &dir,
             &registry,
             Some(vec!["relay://kept".to_string()]),
-            "vault",
+            ServiceMode::Vault,
+            None,
         );
         config.manage_service = true;
         match reconfigure(config) {
@@ -3043,7 +3597,8 @@ mod tests {
             first,
             ProvisionState::RegisteredButUnavailable { .. }
         ));
-        let mut config = reconfigure_no_service(&dir, &registry, Some(Vec::new()), "vault");
+        let mut config =
+            reconfigure_no_service(&dir, &registry, Some(Vec::new()), ServiceMode::Vault, None);
         config.manage_service = true;
         match reconfigure(config) {
             ProvisionState::ProvisioningIncomplete {
@@ -3060,7 +3615,7 @@ mod tests {
     }
 
     /// A rewrite carries skipped entries forward verbatim: a future
-    /// `mount` entry survives a vault reconfigure with its value
+    /// `fuse` entry survives a vault reconfigure with its value
     /// intact, and the caller still warns about the skip instead of
     /// silently forgetting the entry.
     #[test]
@@ -3079,7 +3634,7 @@ mod tests {
             "drive_dir": dir.join("drive").to_string_lossy(),
             "relays": ["relay://future"],
             "service": "drive-future",
-            "mode": "mount",
+            "mode": "fuse",
         });
         let mut raw: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&registry).unwrap()).unwrap();
@@ -3091,7 +3646,8 @@ mod tests {
             &dir,
             &registry,
             Some(vec!["relay://new".to_string()]),
-            "vault",
+            ServiceMode::Vault,
+            None,
         ));
         let ProvisionState::VerifiedAvailable { entry, skipped } = report else {
             panic!("a stubbed owner must verify: {report:?}");
@@ -3137,7 +3693,13 @@ mod tests {
         std::fs::write(&definition, "leftover").unwrap();
         let sock = dir.join("drive").join("owner.sock");
         let server = stub_owner(sock, 1, "Unobserved");
-        let report = reconfigure(reconfigure_no_service(&dir, &registry, None, "vault"));
+        let report = reconfigure(reconfigure_no_service(
+            &dir,
+            &registry,
+            None,
+            ServiceMode::Vault,
+            None,
+        ));
         let ProvisionState::VerifiedAvailable { entry, .. } = report else {
             panic!("a stubbed owner must verify: {report:?}");
         };
@@ -3164,7 +3726,8 @@ mod tests {
             &dir,
             &registry,
             Some(vec!["not a relay".to_string()]),
-            "vault",
+            ServiceMode::Vault,
+            None,
         ));
         match report {
             ProvisionState::ProvisioningIncomplete {
@@ -3199,7 +3762,13 @@ mod tests {
         // same contention the sync lock test pins.
         let held =
             Engine::open_keystore(dir.join("drive"), "bootstrap-test-pass", identity()).unwrap();
-        let report = reconfigure(reconfigure_no_service(&dir, &registry, None, "vault"));
+        let report = reconfigure(reconfigure_no_service(
+            &dir,
+            &registry,
+            None,
+            ServiceMode::Vault,
+            None,
+        ));
         match report {
             ProvisionState::ProvisioningIncomplete { kind, stage, .. } => {
                 assert_eq!(kind, ProvisionFailureKind::StoreLocked);
@@ -3228,7 +3797,13 @@ mod tests {
             std::thread::sleep(Duration::from_secs(2));
             stub_owner(sock, 1, "Unobserved").join().unwrap();
         });
-        let report = reconfigure(reconfigure_no_service(&dir, &registry, None, "vault"));
+        let report = reconfigure(reconfigure_no_service(
+            &dir,
+            &registry,
+            None,
+            ServiceMode::Vault,
+            None,
+        ));
         let ProvisionState::VerifiedAvailable { .. } = report else {
             panic!("a late owner must still verify: {report:?}");
         };
@@ -3252,7 +3827,12 @@ mod tests {
             passphrase_file: dir.join("passphrase"),
         };
         let stored = entry("demo", &dir);
-        let updated = updated_entry(stored, vec!["relay://new".to_string()]);
+        let updated = updated_entry(
+            stored,
+            vec!["relay://new".to_string()],
+            ServiceMode::Vault,
+            None,
+        );
         assert_eq!(updated.name, "demo");
         assert_eq!(updated.service, "drive-demo");
         assert_eq!(updated.mode, ServiceMode::Vault);

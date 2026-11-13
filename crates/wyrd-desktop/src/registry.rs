@@ -69,6 +69,10 @@ struct RegistryEntryParse {
     relays: Vec<String>,
     service: String,
     mode: String,
+    /// FUSE mountpoint: `Some` in `mount` mode, absent otherwise.
+    /// Defaults so pre-mount files decode.
+    #[serde(default)]
+    mountpoint: Option<PathBuf>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -101,7 +105,8 @@ pub enum DriveAvailability {
 /// One registered drive for the lifecycle view: validated facts
 /// plus the live verdict. `mode` is a display string end to end —
 /// the shell shows the registry's service mode and never interprets
-/// it. Drives match by exact path only.
+/// it. `mountpoint` carries the FUSE mountpoint in `mount` mode
+/// (`None` in `vault` mode). Drives match by exact path only.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct DriveView {
     pub name: String,
@@ -109,6 +114,7 @@ pub struct DriveView {
     pub relays: Vec<String>,
     pub service: String,
     pub mode: String,
+    pub mountpoint: Option<String>,
     pub availability: DriveAvailability,
 }
 
@@ -169,6 +175,7 @@ fn validate_entry(key: &str, entry: &RegistryEntryParse) -> Result<(), String> {
         &entry.drive_dir,
         &entry.service,
         &entry.mode,
+        entry.mountpoint.as_deref(),
         &entry.relays,
     )
 }
@@ -183,6 +190,7 @@ fn validate_fields(
     drive_dir: &Path,
     service: &str,
     mode: &str,
+    mountpoint: Option<&Path>,
     relays: &[String],
 ) -> Result<(), String> {
     if key != name {
@@ -208,11 +216,28 @@ fn validate_fields(
     // control-byte check did; non-UTF8 spellings were never
     // loadable paths here.
     super::validate_drive_path(&drive_dir.to_string_lossy(), "drive_dir").map(|_| ())?;
-    if mode != "vault" {
-        return Err(
-            "unknown service mode: registry-managed mount mode travels with the installer follow-up"
-                .to_string(),
-        );
+    match mode {
+        "vault" => {
+            if mountpoint.is_some() {
+                return Err("vault mode carries no mountpoint".to_string());
+            }
+        }
+        "mount" => {
+            let mountpoint = mountpoint.ok_or_else(|| {
+                "mount mode needs a mountpoint: pass --mountpoint with an absolute path".to_string()
+            })?;
+            super::validate_drive_path(&mountpoint.to_string_lossy(), "mountpoint")
+                .map_err(|reason| format!("invalid mountpoint: {reason}"))?;
+            if mountpoint == drive_dir {
+                return Err(format!(
+                    "invalid mountpoint: mountpoint {} must not equal the drive directory",
+                    mountpoint.display()
+                ));
+            }
+        }
+        _ => {
+            return Err("unknown service mode: this build manages `vault` and `mount`".to_string());
+        }
     }
     if relays.iter().any(|relay| {
         relay.is_empty()
@@ -335,6 +360,10 @@ pub fn list_drives_at(registry_path: &Path) -> RegistryState {
                     relays: entry.relays.clone(),
                     service: entry.service.clone(),
                     mode: entry.mode.clone(),
+                    mountpoint: entry
+                        .mountpoint
+                        .as_ref()
+                        .map(|path| path.to_string_lossy().into_owned()),
                     availability: probe_drive(&entry.drive_dir),
                 })
             }
@@ -363,6 +392,10 @@ pub struct RegistryEntryWrite {
     pub relays: Vec<String>,
     pub service: String,
     pub mode: String,
+    /// FUSE mountpoint: `Some` in `mount` mode, `None` in `vault`
+    /// mode. Serialized always (null for vault) so the daemon's
+    /// optional field decodes either way.
+    pub mountpoint: Option<PathBuf>,
 }
 
 /// Every way a desktop registry write can fail. Variants carry the
@@ -535,6 +568,7 @@ pub fn write_registry_at(
             &entry.drive_dir,
             &entry.service,
             &entry.mode,
+            entry.mountpoint.as_deref(),
             &entry.relays,
         )
         .map_err(|reason| RegistryWriteError::RefusedWrite { reason })?;
@@ -639,6 +673,7 @@ pub fn write_registry_at(
                     &parsed.drive_dir,
                     &parsed.service,
                     &parsed.mode,
+                    parsed.mountpoint.as_deref(),
                     &parsed.relays,
                 )
                 .is_ok()
@@ -966,6 +1001,22 @@ mod tests {
             relays: vec![],
             service: format!("drive-{name}"),
             mode: "vault".to_string(),
+            mountpoint: None,
+        }
+    }
+
+    fn write_mount_entry(
+        name: &str,
+        dir: &std::path::Path,
+        mountpoint: &std::path::Path,
+    ) -> RegistryEntryWrite {
+        RegistryEntryWrite {
+            name: name.to_string(),
+            drive_dir: dir.join("drive").join(name),
+            relays: vec![],
+            service: format!("drive-{name}"),
+            mode: "mount".to_string(),
+            mountpoint: Some(mountpoint.to_path_buf()),
         }
     }
 
@@ -996,6 +1047,72 @@ mod tests {
         assert_eq!(state.status, RegistryStatus::Ready);
         assert_eq!(state.drives.len(), 2);
         assert!(state.skipped.is_empty(), "{:?}", state.skipped);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A mount write round-trips through the reader with its
+    /// mountpoint: the view carries the mode and the mountpoint, and
+    /// nothing is skipped.
+    #[test]
+    fn desktop_mount_write_round_trips_with_its_mountpoint() {
+        let dir =
+            std::env::temp_dir().join(format!("wyrd-desktop-reg-{}-mount", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mountpoint = dir.join("mnt");
+        std::fs::create_dir_all(&mountpoint).unwrap();
+        std::fs::create_dir_all(dir.join("drive").join("alpha")).unwrap();
+        let path = dir.join("drives.json");
+        let mut map = BTreeMapForTest::new();
+        map.insert(
+            "alpha".to_string(),
+            write_mount_entry("alpha", &dir, &mountpoint),
+        );
+        write_registry_at(&path, &map).unwrap();
+        let state = list_drives_at(&path);
+        assert_eq!(state.status, RegistryStatus::Ready);
+        assert_eq!(state.drives.len(), 1);
+        assert_eq!(state.drives[0].mode, "mount");
+        assert_eq!(
+            state.drives[0].mountpoint,
+            Some(mountpoint.to_string_lossy().into_owned())
+        );
+        assert!(state.skipped.is_empty(), "{:?}", state.skipped);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Mount validation pins the mountpoint rules: a missing
+    /// mountpoint, a vault entry carrying one, and a mountpoint
+    /// equal to the drive directory all refuse — while unknown
+    /// future modes skip with the generic reason.
+    #[test]
+    fn desktop_mount_validation_pins_the_mountpoint_rules() {
+        let dir = std::env::temp_dir().join(format!(
+            "wyrd-desktop-reg-{}-mount-rules",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("drives.json");
+        // Mount without a mountpoint refuses.
+        let mut missing = write_entry("missing", &dir);
+        missing.mode = "mount".to_string();
+        let refused = write_registry_at(&path, &{
+            let mut map = BTreeMapForTest::new();
+            map.insert("missing".to_string(), missing);
+            map
+        })
+        .unwrap_err();
+        assert!(refused.to_string().contains("mountpoint"), "{refused}");
+        // Vault carrying a mountpoint refuses.
+        let mut stray = write_entry("stray", &dir);
+        stray.mountpoint = Some(dir.join("mnt"));
+        let refused = write_registry_at(&path, &{
+            let mut map = BTreeMapForTest::new();
+            map.insert("stray".to_string(), stray);
+            map
+        })
+        .unwrap_err();
+        assert!(refused.to_string().contains("vault"), "{refused}");
+        assert!(!path.exists(), "no partial registry may remain");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -1101,8 +1218,8 @@ mod tests {
 
     /// Entries the reader skips are carried forward verbatim: a
     /// rewrite must never delete what this build does not
-    /// understand — including a future mount mode the desktop
-    /// reader skips today.
+    /// understand — including a future mode the desktop reader
+    /// skips today.
     #[test]
     fn desktop_write_carries_skipped_entries_forward_verbatim() {
         let dir =
@@ -1119,7 +1236,7 @@ mod tests {
                         "drive_dir": "/drives/future",
                         "relays": [],
                         "service": "drive-future",
-                        "mode": "mount",
+                        "mode": "fuse",
                     },
                 },
             })
@@ -1133,7 +1250,7 @@ mod tests {
         assert_eq!(drives.len(), 2, "nothing was deleted: {drives:?}");
         assert_eq!(
             drives["future"].get("mode").unwrap(),
-            "mount",
+            "fuse",
             "carried verbatim: {:?}",
             drives["future"]
         );

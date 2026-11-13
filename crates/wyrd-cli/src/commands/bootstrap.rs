@@ -21,6 +21,8 @@ use crate::CliError;
 pub(crate) struct BootstrapArgs {
     pub(crate) name: String,
     pub(crate) drive_dir: PathBuf,
+    pub(crate) mode: String,
+    pub(crate) mountpoint: Option<PathBuf>,
     pub(crate) relays: RelayArgs,
     pub(crate) credentials: Credentials,
     pub(crate) invitation_file: Option<PathBuf>,
@@ -28,6 +30,43 @@ pub(crate) struct BootstrapArgs {
     pub(crate) owner_bin: Option<PathBuf>,
     pub(crate) supervise_bin: Option<PathBuf>,
     pub(crate) no_service: bool,
+}
+
+/// Parse the `--mode`/`--mountpoint` pair both provisioning and
+/// reconfiguration share: `vault` serves headless and refuses a
+/// mountpoint, `mount` serves the FUSE projection and requires one.
+/// Anything else refuses as usage before anything is created,
+/// stopped, or written. Mountpoint shape (absolute, no escapes) is
+/// validated by the daemon at the `validate` stage, not here — the
+/// CLI keeps the operator's spelling for the registry.
+pub(crate) fn parse_service_mode(
+    mode: &str,
+    mountpoint: Option<PathBuf>,
+) -> Result<(wyrd_daemon::bootstrap::ServiceMode, Option<PathBuf>), CliError> {
+    use wyrd_daemon::bootstrap::ServiceMode;
+    match mode {
+        "vault" => {
+            if mountpoint.is_some() {
+                return Err(CliError::Usage(
+                    "vault mode carries no mountpoint: remove --mountpoint for a vault entry"
+                        .to_string(),
+                ));
+            }
+            Ok((ServiceMode::Vault, None))
+        }
+        "mount" => {
+            if mountpoint.is_none() {
+                return Err(CliError::Usage(
+                    "mount mode needs a mountpoint: pass --mountpoint with an absolute path"
+                        .to_string(),
+                ));
+            }
+            Ok((ServiceMode::Mount, mountpoint))
+        }
+        other => Err(CliError::Usage(format!(
+            "unknown service mode {other:?}: this build manages `vault` and `mount`"
+        ))),
+    }
 }
 
 /// Resolve, then provision: credentials were already loaded once
@@ -73,10 +112,13 @@ pub(crate) fn bootstrap(
         }
     };
     let registry_path = args.registry.clone().unwrap_or_else(default_registry_path);
+    let (mode, mountpoint) = parse_service_mode(&args.mode, args.mountpoint)?;
     let report = provision(ProvisionConfig {
         name: args.name,
         drive_dir,
         relays,
+        mode,
+        mountpoint,
         identity,
         passphrase: passphrase.to_string(),
         init,

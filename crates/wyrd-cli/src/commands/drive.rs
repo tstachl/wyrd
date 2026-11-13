@@ -76,6 +76,7 @@ pub(crate) fn drive(
         }
         DriveAction::Reconfigure {
             mode,
+            mountpoint,
             relay,
             registry,
             owner_bin,
@@ -84,6 +85,7 @@ pub(crate) fn drive(
         } => reconfigure_drive(
             drive_dir,
             mode,
+            mountpoint,
             relay,
             registry,
             owner_bin,
@@ -189,6 +191,7 @@ pub(crate) fn delete_drive(
 fn reconfigure_drive(
     drive_dir: PathBuf,
     mode: String,
+    mountpoint: Option<PathBuf>,
     relay: Vec<String>,
     registry: Option<PathBuf>,
     owner_bin: Option<PathBuf>,
@@ -220,6 +223,7 @@ fn reconfigure_drive(
     // accident.
     let relays = if relay.is_empty() { None } else { Some(relay) };
     let registry_path = registry.clone().unwrap_or_else(default_registry_path);
+    let (mode, mountpoint) = super::bootstrap::parse_service_mode(&mode, mountpoint)?;
     // The daemon reports the lock refusal as data (the state shape
     // carries kinds, never typed errors); the CLI restores the
     // terminal held-drive exit the supervisor keys on, so keep the
@@ -228,6 +232,7 @@ fn reconfigure_drive(
         drive_dir: drive_dir.clone(),
         relays,
         mode,
+        mountpoint,
         identity,
         passphrase: passphrase.to_string(),
         registry_path,

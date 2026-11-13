@@ -129,6 +129,7 @@ export interface ProvisionCreateArgs {
   identityFile: string;
   passphraseFile: string;
   mode: string;
+  mountpoint?: string;
   noService: boolean;
 }
 
@@ -145,7 +146,7 @@ export interface ProvisionLeaveArgs {
 
 /**
  * Create one drive through the installed CLI, then re-read and
- * probe. `mode` is the platform default `vault`.
+ * probe. `mode` is `vault` or `mount` (`mount` needs `mountpoint`).
  */
 export function provisionCreate(args: ProvisionCreateArgs): Promise<ProvisionReport> {
   return invokeValue<ProvisionReport>("provision_create", { args });

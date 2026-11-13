@@ -619,6 +619,7 @@ fn registry_mirror_agrees_with_the_daemon_writer() {
             relays: vec!["wss://relay.example".to_string()],
             service: "drive-alpha".to_string(),
             mode: ServiceMode::Vault,
+            mountpoint: None,
         },
     );
     write_registry(&path, &drives).expect("the daemon writer stores");
@@ -636,6 +637,7 @@ fn registry_mirror_agrees_with_the_daemon_writer() {
     assert_eq!(view.relays, vec!["wss://relay.example".to_string()]);
     assert_eq!(view.service, "drive-alpha");
     assert_eq!(view.mode, "vault");
+    assert_eq!(view.mountpoint, None);
     // No owner serves the scratch drive: the probe reports no
     // transport, which says nothing about any drive.
     assert!(
@@ -647,6 +649,54 @@ fn registry_mirror_agrees_with_the_daemon_writer() {
         view.availability
     );
     assert!(state.skipped.is_empty());
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Mount compatibility: a daemon-written mount entry reads back
+/// through the desktop mirror with its mode and mountpoint intact —
+/// one file, two readers, no interpretation gap for the managed
+/// mode either.
+#[test]
+fn mount_mirror_carries_the_mountpoint_across_crates() {
+    use std::collections::BTreeMap;
+    use wyrd_daemon::bootstrap::{write_registry, RegistryEntry, ServiceMode};
+
+    let dir = std::env::temp_dir().join(format!("wyrd-desktop-compat-mnt-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let drive = dir.join("drive");
+    std::fs::create_dir_all(&drive).unwrap();
+    let mountpoint = dir.join("mnt");
+    std::fs::create_dir_all(&mountpoint).unwrap();
+    let path = dir.join("drives.json");
+    let mut drives = BTreeMap::new();
+    drives.insert(
+        "alpha".to_string(),
+        RegistryEntry {
+            name: "alpha".to_string(),
+            drive_dir: drive.clone(),
+            relays: vec![],
+            service: "drive-alpha".to_string(),
+            mode: ServiceMode::Mount,
+            mountpoint: Some(mountpoint.clone()),
+        },
+    );
+    write_registry(&path, &drives).expect("the daemon writer stores a mount entry");
+
+    let state = wyrd_desktop::registry::list_drives_at(&path);
+    assert_eq!(
+        state.status,
+        wyrd_desktop::RegistryStatus::Ready,
+        "a daemon-written mount registry reads ready"
+    );
+    assert_eq!(state.drives.len(), 1);
+    assert!(state.skipped.is_empty(), "{:?}", state.skipped);
+    let view = &state.drives[0];
+    assert_eq!(view.mode, "mount");
+    assert_eq!(
+        view.mountpoint,
+        Some(mountpoint.to_string_lossy().into_owned())
+    );
 
     std::fs::remove_dir_all(&dir).unwrap();
 }
@@ -732,6 +782,7 @@ fn registry_probe_verifies_against_the_live_owner() {
             relays: Vec::new(),
             service: "drive-live".to_string(),
             mode: ServiceMode::Vault,
+            mountpoint: None,
         },
     );
     write_registry(&path, &drives).expect("the daemon writer stores");
