@@ -459,6 +459,8 @@ fn command(args: Vec<String>) -> Result<(), CliError> {
         Command::Bootstrap {
             name,
             drive_dir,
+            mode,
+            mountpoint,
             relays,
             credentials,
             invitation_file,
@@ -470,6 +472,8 @@ fn command(args: Vec<String>) -> Result<(), CliError> {
             crate::commands::bootstrap::BootstrapArgs {
                 name,
                 drive_dir,
+                mode,
+                mountpoint,
                 relays,
                 credentials,
                 invitation_file,

@@ -575,10 +575,39 @@ fn drive_reconfigure_keeps_relays_without_relay_flags() {
     );
 }
 
-/// A mount target refuses before anything stops: the refusal names
-/// the installer follow-up and the registry keeps its bytes exactly.
+/// An unknown mode refuses before anything stops: the refusal names
+/// the unknown mode and the registry keeps its bytes exactly.
 #[test]
-fn drive_reconfigure_refuses_non_vault_modes_before_stopping() {
+fn drive_reconfigure_refuses_unknown_modes_before_stopping() {
+    let fixture = Fixture::new();
+    let name = unique_reconf_name("unknown");
+    let registry = fixture._temp.0.join("drives.json");
+    write_registry_entry(&registry, &name, &fixture.drive, &["relay://old"]);
+    let before = fs::read(&registry).unwrap();
+    let error = command(fixture.args(vec![
+        "reconfigure".into(),
+        "--mode".into(),
+        "fuse".into(),
+        "--registry".into(),
+        registry.display().to_string(),
+        "--no-service".into(),
+    ]))
+    .unwrap_err();
+    assert!(
+        matches!(error, CliError::Usage(_)),
+        "refusal, not an inline warning: {error:?}"
+    );
+    assert!(
+        error.to_string().contains("unknown service mode"),
+        "refusal names the unknown mode: {error}"
+    );
+    assert_eq!(fs::read(&registry).unwrap(), before);
+}
+
+/// A mount reconfigure without a mountpoint refuses before anything
+/// stops: the registry keeps its bytes exactly.
+#[test]
+fn drive_reconfigure_refuses_mount_without_a_mountpoint() {
     let fixture = Fixture::new();
     let name = unique_reconf_name("mount");
     let registry = fixture._temp.0.join("drives.json");
@@ -598,10 +627,43 @@ fn drive_reconfigure_refuses_non_vault_modes_before_stopping() {
         "refusal, not an inline warning: {error:?}"
     );
     assert!(
-        error.to_string().contains("installer follow-up"),
-        "refusal points at the follow-up: {error}"
+        error.to_string().contains("needs a mountpoint"),
+        "refusal names the missing mountpoint: {error}"
     );
     assert_eq!(fs::read(&registry).unwrap(), before);
+}
+
+/// A vault-to-mount reconfigure rewrites the entry: the mode and
+/// mountpoint land in the registry and the stub owner verifies the
+/// handoff.
+#[test]
+fn drive_reconfigure_moves_vault_to_mount() {
+    let fixture = Fixture::new();
+    let name = unique_reconf_name("tomount");
+    let registry = fixture._temp.0.join("drives.json");
+    write_registry_entry(&registry, &name, &fixture.drive, &["relay://old"]);
+    let mountpoint = fixture._temp.0.join("mnt");
+    fs::create_dir_all(&mountpoint).unwrap();
+    let sock = fixture.drive.join("owner.sock");
+    let server = stub_owner(sock, "Unobserved", 1);
+    command(fixture.args(vec![
+        "reconfigure".into(),
+        "--mode".into(),
+        "mount".into(),
+        "--mountpoint".into(),
+        mountpoint.display().to_string(),
+        "--registry".into(),
+        registry.display().to_string(),
+        "--no-service".into(),
+    ]))
+    .unwrap();
+    let raw: serde_json::Value = serde_json::from_slice(&fs::read(&registry).unwrap()).unwrap();
+    assert_eq!(raw["drives"][&name]["mode"], serde_json::json!("mount"));
+    assert_eq!(
+        raw["drives"][&name]["mountpoint"],
+        serde_json::json!(mountpoint.to_string_lossy())
+    );
+    server.join().unwrap();
 }
 
 /// An unregistered directory refuses without writing: the drive

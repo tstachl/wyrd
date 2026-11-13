@@ -22,6 +22,7 @@ fn daemon_entry(name: &str, dir: &Path) -> daemon::RegistryEntry {
         relays: vec![],
         service: format!("drive-{name}"),
         mode: daemon::ServiceMode::Vault,
+        mountpoint: None,
     }
 }
 
@@ -32,6 +33,7 @@ fn shell_entry(name: &str, dir: &Path) -> shell::RegistryEntryWrite {
         relays: vec![],
         service: format!("drive-{name}"),
         mode: "vault".to_string(),
+        mountpoint: None,
     }
 }
 
@@ -77,7 +79,7 @@ fn registration_flow_and_desktop_writes_converge() {
                     "drive_dir": "/drives/legacy",
                     "relays": [],
                     "service": "drive-legacy",
-                    "mode": "mount",
+                    "mode": "fuse",
                 },
             },
         })

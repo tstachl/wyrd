@@ -334,8 +334,8 @@ pub struct MembershipObservation {
 /// Create one drive through the installed CLI (`bootstrap` without
 /// an invitation file), then re-read and probe. All arguments are
 /// owned strings; secret *paths* travel, never contents. `mode` is
-/// the platform default `vault` — any other value refuses with the
-/// installer-follow-up pointer before any process spawns.
+/// `vault` or `mount` (`mount` needs `mountpoint`); any other value
+/// refuses before any process spawns.
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProvisionCreateArgs {
@@ -345,6 +345,7 @@ pub struct ProvisionCreateArgs {
     pub identity_file: String,
     pub passphrase_file: String,
     pub mode: String,
+    pub mountpoint: Option<String>,
     pub no_service: bool,
 }
 
@@ -360,6 +361,7 @@ pub struct ProvisionJoinArgs {
     pub passphrase_file: String,
     pub invitation_file: String,
     pub mode: String,
+    pub mountpoint: Option<String>,
     pub no_service: bool,
 }
 
@@ -377,8 +379,8 @@ pub struct ProvisionLeaveArgs {
 /// Create one drive through the installed CLI (`bootstrap` without
 /// an invitation file), then re-read and probe. All arguments are
 /// owned strings; secret *paths* travel, never contents. `mode` is
-/// the platform default `vault` — any other value refuses with the
-/// installer-follow-up pointer before any process spawns.
+/// `vault` or `mount` (`mount` needs `mountpoint`); any other value
+/// refuses before any process spawns.
 #[tauri::command]
 pub async fn provision_create<R: Runtime>(
     app: AppHandle<R>,
@@ -401,6 +403,7 @@ pub async fn provision_create<R: Runtime>(
                 supervise_bin: None,
                 no_service: args.no_service,
                 mode: args.mode,
+                mountpoint: args.mountpoint.map(PathBuf::from),
             };
             let cli = state.cli_bin();
             match cli {
@@ -447,6 +450,7 @@ pub async fn provision_join<R: Runtime>(
                 supervise_bin: None,
                 no_service: args.no_service,
                 mode: args.mode,
+                mountpoint: args.mountpoint.map(PathBuf::from),
             };
             let cli = state.cli_bin();
             match cli {
@@ -507,8 +511,8 @@ pub async fn provision_leave<R: Runtime>(
 /// Reconfigure one registered drive through the installed CLI
 /// (`drive reconfigure`), then re-read and probe. All arguments are
 /// owned strings; secret *paths* travel, never contents. `mode` is
-/// the platform default `vault` — any other value refuses with the
-/// installer-follow-up pointer before any process spawns. `relays`
+/// `vault` or `mount` (`mount` needs `mountpoint`); any other value
+/// refuses before any process spawns. `relays`
 /// replaces the registered set when non-empty and keeps it when
 /// empty, so a credential-path-only reconfigure never clears relays
 /// by accident. Serialized against the per-drive flight like every
@@ -522,6 +526,7 @@ pub struct ProvisionReconfigureArgs {
     pub identity_file: String,
     pub passphrase_file: String,
     pub mode: String,
+    pub mountpoint: Option<String>,
     pub no_service: bool,
 }
 
@@ -547,6 +552,7 @@ pub async fn provision_reconfigure<R: Runtime>(
                 supervise_bin: None,
                 no_service: args.no_service,
                 mode: args.mode,
+                mountpoint: args.mountpoint.map(PathBuf::from),
             };
             let cli = state.cli_bin();
             match cli {
@@ -859,6 +865,7 @@ mod tests {
             relays: vec!["wss://relay.example".to_string()],
             service: "drive-alpha".to_string(),
             mode: "vault".to_string(),
+            mountpoint: None,
             availability: DriveAvailability::Available,
         };
         assert_eq!(
@@ -869,6 +876,7 @@ mod tests {
                 "relays": ["wss://relay.example"],
                 "service": "drive-alpha",
                 "mode": "vault",
+                "mountpoint": null,
                 "availability": {"state": "available"},
             })
         );
@@ -890,6 +898,7 @@ mod tests {
                     "relays": ["wss://relay.example"],
                     "service": "drive-alpha",
                     "mode": "vault",
+                    "mountpoint": null,
                     "availability": {"state": "available"},
                 }],
                 "skipped": ["entry \"bad\": key \"bad\" does not match entry name \"other\""],

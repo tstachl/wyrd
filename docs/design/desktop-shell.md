@@ -150,7 +150,8 @@ plane. Three pieces, all precedented in-tree:
   the process lifecycle: enablement is startup-at-login, and a UI
   that exits or crashes never takes the owner down with it, because
   launchd/systemd — not the UI — is the parent. The service runs
-  `wyrd vault` with the registration's credential files (never a
+  `wyrd vault` or `wyrd mount` (at its registered mountpoint) with
+  the registration's credential files (never a
   bare env-keyed binary: the supervised owner must load secrets in
   service context, and only the file-credential form works there),
   routed through the `wyrd-supervise` wrapper from `nix/drive`

@@ -70,12 +70,14 @@ pub struct ProvisionRequest {
     /// `false` (default) installs, enables, and starts the per-drive
     /// service; `true` registers only.
     pub no_service: bool,
-    /// Service mode display string. The platform default is `vault`;
-    /// any other value is refused with a pointer at the installer
-    /// follow-up (registry-managed mount mode is not provisionable
-    /// through this adapter yet — mirrored from the registry
-    /// validator, which skips non-vault entries loudly).
+    /// Service mode display string: `vault` serves headless, `mount`
+    /// serves the FUSE projection at `mountpoint`. Any other value
+    /// refuses before any process spawns — the adapter never
+    /// provisions a service the registry reader would skip.
     pub mode: String,
+    /// FUSE mountpoint. Required in `mount` mode, refused in `vault`
+    /// mode.
+    pub mountpoint: Option<PathBuf>,
 }
 
 /// Leave the drive: end this device's participation where the trust
@@ -96,11 +98,11 @@ pub struct LeaveRequest {
 /// Reconfigure a registered drive's supervision in place: stop and
 /// clear the old service definition, rewrite the registry entry,
 /// reinstall and restart when managed, and verify the socket.
-/// `relays` replaces the registered set when non-empty and keeps it
-/// when empty (a credential-path-only reconfigure never clears
-/// relays by accident); `mode` is the platform default `vault` and
-/// any other value refuses with the installer-follow-up pointer
-/// before any process spawns, like creation.
+/// `relays` replaces the registered set when non-empty and keeps the
+/// fresh set when empty (a credential-path-only reconfigure never
+/// clears relays by accident); `mode` is `vault` or `mount` (`mount`
+/// needs `mountpoint`), and any other value refuses before any
+/// process spawns, like creation.
 #[derive(Debug, Clone)]
 pub struct ReconfigureRequest {
     pub drive_dir: PathBuf,
@@ -118,12 +120,13 @@ pub struct ReconfigureRequest {
     /// entry, and reinstalls, enables, and restarts; `true`
     /// rewrites without installing any OS service.
     pub no_service: bool,
-    /// Service mode display string. The platform default is `vault`;
-    /// any other value is refused with a pointer at the installer
-    /// follow-up (registry-managed mount mode is not provisionable
-    /// through this adapter yet — mirrored from the registry
-    /// validator, which skips non-vault entries loudly).
+    /// Service mode display string: `vault` serves headless, `mount`
+    /// serves the FUSE projection at `mountpoint`. Any other value
+    /// refuses before any process spawns.
     pub mode: String,
+    /// FUSE mountpoint. Required in `mount` mode, refused in `vault`
+    /// mode.
+    pub mountpoint: Option<PathBuf>,
 }
 
 /// The adapter's verdict on the *operation*. Never lifecycle state:
@@ -250,16 +253,39 @@ pub fn check_cli_version(cli_bin: &Path, timeout: Duration) -> Result<PathBuf, P
 /// separate argv element, never shell-constructed. Mirrors
 /// `crates/wyrd-cli/src/args.rs` (`Command::Bootstrap`).
 pub fn bootstrap_argv(request: &ProvisionRequest) -> Result<Vec<OsString>, String> {
-    if request.mode != "vault" {
-        return Err(format!(
-            "unknown service mode {:?}: only `vault` is provisionable through this adapter; registry-managed mount mode travels with the installer follow-up",
-            request.mode
-        ));
+    match request.mode.as_str() {
+        "vault" => {
+            if request.mountpoint.is_some() {
+                return Err(
+                    "vault mode carries no mountpoint: remove the mountpoint for a vault entry"
+                        .to_string(),
+                );
+            }
+        }
+        "mount" => {
+            if request.mountpoint.is_none() {
+                return Err(
+                    "mount mode needs a mountpoint: pass a mountpoint with an absolute path"
+                        .to_string(),
+                );
+            }
+        }
+        other => {
+            return Err(format!(
+                "unknown service mode {other:?}: this build manages `vault` and `mount`"
+            ));
+        }
     }
     let mut argv: Vec<OsString> = vec!["bootstrap".into()];
     argv.push("--name".into());
     argv.push(request.name.clone().into());
     argv.push(request.drive_dir.as_os_str().to_owned());
+    argv.push("--mode".into());
+    argv.push(request.mode.clone().into());
+    if let Some(mountpoint) = &request.mountpoint {
+        argv.push("--mountpoint".into());
+        argv.push(mountpoint.as_os_str().to_owned());
+    }
     for relay in &request.relays {
         argv.push("--relay".into());
         argv.push(relay.into());
@@ -314,11 +340,28 @@ pub fn leave_argv(request: &LeaveRequest) -> Vec<OsString> {
 /// Empty `relays` emit no `--relay` flags (the CLI keeps the
 /// registered set); non-empty relays replace it.
 pub fn reconfigure_argv(request: &ReconfigureRequest) -> Result<Vec<OsString>, String> {
-    if request.mode != "vault" {
-        return Err(format!(
-            "unknown service mode {:?}: only `vault` reconfigures through this adapter; registry-managed mount mode travels with the installer follow-up",
-            request.mode
-        ));
+    match request.mode.as_str() {
+        "vault" => {
+            if request.mountpoint.is_some() {
+                return Err(
+                    "vault mode carries no mountpoint: remove the mountpoint for a vault entry"
+                        .to_string(),
+                );
+            }
+        }
+        "mount" => {
+            if request.mountpoint.is_none() {
+                return Err(
+                    "mount mode needs a mountpoint: pass a mountpoint with an absolute path"
+                        .to_string(),
+                );
+            }
+        }
+        other => {
+            return Err(format!(
+                "unknown service mode {other:?}: this build manages `vault` and `mount`"
+            ));
+        }
     }
     let mut argv: Vec<OsString> = vec![
         "drive".into(),
@@ -327,6 +370,10 @@ pub fn reconfigure_argv(request: &ReconfigureRequest) -> Result<Vec<OsString>, S
     ];
     argv.push("--mode".into());
     argv.push(request.mode.clone().into());
+    if let Some(mountpoint) = &request.mountpoint {
+        argv.push("--mountpoint".into());
+        argv.push(mountpoint.as_os_str().to_owned());
+    }
     for relay in &request.relays {
         argv.push("--relay".into());
         argv.push(relay.into());
@@ -624,6 +671,7 @@ mod tests {
             supervise_bin: None,
             no_service: false,
             mode: "vault".to_string(),
+            mountpoint: None,
         }
     }
 
@@ -644,6 +692,8 @@ mod tests {
                 "--name",
                 "alpha",
                 "/drives/alpha",
+                "--mode",
+                "vault",
                 "--relay",
                 "wss://relay.example",
                 "--identity-file",
@@ -679,18 +729,52 @@ mod tests {
         assert!(rendered.contains(&"--registry".to_string()));
     }
 
-    /// Non-vault modes refuse before any process spawns: the adapter
-    /// never provisions a service the registry reader would skip.
+    /// Mount argv carries `--mode mount` plus the mountpoint pair:
+    /// the FUSE projection the managed mount mode serves.
     #[test]
-    fn non_vault_mode_refuses_with_the_installer_pointer() {
+    fn mount_argv_carries_the_mode_and_mountpoint_pairs() {
         let mut request = create_request();
         request.mode = "mount".to_string();
+        request.mountpoint = Some(PathBuf::from("/mnt/alpha"));
+        let argv = bootstrap_argv(&request).unwrap();
+        let rendered: Vec<String> = argv
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert!(rendered.contains(&"--mode".to_string()));
+        assert!(rendered.contains(&"mount".to_string()));
+        assert!(rendered.contains(&"--mountpoint".to_string()));
+        assert!(rendered.contains(&"/mnt/alpha".to_string()));
+    }
+
+    /// Mount without a mountpoint refuses before any process spawns,
+    /// like vault carrying one: the pair travels together or not at
+    /// all.
+    #[test]
+    fn mount_without_a_mountpoint_refuses_before_spawning() {
+        let mut request = create_request();
+        request.mode = "mount".to_string();
+        assert!(request.mountpoint.is_none());
+        let reason = bootstrap_argv(&request).unwrap_err();
+        assert!(reason.contains("needs a mountpoint"), "{reason}");
+        let mut stray = create_request();
+        stray.mountpoint = Some(PathBuf::from("/mnt/stray"));
+        let reason = bootstrap_argv(&stray).unwrap_err();
+        assert!(reason.contains("carries no mountpoint"), "{reason}");
+    }
+
+    /// Unknown modes refuse before any process spawns: the adapter
+    /// never provisions a service the registry reader would skip.
+    #[test]
+    fn unknown_mode_refuses_before_spawning() {
+        let mut request = create_request();
+        request.mode = "fuse".to_string();
         match bootstrap_argv(&request) {
             Err(reason) => assert!(
-                reason.contains("installer follow-up"),
-                "reason points at the follow-up: {reason}"
+                reason.contains("unknown service mode"),
+                "reason names the unknown mode: {reason}"
             ),
-            Ok(_) => panic!("a mount mode must refuse"),
+            Ok(_) => panic!("an unknown mode must refuse"),
         }
     }
 
@@ -1060,6 +1144,7 @@ mod tests {
             supervise_bin: None,
             no_service: false,
             mode: "vault".to_string(),
+            mountpoint: None,
         }
     }
 
@@ -1117,18 +1202,36 @@ mod tests {
         assert!(rendered.contains(&"--no-service".to_string()));
     }
 
-    /// Non-vault modes refuse before any process spawns: the adapter
-    /// never reconfigures into a mode the registry reader skips.
+    /// Mount reconfigure argv carries `--mode mount` plus the
+    /// mountpoint pair; unknown modes refuse before any process
+    /// spawns — the adapter never reconfigures into a mode the
+    /// registry reader skips.
     #[test]
-    fn non_vault_reconfigure_refuses_with_the_installer_pointer() {
+    fn mount_reconfigure_carries_the_mode_and_mountpoint_pairs() {
         let mut request = reconfigure_request();
         request.mode = "mount".to_string();
+        request.mountpoint = Some(PathBuf::from("/mnt/alpha"));
+        let argv = reconfigure_argv(&request).unwrap();
+        let rendered: Vec<String> = argv
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert!(rendered.contains(&"--mode".to_string()));
+        assert!(rendered.contains(&"mount".to_string()));
+        assert!(rendered.contains(&"--mountpoint".to_string()));
+        assert!(rendered.contains(&"/mnt/alpha".to_string()));
+    }
+
+    #[test]
+    fn unknown_reconfigure_mode_refuses_before_spawning() {
+        let mut request = reconfigure_request();
+        request.mode = "fuse".to_string();
         match reconfigure_argv(&request) {
             Err(reason) => assert!(
-                reason.contains("installer follow-up"),
-                "reason points at the follow-up: {reason}"
+                reason.contains("unknown service mode"),
+                "reason names the unknown mode: {reason}"
             ),
-            Ok(_) => panic!("a mount reconfigure must refuse"),
+            Ok(_) => panic!("an unknown reconfigure must refuse"),
         }
     }
 

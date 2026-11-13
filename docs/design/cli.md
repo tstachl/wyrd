@@ -23,7 +23,7 @@ wyrd [--config <path>] mount [--relay <url>...] [--verbose] [--interval <secs>] 
 wyrd [--config <path>] export [--identity-file <path>] [--passphrase-file <path>] <drive_dir> <out_dir>
 wyrd [--config <path>] member [--identity-file <path>] [--passphrase-file <path>] <drive_dir> (list | log | status | remove <device> [--yes] | leave [--yes] | rotate | set-owner <device> | invite <device> <encryption-key> <out> [--reader] | reissue <device> <out>)
 wyrd [--config <path>] device [--identity-file <path>] [--passphrase-file <path>] <drive_dir> (id | keys | pairing-request <out> | join <invitation>)
-wyrd [--config <path>] drive [--identity-file <path>] [--passphrase-file <path>] <drive_dir> (delete [--yes] | reconfigure --mode <mode> [--relay <url>...] [--registry <path>] [--owner-bin <path>] [--supervise-bin <path>] [--no-service])
+wyrd [--config <path>] drive [--identity-file <path>] [--passphrase-file <path>] <drive_dir> (delete [--yes] | reconfigure --mode <mode> [--mountpoint <path>] [--relay <url>...] [--registry <path>] [--owner-bin <path>] [--supervise-bin <path>] [--no-service])
 wyrd [--config <path>] sync [--relay <url>...] [--identity-file <path>] [--passphrase-file <path>] <drive_dir> (status | now)
 wyrd [--config <path>] vault [--relay <url>...] [--log-file <path>] [--identity-file <path>] [--passphrase-file <path>] <drive_dir> [start | status]
 wyrd [--config <path>] policy <drive_dir> \
@@ -443,12 +443,11 @@ Validate, resolve, open, stop and clear, install, rewrite, restart,
 verify — in that order — over the drive's registry entry, resolved
 by this drive's directory (exact match; zero matches and duplicates
 both refuse without writing). The name, service label, and directory
-never change: identity never reconfigures. Only `vault`
-reconfigures today; any other mode refuses with the
-installer-follow-up pointer before anything stops, like
-provisioning — registry-managed mount mode, its service template,
-and desktop registry-write authority still travel with that
-follow-up. With `--relay` flags the relay set is replaced; without
+never change: identity never reconfigures. `vault` serves headless,
+`mount` serves the FUSE projection at `--mountpoint` (required in
+`mount` mode, refused in `vault` mode); any other mode refuses with
+the unknown-mode pointer before anything stops, like provisioning.
+With `--relay` flags the relay set is replaced; without
 them the registered set is kept, so a credential-path-only
 reconfigure never clears relays by accident. Relay values validate
 before anything stops, and a relay-less managed service is refused
@@ -484,7 +483,9 @@ One operator at a time: concurrent direct CLI invocations can
 interleave past the store open (the desktop flight serializes only
 its own calls), so serialize reconfigurations against any other
 lifecycle operation on the drive — the last writer wins the entry
-while each rewrite stays atomic. The desktop drives this surface
+whole, never a torn mix (the rewrite re-resolves under the
+registry lock and applies only its transformation to the fresh
+entry), while each rewrite stays atomic. The desktop drives this surface
 through its constrained adapter (structured argv, secret paths only,
 version check first, exit codes plus independent registry, socket,
 and membership re-observation) and never writes the registry itself.

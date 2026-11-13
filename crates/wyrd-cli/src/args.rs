@@ -83,6 +83,14 @@ pub(crate) enum Command {
         /// Directory holding (or to hold) the drive's keystore and
         /// object store.
         drive_dir: PathBuf,
+        /// Target service mode: `vault` serves headless, `mount`
+        /// serves the FUSE projection at `--mountpoint`.
+        #[arg(long, value_name = "MODE", default_value = "vault")]
+        mode: String,
+        /// FUSE mountpoint. Required in `mount` mode, refused in
+        /// `vault` mode.
+        #[arg(long, value_name = "PATH")]
+        mountpoint: Option<PathBuf>,
         #[command(flatten)]
         relays: RelayArgs,
         #[command(flatten)]
@@ -96,7 +104,7 @@ pub(crate) enum Command {
         registry: Option<PathBuf>,
         /// Owner binary for the service definition elsewhere than
         /// the `wyrd` beside this command. The service runs
-        /// `wyrd vault` with the same credential files.
+        /// `wyrd vault` or `wyrd mount` with the same credential files.
         #[arg(long, value_name = "PATH")]
         owner_bin: Option<PathBuf>,
         /// `wyrd-supervise` wrapper for the service definition
@@ -551,20 +559,24 @@ pub(crate) enum DriveAction {
     /// stop and clear the old service definition, rewrite the
     /// registry entry, reinstall and restart when managed, and verify
     /// the owner socket. The entry is resolved by this drive's
-    /// directory (exact match, never a guess across duplicates). Only
-    /// `vault` reconfigures today — any other mode refuses with the
-    /// installer-follow-up pointer before anything stops, like
-    /// provisioning. With `--relay` flags the relay set is replaced;
-    /// without them the registered set is kept, so a
-    /// credential-path-only reconfigure never clears relays by
-    /// accident. A live owner holding the drive refuses with the
-    /// store lock: stop the service first, the same rule every other
-    /// offline writer states.
+    /// directory (exact match, never a guess across duplicates).
+    /// `vault` serves headless, `mount` serves the FUSE projection at
+    /// `--mountpoint`; any other mode refuses with the unknown-mode
+    /// pointer before anything stops, like provisioning. With
+    /// `--relay` flags the relay set is replaced; without them the
+    /// registered set is kept, so a credential-path-only reconfigure
+    /// never clears relays by accident. A live owner holding the drive
+    /// refuses with the store lock: stop the service first, the same
+    /// rule every other offline writer states.
     Reconfigure {
-        /// Target service mode: `vault` today. Any other value
-        /// refuses with the installer-follow-up pointer.
+        /// Target service mode: `vault` or `mount`. Any other value
+        /// refuses with the unknown-mode pointer.
         #[arg(long, value_name = "MODE")]
         mode: String,
+        /// FUSE mountpoint. Required in `mount` mode, refused in
+        /// `vault` mode.
+        #[arg(long, value_name = "PATH")]
+        mountpoint: Option<PathBuf>,
         /// Control-plane relay; repeatable. When at least one is
         /// given the registered set is replaced; with none given the
         /// registered set is kept.
@@ -575,7 +587,7 @@ pub(crate) enum DriveAction {
         registry: Option<PathBuf>,
         /// Owner binary for the service definition elsewhere than
         /// the `wyrd` beside this command. The service runs
-        /// `wyrd vault` with the same credential files.
+        /// `wyrd vault` or `wyrd mount` with the same credential files.
         #[arg(long, value_name = "PATH")]
         owner_bin: Option<PathBuf>,
         /// `wyrd-supervise` wrapper for the service definition
