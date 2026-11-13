@@ -320,7 +320,7 @@ collapsed boolean, never a guess.
   owner-instance identity, one uid check, one shared pool of at
   most 16 connections across both accept loops). The composer
   entry point checks the configured drive against the served
-  drive before anything binds (both `wyrd vault` and `wyrd
+  drive before anything binds (both `wyrd owner` and `wyrd
   mount`); a mismatch refuses the run. A live endpoint at the
   group path is never unlinked (`AddrInUse`, primary unbound,
   run refused); a dead entry reclaims. Dev bootstrap only, via
@@ -349,8 +349,8 @@ collapsed boolean, never a guess.
 ## Stage 2 live proof (manual, macOS only)
 
 Observed 2026-11-12 on the development machine (same team
-identity line as Stage 1): a fresh `wyrd init` drive served by
-`wyrd vault` with the dev bootstrap
+identity line as Stage 1): a fresh `wyrd drive … init` drive served by
+`wyrd owner` with the dev bootstrap
 (`WYRD_FILEPROVIDER_GROUP_CONTAINER` plus
 `WYRD_FILEPROVIDER_DRIVE_ID`, both set).
 

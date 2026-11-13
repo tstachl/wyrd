@@ -997,8 +997,8 @@ fn update_run_commit_under_restart_supervises_the_new_binary() {
 }
 
 #[test]
-fn vault_command_names_the_hand_run_argv() {
-    let command = vault_command(
+fn owner_command_names_the_hand_run_argv() {
+    let command = owner_command(
         Path::new("/opt/wyrd"),
         Path::new("/srv/drive"),
         &["ws://localhost:9".to_owned()],
@@ -1013,7 +1013,7 @@ fn vault_command_names_the_hand_run_argv() {
     assert_eq!(
         args,
         vec![
-            "vault",
+            "owner",
             "/srv/drive",
             "--relay",
             "ws://localhost:9",
@@ -1021,6 +1021,7 @@ fn vault_command_names_the_hand_run_argv() {
             "/srv/id",
             "--passphrase-file",
             "/srv/pp",
+            "start",
         ]
     );
 }

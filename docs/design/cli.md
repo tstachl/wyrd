@@ -7,44 +7,118 @@ itself — every subcommand opens the drive through `WyrdNode` and the
 behavior lives in `wyrd-core` / `wyrd-daemon`. This document mirrors
 the `crates/wyrd-cli/src` module tree (`main.rs` dispatches; argument
 parsing in `args.rs`, one module per command family in `commands/`
-(`device`, `drive`, `export`, `member`, `mount`, `policy`, `snapshot`,
-`sync`, `vault`, declared in `commands.rs`), credentials in `credentials.rs`, drive
-config in `drive_config.rs`, the live-node composer host in `composer.rs`,
-diagnostics in `logging.rs`, posture in `posture.rs`, probes in
-`probes.rs`, and updates in `update.rs`); when they disagree, the code wins and
-this document is stale.
+(`device`, `drive`, `export`, `materialization`, `member`, `mount`,
+`owner`, `snapshot`, `sync`, declared in `commands.rs`), credentials in
+`credentials.rs`, drive config in `drive_config.rs`, the live-node
+composer host in `composer.rs`, diagnostics in `logging.rs`, posture in
+`posture.rs`, probes in `probes.rs`, and updates in `update.rs`);
+when they disagree, the code wins and this document is stale.
+
+## Normative CLI contract
+
+Top-level commands are stable user concepts, not crates, processes,
+or subsystems. Subcommands are operations on those concepts. No
+duplicate vocabulary: `vault` names the materialization role and the
+headless service mode, never the owner process.
+
+### Owner runtime versus Owner membership
+
+The owner is the local drive-owner runtime responsible for durable
+drive operations. It is not a membership role, nor proof the operator
+is a drive owner. Starting, stopping, and inspecting the local owner
+runtime are local operational actions. Authorization of drive
+mutations stays with the drive-owner interface and its authority
+rules. A device or operator need not hold Owner membership to start
+or inspect the local runtime; `owner start` grants no membership
+authority and `owner status` requires none.
+
+### Drive selection
+
+Every drive-scoped invocation names its drive with the `<drive_dir>`
+positional: exactly one drive per invocation, never implicit, never
+all drives. There is no drive discovery and no ambiguity state — a
+missing or unconfigured directory fails with the existing
+not-a-drive error, never with a guess across drives.
+
+`--config PATH` overrides that drive's configuration file
+(`default.toml`): relays and credential paths when the flags are
+absent; the flags always win when both are given. An invalid
+explicit path is a configuration error with no fallback. `--config`
+never selects across drives; it names one file for this invocation.
+Parent flags (credentials, relays, log file) precede the
+subcommand; subcommand flags (names, modes, paths) follow it.
+
+### Command tree and migration
+
+```
+wyrd drive <dir> [--identity-file …] [--passphrase-file …]
+    (init | bootstrap --name … [--mode …] … | delete [--yes] | reconfigure …)
+wyrd device <dir> (id | keys | pairing-request <out> | join <invitation>)
+wyrd member <dir> (list | log | status | invite | reissue | remove | leave
+    | rotate | set-owner | resolve)
+wyrd owner <dir> [--relay …] [--identity-file …] [--passphrase-file …]
+    [--log-file …] [start [--retained-quota …] | status]
+wyrd sync <dir> (status | now [--offline | --serve …])
+wyrd snapshot <dir> (heads | diverged | merge … | recover …)
+wyrd materialization <dir>
+    (status | budgets | role (set | status) | pin | unpin | evict)
+wyrd mount <dir> <mountpoint> … | wyrd export <dir> <out> | wyrd update …
+```
+
+`drive init` creates identity, root custody, genesis membership;
+`drive bootstrap` provisions and hands off to OS supervision. `device
+join` is onboarding, distinct from member admission. `snapshot merge`
+and `snapshot recover` stay separate: different failure and
+authority implications. The `vault` process is now `owner start`;
+`vault` remains the materialization role value and the headless
+service-mode value only.
+
+| Previous surface | New surface |
+| --- | --- |
+| `init` | `drive … init` |
+| `bootstrap` | `drive … bootstrap` |
+| `drive delete/reconfigure` | `drive … delete/reconfigure` (unchanged shape) |
+| `vault start` | `owner … start` (default when omitted) |
+| `vault status` | `owner … status` |
+| `sync status` | `sync … status` (unchanged) |
+| `sync` execution | `sync … now` (unchanged) |
+| `policy` | `materialization` |
+
+Deliberate alpha break with an explicit old-to-new map and command
+examples (this section); no permanent `vault` alias. Behavior is
+preserved; only spelling and hierarchy move.
 
 ## Subcommands
 
 ```
-wyrd [--config <path>] init [--identity-file <path>] [--passphrase-file <path>] <drive_dir>
+wyrd [--config <path>] drive [--identity-file <path>] [--passphrase-file <path>] <drive_dir>
+    (init | bootstrap --name <name> [--mode <mode>] [--mountpoint <path>] [--relay <url>...] [--invitation-file <path>] [--registry <path>] [--owner-bin <path>] [--supervise-bin <path>] [--no-service] | delete [--yes] | reconfigure --mode <mode> [--mountpoint <path>] [--relay <url>...] [--registry <path>] [--owner-bin <path>] [--supervise-bin <path>] [--no-service])
 wyrd [--config <path>] mount [--relay <url>...] [--verbose] [--interval <secs>] \
     [--identity-file <path>] [--passphrase-file <path>] <drive_dir> <mountpoint>
 wyrd [--config <path>] export [--identity-file <path>] [--passphrase-file <path>] <drive_dir> <out_dir>
 wyrd [--config <path>] member [--identity-file <path>] [--passphrase-file <path>] <drive_dir> (list | log | status | remove <device> [--yes] | leave [--yes] | rotate | set-owner <device> | invite <device> <encryption-key> <out> [--reader] | reissue <device> <out>)
 wyrd [--config <path>] device [--identity-file <path>] [--passphrase-file <path>] <drive_dir> (id | keys | pairing-request <out> | join <invitation>)
-wyrd [--config <path>] drive [--identity-file <path>] [--passphrase-file <path>] <drive_dir> (delete [--yes] | reconfigure --mode <mode> [--mountpoint <path>] [--relay <url>...] [--registry <path>] [--owner-bin <path>] [--supervise-bin <path>] [--no-service])
 wyrd [--config <path>] sync [--relay <url>...] [--identity-file <path>] [--passphrase-file <path>] <drive_dir> (status | now)
-wyrd [--config <path>] vault [--relay <url>...] [--log-file <path>] [--identity-file <path>] [--passphrase-file <path>] <drive_dir> [start | status]
-wyrd [--config <path>] policy <drive_dir> \
+wyrd [--config <path>] owner [--relay <url>...] [--log-file <path>] [--identity-file <path>] [--passphrase-file <path>] <drive_dir> [start [--retained-quota <bytes>] | status]
+wyrd [--config <path>] materialization <drive_dir> \
     (status [path] creds | budgets creds | role (set <mirror|vault> [--yes] | status creds) | pin <path> creds | unpin <path> creds | evict <path> creds)
 wyrd [--config <path>] snapshot [--identity-file <path>] [--passphrase-file <path>] <drive_dir> \
     (heads | diverged [--budget <N>] | merge [--head <id>...] [--default @N] [--take path=@N]... [--drop path]... [--dry-run] | recover --from <id> [--take path]... [--all] [--content <id>]... [--dry-run])
 wyrd [--config <path>] update [--relay <url>...] [--restart] [--identity-file <path>] [--passphrase-file <path>] <drive_dir> <archive>
   where creds = [--identity-file <path>] [--passphrase-file <path>]: credential flags ride each
-  policy action, never the parent — `policy role set` alone takes neither
+  materialization action, never the parent — `materialization role set` alone takes neither
 ```
 
 `--identity-file` and `--passphrase-file` are optional when the
 drive's configuration file names them (see "Drive configuration
 file" below); the flags always win when both are given.
 
-### `init` — create a drive
+### `drive init` — create a drive
 
 Writes the drive's keystore and object store under `<drive_dir>`:
 identity, root custody, genesis membership. Idempotent only in the
 sense that re-running refuses — init never merges into an existing
-drive.
+drive. Parent credential flags precede the subcommand.
 
 ### `mount` — serve a live read-write projection
 
@@ -125,9 +199,9 @@ any format break.
 
 ### `member` — administer drive membership
 
-Offline commands (`member`, `snapshot`, `policy`, `drive`) are transient
+Offline commands (`member`, `snapshot`, `materialization`, `drive`) are transient
 owners: each opens the keystore and takes the exclusive store lock,
-so a long-lived owner holding the drive — `wyrd vault`, `wyrd mount`,
+so a long-lived owner holding the drive — `wyrd owner`, `wyrd mount`,
 or a desktop service — refuses them with `StoreLocked`. Stop the
 service first and retry, the same rule `update` already states; the
 lock error names the holding drive, never a retry.
@@ -410,7 +484,7 @@ wyrd member --identity-file ... --passphrase-file ... <owner-dir> invite <device
 wyrd device --identity-file ... --passphrase-file ... <newcomer-dir> join invitation
 ```
 
-### `drive` — delete this drive's local copy
+### `drive` — local drive lifecycle: create, provision, delete, reconfigure
 
 Local forget plus your own removal, in that order: authors
 `Remove(self)` through the owner, then removes the local drive
@@ -431,7 +505,7 @@ cryptographic erasure, and v0 defines no key-erasure primitive.
 
 Like the other offline writers, `drive delete` is a transient owner:
 it opens the keystore and takes the exclusive store lock, so a
-long-lived owner holding the drive — `wyrd vault`, `wyrd mount`, or a
+long-lived owner holding the drive — `wyrd owner`, `wyrd mount`, or a
 desktop service — refuses it with `StoreLocked`. Stop the service
 first and retry. A failed directory removal after the commit reports
 loudly with the removal already standing: remove the directory by
@@ -681,33 +755,33 @@ tears down immediately with its own error instead of serving
 half-fetched state. `--serve` cannot be combined with `--offline`:
 with no relay nothing publishes the route, so the endpoint would
 serve content nothing can discover. The persistent lifecycle is
-`wyrd vault` (below); `--serve` is the bridge, and it performs no
+`wyrd owner` (below); `--serve` is the bridge, and it performs no
 further intake or fetch passes while parked.
 
-### `vault` — a headless vault process, no mount
+### `owner` — the local drive-owner runtime, no mount
 
 The mount's live loop and serving surface with no presentation
 session: the persistent process. `sync now` stays the bounded
-one-shot drain; `vault` never stops syncing until SIGINT/SIGTERM.
-Needs at least one `--relay` — a relay-less vault serves routes
+one-shot drain; `owner` never stops syncing until SIGINT/SIGTERM.
+Needs at least one `--relay` — a relay-less owner serves routes
 nothing can discover and never converges, so the command refuses
 rather than idle forever (there is no `--offline`: an offline
-vault is a process that idles, not a run with a verdict).
+owner is a process that idles, not a run with a verdict).
 
 ```text
-vault
+owner
     = the mount's composition minus the session: open the serving
       endpoint, flush, announce the route, gate every pass on
       mirror readiness, run the live loop under the same budgets
     = reports readiness once, after the first routed pass, as
-      `vault ready: serving <id>` on stderr — the first line is a
+      `owner ready: serving <id>` on stderr — the first line is a
       true one: not before the flush, not before the address
-    = periodic `vault posture` lines while it runs (passes, errors
+    = periodic `owner posture` lines while it runs (passes, errors
       retried, sends, uptime): proof of life, never a health claim
     = failures with the mount's reporting shape
     = one posture sidecar per drive at `<drive_dir>/vault.posture`
       (see `status` below): published atomically with fsync on every
-      loop event, best-effort, never failing the vault
+      loop event, best-effort, never failing the owner
     = SIGTERM exits 0 when the loop stopped clean and every
       transport closed; a transport close that times out exits
       non-zero, after everything else still shut down. Exit 0 is
@@ -716,35 +790,35 @@ vault
       next run — TERM never loses one, but it does not wait for one.
 ```
 
-What the vault states is what the device is *doing* — residency
+What the owner states is what the device is *doing* — residency
 policy, quota, effective budgets, all already readable — never what
 it *guarantees*: retention promises wait for the DG-4 decision, and
 the help text makes no retention claim. No liveness handle, no
 daemonization: supervision owns the pid (`systemd`/`launchd` track
-and restart it). One vault or mount per drive, enforced by the
+and restart it). One owner or mount per drive, enforced by the
 kernel-held store lock: a second opener against a held drive exits
 78 (`EX_CONFIG`, the drive-already-owned code a supervisor must not
 retry), naming the drive (`another wyrd process holds ...: only
-one vault or mount per drive`). Every other failure exits 2; a
+one owner or mount per drive`). Every other failure exits 2; a
 clean stop exits 0. The lock dies with its process, so
 a crash leaves no stale record — but a held lock proves only
 occupancy, never health or convergence. A restart mints a new
-endpoint, so the vault re-announces obligations discharged against
+endpoint, so the owner re-announces obligations discharged against
 an older route for the current head's reachable closure under the
 live route (same route resends nothing, out-of-scope history stays
 discharged); the replacement serves the closure from the retained
 store, so a late peer recovers history, not just the head. Relay
 acceptance is not peer acquisition.
 
-`wyrd vault <drive> status` queries the process without opening
-the store, so it works while the vault holds the lock. Two
+`wyrd owner <drive> status` queries the process without opening
+the store, so it works while the owner holds the lock. Two
 strictly separated sections: process posture from the sidecar
 (instance, serving id, startup/ready timestamps, last-pass
 timestamp and verdict, run counters, posture timestamp with its
-age) and durable state (the vault-position projection — counts
+age) and durable state (the owner-position projection — counts
 only, never the member columns `sync status` prints — when the
 drive is stopped; unavailable — never guessed — while the
-vault runs). Fresh means recent, stale means last-recorded, and
+owner runs). Fresh means recent, stale means last-recorded, and
 both say liveness unverified: a process can die immediately after
 writing, and a fresh posture is not convergence. The staleness
 threshold is three posture intervals (180s), part of the contract.
@@ -808,7 +882,7 @@ The blake3 digest names the artifact in reports; it is an
 identity, never trust — a locally supplied archive is verified
 structurally, and integrity stays separate from compatibility.
 
-### `policy` — local materialization policy
+### `materialization` — local materialization
 
 One namespace for device-local materialization policy: what this
 device intends to retain (`pin`/`unpin`/`evict`), what it reports
@@ -836,29 +910,29 @@ releases, and evict changes intent without deleting bytes. None of
 them silently reinterprets another — a pinned subtree refuses
 eviction, and the effective `vault` role refuses eviction outright.
 
-- `policy pin <path>`: promise every byte under `path`. Offline,
+- `materialization pin <path>`: promise every byte under `path`. Offline,
   idempotent, never fetches — the next sync or mount fetches what
   the policy now requires. Policy is per content identity, so a
   chunk shared with files outside the subtree carries the promise
   there too.
-- `policy unpin <path>`: release the promise (pinned returns to
+- `materialization unpin <path>`: release the promise (pinned returns to
   cacheable policy). Never deletes bytes, never refuses. Promises
   are per content identity, not per path: unpinning a subtree
   releases shared chunks other pinned paths also relied on.
-- `policy evict <path>`: return unpinned content to `REMOTE_ONLY`
+- `materialization evict <path>`: return unpinned content to `REMOTE_ONLY`
   policy. Refuses the whole subtree while any of it is pinned
-  (`policy unpin` first) — a partial evict would let overlapping
+  (`materialization unpin` first) — a partial evict would let overlapping
   paths silently narrow a promise. Intent only: no bytes deleted,
   files that stay fully local keep reading. Refuses under an
   effective `vault` role, which promises no pruning.
-- `policy status [path]`: one row per reachable file with its
+- `materialization status [path]`: one row per reachable file with its
   policy/presence pair, plus quadrant totals, under the role
   posture the census was measured against — one report answers
   what is retained, what exists, and against which baseline.
   Reachable content only — the object store as a whole is never
   scanned. One census, one projection: the posture block and the
   table render from a single read.
-- `policy budgets`: device totals over reachable content plus the
+- `materialization budgets`: device totals over reachable content plus the
   retention and fetch budgets this command ran with. Facts are per
   identity, not per path, so pinned paths are not listed. The budgets
   header says "offline defaults": the quota named here is this
@@ -882,7 +956,7 @@ eviction, and the effective `vault` role refuses eviction outright.
   them. Every label is a row of the DG-5 wording table in
   `docs/design/storage-growth.md`, enforced by
   `every_storage_figure_maps_to_a_dg5_row`.
-- `policy role set <mirror|vault>`: widen or narrow the device-local
+- `materialization role set <mirror|vault>`: widen or narrow the device-local
   materialization role. What this device intends to be: `mirror`
   (prunable participant) or `vault` (replicates every object, never
   prunes). A role is a retention posture, never replicated state —
@@ -895,9 +969,9 @@ eviction, and the effective `vault` role refuses eviction outright.
   until withdrawal completes, and completion is reported, never
   assumed. Setting reads no key, so it takes neither credential
   flag.
-- `policy role status`: configured role, transition, effective
+- `materialization role status`: configured role, transition, effective
   posture, and the quadrant totals to back it — the same census
-  `policy status` reads, because there is one effective policy,
+  `materialization status` reads, because there is one effective policy,
   not two. While withdrawing it names the outstanding count: own
   snapshots still routing this device at a peer (zero means
   serving is still draining).
@@ -909,14 +983,14 @@ effectively retained, and the policy reports show those effective
 numbers. A device with no role file reports `mirror` explicitly:
 the default names current behavior, never a silent choice.
 
-Conflicted paths refuse every mutating policy command: resolve
+Conflicted paths refuse every mutating materialization command: resolve
 first, or address one version through the existing `path@N`
-grammar. `policy status` instead renders them as `CONFLICT` rows —
+grammar. `materialization status` instead renders them as `CONFLICT` rows —
 a read-only report survives the ordinary multi-head state. One
 invocation walks one generation — heads install once up front, so
 a concurrent local write cannot mix generations into it. Policy
 commands need the drive un-mounted regardless: the durable store
-takes an exclusive lock, so a policy command against a mounted
+takes an exclusive lock, so a materialization command against a mounted
 drive fails closed with the lock error. And pinning promises
 retention without fetching: a pinned-but-never-fetched subtree
 still fails closed offline (export names the unheld bytes) until
@@ -928,10 +1002,10 @@ All subcommands take `--identity-file` and `--passphrase-file`,
 optionally: each defaults to the drive configuration file's
 `identity_file` / `passphrase_file` when the flag is absent (see
 "Drive configuration file" below), and the flag always wins —
-with one exception: `policy role set` writes one local file and
+with one exception: `materialization role set` writes one local file and
 touches no key, so it takes neither flag and reads no file. A role stays
 settable on a machine whose keystore is unavailable (a
-`policy role status` opens the node and takes both).
+`materialization role status` opens the node and takes both).
 Both are read and hardened by wyrd code, never by clap:
 
 - The identity file holds exactly 32 raw bytes or 64 hex characters
@@ -1010,7 +1084,7 @@ passphrase_file = "/etc/wyrd/passphrase"
   only paths, read through the same hardening as the flags — so the
   file stays committable and printable.
 - `sync status` and `sync now` print a `relays from:` line (flags,
-  file with its path, or none configured), and `policy budgets`
+  file with its path, or none configured), and `materialization budgets`
   prints a `configuration:` section with the file, the relay source,
   and each credential path's source.
 - The file reads without the store lock: it is deployment state,
@@ -1032,7 +1106,7 @@ passphrase_file = "/etc/wyrd/passphrase"
   endpoint a mount never has. `mount ready` on stderr marks the
   first completed pass; `mount posture` lines follow on the posture
   interval. The sidecar lets a supervisor read liveness-adjacent
-  facts without opening the store, the way `vault status` reads the
+  facts without opening the store, the way `owner … status` reads the
   vault's.
   `vault` logs to stderr always, plus an appended operator-chosen
   file under `--log-file` — never a drive-resident default, never
@@ -1047,15 +1121,15 @@ passphrase_file = "/etc/wyrd/passphrase"
   latency, and the mutation-queue backlog observed at dispatch
   entry — queue pressure per dispatch, no metrics pipeline.
 - Trust position of these surfaces: `sync status`, `sync now`, and
-  `mount.log` speak for a client holding its own keys, never for a
-  vault. The vault's own surface is self-reported — one ready line,
+  `mount.log` speak for a client holding its own keys, never for the
+  owner process. The owner's own surface is self-reported — one ready line,
   periodic posture counts, failures with the mount's shape, on
   stderr plus an optional `--log-file` — and the matrix
   and enforcement that generalize this statement land separately,
-  sequenced after `wyrd vault`, because a boundary needs a vault
+  sequenced after `wyrd owner`, because a boundary needs an owner
   process to be meaningful. What these surfaces
   print is counts, latencies, class breakdowns,
-  and pressure against the bounds in `resource-limits.md`. `vault
+  and pressure against the bounds in `resource-limits.md`. `owner
   status` adds only timestamps and the serving id to that surface —
   the same facts the ready/posture log lines already carry — and
   its reader ignores unknown sidecar fields, so a future field can

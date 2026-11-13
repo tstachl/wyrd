@@ -870,14 +870,14 @@ fn systemd_quote(arg: &str) -> String {
 }
 
 /// The supervised owner command: the `wyrd-supervise` wrapper from
-/// `nix/drive` (OD-34-C) around `wyrd vault` or `wyrd mount` with
+/// `nix/drive` (OD-34-C) around `wyrd owner start` or `wyrd mount` with
 /// file credentials. Managers cannot distinguish the binary's
 /// collapsed exit codes on their own — every CLI failure is 2 except
 /// the terminal held-drive 78 — so the wrapper maps the wait status
 /// onto the exit the supervisor's policy wants (restart-worthy per
 /// manager, 78 never). Routing through the wrapper is what makes the
 /// restart policy below truthful; a bare owner binary cannot express
-/// it. The mount argv mirrors the vault argv with the mount
+/// it. The mount argv mirrors the owner argv with the mount
 /// subcommand, its mountpoint, and the mount posture sidecar — the
 /// restart contract is identical, since a held mount is terminal the
 /// same way a held vault is.
@@ -898,8 +898,8 @@ pub struct SupervisedOwner {
 
 impl SupervisedOwner {
     /// The full supervised argv: wrapper, per-manager restart
-    /// status, posture path, `--` separator, then the vault or mount
-    /// command. Vault and mount share the credential and relay flags;
+    /// status, posture path, `--` separator, then the owner or mount
+    /// command. Owner and mount share the credential and relay flags;
     /// mount adds its mountpoint and serves the mount posture sidecar.
     pub fn argv(&self, entry: &RegistryEntry, restart_status: &str) -> Vec<String> {
         let posture = match entry.mode {
@@ -927,19 +927,30 @@ impl SupervisedOwner {
                         .to_string_lossy()
                         .into_owned(),
                 );
+                argv.push("--identity-file".to_string());
+                argv.push(self.identity_file.to_string_lossy().into_owned());
+                argv.push("--passphrase-file".to_string());
+                argv.push(self.passphrase_file.to_string_lossy().into_owned());
+                for relay in &entry.relays {
+                    argv.push("--relay".to_string());
+                    argv.push(relay.clone());
+                }
             }
             _ => {
-                argv.push("vault".to_string());
+                // Parent flags precede the subcommand: clap parses
+                // `owner <dir> [flags] start`, never flags after `start`.
+                argv.push("owner".to_string());
                 argv.push(entry.drive_dir.to_string_lossy().into_owned());
+                argv.push("--identity-file".to_string());
+                argv.push(self.identity_file.to_string_lossy().into_owned());
+                argv.push("--passphrase-file".to_string());
+                argv.push(self.passphrase_file.to_string_lossy().into_owned());
+                for relay in &entry.relays {
+                    argv.push("--relay".to_string());
+                    argv.push(relay.clone());
+                }
+                argv.push("start".to_string());
             }
-        }
-        argv.push("--identity-file".to_string());
-        argv.push(self.identity_file.to_string_lossy().into_owned());
-        argv.push("--passphrase-file".to_string());
-        argv.push(self.passphrase_file.to_string_lossy().into_owned());
-        for relay in &entry.relays {
-            argv.push("--relay".to_string());
-            argv.push(relay.clone());
         }
         argv
     }
@@ -3048,12 +3059,45 @@ mod tests {
             passphrase_file: dir.join("passphrase"),
         };
         let owned = entry("demo", &dir);
+        // Whole-argv pin, order-sensitive: clap parses
+        // `owner <dir> [parent flags] start` and rejects flags after
+        // `start`, so a substring check would pass on an unparseable
+        // definition. The supervised tail after `--` must match
+        // exactly.
+        let argv = owner.argv(&owned, "0");
+        let tail = argv
+            .iter()
+            .skip_while(|arg| *arg != "--")
+            .skip(1)
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            tail,
+            vec![
+                "/opt/wyrd/bin/wyrd",
+                "owner",
+                &owned.drive_dir.to_string_lossy(),
+                "--identity-file",
+                &dir.join("identity").to_string_lossy(),
+                "--passphrase-file",
+                &dir.join("passphrase").to_string_lossy(),
+                "--relay",
+                "relay://example",
+                "start",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>(),
+            "{argv:?}"
+        );
         let plist = render_launchd_plist("md.enesis.wyrd.drive-demo", &owner, &owned);
         assert!(plist.contains("<string>md.enesis.wyrd.drive-demo</string>"));
         assert!(plist.contains("wyrd-supervise"));
         assert!(plist.contains("--restart-status"));
         assert!(plist.contains("<string>0</string>"), "{plist}");
         assert!(plist.contains("vault.posture"));
+        assert!(plist.contains("<string>owner</string>"), "{plist}");
+        assert!(plist.contains("<string>start</string>"), "{plist}");
         assert!(plist.contains(&*owned.drive_dir.display().to_string()));
         assert!(plist.contains("--identity-file"));
         assert!(plist.contains("--relay"));

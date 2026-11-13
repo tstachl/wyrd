@@ -150,6 +150,20 @@ is transient — no drive data is affected.
 
 ### Changed
 
+- Settle the CLI command vocabulary and hierarchy
+  (`nostr:nevent1qqsty2n74rneaaqj7peqy3pwuptnmzvvcsfcef07mykactuqc4zw9ygpz9mhxue69uhkwunpwdczuap49eehg4ee4tj`):
+  deliberate alpha break, behavior preserved. `init`/`bootstrap` move
+  under `drive` (`drive … init`, `drive … bootstrap` with parent
+  credential flags before the subcommand); the `vault` process is now
+  `owner … start` (default) / `owner … status` (`vault` stays the
+  materialization-role value and the headless service-mode value
+  only); `policy` is now `materialization`. Owner runtime versus
+  Owner membership and the explicit-selection rule (required
+  `<drive_dir>`, `--config` as a file override, never implicit or
+  across drives) are normative in
+  `docs/design/cli.md`, with the old-to-new map there. Supervised
+  service argv, the desktop provisioning adapter, `update --restart`,
+  and the help contract move with the tree.
 - Drive-owner wire v1 to v2 (File Provider Stage 3 prerequisite,
   same issue as above): entry-addressed mutations carry a required
   `expected_identity` precondition, so mixed versions refuse

@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use clap::Parser;
 
-use crate::args::{Cli, Command, PolicyAction, RoleAction, VaultAction};
+use crate::args::{Cli, Command, MaterializationAction, OwnerAction, RoleAction};
 use crate::drive_config::{
     load_drive_config, resolve_credential_path, resolve_relays, update_request_relays,
 };
@@ -25,6 +25,12 @@ pub(crate) use crate::commands::device::{
 pub(crate) use crate::commands::drive::delete_drive;
 use crate::commands::drive::drive;
 use crate::commands::export::export;
+#[cfg(test)]
+pub(crate) use crate::commands::materialization::{
+    evict_render, pin_render, policy_budgets_render, policy_status_render, role_section_render,
+    role_status_render, RetentionAccounting,
+};
+use crate::commands::materialization::{materialization, role_set};
 use crate::commands::member::member;
 #[cfg(test)]
 pub(crate) use crate::commands::member::{
@@ -34,11 +40,8 @@ pub(crate) use crate::commands::member::{
 #[cfg(feature = "mount")]
 use crate::commands::mount::mount;
 #[cfg(test)]
-pub(crate) use crate::commands::policy::{
-    evict_render, pin_render, policy_budgets_render, policy_status_render, role_section_render,
-    role_status_render, RetentionAccounting,
-};
-use crate::commands::policy::{policy, role_set};
+pub(crate) use crate::commands::owner::owner_status_report;
+use crate::commands::owner::{owner, owner_status};
 use crate::commands::snapshot::snapshot;
 #[cfg(test)]
 pub(crate) use crate::commands::snapshot::{
@@ -51,9 +54,6 @@ pub(crate) use crate::commands::sync::{
     drive_quiet, mailbox_line, run_outcome_error, sync_now_render, sync_status_render, RunOutcome,
     SyncRunReport, MAX_SYNC_NOW_PASSES,
 };
-#[cfg(test)]
-pub(crate) use crate::commands::vault::vault_status_report;
-use crate::commands::vault::{vault, vault_status};
 use crate::credentials::load_credentials;
 #[cfg(test)]
 pub(crate) use crate::credentials::{read_credentials, read_identity, read_secret_file};
@@ -122,12 +122,12 @@ pub(crate) enum CliError {
     Identity(#[from] wyrd_sync::keys::CryptoError),
     #[error("engine failed: {0}")]
     Engine(#[from] wyrd_sync::runtime::EngineError),
-    /// A second vault against a drive another process holds: the
+    /// A second owner against a drive another process holds: the
     /// store lock is kernel-held, so this is definite contention,
     /// never a stale record — and it names the drive, because the
-    /// wrapped open error does not. One vault or mount per drive.
-    #[error("another wyrd process holds the drive at {drive}: only one vault or mount per drive")]
-    VaultLocked { drive: PathBuf },
+    /// wrapped open error does not. One owner or mount per drive.
+    #[error("another wyrd process holds the drive at {drive}: only one owner or mount per drive")]
+    OwnerLocked { drive: PathBuf },
     #[error("daemon construction failed: {0}")]
     WyrdNode(#[from] wyrd_daemon::NodeError),
     #[error("object store failed: {0}")]
@@ -220,7 +220,7 @@ impl CliError {
     /// latter), 2 for everything else.
     pub fn exit_code(&self) -> i32 {
         match self {
-            CliError::VaultLocked { .. } => EXIT_DRIVE_LOCKED,
+            CliError::OwnerLocked { .. } => EXIT_DRIVE_LOCKED,
             CliError::Engine(wyrd_sync::runtime::EngineError::Durable(
                 wyrd_sync::durable::DurableError::StoreLocked,
             )) => EXIT_DRIVE_LOCKED,
@@ -359,16 +359,6 @@ fn command(args: Vec<String>) -> Result<(), CliError> {
             println!("{}", update::render_build_info(&update::own_build_info()));
             return Ok(());
         }
-        Command::Init {
-            drive_dir,
-            credentials,
-            ..
-        } => load_credentials(drive_dir, credentials, cli.config.as_deref())?,
-        Command::Bootstrap {
-            drive_dir,
-            credentials,
-            ..
-        } => load_credentials(drive_dir, credentials, cli.config.as_deref())?,
         #[cfg(feature = "mount")]
         Command::Mount {
             drive_dir,
@@ -405,7 +395,7 @@ fn command(args: Vec<String>) -> Result<(), CliError> {
             credentials,
             ..
         } => load_credentials(drive_dir, credentials, cli.config.as_deref())?,
-        Command::Vault {
+        Command::Owner {
             drive_dir,
             credentials,
             ..
@@ -415,7 +405,7 @@ fn command(args: Vec<String>) -> Result<(), CliError> {
             credentials,
             ..
         } => load_credentials(drive_dir, credentials, cli.config.as_deref())?,
-        Command::Policy {
+        Command::Materialization {
             drive_dir, action, ..
         } => match action {
             // Setting touches one local file and no key: return
@@ -424,19 +414,19 @@ fn command(args: Vec<String>) -> Result<(), CliError> {
             // Every other action loads below like every other
             // command — the credential flags ride each action, so
             // `policy role set` alone takes neither.
-            PolicyAction::Role {
+            MaterializationAction::Role {
                 action: RoleAction::Set { role, yes },
             } => {
                 return role_set(drive_dir.clone(), role.clone(), *yes);
             }
-            PolicyAction::Role {
+            MaterializationAction::Role {
                 action: RoleAction::Status { credentials },
             }
-            | PolicyAction::Status { credentials, .. }
-            | PolicyAction::Budgets { credentials }
-            | PolicyAction::Pin { credentials, .. }
-            | PolicyAction::Unpin { credentials, .. }
-            | PolicyAction::Evict { credentials, .. } => {
+            | MaterializationAction::Status { credentials, .. }
+            | MaterializationAction::Budgets { credentials }
+            | MaterializationAction::Pin { credentials, .. }
+            | MaterializationAction::Unpin { credentials, .. }
+            | MaterializationAction::Evict { credentials, .. } => {
                 load_credentials(drive_dir, credentials, cli.config.as_deref())?
             }
         },
@@ -452,40 +442,53 @@ fn command(args: Vec<String>) -> Result<(), CliError> {
         Command::UpdateVerify { drive_dir, .. } => {
             update::run_update_verify(&drive_dir, identity, &passphrase)
         }
-        Command::Init { drive_dir, .. } => {
-            Engine::create(drive_dir, &passphrase, identity)?;
-            Ok(())
-        }
-        Command::Bootstrap {
-            name,
+        Command::Drive {
             drive_dir,
-            mode,
-            mountpoint,
-            relays,
+            action,
             credentials,
-            invitation_file,
-            registry,
-            owner_bin,
-            supervise_bin,
-            no_service,
-        } => bootstrap(
-            crate::commands::bootstrap::BootstrapArgs {
+            ..
+        } => match action {
+            crate::args::DriveAction::Init => {
+                Engine::create(drive_dir, &passphrase, identity)?;
+                Ok(())
+            }
+            crate::args::DriveAction::Bootstrap {
                 name,
-                drive_dir,
                 mode,
                 mountpoint,
                 relays,
-                credentials,
                 invitation_file,
                 registry,
                 owner_bin,
                 supervise_bin,
                 no_service,
-            },
-            identity,
-            &passphrase,
-            config.as_ref(),
-        ),
+            } => bootstrap(
+                crate::commands::bootstrap::BootstrapArgs {
+                    name,
+                    drive_dir,
+                    mode,
+                    mountpoint,
+                    relays,
+                    credentials,
+                    invitation_file,
+                    registry,
+                    owner_bin,
+                    supervise_bin,
+                    no_service,
+                },
+                identity,
+                &passphrase,
+                config.as_ref(),
+            ),
+            action => drive(
+                drive_dir,
+                action,
+                &passphrase,
+                identity,
+                &credentials,
+                config.as_ref(),
+            ),
+        },
         #[cfg(feature = "mount")]
         Command::Mount {
             drive_dir,
@@ -527,19 +530,7 @@ fn command(args: Vec<String>) -> Result<(), CliError> {
         Command::Device {
             drive_dir, action, ..
         } => device(drive_dir, action, &passphrase, identity),
-        Command::Drive {
-            drive_dir,
-            action,
-            credentials,
-            ..
-        } => drive(
-            drive_dir,
-            action,
-            &passphrase,
-            identity,
-            &credentials,
-            config.as_ref(),
-        ),
+
         Command::Sync {
             drive_dir,
             relays,
@@ -556,7 +547,7 @@ fn command(args: Vec<String>) -> Result<(), CliError> {
                 identity,
             )
         }
-        Command::Vault {
+        Command::Owner {
             drive_dir,
             relays,
             log_file,
@@ -565,7 +556,7 @@ fn command(args: Vec<String>) -> Result<(), CliError> {
         } => match action {
             None => {
                 let resolution = resolve_relays(relays.relay, config.as_ref());
-                vault(
+                owner(
                     drive_dir,
                     resolution,
                     config.as_ref(),
@@ -575,9 +566,9 @@ fn command(args: Vec<String>) -> Result<(), CliError> {
                     identity,
                 )
             }
-            Some(VaultAction::Start { retained_quota }) => {
+            Some(OwnerAction::Start { retained_quota }) => {
                 let resolution = resolve_relays(relays.relay, config.as_ref());
-                vault(
+                owner(
                     drive_dir,
                     resolution,
                     config.as_ref(),
@@ -590,19 +581,19 @@ fn command(args: Vec<String>) -> Result<(), CliError> {
             // `--log-file` lives on the parent command so clap cannot
             // express this (same shape as `sync now`'s `--offline`
             // guard above): refuse here rather than silently ignore.
-            Some(VaultAction::Status) if log_file.is_some() => Err(CliError::Usage(
+            Some(OwnerAction::Status) if log_file.is_some() => Err(CliError::Usage(
                 "--log-file is start-only: status writes no diagnostics".into(),
             )),
-            Some(VaultAction::Status) => vault_status(drive_dir, &passphrase, identity),
+            Some(OwnerAction::Status) => owner_status(drive_dir, &passphrase, identity),
         },
-        Command::Policy {
+        Command::Materialization {
             drive_dir, action, ..
         } => {
-            // Policy names no relays of its own: the effective set is
+            // Materialization names no relays of its own: the effective set is
             // whatever the file declares, and the budgets report says
             // where it came from.
             let resolution = resolve_relays(Vec::new(), config.as_ref());
-            policy(
+            materialization(
                 drive_dir,
                 action,
                 &resolution,

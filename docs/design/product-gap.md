@@ -83,7 +83,7 @@ Goal: source-of-truth status a person can act on.
     materialized content, structural metadata, cache, physical
     ciphertext, total filesystem consumption for the drive directory.
   Do not sum rows across the two groups; the source is probes, not UI
-  arithmetic. See `wyrd policy budgets` / `wyrd policy cache status`
+  arithmetic. See `wyrd materialization budgets` / `wyrd materialization status`
   (materialization policy vs capacity caps).
   - First release is report-only. A user can safely evict locally cached content under local policy; they cannot infer retained content is globally reclaimable. A separate narrowly-scoped cache-evict op is allowed only where already contractually supported.
 
@@ -101,7 +101,7 @@ weakening of guarantees.
 
 Acceptance:
 - v0.4 desktop shows owner status and can complete local work offline.
-- `wyrd policy budgets` numbers match a scenario: 200 GB library,
+- `wyrd materialization budgets` numbers match a scenario: 200 GB library,
   2 GB pinned, cold start, steady state, eviction, restart.
 
 ### 2. Conflict visibility and naming (v0.4-0.5)
@@ -210,7 +210,7 @@ Acceptance:
   obligations (outbox obligations, undelivered announcements) survive
   restart; no reinitialization or implicit destructive migration occurs.
 - Uninstall leaves the store intact (explicitly separate from any
-  `wyrd vault` retention decision).
+  `vault`-role retention decision).
 
 ### 7. Differentiator verification (v0.9 soak)
 
@@ -250,7 +250,7 @@ Acceptance:
 
 ## Open questions (blocking v0.4 product definition)
 
-1. `wyrd policy budgets` rendering: which of the four accounting units
+1. `wyrd materialization budgets` rendering: which of the four accounting units
    does a person see by default? "What can I safely remove?" needs
    actionable guidance, not diagnostics.
 2. Conflict indicator surface name and snapshot hierarchy grouping:
@@ -265,7 +265,7 @@ have a decided answer.
 
 ## Traceability
 
-- Product owner: `docs/design/cli.md` (`wyrd policy`, `wyrd snapshot`)
+- Product owner: `docs/design/cli.md` (`wyrd materialization`, `wyrd snapshot`)
 - Retention/storage: `docs/contracts/retention-constraints.md`,
   `docs/design/storage-growth.md`, `docs/design/garbage-collection.md`
 - Identity/membership: `docs/contracts/trust.md`, `docs/contracts/epochs.md`

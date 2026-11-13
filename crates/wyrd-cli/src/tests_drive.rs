@@ -20,12 +20,13 @@ impl Fixture {
         write_secret(&identity_file, [0x22; 32]);
         write_secret(&passphrase_file, b"test-pass\n");
         command(vec![
-            "init".into(),
+            "drive".into(),
             drive.display().to_string(),
             "--identity-file".into(),
             identity_file.display().to_string(),
             "--passphrase-file".into(),
             passphrase_file.display().to_string(),
+            "init".into(),
         ])
         .unwrap();
         Fixture {

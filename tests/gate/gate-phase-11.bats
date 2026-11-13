@@ -44,8 +44,8 @@ setup() {
   # Post-mortem parity with the legacy phase: persist each wyrd
   # invocation's captured output to $RUN/logs before asserting (bats
   # merges stderr into $output, so one .out per step).
-  run guest_wyrd peer-o init --identity-file "$GUO/identity" --passphrase-file "$GUO/passphrase" \
-    "$GUOD"
+  run guest_wyrd peer-o drive "$GUOD" --identity-file "$GUO/identity" --passphrase-file "$GUO/passphrase" \
+    init
   printf '%s\n' "$output" >"$RUN/logs/init-uparent.out"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   run guest_wyrd peer-n device --identity-file "$GUN/identity" --passphrase-file "$GUN/passphrase" \

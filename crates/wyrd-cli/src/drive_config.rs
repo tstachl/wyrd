@@ -247,14 +247,14 @@ pub(crate) fn update_request_relays<'a>(
     }
 }
 
-/// The vault's relay requirement as a pure guard: a relay-less
-/// vault serves routes nothing can discover and never converges,
+/// The owner's relay requirement as a pure guard: a relay-less
+/// owner serves routes nothing can discover and never converges,
 /// and unlike `sync now` there is no `--offline` escape — an
-/// offline vault idles forever instead of reporting a verdict. A
+/// offline owner idles forever instead of reporting a verdict. A
 /// consulted-but-empty file names itself in the refusal; no file at
 /// all keeps the bare flag-oriented message. Pure over the inputs
-/// so both arms pin without starting a vault.
-pub(crate) fn check_vault_relays(
+/// so both arms pin without starting an owner.
+pub(crate) fn check_owner_relays(
     resolution: &RelayResolution,
     config_path: Option<&Path>,
 ) -> Result<(), CliError> {
@@ -263,14 +263,14 @@ pub(crate) fn check_vault_relays(
     }
     Err(CliError::Usage(match resolution.source {
         RelaySource::File => format!(
-            "vault needs at least one relay (no relays in {}): \
-             a relay-less vault serves nothing peers can discover",
+            "owner needs at least one relay (no relays in {}): \
+             a relay-less owner serves nothing peers can discover",
             config_path
                 .map(|p| p.display().to_string())
                 .unwrap_or_default()
         ),
-        _ => "vault needs at least one --relay: \
-              a relay-less vault serves nothing peers can discover"
+        _ => "owner needs at least one --relay: \
+              a relay-less owner serves nothing peers can discover"
             .into(),
     }))
 }
@@ -499,10 +499,10 @@ mod tests {
         assert_eq!(update_request_relays(true, &empty, &empty), &empty);
     }
 
-    /// The vault guard judges the effective set: configured relays
+    /// The owner guard judges the effective set: configured relays
     /// satisfy it, and each empty arm names its own surface.
     #[test]
-    fn the_vault_guard_judges_the_effective_set() {
+    fn the_owner_guard_judges_the_effective_set() {
         let relays = vec!["wss://one.example".to_string()];
         let from_flags = RelayResolution {
             relays: relays.clone(),
@@ -512,13 +512,13 @@ mod tests {
             relays,
             source: RelaySource::File,
         };
-        assert!(check_vault_relays(&from_flags, None).is_ok());
-        assert!(check_vault_relays(&from_file, Some(Path::new("/d/default.toml"))).is_ok());
+        assert!(check_owner_relays(&from_flags, None).is_ok());
+        assert!(check_owner_relays(&from_file, Some(Path::new("/d/default.toml"))).is_ok());
         let bare = RelayResolution {
             relays: Vec::new(),
             source: RelaySource::Neither,
         };
-        let error = check_vault_relays(&bare, None).unwrap_err();
+        let error = check_owner_relays(&bare, None).unwrap_err();
         let CliError::Usage(message) = error else {
             panic!("expected a usage refusal, got: {error:?}");
         };
@@ -531,7 +531,7 @@ mod tests {
             source: RelaySource::File,
         };
         let error =
-            check_vault_relays(&empty_file, Some(Path::new("/d/default.toml"))).unwrap_err();
+            check_owner_relays(&empty_file, Some(Path::new("/d/default.toml"))).unwrap_err();
         let CliError::Usage(message) = error else {
             panic!("expected a usage refusal, got: {error:?}");
         };

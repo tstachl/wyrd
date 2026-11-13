@@ -152,7 +152,7 @@ pub(crate) fn mount(
         // vault's, with the drive, so the supervisor message is one
         // shape for both modes.
         Err(EngineError::Durable(DurableError::StoreLocked)) => {
-            return Err(CliError::VaultLocked {
+            return Err(CliError::OwnerLocked {
                 drive: drive_dir.clone(),
             });
         }

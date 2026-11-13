@@ -53,14 +53,15 @@ impl Fixture {
 
     fn bootstrap(&self, extra: &[&str]) -> Output {
         let mut argv = vec![
-            "bootstrap".to_string(),
-            "--name".to_string(),
-            "demo".to_string(),
+            "drive".to_string(),
             self.drive.to_str().unwrap().to_string(),
             "--identity-file".to_string(),
             self.identity.to_str().unwrap().to_string(),
             "--passphrase-file".to_string(),
             self.passphrase.to_str().unwrap().to_string(),
+            "bootstrap".to_string(),
+            "--name".to_string(),
+            "demo".to_string(),
             "--registry".to_string(),
             self.registry.to_str().unwrap().to_string(),
             "--no-service".to_string(),
@@ -69,7 +70,7 @@ impl Fixture {
         Command::new(wyrd())
             .args(&argv)
             .output()
-            .expect("wyrd bootstrap runs")
+            .expect("wyrd drive bootstrap runs")
     }
 
     fn registry_entries(&self) -> serde_json::Value {
@@ -118,7 +119,7 @@ impl TestRelay {
 /// deliberately out of scope here (no launchd/systemd in CI);
 /// enablement stays the documented manual step.
 #[test]
-fn bootstrap_then_vault_serves_a_non_owner_client() {
+fn bootstrap_then_owner_serves_a_non_owner_client() {
     let fixture = Fixture::new("full-loop");
     let output = fixture.bootstrap(&[]);
     assert!(
@@ -129,7 +130,7 @@ fn bootstrap_then_vault_serves_a_non_owner_client() {
     let relay = TestRelay::spawn();
     let mut child = Command::new(wyrd())
         .args([
-            "vault",
+            "owner",
             fixture.drive.to_str().unwrap(),
             "--relay",
             &relay.url,
@@ -137,16 +138,17 @@ fn bootstrap_then_vault_serves_a_non_owner_client() {
             fixture.identity.to_str().unwrap(),
             "--passphrase-file",
             fixture.passphrase.to_str().unwrap(),
+            "start",
         ])
         .stderr(Stdio::piped())
         .spawn()
-        .expect("wyrd vault spawns");
+        .expect("wyrd owner spawns");
     let deadline = Instant::now() + Duration::from_secs(90);
-    let stderr = child.stderr.take().expect("vault stderr piped");
+    let stderr = child.stderr.take().expect("owner stderr piped");
     let mut ready = false;
     for line in BufReader::new(stderr).lines() {
-        let line = line.expect("vault stderr reads");
-        if line.contains("vault ready: serving ") {
+        let line = line.expect("owner stderr reads");
+        if line.contains("owner ready: serving ") {
             ready = true;
             break;
         }
@@ -154,7 +156,7 @@ fn bootstrap_then_vault_serves_a_non_owner_client() {
             break;
         }
     }
-    assert!(ready, "the vault binds the owner socket");
+    assert!(ready, "the owner binds the owner socket");
     // Separate the reader from the child: the client below must
     // prove a non-owner process is served, not the test harness.
     drop(child.stderr.take());
@@ -172,7 +174,7 @@ fn bootstrap_then_vault_serves_a_non_owner_client() {
     let _ = Command::new("kill")
         .args(["-TERM", &child.id().to_string()])
         .status();
-    let exit = child.wait().expect("vault reaps");
+    let exit = child.wait().expect("owner reaps");
     assert!(exit.success(), "SIGTERM shuts the owner down clean");
     relay.relay.shutdown();
 }
@@ -229,20 +231,21 @@ fn bootstrap_rejects_bad_names_before_touching_anything() {
     let fixture = Fixture::new("bad-name");
     let output = Command::new(wyrd())
         .args([
-            "bootstrap",
-            "--name",
-            "BAD NAME!",
+            "drive",
             fixture.drive.to_str().unwrap(),
             "--identity-file",
             fixture.identity.to_str().unwrap(),
             "--passphrase-file",
             fixture.passphrase.to_str().unwrap(),
+            "bootstrap",
+            "--name",
+            "BAD NAME!",
             "--registry",
             fixture.registry.to_str().unwrap(),
             "--no-service",
         ])
         .output()
-        .expect("wyrd bootstrap runs");
+        .expect("wyrd drive bootstrap runs");
     let stderr = String::from_utf8(output.stderr).expect("stderr is UTF-8");
     assert!(!output.status.success());
     assert!(
@@ -292,20 +295,21 @@ fn bootstrap_registry_flag_overrides_the_default() {
     let elsewhere = fixture.dir.join("elsewhere.json");
     let output = Command::new(wyrd())
         .args([
-            "bootstrap",
-            "--name",
-            "demo",
+            "drive",
             fixture.drive.to_str().unwrap(),
             "--identity-file",
             fixture.identity.to_str().unwrap(),
             "--passphrase-file",
             fixture.passphrase.to_str().unwrap(),
+            "bootstrap",
+            "--name",
+            "demo",
             "--registry",
             elsewhere.to_str().unwrap(),
             "--no-service",
         ])
         .output()
-        .expect("wyrd bootstrap runs");
+        .expect("wyrd drive bootstrap runs");
     assert!(!output.status.success());
     assert!(elsewhere.exists(), "the override path is honored");
     assert!(

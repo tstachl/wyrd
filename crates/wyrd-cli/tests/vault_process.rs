@@ -102,12 +102,13 @@ impl Fixture {
     fn init(&self) {
         let status = self
             .wyrd(&[
-                "init",
+                "drive",
                 self.drive.to_str().unwrap(),
                 "--identity-file",
                 self.identity.to_str().unwrap(),
                 "--passphrase-file",
                 self.passphrase.to_str().unwrap(),
+                "init",
             ])
             .status()
             .expect("wyrd init runs");
@@ -127,7 +128,7 @@ impl Fixture {
         log_file: Option<&std::path::Path>,
     ) -> VaultChild {
         let mut argv = vec![
-            "vault",
+            "owner",
             self.drive.to_str().unwrap(),
             "--relay",
             &relay.url,
@@ -142,13 +143,14 @@ impl Fixture {
             argv.push("--log-file");
             argv.push(&log_path);
         }
+        argv.push("start");
         let mut child = self
             .wyrd(&argv)
             .stderr(Stdio::piped())
             .spawn()
-            .expect("wyrd vault spawns");
+            .expect("wyrd owner spawns");
         let (lines, drain) =
-            await_stderr_line(&mut child, "vault ready: serving ", Duration::from_secs(90));
+            await_stderr_line(&mut child, "owner ready: serving ", Duration::from_secs(90));
         assert!(
             lines
                 .iter()
@@ -161,7 +163,7 @@ impl Fixture {
             .unwrap();
         let ready = lines
             .iter()
-            .find(|line| line.contains("vault ready: serving "))
+            .find(|line| line.contains("owner ready: serving "))
             .unwrap();
         let bind_id = bind.rsplit(' ').next().unwrap();
         let ready_id = ready.rsplit(' ').next().unwrap();
@@ -201,7 +203,7 @@ fn await_stderr_line(
     loop {
         assert!(
             Instant::now() < deadline,
-            "vault never printed {needle:?}; got: {lines:?}"
+            "owner never printed {needle:?}; got: {lines:?}"
         );
         let mut line = String::new();
         let n = reader.read_line(&mut line).expect("stderr reads");
@@ -266,7 +268,7 @@ fn sigterm(child: &VaultChild) {
 /// SIGTERM after readiness exits 0: the loop stopped clean and every
 /// transport closed.
 #[test]
-fn vault_sigterm_after_ready_exits_zero() {
+fn owner_sigterm_after_ready_exits_zero() {
     let fixture = Fixture::new("term");
     fixture.init();
     let relay = TestRelay::spawn();
@@ -286,7 +288,7 @@ fn vault_sigterm_after_ready_exits_zero() {
 /// mid-discharge. Status can open the drive here that it could never
 /// probe while the vault held the store lock.
 #[test]
-fn vault_outbox_empty_after_clean_stop() {
+fn owner_outbox_empty_after_clean_stop() {
     let fixture = Fixture::new("outbox");
     fixture.init();
     let relay = TestRelay::spawn();
@@ -320,11 +322,11 @@ fn vault_outbox_empty_after_clean_stop() {
 /// refusal precedes the keystore open, so even an uninitialized
 /// drive reports the usage error rather than a store error.
 #[test]
-fn vault_without_relay_is_refused() {
+fn owner_without_relay_is_refused() {
     let fixture = Fixture::new("norelay");
     let output = fixture
         .wyrd(&[
-            "vault",
+            "owner",
             fixture.drive.to_str().unwrap(),
             "--identity-file",
             fixture.identity.to_str().unwrap(),
@@ -332,10 +334,10 @@ fn vault_without_relay_is_refused() {
             fixture.passphrase.to_str().unwrap(),
         ])
         .output()
-        .expect("wyrd vault runs");
+        .expect("wyrd owner runs");
     assert!(
         !output.status.success(),
-        "a relay-less vault must not start"
+        "a relay-less owner must not start"
     );
     let stderr = String::from_utf8(output.stderr).expect("stderr renders text");
     assert!(
@@ -348,7 +350,7 @@ fn vault_without_relay_is_refused() {
 /// lands beside the first run's record instead of truncating it. A
 /// restart must not destroy the previous run's evidence.
 #[test]
-fn vault_log_file_appends_across_restarts() {
+fn owner_log_file_appends_across_restarts() {
     let fixture = Fixture::new("logfile");
     fixture.init();
     let relay = TestRelay::spawn();
@@ -362,7 +364,7 @@ fn vault_log_file_appends_across_restarts() {
     relay.shutdown();
     let body = std::fs::read_to_string(&log).expect("log file reads");
     assert_eq!(
-        body.matches("vault ready").count(),
+        body.matches("owner ready").count(),
         2,
         "both runs recorded readiness in one appended file, got:\n{body}"
     );
@@ -376,7 +378,7 @@ fn vault_log_file_appends_across_restarts() {
 /// on this code alone, so it is 78 (`EX_CONFIG`), not 2. After the
 /// holder exits the drive opens again.
 #[test]
-fn vault_second_process_is_refused() {
+fn owner_second_process_is_refused() {
     let fixture = Fixture::new("locked");
     fixture.init();
     let relay = TestRelay::spawn();
@@ -384,7 +386,7 @@ fn vault_second_process_is_refused() {
     let start = Instant::now();
     let mut second = fixture
         .wyrd(&[
-            "vault",
+            "owner",
             fixture.drive.to_str().unwrap(),
             "--relay",
             &relay.url,
@@ -392,19 +394,20 @@ fn vault_second_process_is_refused() {
             fixture.identity.to_str().unwrap(),
             "--passphrase-file",
             fixture.passphrase.to_str().unwrap(),
+            "start",
         ])
         .stderr(Stdio::piped())
         .spawn()
-        .expect("second vault spawns");
+        .expect("second owner spawns");
     // try_wait, never wait: a hung refusal must fail the test, not
     // the suite.
     let status = loop {
-        if let Some(status) = second.try_wait().expect("second vault reaps") {
+        if let Some(status) = second.try_wait().expect("second owner reaps") {
             break status;
         }
         assert!(
             start.elapsed() < Duration::from_secs(30),
-            "a refused vault must exit promptly, still running after {:?}",
+            "a refused owner must exit promptly, still running after {:?}",
             start.elapsed()
         );
         std::thread::sleep(Duration::from_millis(50));
@@ -440,7 +443,7 @@ fn vault_second_process_is_refused() {
 /// ready on the same drive. Fetch-after-recovery is proven by the
 /// microVM leg; here the bar is reacquire plus ready.
 #[test]
-fn vault_sigkill_then_replacement_recovers() {
+fn owner_sigkill_then_replacement_recovers() {
     let fixture = Fixture::new("sigkill");
     fixture.init();
     let relay = TestRelay::spawn();

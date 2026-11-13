@@ -60,6 +60,9 @@ pub(crate) fn drive(
     config: Option<&LoadedConfig>,
 ) -> Result<(), CliError> {
     match action {
+        DriveAction::Init | DriveAction::Bootstrap { .. } => {
+            unreachable!("init/bootstrap resolve in the dispatcher before drive()")
+        }
         DriveAction::Delete { yes } => {
             let report = delete_drive(drive_dir.clone(), passphrase, identity, yes)?;
             print!(
@@ -279,7 +282,7 @@ fn reconfigure_drive(
                 // held-drive case (exit 78, never retried by the
                 // supervisor): stop the service first, the same rule
                 // every other offline writer states.
-                return Err(CliError::VaultLocked { drive: drive_dir });
+                return Err(CliError::OwnerLocked { drive: drive_dir });
             }
             Err(CliError::Usage(format!(
                 "reconfiguration incomplete at {stage}: {reason}"

@@ -15,12 +15,13 @@ fn export_command_materializes_a_plain_tree() {
     write_secret(&identity_file, [0x22; 32]);
     write_secret(&passphrase_file, b"test-pass\n");
     command(vec![
-        "init".into(),
+        "drive".into(),
         drive.display().to_string(),
         "--identity-file".into(),
         identity_file.display().to_string(),
         "--passphrase-file".into(),
         passphrase_file.display().to_string(),
+        "init".into(),
     ])
     .unwrap();
 
@@ -70,12 +71,13 @@ fn export_command_refuses_a_populated_destination() {
     write_secret(&identity_file, [0x22; 32]);
     write_secret(&passphrase_file, b"test-pass\n");
     command(vec![
-        "init".into(),
+        "drive".into(),
         drive.display().to_string(),
         "--identity-file".into(),
         identity_file.display().to_string(),
         "--passphrase-file".into(),
         passphrase_file.display().to_string(),
+        "init".into(),
     ])
     .unwrap();
     fs::create_dir_all(&out).unwrap();
@@ -113,12 +115,13 @@ fn lifecycle_export_refuses_while_the_store_is_locked() {
     write_secret(&identity_file, [0x22; 32]);
     write_secret(&passphrase_file, b"test-pass\n");
     command(vec![
-        "init".into(),
+        "drive".into(),
         drive.display().to_string(),
         "--identity-file".into(),
         identity_file.display().to_string(),
         "--passphrase-file".into(),
         passphrase_file.display().to_string(),
+        "init".into(),
     ])
     .unwrap();
 

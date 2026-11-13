@@ -8,7 +8,7 @@ use std::fs;
 
 /// Check that every headless owner run goes through the daemon's
 /// shared composition: `run_vault` and its input struct `VaultRun`
-/// may appear only inside `wyrd-daemon` itself. `wyrd vault`, `wyrd
+/// may appear only inside `wyrd-daemon` itself. `wyrd owner`, `wyrd
 /// mount` (session path excluded — see below), `wyrd-host`, and every
 /// future owner-mode entry point compose through
 /// `compose_headless_owner` / `run_composed_owner` instead of wiring
@@ -173,7 +173,7 @@ fn host_embeds_wyrd_core_and_links_no_transport_above_it() {
 /// Contract (06 follow-up): every headless owner run goes through
 /// the daemon's shared composition. Scans the CLI's and the host's
 /// production sources for direct uses of the headless runner and
-/// its input struct; `wyrd vault`, `wyrd-host`, and every future
+/// its input struct; `wyrd owner`, `wyrd-host`, and every future
 /// owner-mode entry point must reach `run_vault` only through
 /// `compose_headless_owner` / `run_composed_owner`. The mount's
 /// session-supervised loop is intentionally out of scope (its

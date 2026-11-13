@@ -692,7 +692,7 @@ head -c 32 /dev/urandom &gt; identity.bin &amp;&amp; chmod 600 identity.bin
 printf 'my-passphrase' &gt; passphrase.txt &amp;&amp; chmod 600 passphrase.txt
 
 <span class="c"># create a drive, then mount a live view of it</span>
-wyrd init ./mydrive --identity-file ./identity.bin --passphrase-file ./passphrase.txt
+wyrd drive ./mydrive --identity-file ./identity.bin --passphrase-file ./passphrase.txt init
 wyrd mount ./mydrive ./mnt --identity-file ./identity.bin --passphrase-file ./passphrase.txt</code></pre>
         </div>
         <p class="run-note">Mounting needs system FUSE, libfuse on Linux or macFUSE on macOS. Without a <code>--relay</code> flag the drive stays local-only. Full setup lives in the <a href="https://gitworkshop.dev/control@enesis.md/grasp.t5.st/wyrd" target="_blank" rel="noopener noreferrer">repository</a>.</p>

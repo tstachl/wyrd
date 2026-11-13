@@ -61,7 +61,7 @@ setup() {
   run on_o "sudo mount -o loop '$GIMG' '$GED' && sudo chown e2e:users '$GED'"
   printf '%s\n' "$output" >"$RUN/logs/attach-exh-fs.out"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  run on_o "$WYRD_BIN init --identity-file '$GEC/identity' --passphrase-file '$GEC/passphrase' '$GED'"
+  run on_o "$WYRD_BIN drive '$GED' --identity-file '$GEC/identity' --passphrase-file '$GEC/passphrase' init"
   printf '%s\n' "$output" >"$RUN/logs/init-exh.out"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   run on_o "E2E_ENV_FILE=$GUEST_ENV bash $GUEST_TESTS/alpha-microvm-legs.sh exhaustion $GED $GEC"

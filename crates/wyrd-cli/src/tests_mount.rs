@@ -291,12 +291,13 @@ fn mount_preamble_projects_authorized_heads_without_fuse() {
     write_secret(&identity_file, [0x11; 32]);
     write_secret(&passphrase_file, b"test-pass\n");
     command(vec![
-        "init".into(),
+        "drive".into(),
         drive.display().to_string(),
         "--identity-file".into(),
         identity_file.display().to_string(),
         "--passphrase-file".into(),
         passphrase_file.display().to_string(),
+        "init".into(),
     ])
     .unwrap();
 
@@ -338,12 +339,13 @@ fn live_mount_serves_read_write_until_shutdown() {
     write_secret(&identity_file, [0x11; 32]);
     write_secret(&passphrase_file, b"test-pass\n");
     command(vec![
-        "init".into(),
+        "drive".into(),
         drive.display().to_string(),
         "--identity-file".into(),
         identity_file.display().to_string(),
         "--passphrase-file".into(),
         passphrase_file.display().to_string(),
+        "init".into(),
     ])
     .unwrap();
 
@@ -447,12 +449,13 @@ fn live_mount_preserves_dirty_handle_across_shutdown() {
     write_secret(&identity_file, [0x11; 32]);
     write_secret(&passphrase_file, b"test-pass\n");
     command(vec![
-        "init".into(),
+        "drive".into(),
         drive.display().to_string(),
         "--identity-file".into(),
         identity_file.display().to_string(),
         "--passphrase-file".into(),
         passphrase_file.display().to_string(),
+        "init".into(),
     ])
     .unwrap();
 

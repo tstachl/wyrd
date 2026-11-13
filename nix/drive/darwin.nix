@@ -23,18 +23,29 @@ let
     "${toString drive.driveDir}/${if drive.mode == "vault" then "vault.posture" else "mount.posture"}";
 
   wyrdArgs = drive:
-    [ "${drive.package}/bin/wyrd" drive.mode (toString drive.driveDir) ]
-    ++ lib.optionals (drive.mode == "mount") [ (toString drive.mountpoint) ]
-    ++ [ "--identity-file" (toString drive.identityFile) ]
-    ++ lib.optionals (drive.passphraseFile != null) [
-      "--passphrase-file"
-      (toString drive.passphraseFile)
-    ]
-    ++ lib.concatMap (relay: [ "--relay" relay ]) drive.relays
-    ++ lib.optionals (drive.mode == "vault" && drive.logFile != null) [
-      "--log-file"
-      (toString drive.logFile)
-    ];
+    if drive.mode == "mount" then
+      [ "${drive.package}/bin/wyrd" "mount" (toString drive.driveDir) (toString drive.mountpoint) ]
+      ++ [ "--identity-file" (toString drive.identityFile) ]
+      ++ lib.optionals (drive.passphraseFile != null) [
+        "--passphrase-file"
+        (toString drive.passphraseFile)
+      ]
+      ++ lib.concatMap (relay: [ "--relay" relay ]) drive.relays
+    else
+    # Headless owner: parent flags precede the subcommand
+    # (`owner <dir> [flags] start`); flags after `start` are rejected.
+      [ "${drive.package}/bin/wyrd" "owner" (toString drive.driveDir) ]
+      ++ [ "--identity-file" (toString drive.identityFile) ]
+      ++ lib.optionals (drive.passphraseFile != null) [
+        "--passphrase-file"
+        (toString drive.passphraseFile)
+      ]
+      ++ lib.concatMap (relay: [ "--relay" relay ]) drive.relays
+      ++ lib.optionals (drive.logFile != null) [
+        "--log-file"
+        (toString drive.logFile)
+      ]
+      ++ [ "start" ];
 
   # The wrapper's exit statuses are the supervisor contract (OD-34-C):
   # 78 is terminal (never restarted); launchd's KeepAlive with

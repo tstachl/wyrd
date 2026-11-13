@@ -16,7 +16,7 @@
 //! sources of truth that can disagree.
 //!
 //! Role and process are separate (OD-24-R): `vault` the role is what a
-//! device is, `wyrd vault` the process is how it is run. Nothing here
+//! device is, `wyrd owner` the process is how it is run. Nothing here
 //! starts, stops, or gates a serving endpoint.
 //!
 //! Narrowing (away from `vault`) is a transition, not an edit

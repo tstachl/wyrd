@@ -50,14 +50,14 @@ step1_init() {
   wyrd --help >/dev/null
   pass "version/help exit 0"
 
-  expect_exit 0 step1-init with_creds "$c" init "$d" >/dev/null
+  expect_exit 0 step1-init with_creds "$c" drive "$d" init >/dev/null
   pass "init creates a drive"
   [[ -f "$d/mount.log" ]] && die "init wrote a mount log"
   pass "init logs nothing to disk"
 
   # The cheapest reopen probe doubles as the credential-hardening probe:
   # `device id` opens the keystore, which exercises credential hardening.
-  expect_fail2 step1-reinit with_creds "$c" init "$d"
+  expect_fail2 step1-reinit with_creds "$c" drive "$d" init
 
   local bad="$c/case"; mkdir -p "$bad"
   cp "$c/identity" "$bad/identity"; cp "$c/passphrase" "$bad/passphrase"
@@ -101,7 +101,7 @@ step1_init() {
   # init itself rejects bad credentials too (fresh dir, junk identity).
   cp "$bad/identity-junk" "$bad/identity"
   expect_fail2 step1-init-bad-identity \
-    with_creds "$bad" init "$DRIVES/owner-bad"
+    with_creds "$bad" drive "$DRIVES/owner-bad" init
   cp "$c/identity" "$bad/identity"
   [[ -e "$DRIVES/owner-bad" ]] && die "failed init left a drive dir behind"
 
@@ -295,7 +295,7 @@ step4_member() {
   local td="$DRIVES/terminal" tc="$CREDS/terminal"
   mkdir -p "$tc" "$td"
   gen_identity "$tc/identity"; gen_passphrase "$tc/passphrase"
-  expect_exit 0 step4-terminal-init with_creds "$tc" init "$td" >/dev/null
+  expect_exit 0 step4-terminal-init with_creds "$tc" drive "$td" init >/dev/null
   local terminal_id
   terminal_id="$(with_creds "$tc" device "$td" id | awk '/^device /{print $2}')"
   local removed_out

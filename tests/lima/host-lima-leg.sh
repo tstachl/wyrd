@@ -29,7 +29,7 @@ host_step1_init() {
   local d="$DRIVES/host" c="$CREDS/host"
   mkdir -p "$c"
   gen_identity "$c/identity"; gen_passphrase "$c/passphrase"
-  expect_exit 0 host-init with_creds "$c" init "$d" >/dev/null
+  expect_exit 0 host-init with_creds "$c" drive "$d" init >/dev/null
   pass "init creates the host drive"
 }
 
