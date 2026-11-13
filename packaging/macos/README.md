@@ -288,7 +288,9 @@ collapsed boolean, never a guess.
   within it; the Harness pins the bound including a synthetic
   long tail. `versionFacts` parses `cv1`/`cv2`/`cv3`, normalizing
   a cached `cv2` tail through the same digest so the first
-  post-upgrade modify still matches. Enumerations finish with a
+  post-upgrade modify still matches; a cached `cv1` base still
+  mismatches once and heals on the next enumeration. Enumerations
+  finish with a
   nil page — an anchor-data page fails the fetch persist —
   while the anchor stays live through `currentSyncAnchor`.
 - **Anchors:** `wyrd-anchor-v1:g<generation>:r<revision>`,

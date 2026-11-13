@@ -182,9 +182,13 @@ def answer(op, params):
     if op == "debug-mint":
         # Test-only: mint an identity onto a seeded path, retiring
         # its legacy reference the same rule a real mint enforces.
+        # A second mint refuses: no real owner re-mints an
+        # identified path.
         mint_path = (params or {}).get("path", "")
         if mint_path not in STATE:
             return result_err("NotFound", "no such path")
+        if STATE[mint_path]["identity"] is not None:
+            return result_err("AlreadyExists", "the path already carries an identity")
         STATE[mint_path]["identity"] = mint_token()
         return result_ok({"DebugMinted": {"path": mint_path}})
     path = (params or {}).get("path", "")

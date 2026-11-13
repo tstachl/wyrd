@@ -418,7 +418,18 @@ do {
     check(observer.finished, "enumeration finishes")
     check(observer.finishedPageIsNil, "enumeration finishes with a nil page")
     check(!observer.enumerated.isEmpty, "enumeration serves rows before finishing")
-    check(store.currentAnchor() != nil, "the anchor stays live via currentSyncAnchor")
+    // The anchor half goes through the enumerator's own method, not
+    // the store's: a regression in `currentSyncAnchor` must fail here.
+    let anchorSemaphore = DispatchSemaphore(value: 0)
+    var liveAnchor: NSFileProviderSyncAnchor?
+    enumerator.currentSyncAnchor { anchor in
+        liveAnchor = anchor
+        anchorSemaphore.signal()
+    }
+    check(
+        anchorSemaphore.wait(timeout: .now() + 10) == .success,
+        "the anchor callback answers")
+    check(liveAnchor != nil, "the anchor stays live through currentSyncAnchor")
 }
 
 // The owner error table maps without collapsing distinct refusals.
@@ -968,18 +979,18 @@ do {
             conflictDigestHex(helloRawRest), facts.rest,
             "the current digest covers the token-plus-chunk tail")
         let upgradedFacts = FileProviderExtension.versionFacts(
-            Data("wyrd-cv2:3:9:26:\(helloRawRest)".utf8))
+            Data("wyrd-cv2:3:9:\(facts.size):\(helloRawRest)".utf8))
         check(
             upgradedFacts?.size == facts.size && upgradedFacts?.rest == facts.rest,
             "a cached cv2 tail normalizes to the cv3 facts")
         let upgradedBase = NSFileProviderItemVersion(
-            contentVersion: Data("wyrd-cv2:99:99:26:\(helloRawRest)".utf8),
+            contentVersion: Data("wyrd-cv2:99:99:\(facts.size):\(helloRawRest)".utf8),
             metadataVersion: currentVersion.metadataVersion)
         check(
             FileProviderExtension.baseVersionMatches(upgradedBase, current: current),
             "a cached cv2 base still matches after the cv3 upgrade")
         let staleRawBase = NSFileProviderItemVersion(
-            contentVersion: Data("wyrd-cv2:3:9:26:\(tokenTag):bb".utf8),
+            contentVersion: Data("wyrd-cv2:3:9:\(facts.size):\(tokenTag):bb".utf8),
             metadataVersion: currentVersion.metadataVersion)
         check(
             !FileProviderExtension.baseVersionMatches(staleRawBase, current: current),
