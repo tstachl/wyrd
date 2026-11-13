@@ -145,9 +145,9 @@ timeout 120 "$(entry_sudo_bin)" -n "$GUEST_BIN" exec drive -- /usr/bin/env PATH=
   printf e2e-test-passphrase > /etc/wyrd/passphrase
   chmod 600 /etc/wyrd/identity /etc/wyrd/passphrase
 ' || { echo "drive-service-entry.sh: secret provisioning failed" >&2; exit 1; }
-timeout 120 "$(entry_sudo_bin)" -n "$GUEST_BIN" exec drive -- "$WYRD_BIN" init /var/lib/wyrd/demo --identity-file /etc/wyrd/identity --passphrase-file /etc/wyrd/passphrase \
+timeout 120 "$(entry_sudo_bin)" -n "$GUEST_BIN" exec drive -- "$WYRD_BIN" drive /var/lib/wyrd/demo --identity-file /etc/wyrd/identity --passphrase-file /etc/wyrd/passphrase init \
   || { echo "drive-service-entry.sh: demo drive init failed" >&2; exit 1; }
-timeout 120 "$(entry_sudo_bin)" -n "$GUEST_BIN" exec drive -- "$WYRD_BIN" init /var/lib/wyrd/laptop --identity-file /etc/wyrd/identity --passphrase-file /etc/wyrd/passphrase \
+timeout 120 "$(entry_sudo_bin)" -n "$GUEST_BIN" exec drive -- "$WYRD_BIN" drive /var/lib/wyrd/laptop --identity-file /etc/wyrd/identity --passphrase-file /etc/wyrd/passphrase init \
   || { echo "drive-service-entry.sh: laptop drive init failed" >&2; exit 1; }
 
 # Controlled reboot with boot-id verification: the reboot proves the

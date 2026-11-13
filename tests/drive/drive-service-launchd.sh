@@ -76,7 +76,7 @@ if [[ -f "$SCRATCH/demo/DRIVE" ]]; then
 else
   head -c32 /dev/urandom > "$SCRATCH/identity"; chmod 600 "$SCRATCH/identity"
   printf e2e-test-passphrase > "$SCRATCH/passphrase"; chmod 600 "$SCRATCH/passphrase"
-  "$WYRD_BIN" init "$SCRATCH/demo" --identity-file "$SCRATCH/identity" --passphrase-file "$SCRATCH/passphrase" \
+  "$WYRD_BIN" drive "$SCRATCH/demo" --identity-file "$SCRATCH/identity" --passphrase-file "$SCRATCH/passphrase" init \
     || die "drive init failed"
 fi
 

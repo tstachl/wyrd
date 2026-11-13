@@ -125,7 +125,7 @@ pub(crate) enum CliError {
     /// A second owner against a drive another process holds: the
     /// store lock is kernel-held, so this is definite contention,
     /// never a stale record — and it names the drive, because the
-    /// wrapped open error does not. One vault or mount per drive.
+    /// wrapped open error does not. One owner or mount per drive.
     #[error("another wyrd process holds the drive at {drive}: only one owner or mount per drive")]
     OwnerLocked { drive: PathBuf },
     #[error("daemon construction failed: {0}")]

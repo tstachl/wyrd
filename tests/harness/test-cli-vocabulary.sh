@@ -50,8 +50,9 @@ pass "no wyrd init/vault/policy invocations"
 # 2. No removed subcommands through the e2e helpers: the word right
 # after the creds/role slot is the subcommand (`with_creds <c> vault`
 # is banned; `with_creds <c> drive <dir> init` is the nested action
-# and stays).
-if grep -rnE '(with_creds[[:space:]]+[^[:space:]]+[[:space:]]+|guest_wyrd[[:space:]]+[^[:space:]]+[[:space:]]+|\$WYRD_BIN[[:space:]]+)(init|vault|policy)([[:space:]]|$|")' "${SOURCES[@]}"; then
+# and stays). Quoted `"$WYRD_BIN"` counts: the drive-service entry
+# routes the binary through a quoted sudo/exec wrapper.
+if grep -rnE '(with_creds[[:space:]]+[^[:space:]]+[[:space:]]+|guest_wyrd[[:space:]]+[^[:space:]]+[[:space:]]+|["'"'"']?\$WYRD_BIN["'"'"']?[[:space:]]+)(init|vault|policy)([[:space:]]|$|")' "${SOURCES[@]}"; then
   die "removed subcommand through e2e helper (see above)"
 fi
 pass "no init/vault/policy through with_creds/guest_wyrd/WYRD_BIN"
@@ -61,8 +62,13 @@ pass "no init/vault/policy through with_creds/guest_wyrd/WYRD_BIN"
 for nix in "$ROOT/nix/drive/nixos.nix" "$ROOT/nix/drive/darwin.nix"; do
   grep -q '"owner"' "$nix" || die "$nix: no owner argv"
   grep -q '"start"' "$nix" || die "$nix: no start action"
+  rest=$(tail -n +"$(grep -n '"owner"' "$nix" | head -1 | cut -d: -f1)" "$nix")
+  i=$(printf '%s\n' "$rest" | grep -n '"--identity-file"' | head -1 | cut -d: -f1)
+  st=$(printf '%s\n' "$rest" | grep -n '"start"' | head -1 | cut -d: -f1)
+  [[ -n "$i" && -n "$st" && "$i" -lt "$st" ]] \
+    || die "$nix: owner argv out of order (want owner < flags < start)"
 done
-pass "nix drive modules emit owner … start"
+pass "nix drive modules emit owner … start in order"
 
 # 4. The shared lima helper nests drive/owner actions under parent
 # credentials (`wyrd drive <dir> --identity-file … init`).
