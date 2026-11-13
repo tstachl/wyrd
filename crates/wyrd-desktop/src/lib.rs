@@ -378,6 +378,7 @@ pub fn invoke_handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> 
         commands::provision_create,
         commands::provision_join,
         commands::provision_leave,
+        commands::provision_reconfigure,
     ]
 }
 

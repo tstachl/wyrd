@@ -385,3 +385,280 @@ fn drive_deletion_confirmation_renders_boundary_and_locality() {
         );
     }
 }
+
+/// Registry entry names unique to this process run: the daemon
+/// disable path resolves the platform definition for `drive-<name>`
+/// when the CLI passes no override, and hermetic CLI tests must
+/// never stop or clear a developer's real service of the same name.
+fn unique_reconf_name(tag: &str) -> String {
+    format!("reconf-{tag}-{}", std::process::id())
+}
+
+/// Hand-write one registry entry for the fixture drive: the
+/// registration flow itself would touch a real service manager, so
+/// hermetic CLI tests stage the file directly — the daemon suite
+/// owns the provisioning handoff.
+fn write_registry_entry(registry: &Path, name: &str, drive: &Path, relays: &[&str]) {
+    let relays: Vec<String> = relays.iter().map(|relay| relay.to_string()).collect();
+    let raw = serde_json::json!({
+        "version": 1,
+        "drives": {
+            name: {
+                "name": name,
+                "drive_dir": drive.to_string_lossy(),
+                "relays": relays,
+                "service": format!("drive-{name}"),
+                "mode": "vault",
+            }
+        },
+    });
+    fs::write(registry, serde_json::to_vec(&raw).unwrap()).unwrap();
+}
+
+/// A stub owner socket answering every request with the given
+/// refusal code: the real framed protocol over a Unix socket, so the
+/// command exercises its real client and refusal mapping — only the
+/// owner is fake. The accept loop is deadline-bounded so the thread
+/// always returns for `join`. Mirrors the daemon suite's stub; this
+/// binary cannot import it.
+fn stub_owner(
+    sock: PathBuf,
+    code: &'static str,
+    max_requests: usize,
+) -> std::thread::JoinHandle<()> {
+    if sock.exists() {
+        fs::remove_file(&sock).unwrap();
+    }
+    std::thread::spawn(move || {
+        let listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(60);
+        let mut served = 0;
+        while served < max_requests && std::time::Instant::now() < deadline {
+            let Ok((mut stream, _)) = listener.accept() else {
+                std::thread::sleep(Duration::from_millis(10));
+                continue;
+            };
+            served += 1;
+            stream
+                .set_read_timeout(Some(Duration::from_secs(30)))
+                .unwrap();
+            let mut len = [0u8; 4];
+            if std::io::Read::read_exact(&mut stream, &mut len).is_err() {
+                continue;
+            }
+            let len = u32::from_be_bytes(len) as usize;
+            let mut body = vec![0u8; len];
+            if std::io::Read::read_exact(&mut stream, &mut body).is_err() {
+                continue;
+            }
+            let id: u64 = serde_json::from_slice::<serde_json::Value>(&body)
+                .ok()
+                .and_then(|value| value.get("id")?.as_u64())
+                .unwrap_or(0);
+            let reply = serde_json::json!({
+                "v": wyrd_daemon::owner::WIRE_VERSION,
+                "id": id,
+                "result": {"err": {"code": code, "message": "stub refusal"}},
+            });
+            let body = serde_json::to_vec(&reply).unwrap();
+            let _ = std::io::Write::write_all(&mut stream, &(body.len() as u32).to_be_bytes());
+            let _ = std::io::Write::write_all(&mut stream, &body);
+        }
+    })
+}
+
+fn registry_relays(registry: &Path, name: &str) -> Vec<String> {
+    let raw: serde_json::Value = serde_json::from_slice(&fs::read(registry).unwrap()).unwrap();
+    raw["drives"][name]["relays"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|relay| relay.as_str().unwrap().to_string())
+        .collect()
+}
+
+/// Reconfigure replaces the relay set through the CLI surface: the
+/// entry is rewritten and the run reports reconfigured-and-verified
+/// (a stub owner answers the pre-first-pass refusal this session).
+#[test]
+fn drive_reconfigure_replaces_relays_and_verifies() {
+    let fixture = Fixture::new();
+    let name = unique_reconf_name("replace");
+    let registry = fixture._temp.0.join("drives.json");
+    write_registry_entry(&registry, &name, &fixture.drive, &["relay://old"]);
+    // The stub answers the pre-first-pass refusal, so verification
+    // is fast and deterministic — no socket wait, no real manager.
+    let sock = fixture.drive.join("owner.sock");
+    let server = stub_owner(sock, "Unobserved", 1);
+    command(fixture.args(vec![
+        "reconfigure".into(),
+        "--mode".into(),
+        "vault".into(),
+        "--relay".into(),
+        "relay://new".into(),
+        "--registry".into(),
+        registry.display().to_string(),
+        "--no-service".into(),
+    ]))
+    .unwrap();
+    server.join().unwrap();
+    assert_eq!(
+        registry_relays(&registry, &name),
+        vec!["relay://new".to_string()],
+        "the entry carries the new set"
+    );
+}
+
+/// A terminal owner refusal still verifies nothing: the entry is
+/// rewritten and the run reports reconfigured-but-unavailable with
+/// the reason, fast and without a real manager.
+#[test]
+fn drive_reconfigure_reports_unavailable_on_owner_refusal() {
+    let fixture = Fixture::new();
+    let name = unique_reconf_name("refused");
+    let registry = fixture._temp.0.join("drives.json");
+    write_registry_entry(&registry, &name, &fixture.drive, &["relay://old"]);
+    let sock = fixture.drive.join("owner.sock");
+    let server = stub_owner(sock, "Store", 1);
+    let error = command(fixture.args(vec![
+        "reconfigure".into(),
+        "--mode".into(),
+        "vault".into(),
+        "--relay".into(),
+        "relay://new".into(),
+        "--registry".into(),
+        registry.display().to_string(),
+        "--no-service".into(),
+    ]))
+    .unwrap_err();
+    server.join().unwrap();
+    assert!(
+        matches!(error, CliError::Usage(_)),
+        "a refusing owner verifies nothing: {error:?}"
+    );
+    assert!(
+        error.to_string().contains("reconfigured but unavailable"),
+        "run reports the stage: {error}"
+    );
+    assert_eq!(
+        registry_relays(&registry, &name),
+        vec!["relay://new".to_string()],
+        "the entry carries the new set"
+    );
+}
+
+/// No `--relay` flags keep the registered set: a
+/// credential-path-only reconfigure never clears relays by accident.
+#[test]
+fn drive_reconfigure_keeps_relays_without_relay_flags() {
+    let fixture = Fixture::new();
+    let name = unique_reconf_name("keep");
+    let registry = fixture._temp.0.join("drives.json");
+    write_registry_entry(&registry, &name, &fixture.drive, &["relay://kept"]);
+    let sock = fixture.drive.join("owner.sock");
+    let server = stub_owner(sock, "Unobserved", 1);
+    command(fixture.args(vec![
+        "reconfigure".into(),
+        "--mode".into(),
+        "vault".into(),
+        "--registry".into(),
+        registry.display().to_string(),
+        "--no-service".into(),
+    ]))
+    .unwrap();
+    server.join().unwrap();
+    assert_eq!(
+        registry_relays(&registry, &name),
+        vec!["relay://kept".to_string()],
+        "the registered set survives"
+    );
+}
+
+/// A mount target refuses before anything stops: the refusal names
+/// the installer follow-up and the registry keeps its bytes exactly.
+#[test]
+fn drive_reconfigure_refuses_non_vault_modes_before_stopping() {
+    let fixture = Fixture::new();
+    let name = unique_reconf_name("mount");
+    let registry = fixture._temp.0.join("drives.json");
+    write_registry_entry(&registry, &name, &fixture.drive, &["relay://old"]);
+    let before = fs::read(&registry).unwrap();
+    let error = command(fixture.args(vec![
+        "reconfigure".into(),
+        "--mode".into(),
+        "mount".into(),
+        "--registry".into(),
+        registry.display().to_string(),
+        "--no-service".into(),
+    ]))
+    .unwrap_err();
+    assert!(
+        matches!(error, CliError::Usage(_)),
+        "refusal, not an inline warning: {error:?}"
+    );
+    assert!(
+        error.to_string().contains("installer follow-up"),
+        "refusal points at the follow-up: {error}"
+    );
+    assert_eq!(fs::read(&registry).unwrap(), before);
+}
+
+/// An unregistered directory refuses without writing: the drive
+/// opens (the keystore is real) but no entry names it.
+#[test]
+fn drive_reconfigure_refuses_an_unregistered_directory() {
+    let fixture = Fixture::new();
+    let registry = fixture._temp.0.join("absent.json");
+    let error = command(fixture.args(vec![
+        "reconfigure".into(),
+        "--mode".into(),
+        "vault".into(),
+        "--relay".into(),
+        "relay://new".into(),
+        "--registry".into(),
+        registry.display().to_string(),
+        "--no-service".into(),
+    ]))
+    .unwrap_err();
+    assert!(
+        matches!(error, CliError::Usage(_)),
+        "refusal names the missing registration: {error:?}"
+    );
+    assert!(
+        error.to_string().contains("no registry entry"),
+        "refusal says what to do: {error}"
+    );
+    assert!(!registry.exists(), "a refusal writes nothing");
+}
+
+/// A live owner holding the store fails closed with the terminal
+/// held-drive exit (78, never retried by the supervisor): the
+/// registry keeps its bytes exactly, like every other offline
+/// writer's lock refusal.
+#[test]
+fn drive_reconfigure_refuses_a_held_drive_with_78() {
+    let fixture = Fixture::new();
+    let name = unique_reconf_name("held");
+    let registry = fixture._temp.0.join("drives.json");
+    write_registry_entry(&registry, &name, &fixture.drive, &["relay://old"]);
+    let before = fs::read(&registry).unwrap();
+    // Hold the store open: a second opener fails the lock, the same
+    // contention the sync lock test pins.
+    let _held = fixture.open();
+    let error = command(fixture.args(vec![
+        "reconfigure".into(),
+        "--mode".into(),
+        "vault".into(),
+        "--registry".into(),
+        registry.display().to_string(),
+        "--no-service".into(),
+    ]))
+    .unwrap_err();
+    assert_eq!(
+        error.exit_code(),
+        78,
+        "a held drive exits held-drive: {error:?}"
+    );
+    assert_eq!(fs::read(&registry).unwrap(), before);
+}

@@ -113,9 +113,11 @@ is transient — no drive data is affected.
   acknowledgement to the `--yes` boundary, and a non-owner leave
   authors nothing (the re-observation proves it). Mode selection at
   create/join is the platform default `vault`; other modes refuse
-  with the installer-follow-up pointer, and mode reconfiguration
-  stays with the installer follow-up (no service-management CLI
-  surface exists yet). Native file pickers (`tauri-plugin-dialog`,
+  with the installer-follow-up pointer. Per-drive mode
+  reconfiguration (`drive reconfigure`) stops, clears, rewrites, and
+  restarts vault supervision in place and verifies the socket;
+  non-vault targets still refuse with the installer-follow-up pointer
+  until the mount template lands. Native file pickers (`tauri-plugin-dialog`,
   `dialog:allow-open`) select credential and invitation paths; the
   layer gate reserves the plugin alongside `tauri`. Frontend:
   create/join/leave forms in the Drives view with outcome plus

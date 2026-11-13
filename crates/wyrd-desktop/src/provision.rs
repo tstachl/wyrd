@@ -93,6 +93,39 @@ pub struct LeaveRequest {
     pub acknowledged: bool,
 }
 
+/// Reconfigure a registered drive's supervision in place: stop and
+/// clear the old service definition, rewrite the registry entry,
+/// reinstall and restart when managed, and verify the socket.
+/// `relays` replaces the registered set when non-empty and keeps it
+/// when empty (a credential-path-only reconfigure never clears
+/// relays by accident); `mode` is the platform default `vault` and
+/// any other value refuses with the installer-follow-up pointer
+/// before any process spawns, like creation.
+#[derive(Debug, Clone)]
+pub struct ReconfigureRequest {
+    pub drive_dir: PathBuf,
+    pub relays: Vec<String>,
+    /// Credential *paths*, never contents.
+    pub identity_file: PathBuf,
+    pub passphrase_file: PathBuf,
+    /// Explicit registry path (tests); `None` = platform default.
+    pub registry_path: Option<PathBuf>,
+    /// Explicit owner/supervise binaries (tests / non-standard layout);
+    /// `None` = sibling-of-CLI default the CLI applies.
+    pub owner_bin: Option<PathBuf>,
+    pub supervise_bin: Option<PathBuf>,
+    /// `false` (default) disables the old service, rewrites the
+    /// entry, and reinstalls, enables, and restarts; `true`
+    /// rewrites without installing any OS service.
+    pub no_service: bool,
+    /// Service mode display string. The platform default is `vault`;
+    /// any other value is refused with a pointer at the installer
+    /// follow-up (registry-managed mount mode is not provisionable
+    /// through this adapter yet — mirrored from the registry
+    /// validator, which skips non-vault entries loudly).
+    pub mode: String,
+}
+
 /// The adapter's verdict on the *operation*. Never lifecycle state:
 /// the caller pairs every variant with a registry re-read, a socket
 /// probe, and (for the operated drive) a membership observation, and
@@ -273,6 +306,51 @@ pub fn leave_argv(request: &LeaveRequest) -> Vec<OsString> {
     argv.push("--passphrase-file".into());
     argv.push(request.passphrase_file.as_os_str().to_owned());
     argv
+}
+
+/// Pure argv builder for `wyrd drive <dir> reconfigure …`: every
+/// argument is a separate argv element, never shell-constructed.
+/// Mirrors `crates/wyrd-cli/src/args.rs` (`DriveAction::Reconfigure`).
+/// Empty `relays` emit no `--relay` flags (the CLI keeps the
+/// registered set); non-empty relays replace it.
+pub fn reconfigure_argv(request: &ReconfigureRequest) -> Result<Vec<OsString>, String> {
+    if request.mode != "vault" {
+        return Err(format!(
+            "unknown service mode {:?}: only `vault` reconfigures through this adapter; registry-managed mount mode travels with the installer follow-up",
+            request.mode
+        ));
+    }
+    let mut argv: Vec<OsString> = vec![
+        "drive".into(),
+        request.drive_dir.as_os_str().to_owned(),
+        "reconfigure".into(),
+    ];
+    argv.push("--mode".into());
+    argv.push(request.mode.clone().into());
+    for relay in &request.relays {
+        argv.push("--relay".into());
+        argv.push(relay.into());
+    }
+    argv.push("--identity-file".into());
+    argv.push(request.identity_file.as_os_str().to_owned());
+    argv.push("--passphrase-file".into());
+    argv.push(request.passphrase_file.as_os_str().to_owned());
+    if let Some(registry) = &request.registry_path {
+        argv.push("--registry".into());
+        argv.push(registry.as_os_str().to_owned());
+    }
+    if let Some(owner) = &request.owner_bin {
+        argv.push("--owner-bin".into());
+        argv.push(owner.as_os_str().to_owned());
+    }
+    if let Some(supervise) = &request.supervise_bin {
+        argv.push("--supervise-bin".into());
+        argv.push(supervise.as_os_str().to_owned());
+    }
+    if request.no_service {
+        argv.push("--no-service".into());
+    }
+    Ok(argv)
 }
 
 /// Raw completed-process capture: exit code, stdout, stderr, and
@@ -494,6 +572,37 @@ pub fn run_leave(cli_bin: &Path, request: &LeaveRequest, timeout: Duration) -> P
         };
     }
     let argv = leave_argv(request);
+    let output = run_cli(cli_bin, &argv, timeout);
+    map_exit_output(&output)
+}
+
+/// Run one `drive reconfigure` through the version-matched CLI,
+/// with the same version-first, observation-after contract as
+/// [`run_bootstrap`]. The caller pairs every path with a registry
+/// re-read, socket probes, and a membership re-observation; no path
+/// reports lifecycle state.
+pub fn run_reconfigure(
+    cli_bin: &Path,
+    request: &ReconfigureRequest,
+    timeout: Duration,
+) -> ProvisionOutcome {
+    if let Err(mismatch) = check_cli_version(cli_bin, timeout) {
+        return ProvisionOutcome {
+            result: mismatch,
+            stderr: String::new(),
+            code: None,
+        };
+    }
+    let argv = match reconfigure_argv(request) {
+        Ok(argv) => argv,
+        Err(reason) => {
+            return ProvisionOutcome {
+                result: ProvisionResult::ExpectedFailure { detail: reason },
+                stderr: String::new(),
+                code: None,
+            };
+        }
+    };
     let output = run_cli(cli_bin, &argv, timeout);
     map_exit_output(&output)
 }
@@ -935,6 +1044,178 @@ mod tests {
         assert!(
             matches!(outcome.result, ProvisionResult::Completed { .. }),
             "fake exit-0 join completes: {:?}",
+            outcome.result
+        );
+        std::fs::remove_dir_all(&dir).unwrap_or(());
+    }
+
+    fn reconfigure_request() -> ReconfigureRequest {
+        ReconfigureRequest {
+            drive_dir: PathBuf::from("/drives/alpha"),
+            relays: vec!["wss://relay.example".to_string()],
+            identity_file: PathBuf::from("/keys/identity"),
+            passphrase_file: PathBuf::from("/keys/passphrase"),
+            registry_path: None,
+            owner_bin: None,
+            supervise_bin: None,
+            no_service: false,
+            mode: "vault".to_string(),
+        }
+    }
+
+    /// The reconfigure argv is one structured element per argument:
+    /// `drive <dir> reconfigure --mode vault`, relay pairs, and
+    /// credential paths — never a joined shell string.
+    #[test]
+    fn reconfigure_argv_is_structured_per_element() {
+        let argv = reconfigure_argv(&reconfigure_request()).unwrap();
+        let rendered: Vec<String> = argv
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            rendered,
+            vec![
+                "drive",
+                "/drives/alpha",
+                "reconfigure",
+                "--mode",
+                "vault",
+                "--relay",
+                "wss://relay.example",
+                "--identity-file",
+                "/keys/identity",
+                "--passphrase-file",
+                "/keys/passphrase",
+            ]
+        );
+        assert!(
+            !rendered
+                .iter()
+                .any(|arg| arg.contains(' ') && arg.contains("--")),
+            "no joined shell string: {rendered:?}"
+        );
+    }
+
+    /// Empty relays emit no `--relay` flags: the CLI keeps the
+    /// registered set, so a credential-path-only reconfigure never
+    /// clears relays by accident.
+    #[test]
+    fn reconfigure_argv_omits_relay_flags_when_empty() {
+        let mut request = reconfigure_request();
+        request.relays.clear();
+        request.no_service = true;
+        let argv = reconfigure_argv(&request).unwrap();
+        let rendered: Vec<String> = argv
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            !rendered.contains(&"--relay".to_string()),
+            "no relay flags: {rendered:?}"
+        );
+        assert!(rendered.contains(&"--no-service".to_string()));
+    }
+
+    /// Non-vault modes refuse before any process spawns: the adapter
+    /// never reconfigures into a mode the registry reader skips.
+    #[test]
+    fn non_vault_reconfigure_refuses_with_the_installer_pointer() {
+        let mut request = reconfigure_request();
+        request.mode = "mount".to_string();
+        match reconfigure_argv(&request) {
+            Err(reason) => assert!(
+                reason.contains("installer follow-up"),
+                "reason points at the follow-up: {reason}"
+            ),
+            Ok(_) => panic!("a mount reconfigure must refuse"),
+        }
+    }
+
+    /// End to end through a fake CLI binary: version check passes
+    /// and an exit-0 reconfigure completes with opaque detail — the
+    /// full `run_reconfigure` path the IPC command drives.
+    #[test]
+    fn run_reconfigure_completes_through_a_fake_cli() {
+        let cli = fake_cli(
+            "reconf-ready",
+            "drive alpha reconfigured and verified available (socket /drives/alpha/owner.sock)",
+            0,
+        );
+        let outcome = run_reconfigure(&cli, &reconfigure_request(), Duration::from_secs(30));
+        match &outcome.result {
+            ProvisionResult::Completed { detail } => {
+                assert!(detail.contains("reconfigured"), "detail: {detail}")
+            }
+            other => panic!("fake exit-0 reconfigure completes: {other:?}"),
+        }
+        assert_eq!(outcome.code, Some(0));
+    }
+
+    /// A version-skewed CLI is a hard failure before the reconfigure
+    /// argv runs — never a silent fallback.
+    #[test]
+    fn run_reconfigure_refuses_a_version_skewed_cli() {
+        let dir = std::env::temp_dir().join(format!(
+            "wyrd-desktop-fakecli-{}-reconf-skew",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cli = dir.join("wyrd");
+        std::fs::write(
+            &cli,
+            "#!/bin/sh\nif [ \"$1\" = \"__build_info\" ]; then\necho \"update build: 9.9.9-mismatch\"\nexit 0\nfi\necho \"drive alpha reconfigured\"\nexit 0\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let outcome = run_reconfigure(&cli, &reconfigure_request(), Duration::from_secs(30));
+        assert!(
+            matches!(outcome.result, ProvisionResult::VersionMismatch { .. }),
+            "skew refuses before the reconfigure argv runs: {:?}",
+            outcome.result
+        );
+        std::fs::remove_dir_all(&dir).unwrap_or(());
+    }
+
+    /// A wedged CLI is killed and reaped past the timeout on the
+    /// reconfigure path too: the outcome resolves unknown and
+    /// triggers observation, never re-execution.
+    #[test]
+    fn run_reconfigure_times_out_to_unknown() {
+        let dir = std::env::temp_dir().join(format!(
+            "wyrd-desktop-fakecli-{}-reconf-wedge",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cli = dir.join("wyrd");
+        // Answers the version check instantly, then sleeps past any
+        // test timeout on every other argv.
+        let version = env!("CARGO_PKG_VERSION");
+        std::fs::write(
+            &cli,
+            format!(
+                "#!/bin/sh\nif [ \"$1\" = \"__build_info\" ]; then\necho \"update build: {version}\"\nexit 0\nfi\nsleep 30\nexit 0\n"
+            ),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let start = std::time::Instant::now();
+        let outcome = run_reconfigure(&cli, &reconfigure_request(), Duration::from_secs(2));
+        assert!(
+            start.elapsed() < Duration::from_secs(20),
+            "the wait is bounded by the timeout"
+        );
+        assert!(
+            matches!(outcome.result, ProvisionResult::Unknown { .. }),
+            "a wedged reconfigure resolves unknown: {:?}",
             outcome.result
         );
         std::fs::remove_dir_all(&dir).unwrap_or(());

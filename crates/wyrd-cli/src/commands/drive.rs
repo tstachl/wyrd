@@ -1,5 +1,6 @@
 //! The `drive` command: local drive lifecycle beyond membership —
-//! deleting this drive's local copy after authoring your own removal.
+//! deleting this drive's local copy after authoring your own removal,
+//! and reconfiguring a registered drive's supervision in place.
 //!
 //! Delete composes two operations that already exist: the owner
 //! authors `Remove(self)` through the engine (which enforces
@@ -9,16 +10,34 @@
 //! refusal — non-owner, unacknowledged terminal, frozen, locked store
 //! — leaves it untouched. A mounted drive fails closed with the
 //! store lock: stop the service first, the same rule `member` states.
+//!
+//! Reconfigure resolves the registry entry by drive directory (exact
+//! match; zero or duplicate matches refuse without writing), proves
+//! the keystore still opens (retrying once past a live managed
+//! lock, while any other open failure refuses with everything
+//! untouched), stops and clears the old service definition, installs
+//! the new definition when managed from the updated entry, rewrites
+//! the entry carrying skipped entries forward, and verifies the
+//! socket.
+//! One operator at a time: concurrent direct CLI invocations can
+//! interleave past the store open (the desktop flight serializes
+//! only its own calls), so serialize reconfigurations against any
+//! other lifecycle operation on the drive — the last writer wins the
+//! entry while each rewrite stays atomic.
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use wyrd_core::lifecycle_surface::{render_deletion_confirmation, render_leave_refusal};
+use wyrd_daemon::bootstrap::{default_registry_path, reconfigure, ReconfigureConfig};
 use wyrd_format::{Change, DeviceId, MembershipTransition};
 use wyrd_sync::keys::DeviceIdentitySecret;
 use wyrd_sync::runtime::Engine;
 
-use crate::args::DriveAction;
+use crate::args::{Credentials, DriveAction};
+use crate::commands::bootstrap::{absolutize, canonicalize, warn_skipped};
 use crate::commands::member::{carry_pending, require_last_owner_confirmation};
+use crate::drive_config::{resolve_credential_path, LoadedConfig};
 use crate::CliError;
 
 /// What `drive delete` did: the authored self-removal plus the
@@ -37,6 +56,8 @@ pub(crate) fn drive(
     action: DriveAction,
     passphrase: &str,
     identity: DeviceIdentitySecret,
+    credentials: &Credentials,
+    config: Option<&LoadedConfig>,
 ) -> Result<(), CliError> {
     match action {
         DriveAction::Delete { yes } => {
@@ -53,6 +74,26 @@ pub(crate) fn drive(
             );
             Ok(())
         }
+        DriveAction::Reconfigure {
+            mode,
+            relay,
+            registry,
+            owner_bin,
+            supervise_bin,
+            no_service,
+        } => reconfigure_drive(
+            drive_dir,
+            mode,
+            relay,
+            registry,
+            owner_bin,
+            supervise_bin,
+            no_service,
+            credentials,
+            config,
+            passphrase,
+            identity,
+        ),
     }
 }
 
@@ -136,4 +177,108 @@ pub(crate) fn delete_drive(
         });
     }
     Ok(report)
+}
+
+/// Reconfigure one registered drive in place: resolve the
+/// credential paths the service definition names, then run the
+/// daemon's stop-clear-reconfigure-restart-verify handoff and
+/// report exactly which stage a partial run reached. Ready is
+/// reported only when the socket verifies this session — a
+/// rewritten entry alone never reports ready.
+#[allow(clippy::too_many_arguments)]
+fn reconfigure_drive(
+    drive_dir: PathBuf,
+    mode: String,
+    relay: Vec<String>,
+    registry: Option<PathBuf>,
+    owner_bin: Option<PathBuf>,
+    supervise_bin: Option<PathBuf>,
+    no_service: bool,
+    credentials: &Credentials,
+    config: Option<&LoadedConfig>,
+    passphrase: &str,
+    identity: DeviceIdentitySecret,
+) -> Result<(), CliError> {
+    let identity_file = resolve_credential_path(
+        credentials.identity_file.clone(),
+        config.and_then(|c| c.identity_file.clone()),
+        "--identity-file",
+        "identity_file",
+    )?;
+    let passphrase_file = resolve_credential_path(
+        credentials.passphrase_file.clone(),
+        config.and_then(|c| c.passphrase_file.clone()),
+        "--passphrase-file",
+        "passphrase_file",
+    )?;
+    let identity_file = canonicalize(&identity_file)?;
+    let passphrase_file = canonicalize(&passphrase_file)?;
+    let owner_bin = owner_bin.map(absolutize);
+    let supervise_bin = supervise_bin.map(absolutize);
+    // Flags replace the registered set; no flags keep it, so a
+    // credential-path-only reconfigure never clears relays by
+    // accident.
+    let relays = if relay.is_empty() { None } else { Some(relay) };
+    let registry_path = registry.clone().unwrap_or_else(default_registry_path);
+    // The daemon reports the lock refusal as data (the state shape
+    // carries kinds, never typed errors); the CLI restores the
+    // terminal held-drive exit the supervisor keys on, so keep the
+    // directory for that arm.
+    let report = reconfigure(ReconfigureConfig {
+        drive_dir: drive_dir.clone(),
+        relays,
+        mode,
+        identity,
+        passphrase: passphrase.to_string(),
+        registry_path,
+        wyrd_bin: owner_bin,
+        supervise_bin,
+        identity_file,
+        passphrase_file,
+        service_definition: None,
+        manage_service: !no_service,
+        verify_timeout: Duration::from_secs(30),
+    });
+    match report {
+        wyrd_daemon::bootstrap::ProvisionState::VerifiedAvailable { entry, skipped } => {
+            warn_skipped(&skipped);
+            println!(
+                "drive {} reconfigured and verified available (socket {})",
+                entry.name,
+                entry.drive_dir.join("owner.sock").display()
+            );
+            Ok(())
+        }
+        wyrd_daemon::bootstrap::ProvisionState::RegisteredButUnavailable {
+            entry,
+            reason,
+            skipped,
+            ..
+        } => {
+            warn_skipped(&skipped);
+            Err(CliError::Usage(format!(
+                "drive {} reconfigured but unavailable: {reason}",
+                entry.name
+            )))
+        }
+        wyrd_daemon::bootstrap::ProvisionState::ProvisioningIncomplete {
+            stage,
+            kind,
+            reason,
+        } => {
+            if matches!(
+                kind,
+                wyrd_daemon::bootstrap::ProvisionFailureKind::StoreLocked
+            ) {
+                // A live owner holding the drive is the terminal
+                // held-drive case (exit 78, never retried by the
+                // supervisor): stop the service first, the same rule
+                // every other offline writer states.
+                return Err(CliError::VaultLocked { drive: drive_dir });
+            }
+            Err(CliError::Usage(format!(
+                "reconfiguration incomplete at {stage}: {reason}"
+            )))
+        }
+    }
 }
