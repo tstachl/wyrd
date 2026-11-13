@@ -14,6 +14,7 @@
 
 import FileProvider
 import Foundation
+import os
 
 extension LiveStore {
     /// Largest single content image in bytes, mirroring the owner's
@@ -47,6 +48,12 @@ extension LiveStore {
             guard let path = WyrdItemIdentifier.legacyPath(pathHex: pathHex) else {
                 throw LiveStoreError.notFound("container undecodable")
             }
+            // Same retirement rule as the item and contents paths (see
+            // `requireIdentityLess`): a minted path 404s instead of
+            // enumerating the replacement's children or accepting
+            // writes under the old identifier.
+            let (node, _, _) = try lookupNode(path: path, client: client)
+            try requireIdentityLess(node)
             return path
         case .conflict:
             // Reports are files about conflicts, never containers:

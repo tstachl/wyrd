@@ -105,22 +105,30 @@ final class LiveItem: NSObject, NSFileProviderItem {
         // unrelated commit elsewhere must not invalidate this item,
         // while a same-size remote edit must.
         let tokenTag = nodeIdentity(row.node)?.lowercased() ?? "none"
-        let contentTag: String
+        // The raw per-entry fact is unbounded (chunk lists, subtree
+        // listings), but `NSFileProviderItemVersion` content data
+        // must stay within 128 bytes or fileproviderd rejects the
+        // whole enumeration. Hash the tail to a fixed 16 hex chars
+        // (`conflictDigestHex` precedent: presentation movement,
+        // never integrity — the owner is the backstop) and keep the
+        // size in the clear so the conflict check keeps its shape.
+        let rawContentTag: String
         switch row.node {
         case .file(_, _, let chunks, _):
-            contentTag = chunks.joined(separator: ",")
+            rawContentTag = chunks.joined(separator: ",")
         case .dir(let subtree, _):
-            contentTag = subtree
+            rawContentTag = subtree
         case .mergedDir(let subtrees, _):
-            contentTag = subtrees.flatMap { $0 }.joined(separator: ",")
+            rawContentTag = subtrees.flatMap { $0 }.joined(separator: ",")
         case .symlink, .conflict:
             // Never compared: symlinks and conflicts are not
             // writable, and their targets/versions carry no stable
             // content grammar for the version string.
-            contentTag = ""
+            rawContentTag = ""
         }
+        let contentTag = conflictDigestHex("\(tokenTag):\(rawContentTag)")
         let versionCore =
-            "wyrd-cv2:\(row.generation):\(row.revision):\(fileSize.map(String.init) ?? "-"):\(tokenTag):\(contentTag)"
+            "wyrd-cv3:\(row.generation):\(row.revision):\(fileSize.map(String.init) ?? "-"):\(contentTag)"
         self.contentVersionData = Data(versionCore.utf8)
         self.metadataVersionData = Data("wyrd-mv2:\(row.generation):\(row.revision)".utf8)
         super.init()

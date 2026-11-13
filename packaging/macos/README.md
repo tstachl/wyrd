@@ -274,6 +274,12 @@ collapsed boolean, never a guess.
   `wyrd:legacy:v1:<hex-path>`: unstable by contract (rename means
   a new item), never written back. Conflicts carry no persistent
   identity and never enumerate.
+- **Legacy retirement:** a legacy reference names the identity-less
+  entry at its path. Minting an identity retires it: the item,
+  contents, enumeration, and create-parent surfaces all 404
+  instead of serving the replacement under the old identifier
+  (the same rule stable resolution enforces by token match).
+  Still-identity-less paths resolve unchanged.
 - **Anchors:** `wyrd-anchor-v1:g<generation>:r<revision>`,
   translated from the owner's serving coordinate. Enumeration is
   one `readdir` in one coordinate; the returned anchor always
