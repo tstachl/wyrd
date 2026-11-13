@@ -561,11 +561,13 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
     /// content tag. `cv3` carries a fixed-size digest of the
     /// token-plus-content tail (the raw tail is unbounded and would
     /// breach the 128-byte version bound); `cv2` carries the raw
-    /// tail. Cross-format versions never compare equal — versions
-    /// stored by older builds mismatch once and heal on the next
-    /// enumeration — while same-format equality keeps its meaning.
-    /// Anything else — a foreign format, a truncated version —
-    /// parses to nothing and fails the match, never the parse.
+    /// tail, normalized here through the same digest so a cached
+    /// `cv2` base still matches its `cv3` successor when the entry
+    /// is unchanged. `cv1` carries the old identity tag and never
+    /// equals a newer fact — cached `cv1` bases mismatch once and
+    /// heal on the next enumeration. Anything else — a foreign
+    /// format, a truncated version — parses to nothing and fails
+    /// the match, never the parse.
     static func versionFacts(_ contentVersion: Data) -> (size: String, rest: String)? {
         guard let raw = String(data: contentVersion, encoding: .utf8) else {
             return nil
@@ -576,6 +578,12 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
                     separator: ":", maxSplits: 3, omittingEmptySubsequences: false
                 ).map(String.init)
                 guard parts.count == 4 else { return nil }
+                if prefix == "wyrd-cv2:" {
+                    // The `cv2` tail is the exact `token:content`
+                    // string `cv3` digests, so hashing it reproduces
+                    // the `cv3` fact for unchanged entries.
+                    return (parts[2], conflictDigestHex(parts[3]))
+                }
                 return (parts[2], parts[3])
             }
         }

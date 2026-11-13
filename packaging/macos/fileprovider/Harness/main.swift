@@ -383,6 +383,44 @@ do {
     failures += 1
 }
 
+// MARK: - Enumerator terminus (nil page, live anchor)
+
+/// A recording `NSFileProviderEnumerationObserver`: the Harness
+/// drives the real enumerator and pins the nil-page finish the
+/// Finder leg depends on.
+final class RecordingEnumerationObserver: NSObject, NSFileProviderEnumerationObserver {
+    var enumerated: [NSFileProviderItem] = []
+    var finished = false
+    var finishedPageIsNil = false
+    var finishError: Error?
+    func didEnumerate(_ updatedItems: [NSFileProviderItem]) {
+        enumerated += updatedItems
+    }
+    func finishEnumerating(upTo page: NSFileProviderPage?) {
+        finished = true
+        finishedPageIsNil = page == nil
+    }
+    func finishEnumeratingWithError(_ error: Error) {
+        finished = true
+        finishError = error
+    }
+}
+
+do {
+    // The enumerator finishes with a nil page: an anchor-data page
+    // fails the fetch persist leg-wide, so no continuation state
+    // survives the call. The anchor itself stays live through
+    // `currentSyncAnchor`, which the system consults separately.
+    let observer = RecordingEnumerationObserver()
+    let enumerator = LiveEnumerator(container: .rootContainer, store: store, log: log)
+    enumerator.enumerateItems(for: observer, startingAt: NSFileProviderPage(Data()))
+    check(observer.finishError == nil, "enumeration finishes without error")
+    check(observer.finished, "enumeration finishes")
+    check(observer.finishedPageIsNil, "enumeration finishes with a nil page")
+    check(!observer.enumerated.isEmpty, "enumeration serves rows before finishing")
+    check(store.currentAnchor() != nil, "the anchor stays live via currentSyncAnchor")
+}
+
 // The owner error table maps without collapsing distinct refusals.
 check({
     if case .notFound = store.mapError(OwnerClientError.refused(OwnerError(code: "NotFound", message: "x")), what: "t") { return true }
@@ -585,6 +623,66 @@ func rawRoundTrip(socketPath: String, body: String) throws -> (code: String, ver
     return (code: err["code"] as! String, version: version)
 }
 
+/// One framed debug exchange against the stub, bypassing
+/// `OwnerClient` (test-only ops never enter production code):
+/// length-prefixed JSON out, length-prefixed JSON back, failing
+/// closed unless the stub answers `ok`.
+func debugStub(socketPath: String, op: String, params: [String: Any]) throws {
+    let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+    guard fd >= 0 else { throw HarnessError.socket("socket() failed") }
+    defer { close(fd) }
+    var addr = sockaddr_un()
+    memset(&addr, 0, MemoryLayout<sockaddr_un>.size)
+    addr.sun_family = sa_family_t(AF_UNIX)
+    let connected: Int32 = socketPath.withCString { cString in
+        withUnsafeMutableBytes(of: &addr.sun_path) { raw in
+            let dest = raw.baseAddress!.assumingMemoryBound(to: CChar.self)
+            strncpy(dest, cString, 103)
+        }
+        return withUnsafePointer(to: &addr) { ptr in
+            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sock in
+                connect(fd, sock, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        }
+    }
+    guard connected == 0 else { throw HarnessError.socket("connect refused") }
+    let frame: [String: Any] = ["v": 2, "id": 996, "op": op, "params": params]
+    let bodyData = try JSONSerialization.data(withJSONObject: frame)
+    let length = UInt32(bodyData.count).bigEndian
+    withUnsafeBytes(of: length) { prefix in
+        _ = write(fd, prefix.baseAddress!, prefix.count)
+    }
+    _ = bodyData.withUnsafeBytes { pointer in
+        write(fd, pointer.baseAddress!, bodyData.count)
+    }
+    var prefix = [UInt8](repeating: 0, count: 4)
+    try prefix.withUnsafeMutableBytes { raw in
+        var done = 0
+        while done < 4 {
+            let chunk = read(fd, raw.baseAddress!.advanced(by: done), 4 - done)
+            guard chunk > 0 else { throw HarnessError.socket("short length") }
+            done += chunk
+        }
+    }
+    let lengthValue = (UInt32(prefix[0]) << 24) | (UInt32(prefix[1]) << 16)
+        | (UInt32(prefix[2]) << 8) | UInt32(prefix[3])
+    var payload = [UInt8](repeating: 0, count: Int(lengthValue))
+    let total = payload.count
+    try payload.withUnsafeMutableBytes { raw in
+        var done = 0
+        while done < total {
+            let chunk = read(fd, raw.baseAddress!.advanced(by: done), total - done)
+            guard chunk > 0 else { throw HarnessError.socket("short body") }
+            done += chunk
+        }
+    }
+    let json = try JSONSerialization.jsonObject(with: Data(payload)) as! [String: Any]
+    let result = json["result"] as! [String: Any]
+    guard result["ok"] != nil else {
+        throw HarnessError.socket("debug op refused: \(result)")
+    }
+}
+
 enum HarnessError: Error {
     case socket(String)
 }
@@ -655,6 +753,21 @@ do {
             report.itemVersion.metadataVersion.count <= 128,
             "report \(report.filename) metadata version fits 128 bytes")
     }
+    // Synthetic long tail: thousands of chunks would breach the
+    // bound as a raw tail (over 160 KB), so a revert to raw tails
+    // fails here while the digest stays fixed width.
+    let longChunks = (0..<5000).map { String(format: "%032x", $0) }
+    let longRawTail = "\(identityHex.lowercased()):\(longChunks.joined(separator: ","))"
+    check(longRawTail.count > 128, "the long tail would breach the bound raw")
+    let longItem = try store.buildItem(
+        node: .file(size: 12345, executable: false, chunks: longChunks, identity: identityHex),
+        path: "long-tail.bin", parent: .rootContainer, generation: 3, revision: 9)
+    check(
+        longItem.itemVersion.contentVersion.count <= 128,
+        "a long-tail item version fits 128 bytes")
+    check(
+        longItem.itemVersion.metadataVersion.count <= 128,
+        "a long-tail metadata version fits 128 bytes")
 } catch {
     print("FAIL: version bound: \(error)")
     failures += 1
@@ -833,30 +946,44 @@ do {
     check(facts != nil, "our versions parse into per-entry facts")
     if let facts {
         let unrelatedWrite = NSFileProviderItemVersion(
-            contentVersion: Data("wyrd-cv2:99:99:\(facts.size):\(facts.rest)".utf8),
+            contentVersion: Data("wyrd-cv3:99:99:\(facts.size):\(facts.rest)".utf8),
             metadataVersion: currentVersion.metadataVersion)
         check(
             FileProviderExtension.baseVersionMatches(unrelatedWrite, current: current),
             "a newer coordinate with the same entry facts still matches")
         let changedEntry = NSFileProviderItemVersion(
-            contentVersion: Data("wyrd-cv2:3:9:12345:\(facts.rest)".utf8),
+            contentVersion: Data("wyrd-cv3:3:9:12345:\(facts.rest)".utf8),
             metadataVersion: currentVersion.metadataVersion)
         check(
             !FileProviderExtension.baseVersionMatches(changedEntry, current: current),
             "a changed size fails")
-        // Same size, different content digest: the whole point of
-        // carrying chunks in the version. Tweak the digest tail so
-        // the size still matches.
-        let sizedRest = facts.rest.split(separator: ":", maxSplits: 1).map(String.init)
-        let foreignRest = sizedRest.count == 2
-            ? "\(sizedRest[0]):deadbeef"
-            : "dead:deadbeef"
-        let sameSizeEdit = NSFileProviderItemVersion(
-            contentVersion: Data("wyrd-cv2:3:9:\(facts.size):\(foreignRest)".utf8),
+        // Upgrade continuity: the `cv2` tail is the exact
+        // `token:content` string `cv3` digests, so a cached `cv2`
+        // base still matches after the upgrade instead of failing
+        // once and healing. `hello.txt` serves chunks `["aa"]`
+        // under the test token, so its raw tail is known.
+        let tokenTag = identityHex.lowercased()
+        let helloRawRest = "\(tokenTag):aa"
+        checkEqual(
+            conflictDigestHex(helloRawRest), facts.rest,
+            "the current digest covers the token-plus-chunk tail")
+        let upgradedFacts = FileProviderExtension.versionFacts(
+            Data("wyrd-cv2:3:9:26:\(helloRawRest)".utf8))
+        check(
+            upgradedFacts?.size == facts.size && upgradedFacts?.rest == facts.rest,
+            "a cached cv2 tail normalizes to the cv3 facts")
+        let upgradedBase = NSFileProviderItemVersion(
+            contentVersion: Data("wyrd-cv2:99:99:26:\(helloRawRest)".utf8),
             metadataVersion: currentVersion.metadataVersion)
         check(
-            !FileProviderExtension.baseVersionMatches(sameSizeEdit, current: current),
-            "a same-size content edit fails")
+            FileProviderExtension.baseVersionMatches(upgradedBase, current: current),
+            "a cached cv2 base still matches after the cv3 upgrade")
+        let staleRawBase = NSFileProviderItemVersion(
+            contentVersion: Data("wyrd-cv2:3:9:26:\(tokenTag):bb".utf8),
+            metadataVersion: currentVersion.metadataVersion)
+        check(
+            !FileProviderExtension.baseVersionMatches(staleRawBase, current: current),
+            "a cv2 base with different content still fails")
         // Legacy cv1 versions still parse (transitional cached
         // versions fail closed on shape, never on parse).
         let legacy = NSFileProviderItemVersion(
@@ -1505,6 +1632,32 @@ do {
     checkEqual(
         control.filename, "legacy.bin",
         "an identity-less path keeps its legacy reference")
+    // Resolve-before-mint at one path: the stub seeds an
+    // identity-less file, the legacy reference resolves while it
+    // stays identity-less, and the same reference 404s once the
+    // stub mints — the transition, not just the outcomes.
+    try debugStub(
+        socketPath: socketPath, op: "debug-seed-legacy",
+        params: ["path": "mut-dir/mut-trans.txt", "content_hex": "7472616e73"])
+    let transLegacy = NSFileProviderItemIdentifier(
+        WyrdItemIdentifier.legacyID(path: "mut-dir/mut-trans.txt"))
+    let transBefore = try store.item(for: transLegacy)
+    checkEqual(
+        transBefore.filename, "mut-trans.txt",
+        "a seeded identity-less path resolves through its legacy reference")
+    try debugStub(
+        socketPath: socketPath, op: "debug-mint",
+        params: ["path": "mut-dir/mut-trans.txt"])
+    do {
+        _ = try store.item(for: transLegacy)
+        print("FAIL: minted transition path serves under the old legacy reference")
+        failures += 1
+    } catch let error as LiveStoreError {
+        if case .notFound = error {} else {
+            print("FAIL: minted transition legacy reference 404s, got \(error)")
+            failures += 1
+        }
+    }
     // Retired directories: enumerating through a legacy directory
     // reference and creating under one both 404 once the path is
     // minted — the container surface enforces the same rule as the
