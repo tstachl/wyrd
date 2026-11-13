@@ -112,16 +112,41 @@ is transient — no drive data is affected.
   the sealed invitation file, leave carries the sole-owner terminal
   acknowledgement to the `--yes` boundary, and a non-owner leave
   authors nothing (the re-observation proves it). Mode selection at
-  create/join is the platform default `vault`; other modes refuse
-  with the installer-follow-up pointer. Per-drive mode
-  reconfiguration (`drive reconfigure`) stops, clears, rewrites, and
-  restarts vault supervision in place and verifies the socket;
-  non-vault targets still refuse with the installer-follow-up pointer
-  until the mount template lands. Native file pickers (`tauri-plugin-dialog`,
+  create/join is `vault` or `mount` (`--mountpoint` required for
+  mount, refused for vault); unknown modes refuse before anything
+  moves. Per-drive mode reconfiguration (`drive reconfigure`) stops,
+  clears, rewrites, and restarts supervision in place and verifies
+  the socket; vault and mount both reconfigure in either direction.
+  The registry rewrite re-resolves under the lock and applies only
+  the operator's intent to the fresh entry (a kept relay set never
+  reverts a concurrent update); when the lock resolves a fresher
+  relay set than the installed definition carries, the definition
+  is reinstalled from the written entry. Native file pickers (`tauri-plugin-dialog`,
   `dialog:allow-open`) select credential and invitation paths; the
   layer gate reserves the plugin alongside `tauri`. Frontend:
   create/join/leave forms in the Drives view with outcome plus
   observation display, IPC mirrors and wrapper arg-shape pins.
+
+- Registry-managed `mount` mode with service template and locked
+  registry rewrite
+  (`nostr:nevent1qqsxctefcnqd8fh7rq04eyr48rnkw7qx4t4zau85rd0jymcrskasgkgpz9mhxue69uhkwunpwdczuap49eehgq2zjd4`,
+  `nostr:nevent1qqs9nmxzxp4u4dudamvj4c3qm7k0uuuhywa85n6sjgv3rwfxed2uamgpz9mhxue69uhkwunpwdczuap49eehg4r8n3s`):
+  the registry carries an optional `mountpoint` (`ServiceMode::Mount`
+  alongside `Vault`; version stays 1, older builds skip mount
+  entries loudly and carry them verbatim), and provisioning and
+  reconfiguration manage `wyrd mount` services — supervised argv
+  with the `mount.posture` sidecar, atomic owner-only install,
+  enable/start split, socket-plus-reread verification — through new
+  `--mode`/`--mountpoint` flags on `bootstrap` and `drive
+  reconfigure` (parsed once, refused before any I/O with
+  existence, containment, and pairing rules). Registry call sites
+  rewrite under a locked read-modify-write: the updater closure runs
+  against the fresh map under the lockfile, so a kept relay set
+  never reverts a concurrent update and concurrent same-key updates
+  serialize to one whole winner; the installed definition is
+  reinstalled from the written entry when the lock resolves a
+  fresher relay set. The desktop adapter threads the same pair and
+  the lifecycle view carries the mountpoint to the IPC mirror.
 
 ### Changed
 

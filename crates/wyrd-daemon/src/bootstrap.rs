@@ -466,6 +466,45 @@ fn has_dotdot(path: &Path) -> bool {
         .any(|component| matches!(component, std::path::Component::ParentDir))
 }
 
+/// Live mountpoint checks for the provision/reconfigure validate
+/// stage — never for `validate_entry`: the mountpoint must exist as
+/// a directory (a typo would install a definition that exits
+/// immediately and restart-loops until the socket timeout), and must
+/// neither contain the drive directory nor sit inside it (the
+/// projection would hide the store or shadow part of it). Shape
+/// problems stay in `validate_entry` so the read path keeps
+/// reporting a missing mountpoint as a skip — a loud verdict on
+/// what is registered — instead of hiding an otherwise valid entry.
+fn validate_mountpoint_live(drive_dir: &Path, mountpoint: &Path) -> Result<(), BootstrapError> {
+    if !mountpoint.is_dir() {
+        return Err(BootstrapError::InvalidMountpoint {
+            reason: format!(
+                "mountpoint {} does not exist or is not a directory",
+                mountpoint.display()
+            ),
+        });
+    }
+    if drive_dir.starts_with(mountpoint) {
+        return Err(BootstrapError::InvalidMountpoint {
+            reason: format!(
+                "mountpoint {} must not contain the drive directory {}",
+                mountpoint.display(),
+                drive_dir.display()
+            ),
+        });
+    }
+    if mountpoint.starts_with(drive_dir) {
+        return Err(BootstrapError::InvalidMountpoint {
+            reason: format!(
+                "mountpoint {} must not sit inside the drive directory {}",
+                mountpoint.display(),
+                drive_dir.display()
+            ),
+        });
+    }
+    Ok(())
+}
+
 /// Mountpoint path rules, mirroring the drive-directory rules: the
 /// service template renders the mountpoint into the unit, so a
 /// relative, escaping, or control-carrying path is refused before
@@ -568,10 +607,12 @@ fn lock_registry(path: &Path) -> Result<std::fs::File, BootstrapError> {
 /// matches. The candidate map itself is fully validated and refuses
 /// the write on any invalid entry.
 ///
-/// Whole-map replacement through the same locked path
-/// [`modify_registry`] provides: candidates validate before the lock
-/// (so a refusal touches nothing), then the replacement, merge, and
-/// crash-safe rename run under one lock hold.
+/// Replacement through the same locked path [`modify_registry`]
+/// provides: candidates validate before the lock (so a refusal
+/// touches nothing), then the replacement, the carry-forward merge,
+/// and the crash-safe rename run under one lock hold. Keys the
+/// candidate map drops come back from the carried file verbatim —
+/// this replaces the valid set, it does not delete carried keys.
 pub fn write_registry(
     path: &Path,
     drives: &BTreeMap<String, RegistryEntry>,
@@ -605,13 +646,24 @@ pub fn write_registry(
 /// the lock closes that window: concurrent same-key updates
 /// serialize, and the last writer wins cleanly with no torn mix.
 ///
-/// The closure sees the fresh valid entries and returns its result;
-/// the whole resulting map is validated like `write_registry`
-/// validates its candidates, carried entries merge verbatim, and the
-/// post-write skipped reasons return alongside — so the caller
-/// surfaces rotten data from the file it actually wrote, not from a
-/// pre-lock read.
-pub fn modify_registry<T>(
+/// The closure contract, by necessity of the lock it runs under:
+///
+/// - it runs while the cross-process registry lock is held, so it
+///   must stay non-blocking and do no I/O — file reads, socket
+///   probes, and service waits all happen outside;
+/// - it sees only the validated entries (skipped raws are invisible
+///   to it) and returns its result; the whole resulting map is then
+///   validated like `write_registry` validates its candidates;
+/// - it cannot delete: keys the resulting map drops come back from
+///   the carried raws verbatim (a future `forget` needs an explicit
+///   deletion path, not this primitive).
+///
+/// Carried entries merge verbatim, and the post-write skipped reasons
+/// return alongside — so the caller surfaces rotten data from the
+/// file it actually wrote, not from a pre-lock read. Crate-private:
+/// the CLI drives this through `provision` and `reconfigure`, and no
+/// other crate may take the lock.
+pub(crate) fn modify_registry<T>(
     path: &Path,
     modify: impl FnOnce(&mut BTreeMap<String, RegistryEntry>) -> Result<T, BootstrapError>,
 ) -> Result<(T, Vec<String>), BootstrapError> {
@@ -830,8 +882,8 @@ pub struct SupervisedOwner {
     /// `wyrd-supervise` (`nix/drive/supervise.py`): same installer
     /// layout as the `wyrd` binary, overridable per command.
     pub supervise_bin: PathBuf,
-    /// The `wyrd` binary whose `vault` subcommand serves the drive
-    /// and binds the interface socket.
+    /// The `wyrd` binary whose `vault` or `mount` subcommand serves
+    /// the drive and binds the interface socket.
     pub wyrd_bin: PathBuf,
     /// Hardened credential files, resolved the way `load_credentials`
     /// resolves them. Paths, not secrets, travel here — the service
@@ -1493,6 +1545,18 @@ pub fn provision(config: ProvisionConfig) -> ProvisionState {
             reason: error.to_string(),
         };
     }
+    // Live mountpoint checks before anything is created: shape passed
+    // above, but the path must also exist and stand apart from the
+    // drive directory, or the installed definition could never work.
+    if let Some(mountpoint) = &config.mountpoint {
+        if let Err(error) = validate_mountpoint_live(&config.drive_dir, mountpoint) {
+            return ProvisionState::ProvisioningIncomplete {
+                stage: "validate",
+                kind: ProvisionFailureKind::Validate,
+                reason: error.to_string(),
+            };
+        }
+    }
     // A managed service refuses a relay-less drive (it would serve
     // nothing peers can discover), so managing without relays is
     // refused before anything is created or registered — with that
@@ -1935,6 +1999,18 @@ pub fn reconfigure(config: ReconfigureConfig) -> ProvisionState {
             reason: BootstrapError::MissingMountpoint.to_string(),
         };
     }
+    // Live mountpoint checks before anything moves: shape passed
+    // above, but the path must also exist and stand apart from the
+    // drive directory, or the installed definition could never work.
+    if let Some(mountpoint) = &config.mountpoint {
+        if let Err(error) = validate_mountpoint_live(&config.drive_dir, mountpoint) {
+            return ProvisionState::ProvisioningIncomplete {
+                stage: "validate",
+                kind: ProvisionFailureKind::Validate,
+                reason: error.to_string(),
+            };
+        }
+    }
 
     // 1. Read the registry and resolve the entry by directory. Zero
     // matches means the drive was never registered (or was
@@ -1986,20 +2062,33 @@ pub fn reconfigure(config: ReconfigureConfig) -> ProvisionState {
 
     // 2. Candidate relays: flags replace the registered set, absence
     // keeps it — so a credential-path-only reconfigure never clears
-    // relays by accident. Values validate before anything stops: a
-    // bad relay refuses with the service still up.
-    let relays = match config.relays {
-        Some(relays) => relays,
+    // relays by accident. Explicit values validate before anything
+    // stops: a bad relay refuses with the service still up. A kept
+    // set is intent, not a snapshot: it resolves from the fresh entry
+    // under the lock below, so a concurrent relay update landing
+    // between this read and the rewrite is kept, not reverted.
+    let relays = match config.relays.clone() {
+        Some(candidate) => {
+            if !valid_relays(&candidate) {
+                return ProvisionState::ProvisioningIncomplete {
+                    stage: "validate",
+                    kind: ProvisionFailureKind::Validate,
+                    reason: BootstrapError::InvalidRelays.to_string(),
+                };
+            }
+            Some(candidate)
+        }
+        None => None,
+    };
+    // Pre-stop working values for the definition install: explicit
+    // relays, or the pre-stop stored set as a stand-in the lock
+    // re-resolves below. A managed drive with no relays to serve is
+    // refused before anything stops, like provisioning.
+    let install_relays = match &relays {
+        Some(explicit) => explicit.clone(),
         None => stored.relays.clone(),
     };
-    if !valid_relays(&relays) {
-        return ProvisionState::ProvisioningIncomplete {
-            stage: "validate",
-            kind: ProvisionFailureKind::Validate,
-            reason: BootstrapError::InvalidRelays.to_string(),
-        };
-    }
-    if config.manage_service && relays.is_empty() {
+    if config.manage_service && install_relays.is_empty() {
         return ProvisionState::ProvisioningIncomplete {
             stage: "validate",
             kind: ProvisionFailureKind::Validate,
@@ -2014,12 +2103,17 @@ pub fn reconfigure(config: ReconfigureConfig) -> ProvisionState {
     // one entry `updated_entry` builds from the pre-stop read, so a
     // managed definition can never render the old relay set beside
     // the new registry entry. The authoritative rewrite below
-    // re-resolves under the lock and applies the same transformation
-    // to the fresh entry, so a concurrent same-key update between
-    // this read and the write cannot be clobbered by the stale copy.
-    let updated = updated_entry(
+    // re-resolves under the lock and applies the same intent —
+    // explicit relays, or the fresh kept set — to the fresh entry,
+    // so a concurrent same-key update between this read and the
+    // write is preserved underneath the transformation instead of
+    // being clobbered by the stale copy. When the lock resolves a
+    // fresher relay set than this copy carries, the definition is
+    // reinstalled from the written entry before enabling, so the
+    // two never disagree.
+    let working = updated_entry(
         stored,
-        relays,
+        install_relays,
         config.mode.clone(),
         config.mountpoint.clone(),
     );
@@ -2083,7 +2177,7 @@ pub fn reconfigure(config: ReconfigureConfig) -> ProvisionState {
     match open() {
         Ok(_) => {}
         Err(error) if is_store_locked(&error) && config.manage_service => {
-            if let Err(error) = disable_service(&updated, config.service_definition.as_ref()) {
+            if let Err(error) = disable_service(&working, config.service_definition.as_ref()) {
                 return ProvisionState::ProvisioningIncomplete {
                     stage: "stop-service",
                     kind: ProvisionFailureKind::StopService,
@@ -2121,7 +2215,7 @@ pub fn reconfigure(config: ReconfigureConfig) -> ProvisionState {
     // no-op when step 4 already stopped (the file is gone), and a
     // missing definition file means the drive was never managed —
     // nothing to clear.
-    if let Err(error) = disable_service(&updated, config.service_definition.as_ref()) {
+    if let Err(error) = disable_service(&working, config.service_definition.as_ref()) {
         return ProvisionState::ProvisioningIncomplete {
             stage: "stop-service",
             kind: ProvisionFailureKind::StopService,
@@ -2129,7 +2223,7 @@ pub fn reconfigure(config: ReconfigureConfig) -> ProvisionState {
         };
     }
 
-    // 6. Install the new definition when managed — from the updated
+    // 6. Install the new definition when managed — from the working
     // entry, before the registry rewrite, so a crash between them
     // leaves the new definition beside the old entry (the next run
     // reconciles forward) rather than the old definition over the
@@ -2137,12 +2231,12 @@ pub fn reconfigure(config: ReconfigureConfig) -> ProvisionState {
     // above.
     let definition = if config.manage_service {
         let owner = SupervisedOwner {
-            supervise_bin: supervise_bin.expect("resolved when managed"),
-            wyrd_bin: wyrd_bin.expect("resolved when managed"),
+            supervise_bin: supervise_bin.clone().expect("resolved when managed"),
+            wyrd_bin: wyrd_bin.clone().expect("resolved when managed"),
             identity_file: config.identity_file.clone(),
             passphrase_file: config.passphrase_file.clone(),
         };
-        match install_service_definition(&updated, &owner, config.service_definition.as_ref()) {
+        match install_service_definition(&working, &owner, config.service_definition.as_ref()) {
             Ok(definition) => Some(definition),
             Err((kind, reason)) => {
                 return ProvisionState::ProvisioningIncomplete {
@@ -2158,40 +2252,58 @@ pub fn reconfigure(config: ReconfigureConfig) -> ProvisionState {
 
     // 7. Rewrite the entry in place under the lock. The updater
     // re-resolves by directory against the fresh map and applies the
-    // same transformation (relays, mode, mountpoint) the pre-stop
-    // read computed — so a concurrent same-key update between the
-    // pre-stop read and this write is preserved underneath the
-    // transformation instead of being clobbered by the stale working
-    // copy. Skipped entries carry forward verbatim inside the write,
-    // so a future mode or a rotten entry survives the rewrite and is
-    // surfaced by the caller instead of silently discarded.
-    let intended_relays = updated.relays.clone();
-    let intended_mode = updated.mode.clone();
-    let intended_mountpoint = updated.mountpoint.clone();
-    let (updated, skipped) = match modify_registry(&config.registry_path, |drives| {
+    // operator's intent — explicit relays, or the fresh kept set —
+    // plus the intended mode and mountpoint. A concurrent same-key
+    // update between the pre-stop read and this write is preserved
+    // underneath the transformation instead of being clobbered by
+    // the stale working copy — including a relay update landing
+    // while this run kept the set. Skipped entries carry forward
+    // verbatim inside the write, so a future mode or a rotten entry
+    // survives the rewrite and is surfaced by the caller instead of
+    // silently discarded.
+    let intended_relays = relays;
+    let intended_mode = config.mode.clone();
+    let intended_mountpoint = config.mountpoint.clone();
+    let drive_dir = config.drive_dir.clone();
+    let registry_path = config.registry_path.clone();
+    let (written, skipped) = match modify_registry(&config.registry_path, |drives| {
         let mut matches: Vec<String> = drives
             .iter()
-            .filter(|(_, entry)| entry.drive_dir == config.drive_dir)
+            .filter(|(_, entry)| entry.drive_dir == drive_dir)
             .map(|(key, _)| key.clone())
             .collect();
         matches.sort();
         match matches.len() {
             0 => Err(BootstrapError::Read {
-                path: config.registry_path.clone(),
+                path: registry_path.clone(),
                 source: std::io::Error::new(
                     std::io::ErrorKind::NotFound,
                     format!(
                         "no registry entry for {}: register with `wyrd bootstrap` first",
-                        config.drive_dir.display()
+                        drive_dir.display()
                     ),
                 ),
             }),
             1 => {
                 let key = matches.pop().expect("one match");
-                let stored = drives.get(&key).expect("key resolved").clone();
+                let fresh = drives.get(&key).expect("key resolved").clone();
+                // Intent, resolved fresh: explicit flags win, absence
+                // keeps whatever the fresh entry carries — never the
+                // pre-stop snapshot. Values re-validate here: a
+                // concurrent writer can only have stored valid relays,
+                // but the check is what makes the keep path honest.
+                let resolved = match &intended_relays {
+                    Some(explicit) => explicit.clone(),
+                    None => fresh.relays.clone(),
+                };
+                if !valid_relays(&resolved) {
+                    return Err(BootstrapError::RefusedWrite {
+                        source: Box::new(BootstrapError::InvalidRelays),
+                    });
+                }
                 let updated = updated_entry(
-                    stored,
-                    intended_relays.clone(),
+                    fresh,
+                    resolved,
                     intended_mode.clone(),
                     intended_mountpoint.clone(),
                 );
@@ -2199,29 +2311,78 @@ pub fn reconfigure(config: ReconfigureConfig) -> ProvisionState {
                 Ok(updated)
             }
             _ => Err(BootstrapError::ConflictingEntries {
-                dir: config.drive_dir.clone(),
+                dir: drive_dir.clone(),
                 keys: matches.join(", "),
             }),
         }
     }) {
-        Ok((updated, skipped)) => (updated, skipped),
+        Ok((written, skipped)) => (written, skipped),
         Err(error) => {
+            // Post-stop refusals: the old service is already stopped
+            // and cleared, so a resolve failure names the registry
+            // state to repair — not a write that happened. Anything
+            // else is a write failure with the entry untouched.
+            let stopped = "the old service is already stopped and cleared";
+            let (stage, kind, reason) = match &error {
+                BootstrapError::Read { source, .. }
+                    if source.kind() == std::io::ErrorKind::NotFound =>
+                (
+                    "validate",
+                    ProvisionFailureKind::Validate,
+                    format!("{error} ({stopped}; re-register the drive, then re-run to converge)"),
+                ),
+                BootstrapError::ConflictingEntries { .. } => (
+                    "validate",
+                    ProvisionFailureKind::Validate,
+                    format!("{error} ({stopped}; resolve the duplicate by hand, then re-run to converge)"),
+                ),
+                _ => (
+                    "write-registry",
+                    ProvisionFailureKind::WriteRegistry,
+                    error.to_string(),
+                ),
+            };
             return ProvisionState::ProvisioningIncomplete {
-                stage: "write-registry",
-                kind: ProvisionFailureKind::WriteRegistry,
-                reason: error.to_string(),
+                stage,
+                kind,
+                reason,
             };
         }
     };
+    // The installed definition carries the pre-stop working copy;
+    // the lock may have resolved a fresher relay set. Reinstall from
+    // the written entry when they differ, so the manager never serves
+    // a stale relay set beside the new registry entry.
+    let effective = written;
+    let mut definition = definition;
+    if definition.is_some() && effective.relays != working.relays {
+        let owner = SupervisedOwner {
+            supervise_bin: supervise_bin.expect("resolved when managed"),
+            wyrd_bin: wyrd_bin.expect("resolved when managed"),
+            identity_file: config.identity_file.clone(),
+            passphrase_file: config.passphrase_file.clone(),
+        };
+        match install_service_definition(&effective, &owner, config.service_definition.as_ref()) {
+            Ok(definition_path) => definition = Some(definition_path),
+            Err((kind, reason)) => {
+                return ProvisionState::RegisteredButUnavailable {
+                    entry: effective,
+                    skipped,
+                    kind,
+                    reason,
+                };
+            }
+        }
+    }
 
     // 8. Enable, start, and verify when managed — the same handoff
     // provisioning runs. With `--no-service` and no manually
     // supervised owner, the socket never appears and readiness is
     // withheld — registered, never verified.
     if let Some(definition) = definition {
-        if let Err((kind, reason)) = enable_and_start(&updated, &definition) {
+        if let Err((kind, reason)) = enable_and_start(&effective, &definition) {
             return ProvisionState::RegisteredButUnavailable {
-                entry: updated,
+                entry: effective,
                 skipped: skipped.clone(),
                 kind,
                 reason,
@@ -2234,11 +2395,11 @@ pub fn reconfigure(config: ReconfigureConfig) -> ProvisionState {
         config.manage_service,
     ) {
         Ok(()) => ProvisionState::VerifiedAvailable {
-            entry: updated,
+            entry: effective,
             skipped,
         },
         Err((kind, reason)) => ProvisionState::RegisteredButUnavailable {
-            entry: updated,
+            entry: effective,
             skipped,
             kind,
             reason,
@@ -3068,6 +3229,277 @@ mod tests {
             }
             other => panic!("one writer must win whole: {other:?}"),
         }
+    }
+
+    /// Per-field writers through the locked path both survive: writer
+    /// A changes only the relays (taking mode and mountpoint from the
+    /// entry it reads under the lock), writer B changes only the
+    /// mode and mountpoint (keeping the fresh relays). Either commit
+    /// order leaves A's relays beside B's mode — a stale whole-map
+    /// write would lose one side whichever committed last.
+    #[test]
+    fn concurrent_disjoint_updates_both_survive() {
+        let dir = scratch("disjoint");
+        let registry = dir.join("drives.json");
+        let mountpoint = dir.join("mnt");
+        std::fs::create_dir_all(&mountpoint).unwrap();
+        let first = provision(provision_no_service(&dir, &registry, "demo"));
+        assert!(matches!(
+            first,
+            ProvisionState::RegisteredButUnavailable { .. }
+        ));
+        let registry_clone = registry.clone();
+        let mountpoint_clone = mountpoint.clone();
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                modify_registry(&registry, |drives| {
+                    let fresh = drives.get("demo").expect("demo registered").clone();
+                    let updated = updated_entry(
+                        fresh.clone(),
+                        vec!["relay://a".to_string()],
+                        fresh.mode,
+                        fresh.mountpoint,
+                    );
+                    drives.insert("demo".to_string(), updated);
+                    Ok(())
+                })
+                .unwrap();
+            });
+            scope.spawn(|| {
+                modify_registry(&registry_clone, |drives| {
+                    let fresh = drives.get("demo").expect("demo registered").clone();
+                    let updated = updated_entry(
+                        fresh.clone(),
+                        fresh.relays,
+                        ServiceMode::Mount,
+                        Some(mountpoint_clone.clone()),
+                    );
+                    drives.insert("demo".to_string(), updated);
+                    Ok(())
+                })
+                .unwrap();
+            });
+        });
+        let read = read_registry(&registry).unwrap();
+        let entry = &read.drives["demo"];
+        assert_eq!(entry.relays, vec!["relay://a".to_string()]);
+        assert!(matches!(entry.mode, ServiceMode::Mount));
+        assert_eq!(entry.mountpoint, Some(mountpoint));
+    }
+
+    /// A kept relay set never reverts a concurrent update: writer B
+    /// sets an explicit relay set while writer A reconfigures with no
+    /// `--relay` flags (keep intent) at the `reconfigure` call sites
+    /// themselves. Whatever order the two rewrites commit, the final
+    /// entry carries B's set — A's keep resolves fresh, never stale.
+    /// Retries on the terminal store lock keep the race hermetic: two
+    /// reconfigures in one process briefly contend on the keystore
+    /// open, and a refused attempt simply re-runs.
+    #[test]
+    fn reconfigure_keep_never_reverts_a_concurrent_relay_update() {
+        let dir = scratch("keep-race");
+        let registry = dir.join("drives.json");
+        let first = provision(provision_no_service(&dir, &registry, "demo"));
+        assert!(matches!(
+            first,
+            ProvisionState::RegisteredButUnavailable { .. }
+        ));
+        let sock = dir.join("drive").join("owner.sock");
+        // Exactly two connections: each thread verifies once, on the
+        // attempt its keystore open succeeds — attempts refused with
+        // the store lock never reach the socket.
+        let server = stub_owner(sock, 2, "Unobserved");
+        let registry_a = registry.clone();
+        let registry_b = registry.clone();
+        let dir_a = dir.clone();
+        std::thread::scope(|scope| {
+            scope.spawn(move || {
+                for _ in 0..60 {
+                    let report = reconfigure(reconfigure_no_service(
+                        &dir_a,
+                        &registry_a,
+                        None,
+                        ServiceMode::Vault,
+                        None,
+                    ));
+                    match report {
+                        ProvisionState::VerifiedAvailable { .. } => return,
+                        ProvisionState::ProvisioningIncomplete {
+                            kind: ProvisionFailureKind::StoreLocked,
+                            ..
+                        } => {
+                            // The keystore open holds through the
+                            // KDF, so a colliding attempt backs
+                            // off instead of spinning against it.
+                            std::thread::sleep(std::time::Duration::from_millis(200));
+                            continue;
+                        }
+                        other => panic!("keep must verify or contend: {other:?}"),
+                    }
+                }
+                panic!("keep never verified past contention");
+            });
+            scope.spawn(move || {
+                for _ in 0..60 {
+                    let report = reconfigure(reconfigure_no_service(
+                        &dir,
+                        &registry_b,
+                        Some(vec!["relay://new".to_string()]),
+                        ServiceMode::Vault,
+                        None,
+                    ));
+                    match report {
+                        ProvisionState::VerifiedAvailable { .. } => return,
+                        ProvisionState::ProvisioningIncomplete {
+                            kind: ProvisionFailureKind::StoreLocked,
+                            ..
+                        } => {
+                            std::thread::sleep(std::time::Duration::from_millis(200));
+                            continue;
+                        }
+                        other => panic!("explicit update must verify or contend: {other:?}"),
+                    }
+                }
+                panic!("explicit update never verified past contention");
+            });
+        });
+        let read = read_registry(&registry).unwrap();
+        assert_eq!(
+            read.drives["demo"].relays,
+            vec!["relay://new".to_string()],
+            "the explicit update survives the keep"
+        );
+        server.join().unwrap();
+    }
+
+    /// The installed definition follows the written entry: when the
+    /// lock resolves a fresher relay set than the pre-stop working
+    /// copy carried, the definition is reinstalled from the written
+    /// entry at the same override path — the manager never serves a
+    /// stale relay set beside the new registry entry.
+    #[test]
+    fn reinstall_follows_the_written_relay_set() {
+        let dir = scratch("reinstall");
+        let registry = dir.join("drives.json");
+        let first = provision(provision_no_service(&dir, &registry, "demo"));
+        assert!(matches!(
+            first,
+            ProvisionState::RegisteredButUnavailable { .. }
+        ));
+        // Stage a concurrent update between the pre-stop read and the
+        // rewrite by writing it directly: the working copy below
+        // carries the stale pre-stop set, the file carries the fresh
+        // set the lock will resolve.
+        let mut read = read_registry(&registry).unwrap();
+        read.drives.get_mut("demo").unwrap().relays = vec!["relay://fresh".to_string()];
+        write_registry(&registry, &read.drives).unwrap();
+        let stale = RegistryEntry {
+            name: "demo".to_string(),
+            drive_dir: dir.join("drive"),
+            relays: vec![],
+            service: "drive-demo".to_string(),
+            mode: ServiceMode::Vault,
+            mountpoint: None,
+        };
+        let written = RegistryEntry {
+            relays: vec!["relay://fresh".to_string()],
+            ..stale.clone()
+        };
+        let owner = SupervisedOwner {
+            supervise_bin: dir.join("wyrd-supervise"),
+            wyrd_bin: dir.join("wyrd"),
+            identity_file: dir.join("identity"),
+            passphrase_file: dir.join("passphrase"),
+        };
+        let definition = dir.join("wyrd-test-definition");
+        install_service_definition(&stale, &owner, Some(&definition)).unwrap();
+        assert!(
+            !std::fs::read_to_string(&definition)
+                .unwrap()
+                .contains("relay://fresh"),
+            "the stale install carries the stale set"
+        );
+        install_service_definition(&written, &owner, Some(&definition)).unwrap();
+        let content = std::fs::read_to_string(&definition).unwrap();
+        assert!(
+            content.contains("relay://fresh"),
+            "the reinstall carries the written set: {content}"
+        );
+    }
+
+    /// Mount provisioning refuses a missing, file, containing, or
+    /// contained mountpoint before anything is created: no drive
+    /// directory and no registry appear, and the reason names the
+    /// rule. Shape problems stay in the entry validator; these live
+    /// checks run after it.
+    #[test]
+    fn provision_mount_refuses_unusable_mountpoints_before_creating() {
+        // Missing mountpoint.
+        let dir = scratch("prov-mnt-missing");
+        let registry = dir.join("drives.json");
+        let missing = dir.join("no-such-mnt");
+        let report = provision(provision_mount_no_service(
+            &dir, &registry, "demo", &missing,
+        ));
+        match report {
+            ProvisionState::ProvisioningIncomplete { stage, reason, .. } => {
+                assert_eq!(stage, "validate");
+                assert!(reason.contains("does not exist"), "{reason}");
+            }
+            other => panic!("a missing mountpoint must refuse: {other:?}"),
+        }
+        assert!(!dir.join("drive").exists());
+        assert!(!registry.exists());
+
+        // Mountpoint that is a file, not a directory.
+        let dir = scratch("prov-mnt-file");
+        let registry = dir.join("drives.json");
+        let file = dir.join("file-mnt");
+        std::fs::write(&file, b"x").unwrap();
+        let report = provision(provision_mount_no_service(&dir, &registry, "demo", &file));
+        match report {
+            ProvisionState::ProvisioningIncomplete { stage, reason, .. } => {
+                assert_eq!(stage, "validate");
+                assert!(reason.contains("not a directory"), "{reason}");
+            }
+            other => panic!("a file mountpoint must refuse: {other:?}"),
+        }
+        assert!(!registry.exists());
+
+        // Mountpoint containing the drive directory.
+        let dir = scratch("prov-mnt-contains");
+        let registry = dir.join("drives.json");
+        let report = provision(provision_mount_no_service(
+            &dir,
+            &registry,
+            "demo",
+            dir.as_path(),
+        ));
+        match report {
+            ProvisionState::ProvisioningIncomplete { stage, reason, .. } => {
+                assert_eq!(stage, "validate");
+                assert!(reason.contains("must not contain"), "{reason}");
+            }
+            other => panic!("a containing mountpoint must refuse: {other:?}"),
+        }
+        assert!(!registry.exists());
+
+        // Mountpoint inside the drive directory.
+        let dir = scratch("prov-mnt-inside");
+        let registry = dir.join("drives.json");
+        let drive = dir.join("drive");
+        std::fs::create_dir_all(&drive).unwrap();
+        let inside = drive.join("mnt");
+        std::fs::create_dir_all(&inside).unwrap();
+        let report = provision(provision_mount_no_service(&dir, &registry, "demo", &inside));
+        match report {
+            ProvisionState::ProvisioningIncomplete { stage, reason, .. } => {
+                assert_eq!(stage, "validate");
+                assert!(reason.contains("must not sit inside"), "{reason}");
+            }
+            other => panic!("an inside mountpoint must refuse: {other:?}"),
+        }
+        assert!(!registry.exists());
     }
 
     /// A stub owner socket: answers every request with the given

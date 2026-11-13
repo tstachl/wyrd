@@ -98,11 +98,11 @@ pub struct LeaveRequest {
 /// Reconfigure a registered drive's supervision in place: stop and
 /// clear the old service definition, rewrite the registry entry,
 /// reinstall and restart when managed, and verify the socket.
-/// `relays` replaces the registered set when non-empty and keeps it
-/// when empty (a credential-path-only reconfigure never clears
-/// relays by accident); `mode` is the platform default `vault` and
-/// any other value refuses with the installer-follow-up pointer
-/// before any process spawns, like creation.
+/// `relays` replaces the registered set when non-empty and keeps the
+/// fresh set when empty (a credential-path-only reconfigure never
+/// clears relays by accident); `mode` is `vault` or `mount` (`mount`
+/// needs `mountpoint`), and any other value refuses before any
+/// process spawns, like creation.
 #[derive(Debug, Clone)]
 pub struct ReconfigureRequest {
     pub drive_dir: PathBuf,

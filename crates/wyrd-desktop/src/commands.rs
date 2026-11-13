@@ -334,8 +334,8 @@ pub struct MembershipObservation {
 /// Create one drive through the installed CLI (`bootstrap` without
 /// an invitation file), then re-read and probe. All arguments are
 /// owned strings; secret *paths* travel, never contents. `mode` is
-/// the platform default `vault` — any other value refuses with the
-/// installer-follow-up pointer before any process spawns.
+/// `vault` or `mount` (`mount` needs `mountpoint`); any other value
+/// refuses before any process spawns.
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProvisionCreateArgs {
