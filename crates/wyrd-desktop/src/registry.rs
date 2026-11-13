@@ -380,6 +380,10 @@ pub enum RegistryWriteError {
     /// A candidate entry breaks the registry rules: nothing was written.
     #[error("refusing to write: {reason}")]
     RefusedWrite { reason: String },
+    /// The registry schema version is newer than this build writes:
+    /// writing would silently replace a file this build cannot read.
+    #[error("registry {} is version {found}, this shell writes {REGISTRY_VERSION}", path.display())]
+    UnsupportedVersion { path: PathBuf, found: u64 },
     /// The registry file could not be read.
     #[error("read {}: {source}", path.display())]
     Read {
@@ -441,6 +445,17 @@ pub enum RegistryWriteError {
     #[error("verify {}: written entries do not match reread ({detail})", path.display())]
     VerifyMismatch { path: PathBuf, detail: String },
 }
+
+/// Decoded per entry by the writer: structurally corrupt values
+/// fail the whole write (as they fail the read), while values that
+/// decode but fail validation are carried forward verbatim.
+#[derive(Debug, serde::Deserialize)]
+struct RegistryFileWrite {
+    version: u32,
+    drives: BTreeMapForWrite,
+}
+
+type BTreeMapForWrite = std::collections::BTreeMap<String, serde_json::Value>;
 
 /// The inter-writer serialization, derived exactly like the daemon's:
 /// the registration flow and the desktop shell hold an exclusive
@@ -528,6 +543,11 @@ pub fn write_registry_at(
     // concurrent desktop writes): the lock covers the read below,
     // the merge, the rename, and the reread, so two writers never
     // interleave on one base. Held to end of scope.
+    //
+    // This primitive blocks on the lock. Like every other blocking
+    // call in this crate, future commands must run it on the
+    // `spawn_blocking` pool, never on a Tauri async executor thread
+    // (see the command-surface rule in `commands.rs`).
     let _lock = lock_registry(path)?;
     let mut merged: std::collections::BTreeMap<String, serde_json::Value> = drives
         .iter()
@@ -537,16 +557,61 @@ pub fn write_registry_at(
                 .map_err(|source| RegistryWriteError::Encode { source })
         })
         .collect::<Result<_, _>>()?;
-    if let Ok(existing) = std::fs::read(path) {
-        if let Ok(file) = serde_json::from_slice::<serde_json::Value>(&existing) {
-            if file.get("version").and_then(serde_json::Value::as_u64)
-                == Some(REGISTRY_VERSION as u64)
-            {
-                if let Some(map) = file.get("drives").and_then(serde_json::Value::as_object) {
-                    for (key, value) in map {
-                        merged.entry(key.clone()).or_insert_with(|| value.clone());
-                    }
-                }
+    // No silent best-effort: a present-but-unreadable registry
+    // (malformed JSON, newer schema) refuses the write instead of
+    // replacing the file with only the candidates. The reader
+    // reports such files loudly (`Unreadable`, never guessed); the
+    // writer must match, or a downgraded or corrupted file would
+    // lose every existing entry without a sound. Only a missing
+    // file contributes nothing.
+    match std::fs::read(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(source) => {
+            return Err(RegistryWriteError::Read {
+                path: path.to_path_buf(),
+                source,
+            });
+        }
+        Ok(existing) => {
+            let file: RegistryFileWrite =
+                serde_json::from_slice(&existing).map_err(|source| RegistryWriteError::Parse {
+                    path: path.to_path_buf(),
+                    source: std::io::Error::new(std::io::ErrorKind::InvalidData, source),
+                })?;
+            if file.version != REGISTRY_VERSION {
+                return Err(RegistryWriteError::UnsupportedVersion {
+                    path: path.to_path_buf(),
+                    found: file.version as u64,
+                });
+            }
+            for (key, value) in file.drives {
+                merged.entry(key).or_insert(value);
+            }
+        }
+    }
+    // Merged-set uniqueness: the reader skips duplicate drive_dirs
+    // (first name wins), so the writer refuses a merged set it would
+    // only half-list. Candidates and carried entries compare as
+    // parsed paths, exactly like the reader's dedup — including
+    // pre-existing duplicates, which surface here as a repair
+    // signal instead of silently persisting behind the view.
+    {
+        let mut seen: std::collections::BTreeMap<PathBuf, &str> = std::collections::BTreeMap::new();
+        for (key, value) in &merged {
+            let dir = value
+                .get("drive_dir")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| RegistryWriteError::RefusedWrite {
+                    reason: format!("entry {key:?} has no drive_dir to compare"),
+                })?;
+            let dir = PathBuf::from(dir);
+            if let Some(first) = seen.insert(dir.clone(), key.as_str()) {
+                return Err(RegistryWriteError::RefusedWrite {
+                    reason: format!(
+                        "duplicate drive_dir {} (keys {first:?} and {key:?}; first wins in the reader)",
+                        dir.display()
+                    ),
+                });
             }
         }
     }
@@ -923,6 +988,65 @@ mod tests {
     /// rewrite must never delete what this build does not
     /// understand — including a future mount mode the desktop
     /// reader skips today.
+    ///
+    /// A present-but-unreadable registry refuses the write instead
+    /// of being replaced: malformed JSON fails loud, and a newer
+    /// schema is never downgraded to version 1 with only the
+    /// candidates. Either way nothing is written.
+    #[test]
+    fn desktop_write_refuses_unreadable_and_newer_files() {
+        let dir =
+            std::env::temp_dir().join(format!("wyrd-desktop-reg-{}-refuse", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let malformed = dir.join("drives.json");
+        std::fs::write(&malformed, r#"{"version": 1, "drives": {"#).unwrap();
+        let refused = write_registry_at(&malformed, &write_map(&dir, ["new"])).unwrap_err();
+        assert!(refused.to_string().contains("parse"), "{refused}");
+        assert_eq!(
+            std::fs::read(&malformed).unwrap(),
+            b"{\"version\": 1, \"drives\": {",
+            "the malformed file is untouched"
+        );
+
+        let newer = dir.join("newer.json");
+        std::fs::write(&newer, r#"{"version": 999, "drives": {}}"#).unwrap();
+        let refused = write_registry_at(&newer, &write_map(&dir, ["new"])).unwrap_err();
+        assert!(refused.to_string().contains("999"), "{refused}");
+        assert_eq!(
+            std::fs::read(&newer).unwrap(),
+            br#"{"version": 999, "drives": {}}"#,
+            "the newer file is never downgraded"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Two candidates sharing one drive directory refuse the whole
+    /// write: the reader would skip the duplicate (first name wins),
+    /// so the writer never produces a set it only half-lists.
+    /// Nothing is written.
+    #[test]
+    fn desktop_write_refuses_duplicate_drive_dirs() {
+        let dir = std::env::temp_dir().join(format!(
+            "wyrd-desktop-reg-{}-write-dupes",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("drives.json");
+        let mut map = BTreeMapForTest::new();
+        let first = write_entry("alpha", &dir);
+        let mut second = write_entry("beta", &dir);
+        second.drive_dir = first.drive_dir.clone();
+        map.insert("alpha".to_string(), first);
+        map.insert("beta".to_string(), second);
+        let refused = write_registry_at(&path, &map).unwrap_err();
+        assert!(
+            refused.to_string().contains("duplicate drive_dir"),
+            "{refused}"
+        );
+        assert!(!path.exists(), "no partial registry may remain");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     #[test]
     fn desktop_write_carries_skipped_entries_forward_verbatim() {
         let dir =

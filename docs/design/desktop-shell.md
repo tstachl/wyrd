@@ -137,10 +137,11 @@ plane. Three pieces, all precedented in-tree:
   writer). Both hold an exclusive lock on the registry's lockfile
   sibling for the whole read-modify-write, validate every candidate
   or refuse the write, carry forward entries they do not understand
-  verbatim, follow the crash-safe order above, and the desktop
-  verifies by rereading — so concurrent rewrites serialize instead
-  of losing entries (atomic rename alone does not stop lost
-  updates).
+  verbatim — and refuse rather than replace a file they cannot read
+  (malformed, or a newer version they must not downgrade) — follow
+  the crash-safe order above, and the desktop verifies by rereading
+  — so concurrent rewrites serialize instead of losing entries
+  (atomic rename alone does not stop lost updates).
 - **Per-drive owner services**, installed from a template the
   installer ships: a launchd agent per drive on macOS, a systemd
   user unit per drive on Linux — the same shapes `nix/drive`

@@ -513,12 +513,34 @@ pub fn write_registry(
                 .map_err(|source| BootstrapError::Encode { source })
         })
         .collect::<Result<_, _>>()?;
-    if let Ok(existing) = std::fs::read(path) {
-        if let Ok(file) = serde_json::from_slice::<RegistryFile>(&existing) {
-            if file.version == REGISTRY_VERSION {
-                for (key, value) in file.drives {
-                    merged.entry(key).or_insert(value);
-                }
+    // No silent best-effort: a present-but-unreadable registry
+    // (malformed JSON, newer schema) refuses the write instead of
+    // replacing the file with only the candidates. The reader
+    // reports such files loudly; the writer must match, or a
+    // downgraded or corrupted file would lose every existing entry
+    // without a sound. Only a missing file contributes nothing.
+    match std::fs::read(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(source) => {
+            return Err(BootstrapError::Read {
+                path: path.to_path_buf(),
+                source,
+            });
+        }
+        Ok(existing) => {
+            let file: RegistryFile =
+                serde_json::from_slice(&existing).map_err(|source| BootstrapError::Parse {
+                    path: path.to_path_buf(),
+                    source,
+                })?;
+            if file.version != REGISTRY_VERSION {
+                return Err(BootstrapError::UnsupportedVersion {
+                    path: path.to_path_buf(),
+                    found: file.version,
+                });
+            }
+            for (key, value) in file.drives {
+                merged.entry(key).or_insert(value);
             }
         }
     }
@@ -2070,6 +2092,35 @@ mod tests {
         assert!(!path.exists(), "no partial registry may remain");
     }
 
+    /// A present-but-unreadable registry refuses the write instead
+    /// of being replaced: malformed JSON fails loud, and a newer
+    /// schema is never downgraded to version 1 with only the
+    /// candidates. Either way nothing is written.
+    #[test]
+    fn registry_write_refuses_unreadable_and_newer_files() {
+        let dir = scratch("refuse-unreadable");
+        let malformed = dir.join("drives.json");
+        std::fs::write(&malformed, r#"{"version": 1, "drives": {"#).unwrap();
+        let mut drives = BTreeMap::new();
+        drives.insert("new".to_string(), entry("new", &dir));
+        let refused = write_registry(&malformed, &drives).unwrap_err();
+        assert!(refused.to_string().contains("parse"), "{refused}");
+        assert_eq!(
+            std::fs::read(&malformed).unwrap(),
+            b"{\"version\": 1, \"drives\": {",
+            "the malformed file is untouched"
+        );
+
+        let newer = dir.join("newer.json");
+        std::fs::write(&newer, r#"{"version": 999, "drives": {}}"#).unwrap();
+        let refused = write_registry(&newer, &drives).unwrap_err();
+        assert!(refused.to_string().contains("999"), "{refused}");
+        assert_eq!(
+            std::fs::read(&newer).unwrap(),
+            br#"{"version": 999, "drives": {}}"#,
+            "the newer file is never downgraded"
+        );
+    }
     /// Concurrent writers converge without lost entries: every thread
     /// writes one distinct key through the same read-modify-write,
     /// and the registry lock serializes them, so the final read holds
