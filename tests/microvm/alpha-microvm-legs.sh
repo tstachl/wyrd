@@ -1153,10 +1153,10 @@ leg_headless_serve() {
   # serve#1: the vault announces with its serve route, then keeps
   # syncing. The ready line proves the first routed pass completed,
   # so a fetcher starting now races nothing.
-  with_creds "$c" vault "$d" --relay "$relay" \
+  with_creds "$c" owner "$d" --relay "$relay" start \
     >"$LOGDIR/headless-serve-1.out" 2>"$LOGDIR/headless-serve-1.err" &
   echo $! > "$PIDDIR/headless-serve.pid"
-  poll_until 300 grep -q "vault ready: serving " "$LOGDIR/headless-serve-1.err" \
+  poll_until 300 grep -q "owner ready: serving " "$LOGDIR/headless-serve-1.err" \
     || die "serve#1 never reported ready (see headless-serve-1.err)"
   grep -q "serving over iroh" "$LOGDIR/headless-serve-1.err" \
     || die "serve#1 never bound its endpoint"
@@ -1166,8 +1166,8 @@ leg_headless_serve() {
   # opening the store — exit 0, fresh posture, ready named, durable
   # unavailable (never guessed). No last-pass verdict yet: posture
   # publishes on loop events, and only the ready event has fired.
-  with_creds "$c" vault "$d" status >"$LOGDIR/headless-status-1.out" \
-    || die "vault status failed against running serve#1 (see headless-status-1.out)"
+  with_creds "$c" owner "$d" status >"$LOGDIR/headless-status-1.out" \
+    || die "owner status failed against running serve#1 (see headless-status-1.out)"
   grep -q "^process: fresh posture" "$LOGDIR/headless-status-1.out" \
     || die "status missed fresh posture on serve#1"
   grep -q "^process: ready: [0-9][0-9]*$" "$LOGDIR/headless-status-1.out" \
@@ -1177,7 +1177,7 @@ leg_headless_serve() {
   grep -q "^durable: unavailable (drive held by a running process" "$LOGDIR/headless-status-1.out" \
     || die "status guessed durable state under the lock"
   grep "^process: instance: " "$LOGDIR/headless-status-1.out" | head -n 1 > "$E2E_ROOT/headless-serve1-instance"
-  pass "status reads fresh ready posture off the running vault without opening the store"
+  pass "status reads fresh ready posture off the running owner without opening the store"
   # C fetches the whole drive headless; only then is the kill
   # mid-flight (residency, not startup).
   peer_wait 300 headless-fetch-c-done \
@@ -1191,15 +1191,15 @@ leg_headless_serve() {
   # posture line (poll below), then the verdict is populated under
   # the same instance; "none observed" after that wait would mean
   # the loop wedged without publishing.
-  poll_until 300 grep -q "vault posture:" "$LOGDIR/headless-serve-1.err" \
+  poll_until 300 grep -q "owner posture:" "$LOGDIR/headless-serve-1.err" \
     || die "serve#1 never published a posture event (see headless-serve-1.err)"
-  with_creds "$c" vault "$d" status >"$LOGDIR/headless-status-2.out" \
-    || die "vault status failed against running serve#1 late (see headless-status-2.out)"
+  with_creds "$c" owner "$d" status >"$LOGDIR/headless-status-2.out" \
+    || die "owner status failed against running serve#1 late (see headless-status-2.out)"
   grep -Eq "^process: last pass: (ok at|failed \()" "$LOGDIR/headless-status-2.out" \
     || die "status missed serve#1's last-pass verdict"
   diff "$E2E_ROOT/headless-serve1-instance" <(grep "^process: instance: " "$LOGDIR/headless-status-2.out" | head -n 1) \
     || die "serve#1's instance changed without a restart"
-  pass "status names the last-pass verdict on the long-running vault"
+  pass "status names the last-pass verdict on the long-running owner"
   local pid
   pid="$(cat "$PIDDIR/headless-serve.pid")"
   kill -KILL "$pid" 2>/dev/null || die "serve#1 pid already gone before KILL"
@@ -1218,19 +1218,19 @@ leg_headless_serve() {
   # the new route), and info level hides them.
   local old_serve_log="${RUST_LOG-__unset}"
   export RUST_LOG="wyrd_core=debug"
-  with_creds "$c" vault "$d" --relay "$relay" \
+  with_creds "$c" owner "$d" --relay "$relay" start \
     >"$LOGDIR/headless-serve-2.out" 2>"$LOGDIR/headless-serve-2.err" &
   echo $! > "$PIDDIR/headless-serve.pid"
   if [[ "$old_serve_log" == "__unset" ]]; then unset RUST_LOG; else export RUST_LOG="$old_serve_log"; fi
-  poll_until 300 grep -q "vault ready: serving " "$LOGDIR/headless-serve-2.err" \
+  poll_until 300 grep -q "owner ready: serving " "$LOGDIR/headless-serve-2.err" \
     || die "serve#2 never reported ready after KILL (see headless-serve-2.err)"
-  pass "serve#2 reports ready after KILL: the mirror rebuilt from the vault"
+  pass "serve#2 reports ready after KILL: the mirror rebuilt from the owner"
   peer_signal headless-serve2-ready
   # 22c: the replacement publishes under a new instance from its
   # first write — status must name that instance with its own
   # readiness, never the dead instance's file as its own.
-  with_creds "$c" vault "$d" status >"$LOGDIR/headless-status-3.out" \
-    || die "vault status failed against serve#2 (see headless-status-3.out)"
+  with_creds "$c" owner "$d" status >"$LOGDIR/headless-status-3.out" \
+    || die "owner status failed against serve#2 (see headless-status-3.out)"
   grep -q "^process: fresh posture" "$LOGDIR/headless-status-3.out" \
     || die "status missed fresh posture on serve#2"
   grep -q "^process: ready: [0-9][0-9]*$" "$LOGDIR/headless-status-3.out" \
@@ -1268,8 +1268,8 @@ leg_headless_serve() {
   peer_signal headless-serve-stopped
   # 22c: drive free — durable state renders again beside serve#2's
   # retained last posture (last-recorded, explicitly not live).
-  with_creds "$c" vault "$d" status >"$LOGDIR/headless-status-4.out" \
-    || die "vault status failed on the stopped drive (see headless-status-4.out)"
+  with_creds "$c" owner "$d" status >"$LOGDIR/headless-status-4.out" \
+    || die "owner status failed on the stopped drive (see headless-status-4.out)"
   grep -q "^durable: stopped drive" "$LOGDIR/headless-status-4.out" \
     || die "durable state missing on the stopped drive"
   grep -q "^process: retained posture" "$LOGDIR/headless-status-4.out" \
@@ -1281,16 +1281,16 @@ leg_headless_serve() {
   # D's fresh obligations with its own route.
   poll_until 300 test -f "$E2E_ROOT/signals/headless-d-invited" \
     || die "host never admitted D"
-  with_creds "$c" vault "$d" --relay "$relay" \
+  with_creds "$c" owner "$d" --relay "$relay" start \
     >"$LOGDIR/headless-serve-3.out" 2>"$LOGDIR/headless-serve-3.err" &
   echo $! > "$PIDDIR/headless-serve.pid"
-  poll_until 300 grep -q "vault ready: serving " "$LOGDIR/headless-serve-3.err" \
+  poll_until 300 grep -q "owner ready: serving " "$LOGDIR/headless-serve-3.err" \
     || die "serve#3 never reported ready (see headless-serve-3.err)"
   pass "serve#3 reports ready with D's obligations announced"
   peer_signal headless-serve3-ready
   # 22c: serve#3's own instance, for the stale-transition pin below.
-  with_creds "$c" vault "$d" status >"$LOGDIR/headless-status-5.out" \
-    || die "vault status failed against serve#3 (see headless-status-5.out)"
+  with_creds "$c" owner "$d" status >"$LOGDIR/headless-status-5.out" \
+    || die "owner status failed against serve#3 (see headless-status-5.out)"
   grep -q "^process: fresh posture" "$LOGDIR/headless-status-5.out" \
     || die "status missed fresh posture on serve#3"
   grep "^process: instance: " "$LOGDIR/headless-status-5.out" | head -n 1 > "$E2E_ROOT/headless-serve3-instance"
@@ -1320,8 +1320,8 @@ leg_headless_serve() {
   # an age past the threshold, and serve#3's last posture must read
   # STALE under its own instance.
   sleep 200 || die "sleep past the freshness threshold failed"
-  with_creds "$c" vault "$d" status >"$LOGDIR/headless-status-6.out" \
-    || die "vault status failed long after serve#3's TERM (see headless-status-6.out)"
+  with_creds "$c" owner "$d" status >"$LOGDIR/headless-status-6.out" \
+    || die "owner status failed long after serve#3's TERM (see headless-status-6.out)"
   grep -q "^process: STALE posture" "$LOGDIR/headless-status-6.out" \
     || die "posture still fresh past the 180s threshold"
   diff "$E2E_ROOT/headless-serve3-instance" <(grep "^process: instance: " "$LOGDIR/headless-status-6.out" | head -n 1) \
@@ -1409,10 +1409,10 @@ leg_pause_owner() {
   # serve#1: the vault announces and keeps syncing. The ready line
   # proves the first routed pass completed, so pausing now races
   # nothing.
-  with_creds "$c" vault "$d" --relay "$relay" \
+  with_creds "$c" owner "$d" --relay "$relay" start \
     >"$LOGDIR/pause-serve-1.out" 2>"$LOGDIR/pause-serve-1.err" &
   echo $! > "$PIDDIR/pause-serve.pid"
-  poll_until 300 grep -q "vault ready: serving " "$LOGDIR/pause-serve-1.err" \
+  poll_until 300 grep -q "owner ready: serving " "$LOGDIR/pause-serve-1.err" \
     || die "pause serve#1 never reported ready (see pause-serve-1.err)"
   grep -q "serving over iroh" "$LOGDIR/pause-serve-1.err" \
     || die "pause serve#1 never bound its endpoint"
@@ -1461,26 +1461,26 @@ leg_pause_owner() {
   [[ "$kstatus" == "137" ]] || die "pause serve KILL exit $kstatus, want 137"
   kill -0 "$pid" 2>/dev/null && die "pause serve pid survived KILL"
   rm -f "$PIDDIR/pause-serve.pid"
-  pass "paused vault dies on KILL with the obligation pending"
+  pass "paused owner dies on KILL with the obligation pending"
   # serve#2: restart through the normal production path over the
   # same drive. The ready line proves the first post-restart pass
   # completed, so the checks below race nothing.
-  with_creds "$c" vault "$d" --relay "$relay" \
+  with_creds "$c" owner "$d" --relay "$relay" start \
     >"$LOGDIR/pause-serve-2.out" 2>"$LOGDIR/pause-serve-2.err" &
   echo $! > "$PIDDIR/pause-serve.pid"
-  poll_until 300 grep -q "vault ready: serving " "$LOGDIR/pause-serve-2.err" \
+  poll_until 300 grep -q "owner ready: serving " "$LOGDIR/pause-serve-2.err" \
     || die "pause serve#2 never reported ready (see pause-serve-2.err)"
-  pass "restarted vault reports ready"
+  pass "restarted owner reports ready"
   # A restarted drive runs unpaused: the switch is process-local.
   [[ "$(python3 "$SCRIPT_DIR/owner-socket.py" liveness "$d")" == paused=false* ]] \
-    || die "restarted vault did not come back unpaused"
-  pass "restarted vault runs unpaused"
+    || die "restarted owner did not come back unpaused"
+  pass "restarted owner runs unpaused"
   # The durable obligation reconciles through the outbox: pending
   # drains to zero and exactly one announcement delivers. Both sides
   # come from the same observe slot, but the delivery count is polled
   # like the pending count so a slow pass cannot flake the assertion.
   poll_until 300 bash -c "test \"\$(python3 \"$SCRIPT_DIR/owner-socket.py\" pending \"$d\")\" = 0" \
-    || die "restarted vault never reconciled the obligation (see pause-serve-2.err)"
+    || die "restarted owner never reconciled the obligation (see pause-serve-2.err)"
   poll_until 300 bash -c "test \"\$(python3 \"$SCRIPT_DIR/owner-socket.py\" delivered \"$d\")\" = 1" \
     || die "reconciled obligation did not deliver exactly once"
   pass "pending obligation reconciles after restart with one delivery"
@@ -1506,7 +1506,7 @@ leg_pause_owner() {
   done
   [[ "$status" == "0" ]] || die "pause serve#2 TERM shutdown exit $status, want clean 0"
   rm -f "$PIDDIR/pause-serve.pid"
-  pass "restarted vault stops clean on TERM"
+  pass "restarted owner stops clean on TERM"
   check_no_leaks "$LOGDIR/pause-serve-1.err" "$(cat "$c/identity")" "$(cat "$c/passphrase")"
   check_no_leaks "$LOGDIR/pause-serve-2.err" "$(cat "$c/identity")" "$(cat "$c/passphrase")"
 }
@@ -1557,10 +1557,10 @@ leg_retransmit_owner() {
   # The vault announces and keeps syncing. The ready line proves
   # the first routed pass completed, so authoring now races nothing
   # and any admission-time obligation already drained.
-  with_creds "$c" vault "$d" --relay "$relay" \
+  with_creds "$c" owner "$d" --relay "$relay" start \
     >"$LOGDIR/retransmit-serve.out" 2>"$LOGDIR/retransmit-serve.err" &
   echo $! > "$PIDDIR/retransmit-serve.pid"
-  poll_until 300 grep -q "vault ready: serving " "$LOGDIR/retransmit-serve.err" \
+  poll_until 300 grep -q "owner ready: serving " "$LOGDIR/retransmit-serve.err" \
     || die "retransmit serve never reported ready (see retransmit-serve.err)"
   grep -q "serving over iroh" "$LOGDIR/retransmit-serve.err" \
     || die "retransmit serve never bound its endpoint"

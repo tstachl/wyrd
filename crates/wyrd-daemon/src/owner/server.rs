@@ -489,7 +489,7 @@ impl OwnerService {
         self.group_socket_path.as_deref()
     }
 
-    /// Bind for an owner-mode composer (`wyrd vault`, `wyrd mount`):
+    /// Bind for an owner-mode composer (`wyrd owner`, `wyrd mount`):
     /// the drive-directory socket, plus the App Group socket when
     /// the dev bootstrap names this drive. The configured drive is
     /// checked against the drive actually served *before* anything

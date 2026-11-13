@@ -4,7 +4,7 @@
 //!
 //! The composition itself is one copy in
 //! `wyrd_daemon::compose_headless_owner` / `run_composed_owner`,
-//! shared with `wyrd vault`: this module holds only the host's
+//! shared with `wyrd owner`: this module holds only the host's
 //! phrasing of it — the drive-owner interface the tests submit
 //! through, the ready/posture/failure sink, and the mount's fold
 //! rule. A second owner implementation here would be a competing

@@ -158,8 +158,9 @@ is transient — no drive data is affected.
   `owner … start` (default) / `owner … status` (`vault` stays the
   materialization-role value and the headless service-mode value
   only); `policy` is now `materialization`. Owner runtime versus
-  Owner membership and the one-drive `--config` selection rule
-  (exact-one implicit default, safe-fail ambiguity) are normative in
+  Owner membership and the explicit-selection rule (required
+  `<drive_dir>`, `--config` as a file override, never implicit or
+  across drives) are normative in
   `docs/design/cli.md`, with the old-to-new map there. Supervised
   service argv, the desktop provisioning adapter, `update --restart`,
   and the help contract move with the tree.

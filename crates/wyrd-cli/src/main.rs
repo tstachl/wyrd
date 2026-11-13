@@ -30,7 +30,7 @@ pub(crate) use crate::commands::materialization::{
     evict_render, pin_render, policy_budgets_render, policy_status_render, role_section_render,
     role_status_render, RetentionAccounting,
 };
-use crate::commands::materialization::{materialization as policy, role_set};
+use crate::commands::materialization::{materialization, role_set};
 use crate::commands::member::member;
 #[cfg(test)]
 pub(crate) use crate::commands::member::{
@@ -41,7 +41,7 @@ pub(crate) use crate::commands::member::{
 use crate::commands::mount::mount;
 #[cfg(test)]
 pub(crate) use crate::commands::owner::owner_status_report;
-use crate::commands::owner::{owner as vault, owner_status as vault_status};
+use crate::commands::owner::{owner, owner_status};
 use crate::commands::snapshot::snapshot;
 #[cfg(test)]
 pub(crate) use crate::commands::snapshot::{
@@ -122,11 +122,11 @@ pub(crate) enum CliError {
     Identity(#[from] wyrd_sync::keys::CryptoError),
     #[error("engine failed: {0}")]
     Engine(#[from] wyrd_sync::runtime::EngineError),
-    /// A second vault against a drive another process holds: the
+    /// A second owner against a drive another process holds: the
     /// store lock is kernel-held, so this is definite contention,
     /// never a stale record — and it names the drive, because the
     /// wrapped open error does not. One vault or mount per drive.
-    #[error("another wyrd process holds the drive at {drive}: only one vault or mount per drive")]
+    #[error("another wyrd process holds the drive at {drive}: only one owner or mount per drive")]
     OwnerLocked { drive: PathBuf },
     #[error("daemon construction failed: {0}")]
     WyrdNode(#[from] wyrd_daemon::NodeError),
@@ -556,7 +556,7 @@ fn command(args: Vec<String>) -> Result<(), CliError> {
         } => match action {
             None => {
                 let resolution = resolve_relays(relays.relay, config.as_ref());
-                vault(
+                owner(
                     drive_dir,
                     resolution,
                     config.as_ref(),
@@ -568,7 +568,7 @@ fn command(args: Vec<String>) -> Result<(), CliError> {
             }
             Some(OwnerAction::Start { retained_quota }) => {
                 let resolution = resolve_relays(relays.relay, config.as_ref());
-                vault(
+                owner(
                     drive_dir,
                     resolution,
                     config.as_ref(),
@@ -584,16 +584,16 @@ fn command(args: Vec<String>) -> Result<(), CliError> {
             Some(OwnerAction::Status) if log_file.is_some() => Err(CliError::Usage(
                 "--log-file is start-only: status writes no diagnostics".into(),
             )),
-            Some(OwnerAction::Status) => vault_status(drive_dir, &passphrase, identity),
+            Some(OwnerAction::Status) => owner_status(drive_dir, &passphrase, identity),
         },
         Command::Materialization {
             drive_dir, action, ..
         } => {
-            // Policy names no relays of its own: the effective set is
+            // Materialization names no relays of its own: the effective set is
             // whatever the file declares, and the budgets report says
             // where it came from.
             let resolution = resolve_relays(Vec::new(), config.as_ref());
-            policy(
+            materialization(
                 drive_dir,
                 action,
                 &resolution,

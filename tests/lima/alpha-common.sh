@@ -220,10 +220,21 @@ die()   { echo "  FAIL: $1" >&2; exit 1; }
 wyrd() { "$WYRD_BIN" "$@"; }
 
 # with_creds <cred-dir> <subcommand> <args...>: credential flags precede
-# positionals on every subcommand (`wyrd <sub> --identity-file ... <dirs>`).
+# positionals on flat subcommands (`wyrd <sub> --identity-file ... <dirs>`).
+# `drive` and `owner` nest an action under parent credentials, so their
+# flags ride between the drive dir and the action
+# (`wyrd drive <dir> --identity-file ... init`).
 with_creds() {
   local c="$1" sub="$2"; shift 2
-  "$WYRD_BIN" "$sub" --identity-file "$c/identity" --passphrase-file "$c/passphrase" "$@"
+  case "$sub" in
+    drive|owner)
+      local d="$1"; shift
+      "$WYRD_BIN" "$sub" "$d" --identity-file "$c/identity" --passphrase-file "$c/passphrase" "$@"
+      ;;
+    *)
+      "$WYRD_BIN" "$sub" --identity-file "$c/identity" --passphrase-file "$c/passphrase" "$@"
+      ;;
+  esac
 }
 
 # expect_exit <code> <log-name> <cmd...>: run, capture stderr to the log,

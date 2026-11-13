@@ -504,8 +504,10 @@ pub(crate) enum DriveAction {
         /// so 59-64 chars would overflow the 64-char service token.
         #[arg(long)]
         name: String,
-        /// Target service mode: `vault` role serves headless, `mount`
-        /// serves the FUSE projection at `--mountpoint`.
+        /// Target service mode: `vault` serves headless, `mount`
+        /// serves the FUSE projection at `--mountpoint`. `vault` here
+        /// names the supervised mode, not the membership role — the
+        /// mode value is stable for existing registrations.
         #[arg(long, value_name = "MODE", default_value = "vault")]
         mode: String,
         /// FUSE mountpoint. Required in `mount` mode, refused in

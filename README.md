@@ -224,7 +224,7 @@ supply the runtime library or the kernel extension. `cargo check` and the
 `crates/wyrd-format` carries the format contract and `crates/wyrd-sync`
 the cryptography and state machines (both under test); the read-write
 FUSE backend is implemented in `crates/wyrd-daemon` and driven by the
-`wyrd` process host in `crates/wyrd-cli` (`wyrd init`, `wyrd
+`wyrd` process host in `crates/wyrd-cli` (`wyrd drive … init`, `wyrd
 mount`), which also opens the drive's real-iroh serving endpoint.
 
 To try the alpha without installing Rust:
@@ -257,7 +257,7 @@ printf 'my-passphrase' > passphrase.txt && chmod 600 passphrase.txt
 head -c 32 /dev/urandom > identity.bin && chmod 600 identity.bin
 
 # 2. Create a drive: identity, root custody, genesis membership.
-wyrd init ./mydrive --identity-file ./identity.bin --passphrase-file ./passphrase.txt
+wyrd drive ./mydrive --identity-file ./identity.bin --passphrase-file ./passphrase.txt init
 
 # 3. Mount a live read-write projection of it.
 mkdir -p ./mnt

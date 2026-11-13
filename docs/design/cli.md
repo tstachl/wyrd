@@ -34,21 +34,18 @@ authority and `owner status` requires none.
 
 ### Drive selection
 
-Every drive-scoped invocation operates on exactly one drive. An
-explicit `--config PATH` selects the drive configuration for that
-invocation and takes precedence. Without an explicit selector, the
-CLI selects the configured default only when exactly one drive is
-configured. Zero configured drives produce a not-configured error;
-multiple produce an ambiguity error; an invalid explicit path is a
-configuration error with no fallback. No command silently operates
-on all drives. Ambiguous invocations are safe-fails: they start no
-owner, create no directory, modify no configuration, connect to no
-peer, and author no mutation. Drive-independent commands (for
-example `device id`) bypass selection; the one-drive rule covers
-drive-scoped operations only.
+Every drive-scoped invocation names its drive with the `<drive_dir>`
+positional: exactly one drive per invocation, never implicit, never
+all drives. There is no drive discovery and no ambiguity state — a
+missing or unconfigured directory fails with the existing
+not-a-drive error, never with a guess across drives.
 
-One configuration identifies one drive. `--config` names that file
-explicitly. Parent flags (credentials, relays, log file) precede the
+`--config PATH` overrides that drive's configuration file
+(`default.toml`): relays and credential paths when the flags are
+absent; the flags always win when both are given. An invalid
+explicit path is a configuration error with no fallback. `--config`
+never selects across drives; it names one file for this invocation.
+Parent flags (credentials, relays, log file) precede the
 subcommand; subcommand flags (names, modes, paths) follow it.
 
 ### Command tree and migration
@@ -202,7 +199,7 @@ any format break.
 
 ### `member` — administer drive membership
 
-Offline commands (`member`, `snapshot`, `policy`, `drive`) are transient
+Offline commands (`member`, `snapshot`, `materialization`, `drive`) are transient
 owners: each opens the keystore and takes the exclusive store lock,
 so a long-lived owner holding the drive — `wyrd owner`, `wyrd mount`,
 or a desktop service — refuses them with `StoreLocked`. Stop the
@@ -487,7 +484,7 @@ wyrd member --identity-file ... --passphrase-file ... <owner-dir> invite <device
 wyrd device --identity-file ... --passphrase-file ... <newcomer-dir> join invitation
 ```
 
-### `drive` — delete this drive's local copy
+### `drive` — local drive lifecycle: create, provision, delete, reconfigure
 
 Local forget plus your own removal, in that order: authors
 `Remove(self)` through the owner, then removes the local drive
@@ -913,29 +910,29 @@ releases, and evict changes intent without deleting bytes. None of
 them silently reinterprets another — a pinned subtree refuses
 eviction, and the effective `vault` role refuses eviction outright.
 
-- `policy pin <path>`: promise every byte under `path`. Offline,
+- `materialization pin <path>`: promise every byte under `path`. Offline,
   idempotent, never fetches — the next sync or mount fetches what
   the policy now requires. Policy is per content identity, so a
   chunk shared with files outside the subtree carries the promise
   there too.
-- `policy unpin <path>`: release the promise (pinned returns to
+- `materialization unpin <path>`: release the promise (pinned returns to
   cacheable policy). Never deletes bytes, never refuses. Promises
   are per content identity, not per path: unpinning a subtree
   releases shared chunks other pinned paths also relied on.
-- `policy evict <path>`: return unpinned content to `REMOTE_ONLY`
+- `materialization evict <path>`: return unpinned content to `REMOTE_ONLY`
   policy. Refuses the whole subtree while any of it is pinned
-  (`policy unpin` first) — a partial evict would let overlapping
+  (`materialization unpin` first) — a partial evict would let overlapping
   paths silently narrow a promise. Intent only: no bytes deleted,
   files that stay fully local keep reading. Refuses under an
   effective `vault` role, which promises no pruning.
-- `policy status [path]`: one row per reachable file with its
+- `materialization status [path]`: one row per reachable file with its
   policy/presence pair, plus quadrant totals, under the role
   posture the census was measured against — one report answers
   what is retained, what exists, and against which baseline.
   Reachable content only — the object store as a whole is never
   scanned. One census, one projection: the posture block and the
   table render from a single read.
-- `policy budgets`: device totals over reachable content plus the
+- `materialization budgets`: device totals over reachable content plus the
   retention and fetch budgets this command ran with. Facts are per
   identity, not per path, so pinned paths are not listed. The budgets
   header says "offline defaults": the quota named here is this
@@ -959,7 +956,7 @@ eviction, and the effective `vault` role refuses eviction outright.
   them. Every label is a row of the DG-5 wording table in
   `docs/design/storage-growth.md`, enforced by
   `every_storage_figure_maps_to_a_dg5_row`.
-- `policy role set <mirror|vault>`: widen or narrow the device-local
+- `materialization role set <mirror|vault>`: widen or narrow the device-local
   materialization role. What this device intends to be: `mirror`
   (prunable participant) or `vault` (replicates every object, never
   prunes). A role is a retention posture, never replicated state —
@@ -972,9 +969,9 @@ eviction, and the effective `vault` role refuses eviction outright.
   until withdrawal completes, and completion is reported, never
   assumed. Setting reads no key, so it takes neither credential
   flag.
-- `policy role status`: configured role, transition, effective
+- `materialization role status`: configured role, transition, effective
   posture, and the quadrant totals to back it — the same census
-  `policy status` reads, because there is one effective policy,
+  `materialization status` reads, because there is one effective policy,
   not two. While withdrawing it names the outstanding count: own
   snapshots still routing this device at a peer (zero means
   serving is still draining).
@@ -986,14 +983,14 @@ effectively retained, and the policy reports show those effective
 numbers. A device with no role file reports `mirror` explicitly:
 the default names current behavior, never a silent choice.
 
-Conflicted paths refuse every mutating policy command: resolve
+Conflicted paths refuse every mutating materialization command: resolve
 first, or address one version through the existing `path@N`
-grammar. `policy status` instead renders them as `CONFLICT` rows —
+grammar. `materialization status` instead renders them as `CONFLICT` rows —
 a read-only report survives the ordinary multi-head state. One
 invocation walks one generation — heads install once up front, so
 a concurrent local write cannot mix generations into it. Policy
 commands need the drive un-mounted regardless: the durable store
-takes an exclusive lock, so a policy command against a mounted
+takes an exclusive lock, so a materialization command against a mounted
 drive fails closed with the lock error. And pinning promises
 retention without fetching: a pinned-but-never-fetched subtree
 still fails closed offline (export names the unheld bytes) until
@@ -1005,10 +1002,10 @@ All subcommands take `--identity-file` and `--passphrase-file`,
 optionally: each defaults to the drive configuration file's
 `identity_file` / `passphrase_file` when the flag is absent (see
 "Drive configuration file" below), and the flag always wins —
-with one exception: `policy role set` writes one local file and
+with one exception: `materialization role set` writes one local file and
 touches no key, so it takes neither flag and reads no file. A role stays
 settable on a machine whose keystore is unavailable (a
-`policy role status` opens the node and takes both).
+`materialization role status` opens the node and takes both).
 Both are read and hardened by wyrd code, never by clap:
 
 - The identity file holds exactly 32 raw bytes or 64 hex characters
@@ -1087,7 +1084,7 @@ passphrase_file = "/etc/wyrd/passphrase"
   only paths, read through the same hardening as the flags — so the
   file stays committable and printable.
 - `sync status` and `sync now` print a `relays from:` line (flags,
-  file with its path, or none configured), and `policy budgets`
+  file with its path, or none configured), and `materialization budgets`
   prints a `configuration:` section with the file, the relay source,
   and each credential path's source.
 - The file reads without the store lock: it is deployment state,
@@ -1109,7 +1106,7 @@ passphrase_file = "/etc/wyrd/passphrase"
   endpoint a mount never has. `mount ready` on stderr marks the
   first completed pass; `mount posture` lines follow on the posture
   interval. The sidecar lets a supervisor read liveness-adjacent
-  facts without opening the store, the way `vault status` reads the
+  facts without opening the store, the way `owner … status` reads the
   vault's.
   `vault` logs to stderr always, plus an appended operator-chosen
   file under `--log-file` — never a drive-resident default, never

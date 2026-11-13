@@ -55,8 +55,8 @@ mint_pair() {
   # Post-mortem parity with the legacy phase: persist each wyrd
   # invocation's captured output to $RUN/logs before asserting (bats
   # merges stderr into $output, so one .out per step).
-  run guest_wyrd peer-o init --identity-file "$GHO/identity" --passphrase-file "$GHO/passphrase" \
-    "$GHF"
+  run guest_wyrd peer-o drive "$GHF" --identity-file "$GHO/identity" --passphrase-file "$GHO/passphrase" \
+    init
   printf '%s\n' "$output" >"$RUN/logs/init-hf.out"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   on_o "E2E_ENV_FILE=$GUEST_ENV bash $GUEST_TESTS/alpha-microvm-legs.sh headless-setup $GHF $GHO" \
@@ -174,8 +174,8 @@ mint_pair() {
   GPO="$GUEST_RUN/creds/pause-owner"
   GPD="$GUEST_RUN/drives/pause"
   mint_pair peer-o "$GPO" "$GPD"
-  run guest_wyrd peer-o init --identity-file "$GPO/identity" --passphrase-file "$GPO/passphrase" \
-    "$GPD"
+  run guest_wyrd peer-o drive "$GPD" --identity-file "$GPO/identity" --passphrase-file "$GPO/passphrase" \
+    init
   printf '%s\n' "$output" >"$RUN/logs/init-pause.out"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   GPM="$GUEST_RUN/creds/pause-member"
@@ -218,8 +218,8 @@ mint_pair() {
   GPO="$GUEST_RUN/creds/retransmit-owner"
   GPD="$GUEST_RUN/drives/retransmit"
   mint_pair peer-o "$GPO" "$GPD"
-  run guest_wyrd peer-o init --identity-file "$GPO/identity" --passphrase-file "$GPO/passphrase" \
-    "$GPD"
+  run guest_wyrd peer-o drive "$GPD" --identity-file "$GPO/identity" --passphrase-file "$GPO/passphrase" \
+    init
   printf '%s\n' "$output" >"$RUN/logs/init-retransmit.out"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   GPM="$GUEST_RUN/creds/retransmit-member"

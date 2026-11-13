@@ -249,9 +249,9 @@ per drive; it does not re-decide P2.
 
 Stage-0 exit: the handoff runs end to end through the built
 command — `wyrd drive … bootstrap` registers, a separately spawned `wyrd
-vault` owns and serves, a non-owner `OwnerClient` gets a terminal
+owner … start` owns and serves, a non-owner `OwnerClient` gets a terminal
 `observe` answer out of the drive socket, and SIGTERM shuts the
-owner down clean — pinned as the `bootstrap_then_vault` CLI
+owner down clean — pinned as the `bootstrap_then_owner` CLI
 integration test, with the supervise wait-status mapping pinned by
 the existing `test-supervise.sh` harness leg. What stays manual,
 documented on the bootstrap issue: enablement and restart under a

@@ -1,5 +1,5 @@
 //! Vault-position diagnostics: the keyless-replica projection over
-//! durable state. `wyrd vault status` is a vault surface on every
+//! durable state. `wyrd owner status` is an owner surface on every
 //! composition (matrix rule: vault surfaces show a subset of the
 //! keyless-replica column even when the process holds keys), so the
 //! stopped-drive section cannot reuse [`crate::status`] — the member

@@ -959,7 +959,7 @@ identity, epoch keys, and the live mailbox). A member-hosted
 process *holds* keys; whether a surface may *disclose* key-derived
 information is a separate property, decided per surface:
 
-- **Owner surfaces** — `wyrd owner … status`, the posture sidecar,
+- **Vault surfaces** — `wyrd owner … status`, the posture sidecar,
   anything a vault operator ships to a third party — show a subset
   of the **keyless-replica column only**, on every composition.
   Possessing keys does not widen a vault surface.
