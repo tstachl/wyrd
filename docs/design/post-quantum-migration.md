@@ -14,10 +14,14 @@ Readiness of this note, in three parts that must not be collapsed:
 
 - **Architecture accepted (proposed):** Wyrd pursues PQ migration without
   changing its content-addressing model or rewriting history.
-- **Security design unresolved:** checkpoint provenance, negotiation
-  security floors, and retrospective confidentiality semantics — see the
-  required revisions below. The checkpoint-provenance gap is the
-  must-resolve item before this architecture is called complete.
+- **Security design unresolved:** checkpoint provenance is a specified
+  requirement with an unresolved mechanism — acceptable in a proposal,
+  and a blocker when writing normative checkpoint-acceptance rules at
+  v0.8; negotiation floors are specified conceptually, with
+  authentication and recovery behavior still needing concrete contract
+  language; retrospective semantics are specified. The provenance
+  mechanism is the must-resolve item before this architecture is
+  called complete.
 - **Implementation deferred:** until the v0.8 contract freeze and the T11
   dependency requirements are satisfied.
 
