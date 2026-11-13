@@ -2,12 +2,14 @@
 //! OS service handoff, and the fixed initialize-then-register order.
 //!
 //! The contract lives in `docs/design/desktop-shell.md` (bootstrap
-//! section): a registry file the installer creates and the desktop
-//! registration flow normally writes — never a manager daemon, never
-//! a discovery protocol. This module is the registry as code plus
-//! the provisioning orchestration the `wyrd bootstrap` command
-//! drives. The later desktop backend reads the same file through
-//! this module, never through the CLI.
+//! section): a registry file the installer creates and two writers
+//! share — the registration flow and the desktop shell. Never a
+//! manager daemon, never a discovery protocol. This module is the
+//! registry as code plus the provisioning orchestration the `wyrd
+//! bootstrap` command drives. The desktop backend writes the same
+//! file through its own backend (which cannot link this crate); both
+//! writers serialize on the registry lockfile, so concurrent rewrites
+//! converge instead of losing entries.
 //!
 //! Three rules hold throughout:
 //!
@@ -181,6 +183,13 @@ pub enum BootstrapError {
     /// A directory for the registry or service file could not be created.
     #[error("create {}: {source}", path.display())]
     CreateDir {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    /// The registry lockfile could not be opened or locked.
+    #[error("lock {}: {source}", path.display())]
+    LockFile {
         path: PathBuf,
         #[source]
         source: std::io::Error,
@@ -423,6 +432,52 @@ fn has_dotdot(path: &Path) -> bool {
         .any(|component| matches!(component, std::path::Component::ParentDir))
 }
 
+/// The inter-writer serialization for the registry: the registration
+/// flow (this module) and the desktop shell both hold an exclusive
+/// advisory lock on this sibling for the whole read-modify-write, so
+/// concurrent rewrites serialize instead of losing entries. Atomic
+/// rename alone does not stop lost updates — two writers reading one
+/// base and renaming in turn leave only the second write's entries —
+/// so every writer must hold this lock. The lockfile is never
+/// renamed, so the lock always names a stable inode; the kernel
+/// releases it on crash, so no stale lock can wedge either writer.
+/// Blocking is deliberate: registry writes are rare, and waiting
+/// beats losing. Both writers derive this path the same way, so no
+/// configuration can point them at different locks.
+pub fn registry_lock_path(path: &Path) -> PathBuf {
+    path.with_extension("lock")
+}
+
+/// Hold the registry's exclusive lock, creating the lockfile
+/// owner-only on first use. The returned handle keeps the lock;
+/// dropping it releases.
+fn lock_registry(path: &Path) -> Result<std::fs::File, BootstrapError> {
+    let lock_path = registry_lock_path(path);
+    if let Some(parent) = lock_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent).map_err(|source| BootstrapError::CreateDir {
+                path: parent.to_path_buf(),
+                source,
+            })?;
+        }
+    }
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&lock_path)
+        .map_err(|source| BootstrapError::LockFile {
+            path: lock_path.clone(),
+            source,
+        })?;
+    restrict_owner_only(&lock_path)?;
+    file.lock().map_err(|source| BootstrapError::LockFile {
+        path: lock_path,
+        source,
+    })?;
+    Ok(file)
+}
+
 /// Write the registry crash-safely: temporary file in the same
 /// directory, sync it, atomic replace, sync the directory. An
 /// interrupted write can never leave a truncated registry that
@@ -440,6 +495,11 @@ pub fn write_registry(
     path: &Path,
     drives: &BTreeMap<String, RegistryEntry>,
 ) -> Result<(), BootstrapError> {
+    // Serialize against the desktop shell's writes (and concurrent
+    // registration flows): the lock covers the read below, the
+    // merge, and the rename, so two writers never interleave on one
+    // base. Held to end of scope — through the directory sync.
+    let _lock = lock_registry(path)?;
     for (key, entry) in drives {
         validate_entry(key, entry).map_err(|source| BootstrapError::RefusedWrite {
             source: Box::new(source),
@@ -476,9 +536,10 @@ pub fn write_registry(
     }
     // Unique temporary sibling per writer: the rename stays atomic,
     // and concurrent writers fail on their own file instead of
-    // clobbering each other's. Registration is still single-writer by
-    // contract (one registration flow per user); the unique name
-    // turns a violation into an error, not silent loss.
+    // clobbering each other's. Writers are still serialized by the
+    // registry lock above (one logical writer role, two processes
+    // allowed); the unique name turns a lock violation into an
+    // error, not silent loss.
     let tmp = path.with_extension(format!("tmp.{}", std::process::id()));
     std::fs::write(&tmp, &bytes).map_err(|source| BootstrapError::WriteFile {
         path: tmp.clone(),
@@ -2007,6 +2068,43 @@ mod tests {
         let refused = write_registry(&path, &drives).unwrap_err();
         assert!(refused.to_string().contains("absolute"), "{refused}");
         assert!(!path.exists(), "no partial registry may remain");
+    }
+
+    /// Concurrent writers converge without lost entries: every thread
+    /// writes one distinct key through the same read-modify-write,
+    /// and the registry lock serializes them, so the final read holds
+    /// every key. Without the lock, two writers racing on one base
+    /// would leave only the second rename's entries (atomic rename
+    /// does not stop lost updates). Threads share the process but
+    /// open separate lock descriptions, so the kernel lock contends
+    /// exactly like two processes.
+    #[test]
+    fn concurrent_registration_writes_converge_without_lost_entries() {
+        let dir = scratch("concurrent");
+        let path = dir.join("drives.json");
+        let count = 8usize;
+        std::thread::scope(|scope| {
+            for i in 0..count {
+                let path = &path;
+                let dir = &dir;
+                scope.spawn(move || {
+                    let name = format!("w{i:02}");
+                    let mut drives = BTreeMap::new();
+                    drives.insert(name.clone(), entry(&name, dir));
+                    write_registry(path, &drives).unwrap();
+                });
+            }
+        });
+        let read = read_registry(&path).unwrap();
+        assert!(read.skipped.is_empty(), "{:?}", read.skipped);
+        assert_eq!(read.drives.len(), count, "{:?}", read.drives.keys());
+        for i in 0..count {
+            assert!(
+                read.drives.contains_key(&format!("w{i:02}")),
+                "writer w{i:02} survived: {:?}",
+                read.drives.keys()
+            );
+        }
     }
 
     /// Every reachable terminal provision site carries its

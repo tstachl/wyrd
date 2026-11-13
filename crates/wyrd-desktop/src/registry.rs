@@ -1,12 +1,25 @@
-//! Read-only view of the per-user drive registry (`drives.json`).
+//! Read view plus contracted writer for the per-user drive registry
+//! (`drives.json`).
 //!
-//! Observer only: this module parses the schema-version-1 file the
-//! installer and `wyrd bootstrap` flow write, validates entries with
-//! the same rules as the daemon's registry reader, and probes each
-//! drive's owner socket. It never writes the registry — creation,
-//! joining, and membership changes belong to the provisioning and
-//! membership flows, not to this shell (OD: desktop lifecycle
-//! authority, stage 2).
+//! Observer only for discovery: this module parses the schema-version-1
+//! file the installer and the `wyrd bootstrap` flow write, validates
+//! entries with the same rules as the daemon's registry reader, and
+//! probes each drive's owner socket. It never opens a drive.
+//! Creation, joining, and membership changes belong to the
+//! provisioning and membership flows, not to this shell (OD:
+//! desktop lifecycle authority, stage 2).
+//!
+//! Writer under contract for registry facts: the desktop shell is the
+//! registration flow's co-writer under the single-writer rule (one
+//! logical writer role, two processes allowed). Every desktop write
+//! holds the registry lockfile exclusive for the whole
+//! read-modify-write, validates candidates with exactly the reader's
+//! rules, carries forward entries it does not understand verbatim,
+//! follows the crash-safe tmp-write/sync/atomic-rename/dir-sync
+//! order, and verifies by rereading. The daemon honors the same
+//! lockfile, so concurrent registration-flow and desktop rewrites
+//! serialize instead of losing entries (atomic rename alone does not
+//! stop lost updates).
 //!
 //! Every answer is a fresh observation, never cached authority:
 //!
@@ -147,29 +160,45 @@ fn valid_token(value: &str) -> bool {
 /// The daemon's entry rules, mirrored: the shell must agree with
 /// the writer about which entries are valid, or the lifecycle view
 /// would show drives the owner tooling refuses (and vice versa).
+/// Shared with the writer below, so a candidate the writer accepts
+/// is an entry the reader lists.
 fn validate_entry(key: &str, entry: &RegistryEntryParse) -> Result<(), String> {
-    if key != entry.name {
+    validate_fields(
+        key,
+        &entry.name,
+        &entry.drive_dir,
+        &entry.service,
+        &entry.mode,
+        &entry.relays,
+    )
+}
+
+/// The field rules both the reader and the writer enforce: one
+/// function, so the desktop can never write an entry its own reader
+/// skips (or the daemon's reader skips — the rules mirror
+/// `wyrd_daemon::bootstrap` entry for entry).
+fn validate_fields(
+    key: &str,
+    name: &str,
+    drive_dir: &Path,
+    service: &str,
+    mode: &str,
+    relays: &[String],
+) -> Result<(), String> {
+    if key != name {
+        return Err(format!("key {key:?} does not match entry name {name:?}",));
+    }
+    if !valid_token(name) {
+        return Err(format!("name {name:?} must be 1-64 chars of [a-z0-9-]"));
+    }
+    if name.len() + "drive-".len() > 64 {
         return Err(format!(
-            "key {key:?} does not match entry name {:?}",
-            entry.name
+            "name {name:?} leaves no room for the drive- service prefix (max 58 chars)"
         ));
     }
-    if !valid_token(&entry.name) {
+    if !valid_token(service) {
         return Err(format!(
-            "name {:?} must be 1-64 chars of [a-z0-9-]",
-            entry.name
-        ));
-    }
-    if entry.name.len() + "drive-".len() > 64 {
-        return Err(format!(
-            "name {:?} leaves no room for the drive- service prefix (max 58 chars)",
-            entry.name
-        ));
-    }
-    if !valid_token(&entry.service) {
-        return Err(format!(
-            "service {:?} must be 1-64 chars of [a-z0-9-]",
-            entry.service
+            "service {service:?} must be 1-64 chars of [a-z0-9-]"
         ));
     }
     // One rule for every drive path in the crate: the shared
@@ -178,14 +207,14 @@ fn validate_entry(key: &str, entry: &RegistryEntryParse) -> Result<(), String> {
     // The lossy render feeds the validator exactly like the old
     // control-byte check did; non-UTF8 spellings were never
     // loadable paths here.
-    super::validate_drive_path(&entry.drive_dir.to_string_lossy(), "drive_dir").map(|_| ())?;
-    if entry.mode != "vault" {
+    super::validate_drive_path(&drive_dir.to_string_lossy(), "drive_dir").map(|_| ())?;
+    if mode != "vault" {
         return Err(
             "unknown service mode: registry-managed mount mode travels with the installer follow-up"
                 .to_string(),
         );
     }
-    if entry.relays.iter().any(|relay| {
+    if relays.iter().any(|relay| {
         relay.is_empty()
             || relay
                 .bytes()
@@ -322,6 +351,275 @@ pub fn list_drives_at(registry_path: &Path) -> RegistryState {
 /// Read the default registry and probe every valid entry.
 pub fn list_drives() -> RegistryState {
     list_drives_at(&default_registry_path())
+}
+
+/// One registry entry as written: discovery facts, never secrets.
+/// The shape matches the daemon's writer field for field, so a
+/// desktop-written file reads identically under both readers.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct RegistryEntryWrite {
+    pub name: String,
+    pub drive_dir: PathBuf,
+    pub relays: Vec<String>,
+    pub service: String,
+    pub mode: String,
+}
+
+/// Every way a desktop registry write can fail. Variants carry the
+/// failing identity — paths, names — so future commands can branch
+/// on failure instead of parsing text.
+#[derive(Debug, thiserror::Error)]
+pub enum RegistryWriteError {
+    /// The registry lockfile could not be opened or locked.
+    #[error("lock {}: {source}", path.display())]
+    Lock {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    /// A candidate entry breaks the registry rules: nothing was written.
+    #[error("refusing to write: {reason}")]
+    RefusedWrite { reason: String },
+    /// The registry file could not be read.
+    #[error("read {}: {source}", path.display())]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    /// The registry file is not valid JSON.
+    #[error("parse {}: {source}", path.display())]
+    Parse {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    /// The registry file could not be encoded.
+    #[error("encode registry: {source}")]
+    Encode {
+        #[source]
+        source: serde_json::Error,
+    },
+    /// A directory for the registry could not be created.
+    #[error("create {}: {source}", path.display())]
+    CreateDir {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    /// The temporary registry file could not be written.
+    #[error("write {}: {source}", path.display())]
+    WriteFile {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    /// Owner-only permissions could not be applied.
+    #[error("chmod {}: {source}", path.display())]
+    Chmod {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    /// The atomic replace of the registry file failed.
+    #[error("replace {}: {source}", path.display())]
+    ReplaceFile {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    /// A written file could not be synced to disk.
+    #[error("sync {}: {source}", path.display())]
+    SyncFile {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    /// The reread after the replace does not show the written
+    /// entries: something outside the lock rewrote the file between
+    /// the rename and the verification. Loud, never silent.
+    #[error("verify {}: written entries do not match reread ({detail})", path.display())]
+    VerifyMismatch { path: PathBuf, detail: String },
+}
+
+/// The inter-writer serialization, derived exactly like the daemon's:
+/// the registration flow and the desktop shell hold an exclusive
+/// advisory lock on this sibling for the whole read-modify-write.
+/// The lockfile is never renamed, so the lock always names a stable
+/// inode; the kernel releases it on crash, so no stale lock can
+/// wedge either writer.
+pub fn registry_lock_path(path: &Path) -> PathBuf {
+    path.with_extension("lock")
+}
+
+/// Hold the registry's exclusive lock, creating the lockfile
+/// owner-only on first use. The returned handle keeps the lock;
+/// dropping it releases.
+fn lock_registry(path: &Path) -> Result<std::fs::File, RegistryWriteError> {
+    let lock_path = registry_lock_path(path);
+    if let Some(parent) = lock_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent).map_err(|source| RegistryWriteError::CreateDir {
+                path: parent.to_path_buf(),
+                source,
+            })?;
+        }
+    }
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&lock_path)
+        .map_err(|source| RegistryWriteError::Lock {
+            path: lock_path.clone(),
+            source,
+        })?;
+    restrict_owner_only(&lock_path)?;
+    file.lock().map_err(|source| RegistryWriteError::Lock {
+        path: lock_path,
+        source,
+    })?;
+    Ok(file)
+}
+
+/// Owner-only file permissions (Unix): the registry holds drive
+/// facts, not secrets, but it is still per-user state.
+#[cfg(unix)]
+fn restrict_owner_only(path: &Path) -> Result<(), RegistryWriteError> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).map_err(|source| {
+        RegistryWriteError::Chmod {
+            path: path.to_path_buf(),
+            source,
+        }
+    })
+}
+
+#[cfg(not(unix))]
+fn restrict_owner_only(_path: &Path) -> Result<(), RegistryWriteError> {
+    Ok(())
+}
+
+/// Write registry entries crash-safely under the inter-writer lock:
+/// validate every candidate (one invalid entry refuses the whole
+/// write, mirroring the daemon), carry forward entries the reader
+/// skipped verbatim (unknown modes, hand edits that fail validation —
+/// a rewrite must never delete what this build does not
+/// understand), write a temporary sibling in the same directory,
+/// sync it, atomic replace, sync the directory, then verify by
+/// rereading. An interrupted write can never leave a truncated
+/// registry, and the reread proves this session's write landed.
+pub fn write_registry_at(
+    path: &Path,
+    drives: &std::collections::BTreeMap<String, RegistryEntryWrite>,
+) -> Result<(), RegistryWriteError> {
+    for (key, entry) in drives {
+        validate_fields(
+            key,
+            &entry.name,
+            &entry.drive_dir,
+            &entry.service,
+            &entry.mode,
+            &entry.relays,
+        )
+        .map_err(|reason| RegistryWriteError::RefusedWrite { reason })?;
+    }
+    // Serialize against the registration flow's writes (and
+    // concurrent desktop writes): the lock covers the read below,
+    // the merge, the rename, and the reread, so two writers never
+    // interleave on one base. Held to end of scope.
+    let _lock = lock_registry(path)?;
+    let mut merged: std::collections::BTreeMap<String, serde_json::Value> = drives
+        .iter()
+        .map(|(key, entry)| {
+            serde_json::to_value(entry)
+                .map(|value| (key.clone(), value))
+                .map_err(|source| RegistryWriteError::Encode { source })
+        })
+        .collect::<Result<_, _>>()?;
+    if let Ok(existing) = std::fs::read(path) {
+        if let Ok(file) = serde_json::from_slice::<serde_json::Value>(&existing) {
+            if file.get("version").and_then(serde_json::Value::as_u64)
+                == Some(REGISTRY_VERSION as u64)
+            {
+                if let Some(map) = file.get("drives").and_then(serde_json::Value::as_object) {
+                    for (key, value) in map {
+                        merged.entry(key.clone()).or_insert_with(|| value.clone());
+                    }
+                }
+            }
+        }
+    }
+    let file = serde_json::json!({
+        "version": REGISTRY_VERSION,
+        "drives": merged,
+    });
+    let bytes =
+        serde_json::to_vec_pretty(&file).map_err(|source| RegistryWriteError::Encode { source })?;
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent).map_err(|source| RegistryWriteError::CreateDir {
+                path: parent.to_path_buf(),
+                source,
+            })?;
+        }
+    }
+    let tmp = path.with_extension(format!("tmp.{}", std::process::id()));
+    std::fs::write(&tmp, &bytes).map_err(|source| RegistryWriteError::WriteFile {
+        path: tmp.clone(),
+        source,
+    })?;
+    restrict_owner_only(&tmp)?;
+    std::fs::File::open(&tmp)
+        .and_then(|file| file.sync_all())
+        .map_err(|source| RegistryWriteError::SyncFile {
+            path: tmp.clone(),
+            source,
+        })?;
+    std::fs::rename(&tmp, path).map_err(|source| RegistryWriteError::ReplaceFile {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    restrict_owner_only(path)?;
+    #[cfg(unix)]
+    if let Some(parent) = path.parent() {
+        if let Ok(dir) = std::fs::File::open(parent) {
+            let _ = dir.sync_all();
+        }
+    }
+    // Verification-via-reread: the entries this write carried must
+    // show in the file now. With the lock held, a mismatch means a
+    // writer outside the contract replaced the file mid-write.
+    let reread = std::fs::read(path).map_err(|source| RegistryWriteError::Read {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let reread_file: serde_json::Value =
+        serde_json::from_slice(&reread).map_err(|source| RegistryWriteError::Parse {
+            path: path.to_path_buf(),
+            source: std::io::Error::new(std::io::ErrorKind::InvalidData, source),
+        })?;
+    let reread_drives = reread_file
+        .get("drives")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| RegistryWriteError::VerifyMismatch {
+            path: path.to_path_buf(),
+            detail: "reread has no drives map".to_string(),
+        })?;
+    for (key, entry) in drives {
+        let expected =
+            serde_json::to_value(entry).map_err(|source| RegistryWriteError::Encode { source })?;
+        match reread_drives.get(key) {
+            Some(found) if found == &expected => {}
+            _ => {
+                return Err(RegistryWriteError::VerifyMismatch {
+                    path: path.to_path_buf(),
+                    detail: format!("entry {key:?} missing or changed on reread"),
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -560,6 +858,194 @@ mod tests {
             "skip reasons name the rule: {:?}",
             state.skipped
         );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    fn write_entry(name: &str, dir: &std::path::Path) -> RegistryEntryWrite {
+        RegistryEntryWrite {
+            name: name.to_string(),
+            drive_dir: dir.join("drive").join(name),
+            relays: vec![],
+            service: format!("drive-{name}"),
+            mode: "vault".to_string(),
+        }
+    }
+
+    fn write_map<const N: usize>(dir: &std::path::Path, names: [&str; N]) -> BTreeMapForTest {
+        let mut map = BTreeMapForTest::new();
+        for name in names {
+            map.insert(name.to_string(), write_entry(name, dir));
+        }
+        map
+    }
+
+    type BTreeMapForTest = std::collections::BTreeMap<String, RegistryEntryWrite>;
+
+    /// A desktop write round-trips through the reader: what the
+    /// writer accepts, the reader lists — the shared validator holds
+    /// both directions.
+    #[test]
+    fn desktop_write_round_trips_through_the_reader() {
+        let dir =
+            std::env::temp_dir().join(format!("wyrd-desktop-reg-{}-write", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in ["alpha", "beta"] {
+            std::fs::create_dir_all(dir.join("drive").join(name)).unwrap();
+        }
+        let path = dir.join("drives.json");
+        write_registry_at(&path, &write_map(&dir, ["alpha", "beta"])).unwrap();
+        let state = list_drives_at(&path);
+        assert_eq!(state.status, RegistryStatus::Ready);
+        assert_eq!(state.drives.len(), 2);
+        assert!(state.skipped.is_empty(), "{:?}", state.skipped);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// One invalid candidate refuses the whole write and leaves no
+    /// file behind: batch discipline, mirroring the daemon.
+    #[test]
+    fn desktop_write_refuses_invalid_entries_and_writes_nothing() {
+        let dir =
+            std::env::temp_dir().join(format!("wyrd-desktop-reg-{}-nowrite", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("drives.json");
+        let mut map = write_map(&dir, ["good"]);
+        let mut bad = write_entry("bad", &dir);
+        bad.drive_dir = std::path::PathBuf::from("relative/path");
+        map.insert("bad".to_string(), bad);
+        let refused = write_registry_at(&path, &map).unwrap_err();
+        assert!(refused.to_string().contains("absolute"), "{refused}");
+        assert!(!path.exists(), "no partial registry may remain");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Entries the reader skips are carried forward verbatim: a
+    /// rewrite must never delete what this build does not
+    /// understand — including a future mount mode the desktop
+    /// reader skips today.
+    #[test]
+    fn desktop_write_carries_skipped_entries_forward_verbatim() {
+        let dir =
+            std::env::temp_dir().join(format!("wyrd-desktop-reg-{}-carry", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("drives.json");
+        std::fs::write(
+            &path,
+            serde_json::json!({
+                "version": 1,
+                "drives": {
+                    "future": {
+                        "name": "future",
+                        "drive_dir": "/drives/future",
+                        "relays": [],
+                        "service": "drive-future",
+                        "mode": "mount",
+                    },
+                },
+            })
+            .to_string(),
+        )
+        .unwrap();
+        write_registry_at(&path, &write_map(&dir, ["new"])).unwrap();
+        let raw: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let drives = raw.get("drives").unwrap().as_object().unwrap();
+        assert_eq!(drives.len(), 2, "nothing was deleted: {drives:?}");
+        assert_eq!(
+            drives["future"].get("mode").unwrap(),
+            "mount",
+            "carried verbatim: {:?}",
+            drives["future"]
+        );
+        assert!(drives.contains_key("new"), "{drives:?}");
+        // The reader still lists the new entry and skips the future
+        // one loudly — carrying is invisible to the view.
+        let state = list_drives_at(&path);
+        assert_eq!(state.drives.len(), 1);
+        assert_eq!(state.skipped.len(), 1);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A torn temporary sibling never affects reads: orphans from an
+    /// interrupted write sit beside the registry, and the atomic
+    /// rename is the only way content moves.
+    #[test]
+    fn torn_temporary_siblings_never_affect_reads() {
+        let dir =
+            std::env::temp_dir().join(format!("wyrd-desktop-reg-{}-torn", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("drives.json");
+        write_registry_at(&path, &write_map(&dir, ["kept"])).unwrap();
+        let orphan = path.with_extension(format!("tmp.{}", std::process::id()));
+        std::fs::write(&orphan, b"{truncated").unwrap();
+        let state = list_drives_at(&path);
+        assert_eq!(state.status, RegistryStatus::Ready);
+        assert_eq!(state.drives.len(), 1);
+        assert_eq!(state.drives[0].name, "kept");
+        // And the next write still lands over the orphan's name.
+        write_registry_at(&path, &write_map(&dir, ["kept", "added"])).unwrap();
+        let state = list_drives_at(&path);
+        assert_eq!(state.drives.len(), 2);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Concurrent desktop writers converge without lost entries:
+    /// every thread writes one distinct key, and the registry lock
+    /// serializes the read-modify-writes. Readers interleaved with
+    /// the writers always see a complete, parseable file — never a
+    /// torn registry.
+    #[test]
+    fn concurrent_desktop_writes_converge_without_lost_entries() {
+        let dir = std::env::temp_dir().join(format!(
+            "wyrd-desktop-reg-{}-concurrent",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("drives.json");
+        let count = 8usize;
+        std::thread::scope(|scope| {
+            for i in 0..count {
+                let path = &path;
+                let dir = &dir;
+                scope.spawn(move || {
+                    let name = format!("w{i:02}");
+                    let mut map = BTreeMapForTest::new();
+                    map.insert(name.clone(), write_entry(&name, dir));
+                    write_registry_at(path, &map).unwrap();
+                });
+            }
+            for _ in 0..count {
+                let path = &path;
+                scope.spawn(move || {
+                    for _ in 0..16 {
+                        let bytes = std::fs::read(path).unwrap_or_default();
+                        if bytes.is_empty() {
+                            continue;
+                        }
+                        let file: serde_json::Value = serde_json::from_slice(&bytes)
+                            .expect("every observed registry is complete and parseable");
+                        assert_eq!(file.get("version").and_then(|v| v.as_u64()), Some(1));
+                    }
+                });
+            }
+        });
+        let state = list_drives_at(&path);
+        assert_eq!(state.status, RegistryStatus::Ready);
+        assert_eq!(state.drives.len(), count, "{:?}", state.skipped);
+        for i in 0..count {
+            assert!(
+                state
+                    .drives
+                    .iter()
+                    .any(|drive| drive.name == format!("w{i:02}")),
+                "writer w{i:02} survived: {:?}",
+                state
+                    .drives
+                    .iter()
+                    .map(|drive| &drive.name)
+                    .collect::<Vec<_>>()
+            );
+        }
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
