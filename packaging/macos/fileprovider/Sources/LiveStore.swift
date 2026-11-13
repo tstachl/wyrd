@@ -117,16 +117,7 @@ final class LiveStore {
             }
             let parent = try parentIdentifier(of: path, client: client)
             let (node, generation, revision) = try lookupNode(path: path, client: client)
-            // A legacy reference names the identity-less entry at its
-            // path. Minting an identity retires the reference — the
-            // same rule stable resolution enforces by token match —
-            // so a replacement never serves under the old identifier.
-            // Without this, the system keeps refreshing a retired
-            // reference, gets back an item with a different
-            // identifier, and fails the whole fetch as inconsistent.
-            if nodeIdentity(node) != nil {
-                throw LiveStoreError.notFound("legacy reference retired by identity mint")
-            }
+            try requireIdentityLess(node)
             return try buildItem(
                 node: node,
                 path: path,
@@ -190,15 +181,7 @@ final class LiveStore {
             let path = legacyPath
             let parent = try parentIdentifier(of: path, client: client)
             let (node, generation, revision) = try lookupNode(path: path, client: client)
-            // Same retirement rule as the item path: a minted identity
-            // ends the legacy reference. Hydrating the replacement
-            // under the old identifier would serve new bytes for an
-            // old reference. (This closes the stale-reference half
-            // only; the verify-then-read race documented on
-            // `stableNode` stays open.)
-            if nodeIdentity(node) != nil {
-                throw LiveStoreError.notFound("legacy reference retired by identity mint")
-            }
+            try requireIdentityLess(node)
             return try fileContents(
                 node: node,
                 path: path,
@@ -356,6 +339,22 @@ final class LiveStore {
             )
         }
         return NSFileProviderItemIdentifier(WyrdItemIdentifier.legacyID(path: path))
+    }
+
+    /// Reject a node that carries owner identity behind a legacy
+    /// reference: the reference names the identity-less entry at
+    /// its path, so a minted path 404s instead of serving the
+    /// replacement under the old identifier — the same rule stable
+    /// resolution enforces by token match. Without this, the system
+    /// keeps refreshing a retired reference, gets back an item with
+    /// a different identifier, and fails the whole fetch as
+    /// inconsistent. Still-identity-less nodes pass through
+    /// untouched. One helper for the item, contents, and container
+    /// surfaces, so no surface can lose the rule again.
+    func requireIdentityLess(_ node: OwnerNode) throws {
+        if nodeIdentity(node) != nil {
+            throw LiveStoreError.notFound("legacy reference retired by identity mint")
+        }
     }
 
     /// Resolve one stable token to its serving node in a single
