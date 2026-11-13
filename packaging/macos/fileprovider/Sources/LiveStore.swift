@@ -117,6 +117,16 @@ final class LiveStore {
             }
             let parent = try parentIdentifier(of: path, client: client)
             let (node, generation, revision) = try lookupNode(path: path, client: client)
+            // A legacy reference names the identity-less entry at its
+            // path. Minting an identity retires the reference — the
+            // same rule stable resolution enforces by token match —
+            // so a replacement never serves under the old identifier.
+            // Without this, the system keeps refreshing a retired
+            // reference, gets back an item with a different
+            // identifier, and fails the whole fetch as inconsistent.
+            if nodeIdentity(node) != nil {
+                throw LiveStoreError.notFound("legacy reference retired by identity mint")
+            }
             return try buildItem(
                 node: node,
                 path: path,
@@ -180,6 +190,14 @@ final class LiveStore {
             let path = legacyPath
             let parent = try parentIdentifier(of: path, client: client)
             let (node, generation, revision) = try lookupNode(path: path, client: client)
+            // Same retirement rule as the item path: a minted identity
+            // ends the legacy reference. Hydrating the replacement
+            // under the old identifier would serve new bytes for an
+            // old reference — the read-side half of the residual
+            // window the stable path already closes.
+            if nodeIdentity(node) != nil {
+                throw LiveStoreError.notFound("legacy reference retired by identity mint")
+            }
             return try fileContents(
                 node: node,
                 path: path,

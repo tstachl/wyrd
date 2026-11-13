@@ -14,6 +14,7 @@
 
 import FileProvider
 import Foundation
+import os
 
 extension LiveStore {
     /// Largest single content image in bytes, mirroring the owner's

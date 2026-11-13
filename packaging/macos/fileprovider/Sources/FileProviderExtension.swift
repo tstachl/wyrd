@@ -14,6 +14,8 @@
 // `fileprovider_swift_stays_within_the_owner_boundary`.
 
 import FileProvider
+import Foundation
+import UniformTypeIdentifiers
 import os
 
 final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {

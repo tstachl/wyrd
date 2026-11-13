@@ -21,7 +21,11 @@ enum WyrdItemIdentifier: Equatable {
     case stable(driveHex: String, identityHex: String)
     /// A row without owner identity (legacy entry or merged
     /// disagreement): the current relative path, hex-encoded.
-    /// Unstable by contract — never an EntryIdentity.
+    /// Unstable by contract — never an EntryIdentity. The reference
+    /// resolves only while the path stays identity-less: minting an
+    /// identity retires it (rename preserves, delete retires,
+    /// recreate mints — and minting ends the legacy name), so a
+    /// replacement never serves under the old identifier.
     case legacy(pathHex: String)
     /// A synthetic conflict report for a conflicted logical
     /// location: the drive plus the conflicted relative path,

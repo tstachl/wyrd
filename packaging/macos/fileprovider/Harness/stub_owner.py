@@ -184,6 +184,13 @@ def answer(op, params):
         if path == "hello.txt":
             node = dict(READDIR_OK["result"]["ok"]["Readdir"]["entries"][0]["node"])
             return result_ok({"Lookup": {"node": node, "generation": 3, "revision": 9}})
+        if path == "legacy.bin":
+            for entry in READDIR_OK["result"]["ok"]["Readdir"]["entries"]:
+                if entry["name"] == "legacy.bin":
+                    return result_ok(
+                        {"Lookup": {"node": entry["node"], "generation": 3, "revision": 9}}
+                    )
+            return result_err("NotFound", "no such path")
         if path == "notes":
             node = dict(READDIR_OK["result"]["ok"]["Readdir"]["entries"][1]["node"])
             return result_ok({"Lookup": {"node": node, "generation": 3, "revision": 9}})

@@ -1427,6 +1427,43 @@ do {
     failures += 1
 }
 
+do {
+    // Legacy references retire when an identity is minted: the same
+    // rule stable resolution enforces by token match. A legacy id
+    // over a path that now serves a token-bearing entry 404s on both
+    // lookup and hydration instead of returning the replacement
+    // under the old identifier; a still-identity-less path keeps
+    // resolving through its legacy reference.
+    let dirID = try store.enumerate(container: .rootContainer).items
+        .first(where: { $0.filename == "mut-dir" })!.itemIdentifier
+    _ = try store.createFile(
+        parent: dirID, name: "mut-legacy.txt", contents: Data("m".utf8))
+    let retired = NSFileProviderItemIdentifier(
+        WyrdItemIdentifier.legacyID(path: "mut-dir/mut-legacy.txt"))
+    for op in ["item", "contents"] {
+        do {
+            if op == "item" { _ = try store.item(for: retired) } else {
+                _ = try store.contents(for: retired)
+            }
+            print("FAIL: minted path serves under a legacy reference (\(op))")
+            failures += 1
+        } catch let error as LiveStoreError {
+            if case .notFound = error {} else {
+                print("FAIL: minted legacy reference 404s (\(op)), got \(error)")
+                failures += 1
+            }
+        }
+    }
+    let control = try store.item(
+        for: NSFileProviderItemIdentifier(WyrdItemIdentifier.legacyID(path: "legacy.bin")))
+    checkEqual(
+        control.filename, "legacy.bin",
+        "an identity-less path keeps its legacy reference")
+} catch {
+    print("FAIL: legacy retirement: \(error)")
+    failures += 1
+}
+
 if failures == 0 {
     print("harness: all checks passed")
 } else {
