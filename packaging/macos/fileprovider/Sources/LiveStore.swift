@@ -193,8 +193,9 @@ final class LiveStore {
             // Same retirement rule as the item path: a minted identity
             // ends the legacy reference. Hydrating the replacement
             // under the old identifier would serve new bytes for an
-            // old reference — the read-side half of the residual
-            // window the stable path already closes.
+            // old reference. (This closes the stale-reference half
+            // only; the verify-then-read race documented on
+            // `stableNode` stays open.)
             if nodeIdentity(node) != nil {
                 throw LiveStoreError.notFound("legacy reference retired by identity mint")
             }

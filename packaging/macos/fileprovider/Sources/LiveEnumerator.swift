@@ -30,15 +30,20 @@ final class LiveEnumerator: NSObject, NSFileProviderEnumerator {
         // Reports ride alongside ordinary items; both share the
         // anchor the enumeration served.
         do {
-            let (items, reports, anchor) = try store.enumerate(container: container)
+            let (items, reports, _) = try store.enumerate(container: container)
             var combined: [NSFileProviderItem] = []
             combined.reserveCapacity(items.count + reports.count)
             combined.append(contentsOf: items.map { $0 as NSFileProviderItem })
             combined.append(contentsOf: reports.map { $0 as NSFileProviderItem })
             observer.didEnumerate(combined)
-            observer.finishEnumerating(
-                upTo: NSFileProviderPage(rawValue: Data(anchor.encode().utf8))
-            )
+            // Full enumeration, no continuation: every page serves
+            // the whole container at its current coordinate, so no
+            // page state survives the call. (An anchor-data page
+            // fails the fetch persist leg-wide with a callback-free
+            // 4101; the anchor itself stays live via
+            // currentSyncAnchor, which the system consults
+            // separately. Canned enumerations likewise finish nil.)
+            observer.finishEnumerating(upTo: nil)
         } catch let error as LiveStoreError {
             observer.finishEnumeratingWithError(nsError(for: error))
         } catch {

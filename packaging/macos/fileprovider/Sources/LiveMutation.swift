@@ -48,6 +48,16 @@ extension LiveStore {
             guard let path = WyrdItemIdentifier.legacyPath(pathHex: pathHex) else {
                 throw LiveStoreError.notFound("container undecodable")
             }
+            // Same retirement rule as the item and contents paths: a
+            // legacy reference names the identity-less entry at its
+            // path, so a minted path 404s instead of enumerating the
+            // replacement's children or accepting writes under the
+            // old identifier. Still-identity-less paths resolve
+            // unchanged.
+            let (node, _, _) = try lookupNode(path: path, client: client)
+            if nodeIdentity(node) != nil {
+                throw LiveStoreError.notFound("legacy reference retired by identity mint")
+            }
             return path
         case .conflict:
             // Reports are files about conflicts, never containers:

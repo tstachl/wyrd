@@ -556,17 +556,21 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
         return disk == live
     }
 
-    /// Split a `wyrd-cv2` (or legacy `wyrd-cv1`) content version into
-    /// the per-entry facts: the size and everything after it (token
-    /// plus content digest, or the legacy tag). The generation and
-    /// revision prefix is dropped by construction. Anything else —
-    /// a foreign format, a truncated version — parses to nothing
-    /// and fails the match, never the parse.
+    /// Split a `wyrd-cv3` (or legacy `wyrd-cv2`/`wyrd-cv1`)
+    /// content version into the per-entry facts: the size and the
+    /// content tag. `cv3` carries a fixed-size digest of the
+    /// token-plus-content tail (the raw tail is unbounded and would
+    /// breach the 128-byte version bound); `cv2` carries the raw
+    /// tail. Cross-format versions never compare equal — versions
+    /// stored by older builds mismatch once and heal on the next
+    /// enumeration — while same-format equality keeps its meaning.
+    /// Anything else — a foreign format, a truncated version —
+    /// parses to nothing and fails the match, never the parse.
     static func versionFacts(_ contentVersion: Data) -> (size: String, rest: String)? {
         guard let raw = String(data: contentVersion, encoding: .utf8) else {
             return nil
         }
-        for prefix in ["wyrd-cv2:", "wyrd-cv1:"] as [String] {
+        for prefix in ["wyrd-cv3:", "wyrd-cv2:", "wyrd-cv1:"] as [String] {
             if raw.hasPrefix(prefix) {
                 let parts = raw.dropFirst(prefix.count).split(
                     separator: ":", maxSplits: 3, omittingEmptySubsequences: false

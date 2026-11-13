@@ -633,6 +633,34 @@ do {
 }
 
 do {
+    // Version bound: fileproviderd rejects item versions whose
+    // content or metadata data exceeds 128 bytes, failing the whole
+    // enumeration. Every served row — items and reports — stays
+    // within the bound, no matter how long the underlying tail
+    // (chunk lists, subtree listings) grows.
+    let (boundItems, boundReports, _) = try store.enumerate(container: .rootContainer)
+    for item in boundItems {
+        check(
+            item.itemVersion.contentVersion.count <= 128,
+            "item \(item.filename) content version fits 128 bytes")
+        check(
+            item.itemVersion.metadataVersion.count <= 128,
+            "item \(item.filename) metadata version fits 128 bytes")
+    }
+    for report in boundReports {
+        check(
+            report.itemVersion.contentVersion.count <= 128,
+            "report \(report.filename) content version fits 128 bytes")
+        check(
+            report.itemVersion.metadataVersion.count <= 128,
+            "report \(report.filename) metadata version fits 128 bytes")
+    }
+} catch {
+    print("FAIL: version bound: \(error)")
+    failures += 1
+}
+
+do {
     // End-to-end write path against the stateful stub: mkdir,
     // create-with-contents, modify, rename, delete.
     let dir = try store.createDirectory(parent: .rootContainer, name: "mut-dir")
@@ -837,6 +865,24 @@ do {
         check(
             FileProviderExtension.versionFacts(legacy.contentVersion) != nil,
             "legacy versions still parse")
+        // Current cv3 versions round-trip: same facts, same match;
+        // a same-size digest swap fails.
+        let rebuilt = NSFileProviderItemVersion(
+            contentVersion: Data("wyrd-cv3:3:9:\(facts.size):\(facts.rest)".utf8),
+            metadataVersion: currentVersion.metadataVersion)
+        let reparsed = FileProviderExtension.versionFacts(rebuilt.contentVersion)
+        check(
+            reparsed?.size == facts.size && reparsed?.rest == facts.rest,
+            "current versions round-trip into the same facts")
+        check(
+            FileProviderExtension.baseVersionMatches(rebuilt, current: current),
+            "a rebuilt current version still matches")
+        let swappedDigest = NSFileProviderItemVersion(
+            contentVersion: Data("wyrd-cv3:3:9:\(facts.size):deadbeefdeadbeef".utf8),
+            metadataVersion: currentVersion.metadataVersion)
+        check(
+            !FileProviderExtension.baseVersionMatches(swappedDigest, current: current),
+            "a swapped content digest fails")
     }
     let stale = NSFileProviderItemVersion(
         contentVersion: Data("wyrd-cv1:0:0:0:i:dead".utf8),
@@ -1459,6 +1505,65 @@ do {
     checkEqual(
         control.filename, "legacy.bin",
         "an identity-less path keeps its legacy reference")
+    // Retired directories: enumerating through a legacy directory
+    // reference and creating under one both 404 once the path is
+    // minted — the container surface enforces the same rule as the
+    // item and contents surfaces.
+    let rdir = try store.createDirectory(parent: .rootContainer, name: "mut-rdir")
+    _ = try store.createFile(
+        parent: rdir.itemIdentifier, name: "kid.txt", contents: Data("k".utf8))
+    let retiredDir = NSFileProviderItemIdentifier(
+        WyrdItemIdentifier.legacyID(path: "mut-rdir"))
+    do {
+        _ = try store.enumerate(container: retiredDir)
+        print("FAIL: minted directory enumerates under a legacy reference")
+        failures += 1
+    } catch let error as LiveStoreError {
+        if case .notFound = error {} else {
+            print("FAIL: minted directory enumerate 404s, got \(error)")
+            failures += 1
+        }
+    }
+    do {
+        _ = try store.createFile(
+            parent: retiredDir, name: "sneak.txt", contents: Data("s".utf8))
+        print("FAIL: minted directory accepts a create under a legacy reference")
+        failures += 1
+    } catch let error as LiveStoreError {
+        if case .notFound = error {} else {
+            print("FAIL: minted directory create-parent 404s, got \(error)")
+            failures += 1
+        }
+    }
+    // Delete-plus-recreate lifecycle: deleting the entry 404s the
+    // legacy reference (the path is gone), and recreating mints a
+    // new identity, so the old reference stays retired — a
+    // replacement never serves under it.
+    let legacyKid = try store.enumerate(container: dirID).items
+        .first(where: { $0.filename == "mut-legacy.txt" })!.itemIdentifier
+    try store.delete(identifier: legacyKid)
+    do {
+        _ = try store.item(for: retired)
+        print("FAIL: deleted path serves under a legacy reference")
+        failures += 1
+    } catch let error as LiveStoreError {
+        if case .notFound = error {} else {
+            print("FAIL: deleted legacy reference 404s, got \(error)")
+            failures += 1
+        }
+    }
+    _ = try store.createFile(
+        parent: dirID, name: "mut-legacy.txt", contents: Data("m2".utf8))
+    do {
+        _ = try store.item(for: retired)
+        print("FAIL: recreated path serves under the old legacy reference")
+        failures += 1
+    } catch let error as LiveStoreError {
+        if case .notFound = error {} else {
+            print("FAIL: recreated legacy reference stays retired, got \(error)")
+            failures += 1
+        }
+    }
 } catch {
     print("FAIL: legacy retirement: \(error)")
     failures += 1
