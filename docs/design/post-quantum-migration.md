@@ -10,6 +10,17 @@ a new dependency; `../contracts/trust.md`, `../contracts/object-model.md`,
 conflict with this note. Target: normative contract language at the v0.8
 protocol compatibility and security freeze (`ROADMAP.md`, v0.8).
 
+Readiness of this note, in three parts that must not be collapsed:
+
+- **Architecture accepted (proposed):** Wyrd pursues PQ migration without
+  changing its content-addressing model or rewriting history.
+- **Security design unresolved:** checkpoint provenance, negotiation
+  security floors, and retrospective confidentiality semantics — see the
+  required revisions below. The checkpoint-provenance gap is the
+  must-resolve item before this architecture is called complete.
+- **Implementation deferred:** until the v0.8 contract freeze and the T11
+  dependency requirements are satisfied.
+
 ## Goal
 
 Wyrd supports migration to standardized post-quantum cryptography
@@ -30,8 +41,10 @@ envelopes and ciphertext today and decrypts them once a capable
 quantum computer exists. Wyrd's ciphertext is designed to be retained
 for decades, so durable key establishment — not transport sessions —
 is the primary exposure. If the confidentiality lifetime plus the
-migration time exceeds the quantum-horizon (Mosca's inequality), the
-data is already exposed; re-encryption after harvest cannot un-harvest.
+migration time exceeds the estimated quantum-threat horizon (Mosca's
+inequality, read as a risk threshold — not proof of compromise),
+migration must already have begun; re-encryption after harvest cannot
+un-harvest.
 
 ## Substrate inventory (verified, not assumed)
 
@@ -50,8 +63,18 @@ Two classifications the inventory must keep separate:
 
 - **Hash uses are not one assumption.** ContentId/StorageId collision
   resistance, second-preimage resistance, and KDF output security have
-  different quantum bounds. BLAKE3 is retained provisionally; the
-  contract documents per-use assumptions rather than a blanket claim.
+  different quantum bounds. Generic bounds for an ideal n-bit hash:
+
+  | Property | Classical generic work | Quantum generic work |
+  |---|---|---|
+  | Preimage | 2^n | 2^(n/2) |
+  | Collision | 2^(n/2) | ~2^(n/3) |
+
+  A 256-bit hash therefore does not automatically carry 128-bit
+  quantum collision security. BLAKE3 is retained provisionally on this
+  basis — no replacement is justified by PQ migration alone — but the
+  contract documents the margin per use (which uses need collision vs
+  preimage resistance) rather than a blanket claim.
 - **Escrow/keystore wraps are not key-establishment.** Argon2id plus
   XChaCha20 is password-entropy plus Grover scope, not Shor scope. A
   plaintext DriveId in escrow is privacy, not a KEM break. They are
@@ -88,6 +111,32 @@ signature is a new authentication authority with a classical bootstrap
 trust dependency. It does not make the original identity
 quantum-resistant.
 
+NIP-44 deserves a sharper boundary than "somebody else's problem."
+Wyrd does not control the Nostr identity format or the NIP-44
+specification — but it does control what it places inside NIP-44
+messages. Verified against the control plane (`control/message.rs`,
+`trust.md` "Message set"): no NIP-44 message carries an epoch secret
+or other durable secret under NIP-44-only protection today. Every
+secret-carrying kind wraps its payload in an independent inner
+envelope first — per-recipient ECDH capability wraps inside the
+`Capability`, rotation-delivery, and bootstrap framings — with NIP-44
+always the outer transport layer, never the sole confidentiality
+boundary. `KeyRotation` carries only a transition id (a hint, no key
+material); announcements carry ids and signatures.
+
+All of those inner envelopes are classical ECDH, hence HNDL-exposed
+in exactly the same way — which is what makes the mitigation
+available without waiting on Nostr: **application-layer PQ-protected
+payloads inside NIP-44.** NIP-44 stays the delivery and mailbox
+mechanism; Wyrd independently encrypts sensitive control-plane
+payloads to the recipient's PQ-capable device key; NIP-44 becomes an
+additional outer layer, not the only boundary; the recipient verifies
+the inner envelope and its authenticated sender/key binding. The v1
+design documents the migration problem this creates for existing
+recipients (pre-PQ devices cannot open PQ-inner envelopes — delivery
+to mixed-version memberships needs explicit rules, not silent
+downgrade to classical-inner).
+
 ## Forward protection vs retrospective confidentiality
 
 "New suite arrives with a new epoch, never rewrites history" is
@@ -99,19 +148,37 @@ requirements:
 | Data | Requirement |
 |---|---|
 | Future objects | Encrypt under PQ-protected epoch keys |
-| Existing objects with potentially exposed epoch keys | Re-encrypt under new keys *where retrospective confidentiality is required and the old representations were not already harvested* |
+| Existing objects with potentially exposed epoch keys | Re-encrypt under new keys as a best-effort reduction of future exposure (below) |
 | Historical authorization records | Preserve immutable; anchor separately (below) |
 
-Re-encryption preserves plaintext identity by construction
+Whether an old representation was harvested is unknowable: silent
+copying leaves no signal Wyrd can observe. Migration MUST NOT be
+conditioned on harvest knowledge. Re-encryption therefore promises
+exactly this, no more:
+
+- It protects future access through the newly published representation.
+- It does not protect an old representation whose wrapping key is
+  subsequently recovered.
+- It does not revoke copies an adversary already obtained.
+- It still reduces exposure wherever the adversary never obtained the
+  old ciphertext or cannot obtain the old key.
+
+Re-encryption preserves the `ContentId` of objects whose identity is
+derived independently of their sealed representation
 (`seal.rs`: `ContentId` over the plaintext, `StorageId` over the
 sealed bytes with fresh nonces; `../contracts/object-model.md`
 decision 30; upgrade invariant 8 — migration as ordinary
-snapshot-producing operations). But it cannot un-harvest: copies an
-adversary already recorded stay decryptable under the old epoch
-secret. The v1 contracts must state what Wyrd promises about
-pre-migration confidentiality in exactly these terms — that promise is
-what separates a system that merely supports PQC from one that
-protects decades of accumulated data.
+snapshot-producing operations). Manifest identities are the documented
+exception: manifest entries carry the referenced representation's seal
+version inside the hashed payload, so a seal-version change can move a
+manifest `ContentId`. Such changes are ordinary snapshot-producing
+operations, not a change to the content-addressing model. But
+re-encryption cannot un-harvest: copies an adversary already recorded
+stay decryptable under the old epoch secret. Migration also revokes
+nothing silently: old representations keep their existing access and
+retention semantics under the epoch and retention contracts —
+cryptographic migration MUST NOT quietly introduce a different
+retention or authorization model.
 
 ## Historical authenticity and checkpoints
 
@@ -133,6 +200,27 @@ normative `trust.md` material at v1 scope — including the
 forgery-of-binding case, where the attacker forges the PQ-key binding
 itself rather than subsequent signatures.
 
+A checkpoint cannot establish its own authority, and this note does
+not claim otherwise. A PQ-signed checkpoint whose signing key was
+itself legitimized only by a now-forgeable classical signature moves
+the classical trust problem one level up: the attacker mints their own
+PQ keypair, forges the classical binding, signs an alternative history,
+and produces a perfectly genuine PQ signature over a false checkpoint.
+The v1 contract MUST therefore require independently verifiable
+checkpoint provenance — trust established outside the checkpoint being
+checked. Candidate mechanisms (no choice made here):
+
+- Contemporaneous checkpoints retained by existing devices.
+- Quorum-attested checkpoints from independently trusted devices.
+- External timestamping or transparency witnesses.
+- Cross-peer checkpoint gossip with consistency verification.
+
+Post-quantum signatures are not enough to establish post-quantum
+trust: Wyrd must prove the authority that created a PQ key was
+legitimate even after the cryptography that originally established
+that authority becomes forgeable. Resolving the provenance mechanism
+is the must-resolve item before this architecture is called complete.
+
 ## Suite registry and negotiation (sketch, not spec)
 
 - Versioned cryptographic suites for key establishment, key wrapping,
@@ -140,13 +228,38 @@ itself rather than subsequent signatures.
 - Every durable envelope names its suite explicitly, and the suite
   identifier rides inside the authenticated data (AAD or signed
   preimage) — never a strippable header.
-- Negotiation is capability-based with oldest-mutual selection, per
-  `../contracts/upgrade-contract.md` invariant 5; no silent downgrade,
-  and suite advertisement alone is not a security property.
+- Negotiation separates two jobs that must not be collapsed.
+  **Compatibility selection** chooses the oldest mutually supported
+  representation where the upgrade contract requires it
+  (`../contracts/upgrade-contract.md` invariant 5). **Cryptographic
+  security policy** refuses suites below the locally required floor.
+  Suppressing a peer's advertised PQ capabilities and falling back to
+  classical-only protection is a downgrade attack even though no
+  envelope byte was modified — oldest-mutual selection alone permits
+  it. Each participant therefore enforces a locally configured minimum
+  security level and fails closed rather than silently falling back.
+- The negotiation transcript authenticates the advertised capability
+  sets, the selected suite, the participant identities, and the
+  relevant policy. The selected suite is bound into the resulting key
+  derivation and the authenticated envelope. A mismatch, a suppressed
+  capability, or a selection below either participant's floor fails
+  closed. Capability-based negotiation never authorizes security
+  downgrade: suite advertisement alone is not a security property.
 - New constructions arrive with new epochs and new envelope versions;
   old epochs keep their construction (upgrade invariant 7). Envelope
   versioning follows the existing `SEAL_VERSION` / `ROTATION_VERSION` /
   `CONTROL_VERSION` pattern; no generic provider framework.
+- Hybrid key establishment combines both contributions in a
+  standardized, domain-separated KDF combiner: the recipient identity,
+  sender identity, suite identifier, protocol context, and negotiation
+  transcript are bound into derivation or authenticated context;
+  failure of either required component fails the operation.
+  Concatenating two secrets without a specified combiner is not an
+  acceptable construction, and this note specifies no home-grown
+  combiner.
+- Suite identifiers are never reused. Deprecated suites stay
+  identifiable for historical decoding; unsupported suites fail closed.
+  Retirement removes use, never readability.
 - Algorithm picks stay provisional: ML-KEM-768 / ML-DSA-65 as the
   conventional defaults, SLH-DSA retained as a lattice-independent
   hedge (large, slow — backup only). Finalization waits on audits.
@@ -162,13 +275,17 @@ verification time, and constrained-transport impact before freezing.
 When implementation lands, it demonstrates, at minimum:
 
 - Old classical-only envelopes remain readable under declared semantics.
-- New envelopes cannot silently downgrade (negative tests).
+- New envelopes cannot silently downgrade: negative tests cover both
+  envelope-header stripping and capability-advertisement stripping
+  during negotiation.
 - A new epoch establishes without classical-only key establishment.
+- A device with a PQ-only security floor refuses classical-only
+  negotiation fail-closed instead of falling back.
 - Re-encryption yields same-`ContentId`/new-`StorageId`; old
   representations stay readable — without claiming harvested copies
   become secure.
-- Historical checkpoints validate independently of newly presented
-  classical signatures.
+- Historical checkpoints validate against their independent provenance
+  anchor, not against newly presented classical signatures alone.
 - `layer_contracts` and T11 gates green; no wire bytes outside the
   pinned surface.
 
