@@ -63,60 +63,16 @@ pub(crate) struct RelayArgs {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum Command {
-    /// Create a new drive: identity, root custody, genesis membership.
-    Init {
+    /// Local drive lifecycle: create, provision, delete, reconfigure.
+    /// One drive per invocation; `--config` selects the drive
+    /// configuration, never all drives at once.
+    Drive {
         /// Directory holding the drive's keystore and object store.
         drive_dir: PathBuf,
+        #[command(subcommand)]
+        action: DriveAction,
         #[command(flatten)]
         credentials: Credentials,
-    },
-    /// Provision a drive from nothing and hand it to OS supervision:
-    /// initialize, register in the per-user registry, install and
-    /// enable the per-drive service, and verify the owner socket.
-    /// Ready is reported only when the socket answers this session.
-    Bootstrap {
-        /// Registration name: 1-58 chars of [a-z0-9-]. Names the
-        /// registry entry and derives the `drive-<name>` service name,
-        /// so 59-64 chars would overflow the 64-char service token.
-        #[arg(long)]
-        name: String,
-        /// Directory holding (or to hold) the drive's keystore and
-        /// object store.
-        drive_dir: PathBuf,
-        /// Target service mode: `vault` serves headless, `mount`
-        /// serves the FUSE projection at `--mountpoint`.
-        #[arg(long, value_name = "MODE", default_value = "vault")]
-        mode: String,
-        /// FUSE mountpoint. Required in `mount` mode, refused in
-        /// `vault` mode.
-        #[arg(long, value_name = "PATH")]
-        mountpoint: Option<PathBuf>,
-        #[command(flatten)]
-        relays: RelayArgs,
-        #[command(flatten)]
-        credentials: Credentials,
-        /// Join as an invited device instead of creating: the sealed
-        /// invitation file the inviter's `member invite` wrote.
-        #[arg(long, value_name = "PATH")]
-        invitation_file: Option<PathBuf>,
-        /// Registry file elsewhere than the platform default.
-        #[arg(long, value_name = "PATH")]
-        registry: Option<PathBuf>,
-        /// Owner binary for the service definition elsewhere than
-        /// the `wyrd` beside this command. The service runs
-        /// `wyrd vault` or `wyrd mount` with the same credential files.
-        #[arg(long, value_name = "PATH")]
-        owner_bin: Option<PathBuf>,
-        /// `wyrd-supervise` wrapper for the service definition
-        /// elsewhere than beside the `wyrd` binary. The restart
-        /// policy rests on the wrapper's wait-status mapping, so a
-        /// managed service without it is refused.
-        #[arg(long, value_name = "PATH")]
-        supervise_bin: Option<PathBuf>,
-        /// Register without installing or enabling any OS service:
-        /// the owner stays supervised by whoever starts it.
-        #[arg(long)]
-        no_service: bool,
     },
     /// Mount a live projection at `mountpoint` (read-write).
     // Behind the `mount` feature (plain comment: `///` docs would leak
@@ -210,18 +166,6 @@ pub(crate) enum Command {
         #[command(flatten)]
         credentials: Credentials,
     },
-    /// Delete this drive's local copy: author your own removal, then
-    /// remove the local directory. Owner-only and terminal; a
-    /// non-owner is refused, a frozen drive resolves first, and no
-    /// other member's copy changes.
-    Drive {
-        /// Directory holding the drive's keystore and object store.
-        drive_dir: PathBuf,
-        #[command(subcommand)]
-        action: DriveAction,
-        #[command(flatten)]
-        credentials: Credentials,
-    },
     /// Headless sync: report sync state or run a bounded sync without
     /// mounting. Status never connects and never mutates durable
     /// state; `now` connects when given a relay (and refuses a
@@ -237,44 +181,43 @@ pub(crate) enum Command {
         #[command(flatten)]
         credentials: Credentials,
     },
-    /// Run a headless vault: the mount's live loop and serving
-    /// surface with no presentation session. The persistent process
-    /// (OD-22-B option A) — `sync now` stays the bounded one-shot,
-    /// this never stops syncing until SIGINT/SIGTERM. Needs at least
-    /// one `--relay`; states what the device is doing, never what it
-    /// guarantees (OD-22-E: retention promises wait for DG-4). Bare
-    /// `wyrd vault <drive>` starts the process (the 22b surface);
-    /// `wyrd vault <drive> status` queries it (22c).
-    Vault {
+    /// Run the local drive-owner runtime: the mount's live loop and
+    /// serving surface with no presentation session. The persistent
+    /// process — `sync now` stays the bounded one-shot, this never
+    /// stops syncing until SIGINT/SIGTERM. Needs at least one
+    /// `--relay`; states what the device is doing, never what it
+    /// guarantees. Bare `wyrd owner <drive>` starts the process;
+    /// `wyrd owner <drive> status` queries it.
+    Owner {
         /// Directory holding the drive's keystore and object store.
         drive_dir: PathBuf,
         #[command(flatten)]
         relays: RelayArgs,
         /// Optional log file, appended (never truncated): stderr
         /// always carries the ready line and failures for the
-        /// supervisor to capture (OD-22-D option A+C). Start-only:
-        /// status never writes diagnostics.
+        /// supervisor to capture. Start-only: status never writes
+        /// diagnostics.
         #[arg(long, value_name = "PATH")]
         log_file: Option<PathBuf>,
-        /// Start (default) or query the vault. Relay and log-file
+        /// Start (default) or query the owner. Relay and log-file
         /// flags are start-only; status takes neither, because it
-        /// never constructs a mailbox (matrix H9).
+        /// never constructs a mailbox.
         #[command(subcommand)]
-        action: Option<VaultAction>,
+        action: Option<OwnerAction>,
         #[command(flatten)]
         credentials: Credentials,
     },
-    /// Device-local materialization policy, one namespace: what this
+    /// Device-local materialization, one namespace: what this
     /// device intends to retain (`pin` / `unpin` / `evict`), what it
     /// reports (`status` / `budgets`), and the posture baseline both
-    /// report against (`role`). Policy only — never fetches, never
-    /// authors, never touches heads, never replicates. Offline by
-    /// construction.
-    Policy {
+    /// report against (`role`). Materialization only — never fetches,
+    /// never authors, never touches heads, never replicates. Offline
+    /// by construction.
+    Materialization {
         /// Directory holding the drive's keystore and object store.
         drive_dir: PathBuf,
         #[command(subcommand)]
-        action: PolicyAction,
+        action: MaterializationAction,
     },
     /// Upgrade this installation from a local release archive:
     /// quiesce, flush, stop, swap the binary atomically, verify the
@@ -293,14 +236,14 @@ pub(crate) enum Command {
         /// validated before anything is stopped.
         #[arg(value_name = "ARCHIVE")]
         archive: PathBuf,
-        /// Control-plane relays, forwarded to the vault child under
+        /// Control-plane relays, forwarded to the owner child under
         /// `--restart` only; refused otherwise.
         #[command(flatten)]
         relays: RelayArgs,
         /// After the update resolves, transfer into long-running
-        /// supervision of the vault instead of handing back:
-        /// this process runs the new vault as its child (or the
-        /// restored vault after a rollback) and does not return.
+        /// supervision of the owner instead of handing back:
+        /// this process runs the new owner as its child (or the
+        /// restored owner after a rollback) and does not return.
         /// Exit status then reports the supervised run, not the
         /// update — the update's own outcome is the `update done:`
         /// / `update rollback:` / `update refused:` line plus the
@@ -539,11 +482,58 @@ pub(crate) enum DeviceAction {
     },
 }
 
-/// One local-drive lifecycle action. Only an owner deletes: the
-/// operation authors `Remove(self)` through the engine (which
-/// enforces owner-only) and then removes the local directory.
+/// One local-drive lifecycle action: create, provision, delete,
+/// reconfigure. `init` creates identity, root custody, genesis
+/// membership; `bootstrap` provisions an existing or new drive and
+/// hands it to OS supervision; `delete` authors your own removal then
+/// removes the local directory; `reconfigure` changes supervision in
+/// place. Only an owner deletes.
 #[derive(Debug, Subcommand)]
 pub(crate) enum DriveAction {
+    /// Create a new drive: identity, root custody, genesis membership.
+    /// Idempotent only in the sense that re-running refuses — init
+    /// never merges into an existing drive.
+    Init,
+    /// Provision a drive from nothing and hand it to OS supervision:
+    /// initialize, register in the per-user registry, install and
+    /// enable the per-drive service, and verify the owner socket.
+    /// Ready is reported only when the socket answers this session.
+    Bootstrap {
+        /// Registration name: 1-58 chars of [a-z0-9-]. Names the
+        /// registry entry and derives the `drive-<name>` service name,
+        /// so 59-64 chars would overflow the 64-char service token.
+        #[arg(long)]
+        name: String,
+        /// Target service mode: `vault` role serves headless, `mount`
+        /// serves the FUSE projection at `--mountpoint`.
+        #[arg(long, value_name = "MODE", default_value = "vault")]
+        mode: String,
+        /// FUSE mountpoint. Required in `mount` mode, refused in
+        /// `vault` mode.
+        #[arg(long, value_name = "PATH")]
+        mountpoint: Option<PathBuf>,
+        #[command(flatten)]
+        relays: RelayArgs,
+        /// Join as an invited device instead of creating: the sealed
+        /// invitation file the inviter's `member invite` wrote.
+        #[arg(long, value_name = "PATH")]
+        invitation_file: Option<PathBuf>,
+        /// Registry file elsewhere than the platform default.
+        #[arg(long, value_name = "PATH")]
+        registry: Option<PathBuf>,
+        /// Owner binary for the service definition elsewhere than
+        /// the `wyrd` beside this command.
+        #[arg(long, value_name = "PATH")]
+        owner_bin: Option<PathBuf>,
+        /// `wyrd-supervise` wrapper for the service definition
+        /// elsewhere than beside the `wyrd` binary.
+        #[arg(long, value_name = "PATH")]
+        supervise_bin: Option<PathBuf>,
+        /// Register without installing or enabling any OS service:
+        /// the owner stays supervised by whoever starts it.
+        #[arg(long)]
+        no_service: bool,
+    },
     /// Delete this drive locally: author your own removal
     /// (owner-only, terminal — the owner set empties) and remove the
     /// local directory. Needs `--yes`. A non-owner is refused and a
@@ -587,7 +577,7 @@ pub(crate) enum DriveAction {
         registry: Option<PathBuf>,
         /// Owner binary for the service definition elsewhere than
         /// the `wyrd` beside this command. The service runs
-        /// `wyrd vault` or `wyrd mount` with the same credential files.
+        /// `wyrd owner start` or `wyrd mount` with the same credential files.
         #[arg(long, value_name = "PATH")]
         owner_bin: Option<PathBuf>,
         /// `wyrd-supervise` wrapper for the service definition
@@ -604,16 +594,18 @@ pub(crate) enum DriveAction {
     },
 }
 
-/// One vault action. `Start` is the 22b process; `Status` is the 22c
-/// operator query: process posture from the sidecar (never the
-/// store) beside durable state when the drive is stopped. The two
-/// sections stay separate in the output — a fresh posture is not
+/// One owner-runtime action. `Start` runs the persistent owner
+/// process; `Status` is the operator query: process posture from the
+/// sidecar (never the store) beside durable state when the drive is
+/// stopped. The two sections stay separate — a fresh posture is not
 /// convergence, and durable state is unavailable (not guessed) while
-/// the vault holds the lock.
+/// the owner holds the lock. The owner runtime is not a membership
+/// role: starting or inspecting it requires no Owner membership, and
+/// grants none.
 #[derive(Debug, Subcommand)]
-pub(crate) enum VaultAction {
-    /// Start the persistent vault process. The default when no
-    /// subcommand is given, so the shipped `wyrd vault <drive>`
+pub(crate) enum OwnerAction {
+    /// Start the persistent owner process. The default when no
+    /// subcommand is given, so the shipped `wyrd owner <drive>`
     /// keeps starting.
     Start {
         /// Per-device retained-bytes ceiling in bytes: the same
@@ -674,13 +666,13 @@ pub(crate) enum SyncAction {
     },
 }
 
-/// One policy-namespace action. Credentials flatten per action, not
-/// on the parent, so `policy role set` alone keeps taking neither flag: a
+/// One materialization-namespace action. Credentials flatten per action, not
+/// on the parent, so `materialization role set` alone keeps taking neither flag: a
 /// role is settable on a machine whose keystore is unavailable
 /// (OD-24-R), and a flag the command never reads is a flag that can
 /// silently rot.
 #[derive(Debug, Subcommand)]
-pub(crate) enum PolicyAction {
+pub(crate) enum MaterializationAction {
     /// Show every reachable file under `path` with its retention
     /// policy (PINNED / REMOTE_ONLY — what this device intends to
     /// retain) against physical presence (PRESENT / ABSENT — what

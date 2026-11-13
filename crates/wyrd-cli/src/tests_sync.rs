@@ -29,12 +29,13 @@ impl Fixture {
         write_secret(&identity_file, [0x44; 32]);
         write_secret(&passphrase_file, b"test-pass\n");
         command(vec![
-            "init".into(),
+            "drive".into(),
             drive.display().to_string(),
             "--identity-file".into(),
             identity_file.display().to_string(),
             "--passphrase-file".into(),
             passphrase_file.display().to_string(),
+            "init".into(),
         ])
         .unwrap();
         Fixture {
@@ -702,14 +703,14 @@ fn sync_status_refuses_a_locked_drive() {
     );
 }
 
-/// `vault status` on a stopped drive reports the vault-position
+/// `owner status` on a stopped drive reports the vault-position
 /// projection (counts only — never the member columns `sync status`
 /// prints) beside an absent process section.
 #[test]
-fn vault_status_reports_durable_state_on_stopped_drive() {
+fn owner_status_reports_durable_state_on_stopped_drive() {
     let fixture = Fixture::new();
     let identity = read_identity(&fixture.identity_file).unwrap();
-    let (report, outcome) = vault_status_report(fixture.drive.clone(), "test-pass", identity);
+    let (report, outcome) = owner_status_report(fixture.drive.clone(), "test-pass", identity);
     outcome.unwrap();
     assert!(
         report.contains("process: no posture recorded"),
@@ -730,7 +731,7 @@ fn vault_status_reports_durable_state_on_stopped_drive() {
 /// positive half pins the vault-only lines (`backlog: active`, no
 /// per-item detail) that prove which renderer ran.
 #[test]
-fn vault_status_stopped_drive_shows_vault_projection_only() {
+fn owner_status_stopped_drive_shows_vault_projection_only() {
     let fixture = Fixture::new();
     let peer = DeviceIdentitySecret::generate().unwrap();
     let peer_hex = peer.device_id().to_string();
@@ -758,7 +759,7 @@ fn vault_status_stopped_drive_shows_vault_projection_only() {
         engine.carry_pending(&store).unwrap();
     }
     let identity = read_identity(&fixture.identity_file).unwrap();
-    let (report, outcome) = vault_status_report(fixture.drive.clone(), "test-pass", identity);
+    let (report, outcome) = owner_status_report(fixture.drive.clone(), "test-pass", identity);
     outcome.unwrap();
     for absent in [
         peer_hex.as_str(),
@@ -794,14 +795,14 @@ fn vault_status_stopped_drive_shows_vault_projection_only() {
 /// as retained history, never as a live process disagreeing with
 /// the durable section (finding 3's report-level pin).
 #[test]
-fn vault_status_on_stopped_drive_marks_fresh_posture_retained() {
+fn owner_status_on_stopped_drive_marks_fresh_posture_retained() {
     let fixture = Fixture::new();
     let recorder = wyrd_daemon::posture::PostureRecorder::new(&fixture.drive, "aa".into()).unwrap();
     recorder.note_startup();
     recorder.note_ready();
     recorder.note_posture(41, 0, 7, 312);
     let identity = read_identity(&fixture.identity_file).unwrap();
-    let (report, outcome) = vault_status_report(fixture.drive.clone(), "test-pass", identity);
+    let (report, outcome) = owner_status_report(fixture.drive.clone(), "test-pass", identity);
     outcome.unwrap();
     assert!(
         report.contains("process: retained posture"),
@@ -818,14 +819,14 @@ fn vault_status_on_stopped_drive_marks_fresh_posture_retained() {
 /// error (fail closed) with the detail on stderr; stdout keeps only
 /// the bland durable line, never the error text.
 #[test]
-fn vault_status_renders_process_beside_durable_failure() {
+fn owner_status_renders_process_beside_durable_failure() {
     let fixture = Fixture::new();
     let recorder = wyrd_daemon::posture::PostureRecorder::new(&fixture.drive, "aa".into()).unwrap();
     recorder.note_startup();
     recorder.note_ready();
     recorder.note_posture(41, 0, 7, 312);
     let identity = read_identity(&fixture.identity_file).unwrap();
-    let (report, outcome) = vault_status_report(fixture.drive.clone(), "wrong-pass", identity);
+    let (report, outcome) = owner_status_report(fixture.drive.clone(), "wrong-pass", identity);
     assert!(outcome.is_err(), "a durable failure still fails closed");
     assert!(
         report.contains("process: retained posture"),
@@ -842,7 +843,7 @@ fn vault_status_renders_process_beside_durable_failure() {
 /// keeps the live reading — the conservative arm of the provenance
 /// classifier.
 #[test]
-fn vault_status_keeps_live_reading_on_prelock_failure() {
+fn owner_status_keeps_live_reading_on_prelock_failure() {
     let temp = TempDir::new();
     let drive = temp.0.join("nodrive");
     std::fs::create_dir_all(&drive).unwrap();
@@ -851,7 +852,7 @@ fn vault_status_keeps_live_reading_on_prelock_failure() {
     recorder.note_ready();
     recorder.note_posture(41, 0, 7, 312);
     let identity = DeviceIdentitySecret::generate().unwrap();
-    let (report, outcome) = vault_status_report(drive, "test-pass", identity);
+    let (report, outcome) = owner_status_report(drive, "test-pass", identity);
     assert!(outcome.is_err(), "a missing drive still fails closed");
     assert!(
         report.contains("process: fresh posture"),
@@ -862,10 +863,10 @@ fn vault_status_keeps_live_reading_on_prelock_failure() {
 /// `--log-file` is start-only: status writes no diagnostics, so
 /// passing it with status is a usage error, not a silent ignore.
 #[test]
-fn vault_status_refuses_log_file() {
+fn owner_status_refuses_log_file() {
     let fixture = Fixture::new();
     let error = command(vec![
-        "vault".into(),
+        "owner".into(),
         fixture.drive.display().to_string(),
         "--identity-file".into(),
         fixture.identity_file.display().to_string(),
@@ -882,13 +883,13 @@ fn vault_status_refuses_log_file() {
     );
 }
 
-/// `vault status` succeeds while the vault holds the lock: the
+/// `owner status` succeeds while the vault holds the lock: the
 /// process section never opens the store, and the durable section
 /// reports unavailable instead of failing closed or bypassing the
 /// lock. This is the acceptance leg that the query path disturbs no
 /// exclusivity.
 #[test]
-fn vault_status_succeeds_while_locked_without_opening_the_store() {
+fn owner_status_succeeds_while_locked_without_opening_the_store() {
     let fixture = Fixture::new();
     // The running vault's lock, held by "another process".
     let _held = fixture.open();
@@ -898,7 +899,7 @@ fn vault_status_succeeds_while_locked_without_opening_the_store() {
     recorder.note_ready();
     recorder.note_posture(41, 0, 7, 312);
     let identity = read_identity(&fixture.identity_file).unwrap();
-    let (report, outcome) = vault_status_report(fixture.drive.clone(), "test-pass", identity);
+    let (report, outcome) = owner_status_report(fixture.drive.clone(), "test-pass", identity);
     outcome.unwrap();
     assert!(
         report.contains("process: fresh posture"),
@@ -917,7 +918,7 @@ fn vault_status_succeeds_while_locked_without_opening_the_store() {
 /// A restarted vault cannot inherit the dead instance's readiness:
 /// the report names the replacement instance as not yet ready.
 #[test]
-fn vault_status_shows_replacement_instance_never_inherited_readiness() {
+fn owner_status_shows_replacement_instance_never_inherited_readiness() {
     let fixture = Fixture::new();
     let dead = wyrd_daemon::posture::PostureRecorder::new(&fixture.drive, "aa".into()).unwrap();
     dead.note_startup();
@@ -927,7 +928,7 @@ fn vault_status_shows_replacement_instance_never_inherited_readiness() {
         wyrd_daemon::posture::PostureRecorder::new(&fixture.drive, "bb".into()).unwrap();
     replacement.note_startup();
     let identity = read_identity(&fixture.identity_file).unwrap();
-    let (report, outcome) = vault_status_report(fixture.drive.clone(), "test-pass", identity);
+    let (report, outcome) = owner_status_report(fixture.drive.clone(), "test-pass", identity);
     outcome.unwrap();
     assert!(
         report.contains("serving: bb"),
@@ -2630,8 +2631,8 @@ fn sync_now_output_contains_no_secret_bytes() {
 
 /// The trust-position statement ships with the surfaces: the docs
 /// the operator reads state that client surfaces speak for clients
-/// while the vault's own surface is self-reported, so nobody reads
-/// a client surface as a vault one. A grep over the changed doc
+/// while the owner's own surface is self-reported, so nobody reads
+/// a client surface as an owner one. A grep over the changed doc
 /// file — fails if the statement is ever dropped. The never-print
 /// list is pinned as one whitespace-normalized sentence, head and
 /// tail anchored, not per-phrase `contains` checks: phrase checks
@@ -2640,15 +2641,15 @@ fn sync_now_output_contains_no_secret_bytes() {
 /// sentence check fails whenever the list changes shape in either
 /// direction.
 #[test]
-fn vault_trust_position_names_the_self_reported_surface() {
+fn owner_trust_position_names_the_self_reported_surface() {
     let reference = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../docs/design/cli.md"
     ))
     .expect("the CLI reference reads");
     assert!(
-        reference.contains("The vault's own surface is self-reported"),
-        "the statement pins the vault surface instead of its absence"
+        reference.contains("The owner's own surface is self-reported"),
+        "the statement pins the owner surface instead of its absence"
     );
     let flat = reference.split_whitespace().collect::<Vec<_>>().join(" ");
     assert!(

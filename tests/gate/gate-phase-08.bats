@@ -7,7 +7,7 @@
 #
 # Ports legacy microVM phase 12: two headless
 # peers exchange content with neither mounting — the owner drive
-# serves via `wyrd vault` while fresh devices join and converge
+# serves via `wyrd owner` while fresh devices join and converge
 # with plain `sync now`, reading bytes through an attachment (the
 # read faults chunks in over the serve route). The dataset is a
 # fresh single-author drive; C proves the positive case, a KILL

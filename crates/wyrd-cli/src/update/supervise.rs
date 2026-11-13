@@ -254,11 +254,11 @@ pub(crate) fn now_unix() -> u64 {
         .unwrap_or(0)
 }
 
-/// Build the vault child command `--restart` supervises: the same
-/// argv a hand-run vault takes, so supervised and manual runs
+/// Build the owner child command `--restart` supervises: the same
+/// argv a hand-run owner takes, so supervised and manual runs
 /// diverge nowhere. Factored out of [`supervise`] (which diverges
 /// by design) so the argv is pinnable by tests.
-pub(crate) fn vault_command(
+pub(crate) fn owner_command(
     exe: &Path,
     drive: &Path,
     relays: &[String],
@@ -266,7 +266,7 @@ pub(crate) fn vault_command(
     passphrase_file: &Path,
 ) -> std::process::Command {
     let mut command = std::process::Command::new(exe);
-    command.arg("vault").arg(drive);
+    command.arg("owner").arg(drive);
     for relay in relays {
         command.arg("--relay").arg(relay);
     }
@@ -275,15 +275,16 @@ pub(crate) fn vault_command(
         .arg(identity_file)
         .arg("--passphrase-file")
         .arg(passphrase_file);
+    command.arg("start");
     command
 }
 
-/// `--restart` supervision: run the new vault as our child and wait
+/// `--restart` supervision: run the new owner as our child and wait
 /// on it, forwarding SIGINT/SIGTERM for a graceful shutdown with a
 /// bounded SIGKILL fallback. The child inherits our stdio, so its
-/// ready line and diagnostics read exactly like a bare vault run.
+/// ready line and diagnostics read exactly like a bare owner run.
 /// The child's exit status propagates (Ctrl-C behaves like a bare
-/// vault); a wedged child that survives the grace period exits the
+/// owner); a wedged child that survives the grace period exits the
 /// parent non-zero. Unix-only: supervision without signals is
 /// guessing, and update never guesses (U3).
 #[cfg(unix)]
@@ -296,10 +297,10 @@ pub(crate) fn supervise(
     passphrase_file: &Path,
 ) -> Result<(), CliError> {
     crate::install_shutdown_handler()?;
-    let mut child = vault_command(exe, drive, relays, identity_file, passphrase_file)
+    let mut child = owner_command(exe, drive, relays, identity_file, passphrase_file)
         .spawn()
         .map_err(|source| CliError::Usage(format!("restart child failed to start ({source})")))?;
-    // Grace mirrors the vault's own teardown horizon: its TERM
+    // Grace mirrors the owner's own teardown horizon: its TERM
     // path drains transports under a 60s endpoint bound, so hurrying
     // it turns clean shutdowns into kills.
     const GRACE: Duration = Duration::from_secs(90);

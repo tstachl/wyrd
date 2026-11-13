@@ -56,12 +56,13 @@ impl Fixture {
 
     fn init(&self) {
         let status = Command::new(wyrd())
-            .arg("init")
+            .arg("drive")
             .arg(&self.drive)
             .arg("--identity-file")
             .arg(&self.identity)
             .arg("--passphrase-file")
             .arg(&self.passphrase)
+            .arg("init")
             .status()
             .unwrap();
         assert!(status.success(), "init must succeed");

@@ -144,7 +144,7 @@ cleanup_mounts() {
   done
   # Mount pidfiles, the headless vault pidfile, and every leg's
   # serve pidfile (pause-serve, retransmit-serve, ...): a leg that
-  # dies early with a live `wyrd vault` behind it (any status probe
+  # dies early with a live `wyrd owner` behind it (any status probe
   # after `vault &` can do it) would otherwise park the bare `wait`
   # below forever — the EXIT trap never finishes, the ssh session
   # never closes, and the host waits on a leg that already reported

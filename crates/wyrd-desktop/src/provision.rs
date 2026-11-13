@@ -249,9 +249,9 @@ pub fn check_cli_version(cli_bin: &Path, timeout: Duration) -> Result<PathBuf, P
     }
 }
 
-/// Pure argv builder for `wyrd bootstrap …`: every argument is a
+/// Pure argv builder for `wyrd drive <dir> bootstrap …`: every argument is a
 /// separate argv element, never shell-constructed. Mirrors
-/// `crates/wyrd-cli/src/args.rs` (`Command::Bootstrap`).
+/// `crates/wyrd-cli/src/args.rs` (`DriveAction::Bootstrap`).
 pub fn bootstrap_argv(request: &ProvisionRequest) -> Result<Vec<OsString>, String> {
     match request.mode.as_str() {
         "vault" => {
@@ -276,10 +276,17 @@ pub fn bootstrap_argv(request: &ProvisionRequest) -> Result<Vec<OsString>, Strin
             ));
         }
     }
-    let mut argv: Vec<OsString> = vec!["bootstrap".into()];
+    let mut argv: Vec<OsString> = vec![
+        "drive".into(),
+        request.drive_dir.as_os_str().to_owned(),
+        "--identity-file".into(),
+        request.identity_file.as_os_str().to_owned(),
+        "--passphrase-file".into(),
+        request.passphrase_file.as_os_str().to_owned(),
+        "bootstrap".into(),
+    ];
     argv.push("--name".into());
     argv.push(request.name.clone().into());
-    argv.push(request.drive_dir.as_os_str().to_owned());
     argv.push("--mode".into());
     argv.push(request.mode.clone().into());
     if let Some(mountpoint) = &request.mountpoint {
@@ -290,10 +297,6 @@ pub fn bootstrap_argv(request: &ProvisionRequest) -> Result<Vec<OsString>, Strin
         argv.push("--relay".into());
         argv.push(relay.into());
     }
-    argv.push("--identity-file".into());
-    argv.push(request.identity_file.as_os_str().to_owned());
-    argv.push("--passphrase-file".into());
-    argv.push(request.passphrase_file.as_os_str().to_owned());
     if let Some(invitation) = &request.invitation_file {
         argv.push("--invitation-file".into());
         argv.push(invitation.as_os_str().to_owned());
@@ -688,18 +691,19 @@ mod tests {
         assert_eq!(
             rendered,
             vec![
-                "bootstrap",
-                "--name",
-                "alpha",
+                "drive",
                 "/drives/alpha",
-                "--mode",
-                "vault",
-                "--relay",
-                "wss://relay.example",
                 "--identity-file",
                 "/keys/identity",
                 "--passphrase-file",
                 "/keys/passphrase",
+                "bootstrap",
+                "--name",
+                "alpha",
+                "--mode",
+                "vault",
+                "--relay",
+                "wss://relay.example",
             ]
         );
         assert!(

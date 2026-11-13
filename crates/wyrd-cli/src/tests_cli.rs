@@ -11,12 +11,13 @@ fn init_command_creates_a_reopenable_drive() {
     write_secret(&passphrase_file, b"test-pass\n");
 
     command(vec![
-        "init".into(),
+        "drive".into(),
         drive.display().to_string(),
         "--identity-file".into(),
         identity_file.display().to_string(),
         "--passphrase-file".into(),
         passphrase_file.display().to_string(),
+        "init".into(),
     ])
     .unwrap();
 
@@ -116,12 +117,13 @@ fn init_under_a_permissive_umask_produces_owner_only_custody() {
 
     let _guard = set_umask(0o000);
     command(vec![
-        "init".into(),
+        "drive".into(),
         drive.display().to_string(),
         "--identity-file".into(),
         identity_file.display().to_string(),
         "--passphrase-file".into(),
         passphrase_file.display().to_string(),
+        "init".into(),
     ])
     .unwrap();
     drop(_guard);
@@ -135,7 +137,7 @@ fn init_under_a_permissive_umask_produces_owner_only_custody() {
 
 #[test]
 fn missing_options_are_usage_errors() {
-    let error = command(vec!["init".into(), "/tmp/drive".into()]).unwrap_err();
+    let error = command(vec!["drive".into(), "/tmp/drive".into(), "init".into()]).unwrap_err();
     assert!(matches!(error, CliError::Usage(_)));
 }
 
@@ -147,12 +149,13 @@ fn relay_flag_is_rejected_for_init() {
     write_secret(&identity_file, [0x11; 32]);
     write_secret(&passphrase_file, b"test-pass\n");
     let error = command(vec![
-        "init".into(),
+        "drive".into(),
         "/tmp/drive".into(),
         "--identity-file".into(),
         identity_file.display().to_string(),
         "--passphrase-file".into(),
         passphrase_file.display().to_string(),
+        "init".into(),
         "--relay".into(),
         "ws://one.example".into(),
     ])
@@ -454,15 +457,15 @@ fn every_src_file_is_a_declared_module() {
     assert!(orphaned.is_empty(), "uncompiled modules: {orphaned:?}");
 }
 
-/// Bare `wyrd vault <drive>` keeps starting the process (the 22b
+/// Bare `wyrd owner <drive>` keeps starting the process (the 22b
 /// surface); the subcommand selects the 22c query. Both shapes parse
 /// through one optional subcommand, not two commands.
 #[test]
-fn vault_start_is_default_and_status_queries() {
+fn owner_start_is_default_and_status_queries() {
     let creds = ["--identity-file", "/tmp/id", "--passphrase-file", "/tmp/pp"];
     let parse = |extra: &[&str]| {
         Cli::try_parse_from(
-            ["wyrd", "vault", "/srv/drive"]
+            ["wyrd", "owner", "/srv/drive"]
                 .into_iter()
                 .chain(creds)
                 .chain(extra.iter().copied()),
@@ -470,22 +473,22 @@ fn vault_start_is_default_and_status_queries() {
         .unwrap()
     };
     match parse(&[]).command {
-        Command::Vault { action: None, .. } => {}
-        other => panic!("bare vault must default to start, got: {other:?}"),
+        Command::Owner { action: None, .. } => {}
+        other => panic!("bare owner must default to start, got: {other:?}"),
     }
     match parse(&["status"]).command {
-        Command::Vault {
-            action: Some(VaultAction::Status),
+        Command::Owner {
+            action: Some(OwnerAction::Status),
             ..
         } => {}
-        other => panic!("vault status must parse, got: {other:?}"),
+        other => panic!("owner status must parse, got: {other:?}"),
     }
     match parse(&["start"]).command {
-        Command::Vault {
-            action: Some(VaultAction::Start { .. }),
+        Command::Owner {
+            action: Some(OwnerAction::Start { .. }),
             ..
         } => {}
-        other => panic!("vault start must parse, got: {other:?}"),
+        other => panic!("owner start must parse, got: {other:?}"),
     }
 }
 
@@ -615,12 +618,13 @@ fn update_verify_passes_a_compatible_drive_twice() {
     write_secret(&passphrase_file, b"test-pass\n");
     let init = || {
         command(vec![
-            "init".into(),
+            "drive".into(),
             drive.display().to_string(),
             "--identity-file".into(),
             identity_file.display().to_string(),
             "--passphrase-file".into(),
             passphrase_file.display().to_string(),
+            "init".into(),
         ])
         .unwrap()
     };
@@ -652,12 +656,13 @@ fn update_verify_refuses_a_held_drive_without_a_verdict() {
     write_secret(&identity_file, [0x11; 32]);
     write_secret(&passphrase_file, b"test-pass\n");
     command(vec![
-        "init".into(),
+        "drive".into(),
         drive.display().to_string(),
         "--identity-file".into(),
         identity_file.display().to_string(),
         "--passphrase-file".into(),
         passphrase_file.display().to_string(),
+        "init".into(),
     ])
     .unwrap();
 
@@ -689,12 +694,13 @@ fn update_verify_names_the_invariant_on_a_torn_store() {
     write_secret(&identity_file, [0x11; 32]);
     write_secret(&passphrase_file, b"test-pass\n");
     command(vec![
-        "init".into(),
+        "drive".into(),
         drive.display().to_string(),
         "--identity-file".into(),
         identity_file.display().to_string(),
         "--passphrase-file".into(),
         passphrase_file.display().to_string(),
+        "init".into(),
     ])
     .unwrap();
     // Tear the commit marker: CURRENT must be sequence plus hash,

@@ -7,7 +7,7 @@
 //! Process-level on purpose: argument resolution, file reading, and
 //! exit codes live in the binary composer, not the library. The
 //! relay is rust-nostr's in-process `LocalRelay` on localhost, so
-//! these run in the default gate like the vault process tests.
+//! these run in the default gate like the owner process tests.
 //!
 //! Unix-only: signals and credential-file hardening are Unix paths,
 //! as in production.
@@ -104,12 +104,13 @@ impl Fixture {
     fn init(&self) {
         let status = self
             .wyrd(&[
-                "init",
+                "drive",
                 self.drive.to_str().unwrap(),
                 "--identity-file",
                 self.identity.to_str().unwrap(),
                 "--passphrase-file",
                 self.passphrase.to_str().unwrap(),
+                "init",
             ])
             .status()
             .expect("wyrd init runs");
@@ -289,12 +290,16 @@ fn cache_policy_reports_the_effective_configuration() {
         fixture.passphrase.display(),
     ));
     let output = fixture
-        .wyrd(&["policy", fixture.drive.to_str().unwrap(), "budgets"])
+        .wyrd(&[
+            "materialization",
+            fixture.drive.to_str().unwrap(),
+            "budgets",
+        ])
         .output()
-        .expect("wyrd policy budgets runs");
+        .expect("wyrd materialization budgets runs");
     assert!(
         output.status.success(),
-        "policy resolves credentials from the file"
+        "materialization resolves credentials from the file"
     );
     let stdout = String::from_utf8(output.stdout).expect("stdout renders text");
     for line in [
@@ -305,7 +310,7 @@ fn cache_policy_reports_the_effective_configuration() {
     ] {
         assert!(
             stdout.contains(&line),
-            "policy reports {line:?}, got:\n{stdout}"
+            "materialization reports {line:?}, got:\n{stdout}"
         );
     }
 }

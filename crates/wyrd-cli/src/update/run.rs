@@ -60,7 +60,7 @@ pub(crate) fn update_run(request: &UpdateRequest<'_>) -> Result<UpdateOutcome, C
     } = request;
     if *restart && relays.is_empty() {
         return Err(CliError::Usage(
-            "--restart needs at least one --relay: the vault refuses relay-less runs".into(),
+            "--restart needs at least one --relay: the owner refuses relay-less runs".into(),
         ));
     }
     if !restart && !relays.is_empty() {
@@ -284,7 +284,7 @@ fn rollback_swapped(
         // binary to supervision. The refusal is carried by the
         // `update rollback:` line above (exit status reports the
         // supervised run, §6).
-        println!("update continuity: supervising restored {own} as the vault child");
+        println!("update continuity: supervising restored {own} as the owner child");
         return Ok(supervise_outcome(
             request.exe,
             request.drive_dir,

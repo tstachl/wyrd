@@ -538,7 +538,7 @@ Peer role and materialization are independent parameters:
 A desktop is `mirror + full`; a laptop `mirror + partial`; a phone
 `on-demand` with a pinned subset; a NAS `vault + full`. Pin/evict decisions
 are local device policy — they change what the device holds, never what the
-drive contains. The CLI surface for this is `wyrd policy` (`pin` /
+drive contains. The CLI surface for this is `wyrd materialization` (`pin` /
 `unpin` / `evict`, plus `status` / `budgets` and the `role` they report
 against — `docs/design/cli.md`): policy facts stay in the device's durable
 log and are never published. The CLI reports two policy
@@ -553,17 +553,17 @@ snapshot model. Roles are not added to the protocol or the membership model,
 and role selection is never an authorization mechanism.
 
 - **Role and process are separate.** `vault` as a role describes a device's
-  replication and retention posture; `vault` as a process (`wyrd vault`) is
+  replication and retention posture; the owner process (`wyrd owner`) is
   one way to operate such a device. A device can hold the vault role without
-  running `wyrd vault`, and `wyrd vault` can run on a device without that
+  running `wyrd owner`, and `wyrd owner` can run on a device without that
   device holding the vault role. Never use bare `vault` where the
   distinction matters.
 - **Storage.** The role is one string in a `role` file beside the drive's
   keystore, read at startup by offline commands and once per pass by
   the live loop. It is not a fact-log entry and never leaves
   the   device. Policy the role implies is admitted as `Cached` facts
-  through the same admission path `pin` uses, so `wyrd policy role set`
-  and `wyrd policy pin` cannot disagree about what the device intends.
+  through the same admission path `pin` uses, so `wyrd materialization role set`
+  and `wyrd materialization pin` cannot disagree about what the device intends.
 - **Default.** A device with no role file reports its effective role
   explicitly and behaves exactly as today: no pins and no quota means
   prunable, which is the `mirror` posture. The default names current

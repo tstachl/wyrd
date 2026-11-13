@@ -1115,7 +1115,7 @@ leg_headless_setup() {
 
 # leg_headless_serve <drive> <creds> <relay>: the serving half of
 # the two-headless-peers exchange (issue 22a: the vault process;
-# issue 22b: the crash-restart gate). Runs `wyrd vault` in the
+# issue 22b: the crash-restart gate). Runs `wyrd owner` in the
 # background, waits for the ready line (first routed pass complete,
 # endpoint serving), then drives the kill/restart/TERM sequence the
 # fetch legs rendezvous on:
@@ -1393,7 +1393,7 @@ leg_headless_fetch() {
 }
 
 # leg_pause_owner <drive> <creds> <relay>: the pause/kill/restart leg
-# (issue 19, owner pause op item 2). Runs `wyrd vault`, pauses it
+# (issue 19, owner pause op item 2). Runs `wyrd owner`, pauses it
 # through the real owner operation, authors a mkdir while paused
 # (local authoring continues), proves the obligation stays pending
 # while passes advance (deferral, not discharge), KILLs the vault

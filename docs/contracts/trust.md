@@ -866,7 +866,7 @@ daemon runs as a privileged system service.
 T6 is the target custody model. The pre-alpha implements only the first
 mode below, so no shipped build satisfies T6 yet.
 
-- **Local-key mode — the only mode implemented.** `wyrd init` and `wyrd
+- **Local-key mode — the only mode implemented.** `wyrd drive … init/bootstrap` and `wyrd
   mount` read the device identity secret from `--identity-file` (32 raw
   bytes or 64 hex characters), and the daemon process holds it for its whole
   lifetime. The engine signs snapshots and announcements with it and seals
@@ -959,7 +959,7 @@ identity, epoch keys, and the live mailbox). A member-hosted
 process *holds* keys; whether a surface may *disclose* key-derived
 information is a separate property, decided per surface:
 
-- **Vault surfaces** — `wyrd vault status`, the posture sidecar,
+- **Owner surfaces** — `wyrd owner … status`, the posture sidecar,
   anything a vault operator ships to a third party — show a subset
   of the **keyless-replica column only**, on every composition.
   Possessing keys does not widen a vault surface.

@@ -32,12 +32,13 @@ impl Pair {
         write_secret(&newcomer_identity, [0x33; 32]);
         write_secret(&newcomer_passphrase, b"newcomer-pass\n");
         command(vec![
-            "init".into(),
+            "drive".into(),
             owner_drive.display().to_string(),
             "--identity-file".into(),
             owner_identity.display().to_string(),
             "--passphrase-file".into(),
             owner_passphrase.display().to_string(),
+            "init".into(),
         ])
         .unwrap();
         let pairing_file = temp.0.join("pairing");

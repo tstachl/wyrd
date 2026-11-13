@@ -7,7 +7,7 @@
 //! census measures every action against. Policy only — never
 //! fetches, never authors, never touches heads, never replicates.
 //! Every reader is offline: durable state only, never connects.
-use crate::args::{PolicyAction, RoleAction};
+use crate::args::{MaterializationAction, RoleAction};
 use crate::commands::export::open_policy_node;
 use crate::drive_config::{CredentialProvenance, LoadedConfig, RelayResolution};
 use crate::CliError;
@@ -28,9 +28,9 @@ use wyrd_sync::keys::DeviceIdentitySecret;
 /// `role set` action writes one local file and no key (the `policy
 /// role set` dispatch in `main.rs` returns it before credential
 /// loading).
-pub(crate) fn policy(
+pub(crate) fn materialization(
     drive_dir: PathBuf,
-    action: PolicyAction,
+    action: MaterializationAction,
     resolution: &RelayResolution,
     config: Option<&LoadedConfig>,
     credential_provenance: &CredentialProvenance,
@@ -38,8 +38,10 @@ pub(crate) fn policy(
     identity: DeviceIdentitySecret,
 ) -> Result<(), CliError> {
     match action {
-        PolicyAction::Status { path, .. } => policy_status(drive_dir, &path, passphrase, identity),
-        PolicyAction::Budgets { .. } => policy_budgets(
+        MaterializationAction::Status { path, .. } => {
+            materialization_status(drive_dir, &path, passphrase, identity)
+        }
+        MaterializationAction::Budgets { .. } => materialization_budgets(
             drive_dir,
             resolution,
             config,
@@ -47,17 +49,17 @@ pub(crate) fn policy(
             passphrase,
             identity,
         ),
-        PolicyAction::Role { action } => match action {
+        MaterializationAction::Role { action } => match action {
             // Set returns before credential loading, in `main.rs`;
             // the arm exists only because the match is exhaustive.
             RoleAction::Set { .. } => {
-                unreachable!("policy role set returns before credential loading")
+                unreachable!("materialization role set returns before credential loading")
             }
             RoleAction::Status { .. } => role_status(drive_dir, passphrase, identity),
         },
-        PolicyAction::Pin { path, .. } => pin(drive_dir, &path, passphrase, identity),
-        PolicyAction::Unpin { path, .. } => unpin(drive_dir, &path, passphrase, identity),
-        PolicyAction::Evict { path, .. } => evict(drive_dir, &path, passphrase, identity),
+        MaterializationAction::Pin { path, .. } => pin(drive_dir, &path, passphrase, identity),
+        MaterializationAction::Unpin { path, .. } => unpin(drive_dir, &path, passphrase, identity),
+        MaterializationAction::Evict { path, .. } => evict(drive_dir, &path, passphrase, identity),
     }
 }
 
@@ -66,7 +68,7 @@ pub(crate) fn policy(
 /// produced. The census and the posture cannot disagree, because
 /// there is one read of each — not two helpers each re-deriving
 /// state.
-fn policy_status(
+fn materialization_status(
     drive_dir: PathBuf,
     path: &str,
     passphrase: &str,
@@ -91,7 +93,7 @@ fn policy_status(
 
 /// Device totals over reachable content plus the budgets that bound
 /// retention and fetch. Reads durable state only.
-fn policy_budgets(
+fn materialization_budgets(
     drive_dir: PathBuf,
     resolution: &RelayResolution,
     config: Option<&LoadedConfig>,
@@ -164,7 +166,7 @@ pub(crate) fn role_set(drive_dir: PathBuf, role: String, yes: bool) -> Result<()
             Transition::NarrowingAcknowledged | Transition::WithdrawalPending
         ) {
             return Err(CliError::Usage(
-                "narrowing is already acknowledged and still withdrawing as vault: to start over, widen back to vault first (policy role set vault), then narrow again with --yes.".into(),
+                "narrowing is already acknowledged and still withdrawing as vault: to start over, widen back to vault first (materialization role set vault), then narrow again with --yes.".into(),
             ));
         }
         if !yes {
@@ -294,7 +296,7 @@ pub(crate) fn evict(
     let state = wyrd_core::role::load(&drive_dir).map_err(role_err)?;
     if state.effective() == wyrd_core::role::Role::Vault {
         return Err(CliError::Usage(
-            "role 'vault' forbids eviction: the role promises no pruning. Narrow the role first (policy role set mirror --yes), or pin explicitly what must stay.".into(),
+            "role 'vault' forbids eviction: the role promises no pruning. Narrow the role first (materialization role set mirror --yes), or pin explicitly what must stay.".into(),
         ));
     }
     let mut node = open_policy_node(drive_dir, passphrase, identity)?;
@@ -325,7 +327,7 @@ pub(crate) fn evict_render(path: &str, report: &wyrd_core::policy::EvictReport) 
     out
 }
 
-/// The effective deployment configuration behind a `policy budgets`
+/// The effective deployment configuration behind a `materialization budgets`
 /// report: which file was read (or that none was), where the relay
 /// list came from, and which surface each credential path came
 /// from — so the operator answers "what is this drive actually
@@ -382,7 +384,7 @@ pub(crate) fn presence_word(local: LocalPresence) -> &'static str {
 }
 
 /// The posture block: configured role, transition, effective, and
-/// the notes that qualify them. Shared by `policy status` and
+/// the notes that qualify them. Shared by `materialization status` and
 /// `policy role status` so the two projections cannot drift — one
 /// renderer, one meaning.
 pub(crate) fn role_section_render(
@@ -415,8 +417,8 @@ pub(crate) fn role_section_render(
     out
 }
 
-/// `policy role status`: the posture block plus the quadrant totals
-/// it implies. The same census `policy status` reads, rendered
+/// `materialization role status`: the posture block plus the quadrant totals
+/// it implies. The same census `materialization status` reads, rendered
 /// without the table — the role report is the posture report, and
 /// the numbers backing it are the ones the status report prints.
 pub(crate) fn role_status_render(
@@ -430,7 +432,7 @@ pub(crate) fn role_status_render(
     out
 }
 
-/// `policy status`: the posture block, then one row per reachable
+/// `materialization status`: the posture block, then one row per reachable
 /// file plus quadrant totals. The caller computes one census; this
 /// renders it once, under the posture it was read against.
 pub(crate) fn policy_status_render(
@@ -440,7 +442,7 @@ pub(crate) fn policy_status_render(
 ) -> String {
     let mut out = String::from(role_block);
     out.push_str(&format!(
-        "policy status under {}\n{}\n",
+        "materialization status under {}\n{}\n",
         display_policy_path(path),
         StorageFigure::PerFileRow.label()
     ));
@@ -503,7 +505,7 @@ pub(crate) fn policy_budgets_render(
     // chunk pinned through two paths is one promise, not two.
     let pinned_chunks = census.pinned_chunk_union().len();
     let mut out = format!(
-        "policy budgets (reachable content)\n{}: {pinned_files}\n{}: {pinned_chunks}\n",
+        "materialization budgets (reachable content)\n{}: {pinned_files}\n{}: {pinned_chunks}\n",
         StorageFigure::PinnedFiles.label(),
         StorageFigure::PinnedChunks.label(),
     );
@@ -643,7 +645,7 @@ pub(crate) fn policy_budgets_render(
     out
 }
 
-/// Measured byte dimensions behind `policy budgets`' retention
+/// Measured byte dimensions behind `materialization budgets`' retention
 /// breakdown: the enforcement quantity plus the two resident-but-
 /// unenforced dimensions. Measured at report time from the mounted
 /// store, the fact log, and the vault — three walks, never cached,

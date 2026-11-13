@@ -1,9 +1,9 @@
-//! The `vault` command: headless vault lifecycle, `vault status`,
-//! and the durable-probe helpers. Owns the vault runners and the
-//! vault-position renderer; the dispatcher in `main.rs` calls in.
+//! The `owner` command: headless owner lifecycle, `owner status`,
+//! and the durable-probe helpers. Owns the owner runners and the
+//! owner-position renderer; the dispatcher in `main.rs` calls in.
 
-use crate::drive_config::{check_vault_relays, LoadedConfig, RelayResolution};
-use crate::logging::init_vault_diagnostics;
+use crate::drive_config::{check_owner_relays, LoadedConfig, RelayResolution};
+use crate::logging::init_owner_diagnostics;
 use crate::probes::combine_status;
 use crate::probes::TeardownStatus;
 use crate::CliError;
@@ -20,13 +20,13 @@ use wyrd_daemon::{
 use wyrd_sync::durable::DurableError;
 use wyrd_sync::keys::DeviceIdentitySecret;
 use wyrd_sync::runtime::{Engine, EngineError};
-/// Render the vault-position projection for `vault status`'s
+/// Render the owner-position projection for `owner status`'s
 /// stopped-drive section. Counts and drive state only — the struct
 /// has no identity-bearing field, so the renderer cannot print one:
 /// no tip transition id, no held epochs, no head ids or authors, no
-/// peer handles, no mailbox line. A vault surface on every
+/// peer handles, no mailbox line. An owner surface on every
 /// composition (matrix rule), even when the process holds keys.
-fn vault_status_render(status: &VaultStatus) -> String {
+fn owner_status_render(status: &VaultStatus) -> String {
     let mut out = String::new();
     let totals = &status.outbox;
     out.push_str(&format!(
@@ -82,14 +82,14 @@ fn vault_status_render(status: &VaultStatus) -> String {
     out
 }
 
-/// A headless vault: the mount's live loop and serving surface with
+/// A headless owner: the mount's live loop and serving surface with
 /// no presentation session. The persistent process (OD-22-B option
 /// A): `sync now` stays the bounded one-shot drain, this never stops
 /// syncing until SIGINT/SIGTERM. Composition runs through the
-/// daemon's vault runner, so the loop order and transport tail stay
-/// one copy with the mount — the vault is the second composer the
+/// daemon's owner runner, so the loop order and transport tail stay
+/// one copy with the mount — the owner is the second composer the
 /// lifecycle prose was written for.
-pub(crate) fn vault(
+pub(crate) fn owner(
     drive_dir: PathBuf,
     resolution: RelayResolution,
     config: Option<&LoadedConfig>,
@@ -98,23 +98,23 @@ pub(crate) fn vault(
     passphrase: &str,
     identity: DeviceIdentitySecret,
 ) -> Result<(), CliError> {
-    // A relay-less vault serves routes nothing can discover and never
+    // A relay-less owner serves routes nothing can discover and never
     // converges: refuse it the way `sync now` refuses a bare
     // relay-less run. Unlike `sync now` there is no `--offline`
-    // escape — an offline vault is a process that idles forever, not
+    // escape — an offline owner is a process that idles forever, not
     // a run with a verdict. The refusal judges the effective set, so
     // a configured relay satisfies it exactly like a flag.
-    check_vault_relays(&resolution, config.map(|c| c.path.as_path()))?;
+    check_owner_relays(&resolution, config.map(|c| c.path.as_path()))?;
     let relays = resolution.relays;
     // Diagnostics first: stderr always carries the ready line and the
     // failures for the supervisor to capture, plus an appended
     // operator-chosen file under `--log-file` — never a
     // drive-resident default, never truncated (a restart must not
     // destroy the previous run's record).
-    init_vault_diagnostics(log_file.as_deref())?;
-    let vault_span = tracing::info_span!("vault", drive = %drive_dir.display());
-    let _vault_guard = vault_span.enter();
-    tracing::info!(stage = "start", "vault diagnostics initialized");
+    init_owner_diagnostics(log_file.as_deref())?;
+    let owner_span = tracing::info_span!("owner", drive = %drive_dir.display());
+    let _owner_guard = owner_span.enter();
+    tracing::info!(stage = "start", "owner diagnostics initialized");
 
     let engine = match Engine::open_keystore(drive_dir.clone(), passphrase, identity.clone()) {
         // Definite contention, surfaced before any iroh or relay
@@ -122,13 +122,13 @@ pub(crate) fn vault(
         // and the drive is named, because the wrapped open error
         // says "durable commit failed" without saying where.
         Err(EngineError::Durable(DurableError::StoreLocked)) => {
-            return Err(CliError::VaultLocked {
+            return Err(CliError::OwnerLocked {
                 drive: drive_dir.clone(),
             });
         }
         result => result?,
     };
-    // The vault parks on this latch from its first pass to its last,
+    // The owner parks on this latch from its first pass to its last,
     // so arm it before composition: a signal during startup still
     // tears down instead of parking.
     install_shutdown_handler()?;
@@ -177,15 +177,15 @@ pub(crate) fn vault(
     // while it runs, failures with the mount's reporting shape. All
     // three go to stderr (the supervisor captures them) and the event
     // stream the log file carries — and each also publishes one
-    // sidecar generation, so `vault status` sees what the logs see.
+    // sidecar generation, so `owner status` sees what the logs see.
     let emit: Arc<dyn Fn(VaultEvent) + Send + Sync> = Arc::new(move |event| match event {
         // The recorder runs before the prints in every arm: the log
         // line then implies its sidecar generation already landed, so
         // a watcher that sees "ready" never reads a pre-ready file.
         VaultEvent::Ready { serving_id } => {
             recorder.note_ready();
-            eprintln!("vault ready: serving {serving_id}");
-            tracing::info!(stage = "ready", iroh_id = %serving_id, "vault ready");
+            eprintln!("owner ready: serving {serving_id}");
+            tracing::info!(stage = "ready", iroh_id = %serving_id, "owner ready");
         }
         VaultEvent::Posture {
             passes,
@@ -195,7 +195,7 @@ pub(crate) fn vault(
         } => {
             recorder.note_posture(passes, errors, sent, uptime_secs);
             eprintln!(
-                "vault posture: {passes} passes, {errors} errors retried, {sent} sends, uptime {uptime_secs}s"
+                "owner posture: {passes} passes, {errors} errors retried, {sent} sends, uptime {uptime_secs}s"
             );
             tracing::info!(
                 stage = "posture",
@@ -203,7 +203,7 @@ pub(crate) fn vault(
                 errors,
                 sent,
                 uptime_secs,
-                "vault posture"
+                "owner posture"
             );
         }
         VaultEvent::PassFailed {
@@ -233,7 +233,7 @@ pub(crate) fn vault(
     // Fold like the mount — loop first, then serving — with no
     // session in between. SIGTERM exits 0 here exactly when the loop
     // stopped clean and every transport closed: the mount's rule at
-    // `docs/design/cli.md:675-679` applies to the vault too.
+    // `docs/design/cli.md` owner section applies here too.
     let loop_result = match outcome.loop_end {
         VaultLoopEnd::Returned(result) => result.map(|_| ()).map_err(|error| match error {
             LoopError::Live(error) => CliError::Live(error),
@@ -252,23 +252,23 @@ pub(crate) fn vault(
     })
 }
 
-/// `vault status`: process posture from the sidecar beside durable
+/// `owner status`: process posture from the sidecar beside durable
 /// state, the two strictly separated. The process section never opens
-/// the store — a running vault's exclusivity is undisturbed by the
+/// the store — a running owner's exclusivity is undisturbed by the
 /// query — and never claims liveness: fresh means recent, stale means
 /// last-recorded, and both say liveness unverified. The durable
-/// section shows the vault-position projection when the drive is
+/// section shows the owner-position projection when the drive is
 /// stopped (counts only — never the member columns
 /// `sync status` prints), and reports unavailable — never guessed —
-/// while the vault holds the lock. The surface takes no relay
+/// while the owner holds the lock. The surface takes no relay
 /// configuration: it never constructs a mailbox, so there is no
 /// mailbox line to label (matrix H9).
-pub(crate) fn vault_status(
+pub(crate) fn owner_status(
     drive_dir: PathBuf,
     passphrase: &str,
     identity: DeviceIdentitySecret,
 ) -> Result<(), CliError> {
-    let (out, outcome) = vault_status_report(drive_dir, passphrase, identity);
+    let (out, outcome) = owner_status_report(drive_dir, passphrase, identity);
     print!("{out}");
     outcome
 }
@@ -320,7 +320,7 @@ enum DurableProbe {
 /// outcome stays non-zero when durable state was unreadable, but the
 /// string still carries the process section — a durable failure must
 /// not take down what the sidecar read needs no credentials for.
-pub(crate) fn vault_status_report(
+pub(crate) fn owner_status_report(
     drive_dir: PathBuf,
     passphrase: &str,
     identity: DeviceIdentitySecret,
@@ -333,8 +333,8 @@ pub(crate) fn vault_status_report(
     // contended drive; any other failure keeps its error plus its
     // lock provenance for the tail.
     let probe = match Engine::open_keystore(drive_dir, passphrase, identity) {
-        // The vault projection, never the member one: this is a
-        // vault surface on every composition (matrix rule), so the
+        // The owner projection, never the member one: this is a
+        // owner surface on every composition (matrix rule), so the
         // stopped-drive section shows the keyless-replica subset —
         // counts only, no tip, heads, peers, or mailbox.
         Ok(engine) => match observe_vault(&engine) {
@@ -359,8 +359,8 @@ pub(crate) fn vault_status_report(
         DurableProbe::Stopped(status) => {
             let process = posture::read_posture(&sidecar);
             let mut out = posture::render_process_section(&process, true);
-            out.push_str("durable: stopped drive (vault-position facts only)\n");
-            out.push_str(&vault_status_render(&status));
+            out.push_str("durable: stopped drive (owner-position facts only)\n");
+            out.push_str(&owner_status_render(&status));
             (out, Ok(()))
         }
         DurableProbe::Held => {

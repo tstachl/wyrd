@@ -265,17 +265,17 @@ pub(crate) fn init_mount_diagnostics(drive_dir: &Path, verbose: bool) -> Result<
     Ok(log_path)
 }
 
-/// Vault diagnostics: structured events to stderr always, plus an
+/// Owner diagnostics: structured events to stderr always, plus an
 /// appended operator-chosen file when `--log-file` is given (OD-22-D
 /// option A+C). Never a drive-resident default, and never truncated:
 /// a vault runs for months under a supervisor that already captures
 /// stderr, and a restart must not destroy the previous run's record.
 /// Logs never contain secret bytes (same rule as CLI errors).
 ///
-/// Call first in [`vault`](crate::vault), before the serving endpoint
+/// Call first in the owner runner, before the serving endpoint
 /// or the loop thread exists. Same first-install-wins rule as the
-/// mount: one vault per process by construction.
-pub(crate) fn init_vault_diagnostics(log_file: Option<&Path>) -> Result<Option<PathBuf>, CliError> {
+/// mount: one owner per process by construction.
+pub(crate) fn init_owner_diagnostics(log_file: Option<&Path>) -> Result<Option<PathBuf>, CliError> {
     let file = match log_file {
         Some(path) => Some(
             fs::OpenOptions::new()
@@ -303,7 +303,7 @@ pub(crate) fn init_vault_diagnostics(log_file: Option<&Path>) -> Result<Option<P
 }
 
 /// Install stderr-only diagnostics for `sync now`: the same filter
-/// contract as the vault (notably `RUST_LOG` passthrough via
+/// contract as the owner (notably `RUST_LOG` passthrough via
 /// [`build_mount_subscriber`]), but no log file — the harness
 /// captures stderr per run. Without this the headless path runs
 /// blind: intake verdicts, route publication, and fetch dials emit

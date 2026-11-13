@@ -249,7 +249,7 @@ Mark → Hold → Authorize → Sweep → Audit
 
 **Mark (local, no authority).** Compute candidate set = objects outside all
 four reachability sets, each with its reason set and generation. Emit
-measurement report only (`wyrd policy budgets` style — no deletion). This
+measurement report only (`wyrd materialization budgets` style — no deletion). This
 sizes the problem before any sweep.
 
 **Hold (grace + retention-custodian acknowledgement).** Poll *custodians*,

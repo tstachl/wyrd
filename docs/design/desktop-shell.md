@@ -69,7 +69,7 @@ the same rule as the interface itself.
 ## Prerequisite: which binary serves the socket (P2, decided option A)
 
 The P2 owner-socket issue was load-bearing for every composition this
-note describes and has landed: both `wyrd vault` / `wyrd-app` (via
+note describes and has landed: both `wyrd owner` / `wyrd-app` (via
 `run_composed_owner`) and `wyrd mount` bind `owner.sock` through the
 shared `OwnerService`, so a desktop composition running the drive
 under `wyrd mount` leaves the window with its interface — the
@@ -150,7 +150,7 @@ plane. Three pieces, all precedented in-tree:
   the process lifecycle: enablement is startup-at-login, and a UI
   that exits or crashes never takes the owner down with it, because
   launchd/systemd — not the UI — is the parent. The service runs
-  `wyrd vault` or `wyrd mount` (at its registered mountpoint) with
+  `wyrd owner start` or `wyrd mount` (at its registered mountpoint) with
   the registration's credential files (never a
   bare env-keyed binary: the supervised owner must load secrets in
   service context, and only the file-credential form works there),
@@ -208,7 +208,7 @@ plane. Three pieces, all precedented in-tree:
   the per-drive service → verify the socket. Registration and
   enablement happen only after initialization succeeds, never
   speculatively. A managed service needs at least one relay: a
-  headless `wyrd vault` refuses a relay-less drive, so supervision
+  headless `wyrd owner` refuses a relay-less drive, so supervision
   without relays is refused with that pointer instead of installing
   a definition that can never verify. Partial completion has
   explicit recovery, and a drive is reported ready only when its
@@ -248,7 +248,7 @@ the non-desktop marking was rejected. The registry records the mode
 per drive; it does not re-decide P2.
 
 Stage-0 exit: the handoff runs end to end through the built
-command — `wyrd bootstrap` registers, a separately spawned `wyrd
+command — `wyrd drive … bootstrap` registers, a separately spawned `wyrd
 vault` owns and serves, a non-owner `OwnerClient` gets a terminal
 `observe` answer out of the drive socket, and SIGTERM shuts the
 owner down clean — pinned as the `bootstrap_then_vault` CLI
