@@ -177,6 +177,10 @@ pub enum BootstrapError {
     /// A mountpoint breaks the path rules.
     #[error("invalid mountpoint: {reason}")]
     InvalidMountpoint { reason: String },
+    /// A managed service with no relays to serve: a relay-less drive
+    /// serves nothing peers can discover.
+    #[error("managing a service needs at least one --relay: a relay-less drive serves nothing peers can discover; register with --no-service instead")]
+    ManagedWithoutRelays,
     /// The drive directory resolves to several registry keys under
     /// the write lock: a concurrent registration duplicated the
     /// entry between the pre-stop resolve and the rewrite.
@@ -1565,10 +1569,7 @@ pub fn provision(config: ProvisionConfig) -> ProvisionState {
         return ProvisionState::ProvisioningIncomplete {
             stage: "validate",
             kind: ProvisionFailureKind::Validate,
-            reason: "managing a service needs at least one --relay: \
-                a relay-less drive serves nothing peers can discover; \
-                register with --no-service instead"
-                .to_string(),
+            reason: BootstrapError::ManagedWithoutRelays.to_string(),
         };
     }
 
@@ -1811,6 +1812,16 @@ fn updated_entry(
     stored
 }
 
+/// Whether the installed definition must be reinstalled from the
+/// written entry: the registry lock may have resolved a fresher
+/// relay set than the pre-stop working copy carried. Mode and
+/// mountpoint are operator intent in both copies, so only the relay
+/// set can differ — and when it does, the manager must serve the
+/// written set, never the stale installed one.
+fn definition_needs_reinstall(working: &RegistryEntry, written: &RegistryEntry) -> bool {
+    working.relays != written.relays
+}
+
 /// Install the per-drive service definition for a freshly
 /// reconfigured (or newly provisioned) entry. Shared by both
 /// handoffs so their install failures carry the same kind and
@@ -1826,6 +1837,41 @@ fn install_service_definition(
             format!("install-service: {error}"),
         )
     })
+}
+
+/// Classify a registry failure past the stop: resolve failures
+/// (vanished entry, conflicting duplicates, a managed run that
+/// resolved no relays) name the registry state to repair — the old
+/// service is already stopped and cleared, so `validate` with the
+/// stopped-service note describes what the operator must fix, not a
+/// write that happened. Anything else is a write failure with the
+/// entry untouched.
+fn classify_post_stop_failure(
+    error: &BootstrapError,
+) -> (&'static str, ProvisionFailureKind, String) {
+    let stopped = "the old service is already stopped and cleared";
+    match error {
+        BootstrapError::Read { source, .. } if source.kind() == std::io::ErrorKind::NotFound => (
+            "validate",
+            ProvisionFailureKind::Validate,
+            format!("{error} ({stopped}; re-register the drive, then re-run to converge)"),
+        ),
+        BootstrapError::ConflictingEntries { .. } => (
+            "validate",
+            ProvisionFailureKind::Validate,
+            format!("{error} ({stopped}; resolve the duplicate by hand, then re-run to converge)"),
+        ),
+        BootstrapError::ManagedWithoutRelays => (
+            "validate",
+            ProvisionFailureKind::Validate,
+            format!("{error} ({stopped}; register relays with --no-service first, then re-run to converge)"),
+        ),
+        _ => (
+            "write-registry",
+            ProvisionFailureKind::WriteRegistry,
+            error.to_string(),
+        ),
+    }
 }
 
 /// Enable the installed definition and start it now. Shared by both
@@ -2092,10 +2138,7 @@ pub fn reconfigure(config: ReconfigureConfig) -> ProvisionState {
         return ProvisionState::ProvisioningIncomplete {
             stage: "validate",
             kind: ProvisionFailureKind::Validate,
-            reason: "managing a service needs at least one --relay: \
-                a relay-less drive serves nothing peers can discover; \
-                register with --no-service instead"
-                .to_string(),
+            reason: BootstrapError::ManagedWithoutRelays.to_string(),
         };
     }
 
@@ -2266,6 +2309,7 @@ pub fn reconfigure(config: ReconfigureConfig) -> ProvisionState {
     let intended_mountpoint = config.mountpoint.clone();
     let drive_dir = config.drive_dir.clone();
     let registry_path = config.registry_path.clone();
+    let manage_service = config.manage_service;
     let (written, skipped) = match modify_registry(&config.registry_path, |drives| {
         let mut matches: Vec<String> = drives
             .iter()
@@ -2289,9 +2333,14 @@ pub fn reconfigure(config: ReconfigureConfig) -> ProvisionState {
                 let fresh = drives.get(&key).expect("key resolved").clone();
                 // Intent, resolved fresh: explicit flags win, absence
                 // keeps whatever the fresh entry carries — never the
-                // pre-stop snapshot. Values re-validate here: a
-                // concurrent writer can only have stored valid relays,
-                // but the check is what makes the keep path honest.
+                // pre-stop snapshot. Values re-validate here, and a
+                // managed run with nothing to serve refuses like the
+                // pre-stop check: a concurrent no-service writer may
+                // have emptied the set after this run read it (nothing
+                // else can empty a set — reconfigure keeps or
+                // replaces non-empty, provision validates — but the
+                // lock is where the kept set is authoritative, so the
+                // rule is enforced here too).
                 let resolved = match &intended_relays {
                     Some(explicit) => explicit.clone(),
                     None => fresh.relays.clone(),
@@ -2300,6 +2349,9 @@ pub fn reconfigure(config: ReconfigureConfig) -> ProvisionState {
                     return Err(BootstrapError::RefusedWrite {
                         source: Box::new(BootstrapError::InvalidRelays),
                     });
+                }
+                if manage_service && resolved.is_empty() {
+                    return Err(BootstrapError::ManagedWithoutRelays);
                 }
                 let updated = updated_entry(
                     fresh,
@@ -2318,30 +2370,7 @@ pub fn reconfigure(config: ReconfigureConfig) -> ProvisionState {
     }) {
         Ok((written, skipped)) => (written, skipped),
         Err(error) => {
-            // Post-stop refusals: the old service is already stopped
-            // and cleared, so a resolve failure names the registry
-            // state to repair — not a write that happened. Anything
-            // else is a write failure with the entry untouched.
-            let stopped = "the old service is already stopped and cleared";
-            let (stage, kind, reason) = match &error {
-                BootstrapError::Read { source, .. }
-                    if source.kind() == std::io::ErrorKind::NotFound =>
-                (
-                    "validate",
-                    ProvisionFailureKind::Validate,
-                    format!("{error} ({stopped}; re-register the drive, then re-run to converge)"),
-                ),
-                BootstrapError::ConflictingEntries { .. } => (
-                    "validate",
-                    ProvisionFailureKind::Validate,
-                    format!("{error} ({stopped}; resolve the duplicate by hand, then re-run to converge)"),
-                ),
-                _ => (
-                    "write-registry",
-                    ProvisionFailureKind::WriteRegistry,
-                    error.to_string(),
-                ),
-            };
+            let (stage, kind, reason) = classify_post_stop_failure(&error);
             return ProvisionState::ProvisioningIncomplete {
                 stage,
                 kind,
@@ -2352,10 +2381,13 @@ pub fn reconfigure(config: ReconfigureConfig) -> ProvisionState {
     // The installed definition carries the pre-stop working copy;
     // the lock may have resolved a fresher relay set. Reinstall from
     // the written entry when they differ, so the manager never serves
-    // a stale relay set beside the new registry entry.
+    // a stale relay set beside the new registry entry. A crash
+    // between the write and this reinstall leaves the written entry
+    // beside the stopped old definition — the next run reads the
+    // fresh entry, installs it, and converges.
     let effective = written;
     let mut definition = definition;
-    if definition.is_some() && effective.relays != working.relays {
+    if definition.is_some() && definition_needs_reinstall(&working, &effective) {
         let owner = SupervisedOwner {
             supervise_bin: supervise_bin.expect("resolved when managed"),
             wyrd_bin: wyrd_bin.expect("resolved when managed"),
@@ -3372,6 +3404,95 @@ mod tests {
         server.join().unwrap();
     }
 
+    /// Post-stop failures classify honestly: resolve failures name
+    /// the registry state to repair with the stopped-service note,
+    /// genuine write failures stay `write-registry`.
+    #[test]
+    fn post_stop_failures_classify_the_repair() {
+        let (stage, kind, reason) = classify_post_stop_failure(&BootstrapError::Read {
+            path: "/reg/drives.json".into(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "no registry entry for /d: register with `wyrd bootstrap` first",
+            ),
+        });
+        assert_eq!(stage, "validate");
+        assert_eq!(kind, ProvisionFailureKind::Validate);
+        assert!(reason.contains("already stopped and cleared"), "{reason}");
+        assert!(reason.contains("re-register"), "{reason}");
+
+        let (stage, kind, reason) =
+            classify_post_stop_failure(&BootstrapError::ConflictingEntries {
+                dir: "/d".into(),
+                keys: "a, b".to_string(),
+            });
+        assert_eq!(stage, "validate");
+        assert_eq!(kind, ProvisionFailureKind::Validate);
+        assert!(reason.contains("resolve the duplicate"), "{reason}");
+
+        let (stage, kind, reason) =
+            classify_post_stop_failure(&BootstrapError::ManagedWithoutRelays);
+        assert_eq!(stage, "validate");
+        assert_eq!(kind, ProvisionFailureKind::Validate);
+        assert!(reason.contains("--no-service"), "{reason}");
+
+        let (stage, kind, _) = classify_post_stop_failure(&BootstrapError::RefusedWrite {
+            source: Box::new(BootstrapError::InvalidRelays),
+        });
+        assert_eq!(stage, "write-registry");
+        assert_eq!(kind, ProvisionFailureKind::WriteRegistry);
+    }
+
+    /// The reinstall decision compares relay sets only: equal sets
+    /// need no reinstall (order counts — a rewrite is harmless but
+    /// pointless), differing sets do, and a mode or mountpoint
+    /// difference alone never triggers one (both copies carry
+    /// operator intent there).
+    #[test]
+    fn reinstall_decision_compares_relay_sets_only() {
+        let dir = scratch("reinstall-decide");
+        let base = entry("demo", &dir);
+        assert!(!definition_needs_reinstall(&base, &base));
+        let mut ordered = base.clone();
+        ordered.relays = vec!["relay://a".to_string(), "relay://b".to_string()];
+        let mut reordered = base.clone();
+        reordered.relays = vec!["relay://b".to_string(), "relay://a".to_string()];
+        assert!(definition_needs_reinstall(&ordered, &reordered));
+        let mut mode_only = base.clone();
+        mode_only.mode = ServiceMode::Mount;
+        mode_only.mountpoint = Some(dir.join("mnt"));
+        assert!(!definition_needs_reinstall(&base, &mode_only));
+        let mut differing = base.clone();
+        differing.relays = vec!["relay://fresh".to_string()];
+        assert!(definition_needs_reinstall(&base, &differing));
+    }
+
+    /// A definition install failure carries the install-service kind:
+    /// the caller reports it post-registration instead of mistaking
+    /// it for a write or start failure. Hermetic: the override names
+    /// a path whose parent is a file, so the atomic write fails
+    /// before any manager is touched.
+    #[test]
+    fn install_failure_carries_the_install_service_kind() {
+        let dir = scratch("reinstall-kind");
+        let owner = SupervisedOwner {
+            supervise_bin: dir.join("wyrd-supervise"),
+            wyrd_bin: dir.join("wyrd"),
+            identity_file: dir.join("identity"),
+            passphrase_file: dir.join("passphrase"),
+        };
+        let blocker = dir.join("blocker");
+        std::fs::write(&blocker, b"x").unwrap();
+        let definition = blocker.join("wyrd-test-definition");
+        match install_service_definition(&entry("demo", &dir), &owner, Some(&definition)) {
+            Err((kind, reason)) => {
+                assert_eq!(kind, ProvisionFailureKind::InstallService);
+                assert!(reason.contains("install-service"), "{reason}");
+            }
+            Ok(_) => panic!("an unwritable definition path must fail install"),
+        }
+    }
+
     /// The installed definition follows the written entry: when the
     /// lock resolves a fresher relay set than the pre-stop working
     /// copy carried, the definition is reinstalled from the written
@@ -3825,6 +3946,42 @@ mod tests {
         assert!(matches!(read.drives["demo"].mode, ServiceMode::Mount));
         assert_eq!(read.drives["demo"].mountpoint, Some(mountpoint));
         server.join().unwrap();
+    }
+
+    /// A mount reconfigure without a mountpoint refuses before
+    /// anything stops: the registry keeps its bytes and no service
+    /// state moves — the live check runs at the validate stage, like
+    /// the missing-mountpoint shape refusal.
+    #[test]
+    fn reconfigure_refuses_mount_without_a_mountpoint() {
+        let dir = scratch("rec-mnt-none");
+        let registry = dir.join("drives.json");
+        let first = provision(provision_no_service(&dir, &registry, "demo"));
+        assert!(matches!(
+            first,
+            ProvisionState::RegisteredButUnavailable { .. }
+        ));
+        let before = std::fs::read(&registry).unwrap();
+        let report = reconfigure(reconfigure_no_service(
+            &dir,
+            &registry,
+            None,
+            ServiceMode::Mount,
+            None,
+        ));
+        match report {
+            ProvisionState::ProvisioningIncomplete {
+                kind,
+                stage,
+                reason,
+            } => {
+                assert_eq!(kind, ProvisionFailureKind::Validate);
+                assert_eq!(Some(stage), kind.stage());
+                assert!(reason.contains("needs a mountpoint"), "{reason}");
+            }
+            other => panic!("a mount without a mountpoint must refuse: {other:?}"),
+        }
+        assert_eq!(std::fs::read(&registry).unwrap(), before);
     }
 
     /// No entry for the directory refuses without writing: the drive
