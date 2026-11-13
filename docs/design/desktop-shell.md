@@ -131,8 +131,17 @@ plane. Three pieces, all precedented in-tree:
   resolved through the platform path APIs the frontend already uses.
   JSON, not TOML, deliberately: the daemon already carries
   `serde_json`, and the registry must add no third-party dependency
-  to its closure — the format follows the dependency rule, and the
-  registration flow (not hand-editing) is the writer.
+  to its closure — the format follows the dependency rule. Two
+  writers share the file under one rule, not one writer: the
+  registration flow and the desktop shell (hand-editing is never a
+  writer). Both hold an exclusive lock on the registry's lockfile
+  sibling for the whole read-modify-write, validate every candidate
+  or refuse the write, carry forward entries they do not understand
+  verbatim — and refuse rather than replace a file they cannot read
+  (malformed, or a newer version they must not downgrade) — follow
+  the crash-safe order above, and the desktop verifies by rereading
+  — so concurrent rewrites serialize instead of losing entries
+  (atomic rename alone does not stop lost updates).
 - **Per-drive owner services**, installed from a template the
   installer ships: a launchd agent per drive on macOS, a systemd
   user unit per drive on Linux — the same shapes `nix/drive`

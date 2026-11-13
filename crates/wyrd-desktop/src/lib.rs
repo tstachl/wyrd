@@ -34,7 +34,10 @@ pub mod settings_view;
 
 pub use backend::{BackendError, DesktopBackend};
 pub use provision::{LeaveRequest, ProvisionRequest, ProvisionResult, PROVISION_TIMEOUT};
-pub use registry::{DriveAvailability, DriveView, RegistryState, RegistryStatus};
+pub use registry::{
+    DriveAvailability, DriveView, RegistryEntryWrite, RegistryState, RegistryStatus,
+    RegistryWriteError,
+};
 pub use settings_view::{DriveSettings, DriveSettingsView};
 
 use std::collections::{BTreeMap, HashSet};
