@@ -280,6 +280,19 @@ collapsed boolean, never a guess.
   instead of serving the replacement under the old identifier
   (the same rule stable resolution enforces by token match).
   Still-identity-less paths resolve unchanged.
+- **Versions and enumeration terminus:** entry versions are
+  `wyrd-cv3`: the size in the clear plus a fixed 16-hex digest of
+  the `token:content` tail. The raw tail (chunk lists, subtree
+  listings) is unbounded and would breach the 128-byte
+  item-version bound, so the digest keeps every served version
+  within it; the Harness pins the bound including a synthetic
+  long tail. `versionFacts` parses `cv1`/`cv2`/`cv3`, normalizing
+  a cached `cv2` tail through the same digest so the first
+  post-upgrade modify still matches; a cached `cv1` base still
+  mismatches once and heals on the next enumeration. Enumerations
+  finish with a
+  nil page — an anchor-data page fails the fetch persist —
+  while the anchor stays live through `currentSyncAnchor`.
 - **Anchors:** `wyrd-anchor-v1:g<generation>:r<revision>`,
   translated from the owner's serving coordinate. Enumeration is
   one `readdir` in one coordinate; the returned anchor always

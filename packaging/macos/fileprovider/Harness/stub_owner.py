@@ -164,6 +164,33 @@ def parent_exists(parent):
 
 
 def answer(op, params):
+    if op == "debug-seed-legacy":
+        # Test-only: seed an identity-less file the Harness resolves
+        # through its legacy reference before minting it below.
+        seed_path = (params or {}).get("path", "")
+        content_hex = (params or {}).get("content_hex", "")
+        if not seed_path or seed_path in STATE or seed_path in BASELINE_NAMES:
+            return result_err("AlreadyExists", "a seeded path is new, never a collision")
+        if not parent_exists(parent_of(seed_path)):
+            return result_err("NotFound", "no such parent")
+        try:
+            seed_size = len(bytes.fromhex(content_hex)) if content_hex else 0
+        except ValueError:
+            return result_err("Malformed", "seed content is hex")
+        STATE[seed_path] = {"kind": "file", "identity": None, "size": seed_size, "content": content_hex}
+        return result_ok({"DebugSeeded": {"path": seed_path}})
+    if op == "debug-mint":
+        # Test-only: mint an identity onto a seeded path, retiring
+        # its legacy reference the same rule a real mint enforces.
+        # A second mint refuses: no real owner re-mints an
+        # identified path.
+        mint_path = (params or {}).get("path", "")
+        if mint_path not in STATE:
+            return result_err("NotFound", "no such path")
+        if STATE[mint_path]["identity"] is not None:
+            return result_err("AlreadyExists", "the path already carries an identity")
+        STATE[mint_path]["identity"] = mint_token()
+        return result_ok({"DebugMinted": {"path": mint_path}})
     path = (params or {}).get("path", "")
     if op == "lookup":
         if path in STATE:
