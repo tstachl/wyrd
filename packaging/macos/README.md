@@ -510,10 +510,17 @@ Trade-offs, in the issue's terms:
   the alias. Group container layout is unchanged from the Stage 2
   contract above.
 - **Installer complexity:** one `.app` in the `.dmg`, one drag.
-  The Tauri bundler will run `build-appex.sh`, copy the built appex
-  into `Contents/PlugIns` before signing, then sign nested-first
-  (appex, then app) under one Developer ID with `--options runtime`.
-  No extra install step, no post-install copy.
+  `build.beforeBundleCommand` runs `packaging/macos/stage-appex.sh`
+  (macOS only; a clean skip elsewhere), which builds the appex,
+  pins its `CFBundleVersion` to the app version from
+  `tauri.conf.json`, and stages it at `packaging/macos/stage/`
+  (git-ignored, rebuilt every bundle). `bundle.macOS.files` copies
+  the staged appex into `Contents/PlugIns` at bundle time; the
+  bundler then signs the outer app shallowly, which preserves the
+  appex's own signature — the nested-first order (appex, then app)
+  under one Developer ID with `--options runtime`. No extra install
+  step, no post-install copy. Hook paths assume the CLI runs from
+  `crates/wyrd-desktop` (the same convention as `frontendDist`).
 
 Consequences: the production app carries no entitlements file
 (decided below); the appex provisioning profile carries the App
@@ -522,7 +529,6 @@ throwaway Xcode app stays throwaway: it never becomes the ship
 vehicle.
 
 Follow-on work, scoped not done: the remaining packaging chain —
-Tauri bundler hook (appex copy, appex profile, no app entitlements),
 the notarized `fileproviderd` load check, update
 persistence (install old, install new, domains and sockets
 survive). The per-section lists below decompose it, not duplicate
@@ -565,8 +571,10 @@ before signing, and a missing path refuses instead of signing
 profile-less under a team identity. The app target needs no profile
 and no entitlements: with no sandbox and no constrained
 capabilities there is nothing to provision and nothing for the
-bundler hook to point at. Until that hook lands, team signing is
-the manual sequence:
+bundler hook to carry. Team signing pairs the hook's
+`SIGN_IDENTITY` with the same Developer ID Tauri signs the app with
+(`bundle.macOS.signingIdentity` / `APPLE_SIGNING_IDENTITY`); the
+manual sequence stays available:
 sign appex first (profile embedded), copy into
 `Contents/PlugIns`, then sign the app — nested-first, one Developer
 ID, `--options runtime`.
@@ -588,13 +596,13 @@ any team-signed build. The fresh-install denial check — install,
 create, see in Finder, add a device, watch `fileproviderd` for
 unexpected extension denials on the group container (the
 unsandboxed app itself is denial-free by construction) — is manual
-on a real identity and stays with the signing owner. What this PR
-evidences: ad-hoc `codesign --verify` on the script-built appex,
-and the guard below.
+on a real identity and stays with the signing owner. What the hook
+evidences on this machine: ad-hoc `stage-appex.sh` run — staged
+appex `CFBundleVersion` equals the app version,
+`codesign --verify --deep --strict` clean, no profile embedded by
+default — and the guard below.
 
-Follow-on work, scoped not done: Tauri bundler hook (appex copy
-plus the `CFBundleVersion` rewrite, appex profile injection, no app
-entitlements or profile); the appex provisioning profile from the
+Follow-on work, scoped not done: the appex provisioning profile from the
 Developer portal with the App Group capability; the notarized
 `fileproviderd` load check; the fresh-install denial run.
 

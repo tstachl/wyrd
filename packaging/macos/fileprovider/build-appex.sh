@@ -11,7 +11,10 @@
 # developer directory), SDK (default: the resolved macOS SDK),
 # PROVISIONING_PROFILE (default: unset — no profile embedded; when
 # set to a .provisionprofile path, it is copied to
-# Contents/embedded.provisionprofile before signing).
+# Contents/embedded.provisionprofile before signing),
+# APPEX_BUNDLE_VERSION (default: unset — the checked-in Info.plist
+# stands; when set, it rewrites CFBundleVersion before signing so the
+# staged appex moves in lockstep with the app version).
 # Works in the default devenv shell and under
 # `devenv --profile native-apple shell` alike.
 set -eu
@@ -134,6 +137,16 @@ fi
     "$@"
 
 cp "$HERE/Info.plist" "$CONTENTS/Info.plist"
+
+# Version lockstep (bundler hook): the checked-in plist pins a
+# placeholder; the hook passes the app version through
+# APPEX_BUNDLE_VERSION and the rewrite lands before signing, so the
+# signature covers the shipped version. Unset keeps the checked-in
+# value — manual builds are unaffected.
+if [ -n "${APPEX_BUNDLE_VERSION:-}" ]; then
+    /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $APPEX_BUNDLE_VERSION" \
+        "$CONTENTS/Info.plist"
+fi
 
 # The development entitlements travel with every build, including
 # ad-hoc ones: embedding is harmless, but the App Group container
