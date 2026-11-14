@@ -70,7 +70,9 @@ fn main() {
             std::process::exit(code);
         }
     };
-    install_shutdown_handler().expect("signal handler installs");
+    if let Err(error) = install_shutdown_handler() {
+        eprintln!("warning: signal handler unavailable ({error}); termination falls back to default disposition");
+    }
     // One shared composition with every other owner-mode entry
     // point: store, retention, node, serving surface, live split.
     let composed = compose(open, loopback).unwrap_or_else(|error| {
