@@ -701,7 +701,8 @@ where
     // The drive-owner interface serves from here: the shared
     // projection, the loop-published slots, and the single queue,
     // peer-checked at the drive-directory socket — plus the App
-    // Group socket when the dev bootstrap names this drive (checked
+    // Group socket for the served drive in production (no env pair;
+    // dev bootstrap names this drive explicitly and is checked
     // against the composed drive before anything binds, so a stale
     // or mistyped value refuses instead of publishing another
     // drive's tree). The composer wires the loop's repair queues

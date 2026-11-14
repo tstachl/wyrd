@@ -1,6 +1,7 @@
 # macOS packaging (`packaging/macos/`)
 
-Status: Implemented behind an explicit dev bootstrap. This note
+Status: Implemented (daemon half production, domain half pending).
+This note
 holds the adapter layout and the sandbox/socket scheme; the
 normative transport (both sockets, the alias, authentication, and
 the shared connection bound) lives in
@@ -394,24 +395,30 @@ against the live owner — enumerate, hydrate, rename-preserve,
 delete/recreate, peer rename, legacy rows, merged disagreement,
 and `fileproviderd` recovery.
 
-## Registry-owned switchover (production)
+## Registry-owned switchover (production daemon half)
 
 The dev bootstrap above (explicit container plus drive) stays for
-harness and manual development only. Production binds with no env
-vars: the owner derives the container from the platform
-convention and the drive from the served drive itself
+harness and manual development only. The daemon half is
+production with no env vars: the owner derives the container from
+the platform convention and the drive from the served drive itself
 (`OwnerService::bind_for_composer`), so both `wyrd owner` and
-`wyrd mount` publish the `by-drive/<drive-hex>.sock` alias the
-registry-owned domain resolves through. Registration writes the
+`wyrd mount` publish the `by-drive/<drive-hex>.sock` alias a
+registry-registered domain resolves through. Registration writes the
 registry entry; the managed owner service enables at login
 (`RunAtLoad` in the per-drive launchd agent, `WantedBy` in the
-systemd user unit — vault and mount share the template); the
-domain resolves from the registry with no env-var fallback.
+systemd user unit — vault and mount share the template). The
+container literal is verified for development signing only;
+Developer ID and notarized paths are unverified, and production
+`NSFileProviderDomain` construction from the registry stays a
+manual step pending the app half — the full Finder association is
+pending the signing-owner verification below, not claimed here.
 
 Acceptance (manual, macOS, recorded as release evidence): with the
 env vars unset, a registered drive appears in Finder, survives
 reboot (service re-enabled at login), and the tray shows it
-Available once the owner answers. The reboot-survival drill and
+Available once the owner answers. The containing app must run
+before the service on first run (the daemon never creates the
+container itself). The reboot-survival drill and
 the no-env-vars Finder check are release evidence, owned with the
 signing owner (team-signed verify, `spctl`, provisioning profile,
 notarized `fileproviderd` load check stay with that owner).

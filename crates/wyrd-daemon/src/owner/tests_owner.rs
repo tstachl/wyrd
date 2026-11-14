@@ -1815,8 +1815,13 @@ fn broken_submit_connection_is_unconfirmed_and_reconciles() {
 /// The headless run serves the interface: compose, run, and reach
 /// the drive through the socket beside it. The socket appears only
 /// while the owner runs, and the run refuses to start deaf.
+/// `HOME` points at a scratch directory without a group container,
+/// so the production auto-bind stays primary-only and the test
+/// never writes into the developer's real App Group container.
 #[test]
 fn headless_run_serves_the_interface() {
+    let _lock = GROUP_ENV_LOCK.lock().unwrap();
+    let _home = HomeGuard::scratch_without_container();
     let (engine, dir) = scratch_drive();
     let composed =
         crate::vault::compose_headless_owner(engine, dir.clone(), true).expect("owner composes");
@@ -3291,6 +3296,36 @@ impl Drop for GroupEnvGuard {
     }
 }
 
+/// Point `HOME` at a scratch directory without a group container
+/// for the test duration: forces the production auto-bind to
+/// primary-only, so owner tests never write into the developer's
+/// real `~/Library/Group Containers` on macOS. Serialized with
+/// `GROUP_ENV_LOCK` like the env guards — `HOME` is process-global.
+struct HomeGuard {
+    previous: Option<std::ffi::OsString>,
+}
+impl HomeGuard {
+    fn scratch_without_container() -> Self {
+        let scratch = std::path::PathBuf::from(format!(
+            "/tmp/wyrd-gfp-home-{}-{}",
+            std::process::id(),
+            SCRATCH_N.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&scratch).unwrap();
+        let previous = std::env::var_os("HOME");
+        std::env::set_var("HOME", &scratch);
+        HomeGuard { previous }
+    }
+}
+impl Drop for HomeGuard {
+    fn drop(&mut self) {
+        match self.previous.take() {
+            Some(home) => std::env::set_var("HOME", home),
+            None => std::env::remove_var("HOME"),
+        }
+    }
+}
+
 /// A fresh group container directory. Sockets live under a short
 /// `/tmp` base in tests: the `sun_path` ceiling (103 usable bytes on
 /// macOS) rules out nesting the container under the long scratch
@@ -3538,6 +3573,37 @@ fn production_container_derives_from_home() {
         super::server::default_group_container_with_home(None).is_none(),
         "no home means no container"
     );
+}
+
+/// The production gate is the existence check: a present container
+/// resolves, a missing one (or no home) means primary-only — the
+/// daemon never creates the container itself, so no decoy.
+#[test]
+fn production_container_gates_on_is_dir() {
+    let base = std::path::PathBuf::from(format!(
+        "/tmp/wyrd-gfp-home-{}-{}",
+        std::process::id(),
+        SCRATCH_N.fetch_add(1, Ordering::Relaxed)
+    ));
+    let home = base.join("home");
+    let container =
+        super::server::default_group_container_with_home(Some(home.clone())).expect("home set");
+    // Missing container: primary-only.
+    assert!(
+        super::server::production_group_container_with_home(Some(home.clone())).is_none(),
+        "a missing container means primary-only, never a created decoy"
+    );
+    std::fs::create_dir_all(&container).unwrap();
+    assert_eq!(
+        super::server::production_group_container_with_home(Some(home)).as_deref(),
+        Some(container.as_path()),
+        "a present container resolves"
+    );
+    assert!(
+        super::server::production_group_container_with_home(None).is_none(),
+        "no home means no container"
+    );
+    std::fs::remove_dir_all(&base).unwrap();
 }
 
 /// A bootstrap naming a drive this owner does not serve refuses

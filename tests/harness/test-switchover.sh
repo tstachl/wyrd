@@ -64,33 +64,40 @@ grep -Fq 'no env-var fallback' "$SWIFT" \
   || die "SocketConfig.swift: no-env-fallback not stated"
 pass "Swift domain resolves from the registry with no env fallback"
 
-# 5. The normative transport documents production automatic plus
-# dev-only override.
-grep -Fq 'registry-owned production association on' "$CONTRACT" \
-  || die "contract: production association missing"
-grep -Fq 'no env-var fallback' "$CONTRACT" \
-  || die "contract: no-env-fallback not stated"
+# 5. The normative transport documents the daemon-half production
+# bind plus the pending domain half and the dev-only override.
+grep -Fq 'daemon half of the registry-owned' "$CONTRACT" \
+  || die "contract: daemon-half production missing"
+grep -Fq 'full registry-to-domain association' "$CONTRACT" \
+  || die "contract: pending domain half not stated"
 grep -Fqi 'dev-only env pair' "$CONTRACT" \
   || die "contract: dev-only override not stated"
-pass "contract documents production automatic plus dev-only override"
+pass "contract documents daemon-half production plus pending domain half"
 
 # 6. The packaging note records the switchover acceptance: registered
-# drive in Finder with env unset, reboot survival, tray Available.
-grep -Fq 'Registry-owned switchover (production)' "$README" \
+# drive in Finder with env unset, reboot survival, tray Available —
+# scoped to the daemon half with the signed-container check pending.
+grep -Fq 'Registry-owned switchover (production daemon half)' "$README" \
   || die "README: switchover section missing"
 grep -Fq 'with no env' "$README" \
   || die "README: no-env acceptance missing"
 grep -Fq 'survives' "$README" \
   || die "README: reboot survival missing"
-grep -Fq 'dev-only env pair' "$README" \
-  || die "README: dev-only env not stated"
-pass "README records the switchover acceptance"
+grep -Fq 'verified for development signing only' "$README" \
+  || die "README: signed-container scope missing"
+pass "README records the daemon-half acceptance with pending check"
 
-# 7. Production derivation pins: home-based path math plus the
-# group-id literal, covered by the daemon unit test.
+# 7. Production derivation pins: home-based path math, the is_dir
+# decoy gate, and HOME isolation for owner tests.
 grep -Fq 'production_container_derives_from_home' \
   "$ROOT/crates/wyrd-daemon/src/owner/tests_owner.rs" \
   || die "daemon tests: production derivation pin missing"
-pass "daemon unit test pins the production derivation"
+grep -Fq 'production_group_container_with_home' \
+  "$ROOT/crates/wyrd-daemon/src/owner/tests_owner.rs" \
+  || die "daemon tests: is_dir gate pin missing"
+grep -Fq 'HomeGuard::scratch_without_container' \
+  "$ROOT/crates/wyrd-daemon/src/owner/tests_owner.rs" \
+  || die "daemon tests: HOME isolation missing"
+pass "daemon unit tests pin derivation, decoy gate, and isolation"
 
 echo "switchover: $PASS checks passed"

@@ -129,9 +129,31 @@ pub fn default_group_container() -> Option<PathBuf> {
 /// creates only `Sockets/` (and `by-drive/`) inside it, never the
 /// container itself — a hand-created container is a decoy the
 /// sandboxed extension cannot reach, so a missing directory means
-/// primary-only, never a created decoy.
+/// primary-only, never a created decoy. Evaluated once per bind:
+/// if the App Group container is materialized after the owner
+/// starts (the containing app has never run), the alias is not
+/// published until the service restarts — the app must run before
+/// the service for the first-run Finder observable. A present but
+/// unbindable container (a file at `Sockets/`, permissions) aborts
+/// the whole owner all-or-nothing rather than running primary-only
+/// deaf to the extension: the failure is intentional, so a broken
+/// group path never reads as healthy primary-only.
 pub fn production_group_container() -> Option<PathBuf> {
-    let container = default_group_container()?;
+    #[cfg(target_os = "macos")]
+    {
+        production_group_container_with_home(std::env::var_os("HOME").map(PathBuf::from))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        None
+    }
+}
+
+/// Testable production-container gate: path math plus the `is_dir`
+/// existence check, platform-independent so Linux CI pins the
+/// decoy rule. Production calls this with `HOME` on macOS.
+pub fn production_group_container_with_home(home: Option<PathBuf>) -> Option<PathBuf> {
+    let container = default_group_container_with_home(home)?;
     if container.is_dir() {
         Some(container)
     } else {
