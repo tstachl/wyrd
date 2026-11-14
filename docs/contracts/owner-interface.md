@@ -24,16 +24,31 @@ reach the drive directory from its sandbox: one socket per drive
 at
 `<container>/Sockets/<fingerprint>.sock` plus a
 `Sockets/by-drive/<drive-hex>.sock` symlink alias beside it. This
-second listener is an opt-in bootstrap for the macOS File
-Provider (enabled by the explicitly configured container-plus-
-drive pair, see the packaging note); it is compiled on every
-platform and binds wherever the pair is set, so the "macOS"
-scoping is the consumer, not a platform gate in the code. The
+second listener is the daemon half of the registry-owned
+production association on
+macOS: with no dev env vars set, the owner derives the container
+from the platform convention
+(`~/Library/Group Containers/group.md.enesis.wyrd`, verified for
+development signing only — Developer ID and notarized paths are
+unverified, see the packaging note) and the drive
+from the served drive itself, then publishes the alias the domain
+resolves through; it is compiled on every
+platform but binds the group socket only where the container
+exists, so the "macOS" scoping is the consumer plus the container,
+not a platform gate in the framing code. Absent container means
+primary-only; a present-but-unbindable container aborts the run
+all-or-nothing rather than running deaf to the extension (see the
+bind docs). The containing app must run before the service on
+first run: the daemon creates only `Sockets/` inside the
+container, never the container itself. The
 filename derives from the served `DriveId`
 (`DriveId::fileprovider_socket_fingerprint`, 64-bit domain
 separated derivation, hex-encoded); the daemon is the only
 computer of it, and the extension resolves the alias by
-readlink, never by hashing. The configured drive is checked
+readlink, never by hashing. A dev-only env pair
+(`WYRD_FILEPROVIDER_GROUP_CONTAINER` plus
+`WYRD_FILEPROVIDER_DRIVE_ID`) overrides for harness and manual
+development: the configured drive is checked
 against the drive actually served before anything binds: a
 mismatch refuses the run. The alias target must stay inside
 `Sockets/`; anything else fails closed. A live endpoint at the
@@ -41,10 +56,16 @@ group path is never unlinked — the bind fails closed instead —
 while a dead entry reclaims. Both sockets serve from one server:
 one owner-instance identity, one uid check, and one shared
 connection pool of at most 16 concurrent connections across both
-accept paths. The group socket is a development bootstrap today
-(explicitly configured container plus drive, see the packaging
-note); the multi-drive registry owns the drive-to-domain
-association in production.
+accept paths. The daemon half is production: with no dev env vars,
+the owner publishes the alias for the served drive whenever the
+container exists, so registration plus the managed owner service
+(at login) leaves the socket where a registry-registered domain
+resolves it. The full registry-to-domain association — production
+`NSFileProviderDomain` construction from the registry and the
+signed-container confirmation beyond development signing (the
+packaging note marks the literal verified for development signing
+only) — stays pending the signing-owner verification; the contract
+here owns the socket half, not the domain-registration half.
 
 Frame each message with a u32 big-endian length prefix followed by
 that many JSON bytes. Assemble frames explicitly: an idle

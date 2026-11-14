@@ -32,8 +32,12 @@ struct SocketConfig {
     var overridePath: String?
 
     /// Parse the File Provider domain identifier for this drive.
-    /// Stage 2 dev bootstrap: the identifier is exactly the drive
-    /// id. Anything else is unconfigured, never a guessed drive.
+    /// Registry-owned production: the identifier is exactly the drive
+    /// id, registered from the registry entry's drive (the daemon
+    /// publishes the `by-drive/<drive-hex>.sock` alias for the served
+    /// drive with no env-var fallback). Anything else is unconfigured,
+    /// never a guessed drive. The harness-only `overridePath` stays
+    /// development-only alongside the daemon's dev env bootstrap.
     static func domainDrive(_ identifier: String) -> String? {
         let drive = identifier.lowercased()
         guard drive.count == 64,

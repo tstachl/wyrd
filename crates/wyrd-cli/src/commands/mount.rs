@@ -251,8 +251,9 @@ pub(crate) fn mount(
     // The drive-owner interface serves beside the mount through the
     // shared `OwnerService`: the same handles either presentation
     // serves, peer-checked at the drive-directory socket (P2,
-    // option A) — plus the App Group socket when the dev bootstrap
-    // names this drive. Bind before presenting: an owner that cannot
+    // option A) — plus the App Group socket for the served drive in
+    // production (no env pair), or for the dev-configured drive when
+    // the dev bootstrap names it. Bind before presenting: an owner that cannot
     // serve its interface refuses the run instead of running deaf.
     // The guard is shut down explicitly after the transport tail
     // while the live node (and its store lock) is still held — the

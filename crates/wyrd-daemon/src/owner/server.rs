@@ -75,22 +75,76 @@ pub fn bind_listener(socket_path: &Path) -> std::io::Result<UnixListener> {
     Ok(listener)
 }
 
-/// Env bootstrap for the Stage 2 File Provider socket (dev only, not
-/// a registry): the absolute path of the macOS App Group container.
-/// Set together with [`FILEPROVIDER_DRIVE_ID_ENV`]. Absent (both
-/// unset) means the owner serves the drive-directory socket only —
-/// the Linux behavior and the CI behavior. One set without the other
-/// is a misconfiguration and refuses the run; a malformed value
-/// refuses too, never a silent primary-only fallback.
+/// Dev-only env bootstrap for the File Provider socket (harness and
+/// manual development, never production): the absolute path of the
+/// macOS App Group container. Set together with
+/// [`FILEPROVIDER_DRIVE_ID_ENV`]. Absent (both unset) means the
+/// production path below decides — the Linux behavior and the CI
+/// behavior. One set without the other is a misconfiguration and
+/// refuses the run; a malformed value refuses too, never a silent
+/// primary-only fallback.
 pub const FILEPROVIDER_GROUP_CONTAINER_ENV: &str = "WYRD_FILEPROVIDER_GROUP_CONTAINER";
 
 /// The explicitly configured drive, as 64 lowercase hex chars, paired
-/// with [`FILEPROVIDER_GROUP_CONTAINER_ENV`]. Stage 2 has no
-/// multi-drive registry yet, so the drive behind the group socket is
-/// stated here; the registry owns this association in production.
-/// The daemon never invents it, never guesses a single-drive
-/// default.
+/// with [`FILEPROVIDER_GROUP_CONTAINER_ENV`]. Dev-only: the
+/// production bind derives the served drive from the opened drive
+/// itself, so the daemon never invents it, never guesses a
+/// single-drive default, and never reads it from the environment
+/// outside this dev bootstrap.
 pub const FILEPROVIDER_DRIVE_ID_ENV: &str = "WYRD_FILEPROVIDER_DRIVE_ID";
+
+/// The App Group shared by the desktop app and the File Provider
+/// extension, granted literally (no team prefix). One constant for
+/// the daemon-side production derivation and the Swift declaration
+/// (`SocketConfig.groupIdentifier`); the harness pins the agreement.
+pub const FILEPROVIDER_GROUP_ID: &str = "group.md.enesis.wyrd";
+
+/// The production App Group container path for a home directory:
+/// `~/Library/Group Containers/<group>`. Pure path math so the
+/// derivation pins on every platform; only macOS binds through it.
+pub fn default_group_container_with_home(home: Option<PathBuf>) -> Option<PathBuf> {
+    let home = home?;
+    Some(
+        home.join("Library/Group Containers")
+            .join(FILEPROVIDER_GROUP_ID),
+    )
+}
+
+/// The production container when it exists on disk: the daemon
+/// creates only `Sockets/` (and `by-drive/`) inside it, never the
+/// container itself — a hand-created container is a decoy the
+/// sandboxed extension cannot reach, so a missing directory means
+/// primary-only, never a created decoy. Evaluated once per bind:
+/// if the App Group container is materialized after the owner
+/// starts (the containing app has never run), the alias is not
+/// published until the service restarts — the app must run before
+/// the service for the first-run Finder observable. A present but
+/// unbindable container (a file at `Sockets/`, permissions) aborts
+/// the whole owner all-or-nothing rather than running primary-only
+/// deaf to the extension: the failure is intentional, so a broken
+/// group path never reads as healthy primary-only.
+pub fn production_group_container() -> Option<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        production_group_container_with_home(std::env::var_os("HOME").map(PathBuf::from))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        None
+    }
+}
+
+/// Testable production-container gate: path math plus the `is_dir`
+/// existence check, platform-independent so Linux CI pins the
+/// decoy rule. Production calls this with `HOME` on macOS.
+pub fn production_group_container_with_home(home: Option<PathBuf>) -> Option<PathBuf> {
+    let container = default_group_container_with_home(home)?;
+    if container.is_dir() {
+        Some(container)
+    } else {
+        None
+    }
+}
 
 /// The resolved dev bootstrap: where to bind, and for which drive.
 #[derive(Debug)]
@@ -104,9 +158,12 @@ pub struct GroupContainerConfig {
     pub drive: DriveId,
 }
 
-/// Read the Stage 2 dev bootstrap from the environment: `None` when
+/// Read the dev-only bootstrap from the environment: `None` when
 /// neither variable is set, `Some(Err)` on any partial or malformed
-/// configuration (fail closed, never a silent fallback).
+/// configuration (fail closed, never a silent fallback). Production
+/// never consults this: with both unset, [`OwnerService::bind_for_composer`]
+/// derives the container from the platform convention and the drive
+/// from the served drive itself.
 pub fn group_container_from_env() -> Option<Result<GroupContainerConfig, String>> {
     let container = std::env::var_os(FILEPROVIDER_GROUP_CONTAINER_ENV).map(PathBuf::from);
     let drive_hex = std::env::var(FILEPROVIDER_DRIVE_ID_ENV).ok();
@@ -410,16 +467,17 @@ impl OwnerService {
     }
 
     /// Bind the drive-directory socket **and** the App Group socket
-    /// for the explicitly configured drive, serving both from one
+    /// for the drive, serving both from one
     /// [`OwnerServer`] (one owner-instance identity, one uid check).
     /// Private: composers enter through [`OwnerService::bind_for_composer`],
-    /// which checks the configured drive against the served one
+    /// which checks a dev-configured drive against the served one
     /// before anything binds. All-or-nothing: a group-side failure
     /// unbinds the primary and refuses, so the owner never runs
     /// half-bound — deaf to the extension but alive to the CLI.
     /// The caller holds the store lock throughout, as with
-    /// [`OwnerService::bind`]. Stage 2 dev bootstrap only; the
-    /// multi-drive registry owns this association in production.
+    /// [`OwnerService::bind`]. Shared by the production auto-bind
+    /// (container from the platform convention, drive from the
+    /// served drive) and the dev-only env bootstrap.
     fn bind_with_group_container(
         handles: OwnerHandles,
         drive_dir: &Path,
@@ -490,21 +548,32 @@ impl OwnerService {
     }
 
     /// Bind for an owner-mode composer (`wyrd owner`, `wyrd mount`):
-    /// the drive-directory socket, plus the App Group socket when
-    /// the dev bootstrap names this drive. The configured drive is
-    /// checked against the drive actually served *before* anything
-    /// binds: a stale or mistyped `WYRD_FILEPROVIDER_DRIVE_ID`
-    /// refuses the run instead of publishing another drive's tree
-    /// under this drive's alias. Absent bootstrap means the
-    /// drive-directory socket only. Malformed or mismatched
-    /// configuration refuses; it never falls back silently.
+    /// the drive-directory socket, plus the App Group socket through
+    /// the registry-owned production association. With the dev-only
+    /// env bootstrap set, the configured drive is checked against the
+    /// drive actually served *before* anything binds: a stale or
+    /// mistyped `WYRD_FILEPROVIDER_DRIVE_ID` refuses the run instead
+    /// of publishing another drive's tree under this drive's alias.
+    /// With both env vars unset (production), the container derives
+    /// from the platform convention and the drive from the served
+    /// drive itself — no env-var fallback, so a clean machine with
+    /// no Wyrd env vars still publishes the alias the File Provider
+    /// domain resolves through. Absent container (Linux, CI, or a
+    /// machine whose group container was never materialised) means
+    /// the drive-directory socket only. Malformed or mismatched
+    /// dev configuration refuses; it never falls back silently.
     pub fn bind_for_composer(
         handles: OwnerHandles,
         drive_dir: &Path,
         served: DriveId,
     ) -> std::io::Result<Self> {
         match group_container_from_env() {
-            None => Self::bind(handles, drive_dir),
+            None => match production_group_container() {
+                Some(container) => {
+                    Self::bind_with_group_container(handles, drive_dir, &served, &container)
+                }
+                None => Self::bind(handles, drive_dir),
+            },
             Some(Ok(config)) => {
                 if config.drive != served {
                     return Err(std::io::Error::new(

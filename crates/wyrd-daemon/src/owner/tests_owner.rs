@@ -1815,8 +1815,13 @@ fn broken_submit_connection_is_unconfirmed_and_reconciles() {
 /// The headless run serves the interface: compose, run, and reach
 /// the drive through the socket beside it. The socket appears only
 /// while the owner runs, and the run refuses to start deaf.
+/// `HOME` points at a scratch directory without a group container,
+/// so the production auto-bind stays primary-only and the test
+/// never writes into the developer's real App Group container.
 #[test]
 fn headless_run_serves_the_interface() {
+    let _lock = GROUP_ENV_LOCK.lock().unwrap();
+    let _home = HomeGuard::scratch_without_container();
     let (engine, dir) = scratch_drive();
     let composed =
         crate::vault::compose_headless_owner(engine, dir.clone(), true).expect("owner composes");
@@ -3291,6 +3296,42 @@ impl Drop for GroupEnvGuard {
     }
 }
 
+/// Point `HOME` at a scratch directory without a group container
+/// for the test duration: forces the production auto-bind to
+/// primary-only, so owner tests never write into the developer's
+/// real `~/Library/Group Containers` on macOS. Serialized with
+/// `GROUP_ENV_LOCK` like the env guards — `HOME` is process-global.
+/// Coverage is per-test: other owner-starting harnesses
+/// (`wyrd-host` lifecycle, `wyrd-cli` vault subprocesses) inherit
+/// `HOME` and may bind the group socket on a macOS dev machine with
+/// a materialized container; CI is Linux, so the gate is unaffected.
+struct HomeGuard {
+    previous: Option<std::ffi::OsString>,
+    scratch: std::path::PathBuf,
+}
+impl HomeGuard {
+    fn scratch_without_container() -> Self {
+        let scratch = std::path::PathBuf::from(format!(
+            "/tmp/wyrd-gfp-home-{}-{}",
+            std::process::id(),
+            SCRATCH_N.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&scratch).unwrap();
+        let previous = std::env::var_os("HOME");
+        std::env::set_var("HOME", &scratch);
+        HomeGuard { previous, scratch }
+    }
+}
+impl Drop for HomeGuard {
+    fn drop(&mut self) {
+        match self.previous.take() {
+            Some(home) => std::env::set_var("HOME", home),
+            None => std::env::remove_var("HOME"),
+        }
+        let _ = std::fs::remove_dir_all(&self.scratch);
+    }
+}
+
 /// A fresh group container directory. Sockets live under a short
 /// `/tmp` base in tests: the `sun_path` ceiling (103 usable bytes on
 /// macOS) rules out nesting the container under the long scratch
@@ -3512,6 +3553,122 @@ fn group_bootstrap_env_parsing() {
         "a partial bootstrap refuses, never a silent primary-only fallback"
     );
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// The production container derives from the home directory plus
+/// the literal group id: pure path math, no filesystem, so a
+/// layout change fails here before any bind. `None` home means no
+/// container — never a guessed path.
+#[test]
+fn production_container_derives_from_home() {
+    let home = std::path::PathBuf::from("/tmp/fake-home");
+    let container =
+        super::server::default_group_container_with_home(Some(home.clone())).expect("home set");
+    assert_eq!(
+        container,
+        home.join("Library/Group Containers")
+            .join(super::server::FILEPROVIDER_GROUP_ID),
+        "the production container is the platform convention"
+    );
+    assert_eq!(
+        super::server::FILEPROVIDER_GROUP_ID,
+        "group.md.enesis.wyrd",
+        "the daemon-side group id is the entitled literal"
+    );
+    assert!(
+        super::server::default_group_container_with_home(None).is_none(),
+        "no home means no container"
+    );
+}
+
+/// The production gate is the existence check: a present container
+/// resolves, a missing one (or no home) means primary-only — the
+/// daemon never creates the container itself, so no decoy.
+#[test]
+fn production_container_gates_on_is_dir() {
+    let base = std::path::PathBuf::from(format!(
+        "/tmp/wyrd-gfp-home-{}-{}",
+        std::process::id(),
+        SCRATCH_N.fetch_add(1, Ordering::Relaxed)
+    ));
+    let home = base.join("home");
+    let container =
+        super::server::default_group_container_with_home(Some(home.clone())).expect("home set");
+    // Missing container: primary-only.
+    assert!(
+        super::server::production_group_container_with_home(Some(home.clone())).is_none(),
+        "a missing container means primary-only, never a created decoy"
+    );
+    std::fs::create_dir_all(&container).unwrap();
+    assert_eq!(
+        super::server::production_group_container_with_home(Some(home)).as_deref(),
+        Some(container.as_path()),
+        "a present container resolves"
+    );
+    assert!(
+        super::server::production_group_container_with_home(None).is_none(),
+        "no home means no container"
+    );
+    std::fs::remove_dir_all(&base).unwrap();
+}
+
+/// Production auto-bind drives `bind_for_composer` with no env pair:
+/// a present container publishes the alias for the served drive,
+/// a missing one stays primary-only. macOS-only: elsewhere the
+/// production container is always `None`, so the branch never runs.
+/// Short `/tmp` fixture home keeps the derived socket path under
+/// the `sun_path` ceiling. Serialized with `GROUP_ENV_LOCK`:
+/// `HOME` and the dev env pair are process-global.
+#[cfg(target_os = "macos")]
+#[test]
+fn production_auto_bind_publishes_alias_without_env() {
+    let _lock = GROUP_ENV_LOCK.lock().unwrap();
+    std::env::remove_var(super::server::FILEPROVIDER_GROUP_CONTAINER_ENV);
+    std::env::remove_var(super::server::FILEPROVIDER_DRIVE_ID_ENV);
+    let base = std::path::PathBuf::from(format!(
+        "/tmp/h-{}-{}",
+        std::process::id(),
+        SCRATCH_N.fetch_add(1, Ordering::Relaxed)
+    ));
+    let home = base.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let previous = std::env::var_os("HOME");
+    std::env::set_var("HOME", &home);
+    // Missing container: primary-only, no alias.
+    let (parts, dir, drive) = composed_parts_with_drive();
+    let service =
+        super::OwnerService::bind_for_composer(OwnerHandles::from_parts(&parts), &dir, drive)
+            .expect("missing container stays primary-only");
+    assert!(
+        service.group_socket_path().is_none(),
+        "no container means primary-only"
+    );
+    drop(service);
+    std::fs::remove_dir_all(&dir).unwrap();
+    // Present container: the alias publishes for the served drive.
+    let container =
+        super::server::default_group_container_with_home(Some(home.clone())).expect("home set");
+    std::fs::create_dir_all(&container).unwrap();
+    let (parts, dir, drive) = composed_parts_with_drive();
+    let service =
+        super::OwnerService::bind_for_composer(OwnerHandles::from_parts(&parts), &dir, drive)
+            .expect("present container publishes the alias");
+    let link = super::server::group_symlink_path(&container, &drive);
+    assert!(
+        service.group_socket_path().is_some(),
+        "present container binds the group socket"
+    );
+    assert!(
+        std::fs::symlink_metadata(&link).is_ok(),
+        "the by-drive alias publishes"
+    );
+    drop(service);
+    match previous {
+        Some(home) => std::env::set_var("HOME", home),
+        None => std::env::remove_var("HOME"),
+    }
+    std::fs::remove_dir_all(&base).unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 /// A bootstrap naming a drive this owner does not serve refuses
