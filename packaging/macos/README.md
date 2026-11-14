@@ -515,16 +515,15 @@ Trade-offs, in the issue's terms:
   (appex, then app) under one Developer ID with `--options runtime`.
   No extra install step, no post-install copy.
 
-Consequences: the production app carries its own entitlements file
-with the same App Group and no sandbox (decided below); the appex
-provisioning profile carries the App Group capability; notarization
-staples the whole `.dmg`. The
+Consequences: the production app carries no entitlements file
+(decided below); the appex provisioning profile carries the App
+Group capability; notarization staples the whole `.dmg`. The
 throwaway Xcode app stays throwaway: it never becomes the ship
 vehicle.
 
 Follow-on work, scoped not done: the remaining packaging chain —
-Tauri bundler hook (appex copy, app entitlements path, appex
-profile), the notarized `fileproviderd` load check, update
+Tauri bundler hook (appex copy, appex profile, no app entitlements),
+the notarized `fileproviderd` load check, update
 persistence (install old, install new, domains and sockets
 survive). The per-section lists below decompose it, not duplicate
 it.
@@ -532,13 +531,12 @@ it.
 ## Production entitlements and provisioning (decided)
 
 Minimal by default: the appex holds the sandbox plus the one
-shared group, the app holds the group alone with no sandbox, and
-anything broader needs its own justification.
+shared group, the app holds nothing, and anything broader needs its
+own justification.
 
-- **App** (`packaging/macos/Wyrd.entitlements`): the App Group
-  only, and deliberately no `app-sandbox`. The shipped desktop cannot
-  operate sandboxed: the registry defaults to
-  `~/Library/Application Support/Wyrd`
+- **App**: no entitlement file. The shipped desktop is unsandboxed
+  under Developer ID and uses direct paths throughout: the
+  registry defaults to `~/Library/Application Support/Wyrd`
   (`crates/wyrd-desktop/src/registry.rs`), owner sockets live beside
   their drive directories with no group-container resolver
   (`wyrd-owner-client` resolves `drive_dir/owner.sock` only), and
@@ -546,12 +544,13 @@ anything broader needs its own justification.
   sandbox — to write `~/Library/LaunchAgents` and the drive
   directory itself. Sandboxing the app would break discovery,
   connection, and provisioning, the desktop's stated authority
-  path. So the app ships unsandboxed under Developer ID; the group
-  key is carried so the shared container identity is pinned in one
-  file per target, enforced where the sandbox is on (the appex).
-  Revisit only with a sandboxed redesign (group-container registry,
-  app-side group-socket resolver, sandbox-viable agent install),
-  never by adding keys piecemeal.
+  path. With no sandbox and no constrained capabilities there is
+  nothing to entitle and no app profile to provision — the group
+  container is reached by direct path, the entitled `containerURL`
+  API belongs to the appex alone. Revisit only with a sandboxed
+  redesign (group-container registry, app-side group-socket
+  resolver, sandbox-viable agent install), never by adding keys
+  piecemeal.
 - **Appex** (`fileprovider/WyrdFileProvider.entitlements`):
   unchanged, sandbox plus the same literal group. The extension
   reaches only its container and user-intent paths; the owner
@@ -592,8 +591,8 @@ evidences: ad-hoc `codesign --verify` on the script-built appex,
 and the guard below.
 
 Follow-on work, scoped not done: Tauri bundler hook (appex copy
-plus the `CFBundleVersion` rewrite, app entitlements path, appex
-profile injection); the appex provisioning profile from the
+plus the `CFBundleVersion` rewrite, appex profile injection, no app
+entitlements or profile); the appex provisioning profile from the
 Developer portal with the App Group capability; the notarized
 `fileproviderd` load check; the fresh-install denial run.
 
