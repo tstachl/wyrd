@@ -11,7 +11,11 @@
 # developer directory), SDK (default: the resolved macOS SDK),
 # PROVISIONING_PROFILE (default: unset — no profile embedded; when
 # set to a .provisionprofile path, it is copied to
-# Contents/embedded.provisionprofile before signing).
+# Contents/embedded.provisionprofile before signing),
+# APPEX_BUNDLE_VERSION (default: unset — the checked-in Info.plist
+# stands; when set, it rewrites CFBundleVersion and
+# CFBundleShortVersionString before signing so the staged appex
+# reports the app version in both keys).
 # Works in the default devenv shell and under
 # `devenv --profile native-apple shell` alike.
 set -eu
@@ -135,6 +139,17 @@ fi
 
 cp "$HERE/Info.plist" "$CONTENTS/Info.plist"
 
+# Version lockstep (bundler hook): the checked-in plist pins
+# placeholders; the hook passes the app version through
+# APPEX_BUNDLE_VERSION and both keys land before signing, so the
+# signature covers the shipped versions. Unset keeps the checked-in
+# values — manual builds are unaffected.
+if [ -n "${APPEX_BUNDLE_VERSION:-}" ]; then
+    /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $APPEX_BUNDLE_VERSION" \
+        -c "Set :CFBundleShortVersionString $APPEX_BUNDLE_VERSION" \
+        "$CONTENTS/Info.plist"
+fi
+
 # The development entitlements travel with every build, including
 # ad-hoc ones: embedding is harmless, but the App Group container
 # only materializes under a team-signed build with provisioning.
@@ -155,9 +170,14 @@ if [ -n "${PROVISIONING_PROFILE:-}" ]; then
     cp "$PROVISIONING_PROFILE" "$CONTENTS/embedded.provisionprofile"
 fi
 
+# Hardened runtime is always on, including ad-hoc builds: the staged
+# appex is the production signer output, and a Developer ID build
+# without it is not notarizable. Tauri's shallow outer-app signature
+# cannot repair a nested signature that lacks it.
 codesign --force --sign "$SIGN_IDENTITY" \
     --identifier md.enesis.wyrd.fileprovider \
     --entitlements "$ENTITLEMENTS" \
+    --options runtime \
     "$APPEX"
 
 echo "built $APPEX"

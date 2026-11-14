@@ -73,6 +73,7 @@ in
       bash tests/harness/test-cli-vocabulary.sh
       bash tests/harness/test-appex-embedding.sh
       bash tests/harness/test-entitlements.sh
+      bash tests/harness/test-bundler-hook.sh
       say "native shell suites green"
     '';
   };
