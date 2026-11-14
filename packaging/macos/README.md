@@ -515,34 +515,43 @@ Trade-offs, in the issue's terms:
   (appex, then app) under one Developer ID with `--options runtime`.
   No extra install step, no post-install copy.
 
-Consequences: the production app will need its own entitlements file
-carrying the same App Group (plus no other new capability in this
-decision); provisioning profiles will cover app and appex with the
-App Group capability; notarization staples the whole `.dmg`. The
+Consequences: the production app carries its own entitlements file
+with the same App Group and no sandbox (decided below); the appex
+provisioning profile carries the App Group capability; notarization
+staples the whole `.dmg`. The
 throwaway Xcode app stays throwaway: it never becomes the ship
 vehicle.
 
-Follow-on work, scoped not done: Tauri bundler hook for the appex
-copy plus the `CFBundleVersion` rewrite; app entitlements file; provisioning profiles; nested signing
-script order; notarization plus a `fileproviderd` load check under a
-real identity; update persistence (install old, install new, domains
-and sockets survive).
+Follow-on work, scoped not done: the remaining packaging chain —
+Tauri bundler hook (appex copy, app entitlements path, appex
+profile), the notarized `fileproviderd` load check, update
+persistence (install old, install new, domains and sockets
+survive). The per-section lists below decompose it, not duplicate
+it.
 
 ## Production entitlements and provisioning (decided)
 
-Minimal by default: each target holds exactly the sandbox plus the
-one shared group, and anything broader needs its own justification.
+Minimal by default: the appex holds the sandbox plus the one
+shared group, the app holds the group alone with no sandbox, and
+anything broader needs its own justification.
 
-- **App** (`packaging/macos/Wyrd.entitlements`): `app-sandbox` plus
-  `application-groups` with the literal `group.md.enesis.wyrd`. The
-  group is the only cross-process surface the app needs: owner
-  sockets resolve through the container, and domain registration
-  runs in the containing-app context (no File-Provider-specific key
-  exists for the app side). Refused by default: file-access keys —
-  the app never touches drive directories (only the unsandboxed
-  owner service does) — and login-item keys — startup-at-login
-  comes from the per-drive launchd agents below, not from the app
-  promoting itself.
+- **App** (`packaging/macos/Wyrd.entitlements`): the App Group
+  only, and deliberately no `app-sandbox`. The shipped desktop cannot
+  operate sandboxed: the registry defaults to
+  `~/Library/Application Support/Wyrd`
+  (`crates/wyrd-desktop/src/registry.rs`), owner sockets live beside
+  their drive directories with no group-container resolver
+  (`wyrd-owner-client` resolves `drive_dir/owner.sock` only), and
+  provisioning spawns the co-installed CLI — which inherits any
+  sandbox — to write `~/Library/LaunchAgents` and the drive
+  directory itself. Sandboxing the app would break discovery,
+  connection, and provisioning, the desktop's stated authority
+  path. So the app ships unsandboxed under Developer ID; the group
+  key is carried so the shared container identity is pinned in one
+  file per target, enforced where the sandbox is on (the appex).
+  Revisit only with a sandboxed redesign (group-container registry,
+  app-side group-socket resolver, sandbox-viable agent install),
+  never by adding keys piecemeal.
 - **Appex** (`fileprovider/WyrdFileProvider.entitlements`):
   unchanged, sandbox plus the same literal group. The extension
   reaches only its container and user-intent paths; the owner
@@ -554,12 +563,11 @@ the release owner (like the signing identity), never in the tree.
 The appex target is wired now: `PROVISIONING_PROFILE` names a
 `.provisionprofile` to embed at `Contents/embedded.provisionprofile`
 before signing, and a missing path refuses instead of signing
-profile-less under a team identity. The app target wires through
-the Tauri bundler hook that already owns the appex copy (see the
-shipment-layout follow-ons): it will point the bundle's
-entitlements at `packaging/macos/Wyrd.entitlements` and inject the
-app profile at signing time. Until that hook lands, team signing is
-the manual sequence: sign appex first (profile embedded), copy into
+profile-less under a team identity. The app target needs no profile:
+with no sandbox and no constrained capabilities there is nothing to
+provision; the Tauri bundler hook carries the entitlements file path
+alone. Until that hook lands, team signing is the manual sequence:
+sign appex first (profile embedded), copy into
 `Contents/PlugIns`, then sign the app — nested-first, one Developer
 ID, `--options runtime`.
 
@@ -583,9 +591,10 @@ on a real identity and stays with the signing owner. What this PR
 evidences: ad-hoc `codesign --verify` on the script-built appex,
 and the guard below.
 
-Follow-on work, scoped not done: Tauri bundler hook (appex copy,
-app entitlements path, both profiles); provisioning profiles from
-the Developer portal with the App Group capability; the notarized
+Follow-on work, scoped not done: Tauri bundler hook (appex copy
+plus the `CFBundleVersion` rewrite, app entitlements path, appex
+profile injection); the appex provisioning profile from the
+Developer portal with the App Group capability; the notarized
 `fileproviderd` load check; the fresh-install denial run.
 
 ## Release distinction
