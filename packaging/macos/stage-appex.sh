@@ -50,23 +50,38 @@ if [ -n "${TAURI_ENV_TARGET_TRIPLE:-}" ]; then
     export ARCH
 fi
 
-# Identity pairing: Tauri team-signs the outer app when
-# APPLE_SIGNING_IDENTITY is set. An ad-hoc appex inside it is the
-# mixed state the release runbook forbids — fail closed and name
-# the fix. Dev flow (neither set) is unaffected.
-if [ -n "${APPLE_SIGNING_IDENTITY:-}" ] && [ "${SIGN_IDENTITY:--}" = "-" ]; then
-    echo "error: APPLE_SIGNING_IDENTITY is set but SIGN_IDENTITY is ad-hoc; set SIGN_IDENTITY to the same Developer ID." >&2
+# Config source: the app version and the macOS signing identity
+# Tauri reads. python3 parses the config on macOS and in CI.
+TAURI_CONF="$ROOT/crates/wyrd-desktop/tauri.conf.json"
+command -v python3 >/dev/null 2>&1 || {
+    echo "error: python3 is required to read the Tauri config." >&2
     exit 1
+}
+
+# Identity pairing: the outer app is team-signed when Tauri has a
+# real identity — APPLE_SIGNING_IDENTITY in the environment or
+# bundle.macOS.signingIdentity in the config. A real outer identity
+# with an ad-hoc or different appex identity is the mixed state the
+# release runbook forbids — fail closed and name the fix. `-`
+# (Tauri's ad-hoc pseudo-identity) and unset both mean ad-hoc, so
+# the dev flow (neither set) and explicit ad-hoc pairs pass.
+OUTER_IDENTITY="${APPLE_SIGNING_IDENTITY:-}"
+if [ -z "$OUTER_IDENTITY" ]; then
+    OUTER_IDENTITY=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("bundle",{}).get("macOS",{}).get("signingIdentity",""))' "$TAURI_CONF")
 fi
+case "$OUTER_IDENTITY" in
+    ""|-) ;;
+    *)
+        if [ "${SIGN_IDENTITY:--}" != "$OUTER_IDENTITY" ]; then
+            echo "error: outer app signs as $OUTER_IDENTITY but the appex would sign as ${SIGN_IDENTITY:--}; set SIGN_IDENTITY to the same identity." >&2
+            exit 1
+        fi
+        ;;
+esac
 
 # Single version source: the app version Tauri reads. Both staged
 # version keys must equal it (lockstep, no mixed-version support
 # case).
-TAURI_CONF="$ROOT/crates/wyrd-desktop/tauri.conf.json"
-command -v python3 >/dev/null 2>&1 || {
-    echo "error: python3 is required to read the app version." >&2
-    exit 1
-}
 APP_VERSION=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$TAURI_CONF")
 [ -n "$APP_VERSION" ] || {
     echo "error: no version in $TAURI_CONF." >&2

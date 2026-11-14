@@ -606,10 +606,11 @@ appex version keys equal the app version,
 `codesign --verify --deep --strict` clean, no profile embedded by
 default — plus a debug `cargo tauri build --bundles app`: the hook
 restaged through `beforeBundleCommand`, the appex landed at
-`Contents/PlugIns` with both version keys at the app version, and a
-shallow outer sign (Tauri's behavior, never `--deep`) verifies
-`--deep --strict` clean with the nested signature preserved — and
-the guard below.
+`Contents/PlugIns` bit-identical to the staged tree (including its
+signature — the preservation proof, not the verify pass), and the
+outer app verifies `codesign --verify --deep --strict` clean after a
+shallow sign. Staged and bundle artifacts are untracked manual
+context, not revision-bound evidence — and the guard below.
 
 Follow-on work, scoped not done: the appex provisioning profile from the
 Developer portal with the App Group capability; the notarized

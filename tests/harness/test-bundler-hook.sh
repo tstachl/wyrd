@@ -59,14 +59,20 @@ grep -Fq 'x86_64-apple-darwin) ARCH=x86_64' "$STAGE" \
   || die "stage: no x86_64 mapping"
 pass "stage script pins the appex arch to the bundle target"
 
-# 4. Identity pairing fails closed: a team-signed outer app
-# (APPLE_SIGNING_IDENTITY) with an ad-hoc appex (SIGN_IDENTITY `-`,
-# the default) is refused with the fix named.
+# 4. Identity pairing fails closed: a real outer identity —
+# APPLE_SIGNING_IDENTITY in the environment or
+# bundle.macOS.signingIdentity in the config — with an ad-hoc or
+# different appex identity is refused with the fix named. `-`
+# (Tauri's ad-hoc pseudo-identity) and unset both mean ad-hoc.
 grep -Fq 'APPLE_SIGNING_IDENTITY' "$STAGE" \
   || die "stage: no outer-identity pairing"
-grep -Fq 'set SIGN_IDENTITY to the same Developer ID' "$STAGE" \
+grep -Fq 'signingIdentity' "$STAGE" \
+  || die "stage: config signing identity is not read"
+grep -Fq '""|-)' "$STAGE" \
+  || die "stage: ad-hoc - is not treated as ad-hoc"
+grep -Fq 'set SIGN_IDENTITY to the same identity' "$STAGE" \
   || die "stage: pairing refusal names no fix"
-pass "stage script refuses an ad-hoc appex in a team-signed app"
+pass "stage script refuses a mismatched appex identity"
 
 # 5. The stage script carries nothing app-side: it never names an app
 # entitlements file, an app profile, or the outer bundle — Tauri owns
@@ -112,5 +118,18 @@ grep -Fq 'beforeBundleCommand' "$ROOT/packaging/macos/README.md" \
 grep -Fq 'never `--deep`' "$ROOT/packaging/macos/README.md" \
   || die "README: shallow outer sign not recorded"
 pass "README records the hook"
+
+# 9. The operative release instruction carries the same prohibition:
+# the runbook signs nested-first and shallowly, and the only
+# `--deep` left is the verification line (signing with it would
+# re-sign the nested appex without its entitlements).
+RUNBOOK="$ROOT/.ngit/release.yaml"
+grep -Fq 'never `--deep`' "$RUNBOOK" \
+  || die "runbook: shallow-signing prohibition missing"
+[ "$(grep -c -- '--deep' "$RUNBOOK")" = "2" ] \
+  || die "runbook: --deep appears outside the prohibition and verify lines"
+grep -- '--deep' "$RUNBOOK" | grep -Fq 'codesign --verify --deep' \
+  || die "runbook: the --deep line is not the verify line"
+pass "runbook signs nested-first and shallowly"
 
 echo "bundler-hook: $PASS checks passed"
