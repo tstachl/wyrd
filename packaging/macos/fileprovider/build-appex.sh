@@ -8,7 +8,10 @@
 # Environment: ARCH (default: host arch), SIGN_IDENTITY (default:
 # ad-hoc `-`), MIN_MACOS (default: 13.0), TOOLCHAIN (default: the
 # active developer directory), SWIFTC (default: resolved from the
-# developer directory), SDK (default: the resolved macOS SDK).
+# developer directory), SDK (default: the resolved macOS SDK),
+# PROVISIONING_PROFILE (default: unset — no profile embedded; when
+# set to a .provisionprofile path, it is copied to
+# Contents/embedded.provisionprofile before signing).
 # Works in the default devenv shell and under
 # `devenv --profile native-apple shell` alike.
 set -eu
@@ -18,6 +21,13 @@ HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 OUT=${1:-"$HERE/build"}
 ARCH=${ARCH:-$(uname -m)}
 SIGN_IDENTITY=${SIGN_IDENTITY:--}
+
+# Fail fast on a misconfigured profile: the embed below runs after a
+# minutes-long swiftc, so a missing path must refuse here, not there.
+if [ -n "${PROVISIONING_PROFILE:-}" ] && [ ! -f "$PROVISIONING_PROFILE" ]; then
+    echo "error: PROVISIONING_PROFILE names no file: $PROVISIONING_PROFILE" >&2
+    exit 1
+fi
 MIN_MACOS=${MIN_MACOS:-13.0}
 
 # Toolchain discovery is conventional and script-local: the system
@@ -137,6 +147,13 @@ if [ -n "${TEAM_ID:-}" ]; then
     echo "warning: TEAM_ID is ignored; the group id signs as written." >&2
 fi
 ENTITLEMENTS="$HERE/WyrdFileProvider.entitlements"
+
+# Provisioning wiring (appex target): profiles live outside the
+# repository with the release owner. When PROVISIONING_PROFILE names
+# one (existence checked up front), embed it before signing.
+if [ -n "${PROVISIONING_PROFILE:-}" ]; then
+    cp "$PROVISIONING_PROFILE" "$CONTENTS/embedded.provisionprofile"
+fi
 
 codesign --force --sign "$SIGN_IDENTITY" \
     --identifier md.enesis.wyrd.fileprovider \

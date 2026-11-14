@@ -528,6 +528,66 @@ script order; notarization plus a `fileproviderd` load check under a
 real identity; update persistence (install old, install new, domains
 and sockets survive).
 
+## Production entitlements and provisioning (decided)
+
+Minimal by default: each target holds exactly the sandbox plus the
+one shared group, and anything broader needs its own justification.
+
+- **App** (`packaging/macos/Wyrd.entitlements`): `app-sandbox` plus
+  `application-groups` with the literal `group.md.enesis.wyrd`. The
+  group is the only cross-process surface the app needs: owner
+  sockets resolve through the container, and domain registration
+  runs in the containing-app context (no File-Provider-specific key
+  exists for the app side). Refused by default: file-access keys —
+  the app never touches drive directories (only the unsandboxed
+  owner service does) — and login-item keys — startup-at-login
+  comes from the per-drive launchd agents below, not from the app
+  promoting itself.
+- **Appex** (`fileprovider/WyrdFileProvider.entitlements`):
+  unchanged, sandbox plus the same literal group. The extension
+  reaches only its container and user-intent paths; the owner
+  socket is reachable exactly because it lives in the group
+  container (see the sandbox scheme above).
+
+**Provisioning wiring.** Profiles live outside the repository with
+the release owner (like the signing identity), never in the tree.
+The appex target is wired now: `PROVISIONING_PROFILE` names a
+`.provisionprofile` to embed at `Contents/embedded.provisionprofile`
+before signing, and a missing path refuses instead of signing
+profile-less under a team identity. The app target wires through
+the Tauri bundler hook that already owns the appex copy (see the
+shipment-layout follow-ons): it will point the bundle's
+entitlements at `packaging/macos/Wyrd.entitlements` and inject the
+app profile at signing time. Until that hook lands, team signing is
+the manual sequence: sign appex first (profile embedded), copy into
+`Contents/PlugIns`, then sign the app — nested-first, one Developer
+ID, `--options runtime`.
+
+**Ordering is behavior, not documentation.** Owner-first falls out
+of the per-drive launchd agent: `RunAtLoad` starts the owner at
+login and `KeepAlive`/`SuccessfulExit` restarts unexpected death
+but never the terminal held-drive exit (`render_launchd_plist`,
+pinned in the bootstrap tests) — the UI opens whenever and reads
+`Unavailable` until the socket appears (the backend's absent-socket
+outcome, never a guess). File-Provider-before-UI falls out of
+`fileproviderd`: the appex loads on domain access independent of
+the UI, and the UI never fronts file bytes (presentation adapters
+around the owner, never the product contract).
+
+**Verification.** `codesign --verify --deep --strict` clean on both
+targets, plus `spctl -a -vvv -t install` on the app, is the gate for
+any team-signed build. The fresh-install sandbox-denial check —
+install, create, see in Finder, add a device, watch for unexpected
+denials on the registry, sockets, and drive directories — is manual
+on a real identity and stays with the signing owner. What this PR
+evidences: ad-hoc `codesign --verify` on the script-built appex,
+and the guard below.
+
+Follow-on work, scoped not done: Tauri bundler hook (appex copy,
+app entitlements path, both profiles); provisioning profiles from
+the Developer portal with the App Group capability; the notarized
+`fileproviderd` load check; the fresh-install denial run.
+
 ## Release distinction
 
 - Unsigned/ad-hoc integration: development and manual testing only.

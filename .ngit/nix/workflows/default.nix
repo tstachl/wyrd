@@ -72,6 +72,7 @@ in
       bash tests/harness/test-no-host-privilege.sh
       bash tests/harness/test-cli-vocabulary.sh
       bash tests/harness/test-appex-embedding.sh
+      bash tests/harness/test-entitlements.sh
       say "native shell suites green"
     '';
   };
