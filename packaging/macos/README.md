@@ -97,15 +97,16 @@ The report's V1 vocabulary maps as: `startProvidingItem` →
 through enumeration, lookup, hydration, and mutation. Recorded on
 the issue thread (`nostr:nevent1qqsqz3tuhx8vvucgzrdtfc0y49sfs0mc3v7xratvxhg999plxp97e0gpz9mhxue69uhkwunpwdczuap49eehgvak3m0`).
 
-## Sandbox and socket scheme (implemented, dev bootstrap)
+## Sandbox and socket scheme (implemented, registry-owned)
 
 Status: Implemented — the normative transport covers both sockets
 (`docs/contracts/owner-interface.md`, Transport): one socket at
 `<drive_dir>/owner.sock` (the sandbox boundary, unchanged), plus
 the macOS-additive group socket and alias for the File Provider
-extension. The dev bootstrap (explicit container plus drive) is
-the only configuration; the registry owns the production
-association.
+extension. Production is registry-owned and automatic (container
+from the platform convention, drive from the served drive, no env
+vars); the env bootstrap (explicit container plus drive) remains
+for harness and manual development only.
 
 The extension runs sandboxed inside `fileproviderd`. A sandboxed
 process reaches its container, its App Group containers, and
@@ -121,10 +122,16 @@ The scheme, therefore:
   `~/Library/Group Containers/<group>/Sockets/<fingerprint>.sock`,
   plus a `by-drive/<drive-hex>.sock` symlink alias beside it (see
   the Stage 2 design contract below for the fingerprint, the
-  alias, and the dev bootstrap). One socket per drive. The daemon
+  alias, and the dev-only env bootstrap). One socket per drive.
+  The daemon
   is unsandboxed and binds there; the extension holds the group
   entitlement, readlinks the alias, and connects to the sibling
-  target.
+  target. In production the daemon derives the container from the
+  platform convention and the drive from the served drive itself —
+  registration writes the registry entry, the managed owner service
+  enables at login (`RunAtLoad`), and the domain resolves from the
+  registry with no env-var fallback, so a clean machine with no
+  Wyrd env vars still shows registry drives in Finder.
   `<group>` is the literal `group.md.enesis.wyrd` as observed on
   the development build (see Bundle identities above for the
   qualification). Stage 1 probed the container directory form
@@ -143,8 +150,9 @@ The scheme, therefore:
   assumes a persistent connection.
 - `<drive>` is the stable per-drive fingerprint from the Stage 2
   design contract below, coordinated with the multi-drive registry
-  (in progress elsewhere) — the registry owns the
-  drive-to-domain association in production.
+  — the registry owns the
+  drive-to-domain association in production (registration writes
+  the entry; the domain resolves from the registry).
 
 This analysis is the Stage 0 confirmation. The live proof comes
 in two halves. Stage 1's entry gate, before any adapter logic,
@@ -319,15 +327,19 @@ collapsed boolean, never a guess.
   the group socket serve from one `OwnerServer` (one
   owner-instance identity, one uid check, one shared pool of at
   most 16 connections across both accept loops). The composer
-  entry point checks the configured drive against the served
-  drive before anything binds (both `wyrd owner` and `wyrd
-  mount`); a mismatch refuses the run. A live endpoint at the
-  group path is never unlinked (`AddrInUse`, primary unbound,
-  run refused); a dead entry reclaims. Dev bootstrap only, via
-  `WYRD_FILEPROVIDER_GROUP_CONTAINER` plus
-  `WYRD_FILEPROVIDER_DRIVE_ID` (both or neither; malformed
-  refuses, never a silent primary-only fallback). The registry
-  owns this association in production.
+  entry point binds the group socket for the served drive in
+  production (container from the platform convention, drive from
+  the served drive — both `wyrd owner` and `wyrd mount`); a live
+  endpoint at the group path is never unlinked (`AddrInUse`,
+  primary unbound, run refused) while a dead entry reclaims. The
+  dev-only env pair (`WYRD_FILEPROVIDER_GROUP_CONTAINER` plus
+  `WYRD_FILEPROVIDER_DRIVE_ID`, both or neither; malformed
+  refuses, never a silent primary-only fallback) overrides for
+  harness and manual development, with the configured drive
+  checked against the served drive before anything binds. The
+  registry owns this association in production (registration
+  writes the entry; the managed service enables at login; the
+  domain resolves from the registry with no env-var fallback).
 - **Errors:** `NotFound` → item-not-found; `Conflicted`,
   `TooLarge`, `Timeout` (after one retry), protocol violations →
   deterministic sync failure; `Unavailable` and transport breaks
@@ -381,6 +393,28 @@ id as its identifier, and run the Stage 1 Finder procedure
 against the live owner — enumerate, hydrate, rename-preserve,
 delete/recreate, peer rename, legacy rows, merged disagreement,
 and `fileproviderd` recovery.
+
+## Registry-owned switchover (production)
+
+The dev bootstrap above (explicit container plus drive) stays for
+harness and manual development only. Production binds with no env
+vars: the owner derives the container from the platform
+convention and the drive from the served drive itself
+(`OwnerService::bind_for_composer`), so both `wyrd owner` and
+`wyrd mount` publish the `by-drive/<drive-hex>.sock` alias the
+registry-owned domain resolves through. Registration writes the
+registry entry; the managed owner service enables at login
+(`RunAtLoad` in the per-drive launchd agent, `WantedBy` in the
+systemd user unit — vault and mount share the template); the
+domain resolves from the registry with no env-var fallback.
+
+Acceptance (manual, macOS, recorded as release evidence): with the
+env vars unset, a registered drive appears in Finder, survives
+reboot (service re-enabled at login), and the tray shows it
+Available once the owner answers. The reboot-survival drill and
+the no-env-vars Finder check are release evidence, owned with the
+signing owner (team-signed verify, `spctl`, provisioning profile,
+notarized `fileproviderd` load check stay with that owner).
 
 ## Stage 3 mutation callbacks (sub-PR 2)
 

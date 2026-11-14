@@ -3514,6 +3514,32 @@ fn group_bootstrap_env_parsing() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// The production container derives from the home directory plus
+/// the literal group id: pure path math, no filesystem, so a
+/// layout change fails here before any bind. `None` home means no
+/// container — never a guessed path.
+#[test]
+fn production_container_derives_from_home() {
+    let home = std::path::PathBuf::from("/tmp/fake-home");
+    let container =
+        super::server::default_group_container_with_home(Some(home.clone())).expect("home set");
+    assert_eq!(
+        container,
+        home.join("Library/Group Containers")
+            .join(super::server::FILEPROVIDER_GROUP_ID),
+        "the production container is the platform convention"
+    );
+    assert_eq!(
+        super::server::FILEPROVIDER_GROUP_ID,
+        "group.md.enesis.wyrd",
+        "the daemon-side group id is the entitled literal"
+    );
+    assert!(
+        super::server::default_group_container_with_home(None).is_none(),
+        "no home means no container"
+    );
+}
+
 /// A bootstrap naming a drive this owner does not serve refuses
 /// before anything binds: no primary, no group socket, no alias —
 /// the run never publishes another drive's tree under this drive's

@@ -24,16 +24,23 @@ reach the drive directory from its sandbox: one socket per drive
 at
 `<container>/Sockets/<fingerprint>.sock` plus a
 `Sockets/by-drive/<drive-hex>.sock` symlink alias beside it. This
-second listener is an opt-in bootstrap for the macOS File
-Provider (enabled by the explicitly configured container-plus-
-drive pair, see the packaging note); it is compiled on every
-platform and binds wherever the pair is set, so the "macOS"
-scoping is the consumer, not a platform gate in the code. The
+second listener is the registry-owned production association on
+macOS: with no dev env vars set, the owner derives the container
+from the platform convention
+(`~/Library/Group Containers/group.md.enesis.wyrd`) and the drive
+from the served drive itself, then publishes the alias the domain
+resolves through (see the packaging note); it is compiled on every
+platform but binds the group socket only where the container
+exists, so the "macOS" scoping is the consumer plus the container,
+not a platform gate in the framing code. The
 filename derives from the served `DriveId`
 (`DriveId::fileprovider_socket_fingerprint`, 64-bit domain
 separated derivation, hex-encoded); the daemon is the only
 computer of it, and the extension resolves the alias by
-readlink, never by hashing. The configured drive is checked
+readlink, never by hashing. A dev-only env pair
+(`WYRD_FILEPROVIDER_GROUP_CONTAINER` plus
+`WYRD_FILEPROVIDER_DRIVE_ID`) overrides for harness and manual
+development: the configured drive is checked
 against the drive actually served before anything binds: a
 mismatch refuses the run. The alias target must stay inside
 `Sockets/`; anything else fails closed. A live endpoint at the
@@ -41,10 +48,10 @@ group path is never unlinked — the bind fails closed instead —
 while a dead entry reclaims. Both sockets serve from one server:
 one owner-instance identity, one uid check, and one shared
 connection pool of at most 16 concurrent connections across both
-accept paths. The group socket is a development bootstrap today
-(explicitly configured container plus drive, see the packaging
-note); the multi-drive registry owns the drive-to-domain
-association in production.
+accept paths. The registry owns the drive-to-domain
+association in production: registration writes the entry, the
+managed owner service enables at login, and the domain resolves
+from the registry with no env-var fallback.
 
 Frame each message with a u32 big-endian length prefix followed by
 that many JSON bytes. Assemble frames explicitly: an idle
