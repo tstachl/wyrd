@@ -71,6 +71,7 @@ in
       bash -n tests/harness/e2e-helpers.bash
       bash tests/harness/test-no-host-privilege.sh
       bash tests/harness/test-cli-vocabulary.sh
+      bash tests/harness/test-appex-embedding.sh
       say "native shell suites green"
     '';
   };

@@ -8,7 +8,7 @@
 //! platform adapter: the window attaches later as a non-owner consumer
 //! of the drive-owner interface (issue 16), and the File Provider
 //! adapter is a separate adapter outside Cargo (issue 17; layout
-//! proposed in `packaging/macos/README.md`, pending decision).
+//! decided in `packaging/macos/README.md`, "Shipment bundle layout").
 //!
 //! Dependency rule, enforced by
 //! `wyrd-contracts`' host composition check: this crate's production

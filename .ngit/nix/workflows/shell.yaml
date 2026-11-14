@@ -21,6 +21,7 @@ on:
       - "flake.lock"
       - "nix/**"
       - "tests/**"
+      - "packaging/**"
       - ".ngit/nix/**"
   pull_request:
     # Ready-gated like the act job: draft pushes spend no CI, the
@@ -36,6 +37,7 @@ on:
       - "flake.lock"
       - "nix/**"
       - "tests/**"
+      - "packaging/**"
       - ".ngit/nix/**"
 
 jobs:
