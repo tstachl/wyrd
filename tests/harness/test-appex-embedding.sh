@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # tests/harness/test-appex-embedding.sh — pin the appex embedding
 # decision: the extension ships inside the app bundle, and the bundle
-# identifiers plus the App Group agree across the four places that
-# name them.
+# identifiers plus the App Group agree across the places that name
+# them.
 #
 # Pure bash, no host, no nix: run it anywhere with
 # `bash tests/harness/test-appex-embedding.sh`. (Wired into the CI
@@ -16,28 +16,39 @@ PASS=0
 pass() { PASS=$((PASS + 1)); echo "  PASS: $1"; }
 die() { echo "  FAIL: $1" >&2; exit 1; }
 
-# 1. The decision is recorded and names the embedded path.
-grep -q 'Contents/PlugIns' "$ROOT/packaging/macos/README.md" \
-  || die "README names no Contents/PlugIns path"
-grep -q 'PlugIns/WyrdFileProvider.appex' "$ROOT/packaging/macos/README.md" \
-  || die "README does not pin PlugIns/WyrdFileProvider.appex"
-pass "README pins the embedded appex path"
+# 1. The accepted decision sentence plus the tree block, verbatim:
+# a sidecar decision that merely names the rejected path must not pass.
+grep -Fq 'The File Provider extension ships embedded in the app bundle:' \
+  "$ROOT/packaging/macos/README.md" \
+  || die "README: accepted decision sentence missing"
+grep -Fq 'PlugIns/WyrdFileProvider.appex/' "$ROOT/packaging/macos/README.md" \
+  || die "README: tree block missing PlugIns/WyrdFileProvider.appex/"
+pass "README pins the accepted embedded layout"
 
-# 2. One App Group everywhere, literal, no team prefix.
-GROUP="group.md.enesis.wyrd"
-for f in \
-  "packaging/macos/fileprovider/WyrdFileProvider.entitlements" \
-  "packaging/macos/fileprovider/Sources/SocketConfig.swift" \
-  "packaging/macos/fileprovider/Sources/SocketProbe.swift"; do
-  grep -q "$GROUP" "$ROOT/$f" || die "$f: missing $GROUP"
-done
-pass "app group agrees across entitlements and Swift sources"
+# 2. One App Group everywhere, literal, on the declaration lines —
+# a comment mentioning the group must not satisfy the check.
+GROUP='group.md.enesis.wyrd'
+grep -Fq "<string>$GROUP</string>" \
+  "$ROOT/packaging/macos/fileprovider/WyrdFileProvider.entitlements" \
+  || die "entitlements: missing <$GROUP>"
+grep -Fq "groupIdentifier = \"$GROUP\"" \
+  "$ROOT/packaging/macos/fileprovider/Sources/SocketConfig.swift" \
+  || die "SocketConfig.swift: declaration drifted"
+grep -Fq "groupIdentifier = \"$GROUP\"" \
+  "$ROOT/packaging/macos/fileprovider/Sources/SocketProbe.swift" \
+  || die "SocketProbe.swift: declaration drifted"
+pass "app group agrees on its declaration lines"
 
-# 3. Bundle identifiers nest: app md.enesis.wyrd, appex appends.
-grep -q '"identifier": "md.enesis.wyrd"' "$ROOT/crates/wyrd-desktop/tauri.conf.json" \
+# 3. Bundle identifiers nest: app md.enesis.wyrd, appex appends —
+# and the build script signs the same appex identifier it ships.
+grep -Fq '"identifier": "md.enesis.wyrd"' "$ROOT/crates/wyrd-desktop/tauri.conf.json" \
   || die "tauri.conf.json: app identifier drifted"
-grep -q '<string>md.enesis.wyrd.fileprovider</string>' "$ROOT/packaging/macos/fileprovider/Info.plist" \
+grep -Fq '<string>md.enesis.wyrd.fileprovider</string>' \
+  "$ROOT/packaging/macos/fileprovider/Info.plist" \
   || die "Info.plist: appex identifier drifted"
-pass "bundle identifiers nest (app plus .fileprovider)"
+grep -Fq -- '--identifier md.enesis.wyrd.fileprovider' \
+  "$ROOT/packaging/macos/fileprovider/build-appex.sh" \
+  || die "build-appex.sh: codesign identifier drifted"
+pass "bundle identifiers nest, build script agrees"
 
 echo "appex-embedding: $PASS checks passed"

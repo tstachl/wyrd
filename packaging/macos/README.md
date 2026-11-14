@@ -491,29 +491,34 @@ replaceable parts, and invites app/extension version skew.
 Trade-offs, in the issue's terms:
 
 - **Update atomicity:** whole-bundle replacement. The `.dmg` carries
-  one versioned `Wyrd.app`; app and appex share `CFBundleVersion`
-  and move in lockstep. No split replacement, no mixed-version
-  support case. Domains persist across updates by stable
-  drive-derived domain identity; `fileproviderd` re-registers the
-  new appex on first launch.
+  one versioned `Wyrd.app`; the bundler hook rewrites the appex
+  `CFBundleVersion` to the app version so both move in lockstep
+  (today the checked-in plist still pins `1`; the hook owns the
+  rewrite and pins the equality when it lands). No split
+  replacement, no mixed-version support case. Domains persist across
+  updates by stable drive-derived domain identity; `fileproviderd`
+  re-registers the new appex on first launch.
 - **Sandbox sharing:** the App Group is the only shared surface.
-  Both app and appex hold `group.md.enesis.wyrd` (literal, no team
-  prefix); both resolve through `containerURL`, never hardcoded.
-  The owner server publishes `Sockets/<fingerprint>.sock` plus the
+  Both app and appex will hold `group.md.enesis.wyrd` (literal, no
+  team prefix); both resolve through `containerURL`, never
+  hardcoded. The literal form is verified for development signing
+  only; Developer ID distribution is unverified and covered by the
+  planned `fileproviderd` load check below. The owner server
+  publishes `Sockets/<fingerprint>.sock` plus the
   `Sockets/by-drive/<drive-hex>.sock` symlink alias; the daemon is
   the sole computer of the fingerprint and the extension readlinks
   the alias. Group container layout is unchanged from the Stage 2
   contract above.
 - **Installer complexity:** one `.app` in the `.dmg`, one drag.
-  The Tauri bundler runs `build-appex.sh`, copies the built appex
-  into `Contents/PlugIns` before signing, then signs nested-first
+  The Tauri bundler will run `build-appex.sh`, copy the built appex
+  into `Contents/PlugIns` before signing, then sign nested-first
   (appex, then app) under one Developer ID with `--options runtime`.
   No extra install step, no post-install copy.
 
-Consequences: the production app needs its own entitlements file
+Consequences: the production app will need its own entitlements file
 carrying the same App Group (plus no other new capability in this
-decision); provisioning profiles cover app and appex with the App
-Group capability; notarization staples the whole `.dmg`. The
+decision); provisioning profiles will cover app and appex with the
+App Group capability; notarization staples the whole `.dmg`. The
 throwaway Xcode app stays throwaway: it never becomes the ship
 vehicle.
 
