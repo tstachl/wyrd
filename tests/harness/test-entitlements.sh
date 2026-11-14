@@ -46,7 +46,7 @@ pass "appex sandboxed on the group"
 # 3. Minimal by default: no other com.apple.* key on the appex.
 # Adding a capability must update this guard with its rationale,
 # never slip in silently.
-allowed="$(printf 'com.apple.security.app-sandbox\ncom.apple.security.application-groups')"
+allowed="$(printf 'com.apple.security.application-groups\ncom.apple.security.app-sandbox' | sort -u)"
 keys="$(grep -o 'com\.apple[^<]*' "$APPEX" | sort -u || true)"
 [[ -n "$keys" && "$keys" == "$allowed" ]] \
   || die "appex: non-minimal entitlement keys: $keys"

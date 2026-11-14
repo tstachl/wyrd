@@ -562,10 +562,11 @@ the release owner (like the signing identity), never in the tree.
 The appex target is wired now: `PROVISIONING_PROFILE` names a
 `.provisionprofile` to embed at `Contents/embedded.provisionprofile`
 before signing, and a missing path refuses instead of signing
-profile-less under a team identity. The app target needs no profile:
-with no sandbox and no constrained capabilities there is nothing to
-provision; the Tauri bundler hook carries the entitlements file path
-alone. Until that hook lands, team signing is the manual sequence:
+profile-less under a team identity. The app target needs no profile
+and no entitlements: with no sandbox and no constrained
+capabilities there is nothing to provision and nothing for the
+bundler hook to point at. Until that hook lands, team signing is
+the manual sequence:
 sign appex first (profile embedded), copy into
 `Contents/PlugIns`, then sign the app — nested-first, one Developer
 ID, `--options runtime`.
@@ -583,9 +584,10 @@ around the owner, never the product contract).
 
 **Verification.** `codesign --verify --deep --strict` clean on both
 targets, plus `spctl -a -vvv -t install` on the app, is the gate for
-any team-signed build. The fresh-install sandbox-denial check —
-install, create, see in Finder, add a device, watch for unexpected
-denials on the registry, sockets, and drive directories — is manual
+any team-signed build. The fresh-install denial check — install,
+create, see in Finder, add a device, watch `fileproviderd` for
+unexpected extension denials on the group container (the
+unsandboxed app itself is denial-free by construction) — is manual
 on a real identity and stays with the signing owner. What this PR
 evidences: ad-hoc `codesign --verify` on the script-built appex,
 and the guard below.
