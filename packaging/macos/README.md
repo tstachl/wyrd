@@ -523,7 +523,7 @@ throwaway Xcode app stays throwaway: it never becomes the ship
 vehicle.
 
 Follow-on work, scoped not done: Tauri bundler hook for the appex
-copy; app entitlements file; provisioning profiles; nested signing
+copy plus the `CFBundleVersion` rewrite; app entitlements file; provisioning profiles; nested signing
 script order; notarization plus a `fileproviderd` load check under a
 real identity; update persistence (install old, install new, domains
 and sockets survive).
