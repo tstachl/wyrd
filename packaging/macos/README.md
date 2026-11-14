@@ -491,10 +491,11 @@ replaceable parts, and invites app/extension version skew.
 Trade-offs, in the issue's terms:
 
 - **Update atomicity:** whole-bundle replacement. The `.dmg` carries
-  one versioned `Wyrd.app`; the bundler hook rewrites the appex
-  `CFBundleVersion` to the app version so both move in lockstep
-  (today the checked-in plist still pins `1`; the hook owns the
-  rewrite and pins the equality when it lands). No split
+  one versioned `Wyrd.app`; the bundler hook pins the appex
+  `CFBundleVersion` and `CFBundleShortVersionString` to the app
+  version so all three move in lockstep (the checked-in plist still
+  pins the placeholders; the hook owns the rewrite and fails closed
+  on drift). No split
   replacement, no mixed-version support case. Domains persist across
   updates by stable drive-derived domain identity; `fileproviderd`
   re-registers the new appex on first launch.
@@ -512,15 +513,18 @@ Trade-offs, in the issue's terms:
 - **Installer complexity:** one `.app` in the `.dmg`, one drag.
   `build.beforeBundleCommand` runs `packaging/macos/stage-appex.sh`
   (macOS only; a clean skip elsewhere), which builds the appex,
-  pins its `CFBundleVersion` to the app version from
-  `tauri.conf.json`, and stages it at `packaging/macos/stage/`
-  (git-ignored, rebuilt every bundle). `bundle.macOS.files` copies
-  the staged appex into `Contents/PlugIns` at bundle time; the
-  bundler then signs the outer app shallowly, which preserves the
-  appex's own signature — the nested-first order (appex, then app)
-  under one Developer ID with `--options runtime`. No extra install
-  step, no post-install copy. Hook paths assume the CLI runs from
-  `crates/wyrd-desktop` (the same convention as `frontendDist`).
+  pins its `CFBundleVersion` and `CFBundleShortVersionString` to the
+  app version from `tauri.conf.json`, maps Tauri's target triple to
+  the appex arch (native per-arch builds only), and stages it at
+  `packaging/macos/stage/` (git-ignored, rebuilt every bundle).
+  `bundle.macOS.files` copies the staged appex into
+  `Contents/PlugIns` at bundle time; the bundler then signs the
+  outer app shallowly — never `--deep`, which would re-sign the
+  nested appex without its entitlements — preserving the appex's own
+  hardened-runtime signature (the nested-first order under one
+  Developer ID). No extra install step, no post-install copy. Hook
+  paths assume the CLI runs from `crates/wyrd-desktop` (the same
+  convention as `frontendDist`).
 
 Consequences: the production app carries no entitlements file
 (decided below); the appex provisioning profile carries the App
@@ -598,9 +602,14 @@ unexpected extension denials on the group container (the
 unsandboxed app itself is denial-free by construction) — is manual
 on a real identity and stays with the signing owner. What the hook
 evidences on this machine: ad-hoc `stage-appex.sh` run — staged
-appex `CFBundleVersion` equals the app version,
+appex version keys equal the app version,
 `codesign --verify --deep --strict` clean, no profile embedded by
-default — and the guard below.
+default — plus a debug `cargo tauri build --bundles app`: the hook
+restaged through `beforeBundleCommand`, the appex landed at
+`Contents/PlugIns` with both version keys at the app version, and a
+shallow outer sign (Tauri's behavior, never `--deep`) verifies
+`--deep --strict` clean with the nested signature preserved — and
+the guard below.
 
 Follow-on work, scoped not done: the appex provisioning profile from the
 Developer portal with the App Group capability; the notarized

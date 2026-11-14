@@ -2,9 +2,10 @@
 # Stage the File Provider appex for the Tauri bundler.
 #
 # Runs as `build.beforeBundleCommand` (macOS only): builds the appex
-# with `fileprovider/build-appex.sh`, pins its CFBundleVersion to the
-# app version from `crates/wyrd-desktop/tauri.conf.json`, and leaves
-# it at the fixed staging path that `bundle.macOS.files` copies into
+# with `fileprovider/build-appex.sh`, pins its `CFBundleVersion` and
+# `CFBundleShortVersionString` to the app version from
+# `crates/wyrd-desktop/tauri.conf.json`, and leaves it at the fixed
+# staging path that `bundle.macOS.files` copies into
 # `Contents/PlugIns`. The bundler then signs the outer app shallowly,
 # which preserves the appex's own signature (nested-first order).
 #
@@ -16,7 +17,8 @@
 # ad-hoc `-`), PROVISIONING_PROFILE (default unset), ARCH, MIN_MACOS,
 # TOOLCHAIN, SWIFTC, SDK. The signing owner pairs SIGN_IDENTITY with
 # the same Developer ID Tauri signs the app with
-# (`bundle.macOS.signingIdentity` / APPLE_SIGNING_IDENTITY).
+# (`bundle.macOS.signingIdentity` / APPLE_SIGNING_IDENTITY); a
+# team-signed outer app with an ad-hoc appex is refused below.
 set -eu
 set -o pipefail 2>/dev/null || true
 
@@ -30,9 +32,36 @@ if [ "$(uname -s)" != "Darwin" ]; then
     exit 0
 fi
 
-# Single version source: the app version Tauri reads. The staged
-# appex CFBundleVersion must equal it (lockstep, no mixed-version
-# support case).
+# Architecture lockstep: Tauri exports TAURI_ENV_TARGET_TRIPLE for
+# the bundle it builds. A cross-target bundle must not silently
+# embed a host-arch appex, and there is no universal appex build —
+# per-arch bundles build on their host (the release runbook ships
+# per-arch DMGs). Manual runs without Tauri keep the build-appex.sh
+# default (ARCH or host arch).
+if [ -n "${TAURI_ENV_TARGET_TRIPLE:-}" ]; then
+    case "$TAURI_ENV_TARGET_TRIPLE" in
+        aarch64-apple-darwin) ARCH=arm64 ;;
+        x86_64-apple-darwin) ARCH=x86_64 ;;
+        *)
+            echo "error: stage-appex.sh cannot satisfy target $TAURI_ENV_TARGET_TRIPLE (native per-arch builds only)." >&2
+            exit 1
+            ;;
+    esac
+    export ARCH
+fi
+
+# Identity pairing: Tauri team-signs the outer app when
+# APPLE_SIGNING_IDENTITY is set. An ad-hoc appex inside it is the
+# mixed state the release runbook forbids — fail closed and name
+# the fix. Dev flow (neither set) is unaffected.
+if [ -n "${APPLE_SIGNING_IDENTITY:-}" ] && [ "${SIGN_IDENTITY:--}" = "-" ]; then
+    echo "error: APPLE_SIGNING_IDENTITY is set but SIGN_IDENTITY is ad-hoc; set SIGN_IDENTITY to the same Developer ID." >&2
+    exit 1
+fi
+
+# Single version source: the app version Tauri reads. Both staged
+# version keys must equal it (lockstep, no mixed-version support
+# case).
 TAURI_CONF="$ROOT/crates/wyrd-desktop/tauri.conf.json"
 command -v python3 >/dev/null 2>&1 || {
     echo "error: python3 is required to read the app version." >&2
@@ -50,10 +79,12 @@ rm -rf "$STAGE"
 APPEX_BUNDLE_VERSION="$APP_VERSION" "$HERE/fileprovider/build-appex.sh" "$HERE/stage"
 
 # Fail closed: the bundler must never copy a version-drifted appex.
-STAGED_VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$STAGE/Contents/Info.plist")
-if [ "$STAGED_VERSION" != "$APP_VERSION" ]; then
-    echo "error: staged appex CFBundleVersion $STAGED_VERSION != app version $APP_VERSION." >&2
-    exit 1
-fi
+for key in CFBundleVersion CFBundleShortVersionString; do
+    STAGED_VERSION=$(/usr/libexec/PlistBuddy -c "Print :$key" "$STAGE/Contents/Info.plist")
+    if [ "$STAGED_VERSION" != "$APP_VERSION" ]; then
+        echo "error: staged appex $key $STAGED_VERSION != app version $APP_VERSION." >&2
+        exit 1
+    fi
+done
 
-echo "staged $STAGE at CFBundleVersion $STAGED_VERSION"
+echo "staged $STAGE at version $APP_VERSION"

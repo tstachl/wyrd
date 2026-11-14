@@ -38,9 +38,16 @@
 #      (`ci stop` ends all CI), so check `ci status` before any manual
 #      trigger, and trigger only to retry a failed run.
 #   6. Build the macOS legs locally, one `.app` bundle per arch carrying
-#      the host, wrapped in the `.dmg` this manifest names. Sign with the
-#      maintainer-held Developer ID (`codesign -s <identity> --deep --strict
-#      --options runtime`), verify with `codesign --verify --deep --strict
+#      the host, wrapped in the `.dmg` this manifest names. Build the
+#      bundle through the Tauri hook (`packaging/macos/stage-appex.sh`
+#      stages and signs the appex; `bundle.macOS.files` copies it into
+#      `Contents/PlugIns`), then sign nested-first with the
+#      maintainer-held Developer ID: the appex first (profile embedded,
+#      `--options runtime`), then the outer app SHALLOWLY
+#      (`codesign -s <identity> --strict --options runtime Wyrd.app` —
+#      never `--deep`: it re-signs the nested appex without its
+#      entitlements and breaks the embedded profile/signature
+#      relationship). Verify with `codesign --verify --deep --strict
 #      --verbose=2` and `spctl -a -vvv -t install`, submit with
 #      `xcrun notarytool submit <dmg> --keychain-profile <profile> --wait`,
 #      and staple on success. The identity and the API key live outside the

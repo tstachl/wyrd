@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # tests/harness/test-bundler-hook.sh — pin the Tauri bundler hook:
-# the stage script builds the appex at the app version, the config
-# copies it into Contents/PlugIns before signing, and the app side
-# carries nothing. Linux-safe: static assertions only (the real
-# stage run and the bundle itself are macOS-only manual evidence).
+# the stage script builds the appex at the app version and arch, the
+# config copies it into Contents/PlugIns before signing, hardened
+# runtime and identities pair correctly, and the app side carries
+# nothing. Linux-safe: static assertions only (the real stage run
+# and the bundle itself are macOS-only manual evidence).
 #
 # Pure bash, no host, no nix: run it anywhere with
 # `bash tests/harness/test-bundler-hook.sh`. (Wired into the CI
@@ -23,7 +24,8 @@ BUILD="$ROOT/packaging/macos/fileprovider/build-appex.sh"
 
 # 1. The config runs the stage script before bundling and copies the
 # staged appex into Contents/PlugIns (destination first, source
-# second — the bundler's mapping direction).
+# second — the bundler's mapping direction). The outer app carries
+# no entitlements (decided).
 python3 - "$CONF" <<'EOF'
 import json, sys
 conf = json.load(open(sys.argv[1]))
@@ -38,19 +40,35 @@ EOF
 pass "config stages before bundling, copies to PlugIns, no app entitlements"
 
 # 2. The stage script is macOS-only (skips elsewhere, exit 0), builds
-# through build-appex.sh, and derives the version from the config —
-# never hardcoded, never passed in.
-grep -Fq 'uname -s' "$STAGE" || die "stage: no platform guard"
-grep -Fq 'exit 0' "$STAGE" || die "stage: no clean skip"
-grep -Fq 'fileprovider/build-appex.sh' "$STAGE" \
-  || die "stage: does not build through build-appex.sh"
-grep -Fq 'tauri.conf.json' "$STAGE" \
-  || die "stage: version source is not tauri.conf.json"
-grep -Fq 'APPEX_BUNDLE_VERSION' "$STAGE" \
-  || die "stage: does not pin CFBundleVersion to the app version"
+# through build-appex.sh with the config version stamped in the
+# environment — the exact assignment, not a comment mention.
+grep -Fq 'if [ "$(uname -s)" != "Darwin" ]' "$STAGE" \
+  || die "stage: no macOS platform guard"
+grep -Fq 'APPEX_BUNDLE_VERSION="$APP_VERSION" "$HERE/fileprovider/build-appex.sh"' "$STAGE" \
+  || die "stage: version is not passed to build-appex.sh in the environment"
 pass "stage script builds macOS-only at the config version"
 
-# 3. The stage script carries nothing app-side: it never names an app
+# 3. The stage script maps Tauri's target triple to the appex arch
+# and refuses targets it cannot satisfy (no silent host-arch embed,
+# no universal appex).
+grep -Fq 'TAURI_ENV_TARGET_TRIPLE' "$STAGE" \
+  || die "stage: no target-triple mapping"
+grep -Fq 'aarch64-apple-darwin) ARCH=arm64' "$STAGE" \
+  || die "stage: no aarch64 mapping"
+grep -Fq 'x86_64-apple-darwin) ARCH=x86_64' "$STAGE" \
+  || die "stage: no x86_64 mapping"
+pass "stage script pins the appex arch to the bundle target"
+
+# 4. Identity pairing fails closed: a team-signed outer app
+# (APPLE_SIGNING_IDENTITY) with an ad-hoc appex (SIGN_IDENTITY `-`,
+# the default) is refused with the fix named.
+grep -Fq 'APPLE_SIGNING_IDENTITY' "$STAGE" \
+  || die "stage: no outer-identity pairing"
+grep -Fq 'set SIGN_IDENTITY to the same Developer ID' "$STAGE" \
+  || die "stage: pairing refusal names no fix"
+pass "stage script refuses an ad-hoc appex in a team-signed app"
+
+# 5. The stage script carries nothing app-side: it never names an app
 # entitlements file, an app profile, or the outer bundle — Tauri owns
 # all three. The appex profile flows only through build-appex.sh env.
 grep -q 'Wyrd.entitlements' "$STAGE" \
@@ -61,26 +79,38 @@ grep -q 'embedded.provisionprofile' "$STAGE" \
   && die "stage: profile embed belongs to build-appex.sh only"
 pass "stage script carries nothing app-side"
 
-# 4. The version rewrite in build-appex.sh lands between the Info.plist
-# copy and the signing, so the signature covers the shipped version;
-# unset keeps the checked-in value for manual builds.
+# 6. Hardened runtime is on the appex signature: Tauri's shallow
+# outer sign cannot repair a nested signature that lacks it, and a
+# Developer ID build without it is not notarizable.
+grep -Fq -- '--options runtime' "$BUILD" \
+  || die "build-appex.sh: appex signature lacks hardened runtime"
+pass "appex signature carries hardened runtime"
+
+# 7. Both version keys land between the Info.plist copy and the
+# signing, so the signature covers the shipped versions; unset keeps
+# the checked-in values for manual builds.
 copy_line=$(grep -n 'cp "\$HERE/Info.plist"' "$BUILD" | head -1 | cut -d: -f1)
-rewrite_line=$(grep -n 'Set :CFBundleVersion' "$BUILD" | head -1 | cut -d: -f1)
+rewrite_line=$(grep -n 'Set :CFBundleShortVersionString' "$BUILD" | head -1 | cut -d: -f1)
 sign_line=$(grep -n '^codesign ' "$BUILD" | head -1 | cut -d: -f1)
 [[ -n "$copy_line" && -n "$rewrite_line" && -n "$sign_line" ]] \
   || die "build-appex.sh: version flow incomplete"
 [[ "$copy_line" -lt "$rewrite_line" && "$rewrite_line" -lt "$sign_line" ]] \
   || die "build-appex.sh: rewrite must sit between copy and sign"
+grep -Fq 'Set :CFBundleVersion' "$BUILD" \
+  || die "build-appex.sh: CFBundleVersion is not rewritten"
 grep -Fq 'if [ -n "${APPEX_BUNDLE_VERSION:-}" ]' "$BUILD" \
   || die "build-appex.sh: rewrite is not opt-in"
-pass "version rewrite sits between copy and sign"
+pass "both version keys move between copy and sign"
 
-# 5. The decision is recorded and the follow-on lists point past the
-# hook, not at it.
+# 8. The decision is recorded in hook-specific prose (not the
+# pre-existing tree block): the hook script, the
+# `beforeBundleCommand` wiring, and the shallow-signing order.
 grep -Fq 'stage-appex.sh' "$ROOT/packaging/macos/README.md" \
   || die "README: hook script not recorded"
-grep -Fq 'PlugIns/WyrdFileProvider.appex' "$ROOT/packaging/macos/README.md" \
-  || die "README: PlugIns destination not recorded"
+grep -Fq 'beforeBundleCommand' "$ROOT/packaging/macos/README.md" \
+  || die "README: hook wiring not recorded"
+grep -Fq 'never `--deep`' "$ROOT/packaging/macos/README.md" \
+  || die "README: shallow outer sign not recorded"
 pass "README records the hook"
 
 echo "bundler-hook: $PASS checks passed"
