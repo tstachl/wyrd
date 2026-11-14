@@ -110,21 +110,6 @@ pub fn default_group_container_with_home(home: Option<PathBuf>) -> Option<PathBu
     )
 }
 
-/// Where the production group socket lives when no dev bootstrap is
-/// set: the platform App Group container, resolved from `HOME` on
-/// macOS. `None` elsewhere (Linux, CI) — the owner serves the
-/// drive-directory socket only there.
-pub fn default_group_container() -> Option<PathBuf> {
-    #[cfg(target_os = "macos")]
-    {
-        default_group_container_with_home(std::env::var_os("HOME").map(PathBuf::from))
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        None
-    }
-}
-
 /// The production container when it exists on disk: the daemon
 /// creates only `Sockets/` (and `by-drive/`) inside it, never the
 /// container itself — a hand-created container is a decoy the

@@ -85,6 +85,10 @@ grep -Fq 'survives' "$README" \
   || die "README: reboot survival missing"
 grep -Fq 'verified for development signing only' "$README" \
   || die "README: signed-container scope missing"
+grep -Fq 'daemon half of the' "$README" \
+  || die "README: scheme section not scoped to daemon half"
+grep -Fq 'domain half' "$README" \
+  || die "README: pending domain half not stated"
 pass "README records the daemon-half acceptance with pending check"
 
 # 7. Production derivation pins: home-based path math, the is_dir

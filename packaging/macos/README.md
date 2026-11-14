@@ -128,11 +128,13 @@ The scheme, therefore:
   is unsandboxed and binds there; the extension holds the group
   entitlement, readlinks the alias, and connects to the sibling
   target. In production the daemon derives the container from the
-  platform convention and the drive from the served drive itself —
-  registration writes the registry entry, the managed owner service
-  enables at login (`RunAtLoad`), and the domain resolves from the
-  registry with no env-var fallback, so a clean machine with no
-  Wyrd env vars still shows registry drives in Finder.
+  platform convention (verified for development signing only;
+  Developer ID and notarized paths are unverified) and the drive
+  from the served drive itself — the daemon half of the
+  registry-owned association. The managed owner service enables at
+  login (`RunAtLoad`); the full Finder observable (domain
+  registered from the registry, clean machine shows drives) stays
+  pending the signing-owner verification below, not claimed here.
   `<group>` is the literal `group.md.enesis.wyrd` as observed on
   the development build (see Bundle identities above for the
   qualification). Stage 1 probed the container directory form
@@ -338,9 +340,10 @@ collapsed boolean, never a guess.
   refuses, never a silent primary-only fallback) overrides for
   harness and manual development, with the configured drive
   checked against the served drive before anything binds. The
-  registry owns this association in production (registration
-  writes the entry; the managed service enables at login; the
-  domain resolves from the registry with no env-var fallback).
+  daemon half is the agreed production design (registration writes
+  the entry; the managed service enables at login); the domain half
+  (production `NSFileProviderDomain` from the registry) stays
+  pending the signing-owner verification.
 - **Errors:** `NotFound` → item-not-found; `Conflicted`,
   `TooLarge`, `Timeout` (after one retry), protocol violations →
   deterministic sync failure; `Unavailable` and transport breaks
