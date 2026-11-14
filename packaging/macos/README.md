@@ -515,18 +515,88 @@ Trade-offs, in the issue's terms:
   (appex, then app) under one Developer ID with `--options runtime`.
   No extra install step, no post-install copy.
 
-Consequences: the production app will need its own entitlements file
-carrying the same App Group (plus no other new capability in this
-decision); provisioning profiles will cover app and appex with the
-App Group capability; notarization staples the whole `.dmg`. The
+Consequences: the production app carries no entitlements file
+(decided below); the appex provisioning profile carries the App
+Group capability; notarization staples the whole `.dmg`. The
 throwaway Xcode app stays throwaway: it never becomes the ship
 vehicle.
 
-Follow-on work, scoped not done: Tauri bundler hook for the appex
-copy plus the `CFBundleVersion` rewrite; app entitlements file; provisioning profiles; nested signing
-script order; notarization plus a `fileproviderd` load check under a
-real identity; update persistence (install old, install new, domains
-and sockets survive).
+Follow-on work, scoped not done: the remaining packaging chain —
+Tauri bundler hook (appex copy, appex profile, no app entitlements),
+the notarized `fileproviderd` load check, update
+persistence (install old, install new, domains and sockets
+survive). The per-section lists below decompose it, not duplicate
+it.
+
+## Production entitlements and provisioning (decided)
+
+Minimal by default: the appex holds the sandbox plus the one
+shared group, the app holds nothing, and anything broader needs its
+own justification.
+
+- **App**: no entitlement file. The shipped desktop is unsandboxed
+  under Developer ID and uses direct paths throughout: the
+  registry defaults to `~/Library/Application Support/Wyrd`
+  (`crates/wyrd-desktop/src/registry.rs`), owner sockets live beside
+  their drive directories with no group-container resolver
+  (`wyrd-owner-client` resolves `drive_dir/owner.sock` only), and
+  provisioning spawns the co-installed CLI — which inherits any
+  sandbox — to write `~/Library/LaunchAgents` and the drive
+  directory itself. Sandboxing the app would break discovery,
+  connection, and provisioning, the desktop's stated authority
+  path. With no sandbox and no constrained capabilities there is
+  nothing to entitle and no app profile to provision — the group
+  container is reached by direct path, the entitled `containerURL`
+  API belongs to the appex alone. Revisit only with a sandboxed
+  redesign (group-container registry, app-side group-socket
+  resolver, sandbox-viable agent install), never by adding keys
+  piecemeal.
+- **Appex** (`fileprovider/WyrdFileProvider.entitlements`):
+  unchanged, sandbox plus the same literal group. The extension
+  reaches only its container and user-intent paths; the owner
+  socket is reachable exactly because it lives in the group
+  container (see the sandbox scheme above).
+
+**Provisioning wiring.** Profiles live outside the repository with
+the release owner (like the signing identity), never in the tree.
+The appex target is wired now: `PROVISIONING_PROFILE` names a
+`.provisionprofile` to embed at `Contents/embedded.provisionprofile`
+before signing, and a missing path refuses instead of signing
+profile-less under a team identity. The app target needs no profile
+and no entitlements: with no sandbox and no constrained
+capabilities there is nothing to provision and nothing for the
+bundler hook to point at. Until that hook lands, team signing is
+the manual sequence:
+sign appex first (profile embedded), copy into
+`Contents/PlugIns`, then sign the app — nested-first, one Developer
+ID, `--options runtime`.
+
+**Ordering is behavior, not documentation.** Owner-first falls out
+of the per-drive launchd agent: `RunAtLoad` starts the owner at
+login and `KeepAlive`/`SuccessfulExit` restarts unexpected death
+but never the terminal held-drive exit (`render_launchd_plist`,
+pinned in the bootstrap tests) — the UI opens whenever and reads
+`Unavailable` until the socket appears (the backend's absent-socket
+outcome, never a guess). File-Provider-before-UI falls out of
+`fileproviderd`: the appex loads on domain access independent of
+the UI, and the UI never fronts file bytes (presentation adapters
+around the owner, never the product contract).
+
+**Verification.** `codesign --verify --deep --strict` clean on both
+targets, plus `spctl -a -vvv -t install` on the app, is the gate for
+any team-signed build. The fresh-install denial check — install,
+create, see in Finder, add a device, watch `fileproviderd` for
+unexpected extension denials on the group container (the
+unsandboxed app itself is denial-free by construction) — is manual
+on a real identity and stays with the signing owner. What this PR
+evidences: ad-hoc `codesign --verify` on the script-built appex,
+and the guard below.
+
+Follow-on work, scoped not done: Tauri bundler hook (appex copy
+plus the `CFBundleVersion` rewrite, appex profile injection, no app
+entitlements or profile); the appex provisioning profile from the
+Developer portal with the App Group capability; the notarized
+`fileproviderd` load check; the fresh-install denial run.
 
 ## Release distinction
 

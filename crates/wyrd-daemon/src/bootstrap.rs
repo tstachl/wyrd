@@ -3102,6 +3102,9 @@ mod tests {
         assert!(plist.contains("--identity-file"));
         assert!(plist.contains("--relay"));
         assert!(plist.contains("<key>SuccessfulExit</key>"));
+        // Owner-first ordering: the agent starts at login, before any
+        // UI opens — the UI reads Unavailable until this socket appears.
+        assert!(plist.contains("<key>RunAtLoad</key>"), "{plist}");
         let unit = render_systemd_unit("Wyrd drive demo", &owner, &owned);
         assert!(unit.contains("WantedBy=default.target"));
         assert!(unit.contains("Restart=on-failure"));
