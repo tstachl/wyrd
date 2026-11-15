@@ -81,16 +81,36 @@ export function suggestedDriveDirFor(nameValue: string, identityPath: string): s
 }
 
 /**
+ * Next drive-dir value from the form's state (pure, pinned below):
+ * while untouched and not leaving, follow the suggestion; entering
+ * Leave with an untouched field clears it so Leave never targets a
+ * guessed directory; otherwise keep the operator's value. An
+ * explicit clear marks the field touched upstream, so it sticks.
+ */
+export function nextDriveDir(
+  mode: string,
+  touched: boolean,
+  current: string,
+  suggested: string | null,
+): string {
+  if (mode === "leave") return touched ? current : "";
+  if (!touched && suggested !== null && current !== suggested) return suggested;
+  return current;
+}
+
+/**
  * Missing-CLI hint for version-mismatch detail: the desktop resolves
  * the version-matched `wyrd` binary as a sibling of its own binary
- * (never `PATH`), so a fresh dev checkout without `cargo build -p
- * wyrd-cli` reports `cannot execute … No such file`. Append the
- * one-line build pointer where the reason names that case; otherwise
- * return the reason unchanged. Pure over the input, pinned below.
+ * (never `PATH`), so a checkout without a built CLI reports
+ * `cannot execute … No such file`. Append the build pointer where
+ * the reason names that case — in a development checkout that is the
+ * fix; in a packaged install the same sentence degrades to the
+ * reinstall line above it. Otherwise return the reason unchanged.
+ * Pure over the input, pinned below.
  */
 export function withDevCliHint(reason: string): string {
   if (reason.includes("cannot execute") && reason.includes("No such file")) {
-    return `${reason} — in development, build the CLI (cargo build -p wyrd-cli) so wyrd sits beside the desktop binary`;
+    return `${reason} — if this is a development checkout, build the CLI (cargo build -p wyrd-cli) so wyrd sits beside the desktop binary; in a packaged install, reinstall the matched pair`;
   }
   return reason;
 }

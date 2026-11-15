@@ -129,6 +129,11 @@ plane. Three pieces, all precedented in-tree:
   `XDG_STATE_HOME/wyrd/drives.json` on Linux,
   `~/Library/Application Support/Wyrd/drives.json` on macOS,
   resolved through the platform path APIs the frontend already uses.
+  The provisioning form suggests new drive locations beside the
+  registry as `<base>/drives/<name>` (`base` is the registry's own
+  directory, derived from the credential base; editable, never a
+  second source of truth — the CLI validates the path and the store
+  creates missing parents, hardening only the leaf).
   JSON, not TOML, deliberately: the daemon already carries
   `serde_json`, and the registry must add no third-party dependency
   to its closure — the format follows the dependency rule. Two
@@ -420,7 +425,8 @@ verdict.
   restart.
 - Framework choice, decided: Svelte 5 + shadcn-svelte, no SvelteKit
   (local desktop app: no SSR, routing infrastructure, or server
-  endpoints). Svelte components styled with Tailwind, built with
+  endpoints). The main window opens 1120x800 (min 960x640) so the
+  first-run flow fits without resizing. Svelte components styled with Tailwind, built with
   Vite, against the backend IPC surface; no store
   of drive state outside what the owner reports. No mocks that invent
   interface semantics in tests; test against the real client types. The

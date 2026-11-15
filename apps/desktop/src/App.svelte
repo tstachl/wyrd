@@ -456,6 +456,8 @@
         </button>
       {/each}
     </nav>
+    {:else if gate === "unknown"}
+    <p class="mt-4 text-xs text-bone/70">This device's identity could not be checked — retry in the main view to unlock Status, Drives, and Settings.</p>
     {:else}
     <p class="mt-4 text-xs text-bone/70">Set up this device's identity to unlock Status, Drives, and Settings.</p>
     {/if}

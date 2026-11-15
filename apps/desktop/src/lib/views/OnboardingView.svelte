@@ -49,8 +49,14 @@ never enter this component. -->
   let commitError: string | null = $state(null);
   let committedIdentityFile = $state("");
   let committedPassphraseFile = $state("");
-  // Discard prompt.
+  // Discard prompt. The modal focuses its dialog on open so Escape
+  // reaches it; the dialog closes on Escape and swallows other keys
+  // so they never dismiss from behind the overlay.
   let confirmDiscard = $state(false);
+  let confirmDialogEl: HTMLDivElement | null = $state(null);
+  $effect(() => {
+    if (confirmDiscard) confirmDialogEl?.focus();
+  });
 
   const busy = $derived(pending || working);
 
@@ -464,8 +470,12 @@ never enter this component. -->
         aria-label="Discard onboarding"
         aria-modal="true"
         tabindex={-1}
+        bind:this={confirmDialogEl}
         onclick={(event) => event.stopPropagation()}
-        onkeydown={(event) => event.stopPropagation()}
+        onkeydown={(event) => {
+          if (event.key === "Escape") confirmDiscard = false;
+          else event.stopPropagation();
+        }}
       >
         <p class="font-semibold">Discard and start over?</p>
         <p class="mt-1">The identity is not saved yet{useGenerated && generatedPassphrase !== null ? " and anything generated will be lost" : ""}. Starting over leaves nothing behind.</p>

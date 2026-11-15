@@ -10,7 +10,7 @@ entered by hand elsewhere. -->
   import type { ProvisionReport } from "$lib/ipc/results.js";
   import { pickExistingFile } from "$lib/ipc/files.js";
   import type { ProvisionCreateArgs, ProvisionJoinArgs, ProvisionLeaveArgs } from "$lib/ipc/operations.js";
-  import { suggestedDriveDirFor, withDevCliHint } from "./format.js";
+  import { nextDriveDir, suggestedDriveDirFor, withDevCliHint } from "./format.js";
 
   interface Props {
     pending: boolean;
@@ -69,31 +69,23 @@ entered by hand elsewhere. -->
   );
   const suggestedDriveDir = $derived(suggestedDriveDirFor(name, identityForSuggestion));
 
-  // Pre-fill the suggestion while untouched (editable after): the
-  // default follows the name until the operator types, never
-  // clobbering edits. Clearing the field marks it touched, so an
-  // explicit clear sticks. Gated on create/join: the Leave form keeps
-  // an empty field until the operator supplies a directory, and
-  // entering Leave with an untouched suggestion clears it — leaving
-  // never targets a guessed directory.
+  // The suggestion decision as a pure function of its inputs so it
+  // pins in `format.test.ts` beside the derivation: while untouched
+  // (and not leaving) follow the suggestion; entering Leave with an
+  // untouched field clears it so Leave never targets a guess;
+  // otherwise keep the operator's value (including an explicit
+  // clear, which marks the field touched).
   $effect(() => {
-    if (mode === "leave") {
-      if (!driveDirTouched) driveDir = "";
-      return;
-    }
-    if (!driveDirTouched && suggestedDriveDir !== null && driveDir !== suggestedDriveDir) {
-      driveDir = suggestedDriveDir;
-    }
+    driveDir = nextDriveDir(mode, driveDirTouched, driveDir, suggestedDriveDir);
   });
 
-  // Relays are optional in the copy: empty is local-only, non-empty
-  // runs managed — but this form always runs managed (`noService:
-  // false`), so an empty field reaches the CLI's managed-service
-  // refusal honestly instead of registering a local-only drive the
-  // desktop cannot serve. No product default relay set exists in the
-  // repo, so the field stays empty with the example placeholder; the
-  // outcome below reports the refusal verbatim.
-  const isLocalOnly = $derived(relayList().length === 0);
+  // Empty relays are refused before anything is created: this form
+  // always runs managed (`noService: false`), so the CLI's
+  // managed-service refusal is the honest outcome and the detail
+  // below reports it verbatim. There is no local-only mode in this
+  // form and no product default relay set ships in the repo — the
+  // field starts empty with the example placeholder as a shape hint.
+  const relaysEmpty = $derived(relayList().length === 0);
 
   function describeResult(value: ProvisionReport): string {
     const result = value.result;
@@ -192,15 +184,14 @@ entered by hand elsewhere. -->
       </div>
     {/if}
     <label class="mt-2 block text-sm">
-      Relays <span class="text-smoke">(optional — only needed to sync beyond this device)</span>
+      Relays <span class="text-smoke">(comma-separated; this form runs managed — at least one required)</span>
       <input class="mt-1 w-full rounded-md border border-ink/15 px-2 py-1 dark:border-bone/20 dark:bg-white/5" bind:value={relays} disabled={busy} placeholder="wss://relay.example" />
     </label>
     <p class="mt-1 text-xs text-smoke">
-      Relays are optional — only needed to sync beyond this device. Leave empty for local-only. This
-      form always runs managed (vault), which needs at least one relay to sync: with none, the CLI
-      refuses the relay-less managed service honestly, and that refusal reports verbatim below.
-      No product default relay set ships in the repo, so the field starts empty — the example
-      placeholder is a shape hint, not a suggestion to use.
+      Relays sync beyond this device. This form always runs managed (vault): at least one relay is
+      required, and an empty field is refused before anything is created — that refusal reports
+      verbatim below. No product default relay set ships in the repo, so the field starts empty;
+      the example placeholder is a shape hint, not a suggestion to use.
     </p>
     {#if mode === "join"}
       <div class="mt-2 text-sm">
@@ -251,8 +242,8 @@ entered by hand elsewhere. -->
       {working ? "Leaving…" : "Leave drive"}
     </Button>
   {:else if mode === "create"}
-    {#if isLocalOnly}
-      <p class="mt-3 text-xs text-smoke">No relays — the managed service will refuse honestly (it needs at least one relay to sync). Add relays to create managed (vault). Mount mode travels with the installer follow-up.</p>
+    {#if relaysEmpty}
+      <p class="mt-3 text-xs text-smoke">No relays — this managed form will refuse before creating anything. Add at least one relay to create (vault). Mount mode travels with the installer follow-up.</p>
     {:else}
       <p class="mt-3 text-xs text-smoke">Service mode: vault (platform default). Mount mode travels with the installer follow-up.</p>
     {/if}
@@ -268,8 +259,8 @@ entered by hand elsewhere. -->
       {working ? "Creating…" : "Create drive"}
     </Button>
   {:else}
-    {#if isLocalOnly}
-      <p class="mt-3 text-xs text-smoke">No relays — the managed service will refuse honestly (it needs at least one relay to sync). Add relays to join managed (vault). Mount mode travels with the installer follow-up.</p>
+    {#if relaysEmpty}
+      <p class="mt-3 text-xs text-smoke">No relays — this managed form will refuse before joining anything. Add at least one relay to join (vault). Mount mode travels with the installer follow-up.</p>
     {:else}
       <p class="mt-3 text-xs text-smoke">Service mode: vault (platform default). Mount mode travels with the installer follow-up.</p>
     {/if}
