@@ -162,7 +162,7 @@ pass "install names its prerequisites with fixes"
 # the shipped CLI drops the mount stack entirely (the manifest's
 # `--no-default-features` no-FUSE mode): a clean Mac has no macFUSE
 # to load, while the release path keeps mount by leaving it unset.
-for marker in 'cargo build --release -p wyrd-cli' 'libiconv.tbd' 'codesign' 'TAURI_ENV_TARGET_TRIPLE'; do
+for marker in 'cargo build --release -p wyrd-cli' 'libiconv.tbd' 'codesign' 'TAURI_ENV_TARGET_TRIPLE' 'SDKROOT="$DISCOVERED_SDK"'; do
   match "$marker" "$STAGE_CODE" \
     || die "stage-cli: '$marker' missing"
 done
@@ -182,6 +182,8 @@ match '[Ff][Uu][Ss][Ee]' "$STAGE_CODE" \
   || die "stage-cli: no fuse-free guard for the vault-only CLI"
 match 'SIGN_IDENTITY:-}' "$WRAPPER_CODE" \
   || die "wrapper: reseal names no signing identity"
+match 'SDKROOT="$DISCOVERED_SDK"' "$WRAPPER_CODE" \
+  || die "wrapper: discovered SDK is not exported as SDKROOT"
 match '!= "-"' "$WRAPPER_CODE" \
   || die "wrapper: timestamp is not conditioned on a real identity"
 match '--timestamp' "$WRAPPER_CODE" \
@@ -209,7 +211,7 @@ pass "linkage is covered on both sides of the stage boundary"
 # 10. The decision is recorded in hook-adjacent prose: the packaging
 # README names the command, the bundled CLI, the boundary, and the
 # team-signed pointer together.
-for marker in 'install-dev.sh' 'Resources/wyrd' 'no-group-container' 'team-signed'; do
+for marker in 'install-dev.sh' 'Resources/wyrd' 'no-group-container' 'team-signed' 'SDKROOT'; do
   grep -Fq "$marker" "$ROOT/packaging/macos/README.md" \
     || die "README: '$marker' not recorded"
 done
