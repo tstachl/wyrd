@@ -6,7 +6,9 @@
 # SIGN_IDENTITY, PROVISIONING_PROFILE, ARCH, MIN_MACOS, TOOLCHAIN,
 # SWIFTC, SDK, APPEX_BUNDLE_VERSION. With no arguments the wrapper
 # builds `--bundles app` (the release runbook shape); any arguments
-# replace the default and forward to `cargo tauri build` verbatim.
+# replace the default and forward to `cargo tauri build` verbatim,
+# with a `--target <triple>` argument moving the release dir the
+# guard inspects accordingly.
 #
 # Background: under the default devenv shell the Nix cc wrapper puts
 # `-L/nix/store/...-libiconv.../lib` on the link line (via libc's
@@ -84,11 +86,34 @@ cargo tauri build "$@"
 # No-Nix-links guard (Darwin only): delegate to
 # check-no-nix-links.sh, which fails closed when it inspects nothing
 # and covers the appex binary too. The release dir follows
-# CARGO_TARGET_DIR when set, so a relocated target dir does not trip
-# the fail-closed guard; --target triples pass their release dir to
-# the check explicitly. otool absent means not a macOS bundle host —
+# CARGO_TARGET_DIR when set and a `--target <triple>` argument when
+# forwarded, so a relocated target dir does not trip the fail-closed
+# guard; anything else passes its release dir to the check
+# explicitly. otool absent means not a macOS bundle host —
 # the check skips itself.
 if [ "$(uname -s)" = "Darwin" ]; then
-    RELEASE_DIR="${CARGO_TARGET_DIR:-$ROOT/target}/release"
-    "$HERE/check-no-nix-links.sh" "$ROOT" "$RELEASE_DIR"
+# A `--target <triple>` build moves the artifacts; the guard must
+# follow or it inspects stale host output (or nothing). Scan the
+# forwarded args for it — the only relocation the wrapper derives
+# itself; anything else goes through check-no-nix-links.sh's
+# explicit dir argument.
+RELEASE_BASE="${CARGO_TARGET_DIR:-$ROOT/target}"
+RELEASE_DIR="$RELEASE_BASE/release"
+NEXT_IS_TARGET=0
+for ARG in "$@"; do
+    if [ "$NEXT_IS_TARGET" -eq 1 ]; then
+        RELEASE_DIR="$RELEASE_BASE/$ARG/release"
+        NEXT_IS_TARGET=0
+    else
+        case "$ARG" in
+            --target) NEXT_IS_TARGET=1 ;;
+            --target=*) RELEASE_DIR="$RELEASE_BASE/${ARG#--target=}/release" ;;
+        esac
+    fi
+done
+if [ "$NEXT_IS_TARGET" -eq 1 ]; then
+    echo "error: --target without a triple; refusing a build the guard cannot locate." >&2
+    exit 1
+fi
+"$HERE/check-no-nix-links.sh" "$ROOT" "$RELEASE_DIR"
 fi

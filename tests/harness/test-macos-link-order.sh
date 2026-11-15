@@ -77,6 +77,8 @@ code "$WRAPPER" | grep -Fq 'check-no-nix-links.sh' \
   || die "wrapper: guard is not delegated to check-no-nix-links.sh"
 code "$WRAPPER" | grep -Fq 'CARGO_TARGET_DIR' \
   || die "wrapper: release dir does not follow CARGO_TARGET_DIR"
+code "$WRAPPER" | grep -Fq -- '--target=' \
+  || die "wrapper: forwarded --target does not move the release dir"
 pass "wrapper delegates the guard with a relocatable release dir"
 
 # 6. The check script resolves the shipped binaries without a
@@ -99,11 +101,13 @@ pass "check resolves binaries, covers the appex, fails closed"
 
 # 7. Negative control: the comment-stripping is load-bearing, not
 # decorative. A wrapper copy whose `--bundles app` default survives
-# only as a comment (the header prose mentions it) must fail the
-# corresponding pin — proving a prose mention can never satisfy it.
+# only as comments must fail the corresponding pin. The prose line
+# is written into the fixture explicitly, so the control cannot go
+# vacuous if the wrapper header is ever reworded.
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 sed '/^[[:space:]]*set -- --bundles app$/d' "$WRAPPER" > "$TMP/wrapper-comment-only.sh"
+printf '# the default shape stays --bundles app; see the runbook\n' >> "$TMP/wrapper-comment-only.sh"
 code "$TMP/wrapper-comment-only.sh" | grep -Fq -- '--bundles app' \
   && die "negative control: comment-only mention satisfied the pin"
 pass "comment-only mentions cannot satisfy pins"
@@ -133,19 +137,19 @@ clean_out > "$OTOOL_MODE_OUT"
 
 fixture_root
 touch "$TMP/root/target/release/wyrd-desktop"
-"$CHECK" "$TMP/root" >/dev/null 2>&1 \
+"$CHECK" "$TMP/root" "$TMP/root/target/release" >/dev/null 2>&1 \
   || die "check: clean tree refused"
 pass "guard passes a clean tree"
 
 clean_out > "$OTOOL_MODE_OUT"
 fixture_root
 touch "$TMP/root/target/release/wyrd-desktop"
-OTOOL_MODE_OUT="$OTOOL_NIX_OUT" "$CHECK" "$TMP/root" >/dev/null 2>&1 \
+OTOOL_MODE_OUT="$OTOOL_NIX_OUT" "$CHECK" "$TMP/root" "$TMP/root/target/release" >/dev/null 2>&1 \
   && die "check: Nix-linked standalone passed"
 pass "guard fails a Nix-linked standalone binary"
 
 fixture_root
-"$CHECK" "$TMP/root" >/dev/null 2>&1 \
+"$CHECK" "$TMP/root" "$TMP/root/target/release" >/dev/null 2>&1 \
   && die "check: empty tree passed without inspecting anything"
 pass "guard fails closed on an empty tree"
 
@@ -156,7 +160,7 @@ fixture_root
 mkdir -p "$TMP/root/target/release/bundle/macos/Wyrd.app/Contents/MacOS"
 touch "$TMP/root/target/release/bundle/macos/Wyrd.app/Contents/MacOS/Wyrd"
 clean_out > "$OTOOL_MODE_OUT"
-"$CHECK" "$TMP/root" >/dev/null 2>&1 \
+"$CHECK" "$TMP/root" "$TMP/root/target/release" >/dev/null 2>&1 \
   || die "check: clean bundle binary under another name refused"
 pass "guard inspects the bundle binary under any name"
 
@@ -164,7 +168,7 @@ fixture_root
 mkdir -p "$TMP/root/target/release/bundle/macos/Wyrd.app/Contents/MacOS"
 touch "$TMP/root/target/release/bundle/macos/Wyrd.app/Contents/MacOS/Wyrd-bad"
 clean_out > "$OTOOL_MODE_OUT"
-"$CHECK" "$TMP/root" >/dev/null 2>&1 \
+"$CHECK" "$TMP/root" "$TMP/root/target/release" >/dev/null 2>&1 \
   && die "check: Nix-linked bundle binary passed"
 pass "guard fails a Nix-linked bundle binary"
 
@@ -176,10 +180,10 @@ APPEX_MACOS="$TMP/root/target/release/bundle/macos/Wyrd.app/Contents/PlugIns/Wyr
 mkdir -p "$APPEX_MACOS"
 touch "$APPEX_MACOS/WyrdFileProvider"
 clean_out > "$OTOOL_MODE_OUT"
-"$CHECK" "$TMP/root" >/dev/null 2>&1 \
+"$CHECK" "$TMP/root" "$TMP/root/target/release" >/dev/null 2>&1 \
   || die "check: clean appex binary refused"
 pass "guard inspects the appex binary"
-OTOOL_MODE_OUT="$OTOOL_NIX_OUT" "$CHECK" "$TMP/root" >/dev/null 2>&1 \
+OTOOL_MODE_OUT="$OTOOL_NIX_OUT" "$CHECK" "$TMP/root" "$TMP/root/target/release" >/dev/null 2>&1 \
   && die "check: Nix-linked appex binary passed"
 pass "guard fails a Nix-linked appex binary"
 
