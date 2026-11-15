@@ -59,8 +59,12 @@ be recreated from the passphrase; unlock passphrase: protects
 access, does not replace or recover the key), "You need both",
 and the on-device / on-another-device split above.
 
-Generation happens in memory (backend CSPRNG, both T14 halves);
-nothing is written yet. No public identifier, no copy button.
+Generation happens in the CLI, never in the UI or the desktop
+backend: the passphrase is minted for display at the Passphrase
+stage (`identity new-passphrase`) and held in memory; the identity
+scalar is minted in-process by `identity commit` at Finish and
+never leaves the CLI. Nothing is written before Finish. No public
+identifier, no copy button.
 
 ### Restore
 

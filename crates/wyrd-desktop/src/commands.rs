@@ -810,8 +810,6 @@ where
 /// timeouts and spawn failures. Everything runs on the blocking
 /// pool (the registry probe fans out over sockets with a per-drive
 /// bound and must never park an async runtime worker). A dead
-/// pool (the registry probe fans out over sockets with a per-drive
-/// bound and must never park an async runtime worker). A dead
 /// blocking worker resolves `Unknown`, never success: the outcome
 /// is unknown by definition, and only the observed state decides
 /// the display. The flight releases through an RAII guard, so a

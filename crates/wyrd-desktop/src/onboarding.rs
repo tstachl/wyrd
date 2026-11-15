@@ -73,6 +73,20 @@ pub struct KeyDefaults {
 /// file. `None` where no home resolves — the caller reports
 /// unusable instead of inventing a relative path.
 fn config_dir() -> Option<PathBuf> {
+    #[cfg(test)]
+    {
+        // Test seam (test builds only; production has no override):
+        // unit tests point the record at a scratch directory so no
+        // test ever touches the operator's real config dir.
+        if let Some(dir) = std::env::var_os("WYRD_ONBOARDING_TEST_DIR") {
+            if !dir.is_empty() {
+                let dir = PathBuf::from(dir);
+                if dir.is_absolute() {
+                    return Some(dir);
+                }
+            }
+        }
+    }
     #[cfg(target_os = "macos")]
     {
         std::env::var_os("HOME")
@@ -113,6 +127,14 @@ fn default_paths() -> Option<(String, String)> {
 /// defaults.
 fn adopted_paths() -> Option<(String, String)> {
     let dir = config_dir()?;
+    adopted_paths_in(&dir)
+}
+
+/// The adopted pair inside one directory: version-gated,
+/// absolute-paths-only. Missing, unparsable, wrong-version, empty,
+/// or relative records all fall back — the credential files are the
+/// source of truth, the record only a pointer.
+fn adopted_paths_in(dir: &Path) -> Option<(String, String)> {
     let bytes = std::fs::read(dir.join(ADOPTED_RECORD_FILENAME)).ok()?;
     let value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
     if value.get("version")?.as_u64()? != u64::from(ADOPTED_RECORD_VERSION) {
@@ -164,12 +186,20 @@ pub fn adopt_paths(identity_file: &Path, passphrase_file: &Path) -> Result<KeyDe
     let dir = config_dir().ok_or_else(|| {
         "cannot record the credential pair: no home directory resolves".to_string()
     })?;
-    std::fs::create_dir_all(&dir)
+    adopt_paths_in(&dir, identity_file, passphrase_file)?;
+    Ok(default_key_paths())
+}
+
+/// Record the pair inside one directory: the unit-testable half of
+/// [`adopt_paths`]. Absolute paths only; the record holds paths,
+/// never secrets.
+fn adopt_paths_in(dir: &Path, identity_file: &Path, passphrase_file: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(dir)
         .map_err(|error| format!("cannot create {}: {error}", dir.display()))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
             .map_err(|error| format!("cannot restrict {}: {error}", dir.display()))?;
     }
     let record = serde_json::json!({
@@ -185,17 +215,52 @@ pub fn adopt_paths(identity_file: &Path, passphrase_file: &Path) -> Result<KeyDe
         ADOPTED_RECORD_FILENAME,
         std::process::id()
     ));
-    std::fs::write(&tmp, &bytes)
-        .map_err(|error| format!("cannot stage {}: {error}", path.display()))?;
+    let wrote = (|| -> Result<(), String> {
+        std::fs::write(&tmp, &bytes)
+            .map_err(|error| format!("cannot stage {}: {error}", path.display()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))
+                .map_err(|error| format!("cannot restrict {}: {error}", path.display()))?;
+            // fsync the staged record before the rename, like the
+            // credential writer: the rename then orders a durable
+            // record, never a torn one.
+            let handle = std::fs::File::open(&tmp)
+                .map_err(|error| format!("cannot fsync {}: {error}", path.display()))?;
+            handle
+                .sync_all()
+                .map_err(|error| format!("cannot fsync {}: {error}", path.display()))?;
+        }
+        std::fs::rename(&tmp, &path)
+            .map_err(|error| format!("cannot record {}: {error}", path.display()))?;
+        fsync_config_dir(dir)
+            .map_err(|error| format!("cannot fsync {}: {error}", dir.display()))?;
+        Ok(())
+    })();
+    if wrote.is_err() {
+        // Never leave a staged temp record behind: a crash window
+        // with two candidate records must not exist.
+        let _ = std::fs::remove_file(&tmp);
+    }
+    wrote
+}
+
+/// fsync one config directory so a fresh record name is durable,
+/// not just its bytes. Best-effort where the directory cannot be
+/// opened for fsync (non-Unix): the record write above already
+/// succeeded, and the rename carries the pointer either way.
+fn fsync_config_dir(dir: &Path) -> std::io::Result<()> {
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))
-            .map_err(|error| format!("cannot restrict {}: {error}", path.display()))?;
+        let handle = std::fs::File::open(dir)?;
+        handle.sync_all()?;
     }
-    std::fs::rename(&tmp, &path)
-        .map_err(|error| format!("cannot record {}: {error}", path.display()))?;
-    Ok(default_key_paths())
+    #[cfg(not(unix))]
+    {
+        let _ = dir;
+    }
+    Ok(())
 }
 
 /// Shape check for a generated passphrase: 24 charset chars in
@@ -371,11 +436,17 @@ pub fn run_new_passphrase(cli_bin: &Path, timeout: Duration) -> OnboardingReport
     report(result)
 }
 
-/// Run `<cli> identity commit`: the passphrase travels on the stdin
-/// pipe (never argv). Version check and pre-validation first; a
-/// custom passphrase that fails the floor refuses before any process
-/// spawns. Post-run the report carries fresh existence (the
-/// commit boundary's read-back signal).
+/// Run `<cli> identity commit` as one atomic onboarding step: the
+/// passphrase travels on the stdin pipe (never argv). Version check
+/// and pre-validation first; a custom passphrase that fails the
+/// floor refuses before any process spawns. On a successful write
+/// the same binary verifies the pair through the hardened reader
+/// and then records it as adopted — all before the report, so no
+/// Ready-close window can orphan a committed pair. A verify or
+/// record failure names itself: "written but not readable" and
+/// "record not written" are distinct from identity failures, and
+/// the view retries verification without re-running the
+/// never-overwrite commit.
 pub fn run_commit(
     cli_bin: &Path,
     identity_file: &Path,
@@ -393,6 +464,26 @@ pub fn run_commit(
     }
     let argv = commit_argv(identity_file, passphrase_file);
     let output = run_cli(cli_bin, &argv, Some(passphrase.as_bytes()), timeout);
+    if !output.status_success {
+        return report(map_output(output));
+    }
+    let verify = run_cli(
+        cli_bin,
+        &verify_argv(identity_file, passphrase_file),
+        None,
+        timeout,
+    );
+    if !verify.status_success {
+        return report(OnboardingResult::ExpectedFailure {
+            detail: format!(
+                "the files were written but are not readable yet: {}",
+                truncate(&format!("{}\n{}", verify.stdout, verify.stderr), 300)
+            ),
+        });
+    }
+    if let Err(reason) = adopt_paths(identity_file, passphrase_file) {
+        return report(OnboardingResult::ExpectedFailure { detail: reason });
+    }
     report(map_output(output))
 }
 
@@ -499,6 +590,32 @@ pub fn onboarding_timeout() -> Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// Serializes the record-override tests: the override is
+    /// process-global for the test binary, so only one of these
+    /// holds it at a time.
+    static RECORD_OVERRIDE_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Point the record dir at a fresh scratch directory; returns the
+    /// guard (dropping it releases the lock) — the caller must
+    /// `remove_var` the override before dropping, to leave no global
+    /// state for the next test.
+    fn override_record_dir(tag: &str) -> (std::sync::MutexGuard<'static, ()>, PathBuf) {
+        let guard = RECORD_OVERRIDE_LOCK
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let dir =
+            std::env::temp_dir().join(format!("wyrd-desktop-adopt-{}-{}", std::process::id(), tag));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::env::set_var("WYRD_ONBOARDING_TEST_DIR", &dir);
+        (guard, dir)
+    }
+
+    fn unoverride_record_dir(guard: std::sync::MutexGuard<'static, ()>) {
+        std::env::remove_var("WYRD_ONBOARDING_TEST_DIR");
+        drop(guard);
+    }
 
     /// Shape pins: 6-6-6-6 over the 32-char alphabet, 27 with dashes.
     #[test]
@@ -577,6 +694,78 @@ mod tests {
         );
     }
 
+    /// The adopted-pair record round-trips through one directory
+    /// and resolves: write, read, and no temp file left behind.
+    /// Missing, unparsable, wrong-version, empty, and relative
+    /// records all fall back — the credential files stay the source
+    /// of truth.
+    #[test]
+    fn adopted_record_round_trips_and_rejects() {
+        let dir = std::env::temp_dir().join(format!(
+            "wyrd-desktop-adopt-{}-roundtrip",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        // Missing record falls back.
+        assert!(adopted_paths_in(&dir).is_none());
+        let identity = dir.join("identity");
+        let passphrase = dir.join("passphrase");
+        adopt_paths_in(&dir, &identity, &passphrase).unwrap();
+        assert_eq!(
+            adopted_paths_in(&dir).unwrap(),
+            (
+                identity.to_string_lossy().into_owned(),
+                passphrase.to_string_lossy().into_owned()
+            )
+        );
+        // No staged temp file survives a success.
+        let leftovers: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(&format!("{ADOPTED_RECORD_FILENAME}.tmp."))
+            })
+            .collect();
+        assert!(leftovers.is_empty(), "leftovers: {leftovers:?}");
+        // Unparsable, wrong-version, empty, and relative records
+        // fall back instead of resolving.
+        std::fs::write(dir.join(ADOPTED_RECORD_FILENAME), b"not json").unwrap();
+        assert!(adopted_paths_in(&dir).is_none());
+        std::fs::write(
+            dir.join(ADOPTED_RECORD_FILENAME),
+            serde_json::json!({"version": 99, "identity_file": "/a", "passphrase_file": "/b"})
+                .to_string(),
+        )
+        .unwrap();
+        assert!(adopted_paths_in(&dir).is_none());
+        std::fs::write(
+            dir.join(ADOPTED_RECORD_FILENAME),
+            serde_json::json!({"version": 1, "identity_file": "", "passphrase_file": "/b"})
+                .to_string(),
+        )
+        .unwrap();
+        assert!(adopted_paths_in(&dir).is_none());
+        std::fs::write(
+            dir.join(ADOPTED_RECORD_FILENAME),
+            serde_json::json!({"version": 1, "identity_file": "relative", "passphrase_file": "/b"})
+                .to_string(),
+        )
+        .unwrap();
+        assert!(adopted_paths_in(&dir).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The public adoption gate refuses relative paths before
+    /// touching the filesystem.
+    #[test]
+    fn adopt_paths_refuses_relative_paths() {
+        assert!(adopt_paths(Path::new("relative"), Path::new("/abs")).is_err());
+        assert!(adopt_paths(Path::new("/abs"), Path::new("relative")).is_err());
+    }
+
     /// `Debug` never leaks the passphrase.
     #[test]
     fn debug_redacts_the_passphrase() {
@@ -636,10 +825,13 @@ mod tests {
         }
     }
 
-    /// `commit` pipes the passphrase on stdin (the fake drains it)
-    /// and maps exit 0 to completed without echoing the text.
+    /// `commit` pipes the passphrase on stdin (the fake drains it),
+    /// maps exit 0 to completed without echoing the text, and then
+    /// verifies and adopts atomically: on success the record names
+    /// the committed pair, so no Ready-close window can orphan it.
     #[test]
     fn commit_pipes_stdin_and_maps_the_code_only() {
+        let (guard, dir) = override_record_dir("commit");
         let cli = fake_cli("commit", 0, false);
         let report = run_commit(
             &cli,
@@ -652,6 +844,12 @@ mod tests {
             OnboardingResult::Completed { passphrase, .. } => assert!(passphrase.is_none()),
             other => panic!("fake exit-0 commit completes: {other:?}"),
         }
+        assert_eq!(
+            adopted_paths_in(&dir).unwrap(),
+            ("/k/identity".to_string(), "/k/passphrase".to_string())
+        );
+        unoverride_record_dir(guard);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// `verify` maps a nonzero exit to an expected failure.
@@ -669,6 +867,62 @@ mod tests {
             "exit 2 fails expectedly: {:?}",
             report.result
         );
+    }
+
+    /// `adopt` verifies through the CLI and then records the pair:
+    /// the Repair pick path persists in the same call, never in two.
+    #[test]
+    fn adopt_verifies_then_records() {
+        let (guard, dir) = override_record_dir("adopt");
+        let cli = fake_cli("adopt", 0, false);
+        let report = run_adopt(
+            &cli,
+            Path::new("/k/identity"),
+            Path::new("/k/passphrase"),
+            Duration::from_secs(30),
+        );
+        assert!(
+            matches!(
+                &report.result,
+                OnboardingResult::Completed {
+                    passphrase: None,
+                    ..
+                }
+            ),
+            "fake exit-0 adopt completes: {:?}",
+            report.result
+        );
+        assert_eq!(
+            adopted_paths_in(&dir).unwrap(),
+            ("/k/identity".to_string(), "/k/passphrase".to_string())
+        );
+        unoverride_record_dir(guard);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A failed verify records nothing: the gate keeps resolving the
+    /// previous pair instead of a pair that never checked out.
+    #[test]
+    fn adopt_records_nothing_on_verify_failure() {
+        let (guard, dir) = override_record_dir("adopt-fail");
+        let cli = fake_cli("adopt-fail", 2, false);
+        let report = run_adopt(
+            &cli,
+            Path::new("/k/identity"),
+            Path::new("/k/passphrase"),
+            Duration::from_secs(30),
+        );
+        assert!(
+            matches!(&report.result, OnboardingResult::ExpectedFailure { .. }),
+            "exit 2 fails expectedly: {:?}",
+            report.result
+        );
+        assert!(
+            !dir.join(ADOPTED_RECORD_FILENAME).exists(),
+            "no record on verify failure"
+        );
+        unoverride_record_dir(guard);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A wedged CLI is killed past the timeout even with stdin

@@ -57,7 +57,8 @@ test("restore branch names readable files, never verified pairing", () => {
 
 test("written-but-unreadable commits offer verify-only recovery", () => {
   expect(view).toContain("Verify the existing files");
-  expect(view).toContain("The files were written but are not readable yet.");
+  expect(view).toContain("The files are still not readable.");
+  expect(view).toContain("The restored files were not adopted.");
 });
 
 test("quitting mid-flow discards back to the start", () => {

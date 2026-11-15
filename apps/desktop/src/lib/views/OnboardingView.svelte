@@ -20,12 +20,13 @@ never enter this component. -->
     onNewPassphrase: () => Promise<OnboardingReport>;
     onCommit: (args: { identityFile: string; passphraseFile: string; passphrase: string }) => Promise<OnboardingReport>;
     onVerify: (args: { identityFile: string; passphraseFile: string }) => Promise<OnboardingReport>;
+    onAdopt: (args: { identityFile: string; passphraseFile: string }) => Promise<OnboardingReport>;
     onReveal: (path: string) => Promise<boolean>;
     onDone: (identityFile: string, passphraseFile: string, mode: "create" | "join") => void;
     onQuit: () => void;
   }
 
-  let { defaults, pending, onNewPassphrase, onCommit, onVerify, onReveal, onDone, onQuit }: Props = $props();
+  let { defaults, pending, onNewPassphrase, onCommit, onVerify, onAdopt, onReveal, onDone, onQuit }: Props = $props();
 
   let stage = $state<Stage>("identity");
   let choice = $state<IdentityChoice>("create");
@@ -45,7 +46,6 @@ never enter this component. -->
   let working = $state(false);
   let helper: string | null = $state(null);
   let commitError: string | null = $state(null);
-  let commitReport = $state<OnboardingReport | null>(null);
   let committedIdentityFile = $state("");
   let committedPassphraseFile = $state("");
   // Discard prompt.
@@ -135,7 +135,6 @@ never enter this component. -->
   async function finish(): Promise<void> {
     helper = null;
     commitError = null;
-    commitReport = null;
     if (!defaults.usable) {
       helper = "Could not determine this device's credential locations: no home directory resolves. Fix the environment and retry — nothing was written.";
       return;
@@ -146,17 +145,17 @@ never enter this component. -->
     }
     if (choice === "restore") {
       // Nothing to write: the restored files are already in place.
-      // Verify once more (read-back), then report Ready with the
-      // actual picked paths.
+      // Adopt verifies once more (read-back) and records the pair,
+      // so the gate resolves it after the session.
       working = true;
       try {
-        const report = await onVerify({ identityFile: restoreIdentityFile, passphraseFile: restorePassphraseFile });
+        const report = await onAdopt({ identityFile: restoreIdentityFile, passphraseFile: restorePassphraseFile });
         if (report.result.result === "completed") {
           committedIdentityFile = restoreIdentityFile;
           committedPassphraseFile = restorePassphraseFile;
           stage = "ready";
         } else {
-          commitError = describeReport(report, "The restored files did not verify.");
+          commitError = describeReport(report, "The restored files were not adopted.");
         }
       } catch (failure: unknown) {
         commitError = failure instanceof Error ? failure.message : String(failure);
@@ -174,24 +173,16 @@ never enter this component. -->
     }
     working = true;
     try {
+      // Atomic step: commit writes, verifies, and adopts in one
+      // backend call, so no Ready-close window can orphan the pair.
       const report = await onCommit({ identityFile: defaults.identity_file, passphraseFile: defaults.passphrase_file, passphrase });
-      commitReport = report;
       if (report.result.result === "completed") {
-        // Read-back: verify through the production reader before
-        // navigating anywhere (commit boundary step 6).
-        const check = await onVerify({ identityFile: defaults.identity_file, passphraseFile: defaults.passphrase_file });
-        if (check.result.result === "completed") {
-          committedIdentityFile = defaults.identity_file;
-          committedPassphraseFile = defaults.passphrase_file;
-          generatedPassphrase = null;
-          customPassphrase = "";
-          customConfirm = "";
-          commitReport = null;
-          stage = "ready";
-        } else {
-          commitReport = check;
-          commitError = describeReport(check, "The files were written but are not readable yet.");
-        }
+        committedIdentityFile = defaults.identity_file;
+        committedPassphraseFile = defaults.passphrase_file;
+        generatedPassphrase = null;
+        customPassphrase = "";
+        customConfirm = "";
+        stage = "ready";
       } else {
         commitError = describeReport(report, "Could not write the credential files.");
       }
@@ -202,21 +193,19 @@ never enter this component. -->
     }
   }
 
-  // Verify-only recovery after a written-but-unreadable commit: the
-  // files exist (fresh existence in the stored report), so re-check
-  // them without re-running the never-overwrite commit.
+  // Verify-only recovery after a failed commit: the commit refuses
+  // to overwrite, so re-running it refuses too. Adopt verifies the
+  // existing files and records them without writing anything.
   async function verifyExisting(): Promise<void> {
     commitError = null;
     working = true;
     try {
-      const check = await onVerify({ identityFile: defaults.identity_file, passphraseFile: defaults.passphrase_file });
+      const check = await onAdopt({ identityFile: defaults.identity_file, passphraseFile: defaults.passphrase_file });
       if (check.result.result === "completed") {
         committedIdentityFile = defaults.identity_file;
         committedPassphraseFile = defaults.passphrase_file;
-        commitReport = null;
         stage = "ready";
       } else {
-        commitReport = check;
         commitError = describeReport(check, "The files are still not readable.");
       }
     } catch (failure: unknown) {
@@ -225,10 +214,6 @@ never enter this component. -->
       working = false;
     }
   }
-
-  const commitWroteFiles = $derived(
-    commitReport !== null && commitReport.defaults.identity_exists && commitReport.defaults.passphrase_exists,
-  );
 
   function describeReport(report: OnboardingReport, prefix: string): string {
     const result = report.result;
@@ -437,11 +422,9 @@ never enter this component. -->
     {#if helper !== null}<p class="mt-3 text-sm" role="alert">{helper}</p>{/if}
     {#if commitError !== null}
       <p class="mt-3 text-sm" role="alert">{commitError}</p>
-      {#if commitWroteFiles}
-        <div class="mt-2">
-          <Button variant="secondary" size="sm" disabled={busy} onclick={() => void verifyExisting()}>Verify the existing files</Button>
-        </div>
-      {/if}
+      <div class="mt-2">
+        <Button variant="secondary" size="sm" disabled={busy} onclick={() => void verifyExisting()}>Verify the existing files</Button>
+      </div>
     {/if}
     <div class="mt-4 flex gap-2">
       <Button variant="secondary" size="sm" disabled={busy} onclick={() => (stage = "passphrase")}>Back</Button>

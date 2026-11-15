@@ -42,15 +42,15 @@ const PASSPHRASE_GROUP: usize = 6;
 /// so `% 32` is exact. Held in `Zeroizing`: the text scrubs on drop.
 fn mint_passphrase() -> Result<Zeroizing<String>, CliError> {
     let mut body = Zeroizing::new(String::with_capacity(PASSPHRASE_CHARS + 3));
-    let mut buf = [0u8; 32];
+    let mut buf = Zeroizing::new([0u8; 32]);
     let mut produced = 0usize;
     while produced < PASSPHRASE_CHARS {
-        getrandom::getrandom(&mut buf).map_err(|_| {
+        getrandom::getrandom(&mut *buf).map_err(|_| {
             CliError::Usage(
                 "secure randomness unavailable: cannot generate a passphrase".to_string(),
             )
         })?;
-        for byte in buf {
+        for byte in buf.iter().copied() {
             if produced >= PASSPHRASE_CHARS {
                 break;
             }
@@ -217,29 +217,7 @@ pub(crate) fn commit(identity_file: PathBuf, passphrase_file: PathBuf) -> Result
     }
     #[cfg(unix)]
     {
-        use std::io::Read;
-        // Bounded like the credential reader (4096 bytes): a hostile
-        // or corrupt pipe cannot exhaust memory before validation
-        // refuses it. One trailing newline is the line discipline,
-        // not part of the passphrase.
-        let mut text = Zeroizing::new(String::new());
-        std::io::stdin()
-            .take((MAX_PASSPHRASE_BYTES + 1) as u64)
-            .read_to_string(&mut text)
-            .map_err(|source| CliError::Io {
-                path: PathBuf::from("<stdin>"),
-                source,
-            })?;
-        if text.len() > MAX_PASSPHRASE_BYTES {
-            return Err(CliError::Usage(
-                "passphrase exceeds the 4096-byte size limit".to_string(),
-            ));
-        }
-        let stripped = text
-            .strip_suffix("\r\n")
-            .or_else(|| text.strip_suffix('\n'))
-            .unwrap_or(&text);
-        let passphrase = Zeroizing::new(stripped.to_owned());
+        let passphrase = read_stdin_bounded(std::io::stdin().lock())?;
         validate_passphrase(&passphrase)?;
         ensure_parent(&identity_file)?;
         ensure_parent(&passphrase_file)?;
@@ -253,6 +231,34 @@ pub(crate) fn commit(identity_file: PathBuf, passphrase_file: PathBuf) -> Result
         }
         Ok(())
     }
+}
+
+/// Read the commit passphrase from a reader, bounded like the
+/// credential reader (4096 bytes): a hostile or corrupt pipe cannot
+/// exhaust memory before validation refuses it. One trailing newline
+/// is the line discipline, not part of the passphrase. Over-long
+/// input refuses here, before validation and before anything is
+/// written.
+fn read_stdin_bounded(reader: impl std::io::Read) -> Result<Zeroizing<String>, CliError> {
+    use std::io::Read;
+    let mut text = Zeroizing::new(String::new());
+    reader
+        .take((MAX_PASSPHRASE_BYTES + 1) as u64)
+        .read_to_string(&mut text)
+        .map_err(|source| CliError::Io {
+            path: PathBuf::from("<stdin>"),
+            source,
+        })?;
+    if text.len() > MAX_PASSPHRASE_BYTES {
+        return Err(CliError::Usage(
+            "passphrase exceeds the 4096-byte size limit".to_string(),
+        ));
+    }
+    let stripped = text
+        .strip_suffix("\r\n")
+        .or_else(|| text.strip_suffix('\n'))
+        .unwrap_or(&text);
+    Ok(Zeroizing::new(stripped.to_owned()))
 }
 
 /// Passphrase bounds, mirrored by the desktop pre-check: 12 chars
@@ -386,5 +392,27 @@ mod tests {
         assert!(validate_passphrase(&"x".repeat(4097)).is_err());
         assert!(validate_passphrase("twelve-chars\n").is_err());
         assert!(validate_passphrase("twelve-chars\r\n").is_err());
+    }
+
+    /// Stdin bound pins: over-limit refuses, one trailing newline is
+    /// stripped, CRLF likewise, short input passes through.
+    #[test]
+    fn stdin_bound_refuses_over_limit() {
+        let over = "x".repeat(MAX_PASSPHRASE_BYTES + 1);
+        assert!(read_stdin_bounded(over.as_bytes()).is_err());
+        let at = "y".repeat(MAX_PASSPHRASE_BYTES);
+        assert_eq!(read_stdin_bounded(at.as_bytes()).unwrap().as_str(), at);
+        assert_eq!(
+            read_stdin_bounded("exactly-12ch\n".as_bytes())
+                .unwrap()
+                .as_str(),
+            "exactly-12ch"
+        );
+        assert_eq!(
+            read_stdin_bounded("exactly-12ch\r\n".as_bytes())
+                .unwrap()
+                .as_str(),
+            "exactly-12ch"
+        );
     }
 }

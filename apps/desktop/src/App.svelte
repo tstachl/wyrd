@@ -286,33 +286,15 @@
     }
   }
 
-  async function onboardingDone(
+  function onboardingDone(
     identityFile: string,
     passphraseFile: string,
     mode: "create" | "join",
-  ): Promise<void> {
-    // Adopt the pair first: without the record the gate would
-    // re-enter on the platform defaults next launch. Adoption only
-    // records paths; the files were already committed and verified.
+  ): void {
+    // The pair is already adopted (the commit and restore paths
+    // record it before reporting success); the gate resolves it on
+    // the next check. This only carries the session forward.
     pendingProvisionMode = mode;
-    try {
-      const report = await runOnboarding(() =>
-        onboardingAdopt({ identityFile, passphraseFile }),
-      );
-      if (report.result.result !== "completed") {
-        gateDetail = report.result.result === "expectedfailure"
-          ? report.result.detail
-          : report.result.result === "versionmismatch"
-            ? `Version mismatch: ${report.result.reason}`
-            : report.result.detail;
-        gate = "unknown";
-        return;
-      }
-    } catch (error: unknown) {
-      gateDetail = error instanceof Error ? error.message : String(error);
-      gate = "unknown";
-      return;
-    }
     onboardedIdentityFile = identityFile;
     onboardedPassphraseFile = passphraseFile;
     gate = "done";
@@ -486,8 +468,9 @@
           onNewPassphrase={() => runOnboarding(() => onboardingNewPassphrase())}
           onCommit={(args: OnboardingCommitArgs) => runOnboarding(() => onboardingCommit(args))}
           onVerify={(args: OnboardingVerifyArgs) => runOnboarding(() => onboardingVerify(args))}
+          onAdopt={(args: OnboardingAdoptArgs) => runOnboarding(() => onboardingAdopt(args))}
           onReveal={reveal}
-          onDone={(identityFile, passphraseFile, mode) => void onboardingDone(identityFile, passphraseFile, mode)}
+          onDone={(identityFile, passphraseFile, mode) => onboardingDone(identityFile, passphraseFile, mode)}
           onQuit={quitToStart}
         />
       {/key}
@@ -498,7 +481,7 @@
         pending={busy}
         onVerify={(args: OnboardingVerifyArgs) => runOnboarding(() => onboardingVerify(args))}
         onAdopt={(args: OnboardingAdoptArgs) => runOnboarding(() => onboardingAdopt(args))}
-        onAdopted={(identityFile, passphraseFile) => void onboardingDone(identityFile, passphraseFile, "create")}
+        onAdopted={(identityFile, passphraseFile) => onboardingDone(identityFile, passphraseFile, "create")}
         onCreateNew={repairCreateNew}
       />
     {:else if gate === "unknown"}

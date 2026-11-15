@@ -429,7 +429,10 @@ pub(crate) struct CliOutput {
 ///
 /// `stdin_bytes`, when present, is piped to the child's stdin and
 /// the pipe closed; otherwise stdin is null (a CLI that reads stdin
-/// fails closed instead of hanging the adapter).
+/// fails closed instead of hanging the adapter). Callers must bound
+/// piped input: the write runs before the timeout loop, so an
+/// unbounded write to a reader that never drains could block past
+/// the bound (the sole caller caps stdin at 4096 bytes).
 pub(crate) fn run_cli(
     cli_bin: &Path,
     argv: &[OsString],
