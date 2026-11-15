@@ -278,6 +278,17 @@ is transient — no drive data is affected.
 
 ### Fixed
 
+- File Provider hydration is identity-bound across the
+  verify-then-read window
+  (`nostr:nevent1qqsqsz2fxmy2p9vj795gw2jpg7hfp9ag44dn6pu46awkmas8zptrpngpz9mhxue69uhkwunpwdczuap49eehg8g93s0`):
+  the read op carries the verified entry token and the owner
+  refuses a token mismatch as `StaleEntry` instead of serving the
+  replacement's bytes under the old identifier and version. Absent
+  stays path-only with the long-standing behavior; the adapter maps
+  the refusal to not-found. Proven by a Harness negative test that
+  replaces the entry inside the read (fails on the old code with
+  the replacement served) plus the existing round-trip suite green.
+
 - First-run Repair no longer blames the identity files for a broken
   app pairing
   (`nostr:nevent1qqs028r8cren4pvy2gsp45nu6ahqtkzqhhtem3gnyks27rupatzrc5gpz9mhxue69uhkwunpwdczuap49eehg3d9qvy`):

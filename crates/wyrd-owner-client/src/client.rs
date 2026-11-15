@@ -171,6 +171,7 @@ impl OwnerClient {
             OP_LOOKUP,
             PathParams {
                 path: path.to_string(),
+                identity: None,
             },
         )? {
             WireOk::Lookup {
@@ -189,6 +190,7 @@ impl OwnerClient {
             OP_STAT,
             PathParams {
                 path: path.to_string(),
+                identity: None,
             },
         )? {
             WireOk::Stat {
@@ -207,6 +209,7 @@ impl OwnerClient {
             OP_READDIR,
             PathParams {
                 path: path.to_string(),
+                identity: None,
             },
         )? {
             WireOk::Readdir {
@@ -221,11 +224,22 @@ impl OwnerClient {
     /// Read one whole file, hex-decoded, plus serving generation and
     /// durable revision. Files past the interface read bound refuse
     /// with `TooLarge` — never truncated, never silently streamed.
-    pub fn read(&mut self, path: &str) -> Result<(Vec<u8>, u64, u64), ClientError> {
+    /// `expected_identity` binds the read to the verified entry: a
+    /// path that resolved to a different entry refuses as
+    /// `StaleEntry` instead of serving foreign bytes. The answer
+    /// stays path-addressed (generation plus revision only) — the
+    /// binding lives in the request. `None` is the path-only read
+    /// with the long-standing behavior.
+    pub fn read(
+        &mut self,
+        path: &str,
+        expected_identity: Option<&str>,
+    ) -> Result<(Vec<u8>, u64, u64), ClientError> {
         match self.transact(
             OP_READ,
             PathParams {
                 path: path.to_string(),
+                identity: expected_identity.map(str::to_string),
             },
         )? {
             WireOk::Read {
@@ -286,6 +300,7 @@ impl OwnerClient {
             OP_CAPTURE_PARENT,
             PathParams {
                 path: path.to_string(),
+                identity: None,
             },
         )? {
             WireOk::ParentToken { token } => Ok(token),
@@ -333,6 +348,7 @@ impl OwnerClient {
             OP_POLICY_PIN,
             PathParams {
                 path: path.to_string(),
+                identity: None,
             },
         )? {
             WireOk::PolicyPinned {
@@ -354,6 +370,7 @@ impl OwnerClient {
             OP_POLICY_UNPIN,
             PathParams {
                 path: path.to_string(),
+                identity: None,
             },
         )? {
             WireOk::PolicyUnpinned {
@@ -375,6 +392,7 @@ impl OwnerClient {
             OP_POLICY_EVICT,
             PathParams {
                 path: path.to_string(),
+                identity: None,
             },
         )? {
             WireOk::PolicyEvicted {
@@ -400,6 +418,7 @@ impl OwnerClient {
             OP_POLICY_STATUS,
             PathParams {
                 path: path.to_string(),
+                identity: None,
             },
         )? {
             WireOk::PolicyStatus {

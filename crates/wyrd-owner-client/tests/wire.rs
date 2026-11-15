@@ -481,6 +481,37 @@ fn golden_vectors_pin_the_wire() {
     );
 }
 
+/// The read params carry the optional entry token: absent stays
+/// path-only (legacy payloads parse, and `None` serializes without
+/// the key so the golden request bytes are unchanged), present
+/// round-trips the token the read binds to.
+#[test]
+fn read_params_carry_the_optional_entry_token() {
+    let bare = PathParams {
+        path: "hello.txt".to_string(),
+        identity: None,
+    };
+    let bare_value = serde_json::to_value(&bare).unwrap();
+    assert!(
+        !bare_value.as_object().unwrap().contains_key("identity"),
+        "absent identity serializes without the key: {bare_value}"
+    );
+    let parsed: PathParams = serde_json::from_value(serde_json::json!({"path": "hello.txt"}))
+        .expect("legacy payloads parse");
+    assert_eq!(parsed.identity, None);
+    let bound = PathParams {
+        path: "hello.txt".to_string(),
+        identity: Some("ab".repeat(32)),
+    };
+    let bound_value = serde_json::to_value(&bound).unwrap();
+    assert_eq!(
+        bound_value["identity"],
+        serde_json::Value::String("ab".repeat(32))
+    );
+    let round_trip: PathParams = serde_json::from_value(bound_value).expect("bound params parse");
+    assert_eq!(round_trip, bound);
+}
+
 #[test]
 fn policy_wire_field_names_are_pinned() {
     fn keys(value: &serde_json::Value) -> BTreeSet<String> {

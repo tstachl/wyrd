@@ -90,6 +90,26 @@ do {
     failures += 1
 }
 
+// The bound read frames its token: the same canonical body plus
+// the verified identity, so a second implementation reproduces
+// the bound document exactly. Absent stays the path-only
+// document above.
+do {
+    let request = OwnerRequest(
+        v: 2, id: 7, op: "read",
+        params: .path(OwnerPathParams(path: "hello.txt", identity: String(repeating: "ab", count: 32))))
+    let body = try JSONEncoder().encode(request)
+    let bodyJSON = try JSONSerialization.jsonObject(with: body)
+    let expectedParsed = try JSONSerialization.jsonObject(with: Data(
+        "{\"v\":2,\"id\":7,\"op\":\"read\",\"params\":{\"path\":\"hello.txt\",\"identity\":\"\(String(repeating: "ab", count: 32))\"}}".utf8))
+    check(
+        (bodyJSON as? NSDictionary)?.isEqual(to: expectedParsed as! [AnyHashable: Any]) ?? false,
+        "bound read encodes the token document")
+} catch {
+    print("FAIL: bound-read framing: \(error)")
+    failures += 1
+}
+
 // Every Stage 2 answer vector decodes to its own shape.
 do {
     let stat = try decoder.decode(
@@ -1197,6 +1217,62 @@ do {
     }
 } catch {
     print("FAIL: content-base checks: \(error)")
+    failures += 1
+}
+
+do {
+    // Identity-bound hydration: a delete-plus-recreate between the
+    // verify lookup and the read refuses instead of serving the
+    // replacement's bytes under the old identifier and version. The
+    // stub performs the replacement inside the read (the racing
+    // peer), so this drives the true window through the public
+    // hydration call: without the bound token the stub serves the
+    // replacement and this test fails on wrong bytes.
+    _ = try store.createDirectory(parent: .rootContainer, name: "mut-window")
+    let window = try store.createFile(
+        parent: try store.enumerate(container: .rootContainer).items
+            .first(where: { $0.filename == "mut-window" })!.itemIdentifier,
+        name: "window.txt", contents: Data("original".utf8))
+    let (served, _) = try store.contents(for: window.itemIdentifier)
+    checkEqual(
+        String(data: served, encoding: .utf8), "original",
+        "a bound read serves the verified entry")
+    try debugStub(
+        socketPath: socketPath, op: "debug-replace-on-read",
+        params: ["path": "mut-window/window.txt"])
+    do {
+        _ = try store.contents(for: window.itemIdentifier)
+        print("FAIL: replaced entry hydrates under the old identifier")
+        failures += 1
+    } catch let error as LiveStoreError {
+        if case .notFound = error {} else {
+            print("FAIL: replaced hydration 404s, got \(error)")
+            failures += 1
+        }
+    }
+} catch {
+    print("FAIL: identity-bound hydration: \(error)")
+    failures += 1
+}
+
+do {
+    // A presented token against an identity-less entry refuses:
+    // the legacy row never matches a bound read.
+    let legacy = OwnerClient(socketPath: socketPath)
+    do {
+        _ = try legacy.read(path: "legacy.bin", identity: String(repeating: "ff", count: 32))
+        print("FAIL: bound read of a legacy entry serves")
+        failures += 1
+    } catch let error as OwnerClientError {
+        if case .refused(let refusal) = error {
+            checkEqual(refusal.code, "StaleEntry", "a legacy entry refuses a bound read")
+        } else {
+            print("FAIL: legacy bound read refuses StaleEntry, got \(error)")
+            failures += 1
+        }
+    }
+} catch {
+    print("FAIL: legacy bound read: \(error)")
     failures += 1
 }
 

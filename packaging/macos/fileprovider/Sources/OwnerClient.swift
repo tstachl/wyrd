@@ -99,8 +99,12 @@ final class OwnerClient {
         return (entries, generation, revision)
     }
 
-    func read(path: String) throws -> (bytes: [UInt8], generation: UInt64, revision: UInt64) {
-        let response = try roundTrip(op: OwnerOp.read, params: .path(OwnerPathParams(path: path)))
+    /// Read one file, bound to the verified entry when the caller
+    /// names its token: a path that resolved to a different entry
+    /// refuses as `StaleEntry` instead of serving foreign bytes.
+    /// Absent is the path-only read with the long-standing behavior.
+    func read(path: String, identity: String? = nil) throws -> (bytes: [UInt8], generation: UInt64, revision: UInt64) {
+        let response = try roundTrip(op: OwnerOp.read, params: .path(OwnerPathParams(path: path, identity: identity)))
         guard case .ok(let ok) = response.result else {
             throw refusedOrIncompatible(response: response, op: OwnerOp.read)
         }

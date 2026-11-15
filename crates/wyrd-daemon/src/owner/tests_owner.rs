@@ -7,9 +7,10 @@
 use super::client::{ClientError, OwnerClient};
 use super::mapping::{
     attr_from_wire, file_identity_from_wire, kind_from_wire, map_policy_error,
-    mutation_kind_from_wire, node_from_wire, wire_attr, wire_dir_entry, wire_mutation_error,
-    wire_mutation_outcome, wire_node, wire_presence, wire_retention_policy,
+    mutation_kind_from_wire, node_from_wire, node_token, wire_attr, wire_dir_entry,
+    wire_mutation_error, wire_mutation_outcome, wire_node, wire_presence, wire_retention_policy,
 };
+use super::server::bound_read_refusal;
 use super::wire::{
     PathParams, RawRequest, SubmitParams, WireAttr, WireDirEntry, WireDurabilityLevel, WireError,
     WireErrorCode, WireFileIdentity, WireFreshnessState, WireKind, WireLiveness, WireMutationKind,
@@ -116,6 +117,7 @@ fn dispatch_ok(server: &OwnerServer, op: &str, path: &str) -> WireOk {
         op: op.to_string(),
         params: serde_json::to_value(PathParams {
             path: path.to_string(),
+            identity: None,
         })
         .unwrap(),
     });
@@ -135,6 +137,7 @@ fn dispatch_err(server: &OwnerServer, op: &str, path: &str) -> WireError {
         op: op.to_string(),
         params: serde_json::to_value(PathParams {
             path: path.to_string(),
+            identity: None,
         })
         .unwrap(),
     });
@@ -286,6 +289,113 @@ fn wire_attr_and_entry_round_trip() {
     assert_eq!(back, wire);
 }
 
+/// The bound-read token source: every identified node resolves to
+/// its entry token, while pre-identity entries and the synthetic
+/// conflict view resolve to none — so a presented token against
+/// either refuses as `StaleEntry` instead of matching.
+#[test]
+fn node_token_resolves_identified_nodes_and_nothing_else() {
+    let token = EntryIdentity::from_bytes([0xB0; 32]);
+    assert_eq!(
+        node_token(&Node::File {
+            size: 1,
+            executable: false,
+            chunks: vec![],
+            identity: Some(token),
+        }),
+        Some(token)
+    );
+    assert_eq!(
+        node_token(&Node::Dir {
+            subtree: ContentId::from_bytes([0x02; 32]),
+            identity: Some(token),
+        }),
+        Some(token)
+    );
+    assert_eq!(
+        node_token(&Node::File {
+            size: 1,
+            executable: false,
+            chunks: vec![],
+            identity: None,
+        }),
+        None
+    );
+    assert_eq!(node_token(&Node::Conflict { versions: vec![] }), None);
+}
+
+/// The bound-read refusal decides from the resolved node before
+/// any byte is touched: conflict refuses as conflicted with or
+/// without a token, a foreign token (including one presented
+/// against an identity-less entry) refuses as `StaleEntry`, and a
+/// match — or no expectation at all — proceeds.
+#[test]
+fn bound_read_refusal_orders_conflict_before_token() {
+    let token = EntryIdentity::from_bytes([0xB0; 32]);
+    let file = Node::File {
+        size: 1,
+        executable: false,
+        chunks: vec![],
+        identity: Some(token),
+    };
+    let legacy = Node::File {
+        size: 1,
+        executable: false,
+        chunks: vec![],
+        identity: None,
+    };
+    let conflict = Node::Conflict { versions: vec![] };
+    let foreign = EntryIdentity::from_bytes([0xF0; 32]);
+    for node in [&file, &legacy] {
+        match bound_read_refusal(node, None, "p") {
+            None => {}
+            other => panic!("no expectation proceeds on {node:?}: {other:?}"),
+        }
+    }
+    assert!(bound_read_refusal(&file, Some(&token), "p").is_none());
+    match bound_read_refusal(&file, Some(&foreign), "p") {
+        Some((WireErrorCode::StaleEntry, _)) => {}
+        other => panic!("a foreign token refuses as StaleEntry: {other:?}"),
+    }
+    match bound_read_refusal(&legacy, Some(&token), "p") {
+        Some((WireErrorCode::StaleEntry, _)) => {}
+        other => {
+            panic!("a token against an identity-less entry refuses as StaleEntry: {other:?}")
+        }
+    }
+    for expected in [None, Some(&token), Some(&foreign)] {
+        match bound_read_refusal(&conflict, expected, "p") {
+            Some((WireErrorCode::Conflicted, _)) => {}
+            other => panic!("a conflicted path refuses as conflicted: {other:?}"),
+        }
+    }
+}
+
+/// A present token on a non-read operation refuses as `Malformed`
+/// instead of serving an unbound answer under a bound request.
+#[test]
+fn non_read_operations_refuse_a_present_token() {
+    let (parts, dir) = composed_parts();
+    let server = OwnerServer::new(OwnerHandles::from_parts(&parts));
+    for op in [OP_LOOKUP, OP_STAT, OP_READDIR] {
+        let response = server.dispatch(RawRequest {
+            v: WIRE_VERSION,
+            id: 7,
+            op: op.to_string(),
+            params: serde_json::to_value(PathParams {
+                path: "hello.txt".to_string(),
+                identity: Some("ab".repeat(32)),
+            })
+            .unwrap(),
+        });
+        match response.result {
+            WireResult::Err(error) => assert_eq!(error.code, WireErrorCode::Malformed),
+            ok => panic!("{op} with a token refuses as Malformed: {ok:?}"),
+        }
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 // ---------------------------------------------------------------------------
 // Dispatch over a composed view
 // ---------------------------------------------------------------------------
@@ -371,6 +481,7 @@ fn dispatch_refuses_with_explicit_codes() {
         op: OP_LOOKUP.to_string(),
         params: serde_json::to_value(PathParams {
             path: "hello.txt".to_string(),
+            identity: None,
         })
         .unwrap(),
     });
@@ -671,6 +782,7 @@ fn shutdown_completes_with_a_client_connected() {
         op: OP_LOOKUP.to_string(),
         params: serde_json::to_value(PathParams {
             path: "hello.txt".to_string(),
+            identity: None,
         })
         .unwrap(),
     })
@@ -732,6 +844,7 @@ fn socket_round_trip_serves_a_lookup() {
         op: OP_LOOKUP.to_string(),
         params: serde_json::to_value(PathParams {
             path: "hello.txt".to_string(),
+            identity: None,
         })
         .unwrap(),
     })
@@ -1296,6 +1409,7 @@ fn submit_reports_the_same_outcome_both_ways() {
         op: OP_CAPTURE_PARENT.to_string(),
         params: serde_json::to_value(PathParams {
             path: String::new(),
+            identity: None,
         })
         .unwrap(),
     });
@@ -1770,6 +1884,7 @@ fn broken_submit_connection_is_unconfirmed_and_reconciles() {
         op: OP_LOOKUP.to_string(),
         params: serde_json::to_value(PathParams {
             path: "reconcile-me".to_string(),
+            identity: None,
         })
         .unwrap(),
     })
@@ -1852,6 +1967,7 @@ fn headless_run_serves_the_interface() {
         op: OP_READDIR.to_string(),
         params: serde_json::to_value(PathParams {
             path: String::new(),
+            identity: None,
         })
         .unwrap(),
     })
@@ -2097,6 +2213,7 @@ fn stalled_mid_frame_closes_with_zero_misframed_traffic() {
     let lookup_params = || {
         serde_json::to_value(PathParams {
             path: "hello.txt".to_string(),
+            identity: None,
         })
         .unwrap()
     };
@@ -2186,6 +2303,7 @@ fn overlong_length_prefix_closes_without_answer() {
         OP_LOOKUP,
         serde_json::to_value(PathParams {
             path: "hello.txt".to_string(),
+            identity: None,
         })
         .unwrap(),
     );
@@ -2269,6 +2387,7 @@ fn over_limit_submit_is_a_typed_toolarge_not_silence() {
         op: OP_LOOKUP.to_string(),
         params: serde_json::to_value(PathParams {
             path: "hello.txt".to_string(),
+            identity: None,
         })
         .unwrap(),
     })
@@ -2311,6 +2430,7 @@ fn stalled_mid_body_closes_with_zero_misframed_traffic() {
         op: OP_LOOKUP.to_string(),
         params: serde_json::to_value(PathParams {
             path: "hello.txt".to_string(),
+            identity: None,
         })
         .unwrap(),
     })
@@ -2345,6 +2465,7 @@ fn stalled_mid_body_closes_with_zero_misframed_traffic() {
         OP_LOOKUP,
         serde_json::to_value(PathParams {
             path: "hello.txt".to_string(),
+            identity: None,
         })
         .unwrap(),
     );
@@ -2403,6 +2524,7 @@ fn accept_flood_stays_bounded() {
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     let lookup_params = serde_json::to_value(PathParams {
         path: "hello.txt".to_string(),
+        identity: None,
     })
     .unwrap();
     let response = loop {
@@ -2454,8 +2576,31 @@ fn client_serves_the_typed_surface() {
         entries.iter().any(|entry| entry.name == "hello.txt"),
         "the root lists the seeded file"
     );
-    let (bytes, _, _) = client.read("hello.txt").expect("read serves");
+    let (bytes, _, _) = client.read("hello.txt", None).expect("read serves");
     assert_eq!(bytes, b"hello owner");
+    // Identity-bound read: the verified token serves the entry, a
+    // foreign token refuses as StaleEntry (the replacement's bytes
+    // never serve under the old verification), and a malformed
+    // token is Malformed, never silently dropped.
+    let WireNode::File {
+        identity: Some(token),
+        ..
+    } = node
+    else {
+        panic!("the seeded file carries an entry token: {node:?}");
+    };
+    let (bound, _, _) = client
+        .read("hello.txt", Some(&token))
+        .expect("the verified token serves");
+    assert_eq!(bound, b"hello owner");
+    match client.read("hello.txt", Some(&"ff".repeat(32))) {
+        Err(ClientError::Refused(error)) => assert_eq!(error.code, WireErrorCode::StaleEntry),
+        other => panic!("a foreign token refuses as StaleEntry: {other:?}"),
+    }
+    match client.read("hello.txt", Some("not-hex")) {
+        Err(ClientError::Refused(error)) => assert_eq!(error.code, WireErrorCode::Malformed),
+        other => panic!("a malformed token refuses as Malformed: {other:?}"),
+    };
     match client.observe() {
         Err(ClientError::Refused(error)) => assert_eq!(error.code, WireErrorCode::Unobserved),
         other => panic!("no pass completed, so observe refuses explicitly: {other:?}"),
@@ -2630,7 +2775,9 @@ fn mounted_owner_serves_socket_alongside_backend() {
         matches!(node, WireNode::File { size: 11, .. }),
         "lookup serves the seeded file while mounted: {node:?}"
     );
-    let (bytes, _, _) = client.read("hello.txt").expect("read serves while mounted");
+    let (bytes, _, _) = client
+        .read("hello.txt", None)
+        .expect("read serves while mounted");
     assert_eq!(bytes, b"hello owner");
     let outcome = client
         .submit(WireMutationKind::Mkdir {
@@ -2978,6 +3125,7 @@ fn policy_ok(server: &OwnerServer, op: &str, path: &str) -> WireOk {
         op: op.to_string(),
         params: serde_json::to_value(PathParams {
             path: path.to_string(),
+            identity: None,
         })
         .unwrap(),
     });
@@ -2997,6 +3145,7 @@ fn policy_err(server: &OwnerServer, op: &str, path: &str) -> WireError {
         op: op.to_string(),
         params: serde_json::to_value(PathParams {
             path: path.to_string(),
+            identity: None,
         })
         .unwrap(),
     });
@@ -3786,6 +3935,7 @@ fn submit_refuses_the_old_wire_version() {
         op: OP_LOOKUP.to_string(),
         params: serde_json::to_value(PathParams {
             path: "".to_string(),
+            identity: None,
         })
         .unwrap(),
     });

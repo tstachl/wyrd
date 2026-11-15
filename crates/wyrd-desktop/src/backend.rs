@@ -184,9 +184,11 @@ impl DesktopBackend {
 
     /// Read one whole file, plus serving generation and durable
     /// revision. Files past the interface read bound refuse with
-    /// `TooLarge` — never truncated, never streamed.
+    /// `TooLarge` — never truncated, never streamed. Path-only: this
+    /// is a one-shot read, never the verify-then-read of the File
+    /// Provider hydration path, so no token binds it.
     pub fn read(&self, path: &str) -> Result<(Vec<u8>, u64, u64), BackendError> {
-        self.with_client(|client| client.read(path))
+        self.with_client(|client| client.read(path, None))
     }
 
     /// The owner's durable observation: what a member may observe,

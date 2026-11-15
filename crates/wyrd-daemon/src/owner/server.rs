@@ -46,13 +46,14 @@ use wyrd_core::view::{NamespaceView, Node, ViewError};
 use wyrd_core::wake::WakeSignal;
 use wyrd_core::want::{WantError, WantRegistry};
 use wyrd_format::DriveId;
+use wyrd_format::EntryIdentity;
 
 use crate::vault::OwnerView;
 
 use super::mapping::{
-    map_policy_error, mutation_kind_from_wire, wire_attr, wire_dir_entry, wire_freshness,
-    wire_mailbox_health, wire_mutation_error, wire_mutation_outcome, wire_node, wire_policy_row,
-    wire_sync_report, wire_sync_status,
+    map_policy_error, mutation_kind_from_wire, node_token, wire_attr, wire_dir_entry,
+    wire_freshness, wire_identity, wire_mailbox_health, wire_mutation_error, wire_mutation_outcome,
+    wire_node, wire_policy_row, wire_sync_report, wire_sync_status,
 };
 use super::wire::{
     PathParams, RawRequest, SubmitParams, WireError, WireErrorCode, WireLiveness,
@@ -968,6 +969,7 @@ impl OwnerServer {
                 format!("bad lookup params: {error}"),
             )
         })?;
+        reject_bound_non_read("lookup", &params)?;
         let projection = self.current_projection()?;
         let node = projection
             .view()
@@ -987,6 +989,7 @@ impl OwnerServer {
                 format!("bad stat params: {error}"),
             )
         })?;
+        reject_bound_non_read("stat", &params)?;
         let projection = self.current_projection()?;
         let attr = projection
             .view()
@@ -1006,6 +1009,7 @@ impl OwnerServer {
                 format!("bad readdir params: {error}"),
             )
         })?;
+        reject_bound_non_read("readdir", &params)?;
         let projection = self.current_projection()?;
         let node = projection
             .view()
@@ -1027,14 +1031,29 @@ impl OwnerServer {
             )
         })?;
         let projection = self.current_projection()?;
+        let node = projection
+            .view()
+            .lookup(&params.path)
+            .map_err(map_view_error)?;
+        // Identity-bound read: the refusal is decided from the
+        // resolved node before any byte is touched — conflicted
+        // first, then the token equality — so the check and the
+        // served bytes come from one immutable generation.
+        // Present must parse — never silently dropped — reusing the
+        // node-identity rule; absent stays path-only.
+        let expected = wire_identity(&params.identity).map_err(|error| {
+            (
+                WireErrorCode::Malformed,
+                format!("bad read identity for {}: {error}", params.path),
+            )
+        })?;
+        if let Some((code, message)) = bound_read_refusal(&node, expected.as_ref(), &params.path) {
+            return Err((code, message));
+        }
         // Bound one request's memory before touching the bytes: a
         // file past the bound is refused explicitly, never
         // truncated and never streamed past the cap.
-        let size = match projection
-            .view()
-            .lookup(&params.path)
-            .map_err(map_view_error)?
-        {
+        let size = match node {
             Node::File { size, .. } => size,
             // Symlinks resolve at the presentation boundary and
             // conflicts address through version-qualified paths: a
@@ -1185,6 +1204,7 @@ impl OwnerServer {
                 format!("bad capture-parent params: {error}"),
             )
         })?;
+        reject_bound_non_read("capture-parent", &params)?;
         match self.handles.mutations.capture_parent(&params.path) {
             Ok(Some(token)) => Ok(WireOk::ParentToken {
                 token: WireParentToken {
@@ -1257,6 +1277,7 @@ impl OwnerServer {
                 format!("bad policy-pin params: {error}"),
             )
         })?;
+        reject_bound_non_read("policy-pin", &params)?;
         match self
             .handles
             .policy
@@ -1290,6 +1311,7 @@ impl OwnerServer {
                 format!("bad policy-unpin params: {error}"),
             )
         })?;
+        reject_bound_non_read("policy-unpin", &params)?;
         match self
             .handles
             .policy
@@ -1323,6 +1345,7 @@ impl OwnerServer {
                 format!("bad policy-evict params: {error}"),
             )
         })?;
+        reject_bound_non_read("policy-evict", &params)?;
         match self
             .handles
             .policy
@@ -1360,6 +1383,7 @@ impl OwnerServer {
                 format!("bad policy-status params: {error}"),
             )
         })?;
+        reject_bound_non_read("policy-status", &params)?;
         match self
             .handles
             .policy
@@ -1417,6 +1441,50 @@ fn refuse(id: u64, code: WireErrorCode, message: String) -> WireResponse {
         id,
         result: WireResult::Err(WireError { code, message }),
     }
+}
+
+/// The bound-read refusal for a resolved node, decided before any
+/// byte is touched: a conflicted path refuses as conflicted before
+/// any token comparison (four conditions stay distinct, never
+/// collapsed into one), then a presented token must equal the
+/// node's own — `None` when the entry is identity-less — or the
+/// read refuses as `StaleEntry`. Absent with no expectation serves;
+/// the caller distinguishes "no token asked" from "token asked and
+/// matched" nowhere, because both proceed identically.
+pub(super) fn bound_read_refusal(
+    node: &Node,
+    expected: Option<&EntryIdentity>,
+    path: &str,
+) -> Option<(WireErrorCode, String)> {
+    if matches!(node, Node::Conflict { .. }) {
+        return Some((
+            WireErrorCode::Conflicted,
+            format!("{path} is conflicted across heads"),
+        ));
+    }
+    match (expected, node_token(node)) {
+        (Some(wanted), found) if found.as_ref() != Some(wanted) => Some((
+            WireErrorCode::StaleEntry,
+            format!(
+                "stale entry identity for {path:?}: the path no longer resolves to the verified entry"
+            ),
+        )),
+        _ => None,
+    }
+}
+
+/// The entry token binds reads only: a caller that passes one to
+/// any path-addressed operation besides `read` believes the answer
+/// is bound, and it is not — refuse loudly instead of serving an
+/// unbound answer under a bound request.
+fn reject_bound_non_read(op: &str, params: &PathParams) -> Result<(), (WireErrorCode, String)> {
+    if params.identity.is_some() {
+        return Err((
+            WireErrorCode::Malformed,
+            format!("bad {op} params: identity binds reads only"),
+        ));
+    }
+    Ok(())
 }
 
 /// Map a view failure to a wire refusal. Every variant names its
