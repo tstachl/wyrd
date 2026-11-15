@@ -13,6 +13,7 @@ import {
   freshnessLabel,
   shortId,
   suggestedDriveDirFor,
+  withDevCliHint,
 } from "./format.js";
 
 test("observation stamps render as UTC clock times", () => {
@@ -71,4 +72,13 @@ test("drive suggestions derive from the credential base, never guesses", () => {
     suggestedDriveDirFor("beta", "/a/keys/identity"),
   ).toBe("/a/drives/beta");
   expect(suggestedDriveDirFor("beta", "")).toBeNull();
+});
+
+test("missing dev CLI names the build that provides it", () => {
+  const missing =
+    "`__build_info` failed (no exit code): cannot execute /tmp/wyrd: No such file or directory (os error 2)";
+  expect(withDevCliHint(missing)).toContain("cargo build -p wyrd-cli");
+  expect(withDevCliHint("CLI build 9.9.9 does not match")).toBe(
+    "CLI build 9.9.9 does not match",
+  );
 });

@@ -79,3 +79,18 @@ export function suggestedDriveDirFor(nameValue: string, identityPath: string): s
   const safeName = nameValue.trim() === "" ? "alpha" : nameValue.trim();
   return `${base}/drives/${safeName}`;
 }
+
+/**
+ * Missing-CLI hint for version-mismatch detail: the desktop resolves
+ * the version-matched `wyrd` binary as a sibling of its own binary
+ * (never `PATH`), so a fresh dev checkout without `cargo build -p
+ * wyrd-cli` reports `cannot execute … No such file`. Append the
+ * one-line build pointer where the reason names that case; otherwise
+ * return the reason unchanged. Pure over the input, pinned below.
+ */
+export function withDevCliHint(reason: string): string {
+  if (reason.includes("cannot execute") && reason.includes("No such file")) {
+    return `${reason} — in development, build the CLI (cargo build -p wyrd-cli) so wyrd sits beside the desktop binary`;
+  }
+  return reason;
+}

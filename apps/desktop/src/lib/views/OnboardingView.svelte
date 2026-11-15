@@ -10,6 +10,7 @@ never enter this component. -->
   import Button from "$lib/components/ui/button.svelte";
   import type { KeyDefaults, OnboardingReport } from "$lib/ipc/results.js";
   import { pickExistingFile } from "$lib/ipc/files.js";
+  import { withDevCliHint } from "./format.js";
 
   type Stage = "identity" | "passphrase" | "recovery" | "ready";
   type IdentityChoice = "create" | "restore";
@@ -223,7 +224,7 @@ never enter this component. -->
       case "expectedfailure":
         return `${prefix} ${result.detail}`;
       case "versionmismatch":
-        return `Version mismatch (reinstall the matched pair): ${result.reason}`;
+        return `Version mismatch (reinstall the matched pair): ${withDevCliHint(result.reason)}`;
       case "unknown":
         return `Outcome unknown: ${result.detail}`;
     }
@@ -449,12 +450,29 @@ never enter this component. -->
   {/if}
 
   {#if confirmDiscard}
-    <div class="mt-4 rounded-md border border-ink/15 dark:border-bone/20 px-3 py-2 text-sm" role="alertdialog" aria-label="Discard onboarding">
-      <p class="font-semibold">Discard and start over?</p>
-      <p class="mt-1">The identity is not saved yet{useGenerated && generatedPassphrase !== null ? " and anything generated will be lost" : ""}. Starting over leaves nothing behind.</p>
-      <div class="mt-2 flex gap-2">
-        <Button variant="secondary" size="sm" onclick={() => (confirmDiscard = false)}>Keep going</Button>
-        <Button variant="default" size="sm" onclick={onQuit}>Discard</Button>
+    <div
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+      onclick={() => (confirmDiscard = false)}
+      onkeydown={(event) => {
+        if (event.key === "Escape") confirmDiscard = false;
+      }}
+      role="presentation"
+    >
+      <div
+        class="w-full max-w-sm rounded-md border border-ink/15 bg-bone px-4 py-3 text-sm text-ink shadow-lg dark:border-bone/20 dark:bg-ink dark:text-bone"
+        role="alertdialog"
+        aria-label="Discard onboarding"
+        aria-modal="true"
+        tabindex={-1}
+        onclick={(event) => event.stopPropagation()}
+        onkeydown={(event) => event.stopPropagation()}
+      >
+        <p class="font-semibold">Discard and start over?</p>
+        <p class="mt-1">The identity is not saved yet{useGenerated && generatedPassphrase !== null ? " and anything generated will be lost" : ""}. Starting over leaves nothing behind.</p>
+        <div class="mt-3 flex justify-end gap-2">
+          <Button variant="secondary" size="sm" onclick={() => (confirmDiscard = false)}>Keep going</Button>
+          <Button variant="default" size="sm" onclick={onQuit}>Discard</Button>
+        </div>
       </div>
     </div>
   {/if}

@@ -10,7 +10,7 @@ entered by hand elsewhere. -->
   import type { ProvisionReport } from "$lib/ipc/results.js";
   import { pickExistingFile } from "$lib/ipc/files.js";
   import type { ProvisionCreateArgs, ProvisionJoinArgs, ProvisionLeaveArgs } from "$lib/ipc/operations.js";
-  import { suggestedDriveDirFor } from "./format.js";
+  import { suggestedDriveDirFor, withDevCliHint } from "./format.js";
 
   interface Props {
     pending: boolean;
@@ -105,7 +105,7 @@ entered by hand elsewhere. -->
       case "helddrive":
         return `Held drive (another process holds it — not retried): ${result.detail}`;
       case "versionmismatch":
-        return `Version mismatch (reinstall the matched pair): ${result.reason}`;
+        return `Version mismatch (reinstall the matched pair): ${withDevCliHint(result.reason)}`;
       case "busy":
         return `Another operation is already in flight on ${result.drive_dir} — not queued.`;
       case "unknown":

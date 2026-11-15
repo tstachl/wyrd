@@ -423,7 +423,7 @@
         {presentation.pendingRequests} request(s) in flight
       </p>
     {/if}
-    {#if drives.length > 1}
+    {#if drives.length > 1 && gate === "done"}
       <nav aria-label="Drives" class="mt-4 space-y-1">
         {#each drives as drive (drive.drive_dir)}
           <button
@@ -440,6 +440,7 @@
         {/each}
       </nav>
     {/if}
+    {#if gate === "done"}
     <nav aria-label="Views" class="mt-4 space-y-1">
       {#each views as view (view.id)}
         <button
@@ -455,6 +456,9 @@
         </button>
       {/each}
     </nav>
+    {:else}
+    <p class="mt-4 text-xs text-bone/70">Set up this device's identity to unlock Status, Drives, and Settings.</p>
+    {/if}
   </aside>
 
   <main class="max-w-2xl flex-1 p-8" aria-live="polite">
