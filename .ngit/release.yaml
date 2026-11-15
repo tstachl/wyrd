@@ -38,8 +38,9 @@
 #      (`ci stop` ends all CI), so check `ci status` before any manual
 #      trigger, and trigger only to retry a failed run.
 #   6. Build the macOS legs locally, one `.app` bundle per arch carrying
-#      the host, wrapped in the `.dmg` this manifest names. Build the
-#      bundle through the Tauri hook (`packaging/macos/stage-appex.sh`
+#      the host, wrapped in the `.dmg` this manifest names. Build through
+#      `packaging/macos/build-bundle.sh` (SDK link-order pin plus the
+#      no-Nix-links guard, then the Tauri hook `packaging/macos/stage-appex.sh`
 #      stages and signs the appex; `bundle.macOS.files` copies it into
 #      `Contents/PlugIns`), then sign nested-first with the
 #      maintainer-held Developer ID: the appex first (profile embedded,
