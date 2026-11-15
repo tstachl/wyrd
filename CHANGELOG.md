@@ -210,6 +210,12 @@ is transient — no drive data is affected.
 
 ### Changed
 
+- Bundle icons follow the Bone Held mark: `apps/shared/brand/held.svg`
+  now paints the mark in Bone instead of Amber, matching the in-app
+  lockup and the marketing favicon, and
+  `crates/wyrd-desktop/icons/` is regenerated from it with
+  `cargo tauri icon`. The menu-bar template icon is unchanged.
+
 - Redesigned desktop shell (`apps/desktop`): the three-item sidebar is
   replaced by a device-level Drives home and a drive workspace with
   Status and Settings tabs. Drives and relays render as cards and

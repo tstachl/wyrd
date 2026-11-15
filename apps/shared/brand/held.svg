@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="Wyrd Held mark">
   <rect x="8" y="8" width="240" height="240" rx="56" fill="#121614"/>
-  <path d="M48 62 L88 211.3 L128 62 L168 211.3 L208 62" fill="none" stroke="#E3A13B" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"/>
-  <circle cx="48" cy="62" r="22" fill="#E3A13B"/>
-  <circle cx="128" cy="62" r="22" fill="#E3A13B"/>
-  <circle cx="208" cy="62" r="22" fill="#E3A13B"/>
+  <path d="M48 62 L88 211.3 L128 62 L168 211.3 L208 62" fill="none" stroke="#ECE7DA" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="48" cy="62" r="22" fill="#ECE7DA"/>
+  <circle cx="128" cy="62" r="22" fill="#ECE7DA"/>
+  <circle cx="208" cy="62" r="22" fill="#ECE7DA"/>
 </svg>
