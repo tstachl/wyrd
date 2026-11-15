@@ -29,7 +29,7 @@
 //! these, and the per-operation wrappers there land against this
 //! list — never against invented names.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager, Runtime};
 use wyrd_owner_client::{
     OwnerClient, WireAttr, WireDirEntry, WireFreshness, WireLiveness, WireMutationKind,
@@ -572,10 +572,191 @@ pub async fn provision_reconfigure<R: Runtime>(
     .await
 }
 
+/// Platform key defaults plus existence (no secret reads). A local
+/// query: infallible, counted in flight. Pre-commit the UI treats the
+/// paths as intended locations; post-commit the same paths with
+/// existence set are the actual files. Trivial cost (two metadata
+/// probes), so no blocking pool — the flight count still covers the
+/// dispatch for the quit drain.
+#[tauri::command]
+pub async fn onboarding_defaults<R: Runtime>(app: AppHandle<R>) -> super::onboarding::KeyDefaults {
+    let _flight = app.state::<super::FlightTracker>().enter();
+    super::onboarding::default_key_paths()
+}
+
+/// One generated passphrase for write-down: writes nothing. Infallible
+/// like the other local queries — the report carries the outcome plus
+/// fresh existence, and a dead worker resolves `Unknown` inside the
+/// payload, never a throw.
+#[tauri::command]
+pub async fn onboarding_new_passphrase<R: Runtime>(
+    app: AppHandle<R>,
+) -> super::onboarding::OnboardingReport {
+    run_onboarding(app, "onboarding_new_passphrase", |state| {
+        let cli = state.cli_bin();
+        match cli {
+            Ok(bin) => {
+                super::onboarding::run_new_passphrase(&bin, super::onboarding::onboarding_timeout())
+            }
+            Err(reason) => super::onboarding::OnboardingReport {
+                result: super::onboarding::OnboardingResult::VersionMismatch { reason },
+                defaults: super::onboarding::default_key_paths(),
+            },
+        }
+    })
+    .await
+}
+
+/// Commit arguments: credential paths plus the passphrase text. The
+/// text travels backend -> CLI on the stdin pipe (never argv); the
+/// frontend holds it only from write-down to Finish.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OnboardingCommitArgs {
+    pub identity_file: String,
+    pub passphrase_file: String,
+    pub passphrase: String,
+}
+
+/// Commit both credential files (generate + atomic write + read-back
+/// signal via fresh existence). Infallible; dead workers resolve
+/// `Unknown`.
+#[tauri::command]
+pub async fn onboarding_commit<R: Runtime>(
+    app: AppHandle<R>,
+    args: OnboardingCommitArgs,
+) -> super::onboarding::OnboardingReport {
+    run_onboarding(app, "onboarding_commit", move |state| {
+        let cli = state.cli_bin();
+        match cli {
+            Ok(bin) => super::onboarding::run_commit(
+                &bin,
+                Path::new(&args.identity_file),
+                Path::new(&args.passphrase_file),
+                &args.passphrase,
+                super::onboarding::onboarding_timeout(),
+            ),
+            Err(reason) => super::onboarding::OnboardingReport {
+                result: super::onboarding::OnboardingResult::VersionMismatch { reason },
+                defaults: super::onboarding::default_key_paths(),
+            },
+        }
+    })
+    .await
+}
+
+/// Verify arguments: credential paths only, never contents.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OnboardingVerifyArgs {
+    pub identity_file: String,
+    pub passphrase_file: String,
+}
+
+/// Verify both files through the hardened reader (exit codes only).
+/// Infallible; the report's fresh existence is the read-back signal.
+#[tauri::command]
+pub async fn onboarding_verify<R: Runtime>(
+    app: AppHandle<R>,
+    args: OnboardingVerifyArgs,
+) -> super::onboarding::OnboardingReport {
+    run_onboarding(app, "onboarding_verify", move |state| {
+        let cli = state.cli_bin();
+        match cli {
+            Ok(bin) => super::onboarding::run_verify(
+                &bin,
+                Path::new(&args.identity_file),
+                Path::new(&args.passphrase_file),
+                super::onboarding::onboarding_timeout(),
+            ),
+            Err(reason) => super::onboarding::OnboardingReport {
+                result: super::onboarding::OnboardingResult::VersionMismatch { reason },
+                defaults: super::onboarding::default_key_paths(),
+            },
+        }
+    })
+    .await
+}
+
+/// Reveal arguments: one path to show in the platform file manager.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RevealArgs {
+    pub path: String,
+}
+
+/// Best-effort reveal of one path in the platform file manager
+/// (`open -R` on macOS, `xdg-open` on the directory elsewhere).
+/// Returns `true` where the opener spawned; never throws — a missing
+/// opener is not an onboarding failure.
+#[tauri::command]
+pub async fn reveal_in_folder<R: Runtime>(app: AppHandle<R>, args: RevealArgs) -> bool {
+    let _flight = app.state::<super::FlightTracker>().enter();
+    let path = args.path;
+    tauri::async_runtime::spawn_blocking(move || reveal_path(&path))
+        .await
+        .unwrap_or(false)
+}
+
+fn reveal_path(path: &str) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg("-R")
+            .arg(path)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map(|_| true)
+            .unwrap_or(false)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let dir = std::path::Path::new(path)
+            .parent()
+            .map(|p| p.as_os_str().to_owned())
+            .unwrap_or_else(|| std::ffi::OsString::from(path));
+        std::process::Command::new("xdg-open")
+            .arg(dir)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map(|_| true)
+            .unwrap_or(false)
+    }
+}
+
+/// Run one onboarding CLI exchange on the blocking pool and count it
+/// in flight. Infallible: a dead worker resolves `Unknown` with fresh
+/// existence, never success and never a throw.
+async fn run_onboarding<R, F>(
+    app: AppHandle<R>,
+    op: &'static str,
+    call: F,
+) -> super::onboarding::OnboardingReport
+where
+    F: FnOnce(&super::AppState) -> super::onboarding::OnboardingReport + Send + 'static,
+    R: Runtime,
+{
+    let _flight = app.state::<super::FlightTracker>().enter();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<super::AppState>();
+        call(&state)
+    })
+    .await
+    .unwrap_or_else(|join| super::onboarding::OnboardingReport {
+        result: super::onboarding::OnboardingResult::Unknown {
+            detail: format!("ipc worker failed for {op}: {join}"),
+        },
+        defaults: super::onboarding::default_key_paths(),
+    })
+}
+
 /// Run one lifecycle operation serialized per drive: validate the
 /// identity, claim the flight (refuse `Busy` when held), run the
 /// blocking CLI exchange, release the flight, then re-read the
-/// registry, probe every drive, and re-observe the operated drive's
 /// membership — verification-via-reread on every path, including
 /// timeouts and spawn failures. Everything runs on the blocking
 /// pool (the registry probe fans out over sockets with a per-drive

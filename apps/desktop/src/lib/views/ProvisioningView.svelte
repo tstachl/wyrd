@@ -13,21 +13,30 @@ entered by hand elsewhere. -->
 
   interface Props {
     pending: boolean;
+    initialIdentityFile: string | null;
+    initialPassphraseFile: string | null;
     onCreate: (args: ProvisionCreateArgs) => Promise<ProvisionReport>;
     onJoin: (args: ProvisionJoinArgs) => Promise<ProvisionReport>;
     onLeave: (args: ProvisionLeaveArgs) => Promise<ProvisionReport>;
     onDone: () => void;
   }
 
-  let { pending, onCreate, onJoin, onLeave, onDone }: Props = $props();
+  let { pending, initialIdentityFile, initialPassphraseFile, onCreate, onJoin, onLeave, onDone }: Props = $props();
 
   let mode: "create" | "join" | "leave" = $state("create");
   let name = $state("");
   let driveDir = $state("");
   let relays = $state("");
-  let identityFile = $state("");
-  let passphraseFile = $state("");
+  let identityFile = $state(initialIdentityFile ?? "");
+  let passphraseFile = $state(initialPassphraseFile ?? "");
   let invitationFile = $state("");
+  // Pre-fill from onboarding (first create goes through the
+  // unchanged constrained CLI adapter with committed credentials).
+  // Only fills empty fields, never clobbers user edits.
+  $effect(() => {
+    if (initialIdentityFile !== null && identityFile === "") identityFile = initialIdentityFile;
+    if (initialPassphraseFile !== null && passphraseFile === "") passphraseFile = initialPassphraseFile;
+  });
   let acknowledged = $state(false);
   let working = $state(false);
   let report: ProvisionReport | null = $state(null);
