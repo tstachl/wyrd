@@ -7,10 +7,10 @@
 //
 // - Marketing stays build-free static, so it vendors plain copies of
 //   the brand fonts. Each copy must stay byte-identical to the brand
-//   file. (The marketing favicon is a deliberate Bone-on-Ink variant of
-//   the Amber-on-Ink Held mark, so SVGs pin shared geometry, not
-//   bytes: the mark path data must appear in `held.svg`,
-//   `favicon.svg`, and the desktop's inlined `held-mark.svelte`.)
+//   file. The mark is Bone on Ink everywhere — `held.svg`, the
+//   marketing favicon, the generated bundle icons and the desktop's
+//   inlined `held-mark.svelte` — so SVGs pin shared geometry, not
+//   bytes: the mark path data must appear in all three source files.
 // - Desktop imports the brand font directly (Vite bundles it into
 //   `dist/`), so the check pins the import path instead of a copy.
 // - Both consumers' CSS must contain every token hex, so a token edit
