@@ -124,14 +124,15 @@ for marker in 'CARGO_TARGET_DIR' 'CARGO_BUILD_TARGET' '--target=*)'; do
 done
 pass "installer mirrors the wrapper release-dir rule"
 
-# 6c. The destination guard canonicalizes before comparing (a
-# lexical check is bypassed by `..`), and the swap keeps the
-# previous install across a failed rename (`.old`) while a
-# pre-existing staging name refuses instead of deleting another
-# run's work.
-for marker in 'DEST_PARENT_DIR=$(cd' '.old' 'another install in flight'; do
+# 6c. The destination guard canonicalizes physically (`-P`, so
+# symlinked parents resolve) before comparing, and the swap uses
+# PID-suffixed staging names, restores only its own `.old`, and
+# never deletes another run's work. The refusal block precedes
+# the wrapper invocation, so a refused destination costs no
+# compile (structural; read top-down).
+for marker in 'pwd -P' '.new.$$' '.old.$$' '"$APP"|"$APP"/*'; do
   match "$marker" "$INSTALL_CODE" \
-    || die "install: safe-replace marker '$marker' missing"
+    || die "install: safe-destination marker '$marker' missing"
 done
 pass "installer canonicalizes and swaps safely"
 
@@ -173,8 +174,18 @@ match 'WYRD_NO_MOUNT' "$INSTALL_CODE" \
   || die "install: ad-hoc mount drop missing"
 match '--no-default-features' "$STAGE_CODE" \
   || die "stage-cli: no-FUSE build flag missing"
-match 'LINKED=$(otool' "$STAGE_CODE" \
-  || die "stage-cli: linkage is not captured without a pipe"
+# N15: the B2 repair is mechanical — with WYRD_NO_MOUNT=1 the
+# stage refuses any FUSE mention in the captured linkage — and the
+# timestamp is conditional: a real identity seals with it, ad-hoc
+# omits it.
+match '[Ff][Uu][Ss][Ee]' "$STAGE_CODE" \
+  || die "stage-cli: no fuse-free guard for the vault-only CLI"
+match 'SIGN_IDENTITY:-}' "$WRAPPER_CODE" \
+  || die "wrapper: reseal names no signing identity"
+match '!= "-"' "$WRAPPER_CODE" \
+  || die "wrapper: timestamp is not conditioned on a real identity"
+match '--timestamp' "$WRAPPER_CODE" \
+  || die "wrapper: real-identity reseal carries no timestamp"
 pass "stage script builds and signs the release CLI"
 
 # 9b. Linkage is covered on both sides of the stage boundary:
@@ -189,6 +200,8 @@ match 'stage/wyrd' "$CHECK_CODE" \
   && die "check: staged path would defeat fail-closed"
 match 'otool -L' "$STAGE_CODE" \
   || die "stage-cli: no staged-CLI linkage check"
+match 'LINKED=$(otool' "$STAGE_CODE" \
+  || die "stage-cli: linkage is not captured without a pipe"
 match '/nix/store' "$STAGE_CODE" \
   || die "stage-cli: linkage check names no Nix store"
 pass "linkage is covered on both sides of the stage boundary"

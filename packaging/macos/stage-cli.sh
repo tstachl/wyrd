@@ -146,6 +146,10 @@ chmod +x "$STAGED"
 # no /nix/store path (same rule the wrapper guards for the bundle).
 # Capture once and match without a pipe: under `pipefail` a
 # `grep -q` early exit would SIGPIPE otool into a spurious pass.
+# With WYRD_NO_MOUNT=1 the CLI must additionally link no FUSE at
+# all — the vault-only binary that starts on a clean Mac (this is
+# the mechanical form of the B2 repair: a strong libfuse3 entry
+# fails the stage with its cause named).
 # otool absent means not a macOS bundle host — skip with a note,
 # following check-no-nix-links.sh.
 if command -v otool >/dev/null 2>&1; then
@@ -157,6 +161,15 @@ if command -v otool >/dev/null 2>&1; then
             exit 1
             ;;
     esac
+    if [ "${WYRD_NO_MOUNT:-0}" = "1" ]; then
+        case "$LINKED" in
+            *[Ff][Uu][Ss][Ee]*)
+                echo "error: vault-only staged CLI links FUSE ($WYRD_NO_MOUNT=1):" >&2
+                printf '%s\n' "$LINKED" | grep -i fuse >&2 || true
+                exit 1
+                ;;
+        esac
+    fi
 else
     echo "note: otool absent, skipping staged-CLI linkage check." >&2
 fi

@@ -133,35 +133,21 @@ case "$DEST" in
         exit 1
         ;;
 esac
-# Canonicalize before the build-tree comparison: a lexical check is
-# bypassed by `..` (`/Applications/../<repo>/x.app`).
+# Canonicalize before the build-tree comparison: a lexical check
+# is bypassed by `..` (`/Applications/../<repo>/x.app`). Physical
+# (`-P`) so symlinked parents (e.g. /tmp) resolve before comparing.
 DEST_PARENT_DIR=$(dirname -- "$DEST")
 DEST_BASE_NAME=$(basename -- "$DEST")
 mkdir -p -- "$DEST_PARENT_DIR"
-DEST_PARENT_DIR=$(cd -- "$DEST_PARENT_DIR" && pwd)
+DEST_PARENT_DIR=$(cd -P -- "$DEST_PARENT_DIR" && pwd -P)
 DEST="$DEST_PARENT_DIR/$DEST_BASE_NAME"
 
-# Build through the wrapper (link-order pin plus no-Nix-links guard),
-# keeping its app-only default unless the caller forwards --bundles.
-# The ad-hoc CLI is vault-only: WYRD_NO_MOUNT=1 drops the mount
-# stack, whose macFUSE load dependency a clean Mac has no copy of.
-HAS_BUNDLES=0
-for ARG in "$@"; do
-    case "$ARG" in
-        --bundles|--bundles=*) HAS_BUNDLES=1 ;;
-    esac
-done
-if [ "$HAS_BUNDLES" -eq 0 ]; then
-    set -- --bundles app "$@"
-fi
-WYRD_NO_MOUNT=1
-export WYRD_NO_MOUNT
-"$HERE/build-bundle.sh" "$@"
-
-# Locate the built bundle: this mirrors the wrapper's release-dir
-# rule (CARGO_TARGET_DIR-aware, --target/CARGO_BUILD_TARGET
-# triple-aware) so the installer inspects what the wrapper guarded.
-# The two copies are pinned together by tests/harness/test-dev-install.sh.
+# Locate the built bundle before building: this mirrors the
+# wrapper's release-dir rule (CARGO_TARGET_DIR-aware,
+# --target/CARGO_BUILD_TARGET triple-aware) so the installer
+# inspects what the wrapper guarded. The two copies are pinned
+# together by tests/harness/test-dev-install.sh. Resolving early
+# also lets the destination refusal below run before the build.
 RELEASE_BASE="${CARGO_TARGET_DIR:-$ROOT/target}"
 TRIPLE=""
 NEXT_IS_TARGET=0
@@ -185,14 +171,11 @@ else
     RELEASE_DIR="$RELEASE_BASE/release"
 fi
 APP="$RELEASE_DIR/bundle/macos/Wyrd.app"
-if [ ! -d "$APP" ]; then
-    echo "error: built bundle not found at $APP." >&2
-    exit 1
-fi
 
 # Refuse a destination that would delete the build output or the
 # source tree: the install target must not equal the built bundle
 # and must not sit inside the repository or the target dir.
+# Runs before the build, so a refused destination costs no compile.
 case "$DEST" in
     "$APP"|"$APP"/*)
         echo "error: --dest must not be the built bundle itself: $DEST" >&2
@@ -203,6 +186,28 @@ case "$DEST" in
         exit 1
         ;;
 esac
+
+# Build through the wrapper (link-order pin plus no-Nix-links guard),
+# keeping its app-only default unless the caller forwards --bundles.
+# The ad-hoc CLI is vault-only: WYRD_NO_MOUNT=1 drops the mount
+# stack, whose macFUSE load dependency a clean Mac has no copy of.
+HAS_BUNDLES=0
+for ARG in "$@"; do
+    case "$ARG" in
+        --bundles|--bundles=*) HAS_BUNDLES=1 ;;
+    esac
+done
+if [ "$HAS_BUNDLES" -eq 0 ]; then
+    set -- --bundles app "$@"
+fi
+WYRD_NO_MOUNT=1
+export WYRD_NO_MOUNT
+"$HERE/build-bundle.sh" "$@"
+
+if [ ! -d "$APP" ]; then
+    echo "error: built bundle not found at $APP." >&2
+    exit 1
+fi
 
 # Fail closed on signature: ad-hoc verifies clean, and a broken
 # bundle never reaches /Applications.
@@ -218,13 +223,15 @@ if [ ! -f "$APP/Contents/Resources/wyrd" ]; then
     exit 1
 fi
 
-# Install: copy to a fresh staging name, verify the copy, then
-# swap through a `.old` name: the previous install survives a
-# failed swap, and a second concurrent run cannot share our
-# staging name. A pre-existing staging name refuses instead of
+# Install: copy to a PID-suffixed staging name, verify the copy,
+# then swap through a PID-suffixed `.old` name: two concurrent
+# runs never share a staging name, the previous install survives
+# a failed swap (only our own `.old` is ever removed or
+# restored), and a pre-existing staging name refuses instead of
 # deleting work another run may still be verifying.
-STAGED_DEST="$DEST.new"
-if [ -e "$STAGED_DEST" ]; then
+STAGED_DEST="$DEST.new.$$"
+OLD_DEST="$DEST.old.$$"
+if [ -e "$STAGED_DEST" ] || [ -e "$OLD_DEST" ]; then
     echo "error: staging path exists (another install in flight?): $STAGED_DEST" >&2
     exit 1
 fi
@@ -234,16 +241,17 @@ codesign --verify --deep --strict "$STAGED_DEST" || {
     rm -rf -- "$STAGED_DEST"
     exit 1
 }
-if [ -e "$DEST" ]; then
-    rm -rf -- "$DEST.old"
-    mv -- "$DEST" "$DEST.old"
+if [ -e "$DEST" ] && ! mv -- "$DEST" "$OLD_DEST"; then
+    echo "error: cannot stage the previous install aside." >&2
+    rm -rf -- "$STAGED_DEST"
+    exit 1
 fi
 if mv -- "$STAGED_DEST" "$DEST"; then
-    rm -rf -- "$DEST.old"
+    rm -rf -- "$OLD_DEST"
 else
     rc=$?
-    if [ -e "$DEST.old" ]; then
-        mv -- "$DEST.old" "$DEST"
+    if [ -e "$OLD_DEST" ]; then
+        mv -- "$OLD_DEST" "$DEST"
     fi
     echo "error: install swap failed." >&2
     exit "$rc"
