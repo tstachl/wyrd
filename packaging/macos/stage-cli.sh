@@ -19,7 +19,10 @@
 # Environment passthrough: SIGN_IDENTITY (default: ad-hoc `-`),
 # TOOLCHAIN, SDK, ARCH, CARGO_TARGET_DIR, CARGO_BUILD_TARGET,
 # TAURI_ENV_TARGET_TRIPLE (native per-arch builds only, like the
-# appex stage).
+# appex stage), WYRD_NO_MOUNT (when 1, build the CLI without the
+# mount stack: the FUSE backend links macFUSE at load, which a
+# clean Mac has no copy of — the ad-hoc bundle is vault-only, and
+# the release path keeps mount by leaving this unset).
 set -eu
 set -o pipefail 2>/dev/null || true
 
@@ -36,11 +39,11 @@ fi
 # Architecture lockstep: Tauri exports TAURI_ENV_TARGET_TRIPLE for
 # the bundle it builds. A cross-target bundle must not silently
 # embed a host-arch CLI — per-arch bundles build on their host.
-CLI_TARGET=""
+CLI_TRIPLE=""
 if [ -n "${TAURI_ENV_TARGET_TRIPLE:-}" ]; then
     case "$TAURI_ENV_TARGET_TRIPLE" in
         aarch64-apple-darwin|x86_64-apple-darwin)
-            CLI_TARGET="--target $TAURI_ENV_TARGET_TRIPLE"
+            CLI_TRIPLE="$TAURI_ENV_TARGET_TRIPLE"
             ;;
         *)
             echo "error: stage-cli.sh cannot satisfy target $TAURI_ENV_TARGET_TRIPLE (native per-arch builds only)." >&2
@@ -95,16 +98,29 @@ esac
 RUSTFLAGS="${RUSTFLAGS:-} -C link-arg=-L$DISCOVERED_SDK/usr/lib"
 export RUSTFLAGS
 
-# Build the CLI in release (same profile the wrapper guards), then
-# stage the binary. Target output follows CARGO_TARGET_DIR and an
+# Build the CLI in release (same profile the wrapper guards),
+# then stage the binary. WYRD_NO_MOUNT=1 drops the mount stack
+# (`--no-default-features`, the manifest's no-FUSE mode): the
+# mount backend hard-links macFUSE at load, which a clean Mac has
+# no copy of, so the ad-hoc bundle is vault-only and starts
+# everywhere. Target output follows CARGO_TARGET_DIR and an
 # explicit --target triple the same way build-bundle.sh resolves it.
-# shellcheck disable=SC2086
 cd "$ROOT"
-cargo build --release -p wyrd-cli $CLI_TARGET
+if [ -n "$CLI_TRIPLE" ]; then
+    if [ "${WYRD_NO_MOUNT:-0}" = "1" ]; then
+        cargo build --release --no-default-features -p wyrd-cli --target "$CLI_TRIPLE"
+    else
+        cargo build --release -p wyrd-cli --target "$CLI_TRIPLE"
+    fi
+elif [ "${WYRD_NO_MOUNT:-0}" = "1" ]; then
+    cargo build --release --no-default-features -p wyrd-cli
+else
+    cargo build --release -p wyrd-cli
+fi
 
 RELEASE_BASE="${CARGO_TARGET_DIR:-$ROOT/target}"
-if [ -n "$CLI_TARGET" ]; then
-    TRIPLE="${TAURI_ENV_TARGET_TRIPLE:-}"
+if [ -n "$CLI_TRIPLE" ]; then
+    TRIPLE="$CLI_TRIPLE"
     if [ -n "${CARGO_BUILD_TARGET:-}" ] && [ "$TRIPLE" != "$CARGO_BUILD_TARGET" ]; then
         echo "error: TAURI_ENV_TARGET_TRIPLE ($TRIPLE) disagrees with CARGO_BUILD_TARGET ($CARGO_BUILD_TARGET)." >&2
         exit 1
@@ -128,27 +144,32 @@ chmod +x "$STAGED"
 
 # Fail closed on linkage before signing: the shipped CLI must link
 # no /nix/store path (same rule the wrapper guards for the bundle).
+# Capture once and match without a pipe: under `pipefail` a
+# `grep -q` early exit would SIGPIPE otool into a spurious pass.
 # otool absent means not a macOS bundle host — skip with a note,
 # following check-no-nix-links.sh.
 if command -v otool >/dev/null 2>&1; then
-    if otool -L "$STAGED" | grep -q '/nix/store'; then
-        echo "error: staged CLI links /nix/store paths:" >&2
-        otool -L "$STAGED" | grep '/nix/store' >&2
-        exit 1
-    fi
+    LINKED=$(otool -L "$STAGED")
+    case "$LINKED" in
+        *"/nix/store"*)
+            echo "error: staged CLI links /nix/store paths:" >&2
+            printf '%s\n' "$LINKED" | grep '/nix/store' >&2 || true
+            exit 1
+            ;;
+    esac
 else
     echo "note: otool absent, skipping staged-CLI linkage check." >&2
 fi
 
 # Sign with the same identity the appex uses (default ad-hoc `-`),
-# but WITHOUT hardened runtime: the CLI loads the third-party
-# macFUSE library at runtime (`mount` mode links system FUSE), and
-# a hardened-runtime signature fails library validation against the
-# differently-signed macFUSE dylib (dead in dyld before main —
-# observed 2026-11-15). The appex keeps `--options runtime` because
-# `fileproviderd` demands it; the CLI must stay loadable. The
-# bundler seals the outer app over the staged tree, and the install
-# guard verifies the sealed copy deep-strict.
+# but WITHOUT hardened runtime: a mount-enabled CLI loads the
+# third-party macFUSE library at runtime, and a hardened-runtime
+# signature fails library validation against the differently-signed
+# macFUSE dylib (dead in dyld before main — observed 2026-11-15).
+# The appex keeps `--options runtime` because `fileproviderd`
+# demands it; a helper that must stay loadable does not take it.
+# The bundler seals the outer app over the staged tree, and the
+# install guard verifies the sealed copy deep-strict.
 SIGN_IDENTITY=${SIGN_IDENTITY:--}
 codesign --force --sign "$SIGN_IDENTITY" "$STAGED"
 

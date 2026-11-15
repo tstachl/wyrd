@@ -33,15 +33,21 @@ usage() {
     echo "(or ~/Applications) ready to launch. The bundler hook stages"
     echo "the appex plus the version-matched wyrd CLI into"
     echo "Contents/Resources/wyrd; the desktop resolves the bundled copy"
-    echo "first and the target-dir sibling only in dev."
+    echo "first and the target-dir sibling only in dev. The ad-hoc CLI"
+    echo "is vault-only (WYRD_NO_MOUNT=1): mount needs macFUSE and a"
+    echo "mount-enabled build."
     echo ""
     echo "Finder stays inert ad-hoc (no-group-container); the team-signed"
     echo "path is in packaging/macos/README.md."
 }
 
 # --help before anything that can fail: a machine without cargo can
-# still read the usage.
+# still read the usage. Stops at `--` so forwarded build args are
+# never mistaken for install flags.
 for ARG in "$@"; do
+    if [ "$ARG" = "--" ]; then
+        break
+    fi
     case "$ARG" in
         --help|-h) usage; exit 0 ;;
     esac
@@ -127,9 +133,18 @@ case "$DEST" in
         exit 1
         ;;
 esac
+# Canonicalize before the build-tree comparison: a lexical check is
+# bypassed by `..` (`/Applications/../<repo>/x.app`).
+DEST_PARENT_DIR=$(dirname -- "$DEST")
+DEST_BASE_NAME=$(basename -- "$DEST")
+mkdir -p -- "$DEST_PARENT_DIR"
+DEST_PARENT_DIR=$(cd -- "$DEST_PARENT_DIR" && pwd)
+DEST="$DEST_PARENT_DIR/$DEST_BASE_NAME"
 
 # Build through the wrapper (link-order pin plus no-Nix-links guard),
 # keeping its app-only default unless the caller forwards --bundles.
+# The ad-hoc CLI is vault-only: WYRD_NO_MOUNT=1 drops the mount
+# stack, whose macFUSE load dependency a clean Mac has no copy of.
 HAS_BUNDLES=0
 for ARG in "$@"; do
     case "$ARG" in
@@ -139,6 +154,8 @@ done
 if [ "$HAS_BUNDLES" -eq 0 ]; then
     set -- --bundles app "$@"
 fi
+WYRD_NO_MOUNT=1
+export WYRD_NO_MOUNT
 "$HERE/build-bundle.sh" "$@"
 
 # Locate the built bundle: this mirrors the wrapper's release-dir
@@ -201,20 +218,36 @@ if [ ! -f "$APP/Contents/Resources/wyrd" ]; then
     exit 1
 fi
 
-# Install: copy to a fresh staging name, verify the copy, then swap.
-# The old app is removed only after the new copy verifies, so a
-# failed copy or failed verify keeps the previous install.
+# Install: copy to a fresh staging name, verify the copy, then
+# swap through a `.old` name: the previous install survives a
+# failed swap, and a second concurrent run cannot share our
+# staging name. A pre-existing staging name refuses instead of
+# deleting work another run may still be verifying.
 STAGED_DEST="$DEST.new"
-rm -rf -- "$STAGED_DEST"
-mkdir -p "$(dirname "$DEST")"
+if [ -e "$STAGED_DEST" ]; then
+    echo "error: staging path exists (another install in flight?): $STAGED_DEST" >&2
+    exit 1
+fi
 ditto "$APP" "$STAGED_DEST"
 codesign --verify --deep --strict "$STAGED_DEST" || {
     echo "error: staged bundle at $STAGED_DEST fails codesign verification." >&2
     rm -rf -- "$STAGED_DEST"
     exit 1
 }
-rm -rf -- "$DEST"
-mv "$STAGED_DEST" "$DEST"
+if [ -e "$DEST" ]; then
+    rm -rf -- "$DEST.old"
+    mv -- "$DEST" "$DEST.old"
+fi
+if mv -- "$STAGED_DEST" "$DEST"; then
+    rm -rf -- "$DEST.old"
+else
+    rc=$?
+    if [ -e "$DEST.old" ]; then
+        mv -- "$DEST.old" "$DEST"
+    fi
+    echo "error: install swap failed." >&2
+    exit "$rc"
+fi
 codesign --verify --deep --strict "$DEST" || {
     echo "error: installed bundle at $DEST fails codesign verification." >&2
     exit 1

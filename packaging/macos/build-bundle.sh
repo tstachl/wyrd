@@ -144,10 +144,17 @@ if [ "$(uname -s)" = "Darwin" ]; then
     # the runbook documents. Identity pairs with the hook:
     # stage-appex.sh already refused a mixed pair, so the default
     # ad-hoc `-` here means an ad-hoc outer app, and a set
-    # SIGN_IDENTITY is the same Developer ID Tauri used.
+    # SIGN_IDENTITY is the same Developer ID Tauri used. A real
+    # identity seals with a secure timestamp (notarization
+    # requires it); ad-hoc has no timestamp authority to reach.
     if [ -d "$RELEASE_DIR/bundle/macos/Wyrd.app" ]; then
-        codesign --force --sign "${SIGN_IDENTITY:--}" --options runtime \
-            "$RELEASE_DIR/bundle/macos/Wyrd.app"
+        if [ -n "${SIGN_IDENTITY:-}" ] && [ "$SIGN_IDENTITY" != "-" ]; then
+            codesign --force --sign "$SIGN_IDENTITY" --options runtime --timestamp \
+                "$RELEASE_DIR/bundle/macos/Wyrd.app"
+        else
+            codesign --force --sign "${SIGN_IDENTITY:--}" --options runtime \
+                "$RELEASE_DIR/bundle/macos/Wyrd.app"
+        fi
     fi
     "$HERE/check-no-nix-links.sh" "$ROOT" "$RELEASE_DIR"
 fi

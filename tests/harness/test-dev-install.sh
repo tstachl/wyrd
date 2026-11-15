@@ -67,12 +67,15 @@ pass "install builds through the wrapper with the CLI staged"
 # the bundler's linker-only seal leaves the staged files
 # unverified, and only a shallow re-sign (never `--deep`, which
 # would re-sign the appex without its entitlements) makes the
-# installed copy verify deep-strict.
+# installed copy verify deep-strict; a real identity seals with
+# `--timestamp` for notarization.
 WRAPPER_CODE="$(grep -v '^[[:space:]]*#' "$ROOT/packaging/macos/build-bundle.sh")"
 match 'codesign --force --sign' "$WRAPPER_CODE" \
   || die "wrapper: no post-bundle reseal"
 match 'bundle/macos/Wyrd.app' "$WRAPPER_CODE" \
   || die "wrapper: reseal names no bundle path"
+match '--timestamp' "$WRAPPER_CODE" \
+  || die "wrapper: real-identity reseal carries no timestamp"
 pass "wrapper reseals the outer app shallowly"
 
 # 4. The desktop resolves the bundled CLI first: the fixed pair the
@@ -121,6 +124,17 @@ for marker in 'CARGO_TARGET_DIR' 'CARGO_BUILD_TARGET' '--target=*)'; do
 done
 pass "installer mirrors the wrapper release-dir rule"
 
+# 6c. The destination guard canonicalizes before comparing (a
+# lexical check is bypassed by `..`), and the swap keeps the
+# previous install across a failed rename (`.old`) while a
+# pre-existing staging name refuses instead of deleting another
+# run's work.
+for marker in 'DEST_PARENT_DIR=$(cd' '.old' 'another install in flight'; do
+  match "$marker" "$INSTALL_CODE" \
+    || die "install: safe-replace marker '$marker' missing"
+done
+pass "installer canonicalizes and swaps safely"
+
 # 7. Honest Finder boundary in the script output: ad-hoc stays
 # inert (no-group-container), team-signed is the separate path.
 match 'no-group-container' "$INSTALL_CODE" \
@@ -140,15 +154,27 @@ pass "install names its prerequisites with fixes"
 # 9. The stage script builds the release CLI with the SDK pin,
 # signs it with the paired identity, and refuses cross-target
 # embeds — mirroring the appex stage, never the outer bundle. The
-# CLI signs WITHOUT hardened runtime on purpose: it loads the
-# third-party macFUSE dylib, which a runtime-constrained signature
-# rejects in dyld (the appex keeps `--options runtime`).
+# CLI signs WITHOUT hardened runtime on purpose: a mount-enabled
+# build loads the third-party macFUSE dylib, which a
+# runtime-constrained signature rejects in dyld (the appex keeps
+# `--options runtime`). The ad-hoc bundle sets WYRD_NO_MOUNT=1 so
+# the shipped CLI drops the mount stack entirely (the manifest's
+# `--no-default-features` no-FUSE mode): a clean Mac has no macFUSE
+# to load, while the release path keeps mount by leaving it unset.
 for marker in 'cargo build --release -p wyrd-cli' 'libiconv.tbd' 'codesign' 'TAURI_ENV_TARGET_TRIPLE'; do
   match "$marker" "$STAGE_CODE" \
     || die "stage-cli: '$marker' missing"
 done
 match '--options runtime' "$STAGE_CODE" \
   && die "stage-cli: hardened runtime would reject macFUSE"
+match 'WYRD_NO_MOUNT' "$STAGE_CODE" \
+  || die "stage-cli: ad-hoc mount drop missing"
+match 'WYRD_NO_MOUNT' "$INSTALL_CODE" \
+  || die "install: ad-hoc mount drop missing"
+match '--no-default-features' "$STAGE_CODE" \
+  || die "stage-cli: no-FUSE build flag missing"
+match 'LINKED=$(otool' "$STAGE_CODE" \
+  || die "stage-cli: linkage is not captured without a pipe"
 pass "stage script builds and signs the release CLI"
 
 # 9b. Linkage is covered on both sides of the stage boundary:

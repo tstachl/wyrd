@@ -140,7 +140,12 @@ version-matched `wyrd` CLI into `Contents/Resources/wyrd` before
 the outer sign — the desktop resolves the bundled copy first (the
 `MacOS` sibling is the devenv fallback only) and version-checks it
 before every lifecycle run — so the UI, owner, registry, and tray
-work ad-hoc: create/join/leave, status, settings.
+work ad-hoc: create/join/leave, status, settings. No macFUSE is
+needed: the ad-hoc CLI builds vault-only (`WYRD_NO_MOUNT=1`
+drops the mount stack, whose macFUSE load dependency a clean Mac
+has no copy of); `mount` mode and Finder stay with the
+team-signed path below, and the release bundle keeps the full
+mount-enabled CLI by leaving the flag unset.
 
 Finder boundary (honest, not a bug): an ad-hoc appex logs
 `no-group-container` and stays inert — the App Group container

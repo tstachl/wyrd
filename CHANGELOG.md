@@ -190,12 +190,16 @@ is transient — no drive data is affected.
   override, and re-verifies.
   The desktop resolves the bundled CLI first and version-checks it
   before every run, so UI, owner, registry, and tray work with no
-  signing assets. The staged CLI signs without hardened runtime on
-  purpose (it must load the third-party macFUSE dylib); the appex
-  keeps it. Finder stays honestly inert ad-hoc
+  signing assets and no macFUSE: the ad-hoc CLI builds vault-only
+  (`WYRD_NO_MOUNT=1`, the manifest's `--no-default-features`
+  no-FUSE mode) because the mount stack hard-links macFUSE at load.
+  The staged CLI signs without hardened runtime (a mount-enabled
+  build must load the third-party dylib); the appex keeps it.
+  Finder stays honestly inert ad-hoc
   (`no-group-container`) with the team-signed path in
   `packaging/macos/README.md`. Signed `.dmg` plus notarization
-  stays on the release track.
+  stays on the release track (which keeps the mount-enabled CLI;
+  the wrapper reseal timestamps real-identity signs).
 
 ### Changed
 
