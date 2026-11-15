@@ -35,6 +35,19 @@ is transient — no drive data is affected.
 
 ### Added
 
+- In-UI owner recovery with per-drive service states
+  (`nostr:nevent1qqsr74fdjmr6hza7wsmgnj9wlp8w94nfrzyd8mfr2ryuufx7yyg708gpz9mhxue69uhkwunpwdczuap49eehgj6rmyj`):
+  the desktop's unavailable screen distinguishes the three causes
+  (service definition not installed, installed but stopped, running
+  but socket-absent) beside the transport verdict and offers the
+  matching recovery through the constrained CLI adapter — Start the
+  installed agent (new `wyrd drive <dir> service-start`: enable and
+  start the existing definition, verify the socket, no keystore, no
+  credentials) or Reinstall the definition (existing `drive
+  reconfigure` keeping relays and mode). Never auto-start; refused
+  recoveries report their outcome on the screen; dev builds without
+  managed pieces say so instead of a dead Retry.
+
 - Menu-bar icon is now the white Held mark with transparency
   (`crates/wyrd-desktop/icons/tray-held-template.png`, geometry
   from `apps/shared/brand/held.svg`, tile dropped), marked as a

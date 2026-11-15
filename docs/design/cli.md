@@ -55,7 +55,7 @@ wyrd identity (generate --identity-file … --passphrase-file …
     | new-passphrase | commit --identity-file … --passphrase-file …
     | verify --identity-file … --passphrase-file …)
 wyrd drive <dir> [--identity-file …] [--passphrase-file …]
-    (init | bootstrap --name … [--mode …] … | delete [--yes] | reconfigure …)
+    (init | bootstrap --name … [--mode …] … | delete [--yes] | reconfigure … | service-start …)
 wyrd device <dir> (id | keys | pairing-request <out> | join <invitation>)
 wyrd member <dir> (list | log | status | invite | reissue | remove | leave
     | rotate | set-owner | resolve)
@@ -93,6 +93,7 @@ service-mode value only.
 | `init` | `drive … init` |
 | `bootstrap` | `drive … bootstrap` |
 | `drive delete/reconfigure` | `drive … delete/reconfigure` (unchanged shape) |
+| `drive service-start` | `drive … service-start` (new: start the installed service, rewrite nothing) |
 | `vault start` | `owner … start` (default when omitted) |
 | `vault status` | `owner … status` |
 | `sync status` | `sync … status` (unchanged) |
@@ -107,7 +108,7 @@ preserved; only spelling and hierarchy move.
 
 ```
 wyrd [--config <path>] drive [--identity-file <path>] [--passphrase-file <path>] <drive_dir>
-    (init | bootstrap --name <name> [--mode <mode>] [--mountpoint <path>] [--relay <url>...] [--invitation-file <path>] [--registry <path>] [--owner-bin <path>] [--supervise-bin <path>] [--no-service] | delete [--yes] | reconfigure --mode <mode> [--mountpoint <path>] [--relay <url>...] [--registry <path>] [--owner-bin <path>] [--supervise-bin <path>] [--no-service])
+    (init | bootstrap --name <name> [--mode <mode>] [--mountpoint <path>] [--relay <url>...] [--invitation-file <path>] [--registry <path>] [--owner-bin <path>] [--supervise-bin <path>] [--no-service] | delete [--yes] | reconfigure --mode <mode> [--mountpoint <path>] [--relay <url>...] [--registry <path>] [--owner-bin <path>] [--supervise-bin <path>] [--no-service] | service-start [--registry <path>])
 wyrd [--config <path>] mount [--relay <url>...] [--verbose] [--interval <secs>] \
     [--identity-file <path>] [--passphrase-file <path>] <drive_dir> <mountpoint>
 wyrd [--config <path>] export [--identity-file <path>] [--passphrase-file <path>] <drive_dir> <out_dir>
@@ -578,6 +579,33 @@ entry), while each rewrite stays atomic. The desktop drives this surface
 through its constrained adapter (structured argv, secret paths only,
 version check first, exit codes plus independent registry, socket,
 and membership re-observation) and never writes the registry itself.
+
+### `drive service-start` — start the installed service, rewrite nothing
+
+Enable and start the existing definition for one registered drive,
+then verify the socket. The recovery for "installed but stopped":
+explicit, never automatic. The entry resolves by drive directory
+(exact match; zero and duplicates refuse without writing), a missing
+definition file refuses with the reinstall pointer (`drive
+<dir> reconfigure`), and no keystore opens — starting proves nothing
+about membership and needs no credentials, so it runs before
+credential loading. The definition names its own programs: no binary
+preflight runs, and a missing program surfaces through enable/start
+and the socket verify instead. Ready is reported only when the
+socket verifies this session. The desktop drives this surface
+through the same constrained adapter as the other lifecycle
+operations (structured argv, version check first, exit codes plus
+independent re-observation).
+
+Against a live drive this restarts the owner by design: the
+enable/start primitives are the reconfigure ones (macOS unloads then
+loads, Linux restarts the unit), so in-flight work turns
+`Unconfirmed` and the fresh socket verify proves the new owner.
+Offer it only for stopped and wedged drives; a direct CLI run
+against a healthy drive is a deliberate restart, and it serializes
+against other lifecycle operations on the drive like any manager
+would — a start writes nothing, but its restart still races another
+writer's stop.
 
 ### `sync` — headless sync without mounting
 

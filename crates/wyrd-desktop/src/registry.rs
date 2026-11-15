@@ -116,6 +116,10 @@ pub struct DriveView {
     pub mode: String,
     pub mountpoint: Option<String>,
     pub availability: DriveAvailability,
+    /// The service-manager fact beside the transport verdict:
+    /// not-installed vs stopped vs wedged vs running vs unknown vs
+    /// unsupported. Observation only — never supervision.
+    pub service_state: super::service::ServiceState,
 }
 
 /// The lifecycle view's registry answer: the file status, one view
@@ -354,17 +358,54 @@ pub fn list_drives_at(registry_path: &Path) -> RegistryState {
                     ));
                     continue;
                 }
-                drives.push(DriveView {
-                    name: entry.name.clone(),
-                    drive_dir: entry.drive_dir.to_string_lossy().into_owned(),
-                    relays: entry.relays.clone(),
-                    service: entry.service.clone(),
-                    mode: entry.mode.clone(),
-                    mountpoint: entry
-                        .mountpoint
-                        .as_ref()
-                        .map(|path| path.to_string_lossy().into_owned()),
-                    availability: probe_drive(&entry.drive_dir),
+                drives.push({
+                    let availability = probe_drive(&entry.drive_dir);
+                    // The service-manager probe runs only where a view
+                    // consumes it: the unavailable screen is the sole
+                    // reader, and it renders only for `Unavailable`. A
+                    // live socket already proves the owner runs, so an
+                    // `Available` drive reports that fact without
+                    // spawning the manager — one fewer fork per drive
+                    // per refresh, and no 5 s ceiling where nothing
+                    // reads the answer. `Unknown` availability gets only
+                    // the definition-file fact, never a manager spawn:
+                    // the screen does not render it either.
+                    let service_state = match &availability {
+                        DriveAvailability::Available => super::service::ServiceState::Running {
+                            detail:
+                                "the owner answered this session — the manager was not re-probed"
+                                    .to_string(),
+                        },
+                        DriveAvailability::Unavailable { .. } => {
+                            // No transport plus a loaded unit reads as
+                            // wedged.
+                            super::service::probe_service_state(&entry.service, false)
+                        }
+                        DriveAvailability::Unknown { .. } => {
+                            if super::service::service_definition_path(&entry.service).exists() {
+                                super::service::ServiceState::Unknown {
+                                    detail: "service not probed while availability is unknown — retry the owner probe".to_string(),
+                                }
+                            } else {
+                                super::service::ServiceState::NotInstalled {
+                                    detail: "no service definition installed: the drive is registered without a managed service — reinstall the definition to supervise it".to_string(),
+                                }
+                            }
+                        }
+                    };
+                    DriveView {
+                        name: entry.name.clone(),
+                        drive_dir: entry.drive_dir.to_string_lossy().into_owned(),
+                        relays: entry.relays.clone(),
+                        service: entry.service.clone(),
+                        mode: entry.mode.clone(),
+                        mountpoint: entry
+                            .mountpoint
+                            .as_ref()
+                            .map(|path| path.to_string_lossy().into_owned()),
+                        availability,
+                        service_state,
+                    }
                 })
             }
             Err(reason) => skipped.push(format!("entry {key:?}: {reason}")),

@@ -657,6 +657,18 @@ pub(crate) enum DriveAction {
         #[arg(long)]
         no_service: bool,
     },
+    /// Start this registered drive's installed service without
+    /// rewriting anything: enable and start the existing definition
+    /// and verify the socket. The recovery for "installed but
+    /// stopped" — explicit, never automatic. A missing definition
+    /// refuses with the reinstall pointer. Against a live drive this
+    /// restarts the owner by design (the enable/start primitives
+    /// restart), so offer it only for stopped and wedged drives.
+    ServiceStart {
+        /// Registry file elsewhere than the platform default.
+        #[arg(long, value_name = "PATH")]
+        registry: Option<PathBuf>,
+    },
 }
 
 /// One owner-runtime action. `Start` runs the persistent owner

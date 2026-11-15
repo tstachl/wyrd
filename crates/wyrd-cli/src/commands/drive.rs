@@ -1,6 +1,7 @@
 //! The `drive` command: local drive lifecycle beyond membership —
 //! deleting this drive's local copy after authoring your own removal,
-//! and reconfiguring a registered drive's supervision in place.
+//! reconfiguring a registered drive's supervision in place, and
+//! starting an installed service without rewriting anything.
 //!
 //! Delete composes two operations that already exist: the owner
 //! authors `Remove(self)` through the engine (which enforces
@@ -10,6 +11,23 @@
 //! refusal — non-owner, unacknowledged terminal, frozen, locked store
 //! — leaves it untouched. A mounted drive fails closed with the
 //! store lock: stop the service first, the same rule `member` states.
+//!
+//! Service-start resolves the registry entry by drive directory
+//! (exact match; zero or duplicate matches refuse without writing),
+//! refuses where no definition file exists (reinstall is the recovery
+//! there), then enables and starts the existing definition and
+//! verifies the socket. No keystore opens: starting proves nothing
+//! about membership and needs no credentials. Against a live drive
+//! it restarts the owner by design, turning in-flight work
+//! `Unconfirmed` — offer it only for stopped and wedged drives.
+//!
+//! One operator at a time: concurrent direct CLI invocations can
+//! interleave past the store open (the desktop flight serializes
+//! only its own calls), so serialize service-starts and
+//! reconfigurations against any other lifecycle operation on the
+//! drive — a start writes nothing, but its restart still races
+//! another writer's stop the way any two managers would, and the
+//! last writer wins the entry whole, never a torn mix.
 //!
 //! Reconfigure resolves the registry entry by drive directory (exact
 //! match; zero or duplicate matches refuse without writing), proves
@@ -29,7 +47,10 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use wyrd_core::lifecycle_surface::{render_deletion_confirmation, render_leave_refusal};
-use wyrd_daemon::bootstrap::{default_registry_path, reconfigure, ReconfigureConfig};
+use wyrd_daemon::bootstrap::{
+    default_registry_path, reconfigure, start_managed_service, ReconfigureConfig,
+    StartServiceConfig,
+};
 use wyrd_format::{Change, DeviceId, MembershipTransition};
 use wyrd_sync::keys::DeviceIdentitySecret;
 use wyrd_sync::runtime::Engine;
@@ -99,6 +120,60 @@ pub(crate) fn drive(
             passphrase,
             identity,
         ),
+        DriveAction::ServiceStart { .. } => {
+            unreachable!("service-start resolves in the dispatcher before drive()")
+        }
+    }
+}
+
+/// Start this registered drive's installed service without rewriting
+/// anything: enable and start the existing definition, then verify
+/// the socket. No keystore opens and no credentials load — the
+/// dispatcher calls this before credential loading, so a stopped
+/// service starts even where the operator's key files are momentarily
+/// unavailable. Ready is reported only when the socket verifies this
+/// session.
+pub(crate) fn service_start_drive(
+    drive_dir: PathBuf,
+    registry: Option<PathBuf>,
+) -> Result<(), CliError> {
+    let registry_path = registry.unwrap_or_else(default_registry_path);
+    let report = start_managed_service(StartServiceConfig {
+        drive_dir: drive_dir.clone(),
+        registry_path,
+        service_definition: None,
+        verify_timeout: Duration::from_secs(30),
+    });
+    match report {
+        wyrd_daemon::bootstrap::ProvisionState::VerifiedAvailable { entry, skipped } => {
+            warn_skipped(&skipped);
+            println!(
+                "drive {} service started and verified available (socket {})",
+                entry.name,
+                entry.drive_dir.join("owner.sock").display()
+            );
+            Ok(())
+        }
+        wyrd_daemon::bootstrap::ProvisionState::RegisteredButUnavailable {
+            entry,
+            reason,
+            skipped,
+            ..
+        } => {
+            warn_skipped(&skipped);
+            Err(CliError::Usage(format!(
+                "drive {} service started but unavailable: {reason}",
+                entry.name
+            )))
+        }
+        // No store ever opens on this path, so the terminal
+        // held-drive kind cannot occur here: every incomplete stage
+        // is a usage error with its stage.
+        wyrd_daemon::bootstrap::ProvisionState::ProvisioningIncomplete {
+            stage, reason, ..
+        } => Err(CliError::Usage(format!(
+            "service start incomplete at {stage}: {reason}"
+        ))),
     }
 }
 

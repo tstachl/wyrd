@@ -207,6 +207,9 @@ mod tests {
             mode: "vault".to_string(),
             mountpoint: None,
             availability,
+            service_state: super::super::service::ServiceState::Unknown {
+                detail: "tray tests do not probe the manager".to_string(),
+            },
         }
     }
 

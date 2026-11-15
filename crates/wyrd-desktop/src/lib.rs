@@ -31,6 +31,7 @@ pub mod commands;
 pub mod onboarding;
 pub mod provision;
 pub mod registry;
+pub mod service;
 pub mod settings_view;
 pub mod tray;
 
@@ -41,6 +42,7 @@ pub use registry::{
     DriveAvailability, DriveView, RegistryEntryWrite, RegistryState, RegistryStatus,
     RegistryWriteError,
 };
+pub use service::ServiceState;
 pub use settings_view::{DriveSettings, DriveSettingsView};
 
 use std::collections::{BTreeMap, HashSet};
@@ -387,6 +389,7 @@ pub fn invoke_handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> 
         commands::provision_join,
         commands::provision_leave,
         commands::provision_reconfigure,
+        commands::provision_service_start,
         commands::onboarding_defaults,
         commands::onboarding_new_passphrase,
         commands::onboarding_commit,

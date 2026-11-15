@@ -430,7 +430,22 @@ verdict.
 - The unavailable state is a first-class view, not an error toast.
   Owner down means an explicit unavailable screen; the shell never
   opens the store itself. Owner back means the shell resumes without
-  restart.
+  restart. The screen always means "something changed since ready"
+  (a completed create ends at a verified socket, so the drive was
+  verified before) — never that the drive is broken. Beside the
+  transport verdict the view names the service-manager fact the
+  probes observe without supervising: definition not installed,
+  installed but stopped, or running but socket-absent (wedged, with
+  a pointer at the drive's service log on macOS and the user
+  journal on Linux). A probe timeout reads unknown (retry the
+  probe; nothing changed), and a build without manager tooling
+  reads unsupported ("no managed service verdict in this build").
+  The matching recovery runs through the constrained CLI adapter —
+  start the installed agent, or reinstall the definition — never a
+  terminal, never auto-start: a stopped drive is a stable
+  first-class state until the person starts it, and a refused
+  recovery reports its outcome on the screen instead of failing
+  silently.
 - Framework choice, decided: Svelte 5 + shadcn-svelte, no SvelteKit
   (local desktop app: no SSR, routing infrastructure, or server
   endpoints). The main window opens 1120x800 (min 960x640) so the

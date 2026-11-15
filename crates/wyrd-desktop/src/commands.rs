@@ -572,6 +572,52 @@ pub async fn provision_reconfigure<R: Runtime>(
     .await
 }
 
+/// Start one registered drive's installed service through the
+/// installed CLI (`drive service-start`), then re-read and probe.
+/// No credentials travel — starting opens no keystore. The recovery
+/// for "installed but stopped": explicit, never automatic, and a
+/// missing definition refuses with the reinstall pointer (the
+/// reconfigure recovery below).
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProvisionServiceStartArgs {
+    pub drive_dir: String,
+}
+
+/// Start one registered drive's installed service through the
+/// installed CLI (`drive service-start`), then re-read and probe.
+#[tauri::command]
+pub async fn provision_service_start<R: Runtime>(
+    app: AppHandle<R>,
+    args: ProvisionServiceStartArgs,
+) -> ProvisionReport {
+    run_provision(
+        app,
+        "provision_service_start",
+        args.drive_dir.clone(),
+        move |state, dir| {
+            let request = super::provision::ServiceStartRequest {
+                drive_dir: dir,
+                registry_path: None,
+            };
+            let cli = state.cli_bin();
+            match cli {
+                Ok(bin) => super::provision::run_service_start(
+                    &bin,
+                    &request,
+                    super::provision::PROVISION_TIMEOUT,
+                ),
+                Err(reason) => super::provision::ProvisionOutcome {
+                    result: super::provision::ProvisionResult::VersionMismatch { reason },
+                    stderr: String::new(),
+                    code: None,
+                },
+            }
+        },
+    )
+    .await
+}
+
 /// Platform key defaults plus existence (no secret reads). A local
 /// query: infallible, counted in flight. Pre-commit the UI treats the
 /// paths as intended locations; post-commit the same paths with
@@ -1067,6 +1113,7 @@ mod tests {
     /// `results.test.ts` verbatim.
     #[test]
     fn local_query_shapes_serialize_verbatim() {
+        use super::super::service::ServiceState;
         use super::super::{DriveAvailability, DriveSettings, DriveSettingsView};
         use super::super::{DriveView, RegistryState, RegistryStatus};
 
@@ -1088,6 +1135,45 @@ mod tests {
             .unwrap(),
             serde_json::json!({"state": "unknown", "detail": "no terminal answer"})
         );
+        // The service-state taxonomy beside availability: the frontend
+        // tells every branching state apart from the JSON alone, and
+        // the recovery buttons branch on it. Every state the
+        // unavailable screen branches on is pinned here.
+        assert_eq!(
+            serde_json::to_value(ServiceState::Stopped {
+                detail: "installed but stopped".to_string()
+            })
+            .unwrap(),
+            serde_json::json!({"state": "stopped", "detail": "installed but stopped"})
+        );
+        assert_eq!(
+            serde_json::to_value(ServiceState::Wedged {
+                detail: "running but socket-absent".to_string()
+            })
+            .unwrap(),
+            serde_json::json!({"state": "wedged", "detail": "running but socket-absent"})
+        );
+        assert_eq!(
+            serde_json::to_value(ServiceState::Unknown {
+                detail: "the manager did not answer".to_string()
+            })
+            .unwrap(),
+            serde_json::json!({"state": "unknown", "detail": "the manager did not answer"})
+        );
+        assert_eq!(
+            serde_json::to_value(ServiceState::NotInstalled {
+                detail: "no definition".to_string()
+            })
+            .unwrap(),
+            serde_json::json!({"state": "notinstalled", "detail": "no definition"})
+        );
+        assert_eq!(
+            serde_json::to_value(ServiceState::Unsupported {
+                detail: "no managed service in this build".to_string()
+            })
+            .unwrap(),
+            serde_json::json!({"state": "unsupported", "detail": "no managed service in this build"})
+        );
 
         let drive = DriveView {
             name: "alpha".to_string(),
@@ -1097,6 +1183,9 @@ mod tests {
             mode: "vault".to_string(),
             mountpoint: None,
             availability: DriveAvailability::Available,
+            service_state: ServiceState::Running {
+                detail: "the service manager reports the owner running".to_string(),
+            },
         };
         assert_eq!(
             serde_json::to_value(&drive).unwrap(),
@@ -1108,6 +1197,7 @@ mod tests {
                 "mode": "vault",
                 "mountpoint": null,
                 "availability": {"state": "available"},
+                "service_state": {"state": "running", "detail": "the service manager reports the owner running"},
             })
         );
 
@@ -1130,6 +1220,7 @@ mod tests {
                     "mode": "vault",
                     "mountpoint": null,
                     "availability": {"state": "available"},
+                    "service_state": {"state": "running", "detail": "the service manager reports the owner running"},
                 }],
                 "skipped": ["entry \"bad\": key \"bad\" does not match entry name \"other\""],
             })
