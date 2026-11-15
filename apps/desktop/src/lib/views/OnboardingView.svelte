@@ -835,19 +835,29 @@ never enter this component. -->
     </Card.Root>
   {/if}
 
-  <AlertDialog.Root bind:open={confirmDiscard}>
-    <AlertDialog.Content size="sm">
-      <AlertDialog.Header>
-        <AlertDialog.Title>Discard and start over?</AlertDialog.Title>
-        <AlertDialog.Description>
-          The identity is not saved yet{useGenerated && generatedPassphrase !== null ? " and anything generated will be lost" : ""}.
-          Starting over leaves nothing behind.
-        </AlertDialog.Description>
-      </AlertDialog.Header>
-      <AlertDialog.Footer>
-        <AlertDialog.Cancel>Keep going</AlertDialog.Cancel>
-        <AlertDialog.Action variant="destructive" onclick={onQuit}>Discard</AlertDialog.Action>
-      </AlertDialog.Footer>
-    </AlertDialog.Content>
-  </AlertDialog.Root>
+    <AlertDialog.Root bind:open={confirmDiscard}>
+      <AlertDialog.Content size="sm">
+        <AlertDialog.Header>
+          <AlertDialog.Title>Discard and start over?</AlertDialog.Title>
+          <AlertDialog.Description>
+            The identity is not saved yet{useGenerated && generatedPassphrase !== null ? " and anything generated will be lost" : ""}.
+            Starting over leaves nothing behind.
+          </AlertDialog.Description>
+        </AlertDialog.Header>
+        <AlertDialog.Footer>
+          <AlertDialog.Cancel>Keep going</AlertDialog.Cancel>
+          <AlertDialog.Action
+            variant="destructive"
+            onclick={() => {
+              // bits-ui's Action does not close the root; the caller
+              // owns the bound open state.
+              confirmDiscard = false;
+              onQuit();
+            }}
+          >
+            Discard
+          </AlertDialog.Action>
+        </AlertDialog.Footer>
+      </AlertDialog.Content>
+    </AlertDialog.Root>
 </div>

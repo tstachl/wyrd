@@ -338,7 +338,16 @@ and never deletes local data as a side effect of the UI. -->
     </AlertDialog.Header>
     <AlertDialog.Footer>
       <AlertDialog.Cancel>Keep this drive</AlertDialog.Cancel>
-      <AlertDialog.Action variant="destructive" disabled={busy} onclick={() => void leave()}>
+      <AlertDialog.Action
+        variant="destructive"
+        disabled={busy}
+        onclick={() => {
+          // bits-ui's Action does not close the root; close it so
+          // the report lands in the card, not behind a modal.
+          confirmLeave = false;
+          void leave();
+        }}
+      >
         Leave drive
       </AlertDialog.Action>
     </AlertDialog.Footer>

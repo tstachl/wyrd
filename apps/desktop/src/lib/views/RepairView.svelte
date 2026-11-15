@@ -280,7 +280,17 @@ where it is, never overwritten, and the consequence is stated plainly. -->
       </AlertDialog.Header>
       <AlertDialog.Footer>
         <AlertDialog.Cancel>Cancel</AlertDialog.Cancel>
-        <AlertDialog.Action variant="destructive" onclick={onCreateNew}>Create new identity</AlertDialog.Action>
+        <AlertDialog.Action
+          variant="destructive"
+          onclick={() => {
+            // bits-ui's Action does not close the root; the caller
+            // owns the bound open state.
+            confirmNew = false;
+            onCreateNew();
+          }}
+        >
+          Create new identity
+        </AlertDialog.Action>
       </AlertDialog.Footer>
     </AlertDialog.Content>
   </AlertDialog.Root>

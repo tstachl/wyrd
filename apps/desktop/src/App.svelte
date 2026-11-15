@@ -494,7 +494,7 @@
 
 <div class="flex min-h-screen flex-col bg-background font-sans text-foreground">
   <header
-    data-tauri-drag-region
+    data-tauri-drag-region="deep"
     class="sticky top-0 z-40 flex h-12 shrink-0 items-center gap-3 border-b border-bone/10 bg-ink px-4 text-bone {trafficLightInset
       ? 'pl-20'
       : ''}"

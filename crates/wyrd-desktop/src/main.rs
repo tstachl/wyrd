@@ -147,6 +147,19 @@ fn drain_and_exit<R: Runtime>(app: AppHandle<R>) {
     });
 }
 
+/// Whether closing the window has a way back: the macOS dock's
+/// `Reopen` path always exists; elsewhere only a live tray does. A
+/// failed tray build must not hide the only window unreachably.
+#[cfg(target_os = "macos")]
+fn close_reachable<R: Runtime>(_window: &tauri::Window<R>) -> bool {
+    true
+}
+
+#[cfg(not(target_os = "macos"))]
+fn close_reachable<R: Runtime>(window: &tauri::Window<R>) -> bool {
+    window.app_handle().tray_by_id(tray::TRAY_ID).is_some()
+}
+
 fn main() {
     let drive_dir = match drive_dir_from_argv() {
         Ok(dir) => dir,
@@ -261,10 +274,15 @@ fn main() {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 // Close hides to the menu-bar extra; the process
                 // stays alive. Quit (tray item, Cmd+Q, or any exit
-                // request) is the explicit exit and drains.
+                // request) is the explicit exit and drains. Hide only
+                // where the window has a way back.
                 api.prevent_close();
-                if let Err(error) = window.hide() {
-                    eprintln!("wyrd-desktop: hide on close failed: {error}");
+                if close_reachable(window) {
+                    if let Err(error) = window.hide() {
+                        eprintln!("wyrd-desktop: hide on close failed: {error}");
+                    }
+                } else {
+                    eprintln!("wyrd-desktop: no tray to restore the window; keeping it visible");
                 }
             }
         })
