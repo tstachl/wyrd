@@ -599,8 +599,6 @@ pub async fn provision_service_start<R: Runtime>(
             let request = super::provision::ServiceStartRequest {
                 drive_dir: dir,
                 registry_path: None,
-                owner_bin: None,
-                supervise_bin: None,
             };
             let cli = state.cli_bin();
             match cli {
@@ -1139,13 +1137,28 @@ mod tests {
         );
         // The service-state taxonomy beside availability: the frontend
         // tells not-installed from stopped from wedged from the JSON
-        // alone, and the recovery buttons branch on it.
+        // alone, and the recovery buttons branch on it. Every state
+        // the unavailable screen branches on is pinned here.
         assert_eq!(
             serde_json::to_value(ServiceState::Stopped {
                 detail: "installed but stopped".to_string()
             })
             .unwrap(),
             serde_json::json!({"state": "stopped", "detail": "installed but stopped"})
+        );
+        assert_eq!(
+            serde_json::to_value(ServiceState::NotInstalled {
+                detail: "no definition".to_string()
+            })
+            .unwrap(),
+            serde_json::json!({"state": "notinstalled", "detail": "no definition"})
+        );
+        assert_eq!(
+            serde_json::to_value(ServiceState::Unsupported {
+                detail: "no managed service in this build".to_string()
+            })
+            .unwrap(),
+            serde_json::json!({"state": "unsupported", "detail": "no managed service in this build"})
         );
 
         let drive = DriveView {

@@ -701,6 +701,23 @@ fn mount_mirror_carries_the_mountpoint_across_crates() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// Service-definition path compatibility: the desktop's observation
+/// probe derives the definition path from the service token without
+/// depending on the daemon, so this test pins both derivations to the
+/// same file under the current environment. A drift would silently
+/// misclassify every drive (NotInstalled forever, or Stopped for a
+/// drive whose definition lives elsewhere).
+#[test]
+fn service_definition_path_mirrors_the_daemon_derivation() {
+    for service in ["drive-alpha", "drive-0123456789abcdef"] {
+        assert_eq!(
+            wyrd_desktop::service::service_definition_path(service),
+            wyrd_daemon::bootstrap::service_definition_path_for_service(service),
+            "definition path drift for {service:?}"
+        );
+    }
+}
+
 /// Settings compatibility: a section the daemon's own writer
 /// stores — notification records included — reads back through the
 /// desktop mirror with the bounds intact and the records excluded.

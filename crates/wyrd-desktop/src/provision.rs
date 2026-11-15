@@ -133,16 +133,12 @@ pub struct ReconfigureRequest {
 /// rewriting anything: the recovery for "installed but stopped".
 /// No credentials travel — starting proves nothing about membership
 /// and the CLI opens no keystore — only the drive directory plus the
-/// usual registry/binary overrides (tests and non-standard layouts).
+/// registry override (tests and non-standard layouts).
 #[derive(Debug, Clone)]
 pub struct ServiceStartRequest {
     pub drive_dir: PathBuf,
     /// Explicit registry path (tests); `None` = platform default.
     pub registry_path: Option<PathBuf>,
-    /// Explicit owner/supervise binaries (tests / non-standard layout);
-    /// `None` = sibling-of-CLI default the CLI applies.
-    pub owner_bin: Option<PathBuf>,
-    pub supervise_bin: Option<PathBuf>,
 }
 
 /// The adapter's verdict on the *operation*. Never lifecycle state:
@@ -455,14 +451,6 @@ pub fn service_start_argv(request: &ServiceStartRequest) -> Vec<OsString> {
     if let Some(registry) = &request.registry_path {
         argv.push("--registry".into());
         argv.push(registry.as_os_str().to_owned());
-    }
-    if let Some(owner) = &request.owner_bin {
-        argv.push("--owner-bin".into());
-        argv.push(owner.as_os_str().to_owned());
-    }
-    if let Some(supervise) = &request.supervise_bin {
-        argv.push("--supervise-bin".into());
-        argv.push(supervise.as_os_str().to_owned());
     }
     argv
 }
@@ -1466,14 +1454,12 @@ mod tests {
 
     /// The service-start argv is one structured element per argument:
     /// `drive <dir> service-start`, no credentials — starting opens
-    /// no keystore — plus the registry/binary overrides where set.
+    /// no keystore — plus the registry override where set.
     #[test]
     fn service_start_argv_is_structured_without_credentials() {
         let request = ServiceStartRequest {
             drive_dir: PathBuf::from("/drives/alpha"),
             registry_path: Some(PathBuf::from("/tmp/drives.json")),
-            owner_bin: None,
-            supervise_bin: Some(PathBuf::from("/tmp/wyrd-supervise")),
         };
         let rendered: Vec<String> = service_start_argv(&request)
             .iter()
@@ -1487,8 +1473,6 @@ mod tests {
                 "service-start",
                 "--registry",
                 "/tmp/drives.json",
-                "--supervise-bin",
-                "/tmp/wyrd-supervise",
             ]
         );
         assert!(
@@ -1510,8 +1494,6 @@ mod tests {
         let request = ServiceStartRequest {
             drive_dir: PathBuf::from("/drives/alpha"),
             registry_path: None,
-            owner_bin: None,
-            supervise_bin: None,
         };
         let outcome = run_service_start(&cli, &request, Duration::from_secs(30));
         match &outcome.result {

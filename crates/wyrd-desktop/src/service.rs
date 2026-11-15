@@ -35,7 +35,8 @@ pub enum ServiceState {
     /// No service definition file exists for this drive: the drive
     /// was registered without a managed service (`--no-service`), or
     /// the definition was removed. A stable first-class state, never
-    /// a failure — the recovery is reinstall, never auto-start.
+    /// a failure — the recovery is reinstall, never auto-start, and
+    /// never a terminal.
     NotInstalled { detail: String },
     /// A definition exists but the manager reports it not
     /// loaded/active: the service is installed but stopped. A stable
@@ -44,19 +45,25 @@ pub enum ServiceState {
     Stopped { detail: String },
     /// The manager reports the unit loaded/active but the owner
     /// socket is absent: the service is wedged (crashed without the
-    /// manager retrying, or bound elsewhere). Points at logs, never
-    /// at the drive contents.
+    /// manager retrying, or bound elsewhere). Points at the service
+    /// log, never at the drive contents.
     Wedged { detail: String },
-    /// The manager reports the unit loaded/active. Whether the owner
-    /// answers is the availability verdict's job, not this enum's —
-    /// a loaded unit with a live socket is the ready path.
+    /// The manager reports the unit loaded/active, or the owner
+    /// answered this session (availability already proved it). Whether
+    /// the owner answers is the availability verdict's job, not this
+    /// enum's — a loaded unit with a live socket is the ready path.
     Running { detail: String },
-    /// The probe could not determine the state: the manager tool is
-    /// missing, timed out, or the managed pieces do not exist in this
-    /// build (dev `cargo` binaries beside no definitions). Dev-only
-    /// honesty lives here: "no managed service in this build, start
-    /// the owner manually" instead of a dead Retry.
+    /// The service manager did not answer: probe timeout or an
+    /// unexpected tool status. Retry the probe — the drive and its
+    /// service are unchanged, and this is not evidence about either.
     Unknown { detail: String },
+    /// No service manager tool exists in this build (dev `cargo`
+    /// binaries beside no definitions, or a platform without
+    /// `launchctl`/`systemctl`). Dev-only honesty: "no managed
+    /// service in this build, start the owner manually" instead of a
+    /// dead Retry. Never a shipped state — shipped builds always
+    /// supervise the owner through the OS service manager.
+    Unsupported { detail: String },
 }
 
 /// Where the per-drive service definition lives on this platform.
@@ -89,42 +96,92 @@ pub fn service_definition_path(service: &str) -> PathBuf {
 }
 
 /// Whether the unit is loaded/active according to the OS service
-/// manager. Returns `None` where the probe could not answer (missing
-/// tool, timeout, spawn failure) — unknown, never stopped.
-fn manager_reports_running(service: &str) -> Option<bool> {
+/// manager. Exit codes are the only signal (output is never parsed):
+/// 0 means loaded/active; documented not-loaded codes mean stopped;
+/// anything else — missing tool, timeout, unexpected status — is no
+/// answer, never stopped.
+fn manager_reports_running(service: &str) -> ManagerAnswer {
     #[cfg(target_os = "macos")]
     {
         let label = format!("md.enesis.wyrd.{service}");
+        // `launchctl list` reports a not-loaded agent with a non-zero
+        // status; there is no finer documented code to split tool
+        // failures from, so any completed non-zero answer reads as
+        // stopped while spawn and timeout stay no-answer below.
         match run_probe(&["launchctl", "list", &label]) {
-            ProbeOutcome::ExitZero => Some(true),
-            ProbeOutcome::NonZero => Some(false),
-            ProbeOutcome::Unknown => None,
+            ProbeOutcome::Exit(0) => ManagerAnswer::Running,
+            ProbeOutcome::Exit(code) => ManagerAnswer::NotRunning { code: Some(code) },
+            ProbeOutcome::MissingTool => ManagerAnswer::NoAnswer {
+                reason: NoAnswerReason::MissingTool,
+            },
+            ProbeOutcome::Timeout => ManagerAnswer::NoAnswer {
+                reason: NoAnswerReason::Timeout,
+            },
         }
     }
     #[cfg(not(target_os = "macos"))]
     {
         let unit = format!("wyrd-{service}.service");
+        // LSB codes via systemd: 0 active, 3 not active, 4 no such
+        // unit (installed on disk but never loaded — still stopped).
+        // Anything else (bus failure exit 1, unexpected statuses)
+        // is tool failure, never a lifecycle state.
         match run_probe(&["systemctl", "--user", "is-active", "--quiet", &unit]) {
-            ProbeOutcome::ExitZero => Some(true),
-            ProbeOutcome::NonZero => Some(false),
-            ProbeOutcome::Unknown => None,
+            ProbeOutcome::Exit(0) => ManagerAnswer::Running,
+            ProbeOutcome::Exit(3 | 4) => ManagerAnswer::NotRunning { code: None },
+            ProbeOutcome::Exit(code) => ManagerAnswer::NoAnswer {
+                reason: NoAnswerReason::UnexpectedStatus { code },
+            },
+            ProbeOutcome::MissingTool => ManagerAnswer::NoAnswer {
+                reason: NoAnswerReason::MissingTool,
+            },
+            ProbeOutcome::Timeout => ManagerAnswer::NoAnswer {
+                reason: NoAnswerReason::Timeout,
+            },
         }
     }
 }
 
+/// What one manager probe concluded. Exit codes carry the verdict;
+/// anything that prevented an answer carries its reason instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ManagerAnswer {
+    Running,
+    NotRunning { code: Option<i32> },
+    NoAnswer { reason: NoAnswerReason },
+}
+
+/// Why a manager probe produced no verdict.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NoAnswerReason {
+    /// The tool binary could not be spawned (absent in this build).
+    MissingTool,
+    /// The tool did not answer within the bound.
+    Timeout,
+    /// The tool answered with an undocumented status (e.g. a bus
+    /// failure): not a lifecycle state. Only constructed on the
+    /// systemd branch, where exit codes beyond 0/3/4 carry meaning;
+    /// `launchctl` reports every not-loaded agent non-zero, so macOS
+    /// maps those to not-loaded instead.
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
+    UnexpectedStatus { code: i32 },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ProbeOutcome {
-    ExitZero,
-    NonZero,
-    Unknown,
+    Exit(i32),
+    MissingTool,
+    Timeout,
 }
 
 /// Run one manager probe argv with a hard bound. Never parses
-/// output: only the exit status decides (loaded vs not). A missing
-/// binary, spawn failure, or timeout is `Unknown`, never a state.
+/// output: only completion and the exit status decide. A missing
+/// binary is `MissingTool`, an overrun is `Timeout` — both no-answer
+/// by construction, never a lifecycle state.
 fn run_probe(argv: &[&str]) -> ProbeOutcome {
     let (program, args) = match argv.split_first() {
         Some((program, args)) => (*program, args),
-        None => return ProbeOutcome::Unknown,
+        None => return ProbeOutcome::MissingTool,
     };
     let mut child = match std::process::Command::new(program)
         .args(args)
@@ -134,27 +191,30 @@ fn run_probe(argv: &[&str]) -> ProbeOutcome {
         .spawn()
     {
         Ok(child) => child,
-        Err(_) => return ProbeOutcome::Unknown,
+        Err(_) => return ProbeOutcome::MissingTool,
     };
     let deadline = std::time::Instant::now() + SERVICE_PROBE_TIMEOUT;
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
-                return if status.success() {
-                    ProbeOutcome::ExitZero
-                } else {
-                    ProbeOutcome::NonZero
+                // `code()` is `None` on signal death: without a status
+                // there is no verdict, so signal death reads as a
+                // timeout-class no-answer rather than a lifecycle
+                // state.
+                return match status.code() {
+                    Some(code) => ProbeOutcome::Exit(code),
+                    None => ProbeOutcome::Timeout,
                 };
             }
             Ok(None) => {
                 if std::time::Instant::now() >= deadline {
                     let _ = child.kill();
                     let _ = child.wait();
-                    return ProbeOutcome::Unknown;
+                    return ProbeOutcome::Timeout;
                 }
                 std::thread::sleep(Duration::from_millis(10));
             }
-            Err(_) => return ProbeOutcome::Unknown,
+            Err(_) => return ProbeOutcome::Timeout,
         }
     }
 }
@@ -188,30 +248,35 @@ fn probe_with(
     service: &str,
     definition: &Path,
     socket_present: bool,
-    manager: impl Fn(&str) -> Option<bool>,
+    manager: impl Fn(&str) -> ManagerAnswer,
 ) -> ServiceState {
     if !definition.exists() {
         return ServiceState::NotInstalled {
             detail: format!(
-                "no service definition installed ({} missing): the drive is registered without a managed service — reinstall the definition to supervise it, or start the owner manually",
+                "no service definition installed ({} missing): the drive is registered without a managed service — reinstall the definition to supervise it",
                 definition.display()
             ),
         };
     }
     match manager(service) {
-        None => ServiceState::Unknown {
-            detail: "the service manager did not answer (missing tool or probe timeout): no managed service verdict in this build — start the owner manually and check the service logs".to_string(),
+        ManagerAnswer::NoAnswer {
+            reason: NoAnswerReason::MissingTool,
+        } => ServiceState::Unsupported {
+            detail: "no service manager tool in this build: no managed service verdict here — start the owner manually. Shipped builds always supervise the owner through the OS service manager".to_string(),
         },
-        Some(false) => ServiceState::Stopped {
+        ManagerAnswer::NoAnswer { .. } => ServiceState::Unknown {
+            detail: "the service manager did not answer (probe timeout or unexpected tool status): retry the probe — the drive and its service are unchanged".to_string(),
+        },
+        ManagerAnswer::NotRunning { .. } => ServiceState::Stopped {
             detail: format!(
                 "service definition installed but the manager reports it stopped ({} present, unit not loaded): start the installed service — a stopped drive is a stable state, never auto-started",
                 definition.display()
             ),
         },
-        Some(true) if !socket_present => ServiceState::Wedged {
-            detail: "the service manager reports the owner running but its socket is absent: the owner is wedged — check the service logs (service.log beside the definition), then restart the service".to_string(),
+        ManagerAnswer::Running if !socket_present => ServiceState::Wedged {
+            detail: "the service manager reports the owner running but its socket is absent: the owner is wedged — check the drive's service log (service.log in the drive directory on macOS, the user journal on Linux), then restart the service".to_string(),
         },
-        Some(true) => ServiceState::Running {
+        ManagerAnswer::Running => ServiceState::Running {
             detail: "the service manager reports the owner running".to_string(),
         },
     }
@@ -281,27 +346,38 @@ mod tests {
 
         // Manager down with a definition present: stopped.
         assert!(matches!(
-            probe_with("drive-x", &definition, false, |_| Some(false)),
+            probe_with("drive-x", &definition, false, |_| {
+                ManagerAnswer::NotRunning { code: None }
+            }),
             ServiceState::Stopped { .. }
         ));
-        // Manager up without a socket: wedged.
-        assert!(matches!(
-            probe_with("drive-x", &definition, false, |_| Some(true)),
-            ServiceState::Wedged { .. }
-        ));
+        // Manager up without a socket: wedged, pointing at the
+        // service log — never at the drive contents.
+        match probe_with("drive-x", &definition, false, |_| ManagerAnswer::Running) {
+            ServiceState::Wedged { detail } => {
+                assert!(detail.contains("service log"), "detail: {detail}");
+                assert!(
+                    detail.contains("user journal"),
+                    "detail names the Linux journal too: {detail}"
+                );
+            }
+            other => panic!("a loaded unit without a socket is wedged: {other:?}"),
+        }
         // Manager up with a socket: running (availability owns liveness).
         assert!(matches!(
-            probe_with("drive-x", &definition, true, |_| Some(true)),
+            probe_with("drive-x", &definition, true, |_| ManagerAnswer::Running),
             ServiceState::Running { .. }
         ));
         std::fs::remove_dir_all(&dir).unwrap_or(());
     }
 
-    /// A missing manager tool is `Unknown`, never stopped: dev-build
+    /// A missing manager tool is `Unsupported`, never stopped: dev-build
     /// honesty — "no managed service in this build" — instead of a
-    /// state the recovery would misread.
+    /// state the recovery would misread. A timeout or an unexpected
+    /// tool status is `Unknown` instead: the drive and its service
+    /// are unchanged, and a manual start is not the move.
     #[test]
-    fn missing_manager_tool_is_unknown() {
+    fn missing_tool_is_unsupported_while_timeout_is_unknown() {
         let dir = std::env::temp_dir().join(format!(
             "wyrd-desktop-service-{}-notool",
             std::process::id()
@@ -309,11 +385,30 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let definition = dir.join("definition.plist");
         std::fs::write(&definition, "installed").unwrap();
-        match probe_with("drive-x", &definition, false, |_| None) {
-            ServiceState::Unknown { detail } => {
-                assert!(detail.contains("did not answer"), "detail: {detail}");
+        match probe_with("drive-x", &definition, false, |_| ManagerAnswer::NoAnswer {
+            reason: NoAnswerReason::MissingTool,
+        }) {
+            ServiceState::Unsupported { detail } => {
+                assert!(detail.contains("no managed service"), "detail: {detail}");
             }
-            other => panic!("a missing manager tool is Unknown: {other:?}"),
+            other => panic!("a missing manager tool is Unsupported: {other:?}"),
+        }
+        for reason in [
+            NoAnswerReason::Timeout,
+            NoAnswerReason::UnexpectedStatus { code: 1 },
+        ] {
+            match probe_with("drive-x", &definition, false, |_| ManagerAnswer::NoAnswer {
+                reason,
+            }) {
+                ServiceState::Unknown { detail } => {
+                    assert!(detail.contains("did not answer"), "detail: {detail}");
+                    assert!(
+                        !detail.contains("manually"),
+                        "a timeout names no manual start: {detail}"
+                    );
+                }
+                other => panic!("a timeout is Unknown: {other:?}"),
+            }
         }
         std::fs::remove_dir_all(&dir).unwrap_or(());
     }

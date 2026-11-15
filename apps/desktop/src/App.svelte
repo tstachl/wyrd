@@ -113,10 +113,6 @@
       ? selectedResult.error.detail
       : null,
   );
-  const selectedServiceState = $derived(selectedDrive?.service_state ?? null);
-  const canReinstall = $derived(
-    onboardedIdentityFile !== null && onboardedPassphraseFile !== null,
-  );
   const busy = $derived(presentation.pendingRequests > 0);
 
   /**
@@ -296,6 +292,36 @@
   let pendingProvisionMode = $state<"create" | "join">("create");
   // Fresh keys for the onboarding component (discard resets it).
   let onboardingEpoch = $state(0);
+  // The last recovery attempt's refused outcome, shown on the
+  // unavailable screen so a refused Start/Reinstall is never silent.
+  // Cleared on every new attempt; a completed recovery clears it via
+  // the availability re-probe below.
+  let recoveryDetail = $state<string | null>(null);
+
+  const selectedServiceState = $derived(selectedDrive?.service_state ?? null);
+  const canReinstall = $derived(
+    onboardedIdentityFile !== null && onboardedPassphraseFile !== null,
+  );
+
+  /**
+   * The refused half of a lifecycle report as display text, or null
+   * where the operation completed (observed state decides the
+   * display; a completed report carries no verdict of its own).
+   */
+  function refusedDetail(report: ProvisionReport): string | null {
+    switch (report.result.result) {
+      case "completed":
+        return null;
+      case "expectedfailure":
+      case "helddrive":
+      case "unknown":
+        return report.result.detail;
+      case "versionmismatch":
+        return report.result.reason;
+      case "busy":
+        return "Another operation is already in flight on this drive — wait for it to finish, then retry.";
+    }
+  }
 
   async function checkIdentityGate(): Promise<void> {
     gate = "loading";
@@ -447,6 +473,7 @@
 
   /** Explicit retry for one drive: reconnect, then re-read. Recovery proves nothing by itself. */
   async function retryConnection(driveDir: string): Promise<void> {
+    recoveryDetail = null;
     presentation.trackRequest();
     try {
       const result = await reconnect(driveDir);
@@ -475,14 +502,29 @@
    * Start one drive's installed service (the "installed but
    * stopped" / "wedged" recovery): enable and start the existing
    * definition through the constrained CLI adapter, then re-read
-   * the registry and the owner. Explicit, never automatic — a
-   * stopped drive stays stopped until this runs. Observed state
-   * decides the display; the report's outcome never does.
+   * the registry and re-derive availability like `retryConnection`
+   * does — a settings-scoped re-read never touches the taxonomy,
+   * so without the explicit probe the overlay would persist after
+   * a successful start on the Settings tab. Explicit, never
+   * automatic — a stopped drive stays stopped until this runs. A
+   * refused outcome surfaces on the screen; a transport throw
+   * surfaces as the recovery detail instead of an unhandled
+   * rejection. Observed state decides the display; the report's
+   * outcome never does.
    */
   async function startService(driveDir: string): Promise<void> {
+    recoveryDetail = null;
     const args: ProvisionServiceStartArgs = { driveDir };
-    await runProvision(() => provisionServiceStart(args));
+    try {
+      const report = await runProvision(() => provisionServiceStart(args));
+      recoveryDetail = refusedDetail(report);
+    } catch (error: unknown) {
+      recoveryDetail =
+        error instanceof Error ? error.message : `Unexpected start failure: ${String(error)}`;
+      return;
+    }
     await refreshLifecycle();
+    await readOwner(driveDir, () => liveness(driveDir));
     await refreshCurrent();
   }
 
@@ -491,10 +533,13 @@
    * installed" recovery): stop and clear, rewrite the entry, and
    * reinstall/restart through the constrained CLI adapter with the
    * gate-verified credential paths, keeping the registered relays
-   * and mode. Then re-read the registry and the owner.
+   * and mode. Then re-read the registry and re-derive availability
+   * like `retryConnection` does. The same no-silent-refusal rule
+   * as `startService` applies.
    */
   async function reinstallService(driveDir: string): Promise<void> {
     if (onboardedIdentityFile === null || onboardedPassphraseFile === null) return;
+    recoveryDetail = null;
     const mode = selectedDrive?.mode ?? "vault";
     const args: ProvisionReconfigureArgs = {
       driveDir,
@@ -505,8 +550,16 @@
       mountpoint: selectedDrive?.mountpoint ?? undefined,
       noService: false,
     };
-    await runProvision(() => provisionReconfigure(args));
+    try {
+      const report = await runProvision(() => provisionReconfigure(args));
+      recoveryDetail = refusedDetail(report);
+    } catch (error: unknown) {
+      recoveryDetail =
+        error instanceof Error ? error.message : `Unexpected reinstall failure: ${String(error)}`;
+      return;
+    }
     await refreshLifecycle();
+    await readOwner(driveDir, () => liveness(driveDir));
     await refreshCurrent();
   }
 
@@ -538,6 +591,7 @@
     onRetry={() => void retryConnection(driveDir)}
     serviceState={selectedServiceState}
     canReinstall={canReinstall}
+    recoveryDetail={recoveryDetail}
     onStart={() => void startService(driveDir)}
     onReinstall={() => void reinstallService(driveDir)}
   />

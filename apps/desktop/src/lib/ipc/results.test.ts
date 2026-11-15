@@ -185,6 +185,16 @@ test("service states distinguish the three unavailable causes", () => {
     detail: "no definition",
   };
   expect(notinstalled.state).toBe("notinstalled");
+  const unsupported: ServiceState = {
+    state: "unsupported",
+    detail: "no managed service in this build",
+  };
+  expect(unsupported.state).toBe("unsupported");
+  const unknown: ServiceState = {
+    state: "unknown",
+    detail: "the service manager did not answer",
+  };
+  expect(unknown.state).toBe("unknown");
 });
 
 test("registry states flatten the status without stutter", () => {

@@ -13,7 +13,9 @@ service fact beside the transport verdict names which cause holds
 socket-absent), and the recovery buttons offer only the matching
 move — start the installed agent, or reinstall the definition —
 through the constrained CLI adapter. Never auto-start: a stopped
-drive is a stable state until the person starts it. -->
+drive is a stable state until the person starts it. A refused
+recovery reports its outcome on this screen instead of failing
+silently. -->
 <script lang="ts">
   import { Button } from "$lib/components/ui/button/index.js";
   import * as Alert from "$lib/components/ui/alert/index.js";
@@ -34,6 +36,8 @@ drive is a stable state until the person starts it. -->
     serviceState?: ServiceState | null;
     /** Whether the reinstall recovery can run (credential paths verified at the gate). */
     canReinstall?: boolean;
+    /** The last recovery attempt's outcome, where it refused — never lifecycle state. */
+    recoveryDetail?: string | null;
     onStart?: () => void;
     onReinstall?: () => void;
   }
@@ -45,6 +49,7 @@ drive is a stable state until the person starts it. -->
     onRetry,
     serviceState = null,
     canReinstall = false,
+    recoveryDetail = null,
     onStart,
     onReinstall,
   }: Props = $props();
@@ -60,7 +65,11 @@ drive is a stable state until the person starts it. -->
   const showReinstall = $derived(
     serviceState !== null && serviceState.state === "notinstalled" && onReinstall !== undefined,
   );
-  const showDevHonesty = $derived(serviceState !== null && serviceState.state === "unknown");
+  // Dev-only honesty: no manager tool exists in this build, so no
+  // managed-service verdict is possible. Shipped builds always
+  // supervise the owner; their timeouts read `unknown` instead and
+  // carry no manual-start wording.
+  const showUnsupported = $derived(serviceState !== null && serviceState.state === "unsupported");
 </script>
 
 <Empty.Root class="mt-6 border border-dashed border-border bg-card/50 py-12">
@@ -89,7 +98,12 @@ drive is a stable state until the person starts it. -->
         <p>{serviceDetail}</p>
       </Alert.Root>
     {/if}
-    {#if showDevHonesty}
+    {#if recoveryDetail !== null}
+      <Alert.Root variant="destructive" class="text-left">
+        <p>{recoveryDetail}</p>
+      </Alert.Root>
+    {/if}
+    {#if showUnsupported}
       <p class="text-xs leading-relaxed text-muted-foreground">
         No managed service verdict in this build — start the owner manually. Shipped builds
         supervise the owner through the OS service manager instead.

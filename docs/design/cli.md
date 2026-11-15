@@ -108,7 +108,7 @@ preserved; only spelling and hierarchy move.
 
 ```
 wyrd [--config <path>] drive [--identity-file <path>] [--passphrase-file <path>] <drive_dir>
-    (init | bootstrap --name <name> [--mode <mode>] [--mountpoint <path>] [--relay <url>...] [--invitation-file <path>] [--registry <path>] [--owner-bin <path>] [--supervise-bin <path>] [--no-service] | delete [--yes] | reconfigure --mode <mode> [--mountpoint <path>] [--relay <url>...] [--registry <path>] [--owner-bin <path>] [--supervise-bin <path>] [--no-service] | service-start [--registry <path>] [--owner-bin <path>] [--supervise-bin <path>])
+    (init | bootstrap --name <name> [--mode <mode>] [--mountpoint <path>] [--relay <url>...] [--invitation-file <path>] [--registry <path>] [--owner-bin <path>] [--supervise-bin <path>] [--no-service] | delete [--yes] | reconfigure --mode <mode> [--mountpoint <path>] [--relay <url>...] [--registry <path>] [--owner-bin <path>] [--supervise-bin <path>] [--no-service] | service-start [--registry <path>])
 wyrd [--config <path>] mount [--relay <url>...] [--verbose] [--interval <secs>] \
     [--identity-file <path>] [--passphrase-file <path>] <drive_dir> <mountpoint>
 wyrd [--config <path>] export [--identity-file <path>] [--passphrase-file <path>] <drive_dir> <out_dir>
@@ -589,12 +589,23 @@ explicit, never automatic. The entry resolves by drive directory
 definition file refuses with the reinstall pointer (`drive
 <dir> reconfigure`), and no keystore opens — starting proves nothing
 about membership and needs no credentials, so it runs before
-credential loading. A missing `wyrd`/`wyrd-supervise` sibling
-refuses like provisioning's post-registration kinds, and ready is
-reported only when the socket verifies this session. The desktop
-drives this surface through the same constrained adapter as the
-other lifecycle operations (structured argv, version check first,
-exit codes plus independent re-observation).
+credential loading. The definition names its own programs: no binary
+preflight runs, and a missing program surfaces through enable/start
+and the socket verify instead. Ready is reported only when the
+socket verifies this session. The desktop drives this surface
+through the same constrained adapter as the other lifecycle
+operations (structured argv, version check first, exit codes plus
+independent re-observation).
+
+Against a live drive this restarts the owner by design: the
+enable/start primitives are the reconfigure ones (macOS unloads then
+loads, Linux restarts the unit), so in-flight work turns
+`Unconfirmed` and the fresh socket verify proves the new owner.
+Offer it only for stopped and wedged drives; a direct CLI run
+against a healthy drive is a deliberate restart, and it serializes
+against other lifecycle operations on the drive like any manager
+would — a start writes nothing, but its restart still races another
+writer's stop.
 
 ### `sync` — headless sync without mounting
 

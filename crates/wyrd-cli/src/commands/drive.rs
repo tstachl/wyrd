@@ -17,7 +17,17 @@
 //! refuses where no definition file exists (reinstall is the recovery
 //! there), then enables and starts the existing definition and
 //! verifies the socket. No keystore opens: starting proves nothing
-//! about membership and needs no credentials.
+//! about membership and needs no credentials. Against a live drive
+//! it restarts the owner by design, turning in-flight work
+//! `Unconfirmed` — offer it only for stopped and wedged drives.
+//!
+//! One operator at a time: concurrent direct CLI invocations can
+//! interleave past the store open (the desktop flight serializes
+//! only its own calls), so serialize service-starts and
+//! reconfigurations against any other lifecycle operation on the
+//! drive — a start writes nothing, but its restart still races
+//! another writer's stop the way any two managers would, and the
+//! last writer wins the entry whole, never a torn mix.
 //!
 //! Reconfigure resolves the registry entry by drive directory (exact
 //! match; zero or duplicate matches refuse without writing), proves
@@ -126,17 +136,11 @@ pub(crate) fn drive(
 pub(crate) fn service_start_drive(
     drive_dir: PathBuf,
     registry: Option<PathBuf>,
-    owner_bin: Option<PathBuf>,
-    supervise_bin: Option<PathBuf>,
 ) -> Result<(), CliError> {
     let registry_path = registry.unwrap_or_else(default_registry_path);
-    let owner_bin = owner_bin.map(absolutize);
-    let supervise_bin = supervise_bin.map(absolutize);
     let report = start_managed_service(StartServiceConfig {
         drive_dir: drive_dir.clone(),
         registry_path,
-        wyrd_bin: owner_bin,
-        supervise_bin,
         service_definition: None,
         verify_timeout: Duration::from_secs(30),
     });
@@ -162,23 +166,14 @@ pub(crate) fn service_start_drive(
                 entry.name
             )))
         }
+        // No store ever opens on this path, so the terminal
+        // held-drive kind cannot occur here: every incomplete stage
+        // is a usage error with its stage.
         wyrd_daemon::bootstrap::ProvisionState::ProvisioningIncomplete {
-            stage,
-            kind,
-            reason,
-        } => {
-            if matches!(
-                kind,
-                wyrd_daemon::bootstrap::ProvisionFailureKind::StoreLocked
-            ) {
-                // A live owner holding the drive is the terminal
-                // held-drive case (exit 78): stop the service first.
-                return Err(CliError::OwnerLocked { drive: drive_dir });
-            }
-            Err(CliError::Usage(format!(
-                "service start incomplete at {stage}: {reason}"
-            )))
-        }
+            stage, reason, ..
+        } => Err(CliError::Usage(format!(
+            "service start incomplete at {stage}: {reason}"
+        ))),
     }
 }
 

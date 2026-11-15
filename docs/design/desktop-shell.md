@@ -436,13 +436,16 @@ verdict.
   transport verdict the view names the service-manager fact the
   probes observe without supervising: definition not installed,
   installed but stopped, or running but socket-absent (wedged, with
-  a pointer at the service logs). The matching recovery runs
-  through the constrained CLI adapter — start the installed agent,
-  or reinstall the definition — never a terminal, never auto-start:
-  a stopped drive is a stable first-class state until the person
-  starts it. Where managed pieces do not exist beside dev binaries,
-  the view says so ("no managed service in this build, start the
-  owner manually") instead of a dead Retry.
+  a pointer at the drive's service log on macOS and the user
+  journal on Linux). A probe timeout reads unknown (retry the
+  probe; nothing changed), and a build without manager tooling
+  reads unsupported ("no managed service verdict in this build").
+  The matching recovery runs through the constrained CLI adapter —
+  start the installed agent, or reinstall the definition — never a
+  terminal, never auto-start: a stopped drive is a stable
+  first-class state until the person starts it, and a refused
+  recovery reports its outcome on the screen instead of failing
+  silently.
 - Framework choice, decided: Svelte 5 + shadcn-svelte, no SvelteKit
   (local desktop app: no SSR, routing infrastructure, or server
   endpoints). The main window opens 1120x800 (min 960x640) so the

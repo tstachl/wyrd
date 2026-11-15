@@ -360,15 +360,33 @@ pub fn list_drives_at(registry_path: &Path) -> RegistryState {
                 }
                 drives.push({
                     let availability = probe_drive(&entry.drive_dir);
-                    // The socket fact for the service probe: anything
-                    // but `Unavailable` means transport exists (a live
-                    // answer, a terminal refusal, or a connected-but-
-                    // unconfirmed socket). Only `Unavailable` (no
-                    // transport) plus a loaded unit reads as wedged.
-                    let socket_present =
-                        !matches!(availability, DriveAvailability::Unavailable { .. });
-                    let service_state =
-                        super::service::probe_service_state(&entry.service, socket_present);
+                    // The service probe runs only where a view consumes
+                    // it: the unavailable screen is the sole reader, and
+                    // it renders only for `Unavailable` (plus `Unknown`,
+                    // whose transport exists but answered nothing). A
+                    // live socket already proves the owner runs, so an
+                    // `Available` drive reports that fact without
+                    // spawning the manager — one fewer fork per drive
+                    // per refresh, and no 5 s ceiling where nothing
+                    // reads the answer.
+                    let service_state = match &availability {
+                        DriveAvailability::Available => super::service::ServiceState::Running {
+                            detail:
+                                "the owner answered this session — the manager was not re-probed"
+                                    .to_string(),
+                        },
+                        _ => {
+                            // The socket fact for the service probe:
+                            // anything but `Unavailable` means transport
+                            // exists (a terminal refusal, or a
+                            // connected-but-unconfirmed socket). Only
+                            // `Unavailable` (no transport) plus a loaded
+                            // unit reads as wedged.
+                            let socket_present =
+                                !matches!(availability, DriveAvailability::Unavailable { .. });
+                            super::service::probe_service_state(&entry.service, socket_present)
+                        }
+                    };
                     DriveView {
                         name: entry.name.clone(),
                         drive_dir: entry.drive_dir.to_string_lossy().into_owned(),

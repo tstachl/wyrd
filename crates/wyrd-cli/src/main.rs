@@ -419,12 +419,7 @@ fn command(args: Vec<String>) -> Result<(), CliError> {
         } => load_credentials(drive_dir, credentials, cli.config.as_deref())?,
         Command::Drive {
             drive_dir,
-            action:
-                crate::args::DriveAction::ServiceStart {
-                    registry,
-                    owner_bin,
-                    supervise_bin,
-                },
+            action: crate::args::DriveAction::ServiceStart { registry },
             ..
         } => {
             // Starting needs no keystore and no credentials: resolve
@@ -433,8 +428,6 @@ fn command(args: Vec<String>) -> Result<(), CliError> {
             return crate::commands::drive::service_start_drive(
                 drive_dir.clone(),
                 registry.clone(),
-                owner_bin.clone(),
-                supervise_bin.clone(),
             );
         }
         Command::Drive {

@@ -1048,13 +1048,23 @@ pub fn render_systemd_unit(
 /// manager loads another.
 #[cfg(unix)]
 fn service_definition_path(entry: &RegistryEntry) -> PathBuf {
+    service_definition_path_for_service(&entry.service)
+}
+
+/// Platform definition path for one service token. `pub` (hidden)
+/// for the desktop mirror test: `wyrd-desktop` duplicates this
+/// derivation for observation-only probes and cannot depend on this
+/// crate, so the integration test pins both sides to the same path
+/// instead of letting them drift silently.
+#[doc(hidden)]
+pub fn service_definition_path_for_service(service: &str) -> PathBuf {
     #[cfg(target_os = "macos")]
     {
         let dir = std::env::var_os("HOME")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("/tmp"))
             .join("Library/LaunchAgents");
-        let label = format!("md.enesis.wyrd.{}", entry.service);
+        let label = format!("md.enesis.wyrd.{service}");
         dir.join(format!("{label}.plist"))
     }
     #[cfg(not(target_os = "macos"))]
@@ -1068,7 +1078,7 @@ fn service_definition_path(entry: &RegistryEntry) -> PathBuf {
                     .join(".config")
             })
             .join("systemd/user");
-        dir.join(format!("wyrd-{}.service", entry.service))
+        dir.join(format!("wyrd-{service}.service"))
     }
 }
 
@@ -2459,15 +2469,21 @@ pub fn reconfigure(config: ReconfigureConfig) -> ProvisionState {
 /// Never auto-runs: the caller (the desktop recovery button) runs
 /// this only on the person's explicit decision, and a deliberately
 /// stopped drive stays stopped until they do.
+///
+/// Against a live drive this restarts the owner: the enable/start
+/// primitives are the reconfigure ones (macOS unloads then loads,
+/// systemd restarts), so in-flight work turns `Unconfirmed`. The
+/// desktop offers the verb only for stopped and wedged drives; a
+/// direct CLI run against a healthy drive restarts it by design, and
+/// the socket verify afterwards proves the new owner answers.
+///
+/// No binary preflight: the definition names its own programs, so
+/// sibling checks would validate the wrong files and refuse starts
+/// that would work. A missing program surfaces through
+/// `enable_and_start` and the socket verify instead.
 pub struct StartServiceConfig {
     pub drive_dir: PathBuf,
     pub registry_path: PathBuf,
-    /// The `wyrd` binary the service runs. Defaults to the sibling
-    /// of the starting command; the installer ships both together.
-    pub wyrd_bin: Option<PathBuf>,
-    /// `wyrd-supervise`: the wait-status mapper the restart policy
-    /// rests on. A managed start without it is refused.
-    pub supervise_bin: Option<PathBuf>,
     /// Explicit service definition path (tests); `None` resolves the
     /// platform path, exactly like installation.
     pub service_definition: Option<PathBuf>,
@@ -2549,48 +2565,12 @@ pub fn start_managed_service(config: StartServiceConfig) -> ProvisionState {
             ),
         };
     }
-    // 3. Resolve the service binaries before starting: a missing
-    // binary refuses with the same kinds provisioning reports
-    // post-registration, so the CLI maps them identically.
-    let (wyrd_bin, supervise_bin) = {
-        let wyrd_bin = match &config.wyrd_bin {
-            Some(path) => path.clone(),
-            None => match sibling_bin("wyrd") {
-                Some(path) => path,
-                None => {
-                    return ProvisionState::RegisteredButUnavailable {
-                        entry,
-                        skipped: registry.skipped.clone(),
-                        kind: ProvisionFailureKind::NoWyrdBinary,
-                        reason: "no wyrd binary: pass --owner-bin (no wyrd beside this command)"
-                            .to_string(),
-                    };
-                }
-            },
-        };
-        let supervise_bin = match &config.supervise_bin {
-            Some(path) => path.clone(),
-            None => match sibling_bin("wyrd-supervise") {
-                Some(path) => path,
-                None => {
-                    return ProvisionState::RegisteredButUnavailable {
-                        entry,
-                        skipped: registry.skipped.clone(),
-                        kind: ProvisionFailureKind::NoSuperviseBinary,
-                        reason: "no wyrd-supervise: pass --supervise-bin \
-                            (the restart policy needs the wrapper; \
-                            a bare owner binary cannot express it)"
-                            .to_string(),
-                    };
-                }
-            },
-        };
-        (wyrd_bin, supervise_bin)
-    };
-    let _ = (wyrd_bin, supervise_bin);
-    // 4. Enable and start the existing definition, then verify the
+    // 3. Enable and start the existing definition, then verify the
     // socket with the reconfigure retry (a freshly restarted owner
-    // still binding never reads as unavailable).
+    // still binding never reads as unavailable). No binary preflight:
+    // the definition names its own programs; a missing program fails
+    // here and in the verify below, which is where the recovery
+    // actually runs.
     if let Err((kind, reason)) = enable_and_start(&entry, definition) {
         return ProvisionState::RegisteredButUnavailable {
             entry,
@@ -3722,8 +3702,6 @@ mod tests {
         let report = start_managed_service(StartServiceConfig {
             drive_dir: dir.join("drive"),
             registry_path: registry.clone(),
-            wyrd_bin: Some(dir.join("wyrd")),
-            supervise_bin: Some(dir.join("wyrd-supervise")),
             service_definition: Some(dir.join("wyrd-test-definition")),
             verify_timeout: Duration::from_secs(1),
         });
@@ -3753,8 +3731,6 @@ mod tests {
         let report = start_managed_service(StartServiceConfig {
             drive_dir: dir.join("drive"),
             registry_path: registry,
-            wyrd_bin: Some(dir.join("wyrd")),
-            supervise_bin: Some(dir.join("wyrd-supervise")),
             service_definition: Some(missing),
             verify_timeout: Duration::from_secs(1),
         });
@@ -3765,6 +3741,42 @@ mod tests {
                 assert!(reason.contains("reconfigure"), "{reason}");
             }
             other => panic!("a missing definition refuses with reinstall: {other:?}"),
+        }
+    }
+
+    /// Starting against a definition the manager cannot load reports
+    /// unavailable, never success: the enable/start failure maps to
+    /// its stage kind like every other handoff. Hermetic: the
+    /// override names a scratch file with garbage content, so the
+    /// load fails before anything is registered — no live unit is
+    /// touched and no residue can remain. (On macOS `load` fails on
+    /// the garbage plist; on Linux the unit name is unknown to the
+    /// user manager, so enable fails first.)
+    #[test]
+    fn start_with_an_unloadable_definition_reports_unavailable() {
+        let dir = scratch("start-baddef");
+        let registry = dir.join("drives.json");
+        let mut drives = BTreeMap::new();
+        drives.insert("demo".to_string(), entry("demo", &dir));
+        write_registry(&registry, &drives).unwrap();
+        let definition = dir.join("wyrd-test-definition");
+        std::fs::write(&definition, b"not a service definition").unwrap();
+        let report = start_managed_service(StartServiceConfig {
+            drive_dir: dir.join("drive"),
+            registry_path: registry,
+            service_definition: Some(definition),
+            verify_timeout: Duration::from_secs(1),
+        });
+        match report {
+            ProvisionState::RegisteredButUnavailable { reason, .. } => {
+                assert!(
+                    reason.contains("enable-service")
+                        || reason.contains("start-service")
+                        || reason.contains("verify-socket"),
+                    "a refused start names its stage: {reason}"
+                );
+            }
+            other => panic!("an unloadable definition reports unavailable: {other:?}"),
         }
     }
 
