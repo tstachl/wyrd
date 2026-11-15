@@ -61,6 +61,13 @@ if [ "$(uname -s)" = "Darwin" ]; then
         echo "error: SDK has no usr/lib/libiconv.tbd: $DISCOVERED_SDK" >&2
         exit 1
     fi
+    case "$DISCOVERED_SDK" in
+        *[[:space:]]*)
+            echo "error: SDK path contains whitespace, which RUSTFLAGS cannot carry: $DISCOVERED_SDK" >&2
+            echo "Point SDK at a whitespace-free path." >&2
+            exit 1
+            ;;
+    esac
     RUSTFLAGS="${RUSTFLAGS:-} -C link-arg=-L$DISCOVERED_SDK/usr/lib"
     export RUSTFLAGS
     echo "note: macOS link-order pin: -L$DISCOVERED_SDK/usr/lib" >&2
@@ -73,29 +80,10 @@ fi
 cd "$DESKTOP"
 cargo tauri build "$@"
 
-# No-Nix-links guard (Darwin only): the shipped binary must link no
-# /nix/store path, or hardened runtime fails library validation at
-# launch. otool absent means not a macOS bundle host — skip.
+# No-Nix-links guard (Darwin only): delegate to
+# check-no-nix-links.sh, which fails closed when it inspects nothing
+# and covers the appex binary too. otool absent means not a macOS
+# bundle host — the check skips itself.
 if [ "$(uname -s)" = "Darwin" ]; then
-    if ! command -v otool >/dev/null 2>&1; then
-        echo "note: otool absent, skipping no-Nix-links guard." >&2
-        exit 0
-    fi
-    BUNDLE_BIN="$ROOT/target/release/bundle/macos/Wyrd.app/Contents/MacOS/wyrd-desktop"
-    STANDALONE_BIN="$ROOT/target/release/wyrd-desktop"
-    FOUND=0
-    for BIN in "$BUNDLE_BIN" "$STANDALONE_BIN"; do
-        if [ -f "$BIN" ]; then
-            if otool -L "$BIN" | grep -q '/nix/store'; then
-                echo "error: $BIN links /nix/store paths:" >&2
-                otool -L "$BIN" | grep '/nix/store' >&2
-                FOUND=1
-            fi
-        fi
-    done
-    if [ "$FOUND" -ne 0 ]; then
-        echo "error: no-Nix-links guard failed; see paths above." >&2
-        exit 1
-    fi
-    echo "note: no-Nix-links guard passed." >&2
+    "$HERE/check-no-nix-links.sh" "$ROOT"
 fi

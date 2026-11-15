@@ -77,9 +77,11 @@ bundle with hardened runtime fails library validation at launch
 `RUSTFLAGS` so the SDK `libiconv.tbd` (`/usr/lib/libiconv.2.dylib`,
 same ABI 7.0.0) wins, runs `cargo tauri build` from
 `crates/wyrd-desktop` (default `--bundles app`), then guards with
-`otool -L`: any `/nix/store` linkage in the bundle or standalone
-binary fails the build. No source or entitlement changes — purely
-link-search order. The pin is Darwin-only; elsewhere the build
+`packaging/macos/check-no-nix-links.sh`: every file under the bundle
+app's `Contents/MacOS` (no hardcoded binary name), plus the
+standalone binary and the embedded appex binary when present. Any
+`/nix/store` linkage — or nothing to inspect at all — fails the
+build. No source or entitlement changes — purely link-search order. The pin is Darwin-only; elsewhere the build
 forwards untouched. Signing env (`SIGN_IDENTITY`,
 `PROVISIONING_PROFILE`) passes through to the `stage-appex.sh` hook.
 
