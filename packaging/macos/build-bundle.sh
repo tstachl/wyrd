@@ -1,6 +1,10 @@
 #!/bin/sh
 # Build the Tauri bundle with the macOS SDK link-order pin.
 #
+# Also exports SDKROOT=<discovered SDK> around the cargo
+# invocations below: rustc honors it directly and skips its bare
+# xcrun query, which under devenv resolves to the Nix shadow.
+#
 # Usage: packaging/macos/build-bundle.sh [--bundles app ...]
 # Environment passthrough to the bundler hook and build-appex.sh:
 # SIGN_IDENTITY, PROVISIONING_PROFILE, ARCH, MIN_MACOS, TOOLCHAIN,

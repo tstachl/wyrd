@@ -46,6 +46,8 @@ code "$WRAPPER" | grep -Fq 'link-arg=-L' \
   || die "wrapper: no link-arg SDK /usr/lib pin"
 code "$WRAPPER" | grep -Fq 'libiconv.tbd' \
   || die "wrapper: pin is not tied to the SDK libiconv.tbd"
+code "$WRAPPER" | grep -Fq 'SDKROOT="$DISCOVERED_SDK"' \
+  || die "wrapper: discovered SDK is not exported as SDKROOT"
 pass "wrapper pins the SDK /usr/lib link-arg on Darwin"
 
 # 3. The pin appends to (never replaces) caller RUSTFLAGS, refuses a
@@ -231,9 +233,9 @@ touch "$TMP/wtoolchain/usr/lib/libiconv.tbd"
 touch "$TMP/wbase/release/wyrd-desktop"
 touch "$TMP/wbase/aarch64-apple-darwin/release/wyrd-desktop"
 printf '#!/bin/sh\necho Darwin\n' > "$TMP/bin/uname"
-printf '#!/bin/sh\nprintf "%%s\\n" "$@" > "$WRAP_CARGO_ARGS"\nexit 0\n' > "$TMP/bin/cargo"
+printf '#!/bin/sh\nprintf "%%s\\n" "$@" > "$WRAP_CARGO_ARGS"\nprintf "%%s" "$SDKROOT" > "$WRAP_SDKROOT"\nexit 0\n' > "$TMP/bin/cargo"
 chmod +x "$TMP/bin/uname" "$TMP/bin/cargo"
-export WRAP_CARGO_ARGS="$TMP/cargo-args" OTOOL_STALE_DIR="$TMP/wbase/release"
+export WRAP_CARGO_ARGS="$TMP/cargo-args" WRAP_SDKROOT="$TMP/cargo-sdkroot" OTOOL_STALE_DIR="$TMP/wbase/release"
 clean_out > "$OTOOL_MODE_OUT"
 wrap_run() { env CARGO_TARGET_DIR="$TMP/wbase" TOOLCHAIN="$TMP/wtoolchain" SDK="$TMP/wtoolchain" "$WRAPPER" "$@"; }
 # --target <triple>: the clean triple dir passes even though the
@@ -245,6 +247,11 @@ grep -Fq -- '--target' "$WRAP_CARGO_ARGS" \
   || die "wrapper: --target flag was not forwarded to cargo"
 grep -Fq -- 'aarch64-apple-darwin' "$WRAP_CARGO_ARGS" \
   || die "wrapper: --target triple was not forwarded to cargo"
+# The stub cargo also captures SDKROOT: the wrapper exports the
+# discovered SDK (here the SDK fixture) into the cargo environment,
+# so rustc skips its bare xcrun query.
+[ "$(cat "$WRAP_SDKROOT")" = "$TMP/wtoolchain" ] \
+  || die "wrapper: cargo did not inherit the discovered SDKROOT"
 pass "wrapper follows --target to the guarded dir"
 # --target=<triple> mirror.
 wrap_run --target=aarch64-apple-darwin >/dev/null 2>&1 \

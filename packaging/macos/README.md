@@ -75,7 +75,10 @@ bundle with hardened runtime fails library validation at launch
 `/usr/bin/xcrun` (same DEVELOPER_DIR/SDKROOT-tolerant pattern as
 `build-appex.sh`), appends `-C link-arg=-L<MacOSX.sdk>/usr/lib` to
 `RUSTFLAGS` so the SDK `libiconv.tbd` (`/usr/lib/libiconv.2.dylib`,
-same ABI 7.0.0) wins, runs `cargo tauri build` from
+same ABI 7.0.0) wins, exports `SDKROOT=<MacOSX.sdk>` so `rustc`
+uses the discovered SDK directly instead of its own bare `xcrun`
+query (which under devenv resolves to the Nix shadow and warns),
+runs `cargo tauri build` from
 `crates/wyrd-desktop` (default `--bundles app`), reseals the outer
 app shallowly (the bundler's linker-only seal leaves the staged
 files unverified; never `--deep`), then guards with
@@ -89,7 +92,10 @@ defaults to `CARGO_TARGET_DIR`-aware `target/release`, moves with
 a forwarded `--target <triple>`, and falls back to
 `CARGO_BUILD_TARGET`. No source or entitlement changes — purely link-search
 order. The pin is Darwin-only; elsewhere the build
-forwards untouched. Signing env (`SIGN_IDENTITY`,
+forwards untouched. Under `devenv --profile native-apple` the
+inherited-value note may print while `SDKROOT` itself is unset at
+entry — stderr noise only, the export still pins the discovered
+SDK for the cargo invocations below. Signing env (`SIGN_IDENTITY`,
 `PROVISIONING_PROFILE`) passes through to the `stage-appex.sh` hook.
 
 Bundle identities: app `md.enesis.wyrd` (from `tauri.conf.json`),
