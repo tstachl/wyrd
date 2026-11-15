@@ -278,6 +278,26 @@ is transient — no drive data is affected.
 
 ### Fixed
 
+- First-run Repair no longer blames the identity files for a broken
+  app pairing
+  (`nostr:nevent1qqs028r8cren4pvy2gsp45nu6ahqtkzqhhtem3gnyks27rupatzrc5gpz9mhxue69uhkwunpwdczuap49eehg3d9qvy`):
+  a `versionmismatch` from the onboarding gate (a missing or
+  mismatched `wyrd` helper beside the desktop binary included) used
+  to render under the "cannot use this identity file" headline. It
+  now renders its own pairing state — headline, reinstall/build
+  fix, and retry — before any credential state, with the
+  development-checkout hint shared with the provisioning copy. File
+  choosing and new-identity creation stay credential-only.
+
+- Conflict-surface unavailable copy names the resource
+  (`nostr:nevent1qqspajuqhkuhyvsnd7umrrcj8wl0wwq9r0rls5pg42erahyw628p5xspz9mhxue69uhkwunpwdczuap49eehgjlfulj`):
+  `describe_unavailable` maps each `StoreFailure` variant to its own
+  sentence (full disk names freeing space, unwritable store names
+  writability, transient keeps the stored-representation sentence)
+  instead of reading every resource failure as damaged data. The
+  unavailable verdict and the structural `None` mapping are
+  unchanged.
+
 - Pin the macOS SDK link order for bundle builds plus a no-Nix-links
   guard
   (`nostr:nevent1qqsgc0hw5xhrelz66xynpjfn8y7nl46uhymhnaz2anjf5ns2yq5gmpspz9mhxue69uhkwunpwdczuap49eehg80dg7t`):

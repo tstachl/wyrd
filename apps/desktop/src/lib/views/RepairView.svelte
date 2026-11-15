@@ -1,10 +1,14 @@
-<!-- Broken-credential Repair: dedicated state, never a toast and
-never a silent invitation to generate. Human-first copy up front;
-raw CLI text rides only inside the expandable technical detail (raw
-credentials.rs strings never reach the renderer as the headline).
-A new identity from here requires explicit destructive confirmation:
-the old file is preserved where it is, never overwritten, and the
-consequence is stated plainly. -->
+<!-- Broken-credential Repair plus broken-pairing Repair: two causes,
+distinct states, one screen. The credential states name the
+identity files and offer file choosing or a new identity; the
+pairing state (a version-mismatched or unrunnable helper) names
+neither — neither choosing files nor creating an identity can fix
+a pairing, so those sections stay hidden there. Human-first copy
+up front; raw CLI text rides only inside the expandable technical
+detail (raw credentials.rs strings never reach the renderer as the
+headline). A new identity from here requires explicit destructive
+confirmation: the old file is preserved where it is, never
+overwritten, and the consequence is stated plainly. -->
 <script lang="ts">
   import Button from "$lib/components/ui/button.svelte";
   import type { KeyDefaults, OnboardingReport } from "$lib/ipc/results.js";
@@ -13,6 +17,7 @@ consequence is stated plainly. -->
   interface Props {
     defaults: KeyDefaults;
     detail: string;
+    kind?: "credentials" | "versionmismatch";
     pending: boolean;
     onVerify: (args: { identityFile: string; passphraseFile: string }) => Promise<OnboardingReport>;
     onAdopt: (args: { identityFile: string; passphraseFile: string }) => Promise<OnboardingReport>;
@@ -20,7 +25,7 @@ consequence is stated plainly. -->
     onCreateNew: () => void;
   }
 
-  let { defaults, detail, pending, onVerify, onAdopt, onAdopted, onCreateNew }: Props = $props();
+  let { defaults, detail, kind = "credentials", pending, onVerify, onAdopt, onAdopted, onCreateNew }: Props = $props();
 
   let pickedIdentity = $state("");
   let pickedPassphrase = $state("");
@@ -41,9 +46,16 @@ consequence is stated plainly. -->
     helper = null;
     try {
       const report = await onVerify({ identityFile: defaults.identity_file, passphraseFile: defaults.passphrase_file });
+      // The pairing path re-runs the version gate, not a credential
+      // read: success means the pair answers, never that files are
+      // readable.
       helper = report.result.result === "completed"
-        ? "The files are readable now — restart the app to continue."
-        : "Still unreadable — the detail below says what the check reported.";
+        ? kind === "versionmismatch"
+          ? "The pair answers now — restart the app to continue."
+          : "The files are readable now — restart the app to continue."
+        : kind === "versionmismatch"
+          ? "Still failing — the detail below says what the check reported."
+          : "Still unreadable — the detail below says what the check reported.";
     } catch (failure: unknown) {
       helper = failure instanceof Error ? failure.message : String(failure);
     } finally {
@@ -76,9 +88,14 @@ consequence is stated plainly. -->
 </script>
 
 <div class="max-w-xl">
+  {#if kind === "versionmismatch"}
+  <h1 class="mt-4 text-2xl font-semibold tracking-tight">The app and its helper tool do not match</h1>
+  <p class="mt-2 text-sm">The desktop and its paired <span class="font-mono text-xs">wyrd</span> helper do not match: either the helper could not be run, or it reported a different build. This says nothing about your identity files, and your drives are untouched — nothing was changed. Reinstall the matched pair, then verify again. In a development checkout that means building the CLI beside the desktop binary; the technical detail below names the exact failure.</p>
+  {:else}
   <h1 class="mt-4 text-2xl font-semibold tracking-tight">Fix this device's identity</h1>
   <p class="mt-2 text-sm">Wyrd cannot use this identity file: other users on this computer could access it, or it is damaged. Your drives are untouched — nothing was changed.</p>
   <p class="mt-1 text-sm text-smoke">Expected files: <span class="font-mono text-xs">{defaults.identity_file}</span>, <span class="font-mono text-xs">{defaults.passphrase_file}</span></p>
+  {/if}
 
   <div class="mt-3">
     <Button variant="secondary" size="sm" disabled={busy} onclick={() => (showTechnical = !showTechnical)}>{showTechnical ? "Hide technical detail" : "Show technical detail"}</Button>
@@ -91,6 +108,7 @@ consequence is stated plainly. -->
     <Button variant="default" size="sm" disabled={busy} onclick={() => void verifyAgain()}>Verify again</Button>
   </div>
 
+  {#if kind === "credentials"}
   <div class="mt-4 rounded-md border border-ink/15 dark:border-bone/20 px-3 py-2">
     <h2 class="text-sm font-semibold">Choose a different file</h2>
     <div class="mt-2 text-sm">
@@ -111,9 +129,11 @@ consequence is stated plainly. -->
       <Button variant="default" size="sm" disabled={busy} onclick={() => void usePicked()}>Use these files</Button>
     </div>
   </div>
+  {/if}
 
   {#if helper !== null}<p class="mt-3 text-sm" role="alert">{helper}</p>{/if}
 
+  {#if kind === "credentials"}
   <div class="mt-4 rounded-md border border-ink/15 dark:border-bone/20 px-3 py-2">
     {#if !confirmNew}
       <Button variant="secondary" size="sm" disabled={busy} onclick={() => (confirmNew = true)}>Create a new identity instead…</Button>
@@ -126,4 +146,5 @@ consequence is stated plainly. -->
       </div>
     {/if}
   </div>
+  {/if}
 </div>

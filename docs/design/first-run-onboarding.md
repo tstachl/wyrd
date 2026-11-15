@@ -154,6 +154,7 @@ the onboarding exception recorded in `desktop-shell.md`.
 | Exists but permissions wrong | Repair: human-first copy, Fix-guidance, Verify again, Choose different files, technical detail expandable |
 | Exists but format invalid | Repair-or-restore, same pattern; single combined passphrase/damage message |
 | Incomplete (one file missing) | Names exactly what is missing |
+| Helper missing or mismatched (`versionmismatch` from the gate, including an unbuilt sibling CLI) | Pairing state, never a credential verdict: own headline, reinstall/build fix, Verify again only — no file choosing, no new identity, credential paths not shown |
 | Gate unreadable (transport, unusable paths) | Explicit unknown state with Retry, never an open gate |
 
 Never let an inaccessible identity silently become an invitation

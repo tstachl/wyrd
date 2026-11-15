@@ -146,3 +146,36 @@ test("repair states readability and adoption plainly", () => {
   // No silent overwrite path: the word never appears as an action.
   expect(repair).not.toContain("Overwrite");
 });
+
+test("repair names a broken pairing before any credential state", () => {
+  // The version-mismatch branch never presents the credential
+  // verdicts: a missing or mismatched helper is a pairing problem,
+  // and neither choosing files nor creating an identity can fix it.
+  for (const line of [
+    "The app and its helper tool do not match",
+    "either the helper could not be run, or it reported a different build",
+    "This says nothing about your identity files",
+    "Reinstall the matched pair",
+    "building the CLI beside the desktop binary",
+    "The pair answers now",
+  ]) {
+    expect(repair).toContain(line);
+  }
+  // The pairing block itself (up to its {:else}) presents no
+  // credential affordance: no expected-paths line, no file
+  // chooser, no new-identity section. The copy test reads source,
+  // so this pins the markup order — a pairing render cannot
+  // reach the credential sections without moving them inside the
+  // branch, which this slice would catch.
+  const pairingBlock = repair.slice(
+    repair.indexOf("The app and its helper tool do not match"),
+    repair.indexOf("{:else}"),
+  );
+  for (const banned of [
+    "Choose a different file",
+    "Create a new identity instead",
+    "Expected files",
+  ]) {
+    expect(pairingBlock).not.toContain(banned);
+  }
+});
