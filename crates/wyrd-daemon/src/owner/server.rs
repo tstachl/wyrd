@@ -46,6 +46,7 @@ use wyrd_core::view::{NamespaceView, Node, ViewError};
 use wyrd_core::wake::WakeSignal;
 use wyrd_core::want::{WantError, WantRegistry};
 use wyrd_format::DriveId;
+use wyrd_format::EntryIdentity;
 
 use crate::vault::OwnerView;
 
@@ -1034,22 +1035,11 @@ impl OwnerServer {
             .view()
             .lookup(&params.path)
             .map_err(map_view_error)?;
-        // A conflicted path carries no token of its own: refuse as
-        // conflicted before any token comparison, exactly like the
-        // mutation-side rule (four conditions stay distinct, never
-        // collapsed into one).
-        if matches!(node, Node::Conflict { .. }) {
-            return Err((
-                WireErrorCode::Conflicted,
-                format!("{} is conflicted across heads", params.path),
-            ));
-        }
-        // Identity-bound read: a caller that verified an entry token
-        // holds the read to that entry. A delete-plus-recreate behind
-        // the path resolves to a different token (or to a legacy
-        // entry with none) and refuses as `StaleEntry` — never the
-        // replacement's bytes under the old verification. Present
-        // must parse — never silently dropped — reusing the
+        // Identity-bound read: the refusal is decided from the
+        // resolved node before any byte is touched — conflicted
+        // first, then the token equality — so the check and the
+        // served bytes come from one immutable generation.
+        // Present must parse — never silently dropped — reusing the
         // node-identity rule; absent stays path-only.
         let expected = wire_identity(&params.identity).map_err(|error| {
             (
@@ -1057,17 +1047,8 @@ impl OwnerServer {
                 format!("bad read identity for {}: {error}", params.path),
             )
         })?;
-        if let Some(expected) = expected {
-            let found = node_token(&node);
-            if found.as_ref() != Some(&expected) {
-                return Err((
-                    WireErrorCode::StaleEntry,
-                    format!(
-                        "stale entry identity for {:?}: the path no longer resolves to the verified entry",
-                        params.path,
-                    ),
-                ));
-            }
+        if let Some((code, message)) = bound_read_refusal(&node, expected.as_ref(), &params.path) {
+            return Err((code, message));
         }
         // Bound one request's memory before touching the bytes: a
         // file past the bound is refused explicitly, never
@@ -1223,6 +1204,7 @@ impl OwnerServer {
                 format!("bad capture-parent params: {error}"),
             )
         })?;
+        reject_bound_non_read("capture-parent", &params)?;
         match self.handles.mutations.capture_parent(&params.path) {
             Ok(Some(token)) => Ok(WireOk::ParentToken {
                 token: WireParentToken {
@@ -1295,6 +1277,7 @@ impl OwnerServer {
                 format!("bad policy-pin params: {error}"),
             )
         })?;
+        reject_bound_non_read("policy-pin", &params)?;
         match self
             .handles
             .policy
@@ -1328,6 +1311,7 @@ impl OwnerServer {
                 format!("bad policy-unpin params: {error}"),
             )
         })?;
+        reject_bound_non_read("policy-unpin", &params)?;
         match self
             .handles
             .policy
@@ -1361,6 +1345,7 @@ impl OwnerServer {
                 format!("bad policy-evict params: {error}"),
             )
         })?;
+        reject_bound_non_read("policy-evict", &params)?;
         match self
             .handles
             .policy
@@ -1398,6 +1383,7 @@ impl OwnerServer {
                 format!("bad policy-status params: {error}"),
             )
         })?;
+        reject_bound_non_read("policy-status", &params)?;
         match self
             .handles
             .policy
@@ -1457,13 +1443,40 @@ fn refuse(id: u64, code: WireErrorCode, message: String) -> WireResponse {
     }
 }
 
-/// Map a view failure to a wire refusal. Every variant names its
-/// own code — the transport never reinterprets a failure, it carries
-/// it.
+/// The bound-read refusal for a resolved node, decided before any
+/// byte is touched: a conflicted path refuses as conflicted before
+/// any token comparison (four conditions stay distinct, never
+/// collapsed into one), then a presented token must equal the
+/// node's own — `None` when the entry is identity-less — or the
+/// read refuses as `StaleEntry`. Absent with no expectation serves;
+/// the caller distinguishes "no token asked" from "token asked and
+/// matched" nowhere, because both proceed identically.
+pub(super) fn bound_read_refusal(
+    node: &Node,
+    expected: Option<&EntryIdentity>,
+    path: &str,
+) -> Option<(WireErrorCode, String)> {
+    if matches!(node, Node::Conflict { .. }) {
+        return Some((
+            WireErrorCode::Conflicted,
+            format!("{path} is conflicted across heads"),
+        ));
+    }
+    match (expected, node_token(node)) {
+        (Some(wanted), found) if found.as_ref() != Some(wanted) => Some((
+            WireErrorCode::StaleEntry,
+            format!(
+                "stale entry identity for {path:?}: the path no longer resolves to the verified entry"
+            ),
+        )),
+        _ => None,
+    }
+}
+
 /// The entry token binds reads only: a caller that passes one to
-/// `lookup`, `stat`, or `readdir` believes the answer is bound, and
-/// it is not — refuse loudly instead of serving an unbound answer
-/// under a bound request.
+/// any path-addressed operation besides `read` believes the answer
+/// is bound, and it is not — refuse loudly instead of serving an
+/// unbound answer under a bound request.
 fn reject_bound_non_read(op: &str, params: &PathParams) -> Result<(), (WireErrorCode, String)> {
     if params.identity.is_some() {
         return Err((
@@ -1474,6 +1487,9 @@ fn reject_bound_non_read(op: &str, params: &PathParams) -> Result<(), (WireError
     Ok(())
 }
 
+/// Map a view failure to a wire refusal. Every variant names its
+/// own code — the transport never reinterprets a failure, it carries
+/// it.
 fn map_view_error(error: ViewError) -> (WireErrorCode, String) {
     let message = error.to_string();
     let code = match &error {
@@ -1492,7 +1508,8 @@ fn map_view_error(error: ViewError) -> (WireErrorCode, String) {
     (code, message)
 }
 
-/// Map a demand-driven read failure to a wire refusal. Timeouts and/// saturated demand are transient — the message says retry — while
+/// Map a demand-driven read failure to a wire refusal. Timeouts and
+/// saturated demand are transient — the message says retry — while
 /// terminal verdicts carry the view's own code.
 fn map_read_error(error: ReadError) -> (WireErrorCode, String) {
     match error {

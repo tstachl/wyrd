@@ -10,6 +10,7 @@ use super::mapping::{
     mutation_kind_from_wire, node_from_wire, node_token, wire_attr, wire_dir_entry,
     wire_mutation_error, wire_mutation_outcome, wire_node, wire_presence, wire_retention_policy,
 };
+use super::server::bound_read_refusal;
 use super::wire::{
     PathParams, RawRequest, SubmitParams, WireAttr, WireDirEntry, WireDurabilityLevel, WireError,
     WireErrorCode, WireFileIdentity, WireFreshnessState, WireKind, WireLiveness, WireMutationKind,
@@ -321,6 +322,78 @@ fn node_token_resolves_identified_nodes_and_nothing_else() {
         None
     );
     assert_eq!(node_token(&Node::Conflict { versions: vec![] }), None);
+}
+
+/// The bound-read refusal decides from the resolved node before
+/// any byte is touched: conflict refuses as conflicted with or
+/// without a token, a foreign token (including one presented
+/// against an identity-less entry) refuses as `StaleEntry`, and a
+/// match — or no expectation at all — proceeds.
+#[test]
+fn bound_read_refusal_orders_conflict_before_token() {
+    let token = EntryIdentity::from_bytes([0xB0; 32]);
+    let file = Node::File {
+        size: 1,
+        executable: false,
+        chunks: vec![],
+        identity: Some(token),
+    };
+    let legacy = Node::File {
+        size: 1,
+        executable: false,
+        chunks: vec![],
+        identity: None,
+    };
+    let conflict = Node::Conflict { versions: vec![] };
+    let foreign = EntryIdentity::from_bytes([0xF0; 32]);
+    for node in [&file, &legacy] {
+        match bound_read_refusal(node, None, "p") {
+            None => {}
+            other => panic!("no expectation proceeds on {node:?}: {other:?}"),
+        }
+    }
+    assert!(bound_read_refusal(&file, Some(&token), "p").is_none());
+    match bound_read_refusal(&file, Some(&foreign), "p") {
+        Some((WireErrorCode::StaleEntry, _)) => {}
+        other => panic!("a foreign token refuses as StaleEntry: {other:?}"),
+    }
+    match bound_read_refusal(&legacy, Some(&token), "p") {
+        Some((WireErrorCode::StaleEntry, _)) => {}
+        other => {
+            panic!("a token against an identity-less entry refuses as StaleEntry: {other:?}")
+        }
+    }
+    for expected in [None, Some(&token), Some(&foreign)] {
+        match bound_read_refusal(&conflict, expected, "p") {
+            Some((WireErrorCode::Conflicted, _)) => {}
+            other => panic!("a conflicted path refuses as conflicted: {other:?}"),
+        }
+    }
+}
+
+/// A present token on a non-read operation refuses as `Malformed`
+/// instead of serving an unbound answer under a bound request.
+#[test]
+fn non_read_operations_refuse_a_present_token() {
+    let (parts, dir) = composed_parts();
+    let server = OwnerServer::new(OwnerHandles::from_parts(&parts));
+    for op in [OP_LOOKUP, OP_STAT, OP_READDIR] {
+        let response = server.dispatch(RawRequest {
+            v: WIRE_VERSION,
+            id: 7,
+            op: op.to_string(),
+            params: serde_json::to_value(PathParams {
+                path: "hello.txt".to_string(),
+                identity: Some("ab".repeat(32)),
+            })
+            .unwrap(),
+        });
+        match response.result {
+            WireResult::Err(error) => assert_eq!(error.code, WireErrorCode::Malformed),
+            ok => panic!("{op} with a token refuses as Malformed: {ok:?}"),
+        }
+    }
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 // ---------------------------------------------------------------------------
