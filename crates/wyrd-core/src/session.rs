@@ -255,6 +255,20 @@ impl WriteBudget {
         self.poison.load(Ordering::Relaxed)
     }
 
+    /// Poison the budget lock for a downstream seam test. The
+    /// catch_unwind drops the guard during unwinding, which poisons a
+    /// std mutex exactly the way a panicking holder does. Pub
+    /// (hidden) for the wyrd-daemon fold pin: integration tests
+    /// cannot reach the lock, and the EIO arm they pin lives behind
+    /// this exact state. Never called in production.
+    #[doc(hidden)]
+    pub fn poison_for_test(&self) {
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = self.state.lock().unwrap();
+            panic!("poison the write budget for a seam test");
+        }));
+    }
+
     /// Record one poisoned acquisition, loudly: the counter names it
     /// for status consumers, the log names it for the operator. Only
     /// ever called with a lock already known poisoned.

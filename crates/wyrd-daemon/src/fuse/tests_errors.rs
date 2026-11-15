@@ -387,3 +387,35 @@ fn poisoned_locks_error_instead_of_panicking() {
     assert_eq!(backend.inode_path(1), Err(fuser::Errno::EIO));
     assert_eq!(backend.dir_entries(0), Err(fuser::Errno::EIO));
 }
+
+/// A poisoned budget fails a clean handle's fsync instead of
+/// reporting the path durable: fsync_handle delegates through
+/// force_path to earliest_dirty_on, which reads zero dirty handles
+/// beside a nonzero poison count as EIO — dead bookkeeping, never a
+/// durable path. The reservation below proves the budget was
+/// non-idle, so the post-poison zero reads as death, not idleness.
+#[test]
+fn poisoned_budget_clean_fsync_fails_eio_not_ok() {
+    let (mut backend, _) = evolving_backend(b"first", b"second");
+    let queue = Arc::new(MutationQueue::default());
+    backend.mutations = Some(Arc::clone(&queue));
+    let fh = backend.open_write("f.txt", libc::O_RDWR).unwrap();
+    let scratch = backend.budget.next_handle();
+    backend.budget.reserve(scratch, 64).unwrap();
+    assert_eq!(backend.budget.poison_count(), 0, "no poison observed yet");
+    backend.budget.poison_for_test();
+    assert_eq!(
+        backend.fsync_handle(fh),
+        Err(fuser::Errno::EIO),
+        "a clean fsync over a poisoned budget fails, never reports durable"
+    );
+    assert!(
+        backend.budget.poison_count() > 0,
+        "the refused fsync counts the poison beside the refusal"
+    );
+    assert_eq!(
+        backend.budget.total(),
+        0,
+        "zero beside a count is dead, not idle"
+    );
+}
