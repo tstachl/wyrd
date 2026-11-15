@@ -449,8 +449,11 @@ verdict.
   drive (`name — Available|Unavailable|Unknown`), then Set up /
   connect drives (shows the window and routes to the lifecycle
   view), Show window, and Quit. The tray reuses only landed IPC,
-  holds no implicit active drive, never opens a drive, and quits
-  through the same graceful drain as window close.
+  holds no implicit active drive, never opens a drive, and is how
+  the shell stays reachable after the window is closed: closing the
+  window hides it, Quit — the tray item, Cmd+Q, or any exit request
+  — drains in-flight work through the graceful-shutdown rule, and
+  the macOS dock icon reopens the hidden window.
 - Frontend state is a presentation cache, never a second drive
   model. Transient presentation state is fine and expected: selected
   view, open dialogs, form input, pending-request indicators, last
