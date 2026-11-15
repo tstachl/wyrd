@@ -6,12 +6,18 @@ distinct value so the Harness can isolate the conflicted
 classification from ordinary lookup. The submit side enforces the v2
 identity precondition exactly like the contract demands: a covered
 kind without one refuses Malformed, a wrong token refuses
-StaleEntry. Mutation calls beyond the baseline vectors run against
+StaleEntry. Reads enforce the same bound when the caller names a
+token: a replacement behind the path refuses StaleEntry instead of
+serving foreign bytes, while absent stays path-only. Mutation calls
+beyond the baseline vectors run against
 a small in-memory namespace (`mut-*` paths plus the scripted
 `stale-dir` fixture): creates, commits, renames, and deletes apply
 there, so the Harness proves the adapter's write path end to end.
 `stale-dir` is deliberately hidden from `readdir` — it exists only
-to script one `StaleParent` for the recapture test. Temporary,
+to script one `StaleParent` for the recapture test. A test-only
+race arm (`debug-replace-on-read`) performs the racing peer's
+delete-plus-recreate inside the next read, so the Harness proves
+the verify-then-read window refuses. Temporary,
 local-only, never part of the appex."""
 
 import hashlib
@@ -125,6 +131,34 @@ def mint_token():
 STALE_ONCE = {STALE_DIR: True}
 
 
+# A test-only race arm: the next `read` of an armed path performs
+# a delete-plus-recreate (new token, new content) before
+# evaluating, simulating the peer that replaces the entry between
+# the caller's verify lookup and its read. Armed by
+# `debug-replace-on-read`, consumed by the next read of that path.
+REPLACE_ON_READ = {}
+
+
+def token_for(path):
+    if path in STATE:
+        return STATE[path]["identity"]
+    return TOKENS.get(path)
+
+
+def rotate_entry(path):
+    # The racing peer's delete-plus-recreate, in one step: the path
+    # keeps its name but the entry (token and content) is new.
+    if path not in STATE:
+        return
+    replacement = bytes("replacement", "utf-8").hex()
+    STATE[path] = {
+        "kind": "file",
+        "identity": mint_token(),
+        "size": len(bytes.fromhex(replacement)),
+        "content": replacement,
+    }
+
+
 # The served content base is derived from the content itself
 # (truncated SHA-256 over the bytes), exactly like a real owner's
 # content addressing: a same-size edit produces a different chunk
@@ -191,6 +225,18 @@ def answer(op, params):
             return result_err("AlreadyExists", "the path already carries an identity")
         STATE[mint_path]["identity"] = mint_token()
         return result_ok({"DebugMinted": {"path": mint_path}})
+    if op == "debug-replace-on-read":
+        # Test-only: arm the verify-then-read race for one path. The
+        # next `read` of the armed path performs the racing peer's
+        # delete-plus-recreate before evaluating, so the Harness
+        # proves a replacement between verify and read refuses.
+        arm_path = (params or {}).get("path", "")
+        if arm_path not in STATE:
+            return result_err("NotFound", "no such path")
+        if STATE[arm_path]["kind"] != "file":
+            return result_err("NotAFile", "not a file")
+        REPLACE_ON_READ[arm_path] = True
+        return result_ok({"DebugArmed": {"path": arm_path}})
     path = (params or {}).get("path", "")
     if op == "lookup":
         if path in STATE:
@@ -337,6 +383,14 @@ def answer(op, params):
             )
         return result_err("NotFound", "no such directory")
     if op == "read":
+        wanted = (params or {}).get("identity")
+        if path in REPLACE_ON_READ:
+            del REPLACE_ON_READ[path]
+            rotate_entry(path)
+        if wanted is not None and token_for(path) != wanted:
+            return result_err(
+                "StaleEntry", "stale entry identity for %r" % path
+            )
         if path in STATE:
             entry = STATE[path]
             if entry["kind"] != "file":

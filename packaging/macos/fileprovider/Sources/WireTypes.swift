@@ -11,9 +11,14 @@
 
 import Foundation
 
-/// `{"path": "<relative path>"}`, empty string for the drive root.
+/// `{"path": "<relative path>", "identity": "<token>"}` — empty
+/// string for the drive root. The token is the verified entry
+/// identity (lowercase hex) a bound read holds the server to;
+/// absent is the path-only read with the long-standing behavior.
+/// Absent keys decode as `nil`, exactly like the node identities.
 struct OwnerPathParams: Codable {
     var path: String
+    var identity: String?
 }
 
 /// One framed request: version, client-matched id, operation name,

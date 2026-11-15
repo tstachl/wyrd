@@ -194,9 +194,12 @@ final class LiveStore {
         }
     }
 
-    /// Build the item for a verified file node, then read it. Shared
-    /// by the stable and legacy hydration paths; reports never reach
-    /// here.
+    /// Build the item for a verified file node, then read it bound
+    /// to that node: the read carries the verified token, so a
+    /// delete-plus-recreate between the verify lookup and the read
+    /// refuses instead of serving the replacement's bytes under the
+    /// old identifier and version. Shared by the stable and legacy
+    /// hydration paths; reports never reach here.
     private func fileContents(
         node: OwnerNode,
         path: String,
@@ -217,12 +220,12 @@ final class LiveStore {
         }
         let bytes: [UInt8]
         do {
-            bytes = try client.read(path: path).bytes
+            bytes = try client.read(path: path, identity: nodeIdentity(node)).bytes
         } catch let error as OwnerClientError {
             if case .refused(let refusal) = error, refusal.code == "Timeout" {
                 log.error("owner read timed out once, retrying on a fresh connection")
                 do {
-                    bytes = try liveClient().read(path: path).bytes
+                    bytes = try liveClient().read(path: path, identity: nodeIdentity(node)).bytes
                 } catch {
                     throw mapError(error, what: "read retry \(path)")
                 }
@@ -364,16 +367,11 @@ final class LiveStore {
     /// replacement *item* under the old identifier. A mismatch falls
     /// through to one bounded walk; a conflict classification fails
     /// closed; anything else 404s. Transport breaks propagate, never
-    /// trigger a walk.
-    ///
-    /// Residual window (documented, not closed): hydration reads by
-    /// path after this verification, so a delete-plus-recreate
-    /// between the verify `lookup` and the `read` can return the
-    /// replacement's bytes under the old identifier and version.
-    /// Closing it needs identity-bound reads (the owner answers by
-    /// token, not by path) — Stage 3 work. The item surface above
-    /// carries no such window: the item is built from the verified
-    /// node itself.
+    /// trigger a walk. Hydration inherits the same bound: `contents`
+    /// reads through this verification and the read itself carries
+    /// the token, so a replacement between the verify lookup and the
+    /// read refuses as `StaleEntry` instead of serving foreign bytes
+    /// under the old identifier and version.
     func stableNode(
         identifier: NSFileProviderItemIdentifier,
         identityHex: String,
@@ -582,6 +580,13 @@ final class LiveStore {
             case "NotFound":
                 return .notFound("\(what): \(refusal.message)")
             case "NotADirectory", "NotAFile":
+                return .notFound("\(what): \(refusal.message)")
+            case "StaleEntry":
+                // The verified entry is gone (replaced behind the
+                // path): the identifier names nothing in this
+                // generation, exactly like the stable-resolution
+                // rule. The replacement serves under its own token,
+                // never under this one.
                 return .notFound("\(what): \(refusal.message)")
             case "Conflicted":
                 return .sync("\(what): \(refusal.message)")
