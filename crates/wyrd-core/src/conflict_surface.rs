@@ -52,6 +52,7 @@ use wyrd_format::{DeviceId, SnapshotId};
 use wyrd_sync::runtime::{MergePath, MergePlan};
 
 use super::status::HeadSummary;
+use wyrd_format::store::StoreFailure;
 use wyrd_namespace::view::{Node, ViewError};
 
 /// One diverged branch, labelled by facts the engine already holds
@@ -394,8 +395,24 @@ pub fn describe_unavailable(error: &ViewError) -> Option<String> {
         ),
         ViewError::LostRepresentation { .. }
         | ViewError::RejectedRepresentation { .. }
-        | ViewError::Corrupt
-        | ViewError::Store(_, _) => Some(
+        | ViewError::Corrupt => Some(
+            "contents unavailable (the stored representation cannot be read right now; the branch metadata above still stands)\n"
+                .to_owned(),
+        ),
+        // A resource failure is unavailable with the same verdict, but
+        // never reads as damaged data: the classification travels with
+        // the error, so the copy names the resource the same way the
+        // mount errnos do (full reads as ENOSPC, unwritable as
+        // EACCES) instead of discarding the distinction.
+        ViewError::Store(StoreFailure::StorageFull, _) => Some(
+            "contents unavailable (the disk is full — free space and retry; the branch metadata above still stands)\n"
+                .to_owned(),
+        ),
+        ViewError::Store(StoreFailure::PermissionDenied, _) => Some(
+            "contents unavailable (the store is not writable by this process; the branch metadata above still stands)\n"
+                .to_owned(),
+        ),
+        ViewError::Store(StoreFailure::Transient, _) => Some(
             "contents unavailable (the stored representation cannot be read right now; the branch metadata above still stands)\n"
                 .to_owned(),
         ),

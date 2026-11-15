@@ -7,7 +7,7 @@
 
 use std::collections::BTreeMap;
 
-use wyrd_format::{ContentId, DeviceId, Entry, ObjectKind, SnapshotId};
+use wyrd_format::{store::StoreFailure, ContentId, DeviceId, Entry, ObjectKind, SnapshotId};
 use wyrd_namespace::view::{ConflictVersion, Node, ViewError};
 use wyrd_sync::keys::DeviceIdentitySecret;
 use wyrd_sync::runtime::engine::SnapshotHead;
@@ -330,6 +330,66 @@ fn conflict_inspection_reports_unfetched_rather_than_empty() {
             None,
             "structural is not unavailable: {structural:?}"
         );
+    }
+}
+
+/// Resource failures keep the unavailable verdict but name the
+/// resource: a full or unwritable disk must never read as damaged
+/// data. Each `StoreFailure` variant pins its own copy; transient
+/// keeps the stored-representation sentence, and the structural
+/// mapping (`None`) is unchanged.
+#[test]
+fn store_failures_name_the_resource_never_damaged_data() {
+    let full = describe_unavailable(&ViewError::Store(
+        StoreFailure::StorageFull,
+        "no space left".to_owned(),
+    ))
+    .expect("full maps to unavailable");
+    assert!(full.contains("unavailable"), "verdict stands:\n{full}");
+    assert!(
+        full.contains("disk is full"),
+        "names the resource, not damage:\n{full}"
+    );
+    assert!(full.contains("metadata"), "metadata still stands:\n{full}");
+    let denied = describe_unavailable(&ViewError::Store(
+        StoreFailure::PermissionDenied,
+        "os error 13".to_owned(),
+    ))
+    .expect("denied maps to unavailable");
+    assert!(denied.contains("unavailable"), "verdict stands:\n{denied}");
+    assert!(
+        denied.contains("not writable"),
+        "names the resource, not damage:\n{denied}"
+    );
+    assert!(
+        denied.contains("metadata"),
+        "metadata still stands:\n{denied}"
+    );
+    let transient = describe_unavailable(&ViewError::Store(
+        StoreFailure::Transient,
+        "poisoned".to_owned(),
+    ))
+    .expect("transient maps to unavailable");
+    assert!(
+        transient.contains("cannot be read right now"),
+        "transient keeps the stored-representation sentence:\n{transient}"
+    );
+    // None of the three reads as damaged data or an empty branch.
+    for copy in [&full, &denied, &transient] {
+        for claim in [
+            "damaged",
+            "corrupt",
+            "0 bytes",
+            "empty document",
+            "zero-byte",
+            "no content",
+            "holds nothing",
+        ] {
+            assert!(
+                !copy.contains(claim),
+                "never a data-loss claim ({claim}):\n{copy}"
+            );
+        }
     }
 }
 
