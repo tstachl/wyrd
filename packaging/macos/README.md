@@ -76,10 +76,13 @@ bundle with hardened runtime fails library validation at launch
 `build-appex.sh`), appends `-C link-arg=-L<MacOSX.sdk>/usr/lib` to
 `RUSTFLAGS` so the SDK `libiconv.tbd` (`/usr/lib/libiconv.2.dylib`,
 same ABI 7.0.0) wins, runs `cargo tauri build` from
-`crates/wyrd-desktop` (default `--bundles app`), then guards with
+`crates/wyrd-desktop` (default `--bundles app`), reseals the outer
+app shallowly (the bundler's linker-only seal leaves the staged
+files unverified; never `--deep`), then guards with
 `packaging/macos/check-no-nix-links.sh`: every file under the bundle
 app's `Contents/MacOS` (no hardcoded binary name), plus the
-standalone binary and the embedded appex binary when present. Any
+standalone binary, the embedded appex binary, and the bundled
+co-installed CLI when present. Any
 `/nix/store` linkage — or nothing to inspect at all — fails the
 build, and the notes name the release dir examined. The dir
 defaults to `CARGO_TARGET_DIR`-aware `target/release`, moves with
@@ -111,6 +114,46 @@ an unsandboxed daemon without the group entitlement cannot call
 needs the same live confirmation this build gave the extension
 side. The container materializes only under a team-signed build
 with provisioning. Deployment target macOS 13.0.
+
+## Developer install (ad-hoc, no fee)
+
+One command builds ad-hoc and installs to an Applications dir,
+ready to launch — no signing assets, no paid Developer Program:
+
+```sh
+packaging/macos/install-dev.sh
+```
+
+Prerequisites: Xcode/CLT (`xcode-select --install`), the devenv
+shell (cargo), `bun` (the desktop `beforeBuildCommand`), `python3`.
+The script builds through `packaging/macos/build-bundle.sh`
+(link-order pin plus no-Nix-links guard; the wrapper's app-only
+default is kept unless `--bundles` is forwarded), verifies
+`codesign --verify --deep --strict` on the built and staged copies
+before the old app is touched (fail closed), copies with `ditto`
+to a staging name and swaps into `/Applications/Wyrd.app` when
+writable else `~/Applications/Wyrd.app` (`--dest`/`DEST`
+overrides, `--no-open` skips launch, `--` forwards e.g.
+`-- --target` to the wrapper), re-verifies the installed copy, and
+launches the app. The bundler hook stages the appex plus the
+version-matched `wyrd` CLI into `Contents/Resources/wyrd` before
+the outer sign — the desktop resolves the bundled copy first (the
+`MacOS` sibling is the devenv fallback only) and version-checks it
+before every lifecycle run — so the UI, owner, registry, and tray
+work ad-hoc: create/join/leave, status, settings. No macFUSE is
+needed: the ad-hoc CLI builds vault-only (`WYRD_NO_MOUNT=1`
+drops the mount stack, whose macFUSE load dependency a clean Mac
+has no copy of); `mount` mode and Finder stay with the
+team-signed path below, and the release bundle keeps the full
+mount-enabled CLI by leaving the flag unset.
+
+Finder boundary (honest, not a bug): an ad-hoc appex logs
+`no-group-container` and stays inert — the App Group container
+only materializes under a team-signed build with provisioning.
+Finder integration stays the separately team-gated path below
+("Production entitlements and provisioning"); the signed `.dmg` +
+notarization + human-path rehearsal ride the release track with
+the signing owner, never this script.
 
 ## Protocol (Stage 0 finding)
 
@@ -549,7 +592,21 @@ Wyrd.app/
       Contents/
         MacOS/WyrdFileProvider
         Info.plist
+    Resources/wyrd
 ```
+
+The version-matched `wyrd` CLI rides in `Contents/Resources`
+(the fixed co-installation the desktop resolves first via
+`bundled_cli_path`; the `MacOS` sibling is the devenv fallback
+only, never the bundle contract — on case-insensitive APFS a
+`MacOS/wyrd` sibling would collide with the `Wyrd` app binary).
+`packaging/macos/stage-cli.sh` builds the release CLI with the SDK
+link-order pin, stages it at `packaging/macos/stage/wyrd`, and
+signs it with the paired identity; `bundle.macOS.files` copies it
+before the outer sign, never as a post-sign copy. The desktop
+version-checks the bundled CLI (`__build_info`) before every
+lifecycle run and refuses skew as `VersionMismatch`, so the bundle
+is the matched pair the provisioning adapter requires.
 
 Rejected: beside the app (a standalone appex next to `Wyrd.app`,
 or anywhere outside `Contents/PlugIns`). `fileproviderd` loads the
@@ -582,13 +639,16 @@ Trade-offs, in the issue's terms:
   contract above.
 - **Installer complexity:** one `.app` in the `.dmg`, one drag.
   `build.beforeBundleCommand` runs `packaging/macos/stage-appex.sh`
-  (macOS only; a clean skip elsewhere), which builds the appex,
-  pins its `CFBundleVersion` and `CFBundleShortVersionString` to the
-  app version from `tauri.conf.json`, maps Tauri's target triple to
-  the appex arch (native per-arch builds only), and stages it at
+  plus `packaging/macos/stage-cli.sh`
+  (macOS only; clean skips elsewhere), which build the appex and the
+  release CLI, pin the appex
+  `CFBundleVersion` and `CFBundleShortVersionString` to the
+  app version from `tauri.conf.json`, map Tauri's target triple to
+  the appex/CLI arch (native per-arch builds only), and stage them at
   `packaging/macos/stage/` (git-ignored, rebuilt every bundle).
   `bundle.macOS.files` copies the staged appex into
-  `Contents/PlugIns` at bundle time; the bundler then signs the
+  `Contents/PlugIns` and the staged CLI into `Contents/Resources`
+  at bundle time; the bundler then signs the
   outer app shallowly — never `--deep`, which would re-sign the
   nested appex without its entitlements — preserving the appex's own
   hardened-runtime signature (the nested-first order under one

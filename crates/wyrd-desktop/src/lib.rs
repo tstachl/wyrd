@@ -67,9 +67,10 @@ pub struct AppState {
     inner: Mutex<BTreeMap<PathBuf, Arc<DesktopBackend>>>,
     flights: Mutex<HashSet<PathBuf>>,
     /// Explicit CLI binary for tests. Production stays `None` so
-    /// every operation resolves the fixed co-installed sibling —
-    /// the frontend can never name an arbitrary binary (no IPC
-    /// command sets this; only Rust callers, i.e. tests, do).
+    /// every operation resolves the bundled co-installation first
+    /// (`Contents/Resources/wyrd`, `MacOS` sibling as the dev
+    /// fallback) — the frontend can never name an arbitrary binary
+    /// (no IPC command sets this; only Rust callers, i.e. tests, do).
     cli_override: Mutex<Option<PathBuf>>,
 }
 
@@ -163,7 +164,8 @@ impl AppState {
     }
 
     /// The CLI binary one provisioning run uses: the test override
-    /// where set, else the fixed co-installed sibling (never `PATH`).
+    /// where set, else the bundled co-installation first with the
+    /// `MacOS` sibling as the dev fallback (never `PATH`).
     pub(crate) fn cli_bin(&self) -> Result<PathBuf, String> {
         let held = self
             .cli_override
