@@ -415,10 +415,18 @@ verdict.
   three kept distinct (a live socket is not a durable fact; a paused
   owner is reachable and quiet, not down).
 - Settings: what the app persists, handed off to the settings
-  surface (issue 25) and shown read-only per the
+  surface (issue 25) and its configuration shown read-only per the
   settings-ownership OD below. The owner holds secrets; the UI
   never sees key material beyond the member-hosted disclosure
   bound, and the credential path uses no env vars and no terminal.
+- The drive list is the device-level home. Selecting a drive opens
+  its workspace, where Status and Settings are tabs and an explicit
+  return goes back to every drive. Creating or joining opens a
+  separate Add a drive page rather than a modal; leaving a drive
+  sits in that drive's Settings, behind an acknowledgement and a
+  confirmation, because membership is drive-scoped and does not
+  belong in an add flow. Leaving reuses the identity pair the
+  start-up gate verified — paths only, never contents.
 - The unavailable state is a first-class view, not an error toast.
   Owner down means an explicit unavailable screen; the shell never
   opens the store itself. Owner back means the shell resumes without
@@ -441,8 +449,11 @@ verdict.
   drive (`name — Available|Unavailable|Unknown`), then Set up /
   connect drives (shows the window and routes to the lifecycle
   view), Show window, and Quit. The tray reuses only landed IPC,
-  holds no implicit active drive, never opens a drive, and quits
-  through the same graceful drain as window close.
+  holds no implicit active drive, never opens a drive, and is how
+  the shell stays reachable after the window is closed: closing the
+  window hides it, Quit — the tray item, Cmd+Q, or any exit request
+  — drains in-flight work through the graceful-shutdown rule, and
+  the macOS dock icon reopens the hidden window.
 - Frontend state is a presentation cache, never a second drive
   model. Transient presentation state is fine and expected: selected
   view, open dialogs, form input, pending-request indicators, last

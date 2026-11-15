@@ -210,6 +210,32 @@ is transient — no drive data is affected.
 
 ### Changed
 
+- Window lifecycle follows the menu-bar presence: the macOS title bar
+  is an overlay on the ink header with the native traffic lights, and
+  closing the window hides it instead of quitting. Quit — the tray
+  item, Cmd+Q, or any exit request — still drains in-flight
+  operations before exit, and the macOS dock icon reopens the hidden
+  window.
+
+- Bundle icons follow the Bone Held mark: `apps/shared/brand/held.svg`
+  now paints the mark in Bone instead of Amber, matching the in-app
+  lockup and the marketing favicon, and
+  `crates/wyrd-desktop/icons/` is regenerated from it with
+  `cargo tauri icon`. The menu-bar template icon is unchanged.
+
+- Add drive is its own page (`apps/desktop`): the create/join form no
+  longer dominates the drive list, which shows skeleton cards while
+  the first registry read is in flight. Leaving a drive moved to that
+  drive's Settings, behind an acknowledgement and confirmation, and
+  reuses the identity pair the start-up gate verified (paths only).
+
+- Redesigned desktop shell (`apps/desktop`): the three-item sidebar is
+  replaced by a device-level Drives home and a drive workspace with
+  Status and Settings tabs. Drives and relays render as cards and
+  removable badges, secondary explanation moves into hover hints
+  (normative onboarding and repair copy stays visible), and the
+  shadcn-svelte primitives carry a Bone/Ink/Amber semantic theme.
+
 - Settle the CLI command vocabulary and hierarchy
   (`nostr:nevent1qqsty2n74rneaaqj7peqy3pwuptnmzvvcsfcef07mykactuqc4zw9ygpz9mhxue69uhkwunpwdczuap49eehg4ee4tj`):
   deliberate alpha break, behavior preserved. `init`/`bootstrap` move

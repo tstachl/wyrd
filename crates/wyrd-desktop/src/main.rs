@@ -24,15 +24,16 @@
 //! shows the same per-drive unavailable view instead, and coming
 //! back resumes without restart.
 //!
-//! Shutdown drains outstanding work first. Closing the window
-//! prevents the close, waits until every dispatched exchange has
-//! its terminal answer or the drain bound fires, then exits —
-//! nothing is reported successful without the owner's authoritative
-//! answer, and exchanges still outstanding past the bound stay
-//! unconfirmed: the next launch reconciles them through the owner
-//! before any retry. New work may still dispatch during the drain
-//! (the window is closing, so in practice none does); the bound
-//! keeps a wedged owner from wedging quit.
+//! Closing the window hides it to the menu-bar extra; the process
+//! stays alive, and the macOS dock icon or the tray's Show window
+//! brings it back. Quit — the tray item, Cmd+Q, or any exit request —
+//! still drains outstanding work first: the shell waits until every
+//! dispatched exchange has its terminal answer or the drain bound
+//! fires, then exits — nothing is reported successful without the
+//! owner's authoritative answer, and exchanges still outstanding past
+//! the bound stay unconfirmed: the next launch reconciles them through
+//! the owner before any retry. New work may still dispatch during the
+//! drain; the bound keeps a wedged owner from wedging quit.
 //!
 //! The binary exists so `cargo tauri dev` has a target to run; the
 //! launchable artifact (bundle, icons, services) lands with the
@@ -45,7 +46,7 @@ use tauri::{AppHandle, Emitter, Manager, Runtime};
 use wyrd_desktop::{invoke_handler, tray, AppState, DesktopBackend, FlightTracker};
 
 /// Bound on the quit drain: every dispatched exchange gets this
-/// long past close-request to reach its terminal answer. Past the
+/// long past the quit request to reach its terminal answer. Past the
 /// bound the shell exits anyway and the abandoned exchanges stay
 /// unconfirmed — the forced-termination path, reconciled on next
 /// launch. Thirty seconds is a UX judgment, not a protocol fact: a
@@ -109,32 +110,54 @@ where
 /// is already covered by the spawned task, never a second drain.
 static DRAINING: AtomicBool = AtomicBool::new(false);
 
-/// Graceful quit: stop accepting new work (the window is closing or
-/// the tray asked), wait until every dispatched exchange has its
-/// terminal answer or the bound fires, then exit. Nothing is
-/// reported successful without the owner's authoritative answer;
-/// exchanges still outstanding past the bound stay unconfirmed —
-/// the forced-termination path, reconciled on next launch. A plain
-/// OS thread, not the async runtime: the drain only polls an atomic
-/// and sleeps, and must never compete with exchanges for threads.
+/// Wait until every dispatched exchange has its terminal answer or
+/// the bound fires. Safe to call on the event-loop thread: it only
+/// polls an atomic and sleeps, and the async runtime that answers
+/// the exchanges is still alive during the `Exit` callback (cleanup
+/// runs after it).
+fn drain_until_settled<R: Runtime>(app: &AppHandle<R>) {
+    let deadline = Instant::now() + QUIT_DRAIN_TIMEOUT;
+    loop {
+        let outstanding = app.state::<FlightTracker>().outstanding();
+        if outstanding == 0 || Instant::now() >= deadline {
+            break;
+        }
+        std::thread::sleep(QUIT_DRAIN_POLL);
+    }
+}
+
+/// Graceful quit: stop accepting new work (quit was requested),
+/// wait until every dispatched exchange has its terminal answer or
+/// the bound fires, then exit. Nothing is reported successful
+/// without the owner's authoritative answer; exchanges still
+/// outstanding past the bound stay unconfirmed — the
+/// forced-termination path, reconciled on next launch. A plain OS
+/// thread, not the async runtime: the drain only polls an atomic and
+/// sleeps, and must never compete with exchanges for threads.
 fn drain_and_exit<R: Runtime>(app: AppHandle<R>) {
     if DRAINING.swap(true, Ordering::SeqCst) {
         return;
     }
     std::thread::spawn(move || {
-        let deadline = Instant::now() + QUIT_DRAIN_TIMEOUT;
-        loop {
-            let outstanding = app.state::<FlightTracker>().outstanding();
-            if outstanding == 0 || Instant::now() >= deadline {
-                break;
-            }
-            std::thread::sleep(QUIT_DRAIN_POLL);
-        }
-        // Exit without re-firing close-requested: the drain already
-        // ran, and a second handler pass could only delay what the
-        // user asked for.
+        drain_until_settled(&app);
+        // Exit after the drain: the resulting `ExitRequested` carries
+        // a code, so it is allowed through, and the `Exit` handler
+        // sees `DRAINING` and does not drain twice.
         app.exit(0);
     });
+}
+
+/// Whether closing the window has a way back: the macOS dock's
+/// `Reopen` path always exists; elsewhere only a live tray does. A
+/// failed tray build must not hide the only window unreachably.
+#[cfg(target_os = "macos")]
+fn close_reachable<R: Runtime>(_window: &tauri::Window<R>) -> bool {
+    true
+}
+
+#[cfg(not(target_os = "macos"))]
+fn close_reachable<R: Runtime>(window: &tauri::Window<R>) -> bool {
+    window.app_handle().tray_by_id(tray::TRAY_ID).is_some()
 }
 
 fn main() {
@@ -164,7 +187,7 @@ fn main() {
         }
     }
     // One drain per process lives in `drain_and_exit` above.
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .manage(state)
         .manage(FlightTracker::new())
         .plugin(tauri_plugin_dialog::init())
@@ -249,12 +272,47 @@ fn main() {
         })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                // Close hides to the menu-bar extra; the process
+                // stays alive. Quit (tray item, Cmd+Q, or any exit
+                // request) is the explicit exit and drains. Hide only
+                // where the window has a way back.
                 api.prevent_close();
-                drain_and_exit(window.app_handle().clone());
+                if close_reachable(window) {
+                    if let Err(error) = window.hide() {
+                        eprintln!("wyrd-desktop: hide on close failed: {error}");
+                    }
+                } else {
+                    eprintln!("wyrd-desktop: no tray to restore the window; keeping it visible");
+                }
             }
         })
-        .run(tauri::generate_context!())
-        .expect("wyrd-desktop: failed to run the Tauri application");
+        .build(tauri::generate_context!())
+        .expect("wyrd-desktop: failed to build the Tauri application");
+
+    app.run(|app, event| match event {
+        tauri::RunEvent::ExitRequested { api, code, .. } => {
+            // Cmd+Q and any other code-less exit request drain like
+            // the tray's Quit. A code is our own post-drain exit and
+            // is allowed through.
+            if code.is_none() {
+                api.prevent_exit();
+                drain_and_exit(app.clone());
+            }
+        }
+        tauri::RunEvent::Exit => {
+            // macOS Cmd+Q terminates the event loop without an
+            // `ExitRequested`; make the same graceful-drain guarantee
+            // here. The async runtime is still alive until this
+            // callback returns, so outstanding exchanges can still
+            // reach their terminal answers.
+            if !DRAINING.swap(true, Ordering::SeqCst) {
+                drain_until_settled(app);
+            }
+        }
+        #[cfg(target_os = "macos")]
+        tauri::RunEvent::Reopen { .. } => tray::show_main_window(app),
+        _ => {}
+    });
 }
 
 #[cfg(test)]

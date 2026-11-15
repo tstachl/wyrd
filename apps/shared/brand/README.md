@@ -4,7 +4,10 @@ Canonical Wyrd visual identity (the C · Held mark: Ink `#121614`,
 Bone `#ECE7DA`, Amber `#E3A13B` + Smoke `#4A4F4B`, Space Grotesk
 + IBM Plex Mono):
 
-- `held.svg` — the Held mark on an Ink tile (favicon shape).
+- `held.svg` — the Held mark (Bone) on an Ink tile: the favicon and
+  app-icon source. The desktop bundle icons in
+  `crates/wyrd-desktop/icons/` are generated from it with
+  `cargo tauri icon`.
 - `fonts/` — self-hosted woff2 files, latin subsets.
 - `tokens.json` — the hex values and display face in one place.
 

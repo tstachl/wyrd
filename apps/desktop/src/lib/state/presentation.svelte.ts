@@ -45,8 +45,12 @@ import type {
 
 export type OwnerAvailability = "unknown" | "available" | "unavailable";
 
-/** The three shipped views. The unavailable state overlays content; it is not a selection. */
-export type ShellView = "status" | "lifecycle" | "settings";
+/**
+ * The shipped shell screens. The unavailable state overlays content;
+ * it is not a selection. `provision` is the dedicated add-a-drive page,
+ * not a drive-scoped view.
+ */
+export type ShellView = "status" | "provision" | "lifecycle" | "settings";
 
 /**
  * One view's last successful answer, stamped at observation. The

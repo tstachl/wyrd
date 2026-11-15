@@ -9,13 +9,17 @@ import {
   availabilityLabel,
   baseDirFromIdentity,
   boundLabel,
+  describeProvisionResult,
   formatObservedAt,
   freshnessLabel,
+  membershipSummary,
   nextDriveDir,
+  observedRegistrySummary,
   shortId,
   suggestedDriveDirFor,
   withDevCliHint,
 } from "./format.js";
+import type { ProvisionReport, RegistryState } from "$lib/ipc/results.js";
 
 test("observation stamps render as UTC clock times", () => {
   expect(formatObservedAt(Date.UTC(2026, 4, 1, 7, 8, 9))).toBe("07:08:09 UTC");
@@ -75,22 +79,53 @@ test("drive suggestions derive from the credential base, never guesses", () => {
   expect(suggestedDriveDirFor("beta", "")).toBeNull();
 });
 
-test("the suggestion follows the name while untouched, never into Leave", () => {
+test("the suggestion follows the name while untouched", () => {
   // Untouched create follows the suggestion, including renames.
-  expect(nextDriveDir("create", false, "", "/b/drives/alpha")).toBe("/b/drives/alpha");
-  expect(nextDriveDir("create", false, "/b/drives/alpha", "/b/drives/project-x")).toBe(
+  expect(nextDriveDir(false, "", "/b/drives/alpha")).toBe("/b/drives/alpha");
+  expect(nextDriveDir(false, "/b/drives/alpha", "/b/drives/project-x")).toBe(
     "/b/drives/project-x",
   );
   // Touched fields keep the operator's value, including clears.
-  expect(nextDriveDir("create", true, "/custom/dir", "/b/drives/alpha")).toBe("/custom/dir");
-  expect(nextDriveDir("create", true, "", "/b/drives/alpha")).toBe("");
-  // Leave never takes a guess: untouched clears, touched keeps.
-  expect(nextDriveDir("leave", false, "/b/drives/alpha", "/b/drives/alpha")).toBe("");
-  expect(nextDriveDir("leave", true, "/operator/chosen", "/b/drives/alpha")).toBe(
-    "/operator/chosen",
-  );
+  expect(nextDriveDir(true, "/custom/dir", "/b/drives/alpha")).toBe("/custom/dir");
+  expect(nextDriveDir(true, "", "/b/drives/alpha")).toBe("");
   // No suggestion keeps whatever is there.
-  expect(nextDriveDir("create", false, "/operator/kept", null)).toBe("/operator/kept");
+  expect(nextDriveDir(false, "/operator/kept", null)).toBe("/operator/kept");
+});
+
+const emptyRegistry: RegistryState = { status: "ready", drives: [], skipped: [] };
+
+function report(result: ProvisionReport["result"], membership: ProvisionReport["membership"] = null): ProvisionReport {
+  return { result, observed: emptyRegistry, membership };
+}
+
+test("provisioning outcomes name the exit code without claiming state", () => {
+  expect(describeProvisionResult(report({ result: "completed", detail: "wrote" }))).toContain(
+    "Only the observation below says what happened",
+  );
+  expect(describeProvisionResult(report({ result: "expectedfailure", detail: "refused" }))).toContain(
+    "Exit 2",
+  );
+  expect(describeProvisionResult(report({ result: "helddrive", detail: "held" }))).toContain(
+    "not retried",
+  );
+  expect(describeProvisionResult(report({ result: "busy", drive_dir: "/d/alpha" }))).toContain(
+    "not queued",
+  );
+  expect(describeProvisionResult(report({ result: "unknown", detail: "torn" }))).toContain(
+    "observation below decides",
+  );
+});
+
+test("post-run observation names the registry and the membership tip", () => {
+  expect(observedRegistrySummary(report({ result: "completed", detail: "" }))).toBe(
+    "Registry ready: 0 drive(s).",
+  );
+  expect(membershipSummary(report({ result: "completed", detail: "" }))).toBe(
+    "Membership: unknown (the owner did not answer).",
+  );
+  expect(
+    membershipSummary(report({ result: "completed", detail: "" }, { epoch: 3, known_members: 2 })),
+  ).toBe("Membership: 2 member(s), epoch 3.");
 });
 
 test("missing dev CLI names the build that provides it", () => {
