@@ -1,7 +1,6 @@
-<!-- Staleness qualification, shared by the three views: every
-cached answer reads as historical until refreshed. -->
 <script lang="ts">
-  import { formatObservedAt } from "./format.js";
+  import ClockIcon from "@lucide/svelte/icons/clock";
+  import { formatObservedAt } from "$lib/views/format.js";
 
   interface Props {
     observedAtMs: number | null;
@@ -10,10 +9,15 @@ cached answer reads as historical until refreshed. -->
   let { observedAtMs }: Props = $props();
 </script>
 
-<p class="mt-1 text-xs text-smoke">
-  {#if observedAtMs === null}
-    Not yet observed — refresh to read from the owner.
-  {:else}
-    Last observed {formatObservedAt(observedAtMs)} — refresh to re-read. Cached data is not current state.
-  {/if}
+<!-- Staleness qualification, shared by the three views: every
+     cached answer reads as historical until refreshed. -->
+<p class="flex items-start gap-1.5 text-xs leading-relaxed text-muted-foreground">
+  <ClockIcon class="mt-0.5 size-3.5 shrink-0 opacity-70" />
+  <span>
+    {#if observedAtMs === null}
+      Not yet observed — refresh to read from the owner.
+    {:else}
+      Last observed {formatObservedAt(observedAtMs)} — refresh to re-read. Cached data is not current state.
+    {/if}
+  </span>
 </p>

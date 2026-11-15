@@ -1,9 +1,9 @@
 <script lang="ts">
   // The C · Held mark (`apps/shared/brand/held.svg`): one unbroken
-  // line with a node at each peak — three devices, one chain. Amber
-  // on transparent for Ink backgrounds (`mark`), or Amber on an Ink
-  // tile (`tile`, the favicon shape). Colors follow the `@theme`
-  // tokens in `src/app.css`, falling back to the canonical hex.
+  // line with a node at each peak — three devices, one chain. The
+  // shell draws it in Bone on Ink (`mark`, the header lockup) or on
+  // an Ink tile (`tile`, the favicon shape). Amber stays the UI
+  // accent; it is no longer the mark's paint.
 
   interface Props {
     variant?: "mark" | "tile";
@@ -15,7 +15,7 @@
 
   const MARK = "M48 62 L88 211.3 L128 62 L168 211.3 L208 62";
   const INK = "var(--color-ink, #121614)";
-  const AMBER = "var(--color-amber, #E3A13B)";
+  const BONE = "var(--color-bone, #ECE7DA)";
 </script>
 
 <svg
@@ -32,12 +32,12 @@
   <path
     d={MARK}
     fill="none"
-    style:stroke={AMBER}
+    style:stroke={BONE}
     stroke-width="16"
     stroke-linecap="round"
     stroke-linejoin="round"
   />
-  <circle cx="48" cy="62" r="22" style:fill={AMBER} />
-  <circle cx="128" cy="62" r="22" style:fill={AMBER} />
-  <circle cx="208" cy="62" r="22" style:fill={AMBER} />
+  <circle cx="48" cy="62" r="22" style:fill={BONE} />
+  <circle cx="128" cy="62" r="22" style:fill={BONE} />
+  <circle cx="208" cy="62" r="22" style:fill={BONE} />
 </svg>

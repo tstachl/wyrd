@@ -4,71 +4,180 @@ the shell does not know those defaults — so absence renders as
 unknown, never as a filled-in number. The shell never writes this
 file; application of the values is the running owner's business. -->
 <script lang="ts">
-  import Button from "$lib/components/ui/button.svelte";
+  import { Button } from "$lib/components/ui/button/index.js";
+  import * as Card from "$lib/components/ui/card/index.js";
+  import * as Alert from "$lib/components/ui/alert/index.js";
+  import { Badge } from "$lib/components/ui/badge/index.js";
+  import { Spinner } from "$lib/components/ui/spinner/index.js";
+  import DetailRow from "$lib/components/detail-row.svelte";
+  import PageHeader from "$lib/components/page-header.svelte";
+  import InfoHint from "$lib/components/info-hint.svelte";
   import type { Stamped } from "$lib/state/presentation.svelte.js";
   import type { DriveSettingsState } from "$lib/ipc/results.js";
   import { boundLabel } from "./format.js";
   import ObservedNote from "./ObservedNote.svelte";
+  import FileQuestionIcon from "@lucide/svelte/icons/file-question";
+  import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 
   interface Props {
-    driveLabel: string;
     snapshot: Stamped<DriveSettingsState> | null;
     pending: boolean;
     transportNotice: string | null;
     onRefresh: () => void;
   }
 
-  let { driveLabel, snapshot, pending, transportNotice, onRefresh }: Props = $props();
+  let { snapshot, pending, transportNotice, onRefresh }: Props = $props();
+
+  const settings = $derived(snapshot?.data ?? null);
 </script>
 
-<div class="flex items-center justify-between">
-  <h1 class="text-2xl font-semibold tracking-tight">Settings</h1>
-  <Button variant="secondary" size="sm" disabled={pending} onclick={onRefresh}>
-    {pending ? "Reading…" : "Refresh"}
-  </Button>
-</div>
-<p class="mt-1 text-xs text-smoke">{driveLabel}</p>
+<PageHeader
+  title="Settings"
+  description="This drive's configured bounds, read-only. Absent values stay unknown — the shell never fills in a default it cannot see."
+>
+  {#snippet actions()}
+    <Button variant="outline" size="sm" disabled={pending} onclick={onRefresh}>
+      {#if pending}
+        <Spinner data-icon="inline-start" />
+        Reading…
+      {:else}
+        <RefreshCwIcon data-icon="inline-start" />
+        Refresh
+      {/if}
+    </Button>
+  {/snippet}
+</PageHeader>
 
 {#if transportNotice !== null}
-  <p class="mt-2 text-sm" role="alert">{transportNotice}</p>
+  <Alert.Root class="mt-4 border-primary/40 bg-primary/10">
+    <p>{transportNotice}</p>
+  </Alert.Root>
 {/if}
 
-{#if snapshot === null}
-  <p class="mt-4 text-sm text-smoke">No settings read yet. Refresh to read this drive's configured bounds.</p>
-  <ObservedNote observedAtMs={null} />
+{#if snapshot === null || settings === null}
+  <div class="mt-6 flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border bg-card/50 px-6 py-14 text-center">
+    <div class="flex size-10 items-center justify-center rounded-full bg-muted text-muted-foreground">
+      <FileQuestionIcon class="size-5" />
+    </div>
+    <p class="text-sm font-medium">No settings read yet</p>
+    <p class="max-w-sm text-sm text-muted-foreground">
+      Refresh to read this drive's configured bounds. Nothing is filled in from memory.
+    </p>
+  </div>
+  <div class="mt-3">
+    <ObservedNote observedAtMs={null} />
+  </div>
+{:else if settings.state === "configured"}
+  <Card.Root class="mt-6">
+    <Card.Header>
+      <Card.Title class="flex items-center gap-1.5">
+        Configured bounds
+        <InfoHint label="About configured bounds">
+          <p>
+            As configured in the per-user settings file — not as applied. The running owner applies
+            these values at startup, command-line flags win over the file, and this shell never
+            writes the file.
+          </p>
+        </InfoHint>
+      </Card.Title>
+      <Card.Description>One drive's saved limits, as the owner will read them.</Card.Description>
+    </Card.Header>
+    <Card.Content>
+      <dl>
+        <DetailRow label="Retained bytes quota">
+          {#if settings.retained_bytes_quota === null}
+            <span class="inline-flex items-center gap-1">
+              <Badge variant="outline" class="text-muted-foreground">Compiled default</Badge>
+              <InfoHint label="About the retained bytes quota">
+                <p>{boundLabel(settings.retained_bytes_quota, "bytes")}</p>
+              </InfoHint>
+            </span>
+          {:else}
+            <span class="font-mono tabular-nums">{boundLabel(settings.retained_bytes_quota, "bytes")}</span>
+          {/if}
+        </DetailRow>
+        <DetailRow label="Wants admitted per sync pass">
+          {#if settings.max_admit_per_pass === null}
+            <span class="inline-flex items-center gap-1">
+              <Badge variant="outline" class="text-muted-foreground">Compiled default</Badge>
+              <InfoHint label="About admitted wants">
+                <p>{boundLabel(settings.max_admit_per_pass, "wants")}</p>
+              </InfoHint>
+            </span>
+          {:else}
+            <span class="font-mono tabular-nums">{boundLabel(settings.max_admit_per_pass, "wants")}</span>
+          {/if}
+        </DetailRow>
+        <DetailRow label="Fetch phase budget">
+          {#if settings.fetch_pass_budget_secs === null}
+            <span class="inline-flex items-center gap-1">
+              <Badge variant="outline" class="text-muted-foreground">Compiled default</Badge>
+              <InfoHint label="About the fetch phase budget">
+                <p>{boundLabel(settings.fetch_pass_budget_secs, "seconds")}</p>
+              </InfoHint>
+            </span>
+          {:else}
+            <span class="font-mono tabular-nums">{boundLabel(settings.fetch_pass_budget_secs, "seconds")}</span>
+          {/if}
+        </DetailRow>
+        <DetailRow label="Held mutation deadline">
+          {#if settings.max_mutation_wait_secs === null}
+            <span class="inline-flex items-center gap-1">
+              <Badge variant="outline" class="text-muted-foreground">Compiled default</Badge>
+              <InfoHint label="About the held mutation deadline">
+                <p>{boundLabel(settings.max_mutation_wait_secs, "seconds")}</p>
+              </InfoHint>
+            </span>
+          {:else}
+            <span class="font-mono tabular-nums">{boundLabel(settings.max_mutation_wait_secs, "seconds")}</span>
+          {/if}
+        </DetailRow>
+        <DetailRow label="Open demand wait">
+          {#if settings.open_timeout_secs === null}
+            <span class="inline-flex items-center gap-1">
+              <Badge variant="outline" class="text-muted-foreground">Compiled default</Badge>
+              <InfoHint label="About the open demand wait">
+                <p>{boundLabel(settings.open_timeout_secs, "seconds")}</p>
+              </InfoHint>
+            </span>
+          {:else}
+            <span class="font-mono tabular-nums">{boundLabel(settings.open_timeout_secs, "seconds")}</span>
+          {/if}
+        </DetailRow>
+      </dl>
+    </Card.Content>
+  </Card.Root>
+{:else if settings.state === "nofile"}
+  <div class="mt-6 flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border bg-card/50 px-6 py-14 text-center">
+    <div class="flex size-10 items-center justify-center rounded-full bg-muted text-muted-foreground">
+      <FileQuestionIcon class="size-5" />
+    </div>
+    <p class="text-sm font-medium">No settings file yet</p>
+    <p class="max-w-md text-sm text-muted-foreground">
+      Nothing is configured, so the owner runs its compiled defaults. Defaults are unknown to this
+      shell, so nothing is filled in here.
+    </p>
+  </div>
+{:else if settings.state === "nosection"}
+  <div class="mt-6 flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border bg-card/50 px-6 py-14 text-center">
+    <div class="flex size-10 items-center justify-center rounded-full bg-muted text-muted-foreground">
+      <FileQuestionIcon class="size-5" />
+    </div>
+    <p class="text-sm font-medium">No section for this drive</p>
+    <p class="max-w-md text-sm text-muted-foreground">
+      The file configures other drives. The owner runs its compiled defaults for this drive, which
+      are unknown to this shell.
+    </p>
+  </div>
 {:else}
-  {@const settings = snapshot.data}
-  {#if settings.state === "configured"}
-    <dl class="mt-4 grid grid-cols-2 gap-x-6 gap-y-1 text-sm">
-      <dt class="text-smoke">Retained bytes quota</dt>
-      <dd>{boundLabel(settings.retained_bytes_quota, "bytes")}</dd>
-      <dt class="text-smoke">Wants admitted per sync pass</dt>
-      <dd>{boundLabel(settings.max_admit_per_pass, "wants")}</dd>
-      <dt class="text-smoke">Fetch phase budget</dt>
-      <dd>{boundLabel(settings.fetch_pass_budget_secs, "seconds")}</dd>
-      <dt class="text-smoke">Held mutation deadline</dt>
-      <dd>{boundLabel(settings.max_mutation_wait_secs, "seconds")}</dd>
-      <dt class="text-smoke">Open demand wait</dt>
-      <dd>{boundLabel(settings.open_timeout_secs, "seconds")}</dd>
-    </dl>
-    <p class="mt-4 rounded-md border border-ink/15 dark:border-bone/20 px-3 py-2 text-xs text-smoke">
-      As configured in the per-user settings file — not as applied. The running owner applies these values
-      at startup, command-line flags win over the file, and this shell never writes the file.
+  <Alert.Root variant="destructive" class="mt-6">
+    <p>
+      Settings unreadable: {settings.reason} — showing nothing rather than defaults that were never
+      configured.
     </p>
-  {:else if settings.state === "nofile"}
-    <p class="mt-4 text-sm text-smoke">
-      No settings file yet — nothing is configured, so the owner runs its compiled defaults.
-      Defaults are unknown to this shell, so nothing is filled in here.
-    </p>
-  {:else if settings.state === "nosection"}
-    <p class="mt-4 text-sm text-smoke">
-      No section for this drive — the file configures other drives. The owner runs its compiled defaults
-      for this drive, which are unknown to this shell.
-    </p>
-  {:else}
-    <p class="mt-4 rounded-md bg-ink px-3 py-2 text-sm text-bone dark:border dark:border-bone/10 dark:bg-black" role="alert">
-      Settings unreadable: {settings.reason} — showing nothing rather than defaults that were never configured.
-    </p>
-  {/if}
-  <ObservedNote observedAtMs={snapshot.observedAtMs} />
+  </Alert.Root>
 {/if}
+
+<div class="mt-4">
+  <ObservedNote observedAtMs={snapshot?.observedAtMs ?? null} />
+</div>

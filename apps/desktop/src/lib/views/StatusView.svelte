@@ -3,101 +3,288 @@ kept distinct. A live socket is not a durable fact; a paused owner
 is reachable and quiet, never down. Everything here is the last
 terminal answer, stamped — never a claim about right now. -->
 <script lang="ts">
-  import Button from "$lib/components/ui/button.svelte";
-  import type { Stamped, StatusSnapshot } from "$lib/state/presentation.svelte.js";
+  import { Button } from "$lib/components/ui/button/index.js";
+  import * as Card from "$lib/components/ui/card/index.js";
+  import * as Alert from "$lib/components/ui/alert/index.js";
+  import { Badge } from "$lib/components/ui/badge/index.js";
+  import { Separator } from "$lib/components/ui/separator/index.js";
+  import { Spinner } from "$lib/components/ui/spinner/index.js";
+  import DetailRow from "$lib/components/detail-row.svelte";
+  import PageHeader from "$lib/components/page-header.svelte";
+  import AvailabilityBadge from "$lib/components/availability-badge.svelte";
+  import InfoHint from "$lib/components/info-hint.svelte";
+  import type { OwnerAvailability, Stamped, StatusSnapshot } from "$lib/state/presentation.svelte.js";
   import { freshnessLabel, shortId } from "./format.js";
   import ObservedNote from "./ObservedNote.svelte";
+  import ActivityIcon from "@lucide/svelte/icons/activity";
+  import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
+  import PauseCircleIcon from "@lucide/svelte/icons/pause-circle";
+  import CheckIcon from "@lucide/svelte/icons/check";
+  import XIcon from "@lucide/svelte/icons/x";
 
   interface Props {
-    driveLabel: string;
     snapshot: Stamped<StatusSnapshot> | null;
+    availability: OwnerAvailability;
     pending: boolean;
     error: string | null;
     transportNotice: string | null;
     onRefresh: () => void;
   }
 
-  let { driveLabel, snapshot, pending, error, transportNotice, onRefresh }: Props = $props();
+  let { snapshot, availability, pending, error, transportNotice, onRefresh }: Props = $props();
+
+  const status = $derived(snapshot?.data ?? null);
+  const freshStale = $derived(
+    status !== null && typeof status.freshness.state === "object" ? status.freshness.state : null,
+  );
+  const freshnessTone = $derived(
+    status === null
+      ? ""
+      : freshStale !== null
+        ? "border-primary/40 bg-primary/10 text-foreground"
+        : "border-ok/30 bg-ok/10 text-ok",
+  );
+  const relayPercent = $derived(
+    status === null || status.liveness.health.total_relays === 0
+      ? 0
+      : Math.round(
+          (status.liveness.health.connected_relays / status.liveness.health.total_relays) * 100,
+        ),
+  );
 </script>
 
-<div class="flex items-center justify-between">
-  <h1 class="text-2xl font-semibold tracking-tight">Status</h1>
-  <Button variant="secondary" size="sm" disabled={pending} onclick={onRefresh}>
-    {pending ? "Reading…" : "Refresh"}
-  </Button>
-</div>
-<p class="mt-1 text-xs text-smoke">{driveLabel}</p>
+<PageHeader
+  title="Status"
+  description="The owner's last reported posture for this drive — observation, liveness, and freshness kept separate."
+>
+  {#snippet actions()}
+    <Button variant="outline" size="sm" disabled={pending} onclick={onRefresh}>
+      {#if pending}
+        <Spinner data-icon="inline-start" />
+        Reading…
+      {:else}
+        <RefreshCwIcon data-icon="inline-start" />
+        Refresh
+      {/if}
+    </Button>
+  {/snippet}
+</PageHeader>
 
 {#if error !== null}
-  <p class="mt-2 text-sm" role="alert">{error}</p>
+  <Alert.Root variant="destructive" class="mt-4">
+    <p>{error}</p>
+  </Alert.Root>
 {/if}
 {#if transportNotice !== null}
-  <p class="mt-2 text-sm" role="alert">{transportNotice}</p>
+  <Alert.Root class="mt-4 border-primary/40 bg-primary/10">
+    <p>{transportNotice}</p>
+  </Alert.Root>
 {/if}
 
-{#if snapshot === null}
-  <p class="mt-4 text-sm text-smoke">No observation yet. Refresh to read from the owner.</p>
-  <ObservedNote observedAtMs={null} />
-{:else}
-  {@const status = snapshot.data}
-  {#if status.liveness.paused}
-    <p class="mt-4 rounded-md bg-amber px-3 py-2 text-sm font-medium text-ink" role="status">
-      Paused — reachable and quiet, not down. Pass {status.liveness.passes} holds; the loop answers, it does not advance.
+{#if snapshot === null || status === null}
+  <div class="mt-6 flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border bg-card/50 px-6 py-14 text-center">
+    <div class="flex size-10 items-center justify-center rounded-full bg-muted text-muted-foreground">
+      <ActivityIcon class="size-5" />
+    </div>
+    <p class="text-sm font-medium">No observation yet</p>
+    <p class="max-w-sm text-sm text-muted-foreground">
+      Refresh to read this drive's posture from the owner. Nothing is filled in from memory.
     </p>
+  </div>
+  <div class="mt-3">
+    <ObservedNote observedAtMs={null} />
+  </div>
+{:else}
+  <div class="mt-5 flex flex-wrap items-center gap-x-6 gap-y-2 rounded-xl border border-border bg-card px-4 py-3 text-sm">
+    <span class="flex items-center gap-1.5">
+      <span class="text-muted-foreground">Connection</span>
+      <AvailabilityBadge state={availability} />
+    </span>
+    <Separator orientation="vertical" class="h-4" />
+    <span class="flex items-center gap-1.5">
+      <span class="text-muted-foreground">Freshness</span>
+      <Badge variant="outline" class={freshnessTone}>
+        {freshStale === null ? freshnessLabel(status.freshness.state) : "Stale"}
+      </Badge>
+    </span>
+    <Separator orientation="vertical" class="h-4" />
+    <span class="flex items-center gap-1.5">
+      <span class="text-muted-foreground">Converged</span>
+      {#if status.observe.convergence.converged}
+        <Badge variant="outline" class="border-ok/30 bg-ok/10 text-ok">
+          <CheckIcon />
+          Yes
+        </Badge>
+      {:else}
+        <Badge variant="outline" class="border-bad/30 bg-bad/10 text-bad">
+          <XIcon />
+          No
+        </Badge>
+      {/if}
+    </span>
+    <span class="ml-auto font-mono text-xs tabular-nums text-muted-foreground">
+      Pass {status.liveness.passes}
+    </span>
+  </div>
+
+  {#if status.liveness.paused}
+    <Alert.Root class="mt-4 border-primary/40 bg-primary/10">
+      <PauseCircleIcon />
+      <Alert.Title>Paused — reachable and quiet, not down.</Alert.Title>
+      <Alert.Description class="text-foreground/80">
+        Pass {status.liveness.passes} holds; the loop answers, it does not advance.
+      </Alert.Description>
+    </Alert.Root>
   {/if}
 
-  <section aria-label="Durable observation" class="mt-6">
-    <h2 class="text-sm font-semibold tracking-wide text-smoke uppercase">Durable observation</h2>
-    <p class="mt-1 text-xs text-smoke">What a member may observe — never liveness.</p>
-    <dl class="mt-2 grid grid-cols-2 gap-x-6 gap-y-1 text-sm">
-      <dt class="text-smoke">Tip epoch</dt>
-      <dd>{status.observe.tip === null ? "none observed" : status.observe.tip.epoch}</dd>
-      <dt class="text-smoke">Tip transition</dt>
-      <dd>{status.observe.tip === null ? "—" : shortId(status.observe.tip.transition_id)}</dd>
-      <dt class="text-smoke">Durability</dt>
-      <dd>{status.observe.durability}</dd>
-      <dt class="text-smoke">Converged</dt>
-      <dd>{status.observe.convergence.converged ? "yes" : `no — ${status.observe.convergence.pending_heads} pending, ${status.observe.convergence.unfetchable_heads} unfetchable`}</dd>
-      <dt class="text-smoke">Known members</dt>
-      <dd>{status.observe.known_members}</dd>
-      <dt class="text-smoke">Peers</dt>
-      <dd>{status.observe.peers.length}</dd>
-      <dt class="text-smoke">Held epochs</dt>
-      <dd>{status.observe.held_epochs.length === 0 ? "none" : status.observe.held_epochs.join(", ")}</dd>
-      <dt class="text-smoke">Queue (outbox / carries / fetch)</dt>
-      <dd>{status.observe.queue.outbox} / {status.observe.queue.carries} / {status.observe.queue.fetch}</dd>
-      <dt class="text-smoke">Materialized (pinned / cached)</dt>
-      <dd>{status.observe.materialization.pinned} / {status.observe.materialization.cached}</dd>
-    </dl>
-  </section>
+  <div class="mt-4 flex flex-col gap-4">
+    <Card.Root>
+      <Card.Header>
+        <Card.Title class="flex items-center gap-1.5">
+          Durable observation
+          <InfoHint label="About durable observation">
+            <p>What a member may observe — never liveness.</p>
+          </InfoHint>
+        </Card.Title>
+      </Card.Header>
+      <Card.Content>
+        <dl class="grid gap-x-10 md:grid-cols-2">
+          <DetailRow label="Tip epoch">
+            {#if status.observe.tip === null}
+              <span class="font-normal text-muted-foreground">None observed</span>
+            {:else}
+              <span class="font-mono tabular-nums">{status.observe.tip.epoch}</span>
+            {/if}
+          </DetailRow>
+          <DetailRow label="Tip transition">
+            <span class="font-mono text-xs">
+              {status.observe.tip === null ? "—" : shortId(status.observe.tip.transition_id)}
+            </span>
+          </DetailRow>
+          <DetailRow label="Durability">
+            <Badge variant="outline" class="font-mono text-[0.7rem]">{status.observe.durability}</Badge>
+          </DetailRow>
+          <DetailRow label="Converged">
+            {#if status.observe.convergence.converged}
+              <span class="text-ok">Yes</span>
+            {:else}
+              <span class="text-bad">
+                No — {status.observe.convergence.pending_heads} pending, {status.observe.convergence.unfetchable_heads} unfetchable
+              </span>
+            {/if}
+          </DetailRow>
+          <DetailRow label="Known members">
+            <span class="font-mono tabular-nums">{status.observe.known_members}</span>
+          </DetailRow>
+          <DetailRow label="Peers">
+            <span class="font-mono tabular-nums">{status.observe.peers.length}</span>
+          </DetailRow>
+          <DetailRow label="Held epochs">
+            {#if status.observe.held_epochs.length === 0}
+              <span class="font-normal text-muted-foreground">None</span>
+            {:else}
+              <span class="flex flex-wrap justify-end gap-1">
+                {#each status.observe.held_epochs as epoch (epoch)}
+                  <Badge variant="outline" class="font-mono text-[0.7rem] tabular-nums">{epoch}</Badge>
+                {/each}
+              </span>
+            {/if}
+          </DetailRow>
+          <DetailRow label="Queue (outbox / carries / fetch)">
+            <span class="font-mono tabular-nums">
+              {status.observe.queue.outbox} / {status.observe.queue.carries} / {status.observe.queue.fetch}
+            </span>
+          </DetailRow>
+          <DetailRow label="Materialized (pinned / cached)">
+            <span class="font-mono tabular-nums">
+              {status.observe.materialization.pinned} / {status.observe.materialization.cached}
+            </span>
+          </DetailRow>
+        </dl>
+      </Card.Content>
+    </Card.Root>
 
-  <section aria-label="Liveness" class="mt-6">
-    <h2 class="text-sm font-semibold tracking-wide text-smoke uppercase">Liveness</h2>
-    <p class="mt-1 text-xs text-smoke">Transport health and the last pass — a separate object from the observation above.</p>
-    <dl class="mt-2 grid grid-cols-2 gap-x-6 gap-y-1 text-sm">
-      <dt class="text-smoke">Paused</dt>
-      <dd>{status.liveness.paused ? "yes — quiet, not down" : "no"}</dd>
-      <dt class="text-smoke">Passes</dt>
-      <dd>{status.liveness.passes}</dd>
-      <dt class="text-smoke">Relay stream</dt>
-      <dd>{status.liveness.health.stream_alive ? "alive" : "not alive"}</dd>
-      <dt class="text-smoke">Relays (connected / total)</dt>
-      <dd>{status.liveness.health.connected_relays} / {status.liveness.health.total_relays}</dd>
-      <dt class="text-smoke">Last publish</dt>
-      <dd>{status.liveness.report === null ? "no pass reported" : status.liveness.report.published ? "published" : "not published"}</dd>
-    </dl>
-  </section>
+    <div class="grid gap-4 lg:grid-cols-2">
+      <Card.Root>
+        <Card.Header>
+          <Card.Title class="flex items-center gap-1.5">
+            Liveness
+            <InfoHint label="About liveness">
+              <p>Transport health and the last pass — a separate object from the observation.</p>
+            </InfoHint>
+          </Card.Title>
+        </Card.Header>
+        <Card.Content>
+          <dl>
+            <DetailRow label="Paused">
+              {status.liveness.paused ? "Yes — quiet, not down" : "No"}
+            </DetailRow>
+            <DetailRow label="Passes">
+              <span class="font-mono tabular-nums">{status.liveness.passes}</span>
+            </DetailRow>
+            <DetailRow label="Relay stream">
+              {#if status.liveness.health.stream_alive}
+                <Badge variant="outline" class="border-ok/30 bg-ok/10 text-ok">
+                  <CheckIcon />
+                  Alive
+                </Badge>
+              {:else}
+                <Badge variant="outline" class="border-bad/30 bg-bad/10 text-bad">
+                  <XIcon />
+                  Not alive
+                </Badge>
+              {/if}
+            </DetailRow>
+            <DetailRow label="Relays (connected / total)">
+              <span class="flex items-center gap-2">
+                <span class="h-1.5 w-16 overflow-hidden rounded-full bg-muted">
+                  <span
+                    class="block h-full rounded-full bg-primary transition-[width]"
+                    style:width={`${relayPercent}%`}
+                  ></span>
+                </span>
+                <span class="font-mono text-xs tabular-nums">
+                  {status.liveness.health.connected_relays} / {status.liveness.health.total_relays}
+                </span>
+              </span>
+            </DetailRow>
+            <DetailRow label="Last publish">
+              {#if status.liveness.report === null}
+                <span class="font-normal text-muted-foreground">No pass reported</span>
+              {:else}
+                {status.liveness.report.published ? "Published" : "Not published"}
+              {/if}
+            </DetailRow>
+          </dl>
+        </Card.Content>
+      </Card.Root>
 
-  <section aria-label="Freshness" class="mt-6">
-    <h2 class="text-sm font-semibold tracking-wide text-smoke uppercase">Freshness</h2>
-    <p class="mt-1 text-xs text-smoke">The projection judgment: fresh, or the last good retained with its reason.</p>
-    <dl class="mt-2 grid grid-cols-2 gap-x-6 gap-y-1 text-sm">
-      <dt class="text-smoke">State</dt>
-      <dd>{freshnessLabel(status.freshness.state)}</dd>
-      <dt class="text-smoke">Revision / generation</dt>
-      <dd>{status.freshness.revision} / {status.freshness.generation}</dd>
-    </dl>
-  </section>
+      <Card.Root>
+        <Card.Header>
+          <Card.Title class="flex items-center gap-1.5">
+            Freshness
+            <InfoHint label="About freshness">
+              <p>The projection judgment: fresh, or the last good retained with its reason.</p>
+            </InfoHint>
+          </Card.Title>
+        </Card.Header>
+        <Card.Content>
+          <dl>
+            <DetailRow label="State">
+              <Badge variant="outline" class={freshnessTone}>{freshnessLabel(status.freshness.state)}</Badge>
+            </DetailRow>
+            <DetailRow label="Revision / generation">
+              <span class="font-mono tabular-nums">
+                {status.freshness.revision} / {status.freshness.generation}
+              </span>
+            </DetailRow>
+          </dl>
+        </Card.Content>
+      </Card.Root>
+    </div>
+  </div>
 
-  <ObservedNote observedAtMs={snapshot.observedAtMs} />
+  <div class="mt-4">
+    <ObservedNote observedAtMs={snapshot.observedAtMs} />
+  </div>
 {/if}

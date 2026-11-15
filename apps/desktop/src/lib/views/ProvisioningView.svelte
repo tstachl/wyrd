@@ -6,11 +6,28 @@ contents never travel — credential and invitation inputs are paths
 only, picked natively where the dialog capability answers and
 entered by hand elsewhere. -->
 <script lang="ts">
-  import Button from "$lib/components/ui/button.svelte";
+  import { Button } from "$lib/components/ui/button/index.js";
+  import * as Card from "$lib/components/ui/card/index.js";
+  import * as Field from "$lib/components/ui/field/index.js";
+  import * as Tabs from "$lib/components/ui/tabs/index.js";
+  import * as Alert from "$lib/components/ui/alert/index.js";
+  import * as InputGroup from "$lib/components/ui/input-group/index.js";
+  import { Input } from "$lib/components/ui/input/index.js";
+  import { Checkbox } from "$lib/components/ui/checkbox/index.js";
+  import { Spinner } from "$lib/components/ui/spinner/index.js";
+  import RelayEditor from "$lib/components/relay-editor.svelte";
+  import InfoHint from "$lib/components/info-hint.svelte";
   import type { ProvisionReport } from "$lib/ipc/results.js";
   import { pickExistingFile } from "$lib/ipc/files.js";
   import type { ProvisionCreateArgs, ProvisionJoinArgs, ProvisionLeaveArgs } from "$lib/ipc/operations.js";
   import { nextDriveDir, suggestedDriveDirFor, withDevCliHint } from "./format.js";
+  import PlusIcon from "@lucide/svelte/icons/plus";
+  import DownloadIcon from "@lucide/svelte/icons/download";
+  import LogOutIcon from "@lucide/svelte/icons/log-out";
+  import FolderOpenIcon from "@lucide/svelte/icons/folder-open";
+  import SparklesIcon from "@lucide/svelte/icons/sparkles";
+  import TerminalIcon from "@lucide/svelte/icons/terminal";
+  import CircleAlertIcon from "@lucide/svelte/icons/circle-alert";
 
   interface Props {
     pending: boolean;
@@ -25,11 +42,13 @@ entered by hand elsewhere. -->
 
   let { pending, initialIdentityFile, initialPassphraseFile, initialMode, onCreate, onJoin, onLeave, onDone }: Props = $props();
 
-  let mode: "create" | "join" | "leave" = $state("create");
+  type Mode = "create" | "join" | "leave";
+
+  let mode = $state<Mode>("create");
   let name = $state("");
   let driveDir = $state("");
   let driveDirTouched = $state(false);
-  let relays = $state("");
+  let relays = $state<string[]>([]);
   let identityFile = $state("");
   let passphraseFile = $state("");
   let invitationFile = $state("");
@@ -54,10 +73,6 @@ entered by hand elsewhere. -->
 
   const busy = $derived(pending || working);
   const credentialsReady = $derived(identityFile.trim() !== "" && passphraseFile.trim() !== "");
-
-  function relayList(): string[] {
-    return relays.split(/[,\s]+/).map((r) => r.trim()).filter((r) => r.length > 0);
-  }
 
   // Drives live beside the registry: the credential files sit at
   // `<base>/keys/<leaf>`, so the suggestion is `<base>/drives/<name>`
@@ -85,7 +100,7 @@ entered by hand elsewhere. -->
   // below reports it verbatim. There is no local-only mode in this
   // form and no product default relay set ships in the repo — the
   // field starts empty with the example placeholder as a shape hint.
-  const relaysEmpty = $derived(relayList().length === 0);
+  const relaysEmpty = $derived(relays.length === 0);
 
   function describeResult(value: ProvisionReport): string {
     const result = value.result;
@@ -136,164 +151,464 @@ entered by hand elsewhere. -->
     const picked = await pickExistingFile(title);
     if (picked !== null) set(picked);
   }
+
+  function switchMode(next: Mode): void {
+    mode = next;
+    modeTouched = true;
+    report = null;
+    error = null;
+    if (next !== "leave") acknowledged = false;
+  }
 </script>
 
-<section aria-label="Runtime provisioning" class="mt-6 rounded-md border border-ink/15 px-3 py-2 dark:border-bone/20">
-  <h2 class="text-sm font-semibold tracking-wide text-smoke uppercase">Create, join, or leave</h2>
-  <div class="mt-2 flex gap-2" role="tablist" aria-label="Provisioning operation">
-    {#each [["create", "Create"], ["join", "Join"], ["leave", "Leave"]] as [id, label] (id)}
-      <Button
-        variant={mode === id ? "default" : "secondary"}
-        size="sm"
-        disabled={busy}
-        onclick={() => { mode = id as typeof mode; modeTouched = true; report = null; error = null; }}
-      >
-        {label}
-      </Button>
-    {/each}
-  </div>
+<Card.Root id="provisioning" class="scroll-mt-24">
+  <Card.Header>
+    <Card.Title>Add or leave a drive</Card.Title>
+    <Card.Description>
+      Create a drive on this device, join one from a sealed invitation, or leave one this device
+      already holds.
+    </Card.Description>
+  </Card.Header>
+  <Card.Content>
+    <Tabs.Root value={mode} onValueChange={(value) => switchMode(value as Mode)}>
+      <Tabs.List>
+        <Tabs.Trigger value="create">
+          <PlusIcon data-icon="inline-start" />
+          Create
+        </Tabs.Trigger>
+        <Tabs.Trigger value="join">
+          <DownloadIcon data-icon="inline-start" />
+          Join
+        </Tabs.Trigger>
+        <Tabs.Trigger value="leave">
+          <LogOutIcon data-icon="inline-start" />
+          Leave
+        </Tabs.Trigger>
+      </Tabs.List>
 
-  {#if mode === "leave"}
-    <label class="mt-3 block text-sm">
-      Drive directory
-      <input class="mt-1 w-full rounded-md border border-ink/15 px-2 py-1 dark:border-bone/20 dark:bg-white/5" bind:value={driveDir} oninput={() => (driveDirTouched = true)} disabled={busy} placeholder="/drives/alpha" />
-    </label>
-  {:else}
-    <label class="mt-3 block text-sm">
-      Drive name <span class="text-smoke">(1–58 chars, lowercase, digits, dashes)</span>
-      <input class="mt-1 w-full rounded-md border border-ink/15 px-2 py-1 dark:border-bone/20 dark:bg-white/5" bind:value={name} disabled={busy} placeholder="alpha" />
-    </label>
-    <label class="mt-2 block text-sm">
-      Drive directory <span class="text-smoke">(absolute, holds the keystore)</span>
-      <input class="mt-1 w-full rounded-md border border-ink/15 px-2 py-1 dark:border-bone/20 dark:bg-white/5" bind:value={driveDir} oninput={() => (driveDirTouched = true)} disabled={busy} placeholder={suggestedDriveDir ?? "/drives/alpha"} />
-    </label>
-    {#if suggestedDriveDir !== null && driveDir !== suggestedDriveDir}
-      <div class="mt-1 flex items-center gap-2 text-xs text-smoke">
-        <span class="font-mono">Suggested: {suggestedDriveDir}</span>
-        <Button
-          variant="secondary"
-          size="sm"
-          disabled={busy}
-          onclick={() => {
-            driveDir = suggestedDriveDir;
-            driveDirTouched = false;
-          }}
-        >
-          Use suggested path
-        </Button>
-      </div>
-    {/if}
-    <label class="mt-2 block text-sm">
-      Relays <span class="text-smoke">(comma-separated; this form runs managed — at least one required)</span>
-      <input class="mt-1 w-full rounded-md border border-ink/15 px-2 py-1 dark:border-bone/20 dark:bg-white/5" bind:value={relays} disabled={busy} placeholder="wss://relay.example" />
-    </label>
-    <p class="mt-1 text-xs text-smoke">
-      Relays sync beyond this device. This form always runs managed (vault): at least one relay is
-      required, and an empty field is refused before anything is created — that refusal reports
-      verbatim below. No product default relay set ships in the repo, so the field starts empty;
-      the example placeholder is a shape hint, not a suggestion to use.
-    </p>
-    {#if mode === "join"}
-      <div class="mt-2 text-sm">
-        <p>Sealed invitation file</p>
-        <div class="mt-1 flex gap-2">
-          <input class="flex-1 rounded-md border border-ink/15 px-2 py-1 dark:border-bone/20 dark:bg-white/5" bind:value={invitationFile} disabled={busy} placeholder="/tmp/invite.sealed" />
-          <Button variant="secondary" size="sm" disabled={busy} onclick={() => void browse((p) => (invitationFile = p), "Sealed invitation file")}>
-            Browse…
+      <Tabs.Content value="create" class="pt-5">
+        <Field.FieldGroup>
+          <Field.Field>
+            <Field.Label for="create-name">Drive name</Field.Label>
+            <Input id="create-name" bind:value={name} disabled={busy} placeholder="alpha" autocomplete="off" spellcheck={false} />
+            <Field.Description>1–58 characters: lowercase letters, digits, and dashes.</Field.Description>
+          </Field.Field>
+
+          <Field.Field>
+            <Field.Label for="create-dir">Drive directory</Field.Label>
+            <Input
+              id="create-dir"
+              bind:value={driveDir}
+              oninput={() => (driveDirTouched = true)}
+              disabled={busy}
+              placeholder={suggestedDriveDir ?? "/drives/alpha"}
+              autocomplete="off"
+              spellcheck={false}
+              class="font-mono text-xs"
+            />
+            <Field.Description>Absolute path. The keystore lives here.</Field.Description>
+            {#if suggestedDriveDir !== null && driveDir !== suggestedDriveDir}
+              <div class="flex flex-wrap items-center gap-2">
+                <span class="min-w-0 truncate font-mono text-xs text-muted-foreground">
+                  Suggested: {suggestedDriveDir}
+                </span>
+                <Button
+                  variant="link"
+                  size="xs"
+                  disabled={busy}
+                  onclick={() => {
+                    driveDir = suggestedDriveDir;
+                    driveDirTouched = false;
+                  }}
+                >
+                  <SparklesIcon data-icon="inline-start" />
+                  Use suggested path
+                </Button>
+              </div>
+            {/if}
+          </Field.Field>
+
+          <Field.Field>
+            <Field.Label for="relays" class="flex items-center gap-1.5">
+              Relays
+              <InfoHint label="About relays">
+                <p>
+                  Relays sync beyond this device. This form always runs managed (vault): at least
+                  one relay is required, and an empty set is refused before anything is created —
+                  that refusal reports verbatim below.
+                </p>
+                <p>
+                  No product default relay set ships in the repo, so the field starts empty. The
+                  example placeholder is a shape hint, not a suggestion to use.
+                </p>
+              </InfoHint>
+            </Field.Label>
+            <RelayEditor bind:relays disabled={busy} />
+            <Field.Description>Add at least one relay for a managed drive.</Field.Description>
+          </Field.Field>
+
+          <Field.Field>
+            <Field.Label for="create-identity" class="flex items-center gap-1.5">
+              Identity file
+              <InfoHint label="About the identity file">
+                <p>Path only — the file's contents never travel through this form.</p>
+              </InfoHint>
+            </Field.Label>
+            <InputGroup.Root>
+              <InputGroup.Input
+                id="create-identity"
+                bind:value={identityFile}
+                disabled={busy}
+                placeholder="/keys/identity"
+                autocomplete="off"
+                spellcheck={false}
+                class="font-mono text-xs"
+              />
+              <InputGroup.Addon align="inline-end">
+                <InputGroup.Button variant="secondary" size="xs" disabled={busy} onclick={() => void browse((p) => (identityFile = p), "Identity file")}>
+                  <FolderOpenIcon data-icon="inline-start" />
+                  Browse…
+                </InputGroup.Button>
+              </InputGroup.Addon>
+            </InputGroup.Root>
+          </Field.Field>
+
+          <Field.Field>
+            <Field.Label for="create-passphrase" class="flex items-center gap-1.5">
+              Passphrase file
+              <InfoHint label="About the passphrase file">
+                <p>Path only — the file's contents never travel through this form.</p>
+              </InfoHint>
+            </Field.Label>
+            <InputGroup.Root>
+              <InputGroup.Input
+                id="create-passphrase"
+                bind:value={passphraseFile}
+                disabled={busy}
+                placeholder="/keys/passphrase"
+                autocomplete="off"
+                spellcheck={false}
+                class="font-mono text-xs"
+              />
+              <InputGroup.Addon align="inline-end">
+                <InputGroup.Button variant="secondary" size="xs" disabled={busy} onclick={() => void browse((p) => (passphraseFile = p), "Passphrase file")}>
+                  <FolderOpenIcon data-icon="inline-start" />
+                  Browse…
+                </InputGroup.Button>
+              </InputGroup.Addon>
+            </InputGroup.Root>
+          </Field.Field>
+        </Field.FieldGroup>
+
+        <div class="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-border/60 pt-4">
+          <p class="text-xs text-muted-foreground">
+            {#if relaysEmpty}
+              No relays — this managed form will refuse before creating anything.
+            {:else}
+              Service mode: vault (platform default). Mount mode travels with the installer follow-up.
+            {/if}
+          </p>
+          <Button
+            disabled={busy || name.trim() === "" || driveDir.trim() === "" || !credentialsReady}
+            onclick={() =>
+              void run(() =>
+                onCreate({ name, driveDir, relays, identityFile, passphraseFile, mode: "vault", noService: false }),
+              )}
+          >
+            {#if working}
+              <Spinner data-icon="inline-start" />
+              Creating…
+            {:else}
+              <PlusIcon data-icon="inline-start" />
+              Create drive
+            {/if}
           </Button>
         </div>
-      </div>
-    {/if}
-  {/if}
+      </Tabs.Content>
 
-  <div class="mt-2 text-sm">
-    <p>Identity file <span class="text-smoke">(path only — contents never travel)</span></p>
-    <div class="mt-1 flex gap-2">
-      <input class="flex-1 rounded-md border border-ink/15 px-2 py-1 dark:border-bone/20 dark:bg-white/5" bind:value={identityFile} disabled={busy} placeholder="/keys/identity" />
-      <Button variant="secondary" size="sm" disabled={busy} onclick={() => void browse((p) => (identityFile = p), "Identity file")}>
-        Browse…
-      </Button>
-    </div>
-  </div>
-  <div class="mt-2 text-sm">
-    <p>Passphrase file <span class="text-smoke">(path only — contents never travel)</span></p>
-    <div class="mt-1 flex gap-2">
-      <input class="flex-1 rounded-md border border-ink/15 px-2 py-1 dark:border-bone/20 dark:bg-white/5" bind:value={passphraseFile} disabled={busy} placeholder="/keys/passphrase" />
-      <Button variant="secondary" size="sm" disabled={busy} onclick={() => void browse((p) => (passphraseFile = p), "Passphrase file")}>
-        Browse…
-      </Button>
-    </div>
-  </div>
+      <Tabs.Content value="join" class="pt-5">
+        <Field.FieldGroup>
+          <Field.Field>
+            <Field.Label for="join-name">Drive name</Field.Label>
+            <Input id="join-name" bind:value={name} disabled={busy} placeholder="alpha" autocomplete="off" spellcheck={false} />
+            <Field.Description>1–58 characters: lowercase letters, digits, and dashes.</Field.Description>
+          </Field.Field>
 
-  {#if mode === "leave"}
-    <label class="mt-3 flex items-start gap-2 text-sm">
-      <input type="checkbox" class="mt-1" bind:checked={acknowledged} disabled={busy} />
-      <span>
-        I understand: leaving as the sole owner is terminal — the drive freezes permanently and no
-        future transition can ever be authorized.
-      </span>
-    </label>
-    <Button
-      variant="default"
-      size="sm"
-      disabled={busy || driveDir.trim() === "" || !credentialsReady || !acknowledged}
-      onclick={() => void run(() => onLeave({ driveDir, identityFile, passphraseFile, acknowledged }))}
-    >
-      {working ? "Leaving…" : "Leave drive"}
-    </Button>
-  {:else if mode === "create"}
-    {#if relaysEmpty}
-      <p class="mt-3 text-xs text-smoke">No relays — this managed form will refuse before creating anything. Add at least one relay to create (vault). Mount mode travels with the installer follow-up.</p>
-    {:else}
-      <p class="mt-3 text-xs text-smoke">Service mode: vault (platform default). Mount mode travels with the installer follow-up.</p>
-    {/if}
-    <Button
-      variant="default"
-      size="sm"
-      disabled={busy || name.trim() === "" || driveDir.trim() === "" || !credentialsReady}
-      onclick={() =>
-        void run(() =>
-          onCreate({ name, driveDir, relays: relayList(), identityFile, passphraseFile, mode: "vault", noService: false }),
-        )}
-    >
-      {working ? "Creating…" : "Create drive"}
-    </Button>
-  {:else}
-    {#if relaysEmpty}
-      <p class="mt-3 text-xs text-smoke">No relays — this managed form will refuse before joining anything. Add at least one relay to join (vault). Mount mode travels with the installer follow-up.</p>
-    {:else}
-      <p class="mt-3 text-xs text-smoke">Service mode: vault (platform default). Mount mode travels with the installer follow-up.</p>
-    {/if}
-    <Button
-      variant="default"
-      size="sm"
-      disabled={busy || name.trim() === "" || driveDir.trim() === "" || invitationFile.trim() === "" || !credentialsReady}
-      onclick={() =>
-        void run(() =>
-          onJoin({
-            name,
-            driveDir,
-            relays: relayList(),
-            identityFile,
-            passphraseFile,
-            invitationFile,
-            mode: "vault",
-            noService: false,
-          }),
-        )}
-    >
-      {working ? "Joining…" : "Join drive"}
-    </Button>
-  {/if}
+          <Field.Field>
+            <Field.Label for="join-dir">Drive directory</Field.Label>
+            <Input
+              id="join-dir"
+              bind:value={driveDir}
+              oninput={() => (driveDirTouched = true)}
+              disabled={busy}
+              placeholder={suggestedDriveDir ?? "/drives/alpha"}
+              autocomplete="off"
+              spellcheck={false}
+              class="font-mono text-xs"
+            />
+            <Field.Description>Absolute path. The keystore lives here.</Field.Description>
+            {#if suggestedDriveDir !== null && driveDir !== suggestedDriveDir}
+              <div class="flex flex-wrap items-center gap-2">
+                <span class="min-w-0 truncate font-mono text-xs text-muted-foreground">
+                  Suggested: {suggestedDriveDir}
+                </span>
+                <Button
+                  variant="link"
+                  size="xs"
+                  disabled={busy}
+                  onclick={() => {
+                    driveDir = suggestedDriveDir;
+                    driveDirTouched = false;
+                  }}
+                >
+                  <SparklesIcon data-icon="inline-start" />
+                  Use suggested path
+                </Button>
+              </div>
+            {/if}
+          </Field.Field>
+
+          <Field.Field>
+            <Field.Label for="join-relays" class="flex items-center gap-1.5">
+              Relays
+              <InfoHint label="About relays">
+                <p>
+                  Relays sync beyond this device. This form always runs managed (vault): at least
+                  one relay is required, and an empty set is refused before anything is joined —
+                  that refusal reports verbatim below.
+                </p>
+              </InfoHint>
+            </Field.Label>
+            <RelayEditor id="join-relays" bind:relays disabled={busy} />
+            <Field.Description>Add at least one relay for a managed drive.</Field.Description>
+          </Field.Field>
+
+          <Field.Field>
+            <Field.Label for="join-invitation">Sealed invitation file</Field.Label>
+            <InputGroup.Root>
+              <InputGroup.Input
+                id="join-invitation"
+                bind:value={invitationFile}
+                disabled={busy}
+                placeholder="/tmp/invite.sealed"
+                autocomplete="off"
+                spellcheck={false}
+                class="font-mono text-xs"
+              />
+              <InputGroup.Addon align="inline-end">
+                <InputGroup.Button variant="secondary" size="xs" disabled={busy} onclick={() => void browse((p) => (invitationFile = p), "Sealed invitation file")}>
+                  <FolderOpenIcon data-icon="inline-start" />
+                  Browse…
+                </InputGroup.Button>
+              </InputGroup.Addon>
+            </InputGroup.Root>
+          </Field.Field>
+
+          <Field.Field>
+            <Field.Label for="join-identity" class="flex items-center gap-1.5">
+              Identity file
+              <InfoHint label="About the identity file">
+                <p>Path only — the file's contents never travel through this form.</p>
+              </InfoHint>
+            </Field.Label>
+            <InputGroup.Root>
+              <InputGroup.Input
+                id="join-identity"
+                bind:value={identityFile}
+                disabled={busy}
+                placeholder="/keys/identity"
+                autocomplete="off"
+                spellcheck={false}
+                class="font-mono text-xs"
+              />
+              <InputGroup.Addon align="inline-end">
+                <InputGroup.Button variant="secondary" size="xs" disabled={busy} onclick={() => void browse((p) => (identityFile = p), "Identity file")}>
+                  <FolderOpenIcon data-icon="inline-start" />
+                  Browse…
+                </InputGroup.Button>
+              </InputGroup.Addon>
+            </InputGroup.Root>
+          </Field.Field>
+
+          <Field.Field>
+            <Field.Label for="join-passphrase" class="flex items-center gap-1.5">
+              Passphrase file
+              <InfoHint label="About the passphrase file">
+                <p>Path only — the file's contents never travel through this form.</p>
+              </InfoHint>
+            </Field.Label>
+            <InputGroup.Root>
+              <InputGroup.Input
+                id="join-passphrase"
+                bind:value={passphraseFile}
+                disabled={busy}
+                placeholder="/keys/passphrase"
+                autocomplete="off"
+                spellcheck={false}
+                class="font-mono text-xs"
+              />
+              <InputGroup.Addon align="inline-end">
+                <InputGroup.Button variant="secondary" size="xs" disabled={busy} onclick={() => void browse((p) => (passphraseFile = p), "Passphrase file")}>
+                  <FolderOpenIcon data-icon="inline-start" />
+                  Browse…
+                </InputGroup.Button>
+              </InputGroup.Addon>
+            </InputGroup.Root>
+          </Field.Field>
+        </Field.FieldGroup>
+
+        <div class="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-border/60 pt-4">
+          <p class="text-xs text-muted-foreground">
+            {#if relaysEmpty}
+              No relays — this managed form will refuse before joining anything.
+            {:else}
+              Service mode: vault (platform default). Mount mode travels with the installer follow-up.
+            {/if}
+          </p>
+          <Button
+            disabled={busy || name.trim() === "" || driveDir.trim() === "" || invitationFile.trim() === "" || !credentialsReady}
+            onclick={() =>
+              void run(() =>
+                onJoin({
+                  name,
+                  driveDir,
+                  relays,
+                  identityFile,
+                  passphraseFile,
+                  invitationFile,
+                  mode: "vault",
+                  noService: false,
+                }),
+              )}
+          >
+            {#if working}
+              <Spinner data-icon="inline-start" />
+              Joining…
+            {:else}
+              <DownloadIcon data-icon="inline-start" />
+              Join drive
+            {/if}
+          </Button>
+        </div>
+      </Tabs.Content>
+
+      <Tabs.Content value="leave" class="pt-5">
+        <Field.FieldGroup>
+          <Field.Field>
+            <Field.Label for="leave-dir">Drive directory</Field.Label>
+            <Input
+              id="leave-dir"
+              bind:value={driveDir}
+              oninput={() => (driveDirTouched = true)}
+              disabled={busy}
+              placeholder="/drives/alpha"
+              autocomplete="off"
+              spellcheck={false}
+              class="font-mono text-xs"
+            />
+            <Field.Description>The exact directory this device already holds.</Field.Description>
+          </Field.Field>
+
+          <Field.Field>
+            <Field.Label for="leave-identity" class="flex items-center gap-1.5">
+              Identity file
+              <InfoHint label="About the identity file">
+                <p>Path only — the file's contents never travel through this form.</p>
+              </InfoHint>
+            </Field.Label>
+            <InputGroup.Root>
+              <InputGroup.Input
+                id="leave-identity"
+                bind:value={identityFile}
+                disabled={busy}
+                placeholder="/keys/identity"
+                autocomplete="off"
+                spellcheck={false}
+                class="font-mono text-xs"
+              />
+              <InputGroup.Addon align="inline-end">
+                <InputGroup.Button variant="secondary" size="xs" disabled={busy} onclick={() => void browse((p) => (identityFile = p), "Identity file")}>
+                  <FolderOpenIcon data-icon="inline-start" />
+                  Browse…
+                </InputGroup.Button>
+              </InputGroup.Addon>
+            </InputGroup.Root>
+          </Field.Field>
+
+          <Field.Field>
+            <Field.Label for="leave-passphrase" class="flex items-center gap-1.5">
+              Passphrase file
+              <InfoHint label="About the passphrase file">
+                <p>Path only — the file's contents never travel through this form.</p>
+              </InfoHint>
+            </Field.Label>
+            <InputGroup.Root>
+              <InputGroup.Input
+                id="leave-passphrase"
+                bind:value={passphraseFile}
+                disabled={busy}
+                placeholder="/keys/passphrase"
+                autocomplete="off"
+                spellcheck={false}
+                class="font-mono text-xs"
+              />
+              <InputGroup.Addon align="inline-end">
+                <InputGroup.Button variant="secondary" size="xs" disabled={busy} onclick={() => void browse((p) => (passphraseFile = p), "Passphrase file")}>
+                  <FolderOpenIcon data-icon="inline-start" />
+                  Browse…
+                </InputGroup.Button>
+              </InputGroup.Addon>
+            </InputGroup.Root>
+          </Field.Field>
+
+          <Field.Field orientation="horizontal" class="rounded-xl border border-destructive/30 bg-destructive/5 p-3">
+            <Checkbox id="leave-acknowledged" bind:checked={acknowledged} disabled={busy} />
+            <Field.Content>
+              <Field.Label for="leave-acknowledged" class="leading-relaxed font-normal">
+                I understand: leaving as the sole owner is terminal — the drive freezes permanently
+                and no future transition can ever be authorized.
+              </Field.Label>
+            </Field.Content>
+          </Field.Field>
+        </Field.FieldGroup>
+
+        <div class="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-border/60 pt-4">
+          <p class="text-xs text-muted-foreground">This removes this device from the drive's membership.</p>
+          <Button
+            variant="destructive"
+            disabled={busy || driveDir.trim() === "" || !credentialsReady || !acknowledged}
+            onclick={() => void run(() => onLeave({ driveDir, identityFile, passphraseFile, acknowledged }))}
+          >
+            {#if working}
+              <Spinner data-icon="inline-start" />
+              Leaving…
+            {:else}
+              <LogOutIcon data-icon="inline-start" />
+              Leave drive
+            {/if}
+          </Button>
+        </div>
+      </Tabs.Content>
+    </Tabs.Root>
 
     {#if error !== null}
-    <p class="mt-3 text-sm" role="alert">{error}</p>
-  {/if}
-  {#if report !== null}
-    <div class="mt-3 rounded-md bg-ink px-3 py-2 text-sm text-bone dark:border dark:border-bone/10 dark:bg-black" role="status">
-      <p>{describeResult(report)}</p>
-      <p class="mt-1 text-bone/70">{observedSummary(report)}</p>
-      <p class="mt-1 text-bone/70">{describeMembership(report)}</p>
-    </div>
-  {/if}
-</section>
+      <Alert.Root variant="destructive" class="mt-4">
+        <CircleAlertIcon />
+        <Alert.Title>Operation failed</Alert.Title>
+        <Alert.Description>{error}</Alert.Description>
+      </Alert.Root>
+    {/if}
+
+    {#if report !== null}
+      <Alert.Root class="mt-4 border-primary/30 bg-primary/5">
+        <TerminalIcon />
+        <Alert.Title>Provisioning report</Alert.Title>
+        <Alert.Description class="space-y-1 text-foreground/80 [&_p:not(:last-child)]:mb-1">
+          <p>{describeResult(report)}</p>
+          <p>{observedSummary(report)}</p>
+          <p>{describeMembership(report)}</p>
+        </Alert.Description>
+      </Alert.Root>
+    {/if}
+  </Card.Content>
+</Card.Root>

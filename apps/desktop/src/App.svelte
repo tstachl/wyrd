@@ -1,6 +1,12 @@
 <script lang="ts">
-  import HeldMark from "$lib/components/held-mark.svelte";
-  import Button from "$lib/components/ui/button.svelte";
+  import Brand from "$lib/components/brand.svelte";
+  import { Button } from "$lib/components/ui/button/index.js";
+  import * as Card from "$lib/components/ui/card/index.js";
+  import * as Alert from "$lib/components/ui/alert/index.js";
+  import * as Tabs from "$lib/components/ui/tabs/index.js";
+  import { Spinner } from "$lib/components/ui/spinner/index.js";
+  import AvailabilityBadge from "$lib/components/availability-badge.svelte";
+  import CopyButton from "$lib/components/copy-button.svelte";
   import { describe } from "$lib/ipc/errors.js";
   import { IpcTransportError } from "$lib/ipc/client.js";
   import {
@@ -39,8 +45,17 @@
   import SettingsView from "$lib/views/SettingsView.svelte";
   import StatusView from "$lib/views/StatusView.svelte";
   import UnavailableView from "$lib/views/UnavailableView.svelte";
+  import LayoutGridIcon from "@lucide/svelte/icons/layout-grid";
+  import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
   import { listen } from "@tauri-apps/api/event";
   import { onMount } from "svelte";
+
+  // macOS keeps its native traffic lights over the ink header
+  // (`titleBarStyle: "Overlay"` + `hiddenTitle`). Reserve the strip
+  // they occupy so the lockup never sits under them; other platforms
+  // keep native decorations and need no inset.
+  const trafficLightInset =
+    typeof navigator !== "undefined" && navigator.userAgent.includes("Mac");
 
   const drives = $derived<DriveView[]>(
     presentation.lifecycleSnapshot === null ? [] : registryDrives(),
@@ -57,6 +72,17 @@
   const selectedDriveDir = $derived<string | null>(
     presentation.selectedDriveDir,
   );
+
+  const selectedDrive = $derived<DriveView | null>(
+    selectedDriveDir === null
+      ? null
+      : (drives.find((drive) => drive.drive_dir === selectedDriveDir) ?? null),
+  );
+
+  // The registry owns the drive's name. Where the registry cannot be
+  // read (or the entry was skipped), the path below still identifies
+  // the drive; the heading never invents a name.
+  const selectedDriveName = $derived(selectedDrive?.name ?? "Drive");
 
   const selectedAvailability = $derived(
     selectedDriveDir === null
@@ -83,12 +109,6 @@
       : null,
   );
   const busy = $derived(presentation.pendingRequests > 0);
-
-  const views: Array<{ id: ShellView; label: string }> = [
-    { id: "status", label: "Status" },
-    { id: "lifecycle", label: "Drives" },
-    { id: "settings", label: "Settings" },
-  ];
 
   /**
    * One owner read against one drive: settle the taxonomy, and
@@ -165,11 +185,25 @@
     // presentation state — later registry changes never silently
     // move it, and an empty registry leaves it null (driveless
     // first-run, not an implicit drive).
+    const listed = registryDrives();
     if (presentation.selectedDriveDir === null) {
-      const listed = registryDrives();
       if (listed.length > 0 && listed[0] !== undefined) {
         presentation.selectDrive(listed[0].drive_dir);
       }
+      return;
+    }
+    // The registry is the device's list of drives. Where a readable
+    // registry no longer names the selected drive (it was left), the
+    // workspace has nothing to show: return to the device home. An
+    // unreadable registry proves nothing, so the selection stands.
+    const registryStatus = presentation.lifecycleSnapshot?.data.status;
+    const readable = registryStatus === "ready" || registryStatus === "nofile";
+    if (
+      readable &&
+      presentation.selectedView !== "lifecycle" &&
+      !listed.some((drive) => drive.drive_dir === presentation.selectedDriveDir)
+    ) {
+      presentation.selectView("lifecycle");
     }
   }
 
@@ -369,9 +403,20 @@
     void refreshCurrent();
   }
 
-  function selectDrive(driveDir: string): void {
+  /**
+   * Open one drive's workspace: select it and land on Status. The
+   * selection is presentation state only — every drive-scoped
+   * command still carries the directory explicitly.
+   */
+  function openDrive(driveDir: string): void {
     presentation.selectDrive(driveDir);
-    void refreshCurrent();
+    presentation.selectView("status");
+    void refreshStatus(driveDir);
+  }
+
+  /** Back to the device-level home: the registry of drives. */
+  function allDrives(): void {
+    selectView("lifecycle");
   }
 
   /** Explicit retry for one drive: reconnect, then re-read. Recovery proves nothing by itself. */
@@ -402,8 +447,8 @@
 
   onMount(() => {
     // Tray route: "Set up / connect drives" shows the window from
-    // the backend and asks the frontend to render the lifecycle
-    // view. Mirrored in `crates/wyrd-desktop/src/tray.rs`
+    // the backend and asks the frontend to render the drive list.
+    // Mirrored in `crates/wyrd-desktop/src/tray.rs`
     // (`SELECT_LIFECYCLE_EVENT`): keep the string in sync.
     // Best-effort: a missing Tauri runtime (browser preview)
     // never fails startup.
@@ -412,84 +457,62 @@
       void refreshLifecycle();
     }).catch(() => {});
     void refreshLifecycle().then(() => {
-      if (presentation.selectedDriveDir === null) {
-        // Driveless first-run: land on the empty lifecycle view
-        // with its registration guidance, not a status page with
-        // nothing to show. The lifecycle snapshot just stored is
-        // already current, so no re-read.
-        presentation.selectView("lifecycle");
-      } else {
-        void refreshCurrent();
-      }
+      // The device-level home is the drive list, not a drive
+      // workspace: startup never implies an active drive.
+      presentation.selectView("lifecycle");
       void checkIdentityGate();
     });
   });
 </script>
 
-<div class="flex min-h-screen bg-bone font-sans text-ink dark:bg-ink dark:text-bone">
-  <aside class="w-56 shrink-0 bg-ink p-4 text-bone dark:border-r dark:border-bone/10 dark:bg-black dark:text-bone">
-    <p class="flex items-center gap-2 text-lg font-semibold tracking-tight">
-      <HeldMark size={24} />
-      Wyrd
-    </p>
-    {#if selectedDriveDir !== null}
-      <p class="mt-2 text-xs text-bone/70">
-        Drive: {selectedDriveDir}
-      </p>
-      <p class="mt-1 text-xs text-bone/70">
-        Owner: {selectedAvailability}
-        {#if busy}
-          · {presentation.pendingRequests} request(s) in flight
-        {/if}
-      </p>
-    {:else if busy}
-      <p class="mt-2 text-xs text-bone/70">
-        {presentation.pendingRequests} request(s) in flight
-      </p>
-    {/if}
-    {#if drives.length > 1 && gate === "done"}
-      <nav aria-label="Drives" class="mt-4 space-y-1">
-        {#each drives as drive (drive.drive_dir)}
-          <button
-            type="button"
-            aria-current={presentation.selectedDriveDir === drive.drive_dir ? "true" : undefined}
-            onclick={() => selectDrive(drive.drive_dir)}
-            class="w-full rounded-md px-3 py-2 text-left text-sm font-medium transition-colors {presentation.selectedDriveDir ===
-            drive.drive_dir
-              ? 'bg-amber text-ink'
-              : 'text-bone hover:bg-bone/10'}"
-          >
-            {drive.name}
-          </button>
-        {/each}
-      </nav>
-    {/if}
-    {#if gate === "done"}
-    <nav aria-label="Views" class="mt-4 space-y-1">
-      {#each views as view (view.id)}
-        <button
-          type="button"
-          aria-current={presentation.selectedView === view.id ? "page" : undefined}
-          onclick={() => selectView(view.id)}
-          class="w-full rounded-md px-3 py-2 text-left text-sm font-medium transition-colors {presentation.selectedView ===
-          view.id
-            ? 'bg-amber text-ink'
-            : 'text-bone hover:bg-bone/10'}"
-        >
-          {view.label}
-        </button>
-      {/each}
-    </nav>
-    {:else if gate === "unknown"}
-    <p class="mt-4 text-xs text-bone/70">This device's identity could not be checked — retry in the main view to unlock Status, Drives, and Settings.</p>
-    {:else}
-    <p class="mt-4 text-xs text-bone/70">Set up this device's identity to unlock Status, Drives, and Settings.</p>
-    {/if}
-  </aside>
+{#snippet unavailableOverlay(driveDir: string)}
+  <UnavailableView
+    driveLabel={driveDir}
+    detail={unavailableDetail}
+    pending={busy}
+    onRetry={() => void retryConnection(driveDir)}
+  />
+{/snippet}
 
-  <main class="max-w-2xl flex-1 p-8" aria-live="polite">
+<div class="flex min-h-screen flex-col bg-background font-sans text-foreground">
+  <header
+    data-tauri-drag-region
+    class="sticky top-0 z-40 flex h-12 shrink-0 items-center gap-3 border-b border-bone/10 bg-ink px-4 text-bone {trafficLightInset
+      ? 'pl-20'
+      : ''}"
+  >
+    <Brand
+      onHome={gate === "done" && presentation.selectedView !== "lifecycle"
+        ? allDrives
+        : undefined}
+    />
+    <div class="ml-auto flex items-center gap-2">
+      {#if busy}
+        <span class="hidden items-center gap-1.5 text-xs text-bone/60 sm:flex">
+          <Spinner class="size-3" />
+          {presentation.pendingRequests} in flight
+        </span>
+      {/if}
+      {#if gate === "done" && presentation.selectedView !== "lifecycle"}
+        <Button
+          variant="ghost"
+          size="sm"
+          class="text-bone hover:bg-bone/10 hover:text-bone"
+          onclick={allDrives}
+        >
+          <LayoutGridIcon data-icon="inline-start" />
+          All drives
+        </Button>
+      {/if}
+    </div>
+  </header>
+
+  <main class="mx-auto w-full max-w-5xl flex-1 px-6 pt-8 pb-16" aria-live="polite">
     {#if gate === "loading"}
-      <p class="mt-4 text-sm text-smoke">Checking this device's identity…</p>
+      <div class="flex min-h-[45vh] flex-col items-center justify-center gap-3 text-center">
+        <Spinner class="size-5 text-muted-foreground" />
+        <p class="text-sm text-muted-foreground">Checking this device's identity…</p>
+      </div>
     {:else if gate === "welcome" && keyDefaults !== null}
       {#key onboardingEpoch}
         <OnboardingView
@@ -516,34 +539,26 @@
         onCreateNew={repairCreateNew}
       />
     {:else if gate === "unknown"}
-      <p class="mt-4 text-sm" role="alert">This device's identity could not be checked: {gateDetail}</p>
-      <div class="mt-2">
-        <Button variant="secondary" size="sm" disabled={busy} onclick={() => void checkIdentityGate()}>Retry</Button>
-      </div>
-    {:else if selectedDriveDir !== null && selectedAvailability === "unavailable" && (presentation.selectedView === "status" || presentation.selectedView === "settings")}
-      <UnavailableView
-        driveLabel={selectedDriveDir}
-        detail={unavailableDetail}
-        pending={busy}
-        onRetry={() => void retryConnection(selectedDriveDir)}
-      />
-    {:else if presentation.selectedView === "status"}
-      {#if selectedDriveDir === null}
-        <p class="mt-4 text-sm text-smoke">
-          No drive selected. Open Drives to create, join, or select one.
-        </p>
-      {:else}
-        {@const snapshot = presentation.statusSnapshotFor(selectedDriveDir)}
-        <StatusView
-          driveLabel={selectedDriveDir}
-          snapshot={snapshot}
-          pending={busy}
-          error={lastError}
-          transportNotice={presentation.transportNotice}
-          onRefresh={() => void refreshStatus(selectedDriveDir)}
-        />
-      {/if}
-    {:else if presentation.selectedView === "lifecycle"}
+      <Card.Root class="mx-auto mt-10 max-w-xl">
+        <Card.Header>
+          <Card.Title>This device's identity could not be checked</Card.Title>
+          <Card.Description>
+            Wyrd cannot read this device's identity state, so it cannot open any drive yet.
+          </Card.Description>
+        </Card.Header>
+        <Card.Content>
+          <Alert.Root variant="destructive">
+            <p>{gateDetail}</p>
+          </Alert.Root>
+        </Card.Content>
+        <Card.Footer class="justify-end">
+          <Button variant="outline" size="sm" disabled={busy} onclick={() => void checkIdentityGate()}>
+            <RefreshCwIcon data-icon="inline-start" />
+            Retry
+          </Button>
+        </Card.Footer>
+      </Card.Root>
+    {:else if presentation.selectedView === "lifecycle" || selectedDriveDir === null}
       <LifecycleView
         snapshot={presentation.lifecycleSnapshot}
         selectedDriveDir={presentation.selectedDriveDir}
@@ -553,24 +568,62 @@
         initialPassphraseFile={onboardedPassphraseFile}
         initialMode={pendingProvisionMode}
         onRefresh={() => void refreshLifecycle()}
-        onSelect={(driveDir) => selectDrive(driveDir)}
+        onOpen={(driveDir) => openDrive(driveDir)}
         onCreate={(args: ProvisionCreateArgs) => runProvision(() => provisionCreate(args))}
         onJoin={(args: ProvisionJoinArgs) => runProvision(() => provisionJoin(args))}
         onLeave={(args: ProvisionLeaveArgs) => runProvision(() => provisionLeave(args))}
       />
-    {:else if selectedDriveDir === null}
-      <p class="mt-4 text-sm text-smoke">
-        No drive selected. Open Drives to create, join, or select one.
-      </p>
     {:else}
-      {@const snapshot = presentation.settingsSnapshotFor(selectedDriveDir)}
-      <SettingsView
-        driveLabel={selectedDriveDir}
-        snapshot={snapshot}
-        pending={busy}
-        transportNotice={presentation.transportNotice}
-        onRefresh={() => void refreshSettings(selectedDriveDir)}
-      />
+      <Tabs.Root
+        value={presentation.selectedView}
+        onValueChange={(value) => selectView(value as ShellView)}
+        class="gap-6"
+      >
+        <div class="flex flex-wrap items-start justify-between gap-x-6 gap-y-4">
+          <div class="min-w-0">
+            <div class="flex flex-wrap items-center gap-2.5">
+              <h1 class="truncate text-2xl font-semibold tracking-tight">{selectedDriveName}</h1>
+              <AvailabilityBadge state={selectedAvailability} />
+            </div>
+            <div class="mt-1 flex min-w-0 items-center gap-1">
+              <span class="truncate font-mono text-xs text-muted-foreground">{selectedDriveDir}</span>
+              <CopyButton text={selectedDriveDir} label="drive path" />
+            </div>
+          </div>
+          <Tabs.List>
+            <Tabs.Trigger value="status">Status</Tabs.Trigger>
+            <Tabs.Trigger value="settings">Settings</Tabs.Trigger>
+          </Tabs.List>
+        </div>
+
+        <Tabs.Content value="status">
+          {#if selectedAvailability === "unavailable"}
+            {@render unavailableOverlay(selectedDriveDir)}
+          {:else}
+            <StatusView
+              snapshot={presentation.statusSnapshotFor(selectedDriveDir)}
+              availability={selectedAvailability}
+              pending={busy}
+              error={lastError}
+              transportNotice={presentation.transportNotice}
+              onRefresh={() => void refreshStatus(selectedDriveDir)}
+            />
+          {/if}
+        </Tabs.Content>
+
+        <Tabs.Content value="settings">
+          {#if selectedAvailability === "unavailable"}
+            {@render unavailableOverlay(selectedDriveDir)}
+          {:else}
+            <SettingsView
+              snapshot={presentation.settingsSnapshotFor(selectedDriveDir)}
+              pending={busy}
+              transportNotice={presentation.transportNotice}
+              onRefresh={() => void refreshSettings(selectedDriveDir)}
+            />
+          {/if}
+        </Tabs.Content>
+      </Tabs.Root>
     {/if}
   </main>
 </div>
