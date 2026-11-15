@@ -50,9 +50,9 @@ use wyrd_format::DriveId;
 use crate::vault::OwnerView;
 
 use super::mapping::{
-    map_policy_error, mutation_kind_from_wire, wire_attr, wire_dir_entry, wire_freshness,
-    wire_mailbox_health, wire_mutation_error, wire_mutation_outcome, wire_node, wire_policy_row,
-    wire_sync_report, wire_sync_status,
+    map_policy_error, mutation_kind_from_wire, node_token, wire_attr, wire_dir_entry,
+    wire_expected_identity, wire_freshness, wire_mailbox_health, wire_mutation_error,
+    wire_mutation_outcome, wire_node, wire_policy_row, wire_sync_report, wire_sync_status,
 };
 use super::wire::{
     PathParams, RawRequest, SubmitParams, WireError, WireErrorCode, WireLiveness,
@@ -1027,14 +1027,39 @@ impl OwnerServer {
             )
         })?;
         let projection = self.current_projection()?;
+        let node = projection
+            .view()
+            .lookup(&params.path)
+            .map_err(map_view_error)?;
+        // Identity-bound read: a caller that verified an entry token
+        // holds the read to that entry. A delete-plus-recreate behind
+        // the path resolves to a different token (or to a legacy
+        // entry with none) and refuses as `StaleEntry` — never the
+        // replacement's bytes under the old verification. Absent
+        // stays path-only with the long-standing behavior; present
+        // but malformed is `Malformed`, never silently dropped.
+        if let Some(expected_hex) = params.identity.as_deref() {
+            let expected = wire_expected_identity(expected_hex).map_err(|error| {
+                (
+                    WireErrorCode::Malformed,
+                    format!("bad read identity for {}: {error}", params.path),
+                )
+            })?;
+            let found = node_token(&node);
+            if found.as_ref() != Some(&expected) {
+                return Err((
+                    WireErrorCode::StaleEntry,
+                    format!(
+                        "stale entry identity for {:?}: the path no longer resolves to the verified entry",
+                        params.path,
+                    ),
+                ));
+            }
+        }
         // Bound one request's memory before touching the bytes: a
         // file past the bound is refused explicitly, never
         // truncated and never streamed past the cap.
-        let size = match projection
-            .view()
-            .lookup(&params.path)
-            .map_err(map_view_error)?
-        {
+        let size = match node {
             Node::File { size, .. } => size,
             // Symlinks resolve at the presentation boundary and
             // conflicts address through version-qualified paths: a

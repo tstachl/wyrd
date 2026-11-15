@@ -202,10 +202,27 @@ pub fn node_from_wire(node: &WireNode) -> Result<Node, String> {
         }
     }
 }
+/// The entry token a node resolves under, if it carries one.
+/// File, dir, symlink, and agreed merged-dir nodes carry the
+/// entry's stable token; pre-identity entries carry none. Conflict
+/// is a synthetic view with no token of its own, so it never
+/// matches a presented identity — a path that conflicted behind a
+/// verified token refuses instead of serving.
+pub fn node_token(node: &Node) -> Option<EntryIdentity> {
+    match node {
+        Node::File { identity, .. }
+        | Node::Dir { identity, .. }
+        | Node::Symlink { identity, .. }
+        | Node::MergedDir { identity, .. } => *identity,
+        Node::Conflict { .. } => None,
+    }
+}
+
 /// Parse a required wire identity: the mutation precondition must
 /// name 32 hex bytes — absent or malformed is `Malformed`, never a
-/// silent path-only mutation.
-fn wire_expected_identity(hex: &str) -> Result<EntryIdentity, String> {
+/// silent path-only mutation. The identity-bound read reuses the
+/// same rule: present must parse, never silently dropped.
+pub fn wire_expected_identity(hex: &str) -> Result<EntryIdentity, String> {
     parse_id(hex)
         .map(EntryIdentity::from_bytes)
         .map_err(|error| format!("invalid expected identity {hex:?}: {error}"))
