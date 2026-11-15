@@ -230,7 +230,7 @@ pub fn wire_expected_identity(hex: &str) -> Result<EntryIdentity, String> {
 
 /// Parse an optional wire identity: absent stays absent (pre-identity
 /// data), present must be 32 hex bytes — never silently dropped.
-fn wire_identity(hex: &Option<String>) -> Result<Option<EntryIdentity>, String> {
+pub fn wire_identity(hex: &Option<String>) -> Result<Option<EntryIdentity>, String> {
     hex.as_deref()
         .map(|raw| {
             parse_id(raw)

@@ -51,8 +51,8 @@ use crate::vault::OwnerView;
 
 use super::mapping::{
     map_policy_error, mutation_kind_from_wire, node_token, wire_attr, wire_dir_entry,
-    wire_expected_identity, wire_freshness, wire_mailbox_health, wire_mutation_error,
-    wire_mutation_outcome, wire_node, wire_policy_row, wire_sync_report, wire_sync_status,
+    wire_freshness, wire_identity, wire_mailbox_health, wire_mutation_error, wire_mutation_outcome,
+    wire_node, wire_policy_row, wire_sync_report, wire_sync_status,
 };
 use super::wire::{
     PathParams, RawRequest, SubmitParams, WireError, WireErrorCode, WireLiveness,
@@ -968,6 +968,7 @@ impl OwnerServer {
                 format!("bad lookup params: {error}"),
             )
         })?;
+        reject_bound_non_read("lookup", &params)?;
         let projection = self.current_projection()?;
         let node = projection
             .view()
@@ -987,6 +988,7 @@ impl OwnerServer {
                 format!("bad stat params: {error}"),
             )
         })?;
+        reject_bound_non_read("stat", &params)?;
         let projection = self.current_projection()?;
         let attr = projection
             .view()
@@ -1006,6 +1008,7 @@ impl OwnerServer {
                 format!("bad readdir params: {error}"),
             )
         })?;
+        reject_bound_non_read("readdir", &params)?;
         let projection = self.current_projection()?;
         let node = projection
             .view()
@@ -1031,20 +1034,30 @@ impl OwnerServer {
             .view()
             .lookup(&params.path)
             .map_err(map_view_error)?;
+        // A conflicted path carries no token of its own: refuse as
+        // conflicted before any token comparison, exactly like the
+        // mutation-side rule (four conditions stay distinct, never
+        // collapsed into one).
+        if matches!(node, Node::Conflict { .. }) {
+            return Err((
+                WireErrorCode::Conflicted,
+                format!("{} is conflicted across heads", params.path),
+            ));
+        }
         // Identity-bound read: a caller that verified an entry token
         // holds the read to that entry. A delete-plus-recreate behind
         // the path resolves to a different token (or to a legacy
         // entry with none) and refuses as `StaleEntry` — never the
-        // replacement's bytes under the old verification. Absent
-        // stays path-only with the long-standing behavior; present
-        // but malformed is `Malformed`, never silently dropped.
-        if let Some(expected_hex) = params.identity.as_deref() {
-            let expected = wire_expected_identity(expected_hex).map_err(|error| {
-                (
-                    WireErrorCode::Malformed,
-                    format!("bad read identity for {}: {error}", params.path),
-                )
-            })?;
+        // replacement's bytes under the old verification. Present
+        // must parse — never silently dropped — reusing the
+        // node-identity rule; absent stays path-only.
+        let expected = wire_identity(&params.identity).map_err(|error| {
+            (
+                WireErrorCode::Malformed,
+                format!("bad read identity for {}: {error}", params.path),
+            )
+        })?;
+        if let Some(expected) = expected {
             let found = node_token(&node);
             if found.as_ref() != Some(&expected) {
                 return Err((
@@ -1447,6 +1460,20 @@ fn refuse(id: u64, code: WireErrorCode, message: String) -> WireResponse {
 /// Map a view failure to a wire refusal. Every variant names its
 /// own code — the transport never reinterprets a failure, it carries
 /// it.
+/// The entry token binds reads only: a caller that passes one to
+/// `lookup`, `stat`, or `readdir` believes the answer is bound, and
+/// it is not — refuse loudly instead of serving an unbound answer
+/// under a bound request.
+fn reject_bound_non_read(op: &str, params: &PathParams) -> Result<(), (WireErrorCode, String)> {
+    if params.identity.is_some() {
+        return Err((
+            WireErrorCode::Malformed,
+            format!("bad {op} params: identity binds reads only"),
+        ));
+    }
+    Ok(())
+}
+
 fn map_view_error(error: ViewError) -> (WireErrorCode, String) {
     let message = error.to_string();
     let code = match &error {
@@ -1465,8 +1492,7 @@ fn map_view_error(error: ViewError) -> (WireErrorCode, String) {
     (code, message)
 }
 
-/// Map a demand-driven read failure to a wire refusal. Timeouts and
-/// saturated demand are transient — the message says retry — while
+/// Map a demand-driven read failure to a wire refusal. Timeouts and/// saturated demand are transient — the message says retry — while
 /// terminal verdicts carry the view's own code.
 fn map_read_error(error: ReadError) -> (WireErrorCode, String) {
     match error {

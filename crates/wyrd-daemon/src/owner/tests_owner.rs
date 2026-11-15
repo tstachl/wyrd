@@ -7,8 +7,8 @@
 use super::client::{ClientError, OwnerClient};
 use super::mapping::{
     attr_from_wire, file_identity_from_wire, kind_from_wire, map_policy_error,
-    mutation_kind_from_wire, node_from_wire, wire_attr, wire_dir_entry, wire_mutation_error,
-    wire_mutation_outcome, wire_node, wire_presence, wire_retention_policy,
+    mutation_kind_from_wire, node_from_wire, node_token, wire_attr, wire_dir_entry,
+    wire_mutation_error, wire_mutation_outcome, wire_node, wire_presence, wire_retention_policy,
 };
 use super::wire::{
     PathParams, RawRequest, SubmitParams, WireAttr, WireDirEntry, WireDurabilityLevel, WireError,
@@ -116,7 +116,6 @@ fn dispatch_ok(server: &OwnerServer, op: &str, path: &str) -> WireOk {
         op: op.to_string(),
         params: serde_json::to_value(PathParams {
             path: path.to_string(),
-
             identity: None,
         })
         .unwrap(),
@@ -137,7 +136,6 @@ fn dispatch_err(server: &OwnerServer, op: &str, path: &str) -> WireError {
         op: op.to_string(),
         params: serde_json::to_value(PathParams {
             path: path.to_string(),
-
             identity: None,
         })
         .unwrap(),
@@ -290,6 +288,41 @@ fn wire_attr_and_entry_round_trip() {
     assert_eq!(back, wire);
 }
 
+/// The bound-read token source: every identified node resolves to
+/// its entry token, while pre-identity entries and the synthetic
+/// conflict view resolve to none — so a presented token against
+/// either refuses as `StaleEntry` instead of matching.
+#[test]
+fn node_token_resolves_identified_nodes_and_nothing_else() {
+    let token = EntryIdentity::from_bytes([0xB0; 32]);
+    assert_eq!(
+        node_token(&Node::File {
+            size: 1,
+            executable: false,
+            chunks: vec![],
+            identity: Some(token),
+        }),
+        Some(token)
+    );
+    assert_eq!(
+        node_token(&Node::Dir {
+            subtree: ContentId::from_bytes([0x02; 32]),
+            identity: Some(token),
+        }),
+        Some(token)
+    );
+    assert_eq!(
+        node_token(&Node::File {
+            size: 1,
+            executable: false,
+            chunks: vec![],
+            identity: None,
+        }),
+        None
+    );
+    assert_eq!(node_token(&Node::Conflict { versions: vec![] }), None);
+}
+
 // ---------------------------------------------------------------------------
 // Dispatch over a composed view
 // ---------------------------------------------------------------------------
@@ -375,7 +408,6 @@ fn dispatch_refuses_with_explicit_codes() {
         op: OP_LOOKUP.to_string(),
         params: serde_json::to_value(PathParams {
             path: "hello.txt".to_string(),
-
             identity: None,
         })
         .unwrap(),
@@ -677,7 +709,6 @@ fn shutdown_completes_with_a_client_connected() {
         op: OP_LOOKUP.to_string(),
         params: serde_json::to_value(PathParams {
             path: "hello.txt".to_string(),
-
             identity: None,
         })
         .unwrap(),
@@ -740,7 +771,6 @@ fn socket_round_trip_serves_a_lookup() {
         op: OP_LOOKUP.to_string(),
         params: serde_json::to_value(PathParams {
             path: "hello.txt".to_string(),
-
             identity: None,
         })
         .unwrap(),
@@ -1306,7 +1336,6 @@ fn submit_reports_the_same_outcome_both_ways() {
         op: OP_CAPTURE_PARENT.to_string(),
         params: serde_json::to_value(PathParams {
             path: String::new(),
-
             identity: None,
         })
         .unwrap(),
@@ -1782,7 +1811,6 @@ fn broken_submit_connection_is_unconfirmed_and_reconciles() {
         op: OP_LOOKUP.to_string(),
         params: serde_json::to_value(PathParams {
             path: "reconcile-me".to_string(),
-
             identity: None,
         })
         .unwrap(),
@@ -1866,7 +1894,6 @@ fn headless_run_serves_the_interface() {
         op: OP_READDIR.to_string(),
         params: serde_json::to_value(PathParams {
             path: String::new(),
-
             identity: None,
         })
         .unwrap(),
@@ -2113,7 +2140,6 @@ fn stalled_mid_frame_closes_with_zero_misframed_traffic() {
     let lookup_params = || {
         serde_json::to_value(PathParams {
             path: "hello.txt".to_string(),
-
             identity: None,
         })
         .unwrap()
@@ -2204,7 +2230,6 @@ fn overlong_length_prefix_closes_without_answer() {
         OP_LOOKUP,
         serde_json::to_value(PathParams {
             path: "hello.txt".to_string(),
-
             identity: None,
         })
         .unwrap(),
@@ -2289,7 +2314,6 @@ fn over_limit_submit_is_a_typed_toolarge_not_silence() {
         op: OP_LOOKUP.to_string(),
         params: serde_json::to_value(PathParams {
             path: "hello.txt".to_string(),
-
             identity: None,
         })
         .unwrap(),
@@ -2333,7 +2357,6 @@ fn stalled_mid_body_closes_with_zero_misframed_traffic() {
         op: OP_LOOKUP.to_string(),
         params: serde_json::to_value(PathParams {
             path: "hello.txt".to_string(),
-
             identity: None,
         })
         .unwrap(),
@@ -2369,7 +2392,6 @@ fn stalled_mid_body_closes_with_zero_misframed_traffic() {
         OP_LOOKUP,
         serde_json::to_value(PathParams {
             path: "hello.txt".to_string(),
-
             identity: None,
         })
         .unwrap(),
@@ -2429,7 +2451,6 @@ fn accept_flood_stays_bounded() {
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     let lookup_params = serde_json::to_value(PathParams {
         path: "hello.txt".to_string(),
-
         identity: None,
     })
     .unwrap();
@@ -3031,7 +3052,6 @@ fn policy_ok(server: &OwnerServer, op: &str, path: &str) -> WireOk {
         op: op.to_string(),
         params: serde_json::to_value(PathParams {
             path: path.to_string(),
-
             identity: None,
         })
         .unwrap(),
@@ -3052,7 +3072,6 @@ fn policy_err(server: &OwnerServer, op: &str, path: &str) -> WireError {
         op: op.to_string(),
         params: serde_json::to_value(PathParams {
             path: path.to_string(),
-
             identity: None,
         })
         .unwrap(),
@@ -3843,7 +3862,6 @@ fn submit_refuses_the_old_wire_version() {
         op: OP_LOOKUP.to_string(),
         params: serde_json::to_value(PathParams {
             path: "".to_string(),
-
             identity: None,
         })
         .unwrap(),

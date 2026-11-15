@@ -1256,6 +1256,27 @@ do {
 }
 
 do {
+    // A presented token against an identity-less entry refuses:
+    // the legacy row never matches a bound read.
+    let legacy = OwnerClient(socketPath: socketPath)
+    do {
+        _ = try legacy.read(path: "legacy.bin", identity: String(repeating: "ff", count: 32))
+        print("FAIL: bound read of a legacy entry serves")
+        failures += 1
+    } catch let error as OwnerClientError {
+        if case .refused(let refusal) = error {
+            checkEqual(refusal.code, "StaleEntry", "a legacy entry refuses a bound read")
+        } else {
+            print("FAIL: legacy bound read refuses StaleEntry, got \(error)")
+            failures += 1
+        }
+    }
+} catch {
+    print("FAIL: legacy bound read: \(error)")
+    failures += 1
+}
+
+do {
     // The Finding-1 scenario at adapter level: a same-size remote
     // edit lands after the system observed the item. The stored
     // base version no longer matches — the digest moved — so a

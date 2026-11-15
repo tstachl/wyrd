@@ -110,8 +110,9 @@ closed with an explicit upgrade directive instead of running
 path-only mutations under an identity-conditional client (or
 vice versa). Both sides ship together, so the only skew window
 is a mixed-release deployment, which refuses loudly rather than
-drifting silently. v2 changes nothing else: reads, parent
-tokens, folds, and every refusal code keep their v1 meaning.
+drifting silently. v2 changes nothing else, except one additive
+read field described below: absent, reads, parent tokens, folds,
+and every refusal code keep their v1 meaning.
 
 ## Read operations
 
@@ -143,6 +144,28 @@ pre-identity payloads (which omit the key) as "no token reported"
 instead of failing. A pre-identity reader likewise tolerates new
 payloads, because the wire types do not deny unknown fields. Consumers answer "is this the same entry I
 saw before?" from the token, never from path, content, or matching.
+
+A `read` may bind to the verified entry: the request carries an
+optional `identity` (lowercase hex EntryIdentity). Absent stays
+path-only with the v1 meaning. Present must parse (`Malformed`
+otherwise, never silently dropped) and must equal the served
+node's token exactly: a delete-plus-recreate behind the path — or
+a presented token against an identity-less entry — refuses as
+`StaleEntry` instead of serving foreign bytes. Four conditions
+stay distinct, mirroring the mutation rule below: a changed
+content base under the same identity serves (the binding is
+entry-scoped, not version-scoped); a different identity is a
+stale entry reference; a conflicted path carries no token of its
+own and refuses as conflicted, exactly like the path-only read;
+a missing path is `NotFound`. Never collapse two into one. The
+answer stays path-addressed — generation plus revision only,
+never a token echo — so the binding lives in the request. A
+pre-binding v2 owner ignores the unknown field and serves
+path-only, so a bound read against one degrades to the old
+verify-then-read window; both sides ship together, so the skew
+covers mixed releases only. Path-only reads (legacy references
+included) keep that window by contract: absent is the
+long-standing behavior, not a bound one.
 
 Each conflict version carries its head snapshot's id and
 authoring timestamp (milliseconds, display and tiebreak only —

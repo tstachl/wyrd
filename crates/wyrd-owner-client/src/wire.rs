@@ -475,11 +475,14 @@ pub struct RawRequest {
 
 /// Parameters for the path-addressed read operations (`lookup`,
 /// `stat`, `readdir`, `read`). `identity` is the caller's expected
-/// entry token (lowercase hex): `None` is a path-only read with the
-/// long-standing behavior, `Some` binds the read to the entry the
-/// caller verified — a delete-plus-recreate behind the path refuses
-/// as `StaleEntry` instead of serving the replacement. Absent stays
-/// absent for mixed-version skew, exactly like the node identities.
+/// entry token (lowercase hex) and binds `read` only: `None` is a
+/// path-only operation with the long-standing behavior, `Some`
+/// holds the `read` to the entry the caller verified — a
+/// delete-plus-recreate behind the path refuses as `StaleEntry`
+/// instead of serving the replacement. The other three operations
+/// refuse a present token as `Malformed` rather than serving an
+/// unbound answer under a bound request. Absent stays absent for
+/// mixed-version skew, exactly like the node identities.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PathParams {
     pub path: String,

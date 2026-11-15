@@ -171,7 +171,6 @@ impl OwnerClient {
             OP_LOOKUP,
             PathParams {
                 path: path.to_string(),
-
                 identity: None,
             },
         )? {
@@ -191,7 +190,6 @@ impl OwnerClient {
             OP_STAT,
             PathParams {
                 path: path.to_string(),
-
                 identity: None,
             },
         )? {
@@ -211,7 +209,6 @@ impl OwnerClient {
             OP_READDIR,
             PathParams {
                 path: path.to_string(),
-
                 identity: None,
             },
         )? {
@@ -227,11 +224,12 @@ impl OwnerClient {
     /// Read one whole file, hex-decoded, plus serving generation and
     /// durable revision. Files past the interface read bound refuse
     /// with `TooLarge` — never truncated, never silently streamed.
-    /// `expected_identity` binds the read to the verified entry: the
-    /// owner's answer names the token it served under, and a path
-    /// that resolved to a different entry refuses as `StaleEntry`
-    /// instead of serving foreign bytes. `None` is the path-only
-    /// read with the long-standing behavior.
+    /// `expected_identity` binds the read to the verified entry: a
+    /// path that resolved to a different entry refuses as
+    /// `StaleEntry` instead of serving foreign bytes. The answer
+    /// stays path-addressed (generation plus revision only) — the
+    /// binding lives in the request. `None` is the path-only read
+    /// with the long-standing behavior.
     pub fn read(
         &mut self,
         path: &str,
@@ -302,7 +300,6 @@ impl OwnerClient {
             OP_CAPTURE_PARENT,
             PathParams {
                 path: path.to_string(),
-
                 identity: None,
             },
         )? {
@@ -351,7 +348,6 @@ impl OwnerClient {
             OP_POLICY_PIN,
             PathParams {
                 path: path.to_string(),
-
                 identity: None,
             },
         )? {
@@ -374,7 +370,6 @@ impl OwnerClient {
             OP_POLICY_UNPIN,
             PathParams {
                 path: path.to_string(),
-
                 identity: None,
             },
         )? {
@@ -397,7 +392,6 @@ impl OwnerClient {
             OP_POLICY_EVICT,
             PathParams {
                 path: path.to_string(),
-
                 identity: None,
             },
         )? {
@@ -424,7 +418,6 @@ impl OwnerClient {
             OP_POLICY_STATUS,
             PathParams {
                 path: path.to_string(),
-
                 identity: None,
             },
         )? {
