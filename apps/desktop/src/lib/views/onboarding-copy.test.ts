@@ -146,3 +146,18 @@ test("repair states readability and adoption plainly", () => {
   // No silent overwrite path: the word never appears as an action.
   expect(repair).not.toContain("Overwrite");
 });
+
+test("repair names a broken pairing before any credential state", () => {
+  // The version-mismatch branch never presents the credential
+  // verdicts: a missing or mismatched helper is a pairing problem,
+  // and neither choosing files nor creating an identity can fix it.
+  for (const line of [
+    "The app and its helper tool do not match",
+    "This says nothing about your identity files",
+    "Reinstall the matched pair",
+    "building the CLI beside the desktop binary",
+    "The pair answers now",
+  ]) {
+    expect(repair).toContain(line);
+  }
+});

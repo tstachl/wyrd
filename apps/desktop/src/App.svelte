@@ -30,6 +30,7 @@
   } from "$lib/ipc/operations.js";
   import type { IpcResult } from "$lib/ipc/types.js";
   import type { DriveView, KeyDefaults, OnboardingReport, ProvisionReport } from "$lib/ipc/results.js";
+  import { withDevCliHint } from "$lib/views/format.js";
   import { presentation } from "$lib/state/presentation.svelte.js";
   import type { ShellView } from "$lib/state/presentation.svelte.js";
   import LifecycleView from "$lib/views/LifecycleView.svelte";
@@ -238,6 +239,12 @@
   let gate = $state<OnboardingGate>("loading");
   let keyDefaults = $state<KeyDefaults | null>(null);
   let repairDetail = $state("");
+  // Repair has two causes with different fixes: unreadable
+  // credentials (the identity-file repair states) versus a broken
+  // app pairing (the desktop could not run its `wyrd` helper — never
+  // evidence about the credential files). The kind selects the
+  // headline; the pairing path renders before any credential state.
+  let repairKind = $state<"credentials" | "versionmismatch">("credentials");
   let gateDetail = $state("");
   let onboardedIdentityFile = $state<string | null>(null);
   let onboardedPassphraseFile = $state<string | null>(null);
@@ -261,6 +268,7 @@
       }
       if (!defaults.identity_exists || !defaults.passphrase_exists) {
         repairDetail = "Incomplete credentials: one of the two files is missing — expected both the identity file and the passphrase file.";
+        repairKind = "credentials";
         gate = "repair";
         return;
       }
@@ -272,11 +280,16 @@
         onboardedPassphraseFile = defaults.passphrase_file;
         gate = "done";
       } else {
-        repairDetail = report.result.result === "expectedfailure"
-          ? report.result.detail
-          : report.result.result === "versionmismatch"
-            ? `Version mismatch: ${report.result.reason}`
-            : report.result.detail;
+        if (report.result.result === "versionmismatch") {
+          // A broken pairing is never a credential verdict: the
+          // version gate names the pair, so the repair screen must
+          // not present the identity-file states.
+          repairDetail = `Version mismatch (reinstall the matched pair): ${withDevCliHint(report.result.reason)}`;
+          repairKind = "versionmismatch";
+        } else {
+          repairDetail = report.result.detail;
+          repairKind = "credentials";
+        }
         gate = "repair";
       }
     } catch (error: unknown) {
@@ -494,6 +507,7 @@
     {:else if gate === "repair" && keyDefaults !== null}
       <RepairView
         defaults={keyDefaults}
+        kind={repairKind}
         detail={repairDetail}
         pending={busy}
         onVerify={(args: OnboardingVerifyArgs) => runOnboarding(() => onboardingVerify(args))}
