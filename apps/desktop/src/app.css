@@ -1,6 +1,21 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
+/* bits-ui publishes state on `data-state` and orientation on
+   `data-orientation`; the shadcn-svelte primitives style with
+   `data-open:`, `data-active:`, `data-checked:`, `data-horizontal:`
+   and friends. Define those variants once here so the generated
+   components stay unmodified and still compose with `group-*` and
+   `peer-*`. Without them a Tabs root never becomes a column. */
+@custom-variant data-open (&:where([data-state="open"]));
+@custom-variant data-closed (&:where([data-state="closed"]));
+@custom-variant data-checked (&:where([data-state="checked"]));
+@custom-variant data-unchecked (&:where([data-state="unchecked"]));
+@custom-variant data-active (&:where([data-state="active"]));
+@custom-variant data-horizontal (&:where([data-orientation="horizontal"]));
+@custom-variant data-vertical (&:where([data-orientation="vertical"]));
+@custom-variant data-disabled (&:where([data-disabled]:not([data-disabled="false"])));
+
 /* Wyrd brand tokens, canonical in `apps/shared/brand/tokens.json`
    (the C · Held mark: Ink #121614, Bone #ECE7DA, Amber #E3A13B +
    Smoke #4A4F4B). Amber is the sole accent; Ink and Bone do all
@@ -139,6 +154,17 @@
 }
 
 @layer base {
+  /* shadcn's default border colour: every `border*` utility without an
+     explicit colour reads the semantic border token instead of
+     `currentColor` (which painted card-footers in Bone on dark). */
+  *,
+  ::before,
+  ::after,
+  ::backdrop,
+  ::file-selector-button {
+    border-color: var(--color-border);
+  }
+
   html {
     background: var(--background);
   }

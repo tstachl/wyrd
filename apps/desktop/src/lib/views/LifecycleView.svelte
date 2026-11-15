@@ -128,10 +128,10 @@ the drive directory explicitly. -->
       <div class="grid gap-4 lg:grid-cols-2">
         {#each drives as drive (drive.drive_dir)}
           {@const selected = selectedDriveDir === drive.drive_dir}
-          <Card.Root class={selected ? "ring-2 ring-primary/60" : ""}>
+          <Card.Root class={selected ? "ring-1 ring-primary/50" : ""}>
             <Card.Header>
-              <div class="flex items-start justify-between gap-3">
-                <div class="flex min-w-0 flex-col gap-1">
+              <div class="flex min-w-0 items-start justify-between gap-3">
+                <div class="flex min-w-0 flex-1 flex-col gap-1">
                   <Card.Title class="flex flex-wrap items-center gap-2">
                     <span class="truncate">{drive.name}</span>
                     {#if selected}
@@ -208,7 +208,7 @@ the drive directory explicitly. -->
     </Card.Root>
   {/if}
 
-  <div class="mt-4">
+  <div class="mt-10">
     <ProvisioningView
       pending={pending}
       initialIdentityFile={initialIdentityFile}

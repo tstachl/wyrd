@@ -53,8 +53,17 @@ terminal answer, stamped — never a claim about right now. -->
   );
 </script>
 
+{#snippet queueHint()}
+  <p>Outbox, carries, and fetch entries, in that order.</p>
+{/snippet}
+
+{#snippet materializedHint()}
+  <p>Pinned and cached entries, in that order.</p>
+{/snippet}
+
 <PageHeader
   title="Status"
+  size="section"
   description="The owner's last reported posture for this drive — observation, liveness, and freshness kept separate."
 >
   {#snippet actions()}
@@ -190,12 +199,12 @@ terminal answer, stamped — never a claim about right now. -->
               </span>
             {/if}
           </DetailRow>
-          <DetailRow label="Queue (outbox / carries / fetch)">
+          <DetailRow label="Queue" hint={queueHint} hintLabel="About the queue">
             <span class="font-mono tabular-nums">
               {status.observe.queue.outbox} / {status.observe.queue.carries} / {status.observe.queue.fetch}
             </span>
           </DetailRow>
-          <DetailRow label="Materialized (pinned / cached)">
+          <DetailRow label="Materialized" hint={materializedHint} hintLabel="About materialization">
             <span class="font-mono tabular-nums">
               {status.observe.materialization.pinned} / {status.observe.materialization.cached}
             </span>

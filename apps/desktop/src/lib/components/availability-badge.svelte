@@ -21,7 +21,7 @@
   );
 </script>
 
-<span class="inline-flex items-center gap-1">
+<span class="inline-flex shrink-0 items-center gap-1">
   <Badge variant="outline" class={tone}>
     <span class="size-1.5 rounded-full bg-current" aria-hidden="true"></span>
     {state === "available" ? "Available" : state === "unavailable" ? "Unavailable" : "Unknown"}

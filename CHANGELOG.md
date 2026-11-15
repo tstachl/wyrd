@@ -210,6 +210,13 @@ is transient — no drive data is affected.
 
 ### Changed
 
+- Redesigned desktop shell (`apps/desktop`): the three-item sidebar is
+  replaced by a device-level Drives home and a drive workspace with
+  Status and Settings tabs. Drives and relays render as cards and
+  removable badges, secondary explanation moves into hover hints
+  (normative onboarding and repair copy stays visible), and the
+  shadcn-svelte primitives carry a Bone/Ink/Amber semantic theme.
+
 - Settle the CLI command vocabulary and hierarchy
   (`nostr:nevent1qqsty2n74rneaaqj7peqy3pwuptnmzvvcsfcef07mykactuqc4zw9ygpz9mhxue69uhkwunpwdczuap49eehg4ee4tj`):
   deliberate alpha break, behavior preserved. `init`/`bootstrap` move

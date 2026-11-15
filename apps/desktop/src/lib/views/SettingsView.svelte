@@ -33,6 +33,7 @@ file; application of the values is the running owner's business. -->
 
 <PageHeader
   title="Settings"
+  size="section"
   description="This drive's configured bounds, read-only. Absent values stay unknown — the shell never fills in a default it cannot see."
 >
   {#snippet actions()}
