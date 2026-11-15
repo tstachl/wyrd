@@ -75,6 +75,12 @@ if [ "$(uname -s)" = "Darwin" ]; then
     esac
     RUSTFLAGS="${RUSTFLAGS:-} -C link-arg=-L$DISCOVERED_SDK/usr/lib"
     export RUSTFLAGS
+    # rustc discovers the macOS SDK with its own bare `xcrun` query,
+    # which under devenv resolves to the Nix shadow and warns. It
+    # honors SDKROOT directly and skips that query, so pin the
+    # discovered SDK for the cargo invocations below.
+    SDKROOT="$DISCOVERED_SDK"
+    export SDKROOT
     echo "note: macOS link-order pin: -L$DISCOVERED_SDK/usr/lib" >&2
 fi
 
