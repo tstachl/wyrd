@@ -14,7 +14,11 @@ serde_json.workspace = true
 thiserror.workspace = true
 # Desktop runtime: application toolkit for the command surface below.
 # Reserved for this crate by the layer gate (`tauri` edge).
-tauri.workspace = true
+# `tray-icon` + `image-png` enable the menu-bar extra (system tray):
+# the tray reuses only landed IPC (`observe`, `liveness`) through the
+# registry probe, adds no owner surface, and stays inside the same
+# reserved toolkit edge — no new external crate.
+tauri = { workspace = true, features = ["tray-icon", "image-png"] }
 # Native file pickers for credential and invitation paths (first
 # shipped view needing it: runtime provisioning). Secrets never
 # cross the picked paths — only path strings travel to the CLI

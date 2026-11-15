@@ -41,8 +41,8 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
-use tauri::Manager;
-use wyrd_desktop::{invoke_handler, AppState, DesktopBackend, FlightTracker};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
+use wyrd_desktop::{invoke_handler, tray, AppState, DesktopBackend, FlightTracker};
 
 /// Bound on the quit drain: every dispatched exchange gets this
 /// long past close-request to reach its terminal answer. Past the
@@ -95,6 +95,38 @@ where
     }
 }
 
+/// One drain per process: a second quit request while draining
+/// is already covered by the spawned task, never a second drain.
+static DRAINING: AtomicBool = AtomicBool::new(false);
+
+/// Graceful quit: stop accepting new work (the window is closing or
+/// the tray asked), wait until every dispatched exchange has its
+/// terminal answer or the bound fires, then exit. Nothing is
+/// reported successful without the owner's authoritative answer;
+/// exchanges still outstanding past the bound stay unconfirmed —
+/// the forced-termination path, reconciled on next launch. A plain
+/// OS thread, not the async runtime: the drain only polls an atomic
+/// and sleeps, and must never compete with exchanges for threads.
+fn drain_and_exit<R: Runtime>(app: AppHandle<R>) {
+    if DRAINING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    std::thread::spawn(move || {
+        let deadline = Instant::now() + QUIT_DRAIN_TIMEOUT;
+        loop {
+            let outstanding = app.state::<FlightTracker>().outstanding();
+            if outstanding == 0 || Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(QUIT_DRAIN_POLL);
+        }
+        // Exit without re-firing close-requested: the drain already
+        // ran, and a second handler pass could only delay what the
+        // user asked for.
+        app.exit(0);
+    });
+}
+
 fn main() {
     let drive_dir = match drive_dir_from_argv() {
         Ok(dir) => dir,
@@ -121,38 +153,69 @@ fn main() {
             Err(error) => eprintln!("wyrd-desktop: pre-connect {dir:?} failed: {error}"),
         }
     }
-    // One drain per process: a second close request while draining
-    // is already covered by the spawned task, never a second drain.
-    static DRAINING: AtomicBool = AtomicBool::new(false);
+    // One drain per process lives in `drain_and_exit` above.
     tauri::Builder::default()
         .manage(state)
         .manage(FlightTracker::new())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(invoke_handler())
+        .setup(|app| {
+            // Menu-bar extra: one tray icon over the same registry
+            // probe the lifecycle view shows. A missing icon never
+            // fails startup — the window stays the product.
+            let state = wyrd_desktop::registry::list_drives();
+            match tray::build_tray_menu(app.handle(), &state) {
+                Ok(menu) => {
+                    let icon =
+                        tauri::image::Image::from_bytes(include_bytes!("../icons/32x32.png"));
+                    match icon {
+                        Ok(icon) => {
+                            if let Err(error) = tauri::tray::TrayIconBuilder::with_id(tray::TRAY_ID)
+                                .icon(icon)
+                                .tooltip("Wyrd")
+                                .menu(&menu)
+                                .show_menu_on_left_click(true)
+                                .on_menu_event(|app, event| match event.id.as_ref() {
+                                    tray::TRAY_SHOW_ID => tray::show_main_window(app),
+                                    tray::TRAY_SETUP_ID => {
+                                        tray::show_main_window(app);
+                                        // Best-effort route: the
+                                        // frontend selects the
+                                        // lifecycle view on this
+                                        // event; a missing
+                                        // listener still leaves
+                                        // the window shown.
+                                        let _ = app.emit(tray::SELECT_LIFECYCLE_EVENT, ());
+                                    }
+                                    tray::TRAY_QUIT_ID => drain_and_exit(app.clone()),
+                                    _ => {}
+                                })
+                                .build(app)
+                            {
+                                eprintln!("wyrd-desktop: tray icon build failed: {error}");
+                            }
+                        }
+                        Err(error) => {
+                            eprintln!("wyrd-desktop: tray icon load failed: {error}");
+                        }
+                    }
+                }
+                Err(error) => eprintln!("wyrd-desktop: tray menu build failed: {error}"),
+            }
+            // Refresh the menu from fresh registry reads: one slow
+            // owner never wedges the tray, because the probe bounds
+            // each drive and a failed rebuild keeps the old menu.
+            let handle = app.handle().clone();
+            std::thread::spawn(move || loop {
+                std::thread::sleep(Duration::from_secs(5));
+                tray::refresh_tray(&handle);
+            });
+            Ok(())
+        })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
-                if DRAINING.swap(true, Ordering::SeqCst) {
-                    return;
-                }
-                let app = window.app_handle().clone();
-                // A plain OS thread, not the async runtime: the drain
-                // only polls an atomic and sleeps, and must never
-                // compete with exchanges for runtime threads.
-                std::thread::spawn(move || {
-                    let deadline = Instant::now() + QUIT_DRAIN_TIMEOUT;
-                    loop {
-                        let outstanding = app.state::<FlightTracker>().outstanding();
-                        if outstanding == 0 || Instant::now() >= deadline {
-                            break;
-                        }
-                        std::thread::sleep(QUIT_DRAIN_POLL);
-                    }
-                    // Exit without re-firing close-requested: the
-                    // drain already ran, and a second handler pass
-                    // could only delay what the user asked for.
-                    app.exit(0);
-                });
+                drain_and_exit(window.app_handle().clone());
             }
         })
         .run(tauri::generate_context!())

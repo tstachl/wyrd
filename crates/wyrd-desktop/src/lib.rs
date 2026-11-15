@@ -32,6 +32,7 @@ pub mod onboarding;
 pub mod provision;
 pub mod registry;
 pub mod settings_view;
+pub mod tray;
 
 pub use backend::{BackendError, DesktopBackend};
 pub use onboarding::{KeyDefaults, OnboardingReport, OnboardingResult};
