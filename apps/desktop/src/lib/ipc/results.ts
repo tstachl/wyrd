@@ -314,6 +314,14 @@ export type DriveAvailability =
   | { state: "unavailable"; detail: string }
   | { state: "unknown"; detail: string };
 
+/** One drive's service-manager fact beside the transport verdict: not-installed vs stopped vs wedged vs running vs unknown. Observation only — never supervision. */
+export type ServiceState =
+  | { state: "notinstalled"; detail: string }
+  | { state: "stopped"; detail: string }
+  | { state: "wedged"; detail: string }
+  | { state: "running"; detail: string }
+  | { state: "unknown"; detail: string };
+
 /** One registered drive for the lifecycle view: facts plus the live verdict. No implicit active drive — the frontend's selection is presentation state, never an authorization boundary. `mountpoint` carries the FUSE mountpoint in `mount` mode (`null` in `vault` mode). */
 export interface DriveView {
   name: string;
@@ -323,6 +331,7 @@ export interface DriveView {
   mode: string;
   mountpoint: string | null;
   availability: DriveAvailability;
+  service_state: ServiceState;
 }
 
 /** How the registry file itself read. Loud about unreadability, never guessing. */

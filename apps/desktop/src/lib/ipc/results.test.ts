@@ -122,6 +122,7 @@ import type {
   DriveSettingsState,
   DriveView,
   RegistryState,
+  ServiceState,
 } from "./results.js";
 
 test("drive availability states stay tagged and distinct", () => {
@@ -148,6 +149,10 @@ test("drive view carries facts plus the live verdict", () => {
     mode: "vault",
     mountpoint: null,
     availability: { state: "available" },
+    service_state: {
+      state: "running",
+      detail: "the service manager reports the owner running",
+    },
   };
   expect(drive).toEqual({
     name: "alpha",
@@ -157,7 +162,29 @@ test("drive view carries facts plus the live verdict", () => {
     mode: "vault",
     mountpoint: null,
     availability: { state: "available" },
+    service_state: {
+      state: "running",
+      detail: "the service manager reports the owner running",
+    },
   });
+});
+
+test("service states distinguish the three unavailable causes", () => {
+  const stopped: ServiceState = {
+    state: "stopped",
+    detail: "installed but stopped",
+  };
+  expect(stopped.state).toBe("stopped");
+  const wedged: ServiceState = {
+    state: "wedged",
+    detail: "running but socket-absent",
+  };
+  expect(wedged.state).toBe("wedged");
+  const notinstalled: ServiceState = {
+    state: "notinstalled",
+    detail: "no definition",
+  };
+  expect(notinstalled.state).toBe("notinstalled");
 });
 
 test("registry states flatten the status without stutter", () => {
@@ -172,6 +199,10 @@ test("registry states flatten the status without stutter", () => {
         mode: "vault",
         mountpoint: null,
         availability: { state: "available" },
+        service_state: {
+          state: "running",
+          detail: "the service manager reports the owner running",
+        },
       },
     ],
     skipped: ['entry "bad": key "bad" does not match entry name "other"'],

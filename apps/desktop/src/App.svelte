@@ -23,6 +23,8 @@
     provisionCreate,
     provisionJoin,
     provisionLeave,
+    provisionReconfigure,
+    provisionServiceStart,
     reconnect,
     revealInFolder,
   } from "$lib/ipc/operations.js";
@@ -33,6 +35,8 @@
     ProvisionCreateArgs,
     ProvisionJoinArgs,
     ProvisionLeaveArgs,
+    ProvisionReconfigureArgs,
+    ProvisionServiceStartArgs,
   } from "$lib/ipc/operations.js";
   import type { IpcResult } from "$lib/ipc/types.js";
   import type { DriveView, KeyDefaults, OnboardingReport, ProvisionReport } from "$lib/ipc/results.js";
@@ -108,6 +112,10 @@
       selectedResult.error.kind === "unavailable"
       ? selectedResult.error.detail
       : null,
+  );
+  const selectedServiceState = $derived(selectedDrive?.service_state ?? null);
+  const canReinstall = $derived(
+    onboardedIdentityFile !== null && onboardedPassphraseFile !== null,
   );
   const busy = $derived(presentation.pendingRequests > 0);
 
@@ -463,6 +471,45 @@
     await refreshCurrent();
   }
 
+  /**
+   * Start one drive's installed service (the "installed but
+   * stopped" / "wedged" recovery): enable and start the existing
+   * definition through the constrained CLI adapter, then re-read
+   * the registry and the owner. Explicit, never automatic — a
+   * stopped drive stays stopped until this runs. Observed state
+   * decides the display; the report's outcome never does.
+   */
+  async function startService(driveDir: string): Promise<void> {
+    const args: ProvisionServiceStartArgs = { driveDir };
+    await runProvision(() => provisionServiceStart(args));
+    await refreshLifecycle();
+    await refreshCurrent();
+  }
+
+  /**
+   * Reinstall one drive's service definition (the "no definition
+   * installed" recovery): stop and clear, rewrite the entry, and
+   * reinstall/restart through the constrained CLI adapter with the
+   * gate-verified credential paths, keeping the registered relays
+   * and mode. Then re-read the registry and the owner.
+   */
+  async function reinstallService(driveDir: string): Promise<void> {
+    if (onboardedIdentityFile === null || onboardedPassphraseFile === null) return;
+    const mode = selectedDrive?.mode ?? "vault";
+    const args: ProvisionReconfigureArgs = {
+      driveDir,
+      relays: [],
+      identityFile: onboardedIdentityFile,
+      passphraseFile: onboardedPassphraseFile,
+      mode,
+      mountpoint: selectedDrive?.mountpoint ?? undefined,
+      noService: false,
+    };
+    await runProvision(() => provisionReconfigure(args));
+    await refreshLifecycle();
+    await refreshCurrent();
+  }
+
   onMount(() => {
     // Tray route: "Set up / connect drives" shows the window from
     // the backend and asks the frontend to render the drive list.
@@ -489,6 +536,10 @@
     detail={unavailableDetail}
     pending={busy}
     onRetry={() => void retryConnection(driveDir)}
+    serviceState={selectedServiceState}
+    canReinstall={canReinstall}
+    onStart={() => void startService(driveDir)}
+    onReinstall={() => void reinstallService(driveDir)}
   />
 {/snippet}
 

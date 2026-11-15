@@ -419,6 +419,26 @@ fn command(args: Vec<String>) -> Result<(), CliError> {
         } => load_credentials(drive_dir, credentials, cli.config.as_deref())?,
         Command::Drive {
             drive_dir,
+            action:
+                crate::args::DriveAction::ServiceStart {
+                    registry,
+                    owner_bin,
+                    supervise_bin,
+                },
+            ..
+        } => {
+            // Starting needs no keystore and no credentials: resolve
+            // before credential loading, so a stopped service starts
+            // even where key files are momentarily unavailable.
+            return crate::commands::drive::service_start_drive(
+                drive_dir.clone(),
+                registry.clone(),
+                owner_bin.clone(),
+                supervise_bin.clone(),
+            );
+        }
+        Command::Drive {
+            drive_dir,
             credentials,
             ..
         } => load_credentials(drive_dir, credentials, cli.config.as_deref())?,
@@ -466,8 +486,9 @@ fn command(args: Vec<String>) -> Result<(), CliError> {
 
     match cli.command {
         // Dead by construction: the credentials match above returns
-        // from update, build-info, and identity before secrets load.
-        // The arm exists only because the match is exhaustive.
+        // from update, build-info, identity, and drive service-start
+        // before secrets load. The arm exists only because the match
+        // is exhaustive.
         Command::Update { .. } | Command::BuildInfo | Command::Identity { .. } => {
             unreachable!("update, build-info, and identity resolve before credential loading")
         }

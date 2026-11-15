@@ -129,6 +129,22 @@ pub struct ReconfigureRequest {
     pub mountpoint: Option<PathBuf>,
 }
 
+/// Start one registered drive's installed service without
+/// rewriting anything: the recovery for "installed but stopped".
+/// No credentials travel — starting proves nothing about membership
+/// and the CLI opens no keystore — only the drive directory plus the
+/// usual registry/binary overrides (tests and non-standard layouts).
+#[derive(Debug, Clone)]
+pub struct ServiceStartRequest {
+    pub drive_dir: PathBuf,
+    /// Explicit registry path (tests); `None` = platform default.
+    pub registry_path: Option<PathBuf>,
+    /// Explicit owner/supervise binaries (tests / non-standard layout);
+    /// `None` = sibling-of-CLI default the CLI applies.
+    pub owner_bin: Option<PathBuf>,
+    pub supervise_bin: Option<PathBuf>,
+}
+
 /// The adapter's verdict on the *operation*. Never lifecycle state:
 /// the caller pairs every variant with a registry re-read, a socket
 /// probe, and (for the operated drive) a membership observation, and
@@ -425,6 +441,32 @@ pub fn reconfigure_argv(request: &ReconfigureRequest) -> Result<Vec<OsString>, S
     Ok(argv)
 }
 
+/// Pure argv builder for `wyrd drive <dir> service-start …`: every
+/// argument is a separate argv element, never shell-constructed.
+/// Mirrors `crates/wyrd-cli/src/args.rs`
+/// (`DriveAction::ServiceStart`). No credentials: starting opens no
+/// keystore and proves nothing about membership.
+pub fn service_start_argv(request: &ServiceStartRequest) -> Vec<OsString> {
+    let mut argv: Vec<OsString> = vec![
+        "drive".into(),
+        request.drive_dir.as_os_str().to_owned(),
+        "service-start".into(),
+    ];
+    if let Some(registry) = &request.registry_path {
+        argv.push("--registry".into());
+        argv.push(registry.as_os_str().to_owned());
+    }
+    if let Some(owner) = &request.owner_bin {
+        argv.push("--owner-bin".into());
+        argv.push(owner.as_os_str().to_owned());
+    }
+    if let Some(supervise) = &request.supervise_bin {
+        argv.push("--supervise-bin".into());
+        argv.push(supervise.as_os_str().to_owned());
+    }
+    argv
+}
+
 /// Raw completed-process capture: exit code, stdout, stderr, and
 /// whether the wait timed out. Stdout/stderr are opaque display
 /// detail — callers map on the exit code alone, never on text.
@@ -704,6 +746,29 @@ pub fn run_reconfigure(
             };
         }
     };
+    let output = run_cli(cli_bin, &argv, None, timeout);
+    map_exit_output(&output)
+}
+
+/// Run one `drive service-start` through the version-matched CLI,
+/// with the same version-first, observation-after contract as
+/// [`run_bootstrap`]. The caller pairs every path with a registry
+/// re-read, socket probes, and a membership re-observation; no path
+/// reports lifecycle state. No credentials travel: the CLI opens no
+/// keystore for a start.
+pub fn run_service_start(
+    cli_bin: &Path,
+    request: &ServiceStartRequest,
+    timeout: Duration,
+) -> ProvisionOutcome {
+    if let Err(mismatch) = check_cli_version(cli_bin, timeout) {
+        return ProvisionOutcome {
+            result: mismatch,
+            stderr: String::new(),
+            code: None,
+        };
+    }
+    let argv = service_start_argv(request);
     let output = run_cli(cli_bin, &argv, None, timeout);
     map_exit_output(&output)
 }
@@ -1397,5 +1462,64 @@ mod tests {
             outcome.result
         );
         std::fs::remove_dir_all(&dir).unwrap_or(());
+    }
+
+    /// The service-start argv is one structured element per argument:
+    /// `drive <dir> service-start`, no credentials — starting opens
+    /// no keystore — plus the registry/binary overrides where set.
+    #[test]
+    fn service_start_argv_is_structured_without_credentials() {
+        let request = ServiceStartRequest {
+            drive_dir: PathBuf::from("/drives/alpha"),
+            registry_path: Some(PathBuf::from("/tmp/drives.json")),
+            owner_bin: None,
+            supervise_bin: Some(PathBuf::from("/tmp/wyrd-supervise")),
+        };
+        let rendered: Vec<String> = service_start_argv(&request)
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            rendered,
+            vec![
+                "drive",
+                "/drives/alpha",
+                "service-start",
+                "--registry",
+                "/tmp/drives.json",
+                "--supervise-bin",
+                "/tmp/wyrd-supervise",
+            ]
+        );
+        assert!(
+            !rendered.iter().any(|arg| arg.contains("identity")),
+            "no credential paths travel on a start: {rendered:?}"
+        );
+    }
+
+    /// End to end through a fake CLI binary: version check passes
+    /// and an exit-0 start completes with opaque detail — the full
+    /// `run_service_start` path the IPC command drives.
+    #[test]
+    fn run_service_start_completes_through_a_fake_cli() {
+        let cli = fake_cli(
+            "start-ready",
+            "drive alpha service started and verified available (socket /drives/alpha/owner.sock)",
+            0,
+        );
+        let request = ServiceStartRequest {
+            drive_dir: PathBuf::from("/drives/alpha"),
+            registry_path: None,
+            owner_bin: None,
+            supervise_bin: None,
+        };
+        let outcome = run_service_start(&cli, &request, Duration::from_secs(30));
+        match &outcome.result {
+            ProvisionResult::Completed { detail } => {
+                assert!(detail.contains("verified available"), "detail: {detail}")
+            }
+            other => panic!("fake exit-0 start completes: {other:?}"),
+        }
+        assert_eq!(outcome.code, Some(0));
     }
 }

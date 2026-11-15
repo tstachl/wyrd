@@ -2450,6 +2450,178 @@ pub fn reconfigure(config: ReconfigureConfig) -> ProvisionState {
     }
 }
 
+/// Start one registered drive's installed service without rewriting
+/// anything: resolve the entry by directory, refuse where no
+/// definition file exists (reinstall is the recovery there, not
+/// start), then enable and start the existing definition and verify
+/// the socket. No keystore opens, no registry writes, no credential
+/// use — starting proves nothing about membership and grants none.
+/// Never auto-runs: the caller (the desktop recovery button) runs
+/// this only on the person's explicit decision, and a deliberately
+/// stopped drive stays stopped until they do.
+pub struct StartServiceConfig {
+    pub drive_dir: PathBuf,
+    pub registry_path: PathBuf,
+    /// The `wyrd` binary the service runs. Defaults to the sibling
+    /// of the starting command; the installer ships both together.
+    pub wyrd_bin: Option<PathBuf>,
+    /// `wyrd-supervise`: the wait-status mapper the restart policy
+    /// rests on. A managed start without it is refused.
+    pub supervise_bin: Option<PathBuf>,
+    /// Explicit service definition path (tests); `None` resolves the
+    /// platform path, exactly like installation.
+    pub service_definition: Option<PathBuf>,
+    /// How long one socket verification waits for a terminal answer.
+    pub verify_timeout: Duration,
+}
+
+/// Start the installed per-drive service for one registered drive.
+/// See [`StartServiceConfig`] for the no-rewrite contract.
+#[cfg(unix)]
+pub fn start_managed_service(config: StartServiceConfig) -> ProvisionState {
+    // 1. Read the registry and resolve the entry by directory. Zero
+    // matches means the drive was never registered; several means
+    // conflicting registrations only the operator can untangle.
+    let registry = match read_registry(&config.registry_path) {
+        Ok(registry) => registry,
+        Err(error) => {
+            return ProvisionState::ProvisioningIncomplete {
+                stage: "read-registry",
+                kind: ProvisionFailureKind::ReadRegistry,
+                reason: error.to_string(),
+            };
+        }
+    };
+    let mut matches: Vec<String> = registry
+        .drives
+        .iter()
+        .filter(|(_, entry)| entry.drive_dir == config.drive_dir)
+        .map(|(key, _)| key.clone())
+        .collect();
+    matches.sort();
+    let entry = match matches.len() {
+        0 => {
+            return ProvisionState::ProvisioningIncomplete {
+                stage: "validate",
+                kind: ProvisionFailureKind::Validate,
+                reason: format!(
+                    "no registry entry for {}: register with `wyrd bootstrap` first",
+                    config.drive_dir.display()
+                ),
+            };
+        }
+        1 => {
+            let key = matches.pop().expect("one match");
+            registry.drives.get(&key).expect("key resolved").clone()
+        }
+        _ => {
+            return ProvisionState::ProvisioningIncomplete {
+                stage: "validate",
+                kind: ProvisionFailureKind::Validate,
+                reason: format!(
+                    "conflicting registry entries for {}: {} — resolve the duplicate by hand first",
+                    config.drive_dir.display(),
+                    matches.join(", ")
+                ),
+            };
+        }
+    };
+    // 2. The definition must already exist: a missing file is the
+    // reinstall recovery, never this one. Refuse before touching the
+    // manager, with that pointer.
+    let owned;
+    let definition = match config.service_definition.as_ref() {
+        Some(path) => path.as_path(),
+        None => {
+            owned = service_definition_path(&entry);
+            &owned
+        }
+    };
+    if !definition.exists() {
+        return ProvisionState::ProvisioningIncomplete {
+            stage: "validate",
+            kind: ProvisionFailureKind::Validate,
+            reason: format!(
+                "no service definition installed for {} ({} missing): reinstall with `wyrd drive {} reconfigure --mode <vault|mount>` first",
+                entry.name,
+                definition.display(),
+                config.drive_dir.display()
+            ),
+        };
+    }
+    // 3. Resolve the service binaries before starting: a missing
+    // binary refuses with the same kinds provisioning reports
+    // post-registration, so the CLI maps them identically.
+    let (wyrd_bin, supervise_bin) = {
+        let wyrd_bin = match &config.wyrd_bin {
+            Some(path) => path.clone(),
+            None => match sibling_bin("wyrd") {
+                Some(path) => path,
+                None => {
+                    return ProvisionState::RegisteredButUnavailable {
+                        entry,
+                        skipped: registry.skipped.clone(),
+                        kind: ProvisionFailureKind::NoWyrdBinary,
+                        reason: "no wyrd binary: pass --owner-bin (no wyrd beside this command)"
+                            .to_string(),
+                    };
+                }
+            },
+        };
+        let supervise_bin = match &config.supervise_bin {
+            Some(path) => path.clone(),
+            None => match sibling_bin("wyrd-supervise") {
+                Some(path) => path,
+                None => {
+                    return ProvisionState::RegisteredButUnavailable {
+                        entry,
+                        skipped: registry.skipped.clone(),
+                        kind: ProvisionFailureKind::NoSuperviseBinary,
+                        reason: "no wyrd-supervise: pass --supervise-bin \
+                            (the restart policy needs the wrapper; \
+                            a bare owner binary cannot express it)"
+                            .to_string(),
+                    };
+                }
+            },
+        };
+        (wyrd_bin, supervise_bin)
+    };
+    let _ = (wyrd_bin, supervise_bin);
+    // 4. Enable and start the existing definition, then verify the
+    // socket with the reconfigure retry (a freshly restarted owner
+    // still binding never reads as unavailable).
+    if let Err((kind, reason)) = enable_and_start(&entry, definition) {
+        return ProvisionState::RegisteredButUnavailable {
+            entry,
+            skipped: registry.skipped.clone(),
+            kind,
+            reason,
+        };
+    }
+    match verify_owner_socket(&config.drive_dir, config.verify_timeout, true) {
+        Ok(()) => ProvisionState::VerifiedAvailable {
+            entry,
+            skipped: registry.skipped,
+        },
+        Err((kind, reason)) => ProvisionState::RegisteredButUnavailable {
+            entry,
+            skipped: registry.skipped,
+            kind,
+            reason,
+        },
+    }
+}
+
+#[cfg(not(unix))]
+pub fn start_managed_service(_config: StartServiceConfig) -> ProvisionState {
+    ProvisionState::ProvisioningIncomplete {
+        stage: "validate",
+        kind: ProvisionFailureKind::Validate,
+        reason: BootstrapError::ServicesUnsupported.to_string(),
+    }
+}
+
 /// Wait for the owner socket to appear: the service was just
 /// enabled and the owner may still be starting. Polls; never
 /// invents an answer.
@@ -3537,6 +3709,62 @@ mod tests {
                 assert!(reason.contains("install-service"), "{reason}");
             }
             Ok(_) => panic!("an unwritable definition path must fail install"),
+        }
+    }
+
+    /// Starting an unregistered drive refuses before anything is
+    /// touched: no keystore opens, no manager is contacted, nothing
+    /// is written. The pointer names registration, not supervision.
+    #[test]
+    fn start_unregistered_drive_refuses_with_the_registration_pointer() {
+        let dir = scratch("start-unregistered");
+        let registry = dir.join("drives.json");
+        let report = start_managed_service(StartServiceConfig {
+            drive_dir: dir.join("drive"),
+            registry_path: registry.clone(),
+            wyrd_bin: Some(dir.join("wyrd")),
+            supervise_bin: Some(dir.join("wyrd-supervise")),
+            service_definition: Some(dir.join("wyrd-test-definition")),
+            verify_timeout: Duration::from_secs(1),
+        });
+        match report {
+            ProvisionState::ProvisioningIncomplete { stage, reason, .. } => {
+                assert_eq!(stage, "validate");
+                assert!(reason.contains("register with"), "{reason}");
+            }
+            other => panic!("an unregistered drive refuses before anything moves: {other:?}"),
+        }
+        assert!(!registry.exists(), "a refusal writes nothing");
+    }
+
+    /// Starting without an installed definition refuses with the
+    /// reinstall pointer — never the manager: a missing file is the
+    /// reinstall recovery, not this one. Hermetic: the override
+    /// names a path that never exists, so no manager is touched.
+    #[test]
+    fn start_without_a_definition_refuses_with_the_reinstall_pointer() {
+        let dir = scratch("start-nodef");
+        let registry = dir.join("drives.json");
+        let mut drives = BTreeMap::new();
+        drives.insert("demo".to_string(), entry("demo", &dir));
+        write_registry(&registry, &drives).unwrap();
+        let missing = dir.join("wyrd-test-definition-missing");
+        assert!(!missing.exists());
+        let report = start_managed_service(StartServiceConfig {
+            drive_dir: dir.join("drive"),
+            registry_path: registry,
+            wyrd_bin: Some(dir.join("wyrd")),
+            supervise_bin: Some(dir.join("wyrd-supervise")),
+            service_definition: Some(missing),
+            verify_timeout: Duration::from_secs(1),
+        });
+        match report {
+            ProvisionState::ProvisioningIncomplete { stage, reason, .. } => {
+                assert_eq!(stage, "validate");
+                assert!(reason.contains("reinstall"), "{reason}");
+                assert!(reason.contains("reconfigure"), "{reason}");
+            }
+            other => panic!("a missing definition refuses with reinstall: {other:?}"),
         }
     }
 

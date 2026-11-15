@@ -657,6 +657,24 @@ pub(crate) enum DriveAction {
         #[arg(long)]
         no_service: bool,
     },
+    /// Start this registered drive's installed service without
+    /// rewriting anything: enable and start the existing definition
+    /// and verify the socket. The recovery for "installed but
+    /// stopped" — explicit, never automatic. A missing definition
+    /// refuses with the reinstall pointer.
+    ServiceStart {
+        /// Registry file elsewhere than the platform default.
+        #[arg(long, value_name = "PATH")]
+        registry: Option<PathBuf>,
+        /// Owner binary for the service definition elsewhere than
+        /// the `wyrd` beside this command.
+        #[arg(long, value_name = "PATH")]
+        owner_bin: Option<PathBuf>,
+        /// `wyrd-supervise` wrapper for the service definition
+        /// elsewhere than beside the `wyrd` binary.
+        #[arg(long, value_name = "PATH")]
+        supervise_bin: Option<PathBuf>,
+    },
 }
 
 /// One owner-runtime action. `Start` runs the persistent owner

@@ -116,6 +116,10 @@ pub struct DriveView {
     pub mode: String,
     pub mountpoint: Option<String>,
     pub availability: DriveAvailability,
+    /// The service-manager fact beside the transport verdict:
+    /// not-installed vs stopped vs wedged vs running vs unknown.
+    /// Observation only — never supervision.
+    pub service_state: super::service::ServiceState,
 }
 
 /// The lifecycle view's registry answer: the file status, one view
@@ -354,17 +358,30 @@ pub fn list_drives_at(registry_path: &Path) -> RegistryState {
                     ));
                     continue;
                 }
-                drives.push(DriveView {
-                    name: entry.name.clone(),
-                    drive_dir: entry.drive_dir.to_string_lossy().into_owned(),
-                    relays: entry.relays.clone(),
-                    service: entry.service.clone(),
-                    mode: entry.mode.clone(),
-                    mountpoint: entry
-                        .mountpoint
-                        .as_ref()
-                        .map(|path| path.to_string_lossy().into_owned()),
-                    availability: probe_drive(&entry.drive_dir),
+                drives.push({
+                    let availability = probe_drive(&entry.drive_dir);
+                    // The socket fact for the service probe: anything
+                    // but `Unavailable` means transport exists (a live
+                    // answer, a terminal refusal, or a connected-but-
+                    // unconfirmed socket). Only `Unavailable` (no
+                    // transport) plus a loaded unit reads as wedged.
+                    let socket_present =
+                        !matches!(availability, DriveAvailability::Unavailable { .. });
+                    let service_state =
+                        super::service::probe_service_state(&entry.service, socket_present);
+                    DriveView {
+                        name: entry.name.clone(),
+                        drive_dir: entry.drive_dir.to_string_lossy().into_owned(),
+                        relays: entry.relays.clone(),
+                        service: entry.service.clone(),
+                        mode: entry.mode.clone(),
+                        mountpoint: entry
+                            .mountpoint
+                            .as_ref()
+                            .map(|path| path.to_string_lossy().into_owned()),
+                        availability,
+                        service_state,
+                    }
                 })
             }
             Err(reason) => skipped.push(format!("entry {key:?}: {reason}")),

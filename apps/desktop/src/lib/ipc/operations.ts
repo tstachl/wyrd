@@ -146,6 +146,20 @@ export interface ProvisionLeaveArgs {
   acknowledged: boolean;
 }
 
+export interface ProvisionReconfigureArgs {
+  driveDir: string;
+  relays: string[];
+  identityFile: string;
+  passphraseFile: string;
+  mode: string;
+  mountpoint?: string;
+  noService: boolean;
+}
+
+export interface ProvisionServiceStartArgs {
+  driveDir: string;
+}
+
 /**
  * Create one drive through the installed CLI, then re-read and
  * probe. `mode` is `vault` or `mount` (`mount` needs `mountpoint`).
@@ -168,6 +182,26 @@ export function provisionJoin(args: ProvisionJoinArgs): Promise<ProvisionReport>
  */
 export function provisionLeave(args: ProvisionLeaveArgs): Promise<ProvisionReport> {
   return invokeValue<ProvisionReport>("provision_leave", { args });
+}
+
+/**
+ * Reconfigure the drive's supervision through the installed CLI
+ * (stop, clear, rewrite, reinstall, restart, verify), then
+ * re-read and probe. The reinstall recovery for "no service
+ * definition installed" — empty `relays` keeps the registered set.
+ */
+export function provisionReconfigure(args: ProvisionReconfigureArgs): Promise<ProvisionReport> {
+  return invokeValue<ProvisionReport>("provision_reconfigure", { args });
+}
+
+/**
+ * Start the drive's installed service through the installed CLI
+ * (enable and start the existing definition, verify the socket),
+ * then re-read and probe. The recovery for "installed but
+ * stopped" — explicit, never automatic; no credentials travel.
+ */
+export function provisionServiceStart(args: ProvisionServiceStartArgs): Promise<ProvisionReport> {
+  return invokeValue<ProvisionReport>("provision_service_start", { args });
 }
 
 // Onboarding operations (first-run identity surface). Paths travel,
