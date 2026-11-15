@@ -5,9 +5,9 @@
     base: "inline-flex shrink-0 items-center justify-center gap-2 rounded-md text-sm font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-amber disabled:pointer-events-none disabled:opacity-50 [&_svg]:size-4 [&_svg]:shrink-0",
     variants: {
       variant: {
-        default: "bg-amber text-ink hover:bg-ink hover:text-bone",
-        secondary: "bg-ink text-bone hover:bg-smoke",
-        ghost: "text-ink hover:bg-ink/10",
+        default: "bg-amber text-ink hover:bg-ink hover:text-bone dark:hover:bg-bone dark:hover:text-ink",
+        secondary: "bg-ink text-bone hover:bg-smoke dark:bg-bone dark:text-ink dark:hover:bg-amber dark:hover:text-ink",
+        ghost: "text-ink hover:bg-ink/10 dark:text-bone dark:hover:bg-bone/10",
       },
       size: {
         default: "h-9 px-4 py-2",

@@ -83,7 +83,7 @@ consequence is stated plainly. -->
   <div class="mt-3">
     <Button variant="secondary" size="sm" disabled={busy} onclick={() => (showTechnical = !showTechnical)}>{showTechnical ? "Hide technical detail" : "Show technical detail"}</Button>
     {#if showTechnical}
-      <pre class="mt-2 overflow-auto rounded-md bg-ink px-3 py-2 text-xs text-bone">{detail}</pre>
+      <pre class="mt-2 overflow-auto rounded-md bg-ink px-3 py-2 text-xs text-bone dark:border dark:border-bone/10 dark:bg-black">{detail}</pre>
     {/if}
   </div>
 
@@ -91,19 +91,19 @@ consequence is stated plainly. -->
     <Button variant="default" size="sm" disabled={busy} onclick={() => void verifyAgain()}>Verify again</Button>
   </div>
 
-  <div class="mt-4 rounded-md border border-ink/15 px-3 py-2">
+  <div class="mt-4 rounded-md border border-ink/15 dark:border-bone/20 px-3 py-2">
     <h2 class="text-sm font-semibold">Choose a different file</h2>
     <div class="mt-2 text-sm">
       <p>Identity file</p>
       <div class="mt-1 flex gap-2">
-        <input class="flex-1 rounded-md border border-ink/15 px-2 py-1" bind:value={pickedIdentity} disabled={busy} placeholder={defaults.identity_file} />
+        <input class="flex-1 rounded-md border border-ink/15 dark:border-bone/20 px-2 py-1" bind:value={pickedIdentity} disabled={busy} placeholder={defaults.identity_file} />
         <Button variant="secondary" size="sm" disabled={busy} onclick={() => void browse((p) => (pickedIdentity = p), "Identity file")}>Browse…</Button>
       </div>
     </div>
     <div class="mt-2 text-sm">
       <p>Passphrase file</p>
       <div class="mt-1 flex gap-2">
-        <input class="flex-1 rounded-md border border-ink/15 px-2 py-1" bind:value={pickedPassphrase} disabled={busy} placeholder={defaults.passphrase_file} />
+        <input class="flex-1 rounded-md border border-ink/15 dark:border-bone/20 px-2 py-1" bind:value={pickedPassphrase} disabled={busy} placeholder={defaults.passphrase_file} />
         <Button variant="secondary" size="sm" disabled={busy} onclick={() => void browse((p) => (pickedPassphrase = p), "Passphrase file")}>Browse…</Button>
       </div>
     </div>
@@ -114,7 +114,7 @@ consequence is stated plainly. -->
 
   {#if helper !== null}<p class="mt-3 text-sm" role="alert">{helper}</p>{/if}
 
-  <div class="mt-4 rounded-md border border-ink/15 px-3 py-2">
+  <div class="mt-4 rounded-md border border-ink/15 dark:border-bone/20 px-3 py-2">
     {#if !confirmNew}
       <Button variant="secondary" size="sm" disabled={busy} onclick={() => (confirmNew = true)}>Create a new identity instead…</Button>
     {:else}

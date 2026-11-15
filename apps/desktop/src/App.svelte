@@ -402,8 +402,8 @@
   });
 </script>
 
-<div class="flex min-h-screen bg-bone font-sans text-ink">
-  <aside class="w-56 shrink-0 bg-ink p-4 text-bone">
+<div class="flex min-h-screen bg-bone font-sans text-ink dark:bg-ink dark:text-bone">
+  <aside class="w-56 shrink-0 bg-ink p-4 text-bone dark:border-r dark:border-bone/10 dark:bg-black dark:text-bone">
     <p class="flex items-center gap-2 text-lg font-semibold tracking-tight">
       <HeldMark size={24} />
       Wyrd

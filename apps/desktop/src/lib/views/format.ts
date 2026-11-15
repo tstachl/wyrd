@@ -50,3 +50,32 @@ export function boundLabel(value: number | null | undefined, unit: string): stri
   }
   return `${value} ${unit}`;
 }
+
+/**
+ * Base dir for suggested drive dirs: two levels up from a
+ * `<base>/keys/<leaf>` credential path (leaf starting with
+ * `identity` or `passphrase`), else null. Parents are the store's
+ * business (it creates the chain, hardening only the leaf), so a
+ * nested `<base>/drives/<name>` suggestion is safe. Pure over the
+ * input so the provisioning form pins without a filesystem.
+ */
+export function baseDirFromIdentity(path: string): string | null {
+  const trimmed = path.trim();
+  if (trimmed === "") return null;
+  const stripped = trimmed.endsWith("/") ? trimmed.slice(0, -1) : trimmed;
+  const parts = stripped.split("/");
+  if (parts.length < 4) return null;
+  const leaf = parts[parts.length - 1] ?? "";
+  const parent = parts[parts.length - 2] ?? "";
+  if (parent !== "keys") return null;
+  if (!(leaf.startsWith("identity") || leaf.startsWith("passphrase"))) return null;
+  return parts.slice(0, -2).join("/") || "/";
+}
+
+/** Suggested drive dir `<base>/drives/<name>` (`alpha` where the name is blank), else null. */
+export function suggestedDriveDirFor(nameValue: string, identityPath: string): string | null {
+  const base = baseDirFromIdentity(identityPath);
+  if (base === null) return null;
+  const safeName = nameValue.trim() === "" ? "alpha" : nameValue.trim();
+  return `${base}/drives/${safeName}`;
+}

@@ -25,3 +25,19 @@
 body {
   font-family: var(--font-sans);
 }
+
+/* Shell-wide theme: light is the default (Bone surfaces, Ink text,
+   dark sidebar); dark follows the OS. Ink/Bone utilities keep their
+   light-mode meaning so Amber-button contrast holds in both modes —
+   dark surfaces opt in per component with `dark:` variants. Smoke
+   lightens in dark mode so secondary text stays readable on dark
+   surfaces. */
+:root {
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-smoke: #a8ada8;
+  }
+}

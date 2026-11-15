@@ -7,10 +7,12 @@
 import { expect, test } from "bun:test";
 import {
   availabilityLabel,
+  baseDirFromIdentity,
   boundLabel,
   formatObservedAt,
   freshnessLabel,
   shortId,
+  suggestedDriveDirFor,
 } from "./format.js";
 
 test("observation stamps render as UTC clock times", () => {
@@ -48,4 +50,25 @@ test("absent bounds stay unknown, never defaulted", () => {
     "Not configured — compiled default applies (unknown to the shell)",
   );
   expect(boundLabel(0, "bytes")).toBe("0 bytes");
+});
+
+test("drive suggestions derive from the credential base, never guesses", () => {
+  expect(baseDirFromIdentity("")).toBeNull();
+  expect(baseDirFromIdentity("/keys/identity")).toBeNull();
+  expect(baseDirFromIdentity("/a/keys/identity")).toBe("/a");
+  expect(
+    baseDirFromIdentity("/Users/t/Library/Application Support/Wyrd/keys/identity"),
+  ).toBe("/Users/t/Library/Application Support/Wyrd");
+  expect(
+    baseDirFromIdentity("/home/t/.local/state/wyrd/keys/passphrase"),
+  ).toBe("/home/t/.local/state/wyrd");
+  expect(baseDirFromIdentity("/a/other/identity")).toBeNull();
+  expect(baseDirFromIdentity("/a/keys/other")).toBeNull();
+  expect(
+    suggestedDriveDirFor("", "/a/keys/identity"),
+  ).toBe("/a/drives/alpha");
+  expect(
+    suggestedDriveDirFor("beta", "/a/keys/identity"),
+  ).toBe("/a/drives/beta");
+  expect(suggestedDriveDirFor("beta", "")).toBeNull();
 });

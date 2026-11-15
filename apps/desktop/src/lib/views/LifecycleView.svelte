@@ -48,7 +48,7 @@ the drive directory explicitly. -->
 {:else}
   {@const registry = snapshot.data}
   {#if registry.status === "unreadable"}
-    <p class="mt-4 rounded-md bg-ink px-3 py-2 text-sm text-bone" role="alert">
+    <p class="mt-4 rounded-md bg-ink px-3 py-2 text-sm text-bone dark:border dark:border-bone/10 dark:bg-black" role="alert">
       Registry unreadable: {registry.reason} — showing nothing rather than guessing.
     </p>
   {:else if registry.status === "nofile" || registry.drives.length === 0}
@@ -62,7 +62,7 @@ the drive directory explicitly. -->
       <h2 class="text-sm font-semibold tracking-wide text-smoke uppercase">Registered drives</h2>
       <ul class="mt-2 space-y-2">
         {#each registry.drives as drive (drive.drive_dir)}
-          <li class="rounded-md border border-ink/15 px-3 py-2 text-sm">
+          <li class="rounded-md border border-ink/15 dark:border-bone/20 px-3 py-2 text-sm">
             <div class="flex items-center justify-between gap-2">
               <p class="font-medium">{drive.name}{selectedDriveDir === drive.drive_dir ? " · selected" : ""}</p>
               {#if selectedDriveDir !== drive.drive_dir}
@@ -90,7 +90,7 @@ the drive directory explicitly. -->
     </section>
   {/if}
 
-  <section aria-label="Lifecycle guidance" class="mt-6 rounded-md border border-ink/15 px-3 py-2 text-sm text-smoke">
+  <section aria-label="Lifecycle guidance" class="mt-6 rounded-md border border-ink/15 dark:border-bone/20 px-3 py-2 text-sm text-smoke">
     <p>
       This view verifies what the provisioning and membership flows registered and whether each
       drive's owner answers. Creation and joining run through the installed CLI above; leaving
