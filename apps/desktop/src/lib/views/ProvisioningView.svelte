@@ -10,6 +10,7 @@ entered by hand elsewhere. -->
   import type { ProvisionReport } from "$lib/ipc/results.js";
   import { pickExistingFile } from "$lib/ipc/files.js";
   import type { ProvisionCreateArgs, ProvisionJoinArgs, ProvisionLeaveArgs } from "$lib/ipc/operations.js";
+  import { nextDriveDir, suggestedDriveDirFor, withDevCliHint } from "./format.js";
 
   interface Props {
     pending: boolean;
@@ -27,6 +28,7 @@ entered by hand elsewhere. -->
   let mode: "create" | "join" | "leave" = $state("create");
   let name = $state("");
   let driveDir = $state("");
+  let driveDirTouched = $state(false);
   let relays = $state("");
   let identityFile = $state("");
   let passphraseFile = $state("");
@@ -57,6 +59,34 @@ entered by hand elsewhere. -->
     return relays.split(/[,\s]+/).map((r) => r.trim()).filter((r) => r.length > 0);
   }
 
+  // Drives live beside the registry: the credential files sit at
+  // `<base>/keys/<leaf>`, so the suggestion is `<base>/drives/<name>`
+  // (pure helper in `./format.js`, pinned by `format.test.ts`).
+  // Parents are the store's business (it creates the chain,
+  // hardening only the leaf), so a nested suggestion is safe.
+  const identityForSuggestion = $derived(
+    identityFile.trim() !== "" ? identityFile : (initialIdentityFile ?? ""),
+  );
+  const suggestedDriveDir = $derived(suggestedDriveDirFor(name, identityForSuggestion));
+
+  // The suggestion decision as a pure function of its inputs so it
+  // pins in `format.test.ts` beside the derivation: while untouched
+  // (and not leaving) follow the suggestion; entering Leave with an
+  // untouched field clears it so Leave never targets a guess;
+  // otherwise keep the operator's value (including an explicit
+  // clear, which marks the field touched).
+  $effect(() => {
+    driveDir = nextDriveDir(mode, driveDirTouched, driveDir, suggestedDriveDir);
+  });
+
+  // Empty relays are refused before anything is created: this form
+  // always runs managed (`noService: false`), so the CLI's
+  // managed-service refusal is the honest outcome and the detail
+  // below reports it verbatim. There is no local-only mode in this
+  // form and no product default relay set ships in the repo — the
+  // field starts empty with the example placeholder as a shape hint.
+  const relaysEmpty = $derived(relayList().length === 0);
+
   function describeResult(value: ProvisionReport): string {
     const result = value.result;
     switch (result.result) {
@@ -67,7 +97,7 @@ entered by hand elsewhere. -->
       case "helddrive":
         return `Held drive (another process holds it — not retried): ${result.detail}`;
       case "versionmismatch":
-        return `Version mismatch (reinstall the matched pair): ${result.reason}`;
+        return `Version mismatch (reinstall the matched pair): ${withDevCliHint(result.reason)}`;
       case "busy":
         return `Another operation is already in flight on ${result.drive_dir} — not queued.`;
       case "unknown":
@@ -108,7 +138,7 @@ entered by hand elsewhere. -->
   }
 </script>
 
-<section aria-label="Runtime provisioning" class="mt-6 rounded-md border border-ink/15 px-3 py-2">
+<section aria-label="Runtime provisioning" class="mt-6 rounded-md border border-ink/15 px-3 py-2 dark:border-bone/20">
   <h2 class="text-sm font-semibold tracking-wide text-smoke uppercase">Create, join, or leave</h2>
   <div class="mt-2 flex gap-2" role="tablist" aria-label="Provisioning operation">
     {#each [["create", "Create"], ["join", "Join"], ["leave", "Leave"]] as [id, label] (id)}
@@ -126,26 +156,48 @@ entered by hand elsewhere. -->
   {#if mode === "leave"}
     <label class="mt-3 block text-sm">
       Drive directory
-      <input class="mt-1 w-full rounded-md border border-ink/15 px-2 py-1" bind:value={driveDir} disabled={busy} placeholder="/drives/alpha" />
+      <input class="mt-1 w-full rounded-md border border-ink/15 px-2 py-1 dark:border-bone/20 dark:bg-white/5" bind:value={driveDir} oninput={() => (driveDirTouched = true)} disabled={busy} placeholder="/drives/alpha" />
     </label>
   {:else}
     <label class="mt-3 block text-sm">
       Drive name <span class="text-smoke">(1–58 chars, lowercase, digits, dashes)</span>
-      <input class="mt-1 w-full rounded-md border border-ink/15 px-2 py-1" bind:value={name} disabled={busy} placeholder="alpha" />
+      <input class="mt-1 w-full rounded-md border border-ink/15 px-2 py-1 dark:border-bone/20 dark:bg-white/5" bind:value={name} disabled={busy} placeholder="alpha" />
     </label>
     <label class="mt-2 block text-sm">
       Drive directory <span class="text-smoke">(absolute, holds the keystore)</span>
-      <input class="mt-1 w-full rounded-md border border-ink/15 px-2 py-1" bind:value={driveDir} disabled={busy} placeholder="/drives/alpha" />
+      <input class="mt-1 w-full rounded-md border border-ink/15 px-2 py-1 dark:border-bone/20 dark:bg-white/5" bind:value={driveDir} oninput={() => (driveDirTouched = true)} disabled={busy} placeholder={suggestedDriveDir ?? "/drives/alpha"} />
     </label>
+    {#if suggestedDriveDir !== null && driveDir !== suggestedDriveDir}
+      <div class="mt-1 flex items-center gap-2 text-xs text-smoke">
+        <span class="font-mono">Suggested: {suggestedDriveDir}</span>
+        <Button
+          variant="secondary"
+          size="sm"
+          disabled={busy}
+          onclick={() => {
+            driveDir = suggestedDriveDir;
+            driveDirTouched = false;
+          }}
+        >
+          Use suggested path
+        </Button>
+      </div>
+    {/if}
     <label class="mt-2 block text-sm">
-      Relays <span class="text-smoke">(comma-separated; a managed service needs at least one)</span>
-      <input class="mt-1 w-full rounded-md border border-ink/15 px-2 py-1" bind:value={relays} disabled={busy} placeholder="wss://relay.example" />
+      Relays <span class="text-smoke">(comma-separated; this form runs managed — at least one required)</span>
+      <input class="mt-1 w-full rounded-md border border-ink/15 px-2 py-1 dark:border-bone/20 dark:bg-white/5" bind:value={relays} disabled={busy} placeholder="wss://relay.example" />
     </label>
+    <p class="mt-1 text-xs text-smoke">
+      Relays sync beyond this device. This form always runs managed (vault): at least one relay is
+      required, and an empty field is refused before anything is created — that refusal reports
+      verbatim below. No product default relay set ships in the repo, so the field starts empty;
+      the example placeholder is a shape hint, not a suggestion to use.
+    </p>
     {#if mode === "join"}
       <div class="mt-2 text-sm">
         <p>Sealed invitation file</p>
         <div class="mt-1 flex gap-2">
-          <input class="flex-1 rounded-md border border-ink/15 px-2 py-1" bind:value={invitationFile} disabled={busy} placeholder="/tmp/invite.sealed" />
+          <input class="flex-1 rounded-md border border-ink/15 px-2 py-1 dark:border-bone/20 dark:bg-white/5" bind:value={invitationFile} disabled={busy} placeholder="/tmp/invite.sealed" />
           <Button variant="secondary" size="sm" disabled={busy} onclick={() => void browse((p) => (invitationFile = p), "Sealed invitation file")}>
             Browse…
           </Button>
@@ -157,7 +209,7 @@ entered by hand elsewhere. -->
   <div class="mt-2 text-sm">
     <p>Identity file <span class="text-smoke">(path only — contents never travel)</span></p>
     <div class="mt-1 flex gap-2">
-      <input class="flex-1 rounded-md border border-ink/15 px-2 py-1" bind:value={identityFile} disabled={busy} placeholder="/keys/identity" />
+      <input class="flex-1 rounded-md border border-ink/15 px-2 py-1 dark:border-bone/20 dark:bg-white/5" bind:value={identityFile} disabled={busy} placeholder="/keys/identity" />
       <Button variant="secondary" size="sm" disabled={busy} onclick={() => void browse((p) => (identityFile = p), "Identity file")}>
         Browse…
       </Button>
@@ -166,7 +218,7 @@ entered by hand elsewhere. -->
   <div class="mt-2 text-sm">
     <p>Passphrase file <span class="text-smoke">(path only — contents never travel)</span></p>
     <div class="mt-1 flex gap-2">
-      <input class="flex-1 rounded-md border border-ink/15 px-2 py-1" bind:value={passphraseFile} disabled={busy} placeholder="/keys/passphrase" />
+      <input class="flex-1 rounded-md border border-ink/15 px-2 py-1 dark:border-bone/20 dark:bg-white/5" bind:value={passphraseFile} disabled={busy} placeholder="/keys/passphrase" />
       <Button variant="secondary" size="sm" disabled={busy} onclick={() => void browse((p) => (passphraseFile = p), "Passphrase file")}>
         Browse…
       </Button>
@@ -190,7 +242,11 @@ entered by hand elsewhere. -->
       {working ? "Leaving…" : "Leave drive"}
     </Button>
   {:else if mode === "create"}
-    <p class="mt-3 text-xs text-smoke">Service mode: vault (platform default). Mount mode travels with the installer follow-up.</p>
+    {#if relaysEmpty}
+      <p class="mt-3 text-xs text-smoke">No relays — this managed form will refuse before creating anything. Add at least one relay to create (vault). Mount mode travels with the installer follow-up.</p>
+    {:else}
+      <p class="mt-3 text-xs text-smoke">Service mode: vault (platform default). Mount mode travels with the installer follow-up.</p>
+    {/if}
     <Button
       variant="default"
       size="sm"
@@ -203,7 +259,11 @@ entered by hand elsewhere. -->
       {working ? "Creating…" : "Create drive"}
     </Button>
   {:else}
-    <p class="mt-3 text-xs text-smoke">Service mode: vault (platform default). Mount mode travels with the installer follow-up.</p>
+    {#if relaysEmpty}
+      <p class="mt-3 text-xs text-smoke">No relays — this managed form will refuse before joining anything. Add at least one relay to join (vault). Mount mode travels with the installer follow-up.</p>
+    {:else}
+      <p class="mt-3 text-xs text-smoke">Service mode: vault (platform default). Mount mode travels with the installer follow-up.</p>
+    {/if}
     <Button
       variant="default"
       size="sm"
@@ -230,7 +290,7 @@ entered by hand elsewhere. -->
     <p class="mt-3 text-sm" role="alert">{error}</p>
   {/if}
   {#if report !== null}
-    <div class="mt-3 rounded-md bg-ink px-3 py-2 text-sm text-bone" role="status">
+    <div class="mt-3 rounded-md bg-ink px-3 py-2 text-sm text-bone dark:border dark:border-bone/10 dark:bg-black" role="status">
       <p>{describeResult(report)}</p>
       <p class="mt-1 text-bone/70">{observedSummary(report)}</p>
       <p class="mt-1 text-bone/70">{describeMembership(report)}</p>

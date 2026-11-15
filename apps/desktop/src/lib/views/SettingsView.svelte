@@ -51,7 +51,7 @@ file; application of the values is the running owner's business. -->
       <dt class="text-smoke">Open demand wait</dt>
       <dd>{boundLabel(settings.open_timeout_secs, "seconds")}</dd>
     </dl>
-    <p class="mt-4 rounded-md border border-ink/15 px-3 py-2 text-xs text-smoke">
+    <p class="mt-4 rounded-md border border-ink/15 dark:border-bone/20 px-3 py-2 text-xs text-smoke">
       As configured in the per-user settings file — not as applied. The running owner applies these values
       at startup, command-line flags win over the file, and this shell never writes the file.
     </p>
@@ -66,7 +66,7 @@ file; application of the values is the running owner's business. -->
       for this drive, which are unknown to this shell.
     </p>
   {:else}
-    <p class="mt-4 rounded-md bg-ink px-3 py-2 text-sm text-bone" role="alert">
+    <p class="mt-4 rounded-md bg-ink px-3 py-2 text-sm text-bone dark:border dark:border-bone/10 dark:bg-black" role="alert">
       Settings unreadable: {settings.reason} — showing nothing rather than defaults that were never configured.
     </p>
   {/if}

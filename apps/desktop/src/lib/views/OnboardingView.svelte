@@ -10,6 +10,7 @@ never enter this component. -->
   import Button from "$lib/components/ui/button.svelte";
   import type { KeyDefaults, OnboardingReport } from "$lib/ipc/results.js";
   import { pickExistingFile } from "$lib/ipc/files.js";
+  import { withDevCliHint } from "./format.js";
 
   type Stage = "identity" | "passphrase" | "recovery" | "ready";
   type IdentityChoice = "create" | "restore";
@@ -48,8 +49,14 @@ never enter this component. -->
   let commitError: string | null = $state(null);
   let committedIdentityFile = $state("");
   let committedPassphraseFile = $state("");
-  // Discard prompt.
+  // Discard prompt. The modal focuses its dialog on open so Escape
+  // reaches it; the dialog closes on Escape and swallows other keys
+  // so they never dismiss from behind the overlay.
   let confirmDiscard = $state(false);
+  let confirmDialogEl: HTMLDivElement | null = $state(null);
+  $effect(() => {
+    if (confirmDiscard) confirmDialogEl?.focus();
+  });
 
   const busy = $derived(pending || working);
 
@@ -223,7 +230,7 @@ never enter this component. -->
       case "expectedfailure":
         return `${prefix} ${result.detail}`;
       case "versionmismatch":
-        return `Version mismatch (reinstall the matched pair): ${result.reason}`;
+        return `Version mismatch (reinstall the matched pair): ${withDevCliHint(result.reason)}`;
       case "unknown":
         return `Outcome unknown: ${result.detail}`;
     }
@@ -261,11 +268,11 @@ never enter this component. -->
 <div class="max-w-xl">
   {#if stage !== "ready"}
     <ol class="flex gap-2 text-xs text-smoke" aria-label="Onboarding progress">
-      <li aria-current={stage === "identity" ? "step" : undefined} class={stage === "identity" ? "font-semibold text-ink" : ""}>Identity</li>
+      <li aria-current={stage === "identity" ? "step" : undefined} class={stage === "identity" ? "font-semibold text-ink dark:text-bone" : ""}>Identity</li>
       <li aria-hidden="true">→</li>
-      <li aria-current={stage === "passphrase" ? "step" : undefined} class={stage === "passphrase" ? "font-semibold text-ink" : ""}>Passphrase</li>
+      <li aria-current={stage === "passphrase" ? "step" : undefined} class={stage === "passphrase" ? "font-semibold text-ink dark:text-bone" : ""}>Passphrase</li>
       <li aria-hidden="true">→</li>
-      <li aria-current={stage === "recovery" ? "step" : undefined} class={stage === "recovery" ? "font-semibold text-ink" : ""}>Recovery</li>
+      <li aria-current={stage === "recovery" ? "step" : undefined} class={stage === "recovery" ? "font-semibold text-ink dark:text-bone" : ""}>Recovery</li>
     </ol>
   {/if}
 
@@ -273,7 +280,7 @@ never enter this component. -->
     <h1 class="mt-4 text-2xl font-semibold tracking-tight">Welcome to Wyrd</h1>
     <p class="mt-2 text-sm">This device needs its own identity to join drives.</p>
 
-    <div class="mt-4 rounded-md border border-ink/15 px-3 py-2 text-sm">
+    <div class="mt-4 rounded-md border border-ink/15 dark:border-bone/20 px-3 py-2 text-sm">
       <p class="font-semibold">This device's identity has two parts.</p>
       <p class="mt-1"><span class="font-semibold">Identity key</span> — establishes who this device is. Generated randomly; it cannot be recreated from your passphrase.</p>
       <p class="mt-1"><span class="font-semibold">Unlock passphrase</span> — protects access to this device's identity key. It does not replace or recover that key.</p>
@@ -285,32 +292,32 @@ never enter this component. -->
     </div>
 
     <div class="mt-4 space-y-2" role="radiogroup" aria-label="Identity choice">
-      <label class="flex items-start gap-2 rounded-md border border-ink/15 px-3 py-2 text-sm">
+      <label class="flex items-start gap-2 rounded-md border border-ink/15 dark:border-bone/20 px-3 py-2 text-sm">
         <input type="radio" class="mt-1" name="identity-choice" checked={choice === "create"} onchange={() => (choice = "create")} disabled={busy} />
         <span><span class="font-semibold">Create a new identity</span><br /><span class="text-smoke">Create a new identity for this device.</span></span>
       </label>
-      <label class="flex items-start gap-2 rounded-md border border-ink/15 px-3 py-2 text-sm">
+      <label class="flex items-start gap-2 rounded-md border border-ink/15 dark:border-bone/20 px-3 py-2 text-sm">
         <input type="radio" class="mt-1" name="identity-choice" checked={choice === "restore"} onchange={() => (choice = "restore")} disabled={busy} />
         <span><span class="font-semibold">Restore from backup</span><br /><span class="text-smoke">Bring back an identity you backed up before.</span></span>
       </label>
     </div>
 
     {#if choice === "restore"}
-      <div class="mt-4 rounded-md border border-ink/15 px-3 py-2">
+      <div class="mt-4 rounded-md border border-ink/15 dark:border-bone/20 px-3 py-2">
         <h2 class="text-sm font-semibold">Restore from backup</h2>
         <p class="mt-1 text-sm">Choose the files belonging to the identity you want to restore on this machine.</p>
         <p class="mt-1 text-sm text-smoke">Restoring brings back this identity on this machine. A second device that stays in use needs its own identity — admit it to your drives instead of copying these files.</p>
         <div class="mt-2 text-sm">
           <p>Identity file</p>
           <div class="mt-1 flex gap-2">
-            <input class="flex-1 rounded-md border border-ink/15 px-2 py-1" bind:value={restoreIdentityFile} disabled={busy} placeholder={defaults.identity_file} />
+            <input class="flex-1 rounded-md border border-ink/15 dark:border-bone/20 px-2 py-1" bind:value={restoreIdentityFile} disabled={busy} placeholder={defaults.identity_file} />
             <Button variant="secondary" size="sm" disabled={busy} onclick={() => void browse((p) => (restoreIdentityFile = p), "Identity file")}>Browse…</Button>
           </div>
         </div>
         <div class="mt-2 text-sm">
           <p>Passphrase file</p>
           <div class="mt-1 flex gap-2">
-            <input class="flex-1 rounded-md border border-ink/15 px-2 py-1" bind:value={restorePassphraseFile} disabled={busy} placeholder={defaults.passphrase_file} />
+            <input class="flex-1 rounded-md border border-ink/15 dark:border-bone/20 px-2 py-1" bind:value={restorePassphraseFile} disabled={busy} placeholder={defaults.passphrase_file} />
             <Button variant="secondary" size="sm" disabled={busy} onclick={() => void browse((p) => (restorePassphraseFile = p), "Passphrase file")}>Browse…</Button>
           </div>
         </div>
@@ -348,7 +355,7 @@ never enter this component. -->
 
       {#if useGenerated}
         {#if generatedPassphrase !== null}
-          <div class="mt-3 rounded-md border border-ink/15 px-3 py-2">
+          <div class="mt-3 rounded-md border border-ink/15 dark:border-bone/20 px-3 py-2">
             <p class="text-sm font-semibold">Your generated passphrase <span class="font-normal text-smoke">— generated locally on this device</span></p>
             <p class="mt-1 font-mono text-base tracking-wide" aria-live="polite">{generatedPassphrase}</p>
             <div class="mt-2 flex gap-2">
@@ -363,11 +370,11 @@ never enter this component. -->
       {:else}
         <label class="mt-3 block text-sm">
           Passphrase
-          <input class="mt-1 w-full rounded-md border border-ink/15 px-2 py-1" type={showPassphrase ? "text" : "password"} bind:value={customPassphrase} disabled={busy} autocomplete="new-password" />
+          <input class="mt-1 w-full rounded-md border border-ink/15 dark:border-bone/20 px-2 py-1" type={showPassphrase ? "text" : "password"} bind:value={customPassphrase} disabled={busy} autocomplete="new-password" />
         </label>
         <label class="mt-2 block text-sm">
           Confirm passphrase
-          <input class="mt-1 w-full rounded-md border border-ink/15 px-2 py-1" type={showPassphrase ? "text" : "password"} bind:value={customConfirm} disabled={busy} autocomplete="new-password" />
+          <input class="mt-1 w-full rounded-md border border-ink/15 dark:border-bone/20 px-2 py-1" type={showPassphrase ? "text" : "password"} bind:value={customConfirm} disabled={busy} autocomplete="new-password" />
         </label>
         <label class="mt-2 flex items-center gap-2 text-sm">
           <input type="checkbox" bind:checked={showPassphrase} disabled={busy} /> Show passphrase
@@ -405,7 +412,7 @@ never enter this component. -->
     </div>
 
     {#if choice === "create" && useGenerated && generatedPassphrase !== null}
-      <div class="mt-3 rounded-md border border-ink/15 px-3 py-2">
+      <div class="mt-3 rounded-md border border-ink/15 dark:border-bone/20 px-3 py-2">
         <p class="text-sm">Your passphrase, again: <span class="font-mono">{generatedPassphrase}</span></p>
         <div class="mt-2">
           <Button variant="secondary" size="sm" disabled={busy} onclick={() => void copyText(generatedPassphrase ?? "")}>Copy — for your password manager</Button>
@@ -438,7 +445,7 @@ never enter this component. -->
       <Button variant="default" size="sm" disabled={busy} onclick={() => onDone(committedIdentityFile, committedPassphraseFile, "create")}>Create a drive — Start a private collection of files and history.</Button>
       <Button variant="secondary" size="sm" disabled={busy} onclick={() => onDone(committedIdentityFile, committedPassphraseFile, "join")}>Join with an invitation — Join a drive someone has shared with this device.</Button>
     </div>
-    <div class="mt-4 rounded-md border border-ink/15 px-3 py-2 text-sm">
+    <div class="mt-4 rounded-md border border-ink/15 dark:border-bone/20 px-3 py-2 text-sm">
       <p class="font-semibold">Identity files <span class="font-normal text-smoke">— Stored on this device:</span></p>
       <p class="mt-1 font-mono text-xs">{committedIdentityFile}</p>
       <div class="mt-2">
@@ -449,12 +456,33 @@ never enter this component. -->
   {/if}
 
   {#if confirmDiscard}
-    <div class="mt-4 rounded-md border border-ink/15 px-3 py-2 text-sm" role="alertdialog" aria-label="Discard onboarding">
-      <p class="font-semibold">Discard and start over?</p>
-      <p class="mt-1">The identity is not saved yet{useGenerated && generatedPassphrase !== null ? " and anything generated will be lost" : ""}. Starting over leaves nothing behind.</p>
-      <div class="mt-2 flex gap-2">
-        <Button variant="secondary" size="sm" onclick={() => (confirmDiscard = false)}>Keep going</Button>
-        <Button variant="default" size="sm" onclick={onQuit}>Discard</Button>
+    <div
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+      onclick={() => (confirmDiscard = false)}
+      onkeydown={(event) => {
+        if (event.key === "Escape") confirmDiscard = false;
+      }}
+      role="presentation"
+    >
+      <div
+        class="w-full max-w-sm rounded-md border border-ink/15 bg-bone px-4 py-3 text-sm text-ink shadow-lg dark:border-bone/20 dark:bg-ink dark:text-bone"
+        role="alertdialog"
+        aria-label="Discard onboarding"
+        aria-modal="true"
+        tabindex={-1}
+        bind:this={confirmDialogEl}
+        onclick={(event) => event.stopPropagation()}
+        onkeydown={(event) => {
+          if (event.key === "Escape") confirmDiscard = false;
+          else event.stopPropagation();
+        }}
+      >
+        <p class="font-semibold">Discard and start over?</p>
+        <p class="mt-1">The identity is not saved yet{useGenerated && generatedPassphrase !== null ? " and anything generated will be lost" : ""}. Starting over leaves nothing behind.</p>
+        <div class="mt-3 flex justify-end gap-2">
+          <Button variant="secondary" size="sm" onclick={() => (confirmDiscard = false)}>Keep going</Button>
+          <Button variant="default" size="sm" onclick={onQuit}>Discard</Button>
+        </div>
       </div>
     </div>
   {/if}

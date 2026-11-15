@@ -50,3 +50,67 @@ export function boundLabel(value: number | null | undefined, unit: string): stri
   }
   return `${value} ${unit}`;
 }
+
+/**
+ * Base dir for suggested drive dirs: two levels up from a
+ * `<base>/keys/<leaf>` credential path (leaf starting with
+ * `identity` or `passphrase`), else null. Parents are the store's
+ * business (it creates the chain, hardening only the leaf), so a
+ * nested `<base>/drives/<name>` suggestion is safe. Pure over the
+ * input so the provisioning form pins without a filesystem.
+ */
+export function baseDirFromIdentity(path: string): string | null {
+  const trimmed = path.trim();
+  if (trimmed === "") return null;
+  const stripped = trimmed.endsWith("/") ? trimmed.slice(0, -1) : trimmed;
+  const parts = stripped.split("/");
+  if (parts.length < 4) return null;
+  const leaf = parts[parts.length - 1] ?? "";
+  const parent = parts[parts.length - 2] ?? "";
+  if (parent !== "keys") return null;
+  if (!(leaf.startsWith("identity") || leaf.startsWith("passphrase"))) return null;
+  return parts.slice(0, -2).join("/") || "/";
+}
+
+/** Suggested drive dir `<base>/drives/<name>` (`alpha` where the name is blank), else null. */
+export function suggestedDriveDirFor(nameValue: string, identityPath: string): string | null {
+  const base = baseDirFromIdentity(identityPath);
+  if (base === null) return null;
+  const safeName = nameValue.trim() === "" ? "alpha" : nameValue.trim();
+  return `${base}/drives/${safeName}`;
+}
+
+/**
+ * Next drive-dir value from the form's state (pure, pinned below):
+ * while untouched and not leaving, follow the suggestion; entering
+ * Leave with an untouched field clears it so Leave never targets a
+ * guessed directory; otherwise keep the operator's value. An
+ * explicit clear marks the field touched upstream, so it sticks.
+ */
+export function nextDriveDir(
+  mode: string,
+  touched: boolean,
+  current: string,
+  suggested: string | null,
+): string {
+  if (mode === "leave") return touched ? current : "";
+  if (!touched && suggested !== null && current !== suggested) return suggested;
+  return current;
+}
+
+/**
+ * Missing-CLI hint for version-mismatch detail: the desktop resolves
+ * the version-matched `wyrd` binary as a sibling of its own binary
+ * (never `PATH`), so a checkout without a built CLI reports
+ * `cannot execute … No such file`. Append the build pointer where
+ * the reason names that case — in a development checkout that is the
+ * fix; in a packaged install the same sentence degrades to the
+ * reinstall line above it. Otherwise return the reason unchanged.
+ * Pure over the input, pinned below.
+ */
+export function withDevCliHint(reason: string): string {
+  if (reason.includes("cannot execute") && reason.includes("No such file")) {
+    return `${reason} — if this is a development checkout, build the CLI (cargo build -p wyrd-cli) so wyrd sits beside the desktop binary; in a packaged install, reinstall the matched pair`;
+  }
+  return reason;
+}
