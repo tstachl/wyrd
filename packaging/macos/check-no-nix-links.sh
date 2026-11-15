@@ -6,8 +6,12 @@
 # Usage: packaging/macos/check-no-nix-links.sh [repo-root [release-dir]]
 # Inspects every regular file under the bundle app's Contents/MacOS
 # (the Tauri binary under its real filename, never a hardcoded one),
-# the standalone release binary, and the embedded appex binary when
-# present. Any /nix/store linkage fails the build, and so does
+# the standalone release binary, the embedded appex binary, and
+# the bundled co-installed CLI (`Contents/Resources/wyrd`) when
+# present — all release-dir-relative, so an empty release tree
+# still fails closed. (The staged CLI copy is checked by
+# stage-cli.sh itself, which owns that path and runs macOS-only.)
+# Any /nix/store linkage fails the build, and so does
 # inspecting nothing at all — a guard that examines nothing must not
 # pass. otool absent means not a macOS bundle host: skip with a note.
 #
@@ -38,6 +42,7 @@ APP_MACOS="$RELEASE_DIR/bundle/macos/Wyrd.app/Contents/MacOS"
 STANDALONE_BIN="$RELEASE_DIR/wyrd-desktop"
 APPEX_BIN="$RELEASE_DIR/bundle/macos/Wyrd.app/Contents/PlugIns"
 APPEX_BIN="$APPEX_BIN/WyrdFileProvider.appex/Contents/MacOS/WyrdFileProvider"
+BUNDLED_CLI="$RELEASE_DIR/bundle/macos/Wyrd.app/Contents/Resources/wyrd"
 
 INSPECTED=0
 FOUND=0
@@ -60,7 +65,7 @@ if [ -d "$APP_MACOS" ]; then
         fi
     done
 fi
-for BIN in "$STANDALONE_BIN" "$APPEX_BIN"; do
+for BIN in "$STANDALONE_BIN" "$APPEX_BIN" "$BUNDLED_CLI"; do
     if [ -f "$BIN" ]; then
         inspect "$BIN"
     fi

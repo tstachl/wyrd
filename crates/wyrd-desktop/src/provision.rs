@@ -175,10 +175,18 @@ pub struct ProvisionOutcome {
 }
 
 /// Resolve the version-matched CLI binary: an explicit path (tests,
-/// non-standard layouts) or the `wyrd` sibling of the running desktop
-/// binary — the fixed co-installation the installer ships. Never a
-/// `PATH` search: a silent fallback to an arbitrary binary would
-/// defeat the version match.
+/// non-standard layouts), the `wyrd` binary in the bundle's
+/// `Contents/Resources` beside the running app (the fixed
+/// co-installation the installer ships), else the `wyrd` sibling of
+/// the running desktop binary (devenv/`cargo tauri dev`, where the
+/// app binary is `wyrd-desktop` and the CLI is its target-dir
+/// sibling). Never a `PATH` search: a silent fallback to an
+/// arbitrary binary would defeat the version match.
+///
+/// The bundle check is existence-gated: on the default
+/// case-insensitive APFS volume `Contents/MacOS/wyrd` would resolve
+/// to the `Wyrd` app binary itself, so the sibling is only the
+/// fallback where no bundled copy exists.
 pub fn resolve_cli_bin(explicit: Option<PathBuf>) -> Result<PathBuf, String> {
     if let Some(path) = explicit {
         return Ok(path);
@@ -188,7 +196,21 @@ pub fn resolve_cli_bin(explicit: Option<PathBuf>) -> Result<PathBuf, String> {
     let dir = exe
         .parent()
         .ok_or_else(|| "the desktop binary has no parent directory".to_string())?;
+    if let Some(bundled) = bundled_cli_path(dir) {
+        if bundled.is_file() {
+            return Ok(bundled);
+        }
+    }
     Ok(dir.join("wyrd"))
+}
+
+/// Bundle-layout candidate for the CLI given the desktop binary's
+/// directory: `Contents/MacOS` -> `Contents/Resources/wyrd`. Pure
+/// path math, no filesystem probe — the caller existence-gates it.
+pub fn bundled_cli_path(exe_dir: &Path) -> Option<PathBuf> {
+    exe_dir
+        .parent()
+        .map(|contents| contents.join("Resources").join("wyrd"))
 }
 
 /// Parse `wyrd __build_info` stdout. Stable lines (`update/preflight.rs`):
@@ -705,6 +727,26 @@ mod tests {
             mode: "vault".to_string(),
             mountpoint: None,
         }
+    }
+
+    /// The bundle-layout candidate is pure path math:
+    /// `Contents/MacOS` -> `Contents/Resources/wyrd`, and the sibling
+    /// stays the fallback. The existence gate lives in
+    /// `resolve_cli_bin`, not here.
+    #[test]
+    fn bundled_cli_path_maps_macos_to_resources() {
+        let macos = Path::new("/Applications/Wyrd.app/Contents/MacOS");
+        assert_eq!(
+            bundled_cli_path(macos),
+            Some(PathBuf::from(
+                "/Applications/Wyrd.app/Contents/Resources/wyrd"
+            ))
+        );
+        assert_eq!(
+            resolve_cli_bin(Some(PathBuf::from("/custom/wyrd"))).unwrap(),
+            PathBuf::from("/custom/wyrd"),
+            "an explicit path passes through untouched"
+        );
     }
 
     /// The create argv is one structured element per argument: no

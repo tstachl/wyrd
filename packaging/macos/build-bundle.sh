@@ -87,7 +87,7 @@ cargo tauri build "$@"
 
 # No-Nix-links guard (Darwin only): delegate to
 # check-no-nix-links.sh, which fails closed when it inspects nothing
-# and covers the appex binary too. The release dir defaults to a
+# and covers the appex and co-installed CLI binaries too. The release dir defaults to a
 # CARGO_TARGET_DIR-aware target/release, moves with a forwarded
 # --target <triple> or CARGO_BUILD_TARGET, and refuses non-release
 # shapes outright; anything beyond these passes its release dir to
@@ -133,6 +133,21 @@ if [ "$(uname -s)" = "Darwin" ]; then
         RELEASE_DIR="$RELEASE_BASE/$TRIPLE/release"
     else
         RELEASE_DIR="$RELEASE_BASE/release"
+    fi
+    # Reseal: the bundler leaves the outer app with a linker-only
+    # signature, so the staged files it copied
+    # (`Contents/Resources/wyrd` beside the appex) are unsealed and
+    # a deep-strict verify fails closed (observed 2026-11-15). A
+    # shallow re-sign seals the current tree while preserving the
+    # nested appex signature (never `--deep`, which would re-sign
+    # the appex without its entitlements) — the nested-first order
+    # the runbook documents. Identity pairs with the hook:
+    # stage-appex.sh already refused a mixed pair, so the default
+    # ad-hoc `-` here means an ad-hoc outer app, and a set
+    # SIGN_IDENTITY is the same Developer ID Tauri used.
+    if [ -d "$RELEASE_DIR/bundle/macos/Wyrd.app" ]; then
+        codesign --force --sign "${SIGN_IDENTITY:--}" --options runtime \
+            "$RELEASE_DIR/bundle/macos/Wyrd.app"
     fi
     "$HERE/check-no-nix-links.sh" "$ROOT" "$RELEASE_DIR"
 fi

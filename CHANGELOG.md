@@ -180,14 +180,22 @@ is transient — no drive data is affected.
 - One-command developer install for v0.4 (ad-hoc, no fee)
   (`nostr:nevent1qqsy9xa9x9ctcgteek5u3szvejd5ff8y02juzlre058qhtccm7czmvspz9mhxue69uhkwunpwdczuap49eehg7cdxm2`):
   `packaging/macos/install-dev.sh` builds `Wyrd.app` ad-hoc
-  through `build-bundle.sh` (hook stages the appex, pairs
-  identities, pins versions), verifies `codesign --verify
-  --deep --strict` on the built and installed copies, and installs
-  with `ditto` to `/Applications` (or `~/Applications`) ready to
-  launch. UI, owner, registry, and tray work with no signing
-  assets; Finder stays honestly inert ad-hoc (`no-group-container`)
-  with the team-signed path in `packaging/macos/README.md`. Signed
-  `.dmg` plus notarization stays on the release track.
+  through `build-bundle.sh` (hook stages the appex plus the
+  version-matched `wyrd` CLI into `Contents/Resources/wyrd`,
+  pairs identities, pins versions; the wrapper reseals the outer
+  app shallowly so the staged files verify), verifies
+  `codesign --verify --deep --strict` on the built and staged
+  copies before the old app is touched, swaps a `ditto` copy into
+  `/Applications` (or `~/Applications`) with `--dest`/`DEST`
+  override, and re-verifies.
+  The desktop resolves the bundled CLI first and version-checks it
+  before every run, so UI, owner, registry, and tray work with no
+  signing assets. The staged CLI signs without hardened runtime on
+  purpose (it must load the third-party macFUSE dylib); the appex
+  keeps it. Finder stays honestly inert ad-hoc
+  (`no-group-container`) with the team-signed path in
+  `packaging/macos/README.md`. Signed `.dmg` plus notarization
+  stays on the release track.
 
 ### Changed
 
