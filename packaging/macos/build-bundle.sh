@@ -7,8 +7,10 @@
 # SWIFTC, SDK, APPEX_BUNDLE_VERSION. With no arguments the wrapper
 # builds `--bundles app` (the release runbook shape); any arguments
 # replace the default and forward to `cargo tauri build` verbatim,
-# with a `--target <triple>` argument moving the release dir the
-# guard inspects accordingly.
+# with a `--target <triple>` argument (or CARGO_BUILD_TARGET) moving
+# the release dir the guard inspects accordingly. Non-release shapes
+# (`--debug`, `--profile`, `--target-dir`) are refused: the guard
+# tracks the release tree only.
 #
 # Background: under the default devenv shell the Nix cc wrapper puts
 # `-L/nix/store/...-libiconv.../lib` on the link line (via libc's
@@ -87,27 +89,36 @@ cargo tauri build "$@"
 # check-no-nix-links.sh, which fails closed when it inspects nothing
 # and covers the appex binary too. The release dir defaults to a
 # CARGO_TARGET_DIR-aware target/release, moves with a forwarded
-# --target <triple>, and falls back to CARGO_BUILD_TARGET; anything
-# beyond these passes its release dir to check-no-nix-links.sh
-# explicitly. otool absent means not a macOS bundle host — the check
-# skips itself.
+# --target <triple> or CARGO_BUILD_TARGET, and refuses non-release
+# shapes outright; anything beyond these passes its release dir to
+# check-no-nix-links.sh explicitly. otool absent means not a macOS
+# bundle host — the check skips itself.
 if [ "$(uname -s)" = "Darwin" ]; then
     # A --target <triple> build moves the artifacts; the guard must
     # follow or it inspects stale host output (or nothing). Scan the
     # forwarded args for it, with CARGO_BUILD_TARGET as the env
-    # fallback; anything beyond these passes its release dir to the
-    # check explicitly.
+    # fallback; non-release shapes are refused above the guard, and
+    # anything beyond these passes its release dir to the check
+    # explicitly.
     RELEASE_BASE="${CARGO_TARGET_DIR:-$ROOT/target}"
     TRIPLE=""
     NEXT_IS_TARGET=0
+    NEXT_IS_PROFILE=0
     for ARG in "$@"; do
         if [ "$NEXT_IS_TARGET" -eq 1 ]; then
             TRIPLE="$ARG"
             NEXT_IS_TARGET=0
+        elif [ "$NEXT_IS_PROFILE" -eq 1 ]; then
+            echo "error: --profile $ARG builds outside release; refusing a shape the guard does not track." >&2
+            exit 1
         else
             case "$ARG" in
                 --target) NEXT_IS_TARGET=1 ;;
                 --target=*) TRIPLE="${ARG#--target=}" ;;
+                --profile) NEXT_IS_PROFILE=1 ;;
+                --profile=*) echo "error: $ARG builds outside release; refusing a shape the guard does not track." >&2; exit 1 ;;
+                --debug) echo "error: --debug builds to debug, not release; refusing a shape the guard does not track." >&2; exit 1 ;;
+                --target-dir|--target-dir=*) echo "error: $ARG moves the target dir; refusing a shape the guard does not track." >&2; exit 1 ;;
             esac
         fi
     done

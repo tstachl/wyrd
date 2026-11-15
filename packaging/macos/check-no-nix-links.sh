@@ -12,8 +12,9 @@
 # pass. otool absent means not a macOS bundle host: skip with a note.
 #
 # The release dir defaults to <root>/target/release, or
-# $CARGO_TARGET_DIR/release when set; pass it explicitly for
-# --target triples, whose artifacts live elsewhere.
+# $CARGO_TARGET_DIR/release when set, with a $CARGO_BUILD_TARGET
+# triple subdir when that is set; pass it explicitly for anything
+# else, whose artifacts live elsewhere.
 set -eu
 set -o pipefail 2>/dev/null || true
 

@@ -79,6 +79,12 @@ code "$WRAPPER" | grep -Fq 'CARGO_TARGET_DIR' \
   || die "wrapper: release dir does not follow CARGO_TARGET_DIR"
 code "$WRAPPER" | grep -Fq -- '--target=' \
   || die "wrapper: forwarded --target does not move the release dir"
+code "$WRAPPER" | grep -Fq 'CARGO_BUILD_TARGET' \
+  || die "wrapper: no CARGO_BUILD_TARGET fallback for the release dir"
+code "$WRAPPER" | grep -Fq -- '--target-dir' \
+  || die "wrapper: --target-dir is not refused"
+code "$WRAPPER" | grep -Fq -- '--debug' \
+  || die "wrapper: --debug is not refused"
 pass "wrapper delegates the guard with a relocatable release dir"
 
 # 6. The check script resolves the shipped binaries without a
@@ -215,7 +221,7 @@ CARGO_TARGET_DIR="$TMP/custom2" CARGO_BUILD_TARGET="aarch64-apple-darwin" "$CHEC
   || die "check: CARGO_BUILD_TARGET relocation refused"
 pass "guard honors a relocated release dir"
 
-# 8. Behavioral wrapper coverage for the --target scan: stub uname
+# 9. Behavioral wrapper coverage for the release-dir scan: stub uname
 # (Darwin), cargo (records argv, always succeeds), and otool, with
 # TOOLCHAIN/SDK fixtures standing in for the Apple toolchain — so
 # this runs on Linux CI too. The stale base dir reports a Nix link
@@ -229,11 +235,11 @@ printf '#!/bin/sh\nprintf "%%s\\n" "$@" > "$WRAP_CARGO_ARGS"\nexit 0\n' > "$TMP/
 chmod +x "$TMP/bin/uname" "$TMP/bin/cargo"
 export WRAP_CARGO_ARGS="$TMP/cargo-args" OTOOL_STALE_DIR="$TMP/wbase/release"
 clean_out > "$OTOOL_MODE_OUT"
-WRAP_RUN="env CARGO_TARGET_DIR=$TMP/wbase TOOLCHAIN=$TMP/wtoolchain SDK=$TMP/wtoolchain"
+wrap_run() { env CARGO_TARGET_DIR="$TMP/wbase" TOOLCHAIN="$TMP/wtoolchain" SDK="$TMP/wtoolchain" "$WRAPPER" "$@"; }
 # --target <triple>: the clean triple dir passes even though the
 # stale base dir is Nix-linked — only possible if the scan moved
 # the guarded dir.
-$WRAP_RUN "$WRAPPER" --target aarch64-apple-darwin >/dev/null 2>&1 \
+wrap_run --target aarch64-apple-darwin >/dev/null 2>&1 \
   || die "wrapper: --target triple was not followed"
 grep -Fq -- '--target' "$WRAP_CARGO_ARGS" \
   || die "wrapper: --target flag was not forwarded to cargo"
@@ -241,16 +247,36 @@ grep -Fq -- 'aarch64-apple-darwin' "$WRAP_CARGO_ARGS" \
   || die "wrapper: --target triple was not forwarded to cargo"
 pass "wrapper follows --target to the guarded dir"
 # --target=<triple> mirror.
-$WRAP_RUN "$WRAPPER" --target=aarch64-apple-darwin >/dev/null 2>&1 \
+wrap_run --target=aarch64-apple-darwin >/dev/null 2>&1 \
   || die "wrapper: --target= triple was not followed"
 pass "wrapper follows --target= to the guarded dir"
+# CARGO_BUILD_TARGET with no --target: same dir selection through
+# the env fallback — deleting the fallback must fail this case.
+CARGO_BUILD_TARGET=aarch64-apple-darwin wrap_run >/dev/null 2>&1 \
+  || die "wrapper: CARGO_BUILD_TARGET triple was not followed"
+pass "wrapper follows CARGO_BUILD_TARGET to the guarded dir"
+# Non-release shapes are refused loudly instead of guarding a stale
+# dir: --debug, --profile, and --target-dir each fail with a reason.
+wrap_run --debug >"$TMP/debug.out" 2>&1 \
+  && die "wrapper: --debug passed"
+grep -Fq 'does not track' "$TMP/debug.out" \
+  || die "wrapper: --debug refusal names no reason"
+wrap_run --profile testing >"$TMP/profile.out" 2>&1 \
+  && die "wrapper: --profile passed"
+grep -Fq 'does not track' "$TMP/profile.out" \
+  || die "wrapper: --profile refusal names no reason"
+wrap_run --target-dir "$TMP/elsewhere" >"$TMP/targetdir.out" 2>&1 \
+  && die "wrapper: --target-dir passed"
+grep -Fq 'does not track' "$TMP/targetdir.out" \
+  || die "wrapper: --target-dir refusal names no reason"
+pass "wrapper refuses non-release build shapes"
 # Stale-only triple dir: guarding nothing must fail, never pass.
 rm -rf "$TMP/wbase/aarch64-apple-darwin"
-$WRAP_RUN "$WRAPPER" --target aarch64-apple-darwin >/dev/null 2>&1 \
+wrap_run --target aarch64-apple-darwin >/dev/null 2>&1 \
   && die "wrapper: stale-only triple dir passed"
 pass "wrapper fails closed on an uninspectable triple dir"
 # Dangling --target is refused with a message.
-$WRAP_RUN "$WRAPPER" --target >"$TMP/dangling.out" 2>&1 \
+wrap_run --target >"$TMP/dangling.out" 2>&1 \
   && die "wrapper: dangling --target passed"
 grep -Fq 'without a triple' "$TMP/dangling.out" \
   || die "wrapper: dangling --target refusal names no reason"
