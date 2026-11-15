@@ -168,12 +168,19 @@ fn main() {
             // icon never fails startup — the window stays the product.
             match tray::build_tray_menu(app.handle(), &tray::loading_state()) {
                 Ok(menu) => {
-                    let icon =
-                        tauri::image::Image::from_bytes(include_bytes!("../icons/32x32.png"));
+                    let icon = tauri::image::Image::from_bytes(include_bytes!(
+                        "../icons/tray-w-template.png"
+                    ));
                     match icon {
                         Ok(icon) => {
                             match tauri::tray::TrayIconBuilder::with_id(tray::TRAY_ID)
                                 .icon(icon)
+                                // Template image (white silhouette plus
+                                // alpha, macOS only): the system tints
+                                // it for light and dark menu bars. A
+                                // fixed-color icon would vanish on one
+                                // of the two.
+                                .icon_as_template(true)
                                 .tooltip("Wyrd")
                                 .menu(&menu)
                                 .show_menu_on_left_click(true)
