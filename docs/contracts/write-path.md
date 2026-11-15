@@ -977,6 +977,7 @@ and ignored (the format does not represent them). There are no ACLs.
 | store not writable | `EACCES` |
 | stale handle, conflicted heads | `EIO` |
 | queued create parent replaced, rotated, or unavailable at admission | `ESTALE` |
+| parent token table unreachable (poisoned) at admission | `EIO` |
 | parent inode retired (kind change, committed removal) or re-minted during create admission | `ESTALE` |
 | parent removal queued but unpublished during create admission | admitted; the loop settles the race (`ENOENT`/`ENOTDIR`/`ESTALE`) |
 | `O_TRUNC` open whose path was replaced between the truncation and the open's capture | `ESTALE` |

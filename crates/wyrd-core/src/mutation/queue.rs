@@ -166,7 +166,9 @@ impl MutationQueue {
     /// (hidden) for the wyrd-daemon poison-mapping pins: integration
     /// tests cannot reach the table lock, and no fake stands in for
     /// the real registry on the capture-parent and create seams.
-    /// Never called in production.
+    /// Never called in production. Relies on unwinding: a build with
+    /// panic=abort would abort here instead of poisoning; the
+    /// workspace sets no panic key today.
     #[doc(hidden)]
     pub fn poison_parent_table_for_test(&self) {
         self.parents.poison_for_test();

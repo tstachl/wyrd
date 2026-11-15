@@ -392,8 +392,9 @@ fn poisoned_locks_error_instead_of_panicking() {
 /// reporting the path durable: fsync_handle delegates through
 /// force_path to earliest_dirty_on, which reads zero dirty handles
 /// beside a nonzero poison count as EIO — dead bookkeeping, never a
-/// durable path. The reservation below proves the budget was
-/// non-idle, so the post-poison zero reads as death, not idleness.
+/// durable path. The reservation plus the pre-poison asserts prove
+/// the budget was non-idle and the clean fsync was Ok, so the
+/// post-poison EIO reads as death, not idleness.
 #[test]
 fn poisoned_budget_clean_fsync_fails_eio_not_ok() {
     let (mut backend, _) = evolving_backend(b"first", b"second");
@@ -402,8 +403,20 @@ fn poisoned_budget_clean_fsync_fails_eio_not_ok() {
     let fh = backend.open_write("f.txt", libc::O_RDWR).unwrap();
     let scratch = backend.budget.next_handle();
     backend.budget.reserve(scratch, 64).unwrap();
+    assert_eq!(backend.budget.dirty_handles(), 1, "the reservation is held");
+    assert_eq!(
+        backend.budget.total(),
+        64,
+        "the budget is provably non-idle"
+    );
     assert_eq!(backend.budget.poison_count(), 0, "no poison observed yet");
+    // A healthy clean fsync commits nothing: the EIO below comes
+    // from the poison, not from the handle.
+    assert_eq!(backend.fsync_handle(fh), Ok(()));
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
     backend.budget.poison_for_test();
+    std::panic::set_hook(previous);
     assert_eq!(
         backend.fsync_handle(fh),
         Err(fuser::Errno::EIO),

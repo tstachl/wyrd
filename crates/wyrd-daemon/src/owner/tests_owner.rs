@@ -1579,25 +1579,13 @@ fn poisoned_parent_table_surfaces_poisoned_not_not_found() {
         "no poison observed yet"
     );
     parts.mutations.poison_parent_table_for_test();
-    let response = server.dispatch(RawRequest {
-        v: WIRE_VERSION,
-        id: 12,
-        op: OP_CAPTURE_PARENT.to_string(),
-        params: serde_json::to_value(PathParams {
-            path: String::new(),
-            identity: None,
-        })
-        .unwrap(),
-    });
-    match response.result {
-        WireResult::Err(error) => assert_eq!(
-            error.code,
-            WireErrorCode::Poisoned,
-            "a poisoned table is a fault, not a missing parent: {}",
-            error.message
-        ),
-        WireResult::Ok(ok) => panic!("capture-parent over a poisoned table succeeded: {ok:?}"),
-    }
+    let error = dispatch_err(&server, OP_CAPTURE_PARENT, "");
+    assert_eq!(
+        error.code,
+        WireErrorCode::Poisoned,
+        "a poisoned table is a fault, not a missing parent: {}",
+        error.message
+    );
     assert!(
         parts.mutations.parent_poison_count() > 0,
         "the refused capture counts the poison beside the refusal"

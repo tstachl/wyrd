@@ -260,7 +260,9 @@ impl WriteBudget {
     /// std mutex exactly the way a panicking holder does. Pub
     /// (hidden) for the wyrd-daemon fold pin: integration tests
     /// cannot reach the lock, and the EIO arm they pin lives behind
-    /// this exact state. Never called in production.
+    /// this exact state. Never called in production. Relies on
+    /// unwinding: a build with panic=abort would abort here instead
+    /// of poisoning; the workspace sets no panic key today.
     #[doc(hidden)]
     pub fn poison_for_test(&self) {
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
