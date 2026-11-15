@@ -41,7 +41,7 @@ terminal answer, stamped — never a claim about right now. -->
 {:else}
   {@const status = snapshot.data}
   {#if status.liveness.paused}
-    <p class="mt-4 rounded-md bg-amber px-3 py-2 text-sm font-medium text-ink dark:text-ink" role="status">
+    <p class="mt-4 rounded-md bg-amber px-3 py-2 text-sm font-medium text-ink" role="status">
       Paused — reachable and quiet, not down. Pass {status.liveness.passes} holds; the loop answers, it does not advance.
     </p>
   {/if}

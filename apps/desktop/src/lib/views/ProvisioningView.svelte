@@ -69,20 +69,30 @@ entered by hand elsewhere. -->
   );
   const suggestedDriveDir = $derived(suggestedDriveDirFor(name, identityForSuggestion));
 
-  // Pre-fill the suggestion once (editable after): only fills an
-  // untouched empty field, never clobbers user edits. Clearing the
-  // field marks it touched, so an explicit clear sticks.
+  // Pre-fill the suggestion while untouched (editable after): the
+  // default follows the name until the operator types, never
+  // clobbering edits. Clearing the field marks it touched, so an
+  // explicit clear sticks. Gated on create/join: the Leave form keeps
+  // an empty field until the operator supplies a directory, and
+  // entering Leave with an untouched suggestion clears it — leaving
+  // never targets a guessed directory.
   $effect(() => {
-    if (!driveDirTouched && driveDir === "" && suggestedDriveDir !== null) {
+    if (mode === "leave") {
+      if (!driveDirTouched) driveDir = "";
+      return;
+    }
+    if (!driveDirTouched && suggestedDriveDir !== null && driveDir !== suggestedDriveDir) {
       driveDir = suggestedDriveDir;
     }
   });
 
-  // Relays are optional: empty means local-only (registers without a
-  // background service); non-empty runs managed. The managed-service
-  // refusal stays honest — with relays the CLI still refuses a
-  // relay-less managed definition, and the outcome below reports it
-  // verbatim instead of papering over it.
+  // Relays are optional in the copy: empty is local-only, non-empty
+  // runs managed — but this form always runs managed (`noService:
+  // false`), so an empty field reaches the CLI's managed-service
+  // refusal honestly instead of registering a local-only drive the
+  // desktop cannot serve. No product default relay set exists in the
+  // repo, so the field stays empty with the example placeholder; the
+  // outcome below reports the refusal verbatim.
   const isLocalOnly = $derived(relayList().length === 0);
 
   function describeResult(value: ProvisionReport): string {
@@ -186,10 +196,11 @@ entered by hand elsewhere. -->
       <input class="mt-1 w-full rounded-md border border-ink/15 px-2 py-1 dark:border-bone/20 dark:bg-white/5" bind:value={relays} disabled={busy} placeholder="wss://relay.example" />
     </label>
     <p class="mt-1 text-xs text-smoke">
-      Leave empty for local-only. A managed service needs at least one relay to sync; with none, the
-      drive registers local-only without a background service. Where a managed definition is
-      required, the CLI refuses a relay-less service honestly — that refusal reports verbatim below,
-      never as a silent success.
+      Relays are optional — only needed to sync beyond this device. Leave empty for local-only. This
+      form always runs managed (vault), which needs at least one relay to sync: with none, the CLI
+      refuses the relay-less managed service honestly, and that refusal reports verbatim below.
+      No product default relay set ships in the repo, so the field starts empty — the example
+      placeholder is a shape hint, not a suggestion to use.
     </p>
     {#if mode === "join"}
       <div class="mt-2 text-sm">
@@ -241,7 +252,7 @@ entered by hand elsewhere. -->
     </Button>
   {:else if mode === "create"}
     {#if isLocalOnly}
-      <p class="mt-3 text-xs text-smoke">Local-only: no relays — registers without a background service. Add relays to run managed (vault). Mount mode travels with the installer follow-up.</p>
+      <p class="mt-3 text-xs text-smoke">No relays — the managed service will refuse honestly (it needs at least one relay to sync). Add relays to create managed (vault). Mount mode travels with the installer follow-up.</p>
     {:else}
       <p class="mt-3 text-xs text-smoke">Service mode: vault (platform default). Mount mode travels with the installer follow-up.</p>
     {/if}
@@ -251,14 +262,14 @@ entered by hand elsewhere. -->
       disabled={busy || name.trim() === "" || driveDir.trim() === "" || !credentialsReady}
       onclick={() =>
         void run(() =>
-          onCreate({ name, driveDir, relays: relayList(), identityFile, passphraseFile, mode: "vault", noService: isLocalOnly }),
+          onCreate({ name, driveDir, relays: relayList(), identityFile, passphraseFile, mode: "vault", noService: false }),
         )}
     >
       {working ? "Creating…" : "Create drive"}
     </Button>
   {:else}
     {#if isLocalOnly}
-      <p class="mt-3 text-xs text-smoke">Local-only: no relays — registers without a background service. Add relays to run managed (vault). Mount mode travels with the installer follow-up.</p>
+      <p class="mt-3 text-xs text-smoke">No relays — the managed service will refuse honestly (it needs at least one relay to sync). Add relays to join managed (vault). Mount mode travels with the installer follow-up.</p>
     {:else}
       <p class="mt-3 text-xs text-smoke">Service mode: vault (platform default). Mount mode travels with the installer follow-up.</p>
     {/if}
@@ -276,7 +287,7 @@ entered by hand elsewhere. -->
             passphraseFile,
             invitationFile,
             mode: "vault",
-            noService: isLocalOnly,
+            noService: false,
           }),
         )}
     >
@@ -288,7 +299,7 @@ entered by hand elsewhere. -->
     <p class="mt-3 text-sm" role="alert">{error}</p>
   {/if}
   {#if report !== null}
-    <div class="mt-3 rounded-md bg-ink px-3 py-2 text-sm text-bone dark:border dark:border-bone/10 dark:bg-black dark:text-bone" role="status">
+    <div class="mt-3 rounded-md bg-ink px-3 py-2 text-sm text-bone dark:border dark:border-bone/10 dark:bg-black" role="status">
       <p>{describeResult(report)}</p>
       <p class="mt-1 text-bone/70">{observedSummary(report)}</p>
       <p class="mt-1 text-bone/70">{describeMembership(report)}</p>
