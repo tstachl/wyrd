@@ -347,8 +347,12 @@ fn store_failures_name_the_resource_never_damaged_data() {
     .expect("full maps to unavailable");
     assert!(full.contains("unavailable"), "verdict stands:\n{full}");
     assert!(
-        full.contains("disk is full"),
-        "names the resource, not damage:\n{full}"
+        full.contains("quota"),
+        "names quota exhaustion as well as a full disk:\n{full}"
+    );
+    assert!(
+        full.contains("retry"),
+        "names the fix, not just the state:\n{full}"
     );
     assert!(full.contains("metadata"), "metadata still stands:\n{full}");
     let denied = describe_unavailable(&ViewError::Store(

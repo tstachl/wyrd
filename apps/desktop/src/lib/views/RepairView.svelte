@@ -1,10 +1,14 @@
-<!-- Broken-credential Repair: dedicated state, never a toast and
-never a silent invitation to generate. Human-first copy up front;
-raw CLI text rides only inside the expandable technical detail (raw
-credentials.rs strings never reach the renderer as the headline).
-A new identity from here requires explicit destructive confirmation:
-the old file is preserved where it is, never overwritten, and the
-consequence is stated plainly. -->
+<!-- Broken-credential Repair plus broken-pairing Repair: two causes,
+distinct states, one screen. The credential states name the
+identity files and offer file choosing or a new identity; the
+pairing state (a version-mismatched or unrunnable helper) names
+neither — neither choosing files nor creating an identity can fix
+a pairing, so those sections stay hidden there. Human-first copy
+up front; raw CLI text rides only inside the expandable technical
+detail (raw credentials.rs strings never reach the renderer as the
+headline). A new identity from here requires explicit destructive
+confirmation: the old file is preserved where it is, never
+overwritten, and the consequence is stated plainly. -->
 <script lang="ts">
   import Button from "$lib/components/ui/button.svelte";
   import type { KeyDefaults, OnboardingReport } from "$lib/ipc/results.js";
@@ -86,12 +90,12 @@ consequence is stated plainly. -->
 <div class="max-w-xl">
   {#if kind === "versionmismatch"}
   <h1 class="mt-4 text-2xl font-semibold tracking-tight">The app and its helper tool do not match</h1>
-  <p class="mt-2 text-sm">The desktop could not run its paired <span class="font-mono text-xs">wyrd</span> helper. This says nothing about your identity files, and your drives are untouched — nothing was changed. Reinstall the matched pair, then verify again. In a development checkout that means building the CLI beside the desktop binary; the technical detail below names the exact failure.</p>
+  <p class="mt-2 text-sm">The desktop and its paired <span class="font-mono text-xs">wyrd</span> helper do not match: either the helper could not be run, or it reported a different build. This says nothing about your identity files, and your drives are untouched — nothing was changed. Reinstall the matched pair, then verify again. In a development checkout that means building the CLI beside the desktop binary; the technical detail below names the exact failure.</p>
   {:else}
   <h1 class="mt-4 text-2xl font-semibold tracking-tight">Fix this device's identity</h1>
   <p class="mt-2 text-sm">Wyrd cannot use this identity file: other users on this computer could access it, or it is damaged. Your drives are untouched — nothing was changed.</p>
-  {/if}
   <p class="mt-1 text-sm text-smoke">Expected files: <span class="font-mono text-xs">{defaults.identity_file}</span>, <span class="font-mono text-xs">{defaults.passphrase_file}</span></p>
+  {/if}
 
   <div class="mt-3">
     <Button variant="secondary" size="sm" disabled={busy} onclick={() => (showTechnical = !showTechnical)}>{showTechnical ? "Hide technical detail" : "Show technical detail"}</Button>

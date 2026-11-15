@@ -48,11 +48,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use wyrd_format::{DeviceId, SnapshotId};
+use wyrd_format::{store::StoreFailure, DeviceId, SnapshotId};
 use wyrd_sync::runtime::{MergePath, MergePlan};
 
 use super::status::HeadSummary;
-use wyrd_format::store::StoreFailure;
 use wyrd_namespace::view::{Node, ViewError};
 
 /// One diverged branch, labelled by facts the engine already holds
@@ -403,9 +402,11 @@ pub fn describe_unavailable(error: &ViewError) -> Option<String> {
         // never reads as damaged data: the classification travels with
         // the error, so the copy names the resource the same way the
         // mount errnos do (full reads as ENOSPC, unwritable as
-        // EACCES) instead of discarding the distinction.
+        // EACCES) instead of discarding the distinction. Full covers
+        // a full disk and an exhausted quota alike, so the copy names
+        // both.
         ViewError::Store(StoreFailure::StorageFull, _) => Some(
-            "contents unavailable (the disk is full — free space and retry; the branch metadata above still stands)\n"
+            "contents unavailable (the disk or quota is full — free space or raise the quota, then retry; the branch metadata above still stands)\n"
                 .to_owned(),
         ),
         ViewError::Store(StoreFailure::PermissionDenied, _) => Some(
