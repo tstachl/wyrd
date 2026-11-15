@@ -38,6 +38,7 @@
   import SettingsView from "$lib/views/SettingsView.svelte";
   import StatusView from "$lib/views/StatusView.svelte";
   import UnavailableView from "$lib/views/UnavailableView.svelte";
+  import { listen } from "@tauri-apps/api/event";
   import { onMount } from "svelte";
 
   const drives = $derived<DriveView[]>(
@@ -387,6 +388,16 @@
   }
 
   onMount(() => {
+    // Tray route: "Set up / connect drives" shows the window from
+    // the backend and asks the frontend to render the lifecycle
+    // view. Mirrored in `crates/wyrd-desktop/src/tray.rs`
+    // (`SELECT_LIFECYCLE_EVENT`): keep the string in sync.
+    // Best-effort: a missing Tauri runtime (browser preview)
+    // never fails startup.
+    void listen("wyrd:select-lifecycle", () => {
+      presentation.selectView("lifecycle");
+      void refreshLifecycle();
+    }).catch(() => {});
     void refreshLifecycle().then(() => {
       if (presentation.selectedDriveDir === null) {
         // Driveless first-run: land on the empty lifecycle view

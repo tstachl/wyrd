@@ -435,6 +435,14 @@ verdict.
   protocol operations; every interface response keeps its typed
   semantics end to end. Runes-based presentation cache only — never a
   second drive model (see the presentation-cache section below).
+- Menu-bar extra (tray presence): the shell stays present as one
+  menu-bar icon (macOS) / indicator (Linux) over the same registry
+  probe the lifecycle view shows — one disabled status line per
+  drive (`name — Available|Unavailable|Unknown`), then Set up /
+  connect drives (shows the window and routes to the lifecycle
+  view), Show window, and Quit. The tray reuses only landed IPC,
+  holds no implicit active drive, never opens a drive, and quits
+  through the same graceful drain as window close.
 - Frontend state is a presentation cache, never a second drive
   model. Transient presentation state is fine and expected: selected
   view, open dialogs, form input, pending-request indicators, last

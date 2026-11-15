@@ -217,7 +217,10 @@ fn policy_for(member: &str) -> Option<MemberPolicy> {
         // `wyrd-owner-client` only — never the store, never the
         // authoring surface, never presentation. `tauri` is the
         // reserved toolkit edge for the command layer that lands
-        // with the first view; `tauri-plugin-dialog` is the native
+        // with the first view, including the `tray-icon` + `image-png`
+        // features for the menu-bar extra (system tray, same edge —
+        // the tray reuses only landed IPC and adds no owner surface);
+        // `tauri-plugin-dialog` is the native
         // file picker for credential and invitation paths (first
         // shipped view needing it: runtime provisioning — paths
         // travel, never secret contents); `serde`/`serde_json` are

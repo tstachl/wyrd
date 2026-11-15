@@ -164,6 +164,19 @@ is transient — no drive data is affected.
   fresher relay set. The desktop adapter threads the same pair and
   the lifecycle view carries the mountpoint to the IPC mirror.
 
+- Menu-bar and tray presence with per-drive status
+  (`nostr:nevent1qqs2v8cey0fgkyyqfnyeg66qckky5887n7p43k6mahvr3q66typg65spz9mhxue69uhkwunpwdczuap49eehg870au2`):
+  a running shell stays present as one menu-bar icon (macOS) /
+  indicator (Linux) over the same registry probe the lifecycle
+  view shows — one disabled status line per drive
+  (`Available`/`Unavailable`/`Unknown`), then Set up / connect
+  drives (shows the window, routes to the lifecycle view), Show
+  window (restores and focuses), and Quit (drains in-flight work
+  per the graceful-shutdown rule). Non-owning client: no drive
+  opens, no implicit active drive, no new owner surface, no new
+  wire bytes. The tray rides the reserved `tauri` edge (`tray-icon`
+  + `image-png` features; the image stack arrives transitively).
+
 ### Changed
 
 - Settle the CLI command vocabulary and hierarchy
