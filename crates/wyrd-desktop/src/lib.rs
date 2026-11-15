@@ -388,6 +388,7 @@ pub fn invoke_handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> 
         commands::onboarding_new_passphrase,
         commands::onboarding_commit,
         commands::onboarding_verify,
+        commands::onboarding_adopt,
         commands::reveal_in_folder,
     ]
 }

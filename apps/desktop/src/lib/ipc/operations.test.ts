@@ -15,6 +15,7 @@ import {
   listDrives,
   lookup,
   observe,
+  onboardingAdopt,
   onboardingCommit,
   onboardingDefaults,
   onboardingNewPassphrase,
@@ -260,8 +261,10 @@ test("onboarding wrappers send paths-only args plus the stdin-pipe passphrase", 
     passphraseFile: "/k/passphrase",
     passphrase: "abcd6e-789abc-d6e789-abcd6e",
   });
-  // verify sends paths only, never contents.
+  // verify sends paths only, never contents; adopt records the
+  // verified pair so the gate resolves it after the session.
   await onboardingVerify({ identityFile: "/k/identity", passphraseFile: "/k/passphrase" });
+  await onboardingAdopt({ identityFile: "/k/identity", passphraseFile: "/k/passphrase" });
   await revealInFolder("/k/identity");
   expect(seen).toEqual([
     { cmd: "onboarding_defaults", args: {} },
@@ -278,6 +281,10 @@ test("onboarding wrappers send paths-only args plus the stdin-pipe passphrase", 
     },
     {
       cmd: "onboarding_verify",
+      args: { args: { identityFile: "/k/identity", passphraseFile: "/k/passphrase" } },
+    },
+    {
+      cmd: "onboarding_adopt",
       args: { args: { identityFile: "/k/identity", passphraseFile: "/k/passphrase" } },
     },
     { cmd: "reveal_in_folder", args: { args: { path: "/k/identity" } } },

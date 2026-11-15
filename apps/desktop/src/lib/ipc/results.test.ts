@@ -262,6 +262,7 @@ test("onboarding report carries fresh existence with the outcome", () => {
       passphrase_file: "/k/passphrase",
       identity_exists: false,
       passphrase_exists: false,
+      usable: true,
     },
   };
   expect(generated.result.result).toBe("completed");
@@ -275,6 +276,7 @@ test("onboarding report carries fresh existence with the outcome", () => {
       passphrase_file: "/k/passphrase",
       identity_exists: true,
       passphrase_exists: true,
+      usable: true,
     },
   };
   if (committed.result.result !== "completed") throw new Error("narrow");
@@ -295,8 +297,17 @@ test("key defaults separate intended paths from actual files", () => {
     passphrase_file: "/k/passphrase",
     identity_exists: false,
     passphrase_exists: false,
+    usable: true,
   };
   expect(intended.identity_exists).toBe(false);
   // Created-vs-backed-up stays explicit: existence is the only
   // signal, and showing a path never claims a backup exists.
+  const unusable: KeyDefaults = {
+    identity_file: "",
+    passphrase_file: "",
+    identity_exists: false,
+    passphrase_exists: false,
+    usable: false,
+  };
+  expect(unusable.usable).toBe(false);
 });

@@ -20,6 +20,7 @@
 use std::path::{Path, PathBuf};
 
 use wyrd_sync::keys::DeviceIdentitySecret;
+use zeroize::Zeroizing;
 
 use crate::credentials::{read_identity, read_secret_file};
 use crate::CliError;
@@ -38,9 +39,9 @@ const PASSPHRASE_GROUP: usize = 6;
 /// retry discipline — scalar validity is irrelevant here, but the
 /// randomness source is the same audited one). Modulo bias is
 /// negligible at 32-way division of a uniform byte (256 = 8 × 32),
-/// so `% 32` is exact.
-fn mint_passphrase() -> Result<String, CliError> {
-    let mut body = String::with_capacity(PASSPHRASE_CHARS + 3);
+/// so `% 32` is exact. Held in `Zeroizing`: the text scrubs on drop.
+fn mint_passphrase() -> Result<Zeroizing<String>, CliError> {
+    let mut body = Zeroizing::new(String::with_capacity(PASSPHRASE_CHARS + 3));
     let mut buf = [0u8; 32];
     let mut produced = 0usize;
     while produced < PASSPHRASE_CHARS {
@@ -86,9 +87,31 @@ fn ensure_parent(dir: &Path) -> Result<(), CliError> {
     Ok(())
 }
 
+/// fsync the parent directory so a fresh directory entry is durable
+/// before the caller reports success. The file fsync in `write_new`
+/// orders the bytes; this orders the name. Best-effort where there
+/// is nothing to report (rollback), hard-error on the commit path.
+#[cfg(unix)]
+fn fsync_parent(path: &Path) -> Result<(), CliError> {
+    let parent = path.parent().filter(|p| !p.as_os_str().is_empty());
+    let Some(dir) = parent else {
+        return Ok(());
+    };
+    let handle = std::fs::File::open(dir).map_err(|source| CliError::Io {
+        path: dir.to_path_buf(),
+        source,
+    })?;
+    handle.sync_all().map_err(|source| CliError::Io {
+        path: dir.to_path_buf(),
+        source,
+    })
+}
+
 /// Write one credential file: O_NOFOLLOW | O_EXCL | 0600 — never
-/// overwrite, never follow a symlink. Presence resolves to a usage
-/// error (the desktop's Repair state), not a silent replace.
+/// overwrite, never follow a symlink — then fsync the parent
+/// directory so the new name is durable, not just the bytes.
+/// Presence resolves to a usage error (the desktop's Repair state),
+/// not a silent replace.
 #[cfg(unix)]
 fn write_new(path: &Path, bytes: &[u8]) -> Result<(), CliError> {
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
@@ -131,6 +154,7 @@ fn write_new(path: &Path, bytes: &[u8]) -> Result<(), CliError> {
             source,
         }
     })?;
+    fsync_parent(path)?;
     Ok(())
 }
 
@@ -149,21 +173,24 @@ pub(crate) fn generate(identity_file: PathBuf, passphrase_file: PathBuf) -> Resu
         ensure_parent(&passphrase_file)?;
         let (raw, _secret) = generate_scalar()?;
         // Raw 32 bytes: the production reader accepts raw or hex, and
-        // raw keeps the file exactly the keystore expects. The wrapper
-        // scrubs on drop at scope end.
+        // raw keeps the file exactly the keystore expects. Both the
+        // bytes and the wrapper scrub on drop at scope end.
         let passphrase = mint_passphrase()?;
-        // Identity first, then passphrase: a crash between the two
-        // leaves the Repair state (identity without passphrase), never
-        // a passphrase pointing at nothing.
-        write_new(&identity_file, &raw)?;
+        // Identity first, then passphrase: the file fsync plus the
+        // parent-directory fsync in `write_new` make the order
+        // durable — a crash between the two leaves the Repair state
+        // (identity without passphrase), never a passphrase pointing
+        // at nothing.
+        write_new(&identity_file, &raw[..])?;
         let outcome = write_new(&passphrase_file, passphrase.as_bytes());
         if outcome.is_err() {
             let _ = std::fs::remove_file(&identity_file);
+            let _ = fsync_parent(&identity_file);
             return outcome;
         }
         // The single stdout line: the desktop captures verbatim for
         // write-down. Nothing else may go to stdout on this path.
-        print!("{passphrase}");
+        print!("{}", passphrase.as_str());
         Ok(())
     }
 }
@@ -171,7 +198,7 @@ pub(crate) fn generate(identity_file: PathBuf, passphrase_file: PathBuf) -> Resu
 /// Mint one generated passphrase for display: writes nothing.
 pub(crate) fn new_passphrase() -> Result<(), CliError> {
     let passphrase = mint_passphrase()?;
-    print!("{passphrase}");
+    print!("{}", passphrase.as_str());
     Ok(())
 }
 
@@ -191,44 +218,64 @@ pub(crate) fn commit(identity_file: PathBuf, passphrase_file: PathBuf) -> Result
     #[cfg(unix)]
     {
         use std::io::Read;
-        let mut text = String::new();
+        // Bounded like the credential reader (4096 bytes): a hostile
+        // or corrupt pipe cannot exhaust memory before validation
+        // refuses it. One trailing newline is the line discipline,
+        // not part of the passphrase.
+        let mut text = Zeroizing::new(String::new());
         std::io::stdin()
+            .take((MAX_PASSPHRASE_BYTES + 1) as u64)
             .read_to_string(&mut text)
             .map_err(|source| CliError::Io {
                 path: PathBuf::from("<stdin>"),
                 source,
             })?;
-        let passphrase = text
+        if text.len() > MAX_PASSPHRASE_BYTES {
+            return Err(CliError::Usage(
+                "passphrase exceeds the 4096-byte size limit".to_string(),
+            ));
+        }
+        let stripped = text
             .strip_suffix("\r\n")
             .or_else(|| text.strip_suffix('\n'))
             .unwrap_or(&text);
-        validate_passphrase(passphrase)?;
+        let passphrase = Zeroizing::new(stripped.to_owned());
+        validate_passphrase(&passphrase)?;
         ensure_parent(&identity_file)?;
         ensure_parent(&passphrase_file)?;
         let (raw, _secret) = generate_scalar()?;
-        write_new(&identity_file, &raw)?;
+        write_new(&identity_file, &raw[..])?;
         let outcome = write_new(&passphrase_file, passphrase.as_bytes());
         if outcome.is_err() {
             let _ = std::fs::remove_file(&identity_file);
+            let _ = fsync_parent(&identity_file);
             return outcome;
         }
         Ok(())
     }
 }
 
-/// Passphrase floor: 12 chars minimum (the UI states the same floor);
-/// bounded like the credential reader (4096 bytes) and UTF-8 by
-/// construction (`String`). Empty and overlong inputs refuse before
-/// anything is written.
+/// Passphrase bounds, mirrored by the desktop pre-check: 12 chars
+/// minimum (the UI states the same floor), 4096 bytes maximum like
+/// the credential reader, no line breaks (one trailing newline is
+/// stripped on input, never stored). Empty, short, overlong, and
+/// multi-line inputs refuse before anything is written.
+const MAX_PASSPHRASE_BYTES: usize = 4096;
+
 fn validate_passphrase(passphrase: &str) -> Result<(), CliError> {
     if passphrase.chars().count() < 12 {
         return Err(CliError::Usage(
             "passphrase must be at least 12 characters".to_string(),
         ));
     }
-    if passphrase.len() > 4096 {
+    if passphrase.len() > MAX_PASSPHRASE_BYTES {
         return Err(CliError::Usage(
             "passphrase exceeds the 4096-byte size limit".to_string(),
+        ));
+    }
+    if passphrase.contains('\n') || passphrase.contains('\r') {
+        return Err(CliError::Usage(
+            "passphrase must not contain line breaks".to_string(),
         ));
     }
     Ok(())
@@ -248,14 +295,14 @@ pub(crate) fn verify(identity_file: PathBuf, passphrase_file: PathBuf) -> Result
 /// Generate one identity scalar with its raw bytes: random
 /// CSPRNG bytes validated through `from_bytes` (same gate as
 /// `DeviceIdentitySecret::generate`), retrying the negligible
-/// non-scalar fraction. Returns the bytes for the file plus the
-/// wrapper (which validates and scrubs on drop).
-fn generate_scalar() -> Result<([u8; 32], DeviceIdentitySecret), CliError> {
+/// non-scalar fraction. The bytes ride in `Zeroizing` beside the
+/// wrapper; both scrub on drop.
+fn generate_scalar() -> Result<(Zeroizing<[u8; 32]>, DeviceIdentitySecret), CliError> {
     loop {
-        let mut raw = [0u8; 32];
-        getrandom::getrandom(&mut raw)
+        let mut raw = Zeroizing::new([0u8; 32]);
+        getrandom::getrandom(&mut *raw)
             .map_err(|_| CliError::Usage("secure randomness unavailable".to_string()))?;
-        if let Ok(secret) = DeviceIdentitySecret::from_bytes(raw) {
+        if let Ok(secret) = DeviceIdentitySecret::from_bytes(*raw) {
             return Ok((raw, secret));
         }
     }
@@ -284,18 +331,19 @@ mod tests {
     #[test]
     fn passphrase_format_is_chunked_120_bits() {
         let phrase = mint_passphrase().unwrap();
-        let parts: Vec<&str> = phrase.split('-').collect();
-        assert_eq!(parts.len(), 4, "four groups: {phrase}");
+        let text = phrase.as_str();
+        let parts: Vec<&str> = text.split('-').collect();
+        assert_eq!(parts.len(), 4, "four groups: {text}");
         for part in &parts {
-            assert_eq!(part.len(), 6, "six chars per group: {phrase}");
+            assert_eq!(part.len(), 6, "six chars per group: {text}");
             for ch in part.chars() {
                 assert!(
                     PASSPHRASE_ALPHABET.contains(&(ch as u8)),
-                    "charset violation {ch:?} in {phrase}"
+                    "charset violation {ch:?} in {text}"
                 );
             }
         }
-        assert_eq!(phrase.len(), PASSPHRASE_CHARS + 3);
+        assert_eq!(text.len(), PASSPHRASE_CHARS + 3);
     }
 
     /// Uniqueness smoke: two mints differ (CSPRNG, not a counter).
@@ -329,12 +377,14 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Floor pins: 11 chars refuse, 12 pass, overlong refuses — all
-    /// before anything is written.
+    /// Floor pins: 11 chars refuse, 12 pass, overlong and
+    /// line-break inputs refuse — all before anything is written.
     #[test]
     fn passphrase_floor_is_12_chars() {
         assert!(validate_passphrase("short-11-ch").is_err());
         assert!(validate_passphrase("exactly-12ch").is_ok());
         assert!(validate_passphrase(&"x".repeat(4097)).is_err());
+        assert!(validate_passphrase("twelve-chars\n").is_err());
+        assert!(validate_passphrase("twelve-chars\r\n").is_err());
     }
 }

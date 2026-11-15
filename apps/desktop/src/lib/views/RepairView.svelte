@@ -15,11 +15,12 @@ consequence is stated plainly. -->
     detail: string;
     pending: boolean;
     onVerify: (args: { identityFile: string; passphraseFile: string }) => Promise<OnboardingReport>;
-    onUsePicked: (identityFile: string, passphraseFile: string) => void;
+    onAdopt: (args: { identityFile: string; passphraseFile: string }) => Promise<OnboardingReport>;
+    onAdopted: (identityFile: string, passphraseFile: string) => void;
     onCreateNew: () => void;
   }
 
-  let { defaults, detail, pending, onVerify, onUsePicked, onCreateNew }: Props = $props();
+  let { defaults, detail, pending, onVerify, onAdopt, onAdopted, onCreateNew }: Props = $props();
 
   let pickedIdentity = $state("");
   let pickedPassphrase = $state("");
@@ -41,7 +42,7 @@ consequence is stated plainly. -->
     try {
       const report = await onVerify({ identityFile: defaults.identity_file, passphraseFile: defaults.passphrase_file });
       helper = report.result.result === "completed"
-        ? "The files verify now — restart the app to continue."
+        ? "The files are readable now — restart the app to continue."
         : "Still unreadable — the detail below says what the check reported.";
     } catch (failure: unknown) {
       helper = failure instanceof Error ? failure.message : String(failure);
@@ -58,11 +59,13 @@ consequence is stated plainly. -->
     working = true;
     helper = null;
     try {
-      const report = await onVerify({ identityFile: pickedIdentity, passphraseFile: pickedPassphrase });
+      // Adopted on success: without the record the gate would
+      // re-enter Repair against the old defaults next launch.
+      const report = await onAdopt({ identityFile: pickedIdentity, passphraseFile: pickedPassphrase });
       if (report.result.result === "completed") {
-        onUsePicked(pickedIdentity, pickedPassphrase);
+        onAdopted(pickedIdentity, pickedPassphrase);
       } else {
-        helper = "Those files did not verify — the detail below says what the check reported.";
+        helper = "Those files were not adopted — the detail below says what the check reported.";
       }
     } catch (failure: unknown) {
       helper = failure instanceof Error ? failure.message : String(failure);

@@ -187,6 +187,11 @@ export interface OnboardingVerifyArgs {
   passphraseFile: string;
 }
 
+export interface OnboardingAdoptArgs {
+  identityFile: string;
+  passphraseFile: string;
+}
+
 export interface RevealArgs {
   path: string;
 }
@@ -209,6 +214,11 @@ export function onboardingCommit(args: OnboardingCommitArgs): Promise<Onboarding
 /** Verify both files through the hardened reader (exit codes only). */
 export function onboardingVerify(args: OnboardingVerifyArgs): Promise<OnboardingReport> {
   return invokeValue<OnboardingReport>("onboarding_verify", { args });
+}
+
+/** Verify the pair, then record it as the adopted credential pair so the gate and later launches resolve it. */
+export function onboardingAdopt(args: OnboardingAdoptArgs): Promise<OnboardingReport> {
+  return invokeValue<OnboardingReport>("onboarding_adopt", { args });
 }
 
 /** Best-effort reveal of one path in the platform file manager. */

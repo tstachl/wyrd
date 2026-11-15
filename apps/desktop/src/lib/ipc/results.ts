@@ -393,12 +393,13 @@ export interface ProvisionReport {
 // travels only in `new-passphrase` answers for write-down — every
 // other success carries `passphrase: null`.
 
-/** Platform key paths plus existence (no secret reads). Pre-commit the UI treats paths as intended locations; post-commit as actual files. */
+/** Platform key paths plus existence (no secret reads). `usable` is false only where no home directory resolves — paths are then empty and nothing may commit. */
 export interface KeyDefaults {
   identity_file: string;
   passphrase_file: string;
   identity_exists: boolean;
   passphrase_exists: boolean;
+  usable: boolean;
 }
 
 /** One onboarding operation outcome. `passphrase` is set only for `new-passphrase` success. */

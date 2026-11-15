@@ -1,8 +1,11 @@
 //! First-run identity onboarding: the desktop's local CLI calls for
-//! generation, commit, and verification. Layering: the backend never
-//! generates, holds only what it must display, and never interprets
-//! secrets — the CLI owns key material, file hardening, and the
-//! format (see `wyrd-cli/src/commands/identity.rs`).
+//! generation, commit, verification, and credential-pair adoption.
+//! Layering: the backend never generates, holds only what it must
+//! display, and never interprets secrets — the CLI owns key material,
+//! file hardening, and the format (see
+//! `wyrd-cli/src/commands/identity.rs`). The process runner is the
+//! provisioning adapter's (`provision::run_cli`): structured argv,
+//! exit codes only, bounded waits.
 //!
 //! - `new-passphrase` prints one generated passphrase (writes
 //!   nothing); the backend validates its shape before returning it
@@ -10,27 +13,50 @@
 //! - `commit` reads the passphrase from the stdin pipe (never argv),
 //!   generates the identity secret in-process, and writes both files
 //!   (owner-only, never overwrite). The identity secret never leaves
-//!   the CLI; only the passphrase transits backend -> CLI, the
-//!   onboarding-only exception the commit boundary requires.
+//!   the CLI; only the passphrase transits backend -> CLI.
 //! - `verify` runs the hardened reader over both files (exit codes
 //!   only; stderr is opaque display detail, never parsed).
-//! - Defaults: platform key paths plus existence (no secret reads).
+//! - Defaults: the adopted credential pair where one is recorded and
+//!   structurally valid, else the platform key paths — plus existence
+//!   (no secret reads) and an explicit usability flag for the
+//!   home-directory-missing edge.
+//!
+//! Passphrase transits (CLI stdout for write-down, stdin pipe for
+//! commit, IPC fields between the webview and the backend) are the
+//! documented onboarding exception to the desktop-shell rule that
+//! secret contents never cross IPC or argv: the write-down step
+//! requires the frontend to display the text, and the commit step
+//! requires the bytes. The exception, its rationale, and its
+//! controls live in `docs/design/desktop-shell.md` ("Onboarding
+//! passphrase handling"), not just here.
 //!
 //! All commands are infallible like the other local queries: the
 //! answer is a state struct, never the owner taxonomy. A dead worker
-//! surfaces as an explicit unreadable state inside the payload.
+//! surfaces as an explicit unknown inside the payload.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use super::provision::{check_cli_version, PROVISION_TIMEOUT};
+use super::provision::{check_cli_version, run_cli, truncate, CliOutput, PROVISION_TIMEOUT};
 
 /// Unambiguous alphabet mirror (CLI-owned): 32 chars, 5 bits each.
 /// The backend validates shape only; generation stays in the CLI.
 const ALPHABET: &[u8] = b"0123456789abcdefghjkmnpqrstvwxyz";
 
-/// Platform key paths plus existence. `intended` labels the
-/// created-on-finish rule: pre-commit the UI shows these as intended
+/// Adopted-pair record: paths only, never secrets. Lives beside the
+/// drive registry so the device remembers which credential files it
+/// committed or picked, across restarts. A structurally valid record
+/// wins over the platform defaults; existence still decides the gate
+/// (missing files resolve to welcome/repair, never to a silent
+/// generate). A missing or unparsable record falls back to the
+/// platform defaults: the files are the source of truth, the record
+/// only a pointer.
+const ADOPTED_RECORD_FILENAME: &str = "credentials.json";
+const ADOPTED_RECORD_VERSION: u8 = 1;
+
+/// Platform key paths plus existence. `usable` is false only where no
+/// home directory resolves (paths are then empty and nothing may
+/// commit); pre-commit the UI shows usable paths as intended
 /// locations, never as existing files; post-commit the same paths
 /// with `exists == true` are the actual files Ready shows.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -39,50 +65,137 @@ pub struct KeyDefaults {
     pub passphrase_file: String,
     pub identity_exists: bool,
     pub passphrase_exists: bool,
+    pub usable: bool,
+}
+
+/// The per-user configuration directory: the same derivation the
+/// registry uses, so the adopted-pair record sits beside the drives
+/// file. `None` where no home resolves — the caller reports
+/// unusable instead of inventing a relative path.
+fn config_dir() -> Option<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        std::env::var_os("HOME")
+            .filter(|h| !h.is_empty())
+            .map(|home| PathBuf::from(home).join("Library/Application Support/Wyrd"))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        if let Ok(dir) = std::env::var("XDG_STATE_HOME") {
+            if !dir.is_empty() && dir.starts_with('/') {
+                return Some(PathBuf::from(dir).join("wyrd"));
+            }
+        }
+        std::env::var_os("HOME")
+            .filter(|h| !h.is_empty())
+            .map(|home| PathBuf::from(home).join(".local/state/wyrd"))
+    }
+    #[cfg(not(any(target_os = "macos", unix)))]
+    {
+        None
+    }
 }
 
 /// Platform default key paths: macOS Application Support, Linux
-/// XDG state home (fallback `~/.local/state`). No secret reads —
-/// existence only.
+/// XDG state home (fallback `~/.local/state`). `None` where no home
+/// resolves — never a literal `~` or a relative guess.
+fn default_paths() -> Option<(String, String)> {
+    let dir = config_dir()?;
+    let keys = dir.join("keys");
+    Some((
+        keys.join("identity").to_string_lossy().into_owned(),
+        keys.join("passphrase").to_string_lossy().into_owned(),
+    ))
+}
+
+/// The adopted pair where a structurally valid record names one:
+/// absolute paths only, anything else falls back to the platform
+/// defaults.
+fn adopted_paths() -> Option<(String, String)> {
+    let dir = config_dir()?;
+    let bytes = std::fs::read(dir.join(ADOPTED_RECORD_FILENAME)).ok()?;
+    let value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    if value.get("version")?.as_u64()? != u64::from(ADOPTED_RECORD_VERSION) {
+        return None;
+    }
+    let identity = value.get("identity_file")?.as_str()?;
+    let passphrase = value.get("passphrase_file")?.as_str()?;
+    if identity.is_empty() || passphrase.is_empty() {
+        return None;
+    }
+    if !Path::new(identity).is_absolute() || !Path::new(passphrase).is_absolute() {
+        return None;
+    }
+    Some((identity.to_string(), passphrase.to_string()))
+}
+
+/// The effective credential paths: the adopted pair where recorded,
+/// else the platform defaults — plus existence (no secret reads) and
+/// usability.
 pub fn default_key_paths() -> KeyDefaults {
-    let (identity_file, passphrase_file) = default_paths();
+    let Some((identity_file, passphrase_file)) = adopted_paths().or_else(default_paths) else {
+        return KeyDefaults {
+            identity_file: String::new(),
+            passphrase_file: String::new(),
+            identity_exists: false,
+            passphrase_exists: false,
+            usable: false,
+        };
+    };
     KeyDefaults {
         identity_exists: Path::new(&identity_file).is_file(),
         passphrase_exists: Path::new(&passphrase_file).is_file(),
         identity_file,
         passphrase_file,
+        usable: true,
     }
 }
 
-fn default_paths() -> (String, String) {
-    #[cfg(target_os = "macos")]
-    {
-        if let Ok(home) = std::env::var("HOME") {
-            if !home.is_empty() {
-                let base = format!("{home}/Library/Application Support/Wyrd/keys");
-                return (format!("{base}/identity"), format!("{base}/passphrase"));
-            }
-        }
-        (
-            "~/Library/Application Support/Wyrd/keys/identity".to_string(),
-            "~/Library/Application Support/Wyrd/keys/passphrase".to_string(),
-        )
+/// Record the adopted credential pair (absolute paths only), so the
+/// gate and later launches resolve the committed or picked files
+/// instead of the platform defaults. The record holds paths, never
+/// secrets. Overwrites any previous record: adoption replaces the
+/// pointer, never the credential files (which the CLI never
+/// overwrites either).
+pub fn adopt_paths(identity_file: &Path, passphrase_file: &Path) -> Result<KeyDefaults, String> {
+    if !identity_file.is_absolute() || !passphrase_file.is_absolute() {
+        return Err("adopted credential paths must be absolute".to_string());
     }
-    #[cfg(not(target_os = "macos"))]
+    let dir = config_dir().ok_or_else(|| {
+        "cannot record the credential pair: no home directory resolves".to_string()
+    })?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|error| format!("cannot create {}: {error}", dir.display()))?;
+    #[cfg(unix)]
     {
-        let base = std::env::var("XDG_STATE_HOME")
-            .ok()
-            .filter(|v| !v.is_empty() && v.starts_with('/'))
-            .or_else(|| {
-                std::env::var("HOME")
-                    .ok()
-                    .filter(|h| !h.is_empty())
-                    .map(|h| format!("{h}/.local/state"))
-            })
-            .map(|b| format!("{b}/wyrd/keys"))
-            .unwrap_or_else(|| "~/.local/state/wyrd/keys".to_string());
-        (format!("{base}/identity"), format!("{base}/passphrase"))
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
+            .map_err(|error| format!("cannot restrict {}: {error}", dir.display()))?;
     }
+    let record = serde_json::json!({
+        "version": ADOPTED_RECORD_VERSION,
+        "identity_file": identity_file.to_string_lossy(),
+        "passphrase_file": passphrase_file.to_string_lossy(),
+    });
+    let bytes = serde_json::to_vec_pretty(&record)
+        .map_err(|error| format!("cannot encode the credential pair: {error}"))?;
+    let path = dir.join(ADOPTED_RECORD_FILENAME);
+    let tmp = dir.join(format!(
+        "{}.tmp.{}",
+        ADOPTED_RECORD_FILENAME,
+        std::process::id()
+    ));
+    std::fs::write(&tmp, &bytes)
+        .map_err(|error| format!("cannot stage {}: {error}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))
+            .map_err(|error| format!("cannot restrict {}: {error}", path.display()))?;
+    }
+    std::fs::rename(&tmp, &path)
+        .map_err(|error| format!("cannot record {}: {error}", path.display()))?;
+    Ok(default_key_paths())
 }
 
 /// Shape check for a generated passphrase: 24 charset chars in
@@ -102,8 +215,8 @@ pub fn passphrase_shape_valid(text: &str) -> bool {
 }
 
 /// Custom passphrase floor mirror (CLI-owned): 12 chars minimum,
-/// 4096 bytes maximum. The backend pre-refuses before spawning; the
-/// CLI re-validates before writing.
+/// 4096 bytes maximum, no line breaks. The backend pre-refuses
+/// before spawning; the CLI re-validates before writing.
 pub fn custom_passphrase_valid(text: &str) -> bool {
     let chars = text.chars().count();
     chars >= 12 && text.len() <= 4096 && !text.contains('\n') && !text.contains('\r')
@@ -112,8 +225,11 @@ pub fn custom_passphrase_valid(text: &str) -> bool {
 /// One onboarding operation outcome. Infallible: every path —
 /// including timeouts and spawn failures — returns a variant the
 /// caller pairs with existence re-reads; no path throws except a dead
-/// IPC worker (which the command layer turns into `Unreadable`).
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+/// IPC worker (which the command layer turns into `Unknown`).
+///
+/// `Debug` is redacted: the generated passphrase must never reach a
+/// log through a `{:?}`.
+#[derive(Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(tag = "result", rename_all = "lowercase")]
 pub enum OnboardingResult {
     /// The CLI reported success. `passphrase` carries the generated
@@ -137,13 +253,45 @@ pub enum OnboardingResult {
     Unknown { detail: String },
 }
 
+impl std::fmt::Debug for OnboardingResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OnboardingResult::Completed { detail, passphrase } => f
+                .debug_struct("Completed")
+                .field("detail", detail)
+                .field("passphrase", &passphrase.as_ref().map(|_| "REDACTED"))
+                .finish(),
+            OnboardingResult::ExpectedFailure { detail } => f
+                .debug_struct("ExpectedFailure")
+                .field("detail", detail)
+                .finish(),
+            OnboardingResult::VersionMismatch { reason } => f
+                .debug_struct("VersionMismatch")
+                .field("reason", reason)
+                .finish(),
+            OnboardingResult::Unknown { detail } => {
+                f.debug_struct("Unknown").field("detail", detail).finish()
+            }
+        }
+    }
+}
+
 /// One completed onboarding call: the outcome plus existence after
 /// the run (the commit boundary's read-back lives here, not in the
-/// CLI text).
-#[derive(Debug, Clone, serde::Serialize)]
+/// CLI text). `Debug` is redacted for the same reason as the result.
+#[derive(Clone, serde::Serialize)]
 pub struct OnboardingReport {
     pub result: OnboardingResult,
     pub defaults: KeyDefaults,
+}
+
+impl std::fmt::Debug for OnboardingReport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OnboardingReport")
+            .field("result", &self.result)
+            .field("defaults", &self.defaults)
+            .finish()
+    }
 }
 
 /// Pure argv builders: one structured element per argument, never
@@ -181,7 +329,7 @@ pub fn verify_argv(identity_file: &Path, passphrase_file: &Path) -> Vec<std::ffi
 /// garbage as a passphrase).
 pub fn run_new_passphrase(cli_bin: &Path, timeout: Duration) -> OnboardingReport {
     if let Err(mismatch) = check_cli_version(cli_bin, timeout) {
-        return report(mismatch_into(mismatch), cli_bin);
+        return report(mismatch_into(mismatch));
     }
     let output = run_cli(cli_bin, &new_passphrase_argv(), None, timeout);
     let result = match output {
@@ -220,7 +368,7 @@ pub fn run_new_passphrase(cli_bin: &Path, timeout: Duration) -> OnboardingReport
             detail: truncate(&format!("{stdout}\n{stderr}"), 500),
         },
     };
-    report(result, cli_bin)
+    report(result)
 }
 
 /// Run `<cli> identity commit`: the passphrase travels on the stdin
@@ -236,20 +384,16 @@ pub fn run_commit(
     timeout: Duration,
 ) -> OnboardingReport {
     if !custom_passphrase_valid(passphrase) {
-        return report(
-            OnboardingResult::ExpectedFailure {
-                detail: "passphrase must be at least 12 characters (without line breaks) and at most 4096 bytes".to_string(),
-            },
-            cli_bin,
-        );
+        return report(OnboardingResult::ExpectedFailure {
+            detail: "passphrase must be at least 12 characters (without line breaks) and at most 4096 bytes".to_string(),
+        });
     }
     if let Err(mismatch) = check_cli_version(cli_bin, timeout) {
-        return report(mismatch_into(mismatch), cli_bin);
+        return report(mismatch_into(mismatch));
     }
     let argv = commit_argv(identity_file, passphrase_file);
     let output = run_cli(cli_bin, &argv, Some(passphrase.as_bytes()), timeout);
-    let result = map_output(output);
-    report(result, cli_bin)
+    report(map_output(output))
 }
 
 /// Run `<cli> identity verify`: exit codes only, stderr opaque.
@@ -260,7 +404,7 @@ pub fn run_verify(
     timeout: Duration,
 ) -> OnboardingReport {
     if let Err(mismatch) = check_cli_version(cli_bin, timeout) {
-        return report(mismatch_into(mismatch), cli_bin);
+        return report(mismatch_into(mismatch));
     }
     let output = run_cli(
         cli_bin,
@@ -268,10 +412,40 @@ pub fn run_verify(
         None,
         timeout,
     );
-    report(map_output(output), cli_bin)
+    report(map_output(output))
 }
 
-fn report(result: OnboardingResult, _cli_bin: &Path) -> OnboardingReport {
+/// Verify the pair through the CLI, then record it as the adopted
+/// credential pair. The record is what the gate and later launches
+/// resolve; without it a restore or repair choice would be orphaned
+/// after the session.
+pub fn run_adopt(
+    cli_bin: &Path,
+    identity_file: &Path,
+    passphrase_file: &Path,
+    timeout: Duration,
+) -> OnboardingReport {
+    if let Err(mismatch) = check_cli_version(cli_bin, timeout) {
+        return report(mismatch_into(mismatch));
+    }
+    let output = run_cli(
+        cli_bin,
+        &verify_argv(identity_file, passphrase_file),
+        None,
+        timeout,
+    );
+    if output.status_success {
+        match adopt_paths(identity_file, passphrase_file) {
+            Ok(_) => {}
+            Err(reason) => {
+                return report(OnboardingResult::ExpectedFailure { detail: reason });
+            }
+        }
+    }
+    report(map_output(output))
+}
+
+fn report(result: OnboardingResult) -> OnboardingReport {
     OnboardingReport {
         result,
         defaults: default_key_paths(),
@@ -298,7 +472,7 @@ fn map_output(output: CliOutput) -> OnboardingResult {
             detail: output.stderr,
         };
     }
-    let Some(code) = output.code else {
+    let Some(_code) = output.code else {
         return OnboardingResult::Unknown {
             detail: output.stderr,
         };
@@ -309,121 +483,9 @@ fn map_output(output: CliOutput) -> OnboardingResult {
             passphrase: None,
         };
     }
-    let _ = code;
     OnboardingResult::ExpectedFailure {
         detail: truncate(&format!("{}\n{}", output.stdout, output.stderr), 500),
     }
-}
-
-/// Raw completed-process capture. `stdin_bytes`, when present, is
-/// piped to the child's stdin (the commit passphrase — the only
-/// secret that ever crosses this boundary, and never via argv).
-struct CliOutput {
-    code: Option<i32>,
-    status_success: bool,
-    stdout: String,
-    stderr: String,
-    timed_out: bool,
-}
-
-fn run_cli(
-    cli_bin: &Path,
-    argv: &[std::ffi::OsString],
-    stdin_bytes: Option<&[u8]>,
-    timeout: Duration,
-) -> CliOutput {
-    use std::io::Write;
-    let mut command = std::process::Command::new(cli_bin);
-    command.args(argv);
-    command.stdout(std::process::Stdio::piped());
-    command.stderr(std::process::Stdio::piped());
-    if stdin_bytes.is_some() {
-        command.stdin(std::process::Stdio::piped());
-    } else {
-        command.stdin(std::process::Stdio::null());
-    }
-    let mut child = match command.spawn() {
-        Ok(child) => child,
-        Err(error) => {
-            return CliOutput {
-                code: None,
-                status_success: false,
-                stdout: String::new(),
-                stderr: format!("cannot execute {}: {error}", cli_bin.display()),
-                timed_out: false,
-            };
-        }
-    };
-    if let Some(bytes) = stdin_bytes {
-        if let Some(mut stdin) = child.stdin.take() {
-            // Best-effort write then close: a failed write fails the
-            // run, never hangs it (the wait below stays bounded and
-            // kills past the timeout).
-            let _ = stdin.write_all(bytes);
-        }
-    }
-    let deadline = std::time::Instant::now() + timeout;
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                let output = child.wait_with_output();
-                return match output {
-                    Ok(output) => CliOutput {
-                        code: output.status.code().or(status.code()),
-                        status_success: output.status.success(),
-                        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-                        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-                        timed_out: false,
-                    },
-                    Err(error) => CliOutput {
-                        code: status.code(),
-                        status_success: status.success(),
-                        stdout: String::new(),
-                        stderr: format!("cannot collect CLI output: {error}"),
-                        timed_out: false,
-                    },
-                };
-            }
-            Ok(None) => {
-                if std::time::Instant::now() >= deadline {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return CliOutput {
-                        code: None,
-                        status_success: false,
-                        stdout: String::new(),
-                        stderr: format!(
-                            "CLI did not complete within {}s and was stopped; outcome unknown",
-                            timeout.as_secs()
-                        ),
-                        timed_out: true,
-                    };
-                }
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            Err(error) => {
-                return CliOutput {
-                    code: None,
-                    status_success: false,
-                    stdout: String::new(),
-                    stderr: format!("cannot wait on CLI process: {error}"),
-                    timed_out: false,
-                };
-            }
-        }
-    }
-}
-
-fn truncate(text: &str, max: usize) -> String {
-    let trimmed = text.trim();
-    if trimmed.len() <= max {
-        return trimmed.to_string();
-    }
-    let mut end = max;
-    while end > 0 && !trimmed.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}…", trimmed[..end].trim_end())
 }
 
 /// Default commit timeout: the version check plus one Argon2-free
@@ -503,14 +565,134 @@ mod tests {
                 passphrase_file: "/k/passphrase".to_string(),
                 identity_exists: true,
                 passphrase_exists: true,
+                usable: true,
             },
         };
         assert_eq!(
             serde_json::to_value(&report).unwrap(),
             serde_json::json!({
                 "result": {"result": "completed", "detail": "ok", "passphrase": "abcd6e-789abc-d6e789-abcd6e"},
-                "defaults": {"identity_file": "/k/identity", "passphrase_file": "/k/passphrase", "identity_exists": true, "passphrase_exists": true},
+                "defaults": {"identity_file": "/k/identity", "passphrase_file": "/k/passphrase", "identity_exists": true, "passphrase_exists": true, "usable": true},
             })
+        );
+    }
+
+    /// `Debug` never leaks the passphrase.
+    #[test]
+    fn debug_redacts_the_passphrase() {
+        let result = OnboardingResult::Completed {
+            detail: "ok".to_string(),
+            passphrase: Some("abcd6e-789abc-d6e789-abcd6e".to_string()),
+        };
+        let rendered = format!("{result:?}");
+        assert!(rendered.contains("REDACTED"), "rendered: {rendered}");
+        assert!(!rendered.contains("abcd6e"), "rendered: {rendered}");
+    }
+
+    /// Write a fake `wyrd` CLI: answers `__build_info` with the
+    /// workspace version and the onboarding verbs with canned
+    /// answers. `new-passphrase` prints one shape-valid phrase;
+    /// `commit` drains stdin and exits 0 without writing (the
+    /// adapter maps exit codes only); `verify` exits 0. The adapter
+    /// spawns it exactly like the installed binary — no mock.
+    fn fake_cli(tag: &str, verify_code: i32, wedge: bool) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "wyrd-desktop-onboarding-fakecli-{}-{}",
+            std::process::id(),
+            tag
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("wyrd");
+        let version = env!("CARGO_PKG_VERSION");
+        let script = if wedge {
+            format!(
+                "#!/bin/sh\nif [ \"$1\" = \"__build_info\" ]; then\necho \"update build: {version}\"\nexit 0\nfi\nsleep 30\nexit 0\n"
+            )
+        } else {
+            format!(
+                "#!/bin/sh\nif [ \"$1\" = \"__build_info\" ]; then\necho \"update build: {version}\"\nexit 0\nfi\nif [ \"$1\" = \"identity\" ] && [ \"$2\" = \"new-passphrase\" ]; then\necho \"abcd6e-789abc-d6e789-abcd6e\"\nexit 0\nfi\nif [ \"$1\" = \"identity\" ] && [ \"$2\" = \"commit\" ]; then\ncat > /dev/null\nexit 0\nfi\nif [ \"$1\" = \"identity\" ] && [ \"$2\" = \"verify\" ]; then\nexit {verify_code}\nfi\nexit 2\n"
+            )
+        };
+        std::fs::write(&path, script).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        path
+    }
+
+    /// `new-passphrase` returns the shape-valid phrase from stdout;
+    /// malformed output would resolve unknown instead.
+    #[test]
+    fn new_passphrase_returns_the_shaped_phrase() {
+        let cli = fake_cli("phrase", 0, false);
+        let report = run_new_passphrase(&cli, Duration::from_secs(30));
+        match &report.result {
+            OnboardingResult::Completed { passphrase, .. } => {
+                assert_eq!(passphrase.as_deref(), Some("abcd6e-789abc-d6e789-abcd6e"));
+            }
+            other => panic!("fake new-passphrase completes: {other:?}"),
+        }
+    }
+
+    /// `commit` pipes the passphrase on stdin (the fake drains it)
+    /// and maps exit 0 to completed without echoing the text.
+    #[test]
+    fn commit_pipes_stdin_and_maps_the_code_only() {
+        let cli = fake_cli("commit", 0, false);
+        let report = run_commit(
+            &cli,
+            Path::new("/k/identity"),
+            Path::new("/k/passphrase"),
+            "exactly-12ch",
+            Duration::from_secs(30),
+        );
+        match &report.result {
+            OnboardingResult::Completed { passphrase, .. } => assert!(passphrase.is_none()),
+            other => panic!("fake exit-0 commit completes: {other:?}"),
+        }
+    }
+
+    /// `verify` maps a nonzero exit to an expected failure.
+    #[test]
+    fn verify_maps_exit_2_to_expected_failure() {
+        let cli = fake_cli("verify-fail", 2, false);
+        let report = run_verify(
+            &cli,
+            Path::new("/k/identity"),
+            Path::new("/k/passphrase"),
+            Duration::from_secs(30),
+        );
+        assert!(
+            matches!(&report.result, OnboardingResult::ExpectedFailure { .. }),
+            "exit 2 fails expectedly: {:?}",
+            report.result
+        );
+    }
+
+    /// A wedged CLI is killed past the timeout even with stdin
+    /// piped: the outcome resolves unknown and the wait stays
+    /// bounded.
+    #[test]
+    fn wedged_commit_resolves_unknown() {
+        let cli = fake_cli("wedge", 0, true);
+        let start = std::time::Instant::now();
+        let report = run_commit(
+            &cli,
+            Path::new("/k/identity"),
+            Path::new("/k/passphrase"),
+            "exactly-12ch",
+            Duration::from_secs(2),
+        );
+        assert!(
+            start.elapsed() < Duration::from_secs(20),
+            "the wait is bounded by the timeout"
+        );
+        assert!(
+            matches!(&report.result, OnboardingResult::Unknown { .. }),
+            "a wedged CLI resolves unknown: {:?}",
+            report.result
         );
     }
 }

@@ -1,12 +1,11 @@
 <!-- First-run identity onboarding: three stages (Identity ->
 Passphrase -> Recovery) plus Ready, with a first-class Restore
-branch. Copy is normative per the frozen v5 design
-(planning/v0.4/first-run-identity-onboarding-DRAFT.md): the
-disclosure audit fixture asserts the load-bearing strings verbatim.
-Secrets: the generated passphrase lives in component state from
-write-down to Finish and is never persisted here; commit sends it to
-the backend once (stdin pipe, never argv). Identity secrets never
-enter this component. -->
+branch. Copy is normative per `docs/design/first-run-onboarding.md`:
+the disclosure audit fixture asserts the load-bearing strings
+verbatim. Secrets: the generated passphrase lives in component state
+from write-down to Finish and is never persisted here; commit sends
+it to the backend once (stdin pipe, never argv). Identity secrets
+never enter this component. -->
 <script lang="ts">
   import Button from "$lib/components/ui/button.svelte";
   import type { KeyDefaults, OnboardingReport } from "$lib/ipc/results.js";
@@ -22,7 +21,7 @@ enter this component. -->
     onCommit: (args: { identityFile: string; passphraseFile: string; passphrase: string }) => Promise<OnboardingReport>;
     onVerify: (args: { identityFile: string; passphraseFile: string }) => Promise<OnboardingReport>;
     onReveal: (path: string) => Promise<boolean>;
-    onDone: (identityFile: string, passphraseFile: string) => void;
+    onDone: (identityFile: string, passphraseFile: string, mode: "create" | "join") => void;
     onQuit: () => void;
   }
 
@@ -46,14 +45,13 @@ enter this component. -->
   let working = $state(false);
   let helper: string | null = $state(null);
   let commitError: string | null = $state(null);
+  let commitReport = $state<OnboardingReport | null>(null);
   let committedIdentityFile = $state("");
   let committedPassphraseFile = $state("");
   // Discard prompt.
   let confirmDiscard = $state(false);
 
   const busy = $derived(pending || working);
-  const identityFile = $derived(choice === "restore" && restoreIdentityFile !== "" ? restoreIdentityFile : defaults.identity_file);
-  const passphraseFile = $derived(choice === "restore" && restorePassphraseFile !== "" ? restorePassphraseFile : defaults.passphrase_file);
 
   function effectivePassphrase(): string | null {
     if (choice === "restore") return null;
@@ -137,6 +135,11 @@ enter this component. -->
   async function finish(): Promise<void> {
     helper = null;
     commitError = null;
+    commitReport = null;
+    if (!defaults.usable) {
+      helper = "Could not determine this device's credential locations: no home directory resolves. Fix the environment and retry — nothing was written.";
+      return;
+    }
     if (!acknowledged) {
       helper = "Confirm you have stored your passphrase somewhere safe before finishing.";
       return;
@@ -172,6 +175,7 @@ enter this component. -->
     working = true;
     try {
       const report = await onCommit({ identityFile: defaults.identity_file, passphraseFile: defaults.passphrase_file, passphrase });
+      commitReport = report;
       if (report.result.result === "completed") {
         // Read-back: verify through the production reader before
         // navigating anywhere (commit boundary step 6).
@@ -182,9 +186,11 @@ enter this component. -->
           generatedPassphrase = null;
           customPassphrase = "";
           customConfirm = "";
+          commitReport = null;
           stage = "ready";
         } else {
-          commitError = describeReport(check, "The files were written but did not read back.");
+          commitReport = check;
+          commitError = describeReport(check, "The files were written but are not readable yet.");
         }
       } else {
         commitError = describeReport(report, "Could not write the credential files.");
@@ -195,6 +201,34 @@ enter this component. -->
       working = false;
     }
   }
+
+  // Verify-only recovery after a written-but-unreadable commit: the
+  // files exist (fresh existence in the stored report), so re-check
+  // them without re-running the never-overwrite commit.
+  async function verifyExisting(): Promise<void> {
+    commitError = null;
+    working = true;
+    try {
+      const check = await onVerify({ identityFile: defaults.identity_file, passphraseFile: defaults.passphrase_file });
+      if (check.result.result === "completed") {
+        committedIdentityFile = defaults.identity_file;
+        committedPassphraseFile = defaults.passphrase_file;
+        commitReport = null;
+        stage = "ready";
+      } else {
+        commitReport = check;
+        commitError = describeReport(check, "The files are still not readable.");
+      }
+    } catch (failure: unknown) {
+      commitError = failure instanceof Error ? failure.message : String(failure);
+    } finally {
+      working = false;
+    }
+  }
+
+  const commitWroteFiles = $derived(
+    commitReport !== null && commitReport.defaults.identity_exists && commitReport.defaults.passphrase_exists,
+  );
 
   function describeReport(report: OnboardingReport, prefix: string): string {
     const result = report.result;
@@ -232,7 +266,7 @@ enter this component. -->
 
   function quit(): void {
     if (stage === "ready") {
-      onDone(committedIdentityFile, committedPassphraseFile);
+      onDone(committedIdentityFile, committedPassphraseFile, "create");
       return;
     }
     confirmDiscard = true;
@@ -301,17 +335,17 @@ enter this component. -->
     {#if helper !== null}<p class="mt-3 text-sm" role="alert">{helper}</p>{/if}
     <div class="mt-4 flex gap-2">
       <Button variant="default" size="sm" disabled={busy} onclick={() => void goPassphrase()}>Continue</Button>
-      <Button variant="secondary" size="sm" disabled={busy} onclick={quit}>Quit</Button>
+      <Button variant="secondary" size="sm" disabled={busy} onclick={quit}>Discard</Button>
     </div>
   {:else if stage === "passphrase"}
     {#if choice === "restore"}
       <h1 class="mt-4 text-2xl font-semibold tracking-tight">Restore from backup</h1>
-      <p class="mt-2 text-sm">Identity files verified: <span class="font-mono text-xs">{restoreIdentityFile}</span> and <span class="font-mono text-xs">{restorePassphraseFile}</span>. Continue to review what restore does and doesn't cover.</p>
+      <p class="mt-2 text-sm">Identity files are readable: <span class="font-mono text-xs">{restoreIdentityFile}</span> and <span class="font-mono text-xs">{restorePassphraseFile}</span>. Continue to review what restore does and doesn't cover.</p>
       {#if helper !== null}<p class="mt-3 text-sm" role="alert">{helper}</p>{/if}
       <div class="mt-4 flex gap-2">
         <Button variant="secondary" size="sm" disabled={busy} onclick={() => (stage = "identity")}>Back</Button>
         <Button variant="default" size="sm" disabled={busy} onclick={() => void goRecovery()}>Continue</Button>
-        <Button variant="secondary" size="sm" disabled={busy} onclick={quit}>Quit</Button>
+        <Button variant="secondary" size="sm" disabled={busy} onclick={quit}>Discard</Button>
       </div>
     {:else}
       <h1 class="mt-4 text-2xl font-semibold tracking-tight">Choose a passphrase</h1>
@@ -359,7 +393,7 @@ enter this component. -->
       <div class="mt-4 flex gap-2">
         <Button variant="secondary" size="sm" disabled={busy} onclick={() => (stage = "identity")}>Back</Button>
         <Button variant="default" size="sm" disabled={busy} onclick={() => void goRecovery()}>Continue</Button>
-        <Button variant="secondary" size="sm" disabled={busy} onclick={quit}>Quit</Button>
+        <Button variant="secondary" size="sm" disabled={busy} onclick={quit}>Discard</Button>
       </div>
     {/if}
   {:else if stage === "recovery"}
@@ -401,7 +435,14 @@ enter this component. -->
     </label>
 
     {#if helper !== null}<p class="mt-3 text-sm" role="alert">{helper}</p>{/if}
-    {#if commitError !== null}<p class="mt-3 text-sm" role="alert">{commitError}</p>{/if}
+    {#if commitError !== null}
+      <p class="mt-3 text-sm" role="alert">{commitError}</p>
+      {#if commitWroteFiles}
+        <div class="mt-2">
+          <Button variant="secondary" size="sm" disabled={busy} onclick={() => void verifyExisting()}>Verify the existing files</Button>
+        </div>
+      {/if}
+    {/if}
     <div class="mt-4 flex gap-2">
       <Button variant="secondary" size="sm" disabled={busy} onclick={() => (stage = "passphrase")}>Back</Button>
       <Button variant="default" size="sm" disabled={busy} onclick={() => void finish()}>{working ? "Finishing…" : "Finish"}</Button>
@@ -411,8 +452,8 @@ enter this component. -->
     <h1 class="mt-4 text-2xl font-semibold tracking-tight">This device is ready</h1>
     <p class="mt-2 text-sm">Your device has its own Wyrd identity.</p>
     <div class="mt-4 space-y-2">
-      <Button variant="default" size="sm" disabled={busy} onclick={() => onDone(committedIdentityFile, committedPassphraseFile)}>Create a drive — Start a private collection of files and history.</Button>
-      <Button variant="secondary" size="sm" disabled={busy} onclick={() => onDone(committedIdentityFile, committedPassphraseFile)}>Join with an invitation — Join a drive someone has shared with this device.</Button>
+      <Button variant="default" size="sm" disabled={busy} onclick={() => onDone(committedIdentityFile, committedPassphraseFile, "create")}>Create a drive — Start a private collection of files and history.</Button>
+      <Button variant="secondary" size="sm" disabled={busy} onclick={() => onDone(committedIdentityFile, committedPassphraseFile, "join")}>Join with an invitation — Join a drive someone has shared with this device.</Button>
     </div>
     <div class="mt-4 rounded-md border border-ink/15 px-3 py-2 text-sm">
       <p class="font-semibold">Identity files <span class="font-normal text-smoke">— Stored on this device:</span></p>
@@ -426,8 +467,8 @@ enter this component. -->
 
   {#if confirmDiscard}
     <div class="mt-4 rounded-md border border-ink/15 px-3 py-2 text-sm" role="alertdialog" aria-label="Discard onboarding">
-      <p class="font-semibold">Discard and quit?</p>
-      <p class="mt-1">The identity is not saved yet{useGenerated && generatedPassphrase !== null ? " and anything generated will be lost" : ""}. Quitting now leaves nothing behind.</p>
+      <p class="font-semibold">Discard and start over?</p>
+      <p class="mt-1">The identity is not saved yet{useGenerated && generatedPassphrase !== null ? " and anything generated will be lost" : ""}. Starting over leaves nothing behind.</p>
       <div class="mt-2 flex gap-2">
         <Button variant="secondary" size="sm" onclick={() => (confirmDiscard = false)}>Keep going</Button>
         <Button variant="default" size="sm" onclick={onQuit}>Discard</Button>

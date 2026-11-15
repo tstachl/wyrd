@@ -7,8 +7,11 @@ use std::path::PathBuf;
 
 /// The `wyrd` binary: create a drive, mount its live projection,
 /// export its namespace to a plain directory tree, administer its
-/// membership, pair a new device, or sync headless. All subcommands need the
-/// credential files (read and hardened by wyrd code, never by clap);
+/// membership, pair a new device, or sync headless. Every
+/// drive-scoped subcommand needs the credential files (read and
+/// hardened by wyrd code, never by clap); `identity` is the
+/// exception — it creates them and takes paths to write, not to
+/// read.
 /// `--relay` is deployment state shared by every networked
 /// subcommand — nothing in the keystore names relays, so they arrive
 /// as flags, defaulted from the drive's `default.toml` when the flags

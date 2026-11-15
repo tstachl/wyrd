@@ -609,13 +609,24 @@ pub async fn onboarding_new_passphrase<R: Runtime>(
 
 /// Commit arguments: credential paths plus the passphrase text. The
 /// text travels backend -> CLI on the stdin pipe (never argv); the
-/// frontend holds it only from write-down to Finish.
-#[derive(Debug, Clone, serde::Deserialize)]
+/// frontend holds it only from write-down to Finish. `Debug` is
+/// redacted so no log line carries the secret.
+#[derive(Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OnboardingCommitArgs {
     pub identity_file: String,
     pub passphrase_file: String,
     pub passphrase: String,
+}
+
+impl std::fmt::Debug for OnboardingCommitArgs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OnboardingCommitArgs")
+            .field("identity_file", &self.identity_file)
+            .field("passphrase_file", &self.passphrase_file)
+            .field("passphrase", &"REDACTED")
+            .finish()
+    }
 }
 
 /// Commit both credential files (generate + atomic write + read-back
@@ -664,6 +675,43 @@ pub async fn onboarding_verify<R: Runtime>(
         let cli = state.cli_bin();
         match cli {
             Ok(bin) => super::onboarding::run_verify(
+                &bin,
+                Path::new(&args.identity_file),
+                Path::new(&args.passphrase_file),
+                super::onboarding::onboarding_timeout(),
+            ),
+            Err(reason) => super::onboarding::OnboardingReport {
+                result: super::onboarding::OnboardingResult::VersionMismatch { reason },
+                defaults: super::onboarding::default_key_paths(),
+            },
+        }
+    })
+    .await
+}
+
+/// Adopt arguments: credential paths only, never contents. The
+/// backend verifies the pair first, then records it as the device's
+/// credential pair for this and later launches.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OnboardingAdoptArgs {
+    pub identity_file: String,
+    pub passphrase_file: String,
+}
+
+/// Verify the pair, then record it as adopted. Infallible; without
+/// the record a restore or repair choice would be orphaned after the
+/// session — the gate resolves the adopted pair, not just the
+/// platform defaults.
+#[tauri::command]
+pub async fn onboarding_adopt<R: Runtime>(
+    app: AppHandle<R>,
+    args: OnboardingAdoptArgs,
+) -> super::onboarding::OnboardingReport {
+    run_onboarding(app, "onboarding_adopt", move |state| {
+        let cli = state.cli_bin();
+        match cli {
+            Ok(bin) => super::onboarding::run_adopt(
                 &bin,
                 Path::new(&args.identity_file),
                 Path::new(&args.passphrase_file),
@@ -757,8 +805,11 @@ where
 /// Run one lifecycle operation serialized per drive: validate the
 /// identity, claim the flight (refuse `Busy` when held), run the
 /// blocking CLI exchange, release the flight, then re-read the
+/// registry, probe every drive, and re-observe the operated drive's
 /// membership — verification-via-reread on every path, including
 /// timeouts and spawn failures. Everything runs on the blocking
+/// pool (the registry probe fans out over sockets with a per-drive
+/// bound and must never park an async runtime worker). A dead
 /// pool (the registry probe fans out over sockets with a per-drive
 /// bound and must never park an async runtime worker). A dead
 /// blocking worker resolves `Unknown`, never success: the outcome
@@ -1219,5 +1270,22 @@ mod tests {
         .expect("camelCase args deserialize");
         assert_eq!(args.drive_dir, "/drives/alpha");
         assert!(args.no_service);
+        // Onboarding args arrive the same way: credential paths
+        // camelCase, the commit passphrase as a plain field (it
+        // rides the stdin pipe from here, never argv).
+        let commit: super::OnboardingCommitArgs = serde_json::from_value(serde_json::json!({
+            "identityFile": "/keys/identity",
+            "passphraseFile": "/keys/passphrase",
+            "passphrase": "abcd6e-789abc-d6e789-abcd6e",
+        }))
+        .expect("camelCase commit args deserialize");
+        assert_eq!(commit.identity_file, "/keys/identity");
+        assert_eq!(commit.passphrase, "abcd6e-789abc-d6e789-abcd6e");
+        let adopt: super::OnboardingAdoptArgs = serde_json::from_value(serde_json::json!({
+            "identityFile": "/keys/identity",
+            "passphraseFile": "/keys/passphrase",
+        }))
+        .expect("camelCase adopt args deserialize");
+        assert_eq!(adopt.passphrase_file, "/keys/passphrase");
     }
 }

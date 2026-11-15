@@ -51,6 +51,9 @@ subcommand; subcommand flags (names, modes, paths) follow it.
 ### Command tree and migration
 
 ```
+wyrd identity (generate --identity-file … --passphrase-file …
+    | new-passphrase | commit --identity-file … --passphrase-file …
+    | verify --identity-file … --passphrase-file …)
 wyrd drive <dir> [--identity-file …] [--passphrase-file …]
     (init | bootstrap --name … [--mode …] … | delete [--yes] | reconfigure …)
 wyrd device <dir> (id | keys | pairing-request <out> | join <invitation>)
@@ -64,6 +67,18 @@ wyrd materialization <dir>
     (status | budgets | role (set | status) | pin | unpin | evict)
 wyrd mount <dir> <mountpoint> … | wyrd export <dir> <out> | wyrd update …
 ```
+
+`wyrd identity` is first-run onboarding and takes no drive and no
+credential flags — it creates the credential files the other
+commands consume. `generate` mints an identity secret plus a
+generated passphrase, writes both files (owner-only, never
+overwrite), and prints the passphrase on stdout for write-down.
+`new-passphrase` prints one and writes nothing. `commit` reads the
+passphrase from stdin (never argv), mints the identity in-process,
+and writes both files. `verify` reads both through the hardened
+reader and exits 0/2. Exit codes follow the surface contract
+(0 success, 2 usage-or-expected-failure); only `drive`/`member`
+operations additionally use 78 (terminal held-drive).
 
 `drive init` creates identity, root custody, genesis membership;
 `drive bootstrap` provisions and hands off to OS supervision. `device

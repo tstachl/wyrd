@@ -222,7 +222,7 @@ pub fn desktop_build_version() -> String {
 /// reported build version to equal the desktop's own. Returns the CLI
 /// binary on success for the caller's argv run.
 pub fn check_cli_version(cli_bin: &Path, timeout: Duration) -> Result<PathBuf, ProvisionResult> {
-    let output = run_cli(cli_bin, &["__build_info".into()], timeout);
+    let output = run_cli(cli_bin, &["__build_info".into()], None, timeout);
     if output.timed_out {
         return Err(ProvisionResult::Unknown {
             detail: format!("version check against {} timed out", cli_bin.display()),
@@ -406,12 +406,16 @@ pub fn reconfigure_argv(request: &ReconfigureRequest) -> Result<Vec<OsString>, S
 /// Raw completed-process capture: exit code, stdout, stderr, and
 /// whether the wait timed out. Stdout/stderr are opaque display
 /// detail — callers map on the exit code alone, never on text.
-struct CliOutput {
-    code: Option<i32>,
-    status_success: bool,
-    stdout: String,
-    stderr: String,
-    timed_out: bool,
+/// Shared with the onboarding adapter, whose commit carries the
+/// passphrase on the stdin pipe (the only secret that ever crosses
+/// this boundary, and never via argv).
+#[derive(Debug, Clone)]
+pub(crate) struct CliOutput {
+    pub(crate) code: Option<i32>,
+    pub(crate) status_success: bool,
+    pub(crate) stdout: String,
+    pub(crate) stderr: String,
+    pub(crate) timed_out: bool,
 }
 
 /// Run `<cli> <argv…>` and wait up to `timeout`. `std::process` only:
@@ -422,13 +426,27 @@ struct CliOutput {
 /// later operation on the same drive. Expiry never means failure of
 /// the operation itself — the CLI may have committed first, so every
 /// timeout resolves `Unknown` and triggers observation.
-fn run_cli(cli_bin: &Path, argv: &[OsString], timeout: Duration) -> CliOutput {
+///
+/// `stdin_bytes`, when present, is piped to the child's stdin and
+/// the pipe closed; otherwise stdin is null (a CLI that reads stdin
+/// fails closed instead of hanging the adapter).
+pub(crate) fn run_cli(
+    cli_bin: &Path,
+    argv: &[OsString],
+    stdin_bytes: Option<&[u8]>,
+    timeout: Duration,
+) -> CliOutput {
+    use std::io::Write;
     let mut command = std::process::Command::new(cli_bin);
     command.args(argv);
-    // Non-interactive, always: the CLI must never block on a prompt
-    // the desktop cannot answer. Stdin is null; a CLI that reads
-    // stdin fails closed instead of hanging the adapter.
-    command.stdin(std::process::Stdio::null());
+    if stdin_bytes.is_some() {
+        command.stdin(std::process::Stdio::piped());
+    } else {
+        // Non-interactive, always: the CLI must never block on a prompt
+        // the desktop cannot answer. Stdin is null; a CLI that reads
+        // stdin fails closed instead of hanging the adapter.
+        command.stdin(std::process::Stdio::null());
+    }
     command.stdout(std::process::Stdio::piped());
     command.stderr(std::process::Stdio::piped());
     let mut child = match command.spawn() {
@@ -443,6 +461,14 @@ fn run_cli(cli_bin: &Path, argv: &[OsString], timeout: Duration) -> CliOutput {
             };
         }
     };
+    if let Some(bytes) = stdin_bytes {
+        if let Some(mut stdin) = child.stdin.take() {
+            // Best-effort write then close: a failed write fails the
+            // run, never hangs it (the wait below stays bounded and
+            // kills past the timeout).
+            let _ = stdin.write_all(bytes);
+        }
+    }
     // Poll for completion; kill and reap past the bound. The output
     // pipes stay bounded by the CLI's own chatter (a trusted,
     // terse binary) — but the wait itself is bounded regardless.
@@ -511,7 +537,7 @@ fn describe_code(code: Option<i32>) -> String {
 /// multi-byte character: the cut lands on the last character
 /// boundary at or under `max`, so non-ASCII drive directories
 /// echoed in CLI output can never panic the adapter.
-fn truncate(text: &str, max: usize) -> String {
+pub(crate) fn truncate(text: &str, max: usize) -> String {
     let trimmed = text.trim();
     if trimmed.len() <= max {
         return trimmed.to_string();
@@ -606,7 +632,7 @@ pub fn run_bootstrap(
             };
         }
     };
-    let output = run_cli(cli_bin, &argv, timeout);
+    let output = run_cli(cli_bin, &argv, None, timeout);
     map_exit_output(&output)
 }
 
@@ -622,7 +648,7 @@ pub fn run_leave(cli_bin: &Path, request: &LeaveRequest, timeout: Duration) -> P
         };
     }
     let argv = leave_argv(request);
-    let output = run_cli(cli_bin, &argv, timeout);
+    let output = run_cli(cli_bin, &argv, None, timeout);
     map_exit_output(&output)
 }
 
@@ -653,7 +679,7 @@ pub fn run_reconfigure(
             };
         }
     };
-    let output = run_cli(cli_bin, &argv, timeout);
+    let output = run_cli(cli_bin, &argv, None, timeout);
     map_exit_output(&output)
 }
 
