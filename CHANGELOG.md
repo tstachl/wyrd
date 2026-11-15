@@ -218,6 +218,18 @@ is transient — no drive data is affected.
 
 ### Fixed
 
+- Pin the macOS SDK link order for bundle builds plus a no-Nix-links
+  guard
+  (`nostr:nevent1qqsgc0hw5xhrelz66xynpjfn8y7nl46uhymhnaz2anjf5ns2yq5gmpspz9mhxue69uhkwunpwdczuap49eehg80dg7t`):
+  the team-signed `Wyrd.app` died at launch — the Rust binary linked
+  the Nix-store `libiconv`, which hardened runtime rejects
+  (`different Team IDs`, dead before main). `packaging/macos/build-bundle.sh`
+  is now the one bundle entry point: it appends
+  `-C link-arg=-L<MacOSX.sdk>/usr/lib` to `RUSTFLAGS` so the SDK
+  `libiconv.tbd` wins, then `packaging/macos/check-no-nix-links.sh`
+  fails the build on any `/nix/store` linkage (or nothing to
+  inspect). No source or entitlement changes.
+
 - Retransmit delivered-but-never-ingested announcements
   (`nostr:nevent1qqsznh66507emwenfvpllhxp9y9uhkz340zg9mc2st73vzp0qrgaswspz9mhxue69uhkwunpwdczuap49eehgs82uuc`):
   the publish pass re-advertises a delivered head the recipient's

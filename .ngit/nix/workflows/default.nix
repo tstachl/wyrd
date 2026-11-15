@@ -75,6 +75,7 @@ in
       bash tests/harness/test-entitlements.sh
       bash tests/harness/test-bundler-hook.sh
       bash tests/harness/test-switchover.sh
+      bash tests/harness/test-macos-link-order.sh
       say "native shell suites green"
     '';
   };

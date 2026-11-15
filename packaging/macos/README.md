@@ -63,6 +63,32 @@ stays on the default shell, at most two profiles. A deliberate
 Xcode selection is `TOOLCHAIN=<developer dir>` (with `SWIFTC` and
 `SDK` as finer overrides); never export `DEVELOPER_DIR` for it.
 
+## Bundle builds (macOS link-order pin)
+
+Build the macOS bundle only through `packaging/macos/build-bundle.sh`
+(the release runbook does). Under the default devenv shell the Nix cc
+wrapper puts `-L/nix/store/...-libiconv.../lib` on the link line, so
+the Rust binary records a `/nix/store` libiconv — and a team-signed
+bundle with hardened runtime fails library validation at launch
+(`different Team IDs`, dead before main; observed 2026-11-14,
+`slice_uuid 38ac3d76-…`). The wrapper discovers the Xcode SDK via
+`/usr/bin/xcrun` (same DEVELOPER_DIR/SDKROOT-tolerant pattern as
+`build-appex.sh`), appends `-C link-arg=-L<MacOSX.sdk>/usr/lib` to
+`RUSTFLAGS` so the SDK `libiconv.tbd` (`/usr/lib/libiconv.2.dylib`,
+same ABI 7.0.0) wins, runs `cargo tauri build` from
+`crates/wyrd-desktop` (default `--bundles app`), then guards with
+`packaging/macos/check-no-nix-links.sh`: every file under the bundle
+app's `Contents/MacOS` (no hardcoded binary name), plus the
+standalone binary and the embedded appex binary when present. Any
+`/nix/store` linkage — or nothing to inspect at all — fails the
+build, and the notes name the release dir examined. The dir
+defaults to `CARGO_TARGET_DIR`-aware `target/release`, moves with
+a forwarded `--target <triple>`, and falls back to
+`CARGO_BUILD_TARGET`. No source or entitlement changes — purely link-search
+order. The pin is Darwin-only; elsewhere the build
+forwards untouched. Signing env (`SIGN_IDENTITY`,
+`PROVISIONING_PROFILE`) passes through to the `stage-appex.sh` hook.
+
 Bundle identities: app `md.enesis.wyrd` (from `tauri.conf.json`),
 extension `md.enesis.wyrd.fileprovider`, group
 `group.md.enesis.wyrd`. Observed 2026-11-11 under development
