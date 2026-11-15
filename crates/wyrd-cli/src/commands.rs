@@ -5,6 +5,7 @@ pub(crate) mod bootstrap;
 pub(crate) mod device;
 pub(crate) mod drive;
 pub(crate) mod export;
+pub(crate) mod identity;
 pub(crate) mod materialization;
 pub(crate) mod member;
 #[cfg(feature = "mount")]

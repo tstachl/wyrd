@@ -15,10 +15,16 @@ import {
   listDrives,
   lookup,
   observe,
+  onboardingAdopt,
+  onboardingCommit,
+  onboardingDefaults,
+  onboardingNewPassphrase,
+  onboardingVerify,
   provisionCreate,
   provisionJoin,
   provisionLeave,
   reconnect,
+  revealInFolder,
   submit,
 } from "./operations.js";
 import { IpcTransportError } from "./client.js";
@@ -220,5 +226,67 @@ test("provisioning wrappers send one args object per command", async () => {
         },
       },
     },
+  ]);
+});
+
+test("onboarding wrappers send paths-only args plus the stdin-pipe passphrase", async () => {
+  const seen: Array<{ cmd: string; args: unknown }> = [];
+  mockIPC((cmd, args) => {
+    seen.push({ cmd, args });
+    if (cmd === "onboarding_defaults") {
+      return {
+        identity_file: "/k/identity",
+        passphrase_file: "/k/passphrase",
+        identity_exists: false,
+        passphrase_exists: false,
+      };
+    }
+    return {
+      result: { result: "completed", detail: "ok", passphrase: null },
+      defaults: {
+        identity_file: "/k/identity",
+        passphrase_file: "/k/passphrase",
+        identity_exists: true,
+        passphrase_exists: true,
+      },
+    };
+  });
+  const defaults = await onboardingDefaults();
+  expect(defaults.identity_exists).toBe(false);
+  // new-passphrase sends nothing but the command: writes nothing.
+  await onboardingNewPassphrase();
+  // commit sends paths plus the passphrase text (stdin pipe, never argv).
+  await onboardingCommit({
+    identityFile: "/k/identity",
+    passphraseFile: "/k/passphrase",
+    passphrase: "abcd6e-789abc-d6e789-abcd6e",
+  });
+  // verify sends paths only, never contents; adopt records the
+  // verified pair so the gate resolves it after the session.
+  await onboardingVerify({ identityFile: "/k/identity", passphraseFile: "/k/passphrase" });
+  await onboardingAdopt({ identityFile: "/k/identity", passphraseFile: "/k/passphrase" });
+  await revealInFolder("/k/identity");
+  expect(seen).toEqual([
+    { cmd: "onboarding_defaults", args: {} },
+    { cmd: "onboarding_new_passphrase", args: {} },
+    {
+      cmd: "onboarding_commit",
+      args: {
+        args: {
+          identityFile: "/k/identity",
+          passphraseFile: "/k/passphrase",
+          passphrase: "abcd6e-789abc-d6e789-abcd6e",
+        },
+      },
+    },
+    {
+      cmd: "onboarding_verify",
+      args: { args: { identityFile: "/k/identity", passphraseFile: "/k/passphrase" } },
+    },
+    {
+      cmd: "onboarding_adopt",
+      args: { args: { identityFile: "/k/identity", passphraseFile: "/k/passphrase" } },
+    },
+    { cmd: "reveal_in_folder", args: { args: { path: "/k/identity" } } },
   ]);
 });

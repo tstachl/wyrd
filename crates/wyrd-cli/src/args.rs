@@ -7,8 +7,11 @@ use std::path::PathBuf;
 
 /// The `wyrd` binary: create a drive, mount its live projection,
 /// export its namespace to a plain directory tree, administer its
-/// membership, pair a new device, or sync headless. All subcommands need the
-/// credential files (read and hardened by wyrd code, never by clap);
+/// membership, pair a new device, or sync headless. Every
+/// drive-scoped subcommand needs the credential files (read and
+/// hardened by wyrd code, never by clap); `identity` is the
+/// exception — it creates them and takes paths to write, not to
+/// read.
 /// `--relay` is deployment state shared by every networked
 /// subcommand — nothing in the keystore names relays, so they arrive
 /// as flags, defaulted from the drive's `default.toml` when the flags
@@ -165,6 +168,16 @@ pub(crate) enum Command {
         action: DeviceAction,
         #[command(flatten)]
         credentials: Credentials,
+    },
+    /// First-run identity onboarding: generate this device's
+    /// credential files, or verify them through the hardened reader.
+    /// `generate` mints a fresh identity secret plus a generated
+    /// passphrase, writes both files (owner-only, never overwrite),
+    /// and prints the passphrase on stdout for write-down. `verify`
+    /// checks both files (permissions, format) and exits 0/2.
+    Identity {
+        #[command(subcommand)]
+        action: IdentityAction,
     },
     /// Headless sync: report sync state or run a bounded sync without
     /// mounting. Status never connects and never mutates durable
@@ -479,6 +492,56 @@ pub(crate) enum DeviceAction {
     Join {
         /// The sealed invitation file.
         invitation: PathBuf,
+    },
+}
+
+/// One first-run identity action: generate or verify the device's
+/// credential files. Generation is the onboarding commit source;
+/// verification is the Repair-state and read-back probe.
+#[derive(Debug, Subcommand)]
+pub(crate) enum IdentityAction {
+    /// Generate this device's credential files: a fresh identity
+    /// secret plus a generated passphrase. Writes both files
+    /// (owner-only, never overwrite) and prints the passphrase on
+    /// stdout — the single line the desktop displays for write-down.
+    /// Single-shot (manual/CLI use); the desktop flow uses
+    /// `new-passphrase` + `commit` to preserve its commit boundary.
+    Generate {
+        /// Where to write the identity secret (32 raw bytes).
+        #[arg(long, value_name = "PATH")]
+        identity_file: PathBuf,
+        /// Where to write the generated passphrase (UTF-8 text).
+        #[arg(long, value_name = "PATH")]
+        passphrase_file: PathBuf,
+    },
+    /// Mint a fresh generated passphrase and print it on stdout.
+    /// Writes nothing: the desktop displays it for write-down and
+    /// holds it in memory until `commit`. Single line, no files.
+    NewPassphrase,
+    /// Commit both credential files: generate the identity secret and
+    /// write it plus the passphrase (read from stdin, one line) to
+    /// their paths (owner-only, never overwrite). The identity secret
+    /// never leaves this process; only the passphrase transits, via
+    /// the stdin pipe (never argv). Stdin is the onboarding-only
+    /// exception to paths-only: display requires the text, commit
+    /// requires the bytes, and argv must never carry either.
+    Commit {
+        /// Where to write the identity secret (32 raw bytes).
+        #[arg(long, value_name = "PATH")]
+        identity_file: PathBuf,
+        /// Where to write the passphrase (UTF-8 text).
+        #[arg(long, value_name = "PATH")]
+        passphrase_file: PathBuf,
+    },
+    /// Verify both credential files through the hardened reader
+    /// (owner-only, no symlinks, identity format, UTF-8 passphrase).
+    Verify {
+        /// Identity file to check.
+        #[arg(long, value_name = "PATH")]
+        identity_file: PathBuf,
+        /// Passphrase file to check.
+        #[arg(long, value_name = "PATH")]
+        passphrase_file: PathBuf,
     },
 }
 

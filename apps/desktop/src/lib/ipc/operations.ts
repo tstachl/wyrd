@@ -19,6 +19,8 @@ import { invokeCommand, invokeValue } from "./client.js";
 import type { IpcResult } from "./types.js";
 import type {
   DriveSettingsState,
+  KeyDefaults,
+  OnboardingReport,
   ProvisionReport,
   RegistryState,
   Served,
@@ -166,4 +168,60 @@ export function provisionJoin(args: ProvisionJoinArgs): Promise<ProvisionReport>
  */
 export function provisionLeave(args: ProvisionLeaveArgs): Promise<ProvisionReport> {
   return invokeValue<ProvisionReport>("provision_leave", { args });
+}
+
+// Onboarding operations (first-run identity surface). Paths travel,
+// never secret contents — except the two documented passphrase
+// transits: `new-passphrase` returns the generated text for
+// write-down, and `commit` sends the write-down text back on the
+// stdin pipe (never argv). The identity secret never leaves the CLI.
+
+export interface OnboardingCommitArgs {
+  identityFile: string;
+  passphraseFile: string;
+  passphrase: string;
+}
+
+export interface OnboardingVerifyArgs {
+  identityFile: string;
+  passphraseFile: string;
+}
+
+export interface OnboardingAdoptArgs {
+  identityFile: string;
+  passphraseFile: string;
+}
+
+export interface RevealArgs {
+  path: string;
+}
+
+/** Platform key defaults plus existence (no secret reads). */
+export function onboardingDefaults(): Promise<KeyDefaults> {
+  return invokeValue<KeyDefaults>("onboarding_defaults");
+}
+
+/** One generated passphrase for write-down: writes nothing. */
+export function onboardingNewPassphrase(): Promise<OnboardingReport> {
+  return invokeValue<OnboardingReport>("onboarding_new_passphrase");
+}
+
+/** Commit both credential files (passphrase via stdin pipe, never argv). */
+export function onboardingCommit(args: OnboardingCommitArgs): Promise<OnboardingReport> {
+  return invokeValue<OnboardingReport>("onboarding_commit", { args });
+}
+
+/** Verify both files through the hardened reader (exit codes only). */
+export function onboardingVerify(args: OnboardingVerifyArgs): Promise<OnboardingReport> {
+  return invokeValue<OnboardingReport>("onboarding_verify", { args });
+}
+
+/** Verify the pair, then record it as the adopted credential pair so the gate and later launches resolve it. */
+export function onboardingAdopt(args: OnboardingAdoptArgs): Promise<OnboardingReport> {
+  return invokeValue<OnboardingReport>("onboarding_adopt", { args });
+}
+
+/** Best-effort reveal of one path in the platform file manager. */
+export function revealInFolder(path: string): Promise<boolean> {
+  return invokeValue<boolean>("reveal_in_folder", { args: { path } });
 }

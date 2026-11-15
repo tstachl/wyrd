@@ -13,13 +13,16 @@ entered by hand elsewhere. -->
 
   interface Props {
     pending: boolean;
+    initialIdentityFile: string | null;
+    initialPassphraseFile: string | null;
+    initialMode: "create" | "join";
     onCreate: (args: ProvisionCreateArgs) => Promise<ProvisionReport>;
     onJoin: (args: ProvisionJoinArgs) => Promise<ProvisionReport>;
     onLeave: (args: ProvisionLeaveArgs) => Promise<ProvisionReport>;
     onDone: () => void;
   }
 
-  let { pending, onCreate, onJoin, onLeave, onDone }: Props = $props();
+  let { pending, initialIdentityFile, initialPassphraseFile, initialMode, onCreate, onJoin, onLeave, onDone }: Props = $props();
 
   let mode: "create" | "join" | "leave" = $state("create");
   let name = $state("");
@@ -28,6 +31,20 @@ entered by hand elsewhere. -->
   let identityFile = $state("");
   let passphraseFile = $state("");
   let invitationFile = $state("");
+  // Pre-fill from onboarding (first create goes through the
+  // unchanged constrained CLI adapter with committed credentials).
+  // Only fills empty fields, never clobbers user edits; the mode
+  // follows Ready's Create/Join choice until the user picks a tab.
+  let modeTouched = $state(false);
+  $effect(() => {
+    if (identityFile === "" && initialIdentityFile !== null) identityFile = initialIdentityFile;
+  });
+  $effect(() => {
+    if (passphraseFile === "" && initialPassphraseFile !== null) passphraseFile = initialPassphraseFile;
+  });
+  $effect(() => {
+    if (!modeTouched && mode !== initialMode) mode = initialMode;
+  });
   let acknowledged = $state(false);
   let working = $state(false);
   let report: ProvisionReport | null = $state(null);
@@ -99,7 +116,7 @@ entered by hand elsewhere. -->
         variant={mode === id ? "default" : "secondary"}
         size="sm"
         disabled={busy}
-        onclick={() => { mode = id as typeof mode; report = null; error = null; }}
+        onclick={() => { mode = id as typeof mode; modeTouched = true; report = null; error = null; }}
       >
         {label}
       </Button>

@@ -1,5 +1,6 @@
 <script lang="ts">
   import HeldMark from "$lib/components/held-mark.svelte";
+  import Button from "$lib/components/ui/button.svelte";
   import { describe } from "$lib/ipc/errors.js";
   import { IpcTransportError } from "$lib/ipc/client.js";
   import {
@@ -8,22 +9,32 @@
     listDrives,
     liveness,
     observe,
+    onboardingAdopt,
+    onboardingCommit,
+    onboardingDefaults,
+    onboardingNewPassphrase,
+    onboardingVerify,
     provisionCreate,
     provisionJoin,
     provisionLeave,
     reconnect,
+    revealInFolder,
   } from "$lib/ipc/operations.js";
   import type {
+    OnboardingAdoptArgs,
+    OnboardingCommitArgs,
+    OnboardingVerifyArgs,
     ProvisionCreateArgs,
     ProvisionJoinArgs,
     ProvisionLeaveArgs,
   } from "$lib/ipc/operations.js";
-  import type { ProvisionReport } from "$lib/ipc/results.js";
   import type { IpcResult } from "$lib/ipc/types.js";
-  import type { DriveView } from "$lib/ipc/results.js";
+  import type { DriveView, KeyDefaults, OnboardingReport, ProvisionReport } from "$lib/ipc/results.js";
   import { presentation } from "$lib/state/presentation.svelte.js";
   import type { ShellView } from "$lib/state/presentation.svelte.js";
   import LifecycleView from "$lib/views/LifecycleView.svelte";
+  import OnboardingView from "$lib/views/OnboardingView.svelte";
+  import RepairView from "$lib/views/RepairView.svelte";
   import SettingsView from "$lib/views/SettingsView.svelte";
   import StatusView from "$lib/views/StatusView.svelte";
   import UnavailableView from "$lib/views/UnavailableView.svelte";
@@ -192,6 +203,138 @@
     }
   }
 
+  /**
+   * One onboarding operation through the CLI adapter: infallible
+   * like provisioning — the report carries the outcome plus fresh
+   * existence, and a transport throw surfaces as a notice, never as
+   * an outcome.
+   */
+  async function runOnboarding(call: () => Promise<OnboardingReport>): Promise<OnboardingReport> {
+    presentation.trackRequest();
+    try {
+      const report = await call();
+      presentation.clearTransportNotice();
+      return report;
+    } catch (error: unknown) {
+      const detail =
+        error instanceof IpcTransportError
+          ? "The shell backend did not answer (transport failure, not an owner answer)."
+          : `Unexpected onboarding failure: ${String(error)}`;
+      presentation.noteTransportFailure(detail);
+      throw new Error(detail);
+    } finally {
+      presentation.finishRequest();
+    }
+  }
+
+  // First-run identity gate: no usable credentials -> onboarding
+  // (welcome) or repair — never a silent invitation to generate, and
+  // never past the gate on an unverified state. A verified state
+  // auto-unlocks: the remembered passphrase means no typing. An
+  // unreadable gate (transport failure, unusable paths) is its own
+  // state with a retry — it never opens as done.
+  type OnboardingGate = "loading" | "welcome" | "repair" | "unknown" | "done";
+  let gate = $state<OnboardingGate>("loading");
+  let keyDefaults = $state<KeyDefaults | null>(null);
+  let repairDetail = $state("");
+  let gateDetail = $state("");
+  let onboardedIdentityFile = $state<string | null>(null);
+  let onboardedPassphraseFile = $state<string | null>(null);
+  let pendingProvisionMode = $state<"create" | "join">("create");
+  // Fresh keys for the onboarding component (discard resets it).
+  let onboardingEpoch = $state(0);
+
+  async function checkIdentityGate(): Promise<void> {
+    gate = "loading";
+    try {
+      const defaults = await onboardingDefaults();
+      keyDefaults = defaults;
+      if (!defaults.usable) {
+        gateDetail = "Could not determine this device's credential locations: no home directory resolves. Fix the environment and retry — nothing was written.";
+        gate = "unknown";
+        return;
+      }
+      if (!defaults.identity_exists && !defaults.passphrase_exists) {
+        gate = "welcome";
+        return;
+      }
+      if (!defaults.identity_exists || !defaults.passphrase_exists) {
+        repairDetail = "Incomplete credentials: one of the two files is missing — expected both the identity file and the passphrase file.";
+        gate = "repair";
+        return;
+      }
+      const report = await runOnboarding(() =>
+        onboardingVerify({ identityFile: defaults.identity_file, passphraseFile: defaults.passphrase_file }),
+      );
+      if (report.result.result === "completed") {
+        onboardedIdentityFile = defaults.identity_file;
+        onboardedPassphraseFile = defaults.passphrase_file;
+        gate = "done";
+      } else {
+        repairDetail = report.result.result === "expectedfailure"
+          ? report.result.detail
+          : report.result.result === "versionmismatch"
+            ? `Version mismatch: ${report.result.reason}`
+            : report.result.detail;
+        gate = "repair";
+      }
+    } catch (error: unknown) {
+      // Transport failure: the backend did not answer, so nothing is
+      // verified. Stay explicit — retry, never open as done.
+      gateDetail = error instanceof Error ? error.message : String(error);
+      gate = "unknown";
+    }
+  }
+
+  function onboardingDone(
+    identityFile: string,
+    passphraseFile: string,
+    mode: "create" | "join",
+  ): void {
+    // The pair is already adopted (the commit and restore paths
+    // record it before reporting success); the gate resolves it on
+    // the next check. This only carries the session forward.
+    pendingProvisionMode = mode;
+    onboardedIdentityFile = identityFile;
+    onboardedPassphraseFile = passphraseFile;
+    gate = "done";
+    void refreshLifecycle().then(() => {
+      presentation.selectView("lifecycle");
+    });
+  }
+
+  function repairCreateNew(): void {
+    // Old files stay where they are (never overwritten, never
+    // deleted): the fresh identity commits to `-new` siblings, shown
+    // as the intended locations until Finish commits and adopts them.
+    if (keyDefaults !== null) {
+      keyDefaults = {
+        identity_file: `${keyDefaults.identity_file}-new`,
+        passphrase_file: `${keyDefaults.passphrase_file}-new`,
+        identity_exists: false,
+        passphrase_exists: false,
+        usable: keyDefaults.usable,
+      };
+    }
+    onboardingEpoch += 1;
+    gate = "welcome";
+  }
+
+  function quitToStart(): void {
+    // Discard confirmed in the view: reset to a fresh flow. The app
+    // cannot function without an identity, so quitting mid-flow
+    // returns to the start rather than to an unverified Drives view.
+    onboardingEpoch += 1;
+  }
+
+  async function reveal(path: string): Promise<boolean> {
+    try {
+      return await revealInFolder(path);
+    } catch {
+      return false;
+    }
+  }
+
   function refreshCurrent(): Promise<void> {
     switch (presentation.selectedView) {
       case "status":
@@ -254,6 +397,7 @@
       } else {
         void refreshCurrent();
       }
+      void checkIdentityGate();
     });
   });
 </script>
@@ -314,7 +458,38 @@
   </aside>
 
   <main class="max-w-2xl flex-1 p-8" aria-live="polite">
-    {#if selectedDriveDir !== null && selectedAvailability === "unavailable" && (presentation.selectedView === "status" || presentation.selectedView === "settings")}
+    {#if gate === "loading"}
+      <p class="mt-4 text-sm text-smoke">Checking this device's identity…</p>
+    {:else if gate === "welcome" && keyDefaults !== null}
+      {#key onboardingEpoch}
+        <OnboardingView
+          defaults={keyDefaults}
+          pending={busy}
+          onNewPassphrase={() => runOnboarding(() => onboardingNewPassphrase())}
+          onCommit={(args: OnboardingCommitArgs) => runOnboarding(() => onboardingCommit(args))}
+          onVerify={(args: OnboardingVerifyArgs) => runOnboarding(() => onboardingVerify(args))}
+          onAdopt={(args: OnboardingAdoptArgs) => runOnboarding(() => onboardingAdopt(args))}
+          onReveal={reveal}
+          onDone={(identityFile, passphraseFile, mode) => onboardingDone(identityFile, passphraseFile, mode)}
+          onQuit={quitToStart}
+        />
+      {/key}
+    {:else if gate === "repair" && keyDefaults !== null}
+      <RepairView
+        defaults={keyDefaults}
+        detail={repairDetail}
+        pending={busy}
+        onVerify={(args: OnboardingVerifyArgs) => runOnboarding(() => onboardingVerify(args))}
+        onAdopt={(args: OnboardingAdoptArgs) => runOnboarding(() => onboardingAdopt(args))}
+        onAdopted={(identityFile, passphraseFile) => onboardingDone(identityFile, passphraseFile, "create")}
+        onCreateNew={repairCreateNew}
+      />
+    {:else if gate === "unknown"}
+      <p class="mt-4 text-sm" role="alert">This device's identity could not be checked: {gateDetail}</p>
+      <div class="mt-2">
+        <Button variant="secondary" size="sm" disabled={busy} onclick={() => void checkIdentityGate()}>Retry</Button>
+      </div>
+    {:else if selectedDriveDir !== null && selectedAvailability === "unavailable" && (presentation.selectedView === "status" || presentation.selectedView === "settings")}
       <UnavailableView
         driveLabel={selectedDriveDir}
         detail={unavailableDetail}
@@ -343,6 +518,9 @@
         selectedDriveDir={presentation.selectedDriveDir}
         pending={busy}
         transportNotice={presentation.transportNotice}
+        initialIdentityFile={onboardedIdentityFile}
+        initialPassphraseFile={onboardedPassphraseFile}
+        initialMode={pendingProvisionMode}
         onRefresh={() => void refreshLifecycle()}
         onSelect={(driveDir) => selectDrive(driveDir)}
         onCreate={(args: ProvisionCreateArgs) => runProvision(() => provisionCreate(args))}

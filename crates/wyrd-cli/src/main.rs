@@ -359,6 +359,38 @@ fn command(args: Vec<String>) -> Result<(), CliError> {
             println!("{}", update::render_build_info(&update::own_build_info()));
             return Ok(());
         }
+        Command::Identity { action } => match action {
+            crate::args::IdentityAction::Generate {
+                identity_file,
+                passphrase_file,
+            } => {
+                return crate::commands::identity::generate(
+                    identity_file.clone(),
+                    passphrase_file.clone(),
+                );
+            }
+            crate::args::IdentityAction::Verify {
+                identity_file,
+                passphrase_file,
+            } => {
+                return crate::commands::identity::verify(
+                    identity_file.clone(),
+                    passphrase_file.clone(),
+                );
+            }
+            crate::args::IdentityAction::NewPassphrase => {
+                return crate::commands::identity::new_passphrase();
+            }
+            crate::args::IdentityAction::Commit {
+                identity_file,
+                passphrase_file,
+            } => {
+                return crate::commands::identity::commit(
+                    identity_file.clone(),
+                    passphrase_file.clone(),
+                );
+            }
+        },
         #[cfg(feature = "mount")]
         Command::Mount {
             drive_dir,
@@ -434,10 +466,10 @@ fn command(args: Vec<String>) -> Result<(), CliError> {
 
     match cli.command {
         // Dead by construction: the credentials match above returns
-        // from update and build-info before secrets load. The arm
-        // exists only because the match is exhaustive.
-        Command::Update { .. } | Command::BuildInfo => {
-            unreachable!("update and build-info resolve before credential loading")
+        // from update, build-info, and identity before secrets load.
+        // The arm exists only because the match is exhaustive.
+        Command::Update { .. } | Command::BuildInfo | Command::Identity { .. } => {
+            unreachable!("update, build-info, and identity resolve before credential loading")
         }
         Command::UpdateVerify { drive_dir, .. } => {
             update::run_update_verify(&drive_dir, identity, &passphrase)

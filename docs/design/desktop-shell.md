@@ -471,10 +471,14 @@ verdict.
   completion and the desktop exiting mid-operation is a forced
   termination that reconciles on next launch (no lifecycle);
   secret contents never cross IPC or argv, only file paths (no
-  secrets-adjacent surfaces); the dialog plugin links only with
+  secrets-adjacent surfaces — the onboarding passphrase exception
+  is recorded under "Onboarding passphrase handling" below and
+  applies nowhere else); the dialog plugin links only with
   the shipped view that needs it (no open capability); and the
-  adapter uses only exit codes plus independent re-observation,
-  with CLI stderr as opaque display detail that is never parsed
+  adapter uses only exit codes plus independent re-observation
+  (the onboarding write-down display excepted — one shape-validated
+  line, per "Onboarding passphrase handling" below), with CLI
+  stderr as opaque display detail that is never parsed
   (no CLI-output-as-UX).
 - Settings are read-only in stage 2 (OD, decided): the settings
   view deserializes the existing `settings.json` schema through a
@@ -735,7 +739,9 @@ operations but never becomes a lifecycle or durable-store
 authority. The contract: the desktop invokes the installed CLI
 through a small Rust adapter with structured arguments (never
 shell-constructed); secret contents never cross IPC or argv, only
-credential file paths; operations are non-interactive with
+credential file paths (the onboarding passphrase exception is
+recorded under "Onboarding passphrase handling" below and applies
+nowhere else); operations are non-interactive with
 explicit exit semantics; the desktop waits, then re-reads the
 registry and probes the socket independently, and observed state
 alone determines the display. The adapter uses only the CLI's
@@ -763,6 +769,36 @@ requires `--yes`, so a frontend that omits the dialog cannot
 bypass the destructive-operation requirement. After completion
 the desktop independently re-observes membership and lifecycle
 state either way.
+
+### Onboarding passphrase handling (exception to the paths-only rule)
+
+First-run onboarding is the one place the passphrase crosses the
+two boundaries named above, and only in the two directions the
+write-down step requires:
+
+- CLI stdout to the backend (`identity new-passphrase`, one line),
+  then backend to the webview for display until Finish commits.
+  The backend validates the shape before displaying anything and
+  treats malformed output as unknown.
+- Webview to backend to CLI stdin (`identity commit`, the pipe —
+  never argv) at Finish. The identity secret never leaves the CLI
+  process that mints it.
+
+Rationale: the write-down step fundamentally requires the
+frontend to show the text — generated or user-chosen — and the
+commit step fundamentally requires the bytes; argv must never
+carry either. Controls: the passphrase lives in frontend state
+only from write-down to Finish (never persisted there), the
+commit reads it from the stdin pipe and the CLI re-validates
+before writing, both files are owner-only with no-overwrite, and
+the read-back goes through the hardened reader. The adapter's
+usual exit-codes-only contract holds everywhere except the
+write-down display, whose single stdout line the backend
+shape-validates instead of parsing for lifecycle facts. The
+passphrase is the only secret that ever crosses IPC, and the
+onboarding report's `Debug` is redacted so no log line carries
+it. Everything else — lifecycle operations, provisioning,
+membership — keeps the paths-only rule with no exception.
 
 Mode is a display string end to end: the shell shows the
 registry's service mode and never interprets it. Service mode is

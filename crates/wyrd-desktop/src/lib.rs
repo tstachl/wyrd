@@ -28,11 +28,13 @@
 
 pub mod backend;
 pub mod commands;
+pub mod onboarding;
 pub mod provision;
 pub mod registry;
 pub mod settings_view;
 
 pub use backend::{BackendError, DesktopBackend};
+pub use onboarding::{KeyDefaults, OnboardingReport, OnboardingResult};
 pub use provision::{LeaveRequest, ProvisionRequest, ProvisionResult, PROVISION_TIMEOUT};
 pub use registry::{
     DriveAvailability, DriveView, RegistryEntryWrite, RegistryState, RegistryStatus,
@@ -382,6 +384,12 @@ pub fn invoke_handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> 
         commands::provision_join,
         commands::provision_leave,
         commands::provision_reconfigure,
+        commands::onboarding_defaults,
+        commands::onboarding_new_passphrase,
+        commands::onboarding_commit,
+        commands::onboarding_verify,
+        commands::onboarding_adopt,
+        commands::reveal_in_folder,
     ]
 }
 

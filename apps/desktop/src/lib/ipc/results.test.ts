@@ -245,3 +245,69 @@ test("provisioning report pairs the outcome with the observation", () => {
   };
   expect(failed.result).toBe("expectedfailure");
 });
+
+// Onboarding mirrors. Source of truth: `report_serializes_verbatim`
+// in `crates/wyrd-desktop/src/onboarding.rs` — pins the JSON the
+// backend produces. The generated passphrase travels only in
+// `new-passphrase` answers; every other success carries
+// `passphrase: null`.
+
+import type { KeyDefaults, OnboardingReport, OnboardingResult } from "./results.js";
+
+test("onboarding report carries fresh existence with the outcome", () => {
+  const generated: OnboardingReport = {
+    result: { result: "completed", detail: "generated passphrase ready for write-down", passphrase: "abcd6e-789abc-d6e789-abcd6e" },
+    defaults: {
+      identity_file: "/k/identity",
+      passphrase_file: "/k/passphrase",
+      identity_exists: false,
+      passphrase_exists: false,
+      usable: true,
+    },
+  };
+  expect(generated.result.result).toBe("completed");
+  if (generated.result.result !== "completed") throw new Error("narrow");
+  expect(generated.result.passphrase).toBe("abcd6e-789abc-d6e789-abcd6e");
+  expect(generated.defaults.identity_exists).toBe(false);
+  const committed: OnboardingReport = {
+    result: { result: "completed", detail: "ok", passphrase: null },
+    defaults: {
+      identity_file: "/k/identity",
+      passphrase_file: "/k/passphrase",
+      identity_exists: true,
+      passphrase_exists: true,
+      usable: true,
+    },
+  };
+  if (committed.result.result !== "completed") throw new Error("narrow");
+  expect(committed.result.passphrase).toBeNull();
+  expect(committed.defaults.identity_exists).toBe(true);
+  const refused: OnboardingResult = {
+    result: "expectedfailure",
+    detail: "credential file /k/identity already exists: refusing to overwrite (choose Repair to inspect it)",
+  };
+  expect(refused.result).toBe("expectedfailure");
+  if (refused.result !== "expectedfailure") throw new Error("narrow");
+  expect(refused.detail).toContain("refusing to overwrite");
+});
+
+test("key defaults separate intended paths from actual files", () => {
+  const intended: KeyDefaults = {
+    identity_file: "/k/identity",
+    passphrase_file: "/k/passphrase",
+    identity_exists: false,
+    passphrase_exists: false,
+    usable: true,
+  };
+  expect(intended.identity_exists).toBe(false);
+  // Created-vs-backed-up stays explicit: existence is the only
+  // signal, and showing a path never claims a backup exists.
+  const unusable: KeyDefaults = {
+    identity_file: "",
+    passphrase_file: "",
+    identity_exists: false,
+    passphrase_exists: false,
+    usable: false,
+  };
+  expect(unusable.usable).toBe(false);
+});

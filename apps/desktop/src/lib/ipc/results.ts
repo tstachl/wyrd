@@ -383,3 +383,34 @@ export interface ProvisionReport {
   observed: RegistryState;
   membership: MembershipObservation | null;
 }
+
+// Onboarding mirrors (first-run identity surface).
+//
+// Source of truth: `OnboardingResult` / `OnboardingReport` /
+// `KeyDefaults` in `crates/wyrd-desktop/src/onboarding.rs`. Only the
+// exit code is ever mapped; CLI text rides as opaque detail, and
+// fresh existence nests under `defaults`. The generated passphrase
+// travels only in `new-passphrase` answers for write-down — every
+// other success carries `passphrase: null`.
+
+/** Platform key paths plus existence (no secret reads). `usable` is false only where no home directory resolves — paths are then empty and nothing may commit. */
+export interface KeyDefaults {
+  identity_file: string;
+  passphrase_file: string;
+  identity_exists: boolean;
+  passphrase_exists: boolean;
+  usable: boolean;
+}
+
+/** One onboarding operation outcome. `passphrase` is set only for `new-passphrase` success. */
+export type OnboardingResult =
+  | { result: "completed"; detail: string; passphrase: string | null }
+  | { result: "expectedfailure"; detail: string }
+  | { result: "versionmismatch"; reason: string }
+  | { result: "unknown"; detail: string };
+
+/** One completed onboarding call plus fresh existence (the read-back signal). Infallible. */
+export interface OnboardingReport {
+  result: OnboardingResult;
+  defaults: KeyDefaults;
+}

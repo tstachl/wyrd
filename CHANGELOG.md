@@ -96,6 +96,22 @@ is transient — no drive data is affected.
   mapping, no content matching. Normative lifecycle, encoding,
   transfer, and authority rules in `docs/contracts/object-model.md`.
 
+- First-run identity onboarding
+  (`nostr:nevent1qqsfawkw0lfuwuh85wzj8ntvp56t93whcx7r2xk68msqukvt0rsd4wspz9mhxue69uhkwunpwdczuap49eehg9wgug4`):
+  `wyrd identity generate|new-passphrase|commit|verify` mints and
+  commits this device's credential files (0700 dirs, 0600 files,
+  O_NOFOLLOW, never overwrite, 120-bit chunked passphrases with a
+  12-char floor, hardened read-back), and the desktop shell gates
+  first run on them: Identity/Passphrase/Recovery/Ready plus a
+  Restore branch and Repair states, with the generated passphrase
+  displayed for write-down and committed once at Finish. The
+  passphrase's two transits (CLI stdout for display, stdin pipe
+  for commit) are the documented onboarding exception to the
+  paths-only rule (`docs/design/desktop-shell.md`, "Onboarding
+  passphrase handling"); the adopted pair is recorded so later
+  launches resolve it. Copy and commit boundary are normative in
+  `docs/design/first-run-onboarding.md`.
+
 - Runtime provisioning through the constrained CLI adapter
   (`nostr:nevent1qqsx9357fqqfup9g7kurf7gdcgtjf8qaceay3a90wzxjw6sresg69eqpz9mhxue69uhkwunpwdczuap49eehgcl6hz9`):
   the desktop shell creates, joins, and leaves drives by invoking

@@ -18,6 +18,9 @@ the drive directory explicitly. -->
     selectedDriveDir: string | null;
     pending: boolean;
     transportNotice: string | null;
+    initialIdentityFile: string | null;
+    initialPassphraseFile: string | null;
+    initialMode: "create" | "join";
     onRefresh: () => void;
     onSelect: (driveDir: string) => void;
     onCreate: (args: ProvisionCreateArgs) => Promise<ProvisionReport>;
@@ -25,7 +28,7 @@ the drive directory explicitly. -->
     onLeave: (args: ProvisionLeaveArgs) => Promise<ProvisionReport>;
   }
 
-  let { snapshot, selectedDriveDir, pending, transportNotice, onRefresh, onSelect, onCreate, onJoin, onLeave }: Props = $props();
+  let { snapshot, selectedDriveDir, pending, transportNotice, initialIdentityFile, initialPassphraseFile, initialMode, onRefresh, onSelect, onCreate, onJoin, onLeave }: Props = $props();
 </script>
 
 <div class="flex items-center justify-between">
@@ -98,6 +101,9 @@ the drive directory explicitly. -->
 
   <ProvisioningView
     pending={pending}
+    initialIdentityFile={initialIdentityFile}
+    initialPassphraseFile={initialPassphraseFile}
+    initialMode={initialMode}
     onCreate={onCreate}
     onJoin={onJoin}
     onLeave={onLeave}
