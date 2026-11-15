@@ -63,7 +63,8 @@ if [ "$(uname -s)" = "Darwin" ]; then
     fi
     case "$DISCOVERED_SDK" in
         *[[:space:]]*)
-            echo "error: SDK path contains whitespace, which RUSTFLAGS cannot carry: $DISCOVERED_SDK" >&2
+            echo "error: SDK path contains whitespace," >&2
+            echo "which RUSTFLAGS cannot carry: $DISCOVERED_SDK" >&2
             echo "Point SDK at a whitespace-free path." >&2
             exit 1
             ;;
@@ -82,8 +83,12 @@ cargo tauri build "$@"
 
 # No-Nix-links guard (Darwin only): delegate to
 # check-no-nix-links.sh, which fails closed when it inspects nothing
-# and covers the appex binary too. otool absent means not a macOS
-# bundle host — the check skips itself.
+# and covers the appex binary too. The release dir follows
+# CARGO_TARGET_DIR when set, so a relocated target dir does not trip
+# the fail-closed guard; --target triples pass their release dir to
+# the check explicitly. otool absent means not a macOS bundle host —
+# the check skips itself.
 if [ "$(uname -s)" = "Darwin" ]; then
-    "$HERE/check-no-nix-links.sh" "$ROOT"
+    RELEASE_DIR="${CARGO_TARGET_DIR:-$ROOT/target}/release"
+    "$HERE/check-no-nix-links.sh" "$ROOT" "$RELEASE_DIR"
 fi

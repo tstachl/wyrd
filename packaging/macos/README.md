@@ -81,7 +81,8 @@ same ABI 7.0.0) wins, runs `cargo tauri build` from
 app's `Contents/MacOS` (no hardcoded binary name), plus the
 standalone binary and the embedded appex binary when present. Any
 `/nix/store` linkage — or nothing to inspect at all — fails the
-build. No source or entitlement changes — purely link-search order. The pin is Darwin-only; elsewhere the build
+build. No source or entitlement changes — purely link-search
+order. The pin is Darwin-only; elsewhere the build
 forwards untouched. Signing env (`SIGN_IDENTITY`,
 `PROVISIONING_PROFILE`) passes through to the `stage-appex.sh` hook.
 

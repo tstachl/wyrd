@@ -3,27 +3,34 @@
 # /nix/store path, or hardened runtime fails library validation at
 # launch (`different Team IDs`, dead before main).
 #
-# Usage: packaging/macos/check-no-nix-links.sh [repo-root]
+# Usage: packaging/macos/check-no-nix-links.sh [repo-root [release-dir]]
 # Inspects every regular file under the bundle app's Contents/MacOS
 # (the Tauri binary under its real filename, never a hardcoded one),
 # the standalone release binary, and the embedded appex binary when
 # present. Any /nix/store linkage fails the build, and so does
 # inspecting nothing at all — a guard that examines nothing must not
 # pass. otool absent means not a macOS bundle host: skip with a note.
+#
+# The release dir defaults to <root>/target/release, or
+# $CARGO_TARGET_DIR/release when set; pass it explicitly for
+# --target triples, whose artifacts live elsewhere.
 set -eu
 set -o pipefail 2>/dev/null || true
 
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 ROOT=${1:-$(cd "$HERE/../.." && pwd)}
+TARGET_DIR=${CARGO_TARGET_DIR:-"$ROOT/target"}
+RELEASE_DIR=${2:-"$TARGET_DIR/release"}
 
 if ! command -v otool >/dev/null 2>&1; then
     echo "note: otool absent, skipping no-Nix-links guard." >&2
     exit 0
 fi
 
-APP_MACOS="$ROOT/target/release/bundle/macos/Wyrd.app/Contents/MacOS"
-STANDALONE_BIN="$ROOT/target/release/wyrd-desktop"
-APPEX_BIN="$ROOT/target/release/bundle/macos/Wyrd.app/Contents/PlugIns/WyrdFileProvider.appex/Contents/MacOS/WyrdFileProvider"
+APP_MACOS="$RELEASE_DIR/bundle/macos/Wyrd.app/Contents/MacOS"
+STANDALONE_BIN="$RELEASE_DIR/wyrd-desktop"
+APPEX_BIN="$RELEASE_DIR/bundle/macos/Wyrd.app/Contents/PlugIns"
+APPEX_BIN="$APPEX_BIN/WyrdFileProvider.appex/Contents/MacOS/WyrdFileProvider"
 
 INSPECTED=0
 FOUND=0
