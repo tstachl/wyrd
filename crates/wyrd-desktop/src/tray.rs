@@ -22,8 +22,9 @@
 //!   success without an owner answer.
 //! - Toolkit edge: `tauri::tray` plus `tauri::menu` ride inside the
 //!   reserved `tauri` edge (`tray-icon` + `image-png` features). No
-//!   new external crate, so the layer gate needs no new allow-list
-//!   entry — the reservation beside the toolkit edge is this module.
+//!   new direct dependency edge — the `image-png` feature pulls the
+//!   image stack transitively, which the direct-edge gate does not
+//!   count — so the layer gate needs no new allow-list entry.
 
 use tauri::{AppHandle, Manager, Runtime};
 
@@ -46,6 +47,10 @@ pub const TRAY_QUIT_ID: &str = "wyrd-quit";
 
 /// Frontend event the Set-up action emits: the window shows and the
 /// lifecycle view renders. The tray never selects a drive.
+///
+/// Mirrored in `apps/desktop/src/App.svelte` (the tray route
+/// listener): no shared build step crosses the Rust/TS boundary, so
+/// keep the string in sync on both sides.
 pub const SELECT_LIFECYCLE_EVENT: &str = "wyrd:select-lifecycle";
 
 /// Tray icon id: one presence per process.
@@ -132,31 +137,59 @@ pub fn build_tray_menu<R: Runtime, M: Manager<R>>(
     builder.build()
 }
 
+/// The pre-probe placeholder: an empty ready registry, replaced by
+/// the refresh thread's immediate first read. The setup hook never
+/// probes — a wedged owner must never delay first paint — so the
+/// first menu briefly reads "No drives registered" until the
+/// background refresh (milliseconds later) renders the real state.
+pub fn loading_state() -> RegistryState {
+    RegistryState {
+        status: super::registry::RegistryStatus::Ready,
+        drives: Vec::new(),
+        skipped: Vec::new(),
+    }
+}
+
 /// Show and focus the main window. Best-effort: a missing window is
 /// not a tray failure, so errors are logged, never propagated as a
-/// menu-event failure.
+/// menu-event failure. Deminiaturizes first: `set_focus` is a no-op
+/// while minimized, so restore before showing and focusing.
 pub fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
     if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
         if let Err(error) = window.show().and_then(|()| window.set_focus()) {
             eprintln!("wyrd-desktop: tray show window failed: {error}");
         }
     }
 }
 
-/// Rebuild the tray menu from a fresh registry read. One slow owner
-/// never wedges the refresh: the registry probe bounds each drive,
-/// and a failed rebuild keeps the previous menu.
-pub fn refresh_tray<R: Runtime>(app: &AppHandle<R>) {
+/// Rebuild the tray menu where the registry state changed since the
+/// last render. No tray, no work: a failed build leaves no consumer,
+/// so the probe is skipped entirely instead of connecting per drive.
+/// An unchanged state skips the rebuild, so a long-running app never
+/// churns (or dismisses) the native menu. One slow owner never wedges
+/// the refresh: the registry probe bounds each drive, and a failed
+/// rebuild keeps the previous menu with `last` untouched.
+pub fn refresh_tray_if_changed<R: Runtime>(app: &AppHandle<R>, last: &mut Option<RegistryState>) {
+    if app.tray_by_id(TRAY_ID).is_none() {
+        return;
+    }
     let state = super::registry::list_drives();
-    if let Some(tray) = app.tray_by_id(TRAY_ID) {
-        match build_tray_menu(app, &state) {
-            Ok(menu) => {
-                if let Err(error) = tray.set_menu(Some(menu)) {
-                    eprintln!("wyrd-desktop: tray menu refresh failed: {error}");
+    if last.as_ref() == Some(&state) {
+        return;
+    }
+    match build_tray_menu(app, &state) {
+        Ok(menu) => {
+            if let Some(tray) = app.tray_by_id(TRAY_ID) {
+                match tray.set_menu(Some(menu)) {
+                    Ok(()) => {
+                        *last = Some(state);
+                    }
+                    Err(error) => eprintln!("wyrd-desktop: tray menu refresh failed: {error}"),
                 }
             }
-            Err(error) => eprintln!("wyrd-desktop: tray menu build failed: {error}"),
         }
+        Err(error) => eprintln!("wyrd-desktop: tray menu build failed: {error}"),
     }
 }
 
@@ -243,6 +276,15 @@ mod tests {
         assert_eq!(rows[0].label, "No drives registered");
         assert!(!rows[0].enabled);
         assert_eq!(rows.len(), 4, "one explanation plus three actions");
+    }
+
+    /// The pre-probe placeholder renders the empty menu until the
+    /// refresh thread's immediate first read replaces it.
+    #[test]
+    fn loading_state_renders_the_empty_menu_until_the_first_refresh() {
+        let rows = tray_rows(&loading_state());
+        assert_eq!(rows[0].label, "No drives registered");
+        assert!(!rows[0].enabled);
     }
 
     /// An unreadable registry names itself loudly in the disabled

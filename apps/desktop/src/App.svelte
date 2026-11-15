@@ -390,7 +390,9 @@
   onMount(() => {
     // Tray route: "Set up / connect drives" shows the window from
     // the backend and asks the frontend to render the lifecycle
-    // view. Best-effort: a missing Tauri runtime (browser preview)
+    // view. Mirrored in `crates/wyrd-desktop/src/tray.rs`
+    // (`SELECT_LIFECYCLE_EVENT`): keep the string in sync.
+    // Best-effort: a missing Tauri runtime (browser preview)
     // never fails startup.
     void listen("wyrd:select-lifecycle", () => {
       presentation.selectView("lifecycle");

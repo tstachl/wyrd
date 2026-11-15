@@ -161,16 +161,18 @@ fn main() {
         .invoke_handler(invoke_handler())
         .setup(|app| {
             // Menu-bar extra: one tray icon over the same registry
-            // probe the lifecycle view shows. A missing icon never
-            // fails startup — the window stays the product.
-            let state = wyrd_desktop::registry::list_drives();
-            match tray::build_tray_menu(app.handle(), &state) {
+            // probe the lifecycle view shows. The first menu is the
+            // loading placeholder — the setup hook never probes, so a
+            // wedged owner can never delay first paint; the refresh
+            // thread below populates the menu immediately. A missing
+            // icon never fails startup — the window stays the product.
+            match tray::build_tray_menu(app.handle(), &tray::loading_state()) {
                 Ok(menu) => {
                     let icon =
                         tauri::image::Image::from_bytes(include_bytes!("../icons/32x32.png"));
                     match icon {
                         Ok(icon) => {
-                            if let Err(error) = tauri::tray::TrayIconBuilder::with_id(tray::TRAY_ID)
+                            match tauri::tray::TrayIconBuilder::with_id(tray::TRAY_ID)
                                 .icon(icon)
                                 .tooltip("Wyrd")
                                 .menu(&menu)
@@ -192,7 +194,29 @@ fn main() {
                                 })
                                 .build(app)
                             {
-                                eprintln!("wyrd-desktop: tray icon build failed: {error}");
+                                Ok(_) => {
+                                    // Refresh the menu from fresh
+                                    // registry reads, gated on a live
+                                    // tray: no tray, no probe work.
+                                    // Unchanged states skip the
+                                    // rebuild, so the native menu is
+                                    // never churned. One slow owner
+                                    // never wedges the tray, because
+                                    // the probe bounds each drive and
+                                    // a failed rebuild keeps the old
+                                    // menu.
+                                    let handle = app.handle().clone();
+                                    std::thread::spawn(move || {
+                                        let mut last = None;
+                                        loop {
+                                            tray::refresh_tray_if_changed(&handle, &mut last);
+                                            std::thread::sleep(Duration::from_secs(5));
+                                        }
+                                    });
+                                }
+                                Err(error) => {
+                                    eprintln!("wyrd-desktop: tray icon build failed: {error}");
+                                }
                             }
                         }
                         Err(error) => {
@@ -202,14 +226,6 @@ fn main() {
                 }
                 Err(error) => eprintln!("wyrd-desktop: tray menu build failed: {error}"),
             }
-            // Refresh the menu from fresh registry reads: one slow
-            // owner never wedges the tray, because the probe bounds
-            // each drive and a failed rebuild keeps the old menu.
-            let handle = app.handle().clone();
-            std::thread::spawn(move || loop {
-                std::thread::sleep(Duration::from_secs(5));
-                tray::refresh_tray(&handle);
-            });
             Ok(())
         })
         .on_window_event(|window, event| {
