@@ -112,6 +112,35 @@ needs the same live confirmation this build gave the extension
 side. The container materializes only under a team-signed build
 with provisioning. Deployment target macOS 13.0.
 
+## Developer install (ad-hoc, no fee)
+
+One command builds ad-hoc and installs to an Applications dir,
+ready to launch — no signing assets, no paid Developer Program:
+
+```sh
+packaging/macos/install-dev.sh
+```
+
+Prerequisites: Xcode/CLT (`xcode-select --install`), the devenv
+shell (cargo), `bun` (the desktop `beforeBuildCommand`), `python3`.
+The script builds through `packaging/macos/build-bundle.sh`
+(link-order pin plus no-Nix-links guard), verifies
+`codesign --verify --deep --strict` on the built and installed
+copies (fail closed), copies with `ditto` to
+`/Applications/Wyrd.app` when writable else
+`~/Applications/Wyrd.app` (`--dest`/`DEST` overrides, `--no-open`
+skips launch, `--` forwards e.g. `--target` to the wrapper), and
+launches the app. The UI, owner, registry, and tray work ad-hoc:
+create/join/leave, status, settings.
+
+Finder boundary (honest, not a bug): an ad-hoc appex logs
+`no-group-container` and stays inert — the App Group container
+only materializes under a team-signed build with provisioning.
+Finder integration stays the separately team-gated path below
+("Production entitlements and provisioning"); the signed `.dmg` +
+notarization + human-path rehearsal ride the release track with
+the signing owner, never this script.
+
 ## Protocol (Stage 0 finding)
 
 The extension implements `NSFileProviderReplicatedExtension`

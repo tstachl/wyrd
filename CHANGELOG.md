@@ -177,6 +177,18 @@ is transient — no drive data is affected.
   wire bytes. The tray rides the reserved `tauri` edge (`tray-icon`
   + `image-png` features; the image stack arrives transitively).
 
+- One-command developer install for v0.4 (ad-hoc, no fee)
+  (`nostr:nevent1qqsy9xa9x9ctcgteek5u3szvejd5ff8y02juzlre058qhtccm7czmvspz9mhxue69uhkwunpwdczuap49eehg7cdxm2`):
+  `packaging/macos/install-dev.sh` builds `Wyrd.app` ad-hoc
+  through `build-bundle.sh` (hook stages the appex, pairs
+  identities, pins versions), verifies `codesign --verify
+  --deep --strict` on the built and installed copies, and installs
+  with `ditto` to `/Applications` (or `~/Applications`) ready to
+  launch. UI, owner, registry, and tray work with no signing
+  assets; Finder stays honestly inert ad-hoc (`no-group-container`)
+  with the team-signed path in `packaging/macos/README.md`. Signed
+  `.dmg` plus notarization stays on the release track.
+
 ### Changed
 
 - Settle the CLI command vocabulary and hierarchy
