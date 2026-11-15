@@ -35,10 +35,12 @@ is transient — no drive data is affected.
 
 ### Added
 
-- Menu-bar icon is now a white `w` template image with
-  transparency (`crates/wyrd-desktop/icons/tray-w-template.png`),
-  so macOS tints it for light and dark menu bars. Replaces the
-  reused app icon.
+- Menu-bar icon is now the white Held mark with transparency
+  (`crates/wyrd-desktop/icons/tray-held-template.png`, geometry
+  from `apps/shared/brand/held.svg`, tile dropped), marked as a
+  template image on macOS so the system tints it for light and
+  dark menu bars. Other platforms keep the full-color app icon.
+  Replaces the reused app icon.
 
 - Read-only conflict inspector for File Provider (File Provider
   Stage 3, sub-PR 3, OD-17-B,

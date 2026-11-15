@@ -57,6 +57,16 @@ const QUIT_DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
 /// when the last answer lands, sparse enough to stay out of the way.
 const QUIT_DRAIN_POLL: Duration = Duration::from_millis(50);
 
+/// Tray asset: the white Held silhouette plus alpha on macOS, where
+/// the builder marks it as a template image and the system tints it
+/// for light and dark menu bars; the full-color app icon everywhere
+/// else, where no template tinting exists. The Held geometry follows
+/// `apps/shared/brand/held.svg` (tile dropped, glyph fit to canvas).
+#[cfg(target_os = "macos")]
+const TRAY_ICON_BYTES: &[u8] = include_bytes!("../icons/tray-held-template.png");
+#[cfg(not(target_os = "macos"))]
+const TRAY_ICON_BYTES: &[u8] = include_bytes!("../icons/32x32.png");
+
 /// Usage: `wyrd-desktop [--drive-dir <DIR>]`. Hand-rolled argv: the
 /// layer gate reserves this crate's third-party edges for the Tauri
 /// toolkit, serde, and error plumbing — no CLI parser. The argument
@@ -168,19 +178,21 @@ fn main() {
             // icon never fails startup — the window stays the product.
             match tray::build_tray_menu(app.handle(), &tray::loading_state()) {
                 Ok(menu) => {
-                    let icon = tauri::image::Image::from_bytes(include_bytes!(
-                        "../icons/tray-w-template.png"
-                    ));
+                    let icon = tauri::image::Image::from_bytes(TRAY_ICON_BYTES);
                     match icon {
                         Ok(icon) => {
-                            match tauri::tray::TrayIconBuilder::with_id(tray::TRAY_ID)
-                                .icon(icon)
-                                // Template image (white silhouette plus
-                                // alpha, macOS only): the system tints
-                                // it for light and dark menu bars. A
-                                // fixed-color icon would vanish on one
-                                // of the two.
-                                .icon_as_template(true)
+                            let builder =
+                                tauri::tray::TrayIconBuilder::with_id(tray::TRAY_ID).icon(icon);
+                            // Template image on macOS only: the white
+                            // Held silhouette plus alpha tints for
+                            // light and dark menu bars there, while
+                            // other platforms receive the full-color
+                            // app icon (no template tinting exists
+                            // for them — a white-only asset would
+                            // vanish on a light panel).
+                            #[cfg(target_os = "macos")]
+                            let builder = builder.icon_as_template(true);
+                            match builder
                                 .tooltip("Wyrd")
                                 .menu(&menu)
                                 .show_menu_on_left_click(true)
