@@ -35,14 +35,10 @@ is transient — no drive data is affected.
 
 ### Added
 
-- Template menu-bar icon for the desktop shell: the tray extra now
-  shows a white `w` silhouette with transparency
-  (`crates/wyrd-desktop/icons/tray-w-template.png`, rendered from
-  the system font at bundle time), marked as a template image so
-  macOS tints it for light and dark menu bars. Replaces the reused
-  app icon (dark tile, gold `W`), which read as a foreign badge in
-  the menu bar and vanished against nothing — a fixed white glyph
-  would have vanished on light bars instead.
+- Menu-bar icon is now a white `w` template image with
+  transparency (`crates/wyrd-desktop/icons/tray-w-template.png`),
+  so macOS tints it for light and dark menu bars. Replaces the
+  reused app icon.
 
 - Read-only conflict inspector for File Provider (File Provider
   Stage 3, sub-PR 3, OD-17-B,
