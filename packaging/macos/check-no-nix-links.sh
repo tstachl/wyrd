@@ -20,7 +20,13 @@ set -o pipefail 2>/dev/null || true
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 ROOT=${1:-$(cd "$HERE/../.." && pwd)}
 TARGET_DIR=${CARGO_TARGET_DIR:-"$ROOT/target"}
-RELEASE_DIR=${2:-"$TARGET_DIR/release"}
+if [ -n "${2:-}" ]; then
+    RELEASE_DIR=$2
+elif [ -n "${CARGO_BUILD_TARGET:-}" ]; then
+    RELEASE_DIR="$TARGET_DIR/$CARGO_BUILD_TARGET/release"
+else
+    RELEASE_DIR="$TARGET_DIR/release"
+fi
 
 if ! command -v otool >/dev/null 2>&1; then
     echo "note: otool absent, skipping no-Nix-links guard." >&2
@@ -60,11 +66,11 @@ for BIN in "$STANDALONE_BIN" "$APPEX_BIN"; do
 done
 
 if [ "$INSPECTED" -eq 0 ]; then
-    echo "error: no-Nix-links guard inspected nothing (no bundle, no standalone binary)." >&2
+    echo "error: no-Nix-links guard inspected nothing under $RELEASE_DIR." >&2
     exit 1
 fi
 if [ "$FOUND" -ne 0 ]; then
-    echo "error: no-Nix-links guard failed; see paths above." >&2
+    echo "error: no-Nix-links guard failed in $RELEASE_DIR; see paths above." >&2
     exit 1
 fi
-echo "note: no-Nix-links guard passed ($INSPECTED binaries)." >&2
+echo "note: no-Nix-links guard passed ($INSPECTED binaries in $RELEASE_DIR)." >&2

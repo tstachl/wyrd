@@ -85,35 +85,43 @@ cargo tauri build "$@"
 
 # No-Nix-links guard (Darwin only): delegate to
 # check-no-nix-links.sh, which fails closed when it inspects nothing
-# and covers the appex binary too. The release dir follows
-# CARGO_TARGET_DIR when set and a `--target <triple>` argument when
-# forwarded, so a relocated target dir does not trip the fail-closed
-# guard; anything else passes its release dir to the check
-# explicitly. otool absent means not a macOS bundle host —
-# the check skips itself.
+# and covers the appex binary too. The release dir defaults to a
+# CARGO_TARGET_DIR-aware target/release, moves with a forwarded
+# --target <triple>, and falls back to CARGO_BUILD_TARGET; anything
+# beyond these passes its release dir to check-no-nix-links.sh
+# explicitly. otool absent means not a macOS bundle host — the check
+# skips itself.
 if [ "$(uname -s)" = "Darwin" ]; then
-# A `--target <triple>` build moves the artifacts; the guard must
-# follow or it inspects stale host output (or nothing). Scan the
-# forwarded args for it — the only relocation the wrapper derives
-# itself; anything else goes through check-no-nix-links.sh's
-# explicit dir argument.
-RELEASE_BASE="${CARGO_TARGET_DIR:-$ROOT/target}"
-RELEASE_DIR="$RELEASE_BASE/release"
-NEXT_IS_TARGET=0
-for ARG in "$@"; do
+    # A --target <triple> build moves the artifacts; the guard must
+    # follow or it inspects stale host output (or nothing). Scan the
+    # forwarded args for it, with CARGO_BUILD_TARGET as the env
+    # fallback; anything beyond these passes its release dir to the
+    # check explicitly.
+    RELEASE_BASE="${CARGO_TARGET_DIR:-$ROOT/target}"
+    TRIPLE=""
+    NEXT_IS_TARGET=0
+    for ARG in "$@"; do
+        if [ "$NEXT_IS_TARGET" -eq 1 ]; then
+            TRIPLE="$ARG"
+            NEXT_IS_TARGET=0
+        else
+            case "$ARG" in
+                --target) NEXT_IS_TARGET=1 ;;
+                --target=*) TRIPLE="${ARG#--target=}" ;;
+            esac
+        fi
+    done
     if [ "$NEXT_IS_TARGET" -eq 1 ]; then
-        RELEASE_DIR="$RELEASE_BASE/$ARG/release"
-        NEXT_IS_TARGET=0
-    else
-        case "$ARG" in
-            --target) NEXT_IS_TARGET=1 ;;
-            --target=*) RELEASE_DIR="$RELEASE_BASE/${ARG#--target=}/release" ;;
-        esac
+        echo "error: --target without a triple; refusing a build the guard cannot locate." >&2
+        exit 1
     fi
-done
-if [ "$NEXT_IS_TARGET" -eq 1 ]; then
-    echo "error: --target without a triple; refusing a build the guard cannot locate." >&2
-    exit 1
-fi
-"$HERE/check-no-nix-links.sh" "$ROOT" "$RELEASE_DIR"
+    if [ -z "$TRIPLE" ] && [ -n "${CARGO_BUILD_TARGET:-}" ]; then
+        TRIPLE="$CARGO_BUILD_TARGET"
+    fi
+    if [ -n "$TRIPLE" ]; then
+        RELEASE_DIR="$RELEASE_BASE/$TRIPLE/release"
+    else
+        RELEASE_DIR="$RELEASE_BASE/release"
+    fi
+    "$HERE/check-no-nix-links.sh" "$ROOT" "$RELEASE_DIR"
 fi

@@ -93,6 +93,8 @@ code "$CHECK" | grep -Fq 'WyrdFileProvider.appex' \
   || die "check: appex binary not covered"
 code "$CHECK" | grep -Fq 'CARGO_TARGET_DIR' \
   || die "check: no target-dir relocation"
+code "$CHECK" | grep -Fq 'CARGO_BUILD_TARGET' \
+  || die "check: no CARGO_BUILD_TARGET fallback"
 code "$CHECK" | grep -Fq "case \"\$LINKED\" in" \
   || die "check: linkage is not classified from a single capture"
 code "$CHECK" | grep -Fq 'inspected nothing' \
@@ -106,6 +108,10 @@ pass "check resolves binaries, covers the appex, fails closed"
 # vacuous if the wrapper header is ever reworded.
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
+# Hermetic fixtures: the guard honors ambient target env, so clear
+# both variables for the behavioral block — the relocation legs set
+# their own values inline below.
+unset CARGO_TARGET_DIR CARGO_BUILD_TARGET
 sed '/^[[:space:]]*set -- --bundles app$/d' "$WRAPPER" > "$TMP/wrapper-comment-only.sh"
 printf '# the default shape stays --bundles app; see the runbook\n' >> "$TMP/wrapper-comment-only.sh"
 code "$TMP/wrapper-comment-only.sh" | grep -Fq -- '--bundles app' \
@@ -120,6 +126,11 @@ pass "comment-only mentions cannot satisfy pins"
 mkdir -p "$TMP/bin"
 cat > "$TMP/bin/otool" <<'EOF'
 #!/bin/sh
+if [ -n "${OTOOL_STALE_DIR:-}" ]; then
+    case "$2" in
+    "$OTOOL_STALE_DIR"/*) cat "$OTOOL_NIX_OUT"; exit 0 ;;
+    esac
+fi
 case "$2" in
 *bad*) cat "$OTOOL_NIX_OUT" ;;
 *) cat "$OTOOL_MODE_OUT" ;;
@@ -197,6 +208,53 @@ clean_out > "$OTOOL_MODE_OUT"
   || die "check: explicit release dir refused"
 CARGO_TARGET_DIR="$TMP/custom" "$CHECK" "$TMP/root" >/dev/null 2>&1 \
   || die "check: CARGO_TARGET_DIR relocation refused"
+fixture_root
+mkdir -p "$TMP/custom2/aarch64-apple-darwin/release"
+touch "$TMP/custom2/aarch64-apple-darwin/release/wyrd-desktop"
+CARGO_TARGET_DIR="$TMP/custom2" CARGO_BUILD_TARGET="aarch64-apple-darwin" "$CHECK" "$TMP/root" >/dev/null 2>&1 \
+  || die "check: CARGO_BUILD_TARGET relocation refused"
 pass "guard honors a relocated release dir"
+
+# 8. Behavioral wrapper coverage for the --target scan: stub uname
+# (Darwin), cargo (records argv, always succeeds), and otool, with
+# TOOLCHAIN/SDK fixtures standing in for the Apple toolchain — so
+# this runs on Linux CI too. The stale base dir reports a Nix link
+# for anything under it; the mode file covers the rest.
+mkdir -p "$TMP/wtoolchain/usr/lib" "$TMP/wbase/release" "$TMP/wbase/aarch64-apple-darwin/release"
+touch "$TMP/wtoolchain/usr/lib/libiconv.tbd"
+touch "$TMP/wbase/release/wyrd-desktop"
+touch "$TMP/wbase/aarch64-apple-darwin/release/wyrd-desktop"
+printf '#!/bin/sh\necho Darwin\n' > "$TMP/bin/uname"
+printf '#!/bin/sh\nprintf "%%s\\n" "$@" > "$WRAP_CARGO_ARGS"\nexit 0\n' > "$TMP/bin/cargo"
+chmod +x "$TMP/bin/uname" "$TMP/bin/cargo"
+export WRAP_CARGO_ARGS="$TMP/cargo-args" OTOOL_STALE_DIR="$TMP/wbase/release"
+clean_out > "$OTOOL_MODE_OUT"
+WRAP_RUN="env CARGO_TARGET_DIR=$TMP/wbase TOOLCHAIN=$TMP/wtoolchain SDK=$TMP/wtoolchain"
+# --target <triple>: the clean triple dir passes even though the
+# stale base dir is Nix-linked — only possible if the scan moved
+# the guarded dir.
+$WRAP_RUN "$WRAPPER" --target aarch64-apple-darwin >/dev/null 2>&1 \
+  || die "wrapper: --target triple was not followed"
+grep -Fq -- '--target' "$WRAP_CARGO_ARGS" \
+  || die "wrapper: --target flag was not forwarded to cargo"
+grep -Fq -- 'aarch64-apple-darwin' "$WRAP_CARGO_ARGS" \
+  || die "wrapper: --target triple was not forwarded to cargo"
+pass "wrapper follows --target to the guarded dir"
+# --target=<triple> mirror.
+$WRAP_RUN "$WRAPPER" --target=aarch64-apple-darwin >/dev/null 2>&1 \
+  || die "wrapper: --target= triple was not followed"
+pass "wrapper follows --target= to the guarded dir"
+# Stale-only triple dir: guarding nothing must fail, never pass.
+rm -rf "$TMP/wbase/aarch64-apple-darwin"
+$WRAP_RUN "$WRAPPER" --target aarch64-apple-darwin >/dev/null 2>&1 \
+  && die "wrapper: stale-only triple dir passed"
+pass "wrapper fails closed on an uninspectable triple dir"
+# Dangling --target is refused with a message.
+$WRAP_RUN "$WRAPPER" --target >"$TMP/dangling.out" 2>&1 \
+  && die "wrapper: dangling --target passed"
+grep -Fq 'without a triple' "$TMP/dangling.out" \
+  || die "wrapper: dangling --target refusal names no reason"
+pass "wrapper refuses a dangling --target"
+unset OTOOL_STALE_DIR
 
 echo "macos-link-order: $PASS checks passed"
