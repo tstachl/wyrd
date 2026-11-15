@@ -1,7 +1,7 @@
-<!-- Lifecycle, observational plus runtime provisioning: the
-registered drives, each verified this session, and the explicitly
-selected drive — plus create, join, and leave through the
-constrained CLI adapter. The selection stays presentation state
+<!-- Lifecycle, observational: the registered drives, each verified
+this session, plus the explicitly selected drive. Creation and
+joining live on the dedicated Add a drive page; leaving lives in the
+selected drive's Settings. The selection stays presentation state
 only: it never authorizes backend access, and every command carries
 the drive directory explicitly. -->
 <script lang="ts">
@@ -11,15 +11,14 @@ the drive directory explicitly. -->
   import { Badge } from "$lib/components/ui/badge/index.js";
   import * as Empty from "$lib/components/ui/empty/index.js";
   import { Spinner } from "$lib/components/ui/spinner/index.js";
+  import { Skeleton } from "$lib/components/ui/skeleton/index.js";
   import PageHeader from "$lib/components/page-header.svelte";
   import InfoHint from "$lib/components/info-hint.svelte";
   import AvailabilityBadge from "$lib/components/availability-badge.svelte";
   import CopyButton from "$lib/components/copy-button.svelte";
   import type { Stamped } from "$lib/state/presentation.svelte.js";
-  import type { ProvisionReport, RegistryState } from "$lib/ipc/results.js";
-  import type { ProvisionCreateArgs, ProvisionJoinArgs, ProvisionLeaveArgs } from "$lib/ipc/operations.js";
+  import type { RegistryState } from "$lib/ipc/results.js";
   import ObservedNote from "./ObservedNote.svelte";
-  import ProvisioningView from "./ProvisioningView.svelte";
   import HardDriveIcon from "@lucide/svelte/icons/hard-drive";
   import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
   import ArrowRightIcon from "@lucide/svelte/icons/arrow-right";
@@ -30,24 +29,16 @@ the drive directory explicitly. -->
     selectedDriveDir: string | null;
     pending: boolean;
     transportNotice: string | null;
-    initialIdentityFile: string | null;
-    initialPassphraseFile: string | null;
-    initialMode: "create" | "join";
     onRefresh: () => void;
+    /** Open the dedicated Add a drive page. */
+    onAdd: () => void;
     onOpen: (driveDir: string) => void;
-    onCreate: (args: ProvisionCreateArgs) => Promise<ProvisionReport>;
-    onJoin: (args: ProvisionJoinArgs) => Promise<ProvisionReport>;
-    onLeave: (args: ProvisionLeaveArgs) => Promise<ProvisionReport>;
   }
 
-  let { snapshot, selectedDriveDir, pending, transportNotice, initialIdentityFile, initialPassphraseFile, initialMode, onRefresh, onOpen, onCreate, onJoin, onLeave }: Props = $props();
+  let { snapshot, selectedDriveDir, pending, transportNotice, onRefresh, onAdd, onOpen }: Props = $props();
 
   const registry = $derived(snapshot?.data ?? null);
   const drives = $derived(registry?.drives ?? []);
-
-  function scrollToProvisioning(): void {
-    document.getElementById("provisioning")?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }
 </script>
 
 <PageHeader
@@ -74,6 +65,10 @@ the drive directory explicitly. -->
         Refresh
       {/if}
     </Button>
+    <Button size="sm" onclick={onAdd}>
+      <PlusIcon data-icon="inline-start" />
+      Add drive
+    </Button>
   {/snippet}
 </PageHeader>
 
@@ -84,18 +79,52 @@ the drive directory explicitly. -->
 {/if}
 
 {#if snapshot === null || registry === null}
-  <div class="mt-5">
-    <Empty.Root class="border border-dashed border-border bg-card/50">
-      <Empty.Header>
-        <Empty.Media variant="icon"><HardDriveIcon /></Empty.Media>
-        <Empty.Title>No registry read yet</Empty.Title>
-        <Empty.Description>Refresh to list the drives registered on this device.</Empty.Description>
-      </Empty.Header>
-    </Empty.Root>
-  </div>
-  <div class="mt-3">
-    <ObservedNote observedAtMs={null} />
-  </div>
+  {#if pending}
+    <!-- First read in flight: show the shape of the list, never a
+         premature "no drives" claim. -->
+    <section aria-label="Registered drives" aria-busy="true" class="mt-5">
+      <div class="grid gap-4 lg:grid-cols-2">
+        {#each [0, 1] as index (index)}
+          <Card.Root aria-hidden="true">
+            <Card.Header>
+              <div class="flex items-center justify-between gap-3">
+                <div class="flex min-w-0 flex-col gap-2">
+                  <Skeleton class="h-5 w-32" />
+                  <Skeleton class="h-3 w-56" />
+                </div>
+                <Skeleton class="h-5 w-24 rounded-full" />
+              </div>
+            </Card.Header>
+            <Card.Content class="flex flex-col gap-3">
+              <div class="flex flex-wrap gap-1.5">
+                <Skeleton class="h-5 w-16 rounded-full" />
+                <Skeleton class="h-5 w-36 rounded-full" />
+              </div>
+              <Skeleton class="h-3 w-16" />
+              <Skeleton class="h-5 w-48 rounded-full" />
+            </Card.Content>
+            <Card.Footer class="justify-between">
+              <Skeleton class="h-3 w-48" />
+              <Skeleton class="h-7 w-24 rounded-lg" />
+            </Card.Footer>
+          </Card.Root>
+        {/each}
+      </div>
+    </section>
+  {:else}
+    <div class="mt-5">
+      <Empty.Root class="border border-dashed border-border bg-card/50">
+        <Empty.Header>
+          <Empty.Media variant="icon"><HardDriveIcon /></Empty.Media>
+          <Empty.Title>No registry read yet</Empty.Title>
+          <Empty.Description>Refresh to list the drives registered on this device.</Empty.Description>
+        </Empty.Header>
+      </Empty.Root>
+    </div>
+    <div class="mt-3">
+      <ObservedNote observedAtMs={null} />
+    </div>
+  {/if}
 {:else}
   {@const registry = snapshot.data}
   {#if registry.status === "unreadable"}
@@ -111,14 +140,14 @@ the drive directory explicitly. -->
           <Empty.Media variant="icon"><HardDriveIcon /></Empty.Media>
           <Empty.Title>No drives registered yet</Empty.Title>
           <Empty.Description>
-            Create one below or join from a sealed invitation — the drive appears here once the
+            Create one or join from a sealed invitation — the drive appears here once the
             registry names it. One window manages every registered drive.
           </Empty.Description>
         </Empty.Header>
         <Empty.Content>
-          <Button size="sm" onclick={scrollToProvisioning}>
+          <Button size="sm" onclick={onAdd}>
             <PlusIcon data-icon="inline-start" />
-            Create a drive
+            Add a drive
           </Button>
         </Empty.Content>
       </Empty.Root>
@@ -207,19 +236,6 @@ the drive directory explicitly. -->
       </Card.Content>
     </Card.Root>
   {/if}
-
-  <div class="mt-10">
-    <ProvisioningView
-      pending={pending}
-      initialIdentityFile={initialIdentityFile}
-      initialPassphraseFile={initialPassphraseFile}
-      initialMode={initialMode}
-      onCreate={onCreate}
-      onJoin={onJoin}
-      onLeave={onLeave}
-      onDone={onRefresh}
-    />
-  </div>
 
   <div class="mt-4">
     <ObservedNote observedAtMs={snapshot.observedAtMs} />

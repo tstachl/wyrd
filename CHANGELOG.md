@@ -216,6 +216,12 @@ is transient — no drive data is affected.
   `crates/wyrd-desktop/icons/` is regenerated from it with
   `cargo tauri icon`. The menu-bar template icon is unchanged.
 
+- Add drive is its own page (`apps/desktop`): the create/join form no
+  longer dominates the drive list, which shows skeleton cards while
+  the first registry read is in flight. Leaving a drive moved to that
+  drive's Settings, behind an acknowledgement and confirmation, and
+  reuses the identity pair the start-up gate verified (paths only).
+
 - Redesigned desktop shell (`apps/desktop`): the three-item sidebar is
   replaced by a device-level Drives home and a drive workspace with
   Status and Settings tabs. Drives and relays render as cards and

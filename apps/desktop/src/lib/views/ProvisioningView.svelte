@@ -1,10 +1,12 @@
-<!-- Runtime provisioning: create, join, and leave through the
-constrained CLI adapter. Every operation returns the outcome plus
-the post-run observation; observed state decides the display, the
-outcome only indicates what the operation reported. Secret
-contents never travel — credential and invitation inputs are paths
-only, picked natively where the dialog capability answers and
-entered by hand elsewhere. -->
+<!-- Dedicated Add a drive page: create on this device or join from a
+sealed invitation through the constrained CLI adapter. Every operation
+returns the outcome plus the post-run observation; observed state
+decides the display, the outcome only indicates what the operation
+reported. Leaving a drive lives in that drive's Settings — a
+destructive membership action does not belong in an add flow. Secret
+contents never travel: credential and invitation inputs are paths
+only, picked natively where the dialog capability answers and entered
+by hand elsewhere. -->
 <script lang="ts">
   import { Button } from "$lib/components/ui/button/index.js";
   import * as Card from "$lib/components/ui/card/index.js";
@@ -13,17 +15,23 @@ entered by hand elsewhere. -->
   import * as Alert from "$lib/components/ui/alert/index.js";
   import * as InputGroup from "$lib/components/ui/input-group/index.js";
   import { Input } from "$lib/components/ui/input/index.js";
-  import { Checkbox } from "$lib/components/ui/checkbox/index.js";
   import { Spinner } from "$lib/components/ui/spinner/index.js";
+  import PageHeader from "$lib/components/page-header.svelte";
   import RelayEditor from "$lib/components/relay-editor.svelte";
   import InfoHint from "$lib/components/info-hint.svelte";
   import type { ProvisionReport } from "$lib/ipc/results.js";
   import { pickExistingFile } from "$lib/ipc/files.js";
-  import type { ProvisionCreateArgs, ProvisionJoinArgs, ProvisionLeaveArgs } from "$lib/ipc/operations.js";
-  import { nextDriveDir, suggestedDriveDirFor, withDevCliHint } from "./format.js";
+  import type { ProvisionCreateArgs, ProvisionJoinArgs } from "$lib/ipc/operations.js";
+  import {
+    describeProvisionResult,
+    membershipSummary,
+    nextDriveDir,
+    observedRegistrySummary,
+    suggestedDriveDirFor,
+  } from "./format.js";
+  import ArrowLeftIcon from "@lucide/svelte/icons/arrow-left";
   import PlusIcon from "@lucide/svelte/icons/plus";
   import DownloadIcon from "@lucide/svelte/icons/download";
-  import LogOutIcon from "@lucide/svelte/icons/log-out";
   import FolderOpenIcon from "@lucide/svelte/icons/folder-open";
   import SparklesIcon from "@lucide/svelte/icons/sparkles";
   import TerminalIcon from "@lucide/svelte/icons/terminal";
@@ -36,13 +44,15 @@ entered by hand elsewhere. -->
     initialMode: "create" | "join";
     onCreate: (args: ProvisionCreateArgs) => Promise<ProvisionReport>;
     onJoin: (args: ProvisionJoinArgs) => Promise<ProvisionReport>;
-    onLeave: (args: ProvisionLeaveArgs) => Promise<ProvisionReport>;
+    /** Registry re-read after every operation; observed state decides. */
     onDone: () => void;
+    /** Back to the drive list. */
+    onBack: () => void;
   }
 
-  let { pending, initialIdentityFile, initialPassphraseFile, initialMode, onCreate, onJoin, onLeave, onDone }: Props = $props();
+  let { pending, initialIdentityFile, initialPassphraseFile, initialMode, onCreate, onJoin, onDone, onBack }: Props = $props();
 
-  type Mode = "create" | "join" | "leave";
+  type Mode = "create" | "join";
 
   let mode = $state<Mode>("create");
   let name = $state("");
@@ -52,8 +62,8 @@ entered by hand elsewhere. -->
   let identityFile = $state("");
   let passphraseFile = $state("");
   let invitationFile = $state("");
-  // Pre-fill from onboarding (first create goes through the
-  // unchanged constrained CLI adapter with committed credentials).
+  // Pre-fill from onboarding (the first create or join goes through the
+  // unchanged constrained CLI adapter with the committed credentials).
   // Only fills empty fields, never clobbers user edits; the mode
   // follows Ready's Create/Join choice until the user picks a tab.
   let modeTouched = $state(false);
@@ -66,7 +76,6 @@ entered by hand elsewhere. -->
   $effect(() => {
     if (!modeTouched && mode !== initialMode) mode = initialMode;
   });
-  let acknowledged = $state(false);
   let working = $state(false);
   let report: ProvisionReport | null = $state(null);
   let error: string | null = $state(null);
@@ -84,14 +93,11 @@ entered by hand elsewhere. -->
   );
   const suggestedDriveDir = $derived(suggestedDriveDirFor(name, identityForSuggestion));
 
-  // The suggestion decision as a pure function of its inputs so it
-  // pins in `format.test.ts` beside the derivation: while untouched
-  // (and not leaving) follow the suggestion; entering Leave with an
-  // untouched field clears it so Leave never targets a guess;
-  // otherwise keep the operator's value (including an explicit
-  // clear, which marks the field touched).
+  // While untouched, follow the suggestion; otherwise keep the
+  // operator's value (including an explicit clear, which marks the
+  // field touched).
   $effect(() => {
-    driveDir = nextDriveDir(mode, driveDirTouched, driveDir, suggestedDriveDir);
+    driveDir = nextDriveDir(driveDirTouched, driveDir, suggestedDriveDir);
   });
 
   // Empty relays are refused before anything is created: this form
@@ -101,38 +107,6 @@ entered by hand elsewhere. -->
   // form and no product default relay set ships in the repo — the
   // field starts empty with the example placeholder as a shape hint.
   const relaysEmpty = $derived(relays.length === 0);
-
-  function describeResult(value: ProvisionReport): string {
-    const result = value.result;
-    switch (result.result) {
-      case "completed":
-        return `Exit 0 — the CLI reported no error. Only the observation below says what happened: ${result.detail}`;
-      case "expectedfailure":
-        return `Exit 2 — expected failure. Only the observation below says what actually exists: ${result.detail}`;
-      case "helddrive":
-        return `Held drive (another process holds it — not retried): ${result.detail}`;
-      case "versionmismatch":
-        return `Version mismatch (reinstall the matched pair): ${withDevCliHint(result.reason)}`;
-      case "busy":
-        return `Another operation is already in flight on ${result.drive_dir} — not queued.`;
-      case "unknown":
-        return `Outcome unknown: ${result.detail}. The observation below decides.`;
-    }
-  }
-
-  function describeMembership(value: ProvisionReport): string {
-    const membership = value.membership;
-    if (membership === null) return "Membership: unknown (the owner did not answer).";
-    const epoch = membership.epoch === null ? "no tip yet" : `epoch ${membership.epoch}`;
-    return `Membership: ${membership.known_members} member(s), ${epoch}.`;
-  }
-
-  function observedSummary(value: ProvisionReport): string {
-    const observed = value.observed;
-    if (observed.status !== "ready") return `Registry: ${observed.status}.`;
-    const names = observed.drives.map((d) => d.name).join(", ");
-    return `Registry ready: ${observed.drives.length} drive(s)${names.length > 0 ? ` (${names})` : ""}.`;
-  }
 
   async function run(call: () => Promise<ProvisionReport>): Promise<void> {
     working = true;
@@ -157,18 +131,22 @@ entered by hand elsewhere. -->
     modeTouched = true;
     report = null;
     error = null;
-    if (next !== "leave") acknowledged = false;
   }
 </script>
 
-<Card.Root id="provisioning" class="scroll-mt-24">
-  <Card.Header>
-    <Card.Title>Add or leave a drive</Card.Title>
-    <Card.Description>
-      Create a drive on this device, join one from a sealed invitation, or leave one this device
-      already holds.
-    </Card.Description>
-  </Card.Header>
+<PageHeader
+  title="Add a drive"
+  description="Create a drive on this device, or join one from a sealed invitation. The drive appears in the list once the registry names it."
+>
+  {#snippet actions()}
+    <Button variant="outline" size="sm" onclick={onBack}>
+      <ArrowLeftIcon data-icon="inline-start" />
+      Drives
+    </Button>
+  {/snippet}
+</PageHeader>
+
+<Card.Root class="mt-6">
   <Card.Content>
     <Tabs.Root value={mode} onValueChange={(value) => switchMode(value as Mode)}>
       <Tabs.List>
@@ -179,10 +157,6 @@ entered by hand elsewhere. -->
         <Tabs.Trigger value="join">
           <DownloadIcon data-icon="inline-start" />
           Join
-        </Tabs.Trigger>
-        <Tabs.Trigger value="leave">
-          <LogOutIcon data-icon="inline-start" />
-          Leave
         </Tabs.Trigger>
       </Tabs.List>
 
@@ -491,104 +465,6 @@ entered by hand elsewhere. -->
           </Button>
         </div>
       </Tabs.Content>
-
-      <Tabs.Content value="leave" class="pt-5">
-        <Field.FieldGroup>
-          <Field.Field>
-            <Field.Label for="leave-dir">Drive directory</Field.Label>
-            <Input
-              id="leave-dir"
-              bind:value={driveDir}
-              oninput={() => (driveDirTouched = true)}
-              disabled={busy}
-              placeholder="/drives/alpha"
-              autocomplete="off"
-              spellcheck={false}
-              class="font-mono text-xs"
-            />
-            <Field.Description>The exact directory this device already holds.</Field.Description>
-          </Field.Field>
-
-          <Field.Field>
-            <Field.Label for="leave-identity" class="flex items-center gap-1.5">
-              Identity file
-              <InfoHint label="About the identity file">
-                <p>Path only — the file's contents never travel through this form.</p>
-              </InfoHint>
-            </Field.Label>
-            <InputGroup.Root>
-              <InputGroup.Input
-                id="leave-identity"
-                bind:value={identityFile}
-                disabled={busy}
-                placeholder="/keys/identity"
-                autocomplete="off"
-                spellcheck={false}
-                class="font-mono text-xs"
-              />
-              <InputGroup.Addon align="inline-end">
-                <InputGroup.Button variant="secondary" size="xs" disabled={busy} onclick={() => void browse((p) => (identityFile = p), "Identity file")}>
-                  <FolderOpenIcon data-icon="inline-start" />
-                  Browse…
-                </InputGroup.Button>
-              </InputGroup.Addon>
-            </InputGroup.Root>
-          </Field.Field>
-
-          <Field.Field>
-            <Field.Label for="leave-passphrase" class="flex items-center gap-1.5">
-              Passphrase file
-              <InfoHint label="About the passphrase file">
-                <p>Path only — the file's contents never travel through this form.</p>
-              </InfoHint>
-            </Field.Label>
-            <InputGroup.Root>
-              <InputGroup.Input
-                id="leave-passphrase"
-                bind:value={passphraseFile}
-                disabled={busy}
-                placeholder="/keys/passphrase"
-                autocomplete="off"
-                spellcheck={false}
-                class="font-mono text-xs"
-              />
-              <InputGroup.Addon align="inline-end">
-                <InputGroup.Button variant="secondary" size="xs" disabled={busy} onclick={() => void browse((p) => (passphraseFile = p), "Passphrase file")}>
-                  <FolderOpenIcon data-icon="inline-start" />
-                  Browse…
-                </InputGroup.Button>
-              </InputGroup.Addon>
-            </InputGroup.Root>
-          </Field.Field>
-
-          <Field.Field orientation="horizontal" class="rounded-xl border border-destructive/30 bg-destructive/5 p-3">
-            <Checkbox id="leave-acknowledged" bind:checked={acknowledged} disabled={busy} />
-            <Field.Content>
-              <Field.Label for="leave-acknowledged" class="leading-relaxed font-normal">
-                I understand: leaving as the sole owner is terminal — the drive freezes permanently
-                and no future transition can ever be authorized.
-              </Field.Label>
-            </Field.Content>
-          </Field.Field>
-        </Field.FieldGroup>
-
-        <div class="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-border/60 pt-4">
-          <p class="text-xs text-muted-foreground">This removes this device from the drive's membership.</p>
-          <Button
-            variant="destructive"
-            disabled={busy || driveDir.trim() === "" || !credentialsReady || !acknowledged}
-            onclick={() => void run(() => onLeave({ driveDir, identityFile, passphraseFile, acknowledged }))}
-          >
-            {#if working}
-              <Spinner data-icon="inline-start" />
-              Leaving…
-            {:else}
-              <LogOutIcon data-icon="inline-start" />
-              Leave drive
-            {/if}
-          </Button>
-        </div>
-      </Tabs.Content>
     </Tabs.Root>
 
     {#if error !== null}
@@ -604,11 +480,19 @@ entered by hand elsewhere. -->
         <TerminalIcon />
         <Alert.Title>Provisioning report</Alert.Title>
         <Alert.Description class="space-y-1 text-foreground/80 [&_p:not(:last-child)]:mb-1">
-          <p>{describeResult(report)}</p>
-          <p>{observedSummary(report)}</p>
-          <p>{describeMembership(report)}</p>
+          <p>{describeProvisionResult(report)}</p>
+          <p>{observedRegistrySummary(report)}</p>
+          <p>{membershipSummary(report)}</p>
         </Alert.Description>
       </Alert.Root>
     {/if}
   </Card.Content>
+  {#if report !== null}
+    <Card.Footer class="justify-end">
+      <Button variant="outline" size="sm" disabled={busy} onclick={onBack}>
+        <ArrowLeftIcon data-icon="inline-start" />
+        Back to drives
+      </Button>
+    </Card.Footer>
+  {/if}
 </Card.Root>

@@ -41,6 +41,7 @@
   import type { ShellView } from "$lib/state/presentation.svelte.js";
   import LifecycleView from "$lib/views/LifecycleView.svelte";
   import OnboardingView from "$lib/views/OnboardingView.svelte";
+  import ProvisioningView from "$lib/views/ProvisioningView.svelte";
   import RepairView from "$lib/views/RepairView.svelte";
   import SettingsView from "$lib/views/SettingsView.svelte";
   import StatusView from "$lib/views/StatusView.svelte";
@@ -198,9 +199,11 @@
     // unreadable registry proves nothing, so the selection stands.
     const registryStatus = presentation.lifecycleSnapshot?.data.status;
     const readable = registryStatus === "ready" || registryStatus === "nofile";
+    const inWorkspace =
+      presentation.selectedView === "status" || presentation.selectedView === "settings";
     if (
       readable &&
-      presentation.selectedView !== "lifecycle" &&
+      inWorkspace &&
       !listed.some((drive) => drive.drive_dir === presentation.selectedDriveDir)
     ) {
       presentation.selectView("lifecycle");
@@ -347,7 +350,9 @@
     onboardedPassphraseFile = passphraseFile;
     gate = "done";
     void refreshLifecycle().then(() => {
-      presentation.selectView("lifecycle");
+      // Ready's Create/Join choice seeds the dedicated add page; the
+      // registry read above lands the drive list behind it.
+      openProvisioning(mode);
     });
   }
 
@@ -389,6 +394,10 @@
         return selectedDriveDir === null
           ? Promise.resolve()
           : refreshStatus(selectedDriveDir);
+      case "provision":
+        // The add page owns its own form and re-reads the registry
+        // after each operation; selecting it fetches nothing.
+        return Promise.resolve();
       case "lifecycle":
         return refreshLifecycle();
       case "settings":
@@ -417,6 +426,15 @@
   /** Back to the device-level home: the registry of drives. */
   function allDrives(): void {
     selectView("lifecycle");
+  }
+
+  /**
+   * Open the dedicated add page. The mode only seeds the tab; the
+   * page still runs through the constrained CLI adapter.
+   */
+  function openProvisioning(mode: "create" | "join"): void {
+    pendingProvisionMode = mode;
+    presentation.selectView("provision");
   }
 
   /** Explicit retry for one drive: reconnect, then re-read. Recovery proves nothing by itself. */
@@ -558,20 +576,26 @@
           </Button>
         </Card.Footer>
       </Card.Root>
+    {:else if presentation.selectedView === "provision"}
+      <ProvisioningView
+        pending={busy}
+        initialIdentityFile={onboardedIdentityFile}
+        initialPassphraseFile={onboardedPassphraseFile}
+        initialMode={pendingProvisionMode}
+        onCreate={(args: ProvisionCreateArgs) => runProvision(() => provisionCreate(args))}
+        onJoin={(args: ProvisionJoinArgs) => runProvision(() => provisionJoin(args))}
+        onDone={() => void refreshLifecycle()}
+        onBack={allDrives}
+      />
     {:else if presentation.selectedView === "lifecycle" || selectedDriveDir === null}
       <LifecycleView
         snapshot={presentation.lifecycleSnapshot}
         selectedDriveDir={presentation.selectedDriveDir}
         pending={busy}
         transportNotice={presentation.transportNotice}
-        initialIdentityFile={onboardedIdentityFile}
-        initialPassphraseFile={onboardedPassphraseFile}
-        initialMode={pendingProvisionMode}
         onRefresh={() => void refreshLifecycle()}
+        onAdd={() => openProvisioning("create")}
         onOpen={(driveDir) => openDrive(driveDir)}
-        onCreate={(args: ProvisionCreateArgs) => runProvision(() => provisionCreate(args))}
-        onJoin={(args: ProvisionJoinArgs) => runProvision(() => provisionJoin(args))}
-        onLeave={(args: ProvisionLeaveArgs) => runProvision(() => provisionLeave(args))}
       />
     {:else}
       <Tabs.Root
@@ -616,10 +640,15 @@
             {@render unavailableOverlay(selectedDriveDir)}
           {:else}
             <SettingsView
+              driveDir={selectedDriveDir}
               snapshot={presentation.settingsSnapshotFor(selectedDriveDir)}
               pending={busy}
               transportNotice={presentation.transportNotice}
+              identityFile={onboardedIdentityFile}
+              passphraseFile={onboardedPassphraseFile}
               onRefresh={() => void refreshSettings(selectedDriveDir)}
+              onLeave={(args: ProvisionLeaveArgs) => runProvision(() => provisionLeave(args))}
+              onRefreshDrives={allDrives}
             />
           {/if}
         </Tabs.Content>

@@ -1,4 +1,4 @@
-// Pure display helpers for the three views. No runes, no IPC, no
+// Pure display helpers for the shell views. No runes, no IPC, no
 // owner facts — components call these so the wording pins in
 // `format.test.ts` instead of drifting per view.
 //
@@ -9,6 +9,7 @@
 
 import type { WireFreshnessState } from "$lib/ipc/results.js";
 import type { DriveAvailability } from "$lib/ipc/results.js";
+import type { ProvisionReport } from "$lib/ipc/results.js";
 
 /** Clock time of an observation stamp, UTC. The stamp is display metadata, never owner state. */
 export function formatObservedAt(observedAtMs: number): string {
@@ -82,18 +83,15 @@ export function suggestedDriveDirFor(nameValue: string, identityPath: string): s
 
 /**
  * Next drive-dir value from the form's state (pure, pinned below):
- * while untouched and not leaving, follow the suggestion; entering
- * Leave with an untouched field clears it so Leave never targets a
- * guessed directory; otherwise keep the operator's value. An
- * explicit clear marks the field touched upstream, so it sticks.
+ * while untouched, follow the suggestion; otherwise keep the
+ * operator's value. An explicit clear marks the field touched
+ * upstream, so it sticks.
  */
 export function nextDriveDir(
-  mode: string,
   touched: boolean,
   current: string,
   suggested: string | null,
 ): string {
-  if (mode === "leave") return touched ? current : "";
   if (!touched && suggested !== null && current !== suggested) return suggested;
   return current;
 }
@@ -113,4 +111,44 @@ export function withDevCliHint(reason: string): string {
     return `${reason} — if this is a development checkout, build the CLI (cargo build -p wyrd-cli) so wyrd sits beside the desktop binary; in a packaged install, reinstall the matched pair`;
   }
   return reason;
+}
+
+/**
+ * One lifecycle-operation outcome line. The exit code says what the
+ * adapter ran, never what exists; the observation below carries the
+ * state. Unknown and held-drive outcomes name themselves instead of
+ * collapsing into failure.
+ */
+export function describeProvisionResult(report: ProvisionReport): string {
+  const result = report.result;
+  switch (result.result) {
+    case "completed":
+      return `Exit 0 — the CLI reported no error. Only the observation below says what happened: ${result.detail}`;
+    case "expectedfailure":
+      return `Exit 2 — expected failure. Only the observation below says what actually exists: ${result.detail}`;
+    case "helddrive":
+      return `Held drive (another process holds it — not retried): ${result.detail}`;
+    case "versionmismatch":
+      return `Version mismatch (reinstall the matched pair): ${withDevCliHint(result.reason)}`;
+    case "busy":
+      return `Another operation is already in flight on ${result.drive_dir} — not queued.`;
+    case "unknown":
+      return `Outcome unknown: ${result.detail}. The observation below decides.`;
+  }
+}
+
+/** Post-run registry summary. Never a claim about the operated drive's membership. */
+export function observedRegistrySummary(report: ProvisionReport): string {
+  const observed = report.observed;
+  if (observed.status !== "ready") return `Registry: ${observed.status}.`;
+  const names = observed.drives.map((drive) => drive.name).join(", ");
+  return `Registry ready: ${observed.drives.length} drive(s)${names.length > 0 ? ` (${names})` : ""}.`;
+}
+
+/** Post-run membership tip for the operated drive; absent owner answer stays unknown. */
+export function membershipSummary(report: ProvisionReport): string {
+  const membership = report.membership;
+  if (membership === null) return "Membership: unknown (the owner did not answer).";
+  const epoch = membership.epoch === null ? "no tip yet" : `epoch ${membership.epoch}`;
+  return `Membership: ${membership.known_members} member(s), ${epoch}.`;
 }
