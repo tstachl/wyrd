@@ -117,8 +117,8 @@ pub struct DriveView {
     pub mountpoint: Option<String>,
     pub availability: DriveAvailability,
     /// The service-manager fact beside the transport verdict:
-    /// not-installed vs stopped vs wedged vs running vs unknown.
-    /// Observation only — never supervision.
+    /// not-installed vs stopped vs wedged vs running vs unknown vs
+    /// unsupported. Observation only — never supervision.
     pub service_state: super::service::ServiceState,
 }
 
@@ -360,31 +360,37 @@ pub fn list_drives_at(registry_path: &Path) -> RegistryState {
                 }
                 drives.push({
                     let availability = probe_drive(&entry.drive_dir);
-                    // The service probe runs only where a view consumes
-                    // it: the unavailable screen is the sole reader, and
-                    // it renders only for `Unavailable` (plus `Unknown`,
-                    // whose transport exists but answered nothing). A
+                    // The service-manager probe runs only where a view
+                    // consumes it: the unavailable screen is the sole
+                    // reader, and it renders only for `Unavailable`. A
                     // live socket already proves the owner runs, so an
                     // `Available` drive reports that fact without
                     // spawning the manager — one fewer fork per drive
                     // per refresh, and no 5 s ceiling where nothing
-                    // reads the answer.
+                    // reads the answer. `Unknown` availability gets only
+                    // the definition-file fact, never a manager spawn:
+                    // the screen does not render it either.
                     let service_state = match &availability {
                         DriveAvailability::Available => super::service::ServiceState::Running {
                             detail:
                                 "the owner answered this session — the manager was not re-probed"
                                     .to_string(),
                         },
-                        _ => {
-                            // The socket fact for the service probe:
-                            // anything but `Unavailable` means transport
-                            // exists (a terminal refusal, or a
-                            // connected-but-unconfirmed socket). Only
-                            // `Unavailable` (no transport) plus a loaded
-                            // unit reads as wedged.
-                            let socket_present =
-                                !matches!(availability, DriveAvailability::Unavailable { .. });
-                            super::service::probe_service_state(&entry.service, socket_present)
+                        DriveAvailability::Unavailable { .. } => {
+                            // No transport plus a loaded unit reads as
+                            // wedged.
+                            super::service::probe_service_state(&entry.service, false)
+                        }
+                        DriveAvailability::Unknown { .. } => {
+                            if super::service::service_definition_path(&entry.service).exists() {
+                                super::service::ServiceState::Unknown {
+                                    detail: "service not probed while availability is unknown — retry the owner probe".to_string(),
+                                }
+                            } else {
+                                super::service::ServiceState::NotInstalled {
+                                    detail: "no service definition installed: the drive is registered without a managed service — reinstall the definition to supervise it".to_string(),
+                                }
+                            }
                         }
                     };
                     DriveView {

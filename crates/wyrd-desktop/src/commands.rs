@@ -1136,15 +1136,29 @@ mod tests {
             serde_json::json!({"state": "unknown", "detail": "no terminal answer"})
         );
         // The service-state taxonomy beside availability: the frontend
-        // tells not-installed from stopped from wedged from the JSON
-        // alone, and the recovery buttons branch on it. Every state
-        // the unavailable screen branches on is pinned here.
+        // tells every branching state apart from the JSON alone, and
+        // the recovery buttons branch on it. Every state the
+        // unavailable screen branches on is pinned here.
         assert_eq!(
             serde_json::to_value(ServiceState::Stopped {
                 detail: "installed but stopped".to_string()
             })
             .unwrap(),
             serde_json::json!({"state": "stopped", "detail": "installed but stopped"})
+        );
+        assert_eq!(
+            serde_json::to_value(ServiceState::Wedged {
+                detail: "running but socket-absent".to_string()
+            })
+            .unwrap(),
+            serde_json::json!({"state": "wedged", "detail": "running but socket-absent"})
+        );
+        assert_eq!(
+            serde_json::to_value(ServiceState::Unknown {
+                detail: "the manager did not answer".to_string()
+            })
+            .unwrap(),
+            serde_json::json!({"state": "unknown", "detail": "the manager did not answer"})
         );
         assert_eq!(
             serde_json::to_value(ServiceState::NotInstalled {

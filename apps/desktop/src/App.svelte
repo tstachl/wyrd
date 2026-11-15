@@ -292,11 +292,12 @@
   let pendingProvisionMode = $state<"create" | "join">("create");
   // Fresh keys for the onboarding component (discard resets it).
   let onboardingEpoch = $state(0);
-  // The last recovery attempt's refused outcome, shown on the
-  // unavailable screen so a refused Start/Reinstall is never silent.
-  // Cleared on every new attempt; a completed recovery clears it via
-  // the availability re-probe below.
-  let recoveryDetail = $state<string | null>(null);
+  // The last recovery attempt's refused outcome, keyed by drive so
+  // a refusal on one drive never renders on another's screen. Shown
+  // on the unavailable screen so a refused Start/Reinstall is never
+  // silent. Cleared on every new attempt; a completed report clears
+  // it through `refusedDetail` returning null.
+  let recovery: { driveDir: string; detail: string } | null = $state(null);
 
   const selectedServiceState = $derived(selectedDrive?.service_state ?? null);
   const canReinstall = $derived(
@@ -473,7 +474,7 @@
 
   /** Explicit retry for one drive: reconnect, then re-read. Recovery proves nothing by itself. */
   async function retryConnection(driveDir: string): Promise<void> {
-    recoveryDetail = null;
+    recovery = null;
     presentation.trackRequest();
     try {
       const result = await reconnect(driveDir);
@@ -513,14 +514,18 @@
    * outcome never does.
    */
   async function startService(driveDir: string): Promise<void> {
-    recoveryDetail = null;
+    recovery = null;
     const args: ProvisionServiceStartArgs = { driveDir };
     try {
       const report = await runProvision(() => provisionServiceStart(args));
-      recoveryDetail = refusedDetail(report);
+      const detail = refusedDetail(report);
+      recovery = detail === null ? null : { driveDir, detail };
     } catch (error: unknown) {
-      recoveryDetail =
-        error instanceof Error ? error.message : `Unexpected start failure: ${String(error)}`;
+      recovery = {
+        driveDir,
+        detail:
+          error instanceof Error ? error.message : `Unexpected start failure: ${String(error)}`,
+      };
       return;
     }
     await refreshLifecycle();
@@ -539,7 +544,7 @@
    */
   async function reinstallService(driveDir: string): Promise<void> {
     if (onboardedIdentityFile === null || onboardedPassphraseFile === null) return;
-    recoveryDetail = null;
+    recovery = null;
     const mode = selectedDrive?.mode ?? "vault";
     const args: ProvisionReconfigureArgs = {
       driveDir,
@@ -552,10 +557,16 @@
     };
     try {
       const report = await runProvision(() => provisionReconfigure(args));
-      recoveryDetail = refusedDetail(report);
+      const detail = refusedDetail(report);
+      recovery = detail === null ? null : { driveDir, detail };
     } catch (error: unknown) {
-      recoveryDetail =
-        error instanceof Error ? error.message : `Unexpected reinstall failure: ${String(error)}`;
+      recovery = {
+        driveDir,
+        detail:
+          error instanceof Error
+            ? error.message
+            : `Unexpected reinstall failure: ${String(error)}`,
+      };
       return;
     }
     await refreshLifecycle();
@@ -591,7 +602,7 @@
     onRetry={() => void retryConnection(driveDir)}
     serviceState={selectedServiceState}
     canReinstall={canReinstall}
-    recoveryDetail={recoveryDetail}
+    recoveryDetail={recovery !== null && recovery.driveDir === driveDir ? recovery.detail : null}
     onStart={() => void startService(driveDir)}
     onReinstall={() => void reinstallService(driveDir)}
   />

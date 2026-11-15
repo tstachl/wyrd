@@ -68,8 +68,8 @@ silently. -->
   // Dev-only honesty: no manager tool exists in this build, so no
   // managed-service verdict is possible. Shipped builds always
   // supervise the owner; their timeouts read `unknown` instead and
-  // carry no manual-start wording.
-  const showUnsupported = $derived(serviceState !== null && serviceState.state === "unsupported");
+  // carry no manual-start wording. The state detail alert above
+  // already carries the wording — no second paragraph.
 </script>
 
 <Empty.Root class="mt-6 border border-dashed border-border bg-card/50 py-12">
@@ -102,12 +102,6 @@ silently. -->
       <Alert.Root variant="destructive" class="text-left">
         <p>{recoveryDetail}</p>
       </Alert.Root>
-    {/if}
-    {#if showUnsupported}
-      <p class="text-xs leading-relaxed text-muted-foreground">
-        No managed service verdict in this build — start the owner manually. Shipped builds
-        supervise the owner through the OS service manager instead.
-      </p>
     {/if}
     <div class="flex flex-wrap gap-2">
       <Button disabled={pending} onclick={onRetry}>
