@@ -4,8 +4,8 @@
 
 use crate::drive_config::{check_owner_relays, LoadedConfig, RelayResolution};
 use crate::logging::init_owner_diagnostics;
-use crate::probes::combine_status;
-use crate::probes::TeardownStatus;
+use crate::teardown::combine_status;
+use crate::teardown::TeardownStatus;
 use crate::CliError;
 use std::path::PathBuf;
 use std::sync::Arc;

@@ -444,6 +444,24 @@ pub(crate) fn encode_reconciliation_view_canonical(view: &ReconciliationEvidence
 
 /// Decode one known record: `None` poisons the file (the caller
 /// filters unknown tags before calling).
+///
+/// Replay fails closed, in two halves. A structurally invalid
+/// record under a *known* tag poisons the whole commit file: the
+/// framing loop (`framing.rs`) turns this `None` into corruption,
+/// so a damaged or tampered record refuses the store instead of
+/// replaying approximately. An *unknown* tag never reaches this
+/// function: the same loop skips it for forward compatibility, so
+/// an old reader loads past records it predates (the upgrade
+/// boundary this enables is pinned in `tests_lifecycle`).
+///
+/// The pairing rule this implies: every tag `encode_fact` emits
+/// must have an arm below that accepts exactly what encode
+/// produces. A new `Fact` variant wired into encode but not decode
+/// compiles either way — and replays wrong either way: with a tag
+/// outside `KNOWN_TAGS` its records skip silently (obligations
+/// vanish), with a known tag its records poison the file. The
+/// `all_facts` round-trip test below pins the pairing for every
+/// variant, so drift fails here instead of at replay.
 pub(crate) fn decode_record(
     drive: &DriveId,
     store_key: &[u8],

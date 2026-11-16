@@ -58,7 +58,7 @@ pub(crate) use crate::credentials::{read_credentials, read_identity, read_secret
 #[cfg(test)]
 pub(crate) use crate::logging::init_mount_diagnostics;
 #[cfg(test)]
-pub(crate) use crate::probes::{combine_status, TeardownStatus};
+pub(crate) use crate::teardown::{combine_status, TeardownStatus};
 #[cfg(feature = "mount")]
 use fuser::{Config, MountOption};
 #[cfg(test)]
@@ -631,7 +631,8 @@ mod composer;
 mod credentials;
 mod drive_config;
 mod logging;
-mod probes;
+mod preflight;
+mod teardown;
 mod update;
 
 #[cfg(test)]

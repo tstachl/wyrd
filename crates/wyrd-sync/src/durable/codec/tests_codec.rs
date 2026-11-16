@@ -1,9 +1,17 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use wyrd_format::membership::Admission;
 use wyrd_format::{Change, Manifest, SnapshotId};
 
+use crate::control::ControlMessageId;
 use crate::control::{seal, CapabilityPayload, KeyRotation, Message, TransitionPayload};
+use crate::durable::tests_harness::{
+    announcement, authorized_capability, authorized_snapshot_body, chain, manifest_record,
+};
+use crate::durable::ReconciliationEvidence;
+use crate::membership::test_util::drive;
+use crate::membership::MembershipLog;
+use crate::runtime::MaterializationState;
 
 use super::*;
 
@@ -105,6 +113,129 @@ fn transition_bytes() -> Vec<u8> {
     )
     .unwrap();
     transition.canonical_bytes()
+}
+
+/// One of every `Fact` variant with valid payloads: the pairing
+/// fixture for the round-trip test below. Sealed envelopes carry
+/// real kind-correct seals (the commit-time gates refuse wrong-kind
+/// envelopes); the membership-bound facts build on a real genesis
+/// log. Exhaustiveness is by convention — a new variant must extend
+/// this list — since Rust cannot enumerate enum variants.
+fn all_facts(drive: &DriveId) -> Vec<Fact> {
+    let seal_key = [0x07u8; 32];
+    let tid = TransitionId::from_bytes([0x11; 32]);
+    let recipient = DeviceId::from_bytes([0x22; 32]);
+    let snapshot = SnapshotId::from_bytes([0x33; 32]);
+    let (genesis, child) = chain();
+    let mut log = MembershipLog::new(*drive);
+    log.observe(genesis.clone());
+    let transition = MembershipTransition::from_canonical_bytes(&transition_bytes()).unwrap();
+    let sealed_transition = sealed_kind(
+        drive,
+        &seal_key,
+        2,
+        &Message::MembershipTransition(TransitionPayload {
+            transition: transition_bytes(),
+        }),
+    );
+    let sealed_capability = sealed_kind(
+        drive,
+        &seal_key,
+        2,
+        &Message::Capability(CapabilityPayload {
+            device: recipient,
+            epoch: 2,
+            wrapped: vec![0xAA; 64],
+        }),
+    );
+    let sealed_announcement = sealed_kind(
+        drive,
+        &seal_key,
+        2,
+        &Message::SnapshotAnnouncement(announcement(&child)),
+    );
+    let rotation = crate::control::seal_rotation(
+        drive,
+        recipient,
+        &wyrd_format::DeviceEncryptionKey::from_bytes([0x7C; 32]),
+        2,
+        &[0xAA; 64],
+        &[0xCC; 64],
+        &[],
+    )
+    .expect("seals")
+    .encode();
+    let evidence = ReconciliationEvidence {
+        transitions: BTreeSet::from([tid]),
+        snapshots: BTreeSet::from([snapshot]),
+        capabilities: BTreeSet::from([(recipient, 2)]),
+    };
+    let statement = [0xD0; 32];
+    vec![
+        Fact::Transition(transition),
+        Fact::Capability(authorized_capability(&genesis, &log)),
+        Fact::Announcement(announcement(&child)),
+        Fact::SnapshotBody(authorized_snapshot_body()),
+        Fact::Manifest(manifest_record()),
+        Fact::LocalObject(ContentId::from_bytes([0x41; 32])),
+        Fact::ObjectRemoved(ContentId::from_bytes([0x42; 32])),
+        Fact::Materialization(
+            ContentId::from_bytes([0x43; 32]),
+            MaterializationState::Cached,
+        ),
+        Fact::ControlMessage(ControlMessageId::from_bytes([0x44; 32])),
+        Fact::AnnouncementQueued(snapshot, recipient),
+        Fact::AnnouncementSealed(snapshot, sealed_announcement.clone()),
+        Fact::AnnouncementRouteSealed(snapshot, vec![0x99; 8], sealed_announcement),
+        Fact::AnnouncementDelivered(snapshot, recipient),
+        Fact::AnnouncementDeliveredRoute(snapshot, recipient, [0x77; 32]),
+        Fact::TransitionQueued(tid, recipient),
+        Fact::TransitionSealed(tid, sealed_transition),
+        Fact::TransitionDelivered(tid, recipient),
+        Fact::CapabilityQueued(2, recipient),
+        Fact::CapabilitySealed(2, recipient, sealed_capability),
+        Fact::CapabilitySealedReplaced {
+            epoch: 2,
+            recipient,
+            supersedes: SealedCapabilityFactId::from_bytes([0xAB; 32]),
+            replacement: rotation,
+        },
+        Fact::CapabilityDelivered(2, recipient),
+        Fact::BootstrapPending(vec![0xBB; 48]),
+        Fact::CarryQueued(snapshot),
+        Fact::CarryDone(snapshot),
+        Fact::ReconciliationView(evidence.clone()),
+        Fact::ReconciliationRequestReceived(recipient, evidence),
+        Fact::TransitionReconciled(tid, recipient, statement),
+        Fact::CapabilityReconciled(2, recipient, statement),
+        Fact::AnnouncementReconciled(snapshot, recipient, statement),
+        Fact::AnnouncementRetransmitted(snapshot, recipient, statement),
+    ]
+}
+
+/// The replay pairing, per variant: every `Fact` encodes to a known
+/// tag whose record decodes back. A new variant wired into encode
+/// but not decode fails here — unknown-tag skip would drop its
+/// records silently at replay, a known tag without an arm poisons
+/// the file — instead of failing at replay.
+#[test]
+fn every_fact_variant_encodes_and_decodes() {
+    let drive = drive();
+    let key = [0x11u8; 32];
+    let facts = all_facts(&drive);
+    assert_eq!(facts.len(), 30, "all_facts covers every Fact variant");
+    for fact in &facts {
+        let (tag, bytes) =
+            encode_fact(&key, &drive, fact).unwrap_or_else(|_| panic!("encode failed: {fact:?}"));
+        assert!(
+            KNOWN_TAGS.contains(&tag),
+            "encode emits a known tag: {fact:?}"
+        );
+        assert!(
+            decode_record(&drive, &key, tag, &bytes).is_some(),
+            "decode accepts what encode emits: {fact:?}"
+        );
+    }
 }
 
 /// The delivery-obligation sealed facts round-trip, and their kind

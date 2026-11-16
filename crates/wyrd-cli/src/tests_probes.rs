@@ -1,4 +1,4 @@
-use super::probes::{
+use super::preflight::{
     check_macfuse_runtime, check_mountpoint, probe_macfuse_runtime, select_macfuse_runtime,
     MacfuseProbe,
 };

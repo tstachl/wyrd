@@ -22,6 +22,7 @@ use wyrd_format::{Change, Snapshot, SnapshotId};
 
 use super::test_util::{tree_id, Fixture};
 use super::SnapshotDag;
+use crate::property_shard::{sharded_property, SHARD_CASES};
 
 /// One operation in a generated sequence: either advance the membership
 /// epoch (no snapshot), or build a snapshot parented onto a previously
@@ -260,9 +261,9 @@ proptest! {
     }
 }
 
-// Sharded like the membership properties: four SHARD_CASES-case tests
-// instead of one 256-case test, same budget, parallel wall time.
-const SHARD_CASES: u32 = 64;
+// Sharded via the shared `crate::property_shard` helper (four
+// SHARD_CASES-case tests instead of one 256-case test, same
+// budget, parallel wall time); shard names below are unchanged.
 
 /// Long-chain scale: a 256-deep linear chain classifies with the tip
 /// eligible and every ancestor history. The fixed point must
@@ -301,21 +302,6 @@ fn long_chain_classifies_tip_eligible_and_ancestors_history() {
             );
         }
     }
-}
-
-macro_rules! sharded_property {
-    (
-        body $body:block
-        shards { $($name:ident ( $($arg:ident in $strategy:expr),* ))* }
-    ) => {
-        proptest! {
-            #![proptest_config(ProptestConfig::with_cases(SHARD_CASES))]
-            $(
-                #[test]
-                fn $name($($arg in $strategy),*) $body
-            )*
-        }
-    };
 }
 
 sharded_property! {
