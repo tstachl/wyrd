@@ -228,9 +228,9 @@ fn relay_health_is_labelled_eventually_consistent() {
     );
 }
 
-/// The constant check: the third surface renders the same idle
-/// reading the CLI's status and now surfaces share
-/// (`MAILBOX_IDLE_LINE`), identical text, never a paraphrase.
+/// The constant check: the third surface renders the idle reading
+/// it shares with the CLI's status and now surfaces (one constant,
+/// `RELAY_IDLE_LINE`), identical text, never a paraphrase.
 #[test]
 fn status_and_relay_surfaces_cannot_drift() {
     assert_eq!(RELAY_IDLE_LINE, "mailbox: idle (no --relay given)\n");

@@ -124,11 +124,10 @@ impl RelayPosture {
     }
 }
 
-/// The relay-less mailbox posture, as its own equivalent of the
-/// CLI's `MAILBOX_IDLE_LINE` (`wyrd-cli/src/commands/sync.rs`):
-/// identical text, never a paraphrase, so the status, now, and
-/// posture surfaces cannot drift apart. Pinned by the literal
-/// test below.
+/// The relay-less mailbox posture, shared with the CLI's status
+/// and now surfaces (`wyrd-cli/src/commands/sync.rs`): one
+/// constant for all three surfaces, so they cannot drift apart.
+/// Pinned by the literal test below.
 pub const RELAY_IDLE_LINE: &str = "mailbox: idle (no --relay given)\n";
 
 /// Standing qualifier, unconditional: it states a protocol

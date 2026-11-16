@@ -476,9 +476,9 @@ fn tipless_summary_names_live_heads_like_detail() {
 }
 
 /// N2 follow-up: the surface renders the shared idle reading
-/// (`RELAY_IDLE_LINE`, identical to the CLI's `MAILBOX_IDLE_LINE`),
-/// never a paraphrase, so the status, now, and posture surfaces
-/// cannot drift apart.
+/// (`RELAY_IDLE_LINE`, one constant shared with the CLI), never a
+/// paraphrase, so the status, now, and posture surfaces cannot
+/// drift apart.
 #[test]
 fn idle_line_is_the_shared_reading() {
     use crate::relay_posture::RELAY_IDLE_LINE;
