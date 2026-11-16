@@ -17,9 +17,11 @@
 //! 1. The operator's offline switch wins over everything. Offline
 //!    is a deliberate mode, never a failure reading.
 //! 2. Zero relays render "no relay configured" before anything
-//!    reads liveness. `is_live` is true for a zero-relay mailbox
-//!    by construction, so a surface that maps it to "running" is
-//!    wrong on exactly the local-only drive.
+//!    reads liveness. The zero-relay check precedes the liveness
+//!    reading on purpose and must not be folded into `is_live`: a
+//!    surface that maps a zero-relay mailbox to "running" is wrong
+//!    on exactly the local-only drive, and a zero-relay mailbox
+//!    whose drainer died still reads `is_live() == false`.
 //! 3. Relays configured, not offline, no health observed yet (or
 //!    the mailbox cannot carry deliveries): "unavailable". This is
 //!    its own non-running reading — startup, failed attachment,

@@ -4,9 +4,7 @@ use std::path::PathBuf;
 use clap::Parser;
 
 use crate::args::{Cli, Command, MaterializationAction, OwnerAction, RoleAction};
-use crate::drive_config::{
-    load_drive_config, resolve_credential_path, resolve_relays, update_request_relays,
-};
+use crate::drive_config::resolve_relays;
 use wyrd_daemon::process::{install_shutdown_handler, SHUTDOWN};
 // Re-exported for the `tests_*` modules, which resolve argument types
 // and credential readers through `super::*` and must stay untouched
@@ -267,11 +265,9 @@ fn command(args: Vec<String>) -> Result<(), CliError> {
         Err(error) => return Err(CliError::Usage(error.to_string())),
     };
     let (identity, passphrase, credential_provenance, config) = match &cli.command {
-        // Update runs the whole transaction below without secrets
-        // (credential paths forward to the verification child, who
-        // opens custody), so it returns before credential loading.
-        // Quiescence, staging, swap, verify, commit-or-rollback,
-        // hand back: `update::update_run`.
+        // Update runs secretless (credential paths forward to the
+        // verification child): `update::update_from_cli` returns
+        // before credential loading.
         Command::Update {
             drive_dir,
             archive,
@@ -279,81 +275,14 @@ fn command(args: Vec<String>) -> Result<(), CliError> {
             restart,
             credentials,
         } => {
-            let exe = std::env::current_exe().map_err(|source| CliError::Io {
-                path: PathBuf::from("<current executable>"),
-                source,
-            })?;
-            // The handoff child never reads the configuration: the
-            // parent resolves the effective set and forwards it
-            // flattened as `--relay`/`--identity-file`/`--passphrase-file`
-            // argv, so the child takes no `--config` and inherits no
-            // file. The two update guards therefore judge different
-            // surfaces: "restart needs a relay" judges the effective
-            // set (a configured relay satisfies it), while
-            // "relay-is-restart-only" judges the flag list (a file the
-            // operator adopted for every other subcommand must not
-            // fail an update that never consumes relays).
-            let update_config = load_drive_config(drive_dir, cli.config.as_deref())?;
-            let update_config = update_config.as_ref();
-            let identity_file = resolve_credential_path(
-                credentials.identity_file.clone(),
-                update_config.and_then(|c| c.identity_file.clone()),
-                "--identity-file",
-                "identity_file",
-            )?;
-            let passphrase_file = resolve_credential_path(
-                credentials.passphrase_file.clone(),
-                update_config.and_then(|c| c.passphrase_file.clone()),
-                "--passphrase-file",
-                "passphrase_file",
-            )?;
-            let resolution = resolve_relays(relays.relay.clone(), update_config);
-            // B1 shape: without `--restart` relays travel nowhere, so
-            // only explicitly passed flags can be a mistake worth
-            // refusing; with `--restart` the handoff consumes the
-            // effective set.
-            let request_relays = update_request_relays(*restart, &relays.relay, &resolution.relays);
-            let outcome = update::update_run(&update::UpdateRequest {
+            return update::update_from_cli(
                 drive_dir,
                 archive,
-                identity_file: &identity_file,
-                passphrase_file: &passphrase_file,
-                relays: request_relays,
-                restart: *restart,
-                exe: &exe,
-            })?;
-            // Supervision diverges by design (the wait loop only
-            // exits the process), so a returned outcome is either
-            // Done or a supervision request — never an Ok from the
-            // supervisor itself.
-            match outcome {
-                update::UpdateOutcome::Done => return Ok(()),
-                update::UpdateOutcome::Supervise {
-                    exe,
-                    drive,
-                    relays,
-                    identity_file,
-                    passphrase_file,
-                } => {
-                    #[cfg(unix)]
-                    {
-                        return update::supervise(
-                            &exe,
-                            &drive,
-                            &relays,
-                            &identity_file,
-                            &passphrase_file,
-                        );
-                    }
-                    #[cfg(not(unix))]
-                    {
-                        let _ = (exe, drive, relays, identity_file, passphrase_file);
-                        return Err(CliError::Usage(
-                            "--restart needs Unix signal forwarding".into(),
-                        ));
-                    }
-                }
-            }
+                relays,
+                *restart,
+                credentials,
+                cli.config.as_deref(),
+            );
         }
         Command::BuildInfo => {
             println!("{}", update::render_build_info(&update::own_build_info()));

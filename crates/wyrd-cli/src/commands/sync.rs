@@ -763,42 +763,43 @@ pub(crate) fn quiet_stall_clauses(report: &SyncRunReport) -> Vec<String> {
     clauses
 }
 
-/// Render a headless run report. Built as a string so tests assert
-/// the rendering without capturing stdout.
-pub(crate) fn sync_now_render(report: &SyncRunReport) -> String {
-    // Shed detail beside the `shed` total below: pending-bound sheds
-    // whose wait was classified, bucketed by that wait, plus the
-    // unclassified remainder (budget/quota/charge-time sheds, decided
-    // before classification by design). The buckets partition shed —
-    // a genuine partition of this count, and of nothing else — so no
-    // line here may read as arithmetic on any other total. Prints
-    // only when the run shed anything, and only nonzero buckets, so
-    // quiet runs stay quiet.
-    let shed_detail = {
-        let mut parts = Vec::new();
-        if report.deferred_shed_unseen > 0 {
-            parts.push(format!("{} unseen-wait", report.deferred_shed_unseen));
-        }
-        if report.deferred_shed_status_blocked > 0 {
-            parts.push(format!(
-                "{} status-blocked-wait",
-                report.deferred_shed_status_blocked
-            ));
-        }
-        let unclassified = report
-            .deferred_shed
-            .saturating_sub(report.deferred_shed_unseen)
-            .saturating_sub(report.deferred_shed_status_blocked);
-        if unclassified > 0 {
-            parts.push(format!("{unclassified} unclassified"));
-        }
-        if parts.is_empty() {
-            String::new()
-        } else {
-            format!(" ({})", parts.join(", "))
-        }
-    };
-    let mut out = format!(
+/// Shed detail beside the `shed` total in the summary line: pending-bound sheds
+/// whose wait was classified, bucketed by that wait, plus the
+/// unclassified remainder (budget/quota/charge-time sheds, decided
+/// before classification by design). The buckets partition shed —
+/// a genuine partition of this count, and of nothing else — so no
+/// line here may read as arithmetic on any other total. Prints
+/// only when the run shed anything, and only nonzero buckets, so
+/// quiet runs stay quiet.
+fn render_shed_detail(report: &SyncRunReport) -> String {
+    let mut parts = Vec::new();
+    if report.deferred_shed_unseen > 0 {
+        parts.push(format!("{} unseen-wait", report.deferred_shed_unseen));
+    }
+    if report.deferred_shed_status_blocked > 0 {
+        parts.push(format!(
+            "{} status-blocked-wait",
+            report.deferred_shed_status_blocked
+        ));
+    }
+    let unclassified = report
+        .deferred_shed
+        .saturating_sub(report.deferred_shed_unseen)
+        .saturating_sub(report.deferred_shed_status_blocked);
+    if unclassified > 0 {
+        parts.push(format!("{unclassified} unclassified"));
+    }
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", parts.join(", "))
+    }
+}
+
+/// The `sync now: …` summary line.
+fn render_summary(report: &SyncRunReport) -> String {
+    let shed_detail = render_shed_detail(report);
+    format!(
         "sync now: {} passes, intake {} accepted ({} duplicates, {} deferred [{} unseen, {} status-blocked, {} shed{}], {} skipped, {} discarded), fetch {} manifests, {} bodies, {} objects ({} unfulfilled), publish {} sends ({} clipped passes, {} deferred), {} obligations pending, {} unfetchable heads\n",
         report.passes,
         report.accepted,
@@ -819,29 +820,36 @@ pub(crate) fn sync_now_render(report: &SyncRunReport) -> String {
         report.publish_deferred,
         report.pending,
         report.unfetchable_heads,
-    );
-    // The control-plane gap beside the obligation backlog: received
-    // reconciliation statements the run never answered, plus
-    // evaluated-but-stuck ones whose requester is still owed. Always
-    // printed (zero is the converged case automation greps for), and
-    // counts only — no statement digests, no requester identities.
-    out.push_str(&format!(
+    )
+}
+
+/// The control-plane gap beside the obligation backlog: received
+/// reconciliation statements the run never answered, plus
+/// evaluated-but-stuck ones whose requester is still owed. Always
+/// printed (zero is the converged case automation greps for), and
+/// counts only — no statement digests, no requester identities.
+fn render_reconciliation_line(report: &SyncRunReport) -> String {
+    format!(
         "reconciliation: {} statements awaiting answer, {} stalled\n",
         report.reconciliation_outstanding, report.reconciliation_stalled,
-    ));
-    // Fetch-attempt diagnostics beside the `(N unfulfilled)` total
-    // above. Each class counts observed attempts, never a share of
-    // the total: budget pressure discarded when a fallback reports
-    // absence lands in `deadlines` without becoming an unfulfilled
-    // item, so the classes are diagnostic counts, not a
-    // decomposition of `unfulfilled` — no line here may read as
-    // arithmetic on it. The breakdown prints only when the run left
-    // work behind and only for classes that fired, so quiet runs
-    // stay quiet; `deadlines` and `terminal` print unconditionally
-    // because they describe the execution itself, not the backlog.
-    // Counts only, grouped by reason — never by identity: this
-    // surface is client-position and must stay reusable from a
-    // vault, where ContentIds are forbidden.
+    )
+}
+
+/// Fetch-attempt diagnostics beside the `(N unfulfilled)` total
+/// above. Each class counts observed attempts, never a share of
+/// the total: budget pressure discarded when a fallback reports
+/// absence lands in `deadlines` without becoming an unfulfilled
+/// item, so the classes are diagnostic counts, not a
+/// decomposition of `unfulfilled` — no line here may read as
+/// arithmetic on it. The breakdown prints only when the run left
+/// work behind and only for classes that fired, so quiet runs
+/// stay quiet; `deadlines` and `terminal` print unconditionally
+/// because they describe the execution itself, not the backlog.
+/// Counts only, grouped by reason — never by identity: this
+/// surface is client-position and must stay reusable from a
+/// vault, where ContentIds are forbidden.
+fn render_fetch_classes(report: &SyncRunReport) -> String {
+    let mut out = String::new();
     let classes = [
         ("transport_errors", report.transport_errors),
         ("missing", report.missing),
@@ -861,18 +869,24 @@ pub(crate) fn sync_now_render(report: &SyncRunReport) -> String {
             out.push_str("  note: refused is retention policy, not loss: refused bytes were never stored, never enter repair as lost, and retry after raising the ceiling\n");
         }
     }
-    out.push_str(&format!(
-        "deadlines: {} discarded under budget pressure\n",
-        report.deadlines,
-    ));
-    out.push_str(&format!(
-        "terminal: {} identities exhausted\n",
-        report.terminal_identities,
-    ));
-    // Repair diagnostics the earlier peer-repair children stored for
-    // this renderer: rejected-representation quarantine and
-    // out-of-band-loss scrub, one line each, only when the run did
-    // repair work. Counts only, like the fetch classes above.
+    out
+}
+
+/// Execution lines: `deadlines` and `terminal` print unconditionally
+/// because they describe the execution itself, not the backlog.
+fn render_execution_lines(report: &SyncRunReport) -> String {
+    format!(
+        "deadlines: {} discarded under budget pressure\nterminal: {} identities exhausted\n",
+        report.deadlines, report.terminal_identities,
+    )
+}
+
+/// Repair diagnostics the earlier peer-repair children stored for
+/// this renderer: rejected-representation quarantine and
+/// out-of-band-loss scrub, one line each, only when the run did
+/// repair work. Counts only, like the fetch classes above.
+fn render_repair_lines(report: &SyncRunReport) -> String {
+    let mut out = String::new();
     if report.quarantined_observed > 0
         || report.quarantine_claims_cleared > 0
         || report.quarantine_bytes_discarded > 0
@@ -899,28 +913,29 @@ pub(crate) fn sync_now_render(report: &SyncRunReport) -> String {
             report.scrub_failures,
         ));
     }
-    // Local durability load beside sync load: the run's passes above
-    // say what the network did; these lines say what the disk did.
-    // Sources are variant classes, never paths — the `Debug` impls
-    // render paths, and this surface must not inherit that.
-    // Write-path statistics are process-local and cover only
-    // mutations submitted to this run's in-memory mutation queue.
-    // Headless commands such as `sync now` do not submit mutations,
-    // so their write-path statistics are zero: honest evidence of no
-    // writes by that invocation, not missing telemetry and never a
-    // claim about the drive's history. The rate's denominator is the
-    // queue lifetime (run length for `sync now`, process lifetime
-    // on a mount), printed beside the rate so a lifetime average is
-    // never misread as a recent one.
+    out
+}
+
+/// Local durability load beside sync load: the run's passes above
+/// say what the network did; these lines say what the disk did.
+/// Sources are variant classes, never paths — the `Debug` impls
+/// render paths, and this surface must not inherit that.
+/// Write-path statistics are process-local and cover only
+/// mutations submitted to this run's in-memory mutation queue.
+/// Headless commands such as `sync now` do not submit mutations,
+/// so their write-path statistics are zero: honest evidence of no
+/// writes by that invocation, not missing telemetry and never a
+/// claim about the drive's history. The rate's denominator is the
+/// queue lifetime (run length for `sync now`, process lifetime
+/// on a mount), printed beside the rate so a lifetime average is
+/// never misread as a recent one.
+fn render_write_path_lines(report: &SyncRunReport) -> String {
     let write = &report.write;
-    out.push_str(&format!(
-        "write path: {} snapshots ({:.1} per min over {:.1}s)\n",
+    format!(
+        "write path: {} snapshots ({:.1} per min over {:.1}s)\nwrite sources: mkdir {} create-file {} commit-file {} append-file {} unlink {} rmdir {} rename {} set-attrs {} fold {}\nwrite latency: admission-to-commit mean {}us max {}us over {} commits ({} failures)\n",
         write.snapshots,
         write.snapshots_per_minute(),
         write.started.elapsed().as_secs_f64(),
-    ));
-    out.push_str(&format!(
-        "write sources: mkdir {} create-file {} commit-file {} append-file {} unlink {} rmdir {} rename {} set-attrs {} fold {}\n",
         write.mkdir,
         write.create_file,
         write.commit_file,
@@ -930,22 +945,23 @@ pub(crate) fn sync_now_render(report: &SyncRunReport) -> String {
         write.rename,
         write.set_attrs,
         write.fold,
-    ));
-    out.push_str(&format!(
-        "write latency: admission-to-commit mean {}us max {}us over {} commits ({} failures)\n",
         write.commit_latency_us_mean(),
         write.commit_latency_us_max,
         write.commits,
         write.failures,
-    ));
-    // Senders heard this run (OD-17-4 option B): full identities,
-    // because this process connected and the operator holds the
-    // keys — with the transport-named caveat that an envelope sender
-    // is any Nostr key that mailed us, member or not, so this is a
-    // sender list, never a membership roster. The durable surface
-    // reports obligation peers as opaque handles; the two answer
-    // different questions (who mailed us vs who we owe) and never
-    // share a representation.
+    )
+}
+
+/// Senders heard this run (OD-17-4 option B): full identities,
+/// because this process connected and the operator holds the
+/// keys — with the transport-named caveat that an envelope sender
+/// is any Nostr key that mailed us, member or not, so this is a
+/// sender list, never a membership roster. The durable surface
+/// reports obligation peers as opaque handles; the two answer
+/// different questions (who mailed us vs who we owe) and never
+/// share a representation.
+fn render_senders_lines(report: &SyncRunReport) -> String {
+    let mut out = String::new();
     if report.peers_observed.is_empty() {
         out.push_str("senders observed: none\n");
     } else {
@@ -957,6 +973,19 @@ pub(crate) fn sync_now_render(report: &SyncRunReport) -> String {
             out.push_str(&format!("  sender {peer}\n"));
         }
     }
+    out
+}
+
+/// The closing verdict lines. An open reconciliation gap downgrades
+/// both quiet verdicts the way a degraded mailbox does: the outbox
+/// is quiet but a peer asked and this run never answered, so the
+/// run stopped instead of completing. Checked before the mailbox
+/// arms so a healthy offline run with a gap cannot claim
+/// completion — a `completed` line beside a non-zero exit would
+/// lie to the automation the exit code serves. Either half of
+/// the gap — never-evaluated or evaluated-but-stuck — downgrades.
+fn render_verdict(report: &SyncRunReport) -> String {
+    let mut out = String::new();
     // An open reconciliation gap downgrades both quiet verdicts
     // the way a degraded mailbox does: the outbox is quiet but a
     // peer asked and this run never answered, so the run stopped
@@ -1047,6 +1076,20 @@ pub(crate) fn sync_now_render(report: &SyncRunReport) -> String {
             out.push('\n');
         }
     }
+    out
+}
+
+/// Render a headless run report. Built as a string so tests assert
+/// the rendering without capturing stdout.
+pub(crate) fn sync_now_render(report: &SyncRunReport) -> String {
+    let mut out = render_summary(report);
+    out.push_str(&render_reconciliation_line(report));
+    out.push_str(&render_fetch_classes(report));
+    out.push_str(&render_execution_lines(report));
+    out.push_str(&render_repair_lines(report));
+    out.push_str(&render_write_path_lines(report));
+    out.push_str(&render_senders_lines(report));
+    out.push_str(&render_verdict(report));
     out
 }
 

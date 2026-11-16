@@ -12,6 +12,7 @@
 //! drive directory gets a metadata check only, so validation always
 //! runs before the running service is disturbed.
 
+mod cli;
 mod identity;
 mod preflight;
 mod run;
@@ -20,6 +21,7 @@ mod state;
 mod supervise;
 mod verify;
 
+pub(crate) use cli::*;
 pub(crate) use preflight::*;
 pub(crate) use run::*;
 pub(crate) use supervise::*;
