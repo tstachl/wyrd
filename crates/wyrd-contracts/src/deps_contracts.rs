@@ -452,7 +452,12 @@ fn feature_pins(member: &str) -> Option<&'static [FeaturePin]> {
             ("dependencies", "wyrd-namespace", &[], true),
             ("dependencies", "wyrd-sync", &[], true),
             ("dev-dependencies", "iroh", &[], true),
-            ("dev-dependencies", "nostr-sdk", &["local-relay"], false),
+            (
+                "dev-dependencies",
+                "nostr-sdk",
+                &["local-relay", "rustls-tls-webpki-roots"],
+                false,
+            ),
             ("dev-dependencies", "secp256k1", &["global-context"], true),
             ("dev-dependencies", "serde_json", &[], true),
             ("dev-dependencies", "tokio-tungstenite", &[], true),
@@ -519,7 +524,12 @@ fn feature_pins(member: &str) -> Option<&'static [FeaturePin]> {
             ("dependencies", "wyrd-format", &[], true),
             ("dependencies", "wyrd-sync", &[], true),
             ("dependencies", "zeroize", &[], true),
-            ("dev-dependencies", "nostr-sdk", &["local-relay"], false),
+            (
+                "dev-dependencies",
+                "nostr-sdk",
+                &["local-relay", "rustls-tls-webpki-roots"],
+                false,
+            ),
             (
                 "dev-dependencies",
                 "tokio",
@@ -711,17 +721,21 @@ fn check_unsafe_sites(holders: &[(String, usize)]) -> Vec<String> {
 }
 
 /// Files holding `#[allow(unsafe_code)]` in code: path to occurrence
-/// count. Counts code occurrences (comments and string literals
-/// excluded by the lexer), so prose mentions never count. Pure over
-/// the holder list so tests can pin the rule without touching the
-/// filesystem.
+/// count. Counts the lint name (`allow(unsafe_code`) in lexed code,
+/// so every spelling counts — `#[allow(unsafe_code)]`,
+/// `#[allow(unsafe_code, ..)]`, `#[cfg_attr(.., allow(unsafe_code))]`,
+/// and the crate-level `#![allow(unsafe_code)]` (which would license
+/// unsafe crate-wide against the workspace `deny`). Comments and
+/// string literals are excluded by the lexer, so prose mentions never
+/// count. Pure over the holder list so tests can pin the rule without
+/// touching the filesystem.
 fn unsafe_holding_files(files: &[(&str, &str)]) -> Vec<(String, usize)> {
     let mut holders: Vec<(String, usize)> = files
         .iter()
         .map(|(path, text)| {
             (
                 path.to_string(),
-                code_text(text).matches("#[allow(unsafe_code)]").count(),
+                code_text(text).matches("allow(unsafe_code").count(),
             )
         })
         .filter(|(_, count)| *count > 0)
@@ -1131,19 +1145,14 @@ fn member_dependency_features_are_pinned() {
         let name = member.rsplit('/').next().unwrap_or(member);
         let manifest = read_manifest(&root.join(member));
         let mut specs = Vec::new();
-        for table in ["dependencies", "build-dependencies", "dev-dependencies"] {
-            let Some(deps) = manifest.get(table).and_then(|t| t.as_table()) else {
-                continue;
-            };
-            for (key, value) in deps {
-                let (features, default) = dep_feature_spec(key, value, &workspace_deps);
-                specs.push((
-                    table,
-                    effective_name(key, value, &workspace_deps),
-                    features,
-                    default,
-                ));
-            }
+        for (table, key, value) in all_dep_edges(&manifest) {
+            let (features, default) = dep_feature_spec(key, value, &workspace_deps);
+            specs.push((
+                table,
+                effective_name(key, value, &workspace_deps),
+                features,
+                default,
+            ));
         }
         pinned_any |= feature_pins(name).is_some();
         violations.extend(check_member_features(
@@ -2128,6 +2137,34 @@ mod policy_tests {
     }
 
     #[test]
+    fn dep_feature_spec_unions_workspace_and_inline() {
+        let root: toml::Table = r#"
+            [workspace.dependencies.nostr-sdk]
+            version = "0.45.2"
+            default-features = false
+            features = ["rustls-tls-webpki-roots"]
+        "#
+        .parse()
+        .unwrap();
+        let workspace = workspace_dep_table(&root);
+        let edge: toml::Value = r#"nostr-sdk = { workspace = true, features = ["local-relay"] }"#
+            .parse::<toml::Table>()
+            .unwrap()
+            .remove("nostr-sdk")
+            .unwrap();
+        let (features, default) = dep_feature_spec("nostr-sdk", &edge, &workspace);
+        assert_eq!(
+            features,
+            vec![
+                "local-relay".to_owned(),
+                "rustls-tls-webpki-roots".to_owned()
+            ],
+            "the union, not the inline half: {features:?}"
+        );
+        assert!(!default, "workspace default-features = false survives");
+    }
+
+    #[test]
     fn unsafe_site_widening_is_rejected() {
         let violations = check_unsafe_sites(&[("crates/wyrd-core/src/node.rs".to_owned(), 1)]);
         assert_eq!(violations.len(), 1, "unlisted site: {violations:?}");
@@ -2162,6 +2199,30 @@ mod policy_tests {
         assert!(
             unsafe_holding_files(&files).is_empty(),
             "comments and strings are not sites"
+        );
+    }
+
+    #[test]
+    fn unsafe_scanner_counts_combined_and_crate_level_spellings() {
+        let files = [
+            (
+                "crates/wyrd-core/src/node.rs",
+                "#[allow(unsafe_code, reason = \"audit\")]",
+            ),
+            (
+                "crates/wyrd-sync/src/durable/mod.rs",
+                "#![allow(unsafe_code)]",
+            ),
+            (
+                "crates/wyrd-view/src/view/head.rs",
+                "#[cfg_attr(test, allow(unsafe_code))]",
+            ),
+        ];
+        let holders = unsafe_holding_files(&files);
+        assert_eq!(holders.len(), 3, "every spelling counts: {holders:?}");
+        assert!(
+            holders.iter().all(|(_, count)| *count == 1),
+            "one lint each: {holders:?}"
         );
     }
 }

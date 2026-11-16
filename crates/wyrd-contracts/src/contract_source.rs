@@ -334,15 +334,49 @@ pub(crate) fn member_features(manifest: &toml::Table) -> toml::Table {
         .unwrap_or_default()
 }
 
+/// Every declared dependency edge in a member manifest, with the
+/// table it was declared in: `(table, key, value)`. Walks the same
+/// recursion as `production_deps` (covers future `[target.*]`
+/// nesting), emitting for `dependencies`, `build-dependencies`, and
+/// `dev-dependencies`. The feature census enumerates through this so
+/// a `[target.*.dependencies]` edge is pinned like any other.
+pub(crate) fn all_dep_edges(manifest: &toml::Table) -> Vec<(&str, &str, &toml::Value)> {
+    fn walk<'a>(table: &'a toml::Table, out: &mut Vec<(&'static str, &'a str, &'a toml::Value)>) {
+        for (key, value) in table {
+            if key == "dependencies" || key == "build-dependencies" || key == "dev-dependencies" {
+                if let Some(inner) = value.as_table() {
+                    let table_name: &'static str = if key == "dependencies" {
+                        "dependencies"
+                    } else if key == "build-dependencies" {
+                        "build-dependencies"
+                    } else {
+                        "dev-dependencies"
+                    };
+                    for (dep_key, dep_value) in inner {
+                        out.push((table_name, dep_key.as_str(), dep_value));
+                    }
+                }
+            } else if let Some(inner) = value.as_table() {
+                walk(inner, out);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(manifest, &mut out);
+    out
+}
+
 /// One declared edge's feature posture: the effective `features`
 /// array (sorted, deduped) and the effective `default-features`
-/// flag. Inline `features` win; otherwise the workspace table's
-/// array applies when the edge inherits it (`workspace = true`);
-/// otherwise empty. Same precedence for `default-features`,
-/// defaulting to true (Cargo's implicit default) when neither side
-/// states it. Pure over the manifest value so the feature census
-/// pins exactly what is declared — unification is Cargo's business,
-/// the declared surface is the contract's.
+/// flag. Cargo combines inherited and inline features instead of
+/// overriding, so the array is the union of the member's `features`
+/// and the workspace table's (when the edge inherits it via
+/// `workspace = true`); otherwise the declared half alone.
+/// Same precedence for `default-features`, defaulting to true
+/// (Cargo's implicit default) when neither side states it. Pure
+/// over the manifest value so the feature census pins exactly what
+/// is declared — unification is Cargo's business, the declared
+/// surface is the contract's.
 pub(crate) fn dep_feature_spec(
     key: &str,
     value: &toml::Value,
@@ -360,7 +394,6 @@ pub(crate) fn dep_feature_spec(
     };
     let mut features: Vec<String> = inline
         .and_then(|table| table.get("features"))
-        .or_else(|| workspace_entry.and_then(|table| table.get("features")))
         .and_then(|f| f.as_array())
         .map(|array| {
             array
@@ -369,6 +402,23 @@ pub(crate) fn dep_feature_spec(
                 .collect()
         })
         .unwrap_or_default();
+    // The union, not the override: `workspace = true` plus member
+    // `features` enables both (the `nostr-sdk` dev edges carry
+    // `local-relay` beside the workspace `rustls-tls-webpki-roots`).
+    // Recording only the inline half would understate the declared
+    // surface, so the pin holds the union.
+    features.extend(
+        workspace_entry
+            .and_then(|table| table.get("features"))
+            .and_then(|f| f.as_array())
+            .map(|array| {
+                array
+                    .iter()
+                    .filter_map(|v| v.as_str().map(str::to_owned))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default(),
+    );
     features.sort();
     features.dedup();
     let default_features = inline

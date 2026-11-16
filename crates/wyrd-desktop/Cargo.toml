@@ -29,8 +29,10 @@ tauri-plugin-dialog.workspace = true
 
 [build-dependencies]
 # Embeds `tauri.conf.json` plus `capabilities/` at compile time for
-# the application context. A build-dependency, not a production edge:
-# the dependency-DAG checker counts `[dependencies]` tables only.
+# the application context. A build edge, counted by the
+# dependency-DAG checker alongside `[dependencies]` tables
+# (`production_deps` in `wyrd-contracts`): the layer gate pins it
+# like any other production edge.
 tauri-build.workspace = true
 
 [dev-dependencies]
