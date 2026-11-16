@@ -144,6 +144,11 @@ pub enum DiscardOutcome {
 /// only for representations observed invalid (quarantine, scrub).
 /// Callers name the content; the implementation re-verifies before
 /// unlinking, so a concurrent heal wins over a stale rejection.
+///
+/// Diagnostics need no `Display`: the associated error carries no
+/// formatting bound here, and call sites that render it add
+/// `Error: Debug` themselves — Debug is the rendering bound, and
+/// nothing requires human-facing display of a store failure.
 pub trait DiscardRejectedRepresentation {
     type Error: StoreError;
 

@@ -32,6 +32,7 @@ use super::chain::build_children_index;
 use super::state::{apply, MembershipState};
 use super::test_util::{admit, drive, key, sign, Builder};
 use super::{MembershipLog, TransitionStatus};
+use crate::property_shard::{sharded_property, SHARD_CASES};
 
 /// Device pool: `key(10 + i)` for `i in 0..POOL`. Index 0 is the genesis
 /// owner and never leaves; small scalars, always valid test keys. Sized
@@ -474,29 +475,14 @@ proptest! {
     }
 }
 
-// The slowest properties below run sharded: four tests of SHARD_CASES
+// The slowest properties below run sharded via the shared
+// `crate::property_shard` helper: four tests of SHARD_CASES
 // novel cases each instead of one test of 256. The per-run budget is
 // unchanged, but nextest executes the shards in parallel, so wall
 // time roughly quarters on a multicore machine. Persisted regression
 // seeds replay in every shard on top. Bodies are written once; the
 // macro stamps out the four shard tests, so shrinking and failure
 // reporting behave exactly like hand-written tests.
-const SHARD_CASES: u32 = 64;
-macro_rules! sharded_property {
-    (
-        body $body:block
-        shards { $($name:ident ( $($arg:ident in $strategy:expr),* ))* }
-    ) => {
-        proptest! {
-            #![proptest_config(ProptestConfig::with_cases(SHARD_CASES))]
-            $(
-                #[test]
-                fn $name($($arg in $strategy),*) $body
-            )*
-        }
-    };
-}
-
 sharded_property! {
     // Arrival order never decides verdicts: three distinct orders over
     // the same observed set agree on every status and the known tip.

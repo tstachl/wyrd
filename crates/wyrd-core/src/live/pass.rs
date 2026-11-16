@@ -399,10 +399,6 @@ where
         &mut self,
         mailbox: &mut M,
     ) -> Result<(bool, wyrd_sync::runtime::DrainReport), LiveError> {
-        // Pause gate (OD-19-A): network intake and reconciliation
-        // stop while paused; local demand bookkeeping below
-        // continues. `DrainReport::default` is the honest empty
-        // report — nothing was read, nothing deferred.
         let paused = self.paused.load(Ordering::Relaxed);
         let drained = if paused {
             Default::default()
@@ -430,19 +426,6 @@ where
         mailbox: &mut M,
         paused: bool,
     ) -> Result<(), LiveError> {
-        // Reconciliation trigger (OD-21-4, C+A): the reconnect edge
-        // plus the drain's gap signal, evaluated once per pass. The
-        // edge is counter movement, never level — the first pass
-        // counts as a session start — and the engine latch coalesces
-        // edges that arrive between evaluations. Mailbox failures
-        // absorb like every other send in this pass (see `publish`):
-        // a dead transport stalls the probe, never the loop. The
-        // outcome is dropped here (the loop stays free of reporting
-        // dependencies): the sent half is observable on the recipient
-        // as a received statement — which is what 21d surfaces — so
-        // the local probe needs no counter of its own.
-        //
-        // Paused passes skip the edge and the probe: both send.
         if !paused {
             let reconnects = mailbox.reconnects();
             if self.last_mailbox_reconnects.replace(reconnects) != Some(reconnects) {
@@ -488,16 +471,6 @@ where
         V::Store: DiscardRejectedRepresentation,
         <V::Store as DiscardRejectedRepresentation>::Error: std::fmt::Debug,
     {
-        // Rejected-representation drain (OD-12-1 A, OD-12-2 A): every
-        // verification failure readers submitted since the last pass
-        // is diagnosed, unlinked, and unclaimed here — ahead of
-        // admission, so the same pass reconciles the cleared claim
-        // back to pending and the waiter's want drives a fresh fetch
-        // generation without waiting another pass. The residency
-        // policy is untouched and no waiter is synthesized; the
-        // emission closure is the diagnostic channel
-        // `14-fetch-failure-diagnostics` will persist. Capped like
-        // admission: leftovers wait for the next pass.
         drain_quarantine(
             &self.quarantine,
             &self.store,
@@ -532,38 +505,23 @@ where
     /// direct `want()` callers; returning `Ok` here still marks
     /// the identity admitted, and the fetch plan picks it up from
     /// the durable `Cached` policy.
+    ///
+    /// Vault retention (24-materialization-roles): a vault-role
+    /// device wants every reachable unheld identity, paced by the
+    /// admission cap. Registration is ownerless and coalescing;
+    /// admission commits Cached through the existing path and the
+    /// fetch plan needs no role knowledge, so no new fact kind
+    /// exists. Skipped below vault-effective (zero cost) and while
+    /// a full sweep already covers the durable revision.
+    ///
+    /// Role-narrowing withdrawal (24-materialization-roles): advance
+    /// acknowledgement toward pending and pending toward settled
+    /// mirror off durable state, so the announce route below is
+    /// already route-less while anything is outstanding.
     fn admit_pending_demand(
         &mut self,
     ) -> Result<Option<wyrd_sync::runtime::RuntimeState>, LiveError> {
-        // Admit outstanding backend demand ahead of fetching, atomically
-        // from the registry's perspective: only durably committed
-        // identities are marked admitted, so a failing commit leaves
-        // the rest pending for the next pass and no waiter ever
-        // coalesces onto an unadmitted fetch. The per-pass cap paces
-        // a demand flood: leftover pending demand is not dropped, it
-        // waits for the next pass.
-        //
-        // One durable snapshot feeds the whole admission: retries of
-        // an already-`Cached` identity admit with no commit, and each
-        // genuinely new identity commits once while refreshing the
-        // snapshot in memory — N admissions cost one replay for the
-        // admission step (routes and settlement still take their own).
-        // The engine's commit-time guard stays the authority for
-        // direct `want()` callers; returning `Ok` here still marks
-        // the identity admitted, and the fetch plan picks it up from
-        // the durable `Cached` policy.
-        // Vault retention (24-materialization-roles): a vault-role
-        // device wants every reachable unheld identity, paced by the
-        // admission cap. Registration is ownerless and coalescing;
-        // admission commits Cached through the existing path and the
-        // fetch plan needs no role knowledge, so no new fact kind
-        // exists. Skipped below vault-effective (zero cost) and while
-        // a full sweep already covers the durable revision.
         self.register_vault_wants()?;
-        // Role-narrowing withdrawal (24-materialization-roles): advance
-        // acknowledgement toward pending and pending toward settled
-        // mirror off durable state, so the announce route below is
-        // already route-less while anything is outstanding.
         self.drive_withdrawal()?;
         // A poisoned registry reads as no demand, loudly: the gate
         // names the poison and skips admission this pass instead of

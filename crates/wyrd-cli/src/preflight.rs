@@ -1,3 +1,7 @@
+//! macOS mount preflight: macFUSE runtime and mountpoint probes.
+//! Typed outcomes (not rendered strings) so callers branch on
+//! variants; the mount composer is the only production caller.
+#[cfg(all(target_os = "macos", feature = "mount"))]
 use crate::CliError;
 #[cfg(any(test, all(target_os = "macos", feature = "mount")))]
 use std::path::{Path, PathBuf};
@@ -158,29 +162,4 @@ pub(crate) fn check_macfuse_runtime(bundle: &Path, dev_dir: &Path) -> Result<(),
             dev_dir.display()
         )),
     }
-}
-
-/// Teardown outcomes as named fields, so a call site cannot silently
-/// swap two stages the way positional arguments allow. The dominance
-/// policy itself is the `.and()` chain below, in field order: keep
-/// the chain and the declaration in the same order. Bulk has no field:
-/// its shutdown is graceful-or-abort and infallible by construction,
-/// so there is no bulk outcome to fold.
-pub(crate) struct TeardownStatus {
-    pub loop_result: Result<(), CliError>,
-    pub session_result: Result<(), CliError>,
-    pub serving_result: Result<(), CliError>,
-}
-
-/// Fold the loop, session, and serving outcomes into the process exit
-/// status. Teardown never short-circuits — every stage runs, and the
-/// first failure wins: a loop failure dominates (it names the
-/// operational cause), then a dead session, then the serving
-/// shutdown. Success requires a clean stop, a cleanly reaped server,
-/// and a clean serving shutdown alike.
-pub(crate) fn combine_status(status: TeardownStatus) -> Result<(), CliError> {
-    status
-        .loop_result
-        .and(status.session_result)
-        .and(status.serving_result)
 }

@@ -6,11 +6,11 @@
 //! the shutdown latch and teardown bounds it honors live in
 //! `wyrd_daemon::process`.
 use crate::logging::init_mount_diagnostics;
-use crate::probes::combine_status;
 #[cfg(target_os = "macos")]
-use crate::probes::macos_preflight;
-use crate::probes::TeardownStatus;
+use crate::preflight::macos_preflight;
 use crate::session_config;
+use crate::teardown::combine_status;
+use crate::teardown::TeardownStatus;
 use crate::CliError;
 #[cfg(target_os = "macos")]
 use crate::MACOS_MOUNT_HINT;

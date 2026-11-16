@@ -28,6 +28,8 @@ mod fuzz;
 pub mod ingest;
 pub mod keys;
 pub mod membership;
+#[cfg(test)]
+pub(crate) mod property_shard;
 pub mod public_read;
 pub mod runtime;
 pub mod seal;
