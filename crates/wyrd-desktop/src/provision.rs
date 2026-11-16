@@ -491,10 +491,24 @@ fn drain_capped<R: std::io::Read>(mut pipe: R) -> Vec<u8> {
                     retained.extend_from_slice(&buf[..n.min(room)]);
                 }
             }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(_) => break,
         }
     }
     retained
+}
+
+/// Spawn a pipe-drain thread. `Builder` (not `spawn`) so thread-creation
+/// exhaustion reports instead of panicking across the adapter boundary.
+fn spawn_drain<R: std::io::Read + Send + 'static>(
+    name: &str,
+    pipe: Option<R>,
+) -> Option<std::io::Result<std::thread::JoinHandle<Vec<u8>>>> {
+    pipe.map(|p| {
+        std::thread::Builder::new()
+            .name(name.to_string())
+            .spawn(move || drain_capped(p))
+    })
 }
 
 /// Run `<cli> <argv…>` and wait up to `timeout`. `std::process` only:
@@ -550,14 +564,28 @@ pub(crate) fn run_cli(
     // more than the OS pipe buffer blocks until the parent reads, so
     // polling `try_wait` without reading wedges past the timeout and
     // misclassifies a fast deterministic failure as `Unknown`.
-    let stdout_handle = child
-        .stdout
-        .take()
-        .map(|pipe| std::thread::spawn(move || drain_capped(pipe)));
-    let stderr_handle = child
-        .stderr
-        .take()
-        .map(|pipe| std::thread::spawn(move || drain_capped(pipe)));
+    let stdout_thread = spawn_drain("wyrd-run-cli-stdout", child.stdout.take());
+    let stderr_thread = spawn_drain("wyrd-run-cli-stderr", child.stderr.take());
+    // A drain thread that never starts must fail closed, never panic
+    // and never leak a live child holding the drive: kill, reap, and
+    // resolve unknown. The missing code maps to `Unknown`, so the
+    // paired observation decides — never a retry.
+    if stdout_thread.as_ref().is_some_and(|r| r.is_err())
+        || stderr_thread.as_ref().is_some_and(|r| r.is_err())
+    {
+        let _ = child.kill();
+        let _ = child.wait();
+        return CliOutput {
+            code: None,
+            status_success: false,
+            stdout: String::new(),
+            stderr: "cannot spawn CLI drain thread; outcome unknown — re-reading observed state"
+                .to_string(),
+            timed_out: false,
+        };
+    }
+    let stdout_handle = stdout_thread.and_then(|r| r.ok());
+    let stderr_handle = stderr_thread.and_then(|r| r.ok());
     if let Some(bytes) = stdin_bytes {
         if let Some(mut stdin) = child.stdin.take() {
             // Best-effort write then close: a failed write fails the
@@ -575,6 +603,12 @@ pub(crate) fn run_cli(
                 // The child exited, so the pipes hit EOF once drained:
                 // join the readers to collect the bounded prefix. A
                 // join failure loses detail, never the exit code.
+                // Residual: a grandchild that inherited a pipe keeps
+                // that write end open, so its reader never sees EOF
+                // and this join outlives the timeout. Unreachable
+                // today (no provisioning or onboarding CLI argv
+                // spawns an inheriting child) and shared with the
+                // removed `wait_with_output` — documented, not bounded.
                 let stdout_bytes = stdout_handle
                     .map(|handle| handle.join().unwrap_or_default())
                     .unwrap_or_default();
@@ -597,6 +631,12 @@ pub(crate) fn run_cli(
                     // could block on a grandchild holding the pipe
                     // open (the wedge test's `sleep`), which would
                     // break the bound this branch exists to keep.
+                    // Lifetime cost: a detached reader lives until the
+                    // last pipe writer closes, so a descendant that
+                    // outlives the kill keeps it consuming and
+                    // discarding until it exits. The caller's wait
+                    // stays bounded; the thread lifetime does not in
+                    // that latent case.
                     let _ = child.kill();
                     let _ = child.wait();
                     return CliOutput {
