@@ -95,9 +95,14 @@ pub fn recovery_attempts(health: &MailboxHealth) -> u64 {
 /// relay closed our subscription (attached but blind — never heals
 /// without operator action), or a supervisor recovery episode ran
 /// (non-zero recovery-attempt total). Zero relays never degrade:
-/// idle intake is the explicit local-only request, and `is_live`
-/// is true for a zero-relay mailbox by construction. Saturation
-/// replays deliberately do not count.
+/// idle intake is the explicit local-only request, and the early
+/// return below — not any `is_live` reading — is what protects
+/// that case: a zero-relay mailbox whose drainer died still reads
+/// local-only, never degraded. This guard is explicit on purpose
+/// and must not be folded into `is_live`'s zero-relay special
+/// case: tightening that predicate would turn a local-only run
+/// into a self-contradicting idle-line-plus-exit-2 report.
+/// Saturation replays deliberately do not count.
 ///
 /// The posture splits this one boolean into words (unavailable,
 /// blind, degraded); the CLI keeps it as the run-verdict oracle
@@ -107,10 +112,7 @@ pub fn mailbox_degraded(health: &MailboxHealth) -> bool {
     if health.total_relays == 0 {
         return false;
     }
-    !health.is_live()
-        || health.closed_subscriptions > 0
-        || health.stream_recovery_attempts > 0
-        || health.relay_recovery_attempts > 0
+    !health.is_live() || health.closed_subscriptions > 0 || recovery_attempts(health) > 0
 }
 
 impl RelayPosture {
