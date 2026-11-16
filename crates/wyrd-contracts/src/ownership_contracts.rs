@@ -524,11 +524,11 @@ fn is_test_cfg_attr(line: &str) -> bool {
 
 /// Shipped lines of one source file: every line outside test-only
 /// `#[cfg]` regions, with original line numbers. A test-gated
-/// attribute (see `is_test_cfg_attr`) exempts the item it gates:
-/// stacked attributes and doc-comment lines plus the item line when
-/// the item carries no braces (`mod foo;` on the next line exempts exactly through that
-/// line, so a later production function is still scanned), or the
-/// brace-balanced block through its matching close brace otherwise.
+/// attribute (see `is_test_cfg_attr`) exempts the item it gates: stacked attributes and
+/// doc-comment lines plus the item line when the item's braces balance on that line
+/// (`mod foo;` or `use a::{b};` ends the region there, so a later production function
+/// is still scanned), or the brace-balanced block through its matching close brace
+/// otherwise.
 /// A same-line item (`#[cfg(test)] mod foo;`) exempts only its own
 /// line. Brace counting runs on `code_text` output (comments and
 /// literals blanked, newlines preserved), so a brace inside a string
@@ -565,11 +565,11 @@ fn live_lines(text: &str) -> Vec<(usize, String)> {
         // Multi-line item: skip any stacked attributes (`#[test]`,
         // `#[allow(..)]`) and doc-comment lines to the item line, then
         // decide by the item. Doc comments are blanked by `code_text`,
-        // so a skipped blank line can never hide a mint. A braceless
-        // item (`mod foo;`) is exactly the attribute block plus its
-        // single line — exempt through it, so a later production
-        // function is still scanned. A braced item scans forward to
-        // the matching close brace.
+        // so a skipped blank line can never hide a mint. An item
+        // whose braces balance on its own line (`mod foo;`,
+        // `use a::{b};`, `fn f() {}`) ends the region there, so a
+        // later production block is still scanned. Only an unbalanced
+        // opener scans forward to its matching close brace.
         let mut item = index + 1;
         while item < stripped.len()
             && (stripped[item].trim_start().starts_with("#[") || stripped[item].trim().is_empty())
@@ -581,29 +581,29 @@ fn live_lines(text: &str) -> Vec<(usize, String)> {
             index += 1;
             continue;
         };
-        if !item_line.contains('{') {
+        // Decide by the item line's own braces: a balanced line
+        // (`mod foo;`, `use a::{b};`, `fn f() {}`) ends the region
+        // there, so a later production block is still scanned. Only
+        // an unbalanced opener scans forward to its matching close.
+        let opens = item_line.chars().filter(|&c| c == '{').count() as i32;
+        let closes = item_line.chars().filter(|&c| c == '}').count() as i32;
+        if opens <= closes {
             index = item + 1;
             continue;
         }
-        let mut depth = 0i32;
-        let mut opened = false;
-        let mut cursor = item;
+        let mut depth = opens - closes;
+        let mut cursor = item + 1;
         while cursor < stripped.len() {
             let line = stripped[cursor];
             depth += line.chars().filter(|&c| c == '{').count() as i32;
             depth -= line.chars().filter(|&c| c == '}').count() as i32;
-            opened |= depth > 0;
             cursor += 1;
-            if opened && depth == 0 {
+            if depth == 0 {
                 break;
             }
         }
-        if opened && depth == 0 {
+        if depth == 0 {
             index = cursor;
-        } else if !opened {
-            // Balanced on the item line itself (`fn f() {}`): the
-            // region is the attribute block through that line.
-            index = item + 1;
         } else {
             // Unbalanced: fail closed, scan from the attribute onward.
             index += 1;
@@ -746,6 +746,21 @@ fn braceless_gated_item_does_not_swallow_production() {
     );
 }
 
+/// A gated item whose braces balance on its own line
+/// (`use a::{b};`) ends the region there: a production mint in the
+/// next block is still scanned. This is the
+/// `wyrd-cli/src/main.rs:57` shape.
+#[test]
+fn balanced_brace_gated_item_does_not_swallow_production() {
+    let text =
+        "#[cfg(test)]\nuse a::{b};\n\npub fn mint() -> Head {\n    Head::new(authorized())\n}\n";
+    let live: Vec<String> = live_lines(text).into_iter().map(|(_, line)| line).collect();
+    assert!(
+        live.iter().any(|line| line.contains("Head::new")),
+        "the production mint after a balanced gate is scanned: {live:?}"
+    );
+}
+
 /// Stacked attributes gate one item together: `#[cfg(test)]` plus
 /// `#[test]` exempt the whole function that follows.
 #[test]
@@ -831,6 +846,96 @@ fn pinned_test_files_match_tree() {
     assert_eq!(
         found, pinned,
         "test-named files drifted: add deliberately here, never silently"
+    );
+    // Every pinned file is declared under a test gate: removing the
+    // `#[cfg(test)]` (or `all(test, ..)`) from its `mod` declaration
+    // would ship the file while the scan kept skipping it. Walk every
+    // source for the declaration — `mod <stem>;` or
+    // `#[path = "<file>"]` plus its `mod` — and require a test-gated
+    // attribute in the block above (reusing `is_test_cfg_attr`).
+    let mut sources: Vec<String> = Vec::new();
+    visit_sources(&root, &mut |_, text| sources.push(text.to_owned()));
+    // Lex each source once: the pin loop below walks lines per pin,
+    // and re-lexing the tree 171 times costs two minutes.
+    let lexed_sources: Vec<Vec<String>> = sources
+        .iter()
+        .map(|source| code_text(source).lines().map(str::to_owned).collect())
+        .collect();
+    let mut ungated: Vec<String> = Vec::new();
+    for pin in TEST_FILE_PINS {
+        let file = pin.rsplit('/').next().unwrap_or(pin);
+        let stem = file.strip_suffix(".rs").unwrap_or(file);
+        let mut gated = false;
+        for (source, lexed) in sources.iter().zip(lexed_sources.iter()) {
+            let raw: Vec<&str> = source.lines().collect();
+            for (i, lex_line) in lexed.iter().enumerate() {
+                // Declaration match on lexed lines (comments and
+                // strings blanked, so prose cannot match): `mod stem`
+                // as tokens, or the raw path attribute naming the file.
+                let tokens: Vec<&str> = lex_line
+                    .split(|c: char| !c.is_alphanumeric() && c != '_')
+                    .filter(|t| !t.is_empty())
+                    .collect();
+                let mod_match = tokens.windows(2).any(|w| w[0] == "mod" && w[1] == stem);
+                let raw_line = raw.get(i).copied().unwrap_or("");
+                let path_match = raw_line.contains("#[path") && raw_line.contains(file);
+                if !mod_match && !path_match {
+                    continue;
+                }
+                // Same-line gate (`#[cfg(test)] mod stem;`).
+                if lex_line.contains("#[cfg(") && is_test_cfg_attr(lex_line) {
+                    gated = true;
+                    break;
+                }
+                // For a path attribute the `mod` sits below it: step
+                // to the mod line first.
+                let mut decl = i;
+                if path_match && !mod_match {
+                    decl = ((i + 1)..raw.len().min(i + 4))
+                        .find(|&k| {
+                            lexed.get(k).is_some_and(|l| {
+                                l.split(|c: char| !c.is_alphanumeric() && c != '_')
+                                    .filter(|t| !t.is_empty())
+                                    .collect::<Vec<_>>()
+                                    .windows(2)
+                                    .any(|w| w[0] == "mod")
+                            })
+                        })
+                        .unwrap_or(i);
+                }
+                // Walk back over attributes, doc comments, and blank
+                // (blanked-comment) lines for a test gate.
+                let mut k = decl;
+                while k > 0 {
+                    k -= 1;
+                    let r = raw.get(k).copied().unwrap_or("").trim_start();
+                    if !(r.starts_with("#[")
+                        || r.starts_with("///")
+                        || r.starts_with("//!")
+                        || lexed.get(k).is_some_and(|l| l.trim().is_empty()))
+                    {
+                        break;
+                    }
+                    if lexed.get(k).is_some_and(|l| is_test_cfg_attr(l)) {
+                        gated = true;
+                        break;
+                    }
+                }
+                if gated {
+                    break;
+                }
+            }
+            if gated {
+                break;
+            }
+        }
+        if !gated {
+            ungated.push(pin.to_string());
+        }
+    }
+    assert!(
+        ungated.is_empty(),
+        "pinned test files without a test-gated declaration: {ungated:?}"
     );
 }
 

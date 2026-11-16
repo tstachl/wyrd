@@ -186,12 +186,17 @@ pub(crate) fn code_text(text: &str) -> String {
             }
             continue;
         }
-        // Ordinary or byte string.
+        // Ordinary or byte string: content is deleted, but newlines
+        // are preserved (a `\` line continuation inside a string
+        // must not shift every later line number).
         if c == '"' || (c == 'b' && chars.get(i + 1) == Some(&'"')) {
             i += if c == 'b' { 2 } else { 1 };
             while i < chars.len() && chars[i] != '"' && chars[i] != '\n' {
                 if chars[i] == '\\' {
                     i += 1;
+                    if chars.get(i) == Some(&'\n') {
+                        code.push('\n');
+                    }
                 }
                 i += 1;
             }
@@ -371,9 +376,13 @@ pub(crate) fn all_dep_edges(manifest: &toml::Table) -> Vec<(&str, &str, &toml::V
 /// flag. Cargo combines inherited and inline features instead of
 /// overriding, so the array is the union of the member's `features`
 /// and the workspace table's (when the edge inherits it via
-/// `workspace = true`); otherwise the declared half alone.
-/// Same precedence for `default-features`, defaulting to true
-/// (Cargo's implicit default) when neither side states it. Pure
+/// `workspace = true`); otherwise the declared half alone. For
+/// `default-features` the workspace entry wins whenever the edge
+/// inherits: Cargo ignores a member-level `default-features` beside
+/// `workspace = true` (see the `wyrd-daemon` note in the workspace
+/// root manifest), so recording the member's value would pin a
+/// posture Cargo does not compile. A non-inheriting edge uses its
+/// own flag, defaulting to true (Cargo's implicit default). Pure
 /// over the manifest value so the feature census pins exactly what
 /// is declared — unification is Cargo's business, the declared
 /// surface is the contract's.
@@ -383,11 +392,11 @@ pub(crate) fn dep_feature_spec(
     workspace_deps: &toml::Table,
 ) -> (Vec<String>, bool) {
     let inline = value.as_table();
-    let workspace_entry = if inline
+    let inherits = inline
         .and_then(|table| table.get("workspace"))
         .and_then(|w| w.as_bool())
-        == Some(true)
-    {
+        == Some(true);
+    let workspace_entry = if inherits {
         workspace_deps.get(key).and_then(|w| w.as_table())
     } else {
         None
@@ -421,11 +430,21 @@ pub(crate) fn dep_feature_spec(
     );
     features.sort();
     features.dedup();
-    let default_features = inline
-        .and_then(|table| table.get("default-features"))
-        .or_else(|| workspace_entry.and_then(|table| table.get("default-features")))
-        .and_then(|f| f.as_bool())
-        .unwrap_or(true);
+    // Workspace wins when the edge inherits: a member-level
+    // `default-features` beside `workspace = true` is ignored by
+    // Cargo, so the pin follows the workspace entry (or Cargo's
+    // default true when neither states it).
+    let default_features = if inherits {
+        workspace_entry
+            .and_then(|table| table.get("default-features"))
+            .and_then(|f| f.as_bool())
+            .unwrap_or(true)
+    } else {
+        inline
+            .and_then(|table| table.get("default-features"))
+            .and_then(|f| f.as_bool())
+            .unwrap_or(true)
+    };
     (features, default_features)
 }
 

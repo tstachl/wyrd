@@ -1655,6 +1655,35 @@ mod policy_tests {
     }
 
     #[test]
+    fn all_dep_edges_enumerate_target_tables() {
+        let manifest: toml::Table = r#"
+            [dependencies]
+            wyrd-format.workspace = true
+            [target.'cfg(unix)'.dependencies]
+            libc = "0.2"
+            [target.'cfg(windows)'.dev-dependencies]
+            windows-sys = "0.6"
+        "#
+        .parse()
+        .unwrap();
+        let edges = all_dep_edges(&manifest);
+        let tables: Vec<(&str, &str)> =
+            edges.iter().map(|(table, key, _)| (*table, *key)).collect();
+        assert!(
+            tables.contains(&("dependencies", "wyrd-format")),
+            "top-level edge: {tables:?}"
+        );
+        assert!(
+            tables.contains(&("dependencies", "libc")),
+            "target dependency: {tables:?}"
+        );
+        assert!(
+            tables.contains(&("dev-dependencies", "windows-sys")),
+            "target dev-dependency: {tables:?}"
+        );
+    }
+
+    #[test]
     fn transitive_sync_reachability_is_rejected_with_witness() {
         let graph = link_graph(&[
             ("wyrd-view", &["wyrd-core"], &["thiserror"]),
@@ -2162,6 +2191,29 @@ mod policy_tests {
             "the union, not the inline half: {features:?}"
         );
         assert!(!default, "workspace default-features = false survives");
+    }
+
+    #[test]
+    fn dep_feature_spec_ignores_member_default_features_when_inheriting() {
+        // Cargo ignores a member-level `default-features` beside
+        // `workspace = true`; the pin follows the workspace entry.
+        let root: toml::Table = r#"
+            [workspace.dependencies.plain]
+            version = "1"
+        "#
+        .parse()
+        .unwrap();
+        let workspace = workspace_dep_table(&root);
+        let edge: toml::Value = r#"plain = { workspace = true, default-features = false }"#
+            .parse::<toml::Table>()
+            .unwrap()
+            .remove("plain")
+            .unwrap();
+        let (_, default) = dep_feature_spec("plain", &edge, &workspace);
+        assert!(
+            default,
+            "the ignored member flag must not reach the pin: {default:?}"
+        );
     }
 
     #[test]
