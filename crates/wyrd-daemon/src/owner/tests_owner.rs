@@ -1565,6 +1565,37 @@ fn mutation_error_codes_are_distinct() {
     }
 }
 
+/// A poisoned parent table surfaces Poisoned through capture-parent,
+/// never NotFound: the mapping arm above is pinned triggered, not
+/// just constructed. A dead token table is a fault, not a missing
+/// parent — the desktop surfaces it instead of retrying a
+/// stale-parent loop forever.
+#[test]
+fn poisoned_parent_table_surfaces_poisoned_not_not_found() {
+    let (server, parts, dir, stop, loop_thread) = running_parts();
+    assert_eq!(
+        parts.mutations.parent_poison_count(),
+        0,
+        "no poison observed yet"
+    );
+    parts.mutations.poison_parent_table_for_test();
+    let error = dispatch_err(&server, OP_CAPTURE_PARENT, "");
+    assert_eq!(
+        error.code,
+        WireErrorCode::Poisoned,
+        "a poisoned table is a fault, not a missing parent: {}",
+        error.message
+    );
+    assert!(
+        parts.mutations.parent_poison_count() > 0,
+        "the refused capture counts the poison beside the refusal"
+    );
+
+    stop.store(true, Ordering::Relaxed);
+    spawn_loop_done(loop_thread);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// All nine mutation kinds encode to JSON and decode back to an
 /// equal operation — and a nested fold refuses at the wire, before
 /// the queue's own closed-fold rule.

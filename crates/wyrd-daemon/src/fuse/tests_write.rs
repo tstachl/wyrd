@@ -944,6 +944,33 @@ fn create_submits_a_lone_forcer_fold() {
     assert_eq!(worker.join().unwrap(), Ok(()));
 }
 
+/// A poisoned parent table fails create louder than a retired inode:
+/// the queue answers Lock, and create_at maps that to EIO, never
+/// ESTALE — a dead table never presents as a stale parent. The
+/// healthy capture first proves the EIO below comes from the poison,
+/// not from setup.
+#[test]
+fn poisoned_parent_table_create_fails_eio_not_estale() {
+    let (mut backend, _) = evolving_backend(b"first", b"second");
+    let queue = Arc::new(MutationQueue::default());
+    backend.mutations = Some(Arc::clone(&queue));
+    let (root, _, _) = backend.resolve_inode("").unwrap();
+    queue
+        .capture_parent("")
+        .expect("healthy table captures")
+        .expect("root captures a token");
+    queue.poison_parent_table_for_test();
+    assert_eq!(
+        backend.create_at(root, "new.txt", libc::O_RDWR).map(|_| ()),
+        Err(fuser::Errno::EIO),
+        "a poisoned parent table fails create loud, never stale"
+    );
+    assert!(
+        queue.parent_poison_count() > 0,
+        "the refused capture counts the poison beside the refusal"
+    );
+}
+
 /// OD-1 rename forcing: renaming over a clean drive submits exactly
 /// one fold with the rename as forcer. The rename rebinds locally
 /// after the submit, so no publish is needed for the worker to

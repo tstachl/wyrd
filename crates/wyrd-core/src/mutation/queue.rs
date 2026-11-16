@@ -161,6 +161,19 @@ impl MutationQueue {
         self.parents.poison_count()
     }
 
+    /// Poison the parent-token table lock so a downstream seam test
+    /// can observe Err(MutationError::Lock) through a real queue. Pub
+    /// (hidden) for the wyrd-daemon poison-mapping pins: integration
+    /// tests cannot reach the table lock, and no fake stands in for
+    /// the real registry on the capture-parent and create seams.
+    /// Never called in production. Relies on unwinding: a build with
+    /// panic=abort would abort here instead of poisoning; the
+    /// workspace sets no panic key today.
+    #[doc(hidden)]
+    pub fn poison_parent_table_for_test(&self) {
+        self.parents.poison_for_test();
+    }
+
     /// Rotate tokens for a path and all of its descendants after a
     /// successful namespace replacement. New captures remain blocked until
     /// the corresponding projection is published.

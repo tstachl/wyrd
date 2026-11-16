@@ -156,6 +156,21 @@ impl ParentRegistry {
         tracing::error!(op, "parent registry lock poisoned; token table unreachable");
     }
 
+    /// Poison the token-table lock for a downstream seam test. The
+    /// catch_unwind drops the guard during unwinding, which poisons a
+    /// std mutex exactly the way a panicking holder does. Unit tests
+    /// inside this module reach the lock directly; other crates
+    /// cannot, so the queue exposes this through
+    /// MutationQueue::poison_parent_table_for_test. Never called in
+    /// production: poisoning is a test-only fault, and every
+    /// acquisition beside it still fails closed with a count.
+    pub(super) fn poison_for_test(&self) {
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = self.state.lock().unwrap();
+            panic!("poison the parent table for a seam test");
+        }));
+    }
+
     pub(super) fn capture(&self, path: &str) -> Result<Option<ParentToken>, MutationError> {
         let mut state = match self.state.lock() {
             Ok(state) => state,
