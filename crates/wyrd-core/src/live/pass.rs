@@ -390,19 +390,15 @@ where
         }
         report
     }
-    /// One pass body: intake, fetch, conditional republication, then
-    /// outbound publish. Republication clears the dirty backlog; every
-    /// failure path leaves it set (via the [`LiveNode::sync_once`]
-    /// wrapper).
-    fn sync_pass<M: Mailbox, B: RoutePublishing>(
+
+    /// Pause gate plus intake drain (OD-19-A): network intake stops
+    /// while paused; local demand bookkeeping below continues.
+    /// `DrainReport::default` is the honest empty report — nothing
+    /// was read, nothing deferred.
+    fn drain_intake<M: Mailbox>(
         &mut self,
         mailbox: &mut M,
-        bulk: Option<&mut B>,
-    ) -> Result<SyncReport, LiveError>
-    where
-        V::Store: DiscardRejectedRepresentation,
-        <V::Store as DiscardRejectedRepresentation>::Error: std::fmt::Debug,
-    {
+    ) -> Result<(bool, wyrd_sync::runtime::DrainReport), LiveError> {
         // Pause gate (OD-19-A): network intake and reconciliation
         // stop while paused; local demand bookkeeping below
         // continues. `DrainReport::default` is the honest empty
@@ -413,6 +409,27 @@ where
         } else {
             self.engine.drain(mailbox)?
         };
+        Ok((paused, drained))
+    }
+
+    /// Reconciliation trigger (OD-21-4, C+A): the reconnect edge
+    /// plus the drain's gap signal, evaluated once per pass. The
+    /// edge is counter movement, never level — the first pass
+    /// counts as a session start — and the engine latch coalesces
+    /// edges that arrive between evaluations. Mailbox failures
+    /// absorb like every other send in this pass (see `publish`):
+    /// a dead transport stalls the probe, never the loop. The
+    /// outcome is dropped here (the loop stays free of reporting
+    /// dependencies): the sent half is observable on the recipient
+    /// as a received statement — which is what 21d surfaces — so
+    /// the local probe needs no counter of its own.
+    ///
+    /// Paused passes skip the edge and the probe: both send.
+    fn fire_reconciliation_trigger<M: Mailbox>(
+        &mut self,
+        mailbox: &mut M,
+        paused: bool,
+    ) -> Result<(), LiveError> {
         // Reconciliation trigger (OD-21-4, C+A): the reconnect edge
         // plus the drain's gap signal, evaluated once per pass. The
         // edge is counter movement, never level — the first pass
@@ -453,20 +470,24 @@ where
                 Err(other) => return Err(LiveError::Engine(other)),
             }
         }
-        // Generation rotation on observed demand (OD-11-2): every
-        // identity noted since the last pass whose generation
-        // completed terminal reopens as a new one. Notes arrive from
-        // terminal reads — first touch and mid-wait observation —
-        // and outlive the waiter that carried them, which is what
-        // makes a retrying reader re-demandable: a waiter never
-        // blocks on a verdict that already exists, so pending alone
-        // could never carry its demand to the next pass. Reopen is a
-        // no-op for anything not terminal, so the sweep never
-        // disturbs live fetches. Admission below then carries the new
-        // generation's demand into the engine.
-        for id in self.wants.take_reopen_notes() {
-            self.engine.reopen_generation(&id);
-        }
+        Ok(())
+    }
+
+    /// Rejected-representation drain (OD-12-1 A, OD-12-2 A): every
+    /// verification failure readers submitted since the last pass
+    /// is diagnosed, unlinked, and unclaimed here — ahead of
+    /// admission, so the same pass reconciles the cleared claim
+    /// back to pending and the waiter's want drives a fresh fetch
+    /// generation without waiting another pass. The residency
+    /// policy is untouched and no waiter is synthesized; the
+    /// emission closure is the diagnostic channel
+    /// `14-fetch-failure-diagnostics` will persist. Capped like
+    /// admission: leftovers wait for the next pass.
+    fn drain_rejected(&mut self) -> Result<crate::quarantine::QuarantineReport, LiveError>
+    where
+        V::Store: DiscardRejectedRepresentation,
+        <V::Store as DiscardRejectedRepresentation>::Error: std::fmt::Debug,
+    {
         // Rejected-representation drain (OD-12-1 A, OD-12-2 A): every
         // verification failure readers submitted since the last pass
         // is diagnosed, unlinked, and unclaimed here — ahead of
@@ -477,7 +498,7 @@ where
         // emission closure is the diagnostic channel
         // `14-fetch-failure-diagnostics` will persist. Capped like
         // admission: leftovers wait for the next pass.
-        let quarantined = drain_quarantine(
+        drain_quarantine(
             &self.quarantine,
             &self.store,
             self.retained_bytes.as_deref(),
@@ -491,7 +512,29 @@ where
                     "representation rejected: discarding bytes and re-demanding"
                 );
             },
-        )?;
+        )
+    }
+
+    /// Admit outstanding backend demand ahead of fetching, atomically
+    /// from the registry's perspective: only durably committed
+    /// identities are marked admitted, so a failing commit leaves
+    /// the rest pending for the next pass and no waiter ever
+    /// coalesces onto an unadmitted fetch. The per-pass cap paces
+    /// a demand flood: leftover pending demand is not dropped, it
+    /// waits for the next pass.
+    ///
+    /// One durable snapshot feeds the whole admission: retries of
+    /// an already-`Cached` identity admit with no commit, and each
+    /// genuinely new identity commits once while refreshing the
+    /// snapshot in memory — N admissions cost one replay for the
+    /// admission step (routes and settlement still take their own).
+    /// The engine's commit-time guard stays the authority for
+    /// direct `want()` callers; returning `Ok` here still marks
+    /// the identity admitted, and the fetch plan picks it up from
+    /// the durable `Cached` policy.
+    fn admit_pending_demand(
+        &mut self,
+    ) -> Result<Option<wyrd_sync::runtime::RuntimeState>, LiveError> {
         // Admit outstanding backend demand ahead of fetching, atomically
         // from the registry's perspective: only durably committed
         // identities are marked admitted, so a failing commit leaves
@@ -549,6 +592,40 @@ where
             self.engine
                 .set_materialization_from(snapshot, want, MaterializationState::Cached)
         })?;
+        Ok(admission)
+    }
+
+    /// One pass body: intake, fetch, conditional republication, then
+    /// outbound publish. Republication clears the dirty backlog; every
+    /// failure path leaves it set (via the [`LiveNode::sync_once`]
+    /// wrapper).
+    fn sync_pass<M: Mailbox, B: RoutePublishing>(
+        &mut self,
+        mailbox: &mut M,
+        bulk: Option<&mut B>,
+    ) -> Result<SyncReport, LiveError>
+    where
+        V::Store: DiscardRejectedRepresentation,
+        <V::Store as DiscardRejectedRepresentation>::Error: std::fmt::Debug,
+    {
+        let (paused, drained) = self.drain_intake(mailbox)?;
+        self.fire_reconciliation_trigger(mailbox, paused)?;
+        // Generation rotation on observed demand (OD-11-2): every
+        // identity noted since the last pass whose generation
+        // completed terminal reopens as a new one. Notes arrive from
+        // terminal reads — first touch and mid-wait observation —
+        // and outlive the waiter that carried them, which is what
+        // makes a retrying reader re-demandable: a waiter never
+        // blocks on a verdict that already exists, so pending alone
+        // could never carry its demand to the next pass. Reopen is a
+        // no-op for anything not terminal, so the sweep never
+        // disturbs live fetches. Admission below then carries the new
+        // generation's demand into the engine.
+        for id in self.wants.take_reopen_notes() {
+            self.engine.reopen_generation(&id);
+        }
+        let quarantined = self.drain_rejected()?;
+        let admission = self.admit_pending_demand()?;
         // Local scrub, walk half (child 13): re-stat locally
         // claimed identities against the store from the rotating
         // cursor, submitting misses for the drain below. The
