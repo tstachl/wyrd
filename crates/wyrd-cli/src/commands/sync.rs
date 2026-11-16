@@ -16,6 +16,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use wyrd_core::mailbox::{LiveMailbox, MailboxHealth};
 use wyrd_core::mutation::WriteStats;
+// Shared idle line: the relay-less reading lives in wyrd-core and
+// is pinned by literal tests on both sides; do not paraphrase.
+use wyrd_core::relay_posture::RELAY_IDLE_LINE;
 use wyrd_core::status::{observe, SyncStatus};
 use wyrd_core::view::NamespaceView;
 use wyrd_daemon::core::RuntimeMaterialization;
@@ -657,7 +660,7 @@ pub(crate) fn sync_status_render(status: &SyncStatus) -> String {
         classes.rejected,
     ));
     if status.mailbox.configured_relays == 0 {
-        out.push_str(MAILBOX_IDLE_LINE);
+        out.push_str(RELAY_IDLE_LINE);
     } else {
         out.push_str(&format!(
             "mailbox: {} relays configured (liveness visible on sync now or mount)\n",
@@ -672,10 +675,6 @@ pub(crate) fn sync_status_render(status: &SyncStatus) -> String {
     out
 }
 
-/// The relay-less mailbox posture, shared by the status and now
-/// surfaces so the two cannot drift apart.
-pub(crate) const MAILBOX_IDLE_LINE: &str = "mailbox: idle (no --relay given)\n";
-
 /// Render the mailbox posture line. Built as a string so tests
 /// assert the rendering without capturing stdout. An explicitly
 /// relay-less run reads idle, never live: with no relays there is
@@ -689,7 +688,7 @@ pub(crate) const MAILBOX_IDLE_LINE: &str = "mailbox: idle (no --relay given)\n";
 /// exit contradicts.
 pub(crate) fn mailbox_line(health: &MailboxHealth) -> String {
     if health.total_relays == 0 {
-        return MAILBOX_IDLE_LINE.to_owned();
+        return RELAY_IDLE_LINE.to_owned();
     }
     let closed = health.closed_subscriptions;
     let attempts = recovery_attempts(health);

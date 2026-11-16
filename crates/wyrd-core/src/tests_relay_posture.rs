@@ -228,9 +228,9 @@ fn relay_health_is_labelled_eventually_consistent() {
     );
 }
 
-/// The constant check: the third surface renders the same idle
-/// reading the CLI's status and now surfaces share
-/// (`MAILBOX_IDLE_LINE`), identical text, never a paraphrase.
+/// The constant check: the third surface renders the idle reading
+/// it shares with the CLI's status and now surfaces (one constant,
+/// `RELAY_IDLE_LINE`), identical text, never a paraphrase.
 #[test]
 fn status_and_relay_surfaces_cannot_drift() {
     assert_eq!(RELAY_IDLE_LINE, "mailbox: idle (no --relay given)\n");
@@ -257,10 +257,13 @@ fn acceptance_qualifier_ignores_pending_counts() {
 
 /// Coverage around the edges the table test does not own:
 /// saturation replays never degrade, the offline switch outranks a
-/// zero relay count, partial connectivity names its fraction, and
+/// zero relay count, partial connectivity names its fraction,
 /// mismatched state-vs-copy inputs render by the documented rule
 /// (state follows the observation, copy states the configured
-/// count) rather than failing or folding.
+/// count) rather than failing or folding, a pre-tick startup reads
+/// unavailable without gating on ticks, a live pre-tick sample
+/// still reads running, and an attached-then-lost latch sample
+/// reads unavailable.
 #[test]
 fn posture_edge_cells_render_by_rule() {
     // Saturation replays are pressure signals, not a health
@@ -303,5 +306,45 @@ fn posture_edge_cells_render_by_rule() {
     assert!(
         rendered.contains("configured relays: 0 (current owner configuration)"),
         "copy states the configured count:\n{rendered}"
+    );
+    // Startup before the first supervisor tick: the surface still
+    // reads unavailable — the ticks==0 grace lives in the run
+    // verdict (mailbox_verdict_failed in sync.rs, pinned by
+    // unverified_verdict_requires_observation in the CLI suite),
+    // never the surface. Same reading as a dead mailbox with ticks
+    // on record: the surface does not gate on ticks.
+    let mut startup = health(false, 0, 2, 0, 0, 0);
+    startup.supervisor_ticks = 0;
+    assert_eq!(
+        RelayPosture::of(false, 2, Some(&startup)),
+        RelayPosture::Unavailable,
+        "startup with no tick yet is unavailable, not running"
+    );
+    // Ticks do not gate the surface either way: a live sample
+    // before the first tick still reads running. A mapping that
+    // gated on ticks would flip this cell.
+    let mut early = health(true, 1, 1, 0, 0, 0);
+    early.supervisor_ticks = 0;
+    assert_eq!(
+        RelayPosture::of(false, 1, Some(&early)),
+        RelayPosture::Running(RunningHealth::Live),
+        "a live sample with no tick yet still reads running"
+    );
+    // Latch persistence: attached-then-transiently-lost still reads
+    // unavailable — the surface follows the observation, and the
+    // attached latch convicts only the run verdict
+    // (attached-then-lost fails there), never re-lives the state
+    // here.
+    let mut lost = health(true, 0, 2, 0, 0, 0);
+    lost.relay_attached = true;
+    assert_eq!(
+        RelayPosture::of(false, 2, Some(&lost)),
+        RelayPosture::Unavailable,
+        "attached-then-lost is unavailable; the latch never re-lives the surface"
+    );
+    let lost_rendered = render_posture(false, 2, Some(&lost), 0);
+    assert!(
+        lost_rendered.contains("mailbox not operational"),
+        "attached-then-lost names the outage:\n{lost_rendered}"
     );
 }
