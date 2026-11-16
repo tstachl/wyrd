@@ -470,14 +470,58 @@ pub(crate) struct CliOutput {
     pub(crate) timed_out: bool,
 }
 
+/// Max retained bytes per piped stream: the drain consumes the full
+/// pipe (so a chatty CLI can never wedge the wait) but keeps only
+/// this prefix. 512 KiB total retained is ample for the 500-byte
+/// display detail `map_exit_output` keeps, while bounding memory.
+const MAX_CLI_CAPTURE_BYTES: usize = 256 * 1024;
+
+/// Drain `pipe` to EOF, retaining at most `MAX_CLI_CAPTURE_BYTES`.
+/// Excess is discarded but still consumed, so the child never blocks
+/// on a full pipe while the parent waits.
+fn drain_capped<R: std::io::Read>(mut pipe: R) -> Vec<u8> {
+    let mut retained = Vec::new();
+    let mut buf = [0u8; 8192];
+    loop {
+        match pipe.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                if retained.len() < MAX_CLI_CAPTURE_BYTES {
+                    let room = MAX_CLI_CAPTURE_BYTES - retained.len();
+                    retained.extend_from_slice(&buf[..n.min(room)]);
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => break,
+        }
+    }
+    retained
+}
+
+/// Spawn a pipe-drain thread. `Builder` (not `spawn`) so thread-creation
+/// exhaustion reports instead of panicking across the adapter boundary.
+fn spawn_drain<R: std::io::Read + Send + 'static>(
+    name: &str,
+    pipe: Option<R>,
+) -> Option<std::io::Result<std::thread::JoinHandle<Vec<u8>>>> {
+    pipe.map(|p| {
+        std::thread::Builder::new()
+            .name(name.to_string())
+            .spawn(move || drain_capped(p))
+    })
+}
+
 /// Run `<cli> <argv…>` and wait up to `timeout`. `std::process` only:
-/// the wait runs on a plain thread that polls `try_wait`, so a wedged
-/// CLI can never wedge the adapter past the bound. On expiry the
-/// child is killed and reaped before returning: the flight releases
-/// only after the process is gone, so a timeout can never overlap a
-/// later operation on the same drive. Expiry never means failure of
-/// the operation itself — the CLI may have committed first, so every
-/// timeout resolves `Unknown` and triggers observation.
+/// the wait polls `try_wait` while two reader threads drain stdout
+/// and stderr concurrently, so a chatty CLI can never wedge the
+/// adapter past the bound. Capture keeps at most
+/// `MAX_CLI_CAPTURE_BYTES` per stream (the drain still consumes the
+/// full pipe). On expiry the child is killed and reaped before
+/// returning: the flight releases only after the process is gone, so
+/// a timeout can never overlap a later operation on the same drive.
+/// Expiry never means failure of the operation itself — the CLI may
+/// have committed first, so every timeout resolves `Unknown` and
+/// triggers observation.
 ///
 /// `stdin_bytes`, when present, is piped to the child's stdin and
 /// the pipe closed; otherwise stdin is null (a CLI that reads stdin
@@ -516,6 +560,32 @@ pub(crate) fn run_cli(
             };
         }
     };
+    // Drain both pipes concurrently with the wait: a child writing
+    // more than the OS pipe buffer blocks until the parent reads, so
+    // polling `try_wait` without reading wedges past the timeout and
+    // misclassifies a fast deterministic failure as `Unknown`.
+    let stdout_thread = spawn_drain("wyrd-run-cli-stdout", child.stdout.take());
+    let stderr_thread = spawn_drain("wyrd-run-cli-stderr", child.stderr.take());
+    // A drain thread that never starts must fail closed, never panic
+    // and never leak a live child holding the drive: kill, reap, and
+    // resolve unknown. The missing code maps to `Unknown`, so the
+    // paired observation decides — never a retry.
+    if stdout_thread.as_ref().is_some_and(|r| r.is_err())
+        || stderr_thread.as_ref().is_some_and(|r| r.is_err())
+    {
+        let _ = child.kill();
+        let _ = child.wait();
+        return CliOutput {
+            code: None,
+            status_success: false,
+            stdout: String::new(),
+            stderr: "cannot spawn CLI drain thread; outcome unknown — re-reading observed state"
+                .to_string(),
+            timed_out: false,
+        };
+    }
+    let stdout_handle = stdout_thread.and_then(|r| r.ok());
+    let stderr_handle = stderr_thread.and_then(|r| r.ok());
     if let Some(bytes) = stdin_bytes {
         if let Some(mut stdin) = child.stdin.take() {
             // Best-effort write then close: a failed write fails the
@@ -524,35 +594,49 @@ pub(crate) fn run_cli(
             let _ = stdin.write_all(bytes);
         }
     }
-    // Poll for completion; kill and reap past the bound. The output
-    // pipes stay bounded by the CLI's own chatter (a trusted,
-    // terse binary) — but the wait itself is bounded regardless.
+    // Poll for completion; kill and reap past the bound. The wait
+    // itself is bounded regardless of how chatty the CLI is.
     let deadline = std::time::Instant::now() + timeout;
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
-                let output = child.wait_with_output();
-                return match output {
-                    Ok(output) => CliOutput {
-                        code: output.status.code().or(status.code()),
-                        status_success: output.status.success(),
-                        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-                        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-                        timed_out: false,
-                    },
-                    Err(error) => CliOutput {
-                        code: status.code(),
-                        status_success: status.success(),
-                        stdout: String::new(),
-                        stderr: format!("cannot collect CLI output: {error}"),
-                        timed_out: false,
-                    },
+                // The child exited, so the pipes hit EOF once drained:
+                // join the readers to collect the bounded prefix. A
+                // join failure loses detail, never the exit code.
+                // Residual: a grandchild that inherited a pipe keeps
+                // that write end open, so its reader never sees EOF
+                // and this join outlives the timeout. Unreachable
+                // today (no provisioning or onboarding CLI argv
+                // spawns an inheriting child) and shared with the
+                // removed `wait_with_output` — documented, not bounded.
+                let stdout_bytes = stdout_handle
+                    .map(|handle| handle.join().unwrap_or_default())
+                    .unwrap_or_default();
+                let stderr_bytes = stderr_handle
+                    .map(|handle| handle.join().unwrap_or_default())
+                    .unwrap_or_default();
+                return CliOutput {
+                    code: status.code(),
+                    status_success: status.success(),
+                    stdout: String::from_utf8_lossy(&stdout_bytes).into_owned(),
+                    stderr: String::from_utf8_lossy(&stderr_bytes).into_owned(),
+                    timed_out: false,
                 };
             }
             Ok(None) => {
                 if std::time::Instant::now() >= deadline {
                     // Best-effort kill, then reap: the flight must
                     // never release while the process is still alive.
+                    // The drain threads are detached here: joining
+                    // could block on a grandchild holding the pipe
+                    // open (the wedge test's `sleep`), which would
+                    // break the bound this branch exists to keep.
+                    // Lifetime cost: a detached reader lives until the
+                    // last pipe writer closes, so a descendant that
+                    // outlives the kill keeps it consuming and
+                    // discarding until it exits. The caller's wait
+                    // stays bounded; the thread lifetime does not in
+                    // that latent case.
                     let _ = child.kill();
                     let _ = child.wait();
                     return CliOutput {
@@ -1121,6 +1205,67 @@ mod tests {
         // release, and a leaked child would wedge the next claim.
         // (The shell script's own `sleep` grandchild is not the
         // adapter's to reap.)
+        std::fs::remove_dir_all(&dir).unwrap_or(());
+    }
+
+    /// A chatty CLI that writes 1 MiB to stdout and exits 2 must not
+    /// wedge the adapter: the pipes are drained concurrently with the
+    /// wait, so the exit code (expected failure) arrives well under
+    /// the timeout instead of resolving `Unknown` after a kill. Both
+    /// pipes are drained (1 MiB each) so a stderr flood cannot wedge
+    /// a stdout drain either; capture keeps only a bounded prefix.
+    #[test]
+    fn chatty_cli_drains_pipes_instead_of_wedging() {
+        let dir = std::env::temp_dir().join(format!(
+            "wyrd-desktop-fakecli-{}-chatty",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cli = dir.join("wyrd");
+        std::fs::write(
+            &cli,
+            "#!/bin/sh\nhead -c 1048576 /dev/zero | tr '\\0' 'A'\nhead -c 1048576 /dev/zero | tr '\\0' 'B' >&2\nexit 2\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let start = std::time::Instant::now();
+        let output = run_cli(&cli, &["probe".into()], None, Duration::from_secs(10));
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "a 1 MiB exit-2 must return well under the timeout, took {elapsed:?}"
+        );
+        assert!(
+            !output.timed_out,
+            "a fast exit-2 is not a timeout: {output:?}"
+        );
+        assert_eq!(output.code, Some(2), "exit code survives: {output:?}");
+        assert!(
+            output.stdout.len() <= super::MAX_CLI_CAPTURE_BYTES,
+            "stdout capture stays bounded: {} bytes",
+            output.stdout.len()
+        );
+        assert!(
+            output.stderr.len() <= super::MAX_CLI_CAPTURE_BYTES,
+            "stderr capture stays bounded: {} bytes",
+            output.stderr.len()
+        );
+        assert!(
+            !output.stdout.is_empty() && !output.stderr.is_empty(),
+            "bounded prefix still carries output for display"
+        );
+        assert!(
+            matches!(
+                map_exit_output(&output).result,
+                ProvisionResult::ExpectedFailure { .. }
+            ),
+            "exit 2 maps to expected failure: {:?}",
+            map_exit_output(&output).result
+        );
         std::fs::remove_dir_all(&dir).unwrap_or(());
     }
 
