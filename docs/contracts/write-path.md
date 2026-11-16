@@ -401,10 +401,14 @@ MutationRequest {
    requests — including the request currently executing and any held
    for prerequisites, not just those waiting. Admission beyond it
    returns `EAGAIN`. The queue has its own lock, never the view's or
-   the store's. Shutdown closes admission:
-   once the live loop stops, new submissions are refused with `EIO`
-   (`Shutdown`) instead of queueing behind a loop that will never drain,
-   and held requests resolve `Shutdown` like any other queued request.
+   the store's. Closing admission refuses new submissions with `EIO`
+   (`Shutdown`): `Supervisor::close_admission` additionally fails
+   whatever is still queued with `Shutdown`, while
+   `Supervisor::close_for_drain` leaves queued work for the
+   post-return drain (rule 6). A loop return alone closes nothing —
+   post-return teardown submissions are still admitted. Held requests
+   resolve `Shutdown` like any other queued request when the close
+   that reaches them is a fail-all close.
 3. **Synchronous, no silent post-timeout commit.** Unlike a fetch want
    (which may outlive its waiter), a mutation's caller stays blocked
    until the loop completes it — including across held passes. Once
@@ -476,18 +480,25 @@ MutationRequest {
    error alike — so teardown submissions made after the return are
    admitted, not refused. The loop thread executes them in its
    post-return `drain_until_closed`
-   (`LiveNode::drain_until_closed`), and only the supervisor settles
-   stragglers, after the teardown joins, with `EIO` (`Shutdown`):
-   `Supervisor::close_for_drain` on the vault/headless path (no
-   session to join) closes admission while leaving queued requests for
-   that drain, so an admission made before the stop resolves `Done`
-   through the drain instead of racing `shutdown`'s fail-all; the
-   `Supervisor::close_admission` mop-up after the loop join then fails
-   only close-racers the drain never saw — plus taken-but-unfinished
-   batch entries, which are the batch guard's duty — with `Shutdown`.
-   A terminal error ends sync; it never strands or mass-fails
-   submitters. Once admission is closed, the closed queue refuses new
-   submissions the same way.
+   (`LiveNode::drain_until_closed`). Settlement is the supervisor's,
+   and the order depends on the path: on the mount path the session
+   joins first, then `Supervisor::close_admission` closes admission
+   (the primary close, not a mop-up), then the loop joins; on the
+   vault/headless path `Supervisor::close_for_drain` closes admission
+   while leaving queued requests for the drain, the loop joins, and
+   `Supervisor::close_admission` follows as the idempotent mop-up for
+   close-racers the drain never saw. Either way an admission made
+   before the close resolves `Done` through the drain instead of
+   racing `shutdown`'s fail-all, while a submit admitted before the
+   close and raced by it resolves `Shutdown` — the terminal, honest
+   answer, never a hang. Taken-but-unfinished batch entries are
+   separate: the batch guard fails unrecorded entries with `Engine`,
+   never `Shutdown`. A terminal error ends sync; it never strands or
+   mass-fails submitters. Once admission is closed, the closed queue
+   refuses new submissions the same way. The deliberate exception is
+   loop-thread panic recovery: the loop thread closes admission itself
+   on the spot, before any join, trading the hang for bounded
+   `Shutdown` losses.
 7. **Publication is the same path as fetch.** A mutation applies under
    the store write path and publishes heads and materialization under
    one short view write lock, exactly as a fetch pass does. Neither lock
@@ -751,15 +762,19 @@ it plainly.
 Unmount adds one best-effort safety net, not a durability boundary:
 `destroy` attempts to commit every still-dirty handle before dropping
 the table. The commit needs the mutation queue open and drained, so
-teardown keeps it that way on every path: the loop returns without
+teardown keeps it that way on every ordinary path: the loop returns without
 settling, and the post-return drain executes teardown submissions with
 full apply semantics. On the mount path the session joins first
 (destroy submits while the loop's post-return drain executes), and
 admission closes only after the join; on the vault/headless path there
 is no session to join, so `Supervisor::close_for_drain` closes
 admission while leaving queued requests for the drain, and
-`Supervisor::close_admission` follows the loop join as the idempotent
-mop-up for close-racers — see the lifecycle contract in `wyrd-daemon/src/lifecycle.rs`. A
+`Supervisor::close_admission` follows the loop join as the
+idempotent mop-up for close-racers — see the lifecycle contract in
+`wyrd-daemon/src/lifecycle.rs`. Loop-thread panic recovery is the
+deliberate exception: admission closes inside the loop thread before
+any join, so teardown submits resolve with bounded `Shutdown` losses
+instead of hanging. A
 commit that fails its own evaluation (stale handle, conflict, store
 failure) is still lost and logged per path, and a crash loses
 everything unflushed; flush or fsync remains the reportable

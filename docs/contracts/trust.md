@@ -404,13 +404,16 @@ cannot authenticate which owner the invitee *meant* to trust. A
 device M can mint a genesis G_M naming M and self-seal an invitation
 for it; an invitee holding no out-of-band owner expectation verifies
 the signature, installs the capability, and anchors to M — by design.
-Two such valid geneses conflict at epoch one
-(`two_valid_geneses_conflict_at_epoch_one`): the log freezes with no
-canonical chain, which is detection, not prevention, and resolution
-proceeds like any other genesis conflict (a later transition naming
-one survivor). Full bootstrap trust against inventory — refusing a
-self-sealed genesis outright — needs an out-of-band owner/drive
-expectation established outside validation scope: the expected owner
+If the invitee later observes a second valid genesis, the two conflict
+at epoch one (`two_valid_geneses_conflict_at_epoch_one`): membership
+evaluation freezes at the contested epoch with no canonical chain,
+which is detection, not prevention, and resolution proceeds like any
+other genesis conflict (a later transition naming one survivor). With
+only the self-sealed genesis in the local log there is no conflict
+and nothing freezes, so the risk reads smallest exactly when the
+invitee has seen the least. Full bootstrap trust against a genuine
+drive — refusing a self-sealed genesis outright — needs an
+out-of-band owner/drive expectation established outside validation scope: the expected owner
 DeviceId (or roster), the expected drive id, and, where the pairing
 flow provides one, the expected genesis TransitionId, compared before
 join. Without that expectation the invitee cannot distinguish the
