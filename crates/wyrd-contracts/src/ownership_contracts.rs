@@ -525,8 +525,8 @@ fn is_test_cfg_attr(line: &str) -> bool {
 /// Shipped lines of one source file: every line outside test-only
 /// `#[cfg]` regions, with original line numbers. A test-gated
 /// attribute (see `is_test_cfg_attr`) exempts the item it gates:
-/// stacked attributes plus the item line when the item carries no
-/// braces (`mod foo;` on the next line exempts exactly through that
+/// stacked attributes and doc-comment lines plus the item line when
+/// the item carries no braces (`mod foo;` on the next line exempts exactly through that
 /// line, so a later production function is still scanned), or the
 /// brace-balanced block through its matching close brace otherwise.
 /// A same-line item (`#[cfg(test)] mod foo;`) exempts only its own
@@ -563,13 +563,17 @@ fn live_lines(text: &str) -> Vec<(usize, String)> {
             continue;
         }
         // Multi-line item: skip any stacked attributes (`#[test]`,
-        // `#[allow(..)]`) to the item line, then decide by the item.
-        // A braceless item (`mod foo;`) is exactly the attribute
-        // block plus its single line — exempt through it, so a later
-        // production function is still scanned. A braced item scans
-        // forward to the matching close brace.
+        // `#[allow(..)]`) and doc-comment lines to the item line, then
+        // decide by the item. Doc comments are blanked by `code_text`,
+        // so a skipped blank line can never hide a mint. A braceless
+        // item (`mod foo;`) is exactly the attribute block plus its
+        // single line — exempt through it, so a later production
+        // function is still scanned. A braced item scans forward to
+        // the matching close brace.
         let mut item = index + 1;
-        while item < stripped.len() && stripped[item].trim_start().starts_with("#[") {
+        while item < stripped.len()
+            && (stripped[item].trim_start().starts_with("#[") || stripped[item].trim().is_empty())
+        {
             item += 1;
         }
         let Some(item_line) = stripped.get(item) else {
@@ -754,6 +758,22 @@ fn stacked_attributes_gate_one_item() {
             .count(),
         1,
         "only the production mint survives stacked gates: {live:?}"
+    );
+}
+
+/// A doc comment between the gate and the item does not end the
+/// exemption: in Rust the cfg still gates the item, and `code_text`
+/// blanks the comment, so the mint inside stays exempt.
+#[test]
+fn doc_comment_between_gate_and_item_stays_exempt() {
+    let text = "#[cfg(test)]\n/// Wraps for tests.\nfn wraps() {\n    let _ = Head::new(authorized());\n}\nlet _ = Head::new(authorized());\n";
+    let live: Vec<String> = live_lines(text).into_iter().map(|(_, line)| line).collect();
+    assert_eq!(
+        live.iter()
+            .filter(|line| line.contains("Head::new"))
+            .count(),
+        1,
+        "only the production mint survives the doc comment: {live:?}"
     );
 }
 
