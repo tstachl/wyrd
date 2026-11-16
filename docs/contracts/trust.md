@@ -396,6 +396,34 @@ other derived value).
 Redelivery is safe downstream without inbox dedupe: capability install is
 monotonic and genesis processing idempotent.
 
+### Bootstrap trust boundary (residual risk)
+
+Validation authenticates the invitation (owner signature over the
+challenge above, recipient binding through the ECDH wrap), but it
+cannot authenticate which owner the invitee *meant* to trust. A
+device M can mint a genesis G_M naming M and self-seal an invitation
+for it; an invitee holding no out-of-band owner expectation verifies
+the signature, installs the capability, and anchors to M — by design.
+If the invitee later observes a second valid genesis, the two conflict
+at epoch one (`two_valid_geneses_conflict_at_epoch_one`): membership
+evaluation freezes at the contested epoch with no canonical chain,
+which is detection, not prevention, and resolution proceeds like any
+other genesis conflict (a later transition naming one survivor). With
+only the self-sealed genesis in the local log there is no conflict
+and nothing freezes, so the risk reads smallest exactly when the
+invitee has seen the least. Full bootstrap trust against a genuine
+drive — refusing a self-sealed genesis outright — needs an
+out-of-band owner/drive expectation established outside validation
+scope: the expected owner
+DeviceId (or roster), the expected drive id, and, where the pairing
+flow provides one, the expected genesis TransitionId, compared before
+join. Without that expectation the invitee cannot distinguish the
+attacker's genesis from the legitimate one. No validation change is
+proposed: the pairing flow (`docs/design/cli.md`, three steps with
+out-of-band handoffs of pairing material and the invitation file) is
+where the expectation travels, and this contract records the shape of
+what must travel there.
+
 ### Rotation delivery (pinned)
 
 A sealed control message opens under an epoch control key, but every
