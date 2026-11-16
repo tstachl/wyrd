@@ -524,15 +524,17 @@ fn is_test_cfg_attr(line: &str) -> bool {
 
 /// Shipped lines of one source file: every line outside test-only
 /// `#[cfg]` regions, with original line numbers. A test-gated
-/// attribute (see `is_test_cfg_attr`) exempts the item that follows
-/// it — a brace-balanced block through its matching close brace, or
-/// just the attribute line itself when the item carries no braces
-/// (a same-line `mod foo;`/`use` item cannot mint a head, and
-/// skipping the following line would under-scan production code).
-/// Brace counting runs on `code_text` output (comments and literals
-/// blanked, newlines preserved), so a brace inside a string never
-/// opens or closes a region. An unbalanced region fails closed: lines
-/// from the attribute onward are scanned, never silently exempted.
+/// attribute (see `is_test_cfg_attr`) exempts the item it gates:
+/// stacked attributes plus the item line when the item carries no
+/// braces (`mod foo;` on the next line exempts exactly through that
+/// line, so a later production function is still scanned), or the
+/// brace-balanced block through its matching close brace otherwise.
+/// A same-line item (`#[cfg(test)] mod foo;`) exempts only its own
+/// line. Brace counting runs on `code_text` output (comments and
+/// literals blanked, newlines preserved), so a brace inside a string
+/// never opens or closes a region. An unbalanced region fails closed:
+/// lines from the attribute onward are scanned, never silently
+/// exempted.
 /// Marker matching runs on these same lexed lines (not on
 /// comment-stripped text), so `//` inside a string literal cannot
 /// hide a mint and a block comment naming a marker cannot trip the
@@ -560,9 +562,28 @@ fn live_lines(text: &str) -> Vec<(usize, String)> {
             index += 1;
             continue;
         }
+        // Multi-line item: skip any stacked attributes (`#[test]`,
+        // `#[allow(..)]`) to the item line, then decide by the item.
+        // A braceless item (`mod foo;`) is exactly the attribute
+        // block plus its single line — exempt through it, so a later
+        // production function is still scanned. A braced item scans
+        // forward to the matching close brace.
+        let mut item = index + 1;
+        while item < stripped.len() && stripped[item].trim_start().starts_with("#[") {
+            item += 1;
+        }
+        let Some(item_line) = stripped.get(item) else {
+            // No item follows: fail closed, scan the attribute.
+            index += 1;
+            continue;
+        };
+        if !item_line.contains('{') {
+            index = item + 1;
+            continue;
+        }
         let mut depth = 0i32;
         let mut opened = false;
-        let mut cursor = index;
+        let mut cursor = item;
         while cursor < stripped.len() {
             let line = stripped[cursor];
             depth += line.chars().filter(|&c| c == '{').count() as i32;
@@ -576,9 +597,9 @@ fn live_lines(text: &str) -> Vec<(usize, String)> {
         if opened && depth == 0 {
             index = cursor;
         } else if !opened {
-            // Braceless next-line item (`mod foo;` on its own line):
-            // the attribute and its single line are the whole region.
-            index += 2;
+            // Balanced on the item line itself (`fn f() {}`): the
+            // region is the attribute block through that line.
+            index = item + 1;
         } else {
             // Unbalanced: fail closed, scan from the attribute onward.
             index += 1;
@@ -704,6 +725,35 @@ fn same_line_cfg_attr_exempts_only_its_line() {
     assert!(
         live.iter().any(|line| line.contains("Head::new")),
         "the production line after a same-line gate is scanned: {live:?}"
+    );
+}
+
+/// A braceless gated item on the next line exempts exactly through
+/// that line: a production mint in a later function is still
+/// scanned. This is the `mod tests_coalescing;` shape from
+/// `wyrd-daemon/src/core/mod.rs`.
+#[test]
+fn braceless_gated_item_does_not_swallow_production() {
+    let text = "#[cfg(all(test, feature = \"mount\"))]\nmod tests_coalescing;\n\npub fn mint() -> Head {\n    Head::new(authorized())\n}\n";
+    let live: Vec<String> = live_lines(text).into_iter().map(|(_, line)| line).collect();
+    assert!(
+        live.iter().any(|line| line.contains("Head::new")),
+        "the production mint after a braceless gate is scanned: {live:?}"
+    );
+}
+
+/// Stacked attributes gate one item together: `#[cfg(test)]` plus
+/// `#[test]` exempt the whole function that follows.
+#[test]
+fn stacked_attributes_gate_one_item() {
+    let text = "#[cfg(test)]\n#[test]\nfn wraps() {\n    let _ = Head::new(authorized());\n}\nlet _ = Head::new(authorized());\n";
+    let live: Vec<String> = live_lines(text).into_iter().map(|(_, line)| line).collect();
+    assert_eq!(
+        live.iter()
+            .filter(|line| line.contains("Head::new"))
+            .count(),
+        1,
+        "only the production mint survives stacked gates: {live:?}"
     );
 }
 
