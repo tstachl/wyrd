@@ -295,7 +295,7 @@ fn check_feature_default_enables_kdf(member: &str, manifest: &toml::Table) -> Ve
 /// `[dev-dependencies]` (fast per-test `Engine`s); a production edge
 /// would bake the 8 MiB / t=1 table into a shipped artifact through
 /// feature unification, silently. The resolved-graph backstop stays in
-/// CI (`cargo tree -e normal,features` in workflow.yml); this is the
+/// CI (`cargo tree -e normal,features` in `.ngit/nix/builds/default.nix`); this is the
 /// in-suite pin that fails the PR gate first.
 #[test]
 fn release_manifests_exclude_insecure_fast_kdf() {
