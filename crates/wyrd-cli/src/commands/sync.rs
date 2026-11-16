@@ -16,6 +16,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use wyrd_core::mailbox::{LiveMailbox, MailboxHealth};
 use wyrd_core::mutation::WriteStats;
+// Shared idle line: the relay-less reading lives in wyrd-core and
+// is pinned by literal tests on both sides; do not paraphrase.
 use wyrd_core::relay_posture::RELAY_IDLE_LINE;
 use wyrd_core::status::{observe, SyncStatus};
 use wyrd_core::view::NamespaceView;
