@@ -16,9 +16,11 @@ use std::sync::Arc;
 use std::time::Duration;
 use wyrd_core::mailbox::{LiveMailbox, MailboxHealth};
 use wyrd_core::mutation::WriteStats;
-// Shared idle line: the relay-less reading lives in wyrd-core and
-// is pinned by literal tests on both sides; do not paraphrase.
-use wyrd_core::relay_posture::RELAY_IDLE_LINE;
+// Shared relay-health predicates: the degraded oracle and the
+// attempt total live in wyrd-core next to the posture they word;
+// this module imports both (the `RELAY_IDLE_LINE` precedent) and
+// keeps only the run-specific observation-validity gate.
+use wyrd_core::relay_posture::{mailbox_degraded, recovery_attempts, RELAY_IDLE_LINE};
 use wyrd_core::status::{observe, SyncStatus};
 use wyrd_core::view::NamespaceView;
 use wyrd_daemon::core::RuntimeMaterialization;
@@ -265,43 +267,9 @@ impl SyncRunReport {
     }
 }
 
-/// True when no stopping verdict can rest on this snapshot. A
-/// relay-less (offline) snapshot is never degraded: idle intake is
-/// the explicit request there, so there is nothing to distrust —
-/// `mailbox_line` reports the same case as idle, and the agreement
-/// test pins the two together. This early return is explicit on
-/// purpose: it must not lean on `is_live`'s zero-relay special
-/// case, or tightening that predicate would turn `--offline` into
-/// a self-contradicting idle-line-plus-exit-2 report. Otherwise the
-/// verdict covers the whole run, not just the terminal sample: a
-/// down intake (no relay connected), a blind stretch that never
-/// healed (a relay closed our subscription, which takes no
-/// resubscribe without operator action), or a blind stretch that
-/// did (a non-zero recovery-attempt total proves a supervisor
-/// episode ran during this run — the counters start at zero per
-/// mailbox and episodes only spawn after first attachment and a
-/// sustained outage, so they cannot be stale and a slow cold start
-/// never counts). A recovered run may in fact have
-/// converged, but the quiet verdict may have been reached through
-/// the blind window; failing it as unverified is the conservative
-/// direction for a convergence-verdict command, and the error names
-/// the attempt count so the operator knows a rerun settles it.
-/// Saturation replays deliberately do not count: a replay
-/// re-requests and redelivers through dedupe, so post-replay
-/// intake is whole again.
-pub(crate) fn mailbox_degraded(health: &MailboxHealth) -> bool {
-    if health.total_relays == 0 {
-        return false;
-    }
-    !health.is_live()
-        || health.closed_subscriptions > 0
-        || health.stream_recovery_attempts > 0
-        || health.relay_recovery_attempts > 0
-}
-
 /// Whether the degraded sample convicts the run: the observation-
-/// validity gate over [`mailbox_degraded`]. The sample predicate
-/// above reports what the last supervisor tick saw; this verdict
+/// validity gate over the shared [`mailbox_degraded`] oracle. The
+/// shared predicate reports what the last supervisor tick saw; this verdict
 /// decides whether that seeing counts. Two rules, both about not
 /// mistaking "not observed yet" for "observed zero":
 ///
@@ -329,13 +297,10 @@ pub(crate) fn mailbox_verdict_failed(
     intake_observed: bool,
     sent_accepted: usize,
 ) -> bool {
-    if health.total_relays == 0 {
+    if !mailbox_degraded(health) {
         return false;
     }
-    if health.closed_subscriptions > 0
-        || health.stream_recovery_attempts > 0
-        || health.relay_recovery_attempts > 0
-    {
+    if health.closed_subscriptions > 0 || recovery_attempts(health) > 0 {
         return true;
     }
     if !health.is_live() {
@@ -357,16 +322,6 @@ pub(crate) fn mailbox_verdict_failed(
 /// communication evidence (see `mailbox_verdict_failed`).
 pub(crate) fn report_intake_observed(report: &SyncRunReport) -> bool {
     report.accepted + report.duplicates + report.deferred + report.skipped + report.discarded > 0
-}
-
-/// Recovery attempts over the run, both kinds: a stream death or a
-/// relay outage each leaves intake blind until its episode
-/// converges, so the run-level verdict counts either. Loop
-/// iterations, matching wyrd-core's unit — not episodes.
-pub(crate) fn recovery_attempts(health: &MailboxHealth) -> u64 {
-    health
-        .stream_recovery_attempts
-        .saturating_add(health.relay_recovery_attempts)
 }
 
 /// Drive bounded sync passes until the first settled-quiet pass,

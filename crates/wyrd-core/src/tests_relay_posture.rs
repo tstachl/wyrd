@@ -4,7 +4,8 @@
 //! lives next to its fixture in `mailbox/tests_shutdown.rs` instead.
 
 use super::{
-    render_posture, RelayPosture, RunningHealth, ACCEPTANCE_IS_NOT_RECEIPT, RELAY_IDLE_LINE,
+    mailbox_degraded, render_posture, RelayPosture, RunningHealth, ACCEPTANCE_IS_NOT_RECEIPT,
+    RELAY_IDLE_LINE,
 };
 use crate::mailbox::MailboxHealth;
 
@@ -147,60 +148,72 @@ fn no_relay_configured_is_local_only_not_an_error() {
     }
 }
 
-/// The surface's word agrees with `mailbox_degraded`
-/// (`wyrd-cli/src/commands/sync.rs`) in every cell: same fields,
-/// same truth table — zero relays never degraded, otherwise a
-/// down transport, a blind close, or a recovery episode degrades.
-/// Saturation replays do not count on either side. The CLI keeps
-/// its copy as the run-verdict oracle; this table pins the
-/// agreement the issue requires without importing the binary.
+/// The surface's word agrees with the shared `mailbox_degraded`
+/// oracle in every cell: no hand-maintained boolean column. Each
+/// fixture drives both sides — the predicate directly and the
+/// posture through `RelayPosture::of` — and the degraded reading is
+/// exactly the non-live running states plus unavailable. Zero
+/// relays never degrade on either side; saturation replays do not
+/// count on either side. The CLI imports the same oracle as its
+/// run-verdict, so this pins the agreement the issue requires
+/// without importing the binary.
 #[test]
 fn degraded_posture_matches_the_run_verdict_cell_by_cell() {
-    // (total, live, closed, attempts) -> degraded?
+    // (total, live, closed, stream_attempts, relay_attempts, saturation)
     let cells = [
-        (0, true, 0, 0, false),
-        (0, false, 0, 0, false),
-        (1, true, 0, 0, false),
-        (1, false, 0, 0, true),
-        (1, true, 1, 0, true),
-        (1, true, 0, 1, true),
-        (1, true, 2, 3, true),
-        (2, true, 0, 0, false),
-        (2, false, 0, 5, true),
+        (0, true, 0, 0, 0, 0),
+        (0, false, 0, 0, 0, 0),
+        (1, true, 0, 0, 0, 0),
+        (1, false, 0, 0, 0, 0),
+        (1, true, 1, 0, 0, 0),
+        (1, true, 0, 1, 0, 0),
+        (1, true, 0, 0, 1, 0),
+        (1, true, 2, 3, 4, 0),
+        (2, true, 0, 0, 0, 0),
+        (2, false, 0, 5, 0, 0),
+        (2, true, 0, 0, 0, 41),
+        (2, false, 0, 0, 0, 0),
+        (2, true, 0, 2, 1, 7),
     ];
-    for (total, live, closed, attempts, degraded) in cells {
-        let h = health(live, usize::from(live), total, closed, attempts, 0);
+    for (total, live, closed, stream_attempts, relay_attempts, saturation) in cells {
+        let mut h = health(
+            live,
+            usize::from(live),
+            total,
+            closed,
+            stream_attempts,
+            relay_attempts,
+        );
+        h.saturation_recoveries = saturation;
+        let degraded = mailbox_degraded(&h);
         let posture = RelayPosture::of(false, total, Some(&h));
+        let posture_degraded = matches!(
+            posture,
+            RelayPosture::Running(RunningHealth::AttachedButBlind | RunningHealth::Degraded)
+                | RelayPosture::Unavailable
+        );
+        assert_eq!(
+            degraded, posture_degraded,
+            "predicate and posture disagree at \
+             total={total} live={live} closed={closed} \
+             stream={stream_attempts} relay={relay_attempts} \
+             saturation={saturation}: {posture:?}"
+        );
         let word = render_posture(false, total, Some(&h), 0);
         if total == 0 {
             assert_eq!(posture, RelayPosture::NoRelayConfigured);
-            assert!(
-                !word.contains("degraded"),
-                "cell {total}/{live}/{closed}/{attempts}"
-            );
+            assert!(!degraded);
+            assert!(!word.contains("degraded"));
         } else if degraded {
-            assert!(
-                matches!(
-                    posture,
-                    RelayPosture::Running(
-                        RunningHealth::AttachedButBlind | RunningHealth::Degraded
-                    ) | RelayPosture::Unavailable
-                ),
-                "cell {total}/{live}/{closed}/{attempts} degrades, got {posture:?}"
-            );
             assert!(
                 word.contains("attached but blind")
                     || word.contains("degraded")
                     || word.contains("unavailable"),
-                "cell {total}/{live}/{closed}/{attempts} says so:\n{word}"
+                "degraded cell says so:\n{word}"
             );
         } else {
-            assert_eq!(
-                posture,
-                RelayPosture::Running(RunningHealth::Live),
-                "cell {total}/{live}/{closed}/{attempts}"
-            );
-            assert!(word.contains("relay: running ("), "cell:\n{word}");
+            assert_eq!(posture, RelayPosture::Running(RunningHealth::Live));
+            assert!(word.contains("relay: running ("), "live cell:\n{word}");
         }
     }
 }

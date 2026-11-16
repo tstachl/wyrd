@@ -32,12 +32,12 @@
 //!    operator action — so it reads first even when attempts are
 //!    also non-zero.
 //!
-//! The degraded predicate mirrors `mailbox_degraded` in
-//! `wyrd-cli/src/commands/sync.rs` field for field (same inputs,
-//! same truth table, saturation replays excluded); the posture
-//! splits its one boolean into words while the CLI keeps its copy
-//! as the run-verdict oracle, and the table test below pins their
-//! agreement cell by cell.
+//! The degraded predicate below is canonical: `mailbox_degraded`
+//! is the single health oracle. The CLI imports it (the
+//! `RELAY_IDLE_LINE` precedent) as its run-verdict oracle, and the
+//! posture's degraded arms agree with it cell by cell — pinned by
+//! the agreement test below, which drives both from the same
+//! fixtures with no hand-maintained boolean column.
 //!
 //! Reads are observations, not instantaneous facts: the supervisor
 //! refreshes health every tick, so a rendering right after a
@@ -81,12 +81,36 @@ pub enum RelayPosture {
 /// plus relay loop iterations, matching the run verdict's unit —
 /// loop iterations, not episodes. Saturation replays deliberately
 /// do not count (a replay redelivers through dedupe, so intake is
-/// whole again afterwards). Mirrors `recovery_attempts` in
-/// `wyrd-cli/src/commands/sync.rs`.
+/// whole again afterwards).
 pub fn recovery_attempts(health: &MailboxHealth) -> u64 {
     health
         .stream_recovery_attempts
         .saturating_add(health.relay_recovery_attempts)
+}
+
+/// Whether the mailbox is degraded: the normative health oracle.
+///
+/// True when relays are configured and any of the three degradations
+/// holds: the transport cannot carry deliveries (`!is_live`), a
+/// relay closed our subscription (attached but blind — never heals
+/// without operator action), or a supervisor recovery episode ran
+/// (non-zero recovery-attempt total). Zero relays never degrade:
+/// idle intake is the explicit local-only request, and `is_live`
+/// is true for a zero-relay mailbox by construction. Saturation
+/// replays deliberately do not count.
+///
+/// The posture splits this one boolean into words (unavailable,
+/// blind, degraded); the CLI keeps it as the run-verdict oracle
+/// behind its observation-validity gate. Both sides import this —
+/// never a copy.
+pub fn mailbox_degraded(health: &MailboxHealth) -> bool {
+    if health.total_relays == 0 {
+        return false;
+    }
+    !health.is_live()
+        || health.closed_subscriptions > 0
+        || health.stream_recovery_attempts > 0
+        || health.relay_recovery_attempts > 0
 }
 
 impl RelayPosture {
@@ -114,13 +138,17 @@ impl RelayPosture {
         if !health.is_live() {
             return RelayPosture::Unavailable;
         }
+        // Past the liveness gate `mailbox_degraded` reduces to the
+        // blind/recovery arms; branch on them for the word while the
+        // shared predicate stays the degraded gate, so the two cannot
+        // drift apart.
+        if !mailbox_degraded(health) {
+            return RelayPosture::Running(RunningHealth::Live);
+        }
         if health.closed_subscriptions > 0 {
             return RelayPosture::Running(RunningHealth::AttachedButBlind);
         }
-        if recovery_attempts(health) > 0 {
-            return RelayPosture::Running(RunningHealth::Degraded);
-        }
-        RelayPosture::Running(RunningHealth::Live)
+        RelayPosture::Running(RunningHealth::Degraded)
     }
 }
 
