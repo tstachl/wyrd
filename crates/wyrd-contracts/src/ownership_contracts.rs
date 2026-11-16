@@ -816,6 +816,37 @@ fn block_comment_marker_does_not_trip() {
     );
 }
 
+/// A gated same-stem twin elsewhere cannot mask an un-gated pin:
+/// the declaration must live in the pin's own parent module.
+#[test]
+fn same_stem_twin_without_gate_is_ungated() {
+    let sources = [
+        ("crates/a/mod.rs", "#[cfg(test)]\nmod tests_harness;\n"),
+        ("crates/b/mod.rs", "mod tests_harness;\n"),
+    ];
+    assert!(pin_declaration_gated("crates/a/tests_harness.rs", &sources));
+    assert!(
+        !pin_declaration_gated("crates/b/tests_harness.rs", &sources),
+        "the gated twin in crates/a must not mask crates/b"
+    );
+}
+
+/// A `#[path]` declaration from the `dir.rs` parent counts: the
+/// declaring module need not sit beside the file.
+#[test]
+fn path_declaration_from_parent_file_is_gated() {
+    let sources = [(
+        "crates/wyrd-core/src/read.rs",
+        "#[path = \"read/tests_read.rs\"]\n#[cfg(test)]\nmod tests_read;\n",
+    )];
+    // Note the attribute order here is path-then-cfg; the walk-back
+    // from the mod line accepts attributes in any order.
+    assert!(pin_declaration_gated(
+        "crates/wyrd-core/src/read/tests_read.rs",
+        &sources
+    ));
+}
+
 /// The pinned test-file list matches the tree: a new test-named file
 /// outside the contracts suite is scanned until it is added here
 /// deliberately (fail closed).
@@ -849,94 +880,119 @@ fn pinned_test_files_match_tree() {
     );
     // Every pinned file is declared under a test gate: removing the
     // `#[cfg(test)]` (or `all(test, ..)`) from its `mod` declaration
-    // would ship the file while the scan kept skipping it. Walk every
-    // source for the declaration — `mod <stem>;` or
-    // `#[path = "<file>"]` plus its `mod` — and require a test-gated
-    // attribute in the block above (reusing `is_test_cfg_attr`).
-    let mut sources: Vec<String> = Vec::new();
-    visit_sources(&root, &mut |_, text| sources.push(text.to_owned()));
-    // Lex each source once: the pin loop below walks lines per pin,
-    // and re-lexing the tree 171 times costs two minutes.
-    let lexed_sources: Vec<Vec<String>> = sources
+    // would ship the file while the scan kept skipping it. Each pin
+    // must be declared from its own parent module (a file in the
+    // pin's directory, or the `dir.rs` parent for `dir/file.rs`
+    // `#[path]` declarations) — a gated same-stem twin elsewhere in
+    // the tree cannot mask an un-gated pin.
+    let mut sources: Vec<(String, String)> = Vec::new();
+    visit_sources(&root, &mut |path, text| {
+        let rel = path
+            .strip_prefix(&root)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        sources.push((rel, text.to_owned()));
+    });
+    let ungated: Vec<String> = TEST_FILE_PINS
         .iter()
-        .map(|source| code_text(source).lines().map(str::to_owned).collect())
+        .filter(|pin| {
+            let refs: Vec<(&str, &str)> = sources
+                .iter()
+                .map(|(rel, text)| (rel.as_str(), text.as_str()))
+                .collect();
+            !pin_declaration_gated(pin, &refs)
+        })
+        .map(|pin| pin.to_string())
         .collect();
-    let mut ungated: Vec<String> = Vec::new();
-    for pin in TEST_FILE_PINS {
-        let file = pin.rsplit('/').next().unwrap_or(pin);
-        let stem = file.strip_suffix(".rs").unwrap_or(file);
-        let mut gated = false;
-        for (source, lexed) in sources.iter().zip(lexed_sources.iter()) {
-            let raw: Vec<&str> = source.lines().collect();
-            for (i, lex_line) in lexed.iter().enumerate() {
-                // Declaration match on lexed lines (comments and
-                // strings blanked, so prose cannot match): `mod stem`
-                // as tokens, or the raw path attribute naming the file.
-                let tokens: Vec<&str> = lex_line
-                    .split(|c: char| !c.is_alphanumeric() && c != '_')
-                    .filter(|t| !t.is_empty())
-                    .collect();
-                let mod_match = tokens.windows(2).any(|w| w[0] == "mod" && w[1] == stem);
-                let raw_line = raw.get(i).copied().unwrap_or("");
-                let path_match = raw_line.contains("#[path") && raw_line.contains(file);
-                if !mod_match && !path_match {
-                    continue;
-                }
-                // Same-line gate (`#[cfg(test)] mod stem;`).
-                if lex_line.contains("#[cfg(") && is_test_cfg_attr(lex_line) {
-                    gated = true;
-                    break;
-                }
-                // For a path attribute the `mod` sits below it: step
-                // to the mod line first.
-                let mut decl = i;
-                if path_match && !mod_match {
-                    decl = ((i + 1)..raw.len().min(i + 4))
-                        .find(|&k| {
-                            lexed.get(k).is_some_and(|l| {
-                                l.split(|c: char| !c.is_alphanumeric() && c != '_')
-                                    .filter(|t| !t.is_empty())
-                                    .collect::<Vec<_>>()
-                                    .windows(2)
-                                    .any(|w| w[0] == "mod")
-                            })
-                        })
-                        .unwrap_or(i);
-                }
-                // Walk back over attributes, doc comments, and blank
-                // (blanked-comment) lines for a test gate.
-                let mut k = decl;
-                while k > 0 {
-                    k -= 1;
-                    let r = raw.get(k).copied().unwrap_or("").trim_start();
-                    if !(r.starts_with("#[")
-                        || r.starts_with("///")
-                        || r.starts_with("//!")
-                        || lexed.get(k).is_some_and(|l| l.trim().is_empty()))
-                    {
-                        break;
-                    }
-                    if lexed.get(k).is_some_and(|l| is_test_cfg_attr(l)) {
-                        gated = true;
-                        break;
-                    }
-                }
-                if gated {
-                    break;
-                }
-            }
-            if gated {
-                break;
-            }
-        }
-        if !gated {
-            ungated.push(pin.to_string());
-        }
-    }
     assert!(
         ungated.is_empty(),
         "pinned test files without a test-gated declaration: {ungated:?}"
     );
+}
+
+/// Whether a pinned test file is declared under a test gate in its
+/// own parent module: some source in the pin's directory — or the
+/// `dir.rs` parent for `dir/file.rs` `#[path]` declarations —
+/// declares it (`mod <stem>;` or `#[path = "<file>"]` plus its
+/// `mod`) with a test-gated attribute in the block above (reusing
+/// `is_test_cfg_attr`). Scoping the declaration to the parent module
+/// means a gated same-stem twin elsewhere cannot mask an un-gated
+/// pin. Pure over (path, text) pairs so tests pin the rule without
+/// touching the filesystem.
+fn pin_declaration_gated(pin: &str, sources: &[(&str, &str)]) -> bool {
+    fn parent_dir(path: &str) -> &str {
+        path.rsplit_once('/').map(|(d, _)| d).unwrap_or("")
+    }
+    let file = pin.rsplit('/').next().unwrap_or(pin);
+    let stem = file.strip_suffix(".rs").unwrap_or(file);
+    let dir = parent_dir(pin);
+    let parent_file = format!("{dir}.rs");
+    // Lex each declaring candidate once per call; callers pass the
+    // whole tree once per pin, so this stays proportional to the
+    // tree, not quadratic in it.
+    for (rel, text) in sources {
+        let in_dir = parent_dir(rel) == dir && *rel != pin;
+        if !in_dir && *rel != parent_file {
+            continue;
+        }
+        let raw: Vec<&str> = text.lines().collect();
+        let blanked = code_text(text);
+        let lexed: Vec<&str> = blanked.lines().collect();
+        for (i, lex_line) in lexed.iter().enumerate() {
+            // Declaration match on lexed lines (comments and strings
+            // blanked, so prose cannot match): `mod stem` as tokens,
+            // or the raw path attribute naming the file.
+            let tokens: Vec<&str> = lex_line
+                .split(|c: char| !c.is_alphanumeric() && c != '_')
+                .filter(|t| !t.is_empty())
+                .collect();
+            let mod_match = tokens.windows(2).any(|w| w[0] == "mod" && w[1] == stem);
+            let raw_line = raw.get(i).copied().unwrap_or("");
+            let path_match = raw_line.contains("#[path") && raw_line.contains(file);
+            if !mod_match && !path_match {
+                continue;
+            }
+            // Same-line gate (`#[cfg(test)] mod stem;`).
+            if lex_line.contains("#[cfg(") && is_test_cfg_attr(lex_line) {
+                return true;
+            }
+            // For a path attribute the `mod` sits below it: step to
+            // the mod line first.
+            let mut decl = i;
+            if path_match && !mod_match {
+                decl = ((i + 1)..raw.len().min(i + 4))
+                    .find(|&k| {
+                        lexed.get(k).is_some_and(|l| {
+                            l.split(|c: char| !c.is_alphanumeric() && c != '_')
+                                .filter(|t| !t.is_empty())
+                                .collect::<Vec<_>>()
+                                .windows(2)
+                                .any(|w| w[0] == "mod")
+                        })
+                    })
+                    .unwrap_or(i);
+            }
+            // Walk back over attributes, doc comments, and blank
+            // (blanked-comment) lines for a test gate.
+            let mut k = decl;
+            while k > 0 {
+                k -= 1;
+                let r = raw.get(k).copied().unwrap_or("").trim_start();
+                if !(r.starts_with("#[")
+                    || r.starts_with("///")
+                    || r.starts_with("//!")
+                    || lexed.get(k).is_some_and(|l| l.trim().is_empty()))
+                {
+                    break;
+                }
+                if lexed.get(k).is_some_and(|l| is_test_cfg_attr(l)) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }
 
 /// Recurse into every Rust source under the root, skipping build
