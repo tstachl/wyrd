@@ -213,28 +213,167 @@ fn all_facts(drive: &DriveId) -> Vec<Fact> {
     ]
 }
 
-/// The replay pairing, per variant: every `Fact` encodes to a known
-/// tag whose record decodes back. A new variant wired into encode
-/// but not decode fails here — unknown-tag skip would drop its
-/// records silently at replay, a known tag without an arm poisons
-/// the file — instead of failing at replay.
+/// The replay pairing, per variant: every `Fact` encodes under
+/// its own tag to a record that decodes back as the same variant.
+/// A new variant wired into encode but not decode fails here —
+/// unknown-tag skip would drop its records silently at replay, a
+/// known tag without an arm poisons the file, a copied tag or a
+/// swapped arm replays as the wrong variant — instead of failing
+/// at replay.
 #[test]
 fn every_fact_variant_encodes_and_decodes() {
     let drive = drive();
     let key = [0x11u8; 32];
     let facts = all_facts(&drive);
     assert_eq!(facts.len(), 30, "all_facts covers every Fact variant");
+    let mut tags = BTreeSet::new();
     for fact in &facts {
         let (tag, bytes) =
             encode_fact(&key, &drive, fact).unwrap_or_else(|_| panic!("encode failed: {fact:?}"));
         assert!(
-            KNOWN_TAGS.contains(&tag),
-            "encode emits a known tag: {fact:?}"
+            tags.insert(tag),
+            "each variant encodes under its own tag: {fact:?}"
         );
+        let decoded = decode_record(&drive, &key, tag, &bytes)
+            .unwrap_or_else(|| panic!("decode accepts what encode emits: {fact:?}"));
         assert!(
-            decode_record(&drive, &key, tag, &bytes).is_some(),
-            "decode accepts what encode emits: {fact:?}"
+            matches!(
+                (fact, &decoded),
+                (Fact::Transition(_), DecodedFact::Transition(_))
+                    | (Fact::Capability(_), DecodedFact::Capability(_))
+                    | (Fact::Announcement(_), DecodedFact::Announcement(_))
+                    | (Fact::SnapshotBody(_), DecodedFact::SnapshotBody(_))
+                    | (Fact::Manifest(_), DecodedFact::Manifest(_))
+                    | (Fact::LocalObject(_), DecodedFact::LocalObject(_))
+                    | (Fact::ObjectRemoved(_), DecodedFact::ObjectRemoved(_))
+                    | (
+                        Fact::Materialization(_, _),
+                        DecodedFact::Materialization(_, _)
+                    )
+                    | (Fact::ControlMessage(_), DecodedFact::ControlMessage(_))
+                    | (
+                        Fact::AnnouncementQueued(_, _),
+                        DecodedFact::AnnouncementQueued(_, _)
+                    )
+                    | (
+                        Fact::AnnouncementSealed(_, _),
+                        DecodedFact::AnnouncementSealed(_, _)
+                    )
+                    | (
+                        Fact::AnnouncementRouteSealed(_, _, _),
+                        DecodedFact::AnnouncementRouteSealed(_, _, _)
+                    )
+                    | (
+                        Fact::AnnouncementDelivered(_, _),
+                        DecodedFact::AnnouncementDelivered(_, _)
+                    )
+                    | (
+                        Fact::AnnouncementDeliveredRoute(_, _, _),
+                        DecodedFact::AnnouncementDeliveredRoute(_, _, _)
+                    )
+                    | (
+                        Fact::TransitionQueued(_, _),
+                        DecodedFact::TransitionQueued(_, _)
+                    )
+                    | (
+                        Fact::TransitionSealed(_, _),
+                        DecodedFact::TransitionSealed(_, _)
+                    )
+                    | (
+                        Fact::TransitionDelivered(_, _),
+                        DecodedFact::TransitionDelivered(_, _)
+                    )
+                    | (
+                        Fact::CapabilityQueued(_, _),
+                        DecodedFact::CapabilityQueued(_, _)
+                    )
+                    | (
+                        Fact::CapabilitySealed(_, _, _),
+                        DecodedFact::CapabilitySealed(_, _, _)
+                    )
+                    | (
+                        Fact::CapabilitySealedReplaced { .. },
+                        DecodedFact::CapabilitySealedReplaced(..)
+                    )
+                    | (
+                        Fact::CapabilityDelivered(_, _),
+                        DecodedFact::CapabilityDelivered(_, _)
+                    )
+                    | (Fact::BootstrapPending(_), DecodedFact::BootstrapPending(_))
+                    | (Fact::CarryQueued(_), DecodedFact::CarryQueued(_))
+                    | (Fact::CarryDone(_), DecodedFact::CarryDone(_))
+                    | (
+                        Fact::ReconciliationView(_),
+                        DecodedFact::ReconciliationView(_)
+                    )
+                    | (
+                        Fact::ReconciliationRequestReceived(_, _),
+                        DecodedFact::ReconciliationRequestReceived(_, _)
+                    )
+                    | (
+                        Fact::TransitionReconciled(_, _, _),
+                        DecodedFact::TransitionReconciled(_, _, _)
+                    )
+                    | (
+                        Fact::CapabilityReconciled(_, _, _),
+                        DecodedFact::CapabilityReconciled(_, _, _)
+                    )
+                    | (
+                        Fact::AnnouncementReconciled(_, _, _),
+                        DecodedFact::AnnouncementReconciled(_, _, _)
+                    )
+                    | (
+                        Fact::AnnouncementRetransmitted(_, _, _),
+                        DecodedFact::AnnouncementRetransmitted(_, _, _)
+                    )
+            ),
+            "decode returns the encoded variant: {fact:?}"
         );
+    }
+    assert_eq!(tags.len(), 30, "no two variants share a tag");
+}
+
+/// The pairing test above covers what `all_facts` lists; this
+/// pins that the list is the whole enum. The `match` has no
+/// wildcard arm, so a new `Fact` variant without a fixture here is
+/// a compile error, not a silent gap — exhaustiveness by
+/// construction, with no new deps and no production change.
+#[test]
+fn all_facts_is_exhaustive() {
+    let drive = drive();
+    for fact in all_facts(&drive) {
+        match fact {
+            Fact::Transition(_)
+            | Fact::Capability(_)
+            | Fact::Announcement(_)
+            | Fact::SnapshotBody(_)
+            | Fact::Manifest(_)
+            | Fact::LocalObject(_)
+            | Fact::ObjectRemoved(_)
+            | Fact::Materialization(_, _)
+            | Fact::ControlMessage(_)
+            | Fact::AnnouncementQueued(_, _)
+            | Fact::AnnouncementSealed(_, _)
+            | Fact::AnnouncementRouteSealed(_, _, _)
+            | Fact::AnnouncementDelivered(_, _)
+            | Fact::AnnouncementDeliveredRoute(_, _, _)
+            | Fact::TransitionQueued(_, _)
+            | Fact::TransitionSealed(_, _)
+            | Fact::TransitionDelivered(_, _)
+            | Fact::CapabilityQueued(_, _)
+            | Fact::CapabilitySealed(_, _, _)
+            | Fact::CapabilitySealedReplaced { .. }
+            | Fact::CapabilityDelivered(_, _)
+            | Fact::BootstrapPending(_)
+            | Fact::CarryQueued(_)
+            | Fact::CarryDone(_)
+            | Fact::ReconciliationView(_)
+            | Fact::ReconciliationRequestReceived(_, _)
+            | Fact::TransitionReconciled(_, _, _)
+            | Fact::CapabilityReconciled(_, _, _)
+            | Fact::AnnouncementReconciled(_, _, _)
+            | Fact::AnnouncementRetransmitted(_, _, _) => {}
+        }
     }
 }
 

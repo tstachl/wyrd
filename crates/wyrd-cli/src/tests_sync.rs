@@ -2884,9 +2884,10 @@ fn sync_now_render_pins_every_section_in_order() {
     mailbox.supervisor_ticks = 2;
     mailbox.relay_attached = true;
     let mut report = report_with(RunOutcome::PassLimit, Some(mailbox));
+    report.passes = 32;
     report.accepted = 5;
     report.duplicates = 1;
-    report.deferred = 4;
+    report.deferred = 5;
     report.deferred_unseen = 1;
     report.deferred_status_blocked = 1;
     report.deferred_shed = 3;
@@ -2953,7 +2954,7 @@ fn sync_now_render_pins_every_section_in_order() {
     // One literal per line: `\`-continuation would strip the
     // intentional two-space indents below.
     let expected = [
-        "sync now: 3 passes, intake 5 accepted (1 duplicates, 4 deferred [1 unseen, 1 status-blocked, 3 shed (1 unseen-wait, 1 status-blocked-wait, 1 unclassified)], 2 skipped, 1 discarded), fetch 6 manifests, 7 bodies, 8 objects (14 unfulfilled), publish 9 sends (1 clipped passes, 2 deferred), 3 obligations pending, 4 unfetchable heads".to_string(),
+        "sync now: 32 passes, intake 5 accepted (1 duplicates, 5 deferred [1 unseen, 1 status-blocked, 3 shed (1 unseen-wait, 1 status-blocked-wait, 1 unclassified)], 2 skipped, 1 discarded), fetch 6 manifests, 7 bodies, 8 objects (14 unfulfilled), publish 9 sends (1 clipped passes, 2 deferred), 3 obligations pending, 4 unfetchable heads".to_string(),
         "reconciliation: 1 statements awaiting answer, 0 stalled".to_string(),
         "fetch classes (diagnostic counts, not shares of unfulfilled):".to_string(),
         "  transport_errors: 2".to_string(),

@@ -1,5 +1,5 @@
-//! Process exit-status fold: every composer (mount, sync, vault,
-//! owner) runs loop, session, and serving stages through the same
+//! Process exit-status fold: the mount, sync, and owner composers
+//! run loop, session, and serving stages through the same
 //! dominance order. Teardown never short-circuits — every stage
 //! runs, and the first failure wins.
 use crate::CliError;

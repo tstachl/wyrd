@@ -11,7 +11,8 @@ parsing in `args.rs`, one module per command family in `commands/`
 `owner`, `snapshot`, `sync`, declared in `commands.rs`), credentials in
 `credentials.rs`, drive config in `drive_config.rs`, the live-node
 composer host in `composer.rs`, diagnostics in `logging.rs`, posture in
-`posture.rs`, probes in `probes.rs`, and updates in `update.rs`);
+`posture.rs`, mount preflight in `preflight.rs`, the exit-status
+fold in `teardown.rs`, and updates in `update.rs`);
 when they disagree, the code wins and this document is stale.
 
 ## Normative CLI contract
