@@ -471,10 +471,23 @@ MutationRequest {
    loop blocks the caller indefinitely. That is a daemon health failure
    bounded by the process supervisor, not a per-request cancellation, and
    it is the deliberate price of the no-post-timeout guarantee. Loop
-   *exit* is different from a wedged loop: terminal error or shutdown
-   resolves every admitted-but-incomplete request with `EIO`
-   (`Shutdown`) instead of stranding it, and the closed queue refuses
-   new submissions the same way.
+   *exit* is different from a wedged loop: every return path leaves
+   admission open and settles nothing — the clean stop and the terminal
+   error alike — so teardown submissions made after the return are
+   admitted, not refused. The loop thread executes them in its
+   post-return `drain_until_closed`
+   (`LiveNode::drain_until_closed`), and only the supervisor settles
+   stragglers, after the teardown joins, with `EIO` (`Shutdown`):
+   `Supervisor::close_for_drain` on the vault/headless path (no
+   session to join) closes admission while leaving queued requests for
+   that drain, so an admission made before the stop resolves `Done`
+   through the drain instead of racing `shutdown`'s fail-all; the
+   `Supervisor::close_admission` mop-up after the loop join then fails
+   only close-racers the drain never saw — plus taken-but-unfinished
+   batch entries, which are the batch guard's duty — with `Shutdown`.
+   A terminal error ends sync; it never strands or mass-fails
+   submitters. Once admission is closed, the closed queue refuses new
+   submissions the same way.
 7. **Publication is the same path as fetch.** A mutation applies under
    the store write path and publishes heads and materialization under
    one short view write lock, exactly as a fetch pass does. Neither lock
@@ -739,9 +752,14 @@ Unmount adds one best-effort safety net, not a durability boundary:
 `destroy` attempts to commit every still-dirty handle before dropping
 the table. The commit needs the mutation queue open and drained, so
 teardown keeps it that way on every path: the loop returns without
-settling, the session joins first (destroy submits while the loop's
-post-return drain executes), and admission closes only after the join
-— see the lifecycle contract in `wyrd-daemon/src/lifecycle.rs`. A
+settling, and the post-return drain executes teardown submissions with
+full apply semantics. On the mount path the session joins first
+(destroy submits while the loop's post-return drain executes), and
+admission closes only after the join; on the vault/headless path there
+is no session to join, so `Supervisor::close_for_drain` closes
+admission while leaving queued requests for the drain, and
+`Supervisor::close_admission` follows the loop join as the idempotent
+mop-up for close-racers — see the lifecycle contract in `wyrd-daemon/src/lifecycle.rs`. A
 commit that fails its own evaluation (stale handle, conflict, store
 failure) is still lost and logged per path, and a crash loses
 everything unflushed; flush or fsync remains the reportable
