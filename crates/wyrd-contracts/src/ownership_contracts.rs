@@ -831,6 +831,26 @@ fn same_stem_twin_without_gate_is_ungated() {
     );
 }
 
+/// An inline `mod tests {` in the pin's own directory does not
+/// declare the `tests.rs` file: removing the file module's gate
+/// still fails, even with a gated inline twin beside it.
+#[test]
+fn inline_mod_in_same_dir_does_not_declare_the_file() {
+    let sources = [(
+        "crates/a/mod.rs",
+        "#[cfg(test)]\nmod tests {\n    fn helper() {}\n}\nmod tests;\n",
+    )];
+    assert!(
+        !pin_declaration_gated("crates/a/tests.rs", &sources),
+        "the gated inline module must not declare the file"
+    );
+    let gated = [(
+        "crates/a/mod.rs",
+        "#[cfg(test)]\nmod tests {\n    fn helper() {}\n}\n#[cfg(test)]\nmod tests;\n",
+    )];
+    assert!(pin_declaration_gated("crates/a/tests.rs", &gated));
+}
+
 /// A `#[path]` declaration from the `dir.rs` parent counts: the
 /// declaring module need not sit beside the file.
 #[test]
@@ -914,12 +934,13 @@ fn pinned_test_files_match_tree() {
 /// Whether a pinned test file is declared under a test gate in its
 /// own parent module: some source in the pin's directory — or the
 /// `dir.rs` parent for `dir/file.rs` `#[path]` declarations —
-/// declares it (`mod <stem>;` or `#[path = "<file>"]` plus its
-/// `mod`) with a test-gated attribute in the block above (reusing
-/// `is_test_cfg_attr`). Scoping the declaration to the parent module
-/// means a gated same-stem twin elsewhere cannot mask an un-gated
-/// pin. Pure over (path, text) pairs so tests pin the rule without
-/// touching the filesystem.
+/// declares it as a file module (`mod <stem>;`, never an inline
+/// `mod <stem> {`, which declares no file) with a test-gated
+/// attribute in the block above (reusing `is_test_cfg_attr`).
+/// Scoping the declaration to the parent module means a gated
+/// same-stem twin elsewhere cannot mask an un-gated pin. Pure over
+/// (path, text) pairs so tests pin the rule without touching the
+/// filesystem.
 fn pin_declaration_gated(pin: &str, sources: &[(&str, &str)]) -> bool {
     fn parent_dir(path: &str) -> &str {
         path.rsplit_once('/').map(|(d, _)| d).unwrap_or("")
@@ -941,13 +962,16 @@ fn pin_declaration_gated(pin: &str, sources: &[(&str, &str)]) -> bool {
         let lexed: Vec<&str> = blanked.lines().collect();
         for (i, lex_line) in lexed.iter().enumerate() {
             // Declaration match on lexed lines (comments and strings
-            // blanked, so prose cannot match): `mod stem` as tokens,
-            // or the raw path attribute naming the file.
+            // blanked, so prose cannot match): a file module
+            // (`mod stem;`, `;`-terminated — never an inline
+            // `mod stem {`, which declares no file), or the raw path
+            // attribute naming the file.
             let tokens: Vec<&str> = lex_line
                 .split(|c: char| !c.is_alphanumeric() && c != '_')
                 .filter(|t| !t.is_empty())
                 .collect();
-            let mod_match = tokens.windows(2).any(|w| w[0] == "mod" && w[1] == stem);
+            let is_file_mod = lex_line.trim_end().ends_with(';');
+            let mod_match = is_file_mod && tokens.windows(2).any(|w| w[0] == "mod" && w[1] == stem);
             let raw_line = raw.get(i).copied().unwrap_or("");
             let path_match = raw_line.contains("#[path") && raw_line.contains(file);
             if !mod_match && !path_match {
@@ -958,20 +982,25 @@ fn pin_declaration_gated(pin: &str, sources: &[(&str, &str)]) -> bool {
                 return true;
             }
             // For a path attribute the `mod` sits below it: step to
-            // the mod line first.
+            // the file-module line first (a `mod x {` there declares
+            // no file, so it never matches). No file-shaped mod
+            // below means this path attribute is not the pin's
+            // declaration — skip the candidate.
             let mut decl = i;
             if path_match && !mod_match {
-                decl = ((i + 1)..raw.len().min(i + 4))
-                    .find(|&k| {
-                        lexed.get(k).is_some_and(|l| {
-                            l.split(|c: char| !c.is_alphanumeric() && c != '_')
+                let Some(found) = ((i + 1)..raw.len().min(i + 4)).find(|&k| {
+                    lexed.get(k).is_some_and(|l| {
+                        l.trim_end().ends_with(';')
+                            && l.split(|c: char| !c.is_alphanumeric() && c != '_')
                                 .filter(|t| !t.is_empty())
                                 .collect::<Vec<_>>()
                                 .windows(2)
                                 .any(|w| w[0] == "mod")
-                        })
                     })
-                    .unwrap_or(i);
+                }) else {
+                    continue;
+                };
+                decl = found;
             }
             // Walk back over attributes, doc comments, and blank
             // (blanked-comment) lines for a test gate.
