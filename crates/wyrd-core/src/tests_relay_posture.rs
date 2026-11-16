@@ -304,4 +304,34 @@ fn posture_edge_cells_render_by_rule() {
         rendered.contains("configured relays: 0 (current owner configuration)"),
         "copy states the configured count:\n{rendered}"
     );
+    // Startup before the first supervisor tick: the surface still
+    // reads unavailable — the ticks==0 grace lives in the run
+    // verdict (mailbox_verdict_failed in sync.rs, pinned by
+    // unverified_verdict_requires_observation in the CLI suite),
+    // never the surface. Same reading as a dead mailbox with ticks
+    // on record: the surface does not gate on ticks.
+    let mut startup = health(false, 0, 2, 0, 0, 0);
+    startup.supervisor_ticks = 0;
+    assert_eq!(
+        RelayPosture::of(false, 2, Some(&startup)),
+        RelayPosture::Unavailable,
+        "startup with no tick yet is unavailable, not running"
+    );
+    // Latch persistence: attached-then-transiently-lost still reads
+    // unavailable — the surface follows the observation, and the
+    // attached latch convicts only the run verdict
+    // (attached-then-lost fails there), never re-lives the state
+    // here.
+    let mut lost = health(true, 0, 2, 0, 0, 0);
+    lost.relay_attached = true;
+    assert_eq!(
+        RelayPosture::of(false, 2, Some(&lost)),
+        RelayPosture::Unavailable,
+        "attached-then-lost is unavailable; the latch never re-lives the surface"
+    );
+    let lost_rendered = render_posture(false, 2, Some(&lost), 0);
+    assert!(
+        lost_rendered.contains("mailbox not operational"),
+        "attached-then-lost names the outage:\n{lost_rendered}"
+    );
 }
