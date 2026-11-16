@@ -2870,6 +2870,116 @@ fn fetch_diagnostic_lines_name_no_device_or_path() {
     }
 }
 
+/// Golden full-output test for `sync_now_render`: one report with
+/// every section populated renders every line in order. The
+/// section-level assertions above would miss a reordered or
+/// dropped section; this pins the whole string. The write-path
+/// rate parenthetical is clock-derived
+/// (`snapshots_per_minute`/`started.elapsed`), so the test
+/// normalizes that one fragment and pins everything else exactly.
+#[test]
+fn sync_now_render_pins_every_section_in_order() {
+    use wyrd_format::DeviceId;
+    let mut mailbox = blind_mailbox();
+    mailbox.supervisor_ticks = 2;
+    mailbox.relay_attached = true;
+    let mut report = report_with(RunOutcome::PassLimit, Some(mailbox));
+    report.accepted = 5;
+    report.duplicates = 1;
+    report.deferred = 4;
+    report.deferred_unseen = 1;
+    report.deferred_status_blocked = 1;
+    report.deferred_shed = 3;
+    report.deferred_shed_unseen = 1;
+    report.deferred_shed_status_blocked = 1;
+    report.skipped = 2;
+    report.discarded = 1;
+    report.manifests = 6;
+    report.snapshot_bodies = 7;
+    report.objects = 8;
+    report.unfulfilled = 14;
+    report.sent = 9;
+    report.publish_clipped_passes = 1;
+    report.publish_deferred = 2;
+    report.pending = 3;
+    report.unfetchable_heads = 4;
+    report.reconciliation_outstanding = 1;
+    report.transport_errors = 2;
+    report.missing = 8;
+    report.invalid = 3;
+    report.unavailable_keys = 4;
+    report.local_failures = 5;
+    report.refused = 1;
+    report.deadlines = 1;
+    report.terminal_identities = 2;
+    report.quarantined_observed = 1;
+    report.quarantine_claims_cleared = 1;
+    report.quarantine_bytes_discarded = 64;
+    report.scrubbed_observed = 1;
+    report.scrub_claims_cleared = 1;
+    report.scrub_bytes_subtracted = 128;
+    report.peers_observed = vec![
+        DeviceId::from_bytes([0xA0; 32]),
+        DeviceId::from_bytes([0xB0; 32]),
+    ];
+    report.write = WriteStats {
+        snapshots: 3,
+        commits: 3,
+        commit_latency_us_sum: 120_000,
+        commit_latency_us_max: 120_000,
+        mkdir: 2,
+        fold: 1,
+        ..Default::default()
+    };
+    let rendered = sync_now_render(&report);
+    // Normalize the single clock-derived fragment; everything
+    // else compares exactly.
+    let mut normalized = String::new();
+    for line in rendered.lines() {
+        if let Some((head, _)) = line
+            .strip_prefix("write path: ")
+            .and_then(|rest| rest.split_once(" ("))
+        {
+            normalized.push_str("write path: ");
+            normalized.push_str(head);
+            normalized.push_str(" (rate normalized)\n");
+        } else {
+            normalized.push_str(line);
+            normalized.push('\n');
+        }
+    }
+    let peer_a = "a0".repeat(32);
+    let peer_b = "b0".repeat(32);
+    // One literal per line: `\`-continuation would strip the
+    // intentional two-space indents below.
+    let expected = [
+        "sync now: 3 passes, intake 5 accepted (1 duplicates, 4 deferred [1 unseen, 1 status-blocked, 3 shed (1 unseen-wait, 1 status-blocked-wait, 1 unclassified)], 2 skipped, 1 discarded), fetch 6 manifests, 7 bodies, 8 objects (14 unfulfilled), publish 9 sends (1 clipped passes, 2 deferred), 3 obligations pending, 4 unfetchable heads".to_string(),
+        "reconciliation: 1 statements awaiting answer, 0 stalled".to_string(),
+        "fetch classes (diagnostic counts, not shares of unfulfilled):".to_string(),
+        "  transport_errors: 2".to_string(),
+        "  missing: 8".to_string(),
+        "  invalid: 3".to_string(),
+        "  unavailable_keys: 4".to_string(),
+        "  local_failures: 5".to_string(),
+        "  refused: 1".to_string(),
+        "  note: refused is retention policy, not loss: refused bytes were never stored, never enter repair as lost, and retry after raising the ceiling".to_string(),
+        "deadlines: 1 discarded under budget pressure".to_string(),
+        "terminal: 2 identities exhausted".to_string(),
+        "quarantine: 1 observed, 1 claims cleared, 64 bytes discarded, 0 failures".to_string(),
+        "scrub: 1 observed, 1 claims cleared, 128 bytes subtracted, 0 failures".to_string(),
+        "write path: 3 snapshots (rate normalized)".to_string(),
+        "write sources: mkdir 2 create-file 0 commit-file 0 append-file 0 unlink 0 rmdir 0 rename 0 set-attrs 0 fold 1".to_string(),
+        "write latency: admission-to-commit mean 40000us max 120000us over 3 commits (0 failures)".to_string(),
+        "senders observed: 2".to_string(),
+        format!("  sender {peer_a}"),
+        format!("  sender {peer_b}"),
+        "stopped: pass limit (32) reached; sync may be incomplete; mailbox degraded, convergence unverified".to_string(),
+    ]
+    .join("\n")
+        + "\n";
+    assert_eq!(normalized, expected, "full render output:\n{rendered}");
+}
+
 /// Verification 8: the trust-position statement ships in the docs
 /// the operator reads, following the
 /// `vault_trust_position_is_documented_as_unimplemented` pattern —

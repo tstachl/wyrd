@@ -986,14 +986,6 @@ fn render_senders_lines(report: &SyncRunReport) -> String {
 /// the gap — never-evaluated or evaluated-but-stuck — downgrades.
 fn render_verdict(report: &SyncRunReport) -> String {
     let mut out = String::new();
-    // An open reconciliation gap downgrades both quiet verdicts
-    // the way a degraded mailbox does: the outbox is quiet but a
-    // peer asked and this run never answered, so the run stopped
-    // instead of completing. Checked before the mailbox arms so a
-    // healthy offline run with a gap cannot claim completion — a
-    // `completed` line beside a non-zero exit would lie to the
-    // automation the exit code serves. Either half of the gap —
-    // never-evaluated or evaluated-but-stuck — downgrades.
     let reconciliation_open =
         report.reconciliation_outstanding > 0 || report.reconciliation_stalled > 0;
     match report.outcome {
