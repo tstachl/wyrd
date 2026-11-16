@@ -413,7 +413,8 @@ only the self-sealed genesis in the local log there is no conflict
 and nothing freezes, so the risk reads smallest exactly when the
 invitee has seen the least. Full bootstrap trust against a genuine
 drive — refusing a self-sealed genesis outright — needs an
-out-of-band owner/drive expectation established outside validation scope: the expected owner
+out-of-band owner/drive expectation established outside validation
+scope: the expected owner
 DeviceId (or roster), the expected drive id, and, where the pairing
 flow provides one, the expected genesis TransitionId, compared before
 join. Without that expectation the invitee cannot distinguish the

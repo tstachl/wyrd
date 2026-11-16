@@ -487,11 +487,15 @@ MutationRequest {
    vault/headless path `Supervisor::close_for_drain` closes admission
    while leaving queued requests for the drain, the loop joins, and
    `Supervisor::close_admission` follows as the idempotent mop-up for
-   close-racers the drain never saw. Either way an admission made
-   before the close resolves `Done` through the drain instead of
-   racing `shutdown`'s fail-all, while a submit admitted before the
-   close and raced by it resolves `Shutdown` — the terminal, honest
-   answer, never a hang. Taken-but-unfinished batch entries are
+   close-racers the drain never saw. On the vault path an admission
+   made before the close resolves `Done` through the drain:
+   `close()` sets the flag without failing the queue, so the drain
+   executes what was admitted instead of racing `shutdown`'s
+   fail-all. On the mount path the close itself is the fail-all:
+   `close_admission` records `Shutdown` for whatever the drain has
+   not taken, so a submit admitted before the close and raced by it
+   resolves `Shutdown` — the terminal, honest answer, never a hang.
+   Taken-but-unfinished batch entries are
    separate: the batch guard fails unrecorded entries with `Engine`,
    never `Shutdown`. A terminal error ends sync; it never strands or
    mass-fails submitters. Once admission is closed, the closed queue
