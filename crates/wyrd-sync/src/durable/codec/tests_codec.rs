@@ -234,6 +234,10 @@ fn every_fact_variant_encodes_and_decodes() {
             tags.insert(tag),
             "each variant encodes under its own tag: {fact:?}"
         );
+        assert!(
+            KNOWN_TAGS.contains(&tag),
+            "encode emits a registered tag: {fact:?}"
+        );
         let decoded = decode_record(&drive, &key, tag, &bytes)
             .unwrap_or_else(|| panic!("decode accepts what encode emits: {fact:?}"));
         assert!(
