@@ -38,14 +38,17 @@ pub(crate) fn effective_name(
     key.to_owned()
 }
 
-/// Collect production `[dependencies]` entries from a member manifest.
-/// Any table named exactly `dependencies` counts (covers future
-/// `[target.*.dependencies]`); `dev-dependencies` never does.
+/// Collect production `[dependencies]` and `[build-dependencies]`
+/// entries from a member manifest. Any table named exactly
+/// `dependencies` or `build-dependencies` counts (covers future
+/// `[target.*]` nesting); `dev-dependencies` never does. Build
+/// edges compile into the member, so a wyrd-to-wyrd build edge is a
+/// layering edge and fails closed like any other.
 pub(crate) fn production_deps(manifest: &toml::Table) -> DepSet {
     let mut deps = DepSet::new();
     fn walk(table: &toml::Table, deps: &mut DepSet) {
         for (key, value) in table {
-            if key == "dependencies" {
+            if key == "dependencies" || key == "build-dependencies" {
                 if let Some(table) = value.as_table() {
                     deps.extend(table.iter().map(|(k, v)| (k.clone(), v.clone())));
                 }
@@ -331,6 +334,51 @@ pub(crate) fn member_features(manifest: &toml::Table) -> toml::Table {
         .unwrap_or_default()
 }
 
+/// One declared edge's feature posture: the effective `features`
+/// array (sorted, deduped) and the effective `default-features`
+/// flag. Inline `features` win; otherwise the workspace table's
+/// array applies when the edge inherits it (`workspace = true`);
+/// otherwise empty. Same precedence for `default-features`,
+/// defaulting to true (Cargo's implicit default) when neither side
+/// states it. Pure over the manifest value so the feature census
+/// pins exactly what is declared — unification is Cargo's business,
+/// the declared surface is the contract's.
+pub(crate) fn dep_feature_spec(
+    key: &str,
+    value: &toml::Value,
+    workspace_deps: &toml::Table,
+) -> (Vec<String>, bool) {
+    let inline = value.as_table();
+    let workspace_entry = if inline
+        .and_then(|table| table.get("workspace"))
+        .and_then(|w| w.as_bool())
+        == Some(true)
+    {
+        workspace_deps.get(key).and_then(|w| w.as_table())
+    } else {
+        None
+    };
+    let mut features: Vec<String> = inline
+        .and_then(|table| table.get("features"))
+        .or_else(|| workspace_entry.and_then(|table| table.get("features")))
+        .and_then(|f| f.as_array())
+        .map(|array| {
+            array
+                .iter()
+                .filter_map(|v| v.as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default();
+    features.sort();
+    features.dedup();
+    let default_features = inline
+        .and_then(|table| table.get("default-features"))
+        .or_else(|| workspace_entry.and_then(|table| table.get("default-features")))
+        .and_then(|f| f.as_bool())
+        .unwrap_or(true);
+    (features, default_features)
+}
+
 /// Check the distribution build's cargo args from the flake text: the
 /// release closure builds `-p wyrd-cli` with default features, so the
 /// live (non-comment) flake text may contain neither
@@ -342,7 +390,7 @@ pub(crate) fn member_features(manifest: &toml::Table) -> toml::Table {
 /// reaches the build through string concatenation is out of scope for
 /// this structural guard (name it plainly or not at all). Not a
 /// substitute for the resolved-graph check in CI
-/// (`cargo tree -e normal,features` in workflow.yml) — matching the
+/// (`cargo tree -e normal,features` in `.ngit/nix/builds/default.nix`) — matching the
 /// whole live text rather than trusting line layout, and failing
 /// closed when the flag vanishes.
 /// Strip Nix `#` comments, string-aware: `"..."` (with `\` escapes)

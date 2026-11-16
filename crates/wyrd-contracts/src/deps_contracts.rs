@@ -233,6 +233,7 @@ fn policy_for(member: &str) -> Option<MemberPolicy> {
             workspace_allow: &["wyrd-owner-client"],
             external_allow: &[
                 "tauri",
+                "tauri-build",
                 "tauri-plugin-dialog",
                 "serde",
                 "serde_json",
@@ -250,7 +251,7 @@ fn check_member(member: &str, deps: &DepSet, workspace_deps: &toml::Table) -> Ve
     let Some(policy) = policy_for(member) else {
         return vec![format!(
             "workspace member `{member}` is not in the dependency-DAG policy: \
-             add it deliberately in `layer_contracts.rs`, do not work around this test"
+             add it deliberately in `deps_contracts.rs`, do not work around this test"
         )];
     };
     let workspace_allowed: BTreeSet<&str> = policy.workspace_allow.iter().copied().collect();
@@ -285,23 +286,448 @@ fn check_member(member: &str, deps: &DepSet, workspace_deps: &toml::Table) -> Ve
     violations
 }
 
-/// `wyrd-view`'s test-only edge set, pinned exactly: the view tests
-/// build export fixtures against `wyrd-core` and nothing else. The
-/// direct check exempts dev-dependencies by design, so this pin is
-/// what makes a widening deliberate instead of silent. Pure over the
-/// edge set so the negative test proves it bites.
-fn check_view_dev_deps(deps: &DepSet, workspace_deps: &toml::Table) -> Vec<String> {
+/// Per-member test-only edge sets, pinned by name: the direct check
+/// exempts dev-dependencies by design and the transitive checks
+/// ignore them, so without these pins a transport edge could hide
+/// in a test profile while every suite stays green. Unknown members
+/// fail closed. Pure over the edge set so the negative tests prove
+/// it bites without touching the filesystem.
+fn dev_dep_policy(member: &str) -> Option<&'static [&'static str]> {
+    match member {
+        "wyrd-format" => Some(&[]),
+        "wyrd-sync" => Some(&["hex", "proptest"]),
+        "wyrd-namespace" => Some(&[]),
+        "wyrd-view" => Some(&["wyrd-core"]),
+        "wyrd-core" => Some(&[
+            "iroh",
+            "nostr-sdk",
+            "secp256k1",
+            "serde_json",
+            "tokio-tungstenite",
+            "tracing-subscriber",
+            "wyrd-sync",
+            "zeroize",
+        ]),
+        "wyrd-daemon" => Some(&["iroh", "tracing-subscriber", "wyrd-core", "wyrd-sync"]),
+        "wyrd-cli" => Some(&["nostr-sdk", "tokio", "wyrd-core", "wyrd-sync", "wyrd-view"]),
+        "wyrd-contracts" => Some(&[
+            "blake3",
+            "iroh",
+            "libc",
+            "secp256k1",
+            "serde_json",
+            "tokio",
+            "toml",
+            "wyrd-core",
+            "wyrd-sync",
+            "zeroize",
+        ]),
+        "wyrd-embed" => Some(&["wyrd-core", "wyrd-sync"]),
+        "wyrd-host" => Some(&["serde_json", "wyrd-sync"]),
+        "wyrd-desktop" => Some(&[
+            "tauri",
+            "wyrd-core",
+            "wyrd-daemon",
+            "wyrd-format",
+            "wyrd-sync",
+        ]),
+        "wyrd-owner-client" => Some(&[]),
+        _ => None,
+    }
+}
+
+fn check_dev_deps(member: &str, deps: &DepSet, workspace_deps: &toml::Table) -> Vec<String> {
+    let Some(allowed) = dev_dep_policy(member) else {
+        return vec![format!(
+            "`{member}` is not in the dev-dependency pin list: \
+             add it deliberately in `deps_contracts.rs`, do not work around this test"
+        )];
+    };
     let names: BTreeSet<String> = deps
         .iter()
         .map(|(key, value)| effective_name(key, value, workspace_deps))
         .collect();
-    if names != BTreeSet::from(["wyrd-core".to_owned()]) {
+    let allowed: BTreeSet<String> = allowed.iter().map(|s| s.to_string()).collect();
+    if names != allowed {
         return vec![format!(
-            "`wyrd-view` dev-dependencies drifted to `{names:?}` (want exactly \
-             `wyrd-core` for export fixtures): widen deliberately here, never silently"
+            "`{member}` dev-dependencies drifted to `{names:?}` (want exactly \
+             `{allowed:?}`): widen deliberately here, never silently"
         )];
     }
     Vec::new()
+}
+
+/// One declared edge's pinned feature posture: the table it is
+/// declared in, the effective package name, the exact `features`
+/// array, and the effective `default-features` flag.
+type FeaturePin = (&'static str, &'static str, &'static [&'static str], bool);
+
+/// Per-member pinned feature posture: the table each edge is
+/// declared in, the effective package name, the exact `features`
+/// array, and the effective `default-features` flag. Anything else —
+/// a new feature, a flipped default, an unlisted edge — fails
+/// closed, so widening is deliberate. Feature unification itself is
+/// Cargo's business; the declared surface is the contract's.
+/// Unknown members fail closed.
+fn feature_pins(member: &str) -> Option<&'static [FeaturePin]> {
+    match member {
+        "wyrd-format" => Some(&[
+            ("dependencies", "blake3", &[], true),
+            ("dependencies", "fastcdc", &[], false),
+            ("dependencies", "hex", &[], true),
+            ("dependencies", "thiserror", &[], true),
+        ]),
+        "wyrd-sync" => Some(&[
+            ("dependencies", "argon2", &[], true),
+            ("dependencies", "bao-tree", &[], true),
+            ("dependencies", "blake3", &[], true),
+            ("dependencies", "bytes", &[], true),
+            ("dependencies", "chacha20poly1305", &[], true),
+            ("dependencies", "getrandom", &[], true),
+            ("dependencies", "hkdf", &[], true),
+            ("dependencies", "iroh", &[], true),
+            ("dependencies", "iroh-blobs", &["fs-store"], false),
+            ("dependencies", "libc", &[], true),
+            ("dependencies", "n0-future", &[], true),
+            (
+                "dependencies",
+                "nostr",
+                &["nip44", "nip59", "os-rng", "std"],
+                false,
+            ),
+            ("dependencies", "secp256k1", &["global-context"], true),
+            ("dependencies", "sha2", &[], true),
+            ("dependencies", "thiserror", &[], true),
+            (
+                "dependencies",
+                "tokio",
+                &[
+                    "fs", "io-util", "macros", "net", "rt", "signal", "sync", "time",
+                ],
+                true,
+            ),
+            ("dependencies", "tracing", &[], true),
+            ("dependencies", "wyrd-format", &[], true),
+            ("dependencies", "wyrd-namespace", &[], true),
+            ("dependencies", "zeroize", &["derive"], true),
+            ("dev-dependencies", "hex", &[], true),
+            ("dev-dependencies", "proptest", &[], true),
+        ]),
+        "wyrd-namespace" => Some(&[
+            ("dependencies", "thiserror", &[], true),
+            ("dependencies", "wyrd-format", &[], true),
+        ]),
+        "wyrd-view" => Some(&[
+            ("dependencies", "thiserror", &[], true),
+            ("dependencies", "wyrd-format", &[], true),
+            ("dependencies", "wyrd-namespace", &[], true),
+            ("dev-dependencies", "wyrd-core", &[], true),
+        ]),
+        "wyrd-core" => Some(&[
+            ("dependencies", "futures-util", &[], true),
+            ("dependencies", "getrandom", &[], true),
+            (
+                "dependencies",
+                "nostr",
+                &["nip44", "nip59", "os-rng", "std"],
+                false,
+            ),
+            (
+                "dependencies",
+                "nostr-sdk",
+                &["rustls-tls-webpki-roots"],
+                false,
+            ),
+            ("dependencies", "thiserror", &[], true),
+            (
+                "dependencies",
+                "tokio",
+                &[
+                    "fs", "io-util", "macros", "net", "rt", "signal", "sync", "time",
+                ],
+                true,
+            ),
+            ("dependencies", "tracing", &[], true),
+            ("dependencies", "wyrd-format", &[], true),
+            ("dependencies", "wyrd-namespace", &[], true),
+            ("dependencies", "wyrd-sync", &[], true),
+            ("dev-dependencies", "iroh", &[], true),
+            ("dev-dependencies", "nostr-sdk", &["local-relay"], false),
+            ("dev-dependencies", "secp256k1", &["global-context"], true),
+            ("dev-dependencies", "serde_json", &[], true),
+            ("dev-dependencies", "tokio-tungstenite", &[], true),
+            ("dev-dependencies", "tracing-subscriber", &[], true),
+            (
+                "dev-dependencies",
+                "wyrd-sync",
+                &["insecure-fast-kdf"],
+                true,
+            ),
+            ("dev-dependencies", "zeroize", &[], true),
+        ]),
+        "wyrd-daemon" => Some(&[
+            ("dependencies", "fuser", &[], true),
+            ("dependencies", "getrandom", &[], true),
+            ("dependencies", "hex", &[], true),
+            ("dependencies", "libc", &[], true),
+            ("dependencies", "serde", &["derive"], true),
+            ("dependencies", "serde_json", &[], true),
+            ("dependencies", "thiserror", &[], true),
+            ("dependencies", "tracing", &[], true),
+            ("dependencies", "wyrd-core", &[], true),
+            ("dependencies", "wyrd-format", &[], true),
+            ("dependencies", "wyrd-owner-client", &[], true),
+            ("dependencies", "wyrd-sync", &[], true),
+            ("dependencies", "wyrd-view", &[], true),
+            ("dev-dependencies", "iroh", &[], true),
+            ("dev-dependencies", "tracing-subscriber", &[], true),
+            ("dev-dependencies", "wyrd-core", &["test-fixtures"], true),
+            (
+                "dev-dependencies",
+                "wyrd-sync",
+                &["insecure-fast-kdf"],
+                true,
+            ),
+        ]),
+        "wyrd-cli" => Some(&[
+            ("dependencies", "blake3", &[], true),
+            ("dependencies", "clap", &["derive"], true),
+            ("dependencies", "fuser", &[], true),
+            ("dependencies", "getrandom", &[], true),
+            ("dependencies", "hex", &[], true),
+            ("dependencies", "libc", &[], true),
+            (
+                "dependencies",
+                "nostr",
+                &["nip44", "nip59", "os-rng", "std"],
+                false,
+            ),
+            ("dependencies", "serde", &["derive"], true),
+            ("dependencies", "serde_json", &[], true),
+            ("dependencies", "thiserror", &[], true),
+            ("dependencies", "toml", &[], true),
+            ("dependencies", "tracing", &[], true),
+            ("dependencies", "tracing-log", &[], true),
+            (
+                "dependencies",
+                "tracing-subscriber",
+                &["env-filter", "fmt"],
+                true,
+            ),
+            ("dependencies", "wyrd-core", &[], true),
+            ("dependencies", "wyrd-daemon", &[], false),
+            ("dependencies", "wyrd-format", &[], true),
+            ("dependencies", "wyrd-sync", &[], true),
+            ("dependencies", "zeroize", &[], true),
+            ("dev-dependencies", "nostr-sdk", &["local-relay"], false),
+            (
+                "dev-dependencies",
+                "tokio",
+                &[
+                    "fs", "io-util", "macros", "net", "rt", "signal", "sync", "time",
+                ],
+                true,
+            ),
+            ("dev-dependencies", "wyrd-core", &["test-fixtures"], true),
+            (
+                "dev-dependencies",
+                "wyrd-sync",
+                &["insecure-fast-kdf"],
+                true,
+            ),
+            ("dev-dependencies", "wyrd-view", &[], true),
+        ]),
+        "wyrd-contracts" => Some(&[
+            ("dependencies", "fuser", &[], true),
+            ("dependencies", "wyrd-core", &[], true),
+            ("dependencies", "wyrd-daemon", &[], false),
+            ("dependencies", "wyrd-format", &[], true),
+            ("dependencies", "wyrd-sync", &[], true),
+            ("dependencies", "wyrd-view", &[], true),
+            ("dev-dependencies", "blake3", &[], true),
+            ("dev-dependencies", "iroh", &[], true),
+            ("dev-dependencies", "libc", &[], true),
+            ("dev-dependencies", "secp256k1", &["global-context"], true),
+            ("dev-dependencies", "serde_json", &[], true),
+            (
+                "dev-dependencies",
+                "tokio",
+                &[
+                    "fs", "io-util", "macros", "net", "rt", "signal", "sync", "time",
+                ],
+                true,
+            ),
+            ("dev-dependencies", "toml", &[], true),
+            ("dev-dependencies", "wyrd-core", &["test-fixtures"], true),
+            (
+                "dev-dependencies",
+                "wyrd-sync",
+                &["insecure-fast-kdf"],
+                true,
+            ),
+            ("dev-dependencies", "zeroize", &[], true),
+        ]),
+        "wyrd-embed" => Some(&[
+            ("dependencies", "wyrd-core", &[], true),
+            ("dependencies", "wyrd-format", &[], true),
+            ("dependencies", "wyrd-sync", &[], true),
+            ("dependencies", "wyrd-view", &[], true),
+            ("dev-dependencies", "wyrd-core", &["test-fixtures"], true),
+            (
+                "dev-dependencies",
+                "wyrd-sync",
+                &["insecure-fast-kdf"],
+                true,
+            ),
+        ]),
+        "wyrd-host" => Some(&[
+            ("dependencies", "hex", &[], true),
+            ("dependencies", "libc", &[], true),
+            ("dependencies", "thiserror", &[], true),
+            ("dependencies", "tracing", &[], true),
+            ("dependencies", "wyrd-core", &[], true),
+            ("dependencies", "wyrd-daemon", &[], false),
+            ("dependencies", "wyrd-format", &[], true),
+            ("dependencies", "wyrd-sync", &[], true),
+            ("dev-dependencies", "serde_json", &[], true),
+            (
+                "dev-dependencies",
+                "wyrd-sync",
+                &["insecure-fast-kdf"],
+                true,
+            ),
+        ]),
+        "wyrd-desktop" => Some(&[
+            ("dependencies", "serde", &["derive"], true),
+            ("dependencies", "serde_json", &[], true),
+            ("dependencies", "tauri", &["image-png", "tray-icon"], true),
+            ("dependencies", "tauri-plugin-dialog", &[], true),
+            ("dependencies", "thiserror", &[], true),
+            ("dependencies", "wyrd-owner-client", &[], true),
+            ("build-dependencies", "tauri-build", &[], true),
+            ("dev-dependencies", "tauri", &["test"], true),
+            ("dev-dependencies", "wyrd-core", &["test-fixtures"], true),
+            ("dev-dependencies", "wyrd-daemon", &[], false),
+            ("dev-dependencies", "wyrd-format", &[], true),
+            (
+                "dev-dependencies",
+                "wyrd-sync",
+                &["insecure-fast-kdf"],
+                true,
+            ),
+        ]),
+        "wyrd-owner-client" => Some(&[
+            ("dependencies", "hex", &[], true),
+            ("dependencies", "serde", &["derive"], true),
+            ("dependencies", "serde_json", &[], true),
+        ]),
+        _ => None,
+    }
+}
+
+/// One member's declared feature posture against its pin: the table,
+/// effective name, exact `features` array, and `default-features`
+/// flag per edge. A new feature, a flipped default, an unlisted
+/// edge, or a removed pin all fail here with the diff. Pure over
+/// resolved specs so the negative tests prove it bites.
+fn check_member_features(member: &str, specs: &[(&str, &str, Vec<String>, bool)]) -> Vec<String> {
+    let Some(pins) = feature_pins(member) else {
+        return vec![format!(
+            "`{member}` is not in the feature pin list: \
+             add it deliberately in `deps_contracts.rs`, do not work around this test"
+        )];
+    };
+    let expected: BTreeSet<(&str, &str, Vec<String>, bool)> = pins
+        .iter()
+        .map(|(table, dep, features, default)| {
+            (
+                *table,
+                *dep,
+                features.iter().map(|s| s.to_string()).collect(),
+                *default,
+            )
+        })
+        .collect();
+    let actual: BTreeSet<(&str, &str, Vec<String>, bool)> = specs
+        .iter()
+        .map(|(table, dep, features, default)| (*table, *dep, features.clone(), *default))
+        .collect();
+    if actual != expected {
+        let missing: Vec<_> = expected.difference(&actual).collect();
+        let extra: Vec<_> = actual.difference(&expected).collect();
+        return vec![format!(
+            "`{member}` feature posture drifted: missing pins {missing:?}, \
+             unpinned edges {extra:?} — amend the pin deliberately here, never silently"
+        )];
+    }
+    Vec::new()
+}
+
+/// Permitted `#[allow(unsafe_code)]` sites: file path to occurrence
+/// count in code (comments and literals excluded by the lexer).
+/// Counts, not presence flags, so a second attribute in the same
+/// file is visible. Test files count: an audit marker in a test is
+/// still an audit marker. Pure over the holder list so the negative
+/// tests prove it bites.
+fn check_unsafe_sites(holders: &[(String, usize)]) -> Vec<String> {
+    const ALLOWED: &[(&str, usize)] = &[
+        ("crates/wyrd-cli/src/credentials.rs", 1),
+        ("crates/wyrd-cli/src/tests_cli.rs", 2),
+        ("crates/wyrd-cli/src/update/supervise.rs", 1),
+        ("crates/wyrd-contracts/src/support/view.rs", 1),
+        ("crates/wyrd-daemon/src/core/tests_mount_free.rs", 1),
+        ("crates/wyrd-daemon/src/fuse/backend.rs", 1),
+        ("crates/wyrd-daemon/src/fuse/tests_harness.rs", 1),
+        ("crates/wyrd-daemon/src/owner/auth.rs", 2),
+        ("crates/wyrd-daemon/src/process.rs", 1),
+        ("crates/wyrd-namespace/src/view.rs", 1),
+        ("crates/wyrd-sync/src/durable/mod.rs", 1),
+        ("crates/wyrd-sync/src/durable/store.rs", 1),
+        ("crates/wyrd-sync/src/durable/tests_permissions.rs", 1),
+        ("crates/wyrd-sync/src/runtime/test_util.rs", 2),
+        ("crates/wyrd-view/src/view/head.rs", 2),
+        ("crates/wyrd-view/src/view/tests_harness.rs", 1),
+    ];
+    let allowed: BTreeMap<&str, usize> = ALLOWED.iter().copied().collect();
+    let mut actual: BTreeMap<&str, usize> = BTreeMap::new();
+    for (holder, count) in holders {
+        *actual.entry(holder.as_str()).or_insert(0) += *count;
+    }
+    if actual != allowed {
+        let missing: Vec<_> = allowed
+            .iter()
+            .filter(|(path, count)| actual.get(*path) != Some(*count))
+            .collect();
+        let extra: Vec<_> = actual
+            .iter()
+            .filter(|(path, count)| allowed.get(*path) != Some(*count))
+            .collect();
+        return vec![format!(
+            "`#[allow(unsafe_code)]` census drifted: missing or changed pins {missing:?}, \
+             unlisted sites {extra:?} — amend the pin deliberately here, never silently"
+        )];
+    }
+    Vec::new()
+}
+
+/// Files holding `#[allow(unsafe_code)]` in code: path to occurrence
+/// count. Counts code occurrences (comments and string literals
+/// excluded by the lexer), so prose mentions never count. Pure over
+/// the holder list so tests can pin the rule without touching the
+/// filesystem.
+fn unsafe_holding_files(files: &[(&str, &str)]) -> Vec<(String, usize)> {
+    let mut holders: Vec<(String, usize)> = files
+        .iter()
+        .map(|(path, text)| {
+            (
+                path.to_string(),
+                code_text(text).matches("#[allow(unsafe_code)]").count(),
+            )
+        })
+        .filter(|(_, count)| *count > 0)
+        .collect();
+    holders.sort();
+    holders
 }
 
 /// The token definition site: the one file allowed to hold the
@@ -645,21 +1071,123 @@ fn view_link_graph_excludes_sync_and_iroh() {
     );
 }
 
-/// Contract 34, dev-dep pin: `wyrd-view`'s test-only edges stay
-/// exactly `wyrd-core` (export fixtures). The direct check exempts
-/// dev-dependencies, and the transitive check ignores them, so
-/// without this pin a transport edge could hide in the test profile
-/// while every suite stays green.
+/// Contract 34, dev-dep pins: every member's test-only edges stay
+/// exactly the pinned set. The direct check exempts dev-dependencies,
+/// and the transitive checks ignore them, so without these pins a
+/// transport edge could hide in a test profile while every suite
+/// stays green.
 #[test]
-fn view_dev_deps_stay_pinned() {
+fn member_dev_dependencies_are_pinned() {
     let root = workspace_root();
     let root_manifest = read_manifest(&root);
+    let members: Vec<String> = root_manifest
+        .get("workspace")
+        .and_then(|w| w.get("members"))
+        .and_then(|m| m.as_array())
+        .expect("workspace members list")
+        .iter()
+        .filter_map(|m| m.as_str().map(str::to_owned))
+        .collect();
+    // Never pass vacuously: an empty member list would check nothing.
+    assert!(!members.is_empty(), "workspace declares no members");
     let workspace_deps = workspace_dep_table(&root_manifest);
-    let view = read_manifest(&root.join("crates/wyrd-view"));
-    let violations = check_view_dev_deps(&dev_deps(&view), &workspace_deps);
+    let mut violations = Vec::new();
+    for member in &members {
+        let name = member.rsplit('/').next().unwrap_or(member);
+        let manifest = read_manifest(&root.join(member));
+        violations.extend(check_dev_deps(name, &dev_deps(&manifest), &workspace_deps));
+    }
     assert!(
         violations.is_empty(),
         "dev-dep violations:\n- {}",
+        violations.join("\n- ")
+    );
+}
+
+/// Contract 34, feature pins: every member's declared feature
+/// posture stays exactly the pinned table — the `features` array
+/// and `default-features` flag per edge in every dependency table.
+/// Feature unification itself is Cargo's business; the declared
+/// surface is the contract's, so a widened feature set fails here
+/// instead of arriving silently through a manifest edit.
+#[test]
+fn member_dependency_features_are_pinned() {
+    let root = workspace_root();
+    let root_manifest = read_manifest(&root);
+    let members: Vec<String> = root_manifest
+        .get("workspace")
+        .and_then(|w| w.get("members"))
+        .and_then(|m| m.as_array())
+        .expect("workspace members list")
+        .iter()
+        .filter_map(|m| m.as_str().map(str::to_owned))
+        .collect();
+    // Never pass vacuously: an empty member list would check nothing.
+    assert!(!members.is_empty(), "workspace declares no members");
+    let workspace_deps = workspace_dep_table(&root_manifest);
+    let mut violations = Vec::new();
+    let mut pinned_any = false;
+    for member in &members {
+        let name = member.rsplit('/').next().unwrap_or(member);
+        let manifest = read_manifest(&root.join(member));
+        let mut specs = Vec::new();
+        for table in ["dependencies", "build-dependencies", "dev-dependencies"] {
+            let Some(deps) = manifest.get(table).and_then(|t| t.as_table()) else {
+                continue;
+            };
+            for (key, value) in deps {
+                let (features, default) = dep_feature_spec(key, value, &workspace_deps);
+                specs.push((
+                    table,
+                    effective_name(key, value, &workspace_deps),
+                    features,
+                    default,
+                ));
+            }
+        }
+        pinned_any |= feature_pins(name).is_some();
+        violations.extend(check_member_features(
+            name,
+            &specs
+                .iter()
+                .map(|(table, dep, features, default)| {
+                    (*table, dep.as_str(), features.clone(), *default)
+                })
+                .collect::<Vec<_>>(),
+        ));
+    }
+    assert!(pinned_any, "no member carries a feature pin");
+    assert!(
+        violations.is_empty(),
+        "feature-posture violations:\n- {}",
+        violations.join("\n- ")
+    );
+}
+
+/// Contract: the `#[allow(unsafe_code)]` census. Every site is
+/// listed with its occurrence count; a new attribute, a removed
+/// one, or a second one in an already-listed file fails here with
+/// the diff. The view-head audit rule in `trust.md` relies on grep
+/// discipline; this test is the mechanical backstop.
+#[test]
+fn unsafe_code_sites_are_pinned() {
+    let root = workspace_root();
+    let (files, errors) = collect_rs_files(&root.join("crates"), &root);
+    assert!(
+        errors.is_empty(),
+        "source walk errors:\n- {}",
+        errors.join("\n- ")
+    );
+    // Never pass vacuously: an empty file set would check nothing.
+    assert!(!files.is_empty(), "workspace holds no `.rs` files");
+    let refs: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(p, t)| (p.as_str(), t.as_str()))
+        .collect();
+    let violations = check_unsafe_sites(&unsafe_holding_files(&refs));
+    assert!(
+        violations.is_empty(),
+        "unsafe-site violations:\n- {}",
         violations.join("\n- ")
     );
 }
@@ -1098,19 +1626,22 @@ mod policy_tests {
     }
 
     #[test]
-    fn production_deps_include_nested_tables_but_not_dev() {
+    fn production_deps_include_nested_tables_and_build_but_not_dev() {
         let collected = manifest_deps(
             r#"
             [dependencies]
             wyrd-format.workspace = true
             [dev-dependencies]
             wyrd-daemon.workspace = true
+            [build-dependencies]
+            wyrd-sync.workspace = true
             [target.'cfg(unix)'.dependencies]
             libc = "0.2"
         "#,
         );
         assert!(collected.contains_key("wyrd-format"));
         assert!(collected.contains_key("libc"));
+        assert!(collected.contains_key("wyrd-sync"));
         assert!(!collected.contains_key("wyrd-daemon"));
     }
 
@@ -1517,8 +2048,8 @@ mod policy_tests {
     }
 
     #[test]
-    fn view_dev_dep_widening_is_rejected() {
-        let violations = check_view_dev_deps(&deps(&["wyrd-core", "tokio"]), &empty_ws());
+    fn dev_dep_widening_is_rejected() {
+        let violations = check_dev_deps("wyrd-view", &deps(&["wyrd-core", "tokio"]), &empty_ws());
         assert_eq!(violations.len(), 1, "widened dev-deps: {violations:?}");
         assert!(
             violations[0].contains("tokio"),
@@ -1527,11 +2058,110 @@ mod policy_tests {
     }
 
     #[test]
-    fn view_dev_dep_pin_passes_exact() {
-        let violations = check_view_dev_deps(&deps(&["wyrd-core"]), &empty_ws());
+    fn dev_dep_pin_passes_exact() {
+        let violations = check_dev_deps("wyrd-view", &deps(&["wyrd-core"]), &empty_ws());
         assert!(
             violations.is_empty(),
             "exactly wyrd-core must pass: {violations:?}"
+        );
+    }
+
+    #[test]
+    fn unknown_member_dev_deps_fail_closed() {
+        let violations = check_dev_deps("wyrd-future", &deps(&[]), &empty_ws());
+        assert_eq!(violations.len(), 1, "unknown member: {violations:?}");
+        assert!(
+            violations[0].contains("wyrd-future"),
+            "names the member: {violations:?}"
+        );
+    }
+
+    #[test]
+    fn member_feature_widening_is_rejected() {
+        let violations = check_member_features(
+            "wyrd-view",
+            &[
+                ("dependencies", "thiserror", vec![], true),
+                (
+                    "dependencies",
+                    "wyrd-format",
+                    vec!["serde".to_owned()],
+                    true,
+                ),
+                ("dependencies", "wyrd-namespace", vec![], true),
+                ("dev-dependencies", "wyrd-core", vec![], true),
+            ],
+        );
+        assert_eq!(violations.len(), 1, "widened features: {violations:?}");
+        assert!(
+            violations[0].contains("serde"),
+            "names the added feature: {violations:?}"
+        );
+    }
+
+    #[test]
+    fn member_feature_default_flip_is_rejected() {
+        let violations = check_member_features(
+            "wyrd-view",
+            &[
+                ("dependencies", "thiserror", vec![], true),
+                ("dependencies", "wyrd-format", vec![], false),
+                ("dependencies", "wyrd-namespace", vec![], true),
+                ("dev-dependencies", "wyrd-core", vec![], true),
+            ],
+        );
+        assert_eq!(violations.len(), 1, "flipped default: {violations:?}");
+        assert!(
+            violations[0].contains("wyrd-format"),
+            "names the flipped edge: {violations:?}"
+        );
+    }
+
+    #[test]
+    fn unknown_member_features_fail_closed() {
+        let violations = check_member_features("wyrd-future", &[]);
+        assert_eq!(violations.len(), 1, "unknown member: {violations:?}");
+        assert!(
+            violations[0].contains("wyrd-future"),
+            "names the member: {violations:?}"
+        );
+    }
+
+    #[test]
+    fn unsafe_site_widening_is_rejected() {
+        let violations = check_unsafe_sites(&[("crates/wyrd-core/src/node.rs".to_owned(), 1)]);
+        assert_eq!(violations.len(), 1, "unlisted site: {violations:?}");
+        assert!(
+            violations[0].contains("node.rs"),
+            "names the site: {violations:?}"
+        );
+    }
+
+    #[test]
+    fn unsafe_site_count_drift_is_rejected() {
+        let violations = check_unsafe_sites(&[("crates/wyrd-view/src/view/head.rs".to_owned(), 3)]);
+        assert_eq!(violations.len(), 1, "changed count: {violations:?}");
+        assert!(
+            violations[0].contains("head.rs"),
+            "names the file: {violations:?}"
+        );
+    }
+
+    #[test]
+    fn unsafe_scanner_ignores_comments_and_strings() {
+        let files = [
+            (
+                "crates/wyrd-daemon/src/owner/auth.rs",
+                "// prose mention of #[allow(unsafe_code)] is not a site",
+            ),
+            (
+                "crates/wyrd-sync/src/durable/mod.rs",
+                "let name = \"#[allow(unsafe_code)]\";",
+            ),
+        ];
+        assert!(
+            unsafe_holding_files(&files).is_empty(),
+            "comments and strings are not sites"
         );
     }
 }

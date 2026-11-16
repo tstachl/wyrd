@@ -24,9 +24,11 @@
 //! outside test code, heads are minted only from engine-classified
 //! material in the core composition path, view heads are never
 //! constructed by consumers, and head sets are installed only by
-//! the node composition. The whole contracts crate counts as test
-//! code, like every harness and fixture: the scan covers the
-//! shipped surface.
+//! the node composition. Test code is directories and file names
+//! that say so (the contracts suite, `tests/` dirs, `tests_*` /
+//! `test_*` files) plus `#[cfg(test)]` regions inside shipped
+//! files: the scan covers the shipped surface, and a production
+//! module that merely mentions tests in its name is scanned.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -41,6 +43,7 @@ use wyrd_sync::durable::{AuthorizeSnapshot, AuthorizedSnapshot, DurableError, Du
 use wyrd_sync::membership::MembershipLog;
 use wyrd_view::{DriveView, Node, ViewHead};
 
+use crate::contract_source::code_text;
 use crate::support::{
     device, drive, scratch_dir, signed_snapshot, signed_transition, RemoteOnlyMaterialization,
 };
@@ -213,17 +216,16 @@ fn only_refresh_live_heads_installs_heads() {
     let mut set_heads_violations = Vec::new();
     let mut scanned = 0;
     visit_sources(&root, &mut |path, text| {
-        let rel_path = path.strip_prefix(&root).unwrap_or(path);
-        if is_test_code(rel_path) || is_self(path) {
-            return;
-        }
-        scanned += 1;
         let rel = path
             .strip_prefix(&root)
             .unwrap_or(path)
             .to_string_lossy()
             .replace('\\', "/");
-        for (index, line) in code_lines(text).enumerate() {
+        if is_test_code(&rel) || is_self(path) {
+            return;
+        }
+        scanned += 1;
+        for (index, line) in live_lines(text) {
             if line.contains("Head::new") && !HEAD_NEW_ALLOWED.contains(&rel.as_str()) {
                 head_violations.push(format!("{rel}:{} names Head::new", index + 1));
             }
@@ -267,18 +269,88 @@ fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 
-/// Test code never carries the gate: the whole contracts suite is a
-/// test harness by construction, and unit fixtures live beside
-/// their modules under test-marked names.
-fn is_test_code(path: &Path) -> bool {
-    path.components().any(|component| {
-        let name = component.as_os_str().to_string_lossy().to_lowercase();
-        name.contains("test")
-            || name.contains("harness")
-            || name.contains("support")
-            || name.contains("contracts")
-            || name.contains("fixture")
-    })
+/// Test code never carries the gate, by location: the whole
+/// contracts suite is a test harness by construction, integration
+/// tests live under `tests/` directories, and unit fixtures live in
+/// files whose names say so (`tests_*`, `test_*`, `tests.rs`).
+/// Anything else is scanned — including a production module that
+/// merely mentions tests, harnesses, or fixtures in its name (a
+/// `support_auth.rs` would previously have evaded the scan). Test
+/// code inside scanned files is exempt by content instead: see
+/// `live_lines` for the `#[cfg(test)]` region rule.
+fn is_test_code(rel: &str) -> bool {
+    if rel.starts_with("crates/wyrd-contracts/") {
+        return true;
+    }
+    if rel.split('/').any(|component| component == "tests") {
+        return true;
+    }
+    let file = rel.rsplit('/').next().unwrap_or(rel);
+    file == "tests.rs" || file.starts_with("tests_") || file.starts_with("test_")
+}
+
+/// Shipped lines of one source file: every line outside `#[cfg(test)]`
+/// regions, with original line numbers. A `#[cfg(test)]` attribute
+/// exempts the item that follows it — a brace-balanced block through
+/// its matching close brace, or the single following line for a
+/// braceless item. Brace counting runs on `code_text` output
+/// (comments and literals blanked, newlines preserved), so a brace
+/// inside a string never opens or closes a region. An unbalanced
+/// region fails closed: lines from the attribute onward are scanned,
+/// never silently exempted. Pure so tests pin the rule without
+/// touching the filesystem.
+fn live_lines(text: &str) -> Vec<(usize, &str)> {
+    let blanked = code_text(text);
+    let stripped: Vec<&str> = blanked.lines().collect();
+    let live: Vec<&str> = text.lines().map(strip_line_comment).collect();
+    // `code_text` preserves newlines 1:1, so the two vectors align.
+    let mut out = Vec::new();
+    let mut index = 0;
+    while index < live.len() {
+        let attributed = stripped
+            .get(index)
+            .is_some_and(|line| line.trim_start().starts_with("#[cfg(test)]"));
+        if !attributed {
+            out.push((index, live[index]));
+            index += 1;
+            continue;
+        }
+        let mut depth = 0i32;
+        let mut opened = false;
+        let mut cursor = index;
+        while cursor < live.len() {
+            let line = stripped.get(cursor).copied().unwrap_or("");
+            depth += line.chars().filter(|&c| c == '{').count() as i32;
+            depth -= line.chars().filter(|&c| c == '}').count() as i32;
+            opened |= depth > 0;
+            cursor += 1;
+            if opened && depth == 0 {
+                break;
+            }
+        }
+        if opened && depth == 0 {
+            index = cursor;
+        } else if !opened {
+            // Braceless item (`use`, `type` alias): the attribute and
+            // its single line are the whole region.
+            index += 2;
+        } else {
+            // Unbalanced: fail closed, scan from the attribute onward.
+            index += 1;
+        }
+    }
+    out
+}
+
+/// One source line with its `//` comment removed, trimmed: doc and
+/// line comments never carry a gate, and a marker named in prose
+/// must not trip it.
+fn strip_line_comment(line: &str) -> &str {
+    let code = match line.find("//") {
+        Some(index) => &line[..index],
+        None => line,
+    };
+    code.trim()
 }
 
 /// This file exempts itself by name: the scan's own marker strings
@@ -287,6 +359,75 @@ fn is_test_code(path: &Path) -> bool {
 fn is_self(path: &Path) -> bool {
     path.file_name()
         .is_some_and(|name| name == "ownership_contracts.rs")
+}
+
+/// A production module that merely mentions tests in its name is
+/// scanned: the old substring rule would have exempted
+/// `support_auth.rs` outright, hiding a mint from the gate.
+#[test]
+fn test_marked_production_names_are_scanned() {
+    assert!(!is_test_code("crates/wyrd-core/src/support_auth.rs"));
+    assert!(!is_test_code("crates/wyrd-core/src/live.rs"));
+    assert!(!is_test_code("crates/wyrd-sync/src/durable/facts.rs"));
+}
+
+/// Location says test-only: the contracts suite, `tests/`
+/// directories, and test-named files. A new test layout that
+/// matches none of these is scanned until the list grows
+/// deliberately — fail closed, not silent.
+#[test]
+fn test_code_is_directories_and_file_names() {
+    for exempt in [
+        "crates/wyrd-contracts/src/deps_contracts.rs",
+        "crates/wyrd-cli/tests/bootstrap.rs",
+        "crates/wyrd-core/src/live/tests_trigger.rs",
+        "crates/wyrd-sync/src/durable/tests_codec.rs",
+        "crates/wyrd-sync/src/authorization/test_util.rs",
+        "crates/wyrd-sync/src/keys/capability/tests.rs",
+    ] {
+        assert!(is_test_code(exempt), "{exempt} is test code");
+    }
+}
+
+/// `#[cfg(test)]` regions inside scanned files are exempt by
+/// content: a mint in a production file's test module never trips
+/// the gate, while the same line outside the region still does.
+#[test]
+fn cfg_test_regions_are_exempt_by_content() {
+    let text = "use crate::view::Head;\n\
+                \n\
+                /// Production mint.\n\
+                pub fn mint() -> Head {\n\
+                \x20   Head::new(authorized())\n\
+                }\n\
+                \n\
+                #[cfg(test)]\n\
+                mod tests {\n\
+                \x20   #[test]\n\
+                \x20   fn wraps() {\n\
+                \x20       let _ = Head::new(authorized());\n\
+                \x20   }\n\
+                }\n";
+    let live: Vec<&str> = live_lines(text).into_iter().map(|(_, line)| line).collect();
+    assert_eq!(
+        live.iter()
+            .filter(|line| line.contains("Head::new"))
+            .count(),
+        1,
+        "only the production mint survives: {live:?}"
+    );
+}
+
+/// An unbalanced `#[cfg(test)]` region fails closed: lines from the
+/// attribute onward are scanned, never silently exempted.
+#[test]
+fn unbalanced_cfg_test_region_is_scanned() {
+    let text = "#[cfg(test)]\nmod tests {\n    let _ = Head::new(authorized());\n";
+    let live: Vec<&str> = live_lines(text).into_iter().map(|(_, line)| line).collect();
+    assert!(
+        live.iter().any(|line| line.contains("Head::new")),
+        "the unbalanced region is scanned: {live:?}"
+    );
 }
 
 /// Recurse into every Rust source under the root, skipping build
@@ -321,16 +462,4 @@ fn visit_sources(root: &Path, visit: &mut impl FnMut(&Path, &str)) {
             }
         }
     }
-}
-
-/// Source lines with comments removed: doc and line comments never
-/// carry a gate, and a marker named in prose must not trip it.
-fn code_lines(text: &str) -> impl Iterator<Item = &str> {
-    text.lines().map(|line| {
-        let code = match line.find("//") {
-            Some(index) => &line[..index],
-            None => line,
-        };
-        code.trim()
-    })
 }
