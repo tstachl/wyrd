@@ -3,6 +3,14 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
+    # Single-bun-version anchor: the exact nixpkgs-unstable rev
+    # devenv.lock carries, so the dev shell (`languages.javascript
+    # .bun.package = unstable.bun` in devenv.nix) and the CI frontend
+    # gate (`desktop.frontend` / `page.check` in .ngit/nix/workflows)
+    # resolve the same bun (1.4.2). Pinned by rev, not by branch:
+    # bumping means moving this rev and devenv.lock's together — the
+    # desktop-frontend-gate harness suite fails if they drift.
+    nixpkgs-unstable.url = "github:NixOS/nixpkgs/f20cd90e28fe0403873f473b29e42662cd86e8c4";
     crane.url = "github:ipetkov/crane";
     rust-overlay = {
       url = "github:oxalica/rust-overlay";
@@ -38,7 +46,7 @@
     darwin.inputs.nixpkgs.follows = "nixpkgs";
   };
 
-  outputs = { self, nixpkgs, crane, rust-overlay, darwin, wyrdSrc, gate, ... }:
+  outputs = { self, nixpkgs, nixpkgs-unstable, crane, rust-overlay, darwin, wyrdSrc, gate, ... }:
     let
       # Product platforms. x86_64-darwin is deliberately absent even though
       # rust-toolchain.toml lists the target: no builder covers it, so it
@@ -57,6 +65,14 @@
         import nixpkgs {
           inherit system;
           overlays = [ (import rust-overlay) ];
+        };
+      # Frontend toolchain channel: bun (and the nodejs its package
+      # bins exec through) for the desktop gate and the page check.
+      # Same rev as the dev shell's `unstable` (see devenv.nix); no
+      # rust overlay needed here.
+      pkgsUnstableFor = system:
+        import nixpkgs-unstable {
+          inherit system;
         };
       wyrdFor = system: src:
         { pname ? "wyrd"
@@ -452,6 +468,7 @@
       # the CI path.
       ngit-ci.commands.x86_64-linux = import ./.ngit/nix/workflows {
         pkgs = pkgsFor "x86_64-linux";
+        pkgsUnstable = pkgsUnstableFor "x86_64-linux";
         inherit crane;
         src = ./.;
       };

@@ -11,7 +11,7 @@
 # (ngit-ci.builds, realised by rust.yaml's build jobs); only the
 # audit job — which needs the network for the advisory DB — remains
 # a run command here.
-{ pkgs, crane, src }:
+{ pkgs, pkgsUnstable, crane, src }:
 let
   # The exact channel pinned in rust-toolchain.toml, so the audit job
   # dispatches `cargo audit` / `cargo deny` through the same cargo as
@@ -174,7 +174,9 @@ in
 
   page.check = pkgs.writeShellApplication {
     name = "page-check";
-    runtimeInputs = with pkgs; [ bun ];
+    # Same unstable bun the dev shell pins (single-bun-version
+    # scheme): the marketing and brand checks run under one bun.
+    runtimeInputs = [ pkgsUnstable.bun ];
     text = ''
       set -euo pipefail
       bun run apps/marketing/check.ts
@@ -202,15 +204,19 @@ in
   # rust gates: this nixpkgs carries no bun-dependency vendoring, so
   # `bun install` fetches the locked set from the registry the way
   # the audit job fetches the advisory DB. `--frozen-lockfile`
-  # refuses lockfile drift instead of resolving it. nodejs rides
-  # beside bun: package bins (vite, svelte-check) exec through a
-  # node shebang. The lockfile must stay at the version the flake's
-  # bun (1.3.x) reads — currently v1, pinned by the harness suite
-  # below — because a newer local bun writes a format the gate
-  # cannot parse.
+  # refuses lockfile drift instead of resolving it.
+  #
+  # Single-bun-version scheme: bun (and the nodejs the package bins
+  # exec through — vite, svelte-check run under a node shebang) come
+  # from nixpkgs-unstable at the exact rev devenv.lock carries, the
+  # same source the dev shell pins (`languages.javascript.bun.package
+  # = unstable.bun` in devenv.nix). The lockfile stays at the version
+  # that bun writes — currently v2, pinned by the harness suite
+  # below. Bumping bun means moving the flake rev and devenv.lock's
+  # together; the harness fails if they drift.
   desktop.frontend = pkgs.writeShellApplication {
     name = "desktop-frontend";
-    runtimeInputs = with pkgs; [ bun nodejs coreutils ];
+    runtimeInputs = [ pkgs.coreutils pkgsUnstable.bun pkgsUnstable.nodejs ];
     text = ''
       set -euo pipefail
       say() { printf '===== %s =====\n' "$1"; }

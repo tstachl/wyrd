@@ -28,6 +28,13 @@ in
 
   languages.javascript.enable = true;
   languages.javascript.bun.enable = true;
+  # Single-bun-version scheme: the shell resolves bun from
+  # nixpkgs-unstable — the same rev the flake's `desktop.frontend`
+  # and `page.check` commands use — instead of floating on
+  # devenv-nixpkgs rolling. Both sides stay on one bun, so a local
+  # `bun install` can never rewrite the lockfile into a format CI
+  # cannot parse.
+  languages.javascript.bun.package = unstable.bun;
   languages.rust.enable = true;
   languages.rust.toolchainFile = ./rust-toolchain.toml;
 
