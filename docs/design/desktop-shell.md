@@ -911,6 +911,24 @@ this note wins for architecture.
    refresh). The stop and recovery story per platform lives where
    the installer consumes it (`packaging/macos/README.md`, "Login
    items and recovery").
+8. Per-session passphrase posture: decided (file-backed stays the
+   default; per-session is the tracked follow-up now landing its
+   transport). Two fixed terms the issue text already uses, defined
+   here because they have no other repo home:
+   R1 — the app owns the unlock lifecycle: in per-session posture
+   no manager auto-start or restart exists (the service definition
+   drops `KeepAlive`/`RunAtLoad`), the app spawns the owner
+   directly with the piped passphrase, restarts unexpected death a
+   bounded number of times while the app lives, then falls back to
+   manual Start.
+   R2 — app lifetime stays separate from owner lifetime: an app
+   crash never takes a running owner down (reattach on relaunch),
+   both dead re-prompts, and an app-stopped owner killed stays
+   dead until the app prompts and starts again. The CLI transport
+   for both is one stdin-pipe handoff (`--passphrase-stdin`,
+   bounded 4096, single trailing newline stripped, EOF/overlong/
+   non-UTF-8 fail closed, `Zeroizing`, never argv/env/temp/log,
+   never persisted).
 
 ## Persistent-format impact
 

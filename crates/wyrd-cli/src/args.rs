@@ -41,9 +41,19 @@ pub(crate) struct Credentials {
 
     /// Keystore passphrase, UTF-8 text. Defaults to the
     /// configuration file's `passphrase_file` when the flag is
-    /// absent; the flag always wins.
-    #[arg(long, value_name = "PATH")]
+    /// absent; the flag always wins. `--passphrase-stdin` reads one
+    /// line from stdin instead (per-session unlock: nothing
+    /// persisted); it conflicts with this flag.
+    #[arg(long, value_name = "PATH", conflicts_with = "passphrase_stdin")]
     pub(crate) passphrase_file: Option<PathBuf>,
+
+    /// Read the keystore passphrase from stdin (one line, bounded
+    /// 4096 bytes, single trailing newline stripped): the
+    /// per-session unlock path that never persists a passphrase
+    /// file. The identity secret still comes from its file.
+    /// Conflicts with `--passphrase-file`.
+    #[arg(long, conflicts_with = "passphrase_file")]
+    pub(crate) passphrase_stdin: bool,
 }
 
 /// Control-plane relays: repeatable deployment state shared by every
