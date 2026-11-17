@@ -53,6 +53,8 @@ let
   # through `gateArgs` (and by `rustDeps` above): same set, same
   # rule. Keep the two in sync — a package here but not there (or
   # the reverse) fails the sys-crate probes in one leg only.
+  # Exception: rustTestsCore drops this set because it excludes
+  # wyrd-desktop. Do not "fix" that override back into symmetry.
   guiInputs = pkgs: with pkgs; [
     glib
     glib-networking
@@ -162,10 +164,25 @@ let
     '';
   });
 
-  # Nextest default profile: the PR gate.
-  rustTests = craneLib.cargoNextest (gateArgs // {
+  # Nextest default profile, core half: the PR gate for every workspace
+  # crate except wyrd-desktop. The desktop shell is a leaf crate with no
+  # reverse dependencies, so excluding it keeps the rest of the suite while
+  # dropping the Tauri GUI closure from this test derivation. The shared
+  # rust-deps step still carries the GUI closure for the desktop half.
+  rustTestsCore = craneLib.cargoNextest (gateArgs // {
     pname = "wyrd";
-    cargoNextestExtraArgs = "--color never --workspace";
+    pnameSuffix = "-tests-core";
+    buildInputs = [ pkgs.fuse ];
+    cargoNextestExtraArgs = "--color never --workspace --exclude wyrd-desktop";
+  });
+
+  # Nextest default profile, desktop half: the wyrd-desktop tests that
+  # the core gate excludes. Keeps the GUI closure and its own job budget,
+  # so a cold shell build cannot consume the core gate's 30 minutes.
+  rustTestsDesktop = craneLib.cargoNextest (gateArgs // {
+    pname = "wyrd";
+    pnameSuffix = "-tests-desktop";
+    cargoNextestExtraArgs = "--color never -p wyrd-desktop";
   });
 
   # Nextest slow profile: the master-CI supplement (live-relay
@@ -191,7 +208,8 @@ in
   rust-clippy = rustClippy;
   rust-check-nomount = rustCheckNomount;
   rust-clippy-nomount = rustClippyNomount;
-  rust-tests = rustTests;
+  rust-tests = rustTestsCore;
+  rust-tests-desktop = rustTestsDesktop;
   rust-doc = rustDoc;
   rust-slow-tests = rustSlowTests;
   rust-doctests = rustDoctests;
