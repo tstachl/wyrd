@@ -210,8 +210,11 @@ green, macOS desktop builds against system frameworks.
   grants for Tauri core/plugin APIs only — they do not make an exposed
   custom command safe, and never load remote content into a privileged
   window. Any extra window/webview needs an explicit IPC trust decision.
-- `tauri.conf.json` `app.security.csp: null` is a scaffold placeholder
-  only; views/packaging sets a restrictive CSP plus capabilities.
+- `tauri.conf.json` `app.security.csp` is a restrictive local-only
+  policy (pinned by `crates/wyrd-desktop/tests/csp_policy.rs`): every
+  asset ships in the bundle, IPC rides the loopback channel, nothing
+  remote. Any widening updates the policy, the pin, and its reason
+  together.
 - Owner socket (`<drive_dir>/owner.sock`) is a local privileged boundary:
   validate ownership/permissions, no attacker-controlled path substitution,
   peer identity per the interface's same-UID rule where available.
