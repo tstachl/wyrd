@@ -124,6 +124,9 @@ fn policy_for(member: &str) -> Option<MemberPolicy> {
                 "wyrd-settings",
             ],
             external_allow: &[
+                // `blake3` is the settings transaction's commit hash
+                // (OD §4): change detection only, never identity.
+                "blake3",
                 "fuser",
                 "futures-util",
                 "getrandom",
@@ -346,7 +349,9 @@ fn dev_dep_policy(member: &str) -> Option<&'static [&'static str]> {
             "wyrd-sync",
         ]),
         "wyrd-owner-client" => Some(&[]),
-        "wyrd-settings" => Some(&[]),
+        // Wire-form tests encode through serde_json; production
+        // stays serde-only — the crate itself encodes nothing.
+        "wyrd-settings" => Some(&["serde_json"]),
         _ => None,
     }
 }
@@ -486,6 +491,7 @@ fn feature_pins(member: &str) -> Option<&'static [FeaturePin]> {
             ("dev-dependencies", "zeroize", &[], true),
         ]),
         "wyrd-daemon" => Some(&[
+            ("dependencies", "blake3", &[], true),
             ("dependencies", "fuser", &[], true),
             ("dependencies", "getrandom", &[], true),
             ("dependencies", "hex", &[], true),
@@ -649,8 +655,12 @@ fn feature_pins(member: &str) -> Option<&'static [FeaturePin]> {
             ("dependencies", "serde_json", &[], true),
         ]),
         // Settings schema only: serde with the workspace derive
-        // feature, nothing else in any table.
-        "wyrd-settings" => Some(&[("dependencies", "serde", &["derive"], true)]),
+        // feature, nothing else in any table. Wire-form tests encode
+        // through serde_json (dev only); production encodes nothing.
+        "wyrd-settings" => Some(&[
+            ("dependencies", "serde", &["derive"], true),
+            ("dev-dependencies", "serde_json", &[], true),
+        ]),
         _ => None,
     }
 }

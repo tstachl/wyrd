@@ -31,10 +31,14 @@ pub use core::{
     PoisonCounts, ResourceBudgets, RunningSettings, RuntimeMaterialization, SyncReport, WyrdNode,
 };
 pub use settings::{
-    default_settings_path, overrides_for, overrides_for_path, read_settings, settings_key_for,
-    split_file_overrides, write_settings, AppSettingsFile, DriveSettingsSection,
-    APP_SETTINGS_VERSION, DEFAULT_OPEN_TIMEOUT, SETTINGS_FILENAME,
+    apply_sparse_update, default_settings_path, overrides_for, overrides_for_path, read_settings,
+    settings_key_for, split_file_overrides, write_settings, AppSettingsFile, DriveSettingsSection,
+    SettingsWriteError, APP_SETTINGS_VERSION, DEFAULT_OPEN_TIMEOUT, SETTINGS_FILENAME,
 };
+/// The sparse edit the transaction commits: re-exported from the
+/// shared contract so the future IPC surface names the same type
+/// the writer enforces.
+pub use wyrd_settings::SparseUpdate;
 // The composed view type, re-exported at the crate root so hosts build
 // their node over the same view the backend serves without depending
 // on the view crate directly — and without needing the `mount`

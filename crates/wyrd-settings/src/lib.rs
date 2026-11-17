@@ -47,19 +47,21 @@ pub struct DriveSettingsSection {
     /// Ceiling on retained object bytes (`None` — absent — is
     /// unlimited). Zero is allowed and means what it says: every
     /// write refuses.
-    #[serde(default)]
+    /// Absent keys serialize absent, never null: clearing a key
+    /// removes it, so a saved file holds configured values only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retained_bytes_quota: Option<u64>,
     /// Wants admitted per sync pass.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_admit_per_pass: Option<usize>,
     /// Wall-clock budget for one pass's fetch phase, in seconds.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fetch_pass_budget_secs: Option<u64>,
     /// Wall-clock deadline for a held mutation, in seconds.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_mutation_wait_secs: Option<u64>,
     /// Wall-clock budget for one `open` demand wait, in seconds.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub open_timeout_secs: Option<u64>,
     /// Notification dedup records: notification key to the
     /// application's own unix-seconds at recording. Absent on first
@@ -191,6 +193,76 @@ pub fn check_notified_key(key: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// The five keys the editor owns, in file order. One list so the
+/// sparse-update validator, the writer, and the future IPC surface
+/// name the same keys — a sixth key is refused everywhere by name,
+/// never silently dropped.
+pub const EDITABLE_KEYS: [&str; 5] = [
+    "retained_bytes_quota",
+    "max_admit_per_pass",
+    "fetch_pass_budget_secs",
+    "max_mutation_wait_secs",
+    "open_timeout_secs",
+];
+
+/// One sparse edit: values to set plus keys to clear, for exactly
+/// one drive. Never a whole-document replacement — the writer
+/// applies these onto the current file under the transaction lock,
+/// preserving every other drive's section and the notification
+/// records beside the edited keys. A key in both lists is refused
+/// as contradictory, never resolved by precedence.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SparseUpdate {
+    /// Bounds to write, keyed by [`EDITABLE_KEYS`] name.
+    #[serde(default)]
+    pub set: BTreeMap<String, u64>,
+    /// Bounds to remove (restore the compiled default), by name.
+    #[serde(default)]
+    pub clear: Vec<String>,
+}
+
+/// Shared validation for one sparse edit: every named key is one of
+/// [`EDITABLE_KEYS`], no key is both set and cleared, and every set
+/// value passes that key's range rule. Runs before the lock, like
+/// every candidate validation — a refusal touches nothing.
+pub fn validate_sparse_update(update: &SparseUpdate) -> Result<(), String> {
+    for key in update.set.keys() {
+        if !EDITABLE_KEYS.contains(&key.as_str()) {
+            return Err(format!("unknown settings key {key:?}"));
+        }
+    }
+    for key in &update.clear {
+        if !EDITABLE_KEYS.contains(&key.as_str()) {
+            return Err(format!("unknown settings key {key:?}"));
+        }
+        if update.set.contains_key(key) {
+            return Err(format!(
+                "settings key {key:?} is both set and cleared: contradictory edit"
+            ));
+        }
+    }
+    for (key, value) in &update.set {
+        match key.as_str() {
+            "retained_bytes_quota" => {
+                // Any u64 is representable: zero means what it says
+                // (every write refuses), absence means unlimited.
+            }
+            "max_admit_per_pass" => {
+                let admit = usize::try_from(*value).map_err(|_| {
+                    format!("settings max_admit_per_pass must be 1..=1000000 (got {value})")
+                })?;
+                check_max_admit_per_pass(admit)?;
+            }
+            "fetch_pass_budget_secs" | "max_mutation_wait_secs" | "open_timeout_secs" => {
+                check_duration_secs(key, *value)?;
+            }
+            _ => unreachable!("key membership checked above"),
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -216,11 +288,95 @@ mod tests {
         assert!(check_notified_key("sync.quiet").is_ok());
     }
 
+    /// Absent bounds serialize absent, never null: a saved file
+    /// holds configured values only, and clearing a key removes it
+    /// from the wire. Explicit nulls from older writers still parse
+    /// to absent, so the sparser encoding needs no migration.
+    #[test]
+    fn absent_bounds_serialize_absent() {
+        let section = DriveSettingsSection {
+            open_timeout_secs: Some(30),
+            ..DriveSettingsSection::default()
+        };
+        let rendered = serde_json::to_value(&section).unwrap();
+        let fields = rendered.as_object().unwrap();
+        assert!(!fields.contains_key("max_admit_per_pass"), "{rendered}");
+        assert_eq!(fields["open_timeout_secs"], 30);
+        let legacy: DriveSettingsSection =
+            serde_json::from_str(r#"{"max_admit_per_pass": null}"#).unwrap();
+        assert_eq!(legacy.max_admit_per_pass, None);
+    }
+
     /// The default file carries the current version and no drives.
     #[test]
     fn default_file_is_current_and_empty() {
         let file = AppSettingsFile::default();
         assert_eq!(file.version, APP_SETTINGS_VERSION);
         assert!(file.drives.is_empty());
+    }
+
+    /// The sparse edit pins its refusals: unknown set/clear keys
+    /// name the key, a both-set-and-cleared key names the
+    /// contradiction, and per-key ranges reuse the shared rules —
+    /// while a well-formed mixed edit validates.
+    #[test]
+    fn sparse_update_pins_its_refusals() {
+        let mut set = BTreeMap::new();
+        set.insert("max_admit_per_pass".to_string(), 64);
+        set.insert("open_timeout_secs".to_string(), 30);
+        let update = SparseUpdate {
+            set,
+            clear: vec!["fetch_pass_budget_secs".to_string()],
+        };
+        assert!(validate_sparse_update(&update).is_ok());
+
+        let mut set = BTreeMap::new();
+        set.insert("admit_all".to_string(), 1);
+        let refused = validate_sparse_update(&SparseUpdate {
+            set,
+            clear: Vec::new(),
+        })
+        .unwrap_err();
+        assert!(refused.contains("admit_all"), "{refused}");
+
+        let refused = validate_sparse_update(&SparseUpdate {
+            set: BTreeMap::new(),
+            clear: vec!["relays".to_string()],
+        })
+        .unwrap_err();
+        assert!(refused.contains("relays"), "{refused}");
+
+        let mut set = BTreeMap::new();
+        set.insert("max_admit_per_pass".to_string(), 64);
+        let refused = validate_sparse_update(&SparseUpdate {
+            set,
+            clear: vec!["max_admit_per_pass".to_string()],
+        })
+        .unwrap_err();
+        assert!(refused.contains("both set and cleared"), "{refused}");
+
+        for (key, value) in [
+            ("max_admit_per_pass", 0),
+            ("max_admit_per_pass", 1_000_001),
+            ("open_timeout_secs", 0),
+            ("open_timeout_secs", 86_401),
+        ] {
+            let mut set = BTreeMap::new();
+            set.insert(key.to_string(), value);
+            let refused = validate_sparse_update(&SparseUpdate {
+                set,
+                clear: Vec::new(),
+            })
+            .unwrap_err();
+            assert!(refused.contains(key), "{refused}");
+        }
+        // Zero quota is representable (refuse-all), not absurd.
+        let mut set = BTreeMap::new();
+        set.insert("retained_bytes_quota".to_string(), 0);
+        assert!(validate_sparse_update(&SparseUpdate {
+            set,
+            clear: Vec::new(),
+        })
+        .is_ok());
     }
 }

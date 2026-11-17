@@ -298,6 +298,8 @@ fn mount_log_reports_queue_depth_and_wait_time_without_a_metrics_dependency() {
     // `wyrd-settings` is the shared application-settings schema
     // (extraction, not metrics): serde-only types and validation
     // rules the daemon applier and the desktop reader both enforce.
+    // `blake3` is the settings transaction's commit hash (OD §4):
+    // change detection only, never a metrics pipeline.
     let manifest = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"))
         .expect("the crate manifest reads");
     let mut in_deps = false;
@@ -322,6 +324,7 @@ fn mount_log_reports_queue_depth_and_wait_time_without_a_metrics_dependency() {
     assert_eq!(
         deps,
         vec![
+            "blake3",
             "fuser",
             "getrandom",
             "hex",

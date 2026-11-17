@@ -20,6 +20,11 @@ wyrd-owner-client.workspace = true
 # the desktop (reader) enforce. Serialization and rules only — no
 # domain edge, like the client above.
 wyrd-settings.workspace = true
+# Content hash for the settings transaction's commit guard (OD §4):
+# the lock serializes cooperating writers, the hash detects a
+# non-cooperating external modification between read and commit.
+# Change detection only — never trust, never identity.
+blake3.workspace = true
 # The FUSE adapter is the first presentation backend, not a property of
 # the node (`docs/architecture.md`): it is a default-on feature so a
 # machine without system libfuse can still build and run everything
