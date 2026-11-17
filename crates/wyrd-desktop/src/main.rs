@@ -222,7 +222,7 @@ fn main() {
                                 .show_menu_on_left_click(true)
                                 .on_menu_event(|app, event| match event.id.as_ref() {
                                     tray::TRAY_SHOW_ID => tray::show_main_window(app),
-                                    tray::TRAY_SETUP_ID => {
+                                    tray::TRAY_ADD_ID => {
                                         tray::show_main_window(app);
                                         // Best-effort route: the
                                         // frontend selects the

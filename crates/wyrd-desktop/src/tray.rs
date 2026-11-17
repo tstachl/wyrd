@@ -45,7 +45,7 @@ pub struct TrayRow {
 }
 
 /// Menu action ids: the only events the tray handles.
-pub const TRAY_SETUP_ID: &str = "wyrd-set-up";
+pub const TRAY_ADD_ID: &str = "wyrd-add-drive";
 /// Menu action id for the Show-window action: the only event the tray handles besides setup and quit.
 pub const TRAY_SHOW_ID: &str = "wyrd-show";
 /// Menu action id for the Quit action: drains in-flight operations per the graceful-shutdown rule, then exits.
@@ -104,7 +104,7 @@ pub fn tray_rows(state: &RegistryState) -> Vec<TrayRow> {
         }
     }
     rows.push(TrayRow {
-        id: TRAY_SETUP_ID.to_string(),
+        id: TRAY_ADD_ID.to_string(),
         label: "Add drive".to_string(),
         enabled: true,
     });
@@ -252,7 +252,7 @@ mod tests {
             rows[..3].iter().all(|row| !row.enabled),
             "status lines are presentation only, never a selection"
         );
-        assert_eq!(rows[3].id, TRAY_SETUP_ID);
+        assert_eq!(rows[3].id, TRAY_ADD_ID);
         assert_eq!(rows[3].label, "Add drive");
         assert_eq!(rows[4].id, TRAY_SHOW_ID);
         assert_eq!(rows[5].id, TRAY_QUIT_ID);
@@ -296,6 +296,18 @@ mod tests {
         let rows = tray_rows(&loading_state());
         assert_eq!(rows[0].label, "No drives registered");
         assert!(!rows[0].enabled);
+    }
+
+    /// The tray route string is mirrored in the frontend with no
+    /// shared build step, so pin it here: if either side renames
+    /// its literal, this fails instead of silently diverging.
+    #[test]
+    fn provision_event_string_matches_the_frontend_listener() {
+        let app_svelte = include_str!("../../../apps/desktop/src/App.svelte");
+        assert!(
+            app_svelte.contains(SELECT_PROVISION_EVENT),
+            "App.svelte must listen for {SELECT_PROVISION_EVENT}"
+        );
     }
 
     /// An unreadable registry names itself loudly in the disabled

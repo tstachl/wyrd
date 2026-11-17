@@ -618,13 +618,20 @@
     // (`SELECT_PROVISION_EVENT`): keep the string in sync.
     // Best-effort: a missing Tauri runtime (browser preview)
     // never fails startup.
+    // A tray route that lands before the first refresh wins over
+    // the startup selection below: startup must not overwrite a
+    // view the person already asked for.
+    let trayRouted = false;
     void listen("wyrd:select-provision", () => {
+      trayRouted = true;
       openProvisioning("create");
     }).catch(() => {});
     void refreshLifecycle().then(() => {
       // The device-level home is the drive list, not a drive
       // workspace: startup never implies an active drive.
-      presentation.selectView("lifecycle");
+      if (!trayRouted) {
+        presentation.selectView("lifecycle");
+      }
       void checkIdentityGate();
     });
   });
