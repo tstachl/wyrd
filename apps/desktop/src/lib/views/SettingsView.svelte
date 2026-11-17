@@ -39,6 +39,7 @@ never deletes local data as a side effect of the UI. -->
     buildDraftInputs,
     buildSparseDraft,
     isDraftDirty,
+    keepsDraftAfterVerdict,
     toggleCleared,
   } from "./settings-draft.js";
   import ObservedNote from "./ObservedNote.svelte";
@@ -171,11 +172,10 @@ never deletes local data as a side effect of the UI. -->
     saveError = null;
     try {
       // The report carries the outcome; the paired re-read behind
-      // `onApply` decides what the display says. Applied and
-      // unverified both committed, so both discard the draft —
-      // unverified keeps its alert beside the fresh observation.
+      // `onApply` decides what the display says. Committed verdicts
+      // discard the draft, uncommitted ones keep it for retry.
       saveReport = await onApply({ set, clear });
-      if (saveReport.result.result === "applied" || saveReport.result.result === "unverified") {
+      if (!keepsDraftAfterVerdict(saveReport.result.result)) {
         editing = false;
         inputs = {};
         cleared = [];

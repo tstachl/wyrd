@@ -64,6 +64,20 @@ export function isDraftDirty(
 }
 
 /**
+ * Whether the editor keeps its draft after a save verdict. Only
+ * uncommitted outcomes keep it: applied and unverified both
+ * committed (the latter's bytes landed, only the read-back
+ * failed), so both discard the draft and show the fresh
+ * observation; conflict, refusal, and failure keep the draft for
+ * retry.
+ */
+export type SaveVerdict = "applied" | "unverified" | "conflict" | "refused" | "failed";
+
+export function keepsDraftAfterVerdict(verdict: SaveVerdict): boolean {
+  return verdict !== "applied" && verdict !== "unverified";
+}
+
+/**
  * Build one committable sparse update from the draft: unchanged
  * rows are skipped, cleared keys skip validation (they carry no
  * value), and every other changed row validates — errors keyed by

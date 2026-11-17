@@ -10,6 +10,7 @@ import {
   buildDraftInputs,
   buildSparseDraft,
   isDraftDirty,
+  keepsDraftAfterVerdict,
   toggleCleared,
 } from "./settings-draft.js";
 import { SETTING_BOUNDS, validateBoundInput } from "./format.js";
@@ -61,4 +62,12 @@ test("cleared keys skip validation and ride the clear list", () => {
   const inputs = { ...buildDraftInputs(configured, KEYS), open_timeout_secs: "garbage" };
   const draft = buildSparseDraft(inputs, ["open_timeout_secs"], configured, KEYS, validateBoundInput);
   expect(draft).toEqual({ set: {}, clear: ["open_timeout_secs"], errors: {} });
+});
+
+test("only uncommitted verdicts keep the draft", () => {
+  expect(keepsDraftAfterVerdict("applied")).toBe(false);
+  expect(keepsDraftAfterVerdict("unverified")).toBe(false);
+  expect(keepsDraftAfterVerdict("conflict")).toBe(true);
+  expect(keepsDraftAfterVerdict("refused")).toBe(true);
+  expect(keepsDraftAfterVerdict("failed")).toBe(true);
 });
