@@ -1,14 +1,16 @@
 # Native rust gates (phase 2 of the act → Nix port).
-# Steps jobs sharing one store each: every job gets a fresh Incus
+# Three step jobs, each sharing one store: every job gets a fresh Incus
 # VM with a cold /nix/store, and crane sharing (cargoArtifacts =
 # rustDeps) only helps on a binary-cache hit — with no cache served,
 # per-gate build jobs each rebuilt rust-deps independently. Steps in
 # one job share the same VM and store, so deps builds once per job
-# instead of once per step. Separate jobs, not one serial run: a
+# instead of once per step: three rust-deps builds per run, the cost
+# of the separate windows. Separate jobs, not one serial run: a
 # single run exceeds the 30-minute allocation. The test suite is two
-# jobs, core and desktop, so each keeps its own timeout window and the
-# core job carries no Tauri GUI closure. needs: between build jobs is
-# forbidden and shares no Nix state; only steps share.
+# jobs, core and desktop, so each keeps its own timeout window. The
+# core test derivation carries no Tauri GUI closure; its deps step
+# still does. needs: between build jobs is forbidden and shares no
+# Nix state; only steps share.
 # Mirrors the act rust job step for step — check (+ the production
 # feature-graph gate), clippy, nextest default profile, audit+deny —
 # so a native green means the same thing as an act green. Doctests
@@ -90,9 +92,9 @@ jobs:
           run: rust.audit
   # Core test gate: deps once, then the workspace suite without
   # wyrd-desktop reuses it in the same store. The desktop shell is a
-  # leaf crate, so excluding it drops the GTK/WebKit closure from this
-  # job: a cold worker no longer spends its whole timeout budget
-  # materialising GUI store paths before nextest starts. Higher memory
+  # leaf crate, so excluding it drops the GTK/WebKit closure from the
+  # test derivation; the deps step still materialises it for the
+  # desktop half. Two 30-minute windows replace one. Higher memory
   # floor for nextest parallelism; no scratch-mib (unschedulable — the
   # adapter never advertises it).
   gates-tests:
@@ -107,9 +109,9 @@ jobs:
   # Desktop test gate: the wyrd-desktop tests the core gate excludes.
   # Carries the Tauri GUI closure in its own job and at the default
   # memory floor, so it schedules beside the core gate and cannot eat
-  # the core gate's 30 minutes. The cold full-workspace run that timed
-  # out peaked at 3.3 GiB including the guest OS, so the default floor
-  # leaves headroom for this smaller set.
+  # the core gate's 30 minutes. The 3377.8 MiB peak is from the logged
+  # aaa4d0b9 gates-tests run (guest RAM, including the guest OS); the
+  # first ready-run must confirm the smaller desktop set fits 4096 MiB.
   gates-tests-desktop:
     steps:
       - deps:
