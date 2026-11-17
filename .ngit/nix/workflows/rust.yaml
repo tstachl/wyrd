@@ -21,6 +21,12 @@
 # wyrd-contracts source-text test. Only the audit step reaches the
 # network (advisory DB), and only for the DB. No artifacts (no
 # provider Blossom yet), no secrets, no Docker.
+#
+# Pull requests only. The default profile already proves the proposal
+# before merge; rerunning it on the merge commit repeats the same
+# 30-minute suite for no new evidence. Master keeps its own Rust test
+# gate in rust-slow.yaml (slow profile plus doctests), which is not a
+# duplicate of this gate.
 version: 1
 system: x86_64-linux
 name: rust
@@ -37,19 +43,6 @@ requirements:
     memory-mib: {gte: 4096}
 
 on:
-  push:
-    branches: [master]
-    paths:
-      - "crates/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "deny.toml"
-      - "rust-toolchain.toml"
-      - "flake.nix"
-      - "flake.lock"
-      - "nix/**"
-      - "tests/**"
-      - ".ngit/nix/**"
   pull_request:
     # Ready-gated like the act job: draft pushes spend no CI, the
     # draft-to-ready transition mints the runs.

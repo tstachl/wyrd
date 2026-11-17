@@ -9,8 +9,8 @@ t = "nextest run"
 # shortcut, not the reverse-dependency closure (a wyrd-sync edit can
 # reach wyrd-core/wyrd-daemon/wyrd-cli, which fast-sync does not run).
 # `fast-all` is the whole workspace under the local profile; the PR gate
-# stays `cargo nextest run` (default profile) plus `--profile slow` on
-# master CI.
+# stays `cargo nextest run` (default profile), and master CI runs only
+# `--profile slow`.
 fast-format = "nextest run --profile local -p wyrd-format -p wyrd-namespace"
 fast-view = "nextest run --profile local -p wyrd-view"
 fast-sync = "nextest run --profile local -p wyrd-sync"

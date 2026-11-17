@@ -24,7 +24,8 @@
 #   heterogeneous cross-implementation cover; see
 #   docs/design/test-review.md). A future `master` profile
 #   (everything plus stress and enlarged proptest budgets) is
-#   planned; until then master CI runs `default` plus `slow`.
+#   planned; until then PR CI runs `default` and master CI runs only
+#   `slow`, so the merge does not repeat the PR suite.
 #
 # P0 baseline (Oct-5, M2, contended dev machine): default wall 206s over
 # 1415 tests with ~7x effective parallelism; warm compile negligible.
