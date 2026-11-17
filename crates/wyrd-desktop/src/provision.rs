@@ -58,6 +58,7 @@ pub struct ProvisionRequest {
     pub relays: Vec<String>,
     /// Credential *paths*, never contents.
     pub identity_file: PathBuf,
+    /// Credential *paths*, never contents.
     pub passphrase_file: PathBuf,
     /// `None` = create, `Some(path)` = join from that invitation file.
     pub invitation_file: Option<PathBuf>,
@@ -66,6 +67,7 @@ pub struct ProvisionRequest {
     /// Explicit owner/supervise binaries (tests / non-standard layout);
     /// `None` = sibling-of-CLI default the CLI applies.
     pub owner_bin: Option<PathBuf>,
+    /// Explicit supervise binary (tests / non-standard layout); `None` = CLI default.
     pub supervise_bin: Option<PathBuf>,
     /// `false` (default) installs, enables, and starts the per-drive
     /// service; `true` registers only.
@@ -87,8 +89,11 @@ pub struct ProvisionRequest {
 /// frontend omitting the dialog cannot bypass the requirement).
 #[derive(Debug, Clone)]
 pub struct LeaveRequest {
+    /// Absolute drive directory, exact string (shared drive-identity rule).
     pub drive_dir: PathBuf,
+    /// Credential *paths*, never contents.
     pub identity_file: PathBuf,
+    /// Credential *paths*, never contents.
     pub passphrase_file: PathBuf,
     /// Sole-owner terminal confirmation. The UI explains the
     /// consequences; this flag carries the acknowledgement to the CLI.
@@ -105,16 +110,20 @@ pub struct LeaveRequest {
 /// process spawns, like creation.
 #[derive(Debug, Clone)]
 pub struct ReconfigureRequest {
+    /// Absolute drive directory, exact string (shared drive-identity rule).
     pub drive_dir: PathBuf,
+    /// Replacement relays when non-empty; empty keeps the registered set.
     pub relays: Vec<String>,
     /// Credential *paths*, never contents.
     pub identity_file: PathBuf,
+    /// Credential *paths*, never contents.
     pub passphrase_file: PathBuf,
     /// Explicit registry path (tests); `None` = platform default.
     pub registry_path: Option<PathBuf>,
     /// Explicit owner/supervise binaries (tests / non-standard layout);
     /// `None` = sibling-of-CLI default the CLI applies.
     pub owner_bin: Option<PathBuf>,
+    /// Explicit supervise binary (tests / non-standard layout); `None` = CLI default.
     pub supervise_bin: Option<PathBuf>,
     /// `false` (default) disables the old service, rewrites the
     /// entry, and reinstalls, enables, and restarts; `true`
@@ -136,6 +145,7 @@ pub struct ReconfigureRequest {
 /// registry override (tests and non-standard layouts).
 #[derive(Debug, Clone)]
 pub struct ServiceStartRequest {
+    /// Absolute drive directory, exact string (shared drive-identity rule).
     pub drive_dir: PathBuf,
     /// Explicit registry path (tests); `None` = platform default.
     pub registry_path: Option<PathBuf>,
@@ -159,30 +169,51 @@ pub enum ProvisionResult {
     /// Exit 0: the CLI reported no error. What actually happened is
     /// decided by the paired observation alone — this never claims a
     /// lifecycle state.
-    Completed { detail: String },
+    Completed {
+        /// Opaque display detail; the paired observation decides what happened.
+        detail: String,
+    },
     /// Exit 2 or an adapter-side refusal: usage, expected failure,
     /// or a validation refusal that never spawned a process. Opaque
     /// detail; the paired observation says what actually exists.
-    ExpectedFailure { detail: String },
+    ExpectedFailure {
+        /// Opaque display detail; the paired observation says what actually exists.
+        detail: String,
+    },
     /// Exit 78: another process holds the drive. Terminal — the
     /// supervisor must not retry.
-    HeldDrive { detail: String },
+    HeldDrive {
+        /// Opaque display detail naming the terminal held-drive.
+        detail: String,
+    },
     /// CLI binary missing, version-mismatched, or unparsable
     /// `__build_info`: hard failure, never silent fallback.
-    VersionMismatch { reason: String },
+    VersionMismatch {
+        /// Why the CLI binary is unusable; never a silent fallback.
+        reason: String,
+    },
     /// A lifecycle operation is already in flight on this drive.
-    Busy { drive_dir: String },
+    Busy {
+        /// Drive refused as busy, as an exact directory string.
+        drive_dir: String,
+    },
     /// Timeout, spawn failure, or signal death: the outcome is
     /// unknown. Triggers observation, never re-execution.
-    Unknown { detail: String },
+    Unknown {
+        /// Why the outcome is unknown; triggers observation, never re-execution.
+        detail: String,
+    },
 }
 
 /// One completed operation: the opaque outcome plus the raw CLI
 /// stderr (display detail, never parsed) and the exit code observed.
 #[derive(Debug, Clone)]
 pub struct ProvisionOutcome {
+    /// Operation verdict: exit codes only, never lifecycle state.
     pub result: ProvisionResult,
+    /// Raw CLI stderr as opaque display detail, never parsed for lifecycle facts.
     pub stderr: String,
+    /// Observed exit code, absent where no process completed.
     pub code: Option<i32>,
 }
 

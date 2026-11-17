@@ -9,7 +9,7 @@
 //! signed resolution transitions.
 //!
 //! v0 note: classification memoizes per observed set (see
-//! [`MembershipLog::analysed`]): one input message batch costs one
+//! `MembershipLog::analysed`): one input message batch costs one
 //! analysis no matter how many verdicts it reads, and `observe` is the
 //! only mutation, so invalidation is a single assignment. Optimize
 //! further only with evidence.
@@ -157,10 +157,15 @@ pub enum Authorizable<'a> {
 /// The peer's authoritative knowledge: the canonical tip's state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct KnownState {
+    /// The canonical tip epoch.
     pub epoch: u64,
+    /// The canonical tip transition id.
     pub transition_id: TransitionId,
+    /// The member-set root of the canonical tip state.
     pub members_root: [u8; 32],
+    /// The owner-set root of the canonical tip state.
     pub owners_root: [u8; 32],
+    /// The reader-set root of the canonical tip state.
     pub readers_root: [u8; 32],
 }
 
@@ -184,6 +189,7 @@ pub struct MembershipLog {
 }
 
 impl MembershipLog {
+    /// Create an empty membership log for one drive.
     pub fn new(drive: DriveId) -> Self {
         MembershipLog {
             drive,

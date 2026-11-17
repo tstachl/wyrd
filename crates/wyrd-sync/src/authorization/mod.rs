@@ -90,7 +90,9 @@ pub enum Pendency {
 /// REJECTED means "invalid"; the others are valid historical states.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Classification {
+    /// Observed history that failed validation; never eligible or live.
     Rejected(Rejection),
+    /// Observed history awaiting more evidence; re-evaluated as the log and DAG grow.
     Pending(Pendency),
     /// Valid history bound to a voided transition: retained, never
     /// eligible; content only via recovery.
@@ -119,6 +121,7 @@ pub struct SnapshotDag {
 }
 
 impl SnapshotDag {
+    /// Create an empty observed DAG for one drive.
     pub fn new(drive: DriveId) -> Self {
         SnapshotDag {
             drive,

@@ -86,9 +86,15 @@ struct RegistryFileParse {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(tag = "status", rename_all = "lowercase")]
 pub enum RegistryStatus {
+    /// File read with its schema version; entries follow below.
     Ready,
+    /// No file exists: a fresh installation registered nothing yet.
     Nofile,
-    Unreadable { reason: String },
+    /// File present but unreadable with the reason: never guessed, never defaulted.
+    Unreadable {
+        /// Why the file is unreadable: version skew or parse reason.
+        reason: String,
+    },
 }
 
 /// One drive's reachability, verified this session. Transport-level
@@ -97,9 +103,18 @@ pub enum RegistryStatus {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(tag = "state", rename_all = "lowercase")]
 pub enum DriveAvailability {
+    /// Owner answered this session, terminally or by refusal: transport exists.
     Available,
-    Unavailable { detail: String },
-    Unknown { detail: String },
+    /// No transport answered: the owner is down, never evidence about the drive.
+    Unavailable {
+        /// Why no transport answered, never a claim about the drive.
+        detail: String,
+    },
+    /// Transport exists but no terminal answer arrived: availability unknown.
+    Unknown {
+        /// Why no terminal answer arrived; retry the probe.
+        detail: String,
+    },
 }
 
 /// One registered drive for the lifecycle view: validated facts
@@ -109,12 +124,19 @@ pub enum DriveAvailability {
 /// (`None` in `vault` mode). Drives match by exact path only.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct DriveView {
+    /// Registry entry name, 1–64 chars of `[a-z0-9-]`.
     pub name: String,
+    /// Absolute drive directory as an exact string; drives match by exact path only.
     pub drive_dir: String,
+    /// Relay URLs from the registry entry, shown verbatim.
     pub relays: Vec<String>,
+    /// Service name from the registry entry, shown verbatim.
     pub service: String,
+    /// Service mode display string, shown verbatim and never interpreted.
     pub mode: String,
+    /// FUSE mountpoint in `mount` mode; `None` in `vault` mode.
     pub mountpoint: Option<String>,
+    /// Per-drive reachability, verified this session.
     pub availability: DriveAvailability,
     /// The service-manager fact beside the transport verdict:
     /// not-installed vs stopped vs wedged vs running vs unknown vs
@@ -128,9 +150,12 @@ pub struct DriveView {
 /// so the file verdict reads without stutter.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct RegistryState {
+    /// How the registry file itself read: ready, absent, or unreadable with the reason.
     #[serde(flatten)]
     pub status: RegistryStatus,
+    /// One view per valid entry, in registry order.
     pub drives: Vec<DriveView>,
+    /// One reason per skipped entry; valid entries are unaffected.
     pub skipped: Vec<String>,
 }
 
@@ -428,10 +453,15 @@ pub fn list_drives() -> RegistryState {
 /// desktop-written file reads identically under both readers.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct RegistryEntryWrite {
+    /// Registry entry name, 1–64 chars of `[a-z0-9-]`.
     pub name: String,
+    /// Absolute drive directory, exact string (shared drive-identity rule).
     pub drive_dir: PathBuf,
+    /// Relay URLs; must be non-empty URLs without whitespace or control bytes.
     pub relays: Vec<String>,
+    /// Service name token, 1–64 chars of `[a-z0-9-]`.
     pub service: String,
+    /// Service mode display string: `vault` or `mount`.
     pub mode: String,
     /// FUSE mountpoint: `Some` in `mount` mode, `None` in `vault`
     /// mode. Serialized always (null for vault) so the daemon's
@@ -447,69 +477,94 @@ pub enum RegistryWriteError {
     /// The registry lockfile could not be opened or locked.
     #[error("lock {}: {source}", path.display())]
     Lock {
+        /// Lockfile path that could not be opened or locked.
         path: PathBuf,
+        /// Underlying OS error from opening or locking.
         #[source]
         source: std::io::Error,
     },
     /// A candidate entry breaks the registry rules: nothing was written.
     #[error("refusing to write: {reason}")]
-    RefusedWrite { reason: String },
+    RefusedWrite {
+        /// Which candidate broke which rule; nothing was written.
+        reason: String,
+    },
     /// The registry schema version is newer than this build writes:
     /// writing would silently replace a file this build cannot read.
     #[error("registry {} is version {found}, this shell writes {REGISTRY_VERSION}", path.display())]
-    UnsupportedVersion { path: PathBuf, found: u64 },
+    UnsupportedVersion {
+        /// Registry path whose version is newer than this build writes.
+        path: PathBuf,
+        /// Schema version found in the file.
+        found: u64,
+    },
     /// The registry file could not be read.
     #[error("read {}: {source}", path.display())]
     Read {
+        /// Registry path that could not be read.
         path: PathBuf,
+        /// Underlying OS read error.
         #[source]
         source: std::io::Error,
     },
     /// The registry file is not valid JSON.
     #[error("parse {}: {source}", path.display())]
     Parse {
+        /// Registry path that failed to parse.
         path: PathBuf,
+        /// Parse failure as an I/O error for the error chain.
         #[source]
         source: std::io::Error,
     },
     /// The registry file could not be encoded.
     #[error("encode registry: {source}")]
     Encode {
+        /// Underlying JSON encode error.
         #[source]
         source: serde_json::Error,
     },
     /// A directory for the registry could not be created.
     #[error("create {}: {source}", path.display())]
     CreateDir {
+        /// Directory path that could not be created.
         path: PathBuf,
+        /// Underlying OS error from directory creation.
         #[source]
         source: std::io::Error,
     },
     /// The temporary registry file could not be written.
     #[error("write {}: {source}", path.display())]
     WriteFile {
+        /// Temporary file path that could not be written.
         path: PathBuf,
+        /// Underlying OS write error.
         #[source]
         source: std::io::Error,
     },
     /// Owner-only permissions could not be applied.
     #[error("chmod {}: {source}", path.display())]
     Chmod {
+        /// Path whose permissions could not be applied.
         path: PathBuf,
+        /// Underlying OS permission error.
         #[source]
         source: std::io::Error,
     },
     /// The atomic replace of the registry file failed.
     #[error("replace {}: {source}", path.display())]
     ReplaceFile {
+        /// Registry path whose atomic replace failed.
         path: PathBuf,
+        /// Underlying OS rename error.
         #[source]
         source: std::io::Error,
     },
     /// A written file could not be synced to disk.
     #[error("sync {}: {source}", path.display())]
     SyncFile {
+        /// File path that could not be synced to disk.
         path: PathBuf,
+        /// Underlying OS sync error.
         #[source]
         source: std::io::Error,
     },
@@ -517,7 +572,12 @@ pub enum RegistryWriteError {
     /// entries: something outside the lock rewrote the file between
     /// the rename and the verification. Loud, never silent.
     #[error("verify {}: written entries do not match reread ({detail})", path.display())]
-    VerifyMismatch { path: PathBuf, detail: String },
+    VerifyMismatch {
+        /// Registry path whose reread did not show the written entries.
+        path: PathBuf,
+        /// Which entry is missing or changed on reread.
+        detail: String,
+    },
 }
 
 /// Decoded per entry by the writer: structurally corrupt values

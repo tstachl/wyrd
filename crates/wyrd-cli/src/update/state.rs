@@ -1,3 +1,7 @@
+//! Swap state machine: the phased stage/swap/converge record that
+//! survives crashes. A present file always means an interrupted
+//! transaction — commit removes it, so there is no `Committed` variant.
+//!
 use crate::CliError;
 use serde::{Deserialize, Serialize};
 use std::fs;

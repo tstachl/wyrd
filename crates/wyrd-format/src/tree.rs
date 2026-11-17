@@ -44,21 +44,29 @@ use thiserror::Error;
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Component(String);
 
+/// Path component validation failures: a component that can never appear
+/// in a canonical tree.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ComponentError {
+    /// Component is empty.
     #[error("path components must be non-empty")]
     Empty,
+    /// Component is `.`.
     #[error("`.` is not a valid path component")]
     Dot,
+    /// Component is `..`.
     #[error("`..` is not a valid path component")]
     DotDot,
+    /// Component contains the `/` separator.
     #[error("path components must not contain the '/' separator")]
     Separator,
+    /// Component contains null bytes.
     #[error("path components must not contain null bytes")]
     NullByte,
 }
 
 impl Component {
+    /// Validate and wrap a path component name.
     pub fn new(name: impl Into<String>) -> Result<Self, ComponentError> {
         let name = name.into();
         if name.is_empty() {
@@ -87,16 +95,25 @@ impl Component {
 pub enum EntryContent {
     /// A file: declared byte size, exec bit, and its ordered chunk ids.
     File {
+        /// Declared file size in bytes.
         size: u64,
+        /// Executable bit; the only metadata a tree carries.
         executable: bool,
+        /// Ordered chunk identities composing the file bytes.
         chunks: Vec<ContentId>,
     },
     /// A directory: the ContentId of the child dir node (a `Tree`-kind
     /// ContentId).
-    Dir { subtree: ContentId },
+    Dir {
+        /// Child directory node identity.
+        subtree: ContentId,
+    },
     /// A symlink to an arbitrary target string (no path validation —
     /// symlink targets are resolved by the consumer, never by the format).
-    Symlink { target: String },
+    Symlink {
+        /// Raw symlink target string.
+        target: String,
+    },
 }
 
 /// One tree entry: a path component, its stable identity, and its
@@ -113,12 +130,16 @@ pub enum EntryContent {
 /// randomness); this layer carries and preserves.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
+    /// Path component naming this entry within its parent.
     pub name: Component,
+    /// Stable entry identity, `None` only for pre-identity legacy entries.
     pub identity: Option<EntryIdentity>,
+    /// Kind-scoped entry content.
     pub content: EntryContent,
 }
 
 impl Entry {
+    /// Build a legacy (identity-free) file entry.
     pub fn file(
         name: impl Into<String>,
         size: u64,
@@ -136,6 +157,7 @@ impl Entry {
         })
     }
 
+    /// Build a legacy (identity-free) directory entry.
     pub fn dir(name: impl Into<String>, subtree: ContentId) -> Result<Self, ComponentError> {
         Ok(Self {
             name: Component::new(name)?,
@@ -144,6 +166,7 @@ impl Entry {
         })
     }
 
+    /// Build a legacy (identity-free) symlink entry.
     pub fn symlink(
         name: impl Into<String>,
         target: impl Into<String>,
@@ -174,24 +197,35 @@ pub struct Tree {
     entries: Vec<Entry>,
 }
 
+/// Tree decoding failures: truncation, trailing bytes, non-canonical
+/// order, unknown kinds, or invalid components and counts.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum TreeError {
+    /// Payload shorter than the declared encoding.
     #[error("payload shorter than the declared encoding")]
     Truncated,
+    /// Payload holds bytes beyond the last declared entry.
     #[error("payload holds bytes beyond the last declared entry")]
     TrailingBytes,
+    /// Entries are not sorted by component bytes.
     #[error("entries are not sorted by component bytes (non-canonical)")]
     Unsorted,
+    /// Entry kind byte names no file, dir, or symlink kind.
     #[error("unknown entry kind byte {0:#04x}")]
     UnknownEntryKind(u8),
+    /// Executable byte is neither `0` nor `1`.
     #[error("executable byte must be 0 or 1, got {0}")]
     InvalidExecByte(u8),
+    /// Component violates the path rules.
     #[error("invalid path component: {0}")]
     InvalidComponent(#[from] ComponentError),
+    /// Payload text is not valid UTF-8.
     #[error("payload text is not valid UTF-8")]
     InvalidUtf8,
+    /// Two entries share one component name.
     #[error("duplicate component {0:?}: names within a tree are unique")]
     DuplicateComponent(String),
+    /// A vector length exceeds the `u32` wire count.
     #[error("length {0} exceeds the u32 wire count")]
     CountOverflow(usize),
 }
@@ -240,6 +274,7 @@ impl Tree {
         }
     }
 
+    /// Entries in canonical bytewise-component order.
     pub fn entries(&self) -> &[Entry] {
         &self.entries
     }

@@ -76,6 +76,7 @@ impl std::fmt::Display for StoreFailure {
 /// [`StoreFailure::Transient`], so in-memory and test stores implement
 /// it with an empty impl and only disk-backed stores override it.
 pub trait StoreError {
+    /// Classify this failure for the sync and mount retry policy.
     fn failure(&self) -> StoreFailure {
         StoreFailure::Transient
     }
@@ -93,7 +94,9 @@ pub trait StoreError {
     }
 }
 
+/// Append-only plaintext object store addressed by [`ContentId`].
 pub trait ObjectStore {
+    /// Store error type carrying the [`StoreError`] classification.
     type Error: StoreError;
 
     /// Store content of the given kind; the store computes and returns its
@@ -150,6 +153,7 @@ pub enum DiscardOutcome {
 /// `Error: Debug` themselves — Debug is the rendering bound, and
 /// nothing requires human-facing display of a store failure.
 pub trait DiscardRejectedRepresentation {
+    /// Store error type carrying the [`StoreError`] classification.
     type Error: StoreError;
 
     /// Unlink the representation at `id` after confirming it still
@@ -281,8 +285,14 @@ pub struct MemoryObjectStore {
 /// insert. Reads and plain inserts cannot fail.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum MemoryStoreError {
+    /// Verified insert derived a different identity than expected.
     #[error("identity mismatch: expected {expected}, derived {derived}")]
-    IdentityMismatch { expected: String, derived: String },
+    IdentityMismatch {
+        /// Address the caller asked to store under.
+        expected: String,
+        /// Address derived from the supplied bytes.
+        derived: String,
+    },
 }
 
 impl StoreError for MemoryStoreError {}
@@ -408,8 +418,10 @@ pub struct SharedStore<S> {
 /// own error, or a poisoned lock (a holder panicked mid-operation).
 #[derive(Debug, Error)]
 pub enum SharedStoreError<E> {
+    /// Backing store failure.
     #[error("backing store failed: {0:?}")]
     Store(E),
+    /// Store lock poisoned by a panicked holder.
     #[error("store lock poisoned")]
     Lock,
 }

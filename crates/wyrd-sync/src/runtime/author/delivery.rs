@@ -1,3 +1,6 @@
+//! Outbox delivery: discharges pending announcement obligations
+//! through the mailbox. Verbatim resends first; stale obligations
+//! supersede durably rather than drifting.
 use std::collections::BTreeMap;
 
 use wyrd_format::{DeviceId, MembershipTransition, TransitionId};

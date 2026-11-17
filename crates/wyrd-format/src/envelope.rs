@@ -42,18 +42,25 @@ pub const HEADER_LEN: usize = 6;
 /// content; parsing it is the responsibility of the kind's own module.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Envelope {
+    /// Object kind carried as the envelope kind byte.
     pub kind: ObjectKind,
+    /// Kind-specific canonical payload bytes.
     pub payload: Vec<u8>,
 }
 
+/// Envelope framing failures: the header or kind byte is unusable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum EnvelopeError {
+    /// Input shorter than the `HEADER_LEN`-byte envelope header.
     #[error("input shorter than the {HEADER_LEN}-byte envelope header")]
     Truncated,
+    /// Magic bytes are not `"wyrd"`.
     #[error("bad magic: expected \"wyrd\"")]
     BadMagic,
+    /// Envelope version byte is not [`VERSION`].
     #[error("unknown envelope version {0:#04x}")]
     UnknownVersion(u8),
+    /// Kind byte names no [`ObjectKind`].
     #[error("unknown kind byte {0:#04x}")]
     UnknownKind(u8),
 }

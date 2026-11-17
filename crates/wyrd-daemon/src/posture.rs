@@ -98,7 +98,9 @@ pub fn now_unix() -> u64 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PassVerdict {
+    /// The last observed pass completed.
     Ok,
+    /// The last observed pass failed with a categorical class.
     Failed,
 }
 

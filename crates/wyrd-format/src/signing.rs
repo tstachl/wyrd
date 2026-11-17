@@ -26,8 +26,11 @@ use crate::{DriveId, MembershipTransition, Snapshot};
 /// proof — `0x02` continues the private sequence `0x00`/`0x01` above.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SignDomain {
+    /// Membership transition signing domain (`0x00`).
     MembershipTransitionV1,
+    /// Snapshot signing domain (`0x01`).
     SnapshotV1,
+    /// Owner-proof signing domain (`0x02`).
     OwnerProofV1,
 }
 

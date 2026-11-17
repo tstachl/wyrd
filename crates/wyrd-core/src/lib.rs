@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! Wyrd's embeddable local node: the drive's namespace, snapshots,
 //! mutations, materialization, and sync control, composed over
 //! `wyrd-sync` with no daemon process assumed — mobile hosts, CLIs, and

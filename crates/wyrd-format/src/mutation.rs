@@ -20,12 +20,21 @@ use thiserror::Error;
 /// Why a path string is not a valid tree path.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum PathError {
+    /// Path string is empty.
     #[error("path is empty")]
     Empty,
+    /// A `/`-separated component is empty (leading, trailing, doubled slash).
     #[error("path has an empty component (leading, trailing, or doubled separator)")]
     EmptyComponent,
+    /// Path exceeds [`MAX_PATH_DEPTH`] components.
     #[error("path is deeper than {max} components (got {depth})")]
-    TooDeep { depth: usize, max: usize },
+    TooDeep {
+        /// Observed component count.
+        depth: usize,
+        /// Maximum accepted component count.
+        max: usize,
+    },
+    /// A single component violates the [`Component`] rules.
     #[error("invalid path component: {0}")]
     Component(#[from] ComponentError),
 }
@@ -38,30 +47,47 @@ pub const MAX_PATH_DEPTH: usize = 256;
 /// A tree mutation failure. `E` is the object store's error type.
 #[derive(Debug, Error)]
 pub enum MutationError<E: std::fmt::Debug> {
+    /// Path string is not a valid tree path.
     #[error("invalid path: {0}")]
     Path(#[from] PathError),
+    /// Object store failure.
     #[error("object store failed: {0:?}")]
     Store(E),
+    /// Named tree object is absent from the store.
     #[error("tree {0} is not present in the store")]
     MissingTree(ContentId),
+    /// Tree payload fails canonical decoding.
     #[error("tree failed: {0}")]
     Tree(#[from] TreeError),
+    /// Expected directory entry is a file or symlink.
     #[error("{0:?} is not a directory")]
     NotADirectory(String),
+    /// Expected file entry is a directory.
     #[error("{0:?} is a directory")]
     IsDirectory(String),
+    /// Named entry does not exist.
     #[error("{0:?} does not exist")]
     NotFound(String),
+    /// Entry already exists where creation requires absence.
     #[error("{0:?} already exists")]
     AlreadyExists(String),
+    /// Owner-supplied identity mint failed.
     #[error("entry identity mint failed: {0}")]
     Mint(String),
+    /// Directory is not empty where emptiness is required.
     #[error("{0:?} is not empty")]
     DirectoryNotEmpty(String),
+    /// Rename is invalid (into own descendant, trailing-slash misuse).
     #[error("invalid rename: {0}")]
     InvalidRename(String),
+    /// Entry name does not match the path's final component.
     #[error("entry name {name:?} does not match the path component {path:?}")]
-    NameMismatch { path: String, name: String },
+    NameMismatch {
+        /// Final path component the entry was placed under.
+        path: String,
+        /// Name carried by the supplied entry.
+        name: String,
+    },
 }
 
 /// Insert or replace the entry at `path`, creating intermediate

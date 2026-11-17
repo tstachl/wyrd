@@ -1,3 +1,7 @@
+#![warn(missing_docs)]
+//! `wyrd` CLI binary: argument parsing and process orchestration over
+//! the daemon's public surface. All drive logic lives in `wyrd-core`
+//! and `wyrd-daemon`; this binary only composes them.
 use std::env;
 use std::path::PathBuf;
 

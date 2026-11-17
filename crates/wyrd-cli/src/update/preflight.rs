@@ -1,3 +1,7 @@
+//! Staged-binary preflight: runs the next binary's lock-free
+//! self-report and compares versions before the swap. Advisory only —
+//! a binary that cannot report is broken and refuses the swap here.
+//!
 use crate::CliError;
 use std::path::Path;
 use wyrd_format::envelope::VERSION as ENVELOPE_VERSION;

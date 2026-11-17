@@ -1,3 +1,7 @@
+//! Transaction orchestration: the full `wyrd update` flow from
+//! quiescence through staging, swap, and verify. Runs below secrets —
+//! credential paths forward to the verification child, never opened here.
+//!
 use crate::CliError;
 use std::path::{Path, PathBuf};
 use wyrd_sync::durable::{probe_lock, LockProbe};

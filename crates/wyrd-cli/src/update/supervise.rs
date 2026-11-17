@@ -1,3 +1,7 @@
+//! Supervision: runs the verification child against the staged
+//! binary and commits or rolls back. Owns the timeout that calls a
+//! wedged verification failed, never hung.
+//!
 use crate::CliError;
 use serde::{Deserialize, Serialize};
 use std::fs;

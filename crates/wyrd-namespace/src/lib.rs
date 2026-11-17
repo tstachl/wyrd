@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! Wyrd's provider-neutral namespace model: what the node publishes
 //! and what presentation backends serve, with no presentation type in
 //! the signatures.

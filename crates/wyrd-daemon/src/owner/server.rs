@@ -6,7 +6,7 @@
 //!
 //! Transport (OD-16-B option A): a `UnixListener` on a socket whose
 //! path derives from the drive directory
-//! ([`socket_path_for`]). One transport for macOS, Linux, and tests.
+//! ([`super::socket_path_for`]). One transport for macOS, Linux, and tests.
 //!
 //! Authentication (OD-16-B caveat): the peer credential's uid must
 //! equal the owner's uid at bind. A connected client holds full
@@ -543,7 +543,7 @@ impl OwnerService {
     }
 
     /// The bound App Group socket path, when
-    /// [`OwnerService::bind_with_group_container`] configured one.
+    /// `OwnerService::bind_with_group_container` configured one.
     pub fn group_socket_path(&self) -> Option<&Path> {
         self.group_socket_path.as_deref()
     }

@@ -56,6 +56,7 @@ pub fn wire_kind(kind: Kind) -> WireKind {
     }
 }
 
+/// Map `WireKind` back to its domain form.
 pub fn kind_from_wire(kind: WireKind) -> Kind {
     match kind {
         WireKind::File => Kind::File,
@@ -81,6 +82,7 @@ pub fn wire_attr(attr: &Attr) -> WireAttr {
     }
 }
 
+/// Map `WireAttr` back to its domain form.
 pub fn attr_from_wire(attr: WireAttr) -> Result<Attr, String> {
     Ok(Attr {
         kind: kind_from_wire(attr.kind),
@@ -149,6 +151,7 @@ pub fn wire_conflict_version(version: &ConflictVersion) -> WireConflictVersion {
     }
 }
 
+/// Map `WireNode` back to its domain form.
 pub fn node_from_wire(node: &WireNode) -> Result<Node, String> {
     match node {
         WireNode::File {
@@ -709,6 +712,7 @@ pub fn wire_file_identity(identity: &FileIdentity) -> WireFileIdentity {
     }
 }
 
+/// Map `WireFileIdentity` back to its domain form.
 pub fn file_identity_from_wire(identity: &WireFileIdentity) -> Result<FileIdentity, String> {
     let mut chunks = Vec::with_capacity(identity.chunks.len());
     for raw in &identity.chunks {
@@ -720,6 +724,7 @@ pub fn file_identity_from_wire(identity: &WireFileIdentity) -> Result<FileIdenti
         chunks,
     ))
 }
+/// Map `WireParentToken` back to its domain form, rejecting stale owner instances.
 pub fn parent_token_from_wire(
     token: &WireParentToken,
     owner_instance: u64,
@@ -734,6 +739,7 @@ pub fn parent_token_from_wire(
         token.counter,
     ))
 }
+/// Map `WireMutationKind` back to its domain form.
 pub fn mutation_kind_from_wire(
     kind: &WireMutationKind,
     owner_instance: u64,

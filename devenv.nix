@@ -158,6 +158,16 @@ in
       files = "\\.rs$";
       pass_filenames = false;
     };
+    # Mirrors the CI rustdoc lane (`rust.yaml` gates-fast: `rust-doc`):
+    # broken intra-doc links denied workspace-wide. RUSTDOCFLAGS (not
+    # RUSTFLAGS) carries the rustdoc lint.
+    rustdoc = {
+      enable = true;
+      name = "rustdoc";
+      entry = "bash -c 'RUSTDOCFLAGS=\"-D rustdoc::broken_intra_doc_links\" cargo doc --no-deps --workspace --color never'";
+      files = "\\.rs$";
+      pass_filenames = false;
+    };
     rustfmt.enable = true;
     nixpkgs-fmt.enable = true;
     commitizen.enable = true;

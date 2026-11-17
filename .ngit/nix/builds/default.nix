@@ -148,6 +148,20 @@ let
       "cargo clippy --workspace --all-targets --no-default-features --color never -- -D warnings";
   });
 
+  # Rustdoc broken-link gate: intra-doc links rot silently without
+  # it (docs batch: 76 warnings fixed). Denies broken links; the
+  # private-item links are fixed too, so both lints stay clean via
+  # plain `cargo doc` locally. RUSTDOCFLAGS (not RUSTFLAGS) carries
+  # the rustdoc lint.
+  rustDoc = craneLib.mkCargoDerivation (gateArgs // {
+    pname = "wyrd";
+    pnameSuffix = "-doc";
+    doCheck = false;
+    buildPhaseCargoCommand = ''
+      RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" cargo doc --no-deps --workspace --color never
+    '';
+  });
+
   # Nextest default profile: the PR gate.
   rustTests = craneLib.cargoNextest (gateArgs // {
     pname = "wyrd";
@@ -178,6 +192,7 @@ in
   rust-check-nomount = rustCheckNomount;
   rust-clippy-nomount = rustClippyNomount;
   rust-tests = rustTests;
+  rust-doc = rustDoc;
   rust-slow-tests = rustSlowTests;
   rust-doctests = rustDoctests;
 }

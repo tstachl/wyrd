@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! Wyrd's peer-to-peer replication layer, built on the iroh stack.
 //!
 //! Responsibilities (see `docs/contracts/sync-and-peers.md` for the design):

@@ -1,5 +1,9 @@
 # Retry policy
 
+Status: Descriptive. This documents the implemented retry policy in
+`wyrd-sync` (Specified, Implemented, Tested). The demand contract it
+serves is property 8 in `docs/design/fetch-on-open.md`.
+
 Roadmap item 2 (`Retry policy: failure ordering, dial/transfer split,
 route freshness`). All three items optimize correct behavior — the
 fair-share floor bounds dead-dial cost, cooling is correct, no

@@ -55,8 +55,11 @@ pub enum RecoveryStatus {
 /// whole, never descended into by selection.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecoveryPath {
+    /// The source root path name this row describes.
     pub path: String,
+    /// The source root entry at this path.
     pub entry: Entry,
+    /// What this row means for the operator.
     pub status: RecoveryStatus,
 }
 

@@ -27,8 +27,11 @@ use crate::live::PendingObligations;
 /// One live head: the merge identity, its epoch, and its author.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HeadSummary {
+    /// Merge identity of the live head.
     pub id: SnapshotId,
+    /// Epoch the head was authored in.
     pub epoch: u64,
+    /// Device that authored the head.
     pub author: DeviceId,
 }
 
@@ -61,12 +64,19 @@ impl HeadSummary {
 /// compilation here instead of silently disappearing from status.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct HeadClasses {
+    /// Heads advancing the view.
     pub eligible: usize,
+    /// Retained canonical history.
     pub canonical_history: usize,
+    /// Heads superseded by newer snapshots.
     pub superseded: usize,
+    /// Heads stranded with no live route.
     pub stranded: usize,
+    /// Heads voided by authorization.
     pub voided: usize,
+    /// Heads awaiting closure.
     pub pending: usize,
+    /// Heads rejected by authorization.
     pub rejected: usize,
 }
 

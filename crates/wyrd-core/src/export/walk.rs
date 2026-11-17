@@ -1,3 +1,7 @@
+//! Export walk: bounded traversal of the namespace view into a
+//! staging tree. Depth-bounded by the format's `MAX_PATH_DEPTH` and
+//! symlink-confined, so hostile trees cannot escape the export root.
+//!
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};

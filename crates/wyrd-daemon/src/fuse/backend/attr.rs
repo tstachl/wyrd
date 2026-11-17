@@ -124,7 +124,7 @@ where
     /// from: lets callers tell whether a pinned listing predates a
     /// publication. The mounted write path keys its cache
     /// invalidation on this. Same failure mapping as
-    /// [`dir_entries`](Self::dir_entries).
+    /// `dir_entries`.
     pub fn dir_generation(&self, fh: u64) -> Result<u64, fuser::Errno> {
         let directories = self.directories.read().map_err(|_| fuser::Errno::EIO)?;
         directories

@@ -29,10 +29,12 @@ impl DriveRootKey {
         Ok(DriveRootKey(bytes))
     }
 
+    /// Reconstruct a root key from raw bytes (keystore install flows).
     pub fn from_bytes(bytes: [u8; 32]) -> Self {
         DriveRootKey(bytes)
     }
 
+    /// The raw root key bytes. Callers must treat these as secret material.
     pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }

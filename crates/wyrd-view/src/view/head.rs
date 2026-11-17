@@ -1,3 +1,7 @@
+//! View heads: the verified-snapshot capability that lets a snapshot
+//! cross into the serving view. Unsafe by design — minting the proof
+//! token is an audited trust assertion, never an implicit conversion.
+
 use wyrd_format::Snapshot;
 
 /// A snapshot that may cross the head boundary: verification already

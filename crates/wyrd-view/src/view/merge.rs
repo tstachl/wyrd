@@ -1,3 +1,7 @@
+//! Head merge: per-path resolution over divergent view heads.
+//! Unanimous agreement serves, structural dir agreement merges, and
+//! anything else is a path conflict the presentation layer must surface.
+//!
 use wyrd_format::{ContentId, EntryIdentity};
 
 use super::{ConflictVersion, Node, ViewError};

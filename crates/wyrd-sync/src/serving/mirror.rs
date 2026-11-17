@@ -1,3 +1,5 @@
+//! Mirror source: serves only durably recorded representations.
+//! Backpressure at import keeps unbounded peers from growing memory.
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
@@ -22,6 +24,7 @@ use super::vault::VaultError;
 /// a full queue as not-ready so announcements never discharge over
 /// representations the mirror has not served.
 pub const MAX_MIRROR_QUEUE_ITEMS: usize = 64;
+/// Bound for the serving mirror write-through queue in bytes (see above).
 pub const MAX_MIRROR_QUEUE_BYTES: usize = 64 << 20;
 
 /// Retained vault bytes observed through replication: the ciphertext
@@ -95,11 +98,17 @@ impl MirrorAccounting {
 /// mirror store that cannot land what the vault holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MirrorStats {
+    /// Queued representations waiting for the drain task.
     pub queued_items: usize,
+    /// Queued representation bytes waiting for the drain task.
     pub queued_bytes: usize,
+    /// Item bound (`MAX_MIRROR_QUEUE_ITEMS`).
     pub capacity_items: usize,
+    /// Byte bound (`MAX_MIRROR_QUEUE_BYTES`).
     pub capacity_bytes: usize,
+    /// Imports refused by backpressure, lifetime total.
     pub rejected_full: u64,
+    /// Mirror imports that failed to land, lifetime total.
     pub failed_imports: u64,
 }
 

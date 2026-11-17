@@ -37,9 +37,13 @@ pub(crate) struct RawId([u8; 32]);
 /// string changes every identity derived with it — these are format constants.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ObjectKind {
+    /// File chunk bytes.
     Chunk,
+    /// Directory node payload.
     Tree,
+    /// Signed snapshot DAG node payload.
     Snapshot,
+    /// Content-to-storage mapping document payload.
     Manifest,
 }
 

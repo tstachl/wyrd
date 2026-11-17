@@ -34,6 +34,8 @@ pub const RECOVERY_FLAG: u8 = 0x01;
 /// Bits that must decode as zero. New flags take a new format version.
 pub const RESERVED_FLAG_MASK: u8 = !RECOVERY_FLAG;
 
+/// One signed snapshot DAG node committing a root tree to its authorizing
+/// membership state (see the module docs for the canonical layout).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Snapshot {
     /// Ordered parent SnapshotIds; empty only for the genesis snapshot.
@@ -62,14 +64,20 @@ pub struct Snapshot {
     pub signature: [u8; 64],
 }
 
+/// Snapshot decoding failures: truncation, trailing bytes, reserved flag
+/// bits, or wire counts beyond `u32`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum SnapshotError {
+    /// Payload shorter than the declared encoding.
     #[error("payload shorter than the declared encoding")]
     Truncated,
+    /// Payload holds bytes beyond the signature.
     #[error("payload holds bytes beyond the signature")]
     TrailingBytes,
+    /// Reserved flag bits are nonzero.
     #[error("reserved flag bits must be zero, got {0:#04x}")]
     ReservedFlags(u8),
+    /// A vector length exceeds the `u32` wire count.
     #[error("length {0} exceeds the u32 wire count")]
     CountOverflow(usize),
 }

@@ -33,8 +33,11 @@ use super::ControlError;
 /// to, and the 32-byte pinned Wyrd message digest itself.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignMessageRequest {
+    /// The operation domain authorizing this signature.
     pub domain: SignDomain,
+    /// The drive the digest belongs to.
     pub drive: DriveId,
+    /// The pinned 32-byte Wyrd message digest to sign.
     pub digest: [u8; 32],
 }
 
@@ -42,6 +45,7 @@ pub struct SignMessageRequest {
 /// Callers verify it against the expected signer key.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignMessageResponse {
+    /// The BIP-340 signature over the request digest.
     pub signature: [u8; 64],
 }
 

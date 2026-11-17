@@ -235,7 +235,7 @@ impl tracing::field::Visit for MessageProbe {
 /// CLI errors): stages, ids, errnos, latencies. They do record the
 /// drive and mountpoint paths as diagnostic metadata.
 ///
-/// Call first in [`mount`], before preflight or the session thread
+/// Call first in [`crate::commands::mount::mount`], before preflight or the session thread
 /// exists. The daemon binary serves exactly one mount per process, so
 /// the first install wins by design. A second init in the same process
 /// (tests sharing one test binary) reuses the installed subscriber and

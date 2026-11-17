@@ -92,21 +92,39 @@ pub fn classify(state: MaterializationState, local: bool) -> (RetentionPolicy, L
 /// failures surface unchanged.
 #[derive(Debug, thiserror::Error)]
 pub enum PolicyError {
+    /// A view read failed at the named drive path.
     #[error("view failed at {path}: {source}")]
-    View { path: String, source: ViewError },
+    View {
+        /// Drive path the view failed on.
+        path: String,
+        /// Underlying view failure.
+        source: ViewError,
+    },
     /// The path is conflicted across heads. Policy never picks a
     /// winner: resolve first, or address one version through the
     /// existing `path@N` lookup grammar (which arrives here as an
     /// ordinary file or dir).
     #[error("path {path} is conflicted across {versions} versions; resolve it or pin one version via path@N")]
-    Conflict { path: String, versions: usize },
+    Conflict {
+        /// Drive path carrying the conflict.
+        path: String,
+        /// Number of conflicting versions.
+        versions: usize,
+    },
     /// Evict refused: part of the subtree is pinned, and evicting
     /// around it would silently narrow an explicit retention promise.
     /// Unpin first. Nothing was committed.
     #[error("evict refused at {path}: {pinned} pinned objects still require retention; unpin them first")]
-    PinnedPresent { path: String, pinned: usize },
+    PinnedPresent {
+        /// Drive path that still holds pins.
+        path: String,
+        /// Pinned objects requiring retention.
+        pinned: usize,
+    },
+    /// Namespace deeper than the format path-depth limit.
     #[error("namespace deeper than the 256-component limit at {0}")]
     TooDeep(String),
+    /// Underlying engine failure.
     #[error("engine failed: {0}")]
     Engine(#[from] EngineError),
 }
@@ -221,13 +239,16 @@ pub struct FileResidency {
 /// report instead of making its semantics ambiguous.
 #[derive(Debug, Default, Clone)]
 pub struct ResidencyCensus {
+    /// Classified files, sorted by path.
     pub files: Vec<FileResidency>,
     /// Conflicted paths met during the walk: recorded, never
     /// traversed. One conflict costs a row, not the report — the
     /// mutating commands still refuse these paths outright, but a
     /// read-only report must survive the ordinary multi-head state.
     pub conflicts: Vec<String>,
+    /// Directories walked.
     pub dirs: u64,
+    /// Symlinks seen and skipped.
     pub symlinks_skipped: u64,
 }
 
@@ -280,7 +301,9 @@ pub const POLICY_STATUS_TRAVERSAL_BUDGET: usize = 4096;
 /// consumer must narrow the path or accept the aggregate as partial.
 #[derive(Debug)]
 pub struct BoundedCensus {
+    /// Census walked before the budget ran out.
     pub census: ResidencyCensus,
+    /// Whether the walk ran to completion.
     pub complete: bool,
 }
 
@@ -508,8 +531,11 @@ pub fn unheld_want_candidates<V: NamespaceView>(
 /// already-held ones so a repeated pin is observably a no-op.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PinReport {
+    /// Files walked.
     pub files: u64,
+    /// Directories walked.
     pub dirs: u64,
+    /// Symlinks seen and skipped.
     pub symlinks_skipped: u64,
     /// Chunk identities newly promised.
     pub pinned: u64,
@@ -562,8 +588,11 @@ pub fn pin_subtree<V: NamespaceView>(
 /// return them to `REMOTE_ONLY` policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UnpinReport {
+    /// Files walked.
     pub files: u64,
+    /// Directories walked.
     pub dirs: u64,
+    /// Symlinks seen and skipped.
     pub symlinks_skipped: u64,
     /// Pinned identities returned to cacheable policy.
     pub released: u64,
@@ -604,8 +633,11 @@ pub fn unpin_subtree<V: NamespaceView>(
 /// `REMOTE_ONLY` policy; bytes are never deleted (see below).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EvictReport {
+    /// Files walked.
     pub files: u64,
+    /// Directories walked.
     pub dirs: u64,
+    /// Symlinks seen and skipped.
     pub symlinks_skipped: u64,
     /// Identities returned to `REMOTE_ONLY` policy.
     pub released: u64,

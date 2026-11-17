@@ -4,7 +4,7 @@
 //! Discipline, inherited from the shell:
 //!
 //! - Non-owning client, never opens a drive directory: the menu
-//!   builds from [`registry::list_drives`], which validates paths
+//!   builds from [`crate::registry::list_drives`], which validates paths
 //!   and probes each owner socket with a bounded `liveness` read —
 //!   the same transport-level verdict the lifecycle view shows.
 //!   No store opens, no mutation path, no new wire bytes.
@@ -35,14 +35,19 @@ use super::registry::{DriveAvailability, RegistryState};
 /// The builder inserts the separator between the two sections.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TrayRow {
+    /// Menu item id: drive row, action id, or explanation row id.
     pub id: String,
+    /// Menu label: `{name} — {Available|Unavailable|Unknown}` for drives.
     pub label: String,
+    /// False for status lines (presentation only), true for the three actions.
     pub enabled: bool,
 }
 
 /// Menu action ids: the only events the tray handles.
 pub const TRAY_SETUP_ID: &str = "wyrd-set-up";
+/// Menu action id for the Show-window action: the only event the tray handles besides setup and quit.
 pub const TRAY_SHOW_ID: &str = "wyrd-show";
+/// Menu action id for the Quit action: drains in-flight operations per the graceful-shutdown rule, then exits.
 pub const TRAY_QUIT_ID: &str = "wyrd-quit";
 
 /// Frontend event the Set-up action emits: the window shows and the

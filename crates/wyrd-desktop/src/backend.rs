@@ -43,23 +43,35 @@ use wyrd_owner_client::{
 pub enum BackendError {
     /// No transport: the owner is down, which says nothing about any
     /// drive. Never an empty drive, never evidence about any request.
-    Unavailable { detail: String },
+    Unavailable {
+        /// Transport detail: why no socket answered, never drive contents.
+        detail: String,
+    },
     /// No terminal answer: the outcome is unknown. Reconnect — the
     /// broken connection poisons itself — then reconcile (re-read
     /// through the owner) before deciding whether retry is safe. A
     /// transport break alone never authorizes retry and never
     /// establishes failure.
-    Unconfirmed { op: String, detail: String },
+    Unconfirmed {
+        /// Operation name at dispatch, for the reconnect-then-reconcile decision.
+        op: String,
+        /// Why no terminal answer arrived; outcome unknown by definition.
+        detail: String,
+    },
     /// The owner answered with a defined refusal. Terminal: the
     /// request did not commit and will not commit on retry unless the
     /// caller changes what it asked for.
     Refused {
+        /// Owner refusal code and message, carried through untouched.
         #[serde(flatten)]
         error: WireError,
     },
     /// The peer does not speak this wire version or answered an
     /// operation with a result shape that operation never produces.
-    Incompatible { detail: String },
+    Incompatible {
+        /// Protocol mismatch detail: version skew or unexpected result shape.
+        detail: String,
+    },
 }
 
 impl std::fmt::Display for BackendError {

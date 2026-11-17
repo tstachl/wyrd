@@ -1,3 +1,6 @@
+//! Conflict resolution: authors the resolution snapshot over
+//! conflicted paths. Read-only classification first; authoring only
+//! on an explicit resolver selection.
 use std::collections::HashSet;
 
 use wyrd_format::membership::{

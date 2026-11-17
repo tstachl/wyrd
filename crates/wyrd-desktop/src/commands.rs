@@ -313,7 +313,9 @@ pub async fn drive_settings<R: Runtime>(app: AppHandle<R>, drive_dir: String) ->
 /// lifecycle state.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ProvisionReport {
+    /// Operation outcome: exit codes only, never lifecycle state.
     pub result: super::provision::ProvisionResult,
+    /// Registry re-read plus per-drive socket probe taken after the process completed.
     pub observed: RegistryState,
     /// The operated drive's membership as the owner reports it now:
     /// the tip epoch and member count from a terminal `observe`
@@ -327,7 +329,9 @@ pub struct ProvisionReport {
 /// operation: terminal owner answer only, never guessed.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct MembershipObservation {
+    /// Membership tip epoch at re-observation, absent where the owner did not answer.
     pub epoch: Option<u64>,
+    /// Member count in the terminal `observe` answer.
     pub known_members: usize,
 }
 
@@ -339,13 +343,21 @@ pub struct MembershipObservation {
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProvisionCreateArgs {
+    /// Registry entry name, 1–58 chars of `[a-z0-9-]`.
     pub name: String,
+    /// Absolute drive directory as an exact string.
     pub drive_dir: String,
+    /// Relays for the managed service; empty is refused before anything is created.
     pub relays: Vec<String>,
+    /// Credential path, never contents.
     pub identity_file: String,
+    /// Credential path, never contents.
     pub passphrase_file: String,
+    /// Service mode display string: `vault` or `mount`.
     pub mode: String,
+    /// FUSE mountpoint: required in `mount` mode, refused in `vault` mode.
     pub mountpoint: Option<String>,
+    /// Register only: skip installing, enabling, and starting the service.
     pub no_service: bool,
 }
 
@@ -354,14 +366,23 @@ pub struct ProvisionCreateArgs {
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProvisionJoinArgs {
+    /// Registry entry name, 1–58 chars of `[a-z0-9-]`.
     pub name: String,
+    /// Absolute drive directory as an exact string.
     pub drive_dir: String,
+    /// Relays for the managed service; empty is refused before anything is created.
     pub relays: Vec<String>,
+    /// Credential path, never contents.
     pub identity_file: String,
+    /// Credential path, never contents.
     pub passphrase_file: String,
+    /// Sealed invitation file path, selected out-of-band.
     pub invitation_file: String,
+    /// Service mode display string: `vault` or `mount`.
     pub mode: String,
+    /// FUSE mountpoint: required in `mount` mode, refused in `vault` mode.
     pub mountpoint: Option<String>,
+    /// Register only: skip installing, enabling, and starting the service.
     pub no_service: bool,
 }
 
@@ -370,9 +391,13 @@ pub struct ProvisionJoinArgs {
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProvisionLeaveArgs {
+    /// Absolute drive directory as an exact string.
     pub drive_dir: String,
+    /// Credential path, never contents.
     pub identity_file: String,
+    /// Credential path, never contents.
     pub passphrase_file: String,
+    /// Sole-owner terminal confirmation carried to the `--yes` boundary.
     pub acknowledged: bool,
 }
 
@@ -521,12 +546,19 @@ pub async fn provision_leave<R: Runtime>(
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProvisionReconfigureArgs {
+    /// Absolute drive directory as an exact string.
     pub drive_dir: String,
+    /// Replacement relays when non-empty; empty keeps the registered set.
     pub relays: Vec<String>,
+    /// Credential path, never contents.
     pub identity_file: String,
+    /// Credential path, never contents.
     pub passphrase_file: String,
+    /// Service mode display string: `vault` or `mount`.
     pub mode: String,
+    /// FUSE mountpoint: required in `mount` mode, refused in `vault` mode.
     pub mountpoint: Option<String>,
+    /// Rewrite the entry without installing any OS service.
     pub no_service: bool,
 }
 
@@ -581,6 +613,7 @@ pub async fn provision_reconfigure<R: Runtime>(
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProvisionServiceStartArgs {
+    /// Absolute drive directory as an exact string.
     pub drive_dir: String,
 }
 
@@ -660,8 +693,11 @@ pub async fn onboarding_new_passphrase<R: Runtime>(
 #[derive(Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OnboardingCommitArgs {
+    /// Credential path, never contents.
     pub identity_file: String,
+    /// Credential path, never contents.
     pub passphrase_file: String,
+    /// Passphrase text piped to the CLI on stdin, never argv.
     pub passphrase: String,
 }
 
@@ -706,7 +742,9 @@ pub async fn onboarding_commit<R: Runtime>(
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OnboardingVerifyArgs {
+    /// Credential path, never contents.
     pub identity_file: String,
+    /// Credential path, never contents.
     pub passphrase_file: String,
 }
 
@@ -741,7 +779,9 @@ pub async fn onboarding_verify<R: Runtime>(
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OnboardingAdoptArgs {
+    /// Credential path, never contents.
     pub identity_file: String,
+    /// Credential path, never contents.
     pub passphrase_file: String,
 }
 
@@ -776,6 +816,7 @@ pub async fn onboarding_adopt<R: Runtime>(
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RevealArgs {
+    /// One path to show in the platform file manager.
     pub path: String,
 }
 

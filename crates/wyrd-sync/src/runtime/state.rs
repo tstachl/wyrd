@@ -1,3 +1,6 @@
+//! Durable runtime state: the plain-data ledger of observed control
+//! messages, snapshot announcements, manifests, and fetch backlog.
+//! Persisted elsewhere; the engine never pulls transport in here.
 use std::collections::{BTreeMap, BTreeSet};
 
 use thiserror::Error;
@@ -119,22 +122,46 @@ pub struct RuntimeState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+/// Runtime-state record rejections: conflicting or unverifiable records fail closed.
 pub enum RuntimeError {
+    /// Two announcements disagree over the same snapshot id.
     #[error("conflicting snapshot announcement for {snapshot}")]
-    ConflictingAnnouncement { snapshot: SnapshotId },
+    ConflictingAnnouncement {
+        /// The snapshot id with conflicting announcements.
+        snapshot: SnapshotId,
+    },
+    /// The snapshot body disagrees with its accepted announcement.
     #[error("snapshot body {snapshot} disagrees with its accepted announcement")]
-    AnnouncementBodyMismatch { snapshot: SnapshotId },
+    AnnouncementBodyMismatch {
+        /// The snapshot id whose body mismatches.
+        snapshot: SnapshotId,
+    },
+    /// Two records disagree over the same manifest id.
     #[error("conflicting manifest record for {manifest}")]
-    ConflictingManifest { manifest: ContentId },
+    ConflictingManifest {
+        /// The manifest id with conflicting records.
+        manifest: ContentId,
+    },
+    /// A child manifest names multiple owning snapshots.
     #[error("child manifest {manifest} has multiple owning snapshots")]
-    ConflictingChildParent { manifest: ContentId },
+    ConflictingChildParent {
+        /// The child manifest id with conflicting parents.
+        manifest: ContentId,
+    },
+    /// The recorded manifest id does not match the derived content id.
     #[error("manifest id {manifest} does not match derived content id {derived}")]
     ManifestIdentityMismatch {
+        /// The recorded manifest id.
         manifest: ContentId,
+        /// The content id derived from the manifest bytes.
         derived: ContentId,
     },
+    /// A manifest names a transport root with no recorded representation.
     #[error("manifest {manifest} names a transport root with no recorded representation")]
-    TransportNotRepresented { manifest: ContentId },
+    TransportNotRepresented {
+        /// The manifest id with the unrepresented transport root.
+        manifest: ContentId,
+    },
 }
 
 impl RuntimeState {

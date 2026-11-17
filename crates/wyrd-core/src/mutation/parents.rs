@@ -1,3 +1,7 @@
+//! Parent tokens and commit-base identity: session-local create tokens
+//! plus the `FileIdentity` a writable handle opened against. Commits
+//! compare the full identity and refuse `Stale` rather than merging.
+//!
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;

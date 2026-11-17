@@ -53,7 +53,7 @@ impl WakeSignal {
     /// Block until poked, stopped, or the deadline elapses. A poke that
     /// lands before the wait is consumed by it, never lost; a stop
     /// always wins over a pending poke. The wait re-checks the stop flag
-    /// every [`STOP_POLL_SLICE`], so a signal-handler trip (which cannot
+    /// every `STOP_POLL_SLICE`, so a signal-handler trip (which cannot
     /// notify the condvar) still cancels promptly.
     pub fn wait(&self, stop: &AtomicBool, timeout: Duration) -> Wake {
         let deadline = std::time::Instant::now() + timeout;

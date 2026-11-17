@@ -262,6 +262,8 @@ pub enum CompositionError {
     QuotaWithoutAccountant,
 }
 
+/// Live loop composition: pacing, backoff, and resource bounds for
+/// [`crate::live::LiveNode::split`] and [`crate::live::LiveNode::run_loop`].
 pub struct LiveConfig {
     /// Idle pacing deadline between passes: the staleness bound, not a
     /// poll interval. Producers (mutation submissions, mailbox intake,

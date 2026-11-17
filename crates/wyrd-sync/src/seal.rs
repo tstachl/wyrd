@@ -49,9 +49,13 @@ pub const SEAL_TAG_LEN: usize = 16;
 /// no paths, no structure, only version, kind, nonce, and ciphertext.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EncryptedObject {
+    /// The sealed envelope version (only `SEAL_VERSION` opens).
     pub version: u8,
+    /// The object kind named by the seal.
     pub kind: ObjectKind,
+    /// The fresh XChaCha20-Poly1305 nonce for this seal.
     pub nonce: [u8; 24],
+    /// The AEAD ciphertext plus tag.
     pub ciphertext: Vec<u8>,
 }
 
@@ -60,15 +64,17 @@ pub struct EncryptedObject {
 /// not a crypto failure, and the caller learns which.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum SealError {
+    /// Sealed-object crypto failed (tag, header, or identity check).
     #[error("sealed-object crypto failed")]
     Crypto(#[from] CryptoError),
+    /// The decrypted bytes are not a canonical manifest.
     #[error("decrypted bytes are not a canonical manifest")]
     Manifest(#[from] ManifestError),
 }
 
 impl EncryptedObject {
     /// The canonical sealed bytes: `version ‖ kind ‖ nonce ‖ ciphertext`.
-    /// [`storage_id`] is defined over exactly these bytes.
+    /// [`Self::storage_id`] is defined over exactly these bytes.
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(SEAL_HEADER_LEN + self.ciphertext.len());
         out.push(self.version);

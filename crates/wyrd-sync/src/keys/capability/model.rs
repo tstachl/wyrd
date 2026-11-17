@@ -5,10 +5,10 @@
 //! drive, bound to the membership transition that admits them. The
 //! **wrapped** form travels the Nostr mailbox:
 //!
-//! ```text
+//! ``text
 //! ephemeral pk (32) || DriveId (32) || device (32) || encryption key (32)
 //!   || transition id (32) || up_to_epoch (u64) || nonce (24) || AEAD ct+tag
-//! ```
+//! ``
 //!
 //! The clear header carries the AAD inputs so the recipient can recompute
 //! the AAD before opening; the plaintext inside carries the same fields
@@ -63,30 +63,53 @@ pub struct Capability {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
+/// Capability construction, binding, and authorization failures.
 pub enum CapabilityError {
     #[error("capability declares epoch {declared} but carries {carried} secrets")]
-    EpochMismatch { declared: u64, carried: u64 },
+    /// The declared epoch disagrees with the carried secret count.
+    EpochMismatch {
+        /// The epoch the capability declares.
+        declared: u64,
+        /// The secret count the capability carries.
+        carried: u64,
+    },
     #[error("a capability must cover at least epoch 1")]
+    /// The capability carries no secrets; epoch 1 is the minimum.
     Empty,
     #[error("the claimed encryption key is not a valid secp256k1 x-only key")]
+    /// The claimed encryption key is not a valid secp256k1 x-only key.
     InvalidEncryptionKey,
     #[error("the claimed device is not a valid secp256k1 x-only key")]
+    /// The claimed device is not a valid secp256k1 x-only key.
     InvalidDevice,
     #[error("device is not a member of this membership state")]
+    /// The device is not a member of the authorizing state.
     NotAMember,
     #[error("capability targets an encryption key that is not the device's registered key")]
+    /// The capability targets a key that is not the device's registered key.
     StaleEncryptionKey,
     #[error("capability is bound to transition {found} but authorized against {expected}")]
+    /// The capability binds a different transition than the one authorizing it.
     TransitionMismatch {
+        /// The transition the authorization names.
         expected: TransitionId,
+        /// The transition the capability is bound to.
         found: TransitionId,
     },
     #[error("capability is bound to transition {0}, which is unobserved or still pending")]
+    /// The authorizing transition is unobserved or still pending: defer, never suppress.
     UnknownTransition(TransitionId),
     #[error("capability is bound to transition {0}, which is observed but can never authorize")]
+    /// The authorizing transition is observed but can never authorize: suppress.
     UnauthorizableTransition(TransitionId),
     #[error("capability targets drive {found} but is authorized for {expected}")]
-    DriveMismatch { expected: DriveId, found: DriveId },
+    /// The capability targets a different drive than the one authorizing it.
+    DriveMismatch {
+        /// The drive authorizing the capability.
+        expected: DriveId,
+        /// The drive the capability targets.
+        found: DriveId,
+    },
 }
 
 impl Capability {
@@ -404,6 +427,7 @@ impl WrappedCapability {
         &self.bytes
     }
 
+    /// Rebuild a sealed capability from stored bytes; structure is checked at unwrap.
     pub fn from_bytes(bytes: Vec<u8>) -> Self {
         WrappedCapability { bytes }
     }
@@ -422,16 +446,22 @@ pub struct DriveKeyring {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
+/// Keyring install routing and authorization failures.
 pub enum InstallError {
     #[error("capability is for drive {0}, keyring holds {1}")]
+    /// The capability names a different drive than this keyring.
     WrongDrive(String, String),
     #[error("capability is for device {0}, keyring holds {1}")]
+    /// The capability names a different device than this keyring.
     WrongDevice(String, String),
     #[error("capability is not authorized: {0}")]
+    /// The capability failed the authorization predicate.
     Unauthorized(#[from] CapabilityError),
     #[error("two capabilities disagree about the secret for epoch {0}")]
+    /// Two capabilities disagree about an already-held epoch's secret.
     EpochConflict(u64),
     #[error("crypto operation failed")]
+    /// The wrap or unwrap crypto operation failed.
     Crypto(#[from] CryptoError),
 }
 
@@ -441,10 +471,16 @@ pub enum InstallReport {
     /// Every epoch was already held with the same secret: replay, no-op.
     NoChange,
     /// Secrets added for the inclusive epoch range.
-    Added { from: u64, to: u64 },
+    Added {
+        /// The first newly-held epoch.
+        from: u64,
+        /// The last newly-held epoch.
+        to: u64,
+    },
 }
 
 impl DriveKeyring {
+    /// An empty keyring for one device on one drive.
     pub fn new(drive: DriveId, device: DeviceId) -> Self {
         DriveKeyring {
             drive,
@@ -453,10 +489,12 @@ impl DriveKeyring {
         }
     }
 
+    /// The drive this keyring holds secrets for.
     pub fn drive(&self) -> &DriveId {
         &self.drive
     }
 
+    /// The device this keyring holds secrets for.
     pub fn device(&self) -> &DeviceId {
         &self.device
     }
@@ -476,7 +514,7 @@ impl DriveKeyring {
     /// device are rejected before anything else.
     ///
     /// This is the strict reference predicate: no live path calls it
-    /// (replay installs through [`DriveKeyring::install_vacant`]).
+    /// (replay installs through `DriveKeyring::install_vacant`).
     /// Its callers are the unit, property, and codec suites that pin
     /// the authorization boundary itself.
     pub fn install(

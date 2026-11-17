@@ -54,10 +54,15 @@ use crate::view::{ConfinementError, ViewError};
 /// What one export produced, for logs and tests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ExportReport {
+    /// Files written to the export tree.
     pub files: u64,
+    /// Directories written to the export tree.
     pub dirs: u64,
+    /// Symlinks recreated in the export tree.
     pub symlinks: u64,
+    /// Multi-head conflicts materialized as versioned siblings.
     pub conflicts: u64,
+    /// Total file bytes written.
     pub bytes: u64,
 }
 
@@ -66,30 +71,50 @@ pub struct ExportReport {
 /// obstacle so a failed export is actionable, never a bare errno.
 #[derive(Debug, thiserror::Error)]
 pub enum ExportError {
+    /// Destination exists and is not empty; nothing was written.
     #[error("destination {0} exists and is not empty")]
     DestinationNotEmpty(PathBuf),
+    /// A view read failed at the named drive path.
     #[error("view failed at {path}: {source}")]
-    View { path: String, source: ViewError },
+    View {
+        /// Drive path the view failed on.
+        path: String,
+        /// Underlying view failure.
+        source: ViewError,
+    },
+    /// A filesystem write failed.
     #[error("{path}: {source}")]
     Io {
+        /// Filesystem path the write failed on.
         path: PathBuf,
+        /// Underlying I/O failure.
         source: std::io::Error,
     },
+    /// A stored name collides with a versioned sibling.
     #[error("export name collision at {0}: a stored name meets a versioned sibling")]
     NameCollision(PathBuf),
+    /// A symlink cannot be proven confined and is refused.
     #[error("symlink at {path} cannot be proven confined and is refused: {source}")]
     Symlink {
+        /// Drive path of the refused symlink.
         path: String,
+        /// Confinement failure.
         source: ConfinementError,
     },
+    /// Served bytes disagree with the declared file size.
     #[error("{path}: served {actual} bytes for a {expected}-byte file")]
     SizeMismatch {
+        /// Drive path of the mismatched file.
         path: String,
+        /// Declared file size.
         expected: u64,
+        /// Bytes actually served.
         actual: u64,
     },
+    /// Namespace deeper than the format path-depth limit.
     #[error("namespace deeper than the 256-component limit at {0}")]
     TooDeep(String),
+    /// Symlinks are not supported on this platform.
     #[error("symlinks are not supported on this platform")]
     SymlinkUnsupported,
 }

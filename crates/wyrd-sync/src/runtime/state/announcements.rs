@@ -16,11 +16,17 @@ use crate::durable::ReconciliationEvidence;
 /// never have to infer the arithmetic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct OutboxTotals {
+    /// Queued announcement obligations.
     pub announcements_queued: usize,
+    /// Delivered announcement obligations.
     pub announcements_delivered: usize,
+    /// Queued transition obligations.
     pub transitions_queued: usize,
+    /// Delivered transition obligations.
     pub transitions_delivered: usize,
+    /// Queued capability obligations.
     pub capabilities_queued: usize,
+    /// Delivered capability obligations.
     pub capabilities_delivered: usize,
 }
 

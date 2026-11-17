@@ -1,3 +1,7 @@
+//! Verification child: opens the drive without disturbing the live
+//! owner and runs the compatibility checks. The only update path that
+//! opens custody — the parent forwards credential paths, never secrets.
+//!
 use crate::CliError;
 use std::path::Path;
 use wyrd_format::envelope::VERSION as ENVELOPE_VERSION;

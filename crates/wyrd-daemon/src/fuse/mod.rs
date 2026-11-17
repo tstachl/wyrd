@@ -1,5 +1,5 @@
-//! FUSE presentation backend, split by concern: [`inode`] owns the
-//! inode table and open-state tracking, and [`backend`] maps kernel
+//! FUSE presentation backend, split by concern: `inode` owns the
+//! inode table and open-state tracking, and `backend` maps kernel
 //! ops onto the daemon's [`DriveView`](wyrd_view::DriveView) — itself
 //! split by area (`setup`, `projection`, `handles`, `read`, `write`,
 //! `fold`, `attr`, `ops`). Behavior tests live alongside, one file

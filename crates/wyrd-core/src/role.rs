@@ -57,6 +57,7 @@ impl Role {
         }
     }
 
+    /// The canonical word for this role in files and status.
     pub fn word(self) -> &'static str {
         match self {
             Role::Mirror => "mirror",
@@ -120,7 +121,9 @@ impl Transition {
 /// role directly, or an acknowledged narrowing would silently prune.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RoleState {
+    /// Configured role.
     pub role: Role,
+    /// In-flight narrowing, if any.
     pub transition: Transition,
 }
 
@@ -258,15 +261,24 @@ pub fn store(drive_dir: &Path, state: RoleState) -> Result<(), RoleError> {
     Ok(())
 }
 
+/// Role-file failures: unknown words, torn content, or I/O.
 #[derive(Debug, thiserror::Error)]
 pub enum RoleError {
+    /// Unknown role word.
     #[error("unknown role {0:?}: want \"mirror\" or \"vault\"")]
     UnknownRole(String),
+    /// Present but unparseable role file.
     #[error("unreadable role file: {detail}")]
-    Malformed { detail: String },
+    Malformed {
+        /// What was wrong with the file.
+        detail: String,
+    },
+    /// Filesystem failure reading or writing the role file.
     #[error("{path}: {source}")]
     Io {
+        /// Role file path.
         path: PathBuf,
+        /// Underlying I/O failure.
         source: std::io::Error,
     },
 }

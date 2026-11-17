@@ -63,10 +63,11 @@ use crate::store::{
 /// Resource conditions are their own variants, never strings inside
 /// [`FsStoreError::Io`]: callers branch on them (fail the sync pass
 /// fast, `ENOSPC`/`EACCES` at the mount) instead of matching rendered
-/// error text. Classification happens once, in [`FsStoreError::io`],
+/// error text. Classification happens once, in `FsStoreError::io`,
 /// so every call site inherits it.
 #[derive(Debug, Error)]
 pub enum FsStoreError {
+    /// Underlying filesystem I/O failure carrying the rendered detail.
     #[error("filesystem error: {0}")]
     Io(String),
     /// The disk (or quota) is full: [`std::io::ErrorKind::StorageFull`]
@@ -298,7 +299,7 @@ impl FsObjectStore {
     /// `ENOSPC`" into a diagnosis at boot.
     ///
     /// Read-only on purpose, and deliberately a separate walk from
-    /// [`Self::sweep`]. Merging them would make this query delete `.tmp`
+    /// `Self::sweep`. Merging them would make this query delete `.tmp`
     /// debris, which no reader of a byte count expects and which would
     /// contradict the store's stated rule that only `open` removes temps.
     /// It serves the quota and accounting path: the live config checks it

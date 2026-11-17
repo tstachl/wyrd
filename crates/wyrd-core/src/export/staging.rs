@@ -1,3 +1,7 @@
+//! Export staging: the crash-safe container a walk fills before the
+//! atomic rename into place. A heartbeat file distinguishes crashed
+//! runs (safe to sweep) from live ones (never touched).
+//!
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};

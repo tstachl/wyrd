@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! Wyrd's core object model: two identity worlds, canonical encoding,
 //! content-defined chunking, Merkle file trees, and the snapshot DAG.
 //!
@@ -8,7 +9,7 @@
 //! normative v0 format contract.
 //!
 //! Wire counts are `u32`: every narrowing length cast must go through the
-//! checked [`identity::u32_len`] helper (or an explicit `try_from`) so
+//! checked `identity::u32_len` helper (or an explicit `try_from`) so
 //! oversized counts fail loudly instead of truncating silently. CI denies
 //! warnings, so this lint gates future casts.
 

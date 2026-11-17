@@ -148,7 +148,7 @@ impl Engine {
     /// Join a drive as an invited device: open the owner's sealed
     /// invitation, commit its genesis, and install the invited epoch
     /// control keys so the first mailbox drain can open the catch-up
-    /// set. See [`bootstrap::accept_invitation`] for the trust
+    /// set. See `bootstrap::accept_invitation` for the trust
     /// reasoning. The admission transition and the capability's
     /// authorization arrive through the normal intake path afterwards —
     /// this call commits no capability fact.
@@ -164,7 +164,7 @@ impl Engine {
 
     /// Stage (or reuse) this device's pairing secret and return the
     /// public pairing material for the owner. See
-    /// [`bootstrap::pairing_request`]: re-running returns the
+    /// `bootstrap::pairing_request`: re-running returns the
     /// same key, never a fresh one.
     pub fn pairing_request(
         dir: &Path,
@@ -177,7 +177,7 @@ impl Engine {
     /// Join a drive from the staged pairing secret plus the owner's
     /// sealed invitation: member custody persists before the accept
     /// commits, so the joined device reopens afterwards. See
-    /// [`bootstrap::join`] for the ordering and refusal rules.
+    /// `bootstrap::join` for the ordering and refusal rules.
     pub fn join(
         dir: PathBuf,
         passphrase: &str,
@@ -190,7 +190,7 @@ impl Engine {
     /// Reissue a device's sealed invitation from durable state: the
     /// recovery path for an admission whose invitation never reached
     /// a file. Authors nothing; see
-    /// [`author::reissue_invitation`].
+    /// `author::reissue_invitation`.
     pub fn reissue_invitation(
         &self,
         device: DeviceId,
@@ -202,7 +202,7 @@ impl Engine {
     /// admission transition (exactly one new epoch), install the new
     /// epoch's self capability, and return the signed transition plus
     /// the sealed invitation for out-of-band delivery to the newcomer.
-    /// Only an owner admits. See [`author::admit_device`].
+    /// Only an owner admits. See `author::admit_device`.
     pub fn admit_device(
         &mut self,
         device: DeviceId,
@@ -216,7 +216,7 @@ impl Engine {
     /// invitation, capability grant, and catch-up are identical — the
     /// role lives in the membership log, and the authorship gates
     /// (local and peer) enforce it from there. Only an owner admits.
-    /// See [`author::admit_reader`].
+    /// See `author::admit_reader`.
     pub fn admit_reader(
         &mut self,
         device: DeviceId,
@@ -232,7 +232,7 @@ impl Engine {
     /// catch-up fill, and reissue its invitation. The operator
     /// surface for `member invite` reruns after a crash between the
     /// membership commit and a complete fill. See
-    /// [`author::resume_admission`].
+    /// `author::resume_admission`.
     pub fn resume_admission(
         &mut self,
         device: DeviceId,
@@ -248,7 +248,7 @@ impl Engine {
     /// queue catch-up for the remaining members and readers. The
     /// removed device — member or reader — receives no new-epoch
     /// material. Only an owner removes; removing the sole owner is
-    /// valid but terminal. See [`author::remove_device`].
+    /// valid but terminal. See `author::remove_device`.
     pub fn remove_device(&mut self, device: DeviceId) -> Result<MembershipTransition, EngineError> {
         author::remove_device(self, device)
     }
@@ -257,7 +257,7 @@ impl Engine {
     /// rotation transition (exactly one new epoch), reinstall the new
     /// epoch's self capability, and queue catch-up for every other
     /// admitted device. Membership is unchanged. Only an owner rotates. See
-    /// [`author::rotate_epoch`].
+    /// `author::rotate_epoch`.
     pub fn rotate_epoch(&mut self) -> Result<MembershipTransition, EngineError> {
         author::rotate_epoch(self)
     }
@@ -267,7 +267,7 @@ impl Engine {
     /// epoch's self capability when this device remains a member, and
     /// queue catch-up for the remaining members. v0 ownership is a
     /// singleton. Only the current owner hands over, and only to a
-    /// member. See [`author::set_owners`].
+    /// member. See `author::set_owners`.
     pub fn set_owners(&mut self, new_owner: DeviceId) -> Result<MembershipTransition, EngineError> {
         author::set_owners(self, new_owner)
     }
@@ -277,7 +277,7 @@ impl Engine {
     /// and exactly the voided siblings in `resolves` (one new epoch,
     /// membership unchanged apart from the voiding). Only an owner
     /// resolves, and only a live contender wins. See
-    /// [`author::resolve_conflict`].
+    /// `author::resolve_conflict`.
     pub fn resolve_conflict(
         &mut self,
         winner: TransitionId,

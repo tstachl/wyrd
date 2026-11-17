@@ -21,7 +21,9 @@ pub const MAX_CHUNK: usize = 256 * 1024;
 /// One content-addressed chunk of a file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Chunk {
+    /// Content-derived identity of `bytes` under the chunk context.
     pub id: ContentId,
+    /// Raw file bytes of this chunk.
     pub bytes: Vec<u8>,
 }
 

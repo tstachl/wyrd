@@ -89,37 +89,54 @@ pub const CONTROL_VERSION: u8 = 0x00;
 pub const CONTROL_HEADER_LEN: usize = 66;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+/// Control-plane decode, open, and verification failures.
 pub enum ControlError {
     #[error("payload shorter than the declared encoding")]
+    /// Bytes end before the declared encoding.
     Truncated,
     #[error("payload holds bytes beyond the message")]
+    /// Bytes remain past the end of the message.
     TrailingBytes,
     #[error("unknown control kind byte {0:#04x}")]
+    /// Unrecognized control kind tag byte.
     UnknownKind(u8),
     #[error("unknown control envelope version {0:#04x}")]
+    /// Unrecognized control envelope version.
     UnknownVersion(u8),
     #[error("unknown signer domain byte {0:#04x}")]
+    /// Unrecognized signer domain byte.
     UnknownSignDomain(u8),
     #[error("message is for another drive")]
+    /// The message names a different drive than this inbox.
     WrongDrive,
     #[error("owner signature does not verify")]
+    /// An author signature failed verification.
     BadSignature,
     #[error("author bytes are not a valid BIP-340 public key")]
+    /// Author bytes are not a valid BIP-340 public key.
     InvalidAuthorKey,
     #[error("no control key held for epoch {0}")]
+    /// No control key is held for this epoch.
     UnknownEpoch(u64),
     #[error("control crypto failed")]
+    /// AEAD open or header-agreement failure.
     Crypto(#[from] CryptoError),
 }
 
 /// The sealed, deliverable form of a control message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SealedControl {
+    /// The envelope version (pinned `CONTROL_VERSION`).
     pub version: u8,
+    /// The drive this sealed message belongs to.
     pub drive: DriveId,
+    /// The control-plane kind of the sealed payload.
     pub kind: ControlKind,
+    /// The epoch whose control key seals (and opens) this message.
     pub epoch: u64,
+    /// Fresh random AEAD nonce; the dedupe id covers it.
     pub nonce: [u8; 24],
+    /// The AEAD ciphertext over drive, kind, epoch, and payload.
     pub ciphertext: Vec<u8>,
 }
 
@@ -312,7 +329,9 @@ pub enum IngestReport {
     Duplicate,
     /// First sight of this message id.
     Accepted {
+        /// The dedupe id of the first-seen sealed bytes.
         id: ControlMessageId,
+        /// The opened control message.
         message: Message,
     },
 }

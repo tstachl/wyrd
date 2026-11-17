@@ -4,7 +4,7 @@
 //! The sync loop is the single writer: each pass either leaves the
 //! published projection untouched or replaces it wholesale with a new
 //! generation built from durable state. Backends clone the current
-//! [`Arc`](std::sync::Arc) under a short read lock and then serve
+//! [`Arc`] under a short read lock and then serve
 //! lock-free from immutable data, so publication is atomic (readers
 //! never observe a half-published projection) and readers never block
 //! each other on view content.
@@ -17,7 +17,7 @@
 //! no per-report predicate, so a future commit path cannot silently skip
 //! publication the way a report-counter gate could.
 //!
-//! Generic over [`NamespaceView`](crate::view::NamespaceView): the
+//! Generic over [`NamespaceView`]: the
 //! publication slot works against the provider-neutral read surface,
 //! never any one presentation's view type.
 

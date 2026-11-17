@@ -1,3 +1,7 @@
+//! Mutation batches: a drained set of queued writes that completes
+//! every request on drop. Unrecorded entries fail closed with
+//! `Engine` rather than stranding the submitter across passes.
+//!
 use std::sync::Arc;
 use std::time::Instant;
 

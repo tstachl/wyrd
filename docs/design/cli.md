@@ -1,5 +1,10 @@
 # `wyrd` CLI reference
 
+Status: Descriptive. This document mirrors the implemented CLI in
+`crates/wyrd-cli` (Specified, Implemented, Tested). Normative behavior
+lives in the contracts linked below; when this reference and the code
+disagree, the code wins and this document is stale.
+
 The `wyrd` process host (`crates/wyrd-cli`): argument parsing,
 credential files, mount orchestration, diagnostics, and exit codes
 over the daemon's public surface. It never implements drive logic

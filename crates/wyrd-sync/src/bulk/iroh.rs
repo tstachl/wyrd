@@ -27,7 +27,9 @@ use super::{AttemptBudget, BulkError, BulkSource, SealedManifest};
 /// transport verification root; an explicit mapping is required between them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IrohBlobRef {
+    /// The provider endpoint serving this representation.
     pub provider: EndpointAddr,
+    /// The verified transport hash of the representation bytes.
     pub hash: [u8; 32],
 }
 
@@ -416,11 +418,17 @@ pub struct BulkFetchStats {
 /// diagnostics, tests, and the resume threshold.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct BulkFetchStatsSnapshot {
+    /// Total fetch attempts recorded.
     pub attempts: u64,
+    /// Attempts that expired in the dial phase.
     pub dial_timeouts: u64,
+    /// Attempts that expired in the transfer phase.
     pub transfer_timeouts: u64,
+    /// Attempts that fulfilled with bytes.
     pub fulfilled: u64,
+    /// Content bytes delivered by fulfilled attempts.
     pub fulfilled_bytes: u64,
+    /// Content bytes streamed by attempts that then failed.
     pub wasted_bytes: u64,
 }
 

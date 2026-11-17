@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! The non-owning side of the drive-owner interface: owned protocol
 //! types, the socket transport constants, and the shared Rust client.
 //! Every consumer in this language uses this client — Tauri first —

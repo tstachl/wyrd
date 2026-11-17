@@ -60,8 +60,11 @@ use wyrd_namespace::view::{Node, ViewError};
 /// screen, never a lookup key, never a version number.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BranchHead {
+    /// Snapshot identity of the diverged head.
     pub id: SnapshotId,
+    /// Epoch the head was authored in.
     pub epoch: u64,
+    /// Device that authored the head.
     pub author: DeviceId,
 }
 
@@ -102,8 +105,13 @@ impl BranchHead {
 /// none of the three divergences.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DivergenceState {
+    /// Zero or one eligible head: the drive has not diverged.
     Converged,
-    Diverged { branches: Vec<BranchHead> },
+    /// Two or more eligible heads, deduplicated by snapshot id.
+    Diverged {
+        /// Branches carrying the divergence.
+        branches: Vec<BranchHead>,
+    },
 }
 
 impl DivergenceState {
@@ -127,6 +135,7 @@ impl DivergenceState {
         }
     }
 
+    /// True when the state is `Diverged`.
     pub fn is_diverged(&self) -> bool {
         matches!(self, DivergenceState::Diverged { .. })
     }
@@ -154,8 +163,13 @@ pub fn render_indicator(state: &DivergenceState) -> String {
 /// authored. The remedy lives in member management, not here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FreezeState {
+    /// No freeze observed.
     Clear,
-    Frozen { epoch: u64 },
+    /// Frozen at the named epoch.
+    Frozen {
+        /// Frozen epoch.
+        epoch: u64,
+    },
 }
 
 impl FreezeState {
@@ -220,7 +234,9 @@ pub fn classify_node(node: &Node) -> NodeDivergence {
 /// [`describe_unavailable`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PathDifference {
+    /// Root path where the heads disagree.
     pub path: String,
+    /// Per-head presence cells, in plan order.
     pub cells: Vec<BranchCell>,
 }
 
@@ -229,7 +245,9 @@ pub struct PathDifference {
 /// the path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BranchCell {
+    /// Branch label for the column.
     pub head: String,
+    /// Whether this head holds an entry at the path.
     pub present: bool,
 }
 
@@ -240,18 +258,25 @@ pub struct BranchCell {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InspectionOutcome {
     /// Every differing root path, in plan (ascending) order.
-    Complete { differences: Vec<PathDifference> },
+    Complete {
+        /// Differing rows shown, in full.
+        differences: Vec<PathDifference>,
+    },
     /// Budget exhaustion (or a partial read): the rows shown so far
     /// plus the totals that prove the set is not complete. Renders
     /// with the incomplete marker, never as the whole set.
     Incomplete {
+        /// Rows shown before the budget ran out.
         shown: Vec<PathDifference>,
+        /// Total differing root paths, including unshown rows.
         total_differing: usize,
+        /// Row budget the walk was capped at.
         budget: usize,
     },
 }
 
 impl InspectionOutcome {
+    /// True when the outcome holds the complete differing set.
     pub fn is_complete(&self) -> bool {
         matches!(self, InspectionOutcome::Complete { .. })
     }

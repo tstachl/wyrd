@@ -112,8 +112,11 @@ impl EpochSecret {
 
 /// Pinned derivation contexts (trust.md): changing one changes every key
 /// ever derived with it — they are format constants.
+/// Pinned manifest derivation context: changing it changes every manifest key.
 pub const MANIFEST_KEY_CONTEXT: &str = "wyrd manifest key v1";
+/// Pinned object derivation context (trust.md): changing it changes every object key.
 pub const OBJECT_KEY_CONTEXT: &str = "wyrd object key v1";
+/// Pinned control derivation context: changing it changes every control seal key.
 pub const CONTROL_KEY_CONTEXT: &str = "wyrd control key v1";
 
 #[cfg(test)]

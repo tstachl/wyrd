@@ -63,32 +63,54 @@ pub enum RuntimeFact {
 /// each bucket.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct LoadedFacts {
+    /// Observed membership transitions, in commit order.
     pub transitions: Vec<MembershipTransition>,
+    /// Authorized capabilities, in commit order.
     pub capabilities: Vec<Capability>,
+    /// Recorded snapshot announcements, in commit order.
     pub announcements: Vec<SnapshotAnnouncement>,
+    /// Signature-verified snapshot bodies, in commit order.
     pub snapshot_bodies: Vec<Snapshot>,
+    /// Recorded manifest hierarchy entries, in commit order.
     pub manifests: Vec<ManifestRecord>,
+    /// Objects present in local storage, in commit order.
     pub local_objects: Vec<ContentId>,
+    /// Objects evicted from local storage, in commit order.
     pub removed_objects: Vec<ContentId>,
+    /// Residency policy entries, in commit order.
     pub materialization: Vec<(ContentId, MaterializationState)>,
+    /// Committed control-message dedupe ids, in commit order.
     pub seen: Vec<ControlMessageId>,
+    /// Pending announcement-delivery obligations, in commit order.
     pub announcement_queued: Vec<(SnapshotId, DeviceId)>,
+    /// First-seal announcement bytes per snapshot, in commit order.
     pub announcement_sealed: Vec<(SnapshotId, Vec<u8>)>,
+    /// Route-specific announcement reseals, in commit order.
     pub announcement_route_sealed: Vec<(SnapshotId, Vec<u8>, Vec<u8>)>,
+    /// Discharged announcement obligations, in commit order.
     pub announcement_delivered: Vec<(SnapshotId, DeviceId)>,
+    /// Serving endpoints of discharged announcements, in commit order.
     pub announcement_delivered_route: Vec<(SnapshotId, DeviceId, [u8; 32])>,
+    /// Pending transition-delivery obligations, in commit order.
     pub transition_queued: Vec<(TransitionId, DeviceId)>,
+    /// Sealed transition bytes per recipient set, in commit order.
     pub transition_sealed: Vec<(TransitionId, Vec<u8>)>,
+    /// Discharged transition obligations, in commit order.
     pub transition_delivered: Vec<(TransitionId, DeviceId)>,
+    /// Pending capability-delivery obligations, in commit order.
     pub capability_queued: Vec<(u64, DeviceId)>,
+    /// Sealed capability bytes per epoch and recipient, in commit order.
     pub capability_sealed: Vec<(u64, DeviceId, Vec<u8>)>,
+    /// Superseded capability seals with their replacements, in commit order.
     pub capability_sealed_replaced: Vec<(
         u64,
         DeviceId,
         crate::durable::SealedCapabilityFactId,
         Vec<u8>,
     )>,
+    /// Discharged capability obligations, in commit order.
     pub capability_delivered: Vec<(u64, DeviceId)>,
+    /// Invitation capability blobs awaiting their authorizing transition.
     pub bootstrap_pending: Vec<Vec<u8>>,
     /// Stated reconciliation views, in commit order. Statements about
     /// the base facts, not base facts: derivation
@@ -129,6 +151,7 @@ pub struct LoadedFacts {
     /// shape as above — which statement each resend answers, so the
     /// one-shot-per-statement quench audits.
     pub announcement_retransmitted: Vec<(SnapshotId, DeviceId, [u8; 32])>,
+    /// Runtime mutations in commit order; order carries the projection semantics.
     pub runtime_facts: Vec<RuntimeFact>,
 }
 
@@ -323,8 +346,11 @@ impl LoadedFacts {
 /// for the fetch plan.
 #[derive(Debug)]
 pub struct Rebuilt {
+    /// The membership log replayed from the recorded transitions.
     pub log: MembershipLog,
+    /// The rebuilt single-device keyring over the replayed capabilities.
     pub keyring: DriveKeyring,
+    /// The rebuilt runtime projection over the replayed facts.
     pub runtime: RuntimeState,
     /// Received reconciliation statements, in commit order. Carried
     /// so the response path reads the statement list from the same

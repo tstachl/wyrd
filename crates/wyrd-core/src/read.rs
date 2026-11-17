@@ -48,7 +48,10 @@ pub enum ReadError {
     /// The bounded wait expired before the identity materialized.
     /// The fetch, if admitted, continues and caches for next time.
     #[error("fetch demand expired for {content:?}")]
-    Timeout { content: ContentId },
+    Timeout {
+        /// Content identity the wait expired on.
+        content: ContentId,
+    },
     /// A settled terminal verdict (unavailable, corrupt): fail fast,
     /// never at the deadline.
     #[error("terminal verdict: {0}")]

@@ -14,7 +14,7 @@ impl Engine {
     /// obligation, returning the number of relay-accepted sends this call.
     /// Transitions go before capabilities; a mid-loop transport
     /// failure leaves the rest pending for the next call. See
-    /// [`author::deliver_pending`].
+    /// `author::deliver_pending`.
     pub fn deliver_pending(
         &mut self,
         mailbox: &mut impl Mailbox,

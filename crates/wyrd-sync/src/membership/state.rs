@@ -39,28 +39,41 @@ fn admit_reader_change(pattern: u8) -> Change {
 /// `DeviceId`.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct MembershipState {
+    /// Current member device ids.
     pub members: BTreeSet<DeviceId>,
+    /// Current owner device ids (subset of members).
     pub owners: BTreeSet<DeviceId>,
+    /// Current reader device ids (disjoint from members).
     pub readers: BTreeSet<DeviceId>,
+    /// Registered device encryption key per admitted device.
     pub encryption_keys: BTreeMap<DeviceId, DeviceEncryptionKey>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+/// Change-application failures: the transition is structurally valid but inapplicable.
 pub enum ApplyError {
+    /// The admitted device is already a member.
     #[error("admitted device is already a member")]
     AdmitExistingMember,
+    /// The admitted device is a reader; remove it before admitting as a member.
     #[error("admitted device is already a reader; remove it before admitting as a member")]
     AdmitExistingReaderAsMember,
+    /// The admitted device is already a member or reader.
     #[error("admitted device is already a member or reader")]
     AdmitReaderExisting,
+    /// The transition removes and re-admits the same device.
     #[error("device removed and re-admitted in one transition; replacing a device means removal now, admission later")]
     RemoveThenAdmitSameDevice,
+    /// The removed device is neither a member nor a reader.
     #[error("removed device is neither a member nor a reader")]
     RemoveUnknownMember,
+    /// An owner with co-owners can only leave via `SetOwners`.
     #[error("an owner with co-owners can only leave via SetOwners")]
     RemovingOwner,
+    /// The change would leave an owner who is not a member.
     #[error("change would leave an owner who is not a member")]
     DanglingOwner,
+    /// `SetOwners` must carry exactly one owner in v0.
     #[error("v0 ownership is a singleton; SetOwners must carry exactly one owner")]
     SetOwnersNotSingleton,
 }
@@ -81,6 +94,7 @@ impl MembershipState {
     }
 }
 
+/// Apply changes sequentially, enforcing role and ownership invariants.
 pub fn apply(state: &MembershipState, changes: &[Change]) -> Result<MembershipState, ApplyError> {
     // Encryption-key rotation is not expressible in v0: a device that
     // is removed and re-admitted in the SAME transition would silently

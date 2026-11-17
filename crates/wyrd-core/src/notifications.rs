@@ -171,7 +171,7 @@ pub fn contains_interval_rendering(text: &str) -> bool {
 /// The closed notification vocabulary (OD-26-A, recommendation A):
 /// one variant per observed transition worth interrupting a person
 /// for. A new variant without a producing observation fails
-/// [`tests_notifications::notifications_only_carry_observed_transitions`],
+/// `tests_notifications::notifications_only_carry_observed_transitions`,
 /// whose match over [`NotificationKind::all`] is exhaustive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NotificationKind {

@@ -1,3 +1,6 @@
+//! FUSE backend: the kernel-facing filesystem over the live projection.
+//! Split by concern (attr, fold, handles, ops, projection, read, setup,
+//! write); this root owns the shared handle and generation plumbing.
 use std::collections::HashMap;
 
 use std::sync::atomic::AtomicU64;
@@ -109,6 +112,7 @@ fn complete_waiter_on_terminal(repair_in_flight: bool) -> bool {
 /// the field, constructors, and observation name one type.
 type BackendProjection<S, M> = Arc<RwLock<Arc<Projection<DriveView<S, M>>>>>;
 
+/// FUSE backend serving one drive projection; see the module docs for the publication model.
 pub struct FuseBackend<S: ObjectStore, M: Materialization>
 where
     S::Error: std::fmt::Debug,

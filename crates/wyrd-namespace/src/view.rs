@@ -36,6 +36,7 @@ use wyrd_format::{
 /// implementation (`RuntimeMaterialization`) stays in `wyrd-core`,
 /// which alone can read sync runtime state.
 pub trait MaterializationPolicy {
+    /// Residency status for one content identity under this policy.
     fn status(&self, id: &ContentId) -> FetchStatus;
 }
 
@@ -129,18 +130,29 @@ pub struct ViewLockError;
 /// carries the agreed token below.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Node {
+    /// A regular file resolved in the namespace view.
     File {
+        /// Declared file size in bytes that reads verify against.
         size: u64,
+        /// Whether the file carries the executable bit.
         executable: bool,
+        /// Chunk identities backing the file body, in order.
         chunks: Vec<ContentId>,
+        /// Stable entry identity across renames and edits, if known.
         identity: Option<EntryIdentity>,
     },
+    /// A directory resolved in the namespace view.
     Dir {
+        /// Content identity of the directory subtree.
         subtree: ContentId,
+        /// Stable entry identity across renames and edits, if known.
         identity: Option<EntryIdentity>,
     },
+    /// A symlink resolved in the namespace view.
     Symlink {
+        /// Stored symlink target bytes.
         target: String,
+        /// Stable entry identity across renames and edits, if known.
         identity: Option<EntryIdentity>,
     },
     /// Every head resolves this path to a directory, but the directory
@@ -157,7 +169,9 @@ pub enum Node {
     /// the same path still merge rather than conflict, with the
     /// disagreement visible per child. See `merge` in `wyrd-view`.
     MergedDir {
+        /// Per-head directory subtrees merged into this unified view.
         subtrees: Vec<(wyrd_format::SnapshotId, ContentId)>,
+        /// Agreed entry identity when every merged head carries the same token.
         identity: Option<EntryIdentity>,
     },
     /// The heads disagree at this path. Versions list only the heads
@@ -166,7 +180,10 @@ pub enum Node {
     /// readable: version-qualified lookup paths (`foo@N`, counted in
     /// SnapshotId byte order) address the versions, and nothing
     /// synthetic is ever listed by `readdir`.
-    Conflict { versions: Vec<ConflictVersion> },
+    Conflict {
+        /// One resolved node per head where the path exists.
+        versions: Vec<ConflictVersion>,
+    },
 }
 
 /// One head's resolution of a conflicted path. `timestamp` is the
@@ -176,8 +193,11 @@ pub enum Node {
 /// exposing peer identity.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConflictVersion {
+    /// Head snapshot this conflicting version resolves from.
     pub snapshot: wyrd_format::SnapshotId,
+    /// Authoring timestamp of the head snapshot, for display only.
     pub timestamp: u64,
+    /// How the path resolves under this head.
     pub node: Node,
 }
 
@@ -185,32 +205,46 @@ pub struct ConflictVersion {
 /// `stat` is how readers observe entry sameness without listing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Attr {
+    /// Node kind observed by `stat`.
     pub kind: Kind,
+    /// Declared size in bytes.
     pub size: u64,
+    /// Whether the executable bit is set.
     pub executable: bool,
+    /// Stable entry identity, if known.
     pub identity: Option<EntryIdentity>,
 }
 
 /// Node kinds, including conflicted paths.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
+    /// A regular file.
     File,
+    /// A directory, including a merged multi-head directory.
     Dir,
+    /// A symlink.
     Symlink,
+    /// A path conflicted across heads.
     Conflict,
 }
 
 /// One directory entry from `readdir`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DirEntry {
+    /// Child name within the listed directory.
     pub name: String,
+    /// How the child resolves in the namespace view.
     pub node: Node,
 }
 
+/// Bounded-resolution outcome for one namespace step.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LookupResult {
+    /// Resolved node, or `None` when the component is absent.
     pub node: Option<Node>,
+    /// Weighted resolution work charged for this step.
     pub work: u64,
+    /// Whether the step exceeded its caller-supplied work budget.
     pub limit_exceeded: bool,
 }
 
@@ -255,14 +289,19 @@ impl OpenFile {
 /// travels with the error instead of being re-derived from text.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ViewError {
+    /// No node exists at this path.
     #[error("no such path")]
     NotFound,
+    /// Path is malformed and cannot be resolved.
     #[error("invalid path")]
     InvalidPath,
+    /// Path resolves, but the node is not a directory.
     #[error("not a directory")]
     NotADirectory,
+    /// Path resolves, but the node is not a file.
     #[error("not a file")]
     NotAFile,
+    /// Path is conflicted across heads; address one version instead.
     #[error(
         "path is conflicted across heads; read a version via `path@N` or resolve before reading"
     )]
@@ -271,7 +310,10 @@ pub enum ViewError {
     /// Content the serving policy wants but this device does not hold.
     /// The missing identity rides the error so a demand-driven backend
     /// can register exactly that want and retry.
-    NotMaterialized { content: ContentId },
+    NotMaterialized {
+        /// Remote-only content identity to demand and retry.
+        content: ContentId,
+    },
     #[error("content unavailable: no peer reachable and nothing cached")]
     /// A settled terminal verdict for content the store does not
     /// hold. Like `NotMaterialized`, the identity rides the error
@@ -279,7 +321,11 @@ pub enum ViewError {
     /// exactly that identity. A stale available claim surfaces as
     /// [`ViewError::LostRepresentation`] instead, so this variant
     /// never names out-of-band loss.
-    Unavailable { content: ContentId },
+    Unavailable {
+        /// Unavailable content identity to record demand for.
+        content: ContentId,
+    },
+    /// Content failed verification and cannot be surfaced.
     #[error("content failed verification; scrub and repair before surfacing")]
     Corrupt,
     #[error("a stored representation failed verification; discard and re-demand before surfacing")]
@@ -293,7 +339,9 @@ pub enum ViewError {
     /// may produce this variant; every other failure class keeps its
     /// own shape, so deletions are never named by resource errors.
     RejectedRepresentation {
+        /// Content identity whose stored bytes failed verification.
         content: ContentId,
+        /// Representation kind to discard and re-demand.
         kind: ObjectKind,
     },
     #[error(
@@ -312,9 +360,12 @@ pub enum ViewError {
     /// the `NotMaterialized` / `Unavailable` shapes, so the loss
     /// diagnostic never fires for content that simply never landed.
     LostRepresentation {
+        /// Content identity claimed durable but absent from the store.
         content: ContentId,
+        /// Representation kind to unclaim and re-demand.
         kind: ObjectKind,
     },
+    /// Local store failure with its resource classification and detail.
     #[error("local store failure: {1}")]
     Store(StoreFailure, String),
 }
@@ -373,6 +424,7 @@ pub trait NamespaceView: Sized {
     /// Resolve a path to its node, merging across heads.
     fn lookup(&self, path: &str) -> Result<Node, ViewError>;
 
+    /// Resolve the drive root with a bounded-work budget.
     fn resolve_root(&self, max_work: u64) -> Result<LookupResult, ViewError> {
         self.lookup("").map(|node| LookupResult {
             node: Some(node),
@@ -381,6 +433,7 @@ pub trait NamespaceView: Sized {
         })
     }
 
+    /// Resolve one child component under a parent with a bounded-work budget.
     fn resolve_child(
         &self,
         parent: &Node,
@@ -425,28 +478,58 @@ pub trait NamespaceView: Sized {
 /// pathname walk can span multiple live projection generations.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ConfinementError {
+    /// Symlink target is absolute and would resolve in the host namespace.
     #[error("symlink target is absolute; absolute targets resolve in the host namespace")]
     Absolute,
+    /// Relative target climbs above the drive root.
     #[error("symlink target escapes the drive root")]
     EscapesRoot,
+    /// Target crosses a conflicted namespace node.
     #[error("symlink target crosses a conflicted namespace node")]
     Conflict,
+    /// Target revisits a symlink path already being resolved.
     #[error("symlink target contains a resolution cycle")]
     Cycle,
+    /// Target exceeds the followed-link hop limit.
     #[error("symlink target exceeds the hop limit ({observed} > {max})")]
-    HopLimit { observed: usize, max: usize },
+    HopLimit {
+        /// Observed followed-link count.
+        observed: usize,
+        /// Maximum allowed followed links.
+        max: usize,
+    },
+    /// Target exceeds the resolved-component limit.
     #[error("symlink target exceeds the component limit ({observed} > {max})")]
-    ComponentLimit { observed: usize, max: usize },
+    ComponentLimit {
+        /// Observed resolved-component count.
+        observed: usize,
+        /// Maximum allowed components.
+        max: usize,
+    },
+    /// Target exceeds the weighted resolution work limit.
     #[error("symlink target exceeds the weighted resolution work limit ({observed} > {max})")]
-    WorkLimit { observed: u64, max: u64 },
+    WorkLimit {
+        /// Observed weighted resolution work.
+        observed: u64,
+        /// Maximum allowed resolution work.
+        max: u64,
+    },
+    /// Underlying namespace lookup failed during confinement.
     #[error("symlink target lookup failed: {source}")]
-    Lookup { source: ViewError },
+    Lookup {
+        /// View error from the failed resolution step.
+        source: ViewError,
+    },
 }
 
+/// Maximum symlink links followed during one confinement check.
 pub const MAX_SYMLINK_HOPS: usize = 40;
+/// Maximum path components resolved during one confinement check.
 pub const MAX_SYMLINK_COMPONENTS: usize = 256;
+/// Maximum weighted resolution work charged during one confinement check.
 pub const MAX_SYMLINK_WORK: u64 = 64 * 1024 * 1024;
 
+/// Weighted resolution budget amortized across a multi-link confinement walk.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct SymlinkResolutionBudget {
     work: u64,
