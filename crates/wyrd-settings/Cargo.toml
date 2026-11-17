@@ -8,5 +8,9 @@ description = "Wyrd's per-user application settings file schema: version, per-dr
 [dependencies]
 serde.workspace = true
 
+[dev-dependencies]
+# Wire-form tests only: the crate itself encodes nothing, consumers do.
+serde_json.workspace = true
+
 [lints]
 workspace = true
