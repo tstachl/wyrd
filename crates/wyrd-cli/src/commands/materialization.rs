@@ -354,7 +354,7 @@ pub(crate) fn config_section_render(
     ));
     out.push_str(&format!(
         "  passphrase_file: {}\n",
-        CredentialProvenance::word(credential_provenance.passphrase_from_file),
+        credential_provenance.passphrase_word(),
     ));
     out
 }

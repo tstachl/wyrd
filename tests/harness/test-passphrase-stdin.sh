@@ -19,6 +19,8 @@ die() { echo "  FAIL: $1" >&2; exit 1; }
 
 ARGS="$ROOT/crates/wyrd-cli/src/args.rs"
 CREDS="$ROOT/crates/wyrd-cli/src/credentials.rs"
+MAIN="$ROOT/crates/wyrd-cli/src/main.rs"
+MATERIALIZATION="$ROOT/crates/wyrd-cli/src/commands/materialization.rs"
 IDENTITY_COMMIT="$ROOT/crates/wyrd-cli/src/commands/identity.rs"
 SHELL_NOTE="$ROOT/docs/design/desktop-shell.md"
 
@@ -30,6 +32,8 @@ SHELL_NOTE="$ROOT/docs/design/desktop-shell.md"
 ARGS_ALL="$(cat "$ARGS")"
 ARGS_CODE="$(grep -v '^[[:space:]]*//' "$ARGS")"
 CREDS_CODE="$(grep -v '^[[:space:]]*//' "$CREDS")"
+MAIN_CODE="$(grep -v '^[[:space:]]*//' "$MAIN")"
+MAT_CODE="$(grep -v '^[[:space:]]*//' "$MATERIALIZATION")"
 match() { grep -F -q -- "$1" <<<"$2"; }
 nomatch() { ! grep -F -q -- "$1" <<<"$2"; }
 
@@ -76,7 +80,7 @@ match 'never persists' "$ARGS_ALL" \
   || die "args: stdin help does not state nothing is persisted"
 match '<stdin>' "$CREDS_CODE" \
   || die "credentials: stdin errors do not name the pipe"
-for banned in 'passphrase.as_str()' 'passphrase.as_bytes()' 'println!("{}", passphrase'; do
+for banned in 'println!("{}", passphrase' 'eprintln!' 'tracing::' 'log::'; do
   nomatch "$banned" "$CREDS_CODE" \
     || die "credentials: secret bytes near output: $banned"
 done
@@ -96,5 +100,30 @@ for marker in 'R1' 'R2' '--passphrase-stdin'; do
     || die "desktop-shell.md: '$marker' not recorded"
 done
 pass "design note defines R1/R2 and names the transport"
+
+# 9. `drive service-start` refuses the stdin flag loudly: the
+# direct-spawn target does not exist yet, so accepting it would
+# silently start the file-backed definition the flag cannot affect.
+match 'passphrase_stdin' "$MAIN_CODE" \
+  || die "main: service-start does not guard the stdin flag"
+match 'has no effect on `drive service-start`' "$MAIN_CODE" \
+  || die "main: service-start refusal does not name the reason"
+pass "service-start refuses the stdin flag until direct-spawn lands"
+
+# 10. Provenance names stdin for what it is: the materialization
+# report renders a stdin word, never the flag/file pair.
+match 'passphrase_word' "$MAT_CODE" \
+  || die "materialization: no stdin-aware provenance word"
+match 'passphrase_from_stdin' "$CREDS_CODE" \
+  || die "credentials: stdin not carried in provenance"
+pass "provenance reports stdin, not a flag"
+
+# 11. The paths-only rule names both bounded pipes: no surviving
+# claim that onboarding "applies nowhere else".
+grep -Fq -- 'applies nowhere else' "$SHELL_NOTE" \
+  && die "desktop-shell.md: stale single-exception claim survives"
+grep -Fq -- 'per-session unlock handoff' "$SHELL_NOTE" \
+  || die "desktop-shell.md: unlock pipe not named as second exception"
+pass "paths-only rule names both bounded pipes"
 
 echo "passphrase-stdin: $PASS checks passed"

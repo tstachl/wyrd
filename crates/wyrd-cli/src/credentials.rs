@@ -50,10 +50,31 @@ pub(crate) fn load_credentials(
 /// trailing newline stripped; the identity may be raw or hex. Paths
 /// resolve flags-first, file-second; the resolved paths travel
 /// through the same hardening either way — the file defaults the
-/// location, never the protection.
+/// location, never the protection. `--passphrase-stdin` reads the
+/// passphrase from the process stdin instead of any file.
 pub(crate) fn read_credentials(
     creds: &Credentials,
     config: Option<&LoadedConfig>,
+) -> Result<
+    (
+        DeviceIdentitySecret,
+        Zeroizing<String>,
+        CredentialProvenance,
+    ),
+    CliError,
+> {
+    read_credentials_with(creds, config, std::io::stdin().lock())
+}
+
+/// The testable half of [`read_credentials`]: the stdin surface
+/// reads from the injected reader, so tests pipe passphrases
+/// without touching the process stdin. Production passes the
+/// locked stdin; the bound, discipline, and failure modes are
+/// identical either way.
+fn read_credentials_with(
+    creds: &Credentials,
+    config: Option<&LoadedConfig>,
+    stdin: impl std::io::Read,
 ) -> Result<
     (
         DeviceIdentitySecret,
@@ -80,10 +101,11 @@ pub(crate) fn read_credentials(
     let provenance = CredentialProvenance {
         identity_from_file: creds.identity_file.is_none(),
         passphrase_from_file: !creds.passphrase_stdin && creds.passphrase_file.is_none(),
+        passphrase_from_stdin: creds.passphrase_stdin,
     };
     let identity = read_identity(&identity_file)?;
     if creds.passphrase_stdin {
-        let passphrase = read_passphrase_stdin(std::io::stdin().lock())?;
+        let passphrase = read_passphrase_stdin(stdin)?;
         return Ok((identity, passphrase, provenance));
     }
     let passphrase_file = resolve_credential_path(
@@ -96,15 +118,21 @@ pub(crate) fn read_credentials(
     let passphrase_text = std::str::from_utf8(&passphrase_bytes)
         .map_err(|_| CliError::Usage("passphrase file must contain UTF-8 text".into()))?;
     let passphrase = Zeroizing::new(passphrase_text.to_owned());
-    let passphrase = passphrase
-        .strip_suffix("\r\n")
-        .or_else(|| passphrase.strip_suffix('\n'))
-        .unwrap_or(&passphrase);
+    let stripped = strip_trailing_newline(&passphrase);
     // Kept scrubbing: the passphrase lives in process memory until the
     // command completes, so it stays in a `Zeroizing` rather than a
     // plain `String`. Callers pass `&passphrase` as `&str` through
     // deref coercion.
-    Ok((identity, Zeroizing::new(passphrase.to_owned()), provenance))
+    Ok((identity, Zeroizing::new(stripped.to_owned()), provenance))
+}
+
+/// One trailing newline is the line discipline, not part of the
+/// passphrase — shared by the file and stdin surfaces, so both open
+/// the same keystore.
+fn strip_trailing_newline(text: &str) -> &str {
+    text.strip_suffix("\r\n")
+        .or_else(|| text.strip_suffix('\n'))
+        .unwrap_or(text)
 }
 
 /// Read the per-session unlock passphrase from a reader, bounded
@@ -113,10 +141,10 @@ pub(crate) fn read_credentials(
 /// discipline, not part of the passphrase — the same stripping the
 /// file path applies, so file and stdin are interchangeable. Empty
 /// input (immediate EOF), over-long input, and non-UTF-8 input
-/// refuse before anything opens: the owner never starts partially
-/// initialized. The buffer stays in a `Zeroizing`, scrubbed on drop.
+/// refuse before the keystore opens: the owner never starts
+/// partially initialized. The buffer stays in a `Zeroizing`,
+/// scrubbed on drop.
 fn read_passphrase_stdin(reader: impl std::io::Read) -> Result<Zeroizing<String>, CliError> {
-    use std::io::Read;
     const MAX_PASSPHRASE_BYTES: usize = 4096;
     let mut bytes = Zeroizing::new(Vec::new());
     reader
@@ -139,10 +167,7 @@ fn read_passphrase_stdin(reader: impl std::io::Read) -> Result<Zeroizing<String>
     let text = std::str::from_utf8(&bytes)
         .map_err(|_| CliError::Usage("passphrase on stdin must contain UTF-8 text".into()))?;
     let text = Zeroizing::new(text.to_owned());
-    let stripped = text
-        .strip_suffix("\r\n")
-        .or_else(|| text.strip_suffix('\n'))
-        .unwrap_or(&text);
+    let stripped = strip_trailing_newline(&text);
     if stripped.is_empty() {
         return Err(CliError::Usage(
             "no passphrase on stdin: pipe one line (the owner never starts without it)".to_string(),
@@ -265,9 +290,9 @@ mod tests {
         );
     }
 
-    /// Empty pipes fail closed before anything opens: immediate EOF
-    /// and a bare newline both refuse as usage, never as an empty
-    /// passphrase the owner would try.
+    /// Empty pipes fail closed before the keystore opens: immediate
+    /// EOF and a bare newline both refuse as usage, never as an
+    /// empty passphrase the owner would try.
     #[test]
     fn empty_stdin_fails_closed() {
         assert!(read_passphrase_stdin(Cursor::new(b"")).is_err());
@@ -299,34 +324,43 @@ mod tests {
         assert!(read_credentials(&creds, None).is_err());
     }
 
-    /// Stdin mode never resolves a passphrase file: no config
-    /// default is consulted and none is required.
+    /// Stdin mode never resolves a passphrase file, even where a
+    /// config names one: a fixture identity plus a piped passphrase
+    /// reads end to end, and the provenance names stdin — so a
+    /// passphrase file is neither required nor consulted.
     #[test]
     fn stdin_mode_needs_no_passphrase_file() {
+        use crate::tests_harness::{write_secret, TempDir};
+        let temp = TempDir::new();
+        let identity_file = temp.0.join("identity");
+        // Raw 32 bytes, the same shape the production reader
+        // accepts elsewhere in this package's tests.
+        write_secret(&identity_file, [0x11; 32]);
         let config = LoadedConfig {
-            path: PathBuf::from("/drive/default.toml"),
+            path: temp.0.join("default.toml"),
             relays: Vec::new(),
-            identity_file: Some(PathBuf::from("/cfg/identity")),
-            passphrase_file: Some(PathBuf::from("/cfg/passphrase")),
+            identity_file: None,
+            // A config naming a passphrase file must not matter:
+            // stdin mode never resolves it.
+            passphrase_file: Some(temp.0.join("passphrase")),
         };
-        // Identity still resolves (flag wins); the passphrase file
-        // surface is irrelevant — assert resolution directly by
-        // observing the provenance refuses nothing at this layer.
-        // The read itself would need a real identity file, so pin
-        // the conflict rule only: stdin + no file flag is not the
-        // ambiguous pair.
         let creds = Credentials {
-            identity_file: Some(PathBuf::from("/k/identity")),
+            identity_file: Some(identity_file),
             passphrase_file: None,
             passphrase_stdin: true,
         };
-        // No ambiguous-pair error: the failure below must be the
-        // missing identity file on disk, never the passphrase pair.
-        match read_credentials(&creds, Some(&config)) {
-            Err(CliError::Usage(message)) if message.contains("conflicts") => {
-                panic!("stdin mode must not trip the pair conflict: {message}")
-            }
-            _ => {}
-        }
+        let (identity, passphrase, provenance) =
+            read_credentials_with(&creds, Some(&config), Cursor::new(b"piped-passphrase\n"))
+                .expect("stdin mode reads without any passphrase file");
+        let _ = identity;
+        assert_eq!(passphrase.as_str(), "piped-passphrase");
+        assert!(
+            provenance.passphrase_from_stdin,
+            "provenance names stdin: {provenance:?}"
+        );
+        assert!(
+            !provenance.passphrase_from_file,
+            "stdin is not a file surface: {provenance:?}"
+        );
     }
 }
