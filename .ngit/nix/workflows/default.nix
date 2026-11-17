@@ -1,8 +1,8 @@
 # .ngit/nix/workflows/default.nix — CI commands for the native Nix path.
 #
 # One command group per workflow file (shell.yaml → `shell`, rust.yaml
-# → `rust`, nix.yaml → `nix`, dist.yaml → `dist`, page.yaml → `page`),
-# one command per run job. Commands are
+# → `rust`, nix.yaml → `nix`, dist.yaml → `dist`, page.yaml → `page`,
+# desktop.yaml → `desktop`), one command per run job. Commands are
 # writeShellApplications whose runtimeInputs carry every tool the job
 # shells out to — the guest is a plain NixOS VM, so nothing may be
 # assumed beyond the closure.
@@ -77,6 +77,7 @@ in
       bash tests/harness/test-switchover.sh
       bash tests/harness/test-macos-link-order.sh
       bash tests/harness/test-dev-install.sh
+      bash tests/harness/test-desktop-frontend-gate.sh
       say "native shell suites green"
     '';
   };
@@ -190,6 +191,39 @@ in
       CLOUDFLARE_API_TOKEN="$(tr -d '\n' < "$NGIT_CI_SECRETS_DIR/CLOUDFLARE_API_TOKEN")"
       export CLOUDFLARE_ACCOUNT_ID CLOUDFLARE_API_TOKEN
       wrangler pages deploy apps/marketing/ --project-name=wyrd-enesis-md
+    '';
+  };
+
+  # Desktop frontend gates. `bun test` (unit proofs against the
+  # mocked IPC bridge), `svelte-check` (the typecheck the views gate
+  # on), and `bun run build` (the vite bundle the Tauri shell serves
+  # — and the artifact the CSP pin reasons about: external scripts
+  # and styles only). A run command, not a pure derivation like the
+  # rust gates: this nixpkgs carries no bun-dependency vendoring, so
+  # `bun install` fetches the locked set from the registry the way
+  # the audit job fetches the advisory DB. `--frozen-lockfile`
+  # refuses lockfile drift instead of resolving it. nodejs rides
+  # beside bun: package bins (vite, svelte-check) exec through a
+  # node shebang. The lockfile must stay at the version the flake's
+  # bun (1.3.x) reads — currently v1, pinned by the harness suite
+  # below — because a newer local bun writes a format the gate
+  # cannot parse.
+  desktop.frontend = pkgs.writeShellApplication {
+    name = "desktop-frontend";
+    runtimeInputs = with pkgs; [ bun nodejs coreutils ];
+    text = ''
+      set -euo pipefail
+      say() { printf '===== %s =====\n' "$1"; }
+      cd apps/desktop
+      say "bun install (frozen lockfile)"
+      bun install --frozen-lockfile
+      say "bun test"
+      bun test
+      say "svelte-check"
+      bun run typecheck
+      say "vite build"
+      bun run build
+      say "desktop frontend green"
     '';
   };
 }
