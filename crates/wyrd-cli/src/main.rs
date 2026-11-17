@@ -353,11 +353,22 @@ fn command(args: Vec<String>) -> Result<(), CliError> {
         Command::Drive {
             drive_dir,
             action: crate::args::DriveAction::ServiceStart { registry },
+            credentials,
             ..
         } => {
             // Starting needs no keystore and no credentials: resolve
             // before credential loading, so a stopped service starts
-            // even where key files are momentarily unavailable.
+            // even where key files are momentarily unavailable. The
+            // per-session stdin handoff has no direct-spawn target
+            // yet (that slice lands the app-supervised start), so a
+            // stdin flag here would parse cleanly and then silently
+            // start the file-backed definition — refuse it loudly
+            // instead of running a start the flag cannot affect.
+            if credentials.passphrase_stdin {
+                return Err(CliError::Usage(
+                    "--passphrase-stdin has no effect on `drive service-start` yet: the direct-spawn handoff is a follow-up slice; start the file-backed service without it".to_string(),
+                ));
+            }
             return crate::commands::drive::service_start_drive(
                 drive_dir.clone(),
                 registry.clone(),

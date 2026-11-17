@@ -8,9 +8,12 @@ home the implementation and its fixtures cite.
 ## Decisions
 
 - Onboarding persists identity + passphrase files on this device
-  (0600, owner-only, never overwrite). Per-session supply and OS
-  keychain migration are tracked follow-ups owned by settings —
-  a security feature, not a convenience option.
+  (0600, owner-only, never overwrite) in the file-backed posture,
+  which stays the default. Per-session supply (no passphrase file,
+  `--passphrase-stdin` unlock owned by the app per R1/R2 in
+  `docs/design/desktop-shell.md`) and OS keychain migration are
+  tracked follow-ups owned by settings — a security feature, not a
+  convenience option.
 - Terminology is always "this device's identity", never "your
   identity". Entry is named "Restore from backup" (never Import,
   never a Recommended nudge). Stage name is Passphrase; the

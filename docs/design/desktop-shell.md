@@ -510,14 +510,15 @@ verdict.
   is a hard failure (no skew); the adapter waits for process
   completion and the desktop exiting mid-operation is a forced
   termination that reconciles on next launch (no lifecycle);
-  secret contents never cross IPC or argv, only file paths (no
-  secrets-adjacent surfaces — the onboarding passphrase exception
-  is recorded under "Onboarding passphrase handling" below and
-  applies nowhere else); the dialog plugin links only with
+  secret contents never cross IPC or argv — only file paths, plus
+  the two bounded passphrase pipes recorded under "Passphrase
+  handling" below (onboarding write-down/commit and the
+  per-session unlock handoff; no secrets-adjacent surfaces beyond
+  those two); the dialog plugin links only with
   the shipped view that needs it (no open capability); and the
   adapter uses only exit codes plus independent re-observation
   (the onboarding write-down display excepted — one shape-validated
-  line, per "Onboarding passphrase handling" below), with CLI
+  line, per "Passphrase handling" below), with CLI
   stderr as opaque display detail that is never parsed
   (no CLI-output-as-UX).
 - Settings are read-only in stage 2 (OD, decided): the settings
@@ -778,10 +779,10 @@ The desktop may launch constrained, version-matched CLI lifecycle
 operations but never becomes a lifecycle or durable-store
 authority. The contract: the desktop invokes the installed CLI
 through a small Rust adapter with structured arguments (never
-shell-constructed); secret contents never cross IPC or argv, only
-credential file paths (the onboarding passphrase exception is
-recorded under "Onboarding passphrase handling" below and applies
-nowhere else); operations are non-interactive with
+shell-constructed); secret contents never cross IPC or argv — only
+credential file paths, plus the two bounded passphrase pipes
+recorded under "Passphrase handling" below (onboarding
+write-down/commit and the per-session unlock handoff); operations are non-interactive with
 explicit exit semantics; the desktop waits, then re-reads the
 registry and probes the socket independently, and observed state
 alone determines the display. The adapter uses only the CLI's
@@ -810,9 +811,9 @@ bypass the destructive-operation requirement. After completion
 the desktop independently re-observes membership and lifecycle
 state either way.
 
-### Onboarding passphrase handling (exception to the paths-only rule)
+### Passphrase handling (bounded exceptions to the paths-only rule)
 
-First-run onboarding is the one place the passphrase crosses the
+First-run onboarding is the first place the passphrase crosses the
 two boundaries named above, and only in the two directions the
 write-down step requires:
 
@@ -824,14 +825,23 @@ write-down step requires:
   never argv) at Finish. The identity secret never leaves the CLI
   process that mints it.
 
+The second place is the per-session unlock handoff (open question
+8, R1/R2): backend to CLI stdin (`--passphrase-stdin`, the pipe —
+never argv, never a file) at explicit unlock. The identity secret
+still comes from its file; only the passphrase rides the pipe.
+
 Rationale: the write-down step fundamentally requires the
 frontend to show the text — generated or user-chosen — and the
-commit step fundamentally requires the bytes; argv must never
-carry either. Controls: the passphrase lives in frontend state
+commit step fundamentally requires the bytes; the unlock step
+fundamentally requires the bytes without persisting them; argv must
+never carry any of them. Controls: the passphrase lives in frontend state
 only from write-down to Finish (never persisted there), the
 commit reads it from the stdin pipe and the CLI re-validates
 before writing, both files are owner-only with no-overwrite, and
-the read-back goes through the hardened reader. The adapter's
+the read-back goes through the hardened reader. The unlock pipe is
+one bounded line (4096 bytes, single trailing newline stripped,
+EOF/overlong/non-UTF-8 fail closed, `Zeroizing`, never persisted,
+never logged). The adapter's
 usual exit-codes-only contract holds everywhere except the
 write-down display, whose single stdout line the backend
 shape-validates instead of parsing for lifecycle facts. The
@@ -911,6 +921,24 @@ this note wins for architecture.
    refresh). The stop and recovery story per platform lives where
    the installer consumes it (`packaging/macos/README.md`, "Login
    items and recovery").
+8. Per-session passphrase posture: decided (file-backed stays the
+   default; per-session is the tracked follow-up now landing its
+   transport). Two fixed terms the issue text already uses, defined
+   here because they have no other repo home:
+   R1 — the app owns the unlock lifecycle: in per-session posture
+   no manager auto-start or restart exists (the service definition
+   drops `KeepAlive`/`RunAtLoad`), the app spawns the owner
+   directly with the piped passphrase, restarts unexpected death a
+   bounded number of times while the app lives, then falls back to
+   manual Start.
+   R2 — app lifetime stays separate from owner lifetime: an app
+   crash never takes a running owner down (reattach on relaunch),
+   both dead re-prompts, and an app-stopped owner killed stays
+   dead until the app prompts and starts again. The CLI transport
+   for both is one stdin-pipe handoff (`--passphrase-stdin`,
+   bounded 4096, single trailing newline stripped, EOF/overlong/
+   non-UTF-8 fail closed, `Zeroizing`, never argv/env/temp/log,
+   never persisted).
 
 ## Persistent-format impact
 

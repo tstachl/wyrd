@@ -302,6 +302,10 @@ pub(crate) fn resolve_credential_path(
 pub(crate) struct CredentialProvenance {
     pub identity_from_file: bool,
     pub passphrase_from_file: bool,
+    /// The passphrase arrived on stdin (`--passphrase-stdin`,
+    /// per-session unlock): no file was resolved, so `word` must
+    /// name stdin rather than misreporting a flag or a file.
+    pub passphrase_from_stdin: bool,
 }
 
 impl CredentialProvenance {
@@ -310,6 +314,16 @@ impl CredentialProvenance {
             "config file"
         } else {
             "command-line flag"
+        }
+    }
+
+    /// The passphrase surface in report words: stdin names itself,
+    /// otherwise the flag/file rule applies.
+    pub(crate) fn passphrase_word(&self) -> &'static str {
+        if self.passphrase_from_stdin {
+            "stdin (`--passphrase-stdin`)"
+        } else {
+            Self::word(self.passphrase_from_file)
         }
     }
 }
