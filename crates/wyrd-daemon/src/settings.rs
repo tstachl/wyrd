@@ -189,11 +189,12 @@ fn secs_to_duration(name: &str, secs: u64) -> Result<Duration, String> {
     Ok(Duration::from_secs(secs))
 }
 
-/// Failure of the sparse settings transaction. Conflict is its own
-/// variant — never a message convention — so the future IPC surface
-/// maps it to a distinct error while every other failure stays a
-/// refusal: nothing was committed in either case, but only conflict
-/// invites the caller to re-read and retry.
+/// Failure of the sparse settings transaction: three outcomes,
+/// never conflated. Conflict is its own variant — never a message
+/// convention — so the future IPC surface maps it to a distinct
+/// error; Refused means nothing was committed; CommittedUnverified
+/// means the commit landed but the final re-read failed. Only
+/// conflict invites the caller to re-read and retry.
 #[derive(Debug, thiserror::Error)]
 pub enum SettingsWriteError {
     /// The file changed between the transaction's read and commit:
@@ -442,6 +443,15 @@ fn commit_staged(
     settings_path: &Path,
     staged: StagedFile,
 ) -> Result<AppSettingsFile, SettingsWriteError> {
+    write_guarded(settings_path, staged)?;
+    verify_commit(settings_path)
+}
+
+/// Guarded write half of [`commit_staged`]: the re-read, the
+/// identity-plus-hash comparison, the parent privacy, and the
+/// crash-safe rename. Split from verification so tests can pin the
+/// committed-but-unverified outcome deterministically.
+fn write_guarded(settings_path: &Path, staged: StagedFile) -> Result<(), SettingsWriteError> {
     let (fresh_bytes, fresh_identity) = match std::fs::read(settings_path) {
         Ok(bytes) => {
             let meta = std::fs::symlink_metadata(settings_path).map_err(|error| {
@@ -491,10 +501,14 @@ fn commit_staged(
     // The rename carries the temp's owner-only mode, so the commit
     // corrects an over-permissive file it replaces — no post-rename
     // chmod, and no chmod-failure-after-rename outcome.
-    //
-    // The verification re-read runs through the normal reader, so a
-    // failure there is reported as committed-but-unverified — never
-    // as a refusal of a write that already landed.
+    Ok(())
+}
+
+/// Verification half of [`commit_staged`]: re-read the committed
+/// file through the normal reader. A failure here is reported as
+/// committed-but-unverified — never as a refusal of a write that
+/// already landed (OD §6 never conflates outcomes).
+fn verify_commit(settings_path: &Path) -> Result<AppSettingsFile, SettingsWriteError> {
     read_settings(settings_path).map_err(|reason| SettingsWriteError::CommittedUnverified {
         path: settings_path.to_path_buf(),
         reason,
@@ -958,6 +972,36 @@ mod tests {
         assert!(conflict.to_string().contains("changed under"), "{conflict}");
         // The external commit stands; the staged intent never landed.
         assert_eq!(read_settings(&path).unwrap(), external);
+    }
+
+    /// OD §6, never conflated: when the commit lands but the
+    /// verification re-read fails, the transaction reports
+    /// committed-but-unverified — not a refusal of a write that
+    /// already changed the file. Deterministic by splitting the
+    /// guarded write from the verification: vanish the file between
+    /// the two.
+    #[test]
+    fn failed_verification_is_committed_not_refused() {
+        let dir = scratch("sparse-unverified");
+        let path = dir.join("settings.json");
+        let drive = dir.join("drive");
+        apply_sparse_update(&path, &drive, &sparse(&[("open_timeout_secs", 30)], &[])).unwrap();
+
+        let _lock = lock_settings(&path).unwrap();
+        let staged = stage_file(&path).unwrap();
+        write_guarded(&path, staged).unwrap();
+        // Vanish the commit's bytes behind garbage: the verification
+        // re-read through the normal reader must fail (a missing file
+        // would read as empty settings, not an error).
+        std::fs::write(&path, b"{invalid json").unwrap();
+
+        let outcome = verify_commit(&path).unwrap_err();
+        assert!(
+            matches!(outcome, SettingsWriteError::CommittedUnverified { .. }),
+            "{outcome}"
+        );
+        assert!(!matches!(outcome, SettingsWriteError::Refused { .. }));
+        assert!(!matches!(outcome, SettingsWriteError::Conflict { .. }));
     }
 
     /// Slice 3, OD §4 stress: concurrent notification landings
