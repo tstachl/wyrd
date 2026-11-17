@@ -142,11 +142,15 @@ writable else `~/Applications/Wyrd.app` (`--dest`/`DEST`
 overrides, `--no-open` skips launch, `--` forwards e.g.
 `-- --target` to the wrapper), re-verifies the installed copy, and
 launches the app. The bundler hook stages the appex plus the
-version-matched `wyrd` CLI into `Contents/Resources/wyrd` before
+version-matched `wyrd` CLI and its `wyrd-supervise` sibling into
+`Contents/Resources` before
 the outer sign — the desktop resolves the bundled copy first (the
 `MacOS` sibling is the devenv fallback only) and version-checks it
 before every lifecycle run — so the UI, owner, registry, and tray
-work ad-hoc: create/join/leave, status, settings. No macFUSE is
+work ad-hoc: create/join/leave, status, settings, and managed
+service reinstall (the daemon resolves the wrapper as the CLI's
+sibling; a bundle without it fails managed operations at
+validate). No macFUSE is
 needed: the ad-hoc CLI builds vault-only (`WYRD_NO_MOUNT=1`
 drops the mount stack, whose macFUSE load dependency a clean Mac
 has no copy of); `mount` mode and Finder stay with the
@@ -599,6 +603,7 @@ Wyrd.app/
         MacOS/WyrdFileProvider
         Info.plist
     Resources/wyrd
+    Resources/wyrd-supervise
 ```
 
 The version-matched `wyrd` CLI rides in `Contents/Resources`
@@ -606,6 +611,15 @@ The version-matched `wyrd` CLI rides in `Contents/Resources`
 `bundled_cli_path`; the `MacOS` sibling is the devenv fallback
 only, never the bundle contract — on case-insensitive APFS a
 `MacOS/wyrd` sibling would collide with the `Wyrd` app binary).
+Beside it rides `wyrd-supervise`, the supervised-owner wrapper
+from `nix/drive/supervise.py` (also the flake's `wyrd-supervise`
+package): the daemon resolves it as the CLI's sibling unless
+`--supervise-bin` is explicit, so managed bootstrap and
+reconfigure fail at validate without it. The staged copy is the
+script with a `python3` shebang prepended (a managed service on
+the target Mac needs a working `python3`, already required for
+the install); it carries no Mach-O linkage, so the no-Nix-links
+guard covers it by content (no `/nix/store`), not by `otool`.
 `packaging/macos/stage-cli.sh` builds the release CLI with the SDK
 link-order pin, stages it at `packaging/macos/stage/wyrd`, and
 signs it with the paired identity; `bundle.macOS.files` copies it
@@ -793,6 +807,28 @@ sed "s|@WYRD_DESKTOP_BIN@|$HOME/.local/bin/wyrd-desktop|" \
 systemctl --user daemon-reload
 systemctl --user enable wyrd-desktop.service
 ```
+
+Non-Nix Linux needs the supervise wrapper too: Nix systems get it
+from the drive module, but a hand-installed `wyrd` has no
+`wyrd-supervise` sibling, and managed bootstrap/reconfigure fail
+at validate without it — the same gate as the macOS bundle above.
+Place an executable `wyrd-supervise` beside the `wyrd` binary
+itself (the daemon's sibling lookup checks the CLI's own
+directory, not `PATH`, so `~/.local/bin` only works when `wyrd`
+lives there too): either `nix build .#wyrd-supervise` and copy the
+output `bin/wyrd-supervise` next to `wyrd`, or shim the repo
+script —
+
+```sh
+BIN_DIR="$(dirname "$(realpath "$(command -v wyrd)" 2>/dev/null || command -v wyrd)")"
+printf '#!/bin/sh\nexec python3 /path/to/repo/nix/drive/supervise.py "$@"\n' \
+  > "$BIN_DIR/wyrd-supervise"
+chmod +x "$BIN_DIR/wyrd-supervise"
+```
+
+(An explicit `--supervise-bin` on the reconfigure/bootstrap
+invocation overrides the sibling lookup wherever the layout
+differs.)
 
 Stop, start, disable — per drive on macOS, then the Linux twin:
 

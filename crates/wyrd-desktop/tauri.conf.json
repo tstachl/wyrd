@@ -44,7 +44,8 @@
     "macOS": {
       "files": {
         "PlugIns/WyrdFileProvider.appex": "../../packaging/macos/stage/WyrdFileProvider.appex",
-        "Resources/wyrd": "../../packaging/macos/stage/wyrd"
+        "Resources/wyrd": "../../packaging/macos/stage/wyrd",
+        "Resources/wyrd-supervise": "../../packaging/macos/stage/wyrd-supervise"
       }
     }
   }

@@ -194,3 +194,32 @@ codesign --force --sign "$SIGN_IDENTITY" "$STAGED"
 
 echo "staged $STAGED"
 codesign -dv "$STAGED" 2>&1 | sed -n '1,4p'
+
+# Stage the supervised-owner wrapper beside the CLI: the daemon
+# resolves `wyrd-supervise` as a sibling of the running `wyrd`
+# (`sibling_bin` in wyrd-daemon's bootstrap), and the desktop
+# passes no explicit `--supervise-bin` in production — so a bundle
+# without this sibling fails every managed bootstrap and
+# reconfigure at validate. Same source the Nix drive module
+# inlines (`nix/drive/supervise.py`, also exposed as the flake's
+# `wyrd-supervise` package); the staged copy is that script with a
+# `python3` shebang prepended, executable like the Nix wrapper. A
+# managed service on the target Mac therefore needs a working
+# `python3` — true on every Mac with the Xcode/CLT toolchain the
+# installer already requires. Content check, not linkage: a script
+# has no Mach-O to otool, but it must never hardcode a /nix/store
+# path the way a Nix-built binary would.
+STAGED_SUPERVISE="$STAGE_DIR/wyrd-supervise"
+{
+    printf '#!/usr/bin/env python3\n'
+    cat "$ROOT/nix/drive/supervise.py"
+} > "$STAGED_SUPERVISE"
+chmod +x "$STAGED_SUPERVISE"
+if grep -q '/nix/store' "$STAGED_SUPERVISE"; then
+    echo "error: staged wyrd-supervise names /nix/store paths." >&2
+    exit 1
+fi
+codesign --force --sign "$SIGN_IDENTITY" "$STAGED_SUPERVISE"
+
+echo "staged $STAGED_SUPERVISE"
+codesign -dv "$STAGED_SUPERVISE" 2>&1 | sed -n '1,4p'
