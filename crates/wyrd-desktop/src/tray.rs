@@ -145,7 +145,7 @@ pub fn build_tray_menu<R: Runtime, M: Manager<R>>(
 }
 
 /// The pre-probe placeholder: an empty ready registry, replaced by
-/// the refresh thread's immediate first read. The add-drive hook never
+/// the refresh thread's immediate first read. The setup hook never
 /// probes — a wedged owner must never delay first paint — so the
 /// first menu briefly reads "No drives registered" until the
 /// background refresh (milliseconds later) renders the real state.
