@@ -68,6 +68,13 @@ BUILD_LINE="$(grep -n -F -- '"$HERE/build-bundle.sh"' <<<"$INSTALL_CODE" | cut -
   || die "install: cannot locate install and build lines"
 [ "$INSTALL_LINE" -lt "$BUILD_LINE" ] \
   || die "install: frontend install is not before the build"
+# Refusals stay cheap: the install must sit after the argument and
+# destination guards, so a refused invocation never reaches it.
+REFUSE_LINE="$(grep -n -F -- 'must not sit inside the repository' <<<"$INSTALL_CODE" | cut -d: -f1)"
+[ -n "$REFUSE_LINE" ] \
+  || die "install: cannot locate the destination refusal"
+[ "$REFUSE_LINE" -lt "$INSTALL_LINE" ] \
+  || die "install: frontend install precedes the destination refusal"
 pass "install script ensures frontend dependencies before the build"
 
 # 3. The build delegates to the wrapper: the link-order pin and the
