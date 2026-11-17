@@ -196,7 +196,7 @@ fn main() {
         .setup(|app| {
             // Menu-bar extra: one tray icon over the same registry
             // probe the lifecycle view shows. The first menu is the
-            // loading placeholder — the setup hook never probes, so a
+            // loading placeholder — the add-drive hook never probes, so a
             // wedged owner can never delay first paint; the refresh
             // thread below populates the menu immediately. A missing
             // icon never fails startup — the window stays the product.

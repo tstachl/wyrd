@@ -46,7 +46,7 @@ pub struct TrayRow {
 
 /// Menu action ids: the only events the tray handles.
 pub const TRAY_ADD_ID: &str = "wyrd-add-drive";
-/// Menu action id for the Show-window action: the only event the tray handles besides setup and quit.
+/// Menu action id for the Show-window action: the only event the tray handles besides add-drive and quit.
 pub const TRAY_SHOW_ID: &str = "wyrd-show";
 /// Menu action id for the Quit action: drains in-flight operations per the graceful-shutdown rule, then exits.
 pub const TRAY_QUIT_ID: &str = "wyrd-quit";
@@ -145,7 +145,7 @@ pub fn build_tray_menu<R: Runtime, M: Manager<R>>(
 }
 
 /// The pre-probe placeholder: an empty ready registry, replaced by
-/// the refresh thread's immediate first read. The setup hook never
+/// the refresh thread's immediate first read. The add-drive hook never
 /// probes — a wedged owner must never delay first paint — so the
 /// first menu briefly reads "No drives registered" until the
 /// background refresh (milliseconds later) renders the real state.
@@ -299,13 +299,14 @@ mod tests {
     }
 
     /// The tray route string is mirrored in the frontend with no
-    /// shared build step, so pin it here: if either side renames
-    /// its literal, this fails instead of silently diverging.
+    /// shared build step, so pin the listener call itself: if either
+    /// side renames its literal, this fails instead of silently
+    /// diverging.
     #[test]
     fn provision_event_string_matches_the_frontend_listener() {
         let app_svelte = include_str!("../../../apps/desktop/src/App.svelte");
         assert!(
-            app_svelte.contains(SELECT_PROVISION_EVENT),
+            app_svelte.contains("listen(\"wyrd:select-provision\""),
             "App.svelte must listen for {SELECT_PROVISION_EVENT}"
         );
     }
