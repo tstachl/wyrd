@@ -48,6 +48,35 @@ match 'macOS only' "$INSTALL_CODE" \
   || die "install: no macOS-only refusal"
 pass "install script is macOS-only"
 
+# 2b. Frontend dependencies are ensured before the build: a fresh
+# checkout without node_modules (or a drifted lockfile/manifest)
+# installs from the frozen lockfile instead of failing inside vite.
+# The install must precede the build delegation, and all three
+# staleness markers must be present — a substring-only pin would
+# pass an unconditional install or one placed after the build.
+match 'node_modules' "$INSTALL_CODE" \
+  || die "install: no node_modules precondition"
+match 'bun.lock' "$INSTALL_CODE" \
+  || die "install: lockfile is not a staleness marker"
+match 'package.json' "$INSTALL_CODE" \
+  || die "install: manifest is not a staleness marker"
+match 'bun install --frozen-lockfile' "$INSTALL_CODE" \
+  || die "install: no frozen frontend install"
+INSTALL_LINE="$(grep -n -F -- 'bun install --frozen-lockfile' <<<"$INSTALL_CODE" | cut -d: -f1)"
+BUILD_LINE="$(grep -n -F -- '"$HERE/build-bundle.sh"' <<<"$INSTALL_CODE" | cut -d: -f1)"
+[ -n "$INSTALL_LINE" ] && [ -n "$BUILD_LINE" ] \
+  || die "install: cannot locate install and build lines"
+[ "$INSTALL_LINE" -lt "$BUILD_LINE" ] \
+  || die "install: frontend install is not before the build"
+# Refusals stay cheap: the install must sit after the argument and
+# destination guards, so a refused invocation never reaches it.
+REFUSE_LINE="$(grep -n -F -- 'must not sit inside the repository' <<<"$INSTALL_CODE" | cut -d: -f1)"
+[ -n "$REFUSE_LINE" ] \
+  || die "install: cannot locate the destination refusal"
+[ "$REFUSE_LINE" -lt "$INSTALL_LINE" ] \
+  || die "install: frontend install precedes the destination refusal"
+pass "install script ensures frontend dependencies before the build"
+
 # 3. The build delegates to the wrapper: the link-order pin and the
 # no-Nix-links guard stay in that one place, never inlined here. The
 # hook stages the appex plus the CLI before the outer sign.
