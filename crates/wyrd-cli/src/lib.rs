@@ -448,6 +448,41 @@ pub fn command(args: Vec<String>) -> Result<(), CliError> {
         } => load_credentials(drive_dir, credentials, cli.config.as_deref())?,
         Command::Drive {
             drive_dir,
+            action:
+                crate::args::DriveAction::Unlock {
+                    relays,
+                    retained_quota,
+                },
+            credentials,
+            ..
+        } => {
+            // Unlock never loads the passphrase from a file: the
+            // terminal prompt or the stdin pipe, then the owner in
+            // the foreground exactly like `owner start`. Nothing is
+            // installed, enabled, or rewritten — the manager learns
+            // nothing, so a reboot or an explicit stop locks the
+            // drive again.
+            use std::io::IsTerminal as _;
+            let stdin_is_tty = std::io::stdin().is_terminal();
+            let config = crate::drive_config::load_drive_config(drive_dir, cli.config.as_deref())?;
+            let (identity, passphrase, _) = crate::credentials::read_unlock_credentials(
+                credentials,
+                config.as_ref(),
+                stdin_is_tty,
+            )?;
+            let resolution = resolve_relays(relays.relay.clone(), config.as_ref());
+            return owner(
+                drive_dir.clone(),
+                resolution,
+                config.as_ref(),
+                None,
+                *retained_quota,
+                &passphrase,
+                identity,
+            );
+        }
+        Command::Drive {
+            drive_dir,
             action: crate::args::DriveAction::ServiceStart { registry },
             credentials,
             ..
@@ -528,14 +563,20 @@ pub fn command(args: Vec<String>) -> Result<(), CliError> {
 
     match cli.command {
         // Dead by construction: the credentials match above returns
-        // from update, build-info, identity, drive service-start, and
-        // settings before secrets load. The arm exists only because
-        // the match is exhaustive.
+        // from update, build-info, identity, drive service-start,
+        // drive unlock, and settings before secrets load. The arm
+        // exists only because the match is exhaustive.
         Command::Update { .. }
         | Command::BuildInfo
         | Command::Identity { .. }
         | Command::Settings { .. } => {
-            unreachable!("update, build-info, identity, service-start, and settings resolve before credential loading")
+            unreachable!("update, build-info, identity, service-start, unlock, and settings resolve before credential loading")
+        }
+        Command::Drive {
+            action: crate::args::DriveAction::Unlock { .. },
+            ..
+        } => {
+            unreachable!("drive unlock runs before credential loading")
         }
         Command::UpdateVerify { drive_dir, .. } => {
             update::run_update_verify(&drive_dir, identity, &passphrase)

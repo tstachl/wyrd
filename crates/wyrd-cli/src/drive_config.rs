@@ -306,6 +306,10 @@ pub(crate) struct CredentialProvenance {
     /// per-session unlock): no file was resolved, so `word` must
     /// name stdin rather than misreporting a flag or a file.
     pub passphrase_from_stdin: bool,
+    /// The passphrase arrived from the unlock terminal prompt (no
+    /// echo): no file was resolved and no pipe was read, so `word`
+    /// must name the prompt rather than misreporting a flag.
+    pub passphrase_from_prompt: bool,
 }
 
 impl CredentialProvenance {
@@ -317,11 +321,14 @@ impl CredentialProvenance {
         }
     }
 
-    /// The passphrase surface in report words: stdin names itself,
-    /// otherwise the flag/file rule applies.
+    /// The passphrase surface in report words: stdin and the
+    /// terminal prompt name themselves, otherwise the flag/file
+    /// rule applies.
     pub(crate) fn passphrase_word(&self) -> &'static str {
         if self.passphrase_from_stdin {
             "stdin (`--passphrase-stdin`)"
+        } else if self.passphrase_from_prompt {
+            "terminal prompt (no echo)"
         } else {
             Self::word(self.passphrase_from_file)
         }

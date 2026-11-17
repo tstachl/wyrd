@@ -123,6 +123,9 @@ pub(crate) fn drive(
         DriveAction::ServiceStart { .. } => {
             unreachable!("service-start resolves in the dispatcher before drive()")
         }
+        DriveAction::Unlock { .. } => {
+            unreachable!("unlock runs the owner in the dispatcher before drive()")
+        }
     }
 }
 
