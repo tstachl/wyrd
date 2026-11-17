@@ -760,3 +760,74 @@ Developer portal with the App Group capability; the notarized
   is not a shipped integration.
 - If macOS cannot ship signed, the cut is Linux-only with FUSE —
   explicit, never a macOS target implying support.
+
+## Login items and recovery (decided)
+
+After install, reboot brings both back, owner first: per-drive owner
+services start at login (`RunAtLoad` in the launchd agent,
+`WantedBy=default.target` in the systemd unit), and the desktop UI
+starts once per login from its own login item. The UI never waits on
+the manager for ordering — a drive whose owner is not answering yet
+reads unavailable, and the owner appearing needs no restart: the
+tray reflects it within its 5s refresh and the view resumes on the
+explicit Retry. The full login-item decision (launchd agent vs the
+Apple login-item API, no manager ordering) is recorded in
+`docs/design/desktop-shell.md`, open-questions item 7.
+
+Install (ad-hoc rehearsal; the real installer owns this step later —
+fill the token with the installed location first):
+
+```sh
+# macOS: fill @WYRD_APP_PATH@, load once (copies are never hand-edited live).
+sed "s|@WYRD_APP_PATH@|$HOME/Applications/Wyrd.app|" \
+  packaging/macos/launchd/md.enesis.wyrd.desktop.plist \
+  > ~/Library/LaunchAgents/md.enesis.wyrd.desktop.plist
+launchctl load -w ~/Library/LaunchAgents/md.enesis.wyrd.desktop.plist
+```
+
+```sh
+# Linux: fill @WYRD_DESKTOP_BIN@, reload, enable for login.
+sed "s|@WYRD_DESKTOP_BIN@|$HOME/.local/bin/wyrd-desktop|" \
+  packaging/linux/systemd/wyrd-desktop.service \
+  > ~/.config/systemd/user/wyrd-desktop.service
+systemctl --user daemon-reload
+systemctl --user enable wyrd-desktop.service
+```
+
+Stop, start, disable — per drive on macOS, then the Linux twin:
+
+```sh
+launchctl list md.enesis.wyrd.drive-alpha   # loaded? (non-zero: stopped)
+launchctl unload ~/Library/LaunchAgents/md.enesis.wyrd.drive-alpha.plist  # stop
+launchctl load -w ~/Library/LaunchAgents/md.enesis.wyrd.drive-alpha.plist # start
+launchctl unload -w ~/Library/LaunchAgents/md.enesis.wyrd.drive-alpha.plist
+rm ~/Library/LaunchAgents/md.enesis.wyrd.drive-alpha.plist                 # disable
+```
+
+```sh
+systemctl --user is-active wyrd-drive-alpha.service
+systemctl --user stop wyrd-drive-alpha.service
+systemctl --user restart wyrd-drive-alpha.service
+systemctl --user disable --now wyrd-drive-alpha.service  # stop plus no login start
+```
+
+The UI login item stops the same way (`launchctl unload [-w]
+~/Library/LaunchAgents/md.enesis.wyrd.desktop.plist`,
+`systemctl --user disable --now wyrd-desktop.service`); stopping the
+UI never touches an owner, and quitting the UI never stops one —
+the OS manager is the parent of both (OD-06-E).
+
+Recovery, per unavailable cause (the desktop shows all three, never
+one toast): `NotInstalled` (no definition file) reinstalls from the
+view's Reinstall, which rewrites the entry and reinstalls, enables,
+and restarts; `Stopped` (definition present, unit not loaded) starts
+from the view's Start, which enables and starts the existing
+definition — a stopped drive is stable, never auto-started;
+`Wedged` (manager reports running, socket absent) restarts the
+service and reads the drive's service log (`service.log` in the
+drive directory on macOS, the user journal on Linux), never the
+drive contents; `Unknown` (manager did not answer) retries the
+probe, nothing else; `Unsupported` (no manager tool in the build)
+starts the owner manually and never ships. Disabling stops without
+touching drive data; only an explicit disable is a deliberate stop,
+never a crash the manager retries.

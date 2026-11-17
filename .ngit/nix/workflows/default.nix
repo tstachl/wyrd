@@ -78,6 +78,7 @@ in
       bash tests/harness/test-macos-link-order.sh
       bash tests/harness/test-dev-install.sh
       bash tests/harness/test-desktop-frontend-gate.sh
+      bash tests/harness/test-login-items.sh
       say "native shell suites green"
     '';
   };
