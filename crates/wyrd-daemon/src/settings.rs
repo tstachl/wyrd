@@ -214,6 +214,17 @@ pub enum SettingsWriteError {
         /// The validation, I/O, or permission failure, with its cause.
         reason: String,
     },
+    /// The commit landed but the verification re-read failed: the
+    /// file changed, the refusal taxonomy must not claim otherwise.
+    /// OD §6 never conflates outcomes — a committed write is
+    /// reported committed, even when only the final re-read failed.
+    #[error("settings at {path} committed but unverified: {reason}")]
+    CommittedUnverified {
+        /// The settings file the transaction committed.
+        path: PathBuf,
+        /// The re-read failure, with its cause.
+        reason: String,
+    },
 }
 
 fn refused(path: &Path, reason: String) -> SettingsWriteError {
@@ -480,7 +491,14 @@ fn commit_staged(
     // The rename carries the temp's owner-only mode, so the commit
     // corrects an over-permissive file it replaces — no post-rename
     // chmod, and no chmod-failure-after-rename outcome.
-    read_settings(settings_path).map_err(|error| refused(settings_path, error))
+    //
+    // The verification re-read runs through the normal reader, so a
+    // failure there is reported as committed-but-unverified — never
+    // as a refusal of a write that already landed.
+    read_settings(settings_path).map_err(|reason| SettingsWriteError::CommittedUnverified {
+        path: settings_path.to_path_buf(),
+        reason,
+    })
 }
 
 /// Apply one sparse edit for exactly one drive, transactionally:
@@ -645,9 +663,9 @@ pub fn notified_for_path(
 /// bug at the call site, not data to persist.
 ///
 /// A non-cooperating external modification between read and commit
-/// retries once under the still-held lock (the lock proves no
-/// cooperating writer intervened, so the second read is current);
-/// a second conflict is reported, never silently overwritten.
+/// is reported, never retried or merged: OD §4 leaves no room for
+/// an in-transaction retry, and the next notification re-lands on
+/// current bytes.
 pub fn record_notified(
     settings_path: &Path,
     drive_dir: &Path,
@@ -658,41 +676,22 @@ pub fn record_notified(
     let drive_key = settings_key_for(drive_dir);
     validate_drive_key(&drive_key)?;
     let _lock = lock_settings(settings_path).map_err(|error| error.to_string())?;
-    for attempt in 0..2 {
-        let mut staged = stage_file(settings_path).map_err(|error| error.to_string())?;
-        let notified = &mut staged
-            .file
-            .drives
-            .entry(drive_key.clone())
-            .or_default()
-            .notified;
-        notified.insert(key.to_string(), app_unix_secs);
-        // Oldest stamps evict first: dedup keeps its window without
-        // growing the file past the ceiling.
-        while notified.len() > MAX_NOTIFIED_PER_DRIVE {
-            let oldest = notified
-                .iter()
-                .min_by_key(|(_, stamp)| *stamp)
-                .map(|(key, _)| key.clone())
-                .expect("non-empty map has an oldest entry");
-            notified.remove(&oldest);
-        }
-        match commit_staged(settings_path, staged) {
-            Ok(_) => return Ok(()),
-            Err(SettingsWriteError::Conflict { .. }) if attempt == 0 => {
-                // One retry under the still-held lock: no cooperating
-                // writer could have intervened, so the second stage
-                // reads current.
-                continue;
-            }
-            Err(error) => return Err(error.to_string()),
-        }
+    let mut staged = stage_file(settings_path).map_err(|error| error.to_string())?;
+    let notified = &mut staged.file.drives.entry(drive_key).or_default().notified;
+    notified.insert(key.to_string(), app_unix_secs);
+    // Oldest stamps evict first: dedup keeps its window without
+    // growing the file past the ceiling.
+    while notified.len() > MAX_NOTIFIED_PER_DRIVE {
+        let oldest = notified
+            .iter()
+            .min_by_key(|(_, stamp)| *stamp)
+            .map(|(key, _)| key.clone())
+            .expect("non-empty map has an oldest entry");
+        notified.remove(&oldest);
     }
-    // The loop always returns; the second conflict falls out here.
-    Err(format!(
-        "settings at {} changed under the notification record",
-        settings_path.display()
-    ))
+    commit_staged(settings_path, staged)
+        .map(|_| ())
+        .map_err(|error| error.to_string())
 }
 
 #[cfg(test)]
