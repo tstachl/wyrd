@@ -124,7 +124,10 @@ fn execute_inner(
     // commit while this loop holds `engine`, and the membership log
     // and keyring the executor reads are untouched by those fact
     // types, so only a torn commit forces the replay back.
-    let mut rebuilt = engine.store.rebuild(engine.device)?;
+    // Seed the run-local evolving copy from the shared projection:
+    // same starting state as a fresh replay at this tip, without
+    // paying the replay when the pass already rebuilt.
+    let mut rebuilt = engine.cached_rebuilt()?;
     loop {
         let runtime = &mut rebuilt.runtime;
         let keyring = &rebuilt.keyring;
@@ -529,7 +532,7 @@ fn execute_inner(
         // the landed prefix stays durable and the loop re-derives the
         // remainder — preserving the torn-commit rebuild semantics.
         if !commit_admissible(engine, &facts)? {
-            rebuilt = engine.store.rebuild(engine.device)?;
+            rebuilt = engine.cached_rebuilt()?;
         }
         // The pass's batch is durable (or the projection was rebuilt
         // around a tear), so the per-pass accumulation starts over and

@@ -149,7 +149,7 @@ impl Engine {
         if self.answered_upto >= self.received_requests.len() {
             return Ok(AnswerReport::default());
         }
-        let rebuilt = self.store.rebuild(self.device)?;
+        let rebuilt = self.cached_rebuilt()?;
         let mut report = AnswerReport::default();
         // Suffix scan: the received-request bucket is append-only in
         // commit order and rebuilds deterministically, so entries
@@ -214,7 +214,7 @@ impl Engine {
             // same suffix — idempotently, since retire commits and
             // sealed sends from the partial pass are already durable.
             if dirty {
-                rebuilt = self.store.rebuild(self.device)?;
+                rebuilt = self.cached_rebuilt()?;
                 dirty = false;
             }
             let outstanding_t = outstanding_transitions(&rebuilt.runtime, requester);

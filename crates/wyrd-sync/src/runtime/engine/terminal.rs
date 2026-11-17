@@ -36,7 +36,7 @@ impl Engine {
     /// tracking issue's follow-up line); their strikes and cooldowns
     /// keep working exactly as before.
     pub fn evaluate_terminal(&mut self) -> Result<RuntimeState, EngineError> {
-        let rebuilt = self.store.rebuild(self.device)?;
+        let rebuilt = self.cached_rebuilt()?;
         let runtime = rebuilt.runtime;
         let plan = runtime.reconcile();
         let mut representations: BTreeMap<ContentId, Vec<FetchKey>> = BTreeMap::new();

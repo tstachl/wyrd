@@ -100,7 +100,7 @@ fn deliver_inner(
     // statement landed just before, so the snapshot sees them and
     // covered obligations are already non-pending — the scoped send
     // can only attempt the missing set.
-    let rebuilt = engine.store.rebuild(engine.device)?;
+    let rebuilt = engine.cached_rebuilt()?;
     let mut sent = 0usize;
     sent += deliver_transitions(engine, mailbox, &rebuilt, &mut *scope, budget)?;
     sent += deliver_capabilities(engine, mailbox, &rebuilt, &mut *scope, budget)?;

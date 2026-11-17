@@ -88,7 +88,7 @@ pub(crate) fn plan<S: ObjectStore>(
 where
     S::Error: std::fmt::Debug,
 {
-    let rebuilt = engine.store.rebuild(engine.device)?;
+    let rebuilt = engine.cached_rebuilt()?;
     plan_over(engine, objects, &rebuilt, from)
 }
 
@@ -183,7 +183,7 @@ fn resolve<S: ObjectStore>(
 where
     S::Error: std::fmt::Debug,
 {
-    let rebuilt = engine.store.rebuild(engine.device)?;
+    let rebuilt = engine.cached_rebuilt()?;
     let plan = plan_over(engine, objects, &rebuilt, from)?;
     let taken = select(objects, &plan, takes, all, contents)?;
     // The live comparison walks only grafted paths (N1): an

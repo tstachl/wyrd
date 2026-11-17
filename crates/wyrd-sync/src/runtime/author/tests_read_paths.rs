@@ -114,11 +114,68 @@ fn heads_report_rebuilds_once() {
     );
 }
 
-/// The merge dry run over the default selection projects three
-/// times: once for source selection, once for the rows, once for
-/// the verdict — the rows and the verdict never re-plan each other.
+/// One quiet pass projects once: every read-only consumer — live
+/// heads, runtime state, reconciliation counters, durability level,
+/// pending outbox queries, the epoch-pinned listing, and the
+/// classified heads listing — shares the pass-scoped projection
+/// keyed by CURRENT instead of replaying history each.
 #[test]
-fn merge_dry_run_rebuilds_thrice_over_default_selection() {
+fn quiet_read_bundle_rebuilds_once() {
+    let (_dir, mut engine, _) = owner_engine("read-paths-quiet-bundle");
+    let mut objects = MemoryObjectStore::default();
+    let base = tree(&mut objects, &[("base", b"base")]);
+    let t1 = tree(&mut objects, &[("a", b"a1")]);
+    let t2 = tree(&mut objects, &[("a", b"a2")]);
+    forks(&mut engine, &mut objects, base, &[t1, t2]);
+
+    let before = engine.store.rebuild_count();
+    let live = engine.live_heads().unwrap();
+    assert_eq!(live.len(), 2, "two forks stay eligible");
+    let _ = engine.runtime_state().unwrap();
+    let _ = engine.reconciliation_counters().unwrap();
+    let _ = engine.durability_level().unwrap();
+    let _ = engine.pending_announcements().unwrap();
+    let _ = engine.pending_carries().unwrap();
+    let _ = engine.withdrawal_outstanding().unwrap();
+    let _ = engine.live_heads_at_epoch(1).unwrap();
+    let listed = engine.snapshot_heads().unwrap();
+    assert_eq!(listed.len(), 2, "every tip is listed with its class");
+    assert_eq!(
+        engine.store.rebuild_count() - before,
+        1,
+        "one quiet bundle costs one replay no matter how many projections it consults"
+    );
+}
+
+/// Sequential commits invalidate exactly once each: three authors
+/// plus a closing read bundle cost four rebuilds — every commit
+/// moves CURRENT past the cached projection, and the bundle
+/// replays once. A stale hit would serve pre-commit heads; a
+/// missing invalidation would replay per call site.
+#[test]
+fn sequential_authors_rebuild_once_each() {
+    let (_dir, mut engine, _) = owner_engine("read-paths-sequential");
+    let mut objects = MemoryObjectStore::default();
+
+    let before = engine.store.rebuild_count();
+    for (name, bytes) in [("a", b"a".as_slice()), ("b", b"b"), ("c", b"c")] {
+        let root = tree(&mut objects, &[(name, bytes)]);
+        engine.author_snapshot(&objects, root).unwrap();
+    }
+    let live = engine.live_heads().unwrap();
+    assert_eq!(live.len(), 1, "each author supersedes the last");
+    let _ = engine.runtime_state().unwrap();
+    assert_eq!(
+        engine.store.rebuild_count() - before,
+        4,
+        "three commits plus one closing bundle cost four replays"
+    );
+}
+
+/// The merge dry run over the default selection projects once:
+/// selection, rows, and verdict share the pass-scoped projection.
+#[test]
+fn merge_dry_run_rebuilds_once_over_default_selection() {
     let (_dir, mut engine, _) = owner_engine("read-paths-merge");
     let mut objects = MemoryObjectStore::default();
     let base = tree(&mut objects, &[("base", b"base")]);
@@ -144,15 +201,15 @@ fn merge_dry_run_rebuilds_thrice_over_default_selection() {
         .unwrap();
     assert_eq!(
         engine.store.rebuild_count() - before,
-        3,
-        "selection, rows, and verdict share three rebuilds"
+        1,
+        "selection, rows, and verdict share one rebuild"
     );
 }
 
-/// The recovery dry run projects twice: once for the rows, once
-/// for the verdict — the verdict never re-plans the rows.
+/// The recovery dry run projects once: rows and verdict share the
+/// pass-scoped projection.
 #[test]
-fn recover_dry_run_rebuilds_twice() {
+fn recover_dry_run_rebuilds_once() {
     let (_dir, mut engine, _) = owner_engine("read-paths-recover");
     let mut objects = MemoryObjectStore::default();
     let (from, _) = base_and_child(&mut engine, &mut objects);
@@ -167,7 +224,7 @@ fn recover_dry_run_rebuilds_twice() {
         .unwrap();
     assert_eq!(
         engine.store.rebuild_count() - before,
-        2,
-        "rows and verdict share two rebuilds"
+        1,
+        "rows and verdict share one rebuild"
     );
 }

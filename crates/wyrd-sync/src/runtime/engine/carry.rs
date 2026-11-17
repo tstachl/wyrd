@@ -19,7 +19,7 @@ impl Engine {
     /// eligible. Returns the number newly staged; restaging is
     /// idempotent, and an empty stage commits nothing.
     pub fn stage_carry_heads(&mut self) -> Result<usize, EngineError> {
-        let rebuilt = self.store.rebuild(self.device)?;
+        let rebuilt = self.cached_rebuilt()?;
         let mut dag = crate::authorization::SnapshotDag::new(self.drive);
         for body in rebuilt.runtime.snapshot_bodies.values() {
             dag.observe(body.clone());
@@ -41,7 +41,7 @@ impl Engine {
     /// The still-undischarged carry obligations: pre-transition heads
     /// staged but not yet re-authored at the known epoch.
     pub fn pending_carries(&self) -> Result<Vec<SnapshotId>, EngineError> {
-        Ok(self.store.rebuild(self.device)?.runtime.pending_carries())
+        Ok(self.cached_rebuilt()?.runtime.pending_carries())
     }
 
     /// Drain the durable carry queue: re-author every still-pending
@@ -67,7 +67,7 @@ impl Engine {
         S::Error: std::fmt::Debug,
     {
         let mut report = CarryReport::default();
-        let rebuilt = self.store.rebuild(self.device)?;
+        let rebuilt = self.cached_rebuilt()?;
         let pending = rebuilt.runtime.pending_carries();
         if pending.is_empty() {
             return Ok(report);

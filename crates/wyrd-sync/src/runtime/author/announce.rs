@@ -61,7 +61,7 @@ pub(crate) fn announce(
         .get(&body.epoch)
         .ok_or(EngineError::MissingEpochKey(body.epoch))?;
 
-    let rebuilt = engine.store.rebuild(engine.device)?;
+    let rebuilt = engine.cached_rebuilt()?;
     let root_record = rebuilt
         .runtime
         .root_manifest_record(&body.snapshot_id())
@@ -244,7 +244,7 @@ pub(crate) fn announce_pending(
     node_addr: Option<&[u8]>,
     budget: &mut PublishBudget,
 ) -> Result<usize, EngineError> {
-    let rebuilt = engine.store.rebuild(engine.device)?;
+    let rebuilt = engine.cached_rebuilt()?;
     // The live route's endpoint identity, for route-scoped
     // redelivery below. `None` (no serving route) degrades the
     // eligibility to plain pending: repair toward no route is
@@ -661,7 +661,7 @@ fn send_pending_for(
     // re-derived here for the same reason: the marker commits below
     // never touch the received-request bucket, so the selecting
     // pass's map stays exact.
-    let rebuilt = engine.store.rebuild(engine.device)?;
+    let rebuilt = engine.cached_rebuilt()?;
     let latest = latest_gap_statements(&rebuilt);
     let mut recipients: Vec<wyrd_format::DeviceId> = rebuilt
         .runtime

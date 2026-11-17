@@ -71,6 +71,7 @@ impl Engine {
             answered_upto: 0,
             pending: PendingQueue::default(),
             live_heads_cache: Mutex::new(None),
+            rebuilt_cache: Mutex::new(None),
             fetch_run: 0,
             fetch_strikes: BTreeMap::new(),
             fetch_budget_burns: BTreeMap::new(),
@@ -106,7 +107,7 @@ impl Engine {
     /// — and authorization already happened when each secret was
     /// installed.
     fn restore_epoch_keys(&mut self) -> Result<(), EngineError> {
-        let rebuilt = self.store.rebuild(self.device)?;
+        let rebuilt = self.cached_rebuilt()?;
         for epoch in 1..=rebuilt.keyring.up_to() {
             if let Some(secret) = rebuilt.keyring.secret(epoch) {
                 self.add_epoch_key(

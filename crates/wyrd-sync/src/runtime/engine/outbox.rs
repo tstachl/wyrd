@@ -26,7 +26,7 @@ impl Engine {
         // No selecting pass here, so the scope is computed for this
         // single send (one DAG walk, same as the drain path spends
         // per resume, not per snapshot).
-        let rebuilt = self.store.rebuild(self.device)?;
+        let rebuilt = self.cached_rebuilt()?;
         let scope = author::redelivery_scope_set(self, &rebuilt);
         // Single snapshot, not the pass aggregate: the per-send relay
         // timeout already bounds this call, so the pass budget does
@@ -59,11 +59,7 @@ impl Engine {
     /// the durable outbox, in snapshot-id order. Empty means nothing
     /// awaits a send.
     pub fn pending_announcements(&self) -> Result<Vec<(SnapshotId, DeviceId)>, EngineError> {
-        Ok(self
-            .store
-            .rebuild(self.device)?
-            .runtime
-            .pending_announcements())
+        Ok(self.cached_rebuilt()?.runtime.pending_announcements())
     }
 
     /// Own in-scope snapshots still naming a serving route at some
@@ -78,7 +74,7 @@ impl Engine {
     /// on, so the predicate can never wait for a pair the gate would
     /// not resend.
     pub fn withdrawal_outstanding(&self) -> Result<usize, EngineError> {
-        let rebuilt = self.store.rebuild(self.device)?;
+        let rebuilt = self.cached_rebuilt()?;
         let scope = author::redelivery_scope_set(self, &rebuilt);
         Ok(rebuilt
             .runtime
@@ -94,7 +90,7 @@ impl Engine {
     /// [`RuntimeState`](super::super::RuntimeState) so holders of an
     /// already-rebuilt state do not rebuild again.
     pub fn durability_level(&self) -> Result<DurabilityLevel, EngineError> {
-        Ok(self.store.rebuild(self.device)?.runtime.durability_level())
+        Ok(self.cached_rebuilt()?.runtime.durability_level())
     }
 
     /// Whether any outbound obligation awaits a send — announcements,
@@ -103,7 +99,7 @@ impl Engine {
     /// pending outbox (queued before a restart, or skipped for a
     /// missing key) still runs its publish step instead of idling.
     pub fn has_pending_outbound(&self) -> Result<bool, EngineError> {
-        let rebuilt = self.store.rebuild(self.device)?;
+        let rebuilt = self.cached_rebuilt()?;
         Ok(!rebuilt.runtime.pending_announcements().is_empty()
             || !rebuilt.runtime.pending_transitions().is_empty()
             || !rebuilt.runtime.pending_capabilities().is_empty())

@@ -108,7 +108,7 @@ pub(crate) fn plan<S: ObjectStore>(
 where
     S::Error: std::fmt::Debug,
 {
-    let rebuilt = engine.store.rebuild(engine.device)?;
+    let rebuilt = engine.cached_rebuilt()?;
     plan_over(engine.drive, objects, &rebuilt, heads)
 }
 
@@ -253,7 +253,7 @@ pub(crate) fn preview<S: ObjectStore>(
 where
     S::Error: std::fmt::Debug,
 {
-    let rebuilt = engine.store.rebuild(engine.device)?;
+    let rebuilt = engine.cached_rebuilt()?;
     let plan = plan_over(engine.drive, objects, &rebuilt, heads)?;
     let taken = validate_spec(&plan, default, spec)?;
     // Locality reads the same rebuild the plan classified: both

@@ -344,7 +344,7 @@ impl LoadedFacts {
 /// The reconstructed live state: facts replayed through the same
 /// machines that accepted them. The caller runs `runtime.reconcile()`
 /// for the fetch plan.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Rebuilt {
     /// The membership log replayed from the recorded transitions.
     pub log: MembershipLog,

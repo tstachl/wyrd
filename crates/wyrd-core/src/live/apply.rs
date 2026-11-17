@@ -390,6 +390,15 @@ where
             return self.apply_fold(members, pinned);
         }
         self.enforce_retained_quota()?;
+        // Per-operation object-store handle for the authoring calls
+        // below: each tree/chunk read takes its own short lock
+        // instead of holding the store read guard across the whole
+        // authoring call (durable replay, vault import with fsyncs,
+        // fact commit) — the same per-operation contract the fetch
+        // executor already relies on. A concurrent import can only
+        // add bytes; a concurrent discard surfacing mid-walk fails
+        // the authoring closed into a re-demand, never corrupt.
+        let shared = SharedStore::from(Arc::clone(&self.store));
         match kind {
             // Folds route through `apply_fold` above; this backstop
             // keeps the match total if one ever reaches here.
@@ -404,7 +413,7 @@ where
                 let (root, outcome) = self.build_root(kind, &heads, tree)?;
                 Self::author_traced(
                     &mut self.engine,
-                    &*self.store.read().map_err(|_| MutationError::Lock)?,
+                    &shared,
                     root,
                     &heads,
                     CommitSource::from(kind),
@@ -425,7 +434,7 @@ where
                 let (root, outcome) = self.build_root(kind, &heads, tree)?;
                 Self::author_traced(
                     &mut self.engine,
-                    &*self.store.read().map_err(|_| MutationError::Lock)?,
+                    &shared,
                     root,
                     &heads,
                     CommitSource::from(kind),
@@ -449,7 +458,7 @@ where
                 let (root, outcome) = self.build_root(kind, &heads, tree)?;
                 Self::author_traced(
                     &mut self.engine,
-                    &*self.store.read().map_err(|_| MutationError::Lock)?,
+                    &shared,
                     root,
                     &heads,
                     CommitSource::from(kind),
@@ -472,7 +481,7 @@ where
                 if root != tree {
                     Self::author_traced(
                         &mut self.engine,
-                        &*self.store.read().map_err(|_| MutationError::Lock)?,
+                        &shared,
                         root,
                         &heads,
                         CommitSource::from(kind),
@@ -487,7 +496,7 @@ where
                 let (root, outcome) = self.build_root(kind, &heads, tree)?;
                 Self::author_traced(
                     &mut self.engine,
-                    &*self.store.read().map_err(|_| MutationError::Lock)?,
+                    &shared,
                     root,
                     &heads,
                     CommitSource::from(kind),
@@ -502,7 +511,7 @@ where
                 let (root, outcome) = self.build_root(kind, &heads, tree)?;
                 Self::author_traced(
                     &mut self.engine,
-                    &*self.store.read().map_err(|_| MutationError::Lock)?,
+                    &shared,
                     root,
                     &heads,
                     CommitSource::from(kind),
@@ -519,7 +528,7 @@ where
                 if root != tree {
                     Self::author_traced(
                         &mut self.engine,
-                        &*self.store.read().map_err(|_| MutationError::Lock)?,
+                        &shared,
                         root,
                         &heads,
                         CommitSource::from(kind),
@@ -537,7 +546,7 @@ where
                 if root != tree {
                     Self::author_traced(
                         &mut self.engine,
-                        &*self.store.read().map_err(|_| MutationError::Lock)?,
+                        &shared,
                         root,
                         &heads,
                         CommitSource::from(kind),
@@ -1287,12 +1296,15 @@ where
             }
         }
         // Phase C: one snapshot for the whole fold — or none when no
-        // surviving member changed the tree.
+        // surviving member changed the tree. The object-store reads
+        // inside authoring take per-operation short locks (see
+        // `apply_mutation`): no guard is held across the vault
+        // import and fact commit here either.
         if evolving != start {
-            let store = self.store.read().map_err(|_| MutationError::Lock)?;
+            let shared = SharedStore::from(Arc::clone(&self.store));
             Self::author_traced(
                 &mut self.engine,
-                &*store,
+                &shared,
                 evolving,
                 &heads,
                 // The seam's own class: a fold has members, not one
