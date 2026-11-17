@@ -431,15 +431,17 @@ export interface OnboardingReport {
 // `crates/wyrd-desktop/src/settings_apply.rs` and
 // `SettingsWriteReport` in `crates/wyrd-desktop/src/commands.rs` —
 // only the exit code is ever mapped (0 applied, 2 refused, 3
-// conflict), CLI text rides as opaque detail, and the observed
-// settings re-read nests under `observed`. Nothing here may add a
-// shape the Rust side does not produce.
+// conflict, 4 committed-but-unverified), CLI text rides as opaque
+// detail, and the observed settings re-read nests under
+// `observed`. Nothing here may add a shape the Rust side does not
+// produce.
 
 /** The adapter's verdict on one sparse edit — never configured state. Only the exit code decides. */
 export type SettingsWriteState =
   | { result: "applied"; detail: string }
   | { result: "refused"; reason: string }
   | { result: "conflict"; reason: string }
+  | { result: "unverified"; reason: string }
   | { result: "failed"; reason: string };
 
 /** One completed settings edit plus the post-run observation. Infallible: unknown states ride inside. */

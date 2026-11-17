@@ -1272,9 +1272,9 @@ fn settings_write_refuses_a_non_canonical_drive_identity() {
 
 /// Settings writes map the CLI exit code through the command: exit
 /// 0 applies (the real file is re-read for the observation), exit 3
-/// conflicts, exit 2 refuses — all through a fake CLI, with no
-/// mock. The fake answers `__build_info` with the workspace version
-/// the adapter requires.
+/// conflicts, exit 4 lands committed-but-unverified, exit 2 refuses
+/// — all through a fake CLI, with no mock. The fake answers
+/// `__build_info` with the workspace version the adapter requires.
 #[test]
 fn settings_write_maps_exit_codes_through_a_fake_cli() {
     let dir = std::env::temp_dir().join(format!(
@@ -1286,6 +1286,7 @@ fn settings_write_maps_exit_codes_through_a_fake_cli() {
     for (name, code, want) in [
         ("ok", 0, "applied"),
         ("race", 3, "conflict"),
+        ("unverified", 4, "unverified"),
         ("bad", 2, "refused"),
     ] {
         let cli = dir.join(name);

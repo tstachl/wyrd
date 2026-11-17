@@ -18,9 +18,11 @@
 //!
 //! Exit codes: 0 applied, 2 refused (validation, unreadable file,
 //! usage), 3 conflict (the file moved under the transaction —
-//! re-read and retry, never terminal), anything else unknown. Only
-//! `settings apply` exits 3; the provisioning contract (0/2/78)
-//! is untouched.
+//! re-read and retry, never terminal), 4 committed-but-unverified
+//! (the bytes landed, only the read-back failed — never a refusal).
+//! Anything else, plus timeouts, spawn failures, and version
+//! mismatch, is unknown. Only `settings apply` exits 3 or 4; the
+//! provisioning contract (0/2/78) is untouched.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -39,9 +41,14 @@ use super::provision::{
 pub const SETTINGS_APPLY_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The exit code `settings apply` reports for a lost commit race.
-/// The only settings-scoped addition to the CLI contract: 0
-/// applied, 2 refused, 78 held-drive — plus 3 conflict.
+/// The only settings-scoped additions to the CLI contract: 0
+/// applied, 2 refused, 78 held-drive — plus 3 conflict and 4
+/// committed-but-unverified.
 pub const EXIT_SETTINGS_CONFLICT: i32 = 3;
+/// The exit code `settings apply` reports when the commit landed
+/// but the verification re-read failed. Never a refusal: the paired
+/// re-read decides what stands.
+pub const EXIT_SETTINGS_UNVERIFIED: i32 = 4;
 
 /// One sparse edit for exactly one drive: the section key plus the
 /// shared update both sides validate.
@@ -85,6 +92,14 @@ pub enum SettingsApplyResult {
     Conflict {
         /// Opaque display detail naming the race; the paired re-read
         /// shows what actually stands.
+        reason: String,
+    },
+    /// Exit 4: the commit landed but the verification re-read
+    /// failed. Never a refusal — the write changed the file, and
+    /// the paired re-read decides what the display says.
+    Unverified {
+        /// Opaque display detail naming the failed read; the paired
+        /// re-read shows what actually stands.
         reason: String,
     },
     /// Version mismatch, spawn failure, timeout, or signal death:
@@ -146,9 +161,9 @@ pub fn settings_apply_argv(request: &SettingsApplyRequest) -> Result<Vec<OsStrin
 }
 
 /// Map a completed process run onto the edit verdict. Only the exit
-/// code decides: 0 applies, 3 conflicts, 2 refuses, and anything
-/// else (plus timeouts and spawn failures) is unknown — the paired
-/// re-read decides what the display says.
+/// code decides: 0 applies, 3 conflicts, 4 lands unverified, 2
+/// refuses, and anything else (plus timeouts and spawn failures)
+/// is unknown — the paired re-read decides what the display says.
 fn map_settings_exit(output: &CliOutput) -> SettingsApplyOutcome {
     if output.timed_out {
         return SettingsApplyOutcome {
@@ -183,27 +198,55 @@ fn map_settings_exit(output: &CliOutput) -> SettingsApplyOutcome {
             code: Some(code),
         };
     }
-    // Every other non-zero code — including usage, unreadable files,
-    // and validation refusals — is a refusal: nothing was committed
-    // past the transaction's own guard, and the paired re-read says
-    // what stands.
+    if code == EXIT_SETTINGS_UNVERIFIED {
+        return SettingsApplyOutcome {
+            result: SettingsApplyResult::Unverified { reason: detail },
+            stderr: output.stderr.clone(),
+            code: Some(code),
+        };
+    }
+    if code == 2 {
+        // Usage, validation, and unreadable-file refusals: nothing
+        // was committed past the transaction's own guard, and the
+        // paired re-read says what stands.
+        return SettingsApplyOutcome {
+            result: SettingsApplyResult::Refused { reason: detail },
+            stderr: output.stderr.clone(),
+            code: Some(code),
+        };
+    }
+    // Any other non-zero code (a CLI panic, a held-drive code on a
+    // path that holds no store) claims no verdict: the outcome is
+    // unknown, and the paired re-read decides.
     SettingsApplyOutcome {
-        result: SettingsApplyResult::Refused { reason: detail },
+        result: SettingsApplyResult::Failed { reason: detail },
         stderr: output.stderr.clone(),
         code: Some(code),
     }
 }
 
-/// Run one `settings apply` through the version-matched CLI: version
-/// check first (hard failure on mismatch, like every provisioned
-/// operation), then the structured argv run, then the exit-code map.
-/// The caller pairs every path with a settings re-read; no path
-/// reports configured state.
+/// Run one `settings apply` through the version-matched CLI: the
+/// structured argv validates first (a typo'd key refuses before any
+/// process spawns — not even the version check), then the version
+/// check (hard failure on mismatch, like every provisioned
+/// operation), then the run and the exit-code map. The caller pairs
+/// every path with a settings re-read; no path reports configured
+/// state.
 pub fn run_settings_apply(
     cli_bin: &Path,
     request: &SettingsApplyRequest,
     timeout: Duration,
 ) -> SettingsApplyOutcome {
+    let argv = match settings_apply_argv(request) {
+        Ok(argv) => argv,
+        Err(reason) => {
+            return SettingsApplyOutcome {
+                result: SettingsApplyResult::Refused { reason },
+                stderr: String::new(),
+                code: None,
+            };
+        }
+    };
     if let Err(mismatch) = check_cli_version(cli_bin, timeout) {
         return SettingsApplyOutcome {
             result: SettingsApplyResult::Failed {
@@ -216,16 +259,6 @@ pub fn run_settings_apply(
             code: None,
         };
     }
-    let argv = match settings_apply_argv(request) {
-        Ok(argv) => argv,
-        Err(reason) => {
-            return SettingsApplyOutcome {
-                result: SettingsApplyResult::Refused { reason },
-                stderr: String::new(),
-                code: None,
-            };
-        }
-    };
     let output = run_cli(cli_bin, &argv, None, timeout);
     map_settings_exit(&output)
 }
@@ -344,8 +377,25 @@ mod tests {
             map_settings_exit(&refused).result,
             SettingsApplyResult::Refused { .. }
         ));
+        // An unexpected code (a CLI panic, a held-drive code on a
+        // path that holds no store) claims no verdict: unknown, with
+        // the paired re-read deciding.
+        let panicked = CliOutput {
+            code: Some(101),
+            status_success: false,
+            stdout: String::new(),
+            stderr: "thread 'main' panicked".to_string(),
+            timed_out: false,
+        };
+        let outcome = map_settings_exit(&panicked);
+        assert!(
+            matches!(outcome.result, SettingsApplyResult::Failed { .. }),
+            "an unexpected code is unknown, never a refusal: {:?}",
+            outcome.result
+        );
+        assert_eq!(outcome.code, Some(101));
         // Exit 78 (a held drive — impossible on this path, but the
-        // mapper must not invent a meaning) refuses generically.
+        // mapper must not invent a meaning) is unknown too.
         let held = CliOutput {
             code: Some(78),
             status_success: false,
@@ -355,8 +405,22 @@ mod tests {
         };
         assert!(matches!(
             map_settings_exit(&held).result,
-            SettingsApplyResult::Refused { .. }
+            SettingsApplyResult::Failed { .. }
         ));
+        // Exit 4 lands committed-but-unverified: never a refusal.
+        let unverified = CliOutput {
+            code: Some(4),
+            status_success: false,
+            stdout: String::new(),
+            stderr: "settings committed but the verification read failed".to_string(),
+            timed_out: false,
+        };
+        match map_settings_exit(&unverified).result {
+            SettingsApplyResult::Unverified { reason } => {
+                assert!(reason.contains("verification"), "detail: {reason}")
+            }
+            other => panic!("exit 4 lands unverified: {other:?}"),
+        }
         let wedged = CliOutput {
             code: None,
             status_success: false,

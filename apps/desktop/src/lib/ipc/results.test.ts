@@ -376,4 +376,12 @@ test("settings write report pairs the outcome with the observation", () => {
     observed: { state: "nosection" },
   };
   expect(conflict.result).toEqual({ result: "conflict", reason: "changed under" });
+  // Exit 4 lands committed-but-unverified: never a refusal, paired
+  // with the fresh re-read. Mirrors the `unverified` row in the
+  // Rust `settings_write_report_serializes_verbatim` test.
+  const unverified: SettingsWriteReport = {
+    result: { result: "unverified", reason: "verification read failed" },
+    observed: { state: "nosection" },
+  };
+  expect(unverified.result).toEqual({ result: "unverified", reason: "verification read failed" });
 });

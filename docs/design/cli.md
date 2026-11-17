@@ -1253,6 +1253,9 @@ show and composes with the party table.
   are failures too, not help text. `settings apply` additionally
   exits `3` on a lost commit race (the file moved under the
   transaction): the edit is valid, so the operator re-reads and
-  retries — never terminal like 78. A serving shutdown failure also
+  retries — never terminal like 78. `settings apply` exits `4` when
+  the commit landed but the verification re-read failed: the bytes
+  changed, so this is never a refusal — the operator trusts the
+  fresh re-read, not a retry. A serving shutdown failure also
   fails the mount (as a serving error, after the mountpoint is
   already unmounted); bulk closes graceful-or-abort and cannot fail.

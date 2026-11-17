@@ -1462,6 +1462,12 @@ mod tests {
                 "conflict",
             ),
             (
+                SettingsApplyResult::Unverified {
+                    reason: "verification read failed".to_string(),
+                },
+                "unverified",
+            ),
+            (
                 SettingsApplyResult::Failed {
                     reason: "no cli".to_string(),
                 },

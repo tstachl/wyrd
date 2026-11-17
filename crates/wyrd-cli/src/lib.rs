@@ -145,6 +145,17 @@ pub enum CliError {
         /// What moved between read and commit.
         reason: String,
     },
+    /// A sparse settings edit committed but the verification
+    /// re-read failed: the bytes landed, only the final read-back
+    /// did not. Never reported as a refusal — the refusal taxonomy
+    /// must not claim otherwise (OD §6 never conflates outcomes).
+    /// Exits 4 (see [`EXIT_SETTINGS_UNVERIFIED`]): the desktop shows
+    /// the fresh re-read beside the unverified outcome.
+    #[error("settings committed but the verification read failed: {reason}")]
+    SettingsUnverified {
+        /// Why the verification re-read failed.
+        reason: String,
+    },
     /// An invitation file does not decode as a sealed bootstrap.
     #[error("invitation file does not decode as a sealed bootstrap")]
     InvitationFormat,
@@ -283,17 +294,25 @@ pub const EXIT_DRIVE_LOCKED: i32 = 78;
 /// apply` exits this way. Recorded in `docs/design/cli.md`'s
 /// exit-code list.
 pub const EXIT_SETTINGS_CONFLICT: i32 = 3;
+/// A sparse settings edit committed but the verification re-read
+/// failed: the bytes landed, only the read-back did not. The
+/// operator trusts the fresh re-read, not a retry — re-running a
+/// landed edit is harmless (idempotent sparse update) but the
+/// outcome is already decided. Only `settings apply` exits this
+/// way. Recorded in `docs/design/cli.md`'s exit-code list.
+pub const EXIT_SETTINGS_UNVERIFIED: i32 = 4;
 
 impl CliError {
     /// Fold the error into a process exit status: the
     /// drive-already-owned code for lock contention (direct or
     /// wrapped in an engine error — the mount contends through the
-    /// latter), the settings-conflict code for a lost commit race,
-    /// 2 for everything else.
+    /// latter), the settings codes for a lost commit race (3) and a
+    /// committed-but-unverified write (4), 2 for everything else.
     pub fn exit_code(&self) -> i32 {
         match self {
             CliError::OwnerLocked { .. } => EXIT_DRIVE_LOCKED,
             CliError::SettingsConflict { .. } => EXIT_SETTINGS_CONFLICT,
+            CliError::SettingsUnverified { .. } => EXIT_SETTINGS_UNVERIFIED,
             CliError::Engine(wyrd_sync::runtime::EngineError::Durable(
                 wyrd_sync::durable::DurableError::StoreLocked,
             )) => EXIT_DRIVE_LOCKED,

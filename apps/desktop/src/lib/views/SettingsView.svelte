@@ -35,6 +35,12 @@ never deletes local data as a side effect of the UI. -->
     SETTING_BOUNDS,
     validateBoundInput,
   } from "./format.js";
+  import {
+    buildDraftInputs,
+    buildSparseDraft,
+    isDraftDirty,
+    toggleCleared,
+  } from "./settings-draft.js";
   import ObservedNote from "./ObservedNote.svelte";
   import FileQuestionIcon from "@lucide/svelte/icons/file-question";
   import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
@@ -101,13 +107,20 @@ never deletes local data as a side effect of the UI. -->
   let saveReport = $state<SettingsWriteReport | null>(null);
   let saveError = $state<string | null>(null);
 
-  function startEditing(): void {
-    const next: Record<string, string> = {};
+  /** Configured values by key for the draft helpers, from the latest observation. */
+  function configuredRecord(): Record<string, number | null> {
+    const record: Record<string, number | null> = {};
     for (const bound of SETTING_BOUNDS) {
-      const current = configuredValue(bound.key);
-      next[bound.key] = current === null ? "" : String(current);
+      record[bound.key] = configuredValue(bound.key);
     }
-    inputs = next;
+    return record;
+  }
+
+  function startEditing(): void {
+    inputs = buildDraftInputs(
+      configuredRecord(),
+      SETTING_BOUNDS.map((bound) => bound.key),
+    );
     cleared = [];
     fieldErrors = {};
     saveReport = null;
@@ -125,10 +138,9 @@ never deletes local data as a side effect of the UI. -->
   }
 
   function toggleClear(key: string): void {
-    if (cleared.includes(key)) {
-      cleared = cleared.filter((candidate) => candidate !== key);
-    } else {
-      cleared = [...cleared, key];
+    const wasCleared = cleared.includes(key);
+    cleared = toggleCleared(cleared, key);
+    if (!wasCleared) {
       const next = { ...fieldErrors };
       delete next[key];
       fieldErrors = next;
@@ -136,39 +148,34 @@ never deletes local data as a side effect of the UI. -->
   }
 
   const dirty = $derived(
-    cleared.length > 0 ||
-      SETTING_BOUNDS.some((bound) => {
-        const text = (inputs[bound.key] ?? "").trim();
-        if (text === "") return false;
-        return text !== String(configuredValue(bound.key) ?? "");
-      }),
+    isDraftDirty(
+      inputs,
+      cleared,
+      configuredRecord(),
+      SETTING_BOUNDS.map((bound) => bound.key),
+    ),
   );
 
   async function save(): Promise<void> {
-    const set: Record<string, number> = {};
-    const clear: string[] = [...cleared];
-    const errors: Record<string, string> = {};
-    for (const bound of SETTING_BOUNDS) {
-      if (cleared.includes(bound.key)) continue;
-      const text = (inputs[bound.key] ?? "").trim();
-      if (text === "") continue;
-      if (text === String(configuredValue(bound.key) ?? "")) continue;
-      const problem = validateBoundInput(bound.key, text);
-      if (problem !== null) {
-        errors[bound.key] = problem;
-        continue;
-      }
-      set[bound.key] = Number(text);
-    }
+    const draft = buildSparseDraft(
+      inputs,
+      cleared,
+      configuredRecord(),
+      SETTING_BOUNDS.map((bound) => bound.key),
+      validateBoundInput,
+    );
+    const { set, clear, errors } = draft;
     fieldErrors = errors;
     if (Object.keys(errors).length > 0) return;
     saving = true;
     saveError = null;
     try {
       // The report carries the outcome; the paired re-read behind
-      // `onApply` decides what the display says.
+      // `onApply` decides what the display says. Applied and
+      // unverified both committed, so both discard the draft —
+      // unverified keeps its alert beside the fresh observation.
       saveReport = await onApply({ set, clear });
-      if (saveReport.result.result === "applied") {
+      if (saveReport.result.result === "applied" || saveReport.result.result === "unverified") {
         editing = false;
         inputs = {};
         cleared = [];
@@ -240,7 +247,15 @@ never deletes local data as a side effect of the UI. -->
     </p>
   </Alert.Root>
 {/if}
-{#if saveReport !== null && saveReport.result.result !== "applied"}
+{#if saveReport !== null && saveReport.result.result === "unverified"}
+  <Alert.Root class="mt-6 border-primary/40 bg-primary/10">
+    <Alert.Title>Saved but unverified</Alert.Title>
+    <Alert.Description>
+      <p>{saveReport.result.reason} — the write landed; the observation below is the fresh re-read.</p>
+    </Alert.Description>
+  </Alert.Root>
+{/if}
+{#if saveReport !== null && saveReport.result.result !== "applied" && saveReport.result.result !== "unverified"}
   <Alert.Root
     variant={saveReport.result.result === "conflict" ? "default" : "destructive"}
     class="mt-6"

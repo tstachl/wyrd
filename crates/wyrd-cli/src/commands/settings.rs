@@ -76,7 +76,8 @@ pub(crate) fn settings(drive_dir: PathBuf, action: SettingsAction) -> Result<(),
             use wyrd_daemon::SettingsWriteError as E;
             match error {
                 E::Conflict { reason, .. } => CliError::SettingsConflict { reason },
-                E::Refused { reason, .. } | E::CommittedUnverified { reason, .. } => {
+                E::CommittedUnverified { reason, .. } => CliError::SettingsUnverified { reason },
+                E::Refused { reason, .. } => {
                     CliError::Usage(format!("settings apply refused: {reason}"))
                 }
             }
@@ -191,7 +192,8 @@ mod tests {
     }
 
     /// The commit race has its own exit status: conflict exits 3 so
-    /// the desktop renders it without parsing text; usage stays 2.
+    /// the desktop renders it without parsing text; an unverified
+    /// commit exits 4, never collapsed into refusal; usage stays 2.
     #[test]
     fn conflict_and_usage_fold_to_distinct_codes() {
         assert_eq!(
@@ -202,6 +204,14 @@ mod tests {
             crate::EXIT_SETTINGS_CONFLICT
         );
         assert_eq!(crate::EXIT_SETTINGS_CONFLICT, 3);
+        assert_eq!(
+            CliError::SettingsUnverified {
+                reason: "unreadable".to_string()
+            }
+            .exit_code(),
+            crate::EXIT_SETTINGS_UNVERIFIED
+        );
+        assert_eq!(crate::EXIT_SETTINGS_UNVERIFIED, 4);
         assert_eq!(CliError::Usage("bad".to_string()).exit_code(), 2);
     }
 
