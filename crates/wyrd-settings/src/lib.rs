@@ -114,30 +114,39 @@ pub fn settings_key_for(drive_dir: &std::path::Path) -> String {
     }
 }
 
-/// Shared rule for one drive key, in a file or about to be written:
-/// non-empty, absolute, no `..`, no control characters. The exact
-/// spelling both readers and the writer enforce, so a key one side
-/// accepts is a key every side accepts.
-pub fn validate_drive_key(key: &str) -> Result<(), String> {
-    if key.is_empty() {
-        return Err("settings drive key must not be empty".to_string());
+/// Shared spelling rule for one drive path, attributed to the
+/// artifact at fault (`noun`): non-empty, absolute, no `..`, no
+/// control characters. One implementation so the settings-file key,
+/// the desktop command boundary, and the registry can never drift —
+/// the same rule, attributed to the surface that rejected it.
+/// `validate_drive_key` is the settings-file spelling of this rule.
+pub fn validate_drive_spelling(value: &str, noun: &str) -> Result<(), String> {
+    if value.is_empty() {
+        return Err(format!("{noun} must not be empty"));
     }
-    let path = std::path::Path::new(key);
+    let path = std::path::Path::new(value);
     if !path.is_absolute() {
-        return Err(format!("settings drive key {key:?} must be absolute"));
+        return Err(format!("{noun} {value:?} must be absolute"));
     }
     if path
         .components()
         .any(|component| matches!(component, std::path::Component::ParentDir))
     {
-        return Err(format!("settings drive key {key:?} must not contain .."));
+        return Err(format!("{noun} {value:?} must not contain .."));
     }
-    if key.bytes().any(|byte| byte < 0x20 || byte == 0x7f) {
+    if value.bytes().any(|byte| byte < 0x20 || byte == 0x7f) {
         return Err(format!(
-            "settings drive key {key:?} must not contain control characters"
+            "{noun} {value:?} must not contain control characters"
         ));
     }
     Ok(())
+}
+
+/// Shared rule for one drive key, in a file or about to be written:
+/// the shared spelling rule under the settings-file noun, so a key
+/// one side accepts is a key every side accepts.
+pub fn validate_drive_key(key: &str) -> Result<(), String> {
+    validate_drive_spelling(key, "settings drive key")
 }
 
 /// Shared range rule for the per-pass admission bound: 1..=1000000.

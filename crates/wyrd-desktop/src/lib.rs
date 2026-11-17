@@ -321,12 +321,12 @@ impl Default for AppState {
 
 /// The drive-identity rule, shared by every drive-identity
 /// surface in the crate: the absolute drive directory as an exact
-/// string — the same rule as the settings keys
-/// (`settings_view::settings_key_for` plus its key validation) and
-/// the registry entries. Empty, relative, `..`-carrying, and
-/// control-byte spellings all refuse with their reason, so no
-/// caller resolves against the process directory and no
-/// non-canonical spelling keys a second map entry for one drive.
+/// string — the shared spelling rule from `wyrd_settings`, so the
+/// command boundary, the registry, and the settings keys can never
+/// drift. Empty, relative, `..`-carrying, and control-byte
+/// spellings all refuse with their reason, so no caller resolves
+/// against the process directory and no non-canonical spelling keys
+/// a second map entry for one drive.
 ///
 /// `noun` names the artifact at fault in the reason text: the
 /// command boundary and the registry say `drive_dir`, the settings
@@ -338,25 +338,8 @@ impl Default for AppState {
 /// call the rule before any socket is touched. The structural
 /// guarantee stays inside the crate at [`AppState::insert`].
 pub fn validate_drive_path(value: &str, noun: &str) -> Result<PathBuf, String> {
-    if value.is_empty() {
-        return Err(format!("{noun} must not be empty"));
-    }
-    let path = PathBuf::from(value);
-    if !path.is_absolute() {
-        return Err(format!("{noun} {value:?} must be absolute"));
-    }
-    if path
-        .components()
-        .any(|component| matches!(component, std::path::Component::ParentDir))
-    {
-        return Err(format!("{noun} {value:?} must not contain .."));
-    }
-    if value.bytes().any(|byte| byte < 0x20 || byte == 0x7f) {
-        return Err(format!(
-            "{noun} {value:?} must not contain control characters"
-        ));
-    }
-    Ok(path)
+    wyrd_settings::validate_drive_spelling(value, noun)?;
+    Ok(PathBuf::from(value))
 }
 
 /// The registered command handler: the authoritative application
@@ -406,8 +389,10 @@ mod tests {
 
     /// The drive-identity rule refuses exactly the settings-key
     /// violations: empty, relative, `..`, and control bytes — while
-    /// an absolute clean path validates. No caller resolves
-    /// against the process directory.
+    /// an absolute clean path validates. It delegates to the shared
+    /// `wyrd_settings` spelling rule, so this test pins the unity
+    /// structurally: the two surfaces cannot drift. No caller
+    /// resolves against the process directory.
     #[test]
     fn drive_identity_follows_the_settings_key_rule() {
         assert!(validate_drive_path("/drives/alpha", "drive_dir").is_ok());
