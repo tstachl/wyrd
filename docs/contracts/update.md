@@ -133,6 +133,12 @@ means same filesystem, so every swap step is one atomic rename.
   write truncates and renames over it, so `converge` needs no
   policy for it (unlike the state record, which decides
   rollback — the verdict decides nothing).
+- `<exe>.verified-archive` — the private copy of the resolved
+  archive that staging extracts. Written after resolve,
+  re-hashed against the resolve-time digest, removed once
+  staging succeeds or fails. A crash leaves it behind like any
+  temp; the next pin removes it before copying, so `converge`
+  needs no policy for it.
 
 Phases, in order:
 

@@ -337,29 +337,45 @@ pub(crate) fn pin_archive_bytes(
 ) -> Result<PathBuf, CliError> {
     let pinned = sibling(exe, ".verified-archive");
     remove_if_present(&pinned)?;
-    fs::copy(archive, &pinned).map_err(|source| CliError::Io {
-        path: pinned.clone(),
+    let sealed = copy_and_hash(&pinned, archive, identity);
+    if sealed.is_err() {
+        remove_if_present(&pinned)?;
+    }
+    sealed.map(|()| pinned)
+}
+
+/// Copy the operator-visible archive to the private path and
+/// re-hash the copy against the resolve-time digest. Every exit
+/// but success leaves no copy behind — the caller removes it —
+/// so a failed pin never leaves bytes for a later step to
+/// mistake for verified ones.
+fn copy_and_hash(
+    pinned: &Path,
+    archive: &Path,
+    identity: &ArchiveIdentity,
+) -> Result<(), CliError> {
+    fs::copy(archive, pinned).map_err(|source| CliError::Io {
+        path: pinned.to_path_buf(),
         source,
     })?;
-    let mut file = fs::File::open(&pinned).map_err(|source| CliError::Io {
-        path: pinned.clone(),
+    let mut file = fs::File::open(pinned).map_err(|source| CliError::Io {
+        path: pinned.to_path_buf(),
         source,
     })?;
     let mut hasher = blake3::Hasher::new();
     std::io::copy(&mut file, &mut hasher).map_err(|source| CliError::Io {
-        path: pinned.clone(),
+        path: pinned.to_path_buf(),
         source,
     })?;
     let copied = hasher.finalize().to_hex().to_string();
     if copied != identity.blake3 {
-        remove_if_present(&pinned)?;
         return Err(CliError::Usage(format!(
             "{}: archive changed after resolve (expected {}, copied {}); \
              refusing before anything is staged",
             identity.canonical_name, identity.blake3, copied
         )));
     }
-    Ok(pinned)
+    Ok(())
 }
 
 /// Extract the new binary from a pinned archive copy (see

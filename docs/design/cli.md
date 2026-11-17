@@ -908,7 +908,7 @@ update
     = refuse a held lock with `stop the service first` and a
       non-drive directory as not-a-drive (a lock-only probe:
       no state read, no key minted, nothing held afterwards)
-    = extract `*/bin/wyrd` to `<exe>.next`, run its lock-free
+    = extract `*/bin/wyrd` from the verified copy to `<exe>.next`, run its lock-free
       self-report as the advisory preflight, then run its
       `__update_verify` as an early refusal: an incompatible
       drive stops here with staging rolled back, before any swap

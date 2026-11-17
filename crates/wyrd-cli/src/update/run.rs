@@ -127,9 +127,12 @@ pub(crate) fn update_run(request: &UpdateRequest<'_>) -> Result<UpdateOutcome, C
     // operator-visible path again, so a swap of the archive
     // between resolve and stage cannot reach the transaction.
     let verified = pin_archive_bytes(exe, archive, &identity)?;
+    // Removal runs whatever staging did, but the staging outcome
+    // propagates first: a removal failure must never mask it.
     let staged = stage_archive(exe, drive_dir, &verified, &identity);
-    remove_if_present(&verified)?;
+    let removed = remove_if_present(&verified);
     staged?;
+    removed?;
     println!("update staged: {}", next_path(exe).display());
     run_preflight(&next_path(exe))?;
     // Early refusal: the staged binary checks the drive BEFORE
