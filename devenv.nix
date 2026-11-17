@@ -81,7 +81,6 @@ in
     # Agent-facing development CLI (verbs encode the correct procedure);
     # see gate.toml and docs/collaboration-workflow.md.
     inputs.gate.packages.${pkgs.stdenv.system}.default
-    inputs.ngit.packages.${pkgs.stdenv.hostPlatform.system}.default
   ] ++ optionals isLinux [
     # Fast parallel linker for large debug artifacts. Only wired up when we
     # add .cargo/config.toml with -fuse-ld=mold; falls back to the system
