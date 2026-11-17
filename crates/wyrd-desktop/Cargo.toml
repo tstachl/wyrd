@@ -7,6 +7,10 @@ description = "The desktop management UI backend: a non-owning Tauri client of t
 
 [dependencies]
 wyrd-owner-client.workspace = true
+# Application settings file schema: version, sections, and strict
+# validation shared with the daemon applier. Serialization and
+# rules only — no domain edge, no store, no authoring surface.
+wyrd-settings.workspace = true
 # Typed IPC answers and refusal codes; no other serialization surface.
 serde.workspace = true
 serde_json.workspace = true

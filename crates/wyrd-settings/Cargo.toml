@@ -1,0 +1,12 @@
+[package]
+name = "wyrd-settings"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Wyrd's per-user application settings file schema: version, per-drive sections, and strict validation. Serialization and rules only — no filesystem access, no locking, no path resolution, no runtime application. The daemon remains the runtime consumer; the desktop is the second consumer of the same contract."
+
+[dependencies]
+serde.workspace = true
+
+[lints]
+workspace = true

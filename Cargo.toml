@@ -7,6 +7,7 @@ members = [
     "crates/wyrd-view",
     "crates/wyrd-core",
     "crates/wyrd-daemon",
+    "crates/wyrd-settings",
     "crates/wyrd-owner-client",
     "crates/wyrd-cli",
     "crates/wyrd-contracts",
@@ -69,6 +70,10 @@ wyrd-core = { path = "crates/wyrd-core" }
 # (A member-level `default-features = false` next to `workspace = true`
 # is ignored by Cargo — hence this single governing line.)
 wyrd-daemon = { path = "crates/wyrd-daemon", default-features = false }
+# Application settings file schema: version, sections, strict
+# validation. Serialization and rules only — the daemon applies,
+# the desktop displays, neither duplicates the contract.
+wyrd-settings = { path = "crates/wyrd-settings" }
 # The drive-owner client: owned protocol types and the non-owning
 # socket client. Domain-free by design — the daemon performs every
 # domain-to-wire conversion — so consumers link the interface without
