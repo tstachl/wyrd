@@ -68,7 +68,7 @@ done
 pass "package scripts test, typecheck, and build exist"
 
 # 5. The suite itself is wired into the native CI shell job.
-grep -Fq 'test-desktop-frontend-gate.sh' "$COMMANDS" \
+match 'test-desktop-frontend-gate.sh' "$COMMANDS_CODE" \
   || die "CI: desktop-frontend-gate suite not wired into shell.suites"
 pass "CI wires the desktop-frontend-gate suite"
 
