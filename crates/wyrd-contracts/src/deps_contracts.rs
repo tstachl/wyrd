@@ -88,6 +88,15 @@ fn policy_for(member: &str) -> Option<MemberPolicy> {
             workspace_allow: &["wyrd-format"],
             external_allow: &["thiserror"],
         }),
+        // The application settings file schema: version, sections,
+        // and strict validation. Serialization and rules only — no
+        // filesystem, no domain edge — so the daemon (applier) and
+        // the desktop (reader) share one contract instead of two
+        // implementations that can drift.
+        "wyrd-settings" => Some(MemberPolicy {
+            workspace_allow: &[],
+            external_allow: &["serde"],
+        }),
         // The drive-owner client: owned protocol types and the
         // non-owning socket client. Domain-free by construction —
         // the daemon performs every domain-to-wire conversion — so
@@ -112,6 +121,7 @@ fn policy_for(member: &str) -> Option<MemberPolicy> {
                 "wyrd-view",
                 "wyrd-core",
                 "wyrd-owner-client",
+                "wyrd-settings",
             ],
             external_allow: &[
                 "fuser",
@@ -229,8 +239,12 @@ fn policy_for(member: &str) -> Option<MemberPolicy> {
         // `wyrd-sync`, `wyrd-view`, `wyrd-format`, `wyrd-host`,
         // `wyrd-cli`, `wyrd-daemon` — is a violation, and the
         // transitive closure test below pins the reachability half.
+        // The one exception is `wyrd-settings`: the shared
+        // application-settings schema both the daemon applier and
+        // this reader enforce. Serialization and rules only — no
+        // domain edge, no store, no authoring surface.
         "wyrd-desktop" => Some(MemberPolicy {
-            workspace_allow: &["wyrd-owner-client"],
+            workspace_allow: &["wyrd-owner-client", "wyrd-settings"],
             external_allow: &[
                 "tauri",
                 "tauri-build",
@@ -332,6 +346,7 @@ fn dev_dep_policy(member: &str) -> Option<&'static [&'static str]> {
             "wyrd-sync",
         ]),
         "wyrd-owner-client" => Some(&[]),
+        "wyrd-settings" => Some(&[]),
         _ => None,
     }
 }
@@ -482,6 +497,7 @@ fn feature_pins(member: &str) -> Option<&'static [FeaturePin]> {
             ("dependencies", "wyrd-core", &[], true),
             ("dependencies", "wyrd-format", &[], true),
             ("dependencies", "wyrd-owner-client", &[], true),
+            ("dependencies", "wyrd-settings", &[], true),
             ("dependencies", "wyrd-sync", &[], true),
             ("dependencies", "wyrd-view", &[], true),
             ("dev-dependencies", "iroh", &[], true),
@@ -614,6 +630,7 @@ fn feature_pins(member: &str) -> Option<&'static [FeaturePin]> {
             ("dependencies", "tauri-plugin-dialog", &[], true),
             ("dependencies", "thiserror", &[], true),
             ("dependencies", "wyrd-owner-client", &[], true),
+            ("dependencies", "wyrd-settings", &[], true),
             ("build-dependencies", "tauri-build", &[], true),
             ("dev-dependencies", "tauri", &["test"], true),
             ("dev-dependencies", "wyrd-core", &["test-fixtures"], true),
@@ -631,6 +648,9 @@ fn feature_pins(member: &str) -> Option<&'static [FeaturePin]> {
             ("dependencies", "serde", &["derive"], true),
             ("dependencies", "serde_json", &[], true),
         ]),
+        // Settings schema only: serde with the workspace derive
+        // feature, nothing else in any table.
+        "wyrd-settings" => Some(&[("dependencies", "serde", &["derive"], true)]),
         _ => None,
     }
 }
@@ -892,6 +912,10 @@ fn workspace_members_are_exact() {
         // closure test below is its proof); the daemon keeps the
         // server and every domain conversion.
         "crates/wyrd-owner-client",
+        // Application settings file schema: version, sections, and
+        // strict validation shared by the daemon applier and the
+        // desktop reader. Serialization and rules only.
+        "crates/wyrd-settings",
     ]
     .into_iter()
     .map(str::to_owned)
@@ -1361,6 +1385,10 @@ fn check_desktop_link_graph(member: &str, graph: &BTreeMap<String, MemberEdges>)
     }
     seen.remove(member);
     seen.remove("wyrd-owner-client");
+    // The shared settings schema is the one deliberate exception:
+    // serde-only types and validation rules with no domain edge, so
+    // the closure reaches no store, no authoring, no transport.
+    seen.remove("wyrd-settings");
     if seen.is_empty() {
         Vec::new()
     } else {
@@ -1381,15 +1409,15 @@ fn check_desktop_link_graph(member: &str, graph: &BTreeMap<String, MemberEdges>)
 
 /// Contract (desktop scaffold): `wyrd-desktop` is the non-owning
 /// management UI backend, so its production-edge closure must reach
-/// no workspace member but the domain-free `wyrd-owner-client` —
-/// never `wyrd-core` or any authoring capability, even transitively.
-/// Resolves every member's normal edges from the manifests
+/// no workspace member but the domain-free `wyrd-owner-client` and
+/// the domain-free settings schema — never `wyrd-core` or any
+/// authoring capability, even transitively. Resolves every member's normal edges from the manifests
 /// (dev-dependencies excluded, as in the direct check) and walks the
 /// closure from the desktop crate. Test-only harnesses (real-owner
 /// IPC proofs) legitimately reach the daemon through
 /// `[dev-dependencies]`; production never does.
 #[test]
-fn desktop_link_graph_excludes_everything_but_the_owner_client() {
+fn desktop_link_graph_excludes_everything_but_the_shared_contracts() {
     let root = workspace_root();
     let root_manifest = read_manifest(&root);
     let members: Vec<String> = root_manifest
@@ -1921,13 +1949,15 @@ mod policy_tests {
                 "the violation names the edge: {violations:?}"
             );
         }
-        // The allowed surface passes: the shared client plus the
-        // reserved toolkit and plumbing externals.
+        // The allowed surface passes: the shared client, the shared
+        // settings schema, plus the reserved toolkit and plumbing
+        // externals.
         assert!(
             check_member(
                 "wyrd-desktop",
                 &deps(&[
                     "wyrd-owner-client",
+                    "wyrd-settings",
                     "tauri",
                     "serde",
                     "serde_json",

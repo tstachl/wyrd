@@ -15,6 +15,11 @@ wyrd-core.workspace = true
 # the server and performs every domain-to-wire conversion in
 # `owner::mapping`; it never redefines the protocol.
 wyrd-owner-client.workspace = true
+# Application settings file schema: the single definition of the
+# version, sections, and validation both the daemon (applier) and
+# the desktop (reader) enforce. Serialization and rules only — no
+# domain edge, like the client above.
+wyrd-settings.workspace = true
 # The FUSE adapter is the first presentation backend, not a property of
 # the node (`docs/architecture.md`): it is a default-on feature so a
 # machine without system libfuse can still build and run everything

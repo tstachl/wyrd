@@ -22,49 +22,11 @@
 //! - relays do not appear here at all: they live in the drive
 //!   deployment configuration, never in this file (OD-25-C).
 
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-/// Settings schema version this shell reads. Newer files are
-/// reported unreadable with their version, never guessed.
-const APP_SETTINGS_VERSION: u32 = 1;
-
-/// Filename of the application settings file inside the per-user
-/// state directory.
-const SETTINGS_FILENAME: &str = "settings.json";
-
-/// One drive's section as parsed: the five surfaced bounds plus the
-/// notification records the daemon's reader validates. Private: the
-/// public [`DriveSettingsView`] carries the displayable bounds only.
-/// `deny_unknown_fields` keeps typo-refusal parity with the daemon —
-/// a misspelled key fails loudly instead of silently discarding.
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct SectionParse {
-    #[serde(default)]
-    retained_bytes_quota: Option<u64>,
-    #[serde(default)]
-    max_admit_per_pass: Option<usize>,
-    #[serde(default)]
-    fetch_pass_budget_secs: Option<u64>,
-    #[serde(default)]
-    max_mutation_wait_secs: Option<u64>,
-    #[serde(default)]
-    open_timeout_secs: Option<u64>,
-    // Parses but never reads: a file carrying notification records
-    // still validates exactly like the daemon's reader, and the
-    // records stay out of the displayable view by construction.
-    #[allow(dead_code)]
-    #[serde(default)]
-    notified: BTreeMap<String, u64>,
-}
-
-#[derive(Debug, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct SettingsFileParse {
-    version: u32,
-    drives: BTreeMap<String, SectionParse>,
-}
+use wyrd_settings::{
+    settings_key_for, validate_drive_key, AppSettingsFile, APP_SETTINGS_VERSION, SETTINGS_FILENAME,
+};
 
 /// One drive's configured bounds, as configured — not as applied.
 /// Every field is optional because absent keys leave the compiled
@@ -151,36 +113,14 @@ fn resolve_settings_path(
     )
 }
 
-/// The lookup key for one drive's section: the absolute drive
-/// directory as an exact string. Mirrors the daemon's rule —
-/// relative arguments resolve once against the current directory,
-/// and only the matching spelling finds its section.
-fn settings_key_for(drive_dir: &Path) -> String {
-    if drive_dir.is_absolute() {
-        drive_dir.to_string_lossy().into_owned()
-    } else {
-        std::env::current_dir()
-            .unwrap_or_else(|_| PathBuf::from("/tmp"))
-            .join(drive_dir)
-            .to_string_lossy()
-            .into_owned()
-    }
-}
-
-fn validate_key(key: &str) -> Result<(), String> {
-    // One rule for every drive path in the crate: the shared
-    // command-boundary validator, so the settings reader can never
-    // accept a spelling the connection map refuses (or vice versa).
-    // The noun names the settings artifact, not the wire argument.
-    super::validate_drive_path(key, "settings drive key").map(|_| ())
-}
-
 fn unreadable(reason: String) -> DriveSettings {
     DriveSettings::Unreadable { reason }
 }
 
 /// Read one drive's settings from an explicit file. The explicit
 /// path exists for tests; production passes the default derivation.
+/// Parses into the shared settings-file contract, so this reader
+/// can never accept a file the daemon refuses (or vice versa).
 pub fn drive_settings_at(settings_path: &Path, drive_dir: &Path) -> DriveSettings {
     let bytes = match std::fs::read(settings_path) {
         Ok(bytes) => bytes,
@@ -191,7 +131,7 @@ pub fn drive_settings_at(settings_path: &Path, drive_dir: &Path) -> DriveSetting
             return unreadable(format!("read {}: {error}", settings_path.display()));
         }
     };
-    let file: SettingsFileParse = match serde_json::from_slice(&bytes) {
+    let file: AppSettingsFile = match serde_json::from_slice(&bytes) {
         Ok(file) => file,
         Err(error) => {
             return unreadable(format!("parse {}: {error}", settings_path.display()));
@@ -206,7 +146,7 @@ pub fn drive_settings_at(settings_path: &Path, drive_dir: &Path) -> DriveSetting
         ));
     }
     for key in file.drives.keys() {
-        if let Err(reason) = validate_key(key) {
+        if let Err(reason) = validate_drive_key(key) {
             return unreadable(reason);
         }
     }

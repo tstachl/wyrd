@@ -7821,6 +7821,7 @@ dependencies = [
  "wyrd-core",
  "wyrd-format",
  "wyrd-owner-client",
+ "wyrd-settings",
  "wyrd-sync",
  "wyrd-view",
 ]
@@ -7839,6 +7840,7 @@ dependencies = [
  "wyrd-daemon",
  "wyrd-format",
  "wyrd-owner-client",
+ "wyrd-settings",
  "wyrd-sync",
 ]
 
@@ -7892,6 +7894,13 @@ dependencies = [
  "hex",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "wyrd-settings"
+version = "0.3.0-alpha"
+dependencies = [
+ "serde",
 ]
 
 [[package]]

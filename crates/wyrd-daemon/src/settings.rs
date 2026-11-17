@@ -28,92 +28,27 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
 use wyrd_core::settings::BudgetOverrides;
+use wyrd_settings::{
+    check_duration_secs, check_max_admit_per_pass, check_notified_key, validate_drive_key,
+};
 
-/// Schema version of the application settings file. Bump only with
-/// a migration that reads the previous version; readers refuse
-/// newer versions loudly rather than guessing.
-pub const APP_SETTINGS_VERSION: u32 = 1;
-
+/// Schema version of the application settings file. Re-exported
+/// from the shared contract: bump only with a migration that reads
+/// the previous version; readers refuse newer versions loudly
+/// rather than guessing.
+pub use wyrd_settings::APP_SETTINGS_VERSION;
 /// Filename of the application settings file inside the per-user
 /// state directory.
-pub const SETTINGS_FILENAME: &str = "settings.json";
+pub use wyrd_settings::SETTINGS_FILENAME;
 
-/// Ceiling on notification records per drive section. Dedup needs
-/// recent keys, not history: a drive notifies a handful of
-/// conditions per run, and 128 is headroom, not a target.
-/// [`record_notified`] evicts the oldest stamps past the ceiling,
-/// so a long fetch with churning counts cannot grow the file
-/// without bound.
-pub const MAX_NOTIFIED_PER_DRIVE: usize = 128;
-
-/// One drive's settings section: the five surfaced bounds, all
-/// optional — absent keys leave the compiled defaults in place —
-/// plus the notification records (OD-26-C, recommendation A).
-/// Durations are whole seconds on the wire; sub-second tuning is
-/// not a person-scale setting.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct DriveSettingsSection {
-    /// Ceiling on retained object bytes (`None` — absent — is
-    /// unlimited). Wires its accountant when applied, always. Zero
-    /// is allowed and means what it says: every write refuses, so
-    /// composing zero over a non-empty store fails fast at the
-    /// startup cross-check instead of discovering it per write.
-    #[serde(default)]
-    pub retained_bytes_quota: Option<u64>,
-    /// Wants admitted per sync pass.
-    #[serde(default)]
-    pub max_admit_per_pass: Option<usize>,
-    /// Wall-clock budget for one pass's fetch phase, in seconds.
-    #[serde(default)]
-    pub fetch_pass_budget_secs: Option<u64>,
-    /// Wall-clock deadline for a held mutation, in seconds.
-    #[serde(default)]
-    pub max_mutation_wait_secs: Option<u64>,
-    /// Wall-clock budget for one `open` demand wait, in seconds.
-    #[serde(default)]
-    pub open_timeout_secs: Option<u64>,
-    /// Notification dedup records: notification key
-    /// ([`Notification::key`](wyrd_core::notifications::Notification::key))
-    /// to the application's own unix-seconds at recording — the
-    /// application's clock, never Wyrd's, labelled "notified unix"
-    /// anywhere shown. Absent on first run; additive under schema
-    /// version 1, so new readers still parse a file written before
-    /// it (a pre-notifications file simply has no records). A file
-    /// that carries it refuses on still-older v0.4 readers through
-    /// the usual unknown-key refusal — loud, never guessed — and
-    /// v0.4 is unreleased, so no migration ships for that skew.
-    /// Seeded into the notification center so a notification
-    /// recorded before a restart does not re-announce.
-    #[serde(default)]
-    pub notified: BTreeMap<String, u64>,
-}
-
-/// The whole file: one version plus per-drive sections keyed by
-/// absolute drive directory. Unknown top-level keys are refused
-/// with their name, like unknown section keys. Sections for drives
-/// that do not exist are inert data, never an error — a setting
-/// outlives a deleted drive the way a preference outlives an
-/// uninstalled drive.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct AppSettingsFile {
-    /// Settings schema version.
-    pub version: u32,
-    /// Per-drive sections keyed by absolute drive directory.
-    pub drives: BTreeMap<String, DriveSettingsSection>,
-}
-
-impl Default for AppSettingsFile {
-    fn default() -> Self {
-        AppSettingsFile {
-            version: APP_SETTINGS_VERSION,
-            drives: BTreeMap::new(),
-        }
-    }
-}
+/// Ceiling on notification records per drive section. Re-exported
+/// from the shared contract; see there for the rationale.
+pub use wyrd_settings::MAX_NOTIFIED_PER_DRIVE;
+/// One drive's settings section: the five surfaced bounds plus the
+/// notification records. Re-exported from the shared contract —
+/// the single definition both readers enforce.
+pub use wyrd_settings::{AppSettingsFile, DriveSettingsSection};
 
 /// Where the settings file lives when no explicit path is given:
 /// per-user state, resolved through the same platform conventions
@@ -186,47 +121,11 @@ pub fn split_file_overrides(drive_dir: &Path) -> Result<(Option<u64>, BudgetOver
     };
     Ok((quota, rest))
 }
-/// The lookup key for one drive's section: the absolute drive
-/// directory as an exact string. Relative arguments resolve once
-/// against the current directory; `/abs/drive`, `drive`, and
-/// `./drive` are different spellings and only the spelling that
-/// matches the stored key finds its section — the same spelling
-/// finds the same section every time, and no spelling is
-/// canonicalized through symlinks. A drive path containing `..`
-/// can never match a stored section (stored keys refuse `..`).
-pub fn settings_key_for(drive_dir: &Path) -> String {
-    if drive_dir.is_absolute() {
-        drive_dir.to_string_lossy().into_owned()
-    } else {
-        std::env::current_dir()
-            .unwrap_or_else(|_| PathBuf::from("/tmp"))
-            .join(drive_dir)
-            .to_string_lossy()
-            .into_owned()
-    }
-}
-
-fn validate_key(key: &str) -> Result<(), String> {
-    if key.is_empty() {
-        return Err("settings drive key must not be empty".to_string());
-    }
-    let path = Path::new(key);
-    if !path.is_absolute() {
-        return Err(format!("settings drive key {key:?} must be absolute"));
-    }
-    if path
-        .components()
-        .any(|component| matches!(component, std::path::Component::ParentDir))
-    {
-        return Err(format!("settings drive key {key:?} must not contain .."));
-    }
-    if key.bytes().any(|byte| byte < 0x20 || byte == 0x7f) {
-        return Err(format!(
-            "settings drive key {key:?} must not contain control characters"
-        ));
-    }
-    Ok(())
-}
+/// The lookup key for one drive's section. Re-exported from the
+/// shared contract: the absolute drive directory as an exact
+/// string, one spelling one section, never canonicalized through
+/// symlinks.
+pub use wyrd_settings::settings_key_for;
 
 /// Read and validate the settings file. A missing file is empty
 /// settings, not an error — a fresh installation has configured
@@ -251,7 +150,7 @@ pub fn read_settings(path: &Path) -> Result<AppSettingsFile, String> {
         ));
     }
     for key in file.drives.keys() {
-        validate_key(key)?;
+        validate_drive_key(key)?;
     }
     Ok(file)
 }
@@ -269,7 +168,7 @@ pub fn write_settings(path: &Path, settings: &AppSettingsFile) -> Result<(), Str
         ));
     }
     for key in settings.drives.keys() {
-        validate_key(key).map_err(|reason| format!("refusing to write: {reason}"))?;
+        validate_drive_key(key).map_err(|reason| format!("refusing to write: {reason}"))?;
     }
     let bytes =
         serde_json::to_vec_pretty(settings).map_err(|error| format!("encode settings: {error}"))?;
@@ -285,14 +184,7 @@ pub fn write_settings(path: &Path, settings: &AppSettingsFile) -> Result<(), Str
 }
 
 fn secs_to_duration(name: &str, secs: u64) -> Result<Duration, String> {
-    if secs == 0 {
-        return Err(format!(
-            "settings {name} must be a positive number of seconds"
-        ));
-    }
-    if secs > 86_400 {
-        return Err(format!("settings {name} exceeds 86400s (got {secs}s)"));
-    }
+    check_duration_secs(name, secs)?;
     Ok(Duration::from_secs(secs))
 }
 
@@ -302,11 +194,7 @@ fn secs_to_duration(name: &str, secs: u64) -> Result<Duration, String> {
 /// unrepresentable through this path.
 pub fn section_to_overrides(section: &DriveSettingsSection) -> Result<BudgetOverrides, String> {
     if let Some(admit) = section.max_admit_per_pass {
-        if admit == 0 || admit > 1_000_000 {
-            return Err(format!(
-                "settings max_admit_per_pass must be 1..=1000000 (got {admit})"
-            ));
-        }
+        check_max_admit_per_pass(admit)?;
     }
     Ok(BudgetOverrides {
         retained_bytes_quota: section.retained_bytes_quota,
@@ -386,17 +274,10 @@ pub fn record_notified(
     key: &str,
     app_unix_secs: u64,
 ) -> Result<(), String> {
-    if key.is_empty() {
-        return Err("notification key must not be empty".to_string());
-    }
-    if key.bytes().any(|byte| byte < 0x20 || byte == 0x7f) {
-        return Err(format!(
-            "notification key {key:?} must not contain control characters"
-        ));
-    }
+    check_notified_key(key)?;
     let mut file = read_settings(settings_path)?;
     let drive_key = settings_key_for(drive_dir);
-    validate_key(&drive_key)?;
+    validate_drive_key(&drive_key)?;
     let notified = &mut file.drives.entry(drive_key).or_default().notified;
     notified.insert(key.to_string(), app_unix_secs);
     // Oldest stamps evict first: dedup keeps its window without
