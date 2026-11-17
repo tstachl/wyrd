@@ -385,20 +385,23 @@ pub fn bootstrap_argv(request: &ProvisionRequest) -> Result<Vec<OsString>, Strin
 }
 
 /// Pure argv builder for `wyrd member <drive> leave [--yes] …`.
-/// Credentials ride as file paths, never contents.
+/// Credentials ride as file paths, never contents. `Credentials` is
+/// flattened on the parent (`Command::Member`), not global, so the
+/// credential flags must precede the `leave` verb — clap rejects them
+/// after it.
 pub fn leave_argv(request: &LeaveRequest) -> Vec<OsString> {
     let mut argv: Vec<OsString> = vec![
         "member".into(),
         request.drive_dir.as_os_str().to_owned(),
+        "--identity-file".into(),
+        request.identity_file.as_os_str().to_owned(),
+        "--passphrase-file".into(),
+        request.passphrase_file.as_os_str().to_owned(),
         "leave".into(),
     ];
     if request.acknowledged {
         argv.push("--yes".into());
     }
-    argv.push("--identity-file".into());
-    argv.push(request.identity_file.as_os_str().to_owned());
-    argv.push("--passphrase-file".into());
-    argv.push(request.passphrase_file.as_os_str().to_owned());
     argv
 }
 
@@ -434,6 +437,10 @@ pub fn reconfigure_argv(request: &ReconfigureRequest) -> Result<Vec<OsString>, S
     let mut argv: Vec<OsString> = vec![
         "drive".into(),
         request.drive_dir.as_os_str().to_owned(),
+        "--identity-file".into(),
+        request.identity_file.as_os_str().to_owned(),
+        "--passphrase-file".into(),
+        request.passphrase_file.as_os_str().to_owned(),
         "reconfigure".into(),
     ];
     argv.push("--mode".into());
@@ -446,10 +453,6 @@ pub fn reconfigure_argv(request: &ReconfigureRequest) -> Result<Vec<OsString>, S
         argv.push("--relay".into());
         argv.push(relay.into());
     }
-    argv.push("--identity-file".into());
-    argv.push(request.identity_file.as_os_str().to_owned());
-    argv.push("--passphrase-file".into());
-    argv.push(request.passphrase_file.as_os_str().to_owned());
     if let Some(registry) = &request.registry_path {
         argv.push("--registry".into());
         argv.push(registry.as_os_str().to_owned());
@@ -1023,6 +1026,8 @@ mod tests {
 
     /// Leave argv carries `--yes` only on explicit acknowledgement:
     /// a frontend omitting the dialog cannot bypass the CLI boundary.
+    /// Credentials precede the `leave` verb: they are flattened on the
+    /// parent, not global, so anything after the verb is rejected.
     #[test]
     fn leave_argv_gates_yes_on_acknowledgement() {
         let base = LeaveRequest {
@@ -1039,6 +1044,19 @@ mod tests {
             !plain.contains(&"--yes".to_string()),
             "no acknowledgement, no --yes: {plain:?}"
         );
+        assert_eq!(
+            plain,
+            vec![
+                "member",
+                "/drives/alpha",
+                "--identity-file",
+                "/keys/identity",
+                "--passphrase-file",
+                "/keys/passphrase",
+                "leave",
+            ],
+            "credentials precede the verb even without --yes: {plain:?}"
+        );
         let acked = LeaveRequest {
             acknowledged: true,
             ..base
@@ -1052,12 +1070,12 @@ mod tests {
             vec![
                 "member",
                 "/drives/alpha",
-                "leave",
-                "--yes",
                 "--identity-file",
                 "/keys/identity",
                 "--passphrase-file",
                 "/keys/passphrase",
+                "leave",
+                "--yes",
             ]
         );
     }
@@ -1453,8 +1471,10 @@ mod tests {
     }
 
     /// The reconfigure argv is one structured element per argument:
-    /// `drive <dir> reconfigure --mode vault`, relay pairs, and
-    /// credential paths — never a joined shell string.
+    /// `drive <dir> --identity-file … --passphrase-file … reconfigure
+    /// --mode vault`, relay pairs after the verb — never a joined
+    /// shell string. Credentials precede the verb because they are
+    /// flattened on the parent, not global.
     #[test]
     fn reconfigure_argv_is_structured_per_element() {
         let argv = reconfigure_argv(&reconfigure_request()).unwrap();
@@ -1467,15 +1487,15 @@ mod tests {
             vec![
                 "drive",
                 "/drives/alpha",
+                "--identity-file",
+                "/keys/identity",
+                "--passphrase-file",
+                "/keys/passphrase",
                 "reconfigure",
                 "--mode",
                 "vault",
                 "--relay",
                 "wss://relay.example",
-                "--identity-file",
-                "/keys/identity",
-                "--passphrase-file",
-                "/keys/passphrase",
             ]
         );
         assert!(
@@ -1483,6 +1503,25 @@ mod tests {
                 .iter()
                 .any(|arg| arg.contains(' ') && arg.contains("--")),
             "no joined shell string: {rendered:?}"
+        );
+        // Position pin, not just contents: the credential pair must
+        // sit before the subcommand verb (the nix/drive owner-argv
+        // order-pin precedent) — after the verb clap rejects it.
+        let verb = rendered
+            .iter()
+            .position(|arg| arg == "reconfigure")
+            .unwrap();
+        let identity = rendered
+            .iter()
+            .position(|arg| arg == "--identity-file")
+            .unwrap();
+        let passphrase = rendered
+            .iter()
+            .position(|arg| arg == "--passphrase-file")
+            .unwrap();
+        assert!(
+            identity < verb && passphrase < verb,
+            "credentials precede the verb: {rendered:?}"
         );
     }
 
