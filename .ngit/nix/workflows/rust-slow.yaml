@@ -5,14 +5,14 @@
 # so PR runs stay fast: the >10s live-relay integration tests, the
 # ceiling-scale admission tests, and the individually measured
 # ~20s-or-more heavyweights (see `.config/nextest.toml`: the `slow`
-# profile is the master-CI supplement; master CI runs `default` plus
-# `slow`). Tests needing a public relay or kernel FUSE stay
-# `#[ignore]`d and never run in CI, so this stays sandbox-safe as a
-# pure build derivation like the other rust gates.
+# profile is the master-CI supplement). Tests needing a public relay
+# or kernel FUSE stay `#[ignore]`d and never run in CI, so this stays
+# sandbox-safe as a pure build derivation like the other rust gates.
 #
-# Master pushes only, scoped like the rust workflow so the same code
-# changes trigger it. No pull_request leg: PRs run the default profile
-# through `rust.yaml`, and the 8 GiB floor below would burn a shared
+# Master pushes only. This is the only Rust test gate on master: PRs
+# run the default profile through `rust.yaml`, and rerunning that suite
+# on the merge commit would repeat the same 30 minutes of evidence.
+# No pull_request leg: the 8 GiB floor below would burn a shared
 # high-memory slot on every draft push. Ready-gating is irrelevant —
 # pushes to master are the only trigger.
 version: 1
