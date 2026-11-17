@@ -134,6 +134,17 @@ pub enum CliError {
     /// An identity file is neither 32 raw bytes nor 64 hex characters.
     #[error("identity file must contain exactly 32 raw bytes or 64 hex characters")]
     IdentityFormat,
+    /// A sparse settings edit lost a commit race: the file changed
+    /// between the transaction's read and commit. Distinct from
+    /// every other failure — the edit is valid, the file moved, and
+    /// the operator re-reads and retries. Exits 3 (see
+    /// [`EXIT_SETTINGS_CONFLICT`]), never 2: the desktop renders
+    /// the conflict state from the code alone, without parsing text.
+    #[error("settings changed under the transaction: {reason}")]
+    SettingsConflict {
+        /// What moved between read and commit.
+        reason: String,
+    },
     /// An invitation file does not decode as a sealed bootstrap.
     #[error("invitation file does not decode as a sealed bootstrap")]
     InvitationFormat,
@@ -264,15 +275,25 @@ pub enum CliError {
 /// wrapper that treats 78 as "held" never misfires on a runtime
 /// error. Recorded in `docs/design/cli.md`'s exit-code list.
 pub const EXIT_DRIVE_LOCKED: i32 = 78;
+/// A sparse settings edit lost its commit race: the file changed
+/// between read and commit. The edit is valid and the file moved,
+/// so the operator re-reads and retries — a supervisor must not
+/// treat this as terminal (unlike 78), and automation must not
+/// collapse it into generic failure (unlike 2). Only `settings
+/// apply` exits this way. Recorded in `docs/design/cli.md`'s
+/// exit-code list.
+pub const EXIT_SETTINGS_CONFLICT: i32 = 3;
 
 impl CliError {
     /// Fold the error into a process exit status: the
     /// drive-already-owned code for lock contention (direct or
     /// wrapped in an engine error — the mount contends through the
-    /// latter), 2 for everything else.
+    /// latter), the settings-conflict code for a lost commit race,
+    /// 2 for everything else.
     pub fn exit_code(&self) -> i32 {
         match self {
             CliError::OwnerLocked { .. } => EXIT_DRIVE_LOCKED,
+            CliError::SettingsConflict { .. } => EXIT_SETTINGS_CONFLICT,
             CliError::Engine(wyrd_sync::runtime::EngineError::Durable(
                 wyrd_sync::durable::DurableError::StoreLocked,
             )) => EXIT_DRIVE_LOCKED,
@@ -475,15 +496,27 @@ pub fn command(args: Vec<String>) -> Result<(), CliError> {
                 load_credentials(drive_dir, credentials, cli.config.as_deref())?
             }
         },
+        Command::Settings { drive_dir, action } => {
+            // Settings touch one per-user file and no key: return
+            // before credential loading, so a save works where the
+            // keystore is unavailable — including a stopped drive,
+            // whose owner cannot serve and whose keys may be
+            // momentarily unreachable. Every other command loads
+            // below like every other family.
+            return crate::commands::settings::settings(drive_dir.clone(), action.clone());
+        }
     };
 
     match cli.command {
         // Dead by construction: the credentials match above returns
-        // from update, build-info, identity, and drive service-start
-        // before secrets load. The arm exists only because the match
-        // is exhaustive.
-        Command::Update { .. } | Command::BuildInfo | Command::Identity { .. } => {
-            unreachable!("update, build-info, and identity resolve before credential loading")
+        // from update, build-info, identity, drive service-start, and
+        // settings before secrets load. The arm exists only because
+        // the match is exhaustive.
+        Command::Update { .. }
+        | Command::BuildInfo
+        | Command::Identity { .. }
+        | Command::Settings { .. } => {
+            unreachable!("update, build-info, identity, service-start, and settings resolve before credential loading")
         }
         Command::UpdateVerify { drive_dir, .. } => {
             update::run_update_verify(&drive_dir, identity, &passphrase)

@@ -82,7 +82,10 @@ overwrite), and prints the passphrase on stdout for write-down.
 `new-passphrase` prints one and writes nothing. `commit` reads the
 passphrase from stdin (never argv), mints the identity in-process,
 and writes both files. `verify` reads both through the hardened
-reader and exits 0/2. Exit codes follow the surface contract
+reader and exits 0/2. `settings apply` writes one drive's settings
+section through the shared transaction (0 applied, 2 refused, 3
+commit race — re-read and retry). Exit codes follow the surface
+contract
 (0 success, 2 usage-or-expected-failure); only `drive`/`member`
 operations additionally use 78 (terminal held-drive).
 
@@ -1247,6 +1250,9 @@ show and composes with the party table.
 - `--help` and `--version` print and exit successfully.
 - Exit `0` on success; exit `2` on any failure, with the reason on
   stderr (`error: ...`). Usage errors (bad flags, missing options)
-  are failures too, not help text. A serving shutdown failure also
+  are failures too, not help text. `settings apply` additionally
+  exits `3` on a lost commit race (the file moved under the
+  transaction): the edit is valid, so the operator re-reads and
+  retries — never terminal like 78. A serving shutdown failure also
   fails the mount (as a serving error, after the mountpoint is
   already unmounted); bulk closes graceful-or-abort and cannot fail.

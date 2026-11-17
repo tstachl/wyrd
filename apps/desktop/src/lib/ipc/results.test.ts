@@ -123,6 +123,7 @@ import type {
   DriveView,
   RegistryState,
   ServiceState,
+  SettingsWriteReport,
 } from "./results.js";
 
 test("drive availability states stay tagged and distinct", () => {
@@ -351,4 +352,28 @@ test("key defaults separate intended paths from actual files", () => {
     usable: false,
   };
   expect(unusable.usable).toBe(false);
+});
+
+test("settings write report pairs the outcome with the observation", () => {
+  // Copied from the Rust test `settings_write_report_serialize_verbatim`
+  // in `crates/wyrd-desktop/src/commands.rs` — pins the JSON the
+  // backend produces, not a second implementation of it.
+  const applied: SettingsWriteReport = {
+    result: { result: "applied", detail: "settings applied" },
+    observed: {
+      state: "configured",
+      retained_bytes_quota: null,
+      max_admit_per_pass: 64,
+      fetch_pass_budget_secs: null,
+      max_mutation_wait_secs: null,
+      open_timeout_secs: 30,
+    },
+  };
+  expect(applied.result.result).toBe("applied");
+  expect(applied.observed.state).toBe("configured");
+  const conflict: SettingsWriteReport = {
+    result: { result: "conflict", reason: "changed under" },
+    observed: { state: "nosection" },
+  };
+  expect(conflict.result).toEqual({ result: "conflict", reason: "changed under" });
 });

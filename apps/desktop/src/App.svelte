@@ -10,6 +10,7 @@
   import { describe } from "$lib/ipc/errors.js";
   import { IpcTransportError } from "$lib/ipc/client.js";
   import {
+    applySettings,
     driveSettings,
     freshness,
     listDrives,
@@ -39,7 +40,14 @@
     ProvisionServiceStartArgs,
   } from "$lib/ipc/operations.js";
   import type { IpcResult } from "$lib/ipc/types.js";
-  import type { DriveView, KeyDefaults, OnboardingReport, ProvisionReport } from "$lib/ipc/results.js";
+  import type {
+    DriveView,
+    KeyDefaults,
+    OnboardingReport,
+    ProvisionReport,
+    SettingsWriteReport,
+  } from "$lib/ipc/results.js";
+  import type { SparseUpdateArgs } from "$lib/ipc/results.js";
   import { withDevCliHint } from "$lib/views/format.js";
   import { presentation } from "$lib/state/presentation.svelte.js";
   import type { ShellView } from "$lib/state/presentation.svelte.js";
@@ -239,6 +247,34 @@
         error instanceof IpcTransportError
           ? "The shell backend did not answer (transport failure, not an owner answer)."
           : `Unexpected provisioning failure: ${String(error)}`;
+      presentation.noteTransportFailure(detail);
+      throw new Error(detail);
+    } finally {
+      presentation.finishRequest();
+    }
+  }
+
+  /**
+   * One settings edit through the CLI adapter: infallible like
+   * provisioning — the report carries the outcome plus the
+   * post-run observation, and the settings re-read follows every
+   * operation so the display always shows observed state.
+   */
+  async function runSettingsWrite(
+    driveDir: string,
+    update: SparseUpdateArgs,
+  ): Promise<SettingsWriteReport> {
+    presentation.trackRequest();
+    try {
+      const report = await applySettings(driveDir, update);
+      presentation.clearTransportNotice();
+      await refreshSettings(driveDir);
+      return report;
+    } catch (error: unknown) {
+      const detail =
+        error instanceof IpcTransportError
+          ? "The shell backend did not answer (transport failure, not an owner answer)."
+          : `Unexpected settings failure: ${String(error)}`;
       presentation.noteTransportFailure(detail);
       throw new Error(detail);
     } finally {
@@ -764,6 +800,9 @@
               passphraseFile={onboardedPassphraseFile}
               onRefresh={() => void refreshSettings(selectedDriveDir)}
               onLeave={(args: ProvisionLeaveArgs) => runProvision(() => provisionLeave(args))}
+              onApply={(update: SparseUpdateArgs) =>
+                runSettingsWrite(selectedDriveDir, update)
+              }
               onRefreshDrives={allDrives}
             />
           {/if}

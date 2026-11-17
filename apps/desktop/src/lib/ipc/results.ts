@@ -424,3 +424,32 @@ export interface OnboardingReport {
   result: OnboardingResult;
   defaults: KeyDefaults;
 }
+
+// Settings-write mirrors (constrained CLI adapter surface).
+//
+// Source of truth: `SettingsApplyResult` in
+// `crates/wyrd-desktop/src/settings_apply.rs` and
+// `SettingsWriteReport` in `crates/wyrd-desktop/src/commands.rs` —
+// only the exit code is ever mapped (0 applied, 2 refused, 3
+// conflict), CLI text rides as opaque detail, and the observed
+// settings re-read nests under `observed`. Nothing here may add a
+// shape the Rust side does not produce.
+
+/** The adapter's verdict on one sparse edit — never configured state. Only the exit code decides. */
+export type SettingsWriteState =
+  | { result: "applied"; detail: string }
+  | { result: "refused"; reason: string }
+  | { result: "conflict"; reason: string }
+  | { result: "failed"; reason: string };
+
+/** One completed settings edit plus the post-run observation. Infallible: unknown states ride inside. */
+export interface SettingsWriteReport {
+  result: SettingsWriteState;
+  observed: DriveSettingsState;
+}
+
+/** One sparse update: bound values to set plus bound names to clear — never a whole document. */
+export interface SparseUpdateArgs {
+  set: Record<string, number>;
+  clear: string[];
+}

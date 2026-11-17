@@ -15,8 +15,10 @@ import {
   membershipSummary,
   nextDriveDir,
   observedRegistrySummary,
+  SETTING_BOUNDS,
   shortId,
   suggestedDriveDirFor,
+  validateBoundInput,
   withDevCliHint,
 } from "./format.js";
 import type { ProvisionReport, RegistryState } from "$lib/ipc/results.js";
@@ -135,4 +137,25 @@ test("missing dev CLI names the build that provides it", () => {
   expect(withDevCliHint("CLI build 9.9.9 does not match")).toBe(
     "CLI build 9.9.9 does not match",
   );
+});
+
+test("bound inputs validate per key, naming the key", () => {
+  expect(SETTING_BOUNDS.map((bound) => bound.key)).toEqual([
+    "retained_bytes_quota",
+    "max_admit_per_pass",
+    "fetch_pass_budget_secs",
+    "max_mutation_wait_secs",
+    "open_timeout_secs",
+  ]);
+  expect(validateBoundInput("max_admit_per_pass", "64")).toBeNull();
+  expect(validateBoundInput("retained_bytes_quota", "0")).toBeNull();
+  expect(validateBoundInput("open_timeout_secs", " 30 ")).toBeNull();
+  expect(validateBoundInput("max_admit_per_pass", "0")).toContain("max_admit_per_pass");
+  expect(validateBoundInput("max_admit_per_pass", "1000001")).toContain("max_admit_per_pass");
+  expect(validateBoundInput("open_timeout_secs", "0")).toContain("open_timeout_secs");
+  expect(validateBoundInput("open_timeout_secs", "86401")).toContain("open_timeout_secs");
+  expect(validateBoundInput("open_timeout_secs", "1.5")).toContain("open_timeout_secs");
+  expect(validateBoundInput("open_timeout_secs", "-3")).toContain("open_timeout_secs");
+  expect(validateBoundInput("open_timeout_secs", "")).toContain("open_timeout_secs");
+  expect(validateBoundInput("admit_all", "1")).toContain("admit_all");
 });

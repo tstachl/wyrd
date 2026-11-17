@@ -35,8 +35,12 @@ use wyrd_owner_client::{
     OwnerClient, WireAttr, WireDirEntry, WireFreshness, WireLiveness, WireMutationKind,
     WireMutationOutcome, WireNode, WireParentToken, WireSyncStatus,
 };
+use wyrd_settings::SparseUpdate;
 
 use super::registry::{self, RegistryState, RegistryStatus};
+use super::settings_apply::{
+    self, SettingsApplyRequest, SettingsApplyResult, SETTINGS_APPLY_TIMEOUT,
+};
 use super::settings_view::{self, DriveSettings};
 use super::{AppState, BackendError, DesktopBackend, FlightTracker};
 
@@ -301,6 +305,112 @@ pub async fn drive_settings<R: Runtime>(app: AppHandle<R>, drive_dir: String) ->
     .await
 }
 
+/// One completed settings edit plus the observed settings state
+/// that decides the display. Infallible like the other local
+/// queries: `result` carries the operation outcome (exit codes only
+/// — CLI stderr travels as opaque display detail and is never parsed
+/// for configured state), `observed` is the settings re-read taken
+/// after the process completed, and only that observed section
+/// decides what the display says.
+///
+/// The command shape is one drive identity plus one sparse update
+/// (set-list with values, clear-list) — never a whole-document
+/// replacement. Invalid identities and invalid updates refuse before
+/// any process spawns; overlapping edits on one drive serialize
+/// through the file lock (atomic commits, last writer wins per key),
+/// so no per-drive busy state exists, unlike lifecycle operations.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SettingsWriteReport {
+    /// Operation verdict: exit codes only, never configured state.
+    pub result: SettingsApplyResult,
+    /// The settings re-read taken after the run, deciding display.
+    pub observed: DriveSettings,
+}
+
+/// Apply one sparse update to one drive's settings section through
+/// the installed CLI, then re-read. The CLI runs the shared
+/// transaction in-process, so the save works whether the drive's
+/// owner runs or not; a saved edit applies at the next owner start
+/// (restart-to-apply), never live.
+#[tauri::command]
+pub async fn drive_settings_write<R: Runtime>(
+    app: AppHandle<R>,
+    drive_dir: String,
+    update: SparseUpdate,
+) -> SettingsWriteReport {
+    run_settings_write(app, "drive_settings_write", drive_dir, update).await
+}
+
+async fn run_settings_write<R>(
+    app: AppHandle<R>,
+    op: &'static str,
+    drive_dir: String,
+    update: SparseUpdate,
+) -> SettingsWriteReport
+where
+    R: Runtime,
+{
+    let _flight = app.state::<FlightTracker>().enter();
+    tauri::async_runtime::spawn_blocking(move || {
+        // Validate the drive identity before anything spawns: a
+        // non-canonical spelling must never key a second section
+        // for one drive.
+        let dir = match super::validate_drive_path(&drive_dir, "drive_dir") {
+            Ok(dir) => dir,
+            Err(reason) => {
+                return SettingsWriteReport {
+                    result: SettingsApplyResult::Refused { reason },
+                    observed: DriveSettings::Unreadable {
+                        reason: format!(
+                            "refused before reading: invalid drive identity {}",
+                            drive_dir
+                        ),
+                    },
+                };
+            }
+        };
+        let state = app.state::<super::AppState>();
+        // No per-drive flight claim: lifecycle operations overlap
+        // dangerously, but sparse edits serialize through the
+        // settings file lock with atomic commits, so overlapping
+        // saves converge per key instead of wedging.
+        let outcome = match state.cli_bin() {
+            Ok(bin) => settings_apply::run_settings_apply(
+                &bin,
+                &SettingsApplyRequest {
+                    drive_dir: dir.clone(),
+                    update,
+                    cli_bin: None,
+                    settings_path: None,
+                },
+                SETTINGS_APPLY_TIMEOUT,
+            ),
+            Err(reason) => settings_apply::SettingsApplyOutcome {
+                result: SettingsApplyResult::Failed { reason },
+                stderr: String::new(),
+                code: None,
+            },
+        };
+        // The paired re-read decides the display on every path: the
+        // outcome carries the exit-code verdict, never configured
+        // state.
+        SettingsWriteReport {
+            result: outcome.result,
+            observed: settings_view::drive_settings(&dir),
+        }
+    })
+    .await
+    .unwrap_or_else(|join| SettingsWriteReport {
+        result: SettingsApplyResult::Failed {
+            reason: format!("ipc worker failed for {op}: {join}"),
+        },
+        // A dead worker is a shell bug, never a settings answer:
+        // report the read as unreadable with the reason.
+        observed: DriveSettings::Unreadable {
+            reason: format!("ipc worker failed for {op}: {join}"),
+        },
+    })
+}
 /// One completed lifecycle operation plus the observed state that
 /// decides the display. Infallible like the other local queries:
 /// `result` carries the operation outcome (exit codes only — CLI
@@ -1309,6 +1419,65 @@ mod tests {
             .unwrap(),
             serde_json::json!({"state": "unreadable", "reason": "settings /x/settings.json is version 2, this shell reads 1"})
         );
+    }
+
+    /// The settings-write report serializes verbatim for the shell:
+    /// the tagged result plus the observed read state, so the
+    /// frontend mirrors this shape without invention.
+    #[test]
+    fn settings_write_report_serializes_verbatim() {
+        use super::super::{DriveSettings, DriveSettingsView, SettingsApplyResult};
+        use super::SettingsWriteReport;
+
+        let applied = SettingsWriteReport {
+            result: SettingsApplyResult::Applied {
+                detail: "settings applied".to_string(),
+            },
+            observed: DriveSettings::Configured(DriveSettingsView {
+                retained_bytes_quota: None,
+                max_admit_per_pass: Some(64),
+                fetch_pass_budget_secs: None,
+                max_mutation_wait_secs: None,
+                open_timeout_secs: Some(30),
+            }),
+        };
+        assert_eq!(
+            serde_json::to_value(&applied).unwrap(),
+            serde_json::json!({
+                "result": {"result": "applied", "detail": "settings applied"},
+                "observed": {"state": "configured", "retained_bytes_quota": null, "max_admit_per_pass": 64, "fetch_pass_budget_secs": null, "max_mutation_wait_secs": null, "open_timeout_secs": 30},
+            })
+        );
+        for (result, name) in [
+            (
+                SettingsApplyResult::Refused {
+                    reason: "unknown settings key".to_string(),
+                },
+                "refused",
+            ),
+            (
+                SettingsApplyResult::Conflict {
+                    reason: "changed under".to_string(),
+                },
+                "conflict",
+            ),
+            (
+                SettingsApplyResult::Failed {
+                    reason: "no cli".to_string(),
+                },
+                "failed",
+            ),
+        ] {
+            let report = SettingsWriteReport {
+                result,
+                observed: DriveSettings::Nosection,
+            };
+            assert_eq!(
+                serde_json::to_value(&report).unwrap()["result"]["result"],
+                serde_json::json!(name),
+                "the result tag names the outcome"
+            );
+        }
     }
 
     /// A dead blocking worker is unconfirmed by definition: the

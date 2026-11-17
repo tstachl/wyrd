@@ -11,5 +11,6 @@ pub(crate) mod member;
 #[cfg(feature = "mount")]
 pub(crate) mod mount;
 pub(crate) mod owner;
+pub(crate) mod settings;
 pub(crate) mod snapshot;
 pub(crate) mod sync;
