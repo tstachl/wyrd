@@ -5,10 +5,10 @@ use crate::support::{drive, seal_flat_drive, signed_snapshot, AnnouncedRoots, Lo
 #[cfg(feature = "mount")]
 use crate::support::{mount_heads, Relay, RemoteOnlyMaterialization};
 #[cfg(feature = "mount")]
-use wyrd_daemon::core::LiveError;
-use wyrd_daemon::core::{LiveConfig, RuntimeMaterialization, WyrdNode};
-#[cfg(feature = "mount")]
 use wyrd_daemon::fuse::FuseBackend;
+#[cfg(feature = "mount")]
+use wyrd_daemon::host::LiveError;
+use wyrd_daemon::host::{LiveConfig, RuntimeMaterialization, WyrdNode};
 #[cfg(feature = "mount")]
 use wyrd_format::Snapshot;
 use wyrd_format::{BaoRoot, ContentId, Entry, MemoryObjectStore, ObjectKind, ObjectStore, Tree};

@@ -266,8 +266,8 @@ fn idle_endpoint_close_is_bounded_and_clean() {
     // deadline with no abort warning. This pins that ordinary closes
     // fit GRACEFUL_CLOSE_DEADLINE with orders of magnitude to spare —
     // the value is evidence-backed, not a guess. (The bound itself is
-    // pinned on the shared helper in `close.rs`.)
-    source.shutdown(crate::close::GRACEFUL_CLOSE_DEADLINE);
+    // pinned on the shared helper in `teardown.rs`.)
+    source.shutdown(crate::teardown::GRACEFUL_CLOSE_DEADLINE);
 }
 
 #[test]
@@ -314,7 +314,7 @@ fn live_close_returns_past_a_zero_deadline() {
     // timer, so the outcome is decided on the first poll —
     // `TimedOut` unless the close is already complete — and this
     // test only pins that the deadline holds. The `TimedOut` leg
-    // stays pinned by the never-ready unit test in `close.rs`,
+    // stays pinned by the never-ready unit test in `teardown.rs`,
     // not here.
     assert_eq!(
         source.fetch_sealed(&storage, usize::MAX).unwrap(),

@@ -11,13 +11,13 @@
 //! same five operations, platform errors instead of POSIX ones. The
 //! FUSE adapter (the `fuse` module, behind the default-on `mount`
 //! feature) is the first such backend, not a property
-//! of the node. This crate's [`core`] module holds the host-side
+//! of the node. This crate's [`host`] module holds the host-side
 //! composition tests; [`lifecycle`] owns supervision.
 
 pub mod bootstrap;
-pub mod core;
 #[cfg(feature = "mount")]
 pub mod fuse;
+pub mod host;
 pub mod lifecycle;
 pub mod owner;
 pub mod posture;
@@ -25,7 +25,7 @@ pub mod process;
 pub mod settings;
 pub mod vault;
 
-pub use core::{
+pub use host::{
     apply_budget_settings, render_settings_surface, AppliedSettings, BudgetOverrides, FailureClass,
     LiveConfig, LiveError, LiveNode, LiveParts, LiveSummary, NodeError, PendingObligations,
     PoisonCounts, ResourceBudgets, RunningSettings, RuntimeMaterialization, SyncReport, WyrdNode,

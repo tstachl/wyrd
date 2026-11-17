@@ -7,8 +7,8 @@ use super::harness::serving_backend;
 use crate::support::{drive, sealed_envelope, Relay};
 use crate::support::{scratch_dir, Rig};
 #[cfg(feature = "mount")]
-use wyrd_daemon::core::LiveConfig;
-use wyrd_daemon::core::{RuntimeMaterialization, WyrdNode};
+use wyrd_daemon::host::LiveConfig;
+use wyrd_daemon::host::{RuntimeMaterialization, WyrdNode};
 #[cfg(feature = "mount")]
 use wyrd_format::EntryContent;
 use wyrd_format::{

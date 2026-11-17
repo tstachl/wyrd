@@ -18,8 +18,8 @@
 
 pub mod authorization;
 pub mod bulk;
-mod close;
-pub use close::GRACEFUL_CLOSE_DEADLINE;
+mod teardown;
+pub use teardown::GRACEFUL_CLOSE_DEADLINE;
 pub mod closure;
 pub mod control;
 pub mod disclosure;

@@ -702,7 +702,7 @@ impl IrohBulkSource {
     /// fail a shutdown whose application work already stopped. The
     /// only observable difference between the paths is the warning.
     pub fn shutdown(&self, deadline: std::time::Duration) {
-        let finished = self.runtime.block_on(crate::close::graceful_or_abort(
+        let finished = self.runtime.block_on(crate::teardown::graceful_or_abort(
             self.endpoint.close(),
             deadline,
         ));

@@ -6,7 +6,7 @@ use crate::support::{
     signed_snapshot, signed_transition, AnnouncedRoots, Loaded, Rig,
 };
 use wyrd_core::budgets::ResourceBudgets;
-use wyrd_daemon::core::{LiveConfig, RuntimeMaterialization, WyrdNode};
+use wyrd_daemon::host::{LiveConfig, RuntimeMaterialization, WyrdNode};
 use wyrd_format::membership::{
     set_root, Admission, MEMBER_SET_CONTEXT, OWNER_SET_CONTEXT, READER_SET_CONTEXT,
 };

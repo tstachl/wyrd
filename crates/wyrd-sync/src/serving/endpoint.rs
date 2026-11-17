@@ -238,8 +238,8 @@ impl ServingEndpoint {
             .map_err(|_| std::io::Error::other("vault mirror lock poisoned"));
         let transport_result = self
             .runtime
-            .block_on(crate::close::with_deadline(
-                crate::close::stop_with_close(
+            .block_on(crate::teardown::with_deadline(
+                crate::teardown::stop_with_close(
                     async {
                         self.router
                             .shutdown()

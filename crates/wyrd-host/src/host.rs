@@ -12,7 +12,7 @@
 
 use std::path::{Path, PathBuf};
 
-use wyrd_daemon::core::RuntimeMaterialization;
+use wyrd_daemon::host::RuntimeMaterialization;
 use wyrd_daemon::posture::describe_drive_holder;
 use wyrd_daemon::DriveView;
 use wyrd_format::FsObjectStore;

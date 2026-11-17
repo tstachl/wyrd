@@ -23,7 +23,7 @@ use wyrd_core::mutation::WriteStats;
 use wyrd_core::relay_posture::{mailbox_degraded, recovery_attempts, RELAY_IDLE_LINE};
 use wyrd_core::status::{observe, SyncStatus};
 use wyrd_core::view::NamespaceView;
-use wyrd_daemon::core::RuntimeMaterialization;
+use wyrd_daemon::host::RuntimeMaterialization;
 use wyrd_daemon::process::{
     bind_bulk_source, check_startup_retention, install_shutdown_handler, SHUTDOWN_DEADLINE,
 };

@@ -212,7 +212,7 @@ impl VaultObserver {
     pub fn pass_failed(&mut self, error: &LiveError, consecutive: u32) {
         self.errors += 1;
         (self.emit)(VaultEvent::PassFailed {
-            class: format!("{:?}", crate::core::FailureClass::from(error)),
+            class: format!("{:?}", crate::host::FailureClass::from(error)),
             consecutive,
             error: error.to_string(),
         });
@@ -636,7 +636,7 @@ pub fn compose_headless_owner_with_quota(
     // file bounds (admission, pass budgets, open timeout) apply
     // here. `split_file_overrides` strips the quota from `rest`,
     // so this cannot rebuild the mismatch.
-    let applied = crate::core::apply_budget_settings(
+    let applied = crate::host::apply_budget_settings(
         &quota_config,
         crate::settings::DEFAULT_OPEN_TIMEOUT,
         &rest,

@@ -19,7 +19,7 @@ die() { echo "  FAIL: $1" >&2; exit 1; }
 
 ARGS="$ROOT/crates/wyrd-cli/src/args.rs"
 CREDS="$ROOT/crates/wyrd-cli/src/credentials.rs"
-MAIN="$ROOT/crates/wyrd-cli/src/main.rs"
+MAIN="$ROOT/crates/wyrd-cli/src/lib.rs"
 MATERIALIZATION="$ROOT/crates/wyrd-cli/src/commands/materialization.rs"
 IDENTITY_COMMIT="$ROOT/crates/wyrd-cli/src/commands/identity.rs"
 SHELL_NOTE="$ROOT/docs/design/desktop-shell.md"
@@ -105,9 +105,9 @@ pass "design note defines R1/R2 and names the transport"
 # direct-spawn target does not exist yet, so accepting it would
 # silently start the file-backed definition the flag cannot affect.
 match 'passphrase_stdin' "$MAIN_CODE" \
-  || die "main: service-start does not guard the stdin flag"
+  || die "lib: service-start does not guard the stdin flag"
 match 'has no effect on `drive service-start`' "$MAIN_CODE" \
-  || die "main: service-start refusal does not name the reason"
+  || die "lib: service-start refusal does not name the reason"
 pass "service-start refuses the stdin flag until direct-spawn lands"
 
 # 10. Provenance names stdin for what it is: the materialization
