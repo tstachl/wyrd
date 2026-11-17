@@ -117,7 +117,19 @@ pub(crate) fn check_drive_dir(drive_dir: &Path) -> Result<(), CliError> {
 /// parses as [`ARCHIVE_NAME_SHAPE`]. Runs before anything is
 /// stopped, so every ambiguity here is a usage error, never a
 /// half-started transaction.
-pub(crate) fn resolve_archive(path: &Path) -> Result<ArchiveIdentity, CliError> {
+///
+/// `expected_blake3` pins the archive's digest out-of-band (the
+/// release record's hash, not the file): a mismatch refuses before
+/// anything is staged, so a swapped archive fetched over a channel
+/// the operator does not fully control never reaches the
+/// transaction. [`None`] keeps the legacy shape — name, regularity
+/// and platform only — for operator-built archives that never left
+/// the machine.
+pub(crate) fn resolve_archive(
+    path: &Path,
+    expected_blake3: Option<&str>,
+) -> Result<ArchiveIdentity, CliError> {
+    let expected = expected_blake3.map(parse_expected_blake3).transpose()?;
     let metadata = fs::metadata(path).map_err(|source| CliError::Io {
         path: path.to_path_buf(),
         source,
@@ -163,14 +175,37 @@ pub(crate) fn resolve_archive(path: &Path) -> Result<ArchiveIdentity, CliError> 
         path: path.to_path_buf(),
         source,
     })?;
+    let digest = hasher.finalize().to_hex().to_string();
+    if let Some(expected) = expected {
+        if digest != expected {
+            return Err(CliError::Usage(format!(
+                "{file_name}: blake3 mismatch: expected {expected}, computed {digest}; \
+                 refusing a swapped or corrupted archive before anything is staged"
+            )));
+        }
+    }
     Ok(ArchiveIdentity {
         canonical_name: file_name.to_owned(),
         version,
         os,
         arch,
-        blake3: hasher.finalize().to_hex().to_string(),
+        blake3: digest,
         bytes,
     })
+}
+
+/// Normalize an operator-supplied digest pin: 64 hex characters,
+/// case-insensitive. Anything else is a usage error naming the
+/// shape — a truncated or mistyped pin must never silently match
+/// nothing and proceed.
+fn parse_expected_blake3(pin: &str) -> Result<String, CliError> {
+    let normalized = pin.trim().to_ascii_lowercase();
+    if normalized.len() != 64 || !normalized.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(CliError::Usage(format!(
+            "{pin}: not a blake3 digest (expected 64 hex characters, the release record's hash)"
+        )));
+    }
+    Ok(normalized)
 }
 
 /// Split a canonical archive name into (version, os, arch). The

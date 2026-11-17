@@ -278,6 +278,7 @@ fn command(args: Vec<String>) -> Result<(), CliError> {
             relays,
             restart,
             credentials,
+            expect_blake3,
         } => {
             return update::update_from_cli(
                 drive_dir,
@@ -286,6 +287,7 @@ fn command(args: Vec<String>) -> Result<(), CliError> {
                 *restart,
                 credentials,
                 cli.config.as_deref(),
+                expect_blake3.clone(),
             );
         }
         Command::BuildInfo => {

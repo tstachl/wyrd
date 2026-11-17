@@ -133,12 +133,19 @@ means same filesystem, so every swap step is one atomic rename.
   write truncates and renames over it, so `converge` needs no
   policy for it (unlike the state record, which decides
   rollback — the verdict decides nothing).
+- `<exe>.verified-archive` — the private copy of the resolved
+  archive that staging extracts. Written after resolve,
+  re-hashed against the resolve-time digest, removed once
+  staging succeeds or fails. A crash leaves it behind like any
+  temp; the next pin removes it before copying, so `converge`
+  needs no policy for it.
 
 Phases, in order:
 
 1. **Resolve.** Validate the archive (name, regularity, digest,
-   host platform); refuse ambiguities before anything is
-   disturbed. Pure; no state file yet.
+   host platform — plus the operator's `--expect-blake3` pin when
+   given: a mismatch refuses here); refuse ambiguities before
+   anything is disturbed. Pure; no state file yet.
 2. **Require quiescence.** Lock probe (§3); held means stop here.
 3. **Stage.** Extract `*/bin/wyrd` from the archive into a
    same-directory staging dir, move to `<exe>.next`, write state
@@ -201,7 +208,13 @@ reads as alarming without it: the archive is operator-supplied
 over a local path — no fetch, no network, no unpacking of
 anything the operator did not stage. Executing the staged
 binary runs operator bytes at operator privilege: not an
-escalation, the same trust as the currently running binary.
+escalation, the same trust as the currently running binary. An
+archive fetched over a channel the operator does not fully
+control is pinned with `--expect-blake3` against the release
+record before it reaches the transaction — fetched bytes are
+trusted on the pin, never on the channel — and the pinned
+private copy is what gets extracted, so a swap between resolve
+and stage cannot reach the swap.
 
 ## 5. Verification boundary (condition 2)
 

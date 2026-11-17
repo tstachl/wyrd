@@ -96,7 +96,7 @@ fn resolve_identifies_a_valid_archive() {
     let temp = TempDir::new();
     let name = host_archive_name("0.3.0-alpha");
     let path = write_archive(&temp.0, &name, b"fake-archive");
-    let identity = resolve_archive(&path).unwrap();
+    let identity = resolve_archive(&path, None).unwrap();
     assert_eq!(identity.canonical_name, name);
     assert_eq!(identity.version, "0.3.0-alpha");
     assert_eq!(identity.bytes, b"fake-archive".len() as u64);
@@ -107,11 +107,122 @@ fn resolve_identifies_a_valid_archive() {
 }
 
 #[test]
+fn resolve_accepts_a_matching_pin() {
+    let temp = TempDir::new();
+    let name = host_archive_name("0.3.0-alpha");
+    let path = write_archive(&temp.0, &name, b"pinned-archive");
+    let pin = blake3::hash(b"pinned-archive").to_hex().to_string();
+    let identity = resolve_archive(&path, Some(&pin)).unwrap();
+    assert_eq!(identity.blake3, pin);
+}
+
+#[test]
+fn resolve_refuses_a_swapped_archive_under_pin() {
+    // D1: the pin names the release bytes, not the file name. A
+    // swapped archive under the same canonical name refuses in
+    // resolve, before anything is stopped or staged — the rotated
+    // bytes the review feared never reach the transaction.
+    let temp = TempDir::new();
+    let name = host_archive_name("0.3.0-alpha");
+    let original = write_archive(&temp.0, &name, b"release-bytes");
+    let pin = blake3::hash(b"release-bytes").to_hex().to_string();
+    // Sanity: the pin matches what it was taken from.
+    resolve_archive(&original, Some(&pin)).unwrap();
+    // Swap the bytes under the same name.
+    let swapped = write_archive(&temp.0, &name, b"attacker-bytes");
+    let error = resolve_archive(&swapped, Some(&pin)).unwrap_err();
+    let message = error.to_string();
+    assert!(message.contains("blake3 mismatch"), "{message}");
+    assert!(message.contains(&pin), "{message}");
+    assert!(matches!(error, CliError::Usage(_)), "{message}");
+}
+
+#[test]
+fn resolve_refuses_a_malformed_pin() {
+    // A truncated or mistyped pin is a usage error naming the
+    // shape — it must never silently match nothing and proceed.
+    let temp = TempDir::new();
+    let name = host_archive_name("0.3.0-alpha");
+    let path = write_archive(&temp.0, &name, b"pinned-archive");
+    let short = "0".repeat(63);
+    let nonhex = "zz".repeat(32);
+    for bad in ["", "abc123", "  ", short.as_str(), nonhex.as_str()] {
+        let error = resolve_archive(&path, Some(bad)).unwrap_err();
+        assert!(
+            error.to_string().contains("not a blake3 digest"),
+            "{bad}: {error}"
+        );
+    }
+    // Uppercase hex normalizes: the release record may print the
+    // digest either way.
+    let upper = blake3::hash(b"pinned-archive")
+        .to_hex()
+        .to_string()
+        .to_ascii_uppercase();
+    resolve_archive(&path, Some(&upper)).unwrap();
+}
+
+#[test]
+#[cfg(unix)]
+fn update_run_refuses_a_wrong_pin_before_staging() {
+    // The pin refusal lands in resolve: the executable is
+    // untouched, nothing is staged, and no record or verdict
+    // exists — resolve runs before the `in_progress` marker by
+    // construction.
+    let temp = TempDir::new();
+    let exe = fake_exe(&temp.0);
+    let drive = fake_drive(&temp.0);
+    let creds = forward_creds(&temp.0);
+    let script = script_binary(&temp.0, 0);
+    let archive = script_archive(&temp.0, &script);
+    let wrong = "1".repeat(64);
+    let error = update_run(&update_request(
+        &drive,
+        &archive,
+        &creds,
+        &[],
+        false,
+        &exe,
+        Some(&wrong),
+    ))
+    .unwrap_err();
+    let message = error.to_string();
+    assert!(message.contains("blake3 mismatch"), "{message}");
+    assert_eq!(fs::read(&exe).unwrap(), b"old-binary");
+    assert!(!next_path(&exe).exists());
+    assert!(!prev_path(&exe).exists());
+    assert!(!state_path(&exe).exists());
+    assert!(read_verdict(&exe).unwrap().is_none());
+}
+
+#[test]
+fn stage_refuses_an_archive_swapped_after_resolve() {
+    // Finding 1: resolve hashes the operator-visible path, but
+    // extraction must read the resolved bytes. Swap the archive
+    // after a successful resolve: the private copy carries the
+    // swapped bytes, the copy re-hash refuses, and staging never
+    // runs — no `.next`, no record, no leftover copy.
+    let temp = TempDir::new();
+    let exe = fake_exe(&temp.0);
+    let name = host_archive_name("0.4.0-alpha");
+    let archive = make_tarball(&temp.0, &name, b"release-binary");
+    let identity = resolve_archive(&archive, None).unwrap();
+    make_tarball(&temp.0, &name, b"swapped-binary");
+    let error = pin_archive_bytes(&exe, &archive, &identity).unwrap_err();
+    let message = error.to_string();
+    assert!(message.contains("changed after resolve"), "{message}");
+    assert!(message.contains(&identity.blake3), "{message}");
+    assert!(!next_path(&exe).exists());
+    assert!(read_state(&exe).unwrap().is_none());
+    assert!(!sibling(&exe, ".verified-archive").exists());
+}
+
+#[test]
 fn resolve_refuses_a_foreign_platform_with_both_named() {
     let temp = TempDir::new();
     let name = foreign_archive_name("0.3.0-alpha");
     let path = write_archive(&temp.0, &name, b"fake-archive");
-    let error = resolve_archive(&path).unwrap_err();
+    let error = resolve_archive(&path, None).unwrap_err();
     let message = error.to_string();
     // On a judgable host the message names both platforms;
     // elsewhere the archive resolves (the preflight backstops).
@@ -133,16 +244,16 @@ fn resolve_allows_the_rosetta_pair_only() {
     }
     let temp = TempDir::new();
     let rosetta = write_archive(&temp.0, "wyrd-0.4.0-alpha-macos-x86_64.tar.gz", b"x");
-    assert_eq!(resolve_archive(&rosetta).unwrap().arch, "x86_64");
+    assert_eq!(resolve_archive(&rosetta, None).unwrap().arch, "x86_64");
     let foreign = write_archive(&temp.0, "wyrd-0.4.0-alpha-linux-aarch64.tar.gz", b"x");
-    assert!(resolve_archive(&foreign).is_err());
+    assert!(resolve_archive(&foreign, None).is_err());
 }
 
 #[test]
 fn resolve_rejects_a_bad_name_with_the_shape() {
     let temp = TempDir::new();
     let path = write_archive(&temp.0, "abc123-wyrd-dist.tar.gz", b"fake-archive");
-    let error = resolve_archive(&path).unwrap_err();
+    let error = resolve_archive(&path, None).unwrap_err();
     let message = error.to_string();
     assert!(
         message.contains("wyrd-<version>-<os>-<arch>.tar.gz"),
@@ -154,11 +265,11 @@ fn resolve_rejects_a_bad_name_with_the_shape() {
 fn resolve_rejects_directories_and_missing_files() {
     let temp = TempDir::new();
     assert!(matches!(
-        resolve_archive(&temp.0).unwrap_err(),
+        resolve_archive(&temp.0, None).unwrap_err(),
         CliError::Usage(_)
     ));
     assert!(matches!(
-        resolve_archive(&temp.0.join("absent.tar.gz")).unwrap_err(),
+        resolve_archive(&temp.0.join("absent.tar.gz"), None).unwrap_err(),
         CliError::Io { .. }
     ));
 }
@@ -524,6 +635,7 @@ fn update_request<'a>(
     relays: &'a [String],
     restart: bool,
     exe: &'a Path,
+    expected_blake3: Option<&'a str>,
 ) -> UpdateRequest<'a> {
     UpdateRequest {
         drive_dir: drive,
@@ -533,6 +645,7 @@ fn update_request<'a>(
         relays,
         restart,
         exe,
+        expected_blake3,
     }
 }
 
@@ -752,7 +865,21 @@ fn update_run_commits_a_verified_swap() {
     let script = script_binary(&temp.0, 0);
     let archive = script_archive(&temp.0, &script);
     let script_bytes = fs::read(&script).unwrap();
-    let outcome = update_run(&update_request(&drive, &archive, &creds, &[], false, &exe)).unwrap();
+    // The happy path runs under a correct pin: pinning must not
+    // disturb a legitimate upgrade.
+    let pin = blake3::hash(&fs::read(&archive).unwrap())
+        .to_hex()
+        .to_string();
+    let outcome = update_run(&update_request(
+        &drive,
+        &archive,
+        &creds,
+        &[],
+        false,
+        &exe,
+        Some(&pin),
+    ))
+    .unwrap();
     assert_eq!(outcome, UpdateOutcome::Done);
     // The staged script is the binary in place; the rollback
     // copy and the record are gone — rollback impossible.
@@ -785,8 +912,16 @@ fn update_run_refuses_before_any_swap() {
     let creds = forward_creds(&temp.0);
     let script = script_binary(&temp.0, 3);
     let archive = script_archive(&temp.0, &script);
-    let error =
-        update_run(&update_request(&drive, &archive, &creds, &[], false, &exe)).unwrap_err();
+    let error = update_run(&update_request(
+        &drive,
+        &archive,
+        &creds,
+        &[],
+        false,
+        &exe,
+        None,
+    ))
+    .unwrap_err();
     let message = error.to_string();
     assert!(message.contains("before any swap"), "{message}");
     assert!(message.contains("did not verify"), "{message}");
@@ -816,7 +951,7 @@ fn update_run_early_refusal_under_restart_supervises_unchanged() {
     let archive = script_archive(&temp.0, &script);
     let relays = vec!["ws://localhost:9".to_owned()];
     let outcome = update_run(&update_request(
-        &drive, &archive, &creds, &relays, true, &exe,
+        &drive, &archive, &creds, &relays, true, &exe, None,
     ))
     .unwrap();
     assert_eq!(fs::read(&exe).unwrap(), b"old-binary");
@@ -843,8 +978,16 @@ fn update_run_rolls_back_a_post_swap_rejection() {
     let creds = forward_creds(&temp.0);
     let script = counting_script(&temp.0);
     let archive = script_archive(&temp.0, &script);
-    let error =
-        update_run(&update_request(&drive, &archive, &creds, &[], false, &exe)).unwrap_err();
+    let error = update_run(&update_request(
+        &drive,
+        &archive,
+        &creds,
+        &[],
+        false,
+        &exe,
+        None,
+    ))
+    .unwrap_err();
     assert!(
         matches!(&error, CliError::Verification(message) if message.contains("did not verify the drive")),
         "post-swap rejection must name the drive, got: {error}"
@@ -877,8 +1020,16 @@ fn update_run_rolls_back_a_post_swap_spawn_failure() {
     let creds = forward_creds(&temp.0);
     let script = unspawnable_second_script(&temp.0);
     let archive = script_archive(&temp.0, &script);
-    let error =
-        update_run(&update_request(&drive, &archive, &creds, &[], false, &exe)).unwrap_err();
+    let error = update_run(&update_request(
+        &drive,
+        &archive,
+        &creds,
+        &[],
+        false,
+        &exe,
+        None,
+    ))
+    .unwrap_err();
     let message = error.to_string();
     assert!(message.contains("failed to start"), "{message}");
     assert!(!message.contains("did not verify"), "{message}");
@@ -908,7 +1059,7 @@ fn update_run_spawn_failure_under_restart_supervises_the_restored_binary() {
     let archive = script_archive(&temp.0, &script);
     let relays = vec!["ws://localhost:9".to_owned()];
     let outcome = update_run(&update_request(
-        &drive, &archive, &creds, &relays, true, &exe,
+        &drive, &archive, &creds, &relays, true, &exe, None,
     ))
     .unwrap();
     assert_eq!(fs::read(&exe).unwrap(), b"old-binary");
@@ -947,7 +1098,7 @@ fn update_run_rejection_under_restart_supervises_the_restored_binary() {
     let archive = script_archive(&temp.0, &script);
     let relays = vec!["ws://localhost:9".to_owned()];
     let outcome = update_run(&update_request(
-        &drive, &archive, &creds, &relays, true, &exe,
+        &drive, &archive, &creds, &relays, true, &exe, None,
     ))
     .unwrap();
     assert_eq!(fs::read(&exe).unwrap(), b"old-binary");
@@ -982,7 +1133,7 @@ fn update_run_commit_under_restart_supervises_the_new_binary() {
     let script_bytes = fs::read(&script).unwrap();
     let relays = vec!["ws://localhost:9".to_owned()];
     let outcome = update_run(&update_request(
-        &drive, &archive, &creds, &relays, true, &exe,
+        &drive, &archive, &creds, &relays, true, &exe, None,
     ))
     .unwrap();
     assert_eq!(fs::read(&exe).unwrap(), script_bytes);
@@ -1115,7 +1266,7 @@ fn host_check_derives_from_consts_on_every_platform() {
     let name = format!("wyrd-0.4.0-alpha-{os}-{other_arch}.tar.gz");
     let path = write_archive(&temp.0, &name, b"x");
     let rosetta = os == "macos" && arch == "aarch64" && other_arch == "x86_64";
-    assert_eq!(resolve_archive(&path).is_ok(), rosetta, "{name}");
+    assert_eq!(resolve_archive(&path, None).is_ok(), rosetta, "{name}");
     // Other-OS always refuses, same arch or not.
     let other_os = if os == "macos" { "linux" } else { "macos" };
     for name in [
@@ -1123,6 +1274,6 @@ fn host_check_derives_from_consts_on_every_platform() {
         format!("wyrd-0.4.0-alpha-{other_os}-{other_arch}.tar.gz"),
     ] {
         let path = write_archive(&temp.0, &name, b"x");
-        assert!(resolve_archive(&path).is_err(), "{name}");
+        assert!(resolve_archive(&path, None).is_err(), "{name}");
     }
 }

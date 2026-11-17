@@ -32,6 +32,10 @@ pub(crate) struct UpdateRequest<'a> {
     pub relays: &'a [String],
     pub restart: bool,
     pub exe: &'a Path,
+    /// Out-of-band digest pin for the archive (`--expect-blake3`):
+    /// [`None`] resolves by shape only, [`Some`] refuses a digest
+    /// mismatch in resolve, before anything is staged.
+    pub expected_blake3: Option<&'a str>,
 }
 
 /// What the transaction hands back: either done, or "supervise
@@ -61,6 +65,7 @@ pub(crate) fn update_run(request: &UpdateRequest<'_>) -> Result<UpdateOutcome, C
         relays,
         restart,
         exe,
+        expected_blake3,
     } = request;
     if *restart && relays.is_empty() {
         return Err(CliError::Usage(
@@ -80,12 +85,15 @@ pub(crate) fn update_run(request: &UpdateRequest<'_>) -> Result<UpdateOutcome, C
         }
     }
     check_drive_dir(drive_dir)?;
-    let identity = resolve_archive(archive)?;
+    let identity = resolve_archive(archive, *expected_blake3)?;
     println!("update archive: {}", identity.canonical_name);
     println!("update version: {}", identity.version);
     println!("update target: {}-{}", identity.os, identity.arch);
     println!("update blake3: {}", identity.blake3);
     println!("update bytes: {}", identity.bytes);
+    if expected_blake3.is_some() {
+        println!("update expected-blake3: matched {}", identity.blake3);
+    }
     println!("{}", render_compatibility(&CompatibilityStatus::Unverified));
     // Mark the run started before anything can mutate: a crash
     // past this point leaves `in_progress`, never the previous
@@ -114,7 +122,17 @@ pub(crate) fn update_run(request: &UpdateRequest<'_>) -> Result<UpdateOutcome, C
         LockProbe::Free => {}
     }
     let own = own_build_info().app;
-    stage_archive(exe, drive_dir, archive, &identity)?;
+    // Bind the pin to the executed bytes: extraction reads a
+    // private copy hashed after copying, never the
+    // operator-visible path again, so a swap of the archive
+    // between resolve and stage cannot reach the transaction.
+    let verified = pin_archive_bytes(exe, archive, &identity)?;
+    // Removal runs whatever staging did, but the staging outcome
+    // propagates first: a removal failure must never mask it.
+    let staged = stage_archive(exe, drive_dir, &verified, &identity);
+    let removed = remove_if_present(&verified);
+    staged?;
+    removed?;
     println!("update staged: {}", next_path(exe).display());
     run_preflight(&next_path(exe))?;
     // Early refusal: the staged binary checks the drive BEFORE
