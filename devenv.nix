@@ -28,6 +28,18 @@ in
 
   languages.javascript.enable = true;
   languages.javascript.bun.enable = true;
+  # Single-bun-version scheme: the shell resolves bun from
+  # nixpkgs-unstable — the same rev the flake's `desktop.frontend`
+  # and `page.check` commands use — instead of floating on
+  # devenv-nixpkgs rolling. Both sides stay on one bun, so a local
+  # `bun install` can never rewrite the lockfile into a format CI
+  # cannot parse.
+  languages.javascript.bun.package = unstable.bun;
+  # Same rev for nodejs: the package bins CI execs (vite,
+  # svelte-check run under a node shebang) run under the shell's
+  # node too. nodejs-slim preserves the current slim build; the
+  # pinned rev carries the same 24.21.0 both sides already run.
+  languages.javascript.package = unstable.nodejs-slim;
   languages.rust.enable = true;
   languages.rust.toolchainFile = ./rust-toolchain.toml;
 

@@ -41,14 +41,24 @@ pass "app group agrees on its declaration lines"
 
 # 3. Bundle identifiers nest: app md.enesis.wyrd, appex appends —
 # and the build script signs the same appex identifier it ships.
+# Product metadata rides the same config: the product name matches
+# the Wyrd.app the install script builds, and the version is the
+# single source the stage hook stamps on the appex.
 grep -Fq '"identifier": "md.enesis.wyrd"' "$ROOT/crates/wyrd-desktop/tauri.conf.json" \
   || die "tauri.conf.json: app identifier drifted"
+grep -Fq '"productName": "Wyrd"' "$ROOT/crates/wyrd-desktop/tauri.conf.json" \
+  || die "tauri.conf.json: product name drifted"
+grep -Fq '"version": "0.4.0"' "$ROOT/crates/wyrd-desktop/tauri.conf.json" \
+  || die "tauri.conf.json: app version drifted"
 grep -Fq '<string>md.enesis.wyrd.fileprovider</string>' \
   "$ROOT/packaging/macos/fileprovider/Info.plist" \
   || die "Info.plist: appex identifier drifted"
 grep -Fq -- '--identifier md.enesis.wyrd.fileprovider' \
   "$ROOT/packaging/macos/fileprovider/build-appex.sh" \
   || die "build-appex.sh: codesign identifier drifted"
+grep -Fq 'app-id: md.enesis.wyrd' \
+  "$ROOT/packaging/linux/md.enesis.wyrd.yaml" \
+  || die "linux manifest: app-id drifted"
 pass "bundle identifiers nest, build script agrees"
 
 echo "appex-embedding: $PASS checks passed"
