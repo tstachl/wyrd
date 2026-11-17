@@ -148,17 +148,17 @@ let
       "cargo clippy --workspace --all-targets --no-default-features --color never -- -D warnings";
   });
 
-  # Rustdoc broken-link gate: intra-doc links rot silently without
-  # it (docs batch: 76 warnings fixed). Denies broken links; the
-  # private-item links are fixed too, so both lints stay clean via
-  # plain `cargo doc` locally. RUSTDOCFLAGS (not RUSTFLAGS) carries
-  # the rustdoc lint.
+  # Rustdoc link gate: intra-doc links rot silently without it
+  # (docs batch: 76 warnings fixed). Denies broken and private-item
+  # links plus redundant targets; the tree is clean for all three, so
+  # plain `cargo doc` stays warning-free locally. RUSTDOCFLAGS (not
+  # RUSTFLAGS) carries the rustdoc lints.
   rustDoc = craneLib.mkCargoDerivation (gateArgs // {
     pname = "wyrd";
     pnameSuffix = "-doc";
     doCheck = false;
     buildPhaseCargoCommand = ''
-      RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" cargo doc --no-deps --workspace --color never
+      RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links -D rustdoc::private_intra_doc_links -D rustdoc::redundant_explicit_links" cargo doc --no-deps --workspace --color never
     '';
   });
 

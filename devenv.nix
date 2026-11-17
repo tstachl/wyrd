@@ -159,12 +159,13 @@ in
       pass_filenames = false;
     };
     # Mirrors the CI rustdoc lane (`rust.yaml` gates-fast: `rust-doc`):
-    # broken intra-doc links denied workspace-wide. RUSTDOCFLAGS (not
-    # RUSTFLAGS) carries the rustdoc lint.
+    # broken and private-item intra-doc links plus redundant targets
+    # denied workspace-wide. RUSTDOCFLAGS (not RUSTFLAGS) carries the
+    # rustdoc lints.
     rustdoc = {
       enable = true;
       name = "rustdoc";
-      entry = "bash -c 'RUSTDOCFLAGS=\"-D rustdoc::broken_intra_doc_links\" cargo doc --no-deps --workspace --color never'";
+      entry = "bash -c 'RUSTDOCFLAGS=\"-D rustdoc::broken_intra_doc_links -D rustdoc::private_intra_doc_links -D rustdoc::redundant_explicit_links\" cargo doc --no-deps --workspace --color never'";
       files = "\\.rs$";
       pass_filenames = false;
     };
