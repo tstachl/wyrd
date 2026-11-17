@@ -813,15 +813,22 @@ from the drive module, but a hand-installed `wyrd` has no
 `wyrd-supervise` sibling, and managed bootstrap/reconfigure fail
 at validate without it — the same gate as the macOS bundle above.
 Place an executable `wyrd-supervise` beside the `wyrd` binary
-(the daemon's sibling lookup, same rule both platforms): either
-`nix build .#wyrd-supervise` and copy the output `bin/wyrd-supervise`
-next to `wyrd`, or shim the repo script —
+itself (the daemon's sibling lookup checks the CLI's own
+directory, not `PATH`, so `~/.local/bin` only works when `wyrd`
+lives there too): either `nix build .#wyrd-supervise` and copy the
+output `bin/wyrd-supervise` next to `wyrd`, or shim the repo
+script —
 
 ```sh
+BIN_DIR="$(dirname "$(command -v wyrd)")"
 printf '#!/bin/sh\nexec python3 /path/to/repo/nix/drive/supervise.py "$@"\n' \
-  > ~/.local/bin/wyrd-supervise
-chmod +x ~/.local/bin/wyrd-supervise
+  > "$BIN_DIR/wyrd-supervise"
+chmod +x "$BIN_DIR/wyrd-supervise"
 ```
+
+(An explicit `--supervise-bin` on the reconfigure/bootstrap
+invocation overrides the sibling lookup wherever the layout
+differs.)
 
 Stop, start, disable — per drive on macOS, then the Linux twin:
 
