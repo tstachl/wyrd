@@ -261,27 +261,59 @@ fn prompt_passphrase_tty() -> Result<Zeroizing<String>, CliError> {
     let mut stderr = std::io::stderr();
     let _ = stderr.write_all(b"Passphrase: ");
     let _ = stderr.flush();
-    let mut line = Zeroizing::new(String::new());
-    std::io::BufRead::read_line(&mut std::io::stdin().lock(), &mut line).map_err(|source| {
-        CliError::Io {
+    // Bounded like the pipe: stop at the first newline (a typed
+    // passphrase is one line; the pipe stays the multi-line
+    // surface) and refuse past one line of 4096 bytes plus its
+    // newline — the same boundary the file and pipe readers
+    // enforce, on the read itself. Cutting at the newline first
+    // also removes the off-by-one: a 4096-byte passphrase plus
+    // Enter fits, exactly like 4096 piped bytes without one.
+    let mut bytes = Zeroizing::new(Vec::new());
+    let mut stdin = std::io::stdin().lock();
+    loop {
+        if bytes.len() >= 4097 {
+            return Err(CliError::Usage(
+                "passphrase exceeds the 4096-byte size limit".to_string(),
+            ));
+        }
+        let mut chunk = [0u8; 64];
+        let n = std::io::Read::read(&mut stdin, &mut chunk).map_err(|source| CliError::Io {
             path: PathBuf::from("<stdin>"),
             source,
+        })?;
+        if n == 0 {
+            break;
         }
-    })?;
+        bytes.extend_from_slice(&chunk[..n]);
+        if bytes.contains(&b'\n') {
+            break;
+        }
+    }
     let _ = stderr.write_all(b"\n");
     let _ = stderr.flush();
+    if let Some(pos) = bytes.iter().position(|byte| *byte == b'\n') {
+        bytes.truncate(pos);
+    }
+    let mut line = Zeroizing::new(
+        std::str::from_utf8(&bytes)
+            .map_err(|_| CliError::Usage("passphrase must contain UTF-8 text".into()))?
+            .to_owned(),
+    );
+    if line.ends_with('\r') {
+        let shortened = line.len() - 1;
+        line.truncate(shortened);
+    }
     if line.len() > 4096 {
         return Err(CliError::Usage(
             "passphrase exceeds the 4096-byte size limit".to_string(),
         ));
     }
-    let stripped = strip_trailing_newline(&line);
-    if stripped.is_empty() {
+    if line.is_empty() {
         return Err(CliError::Usage(
             "no passphrase typed: the owner never starts without it".to_string(),
         ));
     }
-    Ok(Zeroizing::new(stripped.to_owned()))
+    Ok(line)
 }
 
 /// No terminal surface off Unix: credential files are Unix-only,
