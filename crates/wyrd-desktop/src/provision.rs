@@ -284,8 +284,14 @@ pub fn desktop_build_version() -> String {
 
 /// Check the CLI is the version-matched pair: run
 /// `<cli> __build_info` (lock-free, touches no store) and require the
-/// reported build version to equal the desktop's own. Returns the CLI
-/// binary on success for the caller's argv run.
+/// reported build version to equal the desktop's own. Match policy is
+/// exact equality (decided in `docs/design/desktop-shell.md`):
+/// pre-1.0 versions promise nothing across minor or patch, and both
+/// halves ship from one workspace version, so only an exact pair may
+/// operate. A missing binary fails here too — the spawn failure maps
+/// to `VersionMismatch`, never to a fallback — so every lifecycle
+/// runner that gates on this check hard-fails before spawning its
+/// argv. Returns the CLI binary on success for the caller's argv run.
 pub fn check_cli_version(cli_bin: &Path, timeout: Duration) -> Result<PathBuf, ProvisionResult> {
     let output = run_cli(cli_bin, &["__build_info".into()], None, timeout);
     if output.timed_out {
@@ -1398,6 +1404,29 @@ mod tests {
             outcome.result
         );
         std::fs::remove_dir_all(&dir).unwrap_or(());
+    }
+
+    /// A missing CLI binary is the same hard failure as a skewed one:
+    /// the spawn failure maps to `VersionMismatch` with the binary
+    /// named, never to a fallback or a silent skip.
+    #[test]
+    fn version_check_against_a_missing_binary_is_a_hard_failure() {
+        let missing =
+            std::env::temp_dir().join(format!("wyrd-desktop-no-such-cli-{}", std::process::id()));
+        assert!(
+            !missing.exists(),
+            "the missing-binary probe must not exist: {}",
+            missing.display()
+        );
+        match check_cli_version(&missing, Duration::from_secs(30)) {
+            Err(ProvisionResult::VersionMismatch { reason }) => {
+                assert!(
+                    reason.contains(&missing.display().to_string()),
+                    "the reason names the missing binary: {reason}"
+                );
+            }
+            other => panic!("a missing CLI hard-fails: {other:?}"),
+        }
     }
 
     /// A failing fake CLI maps through the exit-code table: exit 2
