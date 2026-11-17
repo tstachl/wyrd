@@ -11,8 +11,9 @@
 #                   --bundles explicitly.
 #
 # What it does: builds Wyrd.app ad-hoc through build-bundle.sh (the
-# bundler hook stages the appex plus the version-matched `wyrd` CLI,
-# pairs identities, and pins versions), verifies the signature, and
+# bundler hook stages the appex plus the version-matched `wyrd` CLI
+# and its `wyrd-supervise` sibling, pairs identities, and pins
+# versions), verifies the signature, and
 # installs the bundle to /Applications (or ~/Applications) ready to
 # launch. No signing assets required: Xcode/CLT plus the Rust and web
 # toolchains only.
@@ -215,13 +216,25 @@ codesign --verify --deep --strict "$APP" || {
     echo "error: built bundle fails codesign verification." >&2
     exit 1
 }
-# The co-installed CLI the desktop resolves first: the fixed pair
-# the acceptance case (create a drive, show it Available) depends on.
-if [ ! -f "$APP/Contents/Resources/wyrd" ]; then
-    echo "error: built bundle has no Contents/Resources/wyrd." >&2
-    echo "The desktop resolves the bundled CLI first; reinstall the matched pair." >&2
-    exit 1
-fi
+# The co-installed CLI the desktop resolves first, plus the
+# supervised-owner wrapper the daemon resolves as its sibling:
+# the fixed pair the acceptance case (create a drive, show it
+# Available) depends on, and without the wrapper every managed
+# bootstrap and reconfigure fails at validate. Both ride the
+# bundler mapping from packaging/macos/stage, so a missing staged
+# file fails here, never in the installed app.
+for BUNDLED in wyrd wyrd-supervise; do
+    if [ ! -f "$APP/Contents/Resources/$BUNDLED" ]; then
+        echo "error: built bundle has no Contents/Resources/$BUNDLED." >&2
+        echo "The desktop resolves the bundled CLI first and the daemon its supervise sibling; reinstall the matched set." >&2
+        exit 1
+    fi
+    if [ ! -x "$APP/Contents/Resources/$BUNDLED" ]; then
+        echo "error: built bundle Contents/Resources/$BUNDLED is not executable." >&2
+        echo "The daemon's sibling lookup requires the executable bit." >&2
+        exit 1
+    fi
+done
 
 # Install: copy to a PID-suffixed staging name, verify the copy,
 # then swap through a PID-suffixed `.old` name: two concurrent

@@ -222,4 +222,25 @@ grep -Fq 'test-dev-install.sh' "$ROOT/.ngit/nix/workflows/default.nix" \
   || die "CI: dev-install suite not wired into shell.suites"
 pass "CI wires the dev-install suite"
 
+# 12. The supervised-owner wrapper ships as the CLI's sibling: the
+# daemon resolves `wyrd-supervise` beside the running `wyrd`, so a
+# bundle without it fails every managed operation at validate.
+# The stage script owns the staged copy (shebang + script source,
+# executable bit, content check instead of otool — a script has no
+# Mach-O), the bundler maps it, and the installer refuses a bundle
+# missing it or carrying it non-executable.
+for marker in 'wyrd-supervise' 'nix/drive/supervise.py' 'chmod +x'; do
+  match "$marker" "$STAGE_CODE" \
+    || die "stage-cli: supervise marker '$marker' missing"
+done
+match "Resources/wyrd-supervise" "$CONF_CODE" \
+  || die "config: bundled supervise mapping missing"
+for marker in 'for BUNDLED in wyrd wyrd-supervise' 'Contents/Resources/$BUNDLED' 'is not executable'; do
+  match "$marker" "$INSTALL_CODE" \
+    || die "install: supervise guard '$marker' missing"
+done
+grep -Fq 'wyrd-supervise' "$ROOT/packaging/macos/README.md" \
+  || die "README: wyrd-supervise not recorded"
+pass "supervise wrapper is staged, mapped, guarded, and recorded"
+
 echo "dev-install: $PASS checks passed"
