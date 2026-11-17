@@ -795,7 +795,15 @@ operations on one drive — a second request while one is in flight
 is refused with an explicit per-drive busy state, never queued
 behind a service restart; no implicit retries of destructive
 operations — a timeout or process failure triggers observation,
-never re-execution; version mismatch is a hard failure. An
+never re-execution; version mismatch is a hard failure. Match
+policy (decided): exact equality on the workspace build version —
+the desktop's `CARGO_PKG_VERSION` against the CLI's `update
+build:` line. Major.minor matching is rejected: pre-1.0 versions
+carry no compatibility promise across minor or patch, so only an
+exact pair may operate. The bundle product version (`0.4.0` in
+`package.json`/`Info.plist` while the workspace is `0.3.0-alpha`)
+is not the match key — it names the installer artifact, and the
+two Rust halves always ship from one workspace version. An
 interrupted mode change recovers like the bootstrap
 partial-completion model: every stage (stop, clear, reconfigure,
 restart, verify) is a registry-plus-socket claim the next
