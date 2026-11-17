@@ -1,0 +1,39 @@
+# Native desktop-frontend workflow: the Tauri web UI gates.
+#
+# `bun test` (unit proofs against the mocked IPC bridge),
+# `svelte-check` (the typecheck the views gate on), and `bun run
+# build` (the vite bundle the Tauri shell serves) run through the
+# `desktop.frontend` command. Triggers on the frontend itself and on
+# the shell identity that serves it (`tauri.conf.json`, which names
+# the bundle and carries the CSP; capabilities), plus master pushes
+# on the same paths. Ready-gated like the other PR workflows: draft
+# pushes spend no CI, the draft-to-ready transition mints the run.
+version: 1
+system: x86_64-linux
+name: desktop
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "apps/desktop/**"
+      - "crates/wyrd-desktop/tauri.conf.json"
+      - "crates/wyrd-desktop/capabilities/**"
+      - "flake.nix"
+      - "flake.lock"
+      - ".ngit/nix/**"
+  pull_request:
+    # Ready-gated like the act job: draft pushes spend no CI, the
+    # draft-to-ready transition mints the runs.
+    types: [ready_for_review]
+    paths:
+      - "apps/desktop/**"
+      - "crates/wyrd-desktop/tauri.conf.json"
+      - "crates/wyrd-desktop/capabilities/**"
+      - "flake.nix"
+      - "flake.lock"
+      - ".ngit/nix/**"
+
+jobs:
+  frontend:
+    run: desktop.frontend
