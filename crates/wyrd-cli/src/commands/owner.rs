@@ -1,6 +1,6 @@
 //! The `owner` command: headless owner lifecycle, `owner status`,
 //! and the durable-probe helpers. Owns the owner runners and the
-//! owner-position renderer; the dispatcher in `main.rs` calls in.
+//! owner-position renderer; the dispatcher in `lib.rs` calls in.
 
 use crate::drive_config::{check_owner_relays, LoadedConfig, RelayResolution};
 use crate::logging::init_owner_diagnostics;

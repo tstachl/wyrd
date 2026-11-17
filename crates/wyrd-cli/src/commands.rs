@@ -1,5 +1,5 @@
 //! Subcommand implementations, one module per command family.
-//! The dispatcher in `main.rs` calls in; shared helpers are
+//! The dispatcher in `lib.rs` calls in; shared helpers are
 //! imported across modules as `crate::commands::<family>::<item>`.
 pub(crate) mod bootstrap;
 pub(crate) mod device;

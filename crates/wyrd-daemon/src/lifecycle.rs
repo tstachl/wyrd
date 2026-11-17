@@ -11,7 +11,7 @@
 //! is the second submitter; a socket submit racing the close answers
 //! `Shutdown`, never a hang) — and closes admission itself.
 //!
-//! Termination propagates through calls the composer (`main.rs`)
+//! Termination propagates through calls the composer (`lib.rs`)
 //! wires at the thread boundaries:
 //!
 //! - the presentation session ends (any outcome) → [`Supervisor::note_session_ended`]

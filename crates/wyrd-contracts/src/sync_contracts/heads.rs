@@ -465,7 +465,7 @@ fn partial_head_set_never_projects_mixed_validity_heads() {
 /// pending (still-fetching) head never projects — the verified head
 /// publishes alone — and a damaged closure still fails the pass. This
 /// is the production mount path (`into_live` + `sync_once`, the
-/// composer startup sequence in `main.rs`), not just the direct
+/// composer startup sequence in `lib.rs`), not just the direct
 /// `WyrdNode::refresh_live_heads` API.
 #[cfg(feature = "mount")]
 #[test]

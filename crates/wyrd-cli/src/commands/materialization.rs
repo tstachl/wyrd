@@ -26,7 +26,7 @@ use wyrd_sync::keys::DeviceIdentitySecret;
 /// One policy invocation. `status` and `budgets` read durable state;
 /// the three writes commit one durable policy change each, and the
 /// `role set` action writes one local file and no key (the `policy
-/// role set` dispatch in `main.rs` returns it before credential
+/// role set` dispatch in `lib.rs` returns it before credential
 /// loading).
 pub(crate) fn materialization(
     drive_dir: PathBuf,
@@ -50,7 +50,7 @@ pub(crate) fn materialization(
             identity,
         ),
         MaterializationAction::Role { action } => match action {
-            // Set returns before credential loading, in `main.rs`;
+            // Set returns before credential loading, in `lib.rs`;
             // the arm exists only because the match is exhaustive.
             RoleAction::Set { .. } => {
                 unreachable!("materialization role set returns before credential loading")

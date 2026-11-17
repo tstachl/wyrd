@@ -1,7 +1,7 @@
 //! The `device` command plus the shared hex parsers and identity
 //! reports. Owns the device runner, the bounded reader, and the
 //! `parse_*` helpers used across member/snapshot/device; the
-//! dispatcher in `main.rs` calls in.
+//! dispatcher in `lib.rs` calls in.
 
 use crate::args::DeviceAction;
 use crate::CliError;

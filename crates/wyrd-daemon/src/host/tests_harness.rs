@@ -141,7 +141,7 @@ where
 }
 
 /// Compose a live loop plus its FUSE adapter from the node's parts:
-/// tests take the composer role `main.rs` plays in production — the
+/// tests take the composer role `lib.rs` plays in production — the
 /// backend is built from the live parts, never handed out by the node.
 /// Behind the `mount` feature with the backend it builds.
 #[cfg(feature = "mount")]

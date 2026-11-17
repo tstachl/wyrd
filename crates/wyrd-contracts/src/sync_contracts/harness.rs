@@ -12,7 +12,7 @@ use wyrd_format::ObjectStore;
 use wyrd_view::DriveView;
 
 /// Compose a serving backend from the node's live parts: contracts
-/// take the composer role production gives `main.rs` — the backend is
+/// take the composer role production gives `lib.rs` — the backend is
 /// built from the parts, never handed out by the node.
 /// Compose a live loop plus its FUSE adapter from the node's parts.
 /// Behind the `mount` feature with the backend it builds: a

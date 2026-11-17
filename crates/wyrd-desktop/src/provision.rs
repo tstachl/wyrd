@@ -39,7 +39,7 @@ use std::time::Duration;
 /// unknown and only the re-read decides what the display says.
 pub const PROVISION_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// Exit codes the CLI contract pins (`main.rs`, `docs/design/cli.md`):
+/// Exit codes the CLI contract pins (`lib.rs`, `docs/design/cli.md`):
 /// 0 success (including `--help`/`--version` and the non-owner leave
 /// refusal, which authors nothing), 78 terminal held-drive (another
 /// process holds the store — the supervisor must not retry), 2

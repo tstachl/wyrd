@@ -1,6 +1,6 @@
 //! `sync status` / `sync now`: headless sync over the keystore.
 //! Owns `SyncRunReport`, the stopping-verdict and rendering helpers,
-//! and the `sync` / `sync_now` runners; the dispatcher in `main.rs`
+//! and the `sync` / `sync_now` runners; the dispatcher in `lib.rs`
 //! calls in. `vault` keeps its own status renderer.
 use crate::args::SyncAction;
 use crate::composer::{park_serving_until_shutdown, shutdown_headless_serving};
