@@ -42,7 +42,7 @@ pub(super) fn escrow_fresh_secret(
     };
     let drive = engine.drive();
     let dir = engine.store.dir().to_path_buf();
-    let rebuilt = engine.store.rebuild(engine.device())?;
+    let rebuilt = engine.cached_rebuilt()?;
     for past in 2..epoch {
         if escrow::load_record(&dir, past)?.is_some() {
             continue;
@@ -98,7 +98,7 @@ pub(super) fn commit_new_epoch(
     let mut staged = engine.log.clone();
     staged.observe(transition.clone());
     refuse_frozen_transition(&staged)?;
-    let rebuilt = engine.store.rebuild(engine.device())?;
+    let rebuilt = engine.cached_rebuilt()?;
     let mut secrets = Vec::with_capacity(epoch as usize);
     for past in 1..epoch {
         secrets.push(

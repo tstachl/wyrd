@@ -216,8 +216,8 @@ fn admit_queues_and_delivers_newcomer_catch_up() {
     assert_eq!(sent, 2, "transition plus capability");
     assert_eq!(
         engine.store.rebuild_count() - rebuilds_before,
-        1,
-        "one delivery snapshot per pass, not one per pair"
+        0,
+        "the delivery snapshot shares the open-warmed projection, never one replay per pair"
     );
     let rebuilt = engine.store.rebuild(engine.device()).unwrap();
     assert!(

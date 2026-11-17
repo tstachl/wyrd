@@ -493,6 +493,22 @@ impl DurableStore {
         self.current
     }
 
+    /// Re-read the commit watermark from disk and compare it with
+    /// this handle's tip: `Ok(true)` when disk still names the
+    /// served tip with its hash, `Ok(false)` when disk moved without
+    /// this handle (a crashed predecessor's commit it has not
+    /// adopted — the rebuild below re-reads from disk and either
+    /// serves the newer state or fails closed), `Err` when the
+    /// watermark itself is unreadable. A rotted watermark fails the
+    /// lookup closed instead of serving the memoized projection:
+    /// every direct rebuild re-validated it through `load`, and the
+    /// post-corruption policy (epochs.md, Heads) refuses to project
+    /// from untrustworthy state. One small file read, no replay.
+    pub(crate) fn watermark_matches(&self) -> Result<bool, DurableError> {
+        let (disk_current, disk_hash) = Self::read_current(&self.dir)?;
+        Ok(disk_current == self.current && disk_hash == self.last_hash)
+    }
+
     /// Bytes of commit files on disk, counted without touching
     /// anything. The observational half of retention reporting: the
     /// fact log is resident but unenforced, so `policy budgets` shows

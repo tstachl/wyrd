@@ -43,7 +43,7 @@ pub(crate) fn author<S: ObjectStore>(
 where
     S::Error: std::fmt::Debug,
 {
-    let rebuilt = engine.store.rebuild(engine.device)?;
+    let rebuilt = engine.cached_rebuilt()?;
     let mut dag = SnapshotDag::new(engine.drive);
     for body in rebuilt.runtime.snapshot_bodies.values() {
         dag.observe(body.clone());
@@ -53,7 +53,7 @@ where
         objects,
         tree,
         dag.eligible_heads(&rebuilt.log),
-        rebuilt,
+        &rebuilt,
         0,
     )
 }
@@ -74,8 +74,8 @@ pub(crate) fn author_with_parents<S: ObjectStore>(
 where
     S::Error: std::fmt::Debug,
 {
-    let rebuilt = engine.store.rebuild(engine.device)?;
-    author_over(engine, objects, tree, parents, rebuilt, 0)
+    let rebuilt = engine.cached_rebuilt()?;
+    author_over(engine, objects, tree, parents, &rebuilt, 0)
 }
 
 /// The recovery author must be the current canonical owner — not
@@ -115,7 +115,7 @@ pub(crate) fn author_recovery<S: ObjectStore>(
 where
     S::Error: std::fmt::Debug,
 {
-    let rebuilt = engine.store.rebuild(engine.device)?;
+    let rebuilt = engine.cached_rebuilt()?;
     // The classifier enforces the same rule on intake
     // (`RecoveryNotOwner`); authoring refuses up front so a
     // misconfigured member fails loudly instead of authoring
@@ -130,7 +130,7 @@ where
         objects,
         tree,
         dag.eligible_heads(&rebuilt.log),
-        rebuilt,
+        &rebuilt,
         RECOVERY_FLAG,
     )
 }
@@ -140,7 +140,7 @@ pub(crate) fn author_over<S: ObjectStore>(
     objects: &S,
     tree: ContentId,
     parents: Vec<SnapshotId>,
-    rebuilt: Rebuilt,
+    rebuilt: &Rebuilt,
     flags: u8,
 ) -> Result<AuthorizedSnapshot, EngineError>
 where

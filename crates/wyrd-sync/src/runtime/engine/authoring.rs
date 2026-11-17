@@ -186,7 +186,7 @@ impl Engine {
     /// the classification identical everywhere without duplicating the
     /// observe loop.
     fn rebuild_eligible_heads(&self) -> Result<(Rebuilt, Vec<AuthorizedSnapshot>), EngineError> {
-        let rebuilt = self.store.rebuild(self.device)?;
+        let rebuilt = self.cached_rebuilt()?;
         let mut dag = crate::authorization::SnapshotDag::new(self.drive);
         for body in rebuilt.runtime.snapshot_bodies.values() {
             dag.observe(body.clone());
@@ -238,7 +238,7 @@ impl Engine {
             .iter()
             .map(|head| head.snapshot().snapshot_id())
             .collect();
-        author::author_over(self, objects, tree, parents, pending.rebuilt, 0)
+        author::author_over(self, objects, tree, parents, &pending.rebuilt, 0)
     }
 
     /// The live heads as of a past epoch, over the currently
@@ -250,7 +250,7 @@ impl Engine {
     /// as [`Engine::live_heads`]: durable facts carry verified
     /// bodies only.
     pub fn live_heads_at_epoch(&self, epoch: u64) -> Result<Vec<AuthorizedSnapshot>, EngineError> {
-        let rebuilt = self.store.rebuild(self.device)?;
+        let rebuilt = self.cached_rebuilt()?;
         let mut dag = crate::authorization::SnapshotDag::new(self.drive);
         for body in rebuilt.runtime.snapshot_bodies.values() {
             dag.observe(body.clone());

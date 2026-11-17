@@ -510,12 +510,35 @@ pub struct WireScrubReport {
     pub failures: u64,
 }
 
-/// The wire form of `SyncReport`: one pass's intake, fetch, repair,
-/// and publication counts. The publish-clip fields default like
-/// `paused` does: a v1 reader from before the publish budget degrades
-/// to "no clip reported" instead of failing the parse; both sides of
-/// this change ship together, so the default only covers
+/// The wire form of `PoisonCounts`: per-registry lock-poison
+/// observations behind one pass. Every field defaults to zero (no
+/// poison observed) so a v1 reader from before the poison surface
+/// degrades to "healthy" instead of failing the parse; both sides
+/// of this change ship together, so the defaults only cover
 /// mixed-version skew during rollout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct WirePoisonCounts {
+    /// `WantRegistry` poison observations.
+    #[serde(default)]
+    pub wants: u64,
+    /// `QuarantineQueue` poison observations.
+    #[serde(default)]
+    pub quarantine: u64,
+    /// `ScrubQueue` poison observations.
+    #[serde(default)]
+    pub scrub: u64,
+    /// Mutation parent-table poison observations.
+    #[serde(default)]
+    pub parents: u64,
+}
+
+/// The wire form of `SyncReport`: one pass's intake, fetch, repair,
+/// and publication counts, plus the poison observations behind the
+/// pass. The publish-clip and poison fields default like
+/// `paused` does: a v1 reader from before them degrades
+/// to "no clip reported, no poison observed" instead of failing the
+/// parse; both sides of this change ship together, so the defaults
+/// only cover mixed-version skew during rollout.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WireSyncReport {
     /// The intake drain behind the pass.
@@ -543,6 +566,9 @@ pub struct WireSyncReport {
     /// Publish-phase elapsed time in ms.
     #[serde(default)]
     pub publish_elapsed_ms: u64,
+    /// Lock-poison observations behind the pass, by registry.
+    #[serde(default)]
+    pub poison: WirePoisonCounts,
 }
 
 /// The liveness answer: the transport health and the last pass

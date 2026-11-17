@@ -180,7 +180,7 @@ fn admit(
     super::common::refuse_frozen_transition(&staged)?;
     // Secrets `1..=epoch`: the keyring holds every past epoch (each
     // installed from an authorized capability), plus the fresh one.
-    let rebuilt = engine.store.rebuild(engine.device)?;
+    let rebuilt = engine.cached_rebuilt()?;
     let mut secrets = Vec::with_capacity(epoch as usize);
     for past in 1..=tip.epoch {
         secrets.push(
@@ -339,7 +339,7 @@ fn count_unqueued_closure(
     use std::collections::BTreeSet;
     use wyrd_format::SnapshotId;
 
-    let Ok(rebuilt) = engine.store.rebuild(engine.device) else {
+    let Ok(rebuilt) = engine.cached_rebuilt() else {
         return UnqueuedClosure::Uncounted;
     };
     let mut stack: Vec<SnapshotId> = seeds
@@ -519,7 +519,7 @@ pub(crate) fn fill_admission_obligations(
     // still overflow the membership commit above; that refusal is
     // whole-batch by design and child 2 names it.)
     let derive_missing = |engine: &mut Engine| -> Result<Vec<Fact>, EngineError> {
-        let rebuilt = engine.store.rebuild(engine.device)?;
+        let rebuilt = engine.cached_rebuilt()?;
         let mut stack: Vec<SnapshotId> = seeds
             .iter()
             .map(|head| head.snapshot().snapshot_id())
@@ -631,7 +631,7 @@ pub(crate) fn reissue_invitation(
         .ok_or(EngineError::NotMember)?;
     // Secrets `1..=epoch`, as at admission: the keyring holds every
     // past epoch from an authorized capability each.
-    let rebuilt = engine.store.rebuild(engine.device)?;
+    let rebuilt = engine.cached_rebuilt()?;
     let mut secrets = Vec::with_capacity(epoch as usize);
     for past in 1..=epoch {
         secrets.push(

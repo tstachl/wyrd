@@ -9,7 +9,7 @@
 //! field to a domain type fails the build here until the mapping
 //! decides what the wire says about it.
 
-use wyrd_core::live::{OwnerObservation, PendingObligations, SyncReport};
+use wyrd_core::live::{OwnerObservation, PendingObligations, PoisonCounts, SyncReport};
 use wyrd_core::mutation::{
     FileIdentity, FoldDisposition, FoldForcerOutcome, MutationError, MutationKind, MutationOutcome,
     ParentToken,
@@ -650,6 +650,23 @@ pub fn wire_scrub_report(report: &ScrubReport) -> WireScrubReport {
     }
 }
 
+/// Map `PoisonCounts` to its wire form. Exhaustive destructure:
+/// a new source field fails the build here, not on the wire.
+pub fn wire_poison_counts(poison: &PoisonCounts) -> WirePoisonCounts {
+    let PoisonCounts {
+        wants,
+        quarantine,
+        scrub,
+        parents,
+    } = poison;
+    WirePoisonCounts {
+        wants: *wants,
+        quarantine: *quarantine,
+        scrub: *scrub,
+        parents: *parents,
+    }
+}
+
 /// Map `SyncReport` to its wire form. Exhaustive destructure:
 /// a new source field fails the build here, not on the wire.
 pub fn wire_sync_report(report: &SyncReport) -> WireSyncReport {
@@ -665,6 +682,7 @@ pub fn wire_sync_report(report: &SyncReport) -> WireSyncReport {
         publish_elapsed_ms,
         generation,
         pending_heads,
+        poison,
     } = report;
     WireSyncReport {
         drained: wire_drain_report(drained),
@@ -678,6 +696,7 @@ pub fn wire_sync_report(report: &SyncReport) -> WireSyncReport {
         publish_elapsed_ms: *publish_elapsed_ms,
         generation: *generation,
         pending_heads: *pending_heads,
+        poison: wire_poison_counts(poison),
     }
 }
 

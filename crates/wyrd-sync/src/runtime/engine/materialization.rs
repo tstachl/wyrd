@@ -78,7 +78,8 @@ impl Engine {
     /// the per-pass quarantine cap: batches stay small). Returns the
     /// number of facts committed.
     pub fn record_objects_removed(&mut self, contents: &[ContentId]) -> Result<usize, EngineError> {
-        let runtime = self.store.rebuild(self.device)?.runtime;
+        let rebuilt = self.cached_rebuilt()?;
+        let runtime = &rebuilt.runtime;
         let mut ids: Vec<ContentId> = contents
             .iter()
             .copied()
@@ -119,7 +120,8 @@ impl Engine {
         &mut self,
         contents: &[ContentId],
     ) -> Result<(usize, u64), EngineError> {
-        let runtime = self.store.rebuild(self.device)?.runtime;
+        let rebuilt = self.cached_rebuilt()?;
+        let runtime = &rebuilt.runtime;
         let mut ids: Vec<ContentId> = contents
             .iter()
             .copied()
@@ -181,7 +183,8 @@ impl Engine {
         &mut self,
         changes: &[(ContentId, MaterializationState)],
     ) -> Result<usize, EngineError> {
-        let runtime = self.store.rebuild(self.device)?.runtime;
+        let rebuilt = self.cached_rebuilt()?;
+        let runtime = &rebuilt.runtime;
         let mut pairs: Vec<(ContentId, MaterializationState)> = Vec::new();
         for (content, state) in changes {
             if runtime.materialization(content) != *state {

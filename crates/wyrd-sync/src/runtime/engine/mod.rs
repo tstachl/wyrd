@@ -877,6 +877,26 @@ pub struct Engine {
     /// it. Volatile like every other live projection — a reopen
     /// starts empty.
     pub(super) live_heads_cache: Mutex<Option<(u64, Vec<AuthorizedSnapshot>)>>,
+    /// The pass-scoped shared rebuilt projection: one durable replay
+    /// per tip, borrowed by the whole pass. Read-only consumers
+    /// (gate checks, barrier gates, answer/deliver/announce paths,
+    /// status observation, fetch planning) share the entry instead
+    /// of replaying history each: commit paths advance CURRENT, so
+    /// the next lookup misses and replays. The tip comparison is the
+    /// invalidation — no explicit invalidation runs anywhere — and
+    /// every hit re-validates the on-disk watermark first, so a
+    /// rotted CURRENT fails the lookup closed instead of serving a
+    /// masked memo (the post-corruption policy). No
+    /// second source of truth: derived state stays disposable, and
+    /// a reopen starts empty like every other live projection. The
+    /// key is the in-memory tip, with the same single-writer premise
+    /// as [`Engine::live_heads_cache`]: if the store's exclusive,
+    /// held-for-life lock ever admits a second writer, this keying
+    /// must change with it. The memo write is tip-guarded like the
+    /// heads listing's: a commit landing between the tip read and
+    /// the replay serves the consistent rebuild but skips the memo,
+    /// so a stale projection is never keyed to a new tip.
+    pub(super) rebuilt_cache: Mutex<Option<(u64, Rebuilt)>>,
     /// In-memory fetch-backoff state: how many `execute_plan` runs have
     /// happened, per-representation strike counts with the run they were
     /// last struck (one strike per run — a call's convergence passes
@@ -1148,7 +1168,7 @@ impl Engine {
             .log
             .known_state()
             .ok_or(EngineError::NoCanonicalMembership)?;
-        let rebuilt = self.store.rebuild(self.device)?;
+        let rebuilt = self.cached_rebuilt()?;
         Ok((1..=tip.epoch)
             .filter(|epoch| rebuilt.keyring.secret(*epoch).is_some())
             .collect())
@@ -1257,6 +1277,46 @@ impl Engine {
         self.store.current()
     }
 
+    /// Share the pass-scoped rebuilt projection: the tip-hit path
+    /// serves the memoized replay, a miss replays once and
+    /// memoizes. Every read-only consumer that previously called
+    /// [`DurableStore::rebuild`](crate::durable::DurableStore::rebuild)
+    /// directly shares this entry, so one quiet pass replays once no
+    /// matter how many projections it consults. Commits advance the
+    /// tip and miss on the next lookup — staleness is impossible
+    /// without a store write, and every store write moves the key.
+    pub fn cached_rebuilt(&self) -> Result<Rebuilt, EngineError> {
+        let tip = self.store.current();
+        // Re-validate the watermark before serving the memo: the
+        // post-corruption policy fails closed on a rotted CURRENT,
+        // and every direct rebuild re-validated it through `load` —
+        // a hit must never mask damage. A moved watermark (never in
+        // production under the exclusive lock; crash-test windows)
+        // misses into the rebuild below, which re-reads from disk.
+        // One small file read on a hit, no replay.
+        if self.store.watermark_matches()? {
+            if let Ok(guard) = self.rebuilt_cache.lock() {
+                if let Some((cached_tip, rebuilt)) = guard.as_ref() {
+                    if *cached_tip == tip {
+                        return Ok(rebuilt.clone());
+                    }
+                }
+            }
+        }
+        let rebuilt = self.store.rebuild(self.device)?;
+        // Tip-guarded memo write: a commit landing between the tip
+        // read and the replay would otherwise key the pre-commit
+        // projection to the post-commit tip. On a race the caller
+        // still holds the consistent rebuild it replayed; only the
+        // memo write is skipped.
+        if self.store.current() == tip {
+            if let Ok(mut guard) = self.rebuilt_cache.lock() {
+                *guard = Some((tip, rebuilt.clone()));
+            }
+        }
+        Ok(rebuilt)
+    }
+
     /// Bytes of fact-log commit files on disk. Observational only —
     /// the fact log is resident but unenforced — for the retention
     /// breakdown `policy budgets` renders.
@@ -1267,7 +1327,7 @@ impl Engine {
     /// Replay durable runtime facts for presentation layers. The returned
     /// state is a snapshot; fetch execution remains owned by the engine.
     pub fn runtime_state(&self) -> Result<super::RuntimeState, EngineError> {
-        Ok(self.store.rebuild(self.device)?.runtime)
+        Ok(self.cached_rebuilt()?.runtime.clone())
     }
 
     /// Reconciliation progress rebuilt from committed facts: received
@@ -1278,7 +1338,7 @@ impl Engine {
     /// a process that answered statements in memory but never retired
     /// them reports the facts, not its volatile evaluation.
     pub fn reconciliation_counters(&self) -> Result<super::ReconciliationCounters, EngineError> {
-        let rebuilt = self.store.rebuild(self.device)?;
+        let rebuilt = self.cached_rebuilt()?;
         let (transitions_reconciled, capabilities_reconciled, announcements_reconciled) =
             rebuilt.runtime.reconciled_counts();
         Ok(super::ReconciliationCounters {
@@ -1320,7 +1380,8 @@ impl Engine {
         if self.stalled_statements.is_empty() {
             return Ok(0);
         }
-        let state = self.store.rebuild(self.device)?.runtime;
+        let rebuilt = self.cached_rebuilt()?;
+        let state = &rebuilt.runtime;
         Ok(self
             .stalled_statements
             .iter()

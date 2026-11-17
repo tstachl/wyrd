@@ -2271,6 +2271,7 @@ fn sync_run_report_accumulates_every_pass_not_just_the_last() {
             publish_elapsed_ms: 28,
             generation: 1,
             pending_heads: 0,
+            poison: Default::default(),
         });
     }
     assert_eq!(report.passes, 3 + 12, "the fixture's 3 plus 12: {report:?}");

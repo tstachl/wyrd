@@ -240,6 +240,14 @@ surfaces:
   classification ran before the bound tripped); the sub-counters
   partition `shed` and nothing else, and `sync now` renders them
   beside the shed total only when the run shed anything.
+- `SyncReport.poison` (`PoisonCounts`): per-pass lock-poison
+  observations by registry (wants, quarantine, scrub, parents).
+  A poisoned registry reads healthy-empty through its fail-closed
+  paths, so any nonzero count is what tells a dead registry from
+  an idle one without reading logs. The write budget is not
+  loop-visible: its poll-beside-total contract stays at
+  `WriteBudget::total` / `dirty_handles`, and a poisoned budget
+  fails the fold fast path with EIO.
 - `WriteStats` on the mutation queue: queue depth (queued but
   unexecuted, per dispatch in `mount.log` beside the dispatch
   latency), snapshot rate with per-source share, and
