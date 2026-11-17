@@ -97,19 +97,29 @@ impl Limits {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+/// Ingest failures: byte-ceiling oversize, count-ceiling overflow, or envelope framing errors.
 pub enum IngestError {
+    /// A byte string exceeds its total-bytes ceiling.
     #[error("{what} of {bytes} bytes exceeds the {max}-byte ceiling")]
     TooLarge {
+        /// What was measured (for diagnostics).
         what: &'static str,
+        /// Observed size in bytes.
         bytes: usize,
+        /// Applicable ceiling in bytes.
         max: usize,
     },
+    /// A decoded structure exceeds its cardinality ceiling.
     #[error("{what} count {count} exceeds the limit of {max}")]
     TooMany {
+        /// What was counted (for diagnostics).
         what: &'static str,
+        /// Observed count.
         count: usize,
+        /// Applicable ceiling.
         max: usize,
     },
+    /// Envelope framing failed before any count check.
     #[error("envelope framing failed")]
     Envelope(#[from] EnvelopeError),
 }

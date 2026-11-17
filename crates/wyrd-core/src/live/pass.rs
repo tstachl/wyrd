@@ -351,7 +351,7 @@ where
     /// One supervised pass: drain the mailbox into the engine, run a
     /// bounded fetch plan when a bulk source is present, then publish
     /// a new serving generation when durable state advanced. Fetch
-    /// runs through a [`SharedStore`](wyrd_format::SharedStore) over
+    /// runs through a [`SharedStore`] over
     /// the same handle the backend serves from: each verified import
     /// locks only for its own write, so bulk reads and verification
     /// never stall serving. Only the final publication takes the
@@ -1031,7 +1031,7 @@ where
     /// them in [`LiveNode::drain_until_closed`], and only the
     /// supervisor — after the presentation and loop joins — closes
     /// admission and settles stragglers with
-    /// [`MutationError::Shutdown`](crate::mutation::MutationError::Shutdown).
+    /// [`MutationError::Shutdown`].
     /// No admitted submitter is stranded at any point: the queue stays
     /// open and drained until the supervisor owns it.
     ///

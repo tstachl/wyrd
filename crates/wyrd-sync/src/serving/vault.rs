@@ -1,3 +1,5 @@
+//! Vault source: the durable-ledger view over sealed objects.
+//! Offers only representations the ledger records, never implied bytes.
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -11,8 +13,10 @@ use crate::seal::blob_root;
 /// The vault directory inside a drive directory.
 const VAULT_DIR: &str = "vault";
 
+/// Serving vault failures: I/O, or backpressure from a full serving mirror queue.
 #[derive(Debug, Error)]
 pub enum VaultError {
+    /// Vault I/O failed.
     #[error("vault I/O failed: {0}")]
     Io(#[from] std::io::Error),
     /// The serving mirror queue is full: the vault file is durable
@@ -25,10 +29,15 @@ pub enum VaultError {
     /// root so a rejection traces to its publication.
     #[error("serving mirror queue full for {root}: {queued_bytes}/{max_bytes} bytes in {queued_items} items, rejected {rejected}")]
     MirrorFull {
+        /// The refused representation's transport root.
         root: BaoRoot,
+        /// Queued items at refusal.
         queued_items: usize,
+        /// Queued bytes at refusal.
         queued_bytes: usize,
+        /// Byte bound refused against.
         max_bytes: usize,
+        /// Lifetime refusal count including this one.
         rejected: u64,
     },
 }

@@ -1,3 +1,6 @@
+//! Epoch rotation: forces a fresh epoch secret without changing
+//! membership. Bounds acquisition after suspected compromise; owner
+//! authority only.
 use wyrd_format::membership::{
     set_root, MEMBER_SET_CONTEXT, OWNER_SET_CONTEXT, READER_SET_CONTEXT,
 };

@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! Wyrd's daemon: the composition layer the architecture reserves for
 //! exactly this role (`docs/architecture.md`): it wires the `wyrd-core`
 //! node to a presentation backend and owns the process around it

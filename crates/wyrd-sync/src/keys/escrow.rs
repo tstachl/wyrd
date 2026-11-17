@@ -62,10 +62,15 @@ pub const ESCROW_RECORD_LEN: usize = 113;
 /// no plaintext secret, no structure beyond the pinned header.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EscrowRecord {
+    /// The escrow record version (only `ESCROW_VERSION` unwraps).
     pub version: u8,
+    /// The drive this escrowed secret belongs to.
     pub drive: DriveId,
+    /// The epoch this escrowed secret belongs to.
     pub epoch: u64,
+    /// The fresh XChaCha20-Poly1305 nonce for this wrap.
     pub nonce: [u8; 24],
+    /// The sealed 32-byte epoch secret plus tag.
     pub ciphertext: [u8; 48],
 }
 
@@ -173,10 +178,10 @@ pub fn record_path(store_dir: &Path, epoch: u64) -> PathBuf {
 /// commits — see the ordering note at the top of this module.
 ///
 /// Creation hardens both leaves the write establishes: the `escrow/`
-/// directory through [`ensure_owner_only_dir`](crate::durable::ensure_owner_only_dir)
+/// directory through `ensure_owner_only_dir`
 /// (owner-only from creation, never the umask's business) and the
 /// record file through [`atomic_write_mode`](crate::durable::atomic_write_mode)
-/// at [`SECRET_FILE_MODE`](crate::durable::SECRET_FILE_MODE), so a
+/// at `SECRET_FILE_MODE`, so a
 /// crash between temp creation and rename never strands a
 /// group-readable sidecar holding a wrapped epoch secret. Like every
 /// custody write, creation hardens and opening never chmods: a

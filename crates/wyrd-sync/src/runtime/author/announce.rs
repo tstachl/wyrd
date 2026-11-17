@@ -1,3 +1,6 @@
+//! Announcement authoring: builds signed snapshot announcements
+//! for the outbox. Read-only against durable state; sending stays
+//! in delivery so retries never re-author.
 use std::collections::BTreeMap;
 
 use super::delivery::{

@@ -33,7 +33,7 @@
 //! entries are structural: the fetch plan always wants them, so a receiver
 //! can assemble the full tree closure. The verifier runs at two boundaries:
 //!
-//! - authoring self-checks before commit ([`crate::runtime::author`]);
+//! - authoring self-checks before commit (`crate::runtime::author`);
 //! - the daemon verifies each classified head's closure against the local
 //!   store before installing it, and a head whose closure is incomplete or
 //!   does not correspond is never mounted (see `wyrd-daemon`).
@@ -67,71 +67,129 @@ use crate::ingest::{check_manifest, check_tree, IngestError, Limits};
 #[derive(Debug, Error)]
 pub enum ClosureError {
     #[error("root manifest describes snapshot {found}, not {expected}")]
+    /// The root manifest declares a different snapshot than the body being verified.
     RootSnapshotMismatch {
+        /// The snapshot id the body commits.
         expected: SnapshotId,
+        /// The snapshot id the root manifest declares.
         found: SnapshotId,
     },
     #[error("no root manifest is recorded for snapshot {0}")]
+    /// No root manifest is recorded locally for this snapshot (fetch progress, not damage).
     RootManifestMissing(SnapshotId),
     #[error("root manifest id {found} does not match its canonical bytes ({derived})")]
+    /// Root manifest bytes do not hash back to the recorded manifest id.
     RootIdentityMismatch {
+        /// The recorded manifest id the bytes failed to reproduce.
         found: ContentId,
+        /// The manifest id the canonical bytes actually derive to.
         derived: ContentId,
     },
     #[error("child manifest {expected} does not match its canonical bytes ({derived})")]
+    /// A child manifest's bytes do not hash back to the id its parent links.
     ChildIdentityMismatch {
+        /// The manifest id the parent link names.
         expected: ContentId,
+        /// The manifest id the child's canonical bytes actually derive to.
         derived: ContentId,
     },
     #[error("manifest is not canonical: entries or children are not strictly ascending")]
+    /// A manifest's entries or children are not strictly ascending.
     NonCanonicalManifest,
     #[error("tree {0} is not available locally")]
+    /// A reachable tree object is not present locally (fetch progress, not damage).
     TreeUnavailable(ContentId),
     #[error("tree {0} does not hash back to its content id")]
+    /// Stored tree bytes do not hash back to their content id.
     TreeIdentityMismatch(ContentId),
     #[error("tree {0} failed to decode")]
+    /// Stored tree bytes fail to decode.
     InvalidTree(ContentId),
     #[error("tree {tree} is mapped by both manifest {first} and manifest {second}")]
+    /// One tree is claimed by two different manifests.
     AmbiguousTreeMapping {
+        /// The doubly-claimed tree.
         tree: ContentId,
+        /// The first claimant manifest.
         first: ContentId,
+        /// The second, contradicting claimant manifest.
         second: ContentId,
     },
     #[error("directory {tree} has no child manifest for subtree {child}")]
-    MissingChildManifest { tree: ContentId, child: ContentId },
-    #[error("child manifest {manifest} for subtree {child} is not available")]
-    MissingChildManifestRecord {
+    /// A directory subtree has no corresponding child manifest link.
+    MissingChildManifest {
+        /// The tree whose directory names the unlinked subtree.
+        tree: ContentId,
+        /// The subtree with no corresponding child manifest.
         child: ContentId,
+    },
+    #[error("child manifest {manifest} for subtree {child} is not available")]
+    /// A linked child manifest has no local record (fetch progress, not damage).
+    MissingChildManifestRecord {
+        /// The subtree whose record is missing.
+        child: ContentId,
+        /// The linked manifest id with no local record.
         manifest: ContentId,
     },
     #[error("child manifest {manifest} describes a different snapshot")]
-    ChildSnapshotMismatch { manifest: ContentId },
+    /// A child manifest declares a different snapshot than the body under verification.
+    ChildSnapshotMismatch {
+        /// The child manifest bound to another snapshot.
+        manifest: ContentId,
+    },
     #[error("child manifest {child} of tree {tree} is not a directory subtree")]
-    UnexpectedChildManifest { tree: ContentId, child: ContentId },
+    /// A child link names a tree that is not a directory subtree here.
+    UnexpectedChildManifest {
+        /// The tree whose child link is unexpected.
+        tree: ContentId,
+        /// The linked tree that is not a directory subtree here.
+        child: ContentId,
+    },
     #[error("file in tree {tree} references chunk {chunk} with no manifest entry")]
-    MissingChunkEntry { tree: ContentId, chunk: ContentId },
+    /// A file references a chunk with no manifest entry.
+    MissingChunkEntry {
+        /// The tree whose file references the unmapped chunk.
+        tree: ContentId,
+        /// The chunk with no manifest entry.
+        chunk: ContentId,
+    },
     #[error("manifest entry {content} is not reachable from the snapshot tree")]
-    UnrelatedEntry { content: ContentId },
-    #[error("manifest entry {content} has kind {found:?}, expected {expected:?}")]
-    KindMismatch {
+    /// A manifest entry is unreachable from the snapshot tree.
+    UnrelatedEntry {
+        /// The manifest entry unreachable from the snapshot tree.
         content: ContentId,
+    },
+    #[error("manifest entry {content} has kind {found:?}, expected {expected:?}")]
+    /// A manifest entry's kind disagrees with where the tree closure finds it.
+    KindMismatch {
+        /// The misclassified content id.
+        content: ContentId,
+        /// The kind the tree closure requires here.
         expected: ObjectKind,
+        /// The kind the manifest entry declares.
         found: ObjectKind,
     },
     #[error("tree entry {content} declares {found} bytes but the tree is {expected}")]
+    /// An optional tree mapping declares the wrong plaintext size.
     TreeEntrySizeMismatch {
+        /// The tree the mismatched entry maps.
         content: ContentId,
+        /// The tree's actual plaintext length.
         expected: u64,
+        /// The size the tree entry declares.
         found: u64,
     },
     #[error(transparent)]
+    /// Ingest limits rejected the tree or manifest under verification.
     Ingest(#[from] IngestError),
     #[error("object store read failed: {detail}")]
+    /// The object store failed mid-read; the store's own classification applies.
     ObjectStore {
         /// The store's own classification: a full or unwritable
         /// store is not closure damage, and the failure policy has a
         /// dedicated budget for it.
         failure: StoreFailure,
+        /// The store error rendered as text.
         detail: String,
     },
 }
@@ -217,6 +275,7 @@ impl ClosureError {
 ///
 /// [`RuntimeState`]: crate::runtime::RuntimeState
 pub trait ManifestSource {
+    /// Resolve a recorded manifest by its logical content id.
     fn manifest(&self, id: &ContentId) -> Option<&Manifest>;
 }
 

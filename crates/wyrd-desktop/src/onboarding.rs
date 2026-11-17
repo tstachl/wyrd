@@ -61,10 +61,15 @@ const ADOPTED_RECORD_VERSION: u8 = 1;
 /// with `exists == true` are the actual files Ready shows.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct KeyDefaults {
+    /// Effective identity file path: adopted pair where recorded, else platform default.
     pub identity_file: String,
+    /// Effective passphrase file path: adopted pair where recorded, else platform default.
     pub passphrase_file: String,
+    /// Whether the identity file exists (no secret reads).
     pub identity_exists: bool,
+    /// Whether the passphrase file exists (no secret reads).
     pub passphrase_exists: bool,
+    /// False only where no home directory resolves; paths are then empty and nothing may commit.
     pub usable: bool,
 }
 
@@ -303,19 +308,30 @@ pub enum OnboardingResult {
     /// committed passphrase is read back from its file, never
     /// echoed).
     Completed {
+        /// Opaque display detail; existence re-reads say what actually exists.
         detail: String,
+        /// Generated text only for `new-passphrase`; `None` for every other success.
         passphrase: Option<String>,
     },
     /// Exit 2 or an adapter-side refusal: usage, expected failure, or
     /// a validation refusal that never spawned a process. Opaque
     /// detail; existence re-reads say what actually exists.
-    ExpectedFailure { detail: String },
+    ExpectedFailure {
+        /// Opaque display detail; existence re-reads say what actually exists.
+        detail: String,
+    },
     /// CLI binary missing or version-mismatched: hard failure, never
     /// silent fallback.
-    VersionMismatch { reason: String },
+    VersionMismatch {
+        /// Why the CLI binary is unusable; never a silent fallback.
+        reason: String,
+    },
     /// Timeout, spawn failure, or signal death: the outcome is
     /// unknown. Triggers re-observation, never re-execution.
-    Unknown { detail: String },
+    Unknown {
+        /// Why the outcome is unknown; triggers re-observation, never re-execution.
+        detail: String,
+    },
 }
 
 impl std::fmt::Debug for OnboardingResult {
@@ -346,7 +362,9 @@ impl std::fmt::Debug for OnboardingResult {
 /// CLI text). `Debug` is redacted for the same reason as the result.
 #[derive(Clone, serde::Serialize)]
 pub struct OnboardingReport {
+    /// Operation outcome; existence re-reads say what actually exists.
     pub result: OnboardingResult,
+    /// Effective credential paths plus existence after the run.
     pub defaults: KeyDefaults,
 }
 
@@ -366,6 +384,9 @@ pub fn new_passphrase_argv() -> Vec<std::ffi::OsString> {
     vec!["identity".into(), "new-passphrase".into()]
 }
 
+/// Pure argv builder for `<cli> identity commit`: one structured element per
+/// argument, never shell-constructed. Secrets never appear — the passphrase
+/// rides the stdin pipe, not argv.
 pub fn commit_argv(identity_file: &Path, passphrase_file: &Path) -> Vec<std::ffi::OsString> {
     vec![
         "identity".into(),
@@ -377,6 +398,8 @@ pub fn commit_argv(identity_file: &Path, passphrase_file: &Path) -> Vec<std::ffi
     ]
 }
 
+/// Pure argv builder for `<cli> identity verify`: one structured element per
+/// argument, never shell-constructed. Paths only, never secret contents.
 pub fn verify_argv(identity_file: &Path, passphrase_file: &Path) -> Vec<std::ffi::OsString> {
     vec![
         "identity".into(),

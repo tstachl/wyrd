@@ -1,3 +1,7 @@
+//! Durable snapshot capture: reads the drive files the compatibility
+//! checks compare against. Excludes operational files (locks, vault
+//! dir, crash debris) so verification compares only real state.
+//!
 use crate::CliError;
 use std::collections::BTreeMap;
 use std::fs;

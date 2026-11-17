@@ -32,10 +32,26 @@ use crate::wake::WakeSignal;
 /// client-supplied budget.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PolicyRequest {
-    Pin { path: String },
-    Unpin { path: String },
-    Evict { path: String },
-    Status { path: String },
+    /// Promise retention for every chunk under the path.
+    Pin {
+        /// Drive-relative path; empty addresses the root.
+        path: String,
+    },
+    /// Release the retention promise under the path.
+    Unpin {
+        /// Drive-relative path; empty addresses the root.
+        path: String,
+    },
+    /// Return policy under the path to remote-only.
+    Evict {
+        /// Drive-relative path; empty addresses the root.
+        path: String,
+    },
+    /// Walk and classify reachable content under the path.
+    Status {
+        /// Drive-relative path; empty addresses the root.
+        path: String,
+    },
 }
 
 /// What the loop answers: the report the operation committed, or the
@@ -46,12 +62,19 @@ pub enum PolicyRequest {
 /// read before submitting.
 #[derive(Debug)]
 pub enum PolicyResponse {
+    /// Report for a completed pin.
     Pinned(PinReport),
+    /// Report for a completed unpin.
     Unpinned(UnpinReport),
+    /// Report for a completed evict.
     Evicted(EvictReport),
+    /// Bounded census for a status walk.
     Status {
+        /// Census walked under the requested path.
         census: BoundedCensus,
+        /// Serving generation the walk was served from.
         generation: u64,
+        /// Durable revision the walk was served from.
         revision: u64,
     },
 }
@@ -126,6 +149,7 @@ impl Default for PolicyChannel {
 }
 
 impl PolicyChannel {
+    /// Create an open, unwired channel.
     pub fn new() -> Self {
         PolicyChannel {
             state: Mutex::new(ChannelState {

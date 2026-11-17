@@ -51,8 +51,11 @@ pub const REGISTRY_FILENAME: &str = "drives.json";
 /// the whole file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ServiceMode {
+    /// Headless owner service without a FUSE mount.
     Vault,
+    /// Owner service plus the FUSE projection at the mountpoint.
     Mount,
+    /// Forward-compatible mode from a newer writer; skipped with a reason.
     Unknown(String),
 }
 
@@ -83,10 +86,15 @@ impl<'de> Deserialize<'de> for ServiceMode {
 /// quoting.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RegistryEntry {
+    /// Drive name; `[a-z0-9-]` token used for the service name.
     pub name: String,
+    /// Absolute drive directory holding the store and socket.
     pub drive_dir: PathBuf,
+    /// Relay URLs peers dial to reach this drive.
     pub relays: Vec<String>,
+    /// Service token deriving the per-drive service definition name.
     pub service: String,
+    /// Supervision mode selecting vault or mount argv.
     pub mode: ServiceMode,
     /// FUSE mountpoint. `Some` in `mount` mode, `None` in `vault`
     /// mode — a vault entry carrying one is invalid, like a mount
@@ -113,7 +121,9 @@ struct RegistryFile {
 /// not silently forgotten.
 #[derive(Debug, Default)]
 pub struct Registry {
+    /// Valid entries keyed by registry name.
     pub drives: BTreeMap<String, RegistryEntry>,
+    /// Per-entry skip reasons for entries that failed validation.
     pub skipped: Vec<String>,
 }
 
@@ -133,38 +143,67 @@ pub enum BootstrapError {
     /// The registry file could not be read.
     #[error("read {}: {source}", path.display())]
     Read {
+        /// Registry path that could not be read.
         path: PathBuf,
+        /// Underlying I/O error.
         #[source]
         source: std::io::Error,
     },
     /// The registry file is not valid JSON.
     #[error("parse {}: {source}", path.display())]
     Parse {
+        /// Registry path that failed to parse.
         path: PathBuf,
+        /// Underlying JSON error.
         #[source]
         source: serde_json::Error,
     },
     /// The registry schema version is newer than this build reads.
     #[error("registry {} is version {found}, this build reads {REGISTRY_VERSION}", path.display())]
-    UnsupportedVersion { path: PathBuf, found: u32 },
+    UnsupportedVersion {
+        /// Registry path with an unsupported schema version.
+        path: PathBuf,
+        /// Version found in the file.
+        found: u32,
+    },
     /// A registry key does not match its entry's name.
     #[error("key {key:?} does not match entry name {name:?}")]
-    KeyMismatch { key: String, name: String },
+    KeyMismatch {
+        /// Registry key whose entry mismatched.
+        key: String,
+        /// Entry name that did not match the key.
+        name: String,
+    },
     /// A drive name breaks the `[a-z0-9-]` token rule.
     #[error("name {name:?} must be 1-64 chars of [a-z0-9-]")]
-    InvalidName { name: String },
+    InvalidName {
+        /// Drive name that broke the token rule.
+        name: String,
+    },
     /// A drive name leaves no room for the `drive-` service prefix.
     #[error("name {name:?} leaves no room for the drive- service prefix (max 58 chars)")]
-    NameTooLongForServicePrefix { name: String },
+    NameTooLongForServicePrefix {
+        /// Drive name leaving no room for the service prefix.
+        name: String,
+    },
     /// A service name breaks the `[a-z0-9-]` token rule.
     #[error("service {service:?} must be 1-64 chars of [a-z0-9-]")]
-    InvalidService { service: String },
+    InvalidService {
+        /// Service token that broke the token rule.
+        service: String,
+    },
     /// A drive directory is not absolute.
     #[error("drive_dir {} must be absolute", dir.display())]
-    RelativeDriveDir { dir: PathBuf },
+    RelativeDriveDir {
+        /// Drive directory that was not absolute.
+        dir: PathBuf,
+    },
     /// A drive directory escapes through `..`.
     #[error("drive_dir {} must not contain ..", dir.display())]
-    DriveDirHasDotDot { dir: PathBuf },
+    DriveDirHasDotDot {
+        /// Drive directory escaping through `..`.
+        dir: PathBuf,
+    },
     /// The entry names a service mode this build does not manage.
     #[error("unknown service mode: this build manages `vault` and `mount`")]
     UnknownServiceMode,
@@ -176,7 +215,10 @@ pub enum BootstrapError {
     MissingMountpoint,
     /// A mountpoint breaks the path rules.
     #[error("invalid mountpoint: {reason}")]
-    InvalidMountpoint { reason: String },
+    InvalidMountpoint {
+        /// Why the mountpoint was refused.
+        reason: String,
+    },
     /// A managed service with no relays to serve: a relay-less drive
     /// serves nothing peers can discover.
     #[error("managing a service needs at least one --relay: a relay-less drive serves nothing peers can discover; register with --no-service instead")]
@@ -187,64 +229,86 @@ pub enum BootstrapError {
     #[error(
         "conflicting registry entries for {dir}: {keys} — resolve the duplicate by hand first"
     )]
-    ConflictingEntries { dir: PathBuf, keys: String },
+    ConflictingEntries {
+        /// Drive directory resolving to several registry keys.
+        dir: PathBuf,
+        /// Conflicting registry keys.
+        keys: String,
+    },
     /// A relay URL is empty or carries whitespace/control bytes.
     #[error("relays must be non-empty URLs without whitespace or control bytes")]
     InvalidRelays,
     /// A drive directory carries control characters.
     #[error("drive_dir {} must not contain control characters", dir.display())]
-    DriveDirHasControlChars { dir: PathBuf },
+    DriveDirHasControlChars {
+        /// Drive directory carrying control characters.
+        dir: PathBuf,
+    },
     /// The candidate set fails validation: nothing was written.
     #[error("refusing to write: {source}")]
     RefusedWrite {
+        /// Underlying validation failure; nothing was written.
         #[source]
         source: Box<BootstrapError>,
     },
     /// The registry could not be encoded.
     #[error("encode registry: {source}")]
     Encode {
+        /// Underlying JSON encoding error.
         #[source]
         source: serde_json::Error,
     },
     /// A directory for the registry or service file could not be created.
     #[error("create {}: {source}", path.display())]
     CreateDir {
+        /// Directory that could not be created.
         path: PathBuf,
+        /// Underlying I/O error.
         #[source]
         source: std::io::Error,
     },
     /// The registry lockfile could not be opened or locked.
     #[error("lock {}: {source}", path.display())]
     LockFile {
+        /// Lockfile that could not be opened or locked.
         path: PathBuf,
+        /// Underlying I/O error.
         #[source]
         source: std::io::Error,
     },
     /// A registry or service file could not be written.
     #[error("write {}: {source}", path.display())]
     WriteFile {
+        /// File that could not be written.
         path: PathBuf,
+        /// Underlying I/O error.
         #[source]
         source: std::io::Error,
     },
     /// The atomic replace of a registry or service file failed.
     #[error("replace {}: {source}", path.display())]
     ReplaceFile {
+        /// Destination that the atomic replace failed on.
         path: PathBuf,
+        /// Underlying I/O error.
         #[source]
         source: std::io::Error,
     },
     /// Owner-only permissions could not be applied.
     #[error("chmod {}: {source}", path.display())]
     Chmod {
+        /// File whose owner-only permissions could not be applied.
         path: PathBuf,
+        /// Underlying I/O error.
         #[source]
         source: std::io::Error,
     },
     /// A written file could not be synced to disk.
     #[error("sync {}: {source}", path.display())]
     SyncFile {
+        /// File that could not be synced to disk.
         path: PathBuf,
+        /// Underlying I/O error.
         #[source]
         source: std::io::Error,
     },
@@ -252,48 +316,62 @@ pub enum BootstrapError {
     /// a reconfigured drive.
     #[error("remove {}: {source}", path.display())]
     RemoveFile {
+        /// Service definition file that could not be removed.
         path: PathBuf,
+        /// Underlying I/O error.
         #[source]
         source: std::io::Error,
     },
     /// A service manager command could not be spawned.
     #[error("spawn {program}: {source}")]
     Spawn {
+        /// Service manager program that could not be spawned.
         program: String,
+        /// Underlying I/O error.
         #[source]
         source: std::io::Error,
     },
     /// A service manager command ran and failed.
     #[error("{program} {args} failed: {detail}")]
     CommandFailed {
+        /// Service manager program that ran and failed.
         program: String,
+        /// Arguments it ran with.
         args: String,
+        /// Captured failure detail.
         detail: String,
     },
     /// Enabling the service through its manager failed.
     #[error("enable {name}: {source}")]
     EnableService {
+        /// Service name that failed to enable.
         name: String,
+        /// Underlying bootstrap failure.
         #[source]
         source: Box<BootstrapError>,
     },
     /// Reloading the user service manager failed.
     #[error("reload user units: {source}")]
     ReloadUnits {
+        /// Underlying failure reloading the user service manager.
         #[source]
         source: Box<BootstrapError>,
     },
     /// The managed service is not loaded after enablement.
     #[error("start {label}: agent not loaded: {source}")]
     AgentNotLoaded {
+        /// Launchd agent label that was not loaded.
         label: String,
+        /// Underlying bootstrap failure.
         #[source]
         source: Box<BootstrapError>,
     },
     /// Restarting the managed service failed.
     #[error("restart {unit}: {source}")]
     RestartService {
+        /// Systemd unit that failed to restart.
         unit: String,
+        /// Underlying bootstrap failure.
         #[source]
         source: Box<BootstrapError>,
     },
@@ -301,7 +379,9 @@ pub enum BootstrapError {
     /// a reconfiguration failed.
     #[error("stop {name}: {source}")]
     StopService {
+        /// Service name that failed to stop before reconfiguration.
         name: String,
+        /// Underlying bootstrap failure.
         #[source]
         source: Box<BootstrapError>,
     },
@@ -611,7 +691,7 @@ fn lock_registry(path: &Path) -> Result<std::fs::File, BootstrapError> {
 /// matches. The candidate map itself is fully validated and refuses
 /// the write on any invalid entry.
 ///
-/// Replacement through the same locked path [`modify_registry`]
+/// Replacement through the same locked path `modify_registry`
 /// provides: candidates validate before the lock (so a refusal
 /// touches nothing), then the replacement, the carry-forward merge,
 /// and the crash-safe rename run under one lock hold. Keys the
@@ -893,6 +973,7 @@ pub struct SupervisedOwner {
     /// resolves them. Paths, not secrets, travel here — the service
     /// definition names the same files the operator already keeps.
     pub identity_file: PathBuf,
+    /// Passphrase credential file named by the service definition.
     pub passphrase_file: PathBuf,
 }
 
@@ -1397,13 +1478,19 @@ pub enum Init {
     /// `Engine::join`: join as an invited device from a sealed
     /// invitation file. The invitation exchange that produced the
     /// file stays out of band; joining consumes it.
-    Join { sealed_invitation: Vec<u8> },
+    Join {
+        /// Sealed invitation bytes consumed by the join.
+        sealed_invitation: Vec<u8>,
+    },
 }
 
 /// What provisioning this drive needs beyond initialization.
 pub struct ProvisionConfig {
+    /// Drive name registered in the registry.
     pub name: String,
+    /// Absolute drive directory to initialize.
     pub drive_dir: PathBuf,
+    /// Relay URLs peers dial to reach this drive.
     pub relays: Vec<String>,
     /// Target service mode: `vault` serves headless, `mount` serves
     /// the FUSE projection. Unknown modes refuse at validation.
@@ -1411,9 +1498,13 @@ pub struct ProvisionConfig {
     /// FUSE mountpoint. Required in `mount` mode, refused in `vault`
     /// mode — validated with the entry before anything is created.
     pub mountpoint: Option<PathBuf>,
+    /// Device identity secret used to initialize the drive.
     pub identity: DeviceIdentitySecret,
+    /// Passphrase protecting the drive keystore.
     pub passphrase: String,
+    /// How to initialize the drive before registration.
     pub init: Init,
+    /// Registry file path to write the entry into.
     pub registry_path: PathBuf,
     /// The `wyrd` binary whose `vault` or `mount` subcommand the
     /// service runs. Defaults to the `wyrd` beside the provisioning
@@ -1430,6 +1521,7 @@ pub struct ProvisionConfig {
     /// resolved the way `load_credentials` resolves them. Paths,
     /// never secrets, travel here.
     pub identity_file: PathBuf,
+    /// Passphrase credential file named by the service definition.
     pub passphrase_file: PathBuf,
     /// Install, enable, and start the per-drive service. Off skips
     /// all three: registration only, for operators who supervise
@@ -1449,19 +1541,31 @@ pub struct ProvisionConfig {
 /// data on rewrite.
 #[derive(Debug)]
 pub enum ProvisionState {
+    /// Drive verified available; the socket answered this session.
     VerifiedAvailable {
+        /// Registry entry that was written and verified.
         entry: RegistryEntry,
+        /// Skip reasons carried forward from the written registry.
         skipped: Vec<String>,
     },
+    /// Drive registered but the service or socket is not yet usable.
     RegisteredButUnavailable {
+        /// Registry entry that was written.
         entry: RegistryEntry,
+        /// Machine-readable failure kind.
         kind: ProvisionFailureKind,
+        /// Human-readable failure reason.
         reason: String,
+        /// Skip reasons carried forward from the written registry.
         skipped: Vec<String>,
     },
+    /// Provisioning stopped before registration completed.
     ProvisioningIncomplete {
+        /// Pipeline stage that stopped.
         stage: &'static str,
+        /// Machine-readable failure kind.
         kind: ProvisionFailureKind,
+        /// Human-readable failure reason.
         reason: String,
     },
 }
@@ -1766,6 +1870,7 @@ pub fn provision(config: ProvisionConfig) -> ProvisionState {
 /// identity the `drive` command already carries — and must resolve
 /// to exactly one registry key, never a guess across duplicates.
 pub struct ReconfigureConfig {
+    /// Absolute drive directory identifying the entry to reconfigure.
     pub drive_dir: PathBuf,
     /// Replacement relay set. `None` keeps the registered set; the
     /// CLI passes `Some` only when the operator named `--relay`
@@ -1781,8 +1886,11 @@ pub struct ReconfigureConfig {
     pub mode: ServiceMode,
     /// FUSE mountpoint for `mount` mode. `None` in `vault` mode.
     pub mountpoint: Option<PathBuf>,
+    /// Device identity secret proving the keystore still opens.
     pub identity: DeviceIdentitySecret,
+    /// Passphrase proving the keystore still opens.
     pub passphrase: String,
+    /// Registry file path holding the entry to rewrite.
     pub registry_path: PathBuf,
     /// The `wyrd` binary whose `vault` or `mount` subcommand the
     /// service runs.
@@ -1798,6 +1906,7 @@ pub struct ReconfigureConfig {
     /// resolved the way `load_credentials` resolves them. Paths,
     /// never secrets, travel here.
     pub identity_file: PathBuf,
+    /// Passphrase credential file named by the service definition.
     pub passphrase_file: PathBuf,
     /// Explicit service definition path (tests); `None` resolves the
     /// platform path. Clearing and installing share it, so the two
@@ -2482,7 +2591,9 @@ pub fn reconfigure(config: ReconfigureConfig) -> ProvisionState {
 /// that would work. A missing program surfaces through
 /// `enable_and_start` and the socket verify instead.
 pub struct StartServiceConfig {
+    /// Absolute drive directory identifying the entry to start.
     pub drive_dir: PathBuf,
+    /// Registry file path holding the entry.
     pub registry_path: PathBuf,
     /// Explicit service definition path (tests); `None` resolves the
     /// platform path, exactly like installation.

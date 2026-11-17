@@ -1,3 +1,5 @@
+//! Device removal: evicts a member device with owner authority.
+//! Pairs with epoch rotation when the removal names a compromise.
 use wyrd_format::membership::{
     set_root, MEMBER_SET_CONTEXT, OWNER_SET_CONTEXT, READER_SET_CONTEXT,
 };

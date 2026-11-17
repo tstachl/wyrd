@@ -79,16 +79,22 @@ pub const CHILD_LEN: usize = 128;
 /// arrival, never an identity).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManifestEntry {
+    /// Logical object identity this mapping covers.
     pub content_id: ContentId,
+    /// Object kind of the referenced representation.
     pub kind: ObjectKind,
     /// Seal version of the referenced representation (production fills
     /// this from the sealing object's version). Hashed into the
     /// manifest's own ContentId: a seal-version fork moves manifest
     /// identities that name the new version.
     pub version: u8,
+    /// Sealed representation address to fetch from the vault.
     pub storage_id: StorageId,
+    /// Capability epoch whose secret decrypts the representation.
     pub encryption_epoch: u64,
+    /// Plaintext byte length; allocation hint, never an identity.
     pub size: u64,
+    /// Bao root of the sealed bytes; verified-streaming address hint.
     pub transport: BaoRoot,
 }
 
@@ -101,9 +107,13 @@ pub struct ManifestEntry {
 /// only an unlinkable StorageId fetch.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChildManifest {
+    /// Tree object identity of the child subtree.
     pub tree: ContentId,
+    /// Logical manifest identity of the child (its seal opens under this).
     pub manifest: ContentId,
+    /// Sealed child manifest address to fetch.
     pub storage: StorageId,
+    /// Child envelope Bao root for verified streaming.
     pub transport: BaoRoot,
 }
 
@@ -123,18 +133,26 @@ pub struct Manifest {
     children: Vec<ChildManifest>,
 }
 
+/// Manifest decoding failures: truncation, trailing bytes, unknown kinds,
+/// non-canonical order, or wire counts beyond `u32`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum ManifestError {
+    /// Payload shorter than the declared encoding.
     #[error("payload shorter than the declared encoding")]
     Truncated,
+    /// Payload holds bytes beyond the manifest.
     #[error("payload holds bytes beyond the manifest")]
     TrailingBytes,
+    /// Kind byte names no [`ObjectKind`].
     #[error("unknown object kind byte {0:#04x}")]
     UnknownKind(u8),
+    /// Entries are not in ascending `(content_id, kind, version)` order.
     #[error("entries are not in ascending (content_id, kind, version) order")]
     UnsortedEntries,
+    /// Child references are not in ascending tree-id order.
     #[error("child references are not in ascending tree-id order")]
     UnsortedChildren,
+    /// A vector length exceeds the `u32` wire count.
     #[error("length {0} exceeds the u32 wire count")]
     CountOverflow(usize),
 }

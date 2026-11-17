@@ -72,7 +72,9 @@ pub fn set_root(context: &'static str, devices: &[DeviceId]) -> Result<[u8; 32],
 /// type (`DeviceEncryptionKey`) prevents swapping them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Admission {
+    /// Admitted device identity (Nostr x-only pubkey).
     pub device: DeviceId,
+    /// Capability-encryption key registered for the device.
     pub encryption_key: DeviceEncryptionKey,
 }
 
@@ -87,10 +89,15 @@ pub struct Admission {
 /// always names a fresh `DeviceId`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Change {
+    /// Admit a full member with its encryption key.
     Admit(Admission),
+    /// Evict a device from members and readers (total revocation).
     Remove(DeviceId),
+    /// Rotate the epoch without membership edits.
     Rotate,
+    /// Replace the owner set with the listed devices.
     SetOwners(Vec<DeviceId>),
+    /// Admit a read-only device with its encryption key.
     AdmitReader(Admission),
 }
 
@@ -134,16 +141,23 @@ pub struct MembershipTransition {
     pub signature: [u8; 64],
 }
 
+/// Membership transition decoding failures: truncation, trailing bytes,
+/// bad framing, unknown change tags, or wire counts beyond `u32`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum MembershipError {
+    /// Payload shorter than the declared encoding.
     #[error("payload shorter than the declared encoding")]
     Truncated,
+    /// Payload holds bytes beyond the signature.
     #[error("payload holds bytes beyond the signature")]
     TrailingBytes,
+    /// Prev flag byte is neither `0x00` absent nor `0x01` present.
     #[error("prev flag byte must be 0x00 or 0x01, got {0:#04x}")]
     InvalidPrevFlag(u8),
+    /// Change tag byte names no [`Change`] kind.
     #[error("unknown change tag byte {0:#04x}")]
     UnknownChangeTag(u8),
+    /// A vector length exceeds the `u32` wire count.
     #[error("length {0} exceeds the u32 wire count")]
     CountOverflow(usize),
 }

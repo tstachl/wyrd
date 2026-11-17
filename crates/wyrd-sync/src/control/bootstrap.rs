@@ -73,24 +73,38 @@ const BOOTSTRAP_CHALLENGE_CONTEXT: &str = "wyrd bootstrap challenge v1";
 /// `Vec<u8>`; they open later through the zeroizing capability path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BootstrapInvitation {
+    /// The drive the invitation joins.
     pub drive: DriveId,
+    /// The owner device issuing the invitation.
     pub inviter: DeviceId,
+    /// The device being invited.
     pub invitee: DeviceId,
+    /// The invitee's registered encryption key the capability is sealed to.
     pub encryption_key: DeviceEncryptionKey,
+    /// The member-visible epoch-1 chain data.
     pub genesis: Vec<u8>,
+    /// The still-sealed wrapped first capability.
     pub capability: Vec<u8>,
 }
 
 /// The sealed, deliverable bootstrap form.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SealedBootstrap {
+    /// The envelope version (pinned `BOOTSTRAP_VERSION`).
     pub version: u8,
+    /// The drive the invitation joins.
     pub drive: DriveId,
+    /// Fresh owner-ephemeral ECDH public key for this invitation.
     pub ephemeral: [u8; 32],
+    /// The invitee device this invitation is sealed for.
     pub recipient: DeviceId,
+    /// The invitee's registered encryption key the invitation is sealed to.
     pub encryption_key: DeviceEncryptionKey,
+    /// The owner device issuing the invitation.
     pub inviter: DeviceId,
+    /// Fresh random AEAD nonce.
     pub nonce: [u8; 24],
+    /// The AEAD ciphertext over the invitation payload and owner signature.
     pub ciphertext: Vec<u8>,
 }
 

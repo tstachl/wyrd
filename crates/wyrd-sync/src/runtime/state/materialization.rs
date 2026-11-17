@@ -14,6 +14,7 @@ use super::RuntimeState;
 /// One object fetch the runtime still wants to perform.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingObjectFetch {
+    /// The plaintext content identity to fetch.
     pub content_id: ContentId,
     /// The sealed representation address from the manifest entry.
     pub storage_id: StorageId,
@@ -21,9 +22,13 @@ pub struct PendingObjectFetch {
     /// address (object-model.md decision 26), preferred over the storage
     /// address when the transport map holds it.
     pub transport: BaoRoot,
+    /// The object kind named by the manifest entry.
     pub kind: ObjectKind,
+    /// The sealed envelope version named by the manifest entry.
     pub version: u8,
+    /// The encryption epoch sealing this representation.
     pub encryption_epoch: u64,
+    /// The plaintext size named by the manifest entry.
     pub size: u64,
 }
 
@@ -31,9 +36,11 @@ pub struct PendingObjectFetch {
 /// current durable state.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct RuntimeReconcile {
+    /// Announced snapshots with no recorded root manifest.
     pub pending_snapshots: BTreeSet<SnapshotId>,
     /// Announcements whose snapshot body is not yet recorded.
     pub pending_snapshot_bodies: BTreeSet<SnapshotId>,
+    /// Missing child manifests, by manifest id.
     pub pending_manifests: BTreeMap<ContentId, ChildManifest>,
     /// Fetch candidates by plaintext content: every usable storage
     /// representation is retained, in first-seen order. The same

@@ -58,7 +58,7 @@ macro_rules! device_secret {
     ($name:ident) => {
         impl $name {
             /// Wrap raw keystore bytes. The scalar is validated now, so
-            /// [`Self::secret_key`] cannot fail later: curve API calls
+            /// `Self::secret_key` cannot fail later: curve API calls
             /// stay infallible at their (already fallible) call sites.
             pub fn from_bytes(bytes: [u8; 32]) -> Result<Self, CryptoError> {
                 SecretKey::from_slice(&bytes).map_err(|_| CryptoError::Malformed)?;
@@ -115,7 +115,7 @@ impl DeviceIdentitySecret {
     /// typed exit for the identity scalar. The CLI and the mailbox
     /// tests build their `Keys` through here instead of parsing raw
     /// bytes — the parse is the single validated one in
-    /// [`Self::secret_key`], and no caller ever sees bytes. The
+    /// `Self::secret_key`, and no caller ever sees bytes. The
     /// returned `Keys` is itself a holder and is inventoried under
     /// "Signer secret boundary" in `wyrd-core`'s mailbox docs.
     pub fn signer_keys(&self) -> nostr::key::Keys {

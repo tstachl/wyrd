@@ -72,10 +72,15 @@ struct SettingsFileParse {
 /// and defaulted stay distinguishable.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct DriveSettingsView {
+    /// Configured retained-bytes quota, absent where the file sets no bound.
     pub retained_bytes_quota: Option<u64>,
+    /// Configured per-pass admission bound, absent where the file sets no bound.
     pub max_admit_per_pass: Option<usize>,
+    /// Configured fetch-pass budget in seconds, absent where the file sets no bound.
     pub fetch_pass_budget_secs: Option<u64>,
+    /// Configured mutation-wait bound in seconds, absent where the file sets no bound.
     pub max_mutation_wait_secs: Option<u64>,
+    /// Configured open timeout in seconds, absent where the file sets no bound.
     pub open_timeout_secs: Option<u64>,
 }
 
@@ -86,10 +91,17 @@ pub struct DriveSettingsView {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(tag = "state", rename_all = "lowercase")]
 pub enum DriveSettings {
+    /// The file names this drive with its configured bounds.
     Configured(DriveSettingsView),
+    /// No settings file exists: nothing configured yet, never defaults dressed as configuration.
     Nofile,
+    /// The file exists but names no section for this drive.
     Nosection,
-    Unreadable { reason: String },
+    /// File present but unreadable with the reason: loud, never guessed.
+    Unreadable {
+        /// Why the file is unreadable: version skew, parse, or invalid key.
+        reason: String,
+    },
 }
 
 /// Where the settings file lives when no explicit path is given:

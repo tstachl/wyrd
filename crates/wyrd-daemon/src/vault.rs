@@ -134,8 +134,11 @@ pub enum VaultEvent {
     /// One pass failed: the class, its consecutive count, and the
     /// error text. Same facts the mount prints per failure.
     PassFailed {
+        /// Failure class of the failed pass.
         class: String,
+        /// Consecutive failure count including this pass.
         consecutive: u32,
+        /// Error text from the failed pass.
         error: String,
     },
 }

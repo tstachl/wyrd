@@ -1,12 +1,12 @@
-//! Runtime sync state: the durable bookkeeping that sits between control
-//! messages and bulk object transport, owned by the runtime engine
-//! (`engine/`, alongside `author/`, `fetch/`, and `intake/`). It records the
-//! local facts the roadmap already names: which control messages were seen,
-//! which snapshot announcements arrived, which snapshot bodies are
-//! recorded, which manifests have been recorded, which objects are already
-//! local, and which objects should be fetched next. The state is
-//! intentionally plain data so a higher layer can persist it without
-//! pulling transport or async concerns into `wyrd-sync`.
+//! Runtime: the sync engine and its durable bookkeeping.
+//! `plan/` orchestrates passes; `engine/plan.rs` executes one pass.
+//! `state/` is the durable ledger of seen messages and fetch backlog.
+//! `author/` is the write half (merges, recovery, admission).
+//! `intake/` classifies arrivals before they touch state.
+//! `ingest.rs` enforces decoder ceilings on untrusted bytes.
+//! `reconcile`/`respond` are the trigger/response pair (OD-21-4).
+//! `fetch/` drives bulk transfer; `bootstrap/` admits the first member.
+//! `retention/` gates local residency; `engine/` owns the loop-facing API.
 
 use std::collections::BTreeMap;
 
@@ -38,7 +38,9 @@ pub use retention::{RefusalLedger, RetentionGate, RetentionRefusal};
 /// snapshot that will report absent until a decodable route arrives.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct RouteReport {
+    /// Address maps filled by the route-publication pass.
     pub published: usize,
+    /// Announcements whose opaque route bytes the codec refused.
     pub undecodable: usize,
 }
 
@@ -66,8 +68,11 @@ pub trait RoutePublishing: crate::bulk::BulkSource {
 /// Local residency policy for one content object.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MaterializationState {
+    /// Content is fetchable from peers but not wanted locally.
     RemoteOnly,
+    /// Content is wanted locally and may be evicted.
     Cached,
+    /// Content is wanted locally and must not be evicted.
     Pinned,
 }
 
@@ -90,6 +95,7 @@ pub struct ManifestRecord {
     /// manifests share the same snapshot id, so callers must say which
     /// record establishes the snapshot head.
     pub is_root: bool,
+    /// The manifest's logical content identity.
     pub manifest_id: ContentId,
     /// Sealed representations of this manifest envelope: each recorded
     /// `StorageId` maps to that representation's own transport root.
@@ -111,6 +117,7 @@ pub struct ManifestRecord {
     /// `transport` names the not-yet-recorded first representation and
     /// serves nothing until merges fill the map.
     pub transport: BaoRoot,
+    /// The decoded manifest body.
     pub manifest: Manifest,
 }
 

@@ -1,3 +1,6 @@
+//! Serving endpoint: the write-through boundary that publishes
+//! generations and serves reads. Open returns with serving live;
+//! flush orders readiness against announcements.
 use std::path::Path;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -204,7 +207,7 @@ impl ServingEndpoint {
     /// signal. Reopening attaches a fresh channel.
     ///
     /// The shutdown blocks until the worker threads exit (bounded by
-    /// [`RUNTIME_SHUTDOWN_TIMEOUT`]) instead of dropping the runtime:
+    /// `RUNTIME_SHUTDOWN_TIMEOUT`) instead of dropping the runtime:
     /// a dropped multi-thread runtime shuts its workers down in the
     /// background, and under load those lingering threads outlive the
     /// caller — nextest attributes them to whatever test runs next.

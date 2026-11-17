@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! Wyrd's mount-free read view: the live view and conflict-version lookup.
 //!
 //! The read-only drive view ([`view::DriveView`]) works mount-free

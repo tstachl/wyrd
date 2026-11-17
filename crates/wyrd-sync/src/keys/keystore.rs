@@ -58,16 +58,21 @@ const TEST_KDF_T_COST: u32 = 1;
 #[cfg(any(test, feature = "insecure-fast-kdf"))]
 const TEST_KDF_P_COST: u32 = 1;
 
+/// Keystore wrap/unwrap failures: wrong passphrase, malformed bytes, RNG, or KDF.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum KeystoreError {
+    /// The passphrase did not open the wrapped secret.
     #[error(
         "the passphrase did not open the wrapped secret (wrong passphrase or damaged keystore)"
     )]
     WrongPassphrase,
+    /// The wrapped-secret bytes are malformed.
     #[error("malformed wrapped-secret bytes")]
     Malformed,
+    /// The OS CSPRNG is unavailable.
     #[error("secure randomness unavailable")]
     RngFailed,
+    /// Key derivation failed.
     #[error("key derivation failed")]
     KdfFailed,
 }
@@ -128,10 +133,12 @@ pub struct WrappedSecret {
 }
 
 impl WrappedSecret {
+    /// The wrapped envelope bytes (`salt ‖ nonce ‖ ciphertext+tag`).
     pub fn as_bytes(&self) -> &[u8] {
         &self.bytes
     }
 
+    /// Wrap raw envelope bytes as a shared secret envelope.
     pub fn from_bytes(bytes: Vec<u8>) -> Self {
         WrappedSecret { bytes }
     }

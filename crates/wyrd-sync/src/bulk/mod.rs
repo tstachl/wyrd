@@ -58,7 +58,9 @@ use std::sync::Arc;
 /// record.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SealedManifest {
+    /// The logical identity the bytes claim; enforced as AAD on open.
     pub content_id: ContentId,
+    /// The sealed representation bytes a member peer serves.
     pub sealed: Vec<u8>,
 }
 
@@ -70,6 +72,7 @@ pub struct SealedManifest {
 /// counts it as invalid remote data, not transport trouble.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum BulkError {
+    /// The transport failed; retry on a later pass.
     #[error("bulk transport failed: {0}")]
     Transport(String),
     /// The attempt ran out of its pass-budget slice before completing:
@@ -91,9 +94,20 @@ pub enum BulkError {
     /// observations are fault information even when the budget is
     /// tight.
     #[error("bulk attempt ran out of its {slice:?} pass-budget slice")]
-    Deadline { slice: std::time::Duration },
+    /// The pass-budget slice that expired at the reporting site.
+    Deadline {
+        /// The budget slice that expired at the reporting site.
+        slice: std::time::Duration,
+    },
+    /// The sealed representation exceeds the fetch ceiling; immutable bytes, so every route agrees.
     #[error("sealed representation of {bytes} bytes exceeds the {max}-byte fetch ceiling")]
-    Oversize { bytes: usize, max: usize },
+    /// Oversize representation: verified size over the caller ceiling.
+    Oversize {
+        /// Verified representation size in bytes.
+        bytes: usize,
+        /// Caller-supplied ceiling in bytes.
+        max: usize,
+    },
 }
 
 /// Per-attempt fetch deadline knob: the plan hands the source the
@@ -111,6 +125,7 @@ pub enum BulkError {
 /// plan-run state: the plan sets it at entry and clears
 /// it on the way out.
 pub trait AttemptBudget {
+    /// Set the pass-budget deadline clamping every subsequent attempt.
     fn set_attempt_deadline(&mut self, _deadline: Option<std::time::Instant>) {}
 }
 

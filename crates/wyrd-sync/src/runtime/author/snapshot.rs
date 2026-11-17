@@ -1,3 +1,6 @@
+//! Snapshot authoring: builds signed snapshots over canonical trees
+//! parented onto eligible heads. Verifies store bytes hash back so a
+//! faulty store cannot launder addresses.
 use std::collections::{BTreeMap, BTreeSet};
 
 use wyrd_format::{

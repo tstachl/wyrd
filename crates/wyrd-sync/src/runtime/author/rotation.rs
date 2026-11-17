@@ -1,3 +1,6 @@
+//! Rotation delivery: verifies and discharges rotation obligations.
+//! Reused bytes resend verbatim when still current, supersede durably
+//! when the registration moved on.
 use wyrd_format::{DeviceId, DriveId, MembershipTransition, TransitionId};
 
 use crate::control::{seal_rotation, SealedRotation, ROTATION_VERSION};

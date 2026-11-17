@@ -62,16 +62,22 @@ pub(crate) fn random_bytes(buf: &mut [u8]) -> Result<(), CryptoError> {
 /// tag verified, but the plaintext is not the named content.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum CryptoError {
+    /// The envelope did not open under this key and context.
     #[error("the envelope did not open under this key and context")]
     OpenFailed,
+    /// Sealing failed under this key and context.
     #[error("sealing failed under this key and context")]
     SealFailed,
+    /// Envelope bytes are malformed.
     #[error("malformed envelope bytes")]
     Malformed,
+    /// The plaintext disagrees with its envelope header.
     #[error("the sealed document disagrees with its envelope header")]
     HeaderMismatch,
+    /// The plaintext does not hash to the expected content identity.
     #[error("the plaintext does not hash to the expected content identity")]
     IdentityMismatch,
+    /// The OS CSPRNG is unavailable.
     #[error("secure randomness unavailable")]
     RngFailed,
 }

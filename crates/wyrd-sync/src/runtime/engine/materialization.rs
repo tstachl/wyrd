@@ -55,7 +55,7 @@ impl Engine {
     /// fact was committed.
     ///
     /// This is one of the two production writers of
-    /// [`Fact::ObjectRemoved`](crate::durable::Fact::ObjectRemoved):
+    /// [`Fact::ObjectRemoved`]:
     /// the quarantine drain calls this method for rejected bytes,
     /// while the scrub drain below calls
     /// [`Engine::record_missing_objects`] for bytes that are simply
@@ -101,7 +101,7 @@ impl Engine {
     /// Clear the possession claims of identities the scrub found
     /// missing from the store, in one durable commit — the second
     /// production writer of
-    /// [`Fact::ObjectRemoved`](crate::durable::Fact::ObjectRemoved),
+    /// [`Fact::ObjectRemoved`],
     /// taking up the reservation above. One rebuild filters
     /// already-absent claims and resolves each cleared identity's
     /// retained size from the first manifest entry that names it

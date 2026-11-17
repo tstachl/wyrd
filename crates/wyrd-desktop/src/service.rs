@@ -37,33 +37,51 @@ pub enum ServiceState {
     /// the definition was removed. A stable first-class state, never
     /// a failure — the recovery is reinstall, never auto-start, and
     /// never a terminal.
-    NotInstalled { detail: String },
+    NotInstalled {
+        /// Evidence string naming the missing definition file.
+        detail: String,
+    },
     /// A definition exists but the manager reports it not
     /// loaded/active: the service is installed but stopped. A stable
     /// first-class state — a deliberately disabled drive stays here
     /// until the person starts it; the UI never auto-starts.
-    Stopped { detail: String },
+    Stopped {
+        /// Evidence string naming the present definition and the not-loaded unit.
+        detail: String,
+    },
     /// The manager reports the unit loaded/active but the owner
     /// socket is absent: the service is wedged (crashed without the
     /// manager retrying, or bound elsewhere). Points at the service
     /// log, never at the drive contents.
-    Wedged { detail: String },
+    Wedged {
+        /// Evidence string pointing at the service log, never the drive contents.
+        detail: String,
+    },
     /// The manager reports the unit loaded/active, or the owner
     /// answered this session (availability already proved it). Whether
     /// the owner answers is the availability verdict's job, not this
     /// enum's — a loaded unit with a live socket is the ready path.
-    Running { detail: String },
+    Running {
+        /// Evidence string: the manager reports the owner running.
+        detail: String,
+    },
     /// The service manager did not answer: probe timeout or an
     /// unexpected tool status. Retry the probe — the drive and its
     /// service are unchanged, and this is not evidence about either.
-    Unknown { detail: String },
+    Unknown {
+        /// Evidence string: the manager did not answer; retry the probe.
+        detail: String,
+    },
     /// No service manager tool exists in this build (dev `cargo`
     /// binaries beside no definitions, or a platform without
     /// `launchctl`/`systemctl`). Dev-only honesty: "no managed
     /// service in this build, start the owner manually" instead of a
     /// dead Retry. Never a shipped state — shipped builds always
     /// supervise the owner through the OS service manager.
-    Unsupported { detail: String },
+    Unsupported {
+        /// Evidence string: no managed service verdict in this build.
+        detail: String,
+    },
 }
 
 /// Where the per-drive service definition lives on this platform.

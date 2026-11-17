@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! Developer-run host binary: the owner process with no presentation
 //! attached. Headless by construction — the window attaches later as
 //! a non-owner consumer — so this is the shape the Lima order

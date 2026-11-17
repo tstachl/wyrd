@@ -9,13 +9,13 @@
 //!
 //! One delivery is one NIP-59 gift wrap (kind 1059, non-replaceable):
 //!
-//! ```text
+//! ``text
 //! Wyrd control bytes (epoch-sealed, Wyrd-owned)
 //!   → NIP-44 identity seal  = MailboxEnvelope.ciphertext (wyrd-sync)
 //!     → Wyrd rumor (kind 9501, unsigned; p tag = recipient)
 //!       → NIP-59 seal (kind 13, signed by the real device key)
 //!         → NIP-59 gift wrap (kind 1059, signed by a discarded ephemeral key)
-//! ```
+//! ``
 //!
 //! The NIP-46 signer session only ever signs the kind 13 seal (and performs
 //! its NIP-44 encryption); the gift wrap is signed locally with an ephemeral
@@ -474,7 +474,7 @@ struct Held {
 /// client and runtime are owned by the daemon composer; `wyrd-sync` only
 /// sees the [`Mailbox`] trait, which stays Nostr-agnostic.
 ///
-/// `S` is the signing backend for outbound seals: a NIP-46 [`NostrConnect`]
+/// `S` is the signing backend for outbound seals: a NIP-46 `NostrConnect`
 /// session in the daemon, local [`Keys`] in tests. Both satisfy the
 /// `rust-nostr` async signer traits; the gift wrap itself is always signed
 /// locally with a fresh ephemeral key (NIP-59). Identity binding is

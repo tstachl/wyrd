@@ -181,7 +181,7 @@ pub(crate) fn create_mode_temp(
 }
 
 /// Durably create-or-replace one file: temp (at an explicit
-/// Unix `mode`, see [`create_mode_temp`]) + `fsync` + rename +
+/// Unix `mode`, see `create_mode_temp`) + `fsync` + rename +
 /// directory `fsync`. The rename preserves the temp's mode, so no
 /// post-rename chmod — and no chmod-failure-after-rename outcome —
 /// exists. Custody and identity files flow through here, and the
@@ -376,10 +376,13 @@ pub(crate) fn restrict_dir_owner_only(
 /// fresh directories.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LockProbe {
+    /// No live holder owns the drive directory right now.
     Free,
+    /// A live process holds the store lock.
     Held,
 }
 
+/// Probe whether a live process holds the drive's store lock.
 pub fn probe_lock(dir: &Path) -> Result<LockProbe, DurableError> {
     let lock = open_lock_file(dir)?;
     match lock.try_lock() {
@@ -808,11 +811,9 @@ impl DurableStore {
     }
 
     /// Rebuild the live state from the durable facts. Delegates to
-    /// [`replay`]: transitions replay first, capabilities re-validate
+    /// `replay`: transitions replay first, capabilities re-validate
     /// against their transition's derived state, then the runtime facts
     /// replay through the same mutators that accepted them.
-    ///
-    /// [`replay`]: mod@replay
     pub fn rebuild(&self, device: DeviceId) -> Result<Rebuilt, DurableError> {
         #[cfg(test)]
         self.rebuilds.fetch_add(1, Ordering::Relaxed);

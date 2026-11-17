@@ -1,3 +1,6 @@
+//! Inode table: kernel handle to drive-node mapping with open-state
+//! tracking. Single authority for lookup, forget, and hard-link counts;
+//! backends resolve through it, never around it.
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use std::sync::{Arc, Mutex};

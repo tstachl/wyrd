@@ -19,7 +19,7 @@
 //! `open_timeout_secs`) plus the notification records
 //! (`notified`); relays are read-only on the surface and live in
 //! the drive deployment configuration, never here. Values convert
-//! into [`BudgetOverrides`](wyrd_core::settings::BudgetOverrides)
+//! into [`BudgetOverrides`]
 //! — the file never constructs a config itself, so it cannot build
 //! the quota-without-accountant mismatch — and command-line flags
 //! win over the file, which wins over compiled defaults.
@@ -100,7 +100,9 @@ pub struct DriveSettingsSection {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AppSettingsFile {
+    /// Settings schema version.
     pub version: u32,
+    /// Per-drive sections keyed by absolute drive directory.
     pub drives: BTreeMap<String, DriveSettingsSection>,
 }
 

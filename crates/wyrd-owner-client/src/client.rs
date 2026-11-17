@@ -59,7 +59,12 @@ pub enum ClientError {
     /// reconcile (re-read through the owner) before deciding whether
     /// retry is safe; a transport failure alone never authorizes
     /// retry and never establishes failure.
-    Unconfirmed { op: String, detail: String },
+    Unconfirmed {
+        /// The operation the unconfirmed request was sent as.
+        op: String,
+        /// What broke: send, frame, bound, wait, or parse detail.
+        detail: String,
+    },
     /// The owner answered with a defined refusal. Terminal: the
     /// request did not commit and will not commit on retry unless the
     /// caller changes what it asked for.

@@ -128,7 +128,7 @@ impl Engine {
     /// only gap is an unfetchable head does not probe. That is
     /// deferred, not dropped — the predicate gains a disjunct when
     /// the producer exists. A frozen drive
-    /// short-circuits to [`ReconciliationOutcome::Frozen`] before any
+    /// short-circuits to `ReconciliationOutcome::Frozen` before any
     /// seal or send, with the edge left latched.
     pub fn maybe_request_reconciliation(
         &mut self,

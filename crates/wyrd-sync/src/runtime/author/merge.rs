@@ -1,3 +1,6 @@
+//! Merge authoring: deterministic merge over selected heads with a
+//! per-path spec. Classification is shared with the dry-run planner
+//! so previews predict commits.
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use wyrd_format::{
@@ -19,7 +22,9 @@ use crate::runtime::engine::{Engine, EngineError};
 /// default, if any.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MergeSelection {
+    /// Adopt the named head's version of the path.
     Take(SnapshotId),
+    /// Drop the path from the merge.
     Absent,
 }
 
@@ -50,6 +55,7 @@ pub struct MergePlan {
 /// One root path's versions across the selected heads.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MergePath {
+    /// The root path name this row describes.
     pub path: String,
     /// What each selected head holds here: its entry, or `None`
     /// where the head lacks the path (a present-vs-absent conflict

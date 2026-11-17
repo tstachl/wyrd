@@ -23,7 +23,9 @@ use crate::keys::{DeviceEncryptionSecret, DeviceIdentitySecret};
 /// the owner alongside the invite request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PairingRequest {
+    /// The newcomer device id to admit.
     pub device: DeviceId,
+    /// The newcomer encryption key the owner admits.
     pub encryption_key: DeviceEncryptionKey,
 }
 

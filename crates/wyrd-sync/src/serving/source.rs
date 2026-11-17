@@ -1,3 +1,5 @@
+//! Bulk source: address maps for fetch, fed from recorded routes.
+//! No-op impls keep in-memory fakes honest about carrying no routes.
 use std::collections::BTreeMap;
 use std::sync::Mutex;
 

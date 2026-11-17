@@ -1,3 +1,7 @@
+//! Drive view: the mounted drive's read-only projection over a head
+//! set plus content stores. Resolves paths and opens files without
+//! ever authoring — writes flow through the mutation queue elsewhere.
+//!
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 

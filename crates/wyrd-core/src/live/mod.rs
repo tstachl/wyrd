@@ -71,7 +71,7 @@ pub use config::{
 /// shared store handle — never the publication lock — so bulk I/O
 /// never stalls serving; publication swaps in a whole new immutable
 /// generation under a short write lock that serving threads only ever
-/// take to clone the current [`Arc`](std::sync::Arc).
+/// take to clone the current [`Arc`].
 ///
 /// Generic over the namespace view: the loop programs against
 /// [`NamespaceView`], never any one presentation's view type, so the

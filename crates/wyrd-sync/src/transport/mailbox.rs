@@ -30,16 +30,26 @@ use zeroize::Zeroizing;
 use std::collections::VecDeque;
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
+/// Mailbox failures: sealing, size ceilings, identity, signer, shutdown, or relay transport.
 pub enum MailboxError {
+    /// NIP-44 seal or open failed.
     #[error("NIP-44 seal/open failed")]
     Crypto,
+    /// A mailbox payload exceeds its byte ceiling.
     #[error("mailbox payload of {bytes} bytes exceeds the {max}-byte ceiling")]
-    Oversize { bytes: usize, max: usize },
+    Oversize {
+        /// Observed payload size in bytes.
+        bytes: usize,
+        /// Applicable ceiling in bytes.
+        max: usize,
+    },
+    /// A device key is not a valid secp256k1 key.
     #[error("a device key is not a valid secp256k1 key")]
     InvalidKey,
     #[error(
         "identity mismatch: the signer, envelope, or open key disagree with the mailbox owner"
     )]
+    /// The signer, envelope, or open key disagrees with the mailbox owner.
     Identity,
     /// The signing backend failed. Constant string by design: signer
     /// errors come from foreign trait implementations (a remote NIP-46
@@ -54,6 +64,7 @@ pub enum MailboxError {
     /// on; the fix is always "do not use the mailbox after shutdown".
     #[error("mailbox is shut down")]
     Shutdown,
+    /// Relay transport failed; the outbox stays pending for a later pass.
     #[error("relay transport failed: {0}")]
     Transport(String),
 }
@@ -63,8 +74,11 @@ pub enum MailboxError {
 /// opaque to relays and carries Wyrd's control bytes underneath.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MailboxEnvelope {
+    /// The Nostr-visible sender identity.
     pub sender: DeviceId,
+    /// The Nostr-visible recipient identity.
     pub recipient: DeviceId,
+    /// The NIP-44 base64 ciphertext carrying Wyrd's control bytes.
     pub ciphertext: String,
 }
 
@@ -251,6 +265,7 @@ pub struct SendReport {
     pub accepted: usize,
 }
 
+/// The relay send/receive boundary a concrete client implements.
 pub trait Mailbox {
     /// Publish one sealed envelope, reporting relay acceptance.
     /// `Ok` means the transport ran; `report.accepted` counts the

@@ -37,8 +37,11 @@ use super::replay::LoadedFacts;
 /// deterministic and set difference (21c) is structural.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ReconciliationEvidence {
+    /// Committed transition ids evidenced by the view.
     pub transitions: BTreeSet<TransitionId>,
+    /// Held snapshot ids (announced or bodied) evidenced by the view.
     pub snapshots: BTreeSet<SnapshotId>,
+    /// Installed capability epochs per device evidenced by the view.
     pub capabilities: BTreeSet<(DeviceId, u64)>,
 }
 
@@ -48,7 +51,9 @@ pub struct ReconciliationEvidence {
 /// comparison or testing, never evidence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ViewProvenance {
+    /// Committed over durable facts; eligible to retire obligations.
     Durable,
+    /// Projected from live memory; comparison and testing only.
     Memory,
 }
 
@@ -126,6 +131,7 @@ pub fn reconciliation_statement_digest(
 /// committed durably.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ReconciliationError {
+    /// Retirement requires durable evidence, not a memory projection.
     #[error(
         "retirement requires a durably committed reconciliation view, not an in-memory projection"
     )]

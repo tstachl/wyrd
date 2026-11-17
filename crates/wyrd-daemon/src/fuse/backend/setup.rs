@@ -25,6 +25,7 @@ impl<S: ObjectStore, M: Materialization> FuseBackend<S, M>
 where
     S::Error: std::fmt::Debug,
 {
+    /// Build a standalone backend owning its projection from one drive view.
     pub fn new(view: DriveView<S, M>) -> Self {
         let (uid, gid) = current_owner();
         FuseBackend {
@@ -179,7 +180,7 @@ where
     }
 
     /// The shared store handle the served generations address: lets
-    /// callers build the next view to [`publish`](Self::publish).
+    /// callers build the next view to [`publish_without_revision`](Self::publish_without_revision).
     pub fn store_handle(&self) -> Result<Arc<RwLock<S>>, fuser::Errno> {
         let projection = self.projection()?;
         Ok(projection.view().store_handle())

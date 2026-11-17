@@ -3,7 +3,7 @@
 //!
 //! Layout under one drive directory:
 //!
-//! ```text
+//! ``text
 //! drive/
 //!   DRIVE              32-byte drive id, written once at creation
 //!   store-key.wrap     store key sealed under the passphrase
@@ -12,7 +12,7 @@
 //!   commits/
 //!     0000000000000001.commit
 //!     ...
-//! ```
+//! ``
 //!
 //! Commit protocol (single writer — enforced: an exclusive advisory
 //! `LOCK` on the store directory rejects concurrent opens and releases
@@ -31,13 +31,13 @@
 //!
 //! Failure semantics, stated exactly:
 //!
-//! ```text
+//! ``text
 //! orphaned .tmp files ............ ignore (never crossed the boundary)
 //! commits above CURRENT .......... ignore (leave for GC)
 //! commit <= CURRENT, valid ....... replay
 //! commit <= CURRENT, missing ..... ERROR (store damage)
 //! commit <= CURRENT, undecodable . ERROR (store damage, never a skip)
-//! ```
+//! ``
 //!
 //! A torn write can only ever produce an orphaned temp: renames are
 //! atomic and CURRENT advances only after the commit file and its
@@ -50,11 +50,11 @@
 //! canonical records; CURRENT binds the tip hash. Recovery verifies the
 //! whole chain, so the durable log is content-addressed end to end:
 //!
-//! ```text
+//! ``text
 //! CURRENT(seq, hash)
 //!    ↓
 //! commit N ──hash──> ... ──hash──> commit 1 ──hash──> zeros
-//! ```
+//! ``
 //!
 //! Facts, not state — precisely, immutable mutations: commits carry
 //! canonical records (transitions, sealed capabilities, announcements,
@@ -86,10 +86,10 @@
 //! engine's term for everything else in the DAG, which never advances
 //! the live view.
 //!
-//! Children: [`store`] owns lifecycle and the crash-safe commit
-//! protocol; [`codec`] owns the commit envelope and fact records;
-//! [`replay`] owns loaded facts and state reconstruction;
-//! [`reconciliation`] owns the recipient's reconciliation view over
+//! Children: `store` owns lifecycle and the crash-safe commit
+//! protocol; `codec` owns the commit envelope and fact records;
+//! `replay` owns loaded facts and state reconstruction;
+//! `reconciliation` owns the recipient's reconciliation view over
 //! those facts. The stable boundary re-exported here is
 //! [`DurableStore`], [`Fact`], [`LoadedFacts`], [`Rebuilt`],
 //! [`ReconciliationEvidence`], [`ReconciliationView`], and
@@ -99,10 +99,6 @@
 //! [`MembershipLog`]: crate::membership::MembershipLog
 //! [`DriveKeyring`]: crate::keys::capability::DriveKeyring
 //! [`RuntimeState`]: crate::runtime::RuntimeState
-//! [`store`]: mod@store
-//! [`codec`]: mod@codec
-//! [`replay`]: mod@replay
-//! [`reconciliation`]: mod@reconciliation
 
 mod codec;
 mod reconciliation;
@@ -181,36 +177,52 @@ use crate::runtime::{ManifestRecord, MaterializationState, RuntimeError};
 #[derive(Debug, Error)]
 pub enum DurableError {
     #[error("durable I/O failed: {0}")]
+    /// The underlying store I/O failed.
     Io(#[from] std::io::Error),
     #[error("another process holds this store directory")]
+    /// Another process holds this store directory.
     StoreLocked,
     #[error("CURRENT is present but not a sequence plus commit hash")]
+    /// CURRENT names no decodable commit.
     CorruptCurrent,
     #[error("commit {0} is present but undecodable")]
+    /// The named commit is present but undecodable.
     CorruptCommit(u64),
     #[error("store holds another drive")]
+    /// The store directory belongs to another drive.
     DriveMismatch,
     #[error("store key failed: {0}")]
+    /// The store-key envelope failed to open.
     StoreKey(#[from] KeystoreError),
     #[error("crypto failed: {0}")]
+    /// A recorded sealed fact failed to open.
     Crypto(#[from] CryptoError),
     #[error("capability failed: {0}")]
+    /// A recorded capability failed authorization.
     Capability(#[from] CapabilityError),
     #[error("manifest failed: {0}")]
+    /// A recorded manifest failed validation.
     Manifest(#[from] ManifestError),
     #[error("membership transition failed: {0}")]
+    /// A recorded transition failed verification.
     Membership(#[from] MembershipError),
     #[error("control decoding failed: {0}")]
+    /// A recorded control message failed decoding.
     Control(#[from] ControlError),
     #[error("runtime rebuild failed: {0}")]
+    /// Runtime state rebuild failed.
     Runtime(#[from] RuntimeError),
     #[error("keyring install failed: {0}")]
+    /// A recorded capability failed keyring install.
     Install(#[from] InstallError),
     #[error("commit {0} is missing at or below CURRENT")]
+    /// A commit at or below CURRENT is missing.
     MissingCommit(u64),
     #[error("announcement outbox fact failed validation")]
+    /// An announcement outbox fact failed validation.
     InvalidOutbox,
     #[error("commit sequence exhausted")]
+    /// The commit sequence has no further values.
     SequenceExhausted,
     /// A commit batch holds more records than load accepts
     /// (`MAX_RECORDS_PER_COMMIT`): refused before writing, so the
@@ -219,14 +231,24 @@ pub enum DurableError {
     #[error(
         "commit batch of {count} records exceeds the per-commit ceiling of {max} records; split the batch and retry"
     )]
-    TooManyRecords { count: usize, max: usize },
+    TooManyRecords {
+        /// The records the refused batch holds.
+        count: usize,
+        /// The per-commit ceiling the batch exceeded.
+        max: usize,
+    },
     /// A commit encodes larger than load accepts (`MAX_COMMIT_BYTES`):
     /// refused before writing, like the record ceiling above. Split
     /// the batch and retry.
     #[error(
         "commit of {bytes} bytes exceeds the per-commit ceiling of {max} bytes; split the batch and retry"
     )]
-    CommitTooLarge { bytes: u64, max: u64 },
+    CommitTooLarge {
+        /// The encoded bytes the refused commit holds.
+        bytes: u64,
+        /// The per-commit byte ceiling the commit exceeded.
+        max: u64,
+    },
     /// One reconciliation-view section holds more entries than load
     /// accepts (`MAX_RECORDS_PER_COMMIT`): refused before writing, so
     /// the store never advances CURRENT onto a view no reopen could
@@ -235,8 +257,11 @@ pub enum DurableError {
         "reconciliation view {section} section of {count} entries exceeds the per-section ceiling of {max} entries; state a narrower view and retry"
     )]
     OversizedView {
+        /// The overfull reconciliation-view section.
         section: &'static str,
+        /// The entries the overfull section holds.
         count: usize,
+        /// The per-section ceiling the statement exceeded.
         max: usize,
     },
 }
@@ -459,9 +484,13 @@ pub enum Fact {
     /// own fact. Retries then reuse the replacement bytes
     /// byte-identically instead of re-minting every pass.
     CapabilitySealedReplaced {
+        /// The epoch the replaced obligation delivers.
         epoch: u64,
+        /// The recipient the replaced obligation delivers to.
         recipient: DeviceId,
+        /// The identity of the sealed fact this replacement supersedes.
         supersedes: SealedCapabilityFactId,
+        /// The replacement sealed bytes retries reuse byte-identically.
         replacement: Vec<u8>,
     },
     /// One capability obligation discharged for one recipient.

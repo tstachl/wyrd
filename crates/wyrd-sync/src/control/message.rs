@@ -51,10 +51,15 @@ use super::ControlError;
 /// in `bootstrap.rs`, so no tag is reserved for invitations.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ControlKind {
+    /// Capability delivery: wrapped epoch secrets for one device.
     Capability,
+    /// Membership transition delivery: canonical bytes the machine verifies.
     MembershipTransition,
+    /// Rotation notice: new epoch material exists under this transition.
     KeyRotation,
+    /// Fetch-and-classify evidence plus the sender's transport identities.
     SnapshotAnnouncement,
+    /// Recipient-originated pull statement; intake commits it as evidence.
     ReconciliationRequest,
 }
 
@@ -88,8 +93,11 @@ impl ControlKind {
 /// only delivers the bytes to the right device.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CapabilityPayload {
+    /// The device the epoch secrets are wrapped for.
     pub device: DeviceId,
+    /// The epoch the wrapped secrets cover, exactly `1..=epoch`.
     pub epoch: u64,
+    /// The ECDH-sealed capability bytes (still ciphertext here).
     pub wrapped: Vec<u8>,
 }
 
@@ -97,6 +105,7 @@ pub struct CapabilityPayload {
 /// membership machine verifies. Control never interprets transitions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransitionPayload {
+    /// The canonical transition bytes; the membership machine verifies them.
     pub transition: Vec<u8>,
 }
 
@@ -114,6 +123,7 @@ pub struct TransitionPayload {
 /// for epoch state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyRotation {
+    /// The transition admitting the new epoch material.
     pub transition: TransitionId,
 }
 
@@ -133,7 +143,9 @@ pub struct KeyRotation {
 /// `Duplicate` by set membership instead of minting a fact per send.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReconciliationRequestPayload {
+    /// The device asking; must equal the mailbox envelope's sender.
     pub requester: DeviceId,
+    /// The canonical reconciliation-evidence bytes, opaque to control.
     pub evidence: Vec<u8>,
 }
 
@@ -150,9 +162,13 @@ pub struct ReconciliationRequestPayload {
 /// then verify what arrived against the identities the author signed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SnapshotAnnouncement {
+    /// The announced snapshot's identity.
     pub snapshot: SnapshotId,
+    /// The announcing device; the signature's claimed author.
     pub author: DeviceId,
+    /// The epoch the announcement is stated under.
     pub epoch: u64,
+    /// The membership transition the announcement's epoch binds to.
     pub membership: TransitionId,
     /// The transport root (Bao root) over the snapshot body's canonical
     /// bytes — the verified-fetch address for the bulk body. The body
@@ -269,10 +285,15 @@ pub enum AnnouncementUpdate {
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Message {
+    /// Carries a capability delivery.
     Capability(CapabilityPayload),
+    /// Carries a membership transition.
     MembershipTransition(TransitionPayload),
+    /// Carries a key-rotation notice.
     KeyRotation(KeyRotation),
+    /// Carries a snapshot announcement.
     SnapshotAnnouncement(SnapshotAnnouncement),
+    /// Carries a reconciliation request.
     ReconciliationRequest(ReconciliationRequestPayload),
 }
 

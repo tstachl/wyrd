@@ -109,7 +109,9 @@ pub enum RotationIngest {
     Duplicate,
     /// First sight of this delivery id.
     Accepted {
+        /// The dedupe id of the first-seen sealed delivery.
         id: super::ControlMessageId,
+        /// The opened rotation delivery.
         delivery: RotationDelivery,
     },
 }
@@ -119,10 +121,15 @@ pub enum RotationIngest {
 /// — it opens later through the zeroizing capability path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RotationDelivery {
+    /// The drive this delivery belongs to.
     pub drive: DriveId,
+    /// The recipient device the epoch material is sealed for.
     pub device: DeviceId,
+    /// The epoch the delivered material opens.
     pub epoch: u64,
+    /// The canonical transition bytes authorizing the new epoch.
     pub transition: Vec<u8>,
+    /// The ECDH-sealed capability bytes (still ciphertext here).
     pub wrapped: Vec<u8>,
     /// The owner's authorization of the secret vector `wrapped`
     /// carries. Carried inside the AEAD plaintext, so the tag
@@ -135,13 +142,21 @@ pub struct RotationDelivery {
 /// The sealed, deliverable rotation form.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SealedRotation {
+    /// The delivery envelope version (pinned `ROTATION_VERSION`).
     pub version: u8,
+    /// The drive this delivery belongs to.
     pub drive: DriveId,
+    /// Fresh sender-ephemeral ECDH public key for this delivery.
     pub ephemeral: [u8; 32],
+    /// The recipient device this delivery is sealed for.
     pub recipient: DeviceId,
+    /// The recipient's registered ECDH target the wrap is sealed to.
     pub encryption_key: DeviceEncryptionKey,
+    /// The epoch whose material this delivery carries.
     pub epoch: u64,
+    /// Fresh random AEAD nonce; the dedupe id covers it.
     pub nonce: [u8; 24],
+    /// The AEAD ciphertext over drive, device, epoch, and blobs.
     pub ciphertext: Vec<u8>,
 }
 

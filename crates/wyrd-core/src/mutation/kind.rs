@@ -1,3 +1,7 @@
+//! Mutation kinds: what a local write asks for and what applying it
+//! reports. Namespace changes report `Done`; file writes return the new
+//! identity so handles advance without a second resolution pass.
+//!
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -23,7 +27,9 @@ pub enum MutationOutcome {
     /// from its disposition and reports the forcer's outcome to the
     /// forcing syscall exactly as if it had submitted alone.
     Fold {
+        /// Forcing member outcome, as if submitted alone.
         forcer: FoldForcerOutcome,
+        /// Per-member dispositions, positional over submission order.
         members: Vec<FoldDisposition>,
     },
 }
@@ -66,14 +72,23 @@ pub enum FoldDisposition {
 /// the `Debug` impls' path rendering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommitSource {
+    /// Authored by a mkdir mutation.
     Mkdir,
+    /// Authored by a create-file mutation.
     CreateFile,
+    /// Authored by a commit-file mutation.
     CommitFile,
+    /// Authored by an append-file mutation.
     AppendFile,
+    /// Authored by an unlink mutation.
     Unlink,
+    /// Authored by an rmdir mutation.
     Rmdir,
+    /// Authored by a rename mutation.
     Rename,
+    /// Authored by a setattr mutation.
     SetAttrs,
+    /// Authored by a fold commit.
     Fold,
 }
 
@@ -116,13 +131,21 @@ pub struct WriteStats {
     pub commit_latency_us_max: u64,
     /// Per-source snapshot counts, in [`CommitSource`] order below.
     pub mkdir: u64,
+    /// Snapshots authored by create-file.
     pub create_file: u64,
+    /// Snapshots authored by commit-file.
     pub commit_file: u64,
+    /// Snapshots authored by append-file.
     pub append_file: u64,
+    /// Snapshots authored by unlink.
     pub unlink: u64,
+    /// Snapshots authored by rmdir.
     pub rmdir: u64,
+    /// Snapshots authored by rename.
     pub rename: u64,
+    /// Snapshots authored by setattr.
     pub set_attrs: u64,
+    /// Snapshots authored by fold commits.
     pub fold: u64,
     /// Queue creation: the rate denominator.
     pub started: Instant,
@@ -188,10 +211,16 @@ pub enum MutationError {
     /// More than one eligible live head: a path mutation has no single
     /// tree to read-modify-write. POSIX `EIO`.
     #[error("cannot mutate while the drive has {heads} live heads")]
-    Conflicted { heads: usize },
+    Conflicted {
+        /// Live heads blocking the mutation.
+        heads: usize,
+    },
     /// An invalid path or entry name. POSIX `EINVAL`.
     #[error("invalid path or name: {0}")]
-    Invalid(String),
+    Invalid(
+        /// Offending path or entry name.
+        String,
+    ),
     /// A missing path. POSIX `ENOENT`.
     #[error("{0:?} does not exist")]
     NotFound(String),
@@ -233,8 +262,11 @@ pub enum MutationError {
     /// error.
     #[error("stale entry identity for {path:?}: expected {expected}, found {found:?}")]
     StaleEntry {
+        /// Path that resolved to a different entry.
         path: String,
+        /// Entry identity the caller expected.
         expected: EntryIdentity,
+        /// Entry identity actually found, if any.
         found: Option<EntryIdentity>,
     },
     /// The operation exceeds a representable or budgeted size. POSIX
@@ -247,7 +279,12 @@ pub enum MutationError {
     /// overloading [`MutationError::TooLarge`]. Integers only — no
     /// foreign error text crosses the channel.
     #[error("count {count} exceeds the limit of {max}")]
-    TooMany { count: usize, max: usize },
+    TooMany {
+        /// Observed count.
+        count: usize,
+        /// Protocol ceiling it exceeded.
+        max: usize,
+    },
     /// Object-store or tree access failed. A classified resource
     /// condition keeps its errno (`ENOSPC` for a full disk, `EACCES`
     /// for an unwritable store); everything else is POSIX `EIO`.
@@ -268,7 +305,9 @@ pub enum MutationError {
     /// the head set.
     #[error("authoring needs remote content {chunks:?}")]
     NeedContent {
+        /// Missing content identities to fetch.
         chunks: Vec<ContentId>,
+        /// Head the mutation was evaluated against, for retry pinning.
         base: Option<wyrd_format::SnapshotId>,
     },
     /// A deferred mutation waited past `max_mutation_wait` for its
@@ -321,12 +360,20 @@ impl MutationError {
 pub enum MutationKind {
     /// Create an empty directory; no intermediates (`insert_into` is the
     /// format layer's strict-parents rule).
-    Mkdir { path: String },
+    Mkdir {
+        /// Canonical path of the directory to create.
+        path: String,
+    },
     /// Create an empty regular file as its own snapshot (the `create`
     /// op's namespace half). The parent token is the directory incarnation
     /// observed by the presentation caller; it is checked again by the
     /// live loop. `EEXIST` when the name is taken.
-    CreateFile { path: String, parent: ParentToken },
+    CreateFile {
+        /// Canonical path of the file to create.
+        path: String,
+        /// Parent directory incarnation observed by the caller.
+        parent: ParentToken,
+    },
     /// Commit a writable handle's full logical image onto the current
     /// head, accepted only if the path still carries `base`. `executable`
     /// is the handle's buffered exec bit for the committed entry.
@@ -336,10 +383,15 @@ pub enum MutationKind {
     /// on a replacement. `None` is the in-process legacy path (the
     /// handle's own stale-base check still applies).
     CommitFile {
+        /// Canonical path to commit the image onto.
         path: String,
+        /// File identity the handle was opened from.
         base: FileIdentity,
+        /// Buffered exec bit for the committed entry.
         executable: bool,
+        /// Full logical file image to commit.
         content: Vec<u8>,
+        /// Expected entry identity precondition, if any.
         expected: Option<EntryIdentity>,
     },
     /// Append `content` to the current head's file at `path`. Unlike
@@ -349,29 +401,40 @@ pub enum MutationKind {
     /// regular file (never creates, never resurrects). `expected`
     /// binds the append to the observed entry, like `CommitFile`.
     AppendFile {
+        /// Canonical path of the file to extend.
         path: String,
+        /// Bytes to append.
         content: Vec<u8>,
+        /// Expected entry identity precondition, if any.
         expected: Option<EntryIdentity>,
     },
     /// Remove the file or symlink at `path`; a directory is `EISDIR`.
     /// `expected` binds the removal to the observed entry.
     Unlink {
+        /// Canonical path to remove.
         path: String,
+        /// Expected entry identity precondition, if any.
         expected: Option<EntryIdentity>,
     },
     /// Remove the empty directory at `path`. `expected` binds the
     /// removal to the observed entry.
     Rmdir {
+        /// Canonical path of the directory to remove.
         path: String,
+        /// Expected entry identity precondition, if any.
         expected: Option<EntryIdentity>,
     },
     /// Move `from` to `to`. `no_replace` is `RENAME_NOREPLACE`.
     /// `expected` binds the move to the observed source entry;
     /// the destination keeps its existing replace semantics.
     Rename {
+        /// Canonical source path.
         from: String,
+        /// Canonical destination path.
         to: String,
+        /// Refuse when the destination exists.
         no_replace: bool,
+        /// Expected source entry identity precondition, if any.
         expected: Option<EntryIdentity>,
     },
     /// One `setattr`: apply the requested size and/or exec change as a
@@ -394,10 +457,15 @@ pub enum MutationKind {
     /// [`MutationError::StaleEntry`]. In-process callers leave it
     /// `None` and keep the content-base check only.
     SetAttrs {
+        /// Canonical path to apply the change to.
         path: String,
+        /// Requested size, if any.
         size: Option<u64>,
+        /// Requested exec bit, if any.
         executable: Option<bool>,
+        /// Content-base precondition, if any.
         base: Option<FileIdentity>,
+        /// Expected entry identity precondition, if any.
         expected: Option<EntryIdentity>,
     },
     /// One commit-forcing event's whole pending set plus itself,
@@ -409,7 +477,10 @@ pub enum MutationKind {
     /// members are all non-forcing and fail per member, best-effort.
     /// A `Fold` never nests: a member whose kind is itself a `Fold`
     /// fails the whole submission closed.
-    Fold { members: Vec<FoldMember> },
+    Fold {
+        /// Fold members, ordered first-in-first-buffered.
+        members: Vec<FoldMember>,
+    },
 }
 
 /// One folded member: a non-`Fold` operation plus whether it is the

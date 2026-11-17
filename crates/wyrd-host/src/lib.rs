@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! The desktop host: the process that owns a drive.
 //!
 //! One owner process holds the store's exclusive lock for its lifetime,

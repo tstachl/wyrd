@@ -29,14 +29,19 @@ use crate::control::nip46::{SignMessageRequest, SignMessageResponse};
 /// under this mapping.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum SignerError {
+    /// The session refused the request (default-deny or policy refusal).
     #[error("signer session refused the request")]
     Refused,
+    /// The session is unreachable; retry on a later pass.
     #[error("signer session is unreachable")]
     Unreachable,
+    /// The returned signature does not verify under the reported key.
     #[error("signer session returned a signature that does not verify under its reported key")]
     IdentityMismatch,
+    /// The session returned an unparseable key or signature.
     #[error("signer session returned an unparseable key or signature")]
     MalformedResponse,
+    /// The session signs as a different device than the caller expects.
     #[error("signer session signs as {reported}, but this device is {device}")]
     SessionIdentityMismatch {
         /// The identity the session reported and proved.

@@ -190,7 +190,7 @@ impl ScrubQueue {
     }
 }
 
-/// One drain's repair counts. `Copy` so it rides [`SyncReport`].
+/// One drain's repair counts. `Copy` so it rides [`crate::live::SyncReport`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ScrubReport {
     /// Losses drained (diagnostics emitted, whether or not the

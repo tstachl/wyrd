@@ -1,3 +1,6 @@
+//! Owner handover: transfers the singleton owner role to another
+//! member. Signed by the pre-transition owner; installs the new
+//! epoch capability when the author remains a member.
 use wyrd_format::membership::{
     set_root, MEMBER_SET_CONTEXT, OWNER_SET_CONTEXT, READER_SET_CONTEXT,
 };

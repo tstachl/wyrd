@@ -41,7 +41,10 @@ pub enum WriteError<E: std::fmt::Debug> {
     /// A write cannot implicitly choose content from one side of a
     /// multi-head conflict. Callers must provide an explicit resolution.
     #[error("cannot write while the drive has {heads} live heads")]
-    Conflicted { heads: usize },
+    Conflicted {
+        /// Live heads blocking the write.
+        heads: usize,
+    },
     /// The final path component is not a valid entry name.
     #[error("invalid entry name: {0}")]
     Name(#[from] wyrd_format::tree::ComponentError),
@@ -79,6 +82,7 @@ pub struct WyrdNode<V: NamespaceView> {
 /// Failure while composing the engine with a namespace view.
 #[derive(Debug, thiserror::Error)]
 pub enum NodeError {
+    /// Runtime state could not be reconstructed.
     #[error("runtime state could not be reconstructed: {0}")]
     Runtime(#[from] wyrd_sync::runtime::EngineError),
     /// The live composition was refused: a configured bound with
@@ -277,7 +281,7 @@ where
     /// engine's durable outbox, without re-authoring anything. The
     /// restart path after a crash or a partial send. The budget
     /// bounds this resume like a live publish phase; callers with
-    /// no phase budget pass [`PublishBudget::unbounded`].
+    /// no phase budget pass [`wyrd_sync::runtime::PublishBudget::unbounded`].
     pub fn announce_pending(
         &mut self,
         mailbox: &mut impl Mailbox,

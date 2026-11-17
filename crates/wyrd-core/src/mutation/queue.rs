@@ -1,3 +1,7 @@
+//! Mutation queue: the total order of admitted local writes.
+//! Admission is immediate or `Saturated`; held entries retry ahead of
+//! new submissions so each snapshot parents onto the previous mutation.
+//!
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};

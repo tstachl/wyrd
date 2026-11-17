@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! The Wyrd desktop application: a non-owning Tauri client of the
 //! drive-owner interface, one window over many independently managed
 //! drives.

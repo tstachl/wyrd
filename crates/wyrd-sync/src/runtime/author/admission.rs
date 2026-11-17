@@ -1,3 +1,6 @@
+//! Member admission: admits devices and readers, reissues
+//! invitations, and resumes paused admissions. All transitions commit
+//! through the engine with owner authority checked first.
 use wyrd_format::membership::{
     set_root, Admission, MEMBER_SET_CONTEXT, OWNER_SET_CONTEXT, READER_SET_CONTEXT,
 };
@@ -26,7 +29,9 @@ pub(crate) const ADMISSION_OBLIGATION_BATCH: usize = 1024;
 /// out-of-band (it bootstraps a device with no engine yet, so it
 /// cannot arrive as a control message).
 pub struct AdmitOutcome {
+    /// The signed admission transition every member must observe.
     pub transition: MembershipTransition,
+    /// The sealed invitation ferried out-of-band to the new device.
     pub invitation: SealedBootstrap,
     /// Announcement obligations queued for the newcomer by the
     /// bounded fill: every closure member exactly once.
@@ -41,8 +46,11 @@ pub struct AdmitOutcome {
 /// invitation (the original may never have reached a file). The
 /// operator surface for `member invite` reruns.
 pub struct ResumeOutcome {
+    /// Catch-up obligations committed by the resume fill.
     pub committed: usize,
+    /// Fill commits spent (one membership commit excluded).
     pub batches: usize,
+    /// The reissued sealed invitation for the admitted device.
     pub invitation: SealedBootstrap,
 }
 

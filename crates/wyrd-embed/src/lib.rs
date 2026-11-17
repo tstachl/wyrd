@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! The embedded consumer boundary: a real consumer of `wyrd-core`
 //! that is not the daemon, the CLI, or a mount.
 //!
@@ -13,7 +14,7 @@
 //! review.
 //!
 //! The payload is one named contract,
-//! [`embedded_drive_lifecycle_needs_no_fuse_and_no_daemon`]: one drive
+//! `embedded_drive_lifecycle_needs_no_fuse_and_no_daemon`: one drive
 //! through its whole embedded lifecycle — create, write, mutate
 //! through the loop-driven channel, stop, reopen, observe, write
 //! policy, reopen again, shut down in order — with no backend ever

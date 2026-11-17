@@ -19,7 +19,7 @@ impl Engine {
     /// the heads agree on are taken automatically and conflicted
     /// paths need a spec line or the default. Ordinary member
     /// authority, current epoch, existing announcement outbox — no
-    /// membership change. See [`author::merge`].
+    /// membership change. See `author::merge`.
     pub fn merge_heads<S: ObjectStore>(
         &mut self,
         objects: &mut S,
@@ -38,7 +38,7 @@ impl Engine {
     /// user before they select. Read-only; shares the
     /// classification [`merge_heads`] validates against, so a
     /// future graphical resolver consumes this instead of
-    /// reimplementing it. See [`author::merge`].
+    /// reimplementing it. See `author::merge`.
     ///
     /// [`merge_heads`]: Engine::merge_heads
     pub fn merge_plan<S: ObjectStore>(
@@ -79,7 +79,7 @@ impl Engine {
     /// anything: the per-path status a dry run shows before the
     /// operator selects. Read-only; shares the classification
     /// [`recover`] validates against. See
-    /// [`author::recover`].
+    /// `author::recover`.
     ///
     /// [`recover`]: Engine::recover
     pub fn recovery_plan<S: ObjectStore>(
@@ -128,7 +128,7 @@ impl Engine {
     /// granularity, like the merge spec), `all` takes the whole
     /// source tree, and `contents` grafts explicitly named content
     /// ids the operator no longer knows a path for. See
-    /// [`author::recover`].
+    /// `author::recover`.
     pub fn recover<S: ObjectStore>(
         &mut self,
         objects: &mut S,

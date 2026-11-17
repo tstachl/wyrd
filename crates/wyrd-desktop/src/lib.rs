@@ -1,9 +1,10 @@
+#![warn(missing_docs)]
 //! The desktop management UI backend: a non-owning client of the
 //! drive-owner interface.
 //!
 //! The UI never owns a drive. The independently installed owner holds
 //! the store and serves `owner.sock`; this crate forwards operations
-//! through the shared [`OwnerClient`] and interprets nothing — the
+//! through the shared [`wyrd_owner_client::OwnerClient`] and interprets nothing — the
 //! same rule as the interface itself
 //! (`docs/contracts/owner-interface.md`).
 //!

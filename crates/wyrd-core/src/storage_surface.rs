@@ -9,7 +9,7 @@
 //! decider, this screen only renders rows it did not write). A
 //! figure without a variant has no label to print, so the surface
 //! cannot emit it. The forbidden words
-//! ([`FORBIDDEN_STORAGE_WORDS`]) never render, in any casing.
+//! ([`crate::policy::FORBIDDEN_STORAGE_WORDS`]) never render, in any casing.
 //!
 //! Two halves with different cadences (OD-31-A): the quota half is
 //! standing — the retained count is an atomic load on the counter
@@ -57,7 +57,12 @@ pub enum StorageReading {
     /// observation is shown as current.
     Unavailable,
     /// The counter's value at the observation time.
-    Measured { bytes: u64, observed_unix_secs: u64 },
+    Measured {
+        /// Retained bytes at observation time.
+        bytes: u64,
+        /// Unix seconds when the count was read.
+        observed_unix_secs: u64,
+    },
 }
 
 impl StorageReading {
@@ -90,6 +95,7 @@ fn unix_now() -> u64 {
 /// ceiling always has a comparable count.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StandingStorage {
+    /// Standing retained-bytes reading.
     pub reading: StorageReading,
     /// The configured ceiling (`budgets.retained_bytes_quota`).
     /// `None` is a fact about this device, never "unlimited" — that
@@ -98,6 +104,7 @@ pub struct StandingStorage {
 }
 
 impl StandingStorage {
+    /// Read the standing half from the owner's handle and ceiling.
     pub fn read(accountant: Option<&RetainedBytes>, ceiling: Option<u64>) -> StandingStorage {
         StandingStorage {
             reading: StorageReading::read(accountant),
@@ -196,8 +203,11 @@ pub enum RefusalAssessment {
     /// identify. The estimate rides the arm so the explanation can
     /// name what pushed a below-ceiling count over.
     CeilingRefused {
+        /// Measured retained bytes at refusal time.
         bytes: u64,
+        /// Configured ceiling.
         ceiling: u64,
+        /// Refused write's estimated size.
         estimate: u64,
     },
     /// No ceiling configured: Wyrd cannot attribute the refusal to
@@ -206,7 +216,12 @@ pub enum RefusalAssessment {
     /// Ceiling configured and the measured count below it: the
     /// ceiling does not explain the refusal. Never a positive claim
     /// about the host.
-    CeilingExonerated { bytes: u64, ceiling: u64 },
+    CeilingExonerated {
+        /// Measured retained bytes at refusal time.
+        bytes: u64,
+        /// Configured ceiling.
+        ceiling: u64,
+    },
     /// Ceiling configured but the count unmeasured or unreachable:
     /// no comparison is possible either way.
     CannotCompare,
@@ -281,7 +296,9 @@ pub fn explain_refusal(assessment: RefusalAssessment) -> String {
 /// A census figure with its own observation time: explicitly
 /// on demand, never confused with the standing count.
 pub struct CensusReading<'a> {
+    /// Census walked on demand.
     pub census: &'a ResidencyCensus,
+    /// Unix seconds when the census was taken.
     pub observed_unix_secs: u64,
 }
 

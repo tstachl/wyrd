@@ -3,7 +3,7 @@
 //! transaction below without secrets (credential paths forward to
 //! the verification child, who opens custody), so it returns before
 //! credential loading. Quiescence, staging, swap, verify,
-//! commit-or-rollback, hand back: [`update_run`](super::update_run).
+//! commit-or-rollback, hand back: [`update_run`].
 
 use super::{supervise, update_run, UpdateOutcome, UpdateRequest};
 use crate::args::{Credentials, RelayArgs};
@@ -15,8 +15,8 @@ use std::path::{Path, PathBuf};
 
 /// Run the update transaction from CLI values: resolve the drive
 /// config, credential paths, and effective relay set, run
-/// [`update_run`](super::update_run), and either finish or diverge
-/// into [`supervise`](super::supervise). Returns before credential
+/// [`update_run`], and either finish or diverge
+/// into [`supervise()`]. Returns before credential
 /// loading by construction — the caller keeps the early return, so
 /// no secrets are opened on this path.
 pub(crate) fn update_from_cli(

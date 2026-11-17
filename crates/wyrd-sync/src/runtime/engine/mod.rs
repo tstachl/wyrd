@@ -15,7 +15,7 @@
 //!
 //! Redelivery policy, stated exactly:
 //!
-//! ```text
+//! ``text
 //! duplicate delivery ............ no-op (already committed)
 //! undecodable / wrong drive ..... discarded as terminal poison (no fact)
 //! unknown epoch key ............. skipped, left unacked for redelivery
@@ -33,7 +33,7 @@
 //!                                redelivery/reseal/re-request is a no-op
 //! reconciliation, requester≠sender suppressed memory-only (disagreement never heals)
 //! held-message overflow ......... left unacked (pending is bounded; relay retains)
-//! ```
+//! ``
 //!
 //! Suppression verdicts are deterministic but memory-only and
 //! FIFO-bounded: they commit no durable fact, so unique invalid
@@ -136,7 +136,9 @@ impl DurabilityLevel {
 /// obscures the refusal itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnqueuedClosure {
+    /// The refusal left this many catch-up announcements unqueued.
     Counted(usize),
+    /// The closure size could not be computed; the refusal stands regardless.
     Uncounted,
 }
 
@@ -162,92 +164,135 @@ impl std::fmt::Display for UnqueuedClosure {
 #[derive(Debug, Error)]
 pub enum EngineError {
     #[error("durable commit failed: {0}")]
+    /// A durable commit failed.
     Durable(#[from] DurableError),
     #[error("runtime record failed: {0}")]
+    /// A runtime record failed.
     Runtime(#[from] RuntimeError),
     #[error("mailbox settlement failed: {0}")]
+    /// Mailbox settlement failed.
     Mailbox(#[from] crate::transport::mailbox::MailboxError),
     #[error("classified snapshot failed verification: {0:?}")]
+    /// A classified snapshot failed verification.
     InvalidHead(crate::authorization::Rejection),
     #[error("no canonical membership state to bind an authored snapshot")]
+    /// No canonical membership state exists to bind authoring.
     NoCanonicalMembership,
     #[error("this device is not a member of the canonical membership state")]
+    /// This device is not a member of the canonical membership state.
     NotAMember,
     #[error("this device is a reader and cannot author snapshots")]
+    /// Readers cannot author snapshots.
     ReaderCannotAuthor,
     #[error("only the current canonical owner may author a recovery snapshot")]
+    /// Only the current canonical owner may author a recovery snapshot.
     RecoveryNotOwner,
     #[error("this device is not an owner in the pre-transition state")]
+    /// This device is not an owner in the pre-transition state.
     NotOwner,
     #[error("device is already a member")]
+    /// The device is already a member.
     AlreadyMember,
     #[error("device is already a reader; remove it before admitting under a new identity")]
+    /// The device is already a reader; remove it before re-admitting.
     AlreadyReader,
     #[error("device is not a member of the canonical membership state")]
+    /// The device is not a member of the canonical membership state.
     NotMember,
     #[error("an owner with co-owners can only leave via SetOwners")]
+    /// An owner with co-owners can only leave via SetOwners.
     RemovingOwner,
     #[error("no frozen membership conflict to resolve")]
+    /// There is no frozen membership conflict to resolve.
     NoFrozenConflict,
     #[error("transition {0:?} is not a live contender in the frozen conflict")]
+    /// The transition is no live contender in the frozen conflict.
     NotContender(TransitionId),
     #[error("void set does not exactly name the winner's rival contenders")]
+    /// The void set does not exactly name the winner's rival contenders.
     ResolutionMismatch,
     #[error("transition leaves a membership conflict frozen; resolve it first")]
+    /// The transition leaves a membership conflict frozen.
     FrozenConflictRemains,
     #[error("merging needs at least two source heads")]
+    /// Merging needs at least two source heads.
     MergeNeedsTwoHeads,
     #[error(
         "membership frozen at epoch {0}: resolve the membership conflict before merging snapshots"
     )]
+    /// Membership is frozen at this epoch; resolve the conflict first.
     MergeBlockedByFreeze(u64),
     #[error("merge selects {0} heads, above the {1}-parent ceiling; coalesce in stages")]
+    /// The merge selects more heads than the parent ceiling allows.
     TooManyMergeHeads(usize, usize),
     #[error("duplicate merge head {0}")]
+    /// The merge selection names the same head twice.
     DuplicateMergeHead(SnapshotId),
     #[error("snapshot {0} is not a current eligible head")]
+    /// The snapshot is not a current eligible head.
     NotEligibleHead(SnapshotId),
     #[error("merge default {0} is not one of the selected heads")]
+    /// The merge default is not one of the selected heads.
     MergeDefaultNotAHead(SnapshotId),
     #[error("merge selection names {0}, which is not one of the selected heads")]
+    /// The merge selection names a snapshot outside the selected heads.
     MergeSelectionNotAHead(SnapshotId),
     #[error("merge spec names {0:?}, which no selected head contains")]
+    /// No selected head contains the merge spec path.
     UnknownMergePath(String),
     #[error("merge spec names {0:?}, which all selected heads agree on")]
+    /// The merge spec selects a path all heads already agree on.
     MergePathAgreed(String),
     #[error("no selection for conflicted path {0:?}: name it in the spec or pass a default")]
+    /// A conflicted path has no selection and no default covers it.
     UnresolvedMergePath(String),
     #[error("merged tree failed construction: {0}")]
+    /// The merged tree failed construction.
     MergeTreeInvalid(String),
     #[error("entry identity mint failed: {0}")]
+    /// An entry identity failed to mint during merge construction.
     EntryIdentityMint(String),
     #[error("no snapshot {0} in the local DAG to recover from")]
+    /// No such snapshot exists in the local DAG.
     UnknownRecoverySource(SnapshotId),
     #[error("recovery selection names {0:?}, which the source snapshot does not contain")]
+    /// The source snapshot holds no such recovery path.
     UnknownRecoveryPath(String),
     #[error("recovery selects nothing: pass --take, --all, or --content")]
+    /// The recovery selection names nothing to carry over.
     RecoveryEmptySelection,
     #[error("recovery content {0} is not in the local object store")]
+    /// The recovery content is absent from the local object store.
     UnknownRecoveryContent(ContentId),
     #[error("recovery tree failed construction: {0}")]
+    /// The recovery tree failed construction.
     RecoveryTreeInvalid(String),
     #[error("device identity was previously removed and cannot be re-admitted; use a new device identity")]
+    /// A removed device identity cannot be re-admitted; mint a new one.
     RetiredDevice,
     #[error("no held epoch secret for epoch {0}")]
+    /// No held epoch secret exists for this epoch.
     MissingEpochSecret(u64),
     #[error("the epoch number space is exhausted at u64::MAX")]
+    /// The epoch number space is exhausted at u64::MAX.
     EpochExhausted,
     #[error("no held control key for epoch {0}")]
+    /// No held control key exists for this epoch.
     MissingEpochKey(u64),
     #[error("snapshot {0} was authored by another device: an engine announces only its own work")]
+    /// Only the authoring device announces its own snapshots.
     NotAnnounceAuthor(SnapshotId),
     #[error("capability authorization failed: {0}")]
+    /// Capability authorization failed.
     Capability(#[from] crate::keys::CapabilityError),
     #[error("ingest limits rejected authored content: {0:?}")]
+    /// Ingest limits rejected authored content.
     Ingest(#[from] crate::ingest::IngestError),
     #[error("snapshot/tree/manifest closure mismatch: {0}")]
+    /// The snapshot, tree, and manifest closures do not correspond.
     Closure(#[from] crate::closure::ClosureError),
     #[error("vault write failed: {0}")]
+    /// A vault write failed.
     Vault(#[from] crate::serving::VaultError),
     /// A fetch refused by the local disk — full or not writable. Fails
     /// the pass (via the run loop's backoff and error cap) instead of
@@ -256,6 +301,7 @@ pub enum EngineError {
     #[error("local store unavailable: {0}")]
     Store(wyrd_format::StoreFailure),
     #[error("chunk {0} is neither locally sealed nor covered by a held recorded mapping")]
+    /// A needed chunk is neither locally sealed nor covered by a held mapping.
     ChunkUnavailable(ContentId),
     /// The authoring walk's collected miss set: every chunk the
     /// mutated tree needs that is neither locally sealed nor covered
@@ -267,20 +313,28 @@ pub enum EngineError {
     #[error("chunks {0:?} are neither locally sealed nor covered by held recorded mappings")]
     ChunksUnavailable(BTreeSet<ContentId>),
     #[error("authored manifest {0} holds no sealed representation to link")]
+    /// The authored manifest holds no sealed representation to link.
     RepresentationMissing(ContentId),
     #[error("no root manifest record for snapshot {0}: author the manifest before announcing")]
+    /// No root manifest record: author the manifest before announcing.
     RootManifestUnavailable(SnapshotId),
     #[error("control sealing failed: {0}")]
+    /// Control sealing failed.
     Crypto(#[from] crate::keys::CryptoError),
     #[error("root tree {0} is not present in the local object store")]
+    /// The requested root tree is absent from the local object store.
     TreeUnavailable(ContentId),
     #[error("root {0} is not a canonical tree object")]
+    /// The requested root is not a canonical tree object.
     InvalidTree(ContentId),
     #[error("root {0} does not hash back from the tree bytes served for it")]
+    /// Served tree bytes do not hash back to the requested root.
     TreeMismatch(ContentId),
     #[error("object store read failed: {0}")]
+    /// An object store read failed while serving.
     ObjectStore(String),
     #[error("the snapshot timestamp space is exhausted at u64::MAX")]
+    /// The snapshot timestamp space is exhausted at u64::MAX.
     TimestampExhausted,
     /// A write session naming more than one eligible head reached
     /// authoring. The write path refuses multi-head drives before
@@ -289,7 +343,10 @@ pub enum EngineError {
     /// authoring against a conflicted base fails closed here rather
     /// than extending one side of the conflict.
     #[error("cannot author a write onto {heads} live heads; resolve the conflict explicitly")]
-    WriteConflicted { heads: usize },
+    WriteConflicted {
+        /// The live heads the refused write session named.
+        heads: usize,
+    },
     /// An admission whose membership batch cannot fit the per-commit
     /// ceiling: a capacity refusal, not a durable failure. Rerunning
     /// unchanged cannot help — the device was not admitted, so
@@ -300,8 +357,11 @@ pub enum EngineError {
     /// `ADMISSION_OBLIGATION_BATCH`), only the membership half can.
     #[error("admission refused: membership batch of {records} records exceeds the per-commit ceiling of {max} records{closure} — rerunning unchanged cannot help: the device was not admitted and no operator action shortens membership history; the bound must change")]
     AdmissionBatchOverBudget {
+        /// The membership batch size that exceeded the ceiling.
         records: usize,
+        /// The per-commit ceiling the batch exceeded.
         max: usize,
+        /// Catch-up announcements the refusal left unqueued.
         closure: UnqueuedClosure,
     },
     /// A resume was asked for a device whose recorded admission
@@ -311,59 +371,85 @@ pub enum EngineError {
     /// identity. Key bytes never render — the mismatch is stated,
     /// never shown. Child-2 identity guard.
     #[error("refusing resume for {device}: the supplied encryption key does not match the recorded admission")]
-    AdmissionKeyMismatch { device: DeviceId },
+    AdmissionKeyMismatch {
+        /// The device the resume arguments name.
+        device: DeviceId,
+    },
     /// A resume was asked under a role the device does not hold
     /// (reader flag against a member admission or vice versa):
     /// intent is ambiguous, so resume refuses with the actual role
     /// named. Child-2 identity guard.
     #[error("refusing resume for {device}: admitted as {actual}, not as requested")]
     AdmissionRoleMismatch {
+        /// The device the resume arguments name.
         device: DeviceId,
+        /// The role the device actually holds.
         actual: &'static str,
     },
     #[error("a drive already exists at this directory")]
+    /// A drive already exists at this directory.
     DriveExists,
     #[error("drive file is not a 32-byte drive id")]
+    /// The drive file is not a 32-byte drive id.
     MalformedDrive,
     #[error("the custody record is malformed")]
+    /// The custody record is malformed.
     MalformedKeystore,
     #[error(
         "escrow sidecar for epoch {0} disagrees with the held epoch key: custody corrupt, refusing to replace held material"
     )]
+    /// The escrow sidecar disagrees with the held epoch key at this epoch.
     EscrowConflict(u64),
     #[error("owner root custody vanished during escrow restoration: refusing partial recovery")]
+    /// Owner root custody vanished during escrow restoration.
     EscrowRootLost,
     #[error("the supplied identity is not this drive's owner")]
+    /// The supplied identity is not this drive's owner.
     OwnerMismatch,
     #[error("the supplied identity does not match this drive's member custody record")]
+    /// The supplied identity does not match this drive's member custody record.
     DeviceMismatch,
     #[error("this directory already holds owner custody: join into a fresh directory, never into an owner's drive home")]
+    /// This directory already holds owner custody; join elsewhere.
     OwnerCustodyExists,
     #[error("no staged pairing secret in this directory: run pairing-request first")]
+    /// No staged pairing secret: run pairing-request first.
     MissingPairingSecret,
     #[error("bootstrap invitation failed to open: {0}")]
+    /// The bootstrap invitation failed to open.
     Invitation(#[from] crate::control::ControlError),
     #[error("bootstrap invitation and its capability disagree on the recipient")]
+    /// The bootstrap invitation and its capability disagree on the recipient.
     InvitationMismatch,
     #[error("invitation genesis is missing, undecodable, or not a valid epoch-1 root")]
+    /// The invitation genesis is missing, undecodable, or not a valid epoch-1 root.
     BadGenesis,
     #[error("pending invitation control keys disagree with the authorized keyring at epoch {0}: refusing to install bootstrap keys over authorized ones")]
+    /// Pending invitation keys disagree with the authorized keyring at this epoch.
     BootstrapKeyConflict(u64),
     #[error("sealed outbox bytes do not match their obligation: {0}")]
+    /// Sealed outbox bytes do not match their obligation.
     SealedOutboxMismatch(String),
     #[error("authored manifest failed canonical construction: {0}")]
+    /// An authored manifest failed canonical construction.
     InvalidManifest(#[from] wyrd_format::ManifestError),
     #[error("authored snapshot failed construction: {0}")]
+    /// An authored snapshot failed construction.
     InvalidSnapshot(#[from] wyrd_format::SnapshotError),
     #[error("authored transition failed construction: {0}")]
+    /// An authored transition failed canonical construction.
     InvalidTransition(#[from] wyrd_format::MembershipError),
     #[error("keystore failed: {0}")]
+    /// The keystore envelope failed to open.
     Keystore(#[from] crate::keys::KeystoreError),
     #[error("keystore I/O failed: {0}")]
+    /// Keystore file I/O failed.
     Io(#[from] std::io::Error),
     #[error("no announcement record for snapshot {0}: planned bodies derive from announcements")]
+    /// No announcement record backs this snapshot body plan.
     AnnouncementUnavailable(SnapshotId),
     #[error("observed transition {0:?} has no classification")]
+    /// An observed transition has no classification yet.
     TransitionUnclassified(TransitionId),
     /// A signer session failed to mint an owner proof. Raise vs
     /// count (error-conventions.md): transient failures
@@ -535,7 +621,7 @@ pub(super) enum DeferredWait {
 
 /// The attributable cause of one deferred message, for
 /// [`DrainReport`]'s cause counters (OD-17-2 option B). The full
-/// [`DeferredWait`] stays `pub(super)` — the wake rule needs the
+/// `DeferredWait` stays `pub(super)` — the wake rule needs the
 /// transition id, but the report only needs the class.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeferredCause {
@@ -603,6 +689,7 @@ pub const MAX_PENDING_MESSAGES: usize = 1024;
 /// restarts resume striking from zero, which is safe (attempts are
 /// fail-closed) and cheaper to reason about than persisting grudges.
 pub const FETCH_MAX_STRIKES: u32 = 3;
+/// How many runs a repeatedly-invalid representation is skipped before retry.
 pub const FETCH_COOLDOWN_PASSES: u64 = 8;
 
 /// The backoff identity for one fetchable unit: child-manifest and
@@ -644,8 +731,11 @@ pub struct TerminalState {
 /// heads of this listing to address merge sources as `@N`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SnapshotHead {
+    /// The head snapshot's identity.
     pub id: SnapshotId,
+    /// The authorization classification of the head.
     pub classification: crate::authorization::Classification,
+    /// The epoch the head is bound to.
     pub epoch: u64,
     /// The body flag bits, so renderers mark recovery snapshots
     /// without a second lookup: audit stays with the row.

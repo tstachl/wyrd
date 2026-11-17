@@ -1,3 +1,7 @@
+//! Archive identity: resolves the update archive path and names the
+//! expected artifact shape. Rejects hash-prefixed store basenames so a
+//! silent name mismatch never reaches the transaction.
+//!
 use crate::CliError;
 use std::fs;
 use std::path::Path;
@@ -39,7 +43,7 @@ pub(crate) struct ArchiveIdentity {
 ///
 /// `Unverified` is what the resolve step reports (it runs no
 /// checks); `__update_verify` constructs the other two from the
-/// invariant mapping in [`run_update_verify`].
+/// invariant mapping in [`super::verify::run_update_verify`].
 pub(crate) enum CompatibilityStatus {
     Verified { checks: Vec<String> },
     Incompatible { invariant: u8, detail: String },
