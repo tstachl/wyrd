@@ -820,7 +820,7 @@ output `bin/wyrd-supervise` next to `wyrd`, or shim the repo
 script —
 
 ```sh
-BIN_DIR="$(dirname "$(command -v wyrd)")"
+BIN_DIR="$(dirname "$(realpath "$(command -v wyrd)" 2>/dev/null || command -v wyrd)")"
 printf '#!/bin/sh\nexec python3 /path/to/repo/nix/drive/supervise.py "$@"\n' \
   > "$BIN_DIR/wyrd-supervise"
 chmod +x "$BIN_DIR/wyrd-supervise"
