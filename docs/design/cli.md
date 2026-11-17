@@ -126,7 +126,7 @@ wyrd [--config <path>] materialization <drive_dir> \
     (status [path] creds | budgets creds | role (set <mirror|vault> [--yes] | status creds) | pin <path> creds | unpin <path> creds | evict <path> creds)
 wyrd [--config <path>] snapshot [--identity-file <path>] [--passphrase-file <path>] <drive_dir> \
     (heads | diverged [--budget <N>] | merge [--head <id>...] [--default @N] [--take path=@N]... [--drop path]... [--dry-run] | recover --from <id> [--take path]... [--all] [--content <id>]... [--dry-run])
-wyrd [--config <path>] update [--relay <url>...] [--restart] [--identity-file <path>] [--passphrase-file <path>] <drive_dir> <archive>
+wyrd [--config <path>] update [--expect-blake3 <hex>] [--relay <url>...] [--restart] [--identity-file <path>] [--passphrase-file <path>] <drive_dir> <archive>
   where creds = [--identity-file <path>] [--passphrase-file <path>]: credential flags ride each
   materialization action, never the parent — `materialization role set` alone takes neither
 ```
@@ -899,7 +899,9 @@ update
       must be a regular file under its canonical name
       (`wyrd-<version>-<os>-<arch>.tar.gz`, matching this host
       except the Rosetta pair); anything else is a usage error
-      naming the expected shape
+      naming the expected shape. `--expect-blake3 <hex>` pins the
+      archive's digest out-of-band (the release record's hash): a
+      mismatch refuses here, before anything is stopped or staged
     = report the artifact identity (version, target, blake3,
       bytes) plus an honestly unverified compatibility line —
       the resolve step runs no checks, and says so
@@ -930,6 +932,13 @@ update
 The blake3 digest names the artifact in reports; it is an
 identity, never trust — a locally supplied archive is verified
 structurally, and integrity stays separate from compatibility.
+An archive fetched over any channel the operator does not fully
+control must be pinned with `--expect-blake3` against the
+release record: an unpinned update of a fetched archive trusts
+the channel, and the channel is not the release. Detached
+release signatures stay with v0.8 release engineering
+(`ROADMAP.md`); the pin is the v0 control, matching the release
+process's own trust anchor (hash comparison at mirror fetch).
 
 ### `materialization` — local materialization
 

@@ -26,6 +26,7 @@ pub(crate) fn update_from_cli(
     restart: bool,
     credentials: &Credentials,
     config_override: Option<&Path>,
+    expect_blake3: Option<String>,
 ) -> Result<(), CliError> {
     let exe = std::env::current_exe().map_err(|source| CliError::Io {
         path: PathBuf::from("<current executable>"),
@@ -69,6 +70,7 @@ pub(crate) fn update_from_cli(
         relays: request_relays,
         restart,
         exe: &exe,
+        expected_blake3: expect_blake3.as_deref(),
     })?;
     // Supervision diverges by design (the wait loop only
     // exits the process), so a returned outcome is either

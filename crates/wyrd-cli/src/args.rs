@@ -274,6 +274,16 @@ pub(crate) enum Command {
         /// one `--relay`.
         #[arg(long)]
         restart: bool,
+        /// Pin the archive's blake3 digest out-of-band (the release
+        /// record's hash, 64 hex characters): a mismatch refuses in
+        /// resolve, before anything is stopped or staged, so a
+        /// swapped archive fetched over a channel the operator does
+        /// not fully control never reaches the transaction.
+        /// Omitted for operator-built archives that never left the
+        /// machine — the contract's local-archive trust (§4) covers
+        /// those, and the pin covers everything else.
+        #[arg(long, value_name = "HEX")]
+        expect_blake3: Option<String>,
         #[command(flatten)]
         credentials: Credentials,
     },

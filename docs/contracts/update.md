@@ -137,8 +137,9 @@ means same filesystem, so every swap step is one atomic rename.
 Phases, in order:
 
 1. **Resolve.** Validate the archive (name, regularity, digest,
-   host platform); refuse ambiguities before anything is
-   disturbed. Pure; no state file yet.
+   host platform — plus the operator's `--expect-blake3` pin when
+   given: a mismatch refuses here); refuse ambiguities before
+   anything is disturbed. Pure; no state file yet.
 2. **Require quiescence.** Lock probe (§3); held means stop here.
 3. **Stage.** Extract `*/bin/wyrd` from the archive into a
    same-directory staging dir, move to `<exe>.next`, write state

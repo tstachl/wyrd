@@ -32,6 +32,10 @@ pub(crate) struct UpdateRequest<'a> {
     pub relays: &'a [String],
     pub restart: bool,
     pub exe: &'a Path,
+    /// Out-of-band digest pin for the archive (`--expect-blake3`):
+    /// [`None`] resolves by shape only, [`Some`] refuses a digest
+    /// mismatch in resolve, before anything is staged.
+    pub expected_blake3: Option<&'a str>,
 }
 
 /// What the transaction hands back: either done, or "supervise
@@ -61,6 +65,7 @@ pub(crate) fn update_run(request: &UpdateRequest<'_>) -> Result<UpdateOutcome, C
         relays,
         restart,
         exe,
+        expected_blake3,
     } = request;
     if *restart && relays.is_empty() {
         return Err(CliError::Usage(
@@ -80,12 +85,15 @@ pub(crate) fn update_run(request: &UpdateRequest<'_>) -> Result<UpdateOutcome, C
         }
     }
     check_drive_dir(drive_dir)?;
-    let identity = resolve_archive(archive)?;
+    let identity = resolve_archive(archive, *expected_blake3)?;
     println!("update archive: {}", identity.canonical_name);
     println!("update version: {}", identity.version);
     println!("update target: {}-{}", identity.os, identity.arch);
     println!("update blake3: {}", identity.blake3);
     println!("update bytes: {}", identity.bytes);
+    if expected_blake3.is_some() {
+        println!("update expected-blake3: matched {}", identity.blake3);
+    }
     println!("{}", render_compatibility(&CompatibilityStatus::Unverified));
     // Mark the run started before anything can mutate: a crash
     // past this point leaves `in_progress`, never the previous
