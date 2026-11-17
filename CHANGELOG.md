@@ -83,6 +83,10 @@ is transient — no drive data is affected.
   symlinks and legacy rows stay read-only, atomicity is not
   declared, and every confirmed mutation signals the working set.
   Proven by the Harness against a stateful stub (plus TSan).
+  Remote (peer-originated) writes carry no Finder notification in
+  v0.4 (OD-17-C): an already-open Finder window shows them after
+  reopen or refresh; enumeration stays authoritative, so delayed
+  presentation never authorizes a stale read or mutation.
 
 - Identity-conditional mutations in the owner queue (File Provider
   Stage 3 prerequisite,
