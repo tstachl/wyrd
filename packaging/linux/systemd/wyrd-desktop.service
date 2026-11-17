@@ -19,6 +19,8 @@
 Description=Wyrd desktop management UI
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=3
 
 [Service]
 Type=simple
@@ -27,8 +29,6 @@ ExecStart=@WYRD_DESKTOP_BIN@
 SyslogIdentifier=wyrd-desktop
 Restart=on-failure
 RestartSec=5
-StartLimitIntervalSec=300
-StartLimitBurst=3
 
 [Install]
 WantedBy=default.target

@@ -20,16 +20,18 @@ die() { echo "  FAIL: $1" >&2; exit 1; }
 PLIST="$ROOT/packaging/macos/launchd/md.enesis.wyrd.desktop.plist"
 UNIT="$ROOT/packaging/linux/systemd/wyrd-desktop.service"
 
-# Code lines only, captured once: strip full-line comments before
-# matching, so the header prose can never satisfy a pin, and match
-# with a here-string (a `code | grep -q` pipeline under pipefail
-# would report 141 once grep exits early and the script grows past
-# the pipe buffer).
-PLIST_CODE="$(grep -v '^[[:space:]]*#' "$PLIST")"
-PLIST_CODE="$(grep -v '^[[:space:]]*<!--' <<<"$PLIST_CODE")"
+# Code lines only, captured once: strip full-line comments and the
+# whole XML comment block before matching, so the header prose can
+# neither satisfy a pin (a token left only in a comment would still
+# pass) nor trip one (a key name mentioned in prose would still
+# fail) — and match with a here-string (a `code | grep -q` pipeline
+# under pipefail would report 141 once grep exits early and the
+# script grows past the pipe buffer).
+PLIST_CODE="$(grep -v '^[[:space:]]*#' "$PLIST" | sed '/^[[:space:]]*<!--/,/-->/d')"
 UNIT_CODE="$(grep -v '^[[:space:]]*#' "$UNIT")"
 match() { grep -F -q -- "$1" <<<"$2"; }
 nomatch() { ! grep -F -q -- "$1" <<<"$2"; }
+count_is() { [ "$(grep -F -c -- "$1" <<<"$2")" = "$3" ]; }
 
 # 1. The templates exist where the installer consumes them.
 [[ -f "$PLIST" ]] \
@@ -60,6 +62,8 @@ match '/usr/bin/open' "$PLIST_CODE" \
   || die "plist: launcher is not open"
 match '@WYRD_APP_PATH@' "$PLIST_CODE" \
   || die "plist: app-path token missing"
+count_is '@WYRD_APP_PATH@' "$PLIST_CODE" 1 \
+  || die "plist: app-path token must appear exactly once, in ProgramArguments"
 pass "macOS template opens the installed app by filled path"
 
 # 4. macOS: the desktop agent is its own unit — it never names a
@@ -82,7 +86,24 @@ nomatch 'RestartPreventExitStatus' "$UNIT_CODE" \
   || die "unit: terminal-exit refusal invents UI state"
 match '@WYRD_DESKTOP_BIN@' "$UNIT_CODE" \
   || die "unit: binary-path token missing"
+count_is '@WYRD_DESKTOP_BIN@' "$UNIT_CODE" 1 \
+  || die "unit: binary-path token must appear exactly once, in ExecStart"
 pass "Linux template launches per login with crash-only restart"
+
+# 5b. The crash backstop lives at unit scope: StartLimit keys are
+# [Unit]-section options and are silently ignored in [Service], so
+# the pin checks the section placement, not just the key names (the
+# repo's own pattern: nix/drive/nixos.nix sets start limits at unit
+# scope, outside serviceConfig).
+UNIT_SECTION="$(sed -n '/^\[Unit\]/,/^\[Service\]/p' <<<"$UNIT_CODE")"
+for key in 'StartLimitIntervalSec=300' 'StartLimitBurst=3'; do
+  match "$key" "$UNIT_SECTION" \
+    || die "unit: '$key' is not in [Unit]"
+done
+SERVICE_SECTION="$(sed -n '/^\[Service\]/,$p' <<<"$UNIT_CODE")"
+nomatch 'StartLimit' "$SERVICE_SECTION" \
+  || die "unit: StartLimit keys in [Service] are silently ignored"
+pass "Linux crash backstop lives at unit scope"
 
 # 6. Linux: no After/Wants on owner units (wyrd-<service>.service) —
 # owner units are dynamic per-drive state the login unit must never
