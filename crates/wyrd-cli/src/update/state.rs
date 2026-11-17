@@ -320,12 +320,56 @@ pub(crate) fn converge(exe: &Path) -> Result<Converged, CliError> {
     }
 }
 
-/// Extract the new binary from the archive into `<exe>.next` and
-/// record the staged phase. The archive holds `*/bin/wyrd` (the
-/// shape `build.sh --verify` checks); extraction runs the system
-/// `tar`, the same prerequisite the release script assumes. A
-/// broken archive fails here — pure, before anything is staged —
-/// so the state file is written only on success.
+/// Copy a resolved archive to a private path beside the
+/// executable and re-hash the copy: staging below extracts the
+/// copy, never the operator-visible path again, so a swap of the
+/// archive between resolve and stage cannot reach the
+/// transaction. The copy lives beside the executable — the same
+/// directory the swap already trusts; a writer who can reach it
+/// can already replace the binary directly, so no new trust is
+/// assumed. A leftover copy from a crashed run is removed by the
+/// next call before copying, so no converge rule is needed for
+/// it. Returns the private path for `stage_archive`.
+pub(crate) fn pin_archive_bytes(
+    exe: &Path,
+    archive: &Path,
+    identity: &ArchiveIdentity,
+) -> Result<PathBuf, CliError> {
+    let pinned = sibling(exe, ".verified-archive");
+    remove_if_present(&pinned)?;
+    fs::copy(archive, &pinned).map_err(|source| CliError::Io {
+        path: pinned.clone(),
+        source,
+    })?;
+    let mut file = fs::File::open(&pinned).map_err(|source| CliError::Io {
+        path: pinned.clone(),
+        source,
+    })?;
+    let mut hasher = blake3::Hasher::new();
+    std::io::copy(&mut file, &mut hasher).map_err(|source| CliError::Io {
+        path: pinned.clone(),
+        source,
+    })?;
+    let copied = hasher.finalize().to_hex().to_string();
+    if copied != identity.blake3 {
+        remove_if_present(&pinned)?;
+        return Err(CliError::Usage(format!(
+            "{}: archive changed after resolve (expected {}, copied {}); \
+             refusing before anything is staged",
+            identity.canonical_name, identity.blake3, copied
+        )));
+    }
+    Ok(pinned)
+}
+
+/// Extract the new binary from a pinned archive copy (see
+/// `pin_archive_bytes`) into `<exe>.next` and record the staged
+/// phase. The archive holds `*/bin/wyrd` (the shape
+/// `build.sh --verify` checks); extraction runs the system `tar`,
+/// the same prerequisite the release script assumes. A broken
+/// archive fails here — pure, before anything is staged — so the
+/// state file is written only on success. User-facing messages
+/// name the canonical archive, never the private copy path.
 pub(crate) fn stage_archive(
     exe: &Path,
     drive: &Path,
@@ -353,14 +397,14 @@ pub(crate) fn stage_archive(
         remove_dir_if_present(&stage)?;
         return Err(CliError::Usage(format!(
             "{}: not an unpackable release archive (tar: {})",
-            archive.display(),
+            identity.canonical_name,
             String::from_utf8_lossy(&tar.stderr).trim(),
         )));
     }
     let binary = find_staged_binary(&stage).ok_or_else(|| {
         CliError::Usage(format!(
             "{}: no */bin/wyrd inside; release archives carry the binary at <top>/bin/wyrd",
-            archive.display(),
+            identity.canonical_name,
         ))
     })?;
     let next = next_path(exe);

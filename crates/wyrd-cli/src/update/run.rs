@@ -122,7 +122,14 @@ pub(crate) fn update_run(request: &UpdateRequest<'_>) -> Result<UpdateOutcome, C
         LockProbe::Free => {}
     }
     let own = own_build_info().app;
-    stage_archive(exe, drive_dir, archive, &identity)?;
+    // Bind the pin to the executed bytes: extraction reads a
+    // private copy hashed after copying, never the
+    // operator-visible path again, so a swap of the archive
+    // between resolve and stage cannot reach the transaction.
+    let verified = pin_archive_bytes(exe, archive, &identity)?;
+    let staged = stage_archive(exe, drive_dir, &verified, &identity);
+    remove_if_present(&verified)?;
+    staged?;
     println!("update staged: {}", next_path(exe).display());
     run_preflight(&next_path(exe))?;
     // Early refusal: the staged binary checks the drive BEFORE

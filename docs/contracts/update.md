@@ -202,7 +202,13 @@ reads as alarming without it: the archive is operator-supplied
 over a local path — no fetch, no network, no unpacking of
 anything the operator did not stage. Executing the staged
 binary runs operator bytes at operator privilege: not an
-escalation, the same trust as the currently running binary.
+escalation, the same trust as the currently running binary. An
+archive fetched over a channel the operator does not fully
+control is pinned with `--expect-blake3` against the release
+record before it reaches the transaction — fetched bytes are
+trusted on the pin, never on the channel — and the pinned
+private copy is what gets extracted, so a swap between resolve
+and stage cannot reach the swap.
 
 ## 5. Verification boundary (condition 2)
 

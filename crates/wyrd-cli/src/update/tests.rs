@@ -196,6 +196,28 @@ fn update_run_refuses_a_wrong_pin_before_staging() {
 }
 
 #[test]
+fn stage_refuses_an_archive_swapped_after_resolve() {
+    // Finding 1: resolve hashes the operator-visible path, but
+    // extraction must read the resolved bytes. Swap the archive
+    // after a successful resolve: the private copy carries the
+    // swapped bytes, the copy re-hash refuses, and staging never
+    // runs — no `.next`, no record, no leftover copy.
+    let temp = TempDir::new();
+    let exe = fake_exe(&temp.0);
+    let name = host_archive_name("0.4.0-alpha");
+    let archive = make_tarball(&temp.0, &name, b"release-binary");
+    let identity = resolve_archive(&archive, None).unwrap();
+    make_tarball(&temp.0, &name, b"swapped-binary");
+    let error = pin_archive_bytes(&exe, &archive, &identity).unwrap_err();
+    let message = error.to_string();
+    assert!(message.contains("changed after resolve"), "{message}");
+    assert!(message.contains(&identity.blake3), "{message}");
+    assert!(!next_path(&exe).exists());
+    assert!(read_state(&exe).unwrap().is_none());
+    assert!(!sibling(&exe, ".verified-archive").exists());
+}
+
+#[test]
 fn resolve_refuses_a_foreign_platform_with_both_named() {
     let temp = TempDir::new();
     let name = foreign_archive_name("0.3.0-alpha");
