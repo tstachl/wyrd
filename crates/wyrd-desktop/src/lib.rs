@@ -33,6 +33,7 @@ pub mod onboarding;
 pub mod provision;
 pub mod registry;
 pub mod service;
+pub mod settings_apply;
 pub mod settings_view;
 pub mod tray;
 
@@ -44,6 +45,9 @@ pub use registry::{
     RegistryWriteError,
 };
 pub use service::ServiceState;
+pub use settings_apply::{
+    SettingsApplyOutcome, SettingsApplyRequest, SettingsApplyResult, SETTINGS_APPLY_TIMEOUT,
+};
 pub use settings_view::{DriveSettings, DriveSettingsView};
 
 use std::collections::{BTreeMap, HashSet};
@@ -369,6 +373,7 @@ pub fn invoke_handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> 
         commands::reconnect,
         commands::list_drives,
         commands::drive_settings,
+        commands::drive_settings_write,
         commands::provision_create,
         commands::provision_join,
         commands::provision_leave,

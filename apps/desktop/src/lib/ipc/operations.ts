@@ -24,6 +24,8 @@ import type {
   ProvisionReport,
   RegistryState,
   Served,
+  SettingsWriteReport,
+  SparseUpdateArgs,
   WireAttr,
   WireDirEntry,
   WireFreshness,
@@ -115,6 +117,20 @@ export function listDrives(): Promise<RegistryState> {
  */
 export function driveSettings(driveDir: string): Promise<DriveSettingsState> {
   return invokeValue<DriveSettingsState>("drive_settings", { driveDir });
+}
+
+/**
+ * Apply one sparse update to one drive's settings section through
+ * the installed CLI, then re-read. One drive plus one sparse update
+ * (set-list with values, clear-list) — never a whole-document
+ * replacement. Infallible: the outcome plus the post-run
+ * observation ride inside the payload.
+ */
+export function applySettings(
+  driveDir: string,
+  update: SparseUpdateArgs,
+): Promise<SettingsWriteReport> {
+  return invokeValue<SettingsWriteReport>("drive_settings_write", { driveDir, update });
 }
 
 // Provisioning operations (constrained CLI adapter surface). One

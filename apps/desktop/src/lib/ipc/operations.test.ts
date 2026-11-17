@@ -10,6 +10,7 @@
 import { beforeEach, expect, test } from "bun:test";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import {
+  applySettings,
   captureParent,
   driveSettings,
   listDrives,
@@ -288,5 +289,37 @@ test("onboarding wrappers send paths-only args plus the stdin-pipe passphrase", 
       args: { args: { identityFile: "/k/identity", passphraseFile: "/k/passphrase" } },
     },
     { cmd: "reveal_in_folder", args: { args: { path: "/k/identity" } } },
+  ]);
+});
+
+test("applySettings sends one drive plus one sparse update", async () => {
+  const seen: Array<{ cmd: string; args: unknown }> = [];
+  mockIPC((cmd, args) => {
+    seen.push({ cmd, args });
+    return {
+      result: { result: "applied", detail: "settings applied" },
+      observed: {
+        state: "configured",
+        retained_bytes_quota: null,
+        max_admit_per_pass: 64,
+        fetch_pass_budget_secs: null,
+        max_mutation_wait_secs: null,
+        open_timeout_secs: 30,
+      },
+    };
+  });
+  const report = await applySettings("/drives/alpha", {
+    set: { max_admit_per_pass: 64 },
+    clear: ["open_timeout_secs"],
+  });
+  expect(report.result).toEqual({ result: "applied", detail: "settings applied" });
+  expect(seen).toEqual([
+    {
+      cmd: "drive_settings_write",
+      args: {
+        driveDir: "/drives/alpha",
+        update: { set: { max_admit_per_pass: 64 }, clear: ["open_timeout_secs"] },
+      },
+    },
   ]);
 });

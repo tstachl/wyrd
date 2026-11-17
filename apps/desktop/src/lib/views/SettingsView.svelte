@@ -1,18 +1,22 @@
-<!-- Settings, read-only for configuration: this drive's configured
-bounds, as configured. Absent keys leave the compiled defaults in
-place, and the shell does not know those defaults — so absence renders
-as unknown, never as a filled-in number. The shell never writes this
-file; application of the values is the running owner's business.
+<!-- Settings: this drive's configured bounds, as configured, plus
+the restricted editor that changes them. Absent keys leave the
+compiled defaults in place, and the shell does not know those
+defaults — so absence renders as unknown, never as a filled-in
+number. Edits commit one sparse update (set-list plus clear-list
+for this drive only) through the installed CLI and the shared
+transaction; application of the values is the running owner's
+business, at its next start.
 
-The one action here is membership, not configuration: leaving the
-drive reuses the identity pair the start-up gate verified (paths only),
-stays behind an explicit acknowledgement and a confirmation dialog,
-and never deletes local data as a side effect of the UI. -->
+The one membership action stays as it was: leaving the drive reuses
+the identity pair the start-up gate verified (paths only), stays
+behind an explicit acknowledgement and a confirmation dialog, and
+never deletes local data as a side effect of the UI. -->
 <script lang="ts">
   import { Button } from "$lib/components/ui/button/index.js";
   import * as Card from "$lib/components/ui/card/index.js";
   import * as Alert from "$lib/components/ui/alert/index.js";
   import * as Field from "$lib/components/ui/field/index.js";
+  import { Input } from "$lib/components/ui/input/index.js";
   import * as AlertDialog from "$lib/components/ui/alert-dialog/index.js";
   import { Badge } from "$lib/components/ui/badge/index.js";
   import { Checkbox } from "$lib/components/ui/checkbox/index.js";
@@ -21,14 +25,23 @@ and never deletes local data as a side effect of the UI. -->
   import PageHeader from "$lib/components/page-header.svelte";
   import InfoHint from "$lib/components/info-hint.svelte";
   import type { Stamped } from "$lib/state/presentation.svelte.js";
-  import type { DriveSettingsState, ProvisionReport } from "$lib/ipc/results.js";
+  import type { DriveSettingsState, ProvisionReport, SettingsWriteReport, SparseUpdateArgs } from "$lib/ipc/results.js";
   import type { ProvisionLeaveArgs } from "$lib/ipc/operations.js";
   import {
     boundLabel,
     describeProvisionResult,
     membershipSummary,
     observedRegistrySummary,
+    SETTING_BOUNDS,
+    validateBoundInput,
   } from "./format.js";
+  import {
+    buildDraftInputs,
+    buildSparseDraft,
+    isDraftDirty,
+    keepsDraftAfterVerdict,
+    toggleCleared,
+  } from "./settings-draft.js";
   import ObservedNote from "./ObservedNote.svelte";
   import FileQuestionIcon from "@lucide/svelte/icons/file-question";
   import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
@@ -45,13 +58,34 @@ and never deletes local data as a side effect of the UI. -->
     passphraseFile: string | null;
     onRefresh: () => void;
     onLeave: (args: ProvisionLeaveArgs) => Promise<ProvisionReport>;
+    /** Apply one sparse update; the report carries the outcome plus the post-run observation. */
+    onApply: (update: SparseUpdateArgs) => Promise<SettingsWriteReport>;
     /** Re-read the registry and return to the drive list. */
     onRefreshDrives: () => void;
   }
 
-  let { driveDir, snapshot, pending, transportNotice, identityFile, passphraseFile, onRefresh, onLeave, onRefreshDrives }: Props = $props();
+  let { driveDir, snapshot, pending, transportNotice, identityFile, passphraseFile, onRefresh, onLeave, onApply, onRefreshDrives }: Props = $props();
 
   const settings = $derived(snapshot?.data ?? null);
+
+  /** Configured value by key for the row being rendered, from the latest observation. */
+  function configuredValue(key: string): number | null {
+    if (settings === null || settings.state !== "configured") return null;
+    switch (key) {
+      case "retained_bytes_quota":
+        return settings.retained_bytes_quota;
+      case "max_admit_per_pass":
+        return settings.max_admit_per_pass;
+      case "fetch_pass_budget_secs":
+        return settings.fetch_pass_budget_secs;
+      case "max_mutation_wait_secs":
+        return settings.max_mutation_wait_secs;
+      case "open_timeout_secs":
+        return settings.open_timeout_secs;
+      default:
+        return null;
+    }
+  }
 
   let acknowledged = $state(false);
   let confirmLeave = $state(false);
@@ -59,8 +93,103 @@ and never deletes local data as a side effect of the UI. -->
   let leaveReport = $state<ProvisionReport | null>(null);
   let leaveError = $state<string | null>(null);
 
-  const busy = $derived(pending || leaveWorking);
   const credentialsReady = $derived(identityFile !== null && passphraseFile !== null);
+
+  // Editor draft: one pending sparse update for this drive. `inputs`
+  // holds the row text (empty means no change), `cleared` names keys
+  // the operator returned to the compiled default. Validation runs
+  // over the whole draft on save — no partial writes — and cancel
+  // discards it untouched.
+  let editing = $state(false);
+  let inputs = $state<Record<string, string>>({});
+  let cleared = $state<string[]>([]);
+  let fieldErrors = $state<Record<string, string>>({});
+  let saving = $state(false);
+  let saveReport = $state<SettingsWriteReport | null>(null);
+  let saveError = $state<string | null>(null);
+
+  /** Configured values by key for the draft helpers, from the latest observation. */
+  function configuredRecord(): Record<string, number | null> {
+    const record: Record<string, number | null> = {};
+    for (const bound of SETTING_BOUNDS) {
+      record[bound.key] = configuredValue(bound.key);
+    }
+    return record;
+  }
+
+  function startEditing(): void {
+    inputs = buildDraftInputs(
+      configuredRecord(),
+      SETTING_BOUNDS.map((bound) => bound.key),
+    );
+    cleared = [];
+    fieldErrors = {};
+    saveReport = null;
+    saveError = null;
+    editing = true;
+  }
+
+  function cancelEditing(): void {
+    editing = false;
+    inputs = {};
+    cleared = [];
+    fieldErrors = {};
+    saveReport = null;
+    saveError = null;
+  }
+
+  function toggleClear(key: string): void {
+    const wasCleared = cleared.includes(key);
+    cleared = toggleCleared(cleared, key);
+    if (!wasCleared) {
+      const next = { ...fieldErrors };
+      delete next[key];
+      fieldErrors = next;
+    }
+  }
+
+  const dirty = $derived(
+    isDraftDirty(
+      inputs,
+      cleared,
+      configuredRecord(),
+      SETTING_BOUNDS.map((bound) => bound.key),
+    ),
+  );
+
+  async function save(): Promise<void> {
+    const draft = buildSparseDraft(
+      inputs,
+      cleared,
+      configuredRecord(),
+      SETTING_BOUNDS.map((bound) => bound.key),
+      validateBoundInput,
+    );
+    const { set, clear, errors } = draft;
+    fieldErrors = errors;
+    if (Object.keys(errors).length > 0) return;
+    saving = true;
+    saveError = null;
+    try {
+      // The report carries the outcome; the paired re-read behind
+      // `onApply` decides what the display says. Committed verdicts
+      // discard the draft, uncommitted ones keep it for retry.
+      saveReport = await onApply({ set, clear });
+      if (!keepsDraftAfterVerdict(saveReport.result.result)) {
+        editing = false;
+        inputs = {};
+        cleared = [];
+        fieldErrors = {};
+      }
+    } catch (failure: unknown) {
+      saveError = failure instanceof Error ? failure.message : String(failure);
+      saveReport = null;
+    } finally {
+      saving = false;
+    }
+  }
+
+  const busy = $derived(pending || leaveWorking || saving);
 
   async function leave(): Promise<void> {
     if (identityFile === null || passphraseFile === null) return;
@@ -88,7 +217,7 @@ and never deletes local data as a side effect of the UI. -->
 <PageHeader
   title="Settings"
   size="section"
-  description="This drive's configured bounds, read-only. Absent values stay unknown — the shell never fills in a default it cannot see."
+  description="This drive's configured bounds, as configured. Absent values stay unknown — the shell never fills in a default it cannot see. Saving writes through the installed CLI; the running owner applies saved values at its next start."
 >
   {#snippet actions()}
     <Button variant="outline" size="sm" disabled={pending} onclick={onRefresh}>
@@ -109,6 +238,56 @@ and never deletes local data as a side effect of the UI. -->
   </Alert.Root>
 {/if}
 
+{#snippet saveAlerts()}
+{#if saveReport !== null && saveReport.result.result === "applied"}
+  <Alert.Root class="mt-6 border-primary/40 bg-primary/10">
+    <p>
+      Bounds saved. Restart the drive to apply them — the running owner keeps its startup
+      values until then.
+    </p>
+  </Alert.Root>
+{/if}
+{#if saveReport !== null && saveReport.result.result === "unverified"}
+  <Alert.Root class="mt-6 border-primary/40 bg-primary/10">
+    <Alert.Title>Saved but unverified</Alert.Title>
+    <Alert.Description>
+      <p>{saveReport.result.reason} — the write landed; the observation below is the fresh re-read.</p>
+    </Alert.Description>
+  </Alert.Root>
+{/if}
+{#if saveReport !== null && saveReport.result.result !== "applied" && saveReport.result.result !== "unverified"}
+  <Alert.Root
+    variant={saveReport.result.result === "conflict" ? "default" : "destructive"}
+    class="mt-6"
+  >
+    <Alert.Title>
+      {#if saveReport.result.result === "conflict"}
+        Settings changed under you
+      {:else if saveReport.result.result === "refused"}
+        Save refused
+      {:else}
+        Save failed
+      {/if}
+    </Alert.Title>
+    <Alert.Description>
+      {#if saveReport.result.result === "conflict"}
+        <p>{saveReport.result.reason} — your draft is kept; save again to retry it against the current file.</p>
+      {:else if saveReport.result.result === "refused"}
+        <p>{saveReport.result.reason}</p>
+      {:else}
+        <p>{saveReport.result.reason}</p>
+      {/if}
+    </Alert.Description>
+  </Alert.Root>
+{/if}
+{#if saveError !== null}
+  <Alert.Root variant="destructive" class="mt-6">
+    <Alert.Title>Save failed</Alert.Title>
+    <Alert.Description>{saveError}</Alert.Description>
+  </Alert.Root>
+{/if}
+{/snippet}
+
 {#if snapshot === null || settings === null}
   <div class="mt-6 flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border bg-card/50 px-6 py-14 text-center">
     <div class="flex size-10 items-center justify-center rounded-full bg-muted text-muted-foreground">
@@ -122,16 +301,100 @@ and never deletes local data as a side effect of the UI. -->
   <div class="mt-3">
     <ObservedNote observedAtMs={null} />
   </div>
+{:else if editing}
+  {@render saveAlerts()}
+  <Card.Root class="mt-6">
+    <Card.Header>
+      <Card.Title class="flex items-center gap-1.5">
+        Edit bounds
+          <InfoHint label="About editing bounds">
+            <p>
+              One sparse update for this drive: set the listed bounds, clear the listed ones.
+              Multi-key edits validate fully before writing — no partial saves. Saving writes
+              through the installed CLI; the values apply at the next owner start, never live.
+            </p>
+          </InfoHint>
+        </Card.Title>
+        <Card.Description>
+          Empty means no change; Using default restores the compiled default for that key.
+        </Card.Description>
+      </Card.Header>
+      <Card.Content>
+        <dl>
+          {#each SETTING_BOUNDS as bound (bound.key)}
+            {@const hasError = fieldErrors[bound.key] !== undefined}
+            <DetailRow label={bound.label}>
+              {#if cleared.includes(bound.key)}
+                <span class="inline-flex items-center gap-1">
+                  <Badge variant="outline" class="text-muted-foreground">Using default</Badge>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={busy}
+                    onclick={() => toggleClear(bound.key)}
+                  >
+                    Restore
+                  </Button>
+                </span>
+              {:else}
+                <Field.Field data-invalid={hasError || undefined}>
+                  <span class="inline-flex items-center gap-1">
+                    <Input
+                      class="w-40 font-mono"
+                      inputmode="numeric"
+                      autocomplete="off"
+                      spellcheck={false}
+                      disabled={busy}
+                      placeholder={configuredValue(bound.key) === null ? "Set value" : ""}
+                      bind:value={inputs[bound.key]}
+                      aria-label={bound.label}
+                      aria-invalid={hasError || undefined}
+                    />
+                    {#if configuredValue(bound.key) !== null}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        disabled={busy}
+                        onclick={() => toggleClear(bound.key)}
+                      >
+                        Using default
+                      </Button>
+                    {/if}
+                  </span>
+                  {#if fieldErrors[bound.key]}
+                    <Field.Error>{fieldErrors[bound.key]}</Field.Error>
+                  {/if}
+                </Field.Field>
+              {/if}
+            </DetailRow>
+          {/each}
+        </dl>
+      </Card.Content>
+      <Card.Footer class="justify-end gap-2">
+        <Button variant="outline" size="sm" disabled={busy} onclick={cancelEditing}>
+          Cancel
+        </Button>
+        <Button size="sm" disabled={busy || !dirty} onclick={() => void save()}>
+          {#if saving}
+            <Spinner data-icon="inline-start" />
+            Saving…
+          {:else}
+            Save bounds
+          {/if}
+        </Button>
+      </Card.Footer>
+    </Card.Root>
 {:else if settings.state === "configured"}
+  {@render saveAlerts()}
   <Card.Root class="mt-6">
     <Card.Header>
       <Card.Title class="flex items-center gap-1.5">
         Configured bounds
         <InfoHint label="About configured bounds">
           <p>
-            As configured in the per-user settings file — not as applied. The running owner applies
-            these values at startup, command-line flags win over the file, and this shell never
-            writes the file.
+            As configured in the per-user settings file — not as applied. The running owner
+            applies these values at startup, command-line flags win over the file, and edits
+            save through the installed CLI.
           </p>
         </InfoHint>
       </Card.Title>
@@ -201,6 +464,11 @@ and never deletes local data as a side effect of the UI. -->
         </DetailRow>
       </dl>
     </Card.Content>
+    <Card.Footer class="justify-end">
+      <Button variant="outline" size="sm" disabled={busy} onclick={startEditing}>
+        Edit bounds
+      </Button>
+    </Card.Footer>
   </Card.Root>
 {:else if settings.state === "nofile"}
   <div class="mt-6 flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border bg-card/50 px-6 py-14 text-center">
@@ -212,6 +480,9 @@ and never deletes local data as a side effect of the UI. -->
       Nothing is configured, so the owner runs its compiled defaults. Defaults are unknown to this
       shell, so nothing is filled in here.
     </p>
+    <Button variant="outline" size="sm" disabled={busy} onclick={startEditing}>
+      Set bounds for this drive
+    </Button>
   </div>
 {:else if settings.state === "nosection"}
   <div class="mt-6 flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border bg-card/50 px-6 py-14 text-center">
@@ -223,6 +494,9 @@ and never deletes local data as a side effect of the UI. -->
       The file configures other drives. The owner runs its compiled defaults for this drive, which
       are unknown to this shell.
     </p>
+    <Button variant="outline" size="sm" disabled={busy} onclick={startEditing}>
+      Set bounds for this drive
+    </Button>
   </div>
 {:else}
   <Alert.Root variant="destructive" class="mt-6">

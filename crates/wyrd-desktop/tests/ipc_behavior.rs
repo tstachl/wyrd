@@ -1245,3 +1245,84 @@ fn provision_leave_reobserves_membership_through_the_owner() {
     std::fs::remove_dir_all(&dir).unwrap_or(());
     owner.shutdown();
 }
+
+/// Settings writes refuse a non-canonical drive identity before any
+/// process spawns: the report is `refused`, and the observed read
+/// names the invalid identity instead of resolving it.
+#[test]
+fn settings_write_refuses_a_non_canonical_drive_identity() {
+    let (_app, webview, data_dir) =
+        mock_app_with_state(wyrd_desktop::AppState::new(), "settings-bad");
+    let report = invoke(
+        &webview,
+        "drive_settings_write",
+        serde_json::json!({
+            "driveDir": "drives/alpha",
+            "update": {"set": {"open_timeout_secs": 30}, "clear": []},
+        }),
+    )
+    .expect("settings writes report infallibly");
+    assert_eq!(report["result"]["result"], "refused");
+    assert_eq!(
+        report["observed"]["state"], "unreadable",
+        "the refused read names its reason: {report}"
+    );
+    std::fs::remove_dir_all(&data_dir).expect("the webview data dir cleans up");
+}
+
+/// Settings writes map the CLI exit code through the command: exit
+/// 0 applies (the real file is re-read for the observation), exit 3
+/// conflicts, exit 4 lands committed-but-unverified, exit 2 refuses
+/// — all through a fake CLI, with no mock. The fake answers
+/// `__build_info` with the workspace version the adapter requires.
+#[test]
+fn settings_write_maps_exit_codes_through_a_fake_cli() {
+    let dir = std::env::temp_dir().join(format!(
+        "wyrd-desktop-ipc-settings-fakecli-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let version = env!("CARGO_PKG_VERSION");
+    for (name, code, want) in [
+        ("ok", 0, "applied"),
+        ("race", 3, "conflict"),
+        ("unverified", 4, "unverified"),
+        ("bad", 2, "refused"),
+    ] {
+        let cli = dir.join(name);
+        std::fs::write(
+            &cli,
+            format!(
+                "#!/bin/sh\nif [ \"$1\" = \"__build_info\" ]; then\necho \"update build: {version}\"\nexit 0\nfi\nexit {code}\n"
+            ),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let state = wyrd_desktop::AppState::new();
+        state.set_cli_override(cli);
+        let (_app, webview, data_dir) = mock_app_with_state(state, "settings-fake");
+        let report = invoke(
+            &webview,
+            "drive_settings_write",
+            serde_json::json!({
+                "driveDir": "/drives/alpha",
+                "update": {"set": {"open_timeout_secs": 30}, "clear": []},
+            }),
+        )
+        .expect("settings writes report infallibly");
+        assert_eq!(
+            report["result"]["result"], want,
+            "fake exit {code} maps to {want}: {report}"
+        );
+        assert!(
+            report["observed"]["state"].is_string(),
+            "the post-run observation rides along: {report}"
+        );
+        std::fs::remove_dir_all(&data_dir).expect("the webview data dir cleans up");
+    }
+    std::fs::remove_dir_all(&dir).unwrap_or(());
+}

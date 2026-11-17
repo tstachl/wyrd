@@ -52,6 +52,53 @@ export function boundLabel(value: number | null | undefined, unit: string): stri
   return `${value} ${unit}`;
 }
 
+/** One editable bound: the key the file carries plus its UI contract. */
+export interface SettingBound {
+  /** The settings-file key (and sparse-update member). */
+  key: string;
+  /** The row label the editor shows. */
+  label: string;
+  /** The unit the value carries (display and input hint). */
+  unit: string;
+  /** Smallest acceptable whole number. Zero only where zero is meaningful (the quota: refuse-all). */
+  min: number;
+  /** Largest acceptable whole number. */
+  max: number;
+}
+
+/**
+ * The five bounds the editor owns, in file order. The validation
+ * ranges mirror the shared contract (`wyrd-settings`): the backend
+ * enforces them again, so this is fast feedback, never authority.
+ */
+export const SETTING_BOUNDS: SettingBound[] = [
+  { key: "retained_bytes_quota", label: "Retained bytes quota", unit: "bytes", min: 0, max: Number.MAX_SAFE_INTEGER },
+  { key: "max_admit_per_pass", label: "Wants admitted per sync pass", unit: "wants", min: 1, max: 1000000 },
+  { key: "fetch_pass_budget_secs", label: "Fetch phase budget", unit: "seconds", min: 1, max: 86400 },
+  { key: "max_mutation_wait_secs", label: "Held mutation deadline", unit: "seconds", min: 1, max: 86400 },
+  { key: "open_timeout_secs", label: "Open demand wait", unit: "seconds", min: 1, max: 86400 },
+];
+
+/**
+ * Validate one bound's raw input text: whole numbers in the key's
+ * range, naming the key on refusal. Returns the error message, or
+ * null when the text is a committable value. Empty text is not an
+ * error here — the editor treats it as "no change", never as zero.
+ */
+export function validateBoundInput(key: string, text: string): string | null {
+  const bound = SETTING_BOUNDS.find((candidate) => candidate.key === key) ?? null;
+  if (bound === null) return `Unknown settings key "${key}"`;
+  const trimmed = text.trim();
+  if (!/^[0-9]+$/.test(trimmed)) {
+    return `${key}: enter a whole number of ${bound.unit}`;
+  }
+  const value = Number(trimmed);
+  if (!Number.isSafeInteger(value) || value < bound.min || value > bound.max) {
+    return `${key}: enter ${bound.min}–${bound.max} ${bound.unit}`;
+  }
+  return null;
+}
+
 /**
  * Base dir for suggested drive dirs: two levels up from a
  * `<base>/keys/<leaf>` credential path (leaf starting with

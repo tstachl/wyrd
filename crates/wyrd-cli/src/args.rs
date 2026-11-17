@@ -242,6 +242,24 @@ pub(crate) enum Command {
         #[command(subcommand)]
         action: MaterializationAction,
     },
+    /// Edit this drive's section of the per-user application
+    /// settings file: one drive identity plus one sparse update,
+    /// never a whole-document replacement. No keystore opens and no
+    /// credentials load — the file is per-user state beside every
+    /// drive directory, and the transaction (lock, strict read,
+    /// commit guard) runs in this process whether the drive's owner
+    /// runs or not. Restart-to-apply: a saved edit takes effect at
+    /// the next owner start, never live.
+    Settings {
+        /// Drive directory whose settings section is edited. The
+        /// section key is this exact spelling — absolute only, never
+        /// resolved against the current directory, so the spelling
+        /// the owner will look up is the spelling written. A
+        /// relative path refuses before anything is read.
+        drive_dir: PathBuf,
+        #[command(subcommand)]
+        action: SettingsAction,
+    },
     /// Upgrade this installation from a local release archive:
     /// quiesce, flush, stop, swap the binary atomically, verify the
     /// new build against the actual store, and hand back to the
@@ -870,5 +888,37 @@ pub(crate) enum RoleAction {
     Status {
         #[command(flatten)]
         credentials: Credentials,
+    },
+}
+
+/// One settings-file action. `apply` is the only writer: one drive
+/// plus one sparse update through the shared transaction, whether
+/// the drive's owner runs or not. No credentials anywhere on this
+/// family — the file is per-user state, never keystore state — so a
+/// save works on a machine whose keystore is unavailable, exactly
+/// like `materialization role set`.
+#[derive(Debug, Clone, Subcommand)]
+pub(crate) enum SettingsAction {
+    /// Apply one sparse update to this drive's settings section:
+    /// set the listed bounds, clear the listed ones, one atomic
+    /// commit. Unknown keys, contradictory set+clear pairs, and
+    /// absurd values refuse before anything is read; a file the
+    /// build cannot parse refuses with its bytes preserved; a
+    /// concurrent external rewrite is a conflict (exit 3), never a
+    /// silent overwrite. Saved edits apply at the next owner start.
+    Apply {
+        /// Bounds to set as `KEY=VALUE` (repeatable): the five
+        /// editable keys with whole-number values, e.g.
+        /// `--set max_admit_per_pass=64`.
+        #[arg(long, value_name = "KEY=VALUE")]
+        set: Vec<String>,
+        /// Bounds to clear back to the compiled default (repeatable),
+        /// e.g. `--clear open_timeout_secs`.
+        #[arg(long, value_name = "KEY")]
+        clear: Vec<String>,
+        /// Settings file elsewhere than the per-user default (tests
+        /// and non-standard layouts).
+        #[arg(long, value_name = "PATH")]
+        settings_path: Option<PathBuf>,
     },
 }
