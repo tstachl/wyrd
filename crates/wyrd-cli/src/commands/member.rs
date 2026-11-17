@@ -1,7 +1,7 @@
 //! The `member` command: invites, resumes, listings, and the log.
 //! Owns the member runner, the invite/resume renderers, the carry
 //! and invitation-file helpers, and the member reports; the
-//! dispatcher in `main.rs` calls in.
+//! dispatcher in `lib.rs` calls in.
 
 use crate::args::MemberAction;
 use crate::commands::device::{parse_device_id, parse_encryption_key, parse_transition_id};

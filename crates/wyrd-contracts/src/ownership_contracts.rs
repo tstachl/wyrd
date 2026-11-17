@@ -354,19 +354,6 @@ const TEST_FILE_PINS: &[&str] = &[
     "crates/wyrd-core/src/tests_settings.rs",
     "crates/wyrd-core/src/tests_status_surface.rs",
     "crates/wyrd-core/src/tests_storage_surface.rs",
-    "crates/wyrd-daemon/src/core/tests_backend.rs",
-    "crates/wyrd-daemon/src/core/tests_coalescing.rs",
-    "crates/wyrd-daemon/src/core/tests_composition.rs",
-    "crates/wyrd-daemon/src/core/tests_handles.rs",
-    "crates/wyrd-daemon/src/core/tests_harness.rs",
-    "crates/wyrd-daemon/src/core/tests_mount.rs",
-    "crates/wyrd-daemon/src/core/tests_mount_free.rs",
-    "crates/wyrd-daemon/src/core/tests_policy.rs",
-    "crates/wyrd-daemon/src/core/tests_publish.rs",
-    "crates/wyrd-daemon/src/core/tests_run_loop.rs",
-    "crates/wyrd-daemon/src/core/tests_sync.rs",
-    "crates/wyrd-daemon/src/core/tests_teardown.rs",
-    "crates/wyrd-daemon/src/core/tests_vault.rs",
     "crates/wyrd-daemon/src/fuse/tests_budget.rs",
     "crates/wyrd-daemon/src/fuse/tests_conflicts.rs",
     "crates/wyrd-daemon/src/fuse/tests_errors.rs",
@@ -376,6 +363,19 @@ const TEST_FILE_PINS: &[&str] = &[
     "crates/wyrd-daemon/src/fuse/tests_readonly.rs",
     "crates/wyrd-daemon/src/fuse/tests_want.rs",
     "crates/wyrd-daemon/src/fuse/tests_write.rs",
+    "crates/wyrd-daemon/src/host/tests_backend.rs",
+    "crates/wyrd-daemon/src/host/tests_coalescing.rs",
+    "crates/wyrd-daemon/src/host/tests_composition.rs",
+    "crates/wyrd-daemon/src/host/tests_handles.rs",
+    "crates/wyrd-daemon/src/host/tests_harness.rs",
+    "crates/wyrd-daemon/src/host/tests_mount.rs",
+    "crates/wyrd-daemon/src/host/tests_mount_free.rs",
+    "crates/wyrd-daemon/src/host/tests_policy.rs",
+    "crates/wyrd-daemon/src/host/tests_publish.rs",
+    "crates/wyrd-daemon/src/host/tests_run_loop.rs",
+    "crates/wyrd-daemon/src/host/tests_sync.rs",
+    "crates/wyrd-daemon/src/host/tests_teardown.rs",
+    "crates/wyrd-daemon/src/host/tests_vault.rs",
     "crates/wyrd-daemon/src/owner/tests_owner.rs",
     "crates/wyrd-format/src/mutation/tests_mutation.rs",
     "crates/wyrd-sync/src/authorization/test_util.rs",
@@ -735,7 +735,7 @@ fn same_line_cfg_attr_exempts_only_its_line() {
 /// A braceless gated item on the next line exempts exactly through
 /// that line: a production mint in a later function is still
 /// scanned. This is the `mod tests_coalescing;` shape from
-/// `wyrd-daemon/src/core/mod.rs`.
+/// `wyrd-daemon/src/host/mod.rs`.
 #[test]
 fn braceless_gated_item_does_not_swallow_production() {
     let text = "#[cfg(all(test, feature = \"mount\"))]\nmod tests_coalescing;\n\npub fn mint() -> Head {\n    Head::new(authorized())\n}\n";
@@ -749,7 +749,7 @@ fn braceless_gated_item_does_not_swallow_production() {
 /// A gated item whose braces balance on its own line
 /// (`use a::{b};`) ends the region there: a production mint in the
 /// next block is still scanned. This is the
-/// `wyrd-cli/src/main.rs:57` shape.
+/// `wyrd-cli/src/lib.rs:57` shape.
 #[test]
 fn balanced_brace_gated_item_does_not_swallow_production() {
     let text =

@@ -5,10 +5,10 @@ use crate::support::{drive, seal_flat_drive, signed_snapshot, AnnouncedRoots, Lo
 #[cfg(feature = "mount")]
 use crate::support::{mount_heads, Relay, RemoteOnlyMaterialization};
 #[cfg(feature = "mount")]
-use wyrd_daemon::core::LiveError;
-use wyrd_daemon::core::{LiveConfig, RuntimeMaterialization, WyrdNode};
-#[cfg(feature = "mount")]
 use wyrd_daemon::fuse::FuseBackend;
+#[cfg(feature = "mount")]
+use wyrd_daemon::host::LiveError;
+use wyrd_daemon::host::{LiveConfig, RuntimeMaterialization, WyrdNode};
 #[cfg(feature = "mount")]
 use wyrd_format::Snapshot;
 use wyrd_format::{BaoRoot, ContentId, Entry, MemoryObjectStore, ObjectKind, ObjectStore, Tree};
@@ -465,7 +465,7 @@ fn partial_head_set_never_projects_mixed_validity_heads() {
 /// pending (still-fetching) head never projects — the verified head
 /// publishes alone — and a damaged closure still fails the pass. This
 /// is the production mount path (`into_live` + `sync_once`, the
-/// composer startup sequence in `main.rs`), not just the direct
+/// composer startup sequence in `lib.rs`), not just the direct
 /// `WyrdNode::refresh_live_heads` API.
 #[cfg(feature = "mount")]
 #[test]

@@ -33,7 +33,7 @@ import sys
 import time
 
 # The drive-already-owned code the binary exits (`CliError::exit_code`
-# in `crates/wyrd-cli/src/main.rs`, `EX_CONFIG`). Kept in sync by the
+# in `crates/wyrd-cli/src/lib.rs`, `EX_CONFIG`). Kept in sync by the
 # contract test `the_nix_module_declares_exactly_one_owner_per_drive`
 # and the `vault_against_held_drive_exits_drive_locked` process test.
 DRIVE_LOCKED_CODE = 78

@@ -195,7 +195,7 @@ Merge candidates (about 55):
   duplicate `keys/hygiene.rs`. This branch removes the three
   named above without loss; the two remaining duplicates stay
   as follow-up scope.
-- `close.rs` (5) stays. The zero-deadline sparing of an
+- `teardown.rs` (5) stays. The zero-deadline sparing of an
   already-complete stop is the serving contract. It is not
   trivia.
 

@@ -66,7 +66,7 @@ fn await_outstanding(queue: &Arc<wyrd_core::mutation::MutationQueue>, count: usi
 }
 
 /// Mirror the composer's loop thread exactly — by calling the same
-/// supervision entry point `main.rs` uses, not a re-implementation:
+/// supervision entry point `lib.rs` uses, not a re-implementation:
 /// run the loop until the latch trips (or the mailbox fails
 /// terminally), report the return on the trigger, then drain admitted
 /// mutations until the composer closes admission. Returns the
@@ -129,7 +129,7 @@ fn reopen_and_read(dir: &std::path::Path, identity: &DeviceIdentitySecret, path:
 /// thread's destroy commits the dirty handle against it while the
 /// post-return drain executes concurrently, and the reopened drive
 /// serves the bytes. The full composer sequence in miniature — the
-/// test takes every role `main.rs` plays.
+/// test takes every role `lib.rs` plays.
 #[cfg(feature = "mount")]
 #[test]
 fn signal_path_shutdown_preserves_dirty_handle() {

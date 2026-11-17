@@ -452,7 +452,7 @@ identities plus duplicates, re-batch commits nothing;
 `evict_refuses_pinned_content_without_committing`
 (`wyrd-core/src/policy.rs`), and
 `pin_survives_restart_and_evict_keeps_bytes`
-(`wyrd-daemon/src/core/tests_policy.rs`).
+(`wyrd-daemon/src/host/tests_policy.rs`).
 
 ## Quarantine repair
 
@@ -521,11 +521,11 @@ Pinned by
 `release_after_loop_return_commits_dirty_handle`,
 `loop_thread_panic_tears_down_bounded`,
 `submissions_racing_admission_close_resolve_bounded`
-(`wyrd-daemon/src/core/tests_teardown.rs`),
+(`wyrd-daemon/src/host/tests_teardown.rs`),
 `loop_return_keeps_queue_open_for_teardown_submits`,
 `terminal_loop_error_completes_blocked_submitters`,
 `clean_stop_completes_blocked_submitters`
-(`wyrd-daemon/src/core/tests_run_loop.rs`),
+(`wyrd-daemon/src/host/tests_run_loop.rs`),
 `loop_return_trips_shutdown_without_settling`
 (`wyrd-daemon/src/lifecycle.rs`),
 `destroy_commits_dirty_write_handles_while_queue_live`,
@@ -535,7 +535,7 @@ Pinned by
 `zero_deadline_trips_a_stalled_stop_but_spares_a_ready_one`,
 `graceful_close_inside_the_deadline_reports_finished`, and
 `stalled_close_reports_unfinished_inside_a_bound`
-(`wyrd-sync/src/close.rs`),
+(`wyrd-sync/src/teardown.rs`),
 `live_close_returns_past_a_zero_deadline` (`wyrd-sync/src/bulk/tests_bulk.rs`),
 `live_serving_stop_returns_past_a_zero_deadline` and
 `poisoned_mirror_lock_reports_but_still_shuts_down`

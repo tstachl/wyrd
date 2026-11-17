@@ -5,7 +5,7 @@
 use crate::CliError;
 use std::path::PathBuf;
 use wyrd_core::export::export_tree;
-use wyrd_daemon::core::RuntimeMaterialization;
+use wyrd_daemon::host::RuntimeMaterialization;
 use wyrd_daemon::DriveView;
 use wyrd_daemon::WyrdNode;
 use wyrd_format::FsObjectStore;

@@ -1,5 +1,7 @@
 //! Per-session write budgets: the memory bound on mounted writable
-//! handles.
+//! handles. Not session lifecycle — write-buffer accounting: nothing
+//! here opens, closes, or supervises a session, it only budgets the
+//! resident bytes of already-open writable handles.
 //!
 //! Normative in `docs/contracts/write-path.md` (Resource bounds). A writable handle
 //! buffers a sparse overlay (dirtied ranges only, plus the append

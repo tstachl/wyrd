@@ -1,7 +1,7 @@
 //! The `snapshot` command: merge, recover, listings, and plans.
 //! Owns the snapshot runner, the merge-path guards, and the
 //! snapshot/recovery/classification renderers; the dispatcher in
-//! `main.rs` calls in.
+//! `lib.rs` calls in.
 
 use crate::args::SnapshotAction;
 use crate::commands::device::{parse_content_id, parse_snapshot_id};

@@ -1,6 +1,6 @@
 //! `sync status` / `sync now`: headless sync over the keystore.
 //! Owns `SyncRunReport`, the stopping-verdict and rendering helpers,
-//! and the `sync` / `sync_now` runners; the dispatcher in `main.rs`
+//! and the `sync` / `sync_now` runners; the dispatcher in `lib.rs`
 //! calls in. `vault` keeps its own status renderer.
 use crate::args::SyncAction;
 use crate::composer::{park_serving_until_shutdown, shutdown_headless_serving};
@@ -23,7 +23,7 @@ use wyrd_core::mutation::WriteStats;
 use wyrd_core::relay_posture::{mailbox_degraded, recovery_attempts, RELAY_IDLE_LINE};
 use wyrd_core::status::{observe, SyncStatus};
 use wyrd_core::view::NamespaceView;
-use wyrd_daemon::core::RuntimeMaterialization;
+use wyrd_daemon::host::RuntimeMaterialization;
 use wyrd_daemon::process::{
     bind_bulk_source, check_startup_retention, install_shutdown_handler, SHUTDOWN_DEADLINE,
 };

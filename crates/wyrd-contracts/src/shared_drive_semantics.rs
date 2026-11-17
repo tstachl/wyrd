@@ -28,8 +28,8 @@ use wyrd_core::projection::SharedProjection;
 use wyrd_core::read::{LiveReader, ReadError};
 use wyrd_core::view::RuntimeMaterialization;
 use wyrd_core::want::WantRegistry;
-use wyrd_daemon::core::WyrdNode;
 use wyrd_daemon::fuse::FuseBackend;
+use wyrd_daemon::host::WyrdNode;
 use wyrd_format::{
     ContentId, Entry, FetchStatus, MemoryObjectStore, ObjectKind, ObjectStore, Tree,
 };
@@ -191,7 +191,7 @@ struct LiveSession {
     stop: Arc<AtomicBool>,
     loop_handle: Option<
         std::thread::JoinHandle<
-            Result<wyrd_daemon::core::LiveSummary, wyrd_daemon::core::LiveError>,
+            Result<wyrd_daemon::host::LiveSummary, wyrd_daemon::host::LiveError>,
         >,
     >,
     parts: LiveParts<LiveView>,

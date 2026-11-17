@@ -55,7 +55,7 @@ fn the_nix_module_declares_exactly_one_owner_per_drive() {
     let wrapper =
         fs::read_to_string(root.join("nix/drive/supervise.py")).expect("wrapper readable");
     let probe = fs::read_to_string(root.join("nix/drive/probe.py")).expect("probe readable");
-    let cli = fs::read_to_string(root.join("crates/wyrd-cli/src/main.rs")).expect("cli readable");
+    let cli = fs::read_to_string(root.join("crates/wyrd-cli/src/lib.rs")).expect("cli readable");
 
     // One mode per declaration is structural (an enum); two
     // declarations for one drive are refused at eval with the drive

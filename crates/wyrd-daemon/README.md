@@ -24,7 +24,7 @@ read-only FUSE mount today, mobile file surfaces later. The `wyrd` binary
 - **The live mailbox** (`live_mailbox.rs`): one `LiveMailbox` owns one
   Tokio runtime and one relay client; relay health is polled and readable
   (`MailboxHealth`), so an outage is diagnosable instead of silent.
-- **The `wyrd` CLI** (`main.rs`): `wyrd drive … init` creates the drive keystore;
+- **The `wyrd` CLI** (`lib.rs`): `wyrd drive … init` creates the drive keystore;
   `wyrd mount --relay …` serves the drive's read-only projection and joins
   the control plane.
 

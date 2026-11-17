@@ -31,7 +31,8 @@ the words that mislead, and the order to read them in.
    in `wyrd-owner-client` (`wire.rs`, `client.rs`, `transport.rs` —
    no domain edge, so consumers link the interface without the
    authoring surface).
-7. `wyrd-cli` — the binary process host. `main.rs` dispatches; one
+7. `wyrd-cli` — the binary process host. `lib.rs` dispatches
+   (thin `main.rs` shim forwards argv); one
    module per command family in `commands/`; `composer.rs` holds
    the live-node plumbing shared by `mount`, `sync now`, and
    `vault`; `update/` holds the updater and its durable-file
@@ -87,7 +88,7 @@ system libfuse builds and runs everything above the mount.
 - `wyrd-cli/src/update/snapshot.rs` captures durable files for
   update verification (`DurableFiles`); it never touches the
   snapshot DAG.
-- `wyrd-sync/src/close.rs` is transport teardown;
+- `wyrd-sync/src/teardown.rs` is transport teardown;
   `wyrd-sync/src/closure.rs` is tree/manifest correspondence.
   Different words, adjacent modules.
 

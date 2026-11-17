@@ -418,15 +418,17 @@ fn credential_contents_never_appear_in_errors() {
 /// Every `src/*.rs` file is reachable from a `mod` declaration: an
 /// orphaned test module compiles nothing and fails nothing, so the
 /// wiring itself needs a pin. Reads the source tree at the
-/// build-time manifest directory; every file but `main.rs` must be
-/// named by a `mod <stem>;` line in `main.rs`. The `commands/`
-/// family tree gets the same pin one level down: every file in
-/// `src/commands/` must be named by a `mod <stem>;` line in
-/// `commands.rs`, or the family compiles nothing and fails nothing.
+/// build-time manifest directory; every file but the two roots
+/// (`main.rs`, the thin binary shim, and `lib.rs`, the library
+/// root) must be named by a `mod <stem>;` line in `lib.rs`. The
+/// `commands/` family tree gets the same pin one level down:
+/// every file in `src/commands/` must be named by a `mod <stem>;`
+/// line in `commands.rs`, or the family compiles nothing and fails
+/// nothing.
 #[test]
 fn every_src_file_is_a_declared_module() {
     let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
-    let main = fs::read_to_string(src.join("main.rs")).unwrap();
+    let root = fs::read_to_string(src.join("lib.rs")).unwrap();
     let mut orphaned = Vec::new();
     let mut entries: Vec<_> = fs::read_dir(&src).unwrap().collect();
     entries.sort_by_key(|entry| entry.as_ref().unwrap().file_name());
@@ -436,10 +438,10 @@ fn every_src_file_is_a_declared_module() {
         let Some(stem) = name.strip_suffix(".rs") else {
             continue;
         };
-        if stem == "main" {
+        if stem == "main" || stem == "lib" {
             continue;
         }
-        if !main.contains(&format!("mod {stem};")) {
+        if !root.contains(&format!("mod {stem};")) {
             orphaned.push(name);
         }
     }

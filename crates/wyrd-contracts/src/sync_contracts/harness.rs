@@ -2,9 +2,9 @@
 //! composer and the epoch-3 rotation helper.
 use crate::support::{signed_transition, Rig};
 #[cfg(feature = "mount")]
-use wyrd_daemon::core::RuntimeMaterialization;
-#[cfg(feature = "mount")]
 use wyrd_daemon::fuse::FuseBackend;
+#[cfg(feature = "mount")]
+use wyrd_daemon::host::RuntimeMaterialization;
 use wyrd_format::Change;
 #[cfg(feature = "mount")]
 use wyrd_format::ObjectStore;
@@ -12,14 +12,14 @@ use wyrd_format::ObjectStore;
 use wyrd_view::DriveView;
 
 /// Compose a serving backend from the node's live parts: contracts
-/// take the composer role production gives `main.rs` — the backend is
+/// take the composer role production gives `lib.rs` — the backend is
 /// built from the parts, never handed out by the node.
 /// Compose a live loop plus its FUSE adapter from the node's parts.
 /// Behind the `mount` feature with the backend it builds: a
 /// mount-free build has no `FuseBackend` to compose.
 #[cfg(feature = "mount")]
 pub(super) fn serving_backend<S: ObjectStore>(
-    parts: wyrd_daemon::core::LiveParts<DriveView<S, RuntimeMaterialization>>,
+    parts: wyrd_daemon::host::LiveParts<DriveView<S, RuntimeMaterialization>>,
 ) -> FuseBackend<S, RuntimeMaterialization>
 where
     S::Error: std::fmt::Debug,
