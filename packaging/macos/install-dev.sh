@@ -79,18 +79,6 @@ command -v bun >/dev/null 2>&1 || {
     echo "error: bun is not on PATH (the desktop build runs 'bun run build')." >&2
     exit 1
 }
-
-# Frontend dependencies: the Tauri beforeBuildCommand runs
-# `bun run build` without installing first, so a fresh checkout (or
-# a lockfile change) fails with a cryptic vite resolve error.
-# Install when node_modules is missing or older than the lockfile or
-# manifest; --frozen-lockfile keeps the build on the committed set,
-# and its own error names the fix when the manifest drifted.
-if [ ! -d "$ROOT/apps/desktop/node_modules" ] \
-    || [ "$ROOT/apps/desktop/bun.lock" -nt "$ROOT/apps/desktop/node_modules" ] \
-    || [ "$ROOT/apps/desktop/package.json" -nt "$ROOT/apps/desktop/node_modules" ]; then
-    (cd "$ROOT/apps/desktop" && bun install --frozen-lockfile)
-fi
 command -v python3 >/dev/null 2>&1 || {
     echo "error: python3 is required to read the Tauri config." >&2
     exit 1
@@ -205,6 +193,20 @@ esac
 # keeping its app-only default unless the caller forwards --bundles.
 # The ad-hoc CLI is vault-only: WYRD_NO_MOUNT=1 drops the mount
 # stack, whose macFUSE load dependency a clean Mac has no copy of.
+#
+# Frontend dependencies first: the Tauri beforeBuildCommand runs
+# `bun run build` without installing, so a fresh checkout (or a
+# lockfile change) fails with a cryptic vite resolve error. Placed
+# after the destination refusal above so a refused invocation costs
+# no network. Install when node_modules is missing or older than
+# the lockfile or manifest; --frozen-lockfile keeps the build on
+# the committed set, and its own error names the fix when the
+# manifest drifted.
+if [ ! -d "$ROOT/apps/desktop/node_modules" ] \
+    || [ "$ROOT/apps/desktop/bun.lock" -nt "$ROOT/apps/desktop/node_modules" ] \
+    || [ "$ROOT/apps/desktop/package.json" -nt "$ROOT/apps/desktop/node_modules" ]; then
+    (cd "$ROOT/apps/desktop" && bun install --frozen-lockfile)
+fi
 HAS_BUNDLES=0
 for ARG in "$@"; do
     case "$ARG" in
