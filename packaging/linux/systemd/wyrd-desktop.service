@@ -1,0 +1,34 @@
+# Login launcher for the Wyrd desktop UI (v0.4).
+# Installed by the installer with @WYRD_DESKTOP_BIN@ replaced by the absolute
+# path of the wyrd-desktop binary (reinstall this unit after moving the
+# binary: the path is filled once, never re-resolved). Install with
+# `systemctl --user daemon-reload && systemctl --user enable wyrd-desktop.service`.
+#
+# A launcher with crash backstop, not a supervisor: WantedBy starts the UI
+# once per login; Restart=on-failure restarts crashes only (a clean quit
+# exits 0 and stays quit). There is no terminal-exit refusal: the UI has no
+# 78-class held state, so no terminal-exit refusal here. The per-drive owner
+# units are separate units under the same manager,
+# and owner-first ordering is a UI behavior (unavailable until the owner
+# answers, explicit reconnect, no restart), never a manager dependency: this
+# unit names no After/Wants on owner units because owner units are dynamic
+# per-drive state the login unit must never hard-code. The macOS half
+# restarts nothing (login-load only); the asymmetry is decided and documented
+# in docs/design/desktop-shell.md, open-questions item 7.
+[Unit]
+Description=Wyrd desktop management UI
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+Type=simple
+WorkingDirectory=/
+ExecStart=@WYRD_DESKTOP_BIN@
+SyslogIdentifier=wyrd-desktop
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

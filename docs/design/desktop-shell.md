@@ -893,6 +893,24 @@ this note wins for architecture.
 6. `wyrd-owner-client` extraction: landed — the closure decision
    rule in the layer-gate section required it (`desktop → daemon →
    core`), and the desktop policy points at the consumer surface.
+7. UI login items and owner-first ordering: decided — the login
+   story is a launchd agent on macOS
+   (`packaging/macos/launchd/md.enesis.wyrd.desktop.plist`, `open -a`
+   the installed app, `RunAtLoad`, no respawn key) and a systemd
+   user unit on Linux (`packaging/linux/systemd/wyrd-desktop.service`,
+   `WantedBy=default.target`, `Restart=on-failure`, crash-only).
+   The Apple login-item API (SMAppService) is rejected for v0.4: it needs UI-side
+   registration code plus a new dependency edge the `wyrd-desktop`
+   layer gate refuses; the OS service manager stays the single
+   parent (OD-06-E). There is deliberately no manager-level
+   ordering: owner units are dynamic per-drive state the login
+   artifacts must never hard-code, so ordering stays a UI behavior
+   — unavailable until the owner answers, explicit reconnect, and
+   resume without restart (landed: per-drive service observation,
+   the unavailable view with Retry/Start/Reinstall, the 5s tray
+   refresh). The stop and recovery story per platform lives where
+   the installer consumes it (`packaging/macos/README.md`, "Login
+   items and recovery").
 
 ## Persistent-format impact
 
