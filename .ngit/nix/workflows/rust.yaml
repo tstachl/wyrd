@@ -26,7 +26,9 @@
 # before merge; rerunning it on the merge commit repeats the same
 # 30-minute suite for no new evidence. Master keeps its own Rust test
 # gate in rust-slow.yaml (slow profile plus doctests), which is not a
-# duplicate of this gate.
+# duplicate of this gate. Direct pushes to master are out of policy:
+# master changes arrive through reviewed PRs. Restoring a push leg here
+# would restore the duplicate.
 version: 1
 system: x86_64-linux
 name: rust
