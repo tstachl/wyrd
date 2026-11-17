@@ -83,15 +83,21 @@ pass "CI wires the desktop-frontend-gate suite"
 # reach CI.
 match 'languages.javascript.bun.package = unstable.bun' "$DEVENV_CODE" \
   || die "devenv.nix: shell bun is not pinned to unstable.bun"
+match 'languages.javascript.package = unstable.nodejs-slim' "$DEVENV_CODE" \
+  || die "devenv.nix: shell nodejs is not pinned to unstable.nodejs-slim"
 match 'pkgsUnstable.bun' "$COMMANDS_CODE" \
   || die "default.nix: gate commands do not take bun from pkgsUnstable"
 match 'pkgsUnstable.nodejs' "$COMMANDS_CODE" \
   || die "default.nix: gate commands do not take nodejs from pkgsUnstable"
 match 'nixpkgs-unstable.url = "github:NixOS/nixpkgs/' "$FLAKE_CODE" \
   || die "flake.nix: nixpkgs-unstable input missing"
-FLAKE_PIN="$(sed -n '/"nixpkgs-unstable"/,/"original"/p' "$ROOT/flake.lock" | grep -o '"rev": "[0-9a-f]*"' | head -n 1)" \
+# Anchored on the node key (4-space indent, exact key, opening
+# brace): a bare /"nixpkgs-unstable"/ range also matches `"ref":
+# "nixpkgs-unstable"` lines and plain string refs elsewhere in the
+# locks, so node reordering could compare the wrong revision.
+FLAKE_PIN="$(awk '/^    "nixpkgs-unstable": \{$/{f=1} f&&/"original"/{exit} f' "$ROOT/flake.lock" | grep -o '"rev": "[0-9a-f]*"' | head -n 1)" \
   || die "flake.lock carries no nixpkgs-unstable rev"
-DEVENV_PIN="$(sed -n '/"nixpkgs-unstable"/,/"original"/p' "$ROOT/devenv.lock" | grep -o '"rev": "[0-9a-f]*"' | head -n 1)" \
+DEVENV_PIN="$(awk '/^    "nixpkgs-unstable": \{$/{f=1} f&&/"original"/{exit} f' "$ROOT/devenv.lock" | grep -o '"rev": "[0-9a-f]*"' | head -n 1)" \
   || die "devenv.lock carries no nixpkgs-unstable rev"
 [ -n "$FLAKE_PIN" ] && [ -n "$DEVENV_PIN" ] \
   || die "bun channel pin unreadable: flake $FLAKE_PIN vs devenv $DEVENV_PIN"

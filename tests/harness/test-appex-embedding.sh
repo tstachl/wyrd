@@ -56,6 +56,9 @@ grep -Fq '<string>md.enesis.wyrd.fileprovider</string>' \
 grep -Fq -- '--identifier md.enesis.wyrd.fileprovider' \
   "$ROOT/packaging/macos/fileprovider/build-appex.sh" \
   || die "build-appex.sh: codesign identifier drifted"
+grep -Fq 'app-id: md.enesis.wyrd' \
+  "$ROOT/packaging/linux/md.enesis.wyrd.yaml" \
+  || die "linux manifest: app-id drifted"
 pass "bundle identifiers nest, build script agrees"
 
 echo "appex-embedding: $PASS checks passed"
