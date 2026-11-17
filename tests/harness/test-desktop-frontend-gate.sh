@@ -72,4 +72,16 @@ grep -Fq 'test-desktop-frontend-gate.sh' "$COMMANDS" \
   || die "CI: desktop-frontend-gate suite not wired into shell.suites"
 pass "CI wires the desktop-frontend-gate suite"
 
+# 6. The lockfile stays at the version the gate's bun reads. The
+# flake's nixpkgs carries bun 1.3.x, which refuses lockfile v2
+# outright; a newer local bun must not rewrite the format (a newer
+# bun leaves a v1 lockfile untouched on a no-op install, verified
+# with 1.4.2). If this pin fails, regenerate the lock with the
+# flake's bun — never by hand-editing the version.
+LOCK_VERSION="$(grep -o '"lockfileVersion": [0-9][0-9]*' "$ROOT/apps/desktop/bun.lock" | head -n 1)" \
+  || die "bun.lock carries no lockfileVersion"
+[ "$LOCK_VERSION" = '"lockfileVersion": 1' ] \
+  || die "bun.lock is $LOCK_VERSION: regenerate with the flake's bun (reads v1 only)"
+pass "lockfile stays at the version the gate's bun reads"
+
 echo "desktop-frontend-gate: $PASS checks passed"

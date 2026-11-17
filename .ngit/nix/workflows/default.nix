@@ -204,7 +204,10 @@ in
   # the audit job fetches the advisory DB. `--frozen-lockfile`
   # refuses lockfile drift instead of resolving it. nodejs rides
   # beside bun: package bins (vite, svelte-check) exec through a
-  # node shebang.
+  # node shebang. The lockfile must stay at the version the flake's
+  # bun (1.3.x) reads — currently v1, pinned by the harness suite
+  # below — because a newer local bun writes a format the gate
+  # cannot parse.
   desktop.frontend = pkgs.writeShellApplication {
     name = "desktop-frontend";
     runtimeInputs = with pkgs; [ bun nodejs coreutils ];
