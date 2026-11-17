@@ -48,6 +48,15 @@ match 'macOS only' "$INSTALL_CODE" \
   || die "install: no macOS-only refusal"
 pass "install script is macOS-only"
 
+# 2b. Frontend dependencies are ensured before the build: a fresh
+# checkout without node_modules (or a drifted lockfile/manifest)
+# installs from the frozen lockfile instead of failing inside vite.
+match 'node_modules' "$INSTALL_CODE" \
+  || die "install: no node_modules precondition"
+match 'bun install --frozen-lockfile' "$INSTALL_CODE" \
+  || die "install: no frozen frontend install"
+pass "install script ensures frontend dependencies"
+
 # 3. The build delegates to the wrapper: the link-order pin and the
 # no-Nix-links guard stay in that one place, never inlined here. The
 # hook stages the appex plus the CLI before the outer sign.

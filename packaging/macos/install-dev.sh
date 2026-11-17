@@ -10,7 +10,8 @@
 #                   app-only default is kept unless the caller forwards
 #                   --bundles explicitly.
 #
-# What it does: builds Wyrd.app ad-hoc through build-bundle.sh (the
+# What it does: ensures the frontend dependencies, builds Wyrd.app
+# ad-hoc through build-bundle.sh (the
 # bundler hook stages the appex plus the version-matched `wyrd` CLI
 # and its `wyrd-supervise` sibling, pairs identities, and pins
 # versions), verifies the signature, and
@@ -78,6 +79,18 @@ command -v bun >/dev/null 2>&1 || {
     echo "error: bun is not on PATH (the desktop build runs 'bun run build')." >&2
     exit 1
 }
+
+# Frontend dependencies: the Tauri beforeBuildCommand runs
+# `bun run build` without installing first, so a fresh checkout (or
+# a lockfile change) fails with a cryptic vite resolve error.
+# Install when node_modules is missing or older than the lockfile or
+# manifest; --frozen-lockfile keeps the build on the committed set,
+# and its own error names the fix when the manifest drifted.
+if [ ! -d "$ROOT/apps/desktop/node_modules" ] \
+    || [ "$ROOT/apps/desktop/bun.lock" -nt "$ROOT/apps/desktop/node_modules" ] \
+    || [ "$ROOT/apps/desktop/package.json" -nt "$ROOT/apps/desktop/node_modules" ]; then
+    (cd "$ROOT/apps/desktop" && bun install --frozen-lockfile)
+fi
 command -v python3 >/dev/null 2>&1 || {
     echo "error: python3 is required to read the Tauri config." >&2
     exit 1
