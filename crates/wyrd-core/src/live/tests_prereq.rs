@@ -1438,6 +1438,49 @@ fn idle_counters_are_not_quiet_with_pending_outbound() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// The pass report carries loop-visible poison counts: a poisoned
+/// parent table reads healthy-empty through the fail-closed paths,
+/// so the report — not the log — is what tells dead from idle. A
+/// counted poison rides the next pass report; the untouched
+/// registries stay zero.
+#[test]
+fn pass_report_carries_parent_poison() {
+    let (engine, dir, store, _chunk, _root, head) = scratch_file_drive("poison-report");
+    let mut node = live_over_fake(engine, store, &[head]);
+    assert_eq!(
+        node.mutations.parent_poison_count(),
+        0,
+        "no poison observed yet"
+    );
+    node.mutations.poison_parent_table_for_test();
+    // One counting acquisition: the pass may or may not touch the
+    // table itself, so the count is established here and the pass
+    // only has to carry it.
+    node.mutations.invalidate_parent_tokens();
+    assert_eq!(
+        node.mutations.parent_poison_count(),
+        1,
+        "the refused invalidation counts the poison"
+    );
+    let report = node
+        .sync_once(
+            &mut NoopMailbox,
+            None::<&mut wyrd_sync::bulk::MemoryBulkSource>,
+        )
+        .unwrap();
+    assert_eq!(
+        report.poison.parents, 1,
+        "a poisoned table is dead, not idle: {report:?}"
+    );
+    assert_eq!(report.poison.wants, 0, "untouched registries stay zero");
+    assert_eq!(
+        report.poison.quarantine, 0,
+        "untouched registries stay zero"
+    );
+    assert_eq!(report.poison.scrub, 0, "untouched registries stay zero");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// Deferred, skipped, duplicate, and discarded intake alone do
 /// not demand a follow-up pass: they wait on remote state or are
 /// already settled, so an immediate retry could not advance

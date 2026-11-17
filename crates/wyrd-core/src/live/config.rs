@@ -132,6 +132,30 @@ pub enum LiveError {
 // Not `Copy`: the drained intake report carries the observed peer
 // set (OD-17-4), which is heap-allocated. Pass reports move by value
 // or by reference; nothing relied on implicit duplication.
+/// Lock-poison observations behind one sync pass, by registry: the
+/// loop's fail-closed reads (an empty admission, an uncounted
+/// total) are indistinguishable from idle without them, so each
+/// pass snapshots the counters beside the report. Any nonzero
+/// value means the state behind that registry's infallible
+/// diagnostics is suspect: reservations still fail closed, but
+/// totals may under-report. The write budget is not here: the
+/// budget lives with the serving backend, not the loop, so its
+/// poll-beside-total contract stays at `WriteBudget::total` — and a
+/// poisoned budget additionally fails the fold fast path with EIO.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PoisonCounts {
+    /// `WantRegistry` poison observations.
+    pub wants: u64,
+    /// `QuarantineQueue` poison observations.
+    pub quarantine: u64,
+    /// `ScrubQueue` poison observations.
+    pub scrub: u64,
+    /// Mutation parent-table poison observations.
+    pub parents: u64,
+}
+
+/// One pass's intake, fetch, repair, and publication counts, plus
+/// the poison observations that tell dead registries from idle ones.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SyncReport {
     /// Control-plane intake: accepted, duplicates, deferred, skipped,
@@ -176,6 +200,10 @@ pub struct SyncReport {
     /// installed, retried next pass. Zero on idle passes (the gate
     /// never ran) and on passes whose damage failed closed.
     pub pending_heads: usize,
+    /// Lock-poison observations behind this pass, by registry: a
+    /// poisoned registry reads healthy-empty, so nonzero here is
+    /// what tells dead from idle without reading logs.
+    pub poison: PoisonCounts,
 }
 
 /// How far a [`crate::live::LiveNode::run_loop`] run got before stopping or

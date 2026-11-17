@@ -28,7 +28,7 @@ pub mod vault;
 pub use core::{
     apply_budget_settings, render_settings_surface, AppliedSettings, BudgetOverrides, FailureClass,
     LiveConfig, LiveError, LiveNode, LiveParts, LiveSummary, NodeError, PendingObligations,
-    ResourceBudgets, RunningSettings, RuntimeMaterialization, SyncReport, WyrdNode,
+    PoisonCounts, ResourceBudgets, RunningSettings, RuntimeMaterialization, SyncReport, WyrdNode,
 };
 pub use settings::{
     default_settings_path, overrides_for, overrides_for_path, read_settings, settings_key_for,

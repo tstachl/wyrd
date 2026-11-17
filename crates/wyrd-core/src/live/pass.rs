@@ -296,6 +296,22 @@ where
         }
     }
 
+    /// Snapshot the loop-visible lock-poison counters beside the pass
+    /// report: fail-closed reads (an empty admission, an uncounted
+    /// total) are indistinguishable from idle without them, so a
+    /// poisoned registry is machine-readable as dead, never as
+    /// quiet. The write budget is backend-held, not loop-visible —
+    /// its poll-beside-total contract stays at its own totals, and
+    /// a poisoned budget fails the fold fast path with EIO.
+    fn poison_counts(&self) -> PoisonCounts {
+        PoisonCounts {
+            wants: self.wants.poison_count(),
+            quarantine: self.quarantine.poison_count(),
+            scrub: self.scrub.poison_count(),
+            parents: self.mutations.parent_poison_count(),
+        }
+    }
+
     /// Record the owner observation for out-of-process consumers:
     /// the durable status at pass end plus this pass's report and
     /// the transport health behind it, pinned to the pass count. The
@@ -852,6 +868,7 @@ where
                 publish_elapsed_ms: 0,
                 generation,
                 pending_heads,
+                poison: self.poison_counts(),
             });
         }
         // Per-class projection: verified heads publish, pending ones
@@ -910,6 +927,7 @@ where
                 publish_elapsed_ms: outcome.elapsed_ms,
                 generation,
                 pending_heads,
+                poison: self.poison_counts(),
             });
         }
         let installed_heads = heads.len();
@@ -1005,6 +1023,7 @@ where
             publish_elapsed_ms: outcome.elapsed_ms,
             generation: generation + 1,
             pending_heads,
+            poison: self.poison_counts(),
         })
     }
     /// Drive sync passes until `stop` is set. The idle wait is

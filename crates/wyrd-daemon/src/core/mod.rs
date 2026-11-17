@@ -35,7 +35,7 @@ mod tests_vault;
 pub use wyrd_core::budgets::ResourceBudgets;
 pub use wyrd_core::live::{
     admit_wants, FailureClass, LiveConfig, LiveError, LiveNode, LiveParts, LiveSummary, PassHook,
-    PendingObligations, ServingBarrier, SyncReport, MAILBOX_MAX_CONSECUTIVE_ERRORS,
+    PendingObligations, PoisonCounts, ServingBarrier, SyncReport, MAILBOX_MAX_CONSECUTIVE_ERRORS,
     STORE_MAX_CONSECUTIVE_ERRORS,
 };
 pub use wyrd_core::node::{NodeError, WriteError, WyrdNode};

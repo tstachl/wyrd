@@ -60,8 +60,8 @@ use apply::{authoring_error, log_backing_store_refusal};
 
 pub use config::{
     check_retained_ceiling, CompositionError, FailureClass, LiveConfig, LiveError, LiveSummary,
-    PassHook, PendingObligations, QuotaBelowRetention, QuotaCheckError, ServingBarrier, SyncReport,
-    MAILBOX_MAX_CONSECUTIVE_ERRORS, STORE_MAX_CONSECUTIVE_ERRORS,
+    PassHook, PendingObligations, PoisonCounts, QuotaBelowRetention, QuotaCheckError,
+    ServingBarrier, SyncReport, MAILBOX_MAX_CONSECUTIVE_ERRORS, STORE_MAX_CONSECUTIVE_ERRORS,
 };
 
 /// A live drive: the engine plus the published projection the
