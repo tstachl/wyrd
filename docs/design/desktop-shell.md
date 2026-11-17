@@ -876,13 +876,18 @@ this note wins for architecture.
    shadcn-svelte, no SvelteKit), under the constraints in the note
    (no drive model, no socket or filesystem access, no protocol
    networking, presentation cache only).
-4. App identifier and bundle metadata: decide before packaging and
-   capability configuration; confirm the existing app-id marker
-   check covers the chosen id. The scaffold's `tauri.conf.json`
-   reuses the workspace `md.enesis.wyrd` id as a placeholder so the
-   existing marker covers it; the distinct desktop bundle id (the
-   host Flatpak keeps `md.enesis.wyrd`) is decided with packaging,
-   not here.
+4. App identifier and bundle metadata: decided — `md.enesis.wyrd`
+   is the desktop bundle identifier, not a placeholder (productName
+   `Wyrd`, version `0.4.0`, all three in
+   `crates/wyrd-desktop/tauri.conf.json`). There is no distinct
+   desktop id: the host Flatpak manifest
+   (`packaging/linux/md.enesis.wyrd.yaml`) shares the same app-id,
+   the appex nests as `md.enesis.wyrd.fileprovider`, and the group
+   is `group.md.enesis.wyrd`. The existing app-id marker check
+   (`tests/harness/test-appex-embedding.sh`, bundle-identifiers
+   check) covers the chosen id plus the product metadata, and the
+   appex stage hook takes the version from the same config (single
+   version source, fails closed on drift).
 5. Settings hand-off (issue 25): reference that issue; duplicate no
    field definitions here.
 6. `wyrd-owner-client` extraction: landed — the closure decision
