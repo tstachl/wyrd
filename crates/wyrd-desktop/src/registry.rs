@@ -272,7 +272,21 @@ fn registry_relays_for_at(registry_path: &Path, drive_dir: &Path) -> Vec<String>
         .map(|relays| {
             relays
                 .iter()
-                .filter_map(|relay| relay.as_str().map(str::to_string))
+                .filter_map(|relay| relay.as_str())
+                // Mirror the writer's relay rule (`validate_fields`
+                // below): empty, whitespace, or control-byte values
+                // are unusable. Skipping them keeps a malformed entry
+                // from pointing the owner at a dead relay while
+                // suppressing the config-file fallback — an
+                // all-unusable set answers empty, exactly like no
+                // relays key.
+                .filter(|relay| {
+                    !relay.is_empty()
+                        && !relay
+                            .bytes()
+                            .any(|byte| byte < 0x20 || byte == 0x7f || byte.is_ascii_whitespace())
+                })
+                .map(str::to_string)
                 .collect()
         })
         .unwrap_or_default()
@@ -1060,7 +1074,8 @@ mod tests {
     /// malformed file, a drive with no entry, or an entry with no
     /// usable relays all answer empty — so unlock falls back to the
     /// drive config file exactly as before. Non-string relay values
-    /// are skipped, never guessed.
+    /// are skipped, never guessed, as are empty, whitespace, or
+    /// control-byte strings (the writer's relay rule mirrored).
     #[test]
     fn registry_relay_lookup_fails_open_to_the_drive_config() {
         let dir =
@@ -1082,7 +1097,7 @@ mod tests {
                     "demo": {
                         "name": "demo",
                         "drive_dir": drive.to_string_lossy(),
-                        "relays": ["wss://one.example", "wss://two.example", 7],
+                        "relays": ["wss://one.example", "wss://two.example", 7, "", "  ", "wss://bad\u{7f}.example"],
                         "service": "drive-demo",
                         "mode": "vault",
                     },
@@ -1103,7 +1118,7 @@ mod tests {
                 "wss://one.example".to_string(),
                 "wss://two.example".to_string()
             ],
-            "registered relays come back in order, non-strings skipped"
+            "registered relays come back in order, unusable values skipped"
         );
         // A drive with no entry answers empty.
         assert!(registry_relays_for_at(&path, &dir.join("other-drive")).is_empty());
