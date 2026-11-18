@@ -899,9 +899,13 @@ pub struct UnlockRequest {
     /// Credential *path*, never contents. The device identity file
     /// the start-up gate verified.
     pub identity_file: PathBuf,
-    /// Control-plane relays for the owner session. Empty means the
-    /// drive configuration default, like every other networked
-    /// command — the CLI resolves, never the adapter.
+    /// Control-plane relays for the owner session: the registry's
+    /// registered set for the drive. Non-empty emits `--relay`
+    /// flags, which *replace* the drive config file (CLI precedence:
+    /// flags win when given); empty omits the flags and the CLI
+    /// falls back to the config file. Unusable values never reach
+    /// this field — `registry::registry_relays_for` skips them, so
+    /// an all-unusable set falls back exactly like no set.
     pub relays: Vec<String>,
     /// Per-device retained-bytes ceiling in bytes. `None` enforces
     /// no ceiling, like `owner start`.
