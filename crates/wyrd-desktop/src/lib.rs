@@ -53,7 +53,7 @@ pub use settings_apply::{
 pub use settings_view::{DriveSettings, DriveSettingsView};
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 /// The managed application state: the drive connection map plus the
@@ -312,6 +312,24 @@ impl AppState {
         Ok(())
     }
 
+    /// Forget the cached connection for one drive without replacing
+    /// it: the next exchange mints a fresh connection on demand.
+    /// Called wherever an operation may replace the serving owner —
+    /// unlock spawning a new owner, lock killing the app-held one,
+    /// owner-restarting provision operations — so the first probe
+    /// past the restart never runs on the pre-restart stream (which
+    /// would break, poison the client, and force a manual reconnect
+    /// for every later probe). Map removal only, never IO: a failed
+    /// or refused operation evicts just as safely, and in-flight
+    /// exchanges hold their own `Arc` and complete undisturbed.
+    pub fn evict_drive(&self, drive_dir: &Path) {
+        let mut held = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        held.remove(drive_dir);
+    }
+
     /// Try to claim the lifecycle flight for one drive: at most one
     /// CLI operation runs on a drive at a time. Returns `true` when
     /// the caller owns the flight and must call
@@ -463,5 +481,17 @@ mod tests {
             }
             other => panic!("a relative drive refuses loudly: {other:?}"),
         }
+    }
+
+    /// Evicting a drive with no cached connection is a silent no-op:
+    /// unlock, lock, and provisioned restarts evict unconditionally
+    /// (map removal only, never IO), so the absent-entry case must
+    /// never fail. The positive case — a stale entry stops being
+    /// served — pins through the `drive_unlock` integration test,
+    /// which needs a real socket the unit context cannot stage.
+    #[test]
+    fn evict_drive_without_a_cached_connection_is_a_noop() {
+        let state = AppState::new();
+        state.evict_drive(Path::new("/drives/alpha"));
     }
 }
