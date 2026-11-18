@@ -1364,7 +1364,13 @@ where
     let request = super::provision::UnlockRequest {
         drive_dir: dir.to_path_buf(),
         identity_file: PathBuf::from(&args.identity_file),
-        relays: Vec::new(),
+        // The registered relay set: managed starts bake it into the
+        // service definition, but unlock spawns the owner directly —
+        // without the registry relays a drive with no `default.toml`
+        // refuses relay-less. Empty where the drive is unregistered
+        // or the registry is unreadable, so the CLI falls back to
+        // the drive config file exactly as before.
+        relays: registry::registry_relays_for(dir),
         retained_quota: None,
     };
     let mut spawned = match super::provision::spawn_unlock(&cli, &request, &secret) {

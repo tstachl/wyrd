@@ -237,6 +237,47 @@ fn managed_definition_exists_at(registry_path: &Path, drive_dir: &Path) -> bool 
     })
 }
 
+/// The registered relay set for one drive directory: the unlock
+/// command's relay source. Reads the default registry file without
+/// probing any socket — a missing or unreadable file, or a drive
+/// with no entry, answers empty, so the CLI falls back to the
+/// drive config file exactly as before. Non-string relay values
+/// are skipped, never guessed: the writer validates relays, and an
+/// entry the reader cannot parse must not invent network targets.
+pub(crate) fn registry_relays_for(drive_dir: &Path) -> Vec<String> {
+    registry_relays_for_at(&default_registry_path(), drive_dir)
+}
+
+/// The test seam for [`registry_relays_for`]: the registry path is
+/// injected, so the lookup pins without touching the operator's
+/// real registry file.
+fn registry_relays_for_at(registry_path: &Path, drive_dir: &Path) -> Vec<String> {
+    let bytes = match std::fs::read(registry_path) {
+        Ok(bytes) => bytes,
+        Err(_) => return Vec::new(),
+    };
+    let file: serde_json::Value = match serde_json::from_slice(&bytes) {
+        Ok(file) => file,
+        Err(_) => return Vec::new(),
+    };
+    let want = drive_dir.to_string_lossy();
+    let Some(drives) = file.get("drives").and_then(|drives| drives.as_object()) else {
+        return Vec::new();
+    };
+    drives
+        .values()
+        .find(|entry| entry.get("drive_dir").and_then(|dir| dir.as_str()) == Some(want.as_ref()))
+        .and_then(|entry| entry.get("relays"))
+        .and_then(|relays| relays.as_array())
+        .map(|relays| {
+            relays
+                .iter()
+                .filter_map(|relay| relay.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// The lifecycle view's registry answer: the file status, one view
 /// per valid entry, and one reason per skipped entry. The status
 /// flattens into the payload (`{"status": "ready", "drives": ...}`)
@@ -1012,6 +1053,63 @@ mod tests {
             }
             other => panic!("a down definition-less drive is locked: {other:?}"),
         }
+    }
+
+    /// The unlock relay lookup reads the registered set without
+    /// probing: relays come back in entry order, and a missing or
+    /// malformed file, a drive with no entry, or an entry with no
+    /// usable relays all answer empty — so unlock falls back to the
+    /// drive config file exactly as before. Non-string relay values
+    /// are skipped, never guessed.
+    #[test]
+    fn registry_relay_lookup_fails_open_to_the_drive_config() {
+        let dir =
+            std::env::temp_dir().join(format!("wyrd-desktop-reg-{}-relays", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let drive = dir.join("drive");
+        // Missing file answers empty.
+        assert!(registry_relays_for_at(&dir.join("absent.json"), &drive).is_empty());
+        // Malformed file answers empty.
+        let broken = dir.join("broken.json");
+        std::fs::write(&broken, r#"{"version": 1, "drives": {"#).unwrap();
+        assert!(registry_relays_for_at(&broken, &drive).is_empty());
+        let path = dir.join("drives.json");
+        std::fs::write(
+            &path,
+            serde_json::json!({
+                "version": 1,
+                "drives": {
+                    "demo": {
+                        "name": "demo",
+                        "drive_dir": drive.to_string_lossy(),
+                        "relays": ["wss://one.example", "wss://two.example", 7],
+                        "service": "drive-demo",
+                        "mode": "vault",
+                    },
+                    "bare": {
+                        "name": "bare",
+                        "drive_dir": dir.join("other").to_string_lossy(),
+                        "service": "drive-bare",
+                        "mode": "vault",
+                    },
+                },
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            registry_relays_for_at(&path, &drive),
+            vec![
+                "wss://one.example".to_string(),
+                "wss://two.example".to_string()
+            ],
+            "registered relays come back in order, non-strings skipped"
+        );
+        // A drive with no entry answers empty.
+        assert!(registry_relays_for_at(&path, &dir.join("other-drive")).is_empty());
+        // An entry with no relays key answers empty.
+        assert!(registry_relays_for_at(&path, &dir.join("other")).is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     /// The managed-definition gate reads the registry file without
