@@ -33,6 +33,7 @@ pub mod onboarding;
 pub mod provision;
 pub mod registry;
 pub mod service;
+pub mod session;
 pub mod settings_apply;
 pub mod settings_view;
 pub mod tray;
@@ -42,15 +43,16 @@ pub use onboarding::{KeyDefaults, OnboardingReport, OnboardingResult};
 pub use provision::{LeaveRequest, ProvisionRequest, ProvisionResult, PROVISION_TIMEOUT};
 pub use registry::{
     DriveAvailability, DriveView, RegistryEntryWrite, RegistryState, RegistryStatus,
-    RegistryWriteError,
+    RegistryWriteError, SessionState,
 };
 pub use service::ServiceState;
+pub use session::{MAX_UNLOCK_RESTARTS, UNLOCK_POLL_INTERVAL, UNLOCK_RESTART_BACKOFF};
 pub use settings_apply::{
     SettingsApplyOutcome, SettingsApplyRequest, SettingsApplyResult, SETTINGS_APPLY_TIMEOUT,
 };
 pub use settings_view::{DriveSettings, DriveSettingsView};
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -70,6 +72,12 @@ use std::sync::{Arc, Mutex};
 /// lifecycle operation runs on a drive at a time. A second request
 /// while one is in flight is refused with an explicit busy state,
 /// never queued behind a service restart.
+///
+/// Unlock sessions serialize the same way through the flight map:
+/// `drive_unlock` claims the flight for its verify window, and
+/// `drive_lock` claims it to take the session — so a lock can
+/// never race an unlock's store, and the monitor's respawns (which
+/// never take the flight) can never interleave with either.
 pub struct AppState {
     inner: Mutex<BTreeMap<PathBuf, Arc<DesktopBackend>>>,
     flights: Mutex<HashSet<PathBuf>>,
@@ -79,6 +87,16 @@ pub struct AppState {
     /// fallback) — the frontend can never name an arbitrary binary
     /// (no IPC command sets this; only Rust callers, i.e. tests, do).
     cli_override: Mutex<Option<PathBuf>>,
+    /// App-held unlock sessions, one per unlocked drive: the
+    /// in-memory passphrase plus the supervised owner child. Never
+    /// persisted, never logged, never IPC'd back out. Locking
+    /// removes the entry (child killed, secret scrubbed); the
+    /// monitor removes it past the restart budget.
+    sessions: Mutex<HashMap<PathBuf, session::UnlockSession>>,
+    /// Monotonic session ids: each stored unlock mints one, and a
+    /// monitor exits where its drive's entry carries another — so a
+    /// stale watcher can never respawn a locked drive.
+    generation: std::sync::atomic::AtomicU64,
 }
 
 /// Outstanding IPC work, counted from dispatch to answer. The quit
@@ -154,6 +172,8 @@ impl AppState {
             inner: Mutex::new(BTreeMap::new()),
             flights: Mutex::new(HashSet::new()),
             cli_override: Mutex::new(None),
+            sessions: Mutex::new(HashMap::new()),
+            generation: std::sync::atomic::AtomicU64::new(1),
         }
     }
 
@@ -315,6 +335,21 @@ impl AppState {
             .unwrap_or_else(|poison| poison.into_inner());
         held.remove(drive_dir);
     }
+
+    /// The app-held unlock sessions: the in-memory passphrase plus
+    /// the supervised owner child per unlocked drive. The session
+    /// module owns the lifecycle; this only exposes the map.
+    pub(crate) fn sessions(&self) -> &Mutex<HashMap<PathBuf, session::UnlockSession>> {
+        &self.sessions
+    }
+
+    /// Mint the next session generation: each stored unlock carries
+    /// a fresh id, and a monitor exits where its drive's entry
+    /// carries another.
+    pub(crate) fn next_generation(&self) -> u64 {
+        self.generation
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+    }
 }
 
 impl Default for AppState {
@@ -379,6 +414,8 @@ pub fn invoke_handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> 
         commands::provision_leave,
         commands::provision_reconfigure,
         commands::provision_service_start,
+        commands::drive_unlock,
+        commands::drive_lock,
         commands::onboarding_defaults,
         commands::onboarding_new_passphrase,
         commands::onboarding_commit,

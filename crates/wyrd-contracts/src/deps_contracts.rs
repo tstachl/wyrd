@@ -255,6 +255,10 @@ fn policy_for(member: &str) -> Option<MemberPolicy> {
                 "serde",
                 "serde_json",
                 "thiserror",
+                // Session secrets only (`Zeroizing` wrappers, never
+                // persisted, never logged): the scrub-on-drop leaf
+                // the CLI and sync halves already use.
+                "zeroize",
             ],
         }),
         _ => None,
@@ -637,6 +641,7 @@ fn feature_pins(member: &str) -> Option<&'static [FeaturePin]> {
             ("dependencies", "thiserror", &[], true),
             ("dependencies", "wyrd-owner-client", &[], true),
             ("dependencies", "wyrd-settings", &[], true),
+            ("dependencies", "zeroize", &[], true),
             ("build-dependencies", "tauri-build", &[], true),
             ("dev-dependencies", "tauri", &["test"], true),
             ("dev-dependencies", "wyrd-core", &["test-fixtures"], true),

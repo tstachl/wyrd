@@ -885,6 +885,229 @@ pub fn run_service_start(
     map_exit_output(&output)
 }
 
+/// Unlock one registered drive for the session: start the
+/// persistent owner in the foreground with a passphrase from the
+/// stdin pipe (`--passphrase-stdin`), never from a file. The
+/// identity secret still comes from its file; only the passphrase
+/// rides the pipe. Nothing is installed, enabled, or rewritten —
+/// the manager learns nothing, so a reboot or an explicit lock
+/// locks the drive again.
+#[derive(Debug, Clone)]
+pub struct UnlockRequest {
+    /// Absolute drive directory, exact string (shared drive-identity rule).
+    pub drive_dir: PathBuf,
+    /// Credential *path*, never contents. The device identity file
+    /// the start-up gate verified.
+    pub identity_file: PathBuf,
+    /// Control-plane relays for the owner session. Empty means the
+    /// drive configuration default, like every other networked
+    /// command — the CLI resolves, never the adapter.
+    pub relays: Vec<String>,
+    /// Per-device retained-bytes ceiling in bytes. `None` enforces
+    /// no ceiling, like `owner start`.
+    pub retained_quota: Option<u64>,
+}
+
+/// Bound on one piped unlock passphrase: the CLI's stdin bound
+/// (`read_passphrase_stdin`), mirrored here so an overlong pipe
+/// refuses before any process spawns instead of failing closed
+/// inside the child.
+pub const MAX_UNLOCK_PASSPHRASE_BYTES: usize = 4096;
+
+/// How long `drive_unlock` waits for the spawned owner to answer
+/// before reporting unknown: long enough for the keystore KDF plus
+/// the socket bind, bounded so a wedged owner cannot hold the
+/// flight past the operation. Expiry resolves `Unknown`, never
+/// failure — the owner may still come up under the session
+/// monitor, and the paired observation decides the display.
+pub const UNLOCK_VERIFY_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Check one unlock passphrase's pipe shape before any process
+/// spawns: non-empty, bounded, UTF-8, no line breaks. The CLI
+/// re-validates on read (bounded take, UTF-8, single trailing
+/// newline stripped, empty refused) — this mirror only fails fast
+/// with the adapter's wording. Line breaks always refuse: the
+/// commit path never writes one, so a break is certainly a paste
+/// error, never a real passphrase.
+pub fn validate_unlock_passphrase(passphrase: &[u8]) -> Result<(), String> {
+    if passphrase.is_empty() {
+        return Err(
+            "no passphrase given: type the drive passphrase to unlock (the owner never starts without it)"
+                .to_string(),
+        );
+    }
+    if passphrase.len() > MAX_UNLOCK_PASSPHRASE_BYTES {
+        return Err("passphrase exceeds the 4096-byte size limit".to_string());
+    }
+    let text =
+        std::str::from_utf8(passphrase).map_err(|_| "passphrase must be UTF-8 text".to_string())?;
+    if text.contains('\n') || text.contains('\r') {
+        return Err(
+            "passphrase must not contain line breaks: retype the single-line passphrase"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+/// Pure argv builder for `wyrd drive <dir> unlock …`: every
+/// argument is a separate argv element, never shell-constructed.
+/// Mirrors `crates/wyrd-cli/src/args.rs` (`DriveAction::Unlock`).
+/// Credential flags ride the `drive` parent (flattened, not
+/// global), so `--identity-file` and `--passphrase-stdin` precede
+/// the `unlock` verb — clap rejects them after it, like the
+/// `leave` argv above. No `--passphrase-file` ever: unlock
+/// refuses a file-backed start by construction.
+pub fn unlock_argv(request: &UnlockRequest) -> Vec<OsString> {
+    let mut argv: Vec<OsString> = vec![
+        "drive".into(),
+        request.drive_dir.as_os_str().to_owned(),
+        "--identity-file".into(),
+        request.identity_file.as_os_str().to_owned(),
+        "--passphrase-stdin".into(),
+        "unlock".into(),
+    ];
+    for relay in &request.relays {
+        argv.push("--relay".into());
+        argv.push(relay.into());
+    }
+    if let Some(quota) = request.retained_quota {
+        argv.push("--retained-quota".into());
+        argv.push(quota.to_string().into());
+    }
+    argv
+}
+
+/// One spawned unlock owner plus its pipe-drain threads. The child
+/// runs the persistent owner — it is held, never waited on here:
+/// the session monitor owns the wait, and `drive_lock` owns the
+/// kill. Drop detaches the drain threads (they consume and discard
+/// until the last pipe writer closes); the child itself is owned
+/// by the session entry and is never orphaned by a drop.
+///
+/// `Debug` is safe: the struct carries pipe handles, never the
+/// secret (the caller keeps that in its own `Zeroizing`).
+#[derive(Debug)]
+pub struct SpawnedUnlock {
+    /// The persistent owner child: stdin already carries the
+    /// passphrase and is closed; stdout/stderr are piped to the
+    /// drain threads below.
+    pub child: std::process::Child,
+    /// Stdout drain thread: discards everything (retaining the
+    /// bounded prefix only so an early exit still reports detail).
+    /// Detached where the owner keeps serving; joined where it
+    /// exits before the verify bound.
+    pub stdout_thread: Option<std::thread::JoinHandle<Vec<u8>>>,
+    /// Stderr drain thread, same discipline as stdout.
+    pub stderr_thread: Option<std::thread::JoinHandle<Vec<u8>>>,
+}
+
+/// Spawn one `drive unlock` through the version-matched CLI:
+/// version check first (hard failure on mismatch, like every
+/// other runner), then the structured argv run with the passphrase
+/// piped on stdin and the pipe closed. Returns the held child —
+/// never waits: `drive unlock` runs the owner until SIGINT/SIGTERM,
+/// so the wait-to-completion `run_cli` would wedge past its
+/// timeout and then kill a healthy owner. The caller verifies
+/// readiness (socket probe) and hands the child to the session
+/// monitor; an early exit joins the drains for the exit-code
+/// detail, a live owner detaches them.
+///
+/// The secret crosses only as pipe bytes, never argv, never a
+/// file, never a log: validation bounds it before the spawn, the
+/// write is one bounded `write_all` to a fresh pipe (never
+/// blocking on a reader that never drains — the CLI reads stdin
+/// first), and the caller's `Zeroizing` wrapper scrubs the source
+/// on drop.
+pub fn spawn_unlock(
+    cli_bin: &Path,
+    request: &UnlockRequest,
+    passphrase: &[u8],
+) -> Result<SpawnedUnlock, ProvisionResult> {
+    use std::io::Write as _;
+    if let Err(reason) = validate_unlock_passphrase(passphrase) {
+        return Err(ProvisionResult::ExpectedFailure { detail: reason });
+    }
+    check_cli_version(cli_bin, PROVISION_TIMEOUT)?;
+    let argv = unlock_argv(request);
+    let mut command = std::process::Command::new(cli_bin);
+    command.args(&argv);
+    command.stdin(std::process::Stdio::piped());
+    command.stdout(std::process::Stdio::piped());
+    command.stderr(std::process::Stdio::piped());
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            return Err(ProvisionResult::Unknown {
+                detail: format!("cannot execute {}: {error}", cli_bin.display()),
+            });
+        }
+    };
+    let stdout_thread = spawn_drain("wyrd-unlock-stdout", child.stdout.take());
+    let stderr_thread = spawn_drain("wyrd-unlock-stderr", child.stderr.take());
+    // A drain thread that never starts must fail closed, never leak
+    // a live owner holding the drive: kill, reap, and resolve
+    // unknown — the paired observation decides, never a retry.
+    if stdout_thread.as_ref().is_some_and(|r| r.is_err())
+        || stderr_thread.as_ref().is_some_and(|r| r.is_err())
+    {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(ProvisionResult::Unknown {
+            detail: "cannot spawn unlock drain thread; outcome unknown — re-reading observed state"
+                .to_string(),
+        });
+    }
+    if let Some(mut stdin) = child.stdin.take() {
+        // One bounded write to a fresh pipe, then close: the CLI
+        // reads stdin before serving, so this never blocks — and
+        // closing tells the CLI the line is complete. A failed
+        // write fails the run, never hangs it.
+        if stdin.write_all(passphrase).is_err() {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(ProvisionResult::Unknown {
+                detail: "cannot pipe the passphrase to the unlock owner; outcome unknown — re-reading observed state"
+                    .to_string(),
+            });
+        }
+    }
+    Ok(SpawnedUnlock {
+        child,
+        stdout_thread: stdout_thread.and_then(|r| r.ok()),
+        stderr_thread: stderr_thread.and_then(|r| r.ok()),
+    })
+}
+
+/// Collect the bounded display detail from an unlock owner that
+/// exited before serving: join both drains (EOF follows the exit)
+/// and truncate like every other runner. Call only where the
+/// child already exited — joining a live owner's drains would
+/// wedge past the verify bound.
+pub fn collect_unlock_exit_detail(spawned: SpawnedUnlock) -> (Option<i32>, String) {
+    let mut child = spawned.child;
+    let code = child.wait().ok().and_then(|status| status.code());
+    let stdout_bytes = spawned
+        .stdout_thread
+        .map(|handle| handle.join().unwrap_or_default())
+        .unwrap_or_default();
+    let stderr_bytes = spawned
+        .stderr_thread
+        .map(|handle| handle.join().unwrap_or_default())
+        .unwrap_or_default();
+    (
+        code,
+        truncate(
+            &format!(
+                "{}\n{}",
+                String::from_utf8_lossy(&stdout_bytes),
+                String::from_utf8_lossy(&stderr_bytes)
+            ),
+            500,
+        ),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1747,5 +1970,205 @@ mod tests {
             other => panic!("fake exit-0 start completes: {other:?}"),
         }
         assert_eq!(outcome.code, Some(0));
+    }
+
+    fn unlock_request() -> UnlockRequest {
+        UnlockRequest {
+            drive_dir: PathBuf::from("/drives/alpha"),
+            identity_file: PathBuf::from("/keys/identity"),
+            relays: vec!["wss://relay.example".to_string()],
+            retained_quota: None,
+        }
+    }
+
+    /// The unlock argv is one structured element per argument:
+    /// `drive <dir> --identity-file … --passphrase-stdin unlock`,
+    /// relay pairs and the quota pair after the verb — never a
+    /// joined shell string, never `--passphrase-file` (unlock
+    /// refuses a file-backed start by construction), never secret
+    /// contents (the passphrase rides the stdin pipe).
+    #[test]
+    fn unlock_argv_is_structured_with_the_pipe_flag() {
+        let argv = unlock_argv(&unlock_request());
+        let rendered: Vec<String> = argv
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            rendered,
+            vec![
+                "drive",
+                "/drives/alpha",
+                "--identity-file",
+                "/keys/identity",
+                "--passphrase-stdin",
+                "unlock",
+                "--relay",
+                "wss://relay.example",
+            ]
+        );
+        // Position pin, not just contents: the parent credential
+        // flags must sit before the `unlock` verb (the `leave`
+        // precedent) — after the verb clap rejects them.
+        let verb = rendered.iter().position(|arg| arg == "unlock").unwrap();
+        let identity = rendered
+            .iter()
+            .position(|arg| arg == "--identity-file")
+            .unwrap();
+        let pipe = rendered
+            .iter()
+            .position(|arg| arg == "--passphrase-stdin")
+            .unwrap();
+        assert!(
+            identity < verb && pipe < verb,
+            "credential flags precede the verb: {rendered:?}"
+        );
+        assert!(
+            !rendered.iter().any(|arg| arg == "--passphrase-file"),
+            "unlock never names a passphrase file: {rendered:?}"
+        );
+        // Empty relays and no quota emit no flags: the CLI resolves
+        // the drive configuration default, like every other
+        // networked command.
+        let bare = UnlockRequest {
+            relays: Vec::new(),
+            retained_quota: None,
+            ..unlock_request()
+        };
+        let rendered: Vec<String> = unlock_argv(&bare)
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            !rendered.contains(&"--relay".to_string()),
+            "no relay flags: {rendered:?}"
+        );
+        let mut quoted = unlock_request();
+        quoted.retained_quota = Some(4096);
+        let rendered: Vec<String> = unlock_argv(&quoted)
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert!(rendered.contains(&"--retained-quota".to_string()));
+        assert!(rendered.contains(&"4096".to_string()));
+    }
+
+    /// Passphrase pipe-shape pins: empty refuses, overlong refuses,
+    /// non-UTF-8 refuses, line breaks refuse (the commit path never
+    /// writes one, so a break is a paste error, never a real
+    /// passphrase) — all before any process spawns.
+    #[test]
+    fn unlock_passphrase_validation_fails_closed_before_spawning() {
+        assert!(validate_unlock_passphrase(b"hunter2-hunter2").is_ok());
+        assert!(validate_unlock_passphrase(b"").is_err());
+        assert!(validate_unlock_passphrase(&vec![b'x'; 4097]).is_err());
+        assert!(validate_unlock_passphrase(&vec![b'x'; 4096]).is_ok());
+        assert!(validate_unlock_passphrase(&[0xff, 0xfe]).is_err());
+        assert!(validate_unlock_passphrase(b"two\nlines").is_err());
+        assert!(validate_unlock_passphrase(b"trailing-newline\n").is_err());
+    }
+
+    /// `spawn_unlock` pipes the passphrase on stdin and holds the
+    /// child: the fake CLI (version gate, then drain stdin to a
+    /// file, then sleep) proves the pipe carries the exact bytes —
+    /// never argv — and the child stays alive past the spawn, so
+    /// the session monitor owns the wait.
+    #[test]
+    fn spawn_unlock_pipes_the_passphrase_and_holds_the_child() {
+        let dir = std::env::temp_dir().join(format!(
+            "wyrd-desktop-fakecli-{}-unlock-pipe",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cli = dir.join("wyrd");
+        let captured = dir.join("stdin-captured");
+        let version = env!("CARGO_PKG_VERSION");
+        std::fs::write(
+            &cli,
+            format!(
+                "#!/bin/sh\nif [ \"$1\" = \"__build_info\" ]; then\necho \"update build: {version}\"\nexit 0\nfi\ncat > {}\nsleep 30\nexit 0\n",
+                captured.display()
+            ),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let mut spawned =
+            spawn_unlock(&cli, &unlock_request(), b"hunter2-hunter2").expect("spawn holds");
+        // The fake drains stdin before sleeping, so the bytes land
+        // promptly; the child must still be alive (persistent owner).
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !captured.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert_eq!(
+            std::fs::read(&captured).unwrap(),
+            b"hunter2-hunter2",
+            "the pipe carries the exact passphrase bytes"
+        );
+        assert!(
+            spawned.child.try_wait().unwrap().is_none(),
+            "the unlock child is held, not reaped"
+        );
+        let _ = spawned.child.kill();
+        let _ = spawned.child.wait();
+        std::fs::remove_dir_all(&dir).unwrap_or(());
+    }
+
+    /// A version-skewed CLI refuses before spawning the unlock argv:
+    /// the pipe never opens, the secret never leaves the caller.
+    #[test]
+    fn spawn_unlock_refuses_a_version_skewed_cli() {
+        let dir = std::env::temp_dir().join(format!(
+            "wyrd-desktop-fakecli-{}-unlock-skew",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cli = dir.join("wyrd");
+        std::fs::write(
+            &cli,
+            "#!/bin/sh\nif [ \"$1\" = \"__build_info\" ]; then\necho \"update build: 9.9.9-mismatch\"\nexit 0\nfi\nexit 0\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        match spawn_unlock(&cli, &unlock_request(), b"hunter2-hunter2") {
+            Err(ProvisionResult::VersionMismatch { .. }) => {}
+            other => panic!("skew refuses before spawning: {other:?}"),
+        }
+        std::fs::remove_dir_all(&dir).unwrap_or(());
+    }
+
+    /// An invalid passphrase refuses before any process spawns: no
+    /// version check runs, no child exists to hold a secret.
+    #[test]
+    fn spawn_unlock_validates_before_spawning() {
+        let missing =
+            std::env::temp_dir().join(format!("wyrd-desktop-no-such-cli-{}", std::process::id()));
+        match spawn_unlock(&missing, &unlock_request(), b"") {
+            Err(ProvisionResult::ExpectedFailure { detail }) => {
+                assert!(detail.contains("no passphrase"), "detail: {detail}");
+            }
+            other => panic!("an empty passphrase refuses first: {other:?}"),
+        }
+    }
+
+    /// An unlock owner that exits before serving reports its bounded
+    /// detail: the drains join past EOF and the exit code survives
+    /// for the caller's mapping.
+    #[test]
+    fn collect_unlock_exit_detail_joins_the_drains() {
+        let cli = fake_cli("unlock-exit", "wrong passphrase\n", 2);
+        let spawned =
+            spawn_unlock(&cli, &unlock_request(), b"wrong-passphrase").expect("spawn holds");
+        let (code, detail) = collect_unlock_exit_detail(spawned);
+        assert_eq!(code, Some(2));
+        assert!(detail.contains("wrong passphrase"), "detail: {detail}");
     }
 }

@@ -97,6 +97,33 @@ pub enum RegistryStatus {
     },
 }
 
+/// One drive's session gate for the per-session posture: whether
+/// this drive is open in this session or needs an explicit unlock.
+/// `None` where a service definition exists — managed recovery
+/// (`ServiceState`) owns that drive, and no passphrase gate
+/// applies. `Some` only for definition-less drives: the
+/// per-session posture (or a removed definition), where the only
+/// ways back to serving are an explicit `drive_unlock` with the
+/// passphrase or a reinstalled managed definition.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "state", rename_all = "lowercase")]
+pub enum SessionState {
+    /// The owner answered this session: the drive is open.
+    Unlocked {
+        /// Evidence string: the owner answered this session.
+        detail: String,
+    },
+    /// No owner serves and no service definition exists to start:
+    /// the drive needs an explicit unlock with its passphrase (or
+    /// a reinstalled managed definition). A stable first-class
+    /// state, never a failure — the shell never auto-starts.
+    Locked {
+        /// Evidence string naming both recoveries: session unlock
+        /// and managed reinstall.
+        detail: String,
+    },
+}
+
 /// One drive's reachability, verified this session. Transport-level
 /// only: `Available` never claims anything about the drive's
 /// contents, and `Unavailable` never claims the drive is gone.
@@ -142,6 +169,11 @@ pub struct DriveView {
     /// not-installed vs stopped vs wedged vs running vs unknown vs
     /// unsupported. Observation only — never supervision.
     pub service_state: super::service::ServiceState,
+    /// The per-session gate beside the transport verdict: locked
+    /// vs unlocked for definition-less drives, `None` where a
+    /// service definition exists (managed recovery owns that
+    /// drive). Observation only — never supervision.
+    pub session: Option<SessionState>,
 }
 
 /// The lifecycle view's registry answer: the file status, one view
@@ -385,6 +417,12 @@ pub fn list_drives_at(registry_path: &Path) -> RegistryState {
                 }
                 drives.push({
                     let availability = probe_drive(&entry.drive_dir);
+                    // The definition fact is read once and shared by
+                    // the service verdict and the session gate below:
+                    // both describe the same file, and two stats could
+                    // disagree under a concurrent reinstall.
+                    let definition_exists =
+                        super::service::service_definition_path(&entry.service).exists();
                     // The service-manager probe runs only where a view
                     // consumes it: the unavailable screen is the sole
                     // reader, and it renders only for `Unavailable`. A
@@ -407,7 +445,7 @@ pub fn list_drives_at(registry_path: &Path) -> RegistryState {
                             super::service::probe_service_state(&entry.service, false)
                         }
                         DriveAvailability::Unknown { .. } => {
-                            if super::service::service_definition_path(&entry.service).exists() {
+                            if definition_exists {
                                 super::service::ServiceState::Unknown {
                                     detail: "service not probed while availability is unknown — retry the owner probe".to_string(),
                                 }
@@ -416,6 +454,27 @@ pub fn list_drives_at(registry_path: &Path) -> RegistryState {
                                     detail: "no service definition installed: the drive is registered without a managed service — reinstall the definition to supervise it".to_string(),
                                 }
                             }
+                        }
+                    };
+                    // The session gate beside the transport verdict:
+                    // definition-less drives are locked until the
+                    // owner answers (explicit unlock opens them) and
+                    // unlocked once it does; managed drives carry no
+                    // gate — their service verdict owns recovery.
+                    let session = if definition_exists {
+                        None
+                    } else {
+                        match &availability {
+                            DriveAvailability::Available => Some(SessionState::Unlocked {
+                                detail: "the owner answered this session — the drive is open"
+                                    .to_string(),
+                            }),
+                            DriveAvailability::Unavailable { .. } => Some(SessionState::Locked {
+                                detail: "no owner serves and no service definition exists: unlock the drive for this session with its passphrase, or reinstall the managed definition".to_string(),
+                            }),
+                            DriveAvailability::Unknown { .. } => Some(SessionState::Locked {
+                                detail: "the owner did not answer terminally and no service definition exists: retry the probe — where the drive stays down, unlock it with its passphrase".to_string(),
+                            }),
                         }
                     };
                     DriveView {
@@ -430,6 +489,7 @@ pub fn list_drives_at(registry_path: &Path) -> RegistryState {
                             .map(|path| path.to_string_lossy().into_owned()),
                         availability,
                         service_state,
+                        session,
                     }
                 })
             }
