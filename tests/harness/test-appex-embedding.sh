@@ -61,4 +61,20 @@ grep -Fq 'app-id: md.enesis.wyrd' \
   || die "linux manifest: app-id drifted"
 pass "bundle identifiers nest, build script agrees"
 
+# 4. The ad-hoc load refusal is recorded, not assumed: the README
+# names the verdict on the ad-hoc appex and the team-signed deltas
+# that unblock distribution, and the notarized check stays with
+# the signing owner.
+grep -Fq 'Ad-hoc `fileproviderd` load check' "$ROOT/packaging/macos/README.md" \
+  || die "README: ad-hoc load check not recorded"
+grep -Fq 'does not load, by mechanism' "$ROOT/packaging/macos/README.md" \
+  || die "README: ad-hoc verdict missing"
+grep -Fq '`fileproviderd` load check itself stays' "$ROOT/packaging/macos/README.md" \
+  || die "README: notarized check ownership missing"
+grep -Fq 'with the signing owner' "$ROOT/packaging/macos/README.md" \
+  || die "README: signing owner missing"
+grep -Fq 'no effective group-container entitlement' "$ROOT/packaging/macos/README.md" \
+  || die "README: effective-entitlement mechanism missing"
+pass "ad-hoc refusal recorded with team-signed deltas"
+
 echo "appex-embedding: $PASS checks passed"
