@@ -446,7 +446,15 @@ verdict.
   posture) — never a terminal, never auto-start: a stopped or
   locked drive is a stable first-class state until the person
   starts or unlocks it, and a refused recovery reports its outcome
-  on the screen instead of failing silently.
+  on the screen instead of failing silently. Locked is the
+  exception that keeps local surfaces: a locked drive's Settings
+  tab still renders — configured bounds read from the settings
+  file and the identity-pair Leave card need no owner — while
+  Status stays gated on the unlock card. Device-level
+  Nostr/identity surfaces never gate on a drive's lock state: the
+  drive list with its per-drive session badges and relay facts,
+  and the device-identity gate with its onboarding and repair, all
+  work with every drive locked.
 - Framework choice, decided: Svelte 5 + shadcn-svelte, no SvelteKit
   (local desktop app: no SSR, routing infrastructure, or server
   endpoints). The main window opens 1120x800 (min 960x640) so the
@@ -653,6 +661,12 @@ plus UI under shape 3 (independent installs that find each other
 through `<drive_dir>/owner.sock`, no discovery service): startup at
 login, owner-first ordering, and the File-Provider-before-UI case
 documented as behavior (issue 17 owns the extension, not this note).
+Per-session drives restate that case as locked-until-unlock: the
+domain surfaces the locked state, never prompts for the passphrase
+itself, never caches it, and materializes only after the app's
+explicit unlock opens the owner. Owner-first ordering still holds
+for managed drives; per-session drives have no manager ordering to
+hold — unlock is the order.
 Distribution mechanics (archives, signing, updates) stay with the
 installer issue; auto-update is explicitly v0.8.
 
@@ -693,6 +707,21 @@ search.
   directory and the backend keeps no implicit active drive
   (selection-as-presentation proof); driveless first-run renders
   the empty lifecycle view instead of exiting.
+- Per-session posture matrix (R1/R2 above): each row names the
+  claim, its automated pin (`cargo test -p wyrd-desktop` for the
+  backend pins, `bun run test` in `apps/desktop/` for the
+  frontend pins), and its manual step against installed artifacts.
+
+  | Claim | Automated pin | Manual step |
+  |---|---|---|
+  | Cold boot, no passphrase file: nothing owner-shaped runs before unlock; a typed passphrase starts the owner; no passphrase file is created | Startup probes but never starts: the first touch is a socket probe plus a manager status probe (`launchctl list` / `systemctl is-active` — observation only), and per-session drives have no definition to start (`managed_definition_gate_fails_open_to_unlock`); a down definition-less drive reads `Locked` (`session_gate_pins_the_posture_rule`) | Boot to login, confirm no owner process, unlock by typing, grep the drive dir for a passphrase file |
+  | Owner death under supervision: no manager unit exists to restart it; the app restarts bounded, then falls back to manual unlock | `crash_loop_burns_the_budget_then_gives_up` (3 supervised respawns, then locked) | Kill the owner, observe the budget spend then the locked state, unlock manually |
+  | App crash with the owner running: survival + reattach | `crash_drop_leaves_the_owner_running_for_reattach`, plus the reattach rule (`session_gate_pins_the_posture_rule`: `Available` reads `Unlocked` with no session held) | Terminate the app, confirm the owner still serves, relaunch — open without a prompt |
+  | Both dead: re-prompt | `session_gate_pins_the_posture_rule` (a down definition-less drive reads `Locked`) | Terminate both, relaunch — locked, prompt |
+  | Absent-app owner death: nothing restarts it; reopen prompts then starts | `removed_entry_reads_gone` (lock wins, the sweeper exits) plus monitor threads dying with the app by construction | Stop the app, kill the owner, confirm nothing restarts, reopen — prompt-then-start |
+  | Credential isolation: the secret crosses only as stdin pipe bytes | `unlock_argv_is_structured_with_the_pipe_flag`, `spawn_unlock_confines_the_secret_to_stdin`, `Debug` redactions (`unlock_args_debug_redacts_the_passphrase`, `debug_redacts_the_secret`), pipe-shape validation (`unlock_passphrase_validation_fails_closed_before_spawning`, CLI-side `read_passphrase_stdin` pins) | `ps e` shows no secret; logs, traces, temp files, and persistent state carry none; no passphrase file appears after unlock |
+  | Transport abuse: malformed and prematurely closed pipes fail closed | Pipe-shape pins above (empty, overlong, non-UTF-8, and line-break passphrases refuse before any spawn) | Feed a truncated pipe and a 4097-byte pipe at `drive unlock --passphrase-stdin`: both refuse, the owner never starts partially initialized |
+  | Headless file-backed start unchanged | Existing `owner start` CLI tests — the pipe handoff adds a surface, changes none | Start file-backed headless as before |
 - No new wire bytes, so no new golden vectors: the backend speaks
   through the shared client, already pinned by `vectors.json`. Any
   drift in the mapped types fails the existing field-name snapshot,

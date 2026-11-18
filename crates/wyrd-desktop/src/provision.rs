@@ -2118,6 +2118,70 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap_or(());
     }
 
+    /// Credential isolation, spawn half: the passphrase crosses to
+    /// the unlock owner only as stdin pipe bytes — never argv,
+    /// never the environment. The recording fake logs its argv and
+    /// environment and captures stdin; the test asserts the secret
+    /// appears in exactly one of the three. (Argv shape pins
+    /// statically in `unlock_argv_is_structured_with_the_pipe_flag`;
+    /// `Debug` redaction pins in
+    /// `unlock_args_debug_redacts_the_passphrase` and
+    /// `debug_redacts_the_secret` in `commands.rs`/`session.rs`.)
+    #[test]
+    fn spawn_unlock_confines_the_secret_to_stdin() {
+        let dir = std::env::temp_dir().join(format!(
+            "wyrd-desktop-fakecli-{}-unlock-isolation",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cli = dir.join("wyrd");
+        let argv_log = dir.join("argv.log");
+        let env_log = dir.join("env.log");
+        let stdin_captured = dir.join("stdin.bin");
+        let version = env!("CARGO_PKG_VERSION");
+        std::fs::write(
+            &cli,
+            format!(
+                "#!/bin/sh\nif [ \"$1\" = \"__build_info\" ]; then\necho \"update build: {version}\"\nexit 0\nfi\nprintf '%s\\n' \"$@\" > {}\nenv > {}\ncat > {}\nexit 2\n",
+                argv_log.display(),
+                env_log.display(),
+                stdin_captured.display()
+            ),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        // Distinctive enough that no path, flag, or inherited
+        // environment variable can contain it by accident.
+        let secret = b"isolation-probe-per-session-9x";
+        let mut spawned = spawn_unlock(&cli, &unlock_request(), secret).expect("spawn holds");
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !stdin_captured.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let stdin = std::fs::read(&stdin_captured).unwrap();
+        let argv = std::fs::read_to_string(&argv_log).unwrap();
+        let env = std::fs::read_to_string(&env_log).unwrap();
+        assert_eq!(
+            stdin, secret,
+            "stdin carries the exact secret bytes, nothing else"
+        );
+        assert!(
+            !argv.contains("isolation-probe"),
+            "the secret never rides argv: {argv:?}"
+        );
+        assert!(
+            !env.contains("isolation-probe"),
+            "the secret never rides the environment"
+        );
+        let _ = spawned.child.kill();
+        let _ = spawned.child.wait();
+        std::fs::remove_dir_all(&dir).unwrap_or(());
+    }
+
     /// A version-skewed CLI refuses before spawning the unlock argv:
     /// the pipe never opens, the secret never leaves the caller.
     #[test]
