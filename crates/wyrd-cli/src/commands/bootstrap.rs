@@ -12,7 +12,7 @@ use wyrd_daemon::bootstrap::{
 };
 
 use crate::args::{Credentials, RelayArgs};
-use crate::drive_config::{resolve_credential_path, resolve_relays, LoadedConfig};
+use crate::drive_config::{resolve_relays, LoadedConfig};
 use crate::CliError;
 
 /// Provision one drive from nothing and hand it to OS supervision.
@@ -81,17 +81,15 @@ pub(crate) fn bootstrap(
 ) -> Result<(), CliError> {
     let drive_dir = args.drive_dir.clone();
     let relays = resolve_relays(args.relays.relay, config).relays;
-    let identity_file = resolve_credential_path(
-        args.credentials.identity_file,
-        config.and_then(|c| c.identity_file.clone()),
-        "--identity-file",
-        "identity_file",
-    )?;
-    let passphrase_file = resolve_credential_path(
-        args.credentials.passphrase_file,
-        config.and_then(|c| c.passphrase_file.clone()),
-        "--passphrase-file",
-        "passphrase_file",
+    let manage_service = !args.no_service;
+    // Credential paths for the definition: the identity file
+    // always, the passphrase file only when a definition will
+    // actually render one. Session posture (`--passphrase-stdin`
+    // with `--no-service`) skips the file entirely.
+    let (identity_file, passphrase_file) = crate::credentials::resolve_service_credential_files(
+        &args.credentials,
+        config,
+        manage_service,
     )?;
     // Services run with a fixed working directory, so every path
     // the definition carries is absolute: canonicalize what must
@@ -99,7 +97,9 @@ pub(crate) fn bootstrap(
     // the binaries without requiring them (a missing supervise
     // wrapper is its own actionable error at provision time).
     let identity_file = canonicalize(&identity_file)?;
-    let passphrase_file = canonicalize(&passphrase_file)?;
+    let passphrase_file = passphrase_file
+        .map(|path| canonicalize(&path))
+        .transpose()?;
     let owner_bin = args.owner_bin.map(absolutize);
     let supervise_bin = args.supervise_bin.map(absolutize);
     let init = match &args.invitation_file {
@@ -127,7 +127,7 @@ pub(crate) fn bootstrap(
         supervise_bin,
         identity_file,
         passphrase_file,
-        manage_service: !args.no_service,
+        manage_service,
         verify_timeout: Duration::from_secs(30),
     });
     match report {

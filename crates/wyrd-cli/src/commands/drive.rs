@@ -58,7 +58,7 @@ use wyrd_sync::runtime::Engine;
 use crate::args::{Credentials, DriveAction};
 use crate::commands::bootstrap::{absolutize, canonicalize, warn_skipped};
 use crate::commands::member::{carry_pending, require_last_owner_confirmation};
-use crate::drive_config::{resolve_credential_path, LoadedConfig};
+use crate::drive_config::LoadedConfig;
 use crate::CliError;
 
 /// What `drive delete` did: the authored self-removal plus the
@@ -283,20 +283,16 @@ fn reconfigure_drive(
     passphrase: &str,
     identity: DeviceIdentitySecret,
 ) -> Result<(), CliError> {
-    let identity_file = resolve_credential_path(
-        credentials.identity_file.clone(),
-        config.and_then(|c| c.identity_file.clone()),
-        "--identity-file",
-        "identity_file",
-    )?;
-    let passphrase_file = resolve_credential_path(
-        credentials.passphrase_file.clone(),
-        config.and_then(|c| c.passphrase_file.clone()),
-        "--passphrase-file",
-        "passphrase_file",
-    )?;
+    // Credential paths for the definition: the identity file
+    // always, the passphrase file only when a definition will
+    // actually render one. Session posture (`--passphrase-stdin`
+    // with `--no-service`) skips the file entirely.
+    let (identity_file, passphrase_file) =
+        crate::credentials::resolve_service_credential_files(credentials, config, !no_service)?;
     let identity_file = canonicalize(&identity_file)?;
-    let passphrase_file = canonicalize(&passphrase_file)?;
+    let passphrase_file = passphrase_file
+        .map(|path| canonicalize(&path))
+        .transpose()?;
     let owner_bin = owner_bin.map(absolutize);
     let supervise_bin = supervise_bin.map(absolutize);
     // Flags replace the registered set; no flags keep it, so a
