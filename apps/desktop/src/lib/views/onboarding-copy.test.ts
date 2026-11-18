@@ -102,6 +102,16 @@ test("acknowledgement is a single checkbox with the comprehension statement", ()
   );
 });
 
+test("recovery proves the write-down with a confirm entry", () => {
+  for (const line of [
+    "Confirm your passphrase",
+    "Re-type the passphrase from your stored copy",
+    "That does not match the passphrase",
+  ]) {
+    expect(view).toContain(line);
+  }
+});
+
 test("ready pairs create and join with actual file locations", () => {
   for (const line of [
     "This device is ready",
@@ -113,8 +123,9 @@ test("ready pairs create and join with actual file locations", () => {
   ]) {
     expect(view).toContain(line);
   }
-  // No recovery/backup status is rendered — backup is acknowledged,
-  // never verified.
+  // No recovery/backup status is rendered beyond the confirm-entry
+  // match — backup is acknowledged and matched, never independently
+  // verified.
   expect(view).not.toContain("Backup complete");
   expect(view).not.toContain("backup verified");
 });

@@ -11,7 +11,9 @@
   import { IpcTransportError } from "$lib/ipc/client.js";
   import {
     applySettings,
+    driveLock,
     driveSettings,
+    driveUnlock,
     freshness,
     listDrives,
     liveness,
@@ -58,6 +60,7 @@
   import SettingsView from "$lib/views/SettingsView.svelte";
   import StatusView from "$lib/views/StatusView.svelte";
   import UnavailableView from "$lib/views/UnavailableView.svelte";
+  import UnlockView from "$lib/views/UnlockView.svelte";
   import LayoutGridIcon from "@lucide/svelte/icons/layout-grid";
   import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
   import { listen } from "@tauri-apps/api/event";
@@ -334,8 +337,20 @@
   // silent. Cleared on every new attempt; a completed report clears
   // it through `refusedDetail` returning null.
   let recovery: { driveDir: string; detail: string } | null = $state(null);
+  // The last unlock attempt's refused outcome, keyed by drive like
+  // `recovery` so a refusal on one drive never renders on another's
+  // screen. Shown on the unlock card; the passphrase that produced
+  // it is already cleared by the unlock view.
+  let unlockRefused: { driveDir: string; detail: string } | null = $state(null);
 
   const selectedServiceState = $derived(selectedDrive?.service_state ?? null);
+  const selectedSession = $derived(selectedDrive?.session ?? null);
+  const selectedSessionDetail = $derived(
+    selectedSession !== null && selectedSession.state === "locked"
+      ? selectedSession.detail
+      : null,
+  );
+  const canUnlock = $derived(onboardedIdentityFile !== null);
   const canReinstall = $derived(
     onboardedIdentityFile !== null && onboardedPassphraseFile !== null,
   );
@@ -610,6 +625,70 @@
     await refreshCurrent();
   }
 
+  /**
+   * Unlock one drive for the session: spawn the persistent owner
+   * through the version-matched CLI with the passphrase on the
+   * stdin pipe, verify the socket answers, then re-read the
+   * registry and re-derive availability like `startService` does.
+   * Explicit, never automatic — a locked drive stays locked until
+   * this runs. A refused outcome surfaces on the unlock card;
+   * the passphrase that produced it is already cleared by the
+   * unlock view and never re-renders.
+   */
+  async function unlockDrive(driveDir: string, passphrase: string): Promise<void> {
+    const identityFile = onboardedIdentityFile;
+    if (identityFile === null) {
+      unlockRefused = {
+        driveDir,
+        detail: "This device's identity is not verified yet — finish the identity check first.",
+      };
+      return;
+    }
+    unlockRefused = null;
+    try {
+      const report = await runProvision(() =>
+        driveUnlock({ driveDir, identityFile, passphrase }),
+      );
+      const detail = refusedDetail(report);
+      unlockRefused = detail === null ? null : { driveDir, detail };
+    } catch (error: unknown) {
+      unlockRefused = {
+        driveDir,
+        detail:
+          error instanceof Error ? error.message : `Unexpected unlock failure: ${String(error)}`,
+      };
+      return;
+    }
+    await refreshLifecycle();
+    await readOwner(driveDir, () => liveness(driveDir));
+    await refreshCurrent();
+  }
+
+  /**
+   * Lock one drive for the session: kill the app-held unlock child
+   * and scrub the session secret, then re-read and re-derive
+   * availability. Refuses where this app holds no unlock session —
+   * a reattached owner the app did not start is never killed.
+   */
+  async function lockDrive(driveDir: string): Promise<void> {
+    unlockRefused = null;
+    try {
+      const report = await runProvision(() => driveLock({ driveDir }));
+      const detail = refusedDetail(report);
+      unlockRefused = detail === null ? null : { driveDir, detail };
+    } catch (error: unknown) {
+      unlockRefused = {
+        driveDir,
+        detail:
+          error instanceof Error ? error.message : `Unexpected lock failure: ${String(error)}`,
+      };
+      return;
+    }
+    await refreshLifecycle();
+    await readOwner(driveDir, () => liveness(driveDir));
+    await refreshCurrent();
+  }
+
   onMount(() => {
     // Tray route: "Add drive" shows the window from the backend
     // and asks the frontend to render the provision view on the
@@ -767,6 +846,15 @@
             <div class="flex flex-wrap items-center gap-2.5">
               <h1 class="truncate text-2xl font-semibold tracking-tight">{selectedDriveName}</h1>
               <AvailabilityBadge state={selectedAvailability} />
+              {#if selectedSession !== null}
+                <span
+                  class="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium {selectedSession.state === 'unlocked'
+                    ? 'border-ok/30 bg-ok/10 text-ok'
+                    : 'border-primary/40 bg-primary/10 text-foreground'}"
+                >
+                  {selectedSession.state === "unlocked" ? "Unlocked for this session" : "Locked — needs passphrase"}
+                </span>
+              {/if}
             </div>
             <div class="mt-1 flex min-w-0 items-center gap-1">
               <span class="truncate font-mono text-xs text-muted-foreground">{selectedDriveDir}</span>
@@ -780,9 +868,34 @@
         </div>
 
         <Tabs.Content value="status">
-          {#if selectedAvailability === "unavailable"}
+          {#if selectedSession !== null && selectedSession.state === "locked"}
+            <UnlockView
+              driveLabel={selectedDriveDir}
+              detail={selectedSessionDetail}
+              pending={busy}
+              identityReady={canUnlock}
+              unlockError={unlockRefused !== null && unlockRefused.driveDir === selectedDriveDir
+                ? unlockRefused.detail
+                : null}
+              onUnlock={(passphrase) => unlockDrive(selectedDriveDir, passphrase)}
+            />
+            {@render unavailableOverlay(selectedDriveDir)}
+          {:else if selectedAvailability === "unavailable"}
             {@render unavailableOverlay(selectedDriveDir)}
           {:else}
+            {#if selectedSession !== null && selectedSession.state === "unlocked"}
+              <div class="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-ok/30 bg-ok/10 px-4 py-3 text-sm">
+                <span class="text-foreground">Unlocked for this session — the owner is answering.</span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={busy}
+                  onclick={() => void lockDrive(selectedDriveDir)}
+                >
+                  Lock for this session
+                </Button>
+              </div>
+            {/if}
             <StatusView
               snapshot={presentation.statusSnapshotFor(selectedDriveDir)}
               availability={selectedAvailability}
@@ -791,6 +904,11 @@
               transportNotice={presentation.transportNotice}
               onRefresh={() => void refreshStatus(selectedDriveDir)}
             />
+            {#if unlockRefused !== null && unlockRefused.driveDir === selectedDriveDir}
+              <Alert.Root variant="destructive" class="mt-4">
+                <p>{unlockRefused.detail}</p>
+              </Alert.Root>
+            {/if}
           {/if}
         </Tabs.Content>
 
