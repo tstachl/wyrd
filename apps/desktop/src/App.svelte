@@ -611,20 +611,27 @@
   }
 
   onMount(() => {
-    // Tray route: "Set up / connect drives" shows the window from
-    // the backend and asks the frontend to render the drive list.
+    // Tray route: "Add drive" shows the window from the backend
+    // and asks the frontend to render the provision view on the
+    // create tab — the same screen the in-window button reaches.
     // Mirrored in `crates/wyrd-desktop/src/tray.rs`
-    // (`SELECT_LIFECYCLE_EVENT`): keep the string in sync.
+    // (`SELECT_PROVISION_EVENT`): keep the string in sync.
     // Best-effort: a missing Tauri runtime (browser preview)
     // never fails startup.
-    void listen("wyrd:select-lifecycle", () => {
-      presentation.selectView("lifecycle");
-      void refreshLifecycle();
+    // A tray route that lands before the first refresh wins over
+    // the startup selection below: startup must not overwrite a
+    // view the person already asked for.
+    let trayRouted = false;
+    void listen("wyrd:select-provision", () => {
+      trayRouted = true;
+      openProvisioning("create");
     }).catch(() => {});
     void refreshLifecycle().then(() => {
       // The device-level home is the drive list, not a drive
       // workspace: startup never implies an active drive.
-      presentation.selectView("lifecycle");
+      if (!trayRouted) {
+        presentation.selectView("lifecycle");
+      }
       void checkIdentityGate();
     });
   });

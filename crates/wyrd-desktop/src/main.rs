@@ -222,15 +222,15 @@ fn main() {
                                 .show_menu_on_left_click(true)
                                 .on_menu_event(|app, event| match event.id.as_ref() {
                                     tray::TRAY_SHOW_ID => tray::show_main_window(app),
-                                    tray::TRAY_SETUP_ID => {
+                                    tray::TRAY_ADD_ID => {
                                         tray::show_main_window(app);
                                         // Best-effort route: the
                                         // frontend selects the
-                                        // lifecycle view on this
+                                        // provision view on this
                                         // event; a missing
                                         // listener still leaves
                                         // the window shown.
-                                        let _ = app.emit(tray::SELECT_LIFECYCLE_EVENT, ());
+                                        let _ = app.emit(tray::SELECT_PROVISION_EVENT, ());
                                     }
                                     tray::TRAY_QUIT_ID => drain_and_exit(app.clone()),
                                     _ => {}

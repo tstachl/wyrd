@@ -1,6 +1,6 @@
 {
   "identifier": "default",
-  "description": "Least-privilege baseline for the Wyrd desktop shell: the frontend invokes the registered custom commands only, listens for the tray's select-lifecycle route, uses the native file picker for credential and invitation paths (runtime provisioning), and drives the borderless macOS header through the window drag region. No other Tauri core or plugin API access.",
+  "description": "Least-privilege baseline for the Wyrd desktop shell: the frontend invokes the registered custom commands only, listens for the tray's select-provision route, uses the native file picker for credential and invitation paths (runtime provisioning), and drives the borderless macOS header through the window drag region. No other Tauri core or plugin API access.",
   "windows": ["main"],
   "permissions": [
     "core:event:allow-listen",

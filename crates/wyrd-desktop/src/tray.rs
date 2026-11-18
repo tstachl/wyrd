@@ -13,10 +13,11 @@
 //!   command still carries its explicit directory. One dead owner
 //!   leaves every other drive's status and connections untouched,
 //!   because the probe fans out per drive under its own bound.
-//! - The tray routes, never authors: "Set up / connect drives"
-//!   shows the window and emits `wyrd:select-lifecycle` for the
-//!   frontend to render; provisioning execution stays with runtime
-//!   provisioning. "Show window" focuses the existing window.
+//! - The tray routes, never authors: "Add drive" shows the
+//!   window and emits `wyrd:select-provision` for the frontend to
+//!   render the provision view on the create tab; provisioning
+//!   execution stays with runtime provisioning. "Show window"
+//!   focuses the existing window.
 //!   "Quit" drains in-flight operations per the graceful-shutdown
 //!   rule (see `main.rs`) and exits — nothing is reported as
 //!   success without an owner answer.
@@ -44,19 +45,20 @@ pub struct TrayRow {
 }
 
 /// Menu action ids: the only events the tray handles.
-pub const TRAY_SETUP_ID: &str = "wyrd-set-up";
-/// Menu action id for the Show-window action: the only event the tray handles besides setup and quit.
+pub const TRAY_ADD_ID: &str = "wyrd-add-drive";
+/// Menu action id for the Show-window action: the only event the tray handles besides add-drive and quit.
 pub const TRAY_SHOW_ID: &str = "wyrd-show";
 /// Menu action id for the Quit action: drains in-flight operations per the graceful-shutdown rule, then exits.
 pub const TRAY_QUIT_ID: &str = "wyrd-quit";
 
-/// Frontend event the Set-up action emits: the window shows and the
-/// lifecycle view renders. The tray never selects a drive.
+/// Frontend event the Add-drive action emits: the window shows and
+/// the provision view renders on the create tab. The tray never
+/// selects a drive.
 ///
 /// Mirrored in `apps/desktop/src/App.svelte` (the tray route
 /// listener): no shared build step crosses the Rust/TS boundary, so
 /// keep the string in sync on both sides.
-pub const SELECT_LIFECYCLE_EVENT: &str = "wyrd:select-lifecycle";
+pub const SELECT_PROVISION_EVENT: &str = "wyrd:select-provision";
 
 /// Tray icon id: one presence per process.
 pub const TRAY_ID: &str = "wyrd-main";
@@ -102,8 +104,8 @@ pub fn tray_rows(state: &RegistryState) -> Vec<TrayRow> {
         }
     }
     rows.push(TrayRow {
-        id: TRAY_SETUP_ID.to_string(),
-        label: "Set up / connect drives".to_string(),
+        id: TRAY_ADD_ID.to_string(),
+        label: "Add drive".to_string(),
         enabled: true,
     });
     rows.push(TrayRow {
@@ -250,7 +252,8 @@ mod tests {
             rows[..3].iter().all(|row| !row.enabled),
             "status lines are presentation only, never a selection"
         );
-        assert_eq!(rows[3].id, TRAY_SETUP_ID);
+        assert_eq!(rows[3].id, TRAY_ADD_ID);
+        assert_eq!(rows[3].label, "Add drive");
         assert_eq!(rows[4].id, TRAY_SHOW_ID);
         assert_eq!(rows[5].id, TRAY_QUIT_ID);
         assert!(
@@ -293,6 +296,19 @@ mod tests {
         let rows = tray_rows(&loading_state());
         assert_eq!(rows[0].label, "No drives registered");
         assert!(!rows[0].enabled);
+    }
+
+    /// The tray route string is mirrored in the frontend with no
+    /// shared build step, so pin the listener call itself: if either
+    /// side renames its literal, this fails instead of silently
+    /// diverging.
+    #[test]
+    fn provision_event_string_matches_the_frontend_listener() {
+        let app_svelte = include_str!("../../../apps/desktop/src/App.svelte");
+        assert!(
+            app_svelte.contains("listen(\"wyrd:select-provision\""),
+            "App.svelte must listen for {SELECT_PROVISION_EVENT}"
+        );
     }
 
     /// An unreadable registry names itself loudly in the disabled
