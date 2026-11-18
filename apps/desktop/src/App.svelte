@@ -526,6 +526,7 @@
   /** Explicit retry for one drive: reconnect, then re-read. Recovery proves nothing by itself. */
   async function retryConnection(driveDir: string): Promise<void> {
     recovery = null;
+    unlockRefused = null;
     presentation.trackRequest();
     try {
       const result = await reconnect(driveDir);
@@ -566,6 +567,7 @@
    */
   async function startService(driveDir: string): Promise<void> {
     recovery = null;
+    unlockRefused = null;
     const args: ProvisionServiceStartArgs = { driveDir };
     try {
       const report = await runProvision(() => provisionServiceStart(args));
@@ -596,6 +598,7 @@
   async function reinstallService(driveDir: string): Promise<void> {
     if (onboardedIdentityFile === null || onboardedPassphraseFile === null) return;
     recovery = null;
+    unlockRefused = null;
     const mode = selectedDrive?.mode ?? "vault";
     const args: ProvisionReconfigureArgs = {
       driveDir,
