@@ -707,6 +707,24 @@ pub(crate) enum DriveAction {
         #[arg(long, value_name = "PATH")]
         registry: Option<PathBuf>,
     },
+    /// Unlock this drive for the session: start the persistent
+    /// owner in the foreground with a passphrase from the
+    /// terminal prompt (no echo) or `--passphrase-stdin`, never
+    /// from a file. The identity secret still comes from its file;
+    /// only the passphrase rides the prompt or the pipe. Nothing
+    /// is installed, enabled, or rewritten — the manager learns
+    /// nothing, so a reboot or an explicit stop locks the drive
+    /// again. Against a live drive this refuses with the store
+    /// lock like every other offline opener.
+    Unlock {
+        #[command(flatten)]
+        relays: RelayArgs,
+        /// Per-device retained-bytes ceiling in bytes: the same
+        /// number `owner start` enforces. Unset (the default)
+        /// enforces no ceiling.
+        #[arg(long, value_name = "BYTES")]
+        retained_quota: Option<u64>,
+    },
 }
 
 /// One owner-runtime action. `Start` runs the persistent owner

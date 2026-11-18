@@ -61,7 +61,7 @@ wyrd identity (generate --identity-file … --passphrase-file …
     | new-passphrase | commit --identity-file … --passphrase-file …
     | verify --identity-file … --passphrase-file …)
 wyrd drive <dir> [--identity-file …] [--passphrase-file …]
-    (init | bootstrap --name … [--mode …] … | delete [--yes] | reconfigure … | service-start …)
+    (init | bootstrap --name … [--mode …] … | delete [--yes] | reconfigure … | service-start … | unlock …)
 wyrd device <dir> (id | keys | pairing-request <out> | join <invitation>)
 wyrd member <dir> (list | log | status | invite | reissue | remove | leave
     | rotate | set-owner | resolve)
@@ -117,7 +117,7 @@ preserved; only spelling and hierarchy move.
 
 ```
 wyrd [--config <path>] drive [--identity-file <path>] [--passphrase-file <path>] <drive_dir>
-    (init | bootstrap --name <name> [--mode <mode>] [--mountpoint <path>] [--relay <url>...] [--invitation-file <path>] [--registry <path>] [--owner-bin <path>] [--supervise-bin <path>] [--no-service] | delete [--yes] | reconfigure --mode <mode> [--mountpoint <path>] [--relay <url>...] [--registry <path>] [--owner-bin <path>] [--supervise-bin <path>] [--no-service] | service-start [--registry <path>])
+    (init | bootstrap --name <name> [--mode <mode>] [--mountpoint <path>] [--relay <url>...] [--invitation-file <path>] [--registry <path>] [--owner-bin <path>] [--supervise-bin <path>] [--no-service] | delete [--yes] | reconfigure --mode <mode> [--mountpoint <path>] [--relay <url>...] [--registry <path>] [--owner-bin <path>] [--supervise-bin <path>] [--no-service] | service-start [--registry <path>] | unlock [--relay <url>...] [--retained-quota <bytes>])
 wyrd [--config <path>] mount [--relay <url>...] [--verbose] [--interval <secs>] \
     [--identity-file <path>] [--passphrase-file <path>] <drive_dir> <mountpoint>
 wyrd [--config <path>] export [--identity-file <path>] [--passphrase-file <path>] <drive_dir> <out_dir>
@@ -615,6 +615,25 @@ against a healthy drive is a deliberate restart, and it serializes
 against other lifecycle operations on the drive like any manager
 would — a start writes nothing, but its restart still races another
 writer's stop.
+
+### `drive unlock` — start the owner for the session, nothing installed
+
+Run the persistent owner in the foreground for one drive with a
+passphrase from the terminal prompt (no echo) or
+`--passphrase-stdin`, never from a file. The identity secret still
+comes from its file; only the passphrase rides the prompt or the
+pipe. Nothing is installed, enabled, or rewritten — the manager
+learns nothing, so a reboot or an explicit stop locks the drive
+again. `--passphrase-file` refuses (a file would make the unlock
+file-backed by accident; file-backed starts use `owner start` or
+`drive service-start`); without `--passphrase-stdin` off-terminal
+stdin refuses instead of blocking on a pipe nobody holds. A
+relay-less drive refuses like `owner start` (relays come from flags
+or the drive config). Against a live drive the store lock refuses
+like every other offline opener. Exit and reporting match `owner
+start` exactly — unlock is the same runner with a different
+passphrase surface, so a wrong passphrase fails the open the same
+way and the owner serves until SIGINT/SIGTERM.
 
 ### `sync` — headless sync without mounting
 

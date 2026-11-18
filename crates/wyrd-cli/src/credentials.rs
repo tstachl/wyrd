@@ -102,6 +102,7 @@ fn read_credentials_with(
         identity_from_file: creds.identity_file.is_none(),
         passphrase_from_file: !creds.passphrase_stdin && creds.passphrase_file.is_none(),
         passphrase_from_stdin: creds.passphrase_stdin,
+        passphrase_from_prompt: false,
     };
     let identity = read_identity(&identity_file)?;
     if creds.passphrase_stdin {
@@ -126,9 +127,207 @@ fn read_credentials_with(
     Ok((identity, Zeroizing::new(stripped.to_owned()), provenance))
 }
 
+/// Load one unlock invocation's secrets: the identity from its
+/// file (flags-first, file-second, same hardening as every other
+/// command), the passphrase from the terminal prompt or the stdin
+/// pipe — never from a file. Unlock is the per-session command:
+/// a passphrase file would make it file-backed by accident, so a
+/// `--passphrase-file` flag here refuses instead of being read.
+pub(crate) fn read_unlock_credentials(
+    creds: &Credentials,
+    config: Option<&LoadedConfig>,
+    stdin_is_tty: bool,
+) -> Result<
+    (
+        DeviceIdentitySecret,
+        Zeroizing<String>,
+        CredentialProvenance,
+    ),
+    CliError,
+> {
+    read_unlock_credentials_with(creds, config, std::io::stdin().lock(), stdin_is_tty)
+}
+
+/// The testable half of [`read_unlock_credentials`]: the prompt
+/// decision runs on the injected TTY bit and the pipe reads from
+/// the injected reader, so tests cover every refusal without a
+/// terminal. The prompt itself (termios echo-off) is the only
+/// untested line — it runs only where a human sits.
+fn read_unlock_credentials_with(
+    creds: &Credentials,
+    config: Option<&LoadedConfig>,
+    stdin: impl std::io::Read,
+    stdin_is_tty: bool,
+) -> Result<
+    (
+        DeviceIdentitySecret,
+        Zeroizing<String>,
+        CredentialProvenance,
+    ),
+    CliError,
+> {
+    // Belt and braces beside the clap `conflicts_with`: a
+    // programmatically built `Credentials` must also refuse the
+    // ambiguous pair rather than silently preferring one surface.
+    if creds.passphrase_stdin && creds.passphrase_file.is_some() {
+        return Err(CliError::Usage(
+            "--passphrase-stdin conflicts with --passphrase-file: pass one passphrase surface"
+                .to_string(),
+        ));
+    }
+    if creds.passphrase_file.is_some() {
+        return Err(CliError::Usage(
+            "unlock never reads a passphrase file: omit --passphrase-file and type at the prompt (or pipe with --passphrase-stdin); file-backed starts use `owner start` or `drive service-start`"
+                .to_string(),
+        ));
+    }
+    let provenance = CredentialProvenance {
+        identity_from_file: creds.identity_file.is_none(),
+        passphrase_from_file: false,
+        passphrase_from_stdin: creds.passphrase_stdin,
+        passphrase_from_prompt: !creds.passphrase_stdin,
+    };
+    let identity_file = resolve_credential_path(
+        creds.identity_file.clone(),
+        config.and_then(|c| c.identity_file.clone()),
+        "--identity-file",
+        "identity_file",
+    )?;
+    let identity = read_identity(&identity_file)?;
+    if creds.passphrase_stdin {
+        let passphrase = read_passphrase_stdin(stdin)?;
+        return Ok((identity, passphrase, provenance));
+    }
+    if !stdin_is_tty {
+        return Err(CliError::Usage(
+            "not a terminal: pipe the passphrase with --passphrase-stdin or run unlock on a terminal (the owner never starts without it)".to_string(),
+        ));
+    }
+    let passphrase = prompt_passphrase_tty()?;
+    Ok((identity, passphrase, provenance))
+}
+
+/// Prompt for the unlock passphrase on the terminal with echo
+/// off. Unix-only: credential files are Unix-only too, so unlock
+/// has no non-Unix surface to prompt on. The prompt goes to
+/// stderr (stdout stays clean for the owner diagnostics contract
+/// below); echo restores through a Drop guard, so every return
+/// path — including a read error — leaves the terminal as found.
+/// A signal mid-prompt can still kill the process with echo off;
+/// shells re-arm echo on their next prompt, and no secret is at
+/// risk either way (the buffer is `Zeroizing`, never logged).
+#[cfg(unix)]
+#[allow(unsafe_code)]
+fn prompt_passphrase_tty() -> Result<Zeroizing<String>, CliError> {
+    use std::io::Write;
+    use std::os::unix::io::AsRawFd;
+
+    struct EchoGuard {
+        fd: std::os::unix::io::RawFd,
+        previous: libc::termios,
+    }
+    impl Drop for EchoGuard {
+        fn drop(&mut self) {
+            // Best effort: nothing left to report to, and the
+            // terminal state matters more than the error.
+            unsafe {
+                libc::tcsetattr(self.fd, libc::TCSANOW, &self.previous);
+            }
+        }
+    }
+
+    let stdin = std::io::stdin();
+    let fd = stdin.as_raw_fd();
+    let mut previous: libc::termios = unsafe { std::mem::zeroed() };
+    // SAFETY: tcgetattr only writes through its third argument on
+    // success (checked below) and reads no other memory.
+    if unsafe { libc::tcgetattr(fd, &mut previous) } != 0 {
+        return Err(CliError::Usage(
+            "cannot prepare the terminal prompt: stdin is not a usable terminal".to_string(),
+        ));
+    }
+    let mut noecho = previous;
+    noecho.c_lflag &= !libc::ECHO;
+    // SAFETY: `noecho` is a copy of a valid termios with one flag
+    // cleared; TCSANOW applies it to the open stdin descriptor.
+    if unsafe { libc::tcsetattr(fd, libc::TCSANOW, &noecho) } != 0 {
+        return Err(CliError::Usage(
+            "cannot silence the terminal prompt: echo stays on rather than risk showing the passphrase"
+                .to_string(),
+        ));
+    }
+    let _restore = EchoGuard { fd, previous };
+
+    let mut stderr = std::io::stderr();
+    let _ = stderr.write_all(b"Passphrase: ");
+    let _ = stderr.flush();
+    // Bounded like the pipe: stop at the first newline (a typed
+    // passphrase is one line; the pipe stays the multi-line
+    // surface) and refuse past one line of 4096 bytes plus its
+    // newline — the same boundary the file and pipe readers
+    // enforce, on the read itself. Cutting at the newline first
+    // also removes the off-by-one: a 4096-byte passphrase plus
+    // Enter fits, exactly like 4096 piped bytes without one.
+    let mut bytes = Zeroizing::new(Vec::new());
+    let mut stdin = std::io::stdin().lock();
+    loop {
+        if bytes.len() >= 4097 {
+            return Err(CliError::Usage(
+                "passphrase exceeds the 4096-byte size limit".to_string(),
+            ));
+        }
+        let mut chunk = [0u8; 64];
+        let n = std::io::Read::read(&mut stdin, &mut chunk).map_err(|source| CliError::Io {
+            path: PathBuf::from("<stdin>"),
+            source,
+        })?;
+        if n == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&chunk[..n]);
+        if bytes.contains(&b'\n') {
+            break;
+        }
+    }
+    let _ = stderr.write_all(b"\n");
+    let _ = stderr.flush();
+    if let Some(pos) = bytes.iter().position(|byte| *byte == b'\n') {
+        bytes.truncate(pos);
+    }
+    let mut line = Zeroizing::new(
+        std::str::from_utf8(&bytes)
+            .map_err(|_| CliError::Usage("passphrase must contain UTF-8 text".into()))?
+            .to_owned(),
+    );
+    if line.ends_with('\r') {
+        let shortened = line.len() - 1;
+        line.truncate(shortened);
+    }
+    if line.len() > 4096 {
+        return Err(CliError::Usage(
+            "passphrase exceeds the 4096-byte size limit".to_string(),
+        ));
+    }
+    if line.is_empty() {
+        return Err(CliError::Usage(
+            "no passphrase typed: the owner never starts without it".to_string(),
+        ));
+    }
+    Ok(line)
+}
+
+/// No terminal surface off Unix: credential files are Unix-only,
+/// so unlock refuses rather than prompting somewhere unhardened.
+#[cfg(not(unix))]
+fn prompt_passphrase_tty() -> Result<Zeroizing<String>, CliError> {
+    Err(CliError::Usage(
+        "terminal unlock is only implemented on Unix: pipe the passphrase with --passphrase-stdin"
+            .to_string(),
+    ))
+}
 /// One trailing newline is the line discipline, not part of the
-/// passphrase — shared by the file and stdin surfaces, so both open
-/// the same keystore.
+/// passphrase — shared by the file, stdin, and prompt surfaces, so
+/// all three open the same keystore.
 fn strip_trailing_newline(text: &str) -> &str {
     text.strip_suffix("\r\n")
         .or_else(|| text.strip_suffix('\n'))
@@ -362,5 +561,68 @@ mod tests {
             !provenance.passphrase_from_file,
             "stdin is not a file surface: {provenance:?}"
         );
+    }
+
+    fn unlock_creds() -> Credentials {
+        Credentials {
+            identity_file: None,
+            passphrase_file: None,
+            passphrase_stdin: false,
+        }
+    }
+
+    /// Unlock never reads a passphrase file: naming one refuses
+    /// before the keystore opens, even where the file exists.
+    #[test]
+    fn unlock_refuses_a_passphrase_file() {
+        let mut creds = unlock_creds();
+        creds.passphrase_file = Some(PathBuf::from("/k/passphrase"));
+        let err = read_unlock_credentials_with(&creds, None, Cursor::new(b""), true)
+            .expect_err("a passphrase file must refuse");
+        assert!(
+            err.to_string().contains("never reads a passphrase file"),
+            "names the rule: {err}"
+        );
+    }
+
+    /// Unlock without a terminal and without the pipe refuses
+    /// before the keystore opens: no silent file fallback, no
+    /// blocking read on a non-terminal stdin.
+    #[test]
+    fn unlock_without_terminal_or_pipe_refuses() {
+        use crate::tests_harness::{write_secret, TempDir};
+        let temp = TempDir::new();
+        let identity_file = temp.0.join("identity");
+        write_secret(&identity_file, [0x33; 32]);
+        let mut creds = unlock_creds();
+        creds.identity_file = Some(identity_file);
+        let err = read_unlock_credentials_with(&creds, None, Cursor::new(b""), false)
+            .expect_err("non-terminal stdin without --passphrase-stdin must refuse");
+        assert!(
+            err.to_string().contains("--passphrase-stdin"),
+            "points at the pipe: {err}"
+        );
+    }
+
+    /// The piped unlock path reads end to end and names stdin in
+    /// provenance — never the prompt, never a file.
+    #[test]
+    fn unlock_pipe_reads_and_names_stdin() {
+        use crate::tests_harness::{write_secret, TempDir};
+        let temp = TempDir::new();
+        let identity_file = temp.0.join("identity");
+        write_secret(&identity_file, [0x22; 32]);
+        let mut creds = unlock_creds();
+        creds.identity_file = Some(identity_file);
+        creds.passphrase_stdin = true;
+        let (identity, passphrase, provenance) =
+            read_unlock_credentials_with(&creds, None, Cursor::new(b"typed-later\n"), false)
+                .expect("piped unlock reads");
+        let _ = identity;
+        assert_eq!(passphrase.as_str(), "typed-later");
+        assert!(provenance.passphrase_from_stdin);
+        assert!(!provenance.passphrase_from_prompt);
+        assert!(!provenance.passphrase_from_file);
+        assert_eq!(provenance.passphrase_word(), "stdin (`--passphrase-stdin`)");
     }
 }
