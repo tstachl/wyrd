@@ -477,6 +477,26 @@ against the live owner — enumerate, hydrate, rename-preserve,
 delete/recreate, peer rename, legacy rows, merged disagreement,
 and `fileproviderd` recovery.
 
+Ad-hoc `fileproviderd` load check (recorded 2026-11-18, macOS
+15.8.3, this issue): an ad-hoc appex does not load, by mechanism,
+not by policy. `build-appex.sh` with the default ad-hoc identity
+produces a verifying-clean bundle (`codesign --verify --deep
+--strict`), identifier `md.enesis.wyrd.fileprovider`, extension
+point `com.apple.fileprovider-nonui` — but no entitlements and
+no embedded provisioning profile. `pluginkit -a` accepts the
+registration (exit 0) yet the record stays unusable (`!` in
+`pluginkit -m -A`) and matches no fileprovider endpoint, so
+`fileproviderd` never instantiates it; the system log shows no
+contact with the extension id. No containing app exists on the
+machine to add a domain, and per the Stage 1 rule an ad-hoc build
+has no effective group-container entitlement, so there is no path
+to listen on. Team-signed deltas for the distribution run: a
+Developer ID identity, a provisioning profile carrying the App
+Group (`group.md.enesis.wyrd`), a containing app to register the
+domain, and notarization — then the Stage 1 procedure above
+applies. The notarized `fileproviderd` load check itself stays
+with the signing owner.
+
 ## Registry-owned switchover (production daemon half)
 
 The dev bootstrap above (explicit container plus drive) stays for
