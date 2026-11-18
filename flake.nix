@@ -2,7 +2,17 @@
   description = "Wyrd: decentralized, append-only, content-addressed drive system";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
+    # Pinned by rev, not by branch: the nixos-26.05 channel never
+    # received the upstream tinycc-mirror fix (master-only as of
+    # Nov-26), and the pinned channel rev fetches its bootstrap
+    # tarball from Anubis-protected repo.or.cz — so the Linux gates
+    # fail building rust-deps from a cold store. This rev is the
+    # oldest master containing that fix ("minimal-bootstrap.
+    # tinycc-{mes,musl*}: fetch from mirror"); moving it is a
+    # deliberate channel jump, not a roll — validate with
+    # `nix flake check --no-build` (all configurations, both
+    # platforms) plus the full gate before merging.
+    nixpkgs.url = "github:NixOS/nixpkgs/b8e79fcb57a9428e505a37369a8357b2d85c72ec";
     # Single-bun-version anchor: the exact nixpkgs-unstable rev
     # devenv.lock carries, so the dev shell (`languages.javascript
     # .bun.package = unstable.bun` in devenv.nix) and the CI frontend
