@@ -69,8 +69,10 @@ grep -Fq 'Ad-hoc `fileproviderd` load check' "$ROOT/packaging/macos/README.md" \
   || die "README: ad-hoc load check not recorded"
 grep -Fq 'does not load, by mechanism' "$ROOT/packaging/macos/README.md" \
   || die "README: ad-hoc verdict missing"
-grep -Fq 'notarized `fileproviderd` load check itself stays' "$ROOT/packaging/macos/README.md" \
+grep -Fq '`fileproviderd` load check itself stays' "$ROOT/packaging/macos/README.md" \
   || die "README: notarized check ownership missing"
+grep -Fq 'with the signing owner' "$ROOT/packaging/macos/README.md" \
+  || die "README: signing owner missing"
 grep -Fq 'no effective group-container entitlement' "$ROOT/packaging/macos/README.md" \
   || die "README: effective-entitlement mechanism missing"
 pass "ad-hoc refusal recorded with team-signed deltas"
