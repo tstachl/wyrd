@@ -25,7 +25,9 @@
     "vite": "7"
   },
   "devDependencies": {
+    "@happy-dom/global-registrator": "^21.0.4",
     "@lucide/svelte": "^1.73.0",
+    "@testing-library/svelte": "^5.4.2",
     "@types/bun": "^1.4.4",
     "bits-ui": "^2.20.0",
     "svelte-check": "4",

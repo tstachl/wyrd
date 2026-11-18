@@ -15,6 +15,7 @@ import {
   membershipSummary,
   nextDriveDir,
   observedRegistrySummary,
+  sessionLabel,
   SETTING_BOUNDS,
   shortId,
   suggestedDriveDirFor,
@@ -47,6 +48,16 @@ test("reachability never claims what transport alone cannot prove", () => {
   );
   expect(availabilityLabel({ state: "unknown", detail: "no terminal answer" })).toBe(
     "Unknown — no terminal answer",
+  );
+});
+
+test("session gate names the per-session posture, managed drives render nothing", () => {
+  expect(sessionLabel(null)).toBeNull();
+  expect(sessionLabel({ state: "unlocked", detail: "open" })).toBe(
+    "Unlocked for this session",
+  );
+  expect(sessionLabel({ state: "locked", detail: "needs passphrase" })).toBe(
+    "Locked — needs passphrase",
   );
 });
 

@@ -19,6 +19,7 @@ the drive directory explicitly. -->
   import type { Stamped } from "$lib/state/presentation.svelte.js";
   import type { RegistryState } from "$lib/ipc/results.js";
   import ObservedNote from "./ObservedNote.svelte";
+  import { sessionLabel } from "./format.js";
   import HardDriveIcon from "@lucide/svelte/icons/hard-drive";
   import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
   import ArrowRightIcon from "@lucide/svelte/icons/arrow-right";
@@ -184,6 +185,16 @@ the drive directory explicitly. -->
                 <Badge variant="outline" class="font-mono text-[0.7rem]">service {drive.service}</Badge>
                 {#if drive.mountpoint !== null}
                   <Badge variant="outline" class="font-mono text-[0.7rem]">{drive.mountpoint}</Badge>
+                {/if}
+                {#if sessionLabel(drive.session) !== null}
+                  <Badge
+                    variant={drive.session?.state === "unlocked" ? "outline" : "secondary"}
+                    class={drive.session?.state === "unlocked"
+                      ? "border-ok/30 bg-ok/10 text-ok"
+                      : "border-primary/40 bg-primary/10"}
+                  >
+                    {sessionLabel(drive.session)}
+                  </Badge>
                 {/if}
               </div>
               <div class="flex flex-col gap-1.5">

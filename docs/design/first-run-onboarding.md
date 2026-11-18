@@ -115,8 +115,13 @@ even if the user forgets the passphrase; restoration anywhere
 else needs both backups.
 
 One acknowledgement checkbox covering both the stored-passphrase
-confirmation and the comprehension statement. Finish validates
-on press.
+confirmation and the comprehension statement, plus a confirm entry:
+the recovery stage asks the person to re-type the passphrase from
+their stored copy, and Finish refuses where it does not match the
+effective passphrase ("That does not match the passphrase — check
+your stored copy and re-type it."). The confirm proves the stored
+copy is right before anything commits — a mismatch means the backup
+is wrong, never the commit. Finish validates on press.
 
 ### Ready
 
@@ -126,7 +131,8 @@ Join target must read acceptably for a genuinely new invitee).
 "Identity files — Stored on this device" with the actual
 post-commit path and Show in Finder. Created-vs-backed-up stays
 explicit: showing the folder claims no backup. No
-recovery/backup status — backup is acknowledged, never verified.
+recovery/backup status beyond the confirm-entry match — backup is
+acknowledged and matched, never independently verified.
 
 ## Commit boundary
 

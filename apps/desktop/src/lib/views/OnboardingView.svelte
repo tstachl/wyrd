@@ -65,6 +65,10 @@ never enter this component. -->
   // Recovery: single acknowledgement + expandable detail.
   let acknowledged = $state(false);
   let showDetails = $state(false);
+  // Write-down proof: re-typed passphrase that must match the
+  // effective passphrase before Finish commits. Held in component
+  // state only, cleared on success like the other secrets.
+  let confirmPassphrase = $state("");
   // Commit.
   let working = $state(false);
   let helper: string | null = $state(null);
@@ -201,6 +205,13 @@ never enter this component. -->
         : (customError() ?? "Enter a passphrase.");
       return;
     }
+    // Write-down proof: the re-typed copy must match before
+    // anything commits. The stored copy is the backup, so a
+    // mismatch means the backup is wrong — never commit it.
+    if (confirmPassphrase !== passphrase) {
+      helper = "That does not match the passphrase — check your stored copy and re-type it.";
+      return;
+    }
     working = true;
     try {
       // Atomic step: commit writes, verifies, and adopts in one
@@ -212,6 +223,7 @@ never enter this component. -->
         generatedPassphrase = null;
         customPassphrase = "";
         customConfirm = "";
+        confirmPassphrase = "";
         stage = "ready";
       } else {
         commitError = describeReport(report, "Could not write the credential files.");
@@ -721,6 +733,24 @@ never enter this component. -->
               copies, so your stored copy is the backup.
             </p>
           </div>
+        {/if}
+
+        {#if choice === "create"}
+          <Field.Field>
+            <Field.Label for="recovery-confirm">Confirm your passphrase</Field.Label>
+            <Input
+              id="recovery-confirm"
+              type={showPassphrase ? "text" : "password"}
+              bind:value={confirmPassphrase}
+              disabled={busy}
+              autocomplete="new-password"
+              placeholder="Re-type the passphrase from your stored copy"
+            />
+            <Field.Description>
+              Proves the stored copy is right before anything is written — type it from your
+              backup, not from memory.
+            </Field.Description>
+          </Field.Field>
         {/if}
 
         <Field.Field orientation="horizontal" class="rounded-xl border border-border p-3">

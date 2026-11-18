@@ -8,7 +8,7 @@
 // as unknown — never as a negative, never as a default.
 
 import type { WireFreshnessState } from "$lib/ipc/results.js";
-import type { DriveAvailability } from "$lib/ipc/results.js";
+import type { DriveAvailability, SessionState } from "$lib/ipc/results.js";
 import type { ProvisionReport } from "$lib/ipc/results.js";
 
 /** Clock time of an observation stamp, UTC. The stamp is display metadata, never owner state. */
@@ -37,6 +37,21 @@ export function availabilityLabel(availability: DriveAvailability): string {
       return `Unavailable — ${availability.detail}`;
     case "unknown":
       return `Unknown — ${availability.detail}`;
+  }
+}
+
+/**
+ * One-line session gate for definition-less drives. Null where a
+ * service definition exists — managed recovery owns that drive, so
+ * no gate renders. Observation only, never supervision.
+ */
+export function sessionLabel(session: SessionState | null): string | null {
+  if (session === null) return null;
+  switch (session.state) {
+    case "unlocked":
+      return "Unlocked for this session";
+    case "locked":
+      return "Locked — needs passphrase";
   }
 }
 
