@@ -1519,10 +1519,18 @@ pub struct ProvisionConfig {
     pub supervise_bin: Option<PathBuf>,
     /// Hardened credential files for the service definition,
     /// resolved the way `load_credentials` resolves them. Paths,
-    /// never secrets, travel here.
+    /// never secrets, travel here. The passphrase `None` means
+    /// session-supplied (prompt or stdin pipe): no managed
+    /// definition may render it, so a managed run with `None`
+    /// refuses at install time instead of writing a definition
+    /// the manager could never start. `no_service` registrations
+    /// carry `None` freely — that is the per-session posture. The
+    /// identity file is required in every posture: the identity
+    /// secret always comes from its file, never the pipe.
     pub identity_file: PathBuf,
     /// Passphrase credential file named by the service definition.
-    pub passphrase_file: PathBuf,
+    /// `None` means session-supplied: see `identity_file`.
+    pub passphrase_file: Option<PathBuf>,
     /// Install, enable, and start the per-drive service. Off skips
     /// all three: registration only, for operators who supervise
     /// the owner themselves.
@@ -1821,11 +1829,22 @@ pub fn provision(config: ProvisionConfig) -> ProvisionState {
                 }
             },
         };
+        let passphrase_file = match managed_passphrase_file(&config.passphrase_file) {
+            Ok(path) => path,
+            Err((kind, reason)) => {
+                return ProvisionState::RegisteredButUnavailable {
+                    entry,
+                    skipped: skipped.clone(),
+                    kind,
+                    reason,
+                };
+            }
+        };
         let owner = SupervisedOwner {
             supervise_bin,
             wyrd_bin,
             identity_file: config.identity_file.clone(),
-            passphrase_file: config.passphrase_file.clone(),
+            passphrase_file,
         };
         let definition = match install_service_definition(&entry, &owner, None) {
             Ok(definition) => definition,
@@ -1904,10 +1923,18 @@ pub struct ReconfigureConfig {
     pub supervise_bin: Option<PathBuf>,
     /// Hardened credential files for the service definition,
     /// resolved the way `load_credentials` resolves them. Paths,
-    /// never secrets, travel here.
+    /// never secrets, travel here. The passphrase `None` means
+    /// session-supplied (prompt or stdin pipe): no managed
+    /// definition may render it, so a managed run with `None`
+    /// refuses at install time instead of writing a definition
+    /// the manager could never start. `no_service` rewrites carry
+    /// `None` freely — that is the per-session posture. The
+    /// identity file is required in every posture: the identity
+    /// secret always comes from its file, never the pipe.
     pub identity_file: PathBuf,
     /// Passphrase credential file named by the service definition.
-    pub passphrase_file: PathBuf,
+    /// `None` means session-supplied: see `identity_file`.
+    pub passphrase_file: Option<PathBuf>,
     /// Explicit service definition path (tests); `None` resolves the
     /// platform path. Clearing and installing share it, so the two
     /// can never name different files — and hermetic tests name a
@@ -1967,6 +1994,30 @@ fn install_service_definition(
             format!("install-service: {error}"),
         )
     })
+}
+
+/// Passphrase file for one managed install: session-supplied
+/// (`None`) refuses here, never renders. A definition embedding
+/// no readable file would install cleanly and then crash-loop
+/// under the manager — this fails that run closed at install
+/// time instead. Every managed install site routes through this
+/// for the same kind and reason. The identity file is not
+/// checked: it is required in every posture, so its type carries
+/// the invariant and there is nothing to refuse.
+fn managed_passphrase_file(
+    passphrase_file: &Option<PathBuf>,
+) -> Result<PathBuf, (ProvisionFailureKind, String)> {
+    match passphrase_file {
+        Some(passphrase) => Ok(passphrase.clone()),
+        None => Err((
+            ProvisionFailureKind::InstallService,
+            "managed service needs a passphrase file the manager can read: \
+             session-supplied credentials (prompt or --passphrase-stdin) cannot render \
+             a service definition — provision or reconfigure with --no-service and start \
+             sessions with `drive unlock`"
+                .to_string(),
+        )),
+    }
 }
 
 /// Classify a registry failure past the stop: resolve failures
@@ -2403,11 +2454,21 @@ pub fn reconfigure(config: ReconfigureConfig) -> ProvisionState {
     // new entry. Without management the definition is already cleared
     // above.
     let definition = if config.manage_service {
+        let passphrase_file = match managed_passphrase_file(&config.passphrase_file) {
+            Ok(path) => path,
+            Err((kind, reason)) => {
+                return ProvisionState::ProvisioningIncomplete {
+                    stage: "install-service",
+                    kind,
+                    reason,
+                };
+            }
+        };
         let owner = SupervisedOwner {
             supervise_bin: supervise_bin.clone().expect("resolved when managed"),
             wyrd_bin: wyrd_bin.clone().expect("resolved when managed"),
             identity_file: config.identity_file.clone(),
-            passphrase_file: config.passphrase_file.clone(),
+            passphrase_file,
         };
         match install_service_definition(&working, &owner, config.service_definition.as_ref()) {
             Ok(definition) => Some(definition),
@@ -2518,11 +2579,22 @@ pub fn reconfigure(config: ReconfigureConfig) -> ProvisionState {
     let effective = written;
     let mut definition = definition;
     if definition.is_some() && definition_needs_reinstall(&working, &effective) {
+        let passphrase_file = match managed_passphrase_file(&config.passphrase_file) {
+            Ok(path) => path,
+            Err((kind, reason)) => {
+                return ProvisionState::RegisteredButUnavailable {
+                    entry: effective,
+                    skipped,
+                    kind,
+                    reason,
+                };
+            }
+        };
         let owner = SupervisedOwner {
             supervise_bin: supervise_bin.expect("resolved when managed"),
             wyrd_bin: wyrd_bin.expect("resolved when managed"),
             identity_file: config.identity_file.clone(),
-            passphrase_file: config.passphrase_file.clone(),
+            passphrase_file,
         };
         match install_service_definition(&effective, &owner, config.service_definition.as_ref()) {
             Ok(definition_path) => definition = Some(definition_path),
@@ -2653,9 +2725,14 @@ pub fn start_managed_service(config: StartServiceConfig) -> ProvisionState {
             };
         }
     };
-    // 2. The definition must already exist: a missing file is the
-    // reinstall recovery, never this one. Refuse before touching the
-    // manager, with that pointer.
+    // 2. The definition must already exist. A missing file is
+    // usually the reinstall recovery — but a deliberately
+    // unmanaged (`--no-service`, the per-session posture) drive
+    // never has one, and reinstalling a managed definition it
+    // cannot start would be the wrong repair. Name both
+    // recoveries: reinstall the managed service, or start a
+    // session directly. Refuse before touching the manager, with
+    // that pointer.
     let owned;
     let definition = match config.service_definition.as_ref() {
         Some(path) => path.as_path(),
@@ -2669,9 +2746,10 @@ pub fn start_managed_service(config: StartServiceConfig) -> ProvisionState {
             stage: "validate",
             kind: ProvisionFailureKind::Validate,
             reason: format!(
-                "no service definition installed for {} ({} missing): reinstall with `wyrd drive {} reconfigure --mode <vault|mount>` first",
+                "no service definition installed for {} ({} missing): reinstall with `wyrd drive {} reconfigure --mode <vault|mount>`, or start a session directly with `wyrd drive {} unlock`",
                 entry.name,
                 definition.display(),
+                config.drive_dir.display(),
                 config.drive_dir.display()
             ),
         };
@@ -3850,8 +3928,50 @@ mod tests {
                 assert_eq!(stage, "validate");
                 assert!(reason.contains("reinstall"), "{reason}");
                 assert!(reason.contains("reconfigure"), "{reason}");
+                // A deliberately unmanaged (per-session) drive lands
+                // here too — no definition ever exists for it — so
+                // the refusal names the session start beside the
+                // managed repair, never the manager alone.
+                assert!(reason.contains("unlock"), "{reason}");
             }
             other => panic!("a missing definition refuses with reinstall: {other:?}"),
+        }
+    }
+
+    /// Session-supplied credentials never render: the managed
+    /// install guard fails closed with the install-service kind,
+    /// naming the session repair instead of a manager retry.
+    #[test]
+    fn managed_install_without_credential_files_refuses() {
+        match managed_passphrase_file(&None) {
+            Err((ProvisionFailureKind::InstallService, reason)) => {
+                assert!(reason.contains("unlock"), "{reason}");
+                assert!(reason.contains("--no-service"), "{reason}");
+            }
+            other => panic!("a file-less managed install refuses: {other:?}"),
+        }
+        let path = PathBuf::from("/keys/passphrase");
+        assert_eq!(managed_passphrase_file(&Some(path.clone())).unwrap(), path);
+    }
+
+    /// The guard wires into provisioning: a managed provision with
+    /// session-supplied credentials registers the drive, then
+    /// refuses at install time — no definition is written, no
+    /// manager is touched. Hermetic: the guard runs before any
+    /// install, so the platform definition path is never reached.
+    #[test]
+    fn managed_provision_without_a_passphrase_file_refuses_at_install() {
+        let dir = scratch("provision-nosession-file");
+        let registry = dir.join("drives.json");
+        let mut config = provision_no_service(&dir, &registry, "demo");
+        config.manage_service = true;
+        config.relays = vec!["relay://test".to_string()];
+        match provision(config) {
+            ProvisionState::RegisteredButUnavailable { kind, reason, .. } => {
+                assert_eq!(kind, ProvisionFailureKind::InstallService);
+                assert!(reason.contains("unlock"), "{reason}");
+            }
+            other => panic!("a file-less managed provision refuses at install: {other:?}"),
         }
     }
 
@@ -4096,7 +4216,7 @@ mod tests {
             wyrd_bin: Some(dir.join("wyrd")),
             supervise_bin: Some(dir.join("wyrd-supervise")),
             identity_file: dir.join("identity"),
-            passphrase_file: dir.join("passphrase"),
+            passphrase_file: None,
             manage_service: false,
             verify_timeout: Duration::from_secs(10),
         }
@@ -4196,7 +4316,7 @@ mod tests {
             wyrd_bin: Some(dir.join("wyrd")),
             supervise_bin: Some(dir.join("wyrd-supervise")),
             identity_file: dir.join("identity"),
-            passphrase_file: dir.join("passphrase"),
+            passphrase_file: None,
             // A scratch definition that never exists: hermetic tests
             // must stop and clear nothing real, and the missing file
             // is the not-managed case — never a manager touch.

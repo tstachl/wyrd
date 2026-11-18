@@ -325,6 +325,42 @@ fn prompt_passphrase_tty() -> Result<Zeroizing<String>, CliError> {
             .to_string(),
     ))
 }
+/// Resolve the credential *paths* a provision or reconfigure hands
+/// the daemon: the identity file always (every posture reads it),
+/// the passphrase file only for a managed service. A piped or
+/// prompted passphrase with `manage_service` refuses — a definition
+/// embedding no readable file would install cleanly and then
+/// crash-loop under the manager. Session posture is `--no-service`
+/// (no definition rendered) plus `drive unlock` for starts.
+pub(crate) fn resolve_service_credential_files(
+    creds: &Credentials,
+    config: Option<&LoadedConfig>,
+    manage_service: bool,
+) -> Result<(PathBuf, Option<PathBuf>), CliError> {
+    if creds.passphrase_stdin && manage_service {
+        return Err(CliError::Usage(
+            "managed service needs a passphrase file the manager can read: omit --passphrase-stdin (or provision with --no-service and start sessions with `drive unlock`)"
+                .to_string(),
+        ));
+    }
+    let identity_file = resolve_credential_path(
+        creds.identity_file.clone(),
+        config.and_then(|c| c.identity_file.clone()),
+        "--identity-file",
+        "identity_file",
+    )?;
+    let passphrase_file = if manage_service {
+        Some(resolve_credential_path(
+            creds.passphrase_file.clone(),
+            config.and_then(|c| c.passphrase_file.clone()),
+            "--passphrase-file",
+            "passphrase_file",
+        )?)
+    } else {
+        None
+    };
+    Ok((identity_file, passphrase_file))
+}
 /// One trailing newline is the line discipline, not part of the
 /// passphrase — shared by the file, stdin, and prompt surfaces, so
 /// all three open the same keystore.
@@ -624,5 +660,59 @@ mod tests {
         assert!(!provenance.passphrase_from_prompt);
         assert!(!provenance.passphrase_from_file);
         assert_eq!(provenance.passphrase_word(), "stdin (`--passphrase-stdin`)");
+    }
+
+    fn service_creds(stdin: bool, file: Option<&str>) -> Credentials {
+        Credentials {
+            identity_file: None,
+            passphrase_file: file.map(PathBuf::from),
+            passphrase_stdin: stdin,
+        }
+    }
+
+    /// A managed service with a piped passphrase refuses before
+    /// anything is created: no definition could embed the pipe, so
+    /// installing one would crash-loop under the manager.
+    #[test]
+    fn managed_service_with_a_pipe_refuses() {
+        let err = resolve_service_credential_files(&service_creds(true, None), None, true)
+            .expect_err("managed plus stdin must refuse");
+        assert!(
+            err.to_string()
+                .contains("managed service needs a passphrase file"),
+            "names the managed requirement: {err}"
+        );
+    }
+
+    /// Session posture skips the file entirely: `--no-service` with
+    /// a pipe resolves the identity and carries no passphrase path
+    /// for the daemon to render.
+    #[test]
+    fn unmanaged_service_with_a_pipe_carries_no_passphrase_file() {
+        use crate::tests_harness::{write_secret, TempDir};
+        let temp = TempDir::new();
+        let identity_file = temp.0.join("identity");
+        write_secret(&identity_file, [0x44; 32]);
+        let mut creds = service_creds(true, None);
+        creds.identity_file = Some(identity_file.clone());
+        let (identity, passphrase) = resolve_service_credential_files(&creds, None, false)
+            .expect("session posture resolves without a passphrase file");
+        assert_eq!(identity, identity_file);
+        assert!(passphrase.is_none(), "no file for the daemon to render");
+    }
+
+    /// File posture is unchanged: managed resolves both paths for
+    /// the definition exactly like before.
+    #[test]
+    fn managed_service_with_files_resolves_both_paths() {
+        let creds = Credentials {
+            identity_file: Some(PathBuf::from("/k/identity")),
+            passphrase_file: Some(PathBuf::from("/k/passphrase")),
+            passphrase_stdin: false,
+        };
+        let (identity, passphrase) =
+            resolve_service_credential_files(&creds, None, true).expect("file posture resolves");
+        assert_eq!(identity, PathBuf::from("/k/identity"));
+        assert_eq!(passphrase, Some(PathBuf::from("/k/passphrase")));
     }
 }

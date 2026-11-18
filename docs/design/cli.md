@@ -595,8 +595,11 @@ Enable and start the existing definition for one registered drive,
 then verify the socket. The recovery for "installed but stopped":
 explicit, never automatic. The entry resolves by drive directory
 (exact match; zero and duplicates refuse without writing), a missing
-definition file refuses with the reinstall pointer (`drive
-<dir> reconfigure`), and no keystore opens — starting proves nothing
+definition file refuses naming both recoveries — the reinstall
+pointer (`drive <dir> reconfigure`) and the session pointer
+(`drive <dir> unlock`, the applicable repair for a deliberately
+unmanaged `--no-service` per-session drive, which never has a
+definition to reinstall) — and no keystore opens — starting proves nothing
 about membership and needs no credentials, so it runs before
 credential loading. The definition names its own programs: no binary
 preflight runs, and a missing program surfaces through enable/start
@@ -633,7 +636,14 @@ or the drive config). Against a live drive the store lock refuses
 like every other offline opener. Exit and reporting match `owner
 start` exactly — unlock is the same runner with a different
 passphrase surface, so a wrong passphrase fails the open the same
-way and the owner serves until SIGINT/SIGTERM.
+way and the owner serves until SIGINT/SIGTERM. Unlock is the start
+half of the per-session posture: provision or reconfigure with
+`--no-service` (no definition is ever rendered for such a drive),
+then start sessions with `unlock`. Managed provisioning or
+reconfiguration with a piped or prompted passphrase refuses — a
+definition embedding no readable file would install cleanly and
+crash-loop under the manager — so the file-backed manager path
+always names a real passphrase file.
 
 ### `sync` — headless sync without mounting
 
