@@ -595,10 +595,11 @@ Enable and start the existing definition for one registered drive,
 then verify the socket. The recovery for "installed but stopped":
 explicit, never automatic. The entry resolves by drive directory
 (exact match; zero and duplicates refuse without writing), a missing
-definition file refuses with the reinstall pointer (`drive
-<dir> reconfigure`) — or the session pointer (`drive <dir> unlock`)
-for a deliberately unmanaged (`--no-service`, per-session) drive,
-which never has a definition to reinstall — and no keystore opens — starting proves nothing
+definition file refuses naming both recoveries — the reinstall
+pointer (`drive <dir> reconfigure`) and the session pointer
+(`drive <dir> unlock`, the applicable repair for a deliberately
+unmanaged `--no-service` per-session drive, which never has a
+definition to reinstall) — and no keystore opens — starting proves nothing
 about membership and needs no credentials, so it runs before
 credential loading. The definition names its own programs: no binary
 preflight runs, and a missing program surfaces through enable/start
