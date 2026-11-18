@@ -1335,6 +1335,21 @@ where
             code: None,
         };
     }
+    // Managed drives start through the manager, never beside it:
+    // spawning an app-supervised owner over an installed definition
+    // would create a second supervisor path. The store lock would
+    // refuse a live manager anyway, but failing fast names the
+    // repair — and a definition-less drive (the per-session
+    // posture, or a removed definition) proceeds.
+    if registry::managed_definition_exists(dir) {
+        return super::provision::ProvisionOutcome {
+            result: ProvisionResult::ExpectedFailure {
+                detail: "this drive has a managed service definition: start it with `drive service-start` instead of spawning a second supervisor (or reconfigure with `--no-service` for the per-session posture)".to_string(),
+            },
+            stderr: String::new(),
+            code: None,
+        };
+    }
     let secret = Zeroizing::new(args.passphrase.clone().into_bytes());
     let cli = match state.cli_bin() {
         Ok(bin) => bin,

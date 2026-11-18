@@ -1326,3 +1326,118 @@ fn settings_write_maps_exit_codes_through_a_fake_cli() {
     }
     std::fs::remove_dir_all(&dir).unwrap_or(());
 }
+
+/// `drive_lock` with no app-held session refuses without killing
+/// anything: the refusal names the boundary (a reattached owner
+/// the app did not start is never killed), and the post-run
+/// observation rides along. The reattach case answers the same
+/// refusal by construction — after a crash and relaunch there is
+/// no entry to take, so the previous process's owner survives the
+/// refusal untouched.
+#[test]
+fn drive_lock_without_a_session_refuses_without_killing() {
+    let dir = std::env::temp_dir().join(format!(
+        "wyrd-desktop-ipc-lock-refusal-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(dir.join("drive")).unwrap();
+    // No CLI override: this path refuses before any spawn, so no
+    // binary is ever executed — nothing to kill regardless.
+    let state = wyrd_desktop::AppState::new();
+    let (_app, webview, data_dir) = mock_app_with_state(state, "lock-refusal");
+    let report = invoke(
+        &webview,
+        "drive_lock",
+        serde_json::json!({"args": {"driveDir": dir.join("drive").to_string_lossy()}}),
+    )
+    .expect("lock reports infallibly");
+    assert_eq!(
+        report["result"]["result"], "expectedfailure",
+        "no session refuses: {report}"
+    );
+    assert!(
+        report["result"]["detail"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("no unlock session held"),
+        "the refusal names the boundary: {report}"
+    );
+    assert!(
+        report["observed"]["status"].is_string(),
+        "the post-run observation rides along: {report}"
+    );
+    std::fs::remove_dir_all(&data_dir).expect("the webview data dir cleans up");
+    std::fs::remove_dir_all(&dir).unwrap_or(());
+}
+
+/// `drive_unlock` maps an early owner exit through the command:
+/// exit 2 is an expected failure with the bounded CLI detail and
+/// stores no session (the follow-up lock refuses — the R2
+/// boundary), exit 78 is the terminal held-drive — all through a
+/// fake CLI, with no mock. The fake answers `__build_info` with
+/// the workspace version the adapter requires.
+#[test]
+fn drive_unlock_maps_early_exits_and_stores_no_session() {
+    let dir = std::env::temp_dir().join(format!(
+        "wyrd-desktop-ipc-unlock-fakecli-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(dir.join("drive")).unwrap();
+    let version = env!("CARGO_PKG_VERSION");
+    for (name, code, want, detail) in [
+        ("wrong", 2, "expectedfailure", "wrong passphrase"),
+        ("held", 78, "helddrive", "another process holds the drive"),
+    ] {
+        let cli = dir.join(name);
+        std::fs::write(
+            &cli,
+            format!(
+                "#!/bin/sh\nif [ \"$1\" = \"__build_info\" ]; then\necho \"update build: {version}\"\nexit 0\nfi\necho \"{detail}\" >&2\nexit {code}\n"
+            ),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let state = wyrd_desktop::AppState::new();
+        state.set_cli_override(cli);
+        let (_app, webview, data_dir) = mock_app_with_state(state, name);
+        let report = invoke(
+            &webview,
+            "drive_unlock",
+            serde_json::json!({"args": {
+                "driveDir": dir.join("drive").to_string_lossy(),
+                "identityFile": "/keys/identity",
+                "passphrase": "hunter2-hunter2",
+            }}),
+        )
+        .expect("unlock reports infallibly");
+        assert_eq!(
+            report["result"]["result"], want,
+            "fake exit {code} maps to {want}: {report}"
+        );
+        assert!(
+            report["result"]["detail"]
+                .as_str()
+                .unwrap_or_default()
+                .contains(detail),
+            "the bounded CLI detail rides along: {report}"
+        );
+        // No session was stored: the follow-up lock refuses instead
+        // of killing — the failed unlock holds nothing.
+        let locked = invoke(
+            &webview,
+            "drive_lock",
+            serde_json::json!({"args": {"driveDir": dir.join("drive").to_string_lossy()}}),
+        )
+        .expect("lock reports infallibly");
+        assert_eq!(
+            locked["result"]["result"], "expectedfailure",
+            "a failed unlock stores no session: {locked}"
+        );
+        std::fs::remove_dir_all(&data_dir).expect("the webview data dir cleans up");
+    }
+    std::fs::remove_dir_all(&dir).unwrap_or(());
+}
