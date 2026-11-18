@@ -56,6 +56,18 @@ export function sessionLabel(session: SessionState | null): string | null {
 }
 
 /**
+ * Locked drives keep their local settings surfaces: configured
+ * bounds read from the settings file, and the identity-pair Leave
+ * card both work without an owner — so the settings tab renders
+ * them instead of the unavailable overlay. Owner-backed Status
+ * stays gated on unlock; managed-down drives (no session gate)
+ * keep the overlay with their Start/Reinstall recovery.
+ */
+export function settingsSurviveLock(session: SessionState | null): boolean {
+  return session !== null && session.state === "locked";
+}
+
+/**
  * One configured bound for the settings view. Absent stays absent:
  * the compiled default applies and the shell does not know it, so
  * the label says exactly that instead of filling a number in.

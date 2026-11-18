@@ -7,12 +7,19 @@ home the implementation and its fixtures cite.
 
 ## Decisions
 
-- Onboarding persists identity + passphrase files on this device
-  (0600, owner-only, never overwrite) in the file-backed posture,
-  which stays the default. Per-session supply (no passphrase file,
-  `--passphrase-stdin` unlock owned by the app per R1/R2 in
-  `docs/design/desktop-shell.md`) and OS keychain migration are
-  tracked follow-ups owned by settings — a security feature, not a
+- Onboarding persists the device identity + passphrase files on
+  this device (0600, owner-only, never overwrite) in both drive
+  postures — the device gate and the unlock's `--identity-file`
+  need them. The file-backed posture stays the default for managed
+  drives: the drive passphrase file exists, so the service manager
+  starts and restarts the owner unattended and the device remembers.
+  The per-session posture persists no drive passphrase file and
+  renders no service definition, so the drive is locked-until-unlock
+  from registration — reboot, quit, or explicit lock relocks it,
+  and only a typed passphrase opens it for the session. The mandate
+  below (write-down proof, backup acknowledgement, never overwrite,
+  read-back) binds in both postures. OS keychain migration stays the
+  tracked follow-up owned by settings — a security feature, not a
   convenience option.
 - Terminology is always "this device's identity", never "your
   identity". Entry is named "Restore from backup" (never Import,

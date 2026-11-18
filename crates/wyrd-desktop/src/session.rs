@@ -428,6 +428,53 @@ mod tests {
         let _ = std::fs::remove_dir_all("/tmp/wyrd-desktop-session-unused");
     }
 
+    /// R2, app-crash half: dropping the held session without
+    /// `drive_lock` (the crash: the map is gone, no kill, no wait)
+    /// leaves the owner running — only an explicit lock kills an
+    /// app-held child. The relaunched app reattaches through the
+    /// socket probe, which reads `Unlocked` without consulting the
+    /// (empty) session map (`session_gate_pins_the_posture_rule` in
+    /// `registry.rs` pins the pure rule; this pins the survival
+    /// half). `sh` supplies the signal probe so the test needs no
+    /// new dependency; `exec` keeps one pid so the cleanup kill
+    /// leaves no orphaned sleeper behind.
+    #[cfg(unix)]
+    #[test]
+    fn crash_drop_leaves_the_owner_running_for_reattach() {
+        let dir = std::env::temp_dir().join(format!(
+            "wyrd-desktop-session-{}-crashdrop",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // `exec` replaces the shell: one pid serves and dies.
+        let cli = fake_cli("crashdrop", "exec sleep 30");
+        let request = unlock_request(&dir);
+        let spawned =
+            provision::spawn_unlock(&cli, &request, b"hunter2-hunter2").expect("spawn holds");
+        let pid = spawned.child.id();
+        // The crash: the session map (and its child handles) drops
+        // with no kill and no wait — exactly what process death does
+        // to plain `std` children (no kill-on-drop, no `Drop` impl
+        // on the session changes that).
+        drop(spawned);
+        let signal = |sig: &str| {
+            std::process::Command::new("sh")
+                .arg("-c")
+                .arg(format!("kill -{sig} {pid}"))
+                .status()
+                .expect("sh runs the signal probe")
+                .success()
+        };
+        assert!(
+            signal("0"),
+            "a dropped session leaves the owner alive for reattach"
+        );
+        // Cleanup kills like `drive_lock` kills.
+        assert!(signal("KILL"), "cleanup kills the test owner");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// `Debug` never leaks the secret: the redacted marker shows,
     /// the bytes do not.
     #[test]

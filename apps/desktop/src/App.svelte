@@ -50,7 +50,7 @@
     SettingsWriteReport,
   } from "$lib/ipc/results.js";
   import type { SparseUpdateArgs } from "$lib/ipc/results.js";
-  import { withDevCliHint } from "$lib/views/format.js";
+  import { settingsSurviveLock, withDevCliHint } from "$lib/views/format.js";
   import { presentation } from "$lib/state/presentation.svelte.js";
   import type { ShellView } from "$lib/state/presentation.svelte.js";
   import LifecycleView from "$lib/views/LifecycleView.svelte";
@@ -916,9 +916,14 @@
         </Tabs.Content>
 
         <Tabs.Content value="settings">
-          {#if selectedAvailability === "unavailable"}
+          {#if selectedAvailability === "unavailable" && !settingsSurviveLock(selectedSession)}
             {@render unavailableOverlay(selectedDriveDir)}
           {:else}
+            <!-- Locked drives keep their local surfaces here:
+                 configured bounds read from the settings file and
+                 the identity-pair Leave card need no owner. Status
+                 stays gated on unlock; managed-down drives keep the
+                 overlay with its Start/Reinstall recovery. -->
             <SettingsView
               driveDir={selectedDriveDir}
               snapshot={presentation.settingsSnapshotFor(selectedDriveDir)}

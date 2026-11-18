@@ -16,6 +16,7 @@ import {
   nextDriveDir,
   observedRegistrySummary,
   sessionLabel,
+  settingsSurviveLock,
   SETTING_BOUNDS,
   shortId,
   suggestedDriveDirFor,
@@ -59,6 +60,18 @@ test("session gate names the per-session posture, managed drives render nothing"
   expect(sessionLabel({ state: "locked", detail: "needs passphrase" })).toBe(
     "Locked — needs passphrase",
   );
+});
+
+test("locked drives keep their local settings surfaces, everything else gates on the owner", () => {
+  // Locked: configured bounds read from the settings file and the
+  // identity-pair Leave card need no owner, so the settings tab
+  // renders them instead of the unavailable overlay.
+  expect(settingsSurviveLock({ state: "locked", detail: "needs passphrase" })).toBe(true);
+  // Unlocked drives render settings through the available path.
+  expect(settingsSurviveLock({ state: "unlocked", detail: "open" })).toBe(false);
+  // Managed-down drives (no session gate) keep the overlay with
+  // its Start/Reinstall recovery — file facts alone would bury it.
+  expect(settingsSurviveLock(null)).toBe(false);
 });
 
 test("absent bounds stay unknown, never defaulted", () => {
