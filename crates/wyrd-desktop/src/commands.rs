@@ -1276,16 +1276,16 @@ where
         // Destructure to drop the secret (scrubbed) and kill the
         // child: best-effort, then reaped. An already-exited owner
         // still resolves completed — the session is gone either
-        // way, and the observation says what serves now. The kill
-        // ends whatever served this socket, so forget the cached
-        // connection with it: the next probe mints a fresh one
-        // instead of breaking on the dead stream.
+        // way, and the observation says what serves now. Evict only
+        // once the child is reaped: a probe landing between evict
+        // and kill could otherwise cache a connection to the
+        // still-alive old owner and poison on it later.
         let super::session::UnlockSession { mut child, .. } = entry;
-        state.evict_drive(&dir);
         if let Some(mut child) = child.take() {
             let _ = child.kill();
             let _ = child.wait();
         }
+        state.evict_drive(&dir);
         let report = ProvisionReport {
             result: super::provision::ProvisionResult::Completed {
                 detail: "drive locked for this session: the owner is stopped and the session secret scrubbed"
