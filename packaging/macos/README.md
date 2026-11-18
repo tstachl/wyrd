@@ -483,9 +483,8 @@ not by policy. `build-appex.sh` with the default ad-hoc identity
 produces a verifying-clean bundle (`codesign --verify --deep
 --strict`), identifier `md.enesis.wyrd.fileprovider`, extension
 point `com.apple.fileprovider-nonui` — with the development
-entitlements passed at sign time but not effective ad-hoc (no
-extractable blob, no embedded provisioning profile), so the App
-Group buys no container. `pluginkit -a` accepts the
+entitlements passed at sign time but not effective without a
+provisioning profile, so the App Group buys no container. `pluginkit -a` accepts the
 registration (exit 0) yet the record stays unusable (`!` in
 `pluginkit -m -A`) and matches no fileprovider endpoint, so
 `fileproviderd` never instantiates it; the system log shows no
