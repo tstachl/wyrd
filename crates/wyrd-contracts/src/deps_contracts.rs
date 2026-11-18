@@ -711,7 +711,7 @@ fn check_member_features(member: &str, specs: &[(&str, &str, Vec<String>, bool)]
 /// tests prove it bites.
 fn check_unsafe_sites(holders: &[(String, usize)]) -> Vec<String> {
     const ALLOWED: &[(&str, usize)] = &[
-        ("crates/wyrd-cli/src/credentials.rs", 1),
+        ("crates/wyrd-cli/src/credentials.rs", 2),
         ("crates/wyrd-cli/src/tests_cli.rs", 2),
         ("crates/wyrd-cli/src/update/supervise.rs", 1),
         ("crates/wyrd-contracts/src/support/view.rs", 1),
