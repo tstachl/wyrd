@@ -97,6 +97,33 @@ pub enum RegistryStatus {
     },
 }
 
+/// One drive's session gate for the per-session posture: whether
+/// this drive is open in this session or needs an explicit unlock.
+/// `None` where a service definition exists — managed recovery
+/// (`ServiceState`) owns that drive, and no passphrase gate
+/// applies. `Some` only for definition-less drives: the
+/// per-session posture (or a removed definition), where the only
+/// ways back to serving are an explicit `drive_unlock` with the
+/// passphrase or a reinstalled managed definition.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "state", rename_all = "lowercase")]
+pub enum SessionState {
+    /// The owner answered this session: the drive is open.
+    Unlocked {
+        /// Evidence string: the owner answered this session.
+        detail: String,
+    },
+    /// No owner serves and no service definition exists to start:
+    /// the drive needs an explicit unlock with its passphrase (or
+    /// a reinstalled managed definition). A stable first-class
+    /// state, never a failure — the shell never auto-starts.
+    Locked {
+        /// Evidence string naming both recoveries: session unlock
+        /// and managed reinstall.
+        detail: String,
+    },
+}
+
 /// One drive's reachability, verified this session. Transport-level
 /// only: `Available` never claims anything about the drive's
 /// contents, and `Unavailable` never claims the drive is gone.
@@ -142,6 +169,72 @@ pub struct DriveView {
     /// not-installed vs stopped vs wedged vs running vs unknown vs
     /// unsupported. Observation only — never supervision.
     pub service_state: super::service::ServiceState,
+    /// The per-session gate beside the transport verdict: locked
+    /// vs unlocked for definition-less drives, `None` where a
+    /// service definition exists (managed recovery owns that
+    /// drive). Observation only — never supervision.
+    pub session: Option<SessionState>,
+}
+
+/// The per-session gate for one drive: locked vs unlocked for
+/// definition-less drives, `None` everywhere else. Pure over the
+/// transport verdict and the definition fact, so the rule pins
+/// without staging an owner. Managed drives (definition exists)
+/// carry no gate — their service verdict owns recovery. A probe
+/// timeout (`Unknown`) carries no gate either: an unresolved probe
+/// changes nothing, so the tag stays absent until the probe
+/// resolves instead of declaring the drive locked.
+pub(crate) fn session_for(
+    availability: &DriveAvailability,
+    definition_exists: bool,
+) -> Option<SessionState> {
+    if definition_exists {
+        return None;
+    }
+    match availability {
+        DriveAvailability::Available => Some(SessionState::Unlocked {
+            detail: "the owner answered this session — the drive is open".to_string(),
+        }),
+        DriveAvailability::Unavailable { .. } => Some(SessionState::Locked {
+            detail: "no owner serves and no service definition exists: unlock the drive for this session with its passphrase, or reinstall the managed definition".to_string(),
+        }),
+        DriveAvailability::Unknown { .. } => None,
+    }
+}
+
+/// Whether the registry names a managed service definition for one
+/// drive directory: the unlock command's posture gate. Reads the
+/// default registry file without probing any socket — a missing or
+/// unreadable file answers `false`, so unlocking an unregistered
+/// drive (or one whose registry is momentarily unreadable) still
+/// proceeds to the CLI instead of refusing on a read failure.
+pub(crate) fn managed_definition_exists(drive_dir: &Path) -> bool {
+    managed_definition_exists_at(&default_registry_path(), drive_dir)
+}
+
+/// The test seam for [`managed_definition_exists`]: the registry
+/// path is injected, so the gate pins without touching the
+/// operator's real registry file.
+fn managed_definition_exists_at(registry_path: &Path, drive_dir: &Path) -> bool {
+    let bytes = match std::fs::read(registry_path) {
+        Ok(bytes) => bytes,
+        Err(_) => return false,
+    };
+    let file: serde_json::Value = match serde_json::from_slice(&bytes) {
+        Ok(file) => file,
+        Err(_) => return false,
+    };
+    let want = drive_dir.to_string_lossy();
+    let Some(drives) = file.get("drives").and_then(|drives| drives.as_object()) else {
+        return false;
+    };
+    drives.values().any(|entry| {
+        entry.get("drive_dir").and_then(|dir| dir.as_str()) == Some(want.as_ref())
+            && entry
+                .get("service")
+                .and_then(|service| service.as_str())
+                .is_some_and(|service| super::service::service_definition_path(service).exists())
+    })
 }
 
 /// The lifecycle view's registry answer: the file status, one view
@@ -385,6 +478,12 @@ pub fn list_drives_at(registry_path: &Path) -> RegistryState {
                 }
                 drives.push({
                     let availability = probe_drive(&entry.drive_dir);
+                    // The definition fact is read once and shared by
+                    // the service verdict and the session gate below:
+                    // both describe the same file, and two stats could
+                    // disagree under a concurrent reinstall.
+                    let definition_exists =
+                        super::service::service_definition_path(&entry.service).exists();
                     // The service-manager probe runs only where a view
                     // consumes it: the unavailable screen is the sole
                     // reader, and it renders only for `Unavailable`. A
@@ -407,7 +506,7 @@ pub fn list_drives_at(registry_path: &Path) -> RegistryState {
                             super::service::probe_service_state(&entry.service, false)
                         }
                         DriveAvailability::Unknown { .. } => {
-                            if super::service::service_definition_path(&entry.service).exists() {
+                            if definition_exists {
                                 super::service::ServiceState::Unknown {
                                     detail: "service not probed while availability is unknown — retry the owner probe".to_string(),
                                 }
@@ -418,6 +517,13 @@ pub fn list_drives_at(registry_path: &Path) -> RegistryState {
                             }
                         }
                     };
+                    // The session gate beside the transport verdict,
+                    // derived from the same definition fact: an
+                    // unresolved probe carries no gate (it changes
+                    // nothing), managed drives carry none (their
+                    // service verdict owns recovery) — see
+                    // `session_for`.
+                    let session = session_for(&availability, definition_exists);
                     DriveView {
                         name: entry.name.clone(),
                         drive_dir: entry.drive_dir.to_string_lossy().into_owned(),
@@ -430,6 +536,7 @@ pub fn list_drives_at(registry_path: &Path) -> RegistryState {
                             .map(|path| path.to_string_lossy().into_owned()),
                         availability,
                         service_state,
+                        session,
                     }
                 })
             }
@@ -859,6 +966,98 @@ pub fn write_registry_at(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The session gate pins without an owner: unlocked where the
+    /// owner answered a definition-less drive, locked where no
+    /// transport answered, absent for managed drives — and absent
+    /// for an unresolved probe, which changes nothing instead of
+    /// declaring the drive locked.
+    #[test]
+    fn session_gate_pins_the_posture_rule() {
+        assert!(session_for(&DriveAvailability::Available, true).is_none());
+        assert!(session_for(
+            &DriveAvailability::Unavailable {
+                detail: "down".to_string()
+            },
+            true
+        )
+        .is_none());
+        assert!(session_for(
+            &DriveAvailability::Unknown {
+                detail: "wedged".to_string()
+            },
+            true
+        )
+        .is_none());
+        assert!(session_for(
+            &DriveAvailability::Unknown {
+                detail: "wedged".to_string()
+            },
+            false
+        )
+        .is_none());
+        assert!(matches!(
+            session_for(&DriveAvailability::Available, false),
+            Some(SessionState::Unlocked { .. })
+        ));
+        match session_for(
+            &DriveAvailability::Unavailable {
+                detail: "down".to_string(),
+            },
+            false,
+        ) {
+            Some(SessionState::Locked { detail }) => {
+                assert!(detail.contains("unlock"), "detail: {detail}");
+                assert!(detail.contains("reinstall"), "detail: {detail}");
+            }
+            other => panic!("a down definition-less drive is locked: {other:?}"),
+        }
+    }
+
+    /// The managed-definition gate reads the registry file without
+    /// probing: a missing file, a malformed file, a drive with no
+    /// entry, and an entry whose definition is absent all proceed
+    /// (answer `false`) — the gate only ever refuses where a
+    /// definition file actually exists.
+    #[test]
+    fn managed_definition_gate_fails_open_to_unlock() {
+        let dir =
+            std::env::temp_dir().join(format!("wyrd-desktop-reg-{}-mngdef", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let drive = dir.join("drive");
+        // Missing file proceeds.
+        assert!(!managed_definition_exists_at(
+            &dir.join("absent.json"),
+            &drive
+        ));
+        // Malformed file proceeds.
+        let broken = dir.join("broken.json");
+        std::fs::write(&broken, r#"{"version": 1, "drives": {"#).unwrap();
+        assert!(!managed_definition_exists_at(&broken, &drive));
+        // An entry naming a service with no installed definition proceeds.
+        let path = dir.join("drives.json");
+        std::fs::write(
+            &path,
+            serde_json::json!({
+                "version": 1,
+                "drives": {
+                    "demo": {
+                        "name": "demo",
+                        "drive_dir": drive.to_string_lossy(),
+                        "relays": [],
+                        "service": "drive-demo-no-such-definition",
+                        "mode": "vault",
+                    },
+                },
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert!(!managed_definition_exists_at(&path, &drive));
+        // A drive with no entry proceeds.
+        assert!(!managed_definition_exists_at(&path, &dir.join("other")));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     /// The taxonomy-to-reachability map pins without an owner: every
     /// client outcome lands on exactly one verdict, and only a

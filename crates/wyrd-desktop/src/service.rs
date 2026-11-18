@@ -271,7 +271,7 @@ fn probe_with(
     if !definition.exists() {
         return ServiceState::NotInstalled {
             detail: format!(
-                "no service definition installed ({} missing): the drive is registered without a managed service — reinstall the definition to supervise it",
+                "no service definition installed ({} missing): the drive is registered without a managed service — unlock the drive for this session with its passphrase, or reinstall the definition to supervise it",
                 definition.display()
             ),
         };

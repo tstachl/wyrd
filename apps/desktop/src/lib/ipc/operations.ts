@@ -220,6 +220,38 @@ export function provisionServiceStart(args: ProvisionServiceStartArgs): Promise<
   return invokeValue<ProvisionReport>("provision_service_start", { args });
 }
 
+/**
+ * Unlock one drive for the session: spawn the persistent owner
+ * through the version-matched CLI with the passphrase on the
+ * stdin pipe (never argv), verify the socket answers, then hold
+ * the child under the session monitor. The passphrase text travels
+ * here like the onboarding commit pipe — never persisted in the
+ * frontend, never logged.
+ */
+export interface DriveUnlockArgs {
+  driveDir: string;
+  identityFile: string;
+  passphrase: string;
+}
+
+export function driveUnlock(args: DriveUnlockArgs): Promise<ProvisionReport> {
+  return invokeValue<ProvisionReport>("drive_unlock", { args });
+}
+
+/**
+ * Lock one drive for the session: kill the app-held unlock child
+ * and scrub the session secret, then re-read and probe. Refuses
+ * where this app holds no unlock session — a reattached owner the
+ * app did not start is never killed.
+ */
+export interface DriveLockArgs {
+  driveDir: string;
+}
+
+export function driveLock(args: DriveLockArgs): Promise<ProvisionReport> {
+  return invokeValue<ProvisionReport>("drive_lock", { args });
+}
+
 // Onboarding operations (first-run identity surface). Paths travel,
 // never secret contents — except the two documented passphrase
 // transits: `new-passphrase` returns the generated text for

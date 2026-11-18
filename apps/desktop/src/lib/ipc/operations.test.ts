@@ -12,7 +12,9 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import {
   applySettings,
   captureParent,
+  driveLock,
   driveSettings,
+  driveUnlock,
   listDrives,
   lookup,
   observe,
@@ -320,6 +322,42 @@ test("applySettings sends one drive plus one sparse update", async () => {
         driveDir: "/drives/alpha",
         update: { set: { max_admit_per_pass: 64 }, clear: ["open_timeout_secs"] },
       },
+    },
+  ]);
+});
+
+test("driveUnlock sends the passphrase in args, driveLock names the drive", async () => {
+  const seen: Array<{ cmd: string; args: unknown }> = [];
+  mockIPC((cmd, args) => {
+    seen.push({ cmd, args });
+    return {
+      result: { result: "completed", detail: "owner answering" },
+      observed: { status: "nofile", drives: [], skipped: [] },
+      membership: null,
+    };
+  });
+  const unlocked = await driveUnlock({
+    driveDir: "/drives/alpha",
+    identityFile: "/keys/identity",
+    passphrase: "hunter2-hunter2",
+  });
+  expect(unlocked.result.result).toBe("completed");
+  const locked = await driveLock({ driveDir: "/drives/alpha" });
+  expect(locked.result.result).toBe("completed");
+  expect(seen).toEqual([
+    {
+      cmd: "drive_unlock",
+      args: {
+        args: {
+          driveDir: "/drives/alpha",
+          identityFile: "/keys/identity",
+          passphrase: "hunter2-hunter2",
+        },
+      },
+    },
+    {
+      cmd: "drive_lock",
+      args: { args: { driveDir: "/drives/alpha" } },
     },
   ]);
 });

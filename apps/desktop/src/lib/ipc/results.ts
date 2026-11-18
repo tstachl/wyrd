@@ -323,6 +323,17 @@ export type ServiceState =
   | { state: "unknown"; detail: string }
   | { state: "unsupported"; detail: string };
 
+/**
+ * One drive's session gate for the per-session posture: whether the
+ * drive is open in this session or needs an explicit unlock. `null`
+ * where a service definition exists — managed recovery owns that
+ * drive. Source of truth: `SessionState` in
+ * `crates/wyrd-desktop/src/registry.rs`.
+ */
+export type SessionState =
+  | { state: "unlocked"; detail: string }
+  | { state: "locked"; detail: string };
+
 /** One registered drive for the lifecycle view: facts plus the live verdict. No implicit active drive — the frontend's selection is presentation state, never an authorization boundary. `mountpoint` carries the FUSE mountpoint in `mount` mode (`null` in `vault` mode). */
 export interface DriveView {
   name: string;
@@ -333,6 +344,7 @@ export interface DriveView {
   mountpoint: string | null;
   availability: DriveAvailability;
   service_state: ServiceState;
+  session: SessionState | null;
 }
 
 /** How the registry file itself read. Loud about unreadability, never guessing. */

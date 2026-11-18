@@ -441,11 +441,12 @@ verdict.
   probe; nothing changed), and a build without manager tooling
   reads unsupported ("no managed service verdict in this build").
   The matching recovery runs through the constrained CLI adapter —
-  start the installed agent, or reinstall the definition — never a
-  terminal, never auto-start: a stopped drive is a stable
-  first-class state until the person starts it, and a refused
-  recovery reports its outcome on the screen instead of failing
-  silently.
+  start the installed agent, reinstall the definition, or unlock
+  the drive for the session where no definition exists (per-session
+  posture) — never a terminal, never auto-start: a stopped or
+  locked drive is a stable first-class state until the person
+  starts or unlocks it, and a refused recovery reports its outcome
+  on the screen instead of failing silently.
 - Framework choice, decided: Svelte 5 + shadcn-svelte, no SvelteKit
   (local desktop app: no SSR, routing infrastructure, or server
   endpoints). The main window opens 1120x800 (min 960x640) so the
@@ -934,11 +935,12 @@ this note wins for architecture.
    transport). Two fixed terms the issue text already uses, defined
    here because they have no other repo home:
    R1 — the app owns the unlock lifecycle: in per-session posture
-   no manager auto-start or restart exists (the service definition
-   drops `KeepAlive`/`RunAtLoad`), the app spawns the owner
-   directly with the piped passphrase, restarts unexpected death a
-   bounded number of times while the app lives, then falls back to
-   manual Start.
+   no manager auto-start or restart exists (no manager definition
+   exists — a `no_service` registration plus `drive unlock` — so
+   there is nothing to auto-start or restart), the app spawns the
+   owner directly with the piped passphrase, restarts unexpected
+   death a bounded number of times while the app lives, then falls
+   back to manual unlock (the locked state).
    R2 — app lifetime stays separate from owner lifetime: an app
    crash never takes a running owner down (reattach on relaunch),
    both dead re-prompts, and an app-stopped owner killed stays

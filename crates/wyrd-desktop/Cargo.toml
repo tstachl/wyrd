@@ -30,6 +30,11 @@ tauri = { workspace = true, features = ["tray-icon", "image-png"] }
 # cross the picked paths — only path strings travel to the CLI
 # adapter. Reserved alongside `tauri` by the layer gate.
 tauri-plugin-dialog.workspace = true
+# In-memory session secrets only (per-drive unlock passphrases,
+# never persisted, never logged). The scrub-on-drop wrapper the
+# CLI and sync halves already use — no new crypto, no new edge
+# shape, just the same leaf.
+zeroize.workspace = true
 
 [build-dependencies]
 # Embeds `tauri.conf.json` plus `capabilities/` at compile time for

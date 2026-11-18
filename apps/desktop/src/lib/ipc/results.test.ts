@@ -123,6 +123,7 @@ import type {
   DriveView,
   RegistryState,
   ServiceState,
+  SessionState,
   SettingsWriteReport,
 } from "./results.js";
 
@@ -154,6 +155,10 @@ test("drive view carries facts plus the live verdict", () => {
       state: "running",
       detail: "the service manager reports the owner running",
     },
+    session: {
+      state: "unlocked",
+      detail: "the owner answered this session — the drive is open",
+    },
   };
   expect(drive).toEqual({
     name: "alpha",
@@ -167,7 +172,26 @@ test("drive view carries facts plus the live verdict", () => {
       state: "running",
       detail: "the service manager reports the owner running",
     },
+    session: {
+      state: "unlocked",
+      detail: "the owner answered this session — the drive is open",
+    },
   });
+});
+
+test("session states stay tagged and distinct, managed drives carry null", () => {
+  const unlocked: SessionState = {
+    state: "unlocked",
+    detail: "the owner answered this session — the drive is open",
+  };
+  expect(unlocked.state).toBe("unlocked");
+  const locked: SessionState = {
+    state: "locked",
+    detail: "no owner serves and no service definition exists",
+  };
+  expect(locked.state).toBe("locked");
+  const managed: SessionState | null = null;
+  expect(managed).toBeNull();
 });
 
 test("service states distinguish the three unavailable causes", () => {
@@ -213,6 +237,10 @@ test("registry states flatten the status without stutter", () => {
         service_state: {
           state: "running",
           detail: "the service manager reports the owner running",
+        },
+        session: {
+          state: "unlocked",
+          detail: "the owner answered this session — the drive is open",
         },
       },
     ],

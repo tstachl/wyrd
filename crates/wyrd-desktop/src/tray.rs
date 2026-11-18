@@ -217,6 +217,7 @@ mod tests {
             service_state: super::super::service::ServiceState::Unknown {
                 detail: "tray tests do not probe the manager".to_string(),
             },
+            session: None,
         }
     }
 
