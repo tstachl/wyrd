@@ -259,8 +259,21 @@ pub(crate) fn watch_session<R: Runtime>(app: AppHandle<R>, drive_dir: PathBuf, g
             let state = app.state::<AppState>();
             match sweep_session(state.sessions(), &drive_dir, generation) {
                 SweepOutcome::Alive => {}
-                SweepOutcome::Respawned => std::thread::sleep(UNLOCK_RESTART_BACKOFF),
-                SweepOutcome::Gone | SweepOutcome::GaveUp => return,
+                SweepOutcome::Respawned => {
+                    // The respawn replaced the serving owner: forget
+                    // the cached connection with it, or the next
+                    // probe breaks on the dead stream and poisons the
+                    // client (see `AppState::evict_drive`).
+                    state.evict_drive(&drive_dir);
+                    std::thread::sleep(UNLOCK_RESTART_BACKOFF);
+                }
+                SweepOutcome::GaveUp => {
+                    // The budget is spent and the owner is gone: the
+                    // same stale trap as a lock, so evict with it.
+                    state.evict_drive(&drive_dir);
+                    return;
+                }
+                SweepOutcome::Gone => return,
             }
         });
 }

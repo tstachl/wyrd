@@ -525,6 +525,7 @@ pub async fn provision_create<R: Runtime>(
         app,
         "provision_create",
         args.drive_dir.clone(),
+        true,
         move |state, dir| {
             let request = super::provision::ProvisionRequest {
                 name: args.name,
@@ -572,6 +573,7 @@ pub async fn provision_join<R: Runtime>(
         app,
         "provision_join",
         args.drive_dir.clone(),
+        true,
         move |state, dir| {
             let request = super::provision::ProvisionRequest {
                 name: args.name,
@@ -620,6 +622,7 @@ pub async fn provision_leave<R: Runtime>(
         app,
         "provision_leave",
         args.drive_dir.clone(),
+        false,
         move |state, dir| {
             let request = super::provision::LeaveRequest {
                 drive_dir: dir,
@@ -683,6 +686,7 @@ pub async fn provision_reconfigure<R: Runtime>(
         app,
         "provision_reconfigure",
         args.drive_dir.clone(),
+        true,
         move |state, dir| {
             let request = super::provision::ReconfigureRequest {
                 drive_dir: dir,
@@ -738,6 +742,7 @@ pub async fn provision_service_start<R: Runtime>(
         app,
         "provision_service_start",
         args.drive_dir.clone(),
+        true,
         move |state, dir| {
             let request = super::provision::ServiceStartRequest {
                 drive_dir: dir,
@@ -1075,6 +1080,7 @@ async fn run_provision<R, F>(
     app: AppHandle<R>,
     op: &'static str,
     drive_dir: String,
+    evict_after: bool,
     call: F,
 ) -> ProvisionReport
 where
@@ -1106,6 +1112,14 @@ where
         }
         let _release = FlightRelease::claim(&state, dir.clone());
         let outcome = call(&state, dir.clone());
+        // Owner-restarting operations evict the cached connection:
+        // the next exchange mints a fresh one instead of breaking
+        // on the pre-restart stream (see `evict_drive`). Leave
+        // authors membership without replacing the server, so it
+        // keeps the connection it had.
+        if evict_after {
+            state.evict_drive(&dir);
+        }
         // The flight releases only after the observation below: the
         // observation is part of the operation, so a second request
         // on the same drive waits for the full verified picture
@@ -1262,12 +1276,16 @@ where
         // Destructure to drop the secret (scrubbed) and kill the
         // child: best-effort, then reaped. An already-exited owner
         // still resolves completed — the session is gone either
-        // way, and the observation says what serves now.
+        // way, and the observation says what serves now. Evict only
+        // once the child is reaped: a probe landing between evict
+        // and kill could otherwise cache a connection to the
+        // still-alive old owner and poison on it later.
         let super::session::UnlockSession { mut child, .. } = entry;
         if let Some(mut child) = child.take() {
             let _ = child.kill();
             let _ = child.wait();
         }
+        state.evict_drive(&dir);
         let report = ProvisionReport {
             result: super::provision::ProvisionResult::Completed {
                 detail: "drive locked for this session: the owner is stopped and the session secret scrubbed"
@@ -1383,6 +1401,11 @@ where
             };
         }
     };
+    // The spawn replaced whatever served this socket before: forget
+    // the cached connection so the first probe past this point mints
+    // a fresh one instead of breaking on the pre-restart stream
+    // (which would poison the client and force a manual reconnect).
+    state.evict_drive(dir);
     let deadline = std::time::Instant::now() + UNLOCK_VERIFY_TIMEOUT;
     loop {
         match spawned.child.try_wait() {
