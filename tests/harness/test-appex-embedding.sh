@@ -71,6 +71,8 @@ grep -Fq 'does not load, by mechanism' "$ROOT/packaging/macos/README.md" \
   || die "README: ad-hoc verdict missing"
 grep -Fq 'notarized `fileproviderd` load check itself stays' "$ROOT/packaging/macos/README.md" \
   || die "README: notarized check ownership missing"
+grep -Fq 'no effective group-container entitlement' "$ROOT/packaging/macos/README.md" \
+  || die "README: effective-entitlement mechanism missing"
 pass "ad-hoc refusal recorded with team-signed deltas"
 
 echo "appex-embedding: $PASS checks passed"
