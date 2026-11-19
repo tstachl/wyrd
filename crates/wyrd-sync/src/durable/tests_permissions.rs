@@ -198,6 +198,30 @@ fn a_crash_during_store_key_write_leaves_no_readable_temp() {
     );
 }
 
+/// Two claims on the same `(dir, name)` while the first file is
+/// still open: the discipline pins distinct paths and the survival
+/// of the first temp — deterministically, with no threads or
+/// sleeps. Under the old shared-name rule the second claim would
+/// have unlinked the first writer's live file; the retry path
+/// (`AlreadyExists` → fresh name) is what this exercises.
+#[test]
+fn concurrent_claims_on_one_name_never_share_a_temp() {
+    use super::store::create_mode_temp;
+    use super::tests_harness::TestDir;
+    let dir = TestDir::new("concurrent-claim");
+    let (_first, first_path) = create_mode_temp(&dir.path, "shared", 0o600).unwrap();
+    let (_second, second_path) = create_mode_temp(&dir.path, "shared", 0o600).unwrap();
+    assert_ne!(
+        first_path, second_path,
+        "each writer owns a distinct sibling"
+    );
+    assert!(
+        first_path.is_file(),
+        "the second claim never unlinks the first writer's temp"
+    );
+    assert!(second_path.is_file(), "the second claim holds its own temp");
+}
+
 #[cfg(unix)]
 #[test]
 fn a_stale_shared_temp_is_left_alone_while_the_write_hardens() {
