@@ -75,13 +75,11 @@ never deletes local data as a side effect of the UI. -->
      * alone.
      */
     onRestartService: () => Promise<string | null>;
-    /** Lock the session owner and land on Status, where unlock lives. */
-    onLockAndShowStatus: () => Promise<void>;
     /** Re-read the registry and return to the drive list. */
     onRefreshDrives: () => void;
   }
 
-  let { driveDir, snapshot, pending, transportNotice, identityFile, passphraseFile, onRefresh, onLeave, onApply, session, onRestartService, onLockAndShowStatus, onRefreshDrives }: Props = $props();
+  let { driveDir, snapshot, pending, transportNotice, identityFile, passphraseFile, onRefresh, onLeave, onApply, session, onRestartService, onRefreshDrives }: Props = $props();
 
   const restartKind = $derived(restartKindFor(session));
 
@@ -311,12 +309,7 @@ never deletes local data as a side effect of the UI. -->
     {:else if restartKind === "session"}
       <Alert.Title>Bounds saved — lock and unlock to apply</Alert.Title>
       <Alert.Description>
-        <p>The running owner keeps its startup values until it restarts. Locking ends this session's owner; unlocking with the passphrase starts it again with the saved values.</p>
-        <div class="mt-3 flex flex-wrap items-center gap-2">
-          <Button variant="outline" size="sm" disabled={busy} onclick={() => void onLockAndShowStatus()}>
-            Lock now
-          </Button>
-        </div>
+        <p>The running owner keeps its startup values until it restarts. Use Lock in the header to end this session's owner, then unlock with the passphrase to start it again with the saved values.</p>
       </Alert.Description>
     {:else}
       <p>Bounds saved. They apply the next time the drive starts — the running owner keeps its startup values until then.</p>

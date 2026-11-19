@@ -1006,7 +1006,6 @@
                 runSettingsWrite(selectedDriveDir, update)
               }
               onRestartService={() => restartServiceForApply(selectedDriveDir)}
-              onLockAndShowStatus={() => lockAndShowStatus(selectedDriveDir)}
               onRefreshDrives={allDrives}
             />
           {/if}
