@@ -316,7 +316,7 @@ fn sync_status_with_relays_stays_fully_offline() {
 }
 
 /// After an admission, status itemizes every obligation class with
-/// its queued/delivered/pending split: the transition and capability
+/// its queued/relay-accepted/pending split: the transition and capability
 /// to the newcomer plus the announcement chain.
 #[test]
 fn sync_status_after_invite_shows_pending_obligations() {
@@ -355,11 +355,11 @@ fn sync_status_after_invite_shows_pending_obligations() {
     let engine = fixture.open();
     let rendered = sync_status_render(&observe(&engine, 0).unwrap());
     assert!(
-        rendered.contains("outbox transitions: 1 queued, 0 delivered, 1 pending"),
+        rendered.contains("outbox transitions: 1 queued, 0 relay-accepted, 1 pending"),
         "{rendered}"
     );
     assert!(
-        rendered.contains("outbox capabilities: 1 queued, 0 delivered, 1 pending"),
+        rendered.contains("outbox capabilities: 1 queued, 0 relay-accepted, 1 pending"),
         "{rendered}"
     );
     assert!(rendered.contains("pending"), "{rendered}");
@@ -3033,8 +3033,8 @@ fn sync_status_prints_no_fetch_class() {
 
 /// OD-18-C parity: the desktop summary and the CLI render the same
 /// observation. Factual parity, never layout identity — the two
-/// share no line of copy by construction (the CLI says "delivered",
-/// the surface says "relay-accepted" for the same counts), so the
+/// share no line of copy by construction (both say "relay-accepted"
+/// for the same counts, in their own sentences), so the
 /// table below checks facts, not text. Divergence here is a defect,
 /// not a platform variant.
 #[test]
@@ -3113,10 +3113,17 @@ fn status_gui_and_cli_agree_on_the_same_observation() {
             "surface names {handle}:\n{detail}"
         );
     }
-    // The intended textual divergence, documented: same counts,
-    // honest words on each side. The CLI predates the surface and
-    // keeps its copy; the surface never says "delivered" bare.
-    assert!(cli.contains("delivered"), "CLI keeps its copy:\n{cli}");
+    // The agreed vocabulary: both sides name relay acceptance for
+    // the same counts, each in its own sentence. Neither side says
+    // "delivered" bare.
+    assert!(
+        cli.contains("relay-accepted"),
+        "CLI names relay acceptance:\n{cli}"
+    );
+    assert!(
+        !cli.contains("delivered"),
+        "CLI never says delivered bare:\n{cli}"
+    );
     assert!(
         !summary.contains("delivered") && !detail.contains("delivered"),
         "surface says relay-accepted, never delivered"

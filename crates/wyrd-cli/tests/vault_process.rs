@@ -312,7 +312,9 @@ fn owner_outbox_empty_after_clean_stop() {
     let report = String::from_utf8(output.stdout).expect("status renders text");
     for class in ["announcements", "transitions", "capabilities"] {
         assert!(
-            report.contains(&format!("outbox {class}: 0 queued, 0 delivered, 0 pending")),
+            report.contains(&format!(
+                "outbox {class}: 0 queued, 0 relay-accepted, 0 pending"
+            )),
             "no {class} left pending after a clean stop, got:\n{report}"
         );
     }

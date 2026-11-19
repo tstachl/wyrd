@@ -200,7 +200,7 @@ fn read_unlock_credentials_with(
     }
     if !stdin_is_tty {
         return Err(CliError::Usage(
-            "not a terminal: pipe the passphrase with --passphrase-stdin or run unlock on a terminal (the owner never starts without it)".to_string(),
+            "not a terminal: pipe the passphrase with --passphrase-stdin or run unlock on a terminal. This drive's owner cannot start without it".to_string(),
         ));
     }
     let passphrase = prompt_passphrase_tty()?;
@@ -310,7 +310,7 @@ fn prompt_passphrase_tty() -> Result<Zeroizing<String>, CliError> {
     }
     if line.is_empty() {
         return Err(CliError::Usage(
-            "no passphrase typed: the owner never starts without it".to_string(),
+            "No passphrase provided. This drive's owner cannot start without it".to_string(),
         ));
     }
     Ok(line)
@@ -391,7 +391,8 @@ fn read_passphrase_stdin(reader: impl std::io::Read) -> Result<Zeroizing<String>
         })?;
     if bytes.is_empty() {
         return Err(CliError::Usage(
-            "no passphrase on stdin: pipe one line (the owner never starts without it)".to_string(),
+            "No passphrase provided on stdin. This drive's owner cannot start without it"
+                .to_string(),
         ));
     }
     if bytes.len() > MAX_PASSPHRASE_BYTES {
@@ -405,7 +406,8 @@ fn read_passphrase_stdin(reader: impl std::io::Read) -> Result<Zeroizing<String>
     let stripped = strip_trailing_newline(&text);
     if stripped.is_empty() {
         return Err(CliError::Usage(
-            "no passphrase on stdin: pipe one line (the owner never starts without it)".to_string(),
+            "No passphrase provided on stdin. This drive's owner cannot start without it"
+                .to_string(),
         ));
     }
     Ok(Zeroizing::new(stripped.to_owned()))

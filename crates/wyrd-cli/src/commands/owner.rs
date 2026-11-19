@@ -30,15 +30,15 @@ fn owner_status_render(status: &VaultStatus) -> String {
     let mut out = String::new();
     let totals = &status.outbox;
     out.push_str(&format!(
-        "outbox announcements: {} queued, {} delivered\n",
+        "outbox announcements: {} queued, {} relay-accepted\n",
         totals.announcements_queued, totals.announcements_delivered,
     ));
     out.push_str(&format!(
-        "outbox transitions: {} queued, {} delivered\n",
+        "outbox transitions: {} queued, {} relay-accepted\n",
         totals.transitions_queued, totals.transitions_delivered,
     ));
     out.push_str(&format!(
-        "outbox capabilities: {} queued, {} delivered\n",
+        "outbox capabilities: {} queued, {} relay-accepted\n",
         totals.capabilities_queued, totals.capabilities_delivered,
     ));
     let queue = &status.queue;

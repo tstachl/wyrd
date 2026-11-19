@@ -166,12 +166,12 @@ pub(crate) fn role_set(drive_dir: PathBuf, role: String, yes: bool) -> Result<()
             Transition::NarrowingAcknowledged | Transition::WithdrawalPending
         ) {
             return Err(CliError::Usage(
-                "narrowing is already acknowledged and still withdrawing as vault: to start over, widen back to vault first (materialization role set vault), then narrow again with --yes.".into(),
+                "narrowing is already acknowledged and still withdrawing from the Vault role: to start over, widen back to the Vault role first (materialization role set vault), then narrow again with --yes.".into(),
             ));
         }
         if !yes {
             return Err(CliError::Usage(
-                "narrowing away from the vault role requires --yes: leaving vault stops being a provider, and that must be explicit. Acknowledgement records intent only; effective posture stays vault until withdrawal completes.".into(),
+                "narrowing away from the Vault role requires --yes: leaving the Vault role stops being a provider, and that must be explicit. Acknowledgement records intent only; effective posture stays `vault` until withdrawal completes.".into(),
             ));
         }
         let state = RoleState {
@@ -180,7 +180,7 @@ pub(crate) fn role_set(drive_dir: PathBuf, role: String, yes: bool) -> Result<()
         };
         wyrd_core::role::store(&drive_dir, state).map_err(role_err)?;
         println!(
-            "narrowing acknowledged: configured mirror, effective still vault until withdrawal completes\nnote: the live loop withdraws on its next passes (route-less announcements, then settled mirror); this device retains like vault until then"
+            "narrowing acknowledged: configured `mirror`, effective still `vault` until withdrawal completes\nnote: the live loop withdraws on its next passes (route-less announcements, then settled mirror); this device retains like the Vault role until then"
         );
         return Ok(());
     }
@@ -296,7 +296,7 @@ pub(crate) fn evict(
     let state = wyrd_core::role::load(&drive_dir).map_err(role_err)?;
     if state.effective() == wyrd_core::role::Role::Vault {
         return Err(CliError::Usage(
-            "role 'vault' forbids eviction: the role promises no pruning. Narrow the role first (materialization role set mirror --yes), or pin explicitly what must stay.".into(),
+            "The Vault role forbids eviction: the role promises no pruning. Narrow the role first (materialization role set mirror --yes), or pin explicitly what must stay.".into(),
         ));
     }
     let mut node = open_policy_node(drive_dir, passphrase, identity)?;
@@ -406,12 +406,12 @@ pub(crate) fn role_section_render(
     }
     if state.transition == Transition::NarrowingAcknowledged {
         out.push_str(
-            "note: narrowing acknowledged; retains like vault until withdrawal completes\n",
+            "note: narrowing acknowledged; retains like the Vault role until withdrawal completes\n",
         );
     }
     if state.transition == Transition::WithdrawalPending {
         out.push_str(&format!(
-            "note: withdrawal pending: {outstanding} own snapshot(s) still route this device at a peer; retains like vault until route publication drains and serving idles\n",
+            "note: withdrawal pending: {outstanding} own snapshot(s) still route this device at a peer; retains like the Vault role until route publication drains and serving idles\n",
         ));
     }
     out
@@ -558,7 +558,7 @@ pub(crate) fn policy_budgets_render(
                 StorageFigure::RetainedQuota.label()
             ));
             out.push_str(&format!(
-                "  {}: under these offline defaults, no retention ceiling is set on this device (set --retained-quota on mount/sync/vault to bound both paths)\n",
+                "  {}: under these offline defaults, no retention ceiling is set on this device (set --retained-quota on mount, unlock, owner start, or sync now to bound both paths)\n",
                 StorageFigure::ReceiveCeiling.label()
             ));
         }

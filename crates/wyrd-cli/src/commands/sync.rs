@@ -504,7 +504,7 @@ pub(crate) fn sync_status_render(status: &SyncStatus) -> String {
     let totals = &status.totals;
     let pending = &status.obligations;
     out.push_str(&format!(
-        "outbox announcements: {} queued, {} delivered, {} pending\n",
+        "outbox announcements: {} queued, {} relay-accepted, {} pending\n",
         totals.announcements_queued,
         totals.announcements_delivered,
         pending.announcements.len(),
@@ -513,7 +513,7 @@ pub(crate) fn sync_status_render(status: &SyncStatus) -> String {
         out.push_str(&format!("  snapshot {snapshot}: {count} pending\n"));
     }
     out.push_str(&format!(
-        "outbox transitions: {} queued, {} delivered, {} pending\n",
+        "outbox transitions: {} queued, {} relay-accepted, {} pending\n",
         totals.transitions_queued,
         totals.transitions_delivered,
         pending.transitions.len(),
@@ -522,7 +522,7 @@ pub(crate) fn sync_status_render(status: &SyncStatus) -> String {
         out.push_str(&format!("  transition {id}: {count} pending\n"));
     }
     out.push_str(&format!(
-        "outbox capabilities: {} queued, {} delivered, {} pending\n",
+        "outbox capabilities: {} queued, {} relay-accepted, {} pending\n",
         totals.capabilities_queued,
         totals.capabilities_delivered,
         pending.capabilities.len(),
