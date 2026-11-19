@@ -30,9 +30,9 @@ test("status rows carry the frozen row names", () => {
   ]) {
     expect(view).toContain(label);
   }
-  expect(view).not.toContain('label="Queue"');
-  expect(view).not.toContain('label="Materialized"');
-  expect(view).not.toContain('label="Last publish"');
+  expect(flat).not.toMatch(/label\s*=\s*"Queue"/);
+  expect(flat).not.toMatch(/label\s*=\s*"Materialized"/);
+  expect(flat).not.toMatch(/label\s*=\s*"Last publish"/);
 });
 
 test("paused names the state without the quiet/down gloss", () => {
