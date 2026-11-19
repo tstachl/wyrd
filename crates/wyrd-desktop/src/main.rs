@@ -155,7 +155,10 @@ fn close_hides<R: Runtime>(_window: &tauri::Window<R>) -> bool {
 }
 
 /// Show and focus the main window. Best-effort: a missing window is
-/// logged and ignored.
+/// logged and ignored. macOS-only: the only caller is the `Reopen`
+/// event (Dock / Spotlight re-activation of the hidden window);
+/// other platforms quit on last-window close instead of hiding.
+#[cfg(target_os = "macos")]
 fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
     let Some(window) = app.get_webview_window("main") else {
         eprintln!("wyrd-desktop: no main window to show");
