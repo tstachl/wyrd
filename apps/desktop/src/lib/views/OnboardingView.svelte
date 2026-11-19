@@ -345,7 +345,7 @@ never enter this component. -->
       </Card.Header>
       <Card.Content class="flex flex-col gap-5">
         <div class="rounded-xl border border-border bg-muted/40 p-4">
-          <p class="text-sm font-semibold">This device's identity has two parts.</p>
+          <p class="text-sm font-semibold">This device is recognized by a public identity key and a private key.</p>
           <div class="mt-3 grid gap-3 sm:grid-cols-2">
             <div class="flex gap-2.5">
               <span class="flex size-8 shrink-0 items-center justify-center rounded-lg bg-background text-muted-foreground ring-1 ring-border">
@@ -354,8 +354,10 @@ never enter this component. -->
               <div class="min-w-0">
                 <p class="text-sm font-semibold">Identity key</p>
                 <p class="mt-0.5 text-xs leading-relaxed text-muted-foreground">
-                  establishes who this device is. Generated randomly; it cannot be recreated from
-                  your passphrase.
+                  A device is recognized by its public identity key. The corresponding private key
+                  material, kept in the identity file and protected by the passphrase, proves that
+                  the device controls that identity. It was generated randomly and cannot be
+                  recreated from your passphrase.
                 </p>
               </div>
             </div>
@@ -366,8 +368,8 @@ never enter this component. -->
               <div class="min-w-0">
                 <p class="text-sm font-semibold">Unlock passphrase</p>
                 <p class="mt-0.5 text-xs leading-relaxed text-muted-foreground">
-                  protects access to this device's identity key. It does not replace or recover that
-                  key.
+                  protects access to this device's private key material. It does not replace or
+                  recover that key.
                 </p>
               </div>
             </div>

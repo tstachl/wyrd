@@ -114,7 +114,7 @@ the last terminal answer, stamped — never a claim about right now. -->
     </div>
     <p class="text-sm font-medium">No observation yet</p>
     <p class="max-w-sm text-sm text-muted-foreground">
-      Refresh to read this drive's posture from the owner. Nothing is filled in from memory.
+      Refresh to read this drive's latest reported posture. Nothing is filled in from memory.
     </p>
   </div>
   <div class="mt-3">

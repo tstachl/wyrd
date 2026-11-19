@@ -676,7 +676,7 @@
     await refreshCurrent();
     return presentation.availabilityFor(driveDir) === "available"
       ? null
-      : "The owner is not answering after the restart — the saved values wait for it to come back.";
+      : "The drive is not answering after the restart — the saved values wait for it to come back.";
   }
 
   /**
@@ -823,7 +823,7 @@
           onclick={allDrives}
         >
           <LayoutGridIcon data-icon="inline-start" />
-          All drives
+          Back to drives
         </Button>
       {/if}
     </div>
@@ -964,7 +964,7 @@
           {:else}
             {#if selectedSession !== null && selectedSession.state === "unlocked"}
               <div class="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-ok/30 bg-ok/10 px-4 py-3 text-sm">
-                <span class="text-foreground">Unlocked for this session — the owner is answering. Lock from the header to end the session; unlocking needs the passphrase.</span>
+                <span class="text-foreground">Unlocked for this session — the drive is answering. Lock from the header to end the session; unlocking needs the passphrase to open it again, and rebooting, stopping the drive, or quitting the app also ends the session.</span>
               </div>
             {/if}
             <StatusView

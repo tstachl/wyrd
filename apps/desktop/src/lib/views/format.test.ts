@@ -87,12 +87,8 @@ test("restart routing follows registry posture, never the view", () => {
 });
 
 test("absent bounds stay unknown, never defaulted", () => {
-  expect(boundLabel(null, "bytes")).toBe(
-    "Not configured — compiled default applies (unknown to the shell)",
-  );
-  expect(boundLabel(undefined, "bytes")).toBe(
-    "Not configured — compiled default applies (unknown to the shell)",
-  );
+  expect(boundLabel(null, "bytes")).toBe("Using Wyrd's default");
+  expect(boundLabel(undefined, "bytes")).toBe("Using Wyrd's default");
   expect(boundLabel(0, "bytes")).toBe("0 bytes");
 });
 
@@ -187,19 +183,19 @@ test("bound inputs validate per key, naming the key", () => {
   // pins them so wording cannot drift per view.
   expect(SETTING_BOUNDS.map((bound) => [bound.key, bound.label, bound.unit])).toEqual([
     ["retained_bytes_quota", "Storage limit", "bytes"],
-    ["max_admit_per_pass", "Items processed per sync", "items"],
-    ["fetch_pass_budget_secs", "Download time limit", "seconds"],
+    ["max_admit_per_pass", "Sync work limit", "items"],
+    ["fetch_pass_budget_secs", "Download time per sync pass", "seconds"],
     ["max_mutation_wait_secs", "File change wait limit", "seconds"],
     ["open_timeout_secs", "File open wait limit", "seconds"],
   ]);
   // Descriptions say what the implementation enforces, beneath
   // each label — pinned here alongside the labels.
   expect(SETTING_BOUNDS.map((bound) => bound.description)).toEqual([
-    "Maximum amount of data Wyrd retains for this drive.",
-    "Maximum number of items admitted during one sync pass.",
-    "Maximum time spent fetching content during one sync pass.",
-    "Maximum time a submitted file change waits before timing out.",
-    "Maximum time to wait for requested file content to become available.",
+    "The most drive data Wyrd will keep on this device. When that limit is reached, Wyrd refuses new data before writing anything. This is not a limit on your disk's free space.",
+    "How many items of sync work Wyrd starts in each sync pass. Anything beyond this waits for the next pass; nothing is dropped.",
+    "How long Wyrd spends downloading in one sync pass. When that time runs out, unfinished downloads wait for the next pass.",
+    "How long a change you make can wait for the content it needs from other devices. If that content does not arrive in time, the change fails and you can retry it; nothing is saved.",
+    "How long Wyrd waits for a file's content to become available on this device when you open or read it. If it takes longer, the open or read fails and you can try again while the download continues.",
   ]);
   expect(validateBoundInput("max_admit_per_pass", "64")).toBeNull();
   expect(validateBoundInput("retained_bytes_quota", "0")).toBeNull();

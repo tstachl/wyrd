@@ -66,9 +66,8 @@ success or failure. Never persisted here, never logged. -->
       Locked for this session
     </Card.Title>
     <Card.Description>
-      <span class="font-mono text-xs">{driveLabel}</span> — no owner serves and no service
-      definition exists. Unlock it with its passphrase, or reinstall the managed definition
-      from below.
+      <span class="font-mono text-xs">{driveLabel}</span> — this drive isn't running. Unlock it
+      with its passphrase for this session, or use the recovery below.
     </Card.Description>
   </Card.Header>
   <Card.Content class="flex flex-col gap-4">
