@@ -370,8 +370,8 @@ export interface DriveSettingsView {
 /** What the settings file said about this drive. Missing and malformed are explicit unknown states. */
 export type DriveSettingsState =
   | ({ state: "configured" } & DriveSettingsView)
-  | { state: "nofile" }
-  | { state: "nosection" }
+  | { state: "nofile"; path: string }
+  | { state: "nosection"; path: string }
   | { state: "unreadable"; reason: string };
 
 // Provisioning mirrors (constrained CLI adapter surface).
