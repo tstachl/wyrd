@@ -13,7 +13,7 @@ import { expect, test } from "bun:test";
 const view = await Bun.file(`${import.meta.dir}/OnboardingView.svelte`).text();
 const repair = await Bun.file(`${import.meta.dir}/RepairView.svelte`).text();
 
-test("mental model states the two parts and the device split", () => {
+test("mental model states the key pair and the device split", () => {
   for (const line of [
     "This device is recognized by a public identity key and a private key.",
     "Identity key",
