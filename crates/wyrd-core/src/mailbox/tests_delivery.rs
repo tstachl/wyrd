@@ -1,7 +1,7 @@
 use super::mini_relay::MiniRelay;
 use super::tests_harness::{
     assert_quiet, device_id, drain_until, envelope, keys, keys_for, live_mailbox, seal_rumor,
-    sender_keys, temp_path, wait_for_delivery, DELIVERY_TIMEOUT,
+    sender_keys, temp_path, wait_for_delivery, wait_for_delivery_other_than, DELIVERY_TIMEOUT,
 };
 use super::*;
 use nostr::event::FinalizeEvent;
@@ -368,7 +368,11 @@ fn retry_requeues_behind_other_mail() {
     mailbox
         .settle(first.id(), Disposition::Retry)
         .expect("retry");
-    let second = wait_for_delivery(&mut mailbox, DELIVERY_TIMEOUT).expect("next offered");
+    // Skip re-offers of the id just retried: recv re-offers held mail
+    // while the next wrap is still arriving, and under load that
+    // re-offer can win the race and masquerade as the next delivery.
+    let second = wait_for_delivery_other_than(&mut mailbox, first.id(), DELIVERY_TIMEOUT)
+        .expect("next offered");
     assert_ne!(
         second.envelope().ciphertext,
         first.envelope().ciphertext,
@@ -377,7 +381,8 @@ fn retry_requeues_behind_other_mail() {
     mailbox
         .settle(second.id(), Disposition::Retry)
         .expect("retry");
-    let wrapped = wait_for_delivery(&mut mailbox, DELIVERY_TIMEOUT).expect("retried returns");
+    let wrapped = wait_for_delivery_other_than(&mut mailbox, second.id(), DELIVERY_TIMEOUT)
+        .expect("retried returns");
     assert_eq!(wrapped.id(), first.id(), "id stable across requeue");
     mailbox.settle(wrapped.id(), Disposition::Ack).expect("ack");
 }

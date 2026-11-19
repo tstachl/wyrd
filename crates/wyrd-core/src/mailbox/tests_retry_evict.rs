@@ -15,6 +15,13 @@ use std::time::Duration;
 #[test]
 fn retry_budget_evicts_parked_head_so_new_mail_delivers() {
     const EXTRA: usize = 1;
+    // This test parks the full 1024-wrap window through the in-process
+    // relay. Under full-workspace nextest the relay's task can be
+    // starved well past the shared 10s delivery window (observed:
+    // 27.8s to failure vs 7.5s isolated), so the collection leg and
+    // the fresh-mail takes get their own budget. Same pattern as the
+    // dedupe flood pin; the whole episode still has the hard bound.
+    const LOADED_DELIVERY_TIMEOUT: Duration = Duration::from_secs(30);
     // Replayed evictions settle Retry like production unknown-epoch
     // mail, so the fresh arrival below converges only after the replayed
     // window re-evicts: bound the whole episode generously.
@@ -34,7 +41,11 @@ fn retry_budget_evicts_parked_head_so_new_mail_delivers() {
     for index in 0..MAX_UNACKED_DELIVERIES {
         relay.inject(seal_rumor(&sender, receiver_key, format!("park-{index}")));
     }
-    let ids = wait_for_distinct_deliveries(&mut mailbox, MAX_UNACKED_DELIVERIES, DELIVERY_TIMEOUT);
+    let ids = wait_for_distinct_deliveries(
+        &mut mailbox,
+        MAX_UNACKED_DELIVERIES,
+        LOADED_DELIVERY_TIMEOUT,
+    );
     assert_eq!(mailbox.unacked.len(), MAX_UNACKED_DELIVERIES);
     for id in &ids {
         mailbox.settle(*id, Disposition::Retry).unwrap();
@@ -87,7 +98,7 @@ fn retry_budget_evicts_parked_head_so_new_mail_delivers() {
     let start = std::time::Instant::now();
     loop {
         let delivery =
-            wait_for_delivery(&mut mailbox, DELIVERY_TIMEOUT).expect("new mail delivers");
+            wait_for_delivery(&mut mailbox, LOADED_DELIVERY_TIMEOUT).expect("new mail delivers");
         if delivery.envelope().ciphertext == format!("after-evict-{EXTRA}") {
             mailbox.settle(delivery.id(), Disposition::Ack).unwrap();
             break;
