@@ -35,12 +35,12 @@ test("short ids keep short values whole", () => {
   expect(shortId("9be2c4d6e8f0a2b4c6d8")).toBe("9be2c4d6…");
 });
 
-test("freshness names staleness instead of implying health", () => {
-  expect(freshnessLabel("FreshEmpty")).toBe("Fresh (empty)");
-  expect(freshnessLabel("FreshNonEmpty")).toBe("Fresh");
+test("freshness names currency, never convergence or health", () => {
+  expect(freshnessLabel("FreshEmpty")).toBe("Current (empty)");
+  expect(freshnessLabel("FreshNonEmpty")).toBe("Current");
   expect(
     freshnessLabel({ RetainedLastGood: { detail: "relay quiet" } }),
-  ).toBe("Last good, stale: relay quiet");
+  ).toBe("Last good copy — stale: relay quiet");
 });
 
 test("reachability never claims what transport alone cannot prove", () => {
