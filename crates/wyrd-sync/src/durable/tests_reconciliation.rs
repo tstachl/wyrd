@@ -149,6 +149,132 @@ fn reconciled_facts_replay_to_the_same_retirement() {
     );
 }
 
+/// Pages partition the evidence exactly: disjoint per-class subsets
+/// in sorted order whose union is the full view, every page within
+/// the page bound, and re-splitting the same evidence yields the
+/// same pages byte-for-byte — so page wire identities are stable
+/// across reseals and redeliveries.
+#[test]
+fn pages_partition_deterministically_within_the_bound() {
+    use super::codec::encode_reconciliation_view_canonical;
+    use super::MAX_RECONCILIATION_PAGE_BYTES;
+
+    let mut evidence = ReconciliationEvidence::default();
+    for i in 0..1500u32 {
+        let mut id = [0u8; 32];
+        id[..4].copy_from_slice(&i.to_le_bytes());
+        evidence.transitions.insert(TransitionId::from_bytes(id));
+    }
+    for i in 0..200u32 {
+        let mut id = [0u8; 32];
+        id[..4].copy_from_slice(&i.to_le_bytes());
+        evidence.snapshots.insert(SnapshotId::from_bytes(id));
+    }
+    for epoch in 1..=300u64 {
+        evidence
+            .capabilities
+            .insert((DeviceId::from_bytes([0x31; 32]), epoch));
+    }
+    let pages = evidence.pages();
+    assert!(pages.len() > 1, "this evidence needs several pages");
+    for page in &pages {
+        assert!(
+            encode_reconciliation_view_canonical(page).len() <= MAX_RECONCILIATION_PAGE_BYTES,
+            "every page fits the page bound"
+        );
+        assert!(
+            !page.transitions.is_empty()
+                || !page.snapshots.is_empty()
+                || !page.capabilities.is_empty(),
+            "no empty pages mid-split"
+        );
+    }
+    let mut union = ReconciliationEvidence::default();
+    for page in &pages {
+        let before = union.transitions.len() + union.snapshots.len() + union.capabilities.len();
+        union.transitions.extend(page.transitions.iter().copied());
+        union.snapshots.extend(page.snapshots.iter().copied());
+        union.capabilities.extend(page.capabilities.iter().copied());
+        let after = union.transitions.len() + union.snapshots.len() + union.capabilities.len();
+        assert_eq!(
+            after,
+            before + page.transitions.len() + page.snapshots.len() + page.capabilities.len(),
+            "pages are disjoint"
+        );
+    }
+    assert_eq!(union, evidence, "the pages union to the full view");
+    assert_eq!(evidence.pages(), pages, "re-splitting is deterministic");
+}
+
+/// The page cut is byte-exact: 1023 transition ids (12 + 1023×32 =
+/// 32748) fill one page, and the 1024th opens a second — so the
+/// bound is enforced, never approximated.
+#[test]
+fn pages_cut_at_the_byte_boundary() {
+    let mut fill = ReconciliationEvidence::default();
+    for i in 0..1023u32 {
+        let mut id = [0u8; 32];
+        id[..4].copy_from_slice(&i.to_le_bytes());
+        fill.transitions.insert(TransitionId::from_bytes(id));
+    }
+    assert_eq!(fill.pages().len(), 1, "32748 bytes fit one page");
+    let mut over = fill.clone();
+    let mut id = [0u8; 32];
+    id[..4].copy_from_slice(&1023u32.to_le_bytes());
+    over.transitions.insert(TransitionId::from_bytes(id));
+    let pages = over.pages();
+    assert_eq!(pages.len(), 2, "32780 bytes need two pages");
+    assert_eq!(pages[0].transitions.len(), 1023);
+    assert_eq!(pages[1].transitions.len(), 1);
+}
+
+/// Empty evidence states as one empty page — the single-statement
+/// send shape is the one-page special case, not a separate path.
+#[test]
+fn empty_evidence_pages_to_one_empty_page() {
+    let pages = ReconciliationEvidence::default().pages();
+    assert_eq!(pages.len(), 1, "always at least one page");
+    assert!(
+        pages[0].transitions.is_empty()
+            && pages[0].snapshots.is_empty()
+            && pages[0].capabilities.is_empty(),
+        "the single page of nothing is empty"
+    );
+}
+
+/// A capability section past one page still splits cleanly: 900
+/// installs exceed the page bound, so `pages()` cuts at least two
+/// pages, each within the bound, whose union is the full set. Pins
+/// the splitter regime the union read in the publish pass exists
+/// for — the install that matters can ride any page.
+#[test]
+fn pages_split_a_multi_page_capability_section() {
+    use super::codec::encode_reconciliation_view_canonical;
+    use super::MAX_RECONCILIATION_PAGE_BYTES;
+
+    let mut evidence = ReconciliationEvidence::default();
+    for epoch in 1..=900u64 {
+        evidence
+            .capabilities
+            .insert((DeviceId::from_bytes([0x31; 32]), epoch));
+    }
+    let pages = evidence.pages();
+    assert!(pages.len() >= 2, "900 installs page: {}", pages.len());
+    let mut union = ReconciliationEvidence::default();
+    for page in &pages {
+        assert!(
+            encode_reconciliation_view_canonical(page).len() <= MAX_RECONCILIATION_PAGE_BYTES,
+            "every capability page fits the page bound"
+        );
+        assert!(
+            page.transitions.is_empty() && page.snapshots.is_empty(),
+            "a capability-only view pages into capability-only pages"
+        );
+        union.capabilities.extend(page.capabilities.iter().copied());
+    }
+    assert_eq!(union, evidence, "the pages union to the full set");
+}
+
 /// The wire-statement identity is stable content addressing: same
 /// requester plus same evidence digests identically across commits,
 /// while a different requester over identical evidence does not —

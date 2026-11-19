@@ -125,7 +125,7 @@ mod tests_rotation;
 
 pub use reconciliation::{
     reconciliation_statement_digest, ReconciliationError, ReconciliationEvidence,
-    ReconciliationView, ViewProvenance,
+    ReconciliationView, ViewProvenance, MAX_RECONCILIATION_PAGE_BYTES,
 };
 pub(crate) use replay::build_keyring;
 pub use replay::{LoadedFacts, Rebuilt};

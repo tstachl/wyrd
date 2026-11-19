@@ -45,6 +45,29 @@ pub struct ReconciliationEvidence {
     pub capabilities: BTreeSet<(DeviceId, u64)>,
 }
 
+/// Max canonical evidence bytes in one reconciliation statement
+/// page (`docs/contracts/resource-limits.md`). Pages split the
+/// sorted evidence sets greedily in class order so every sealed page
+/// lands near 33 KiB — under the 64 KiB mailbox ceiling by
+/// construction with margin for envelope and relay framing. The
+/// bound counts canonical bytes (three u32 section counts plus 32
+/// per transition/snapshot id and 40 per capability entry), never
+/// entries: the largest entry is 40 bytes, so every non-empty
+/// evidence set cuts into at least one page and paging always
+/// terminates.
+pub const MAX_RECONCILIATION_PAGE_BYTES: usize = 32 * 1024;
+
+/// Canonical bytes of one evidence entry class framing: the three
+/// u32 LE section counts the canonical encoding always carries.
+const PAGE_COUNT_OVERHEAD_BYTES: usize = 12;
+/// Canonical bytes per transition id in a page.
+const PAGE_TRANSITION_BYTES: usize = 32;
+/// Canonical bytes per snapshot id in a page.
+const PAGE_SNAPSHOT_BYTES: usize = 32;
+/// Canonical bytes per capability entry (device 32 plus epoch u64
+/// LE 8) in a page.
+const PAGE_CAPABILITY_BYTES: usize = 40;
+
 /// Where a view came from. Only a durably committed view — one the
 /// recipient stated over state that survived its own commit protocol
 /// — may retire an obligation. Everything else is a projection for
@@ -97,6 +120,59 @@ impl ReconciliationEvidence {
     pub fn digest(&self) -> [u8; 32] {
         let bytes = super::codec::encode_reconciliation_view_canonical(self);
         blake3::derive_key(RECONCILIATION_VIEW_CONTEXT, &bytes)
+    }
+
+    /// Whether this evidence names nothing in any class.
+    fn is_empty(&self) -> bool {
+        self.transitions.is_empty() && self.snapshots.is_empty() && self.capabilities.is_empty()
+    }
+
+    /// Split into deterministic bounded pages (`sync-and-peers.md`):
+    /// per-class subsets in sorted order, each page's canonical
+    /// bytes within [`MAX_RECONCILIATION_PAGE_BYTES`]. Greedy fill in
+    /// class order (transitions, then snapshots, then capabilities);
+    /// a page closes when the next entry would overflow it, so pages
+    /// are disjoint and their union is exactly this evidence.
+    /// Re-deriving the same facts yields the same pages byte-for-byte,
+    /// so every page's wire-statement identity is stable across
+    /// reseals and redeliveries. Always returns at least one page —
+    /// empty evidence states as one empty page, exactly like today's
+    /// single-statement send.
+    pub(crate) fn pages(&self) -> Vec<ReconciliationEvidence> {
+        let mut pages = Vec::new();
+        let mut current = ReconciliationEvidence::default();
+        let mut bytes = PAGE_COUNT_OVERHEAD_BYTES;
+        // Close the page when the next entry would overflow it. The
+        // emptiness guard keeps a first entry that alone exceeds the
+        // bound on its own page instead of looping forever — with the
+        // entry sizes above that arm never fires, but the bound is a
+        // contract constant and the splitter must not trust it.
+        let fit = |pages: &mut Vec<ReconciliationEvidence>,
+                   current: &mut ReconciliationEvidence,
+                   bytes: &mut usize,
+                   entry: usize| {
+            if *bytes + entry > MAX_RECONCILIATION_PAGE_BYTES && !current.is_empty() {
+                pages.push(std::mem::take(current));
+                *bytes = PAGE_COUNT_OVERHEAD_BYTES;
+            }
+        };
+        for id in &self.transitions {
+            fit(&mut pages, &mut current, &mut bytes, PAGE_TRANSITION_BYTES);
+            current.transitions.insert(*id);
+            bytes += PAGE_TRANSITION_BYTES;
+        }
+        for id in &self.snapshots {
+            fit(&mut pages, &mut current, &mut bytes, PAGE_SNAPSHOT_BYTES);
+            current.snapshots.insert(*id);
+            bytes += PAGE_SNAPSHOT_BYTES;
+        }
+        for entry in &self.capabilities {
+            fit(&mut pages, &mut current, &mut bytes, PAGE_CAPABILITY_BYTES);
+            current.capabilities.insert(*entry);
+            bytes += PAGE_CAPABILITY_BYTES;
+        }
+        pages.push(current);
+        pages
     }
 }
 

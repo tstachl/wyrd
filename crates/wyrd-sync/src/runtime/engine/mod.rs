@@ -1331,7 +1331,8 @@ impl Engine {
     }
 
     /// Reconciliation progress rebuilt from committed facts: received
-    /// statements plus per-class retirements. The durable half of the
+    /// statements (one per page for multi-page views) plus per-class
+    /// retirements. The durable half of the
     /// operator surface (`sync status`): identical before and after a
     /// restart over the same state, like every other status input.
     /// Rebuilt from the store rather than read off the live sets, so

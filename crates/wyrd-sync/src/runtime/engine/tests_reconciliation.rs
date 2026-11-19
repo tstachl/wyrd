@@ -5,11 +5,15 @@ use wyrd_format::Change;
 use zeroize::Zeroizing;
 
 use crate::control::seal;
+use crate::control::{Message, ReconciliationRequestPayload};
 use crate::durable::Fact;
 use crate::keys::DeviceEncryptionSecret;
 use crate::membership::test_util::{admit, drive as member_drive, key, sign, Builder};
 use crate::runtime::reconcile::ReconciliationOutcome;
-use crate::runtime::test_util::{announcement_for, identity, transition_message, TestDir};
+use crate::runtime::respond::AnswerReport;
+use crate::runtime::test_util::{
+    announcement_for, announcement_msg, identity, transition_message, TestDir,
+};
 use crate::transport::mailbox::seal_for_recipient;
 use crate::transport::mailbox::{
     Delivery, DeliveryId, Disposition, Mailbox, MailboxEnvelope, MailboxError, MemoryMailbox,
@@ -79,6 +83,7 @@ fn send_failure_leaves_the_trigger_armed() {
         ReconciliationOutcome::Requested {
             recipients: 2,
             accepted: 2,
+            pages: 1,
         },
         "arming survives the failed fan-out"
     );
@@ -119,6 +124,7 @@ fn send_failure_mid_fan_out_marks_nothing() {
         ReconciliationOutcome::Requested {
             recipients: 2,
             accepted: 2,
+            pages: 1,
         },
         "a partial fan-out retries whole, never resumes marked"
     );
@@ -229,6 +235,7 @@ fn reconnect_edge_sends_one_request_per_recipient() {
         ReconciliationOutcome::Requested {
             recipients: 2,
             accepted: 2,
+            pages: 1,
         },
         "owner plus B, minus self"
     );
@@ -272,6 +279,7 @@ fn parked_deferral_is_a_gap_that_sends() {
         ReconciliationOutcome::Requested {
             recipients: 2,
             accepted: 2,
+            pages: 1,
         }
     );
     // The evaluation records its sequence: a gap-only repeat on a
@@ -299,6 +307,7 @@ fn reconnect_and_gap_coalesce_to_one_statement() {
         ReconciliationOutcome::Requested {
             recipients: 2,
             accepted: 2,
+            pages: 1,
         }
     );
     assert_eq!(
@@ -323,6 +332,7 @@ fn changed_view_re_arms_after_already_stated() {
         ReconciliationOutcome::Requested {
             recipients: 2,
             accepted: 2,
+            pages: 1,
         }
     );
     let mut mailbox = mailbox_for(&mut pair.relay, device);
@@ -361,6 +371,7 @@ fn changed_view_re_arms_after_already_stated() {
         ReconciliationOutcome::Requested {
             recipients: 2,
             accepted: 2,
+            pages: 1,
         },
         "new state re-sends"
     );
@@ -382,6 +393,7 @@ fn accepted_zero_offline_retries_unmarked() {
             ReconciliationOutcome::Requested {
                 recipients: 2,
                 accepted: 0,
+                pages: 1,
             }
         );
     }
@@ -447,12 +459,17 @@ fn lone_device_has_no_recipients() {
     );
 }
 
-/// An unsendable view sends nothing and marks nothing: the sealed
-/// request exceeds the mailbox ceiling, so the evaluation reports
-/// the ceiling instead of failing the pass — pagination (21c scope)
-/// sends it later. Retried on the next armed evaluation.
+/// A view past the mailbox ceiling pages into bounded statements:
+/// ~2.1k chained transitions derive ~67 KiB of canonical evidence —
+/// past the 64 KiB ceiling once sealed — so one armed evaluation fans
+/// out three pages, every page sealed under the ceiling, and the
+/// full-view digest marks only because every page was relay-accepted.
+/// The next evaluation on the unchanged view stays quiet.
 #[test]
-fn oversize_view_sends_nothing() {
+fn oversize_view_pages_into_bounded_statements() {
+    use crate::durable::MAX_RECONCILIATION_PAGE_BYTES;
+    use crate::transport::mailbox::MAX_MAILBOX_OPEN_BYTES;
+
     let (mut pair, _, _) = scenario();
     converge(&mut pair);
     // ~2.1k chained transitions: the derived evidence (~67 KiB
@@ -468,16 +485,664 @@ fn oversize_view_sends_nothing() {
     let mut mailbox = mailbox_for(&mut pair.relay, device);
     assert_eq!(
         trigger(&mut pair.a.engine, &mut mailbox),
-        ReconciliationOutcome::ViewTooLarge
+        ReconciliationOutcome::Requested {
+            recipients: 2,
+            accepted: 6,
+            pages: 3,
+        },
+        "three pages fanned out once per recipient"
     );
-    assert!(mailbox.recorded.is_empty(), "nothing oversize is mailed");
-    // No trigger armed now: quiet, not a resend — the oversize view
-    // waits for pagination, and nothing was marked.
+    assert_eq!(mailbox.recorded.len(), 6, "pages × recipients envelopes");
+    // Every page the trigger sealed fits the mailbox ceiling with
+    // margin: re-derive the view, cut the same pages, and check the
+    // sealed size the send path already enforced.
+    let evidence =
+        crate::durable::ReconciliationView::derive(&pair.a.engine.store.load().expect("loads a"))
+            .evidence()
+            .clone();
+    let pages = evidence.pages();
+    assert_eq!(pages.len(), 3, "same tip, same pages");
+    let mut union = crate::durable::ReconciliationEvidence::default();
+    for page in &pages {
+        let bytes = crate::durable::encode_reconciliation_view_canonical(page);
+        assert!(
+            bytes.len() <= MAX_RECONCILIATION_PAGE_BYTES,
+            "page under the page bound: {} bytes",
+            bytes.len()
+        );
+        assert!(
+            bytes.len() + 159 < MAX_MAILBOX_OPEN_BYTES,
+            "sealed page under the mailbox ceiling by construction"
+        );
+        union.transitions.extend(page.transitions.iter().copied());
+        union.snapshots.extend(page.snapshots.iter().copied());
+        union.capabilities.extend(page.capabilities.iter().copied());
+    }
+    assert_eq!(union, evidence, "the pages partition the full view");
+    // The recipient commits one received fact per page, each with its
+    // own wire-statement identity — three statements, not one.
+    drop(mailbox);
+    let report = drain_side(&mut pair.relay, &mut pair.b);
+    assert_eq!(report.accepted, 3, "B commits one fact per page");
+    let b_requests = pair
+        .b
+        .engine
+        .store
+        .load()
+        .expect("loads b")
+        .reconciliation_requests;
+    assert_eq!(b_requests.len(), 3, "three page statements, three facts");
+    let mut digests: Vec<[u8; 32]> = b_requests
+        .iter()
+        .map(|(requester, page)| crate::durable::reconciliation_statement_digest(requester, page))
+        .collect();
+    digests.sort();
+    digests.dedup();
+    assert_eq!(digests.len(), 3, "stable identities, one per page");
+    // Fully stated: the next evaluation on the unchanged view stays
+    // quiet instead of resending — pagination, not a ceiling report.
     let mut mailbox = mailbox_for(&mut pair.relay, device);
     assert_eq!(
         trigger(&mut pair.a.engine, &mut mailbox),
         ReconciliationOutcome::Quiet
     );
+    assert!(mailbox.recorded.is_empty());
+}
+
+/// An accepted-but-lost announcement recovers across bounded
+/// statements: A is the only recorded sender of S to B, the relay
+/// copy expires while B is offline (modeled by committing the
+/// delivery without ever pushing the envelope), and B reconnects
+/// with more evidence than the mailbox ceiling. B's pages carry the
+/// gap to A, A's publish pass re-advertises S exactly once off
+/// the unioned pages, B holds S, and B's next statements quench
+/// the resend — with every page sealed under the ceiling and every pass within
+/// the existing caps. Nothing here retires: retransmits never do.
+#[test]
+fn paged_statements_recover_a_lost_announcement() {
+    use crate::durable::reconciliation_statement_digest;
+
+    let (mut pair, _, _) = scenario();
+    converge(&mut pair);
+    let b_dev = pair.b.device;
+
+    // S: A-authored at epoch 2 against A's admission. A records the
+    // announcement and marks it delivered to B; the envelope itself
+    // never reaches the relay — the expired-copy shape the forget
+    // contract must recover from.
+    let s = wyrd_format::SnapshotId::from_bytes([0x5A; 32]);
+    let membership = epoch_two_membership(&pair.b);
+    let Message::SnapshotAnnouncement(ann) =
+        announcement_msg(&pair.a.identity_sk, s, 2, membership)
+    else {
+        panic!("announcement_msg builds an announcement");
+    };
+    pair.a
+        .engine
+        .commit_facts(&[
+            Fact::Announcement(ann),
+            Fact::AnnouncementDelivered(s, b_dev),
+        ])
+        .expect("A records and delivers S, then the copy expires");
+
+    // B reconnects holding more evidence than the mailbox ceiling.
+    let (mut builder, _) = Builder::genesis(10);
+    let transitions: Vec<Fact> = (0..2100)
+        .map(|_| Fact::Transition(builder.child(vec![Change::Rotate])))
+        .collect();
+    pair.b.engine.commit_facts(&transitions).expect("fits");
+    let evidence =
+        crate::durable::ReconciliationView::derive(&pair.b.engine.store.load().expect("loads b"))
+            .evidence()
+            .clone();
+    let pages = evidence.pages();
+    assert_eq!(pages.len(), 3, "the inflated view pages");
+    assert!(
+        pages.iter().all(|page| !page.snapshots.contains(&s)),
+        "no page evidences the lost snapshot"
+    );
+    pair.b.engine.note_reconnected();
+    let device = pair.b.device;
+    let mut mailbox = mailbox_for(&mut pair.relay, device);
+    assert_eq!(
+        trigger(&mut pair.b.engine, &mut mailbox),
+        ReconciliationOutcome::Requested {
+            recipients: 2,
+            accepted: 6,
+            pages: 3,
+        },
+        "the gap leaves as three bounded statements"
+    );
+    drop(mailbox);
+
+    // A commits one received fact per page; evaluating all three moves
+    // nothing — no outstanding obligation, no stall — while proving
+    // multi-page evaluation fits the per-pass caps.
+    let report = drain_side(&mut pair.relay, &mut pair.a);
+    assert_eq!(report.accepted, 3, "A commits one fact per page");
+    let device = pair.a.device;
+    let mut mailbox = mailbox_for(&mut pair.relay, device);
+    let report = pair
+        .a
+        .engine
+        .answer_reconciliation(&mut mailbox, &mut PublishBudget::unbounded())
+        .expect("answer evaluates");
+    assert_eq!(
+        report,
+        AnswerReport {
+            statements: 3,
+            sent: 0,
+            retired: 0,
+        },
+        "three covered-empty pages: evaluated, nothing moved"
+    );
+    assert_eq!(
+        pair.a
+            .engine
+            .stalled_statement_count()
+            .expect("stall gauge reads"),
+        0,
+        "covered-empty never stalls"
+    );
+    drop(mailbox);
+
+    // The publish pass re-advertises S off the unioned pages, once,
+    // naming the latest page's digest in the marker.
+    let device = pair.a.device;
+    let mut mailbox = mailbox_for(&mut pair.relay, device);
+    let sent = pair
+        .a
+        .engine
+        .announce_pending(&mut mailbox, None, &mut PublishBudget::unbounded())
+        .expect("publish re-advertises");
+    assert_eq!(sent, 1, "the lost announcement resends once");
+    drop(mailbox);
+    let expected = reconciliation_statement_digest(&b_dev, &pages[2]);
+    assert_eq!(
+        pair.a
+            .engine
+            .store
+            .load()
+            .expect("loads a")
+            .announcement_retransmitted,
+        vec![(s, b_dev, expected)],
+        "the marker names the evidencing page"
+    );
+
+    // B holds S; its next statements evidence it, and A's next publish
+    // sends nothing — the gap stays closed with no duplicate resend.
+    let report = drain_side(&mut pair.relay, &mut pair.b);
+    assert_eq!(report.accepted, 1, "B commits the re-advertised S");
+    assert!(
+        pair.b
+            .engine
+            .store
+            .load()
+            .expect("loads b")
+            .announcements
+            .iter()
+            .any(|ann| ann.snapshot == s),
+        "B holds S"
+    );
+    pair.b.engine.note_reconnected();
+    let device = pair.b.device;
+    let mut mailbox = mailbox_for(&mut pair.relay, device);
+    assert_eq!(
+        trigger(&mut pair.b.engine, &mut mailbox),
+        ReconciliationOutcome::Requested {
+            recipients: 2,
+            accepted: 6,
+            pages: 3,
+        },
+        "the new view re-states in three pages"
+    );
+    drop(mailbox);
+    let report = drain_side(&mut pair.relay, &mut pair.a);
+    assert_eq!(
+        report.accepted, 1,
+        "only the changed tail page commits — unchanged pages dedupe by stable identity"
+    );
+    assert_eq!(
+        pair.a
+            .engine
+            .store
+            .load()
+            .expect("loads a")
+            .reconciliation_requests
+            .len(),
+        4,
+        "three first-view pages plus the new tail page"
+    );
+    let device = pair.a.device;
+    let mut mailbox = mailbox_for(&mut pair.relay, device);
+    let sent = pair
+        .a
+        .engine
+        .announce_pending(&mut mailbox, None, &mut PublishBudget::unbounded())
+        .expect("publish re-checks");
+    assert_eq!(sent, 0, "an evidenced head never resends");
+    drop(mailbox);
+    assert_eq!(
+        pair.a
+            .engine
+            .store
+            .load()
+            .expect("loads a")
+            .announcement_retransmitted
+            .len(),
+        1,
+        "no duplicate marker for the new statements"
+    );
+    assert!(
+        pair.a
+            .engine
+            .store
+            .load()
+            .expect("loads a")
+            .announcement_reconciled
+            .is_empty(),
+        "retransmits never retire"
+    );
+}
+
+/// Page order must not decide recovery: the publish pass reads the
+/// union of a requester's received statements, so a relay that
+/// delivers the capability-carrying tail page first still
+/// re-advertises. States the recovery test's three pages tail-first
+/// through real intake — the latest statement is then a
+/// transitions-only head page — and the union still carries B's
+/// install.
+#[test]
+fn paged_retransmit_survives_reverse_commit_order() {
+    use crate::durable::reconciliation_statement_digest;
+
+    let (mut pair, controls, _) = scenario();
+    converge(&mut pair);
+    let b_dev = pair.b.device;
+
+    let s = wyrd_format::SnapshotId::from_bytes([0x5A; 32]);
+    let membership = epoch_two_membership(&pair.b);
+    let Message::SnapshotAnnouncement(ann) =
+        announcement_msg(&pair.a.identity_sk, s, 2, membership)
+    else {
+        panic!("announcement_msg builds an announcement");
+    };
+    pair.a
+        .engine
+        .commit_facts(&[
+            Fact::Announcement(ann),
+            Fact::AnnouncementDelivered(s, b_dev),
+        ])
+        .expect("A records and delivers S, then the copy expires");
+
+    let (mut builder, _) = Builder::genesis(10);
+    let transitions: Vec<Fact> = (0..2100)
+        .map(|_| Fact::Transition(builder.child(vec![Change::Rotate])))
+        .collect();
+    pair.b.engine.commit_facts(&transitions).expect("fits");
+    let evidence =
+        crate::durable::ReconciliationView::derive(&pair.b.engine.store.load().expect("loads b"))
+            .evidence()
+            .clone();
+    let pages = evidence.pages();
+    assert_eq!(pages.len(), 3, "the inflated view pages");
+    assert!(
+        pages[2].capabilities.iter().any(|(d, _)| d == &b_dev),
+        "the tail page carries B's installs"
+    );
+    assert!(
+        pages[0].capabilities.is_empty(),
+        "the head page carries no install"
+    );
+
+    for page in pages.iter().rev() {
+        state_page(&mut pair, &controls, page);
+    }
+
+    let device = pair.a.device;
+    let mut mailbox = mailbox_for(&mut pair.relay, device);
+    let sent = pair
+        .a
+        .engine
+        .announce_pending(&mut mailbox, None, &mut PublishBudget::unbounded())
+        .expect("publish re-advertises off the union");
+    assert_eq!(sent, 1, "the lost announcement resends once");
+    drop(mailbox);
+    let expected = reconciliation_statement_digest(&b_dev, &pages[0]);
+    assert_eq!(
+        pair.a
+            .engine
+            .store
+            .load()
+            .expect("loads a")
+            .announcement_retransmitted,
+        vec![(s, b_dev, expected)],
+        "the marker still names the latest statement's digest"
+    );
+}
+
+/// An install living on a non-latest page still opens the resend:
+/// models a capability section split across two pages, where the
+/// latest page carries higher-sorting devices' installs but not
+/// this recipient's. Two synthetic evidences keep the regime exact
+/// without minting a thousand membership transitions — the union
+/// decides eligibility while the marker still names the latest.
+#[test]
+fn paged_retransmit_finds_installs_on_a_non_latest_page() {
+    let (mut pair, _, _) = scenario();
+    converge(&mut pair);
+    let b_dev = pair.b.device;
+
+    let s = wyrd_format::SnapshotId::from_bytes([0x5A; 32]);
+    let membership = epoch_two_membership(&pair.b);
+    let Message::SnapshotAnnouncement(ann) =
+        announcement_msg(&pair.a.identity_sk, s, 2, membership)
+    else {
+        panic!("announcement_msg builds an announcement");
+    };
+    pair.a
+        .engine
+        .commit_facts(&[
+            Fact::Announcement(ann),
+            Fact::AnnouncementDelivered(s, b_dev),
+        ])
+        .expect("A records and delivers S, then the copy expires");
+
+    let mut with_install = crate::durable::ReconciliationEvidence::default();
+    with_install.capabilities.insert((b_dev, 2));
+    let without_install = crate::durable::ReconciliationEvidence::default();
+    pair.a
+        .engine
+        .commit_facts(&[
+            Fact::ReconciliationRequestReceived(b_dev, with_install),
+            Fact::ReconciliationRequestReceived(b_dev, without_install.clone()),
+        ])
+        .expect("two page statements commit");
+
+    let device = pair.a.device;
+    let mut mailbox = mailbox_for(&mut pair.relay, device);
+    let sent = pair
+        .a
+        .engine
+        .announce_pending(&mut mailbox, None, &mut PublishBudget::unbounded())
+        .expect("publish reads the union");
+    assert_eq!(sent, 1, "the unioned install opens the resend");
+    drop(mailbox);
+    let expected = crate::durable::reconciliation_statement_digest(&b_dev, &without_install);
+    assert_eq!(
+        pair.a
+            .engine
+            .store
+            .load()
+            .expect("loads a")
+            .announcement_retransmitted,
+        vec![(s, b_dev, expected)],
+        "the marker names the latest statement even as the union decides"
+    );
+}
+
+/// A mailbox that accepts only the first `limit` sends and reports
+/// the rest unaccepted without blocking: models a partial page
+/// fan-out where one page lands and its siblings do not.
+struct AcceptFirstN<'a> {
+    inner: MemoryMailbox<'a>,
+    recorded: Vec<MailboxEnvelope>,
+    remaining: usize,
+}
+
+impl Mailbox for AcceptFirstN<'_> {
+    fn send(&mut self, envelope: MailboxEnvelope) -> Result<SendReport, MailboxError> {
+        if self.remaining == 0 {
+            return Ok(SendReport { accepted: 0 });
+        }
+        self.remaining -= 1;
+        self.recorded.push(envelope.clone());
+        self.inner.send(envelope)
+    }
+    fn recv(&mut self) -> Result<Option<Delivery>, MailboxError> {
+        self.inner.recv()
+    }
+    fn settle(&mut self, id: DeliveryId, disposition: Disposition) -> Result<(), MailboxError> {
+        self.inner.settle(id, disposition)
+    }
+}
+
+fn accept_first_n<'a>(
+    relay: &'a mut MemoryRelay,
+    device: DeviceId,
+    limit: usize,
+) -> AcceptFirstN<'a> {
+    AcceptFirstN {
+        inner: MemoryMailbox {
+            relay,
+            owner: device,
+        },
+        recorded: Vec::new(),
+        remaining: limit,
+    }
+}
+
+/// A partial page fan-out marks nothing and retries whole: one page
+/// accepted, its siblings relay-rejected, leaves the full-view
+/// digest unmarked, so the still-parked gap fires the full fan-out
+/// again — never a resumed half-mark, never `ViewTooLarge`.
+#[test]
+fn partial_page_fan_out_retries_whole() {
+    let (mut pair, controls, _) = scenario();
+    converge(&mut pair);
+    let (mut builder, _) = Builder::genesis(10);
+    let transitions: Vec<Fact> = (0..2100)
+        .map(|_| Fact::Transition(builder.child(vec![Change::Rotate])))
+        .collect();
+    pair.a.engine.commit_facts(&transitions).expect("fits");
+    park_gap(&mut pair, &controls);
+    pair.a.engine.note_reconnected();
+    let device = pair.a.device;
+    let mut partial = accept_first_n(&mut pair.relay, device, 2);
+    assert_eq!(
+        trigger(&mut pair.a.engine, &mut partial),
+        ReconciliationOutcome::Requested {
+            recipients: 2,
+            accepted: 2,
+            pages: 3,
+        },
+        "one page lands, two do not"
+    );
+    assert_eq!(partial.recorded.len(), 2, "only the first page left");
+    drop(partial);
+    let mut mailbox = mailbox_for(&mut pair.relay, device);
+    assert_eq!(
+        trigger(&mut pair.a.engine, &mut mailbox),
+        ReconciliationOutcome::Requested {
+            recipients: 2,
+            accepted: 6,
+            pages: 3,
+        },
+        "a partial fan-out retries whole"
+    );
+}
+
+/// The scenario's epoch-2 transition id: the admission both sides
+/// observed, so crafted announcements classify at intake.
+fn epoch_two_membership(device: &super::tests_harness::Device) -> wyrd_format::TransitionId {
+    device
+        .engine
+        .store
+        .load()
+        .expect("loads")
+        .transitions
+        .iter()
+        .find(|t| t.epoch == 2)
+        .expect("scenario observes an epoch-2 transition")
+        .transition_id()
+}
+
+/// Retirement waits for the proving page: an announcement obligation
+/// covered by exactly one page of a multi-page view stays pending
+/// while earlier pages evaluate, and retires once its page arrives —
+/// never before, never twice. Each per-page answer stays within the
+/// existing caps (at most one statement evaluated per answer here,
+/// no sends: the answer pass never sends announcements).
+#[test]
+fn no_covered_obligation_retires_before_its_page_arrives() {
+    use crate::durable::reconciliation_statement_digest;
+
+    let (mut pair, controls, _) = scenario();
+    converge(&mut pair);
+    let b_dev = pair.b.device;
+
+    // S: a snapshot B holds that A still owes B — queued, never
+    // delivered. Snapshots sort after transitions, so with an
+    // inflated transition set S is guaranteed into the tail page.
+    let s = wyrd_format::SnapshotId::from_bytes([0x5A; 32]);
+    let membership = epoch_two_membership(&pair.b);
+    let Message::SnapshotAnnouncement(ann) =
+        announcement_msg(&pair.a.identity_sk, s, 2, membership)
+    else {
+        panic!("announcement_msg builds an announcement");
+    };
+    pair.b
+        .engine
+        .commit_facts(&[Fact::Announcement(ann)])
+        .expect("B holds S");
+    pair.a
+        .engine
+        .commit_facts(&[Fact::AnnouncementQueued(s, b_dev)])
+        .expect("A owes S to B");
+
+    // B's pages with S in exactly the tail page, every page small.
+    let (mut builder, _) = Builder::genesis(10);
+    let transitions: Vec<Fact> = (0..2100)
+        .map(|_| Fact::Transition(builder.child(vec![Change::Rotate])))
+        .collect();
+    pair.b.engine.commit_facts(&transitions).expect("fits");
+    let evidence =
+        crate::durable::ReconciliationView::derive(&pair.b.engine.store.load().expect("loads b"))
+            .evidence()
+            .clone();
+    assert!(
+        evidence.snapshots.contains(&s),
+        "B evidences the owed snapshot"
+    );
+    let pages = evidence.pages();
+    assert!(pages.len() > 1, "the inflated view pages");
+    let tail = pages.len() - 1;
+    assert!(
+        pages[tail].snapshots.contains(&s),
+        "the owed snapshot rides the tail page"
+    );
+    assert!(
+        pages[..tail]
+            .iter()
+            .all(|page| !page.snapshots.contains(&s)),
+        "no earlier page covers it"
+    );
+
+    // State every page but the tail, answering each: the obligation
+    // stays pending and nothing retires — the evidence so far proves
+    // nothing about S.
+    for (index, page) in pages[..tail].iter().enumerate() {
+        state_page(&mut pair, &controls, page);
+        let report = answer_a(&mut pair);
+        assert_eq!(
+            report,
+            AnswerReport {
+                statements: 1,
+                sent: 0,
+                retired: 0,
+            },
+            "page {index} proves nothing about S"
+        );
+        assert!(
+            pending_announcement_to(&pair.a, b_dev, s),
+            "S stays owed past page {index}"
+        );
+    }
+    // The tail page proves possession: the obligation retires against
+    // exactly this page's statement identity, once.
+    state_page(&mut pair, &controls, &pages[tail]);
+    let report = answer_a(&mut pair);
+    assert_eq!(
+        report,
+        AnswerReport {
+            statements: 1,
+            sent: 0,
+            retired: 1,
+        },
+        "the proving page retires S"
+    );
+    assert!(
+        !pending_announcement_to(&pair.a, b_dev, s),
+        "S is no longer owed"
+    );
+    let expected = reconciliation_statement_digest(&b_dev, &pages[tail]);
+    assert_eq!(
+        pair.a
+            .engine
+            .store
+            .load()
+            .expect("loads a")
+            .announcement_reconciled,
+        vec![(s, b_dev, expected)],
+        "the retirement anchors the proving page's identity"
+    );
+    // Re-answering evaluates nothing new: no double retirement.
+    let report = answer_a(&mut pair);
+    assert_eq!(
+        report,
+        AnswerReport {
+            statements: 0,
+            sent: 0,
+            retired: 0,
+        },
+        "the answered page never re-retires"
+    );
+}
+
+/// State one evidence page to A through real intake: sealed under the
+/// epoch-1 control key from B's identity, so the agreement gate
+/// passes and the 0x19 fact commits exactly as the trigger's pages
+/// would.
+fn state_page(
+    pair: &mut Pair,
+    controls: &[(u64, [u8; 32])],
+    page: &crate::durable::ReconciliationEvidence,
+) {
+    let b_dev = pair.b.device;
+    let message = Message::ReconciliationRequest(ReconciliationRequestPayload {
+        requester: b_dev,
+        evidence: crate::durable::encode_reconciliation_view_canonical(page),
+    });
+    let sealed = seal(&epoch_key(controls, 1), &member_drive(), 1, &message).unwrap();
+    pair.relay
+        .push(seal_for_recipient(&pair.b.identity_sk, pair.a.device, &sealed.encode()).unwrap());
+    let report = drain_side(&mut pair.relay, &mut pair.a);
+    assert_eq!(report.accepted, 1, "A commits the page statement");
+}
+
+/// Answer one pass for A against the shared relay.
+fn answer_a(pair: &mut Pair) -> AnswerReport {
+    let device = pair.a.device;
+    let mut mailbox = mailbox_for(&mut pair.relay, device);
+    pair.a
+        .engine
+        .answer_reconciliation(&mut mailbox, &mut PublishBudget::unbounded())
+        .expect("answer evaluates")
+}
+
+/// Whether A still owes one announcement pair.
+fn pending_announcement_to(
+    device: &super::tests_harness::Device,
+    recipient: wyrd_format::DeviceId,
+    snapshot: wyrd_format::SnapshotId,
+) -> bool {
+    device
+        .engine
+        .runtime_state()
+        .expect("reads runtime")
+        .pending_announcements()
+        .into_iter()
+        .any(|(id, r)| id == snapshot && r == recipient)
 }
 
 /// End to end: A's edge fires, the envelopes ride the relay, and B
@@ -496,6 +1161,7 @@ fn recipient_intakes_the_request_end_to_end() {
         ReconciliationOutcome::Requested {
             recipients: 2,
             accepted: 2,
+            pages: 1,
         }
     );
     drop(mailbox);
@@ -546,6 +1212,7 @@ fn reconciliation_counters_replay_from_durable_facts() {
         ReconciliationOutcome::Requested {
             recipients: 2,
             accepted: 2,
+            pages: 1,
         }
     );
     drop(mailbox);
@@ -781,6 +1448,7 @@ fn restart_before_send_leaves_the_trigger_armed() {
         ReconciliationOutcome::Requested {
             recipients: 2,
             accepted: 2,
+            pages: 1,
         }
     );
     assert_eq!(mailbox.recorded.len(), 2, "the probe leaves after restart");

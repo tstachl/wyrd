@@ -191,8 +191,26 @@ Releases are not required to write every format they read:
     against the full tag set like `0x16` (pinned by
     `reconciliation_tag_is_a_clean_upgrade_boundary`).
 
+    Paging the reconciliation statement is the versioned-representation
+    decision this contract requires, decided as: no new version. Pages
+    are per-class subsets of the same evidence layout, carried under
+    the same wire kind (`0x04`) and committed under the same record
+    tag (`0x19`); every page decodes with the existing decoder under
+    the existing per-section ceiling, and every page's statement
+    digest is computed with the existing identity. An old node reads
+    each page as an ordinary small statement — answering and retiring
+    per page exactly as for a full view — and an old sender that
+    cannot page still sends nothing oversize, which a new recipient
+    treats exactly as before (no statement, no retirement). No
+    migration, no negotiation, no new tag: the subset form was
+    already the decodable and committable unit, so bounding the
+    sender changes no persistent format. Retirement facts keep
+    anchoring the per-page statement digest that proved the
+    obligation, which is why the anchor is per statement rather than
+    per view.
+
     The two retirement facts (`0x1A` transition, `0x1B` capability)
-    are the `*Reconciled` kinds the paragraph above anticipates: one
+    are the `*Reconciled` kinds the paragraph on `0x19` above anticipates: one
     tag per obligation class, each a fixed triple of obligation
     identity, recipient, and proving statement digest. Fixed-length
     records need no ceiling beyond their exact length; an old node

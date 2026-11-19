@@ -20,8 +20,9 @@
 //! reporting edges, not levels.
 //!
 //! The send path never authors facts. It derives the view live,
-//! seals it, and fans it out; the only state it keeps is the digest
-//! of the last relay-accepted request, in memory. A trigger
+//! splits it into bounded pages, seals each page, and fans every page
+//! out; the only state it keeps is the digest of the last
+//! relay-accepted full view, in memory. A trigger
 //! evaluation must never advance the store sequence on its own:
 //! spontaneous commits would republish the serving generation on
 //! drives whose content did not change, breaking the
@@ -58,7 +59,9 @@ use wyrd_format::DeviceId;
 
 use super::engine::{Engine, EngineError};
 use crate::control::{seal as seal_control, Message, ReconciliationRequestPayload};
-use crate::durable::{encode_reconciliation_view_canonical, ReconciliationView};
+use crate::durable::{
+    encode_reconciliation_view_canonical, ReconciliationView, MAX_RECONCILIATION_PAGE_BYTES,
+};
 use crate::transport::mailbox::{check_outbound_size, seal_for_recipient, Mailbox};
 
 /// What one trigger evaluation did. The live loop drops the value
@@ -73,11 +76,17 @@ pub enum ReconciliationOutcome {
     /// relay-accepted: resending would convey nothing new. Only a
     /// reconnect probe or a view change re-sends.
     AlreadyStated,
-    /// A request left for these recipients; `accepted` counts relay
-    /// acceptances across the fan-out. Zero marks nothing — no relay
-    /// holds the bytes (offline) — so the next armed trigger
-    /// retries; a positive count marks the digest.
-    Requested { recipients: usize, accepted: usize },
+    /// A request left for these recipients, every page of the current
+    /// view fanned out once per recipient; `accepted` counts relay
+    /// acceptances across the whole burst, `pages` the statements it
+    /// took. Zero marks nothing — no relay holds the bytes (offline)
+    /// — so the next armed trigger retries; acceptance on every page
+    /// marks the full-view digest.
+    Requested {
+        recipients: usize,
+        accepted: usize,
+        pages: usize,
+    },
     /// Armed but membership-frozen: an unresolved conflict leaves
     /// recipients and obligations ambiguous, and the conflicted
     /// drive stays inert — no traffic, no facts — until resolution.
@@ -92,12 +101,11 @@ pub enum ReconciliationOutcome {
     /// membership names nobody to ask. A lone device reconciles with
     /// no one.
     NoRecipients,
-    /// The sealed request exceeds the mailbox ceiling, so nothing
-    /// was sent and nothing marked. Chunked statements would version
-    /// the projection alongside the record; until then an oversize
-    /// view waits for pagination (21c scope). Retried on the next
-    /// armed evaluation — oversize views are pathological, not
-    /// steady-state, so no marker paces them.
+    /// A constructed page still exceeds the mailbox ceiling, so
+    /// nothing was sent and nothing marked. Defensive only: pages are
+    /// cut under the ceiling by construction, so this never fires
+    /// unless the page bound outgrows the transport. Retried on the
+    /// next armed evaluation.
     ViewTooLarge,
 }
 
@@ -159,19 +167,19 @@ impl Engine {
         let facts = self.store.load()?;
         let view = ReconciliationView::derive(&facts);
         self.last_trigger_eval = Some((self.current(), view.evidence().digest()));
-        let evidence_bytes = encode_reconciliation_view_canonical(view.evidence());
-        self.request_once(mailbox, view, evidence_bytes, reconnected)
+        self.request_once(mailbox, view, reconnected)
     }
 
-    /// One send attempt for the derived view: seal under the newest
-    /// held epoch key, fan out to every known other device, and mark
-    /// the digest only when a relay accepted. The mark is volatile
-    /// by design (see the module docs): a restart re-probes once.
+    /// One send attempt for the derived view: page the evidence into
+    /// bounded statements, seal each under the newest held epoch key,
+    /// fan every page out to every known other device, and mark the
+    /// full-view digest only when every page was relay-accepted. The
+    /// mark is volatile by design (see the module docs): a restart
+    /// re-probes once.
     fn request_once(
         &mut self,
         mailbox: &mut impl Mailbox,
         view: ReconciliationView,
-        evidence_bytes: Vec<u8>,
         reconnected: bool,
     ) -> Result<ReconciliationOutcome, EngineError> {
         let digest = view.evidence().digest();
@@ -187,37 +195,64 @@ impl Engine {
             Some(epoch) => *epoch,
             None => return Ok(ReconciliationOutcome::NoSealingKey),
         };
-        let sealed = seal_control(
-            &self.epoch_keys[&epoch],
-            &self.drive,
-            epoch,
-            &Message::ReconciliationRequest(ReconciliationRequestPayload {
-                requester: self.device,
-                evidence: evidence_bytes,
-            }),
-        )?;
-        let sealed_bytes = sealed.encode();
-        // Fail fast before any recipient is mailed: an oversize view
-        // sends nothing and marks nothing — the next armed
-        // evaluation retries the seal.
-        if check_outbound_size(&sealed_bytes).is_err() {
-            return Ok(ReconciliationOutcome::ViewTooLarge);
+        // Page first, seal second: every page fits the mailbox ceiling
+        // by construction, so an oversize full view fans out as
+        // several bounded statements instead of sending nothing.
+        // Pre-seal every page before any send: a page that still
+        // exceeds the ceiling sends nothing and marks nothing — the
+        // same fail-fast the single-statement path always had.
+        let pages = view.evidence().pages();
+        let mut sealed_pages = Vec::with_capacity(pages.len());
+        for page in &pages {
+            let evidence_bytes = encode_reconciliation_view_canonical(page);
+            debug_assert!(
+                evidence_bytes.len() <= MAX_RECONCILIATION_PAGE_BYTES,
+                "pages are cut under the page bound by construction"
+            );
+            let sealed = seal_control(
+                &self.epoch_keys[&epoch],
+                &self.drive,
+                epoch,
+                &Message::ReconciliationRequest(ReconciliationRequestPayload {
+                    requester: self.device,
+                    evidence: evidence_bytes,
+                }),
+            )?;
+            let sealed_bytes = sealed.encode();
+            if check_outbound_size(&sealed_bytes).is_err() {
+                return Ok(ReconciliationOutcome::ViewTooLarge);
+            }
+            sealed_pages.push(sealed_bytes);
         }
         let recipients = self.request_recipients();
         if recipients.is_empty() {
             return Ok(ReconciliationOutcome::NoRecipients);
         }
+        // Fan every page out to every recipient: pages are independent
+        // statements with independent wire identities, answered and
+        // retired per page under the existing caps. Acceptance is
+        // tracked per page so a partial fan-out retries whole instead
+        // of resuming half-marked.
         let mut accepted = 0usize;
-        for recipient in &recipients {
-            let envelope = seal_for_recipient(&self.identity_secret, *recipient, &sealed_bytes)?;
-            accepted += mailbox.send(envelope)?.accepted;
+        let mut pages_accepted = 0usize;
+        for sealed_bytes in &sealed_pages {
+            let mut page_accepted = 0usize;
+            for recipient in &recipients {
+                let envelope = seal_for_recipient(&self.identity_secret, *recipient, sealed_bytes)?;
+                page_accepted += mailbox.send(envelope)?.accepted;
+            }
+            accepted += page_accepted;
+            if page_accepted > 0 {
+                pages_accepted += 1;
+            }
         }
-        if accepted > 0 {
+        if pages_accepted == sealed_pages.len() {
             self.last_requested_digest = Some(digest);
         }
         Ok(ReconciliationOutcome::Requested {
             recipients: recipients.len(),
             accepted,
+            pages: sealed_pages.len(),
         })
     }
 

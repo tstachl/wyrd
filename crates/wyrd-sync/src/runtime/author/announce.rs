@@ -203,26 +203,43 @@ pub(crate) fn redelivery_scope_set(
     scope
 }
 
-/// Each requester's latest received reconciliation statement, in
-/// commit order: the durable evidence the publish pass derives
-/// evidence-triggered retransmits from. Last write wins per
-/// requester — a newer statement supersedes, so a resend answers
-/// the gap the recipient most recently evidenced, and a statement
-/// evidencing the head quenches the resend. Computed from the same
-/// fresh rebuild the send below reads, so the digest the marker
-/// commits names the statement the eligibility just compared
-/// against. Statements are rare (one per view change), so one
-/// bucket scan per snapshot visit is the honest cost of an exact
-/// comparison.
-fn latest_gap_statements(
+/// Each requester's unioned gap evidence, in commit order: the
+/// durable evidence the publish pass derives evidence-triggered
+/// retransmits from. The union spans every received page for the
+/// requester — installs and held snapshots are monotone facts (never
+/// un-proven), so the union stays conservative with no format
+/// change — while the digest stays the latest statement's, so the
+/// one-shot marker still names the statement just compared and a
+/// newer gap re-arms exactly one more resend. Computed from the
+/// same fresh rebuild the send below reads. Statements are rare
+/// (pages per view change), so one bucket scan per snapshot visit
+/// is the honest cost of an exact comparison.
+fn requester_gap_evidence(
     rebuilt: &Rebuilt,
 ) -> BTreeMap<DeviceId, ([u8; 32], ReconciliationEvidence)> {
-    let mut latest: BTreeMap<DeviceId, ([u8; 32], ReconciliationEvidence)> = BTreeMap::new();
+    let mut union: BTreeMap<DeviceId, ReconciliationEvidence> = BTreeMap::new();
+    let mut latest_digest: BTreeMap<DeviceId, [u8; 32]> = BTreeMap::new();
     for (requester, evidence) in &rebuilt.reconciliation_requests {
         let digest = reconciliation_statement_digest(requester, evidence);
-        latest.insert(*requester, (digest, evidence.clone()));
+        let entry = union.entry(*requester).or_default();
+        entry
+            .transitions
+            .extend(evidence.transitions.iter().copied());
+        entry.snapshots.extend(evidence.snapshots.iter().copied());
+        entry
+            .capabilities
+            .extend(evidence.capabilities.iter().copied());
+        latest_digest.insert(*requester, digest);
     }
-    latest
+    latest_digest
+        .into_iter()
+        .map(|(requester, digest)| {
+            let evidence = union
+                .remove(&requester)
+                .expect("every digested requester unioned its pages");
+            (requester, (digest, evidence))
+        })
+        .collect()
 }
 
 /// Resume every send-eligible announcement obligation across snapshots,
@@ -259,7 +276,7 @@ pub(crate) fn announce_pending(
     // stays discharged: without the scope gate one restart resends
     // the whole outbox past and stalls live work behind it.
     let scope = redelivery_scope_set(engine, &rebuilt);
-    let latest = latest_gap_statements(&rebuilt);
+    let unioned = requester_gap_evidence(&rebuilt);
     let mut snapshots: Vec<wyrd_format::SnapshotId> = rebuilt
         .runtime
         .announce_eligible_for(route_id, &scope)
@@ -273,7 +290,7 @@ pub(crate) fn announce_pending(
     // deterministic.
     let mut retransmit: Vec<wyrd_format::SnapshotId> = rebuilt
         .runtime
-        .announce_retransmit_for(&latest)
+        .announce_retransmit_for(&unioned)
         .into_iter()
         .map(|(snapshot, _, _)| snapshot)
         .collect();
@@ -530,9 +547,9 @@ fn reuse_or_seal_route(
 /// engine would resend a route it cannot heal. The author's own
 /// engine owns that repair (its redelivery reseals under its live
 /// route); this path records no route and resends nothing already
-/// discharged — except a delivered-but-unevidenced pair the latest
-/// gap statement re-opens, which resends byte-identical (no route
-/// change, so nothing to heal) through the union in
+/// discharged — except a delivered-but-unevidenced pair the
+/// unioned gap evidence re-opens, which resends byte-identical (no
+/// route change, so nothing to heal) through the union in
 /// `send_pending_for`. The author's redelivery arrives as a route
 /// update the receiver dedupes.
 fn reannounce_one(
@@ -634,11 +651,11 @@ fn reannounce_sealed_bytes(
 /// Send the sealed bytes to every send-eligible recipient of one
 /// snapshot — still-pending pairs, pairs in the redelivery scope
 /// discharged against an older route, and delivered-but-unevidenced
-/// pairs the latest gap statements re-open — recording one
+/// pairs the unioned gap evidence re-opens — recording one
 /// delivered marker plus its serving-route record per relay-accepted
 /// send. A send of an already-delivered pair additionally commits
-/// the per-statement retransmit marker, so each evidencing
-/// statement re-opens its gap exactly once. A send failure returns
+/// the per-latest-digest retransmit marker, so each newer statement
+/// re-arms its gap exactly once. A send failure returns
 /// immediately with the rest still pending.
 fn send_pending_for(
     engine: &mut Engine,
@@ -662,7 +679,7 @@ fn send_pending_for(
     // never touch the received-request bucket, so the selecting
     // pass's map stays exact.
     let rebuilt = engine.cached_rebuilt()?;
-    let latest = latest_gap_statements(&rebuilt);
+    let unioned = requester_gap_evidence(&rebuilt);
     let mut recipients: Vec<wyrd_format::DeviceId> = rebuilt
         .runtime
         .announce_eligible_for(route_id, scope)
@@ -675,7 +692,7 @@ fn send_pending_for(
     // it. Keyed by pair for the marker closure below.
     let retransmit: BTreeMap<wyrd_format::DeviceId, [u8; 32]> = rebuilt
         .runtime
-        .announce_retransmit_for(&latest)
+        .announce_retransmit_for(&unioned)
         .into_iter()
         .filter(|(id, _, _)| *id == snapshot)
         .map(|(_, recipient, digest)| (recipient, digest))
