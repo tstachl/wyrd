@@ -8,9 +8,7 @@ use std::io::Write;
 #[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-#[cfg(test)]
-use std::sync::atomic::AtomicU64;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use wyrd_format::{DeviceId, DriveId};
 use zeroize::{ZeroizeOnDrop, Zeroizing};
@@ -143,41 +141,55 @@ const DRIVE_DIR_MODE: u32 = 0o700;
 /// crash between creation and rename never leaves a world-readable
 /// temp holding custody bytes. The mode applies at creation only, so
 /// the name is claimed (`create_new`) rather than truncated: reusing
-/// a stale temp would carry its old loose mode through the rename. On
-/// a lost race the stale file is removed once and the claim retried,
-/// and a second failure propagates — the mode invariant is enforced,
-/// not assumed. Creation is single-writer (the store lock), so a retry
-/// meets a crashed predecessor's temp, never a live competitor.
-/// Callers outside the store lock (today: the materialization-role
-/// file) share the crash semantics but not the single-writer
-/// precondition: concurrent writers resolve last-writer-wins, and
-/// the file always holds one complete write, never a torn one.
-/// Non-Unix falls back to `File::create_new`: the mode guarantee is
-/// Unix-only (see `docs/design/cli.md`).
+/// a stale temp would carry its old loose mode through the rename.
+/// Each writer claims its own per-attempt unique sibling
+/// (`{name}.{pid}-{nonce}.tmp`), so a lost race retries under a fresh
+/// name instead of removing anything: only the current writer ever
+/// manages its own temp path, and a live competitor's temp is never
+/// unlinked. Concurrent writers resolve last-writer-wins at the
+/// rename, and the file always holds one complete write, never a
+/// torn one. Non-Unix falls back to `File::create_new`: the mode
+/// guarantee is Unix-only (see `docs/design/cli.md`).
 pub(crate) fn create_mode_temp(
     dir: &Path,
     name: &str,
     #[cfg_attr(not(unix), allow(unused_variables))] mode: u32,
-) -> std::io::Result<File> {
-    let tmp = dir.join(format!("{name}.tmp"));
-    #[cfg(unix)]
-    let claim = || {
-        std::fs::OpenOptions::new()
+) -> std::io::Result<(File, PathBuf)> {
+    for _ in 0..100 {
+        let tmp = unique_temp_path(dir, name);
+        #[cfg(unix)]
+        let claimed = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .mode(mode)
-            .open(&tmp)
-    };
-    #[cfg(not(unix))]
-    let claim = || File::create_new(&tmp);
-    match claim() {
-        Ok(file) => Ok(file),
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            fs::remove_file(&tmp)?;
-            claim()
+            .open(&tmp);
+        #[cfg(not(unix))]
+        let claimed = File::create_new(&tmp);
+        match claimed {
+            Ok(file) => return Ok((file, tmp)),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
         }
-        Err(error) => Err(error),
     }
+    // A stale-debris collision on every attempt: surface it instead
+    // of looping forever or removing anyone's temp.
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        format!("could not claim a unique temp for {name}"),
+    ))
+}
+
+/// The per-attempt scratch sibling for `name`: pid + counter keep
+/// concurrent writers (threads or processes) off each other's temp.
+/// The `.tmp` extension is preserved so crash-debris sweeps and the
+/// committed-bytes accounting keep skipping these files.
+fn unique_temp_path(dir: &Path, name: &str) -> PathBuf {
+    static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
+    let nonce = NEXT_TEMP.fetch_add(1, Ordering::SeqCst);
+    dir.join(format!(
+        "{name}.{pid}-{nonce}.tmp",
+        pid = std::process::id()
+    ))
 }
 
 /// Durably create-or-replace one file: temp (at an explicit
@@ -195,13 +207,19 @@ pub(crate) fn create_mode_temp(
 /// `wyrd-core`) need exactly this sequencing and must not
 /// reimplement it more weakly.
 pub fn atomic_write_mode(dir: &Path, name: &str, bytes: &[u8], mode: u32) -> std::io::Result<()> {
-    let tmp = dir.join(format!("{name}.tmp"));
-    let mut f = create_mode_temp(dir, name, mode)?;
-    f.write_all(bytes)?;
-    f.sync_all()?;
-    drop(f);
-    fs::rename(&tmp, dir.join(name))?;
-    fsync_dir(dir)
+    let (mut f, tmp) = create_mode_temp(dir, name, mode)?;
+    let write_outcome = (|| {
+        f.write_all(bytes)?;
+        f.sync_all()?;
+        drop(f);
+        fs::rename(&tmp, dir.join(name))?;
+        fsync_dir(dir)
+    })();
+    if write_outcome.is_err() {
+        // Only our own unique temp: never another writer's path.
+        let _ = fs::remove_file(&tmp);
+    }
+    write_outcome
 }
 
 /// Create a drive state directory at no wider than owner-only
