@@ -613,11 +613,12 @@ fails, so the handle goes terminal `EIO` on its next operation rather
 than serving the moved bytes. A writer on the exact source path
 folds the same way: its bytes apply pre-rename and ride, and its
 handle goes terminal at settle when the path is gone. A writer on
-the exact destination — or on a path an `unlink`, `rmdir`, or
-`mkdir` rebinds or destroys — contends and loses to the privileged
-forcer per rule 2; a forcer that fails its own preconditions aborts
-the whole fold with nothing committed per rule 6, and the taken
-writers restore for their own boundary. Following renamed subtrees
+the exact destination — or on a path an `unlink` or `rmdir`
+destroys — contends and loses to the privileged forcer per rule 2.
+A forcer that fails its own preconditions (`mkdir` or `create` on a
+taken name, a refused `rename`) aborts the whole fold with nothing
+committed per rule 6, and the taken writers restore for their own
+boundary. Following renamed subtrees
 through open handles is a presentation-layer feature v0 does not claim.
 
 ## The commit pipeline and durability ordering

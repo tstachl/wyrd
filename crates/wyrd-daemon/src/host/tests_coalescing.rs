@@ -648,6 +648,45 @@ fn create_on_a_taken_name_restores_the_pending_writer() {
     teardown(drive);
 }
 
+/// A refused rename restores the pending writers: no-replace onto a
+/// taken name fails the forcer, so the fold aborts with nothing
+/// committed and the dirty handles stay usable for their own
+/// boundary.
+#[test]
+fn refused_no_replace_rename_restores_pending_writers() {
+    let drive = setup();
+    create_empty(&drive, "a.txt");
+    create_empty(&drive, "b.txt");
+    let ha = overwrite(&drive, "a.txt", b"KEEP");
+
+    let before = generation(&drive);
+    assert_eq!(
+        drive.backend.rename_at(1, "a.txt", 1, "b.txt", true),
+        Err(fuser::Errno::EEXIST),
+        "no-replace onto a taken name is refused"
+    );
+    assert_eq!(
+        generation(&drive) - before,
+        0,
+        "a failed forcer commits nothing, not even the pending set"
+    );
+
+    drive.backend.commit_handle(ha).unwrap();
+    assert_eq!(
+        read_all(&drive, "a.txt"),
+        b"KEEP",
+        "the restored writer still commits on its own forcing event"
+    );
+    assert_eq!(
+        read_all(&drive, "b.txt"),
+        b"",
+        "the refused rename changes nothing"
+    );
+
+    drive.backend.release_handle(ha).unwrap();
+    teardown(drive);
+}
+
 /// Releasing a dirty handle folds every other pending write into the
 /// same snapshot: close is a commit boundary for the whole pending
 /// set, best-effort.
