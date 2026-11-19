@@ -102,6 +102,31 @@ pub(super) fn wait_for_delivery(
     }
 }
 
+/// Wait for a delivery other than `except`, ignoring re-offers of a
+/// held id under its stable id. `recv` re-offers held mail when nothing
+/// new has arrived, so a plain `wait_for_delivery` can hand back the
+/// delivery that was just retried before the next wrap lands — a race
+/// that widens under parallel load. `timeout` bounds the whole wait,
+/// not each take.
+pub(super) fn wait_for_delivery_other_than(
+    mailbox: &mut LiveMailbox<Keys>,
+    except: DeliveryId,
+    timeout: Duration,
+) -> Option<Delivery> {
+    let start = Instant::now();
+    loop {
+        if let Some(delivery) = mailbox.recv().unwrap() {
+            if delivery.id() != except {
+                return Some(delivery);
+            }
+        }
+        if start.elapsed() >= timeout {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 pub(super) fn assert_quiet(mailbox: &mut LiveMailbox<Keys>) {
     assert!(wait_for_delivery(mailbox, QUIET_TIMEOUT).is_none());
 }
