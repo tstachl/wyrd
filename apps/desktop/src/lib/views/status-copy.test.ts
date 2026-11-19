@@ -9,14 +9,17 @@
 import { expect, test } from "bun:test";
 
 const view = await Bun.file(`${import.meta.dir}/StatusView.svelte`).text();
+// Whitespace-normalized once for the retired-string pins, so a
+// reintroduction with different line breaks cannot evade them.
+const flat = view.replace(/\s+/g, " ");
 
 test("status cards carry the frozen dimension names", () => {
   for (const title of ["Sync activity", "Drive activity", "Drive data"]) {
     expect(view).toContain(title);
   }
   expect(view).not.toContain("Durable observation");
-  expect(view).not.toContain(">Liveness<");
-  expect(view).not.toContain(">Freshness<");
+  expect(flat).not.toMatch(/>\s*Liveness\s*</);
+  expect(flat).not.toMatch(/>\s*Freshness\s*</);
 });
 
 test("status rows carry the frozen row names", () => {
@@ -37,6 +40,16 @@ test("paused names the state without the quiet/down gloss", () => {
   expect(view).toContain("The drive is still running and can answer requests.");
   expect(view).not.toContain("reachable and quiet");
   expect(view).not.toContain("quiet, not down");
+});
+
+test("load-bearing clauses pin verbatim, not just labels", () => {
+  // The no-recency definition, the no-convergence note and the
+  // no-fetchability caveat are the clauses a regression would drop
+  // while keeping every label green.
+  expect(view).toContain('Never "recent activity"');
+  expect(view).toContain("does not mean converged with peers");
+  expect(view).toContain("never read as available elsewhere");
+  expect(view).toContain("not files or items");
 });
 
 test("technical detail lives behind a disclosure", () => {
