@@ -92,7 +92,7 @@ test("leave states the device-removal consequences before action", () => {
 
 test("lock names the session consequence", () => {
   expect(app).toContain("unlocking needs the passphrase to open it again");
-  expect(app).toContain("quitting the app also ends the session");
+  expect(app).toContain("Quitting the app leaves the drive running");
 });
 
 test("navigation uses the frozen names", () => {

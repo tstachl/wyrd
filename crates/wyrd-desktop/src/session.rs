@@ -488,6 +488,78 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Clean-quit half of R2 (`docs/contracts/desktop-lifecycle.md`,
+    /// "Effects of clean termination on owners"): dropping the whole
+    /// backend state — the quit path, which drains IPC exchanges but
+    /// never touches a supervised child — leaves the session owner
+    /// running, exactly like the crash path. Only an explicit lock
+    /// (kill plus wait, as `drive_lock` performs) ends it. The
+    /// relaunch then reattaches through the socket probe, which reads
+    /// `Unlocked` without consulting the (empty) session map
+    /// (`session_gate_pins_the_posture_rule` in `registry.rs` pins
+    /// the pure rule; this pins the survival half).
+    #[cfg(unix)]
+    #[test]
+    fn clean_quit_leaves_the_session_owner_running_until_lock() {
+        use super::super::AppState;
+
+        let dir = std::env::temp_dir().join(format!(
+            "wyrd-desktop-session-{}-cleanquit",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // `exec` replaces the shell: one pid serves and dies.
+        let cli = fake_cli("cleanquit", "exec sleep 30");
+        let request = unlock_request(&dir);
+        let spawned =
+            provision::spawn_unlock(&cli, &request, b"hunter2-hunter2").expect("spawn holds");
+        let drive_dir = request.drive_dir.clone();
+        let state = AppState::new();
+        let generation = state.next_generation();
+        state.sessions().lock().unwrap().insert(
+            drive_dir.clone(),
+            UnlockSession::new(
+                Zeroizing::new(b"hunter2-hunter2".to_vec()),
+                spawned.child,
+                cli.clone(),
+                request,
+                generation,
+            ),
+        );
+        let pid = state
+            .sessions()
+            .lock()
+            .unwrap()
+            .get(&drive_dir)
+            .expect("session stored")
+            .child
+            .as_ref()
+            .expect("child held")
+            .id();
+        // Clean quit: the backend state (connection map plus session
+        // map) drops with no kill and no wait — the drain only ever
+        // waited on dispatched IPC exchanges, never on a supervised
+        // owner — so the child survives the shell's exit.
+        drop(state);
+        let signal = |sig: &str| {
+            std::process::Command::new("sh")
+                .arg("-c")
+                .arg(format!("kill -{sig} {pid}"))
+                .status()
+                .expect("sh runs the signal probe")
+                .success()
+        };
+        assert!(
+            signal("0"),
+            "a clean quit leaves the session owner alive for reattach"
+        );
+        // Explicit lock ends it: kill plus wait, as `drive_lock`
+        // performs under the session-map lock.
+        assert!(signal("KILL"), "lock kills the session owner");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// `Debug` never leaks the secret: the redacted marker shows,
     /// the bytes do not.
     #[test]

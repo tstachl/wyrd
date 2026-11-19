@@ -25,10 +25,11 @@
 //! shows the same per-drive unavailable view instead, and coming
 //! back resumes without restart.
 //!
-//! Closing the window hides it to the menu-bar extra; the process
-//! stays alive, and the macOS dock icon or the tray's Show window
-//! brings it back. Quit — the tray item, Cmd+Q, or any exit request —
-//! still drains outstanding work first: the shell waits until every
+//! Window close and application quit are distinct events
+//! (`docs/contracts/desktop-lifecycle.md`): on macOS closing the
+//! window hides it and the Dock reopens it; on Linux closing the
+//! last window quits. Quit — Cmd+Q or any exit request — still
+//! drains outstanding work first: the shell waits until every
 //! dispatched exchange has its terminal answer or the drain bound
 //! fires, then exits — nothing is reported successful without the
 //! owner's authoritative answer, and exchanges still outstanding past
@@ -43,8 +44,8 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Emitter, Manager, Runtime};
-use wyrd_desktop::{invoke_handler, tray, AppState, DesktopBackend, FlightTracker};
+use tauri::{AppHandle, Manager, Runtime};
+use wyrd_desktop::{invoke_handler, AppState, DesktopBackend, FlightTracker};
 
 /// Bound on the quit drain: every dispatched exchange gets this
 /// long past the quit request to reach its terminal answer. Past the
@@ -58,16 +59,6 @@ const QUIT_DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
 /// Poll interval while draining: frequent enough to exit promptly
 /// when the last answer lands, sparse enough to stay out of the way.
 const QUIT_DRAIN_POLL: Duration = Duration::from_millis(50);
-
-/// Tray asset: the white Held silhouette plus alpha on macOS, where
-/// the builder marks it as a template image and the system tints it
-/// for light and dark menu bars; the full-color app icon everywhere
-/// else, where no template tinting exists. The Held geometry follows
-/// `apps/shared/brand/held.svg` (tile dropped, glyph fit to canvas).
-#[cfg(target_os = "macos")]
-const TRAY_ICON_BYTES: &[u8] = include_bytes!("../icons/tray-held-template.png");
-#[cfg(not(target_os = "macos"))]
-const TRAY_ICON_BYTES: &[u8] = include_bytes!("../icons/32x32.png");
 
 /// Usage: `wyrd-desktop [--drive-dir <DIR>]`. Hand-rolled argv: the
 /// layer gate reserves this crate's third-party edges for the Tauri
@@ -148,17 +139,36 @@ fn drain_and_exit<R: Runtime>(app: AppHandle<R>) {
     });
 }
 
-/// Whether closing the window has a way back: the macOS dock's
-/// `Reopen` path always exists; elsewhere only a live tray does. A
-/// failed tray build must not hide the only window unreachably.
+/// Whether closing the window has a way back: on macOS the Dock's
+/// `Reopen` path always exists, so close hides. Everywhere else
+/// close is quit: the process exits through the drain below, and the
+/// launcher starts a new process next time.
 #[cfg(target_os = "macos")]
-fn close_reachable<R: Runtime>(_window: &tauri::Window<R>) -> bool {
+fn close_hides<R: Runtime>(_window: &tauri::Window<R>) -> bool {
     true
 }
 
 #[cfg(not(target_os = "macos"))]
-fn close_reachable<R: Runtime>(window: &tauri::Window<R>) -> bool {
-    window.app_handle().tray_by_id(tray::TRAY_ID).is_some()
+fn close_hides<R: Runtime>(_window: &tauri::Window<R>) -> bool {
+    false
+}
+
+/// Show and focus the main window. Best-effort: a missing window is
+/// logged and ignored.
+fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
+    let Some(window) = app.get_webview_window("main") else {
+        eprintln!("wyrd-desktop: no main window to show");
+        return;
+    };
+    if let Err(error) = window.unminimize() {
+        eprintln!("wyrd-desktop: unminimize failed: {error}");
+    }
+    if let Err(error) = window.show() {
+        eprintln!("wyrd-desktop: show failed: {error}");
+    }
+    if let Err(error) = window.set_focus() {
+        eprintln!("wyrd-desktop: focus failed: {error}");
+    }
 }
 
 fn main() {
@@ -193,97 +203,18 @@ fn main() {
         .manage(FlightTracker::new())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(invoke_handler())
-        .setup(|app| {
-            // Menu-bar extra: one tray icon over the same registry
-            // probe the lifecycle view shows. The first menu is the
-            // loading placeholder — the setup hook never probes, so a
-            // wedged owner can never delay first paint; the refresh
-            // thread below populates the menu immediately. A missing
-            // icon never fails startup — the window stays the product.
-            match tray::build_tray_menu(app.handle(), &tray::loading_state()) {
-                Ok(menu) => {
-                    let icon = tauri::image::Image::from_bytes(TRAY_ICON_BYTES);
-                    match icon {
-                        Ok(icon) => {
-                            let builder =
-                                tauri::tray::TrayIconBuilder::with_id(tray::TRAY_ID).icon(icon);
-                            // Template image on macOS only: the white
-                            // Held silhouette plus alpha tints for
-                            // light and dark menu bars there, while
-                            // other platforms receive the full-color
-                            // app icon (no template tinting exists
-                            // for them — a white-only asset would
-                            // vanish on a light panel).
-                            #[cfg(target_os = "macos")]
-                            let builder = builder.icon_as_template(true);
-                            match builder
-                                .tooltip("Wyrd")
-                                .menu(&menu)
-                                .show_menu_on_left_click(true)
-                                .on_menu_event(|app, event| match event.id.as_ref() {
-                                    tray::TRAY_SHOW_ID => tray::show_main_window(app),
-                                    tray::TRAY_ADD_ID => {
-                                        tray::show_main_window(app);
-                                        // Best-effort route: the
-                                        // frontend selects the
-                                        // provision view on this
-                                        // event; a missing
-                                        // listener still leaves
-                                        // the window shown.
-                                        let _ = app.emit(tray::SELECT_PROVISION_EVENT, ());
-                                    }
-                                    tray::TRAY_QUIT_ID => drain_and_exit(app.clone()),
-                                    _ => {}
-                                })
-                                .build(app)
-                            {
-                                Ok(_) => {
-                                    // Refresh the menu from fresh
-                                    // registry reads, gated on a live
-                                    // tray: no tray, no probe work.
-                                    // Unchanged states skip the
-                                    // rebuild, so the native menu is
-                                    // never churned. One slow owner
-                                    // never wedges the tray, because
-                                    // the probe bounds each drive and
-                                    // a failed rebuild keeps the old
-                                    // menu.
-                                    let handle = app.handle().clone();
-                                    std::thread::spawn(move || {
-                                        let mut last = None;
-                                        loop {
-                                            tray::refresh_tray_if_changed(&handle, &mut last);
-                                            std::thread::sleep(Duration::from_secs(5));
-                                        }
-                                    });
-                                }
-                                Err(error) => {
-                                    eprintln!("wyrd-desktop: tray icon build failed: {error}");
-                                }
-                            }
-                        }
-                        Err(error) => {
-                            eprintln!("wyrd-desktop: tray icon load failed: {error}");
-                        }
-                    }
-                }
-                Err(error) => eprintln!("wyrd-desktop: tray menu build failed: {error}"),
-            }
-            Ok(())
-        })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                // Close hides to the menu-bar extra; the process
-                // stays alive. Quit (tray item, Cmd+Q, or any exit
-                // request) is the explicit exit and drains. Hide only
-                // where the window has a way back.
-                api.prevent_close();
-                if close_reachable(window) {
+                // Close and quit are distinct
+                // (`docs/contracts/desktop-lifecycle.md`): on macOS
+                // close hides the window and the Dock reopens it;
+                // everywhere else close is quit and runs the drain
+                // below through the exit path.
+                if close_hides(window) {
+                    api.prevent_close();
                     if let Err(error) = window.hide() {
                         eprintln!("wyrd-desktop: hide on close failed: {error}");
                     }
-                } else {
-                    eprintln!("wyrd-desktop: no tray to restore the window; keeping it visible");
                 }
             }
         })
@@ -292,8 +223,8 @@ fn main() {
 
     app.run(|app, event| match event {
         tauri::RunEvent::ExitRequested { api, code, .. } => {
-            // Cmd+Q and any other code-less exit request drain like
-            // the tray's Quit. A code is our own post-drain exit and
+            // Cmd+Q and any other code-less exit request drain
+            // before exiting. A code is our own post-drain exit and
             // is allowed through.
             if code.is_none() {
                 api.prevent_exit();
@@ -311,7 +242,7 @@ fn main() {
             }
         }
         #[cfg(target_os = "macos")]
-        tauri::RunEvent::Reopen { .. } => tray::show_main_window(app),
+        tauri::RunEvent::Reopen { .. } => show_main_window(app),
         _ => {}
     });
 }

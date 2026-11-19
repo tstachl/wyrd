@@ -36,7 +36,6 @@ pub mod service;
 pub mod session;
 pub mod settings_apply;
 pub mod settings_view;
-pub mod tray;
 
 pub use backend::{BackendError, DesktopBackend};
 pub use onboarding::{KeyDefaults, OnboardingReport, OnboardingResult};

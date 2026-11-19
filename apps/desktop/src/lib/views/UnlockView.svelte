@@ -91,8 +91,8 @@ success or failure. Never persisted here, never logged. -->
         }}
       />
       <Field.Description>
-        Typed only — never stored. Rebooting, stopping the drive, or quitting the app locks it
-        again. <button
+        Typed only — never stored. Rebooting this device or locking the drive locks it
+        again. Quitting the app leaves the drive running. <button
           type="button"
           class="underline underline-offset-2"
           disabled={busy}

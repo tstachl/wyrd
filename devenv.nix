@@ -1,6 +1,6 @@
 { pkgs, inputs, ... }:
 let
-  inherit (pkgs.lib) optionals optionalString makeSearchPath makeLibraryPath;
+  inherit (pkgs.lib) optionals optionalString makeSearchPath;
   inherit (pkgs.stdenv.hostPlatform) isLinux isDarwin;
   unstable = import inputs.nixpkgs-unstable { system = pkgs.stdenv.system; };
 in
@@ -16,8 +16,6 @@ in
   # enterShell prepend below. An implementation that copies this
   # stanza must preserve the data flow (schema dirs into
   # XDG_DATA_DIRS), not the name.
-  env.LD_LIBRARY_PATH = optionalString isLinux
-    (makeLibraryPath [ unstable.libayatana-appindicator ]);
   env.GIO_MODULE_DIR = optionalString isLinux
     "${unstable.glib-networking}/lib/gio/modules";
   env.GSETTINGS_SCHEMAS_PATH = optionalString isLinux
@@ -120,10 +118,6 @@ in
     atk
     dbus
     librsvg
-    # libayatana-appindicator is dlopen'ed by libappindicator-sys at
-    # runtime, so it can't be resolved through link-time rpath;
-    # LD_LIBRARY_PATH above exposes it.
-    libayatana-appindicator
   ] ++ optionals isDarwin [
     # Build-time headers/stubs for fuser's libfuse probes (fuse.pc from
     # nixpkgs, fuse3.pc from our own stubs: nix/macfuse3-stubs.nix).
