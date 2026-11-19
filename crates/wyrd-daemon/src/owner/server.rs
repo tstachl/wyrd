@@ -1192,8 +1192,10 @@ impl OwnerServer {
     /// Capture the current parent-directory incarnation for a later
     /// create: the consumer sends the token back with the operation,
     /// and the owner re-checks it before authoring. A path with no
-    /// token refuses here — creates address paths through tokens,
-    /// never bare.
+    /// token is minted one here — creates address paths through
+    /// tokens, never bare. Refusal means the table is blocked or
+    /// saturated, reported as `StaleParent` (retry the capture), never
+    /// as a missing parent.
     fn op_capture_parent(
         &self,
         params: serde_json::Value,
@@ -1213,8 +1215,11 @@ impl OwnerServer {
                 },
             }),
             Ok(None) => Err((
-                WireErrorCode::NotFound,
-                format!("no parent to capture for {:?}", params.path),
+                WireErrorCode::StaleParent,
+                format!(
+                    "parent-token table saturated or path blocked for {:?}: retry the capture",
+                    params.path
+                ),
             )),
             // A poisoned token table is not a missing parent: name it
             // so the desktop surfaces a fault instead of retrying a

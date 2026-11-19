@@ -1457,10 +1457,10 @@ fn submit_reports_the_same_outcome_both_ways() {
 }
 
 /// Refusals carry through as distinct outcomes: a stale parent, a
-/// missing path, and a saturated queue each refuse with their own
-/// code, never collapsed to a boolean. The loop runs: refusals are
-/// evaluated by the pass, so a submit without a loop would block
-/// instead of refusing.
+/// missing path, a saturated capture, and a saturated queue each
+/// refuse with their own code, never collapsed to a boolean. The
+/// loop runs: refusals are evaluated by the pass, so a submit
+/// without a loop would block instead of refusing.
 #[test]
 fn submit_refusals_carry_distinct_codes() {
     let (server, _parts, dir, stop, loop_thread) = running_parts();
@@ -1493,6 +1493,97 @@ fn submit_refusals_carry_distinct_codes() {
     stop.store(true, Ordering::Relaxed);
     spawn_loop_done(loop_thread);
     std::fs::remove_dir_all(dir).unwrap();
+
+    // A saturated parent-token table refuses the second distinct
+    // capture as StaleParent, not NotFound: capture mints a token
+    // for any fresh path, so refusal only means blocked or full.
+    // No loop needed — capture never reaches it.
+    {
+        let (parts, dir) = composed_parts();
+        let mut handles = OwnerHandles::from_parts(&parts);
+        handles.mutations = Arc::new(wyrd_core::mutation::MutationQueue::with_limits(
+            usize::MAX,
+            1,
+        ));
+        let server = OwnerServer::new(handles);
+        match dispatch_ok(&server, OP_CAPTURE_PARENT, "a") {
+            WireOk::ParentToken { .. } => {}
+            other => panic!("first capture unexpectedly failed: {other:?}"),
+        }
+        let error = dispatch_err(&server, OP_CAPTURE_PARENT, "b");
+        assert_eq!(
+            error.code,
+            WireErrorCode::StaleParent,
+            "a full token table is stale, not missing: {}",
+            error.message
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    // A saturated mutation queue refuses the second submit while
+    // the first is still unfinished. No loop runs, so the first
+    // submit stays admitted-but-incomplete until the test completes
+    // it; the waiter is released with Done afterwards.
+    {
+        use wyrd_core::mutation::{MutationOutcome, MutationQueue};
+        let (parts, dir) = composed_parts();
+        let queue = Arc::new(MutationQueue::with_limit(1));
+        let mut handles = OwnerHandles::from_parts(&parts);
+        handles.mutations = Arc::clone(&queue);
+        let server = Arc::new(OwnerServer::new(handles));
+        let waiter = {
+            let server = Arc::clone(&server);
+            std::thread::spawn(move || {
+                server.dispatch(RawRequest {
+                    v: WIRE_VERSION,
+                    id: 21,
+                    op: OP_SUBMIT.to_string(),
+                    params: serde_json::to_value(SubmitParams {
+                        kind: WireMutationKind::Mkdir {
+                            path: "held".to_string(),
+                        },
+                    })
+                    .unwrap(),
+                })
+            })
+        };
+        // Hold the only admission slot: the first submit is taken
+        // here instead of by a loop, so its waiter stays blocked.
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        let mut batch = loop {
+            let batch = queue.take_batch();
+            if !batch.is_empty() {
+                break batch;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the first submit was never admitted"
+            );
+            std::thread::yield_now();
+        };
+        let error = submit_err(
+            &server,
+            WireMutationKind::Mkdir {
+                path: "second".to_string(),
+            },
+        );
+        assert_eq!(
+            error.code,
+            WireErrorCode::Saturated,
+            "an unfinished admission saturates the queue: {}",
+            error.message
+        );
+        batch.record(0, Ok(MutationOutcome::Done));
+        batch.finish();
+        match waiter.join().unwrap().result {
+            WireResult::Ok(ok) => match *ok {
+                WireOk::Submitted { .. } => {}
+                other => panic!("held submit answered wrong: {other:?}"),
+            },
+            WireResult::Err(error) => panic!("held submit unexpectedly refused: {error:?}"),
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }
 
 /// Every mutation error maps to its own wire code: the refusal
