@@ -372,7 +372,7 @@
       case "versionmismatch":
         return report.result.reason;
       case "busy":
-        return "Another operation is already in flight on this drive — wait for it to finish, then retry.";
+        return "Another operation is already running on this drive. Wait for it to finish and try again.";
     }
   }
 
@@ -391,7 +391,7 @@
         return;
       }
       if (!defaults.identity_exists || !defaults.passphrase_exists) {
-        repairDetail = "Incomplete credentials: one of the two files is missing — expected both the identity file and the passphrase file.";
+        repairDetail = "Missing credentials: one of the two files is missing — expected both the identity file and the passphrase file.";
         repairKind = "credentials";
         gate = "repair";
         return;

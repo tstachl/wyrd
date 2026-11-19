@@ -62,8 +62,13 @@ the last terminal answer, stamped — never a claim about right now. -->
 
 {#snippet queueHint()}
   <p>
-    Outbox control work, locally staged work and unstarted fetches, in
-    that order — not files or items.
+    Wyrd still has work to do for this drive. This can include
+    updates to share with other devices and content waiting to be
+    transferred.
+  </p>
+  <p>
+    In order: outbox control work, locally staged work and unstarted
+    fetches — not files or items.
   </p>
 {/snippet}
 
