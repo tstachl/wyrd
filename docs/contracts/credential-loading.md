@@ -27,7 +27,7 @@ a valid outcome, never a missing item) — never files, modes,
 keychain handles, or OS facilities. Backends implement how that
 material is kept and retrieved. The trait carries the read half
 today; provisioning, replacement, and deletion join with the
-migration slice. Two backends satisfy this contract:
+migration slice. Two backends are specified by this contract:
 
 - **File backend** (ships today): the hardened Unix file reader in
   `wyrd-cli` (`credentials.rs`) plus its writer, `wyrd identity`

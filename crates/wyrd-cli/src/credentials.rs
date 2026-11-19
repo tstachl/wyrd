@@ -467,6 +467,22 @@ fn read_passphrase_stdin(reader: impl std::io::Read) -> Result<Zeroizing<String>
     Ok(Zeroizing::new(stripped.to_owned()))
 }
 
+/// Shared refusal literals: the reader emits these and
+/// `cli_to_loader` classifies by them, so a rename touches both
+/// sides together — the mapping test pins the arms, and the
+/// wording-parity test pins the full render against the
+/// `CliError` `Display` impls.
+const REASON_UNIX_ONLY: &str = "credential-file protection is only implemented on Unix";
+const REASON_NOT_REGULAR: &str = "not a regular file";
+const REASON_OWNERSHIP: &str = "must be owned by the current user";
+const REASON_MODES: &str = "must not be accessible by group or other users";
+const REASON_SIZE_LIMIT: &str = "exceeds the 4096-byte size limit";
+/// Identity shape message: `CliError::IdentityFormat` renders
+/// this literal (`lib.rs`), and the taxonomy carries the same
+/// text — the wording-parity test asserts they stay equal.
+const IDENTITY_SHAPE_MSG: &str =
+    "identity file must contain exactly 32 raw bytes or 64 hex characters";
+
 /// Read a bounded credential file without following symlinks. On Unix the
 /// file must belong to the current user and not grant group/other access.
 pub(crate) fn read_secret_file(path: &Path) -> Result<Zeroizing<Vec<u8>>, CliError> {
@@ -474,7 +490,7 @@ pub(crate) fn read_secret_file(path: &Path) -> Result<Zeroizing<Vec<u8>>, CliErr
     #[cfg(not(unix))]
     return Err(CliError::Credential {
         path: path.to_path_buf(),
-        reason: "credential-file protection is only implemented on Unix",
+        reason: REASON_UNIX_ONLY,
     });
 
     let mut options = fs::OpenOptions::new();
@@ -495,7 +511,7 @@ pub(crate) fn read_secret_file(path: &Path) -> Result<Zeroizing<Vec<u8>>, CliErr
     if !metadata.is_file() {
         return Err(CliError::Credential {
             path: path.to_path_buf(),
-            reason: "not a regular file",
+            reason: REASON_NOT_REGULAR,
         });
     }
     #[cfg(unix)]
@@ -504,13 +520,13 @@ pub(crate) fn read_secret_file(path: &Path) -> Result<Zeroizing<Vec<u8>>, CliErr
         if metadata.uid() != current_uid() {
             return Err(CliError::Credential {
                 path: path.to_path_buf(),
-                reason: "must be owned by the current user",
+                reason: REASON_OWNERSHIP,
             });
         }
         if metadata.mode() & 0o077 != 0 {
             return Err(CliError::Credential {
                 path: path.to_path_buf(),
-                reason: "must not be accessible by group or other users",
+                reason: REASON_MODES,
             });
         }
     }
@@ -525,7 +541,7 @@ pub(crate) fn read_secret_file(path: &Path) -> Result<Zeroizing<Vec<u8>>, CliErr
     if bytes.len() > MAX_BYTES {
         return Err(CliError::Credential {
             path: path.to_path_buf(),
-            reason: "exceeds the 4096-byte size limit",
+            reason: REASON_SIZE_LIMIT,
         });
     }
     Ok(bytes)
@@ -594,20 +610,14 @@ fn cli_to_loader(error: CliError, subject: CredentialSubject) -> CredentialError
         CliError::Credential { path, reason } => {
             let detail = format!("credential file {}: {reason}", path.display());
             match reason {
-                "must be owned by the current user"
-                | "must not be accessible by group or other users" => {
-                    CredentialError::Denied { subject, detail }
-                }
-                "credential-file protection is only implemented on Unix" => {
-                    CredentialError::Unavailable { subject, detail }
-                }
+                REASON_OWNERSHIP | REASON_MODES => CredentialError::Denied { subject, detail },
+                REASON_UNIX_ONLY => CredentialError::Unavailable { subject, detail },
                 _ => CredentialError::Invalid { subject, detail },
             }
         }
         CliError::IdentityFormat => CredentialError::Invalid {
             subject,
-            detail: "identity file must contain exactly 32 raw bytes or 64 hex characters"
-                .to_string(),
+            detail: IDENTITY_SHAPE_MSG.to_string(),
         },
         other => CredentialError::Invalid {
             subject,
@@ -1020,11 +1030,12 @@ mod tests {
     }
 
     /// Every refusal literal lands on its taxonomy arm by rule:
-    /// each `Credential` reason and each IO kind maps to the arm
-    /// named beside it, so a renamed literal must update
-    /// `cli_to_loader` — the table fails otherwise. A refused
-    /// symlink (`ELOOP`) is `Denied`: the open was refused, and
-    /// retrying the same open cannot fix it.
+    /// the reader and the mapper share `REASON_*` constants, so a
+    /// rename touches both sides together; the wording-parity
+    /// test below pins the full render against the `CliError`
+    /// `Display` impls. A refused symlink (`ELOOP`) is `Denied`:
+    /// the open was refused, and retrying the same open cannot
+    /// fix it.
     #[test]
     fn every_refusal_literal_maps_onto_its_arm() {
         use std::io::ErrorKind;
@@ -1038,14 +1049,11 @@ mod tests {
             CredentialError::Invalid { .. } => "Invalid",
         };
         for (reason, expected) in [
-            ("must be owned by the current user", "Denied"),
-            ("must not be accessible by group or other users", "Denied"),
-            (
-                "credential-file protection is only implemented on Unix",
-                "Unavailable",
-            ),
-            ("not a regular file", "Invalid"),
-            ("exceeds the 4096-byte size limit", "Invalid"),
+            (REASON_OWNERSHIP, "Denied"),
+            (REASON_MODES, "Denied"),
+            (REASON_UNIX_ONLY, "Unavailable"),
+            (REASON_NOT_REGULAR, "Invalid"),
+            (REASON_SIZE_LIMIT, "Invalid"),
         ] {
             let error = cli_to_loader(
                 CliError::Credential {
@@ -1078,7 +1086,103 @@ mod tests {
         // the reader will not follow it, and the taxonomy calls
         // the refusal what it is (matched by errno, since the
         // stable IO kinds cannot name it). Pinned behaviorally in
-        // `tests_cli::credential_symlinks_are_rejected_without_following`.
+        // `tests_cli::credential_symlinks_are_rejected_without_following`,
+        // and classified here at the unit level.
+        let elooped = cli_to_loader(
+            CliError::Io {
+                path: PathBuf::from("/k/link"),
+                source: std::io::Error::from_raw_os_error(libc::ELOOP),
+            },
+            CredentialSubject::File {
+                path: PathBuf::from("/k/link"),
+            },
+        );
+        assert!(
+            matches!(elooped, CredentialError::Denied { .. }),
+            "a refused symlink (ELOOP) is Denied: {elooped:?}"
+        );
+        // The taxonomy identity literal stays equal to the
+        // `CliError::IdentityFormat` rendering: either side
+        // changing its text fails here.
+        assert_eq!(
+            CliError::IdentityFormat.to_string(),
+            IDENTITY_SHAPE_MSG,
+            "taxonomy and CLI name the same identity shape"
+        );
+    }
+
+    /// Wording parity: the cutover preserves diagnostics byte for
+    /// byte. Each case compares the full rendered error and exit
+    /// code from the loader path against the `CliError` rendering
+    /// it replaced — a future edit to either `Display` impl or
+    /// the copied literal drifts here, not silently.
+    #[test]
+    fn loader_path_reports_byte_identical_diagnostics() {
+        use crate::tests_harness::{write_secret, TempDir};
+        use std::os::unix::fs::PermissionsExt;
+        let temp = TempDir::new();
+        // Missing passphrase file: `{path}: {source}` exactly,
+        // exit 2.
+        let identity_file = temp.0.join("identity");
+        write_secret(&identity_file, [0x11; 32]);
+        let missing = temp.0.join("no-passphrase");
+        let creds = Credentials {
+            identity_file: Some(identity_file.clone()),
+            passphrase_file: Some(missing.clone()),
+            passphrase_stdin: false,
+        };
+        let err = read_credentials(&creds, None).expect_err("missing file must refuse");
+        let probe = std::fs::File::open(&missing).expect_err("fixture file stays missing");
+        let expected_io = CliError::Io {
+            path: missing.clone(),
+            source: probe,
+        };
+        assert_eq!(
+            err.to_string(),
+            expected_io.to_string(),
+            "missing file renders exactly"
+        );
+        assert_eq!(err.exit_code(), 2);
+        // Bad modes: `credential file {path}: {reason}` exactly,
+        // exit 2.
+        let lax = temp.0.join("lax-passphrase");
+        write_secret(&lax, b"hunter2-hunter2\n");
+        std::fs::set_permissions(&lax, std::fs::Permissions::from_mode(0o644))
+            .expect("test fixture chmod");
+        let creds = Credentials {
+            identity_file: Some(identity_file.clone()),
+            passphrase_file: Some(lax.clone()),
+            passphrase_stdin: false,
+        };
+        let err = read_credentials(&creds, None).expect_err("bad mode must refuse");
+        assert_eq!(
+            err.to_string(),
+            format!("credential file {}: {REASON_MODES}", lax.display()),
+            "mode refusal renders exactly"
+        );
+        assert_eq!(err.exit_code(), 2);
+        // Broken identity shape: the shared literal, exit 2.
+        let bad = temp.0.join("bad-identity");
+        write_secret(&bad, b"too short");
+        let passphrase_file = temp.0.join("passphrase");
+        write_secret(&passphrase_file, b"hunter2-hunter2\n");
+        let creds = Credentials {
+            identity_file: Some(bad),
+            passphrase_file: Some(passphrase_file),
+            passphrase_stdin: false,
+        };
+        let err = read_credentials(&creds, None).expect_err("bad shape must refuse");
+        assert_eq!(
+            err.to_string(),
+            IDENTITY_SHAPE_MSG,
+            "shape refusal renders exactly"
+        );
+        assert_eq!(
+            err.to_string(),
+            CliError::IdentityFormat.to_string(),
+            "matches the CLI variant it replaced"
+        );
+        assert_eq!(err.exit_code(), 2);
     }
 
     /// The OS store reference answers `Unavailable`, never an
