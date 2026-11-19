@@ -199,11 +199,11 @@ fn a_crash_during_store_key_write_leaves_no_readable_temp() {
 }
 
 /// Two claims on the same `(dir, name)` while the first file is
-/// still open: the discipline pins distinct paths and the survival
-/// of the first temp — deterministically, with no threads or
-/// sleeps. Under the old shared-name rule the second claim would
-/// have unlinked the first writer's live file; the retry path
-/// (`AlreadyExists` → fresh name) is what this exercises.
+/// still open yield distinct siblings and leave the first temp
+/// intact — deterministically, with no threads or sleeps. This pins
+/// the no-unlink core (a second claim never removes the first
+/// writer's live file); the retry loop itself is pinned by the
+/// forced-collision test below.
 #[test]
 fn concurrent_claims_on_one_name_never_share_a_temp() {
     use super::store::create_mode_temp;
@@ -220,6 +220,37 @@ fn concurrent_claims_on_one_name_never_share_a_temp() {
         "the second claim never unlinks the first writer's temp"
     );
     assert!(second_path.is_file(), "the second claim holds its own temp");
+}
+
+/// A forced nonce collision enters the `AlreadyExists` retry branch
+/// deterministically: the first two nonces collide with a planted
+/// blocker, the third succeeds, and the blocker survives untouched.
+/// No threads, no sleeps, no shared global state — the nonce supplier
+/// is injected, so parallel tests cannot disturb the sequence.
+#[test]
+fn a_forced_temp_collision_retries_without_unlinking() {
+    use super::store::create_mode_temp_with;
+    use super::tests_harness::TestDir;
+    let dir = TestDir::new("forced-temp-collision");
+    // The path nonce 7 resolves to, planted before the claim: both of
+    // the first two attempts must collide with it and move on.
+    let blocker = dir
+        .path
+        .join(format!("shared.{pid}-7.tmp", pid = std::process::id()));
+    std::fs::write(&blocker, b"not mine").unwrap();
+    let mut nonces = [7u64, 7, 8].into_iter();
+    let (_file, path) =
+        create_mode_temp_with(&dir.path, "shared", 0o600, &mut || nonces.next().unwrap()).unwrap();
+    assert!(
+        path.ends_with(format!("shared.{pid}-8.tmp", pid = std::process::id())),
+        "two collisions retry onto the fresh name, path: {}",
+        path.display()
+    );
+    assert_eq!(
+        std::fs::read(&blocker).unwrap(),
+        b"not mine",
+        "the retry never unlinks the colliding path"
+    );
 }
 
 #[cfg(unix)]

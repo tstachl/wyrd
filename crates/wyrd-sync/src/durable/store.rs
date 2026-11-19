@@ -155,8 +155,38 @@ pub(crate) fn create_mode_temp(
     name: &str,
     #[cfg_attr(not(unix), allow(unused_variables))] mode: u32,
 ) -> std::io::Result<(File, PathBuf)> {
+    create_mode_temp_with(dir, name, mode, &mut next_temp_nonce)
+}
+
+/// The per-attempt nonce: pid plus a process-global counter keep
+/// concurrent writers (threads or processes) off each other's temp.
+fn next_temp_nonce() -> u64 {
+    static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
+    NEXT_TEMP.fetch_add(1, Ordering::SeqCst)
+}
+
+/// The per-attempt scratch sibling for `name`, built from an explicit
+/// nonce. The `.tmp` extension is preserved so crash-debris sweeps
+/// and the committed-bytes accounting keep skipping these files.
+fn temp_path_with_nonce(dir: &Path, name: &str, nonce: u64) -> PathBuf {
+    dir.join(format!(
+        "{name}.{pid}-{nonce}.tmp",
+        pid = std::process::id()
+    ))
+}
+
+/// The claim loop behind [`create_mode_temp`], with the nonce supplier
+/// injected. Test seam: a forced nonce sequence enters the
+/// `AlreadyExists` retry branch deterministically, without threads,
+/// sleeps, or shared global state.
+pub(crate) fn create_mode_temp_with(
+    dir: &Path,
+    name: &str,
+    #[cfg_attr(not(unix), allow(unused_variables))] mode: u32,
+    next_nonce: &mut dyn FnMut() -> u64,
+) -> std::io::Result<(File, PathBuf)> {
     for _ in 0..100 {
-        let tmp = unique_temp_path(dir, name);
+        let tmp = temp_path_with_nonce(dir, name, next_nonce());
         #[cfg(unix)]
         let claimed = std::fs::OpenOptions::new()
             .write(true)
@@ -176,19 +206,6 @@ pub(crate) fn create_mode_temp(
     Err(std::io::Error::new(
         std::io::ErrorKind::AlreadyExists,
         format!("could not claim a unique temp for {name}"),
-    ))
-}
-
-/// The per-attempt scratch sibling for `name`: pid + counter keep
-/// concurrent writers (threads or processes) off each other's temp.
-/// The `.tmp` extension is preserved so crash-debris sweeps and the
-/// committed-bytes accounting keep skipping these files.
-fn unique_temp_path(dir: &Path, name: &str) -> PathBuf {
-    static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
-    let nonce = NEXT_TEMP.fetch_add(1, Ordering::SeqCst);
-    dir.join(format!(
-        "{name}.{pid}-{nonce}.tmp",
-        pid = std::process::id()
     ))
 }
 
