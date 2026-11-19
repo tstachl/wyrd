@@ -21,11 +21,14 @@ export function shortId(id: string): string {
   return id.length <= 12 ? id : `${id.slice(0, 8)}…`;
 }
 
-/** One-line freshness judgment. A retained last-good names its staleness, never current health. */
+/** One-line freshness judgment, interim (D-11): "Current" answers
+ * whether the served data is current for this device. A retained
+ * last-good names its staleness, never current health — and never a
+ * convergence claim. */
 export function freshnessLabel(state: WireFreshnessState): string {
-  if (state === "FreshEmpty") return "Fresh (empty)";
-  if (state === "FreshNonEmpty") return "Fresh";
-  return `Last good, stale: ${state.RetainedLastGood.detail}`;
+  if (state === "FreshEmpty") return "Current (empty)";
+  if (state === "FreshNonEmpty") return "Current";
+  return `Last good copy — stale: ${state.RetainedLastGood.detail}`;
 }
 
 /** One-line reachability. Unavailable never claims the drive is gone; unknown never claims it is down. */
