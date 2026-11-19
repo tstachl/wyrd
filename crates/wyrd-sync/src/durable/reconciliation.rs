@@ -138,7 +138,7 @@ impl ReconciliationEvidence {
     /// reseals and redeliveries. Always returns at least one page —
     /// empty evidence states as one empty page, exactly like today's
     /// single-statement send.
-    pub fn pages(&self) -> Vec<ReconciliationEvidence> {
+    pub(crate) fn pages(&self) -> Vec<ReconciliationEvidence> {
         let mut pages = Vec::new();
         let mut current = ReconciliationEvidence::default();
         let mut bytes = PAGE_COUNT_OVERHEAD_BYTES;

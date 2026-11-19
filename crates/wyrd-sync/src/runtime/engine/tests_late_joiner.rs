@@ -829,12 +829,22 @@ fn lost_delivery() -> (World, ReconciliationEvidence, [u8; 32]) {
 /// the publish pass must still refuse.
 #[test]
 fn retransmit_negative_gates_stay_silent() {
-    // No installed epoch: the gap evidences installs for epoch 4
-    // only, so s0's epoch-1 seal is unopenable at the recipient —
-    // the resend would discharge an obligation that delivers
-    // nothing. Silent, and markerless.
-    let (mut world, _, _) = lost_delivery();
-    let (b_dev, j_dev) = (world.b.device, world.j.device);
+    // No installed epoch: no received statement ever evidences an
+    // epoch-1 install, so s0's epoch-1 seal is unopenable at the
+    // recipient — the resend would discharge an obligation that
+    // delivers nothing. Silent, and markerless. The union decides:
+    // delivery alone does not open the resend; only an evidenced
+    // install does. (An earlier statement evidencing the install
+    // opens it even when the latest page omits it — pages are
+    // subsets and installs never un-prove — pinned by
+    // `paged_retransmit_finds_installs_on_a_non_latest_page`.)
+    let mut world = build();
+    let (b_dev, j_dev, s0) = (world.b.device, world.j.device, world.s0);
+    world
+        .b
+        .engine
+        .commit_facts(&[Fact::AnnouncementDelivered(s0, j_dev)])
+        .expect("delivery happened; the copy expires");
     let uninstalled = ReconciliationEvidence {
         transitions: BTreeSet::new(),
         snapshots: BTreeSet::new(),

@@ -242,6 +242,39 @@ fn empty_evidence_pages_to_one_empty_page() {
     );
 }
 
+/// A capability section past one page still splits cleanly: 900
+/// installs exceed the page bound, so `pages()` cuts at least two
+/// pages, each within the bound, whose union is the full set. Pins
+/// the splitter regime the union read in the publish pass exists
+/// for — the install that matters can ride any page.
+#[test]
+fn pages_split_a_multi_page_capability_section() {
+    use super::codec::encode_reconciliation_view_canonical;
+    use super::MAX_RECONCILIATION_PAGE_BYTES;
+
+    let mut evidence = ReconciliationEvidence::default();
+    for epoch in 1..=900u64 {
+        evidence
+            .capabilities
+            .insert((DeviceId::from_bytes([0x31; 32]), epoch));
+    }
+    let pages = evidence.pages();
+    assert!(pages.len() >= 2, "900 installs page: {}", pages.len());
+    let mut union = ReconciliationEvidence::default();
+    for page in &pages {
+        assert!(
+            encode_reconciliation_view_canonical(page).len() <= MAX_RECONCILIATION_PAGE_BYTES,
+            "every capability page fits the page bound"
+        );
+        assert!(
+            page.transitions.is_empty() && page.snapshots.is_empty(),
+            "a capability-only view pages into capability-only pages"
+        );
+        union.capabilities.extend(page.capabilities.iter().copied());
+    }
+    assert_eq!(union, evidence, "the pages union to the full set");
+}
+
 /// The wire-statement identity is stable content addressing: same
 /// requester plus same evidence digests identically across commits,
 /// while a different requester over identical evidence does not —

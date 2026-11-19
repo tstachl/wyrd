@@ -301,7 +301,8 @@ every obligation the full view covers retires once all pages have
 — the union of the pages is the full view. The cost of splitting
 is retransmission only: a page omitting what a sibling page holds
 re-sends (the answer re-sends, the publish pass re-advertises off
-the latest statement per requester), never loss — the same
+the union of the requester's received statements, with the one-shot
+marker still naming the latest statement's digest), never loss — the same
 under-claim direction the subset rule already blesses. No new wire
 kind, record tag, or evidence version carries the pages: they reuse
 the statement layout, so an old reader treats each page as an

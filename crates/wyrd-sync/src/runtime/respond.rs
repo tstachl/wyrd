@@ -79,7 +79,7 @@ use wyrd_format::{DeviceId, SnapshotId, TransitionId};
 use super::author::{announcement_obligation, capability_obligation, transition_obligation};
 use super::engine::{Engine, EngineError, PublishBudget};
 use super::state::RuntimeState;
-use crate::durable::{reconciliation_statement_digest, Fact, ReconciliationEvidence};
+use crate::durable::{reconciliation_statement_digest, Fact, Rebuilt, ReconciliationEvidence};
 use crate::membership::MembershipLog;
 use crate::transport::mailbox::Mailbox;
 
@@ -254,7 +254,7 @@ impl Engine {
                 mailbox,
                 requester,
                 MAX_RESPONSE_SENDS_PER_STATEMENT,
-                newest_held_epoch(evidence, requester),
+                newest_held_epoch(&rebuilt, requester),
                 budget,
             )?;
             report.sent += sent;
@@ -538,23 +538,30 @@ fn covered_announcements(
 }
 
 /// The recipient's newest evidenced capability install: the max
-/// epoch in the statement's capability set for this recipient, or 0
-/// when the statement shows nothing held. Bounds the scoped send —
+/// epoch in the union of every received statement for this
+/// recipient, or 0 when no statement shows anything held. Bounds the scoped send —
 /// transitions sealed past this epoch are skipped, never retired —
 /// so the sender never spends a send the recipient could not open.
 /// Read it as "no evidenced install, nothing scoped": zero holds
 /// back every transition until a capability install arrives, and a
 /// recipient that never evidences an install (invitation-held keys,
 /// unauthorized rotation deliveries) gets its transitions from the
-/// blind pass instead, indistinguishably for correctness. The
+/// blind pass instead, indistinguishably for correctness. Union,
+/// not the page being answered: pages carry disjoint class
+/// subsets, so a transition-only page evidences no install while a
+/// sibling capability page does — the per-page read would hold back
+/// every non-tail page and fabricate a stall. Installs are monotone
+/// (never un-proven), so the union stays conservative. The
 /// "scoped nothing" (covered-empty: no outstanding obligations, the
 /// statement closes) and "nothing to send" (outstanding, zero
 /// progress: the UnknownEpoch skip) cases are told apart by 21d's
 /// stall record — the former never stalls, the latter does.
-fn newest_held_epoch(evidence: &ReconciliationEvidence, recipient: &DeviceId) -> u64 {
-    evidence
-        .capabilities
+fn newest_held_epoch(rebuilt: &Rebuilt, recipient: &DeviceId) -> u64 {
+    rebuilt
+        .reconciliation_requests
         .iter()
+        .filter(|(requester, _)| *requester == *recipient)
+        .flat_map(|(_, evidence)| evidence.capabilities.iter())
         .filter(|(device, _)| device == recipient)
         .map(|(_, epoch)| *epoch)
         .max()

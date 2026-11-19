@@ -210,7 +210,7 @@ Releases are not required to write every format they read:
     per view.
 
     The two retirement facts (`0x1A` transition, `0x1B` capability)
-    are the `*Reconciled` kinds the paragraph above anticipates: one
+    are the `*Reconciled` kinds the paragraph on `0x19` above anticipates: one
     tag per obligation class, each a fixed triple of obligation
     identity, recipient, and proving statement digest. Fixed-length
     records need no ceiling beyond their exact length; an old node
