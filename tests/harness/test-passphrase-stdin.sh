@@ -55,7 +55,7 @@ pass "stdin read is bounded like the file read"
 # 3. Empty pipes fail closed before anything opens: EOF and a bare
 # newline both refuse as usage, never as an empty passphrase the
 # owner would try.
-match 'no passphrase on stdin' "$CREDS_CODE" \
+match 'No passphrase provided on stdin' "$CREDS_CODE" \
   || die "credentials: empty stdin does not fail closed"
 pass "empty stdin fails closed"
 

@@ -143,7 +143,7 @@ pub(crate) enum Command {
     /// Administer drive membership: list members, inspect the log,
     /// invite a device, or author remove/rotate/set-owner transitions.
     /// Reads are offline projections of the keystore; writes commit
-    /// one transition plus catch-up obligations, delivered on the
+    /// one transition plus catch-up obligations, sent on the
     /// next mounted sync.
     Member {
         /// Directory holding the drive's keystore and object store.
@@ -427,8 +427,10 @@ pub(crate) enum SnapshotAction {
     /// this is also the live-head listing; every other class is
     /// retained history with its reason attached and no number.
     Heads,
-    /// Report the divergence screen from live engine state: the
-    /// standing indicator over the eligible heads, the freeze half
+    /// Report the divergence screen from live engine state: a
+    /// diverged drive holds competing histories (more than one
+    /// eligible head). The standing indicator over the eligible
+    /// heads, the freeze half
     /// with its remedy, and — only on a diverged drive — the bounded
     /// what-differs comparison over the real merge plan. Read-only:
     /// opens the keystore and the object store, authors nothing, and
@@ -758,7 +760,7 @@ pub(crate) enum OwnerAction {
 /// `now` runs the same sync machinery the mount runs, headless.
 #[derive(Debug, Subcommand)]
 pub(crate) enum SyncAction {
-    /// Show pending outbox obligations (queued, delivered, pending
+    /// Show pending outbox obligations (queued, relay-accepted, pending
     /// per snapshot, transition, and epoch), the membership tip
     /// against held epoch secrets, live heads with classification,
     /// and mailbox posture. Never connects, sends, or touches the

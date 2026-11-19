@@ -13,6 +13,10 @@ use crate::CliError;
 use wyrd_sync::keys::DeviceIdentitySecret;
 use zeroize::Zeroizing;
 
+/// Frozen wording (product-terminology.md R-C1): every
+/// empty-passphrase refusal ends with this sentence.
+const NO_PASSPHRASE_TAIL: &str = "This drive's owner cannot start without it";
+
 #[cfg(unix)]
 #[allow(unsafe_code)]
 pub(crate) fn current_uid() -> u32 {
@@ -200,7 +204,7 @@ fn read_unlock_credentials_with(
     }
     if !stdin_is_tty {
         return Err(CliError::Usage(
-            "not a terminal: pipe the passphrase with --passphrase-stdin or run unlock on a terminal (the owner never starts without it)".to_string(),
+            format!("not a terminal: pipe the passphrase with --passphrase-stdin or run unlock on a terminal. {NO_PASSPHRASE_TAIL}").to_string(),
         ));
     }
     let passphrase = prompt_passphrase_tty()?;
@@ -310,7 +314,7 @@ fn prompt_passphrase_tty() -> Result<Zeroizing<String>, CliError> {
     }
     if line.is_empty() {
         return Err(CliError::Usage(
-            "no passphrase typed: the owner never starts without it".to_string(),
+            format!("No passphrase provided. {NO_PASSPHRASE_TAIL}").to_string(),
         ));
     }
     Ok(line)
@@ -391,7 +395,7 @@ fn read_passphrase_stdin(reader: impl std::io::Read) -> Result<Zeroizing<String>
         })?;
     if bytes.is_empty() {
         return Err(CliError::Usage(
-            "no passphrase on stdin: pipe one line (the owner never starts without it)".to_string(),
+            format!("No passphrase provided on stdin. {NO_PASSPHRASE_TAIL}").to_string(),
         ));
     }
     if bytes.len() > MAX_PASSPHRASE_BYTES {
@@ -405,7 +409,7 @@ fn read_passphrase_stdin(reader: impl std::io::Read) -> Result<Zeroizing<String>
     let stripped = strip_trailing_newline(&text);
     if stripped.is_empty() {
         return Err(CliError::Usage(
-            "no passphrase on stdin: pipe one line (the owner never starts without it)".to_string(),
+            format!("No passphrase provided on stdin. {NO_PASSPHRASE_TAIL}").to_string(),
         ));
     }
     Ok(Zeroizing::new(stripped.to_owned()))
@@ -534,6 +538,25 @@ mod tests {
         assert!(read_passphrase_stdin(Cursor::new(b"\n")).is_err());
     }
 
+    /// Frozen copy (product-terminology.md R-C1): empty-passphrase
+    /// refusals carry the approved sentence, so a future edit
+    /// cannot silently restore the old wording. The prompt path
+    /// needs a terminal and is pinned by construction through the
+    /// shared tail; the pipe path below pins its full message.
+    #[test]
+    fn empty_passphrase_refusals_use_the_approved_sentence() {
+        assert_eq!(
+            NO_PASSPHRASE_TAIL, "This drive's owner cannot start without it",
+            "the shared tail is the frozen sentence"
+        );
+        let err = read_passphrase_stdin(Cursor::new(b"")).expect_err("empty stdin must refuse");
+        assert_eq!(
+            err.to_string(),
+            "No passphrase provided on stdin. This drive's owner cannot start without it",
+            "stdin names its surface and keeps the sentence: {err}"
+        );
+    }
+
     /// Over-long and non-UTF-8 pipes fail closed at the same 4096
     /// bound the file reader enforces.
     #[test]
@@ -637,6 +660,11 @@ mod tests {
         assert!(
             err.to_string().contains("--passphrase-stdin"),
             "points at the pipe: {err}"
+        );
+        assert_eq!(
+            err.to_string(),
+            "not a terminal: pipe the passphrase with --passphrase-stdin or run unlock on a terminal. This drive's owner cannot start without it",
+            "what happened, and the next step: {err}"
         );
     }
 

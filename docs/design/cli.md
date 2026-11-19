@@ -38,6 +38,32 @@ rules. A device or operator need not hold Owner membership to start
 or inspect the local runtime; `owner start` grants no membership
 authority and `owner status` requires none.
 
+### Intentional desktop/CLI divergences
+
+The desktop and the CLI describe the same system to different
+audiences (product-terminology principles). Four wordings diverge
+on purpose; neither side is a typo for the other:
+
+- `owner` vs observable-state wording. The CLI names the
+  drive-owner runtime directly (`owner start`, `owner status`):
+  an operator manages a process. The app never requires ordinary
+  users to learn the process (R-D1) and reports observable state
+  ("this drive isn't running") instead.
+- `--retained-quota` vs "Storage limit". The same refusal boundary
+  over retained object bytes (`resource-limits.md:78`). The CLI
+  keeps the flag name; the app labels the same knob "Storage
+  limit" with its scope description.
+- `materialization` vs "Local files". The CLI reports the
+  retention/posture vocabulary (`materialization status`,
+  `pin`, `evict`); the app reports the three-way outcome ("Kept
+  on this device" / "Stored on this device" / "Not stored on
+  this device", R-D2). Renaming the command family is deferred
+  (D-2).
+- `identity` vs "device identity". The CLI calls the concept
+  `identity` (the public identity key plus its proof); the app
+  always says "this device's identity" so a device key is never
+  read as a drive or account identity.
+
 ### Drive selection
 
 Every drive-scoped invocation names its drive with the `<drive_dir>`
@@ -356,7 +382,7 @@ Reads project the snapshot DAG offline over the keystore; a merge
 authors one snapshot with ordinary member authority through the
 engine, which enforces head eligibility and the merge-spec contract
 — the CLI never decides authorization itself. Announcements for the
-merge queue with the usual outbox, delivered on the next mounted
+merge queue with the usual outbox, sent on the next mounted
 sync. Head references are `@N` over the *selected* heads in ascending
 SnapshotId order — head-wise, not path-wise. The mount and export
 number the versions of one path (`name@N`), skipping heads that lack
@@ -674,7 +700,7 @@ sync now
 ```
 
 - `status`: pending outbox obligations with their queued,
-  delivered, and pending split (announcements per snapshot,
+  relay-accepted, and pending split (announcements per snapshot,
   transitions per transition id, capabilities per epoch), the known
   membership tip against held epoch secrets (knowledge is not
   possession), live heads with classification counts over every DAG
