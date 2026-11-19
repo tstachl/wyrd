@@ -264,8 +264,16 @@ compares that view against its obligations, and sends what remains
 missing. Pull is not "give me your entire state" — it is "give me
 enough authenticated projection of your state to reconcile this
 class", which leaves room for chunking and pagination when
-resource limits demand it. The statement is signed, over durable
-state only, idempotent under redelivery (set-membership comparison, so
+resource limits demand it. That room is now taken by bounded
+statement pages (normative): a requester whose derived view would
+exceed the mailbox ceiling states it as deterministic per-class
+subsets instead of one oversize statement. Pages split the sorted
+evidence sets greedily in class order (transitions, then
+snapshots, then capabilities) so every page's canonical evidence
+bytes fit the page bound (`resource-limits.md`) with the sealed
+page under the mailbox ceiling by construction; re-deriving the
+same tip yields the same pages byte-for-byte. The statement is
+signed, over durable state only, idempotent under redelivery (set-membership comparison, so
 reconciling twice retires nothing new), and answered under a budget —
 a recipient query must not oblige an unbounded response, and that
 budget interacts with the resource-limits work rather than being
@@ -277,6 +285,27 @@ response pass queues and sends the missing announcements and
 retires them on later evidence, so a newcomer holding old epoch
 keys learns what exists without ever having been queued the
 announcements at admission time.
+
+Each page is an independent statement with its own wire-statement
+identity (requester plus that page's evidence) and its own
+received-request fact, answered under the existing per-statement
+caps; there is no sender-side page cursor. One armed evaluation
+sends every page of the current view, and the already-asked marker
+names the full-view digest only when every page was relay-accepted —
+a partial fan-out retries whole, exactly like a partial send. The
+comparison is sound per page: a page is a subset of the full
+derivation, so what a page covers the full view covers too (direct
+hold, known-successor chain, exact install, direct snapshot alike).
+No covered obligation retires before its proving page arrives, and
+every obligation the full view covers retires once all pages have
+— the union of the pages is the full view. The cost of splitting
+is retransmission only: a page omitting what a sibling page holds
+re-sends (the answer re-sends, the publish pass re-advertises off
+the latest statement per requester), never loss — the same
+under-claim direction the subset rule already blesses. No new wire
+kind, record tag, or evidence version carries the pages: they reuse
+the statement layout, so an old reader treats each page as an
+ordinary small statement (`upgrade-contract.md`).
 
 A relay acceptance behind a request marks only that the bytes left,
 never that the peer opened them: a sender that has rotated past the
