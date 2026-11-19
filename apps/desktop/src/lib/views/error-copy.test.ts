@@ -15,6 +15,17 @@ const errors = await Bun.file(`${dir}/../ipc/errors.ts`).text();
 const format = await Bun.file(`${dir}/format.ts`).text();
 const lifecycle = await Bun.file(`${dir}/LifecycleView.svelte`).text();
 const status = await Bun.file(`${dir}/StatusView.svelte`).text();
+// Cross-language pins: the wording matcher keys on Rust detail
+// substrings, so read the producers (repo root is five levels up
+// from this file). If backend wording drifts, the pin fails here
+// instead of silently misrendering.
+const repoRoot = `${dir}/../../../../../`;
+const rustClient = await Bun.file(
+  `${repoRoot}crates/wyrd-owner-client/src/client.rs`,
+).text();
+const rustDesktop = await Bun.file(
+  `${repoRoot}crates/wyrd-desktop/src/lib.rs`,
+).text();
 
 test("credential and registry wording uses the approved sentences", () => {
   expect(app).toContain("Missing credentials:");
@@ -46,11 +57,24 @@ test("pending work carries the approved explanation", () => {
   expect(flat).not.toContain("obtainable");
 });
 
-test("taxonomy rendering keeps unlike failures distinct", () => {
-  expect(errors).toContain("Wyrd refused this path:");
+test("taxonomy rendering keeps unlike failures distinct", () => {  expect(errors).toContain("Wyrd refused this path:");
   expect(errors).toContain("The response used a different wire version:");
   expect(errors).toContain("The answer did not match the request:");
   expect(errors).toContain("The answer could not be read:");
   expect(errors).not.toContain("Incompatible owner");
   expect(errors).not.toContain("Incompatible drive service version");
+});
+
+test("rust detail markers still feed the wording matcher", () => {
+  // `describeIncompatible` keys on these substrings, so the pin
+  // reads the producers: if backend wording drifts, this fails
+  // here instead of silently falling through to "could not be
+  // read" for a local refusal. Synchronous reads — Bun.file(...).text()
+  // above is module-level await; keep this test sync over cached text.
+  expect(rustClient).toContain("owner answered wire version ");
+  expect(rustClient).toContain("owner echoed id ");
+  expect(rustClient).toContain("unrelated result");
+  expect(rustClient).toContain("non-hex read bytes:");
+  // The local refusal travels through the command boundary noun.
+  expect(rustDesktop).toContain('"drive_dir"');
 });
