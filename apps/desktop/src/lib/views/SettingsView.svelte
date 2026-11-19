@@ -490,23 +490,23 @@ never deletes local data as a side effect of the UI. -->
             <span class="font-mono tabular-nums">{boundLabel(settings.retained_bytes_quota, "bytes")}</span>
           {/if}
         </DetailRow>
-        <DetailRow label="Wants admitted per sync pass">
+        <DetailRow label="Items admitted per sync pass">
           {#if settings.max_admit_per_pass === null}
             <span class="inline-flex items-center gap-1">
               <Badge variant="outline" class="text-muted-foreground">Compiled default</Badge>
-              <InfoHint label="About admitted wants">
-                <p>{boundLabel(settings.max_admit_per_pass, "wants")}</p>
+              <InfoHint label="About admitted items">
+                <p>{boundLabel(settings.max_admit_per_pass, "items")}</p>
               </InfoHint>
             </span>
           {:else}
-            <span class="font-mono tabular-nums">{boundLabel(settings.max_admit_per_pass, "wants")}</span>
+            <span class="font-mono tabular-nums">{boundLabel(settings.max_admit_per_pass, "items")}</span>
           {/if}
         </DetailRow>
-        <DetailRow label="Fetch phase budget">
+        <DetailRow label="Fetch time per pass">
           {#if settings.fetch_pass_budget_secs === null}
             <span class="inline-flex items-center gap-1">
               <Badge variant="outline" class="text-muted-foreground">Compiled default</Badge>
-              <InfoHint label="About the fetch phase budget">
+              <InfoHint label="About the fetch time per pass">
                 <p>{boundLabel(settings.fetch_pass_budget_secs, "seconds")}</p>
               </InfoHint>
             </span>
@@ -514,11 +514,11 @@ never deletes local data as a side effect of the UI. -->
             <span class="font-mono tabular-nums">{boundLabel(settings.fetch_pass_budget_secs, "seconds")}</span>
           {/if}
         </DetailRow>
-        <DetailRow label="Held mutation deadline">
+        <DetailRow label="Mutation wait limit">
           {#if settings.max_mutation_wait_secs === null}
             <span class="inline-flex items-center gap-1">
               <Badge variant="outline" class="text-muted-foreground">Compiled default</Badge>
-              <InfoHint label="About the held mutation deadline">
+              <InfoHint label="About the mutation wait limit">
                 <p>{boundLabel(settings.max_mutation_wait_secs, "seconds")}</p>
               </InfoHint>
             </span>
@@ -526,11 +526,11 @@ never deletes local data as a side effect of the UI. -->
             <span class="font-mono tabular-nums">{boundLabel(settings.max_mutation_wait_secs, "seconds")}</span>
           {/if}
         </DetailRow>
-        <DetailRow label="Open demand wait">
+        <DetailRow label="Open wait limit">
           {#if settings.open_timeout_secs === null}
             <span class="inline-flex items-center gap-1">
               <Badge variant="outline" class="text-muted-foreground">Compiled default</Badge>
-              <InfoHint label="About the open demand wait">
+              <InfoHint label="About the open wait limit">
                 <p>{boundLabel(settings.open_timeout_secs, "seconds")}</p>
               </InfoHint>
             </span>
