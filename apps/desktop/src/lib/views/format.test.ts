@@ -183,6 +183,24 @@ test("bound inputs validate per key, naming the key", () => {
     "max_mutation_wait_secs",
     "open_timeout_secs",
   ]);
+  // Labels stay plain-worded and units stay honest: the suite
+  // pins them so wording cannot drift per view.
+  expect(SETTING_BOUNDS.map((bound) => [bound.key, bound.label, bound.unit])).toEqual([
+    ["retained_bytes_quota", "Storage limit", "bytes"],
+    ["max_admit_per_pass", "Items processed per sync", "items"],
+    ["fetch_pass_budget_secs", "Download time limit", "seconds"],
+    ["max_mutation_wait_secs", "File change wait limit", "seconds"],
+    ["open_timeout_secs", "File open wait limit", "seconds"],
+  ]);
+  // Descriptions say what the implementation enforces, beneath
+  // each label — pinned here alongside the labels.
+  expect(SETTING_BOUNDS.map((bound) => bound.description)).toEqual([
+    "Maximum amount of data Wyrd retains for this drive.",
+    "Maximum number of items admitted during one sync pass.",
+    "Maximum time spent fetching content during one sync pass.",
+    "Maximum time a submitted file change waits before timing out.",
+    "Maximum time to wait for requested file content to become available.",
+  ]);
   expect(validateBoundInput("max_admit_per_pass", "64")).toBeNull();
   expect(validateBoundInput("retained_bytes_quota", "0")).toBeNull();
   expect(validateBoundInput("open_timeout_secs", " 30 ")).toBeNull();
@@ -194,4 +212,15 @@ test("bound inputs validate per key, naming the key", () => {
   expect(validateBoundInput("open_timeout_secs", "-3")).toContain("open_timeout_secs");
   expect(validateBoundInput("open_timeout_secs", "")).toContain("open_timeout_secs");
   expect(validateBoundInput("admit_all", "1")).toContain("admit_all");
+});
+
+test("display card mirrors the bounds table, never its own wording", async () => {
+  // The configured-values card hardcodes its rows instead of
+  // iterating the table, so this pins the lockstep: every label
+  // and description renders verbatim in `SettingsView.svelte`.
+  const view = await Bun.file(`${import.meta.dir}/SettingsView.svelte`).text();
+  for (const bound of SETTING_BOUNDS) {
+    expect(view).toContain(`label="${bound.label}"`);
+    expect(view).toContain(bound.description);
+  }
 });

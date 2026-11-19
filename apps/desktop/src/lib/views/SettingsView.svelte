@@ -399,7 +399,7 @@ never deletes local data as a side effect of the UI. -->
         <dl>
           {#each SETTING_BOUNDS as bound (bound.key)}
             {@const hasError = fieldErrors[bound.key] !== undefined}
-            <DetailRow label={bound.label}>
+            <DetailRow label={bound.label} description={bound.description}>
               {#if cleared.includes(bound.key)}
                 <span class="inline-flex items-center gap-1">
                   <Badge variant="outline" class="text-muted-foreground">Using default</Badge>
@@ -478,11 +478,11 @@ never deletes local data as a side effect of the UI. -->
     </Card.Header>
     <Card.Content>
       <dl>
-        <DetailRow label="Retained bytes quota">
+        <DetailRow label="Storage limit" description="Maximum amount of data Wyrd retains for this drive.">
           {#if settings.retained_bytes_quota === null}
             <span class="inline-flex items-center gap-1">
               <Badge variant="outline" class="text-muted-foreground">Compiled default</Badge>
-              <InfoHint label="About the retained bytes quota">
+              <InfoHint label="About the storage limit">
                 <p>{boundLabel(settings.retained_bytes_quota, "bytes")}</p>
               </InfoHint>
             </span>
@@ -490,23 +490,23 @@ never deletes local data as a side effect of the UI. -->
             <span class="font-mono tabular-nums">{boundLabel(settings.retained_bytes_quota, "bytes")}</span>
           {/if}
         </DetailRow>
-        <DetailRow label="Wants admitted per sync pass">
+        <DetailRow label="Items processed per sync" description="Maximum number of items admitted during one sync pass.">
           {#if settings.max_admit_per_pass === null}
             <span class="inline-flex items-center gap-1">
               <Badge variant="outline" class="text-muted-foreground">Compiled default</Badge>
-              <InfoHint label="About admitted wants">
-                <p>{boundLabel(settings.max_admit_per_pass, "wants")}</p>
+              <InfoHint label="About items processed per sync">
+                <p>{boundLabel(settings.max_admit_per_pass, "items")}</p>
               </InfoHint>
             </span>
           {:else}
-            <span class="font-mono tabular-nums">{boundLabel(settings.max_admit_per_pass, "wants")}</span>
+            <span class="font-mono tabular-nums">{boundLabel(settings.max_admit_per_pass, "items")}</span>
           {/if}
         </DetailRow>
-        <DetailRow label="Fetch phase budget">
+        <DetailRow label="Download time limit" description="Maximum time spent fetching content during one sync pass.">
           {#if settings.fetch_pass_budget_secs === null}
             <span class="inline-flex items-center gap-1">
               <Badge variant="outline" class="text-muted-foreground">Compiled default</Badge>
-              <InfoHint label="About the fetch phase budget">
+              <InfoHint label="About the download time limit">
                 <p>{boundLabel(settings.fetch_pass_budget_secs, "seconds")}</p>
               </InfoHint>
             </span>
@@ -514,11 +514,11 @@ never deletes local data as a side effect of the UI. -->
             <span class="font-mono tabular-nums">{boundLabel(settings.fetch_pass_budget_secs, "seconds")}</span>
           {/if}
         </DetailRow>
-        <DetailRow label="Held mutation deadline">
+        <DetailRow label="File change wait limit" description="Maximum time a submitted file change waits before timing out.">
           {#if settings.max_mutation_wait_secs === null}
             <span class="inline-flex items-center gap-1">
               <Badge variant="outline" class="text-muted-foreground">Compiled default</Badge>
-              <InfoHint label="About the held mutation deadline">
+              <InfoHint label="About the file change wait limit">
                 <p>{boundLabel(settings.max_mutation_wait_secs, "seconds")}</p>
               </InfoHint>
             </span>
@@ -526,11 +526,11 @@ never deletes local data as a side effect of the UI. -->
             <span class="font-mono tabular-nums">{boundLabel(settings.max_mutation_wait_secs, "seconds")}</span>
           {/if}
         </DetailRow>
-        <DetailRow label="Open demand wait">
+        <DetailRow label="File open wait limit" description="Maximum time to wait for requested file content to become available.">
           {#if settings.open_timeout_secs === null}
             <span class="inline-flex items-center gap-1">
               <Badge variant="outline" class="text-muted-foreground">Compiled default</Badge>
-              <InfoHint label="About the open demand wait">
+              <InfoHint label="About the file open wait limit">
                 <p>{boundLabel(settings.open_timeout_secs, "seconds")}</p>
               </InfoHint>
             </span>
