@@ -230,7 +230,10 @@ token binds the queue counter to the owner instance that minted
 it. Send the token back with the create. Let the owner re-check
 it at authoring time. Refuse tokens from a dead instance with
 `StaleParent` before any queue check. Refuse forged counters the
-same way at the queue's re-check. Never invent a token on the
+same way at the queue's re-check. A capture refused because the
+table is blocked or saturated also reports `StaleParent` — retry
+the capture — and a dead table reports `Poisoned`, never a
+missing parent. Never invent a token on the
 consumer side. Never reuse a token across an owner restart.
 
 Refuse nested folds at the wire. Let the queue enforce the rest.

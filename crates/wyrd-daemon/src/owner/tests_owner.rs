@@ -1459,8 +1459,9 @@ fn submit_reports_the_same_outcome_both_ways() {
 /// Refusals carry through as distinct outcomes: a stale parent, a
 /// missing path, a saturated capture, and a saturated queue each
 /// refuse with their own code, never collapsed to a boolean. The
-/// loop runs: refusals are evaluated by the pass, so a submit
-/// without a loop would block instead of refusing.
+/// submit cases run against the loop: refusals are evaluated by the
+/// pass, so a submit without a loop would block instead of refusing.
+/// The capture and admission cases need no loop.
 #[test]
 fn submit_refusals_carry_distinct_codes() {
     let (server, _parts, dir, stop, loop_thread) = running_parts();
