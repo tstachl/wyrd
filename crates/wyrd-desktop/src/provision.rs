@@ -1065,15 +1065,26 @@ pub fn spawn_unlock(
     if let Some(mut stdin) = child.stdin.take() {
         // One bounded write to a fresh pipe, then close: the CLI
         // reads stdin before serving, so this never blocks — and
-        // closing tells the CLI the line is complete. A failed
-        // write fails the run, never hangs it.
-        if stdin.write_all(passphrase).is_err() {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(ProvisionResult::Unknown {
-                detail: "cannot pipe the passphrase to the unlock owner; outcome unknown — re-reading observed state"
-                    .to_string(),
-            });
+        // closing tells the CLI the line is complete.
+        if let Err(error) = stdin.write_all(passphrase) {
+            if error.kind() == std::io::ErrorKind::BrokenPipe {
+                // The child closed its read end before the write
+                // landed: it exited early (a rejected passphrase, a
+                // held drive) without reading stdin. That is an
+                // early exit, not an unknown outcome — hand the
+                // child back so the caller's try_wait loop maps its
+                // code (78 -> held drive) and joins the drains for
+                // the bounded detail. Killing here discards exactly
+                // the code the caller needs.
+            } else {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(ProvisionResult::Unknown {
+                    detail: format!(
+                        "cannot pipe the passphrase to the unlock owner: {error}; outcome unknown — re-reading observed state"
+                    ),
+                });
+            }
         }
     }
     Ok(SpawnedUnlock {
@@ -2238,5 +2249,47 @@ mod tests {
         let (code, detail) = collect_unlock_exit_detail(spawned);
         assert_eq!(code, Some(2));
         assert!(detail.contains("wrong passphrase"), "detail: {detail}");
+    }
+
+    /// An unlock owner that closes its stdin before the passphrase
+    /// write lands still maps its exit code: the write sees EPIPE, but
+    /// the child is handed back for the caller to reap, so exit 78
+    /// reports a held drive instead of an unknown outcome. The fake
+    /// closes fd 0 explicitly and lingers, making the broken-pipe write
+    /// deterministic rather than scheduler-dependent.
+    #[test]
+    fn spawn_unlock_maps_an_early_exit_that_closed_stdin() {
+        let dir = std::env::temp_dir().join(format!(
+            "wyrd-desktop-fakecli-{}-unlock-early-exit",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cli = dir.join("wyrd");
+        let version = env!("CARGO_PKG_VERSION");
+        std::fs::write(
+            &cli,
+            format!(
+                "#!/bin/sh\nif [ \"$1\" = \"__build_info\" ]; then\necho \"update build: {version}\"\nexit 0\nfi\nexec 0<&-\necho \"another process holds the drive\" >&2\nsleep 1\nexit 78\n"
+            ),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let spawned =
+            spawn_unlock(&cli, &unlock_request(), b"hunter2-hunter2").expect("spawn holds");
+        let (code, detail) = collect_unlock_exit_detail(spawned);
+        assert_eq!(
+            code,
+            Some(78),
+            "the early exit code is reaped, not killed: {detail}"
+        );
+        assert!(
+            detail.contains("another process holds the drive"),
+            "detail: {detail}"
+        );
+        std::fs::remove_dir_all(&dir).unwrap_or(());
     }
 }
