@@ -35,6 +35,20 @@ is transient — no drive data is affected.
 
 ### Added
 
+- Desktop application lifecycle contract
+  (`docs/contracts/desktop-lifecycle.md`, supersedes
+  `nostr:nevent1qqs2v8cey0fgkyyqfnyeg66qckky5887n7p43k6mahvr3q66typg65spz9mhxue69uhkwunpwdczuap49eehg870au2`):
+  window close and application quit are distinct events (macOS close
+  hides, Dock reopens; Linux last-window close quits; Windows
+  deferred with the platform). Clean termination affects no owner:
+  service-backed owners keep their OS-manager parent, session-backed
+  owners keep running, and relaunch reattaches without a passphrase —
+  quit never locks. Only an explicit lock kills an app-spawned
+  session owner and scrubs its secret. The contract states the
+  30-second IPC drain, the dirty-quit reconcile-before-retry rule,
+  and the post-quit threat model (what stays alive, what secret
+  material remains accessible).
+
 - In-UI owner recovery with per-drive service states
   (`nostr:nevent1qqsr74fdjmr6hza7wsmgnj9wlp8w94nfrzyd8mfr2ryuufx7yyg708gpz9mhxue69uhkwunpwdczuap49eehgj6rmyj`):
   the desktop's unavailable screen distinguishes the three causes
@@ -47,13 +61,6 @@ is transient — no drive data is affected.
   reconfigure` keeping relays and mode). Never auto-start; refused
   recoveries report their outcome on the screen; dev builds without
   managed pieces say so instead of a dead Retry.
-
-- Menu-bar icon is now the white Held mark with transparency
-  (`crates/wyrd-desktop/icons/tray-held-template.png`, geometry
-  from `apps/shared/brand/held.svg`, tile dropped), marked as a
-  template image on macOS so the system tints it for light and
-  dark menu bars. Other platforms keep the full-color app icon.
-  Replaces the reused app icon.
 
 - Read-only conflict inspector for File Provider (File Provider
   Stage 3, sub-PR 3, OD-17-B,
@@ -188,19 +195,6 @@ is transient — no drive data is affected.
   fresher relay set. The desktop adapter threads the same pair and
   the lifecycle view carries the mountpoint to the IPC mirror.
 
-- Menu-bar and tray presence with per-drive status
-  (`nostr:nevent1qqs2v8cey0fgkyyqfnyeg66qckky5887n7p43k6mahvr3q66typg65spz9mhxue69uhkwunpwdczuap49eehg870au2`):
-  a running shell stays present as one menu-bar icon (macOS) /
-  indicator (Linux) over the same registry probe the lifecycle
-  view shows — one disabled status line per drive
-  (`Available`/`Unavailable`/`Unknown`), then Set up / connect
-  drives (shows the window, routes to the lifecycle view), Show
-  window (restores and focuses), and Quit (drains in-flight work
-  per the graceful-shutdown rule). Non-owning client: no drive
-  opens, no implicit active drive, no new owner surface, no new
-  wire bytes. The tray rides the reserved `tauri` edge (`tray-icon`
-  + `image-png` features; the image stack arrives transitively).
-
 - One-command developer install for v0.4 (ad-hoc, no fee)
   (`nostr:nevent1qqsy9xa9x9ctcgteek5u3szvejd5ff8y02juzlre058qhtccm7czmvspz9mhxue69uhkwunpwdczuap49eehg7cdxm2`):
   `packaging/macos/install-dev.sh` builds `Wyrd.app` ad-hoc
@@ -213,8 +207,8 @@ is transient — no drive data is affected.
   `/Applications` (or `~/Applications`) with `--dest`/`DEST`
   override, and re-verifies.
   The desktop resolves the bundled CLI first and version-checks it
-  before every run, so UI, owner, registry, and tray work with no
-  signing assets and no macFUSE: the ad-hoc CLI builds vault-only
+  before every run, so UI, owner, registry, and managed service
+  reinstall work with no signing assets and no macFUSE: the ad-hoc CLI builds vault-only
   (`WYRD_NO_MOUNT=1`, the manifest's `--no-default-features`
   no-FUSE mode) because the mount stack hard-links macFUSE at load.
   The staged CLI signs without hardened runtime (a mount-enabled
@@ -227,12 +221,14 @@ is transient — no drive data is affected.
 
 ### Changed
 
-- Window lifecycle follows the menu-bar presence: the macOS title bar
+- Window lifecycle follows the desktop lifecycle contract
+  (`docs/contracts/desktop-lifecycle.md`): the macOS title bar
   is an overlay on the ink header with the native traffic lights, and
-  closing the window hides it instead of quitting. Quit — the tray
-  item, Cmd+Q, or any exit request — still drains in-flight
-  operations before exit, and the macOS dock icon reopens the hidden
-  window.
+  closing the window hides it instead of quitting on macOS, while
+  closing the last window quits on Linux. Quit — Cmd+Q or any exit
+  request — still drains in-flight operations before exit, and the
+  macOS Dock reopens the hidden window. Session-backed owners keep
+  running across quit; only an explicit lock ends them.
 
 - Bundle icons follow the Bone Held mark: `apps/shared/brand/held.svg`
   now paints the mark in Bone instead of Amber, matching the in-app
@@ -318,6 +314,17 @@ is transient — no drive data is affected.
   in-guest HTTP channel instead of the retired state share. No ssh,
   no shared filesystem, no host-built runners: the images carry wyrd
   and nak, and the suite runs the in-image binaries.
+
+### Removed
+
+- Menu-bar and tray presence (superseded by the desktop lifecycle
+  contract, `docs/contracts/desktop-lifecycle.md`): no second UI
+  surface in v0.4. The tray module, its template icon, its
+  five-second refresh loop, the `wyrd:select-provision` routing
+  event, the `tray-icon` / `image-png` Tauri features, the
+  `core:event:allow-listen` capability, and the Linux appindicator
+  packaging dependency are gone. Status stays in the main window;
+  the in-window Add-drive button is the only provisioning route.
 
 ### Fixed
 

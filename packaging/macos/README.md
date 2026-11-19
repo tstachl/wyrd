@@ -146,7 +146,7 @@ version-matched `wyrd` CLI and its `wyrd-supervise` sibling into
 `Contents/Resources` before
 the outer sign — the desktop resolves the bundled copy first (the
 `MacOS` sibling is the devenv fallback only) and version-checks it
-before every lifecycle run — so the UI, owner, registry, and tray
+before every lifecycle run — so the UI, owner, registry, and service
 work ad-hoc: create/join/leave, status, settings, and managed
 service reinstall (the daemon resolves the wrapper as the CLI's
 sibling; a bundle without it fails managed operations at
@@ -518,7 +518,7 @@ pending the signing-owner verification below, not claimed here.
 
 Acceptance (manual, macOS, recorded as release evidence): with the
 env vars unset, a registered drive appears in Finder, survives
-reboot (service re-enabled at login), and the tray shows it
+reboot (service re-enabled at login), and the main window shows it
 Available once the owner answers. The containing app must run
 before the service on first run (the daemon never creates the
 container itself). The reboot-survival drill and
@@ -803,8 +803,7 @@ services start at login (`RunAtLoad` in the launchd agent,
 `WantedBy=default.target` in the systemd unit), and the desktop UI
 starts once per login from its own login item. The UI never waits on
 the manager for ordering — a drive whose owner is not answering yet
-reads unavailable, and the owner appearing needs no restart: the
-tray reflects it within its 5s refresh and the view resumes on the
+reads unavailable, and the owner appearing needs no restart: the view resumes on the
 explicit Retry. The full login-item decision (launchd agent vs the
 Apple login-item API, no manager ordering) is recorded in
 `docs/design/desktop-shell.md`, open-questions item 7.

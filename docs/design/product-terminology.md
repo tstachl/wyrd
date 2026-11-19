@@ -70,7 +70,7 @@ columns are normative rules.
 | Relay | A control-plane transport endpoint; relay acceptance is not recipient receipt (`docs/contracts/sync-and-peers.md:82-99`). | Relay | `--relay <URL>` | Mailbox, control plane | Server (implies data hosting) |
 | Drive owner | The single process holding the drive's durable-store lock and serving its socket (`docs/architecture.md:36-38`; `docs/contracts/owner-interface.md:5-19`). | Not introduced by default. Observable-state wording in ordinary copy; explanation only where needed (R-D1). | `owner` | Owner interface, mutation queue | "service", bare "owner" in ordinary app copy |
 | Drive service | An OS supervision definition (launchd/systemd) that can start and restart an owner process; distinct from the process itself (`bootstrap.rs:83-105,1125-1163`; `service.rs:28-34`). | Drive service — only where a definition exists (D-1). | Not exposed | Service definition, service token | "Owner" where a definition is meant |
-| Session | A per-run owner started with a one-time passphrase, installing no service; ends on reboot, stop, or quitting the app (`credentials.rs:130-135`; `registry.rs:187-203`; `UnlockView.svelte:95-96`). | Session (with "for this session" kept) | `drive unlock` | Definition-less owner, IPC round trip | Login session, Nostr signer session |
+| Session | A per-run owner started with a one-time passphrase, installing no service; survives desktop quit — ends on reboot, explicit lock, or stopping the drive (`docs/contracts/desktop-lifecycle.md`; `registry.rs:187-203`; `UnlockView.svelte:95-96`). | Session (with "for this session" kept) | `drive unlock` | Definition-less owner, IPC round trip | Login session, Nostr signer session |
 | Snapshot | A signed, immutable version of the drive DAG. | Snapshot (via history language) | `snapshot` | Merkle snapshot, DAG | Version (alone) |
 | Head | A snapshot with no descendants; "eligible" adds authorization and lineage conditions (`docs/contracts/object-model.md:437-438`; `docs/contracts/epochs.md:408-432`). | Technical detail only | `snapshot heads`, `@N` | Head, eligible head | Branch (implies Git semantics) |
 | Divergence | More than one eligible head; distinct from a path conflict (`conflict_surface.rs:101-142`; `docs/contracts/object-model.md:453-462`). | Technical detail / status description | `snapshot diverged` | DAG divergence | Conflict (unqualified) |
@@ -190,8 +190,10 @@ CLI-only. Core copy is strong — `render_deletion_confirmation` bans
 euphemisms and states locality and terminality
 (`lifecycle_surface.rs:105-137`) — and MUST NOT be softened. Device removal
 MUST follow the approved explanation. "Lock for this session" SHOULD state
-that it ends the session until unlocked again, and that reboot, stop or
-quitting the app also ends it (`UnlockView.svelte:95-96`).
+that it ends the session until unlocked again, and that reboot or locking
+the drive also ends it; it MUST NOT claim quitting the app ends it —
+quit leaves a running session drive unlocked
+(`UnlockView.svelte:95-96`; `docs/contracts/desktop-lifecycle.md`).
 
 **R-D6 — Technical-detail disclosure.** Restricted terms MUST be moved
 behind a disclosure in Status and Settings. A disclosure exists only in

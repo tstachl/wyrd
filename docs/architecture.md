@@ -61,6 +61,7 @@ Normative contracts; each invariant lives in exactly one of these:
 - Sync protocol, peers, materialization: `contracts/sync-and-peers.md`
 - Mutation, commit, durability ordering: `contracts/write-path.md`
 - Cross-process ownership boundary: `contracts/owner-interface.md`
+- Desktop application lifecycle (window close, quit, reopen, explicit lock): `contracts/desktop-lifecycle.md`
 - Crash windows per subsystem: `contracts/crash-consistency.md`
 - Error taxonomy: `contracts/error-conventions.md`
 - Live-operation bounds: `contracts/resource-limits.md`

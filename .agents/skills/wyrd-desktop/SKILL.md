@@ -163,8 +163,8 @@ Snapshot (verify `devenv.nix`, `.ngit/nix/builds/default.nix` before
 changing): `cargo-tauri` unconditional; Linux-only set beside `optionals
 isLinux` (`glib`, `glib-networking`, `gsettings-desktop-schemas`, `gtk3`,
 `webkitgtk_4_1`, `libsoup_3`, `gdk-pixbuf`, `cairo`, `pango`, `harfbuzz`,
-`atk`, `dbus`, `librsvg`, `libayatana-appindicator`); `LD_LIBRARY_PATH` ->
-dlopen'd appindicator, `GIO_MODULE_DIR` -> glib-networking modules,
+`atk`, `dbus`, `librsvg` — no `libayatana-appindicator`: retired with
+the tray, nothing dlopens it anymore); `GIO_MODULE_DIR` -> glib-networking modules,
 `GSETTINGS_SCHEMAS_PATH` (devenv-local intermediate) -> schema dirs consumed
 only by the `enterShell` prepend to `XDG_DATA_DIRS` (preserve the data flow,
 not the name). macOS: no Nix WebKit; system WKWebView via Xcode.

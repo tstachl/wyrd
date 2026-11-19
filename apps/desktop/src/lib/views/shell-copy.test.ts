@@ -92,7 +92,7 @@ test("leave states the device-removal consequences before action", () => {
 
 test("lock names the session consequence", () => {
   expect(app).toContain("unlocking needs the passphrase to open it again");
-  expect(app).toContain("quitting the app also ends the session");
+  expect(app).toContain("Quitting the app leaves the drive running");
 });
 
 test("navigation uses the frozen names", () => {
@@ -106,6 +106,16 @@ test("navigation uses the frozen names", () => {
   expect(provisioning).toContain("Back to drives");
   expect(provisioning).not.toContain("Add a drive");
   expect(provisioning).not.toContain("Sealed invitation");
+});
+
+test("in-window Add drive routes to the provision view", () => {
+  // The header "Add drive" button fires `onAdd` (pinned behaviorally
+  // in `lifecycle-add.test.ts`); the App wires that leg to the
+  // provision view on the create tab. Both halves pin here so the
+  // route survives without the removed backend event.
+  expect(app).toContain('onAdd={() => openProvisioning("create")}');
+  expect(app).toContain('function openProvisioning(mode: "create" | "join")');
+  expect(app).toContain('presentation.selectView("provision")');
 });
 
 test("invitation carries the protection explanation", () => {

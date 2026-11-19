@@ -64,7 +64,6 @@
   import LayoutGridIcon from "@lucide/svelte/icons/layout-grid";
   import LockIcon from "@lucide/svelte/icons/lock";
   import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
-  import { listen } from "@tauri-apps/api/event";
   import { onMount } from "svelte";
 
   // macOS keeps its native traffic lights over the ink header
@@ -756,27 +755,13 @@
   }
 
   onMount(() => {
-    // Tray route: "Add drive" shows the window from the backend
-    // and asks the frontend to render the provision view on the
-    // create tab — the same screen the in-window button reaches.
-    // Mirrored in `crates/wyrd-desktop/src/tray.rs`
-    // (`SELECT_PROVISION_EVENT`): keep the string in sync.
-    // Best-effort: a missing Tauri runtime (browser preview)
-    // never fails startup.
-    // A tray route that lands before the first refresh wins over
-    // the startup selection below: startup must not overwrite a
-    // view the person already asked for.
-    let trayRouted = false;
-    void listen("wyrd:select-provision", () => {
-      trayRouted = true;
-      openProvisioning("create");
-    }).catch(() => {});
+    // Startup selects the device-level home — the drive list, never
+    // an implied active drive. The in-window Add button reaches the
+    // provision view through `openProvisioning` below; no backend
+    // route exists (the tray's select-provision event is gone with
+    // the tray).
     void refreshLifecycle().then(() => {
-      // The device-level home is the drive list, not a drive
-      // workspace: startup never implies an active drive.
-      if (!trayRouted) {
-        presentation.selectView("lifecycle");
-      }
+      presentation.selectView("lifecycle");
       void checkIdentityGate();
     });
   });
@@ -964,7 +949,7 @@
           {:else}
             {#if selectedSession !== null && selectedSession.state === "unlocked"}
               <div class="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-ok/30 bg-ok/10 px-4 py-3 text-sm">
-                <span class="text-foreground">Unlocked for this session — the drive is answering. Lock from the header to end the session; unlocking needs the passphrase to open it again, and rebooting, stopping the drive, or quitting the app also ends the session.</span>
+                <span class="text-foreground">Unlocked for this session — the drive is answering. Lock from the header to end the session; unlocking needs the passphrase to open it again, and rebooting this device or locking the drive also ends the session. Quitting the app leaves the drive running.</span>
               </div>
             {/if}
             <StatusView

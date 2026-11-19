@@ -15,8 +15,11 @@ home the implementation and its fixtures cite.
   starts and restarts the owner unattended and the device remembers.
   The per-session posture persists no drive passphrase file and
   renders no service definition, so the drive is locked-until-unlock
-  from registration — reboot, quit, or explicit lock relocks it,
-  and only a typed passphrase opens it for the session. The mandate
+  from registration — reboot, explicit lock, or stopping the drive
+  relocks it (quitting the app leaves a running session drive
+  unlocked: quit never locks, per
+  `docs/contracts/desktop-lifecycle.md`), and only a typed
+  passphrase opens it for the session. The mandate
   below (write-down proof, backup acknowledgement, never overwrite,
   read-back) binds in both postures. OS keychain migration stays the
   tracked follow-up owned by settings — a security feature, not a

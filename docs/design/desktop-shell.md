@@ -4,7 +4,9 @@ Status: Proposed / Open. This note owns the desktop shell shape: the
 split between the Tauri backend crate and the web frontend, the IPC
 discipline between them, the Nix GUI-dependency boundary, and the
 staging into implementable pieces. Normative invariants live in the
-contracts linked below. Nothing here authorizes a contract change; the
+contracts linked below — including the desktop lifecycle contract
+(`../contracts/desktop-lifecycle.md`), which owns window close,
+application quit, reopening, and explicit lock. Nothing here authorizes a contract change; the
 drive-owner interface (`../contracts/owner-interface.md`) wins every
 conflict with this note.
 
@@ -324,9 +326,10 @@ them. The rules, all inherited from the interface contract:
 - Dirty-quit discipline. A sent request is not a committed write.
   Two cases, specified separately because only one of them can offer
   any guarantee:
-  - Graceful shutdown. Stop accepting new commands, track
-    outstanding requests, and let each reach its terminal answer or
-    its defined timeout. Report nothing as success without the
+  - Graceful shutdown. Track outstanding requests, and let each
+    reach its terminal answer or its defined timeout. The drain
+    does not gate admission: a command dispatched during the drain
+    still enters. Report nothing as success without the
     owner's authoritative answer. Only then finish orderly shutdown.
   - Forced termination or crash. Make no claim about any outstanding
     mutation: the owner may have committed it even though the answer
@@ -467,17 +470,13 @@ verdict.
   protocol operations; every interface response keeps its typed
   semantics end to end. Runes-based presentation cache only — never a
   second drive model (see the presentation-cache section below).
-- Menu-bar extra (tray presence): the shell stays present as one
-  menu-bar icon (macOS) / indicator (Linux) over the same registry
-  probe the lifecycle view shows — one disabled status line per
-  drive (`name — Available|Unavailable|Unknown`), then Set up /
-  connect drives (shows the window and routes to the lifecycle
-  view), Show window, and Quit. The tray reuses only landed IPC,
-  holds no implicit active drive, never opens a drive, and is how
-  the shell stays reachable after the window is closed: closing the
-  window hides it, Quit — the tray item, Cmd+Q, or any exit request
-  — drains in-flight work through the graceful-shutdown rule, and
-  the macOS dock icon reopens the hidden window.
+- Menu-bar extra (not shipping in v0.4): a tray presence was staged during development and withdrawn before release by the desktop
+  lifecycle decision (`../contracts/desktop-lifecycle.md`), which
+  supersedes the landed tray shape. There is no second UI surface:
+  status lives in the main window only, closing the window hides it
+  on macOS (the Dock reopens it) and quits on Linux (the launcher
+  reopens it), and Quit — Cmd+Q or any exit request — drains
+  in-flight work through the graceful-shutdown rule.
 - Frontend state is a presentation cache, never a second drive
   model. Transient presentation state is fine and expected: selected
   view, open dialogs, form input, pending-request indicators, last
@@ -603,10 +602,10 @@ GStreamer/media stack — Wyrd v0.4 has no camera or media path).
   beside the existing `optionals isLinux` block: `glib`,
   `glib-networking`, `gsettings-desktop-schemas`, `gtk3`,
   `webkitgtk_4_1`, `libsoup_3`, `gdk-pixbuf`, `cairo`, `pango`,
-  `harfbuzz`, `atk`, `dbus`, `librsvg`, `libayatana-appindicator`.
-  Add the three Linux-only env vars verbatim in purpose:
-  `LD_LIBRARY_PATH` → `libayatana-appindicator` (dlopen'd at
-  runtime, unresolvable at link time); `GIO_MODULE_DIR` →
+  `harfbuzz`, `atk`, `dbus`, `librsvg` (no `libayatana-appindicator`:
+retired with the tray — nothing dlopens it anymore).
+  Add the two Linux-only env vars verbatim in purpose:
+  `GIO_MODULE_DIR` →
   `glib-networking` modules (without it WebKitGTK fails every HTTPS
   request with "TLS support is not available"); and
   `GSETTINGS_SCHEMAS_PATH` → `gsettings-desktop-schemas` + `gtk3`
@@ -955,8 +954,8 @@ this note wins for architecture.
    artifacts must never hard-code, so ordering stays a UI behavior
    — unavailable until the owner answers, explicit reconnect, and
    resume without restart (landed: per-drive service observation,
-   the unavailable view with Retry/Start/Reinstall, the 5s tray
-   refresh). The stop and recovery story per platform lives where
+   the unavailable view with Retry/Start/Reinstall refreshing on
+   Retry). The stop and recovery story per platform lives where
    the installer consumes it (`packaging/macos/README.md`, "Login
    items and recovery").
 8. Per-session passphrase posture: decided (file-backed stays the

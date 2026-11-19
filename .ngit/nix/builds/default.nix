@@ -69,7 +69,6 @@ let
     atk
     dbus
     librsvg
-    libayatana-appindicator
   ];
 
   # Common gate inputs: shared artifacts plus the native prelude for

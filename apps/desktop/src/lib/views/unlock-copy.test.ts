@@ -24,7 +24,7 @@ test("passphrase entry is typed-only and short-lived", () => {
   for (const line of [
     "Drive passphrase",
     "Typed only — never stored.",
-    "quitting the app locks it",
+    "Quitting the app leaves the drive running",
   ]) {
     expect(view).toContain(line);
   }
