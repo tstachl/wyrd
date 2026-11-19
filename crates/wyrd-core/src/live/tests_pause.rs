@@ -127,11 +127,26 @@ fn a_pause_never_stops_a_local_write() {
     let generation_before = node.generation();
     node.set_paused(true);
     let queue = Arc::clone(node.mutations());
-    let submitter = std::thread::spawn(move || {
-        queue.submit(crate::mutation::MutationKind::Mkdir {
-            path: "paused-dir".into(),
-        })
+    let submitter = std::thread::spawn({
+        let queue = Arc::clone(&queue);
+        move || {
+            queue.submit(crate::mutation::MutationKind::Mkdir {
+                path: "paused-dir".into(),
+            })
+        }
     });
+    // `submit` blocks until a pass completes it. Wait for the
+    // submitter to register the mutation before running the pass:
+    // otherwise a pass that wins the race against thread start sees
+    // an empty queue, and the later submission blocks forever with
+    // no pass left to evaluate it (the 600s slow-timeout signature).
+    let stop = AtomicBool::new(false);
+    queue.wait_for_work(&stop, Duration::from_secs(5));
+    assert_eq!(
+        queue.outstanding(),
+        1,
+        "the submitter enqueued the mutation before the pass"
+    );
     let mut mailbox = AcceptingMailbox { sent: Vec::new() };
     node.sync_once(&mut mailbox, None::<&mut wyrd_sync::serving::VaultSource>)
         .unwrap();
@@ -162,11 +177,26 @@ fn a_pause_never_drops_a_pending_mutation() {
     let mut node = live_over_configured(engine, store, &[head], &config);
     node.set_paused(true);
     let queue = Arc::clone(node.mutations());
-    let submitter = std::thread::spawn(move || {
-        queue.submit(crate::mutation::MutationKind::Mkdir {
-            path: "pending-dir".into(),
-        })
+    let submitter = std::thread::spawn({
+        let queue = Arc::clone(&queue);
+        move || {
+            queue.submit(crate::mutation::MutationKind::Mkdir {
+                path: "pending-dir".into(),
+            })
+        }
     });
+    // `submit` blocks until a pass completes it. Wait for the
+    // submitter to register the mutation before running the passes:
+    // otherwise a pass that wins the race against thread start sees
+    // an empty queue, and the later submission blocks forever with
+    // no pass left to evaluate it (the 600s slow-timeout signature).
+    let stop = AtomicBool::new(false);
+    queue.wait_for_work(&stop, Duration::from_secs(5));
+    assert_eq!(
+        queue.outstanding(),
+        1,
+        "the submitter enqueued the mutation before the passes"
+    );
     let mut mailbox = AcceptingMailbox { sent: Vec::new() };
     // Several paused passes in a row: every one of them evaluates
     // admitted work instead of letting it wait out the clock.
