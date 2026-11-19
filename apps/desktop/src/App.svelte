@@ -62,6 +62,7 @@
   import UnavailableView from "$lib/views/UnavailableView.svelte";
   import UnlockView from "$lib/views/UnlockView.svelte";
   import LayoutGridIcon from "@lucide/svelte/icons/layout-grid";
+  import LockIcon from "@lucide/svelte/icons/lock";
   import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
   import { listen } from "@tauri-apps/api/event";
   import { onMount } from "svelte";
@@ -679,14 +680,13 @@
   }
 
   /**
-   * Lock one drive for the session as the first half of a
-   * settings restart: the running owner keeps its startup values
-   * until it restarts, and a session unlock needs the passphrase
-   * typed — so after the lock the workspace lands on Status where
-   * unlock lives. Refusals surface on the unlock card there, like
-   * every other lock.
+   * Lock one drive for the session and land on Status, where unlock
+   * lives: the first half of a settings restart, and the header
+   * Lock button. A session unlock needs the passphrase typed, so
+   * locking never restarts anything by itself. Refusals surface on
+   * the unlock card there, like every other lock.
    */
-  async function lockForRestart(driveDir: string): Promise<void> {
+  async function lockAndShowStatus(driveDir: string): Promise<void> {
     await lockDrive(driveDir);
     selectView("status");
   }
@@ -927,10 +927,23 @@
               <CopyButton text={selectedDriveDir} label="drive path" />
             </div>
           </div>
-          <Tabs.List>
-            <Tabs.Trigger value="status">Status</Tabs.Trigger>
-            <Tabs.Trigger value="settings">Settings</Tabs.Trigger>
-          </Tabs.List>
+          <div class="flex flex-wrap items-center gap-2.5">
+            <Tabs.List>
+              <Tabs.Trigger value="status">Status</Tabs.Trigger>
+              <Tabs.Trigger value="settings">Settings</Tabs.Trigger>
+            </Tabs.List>
+            {#if selectedSession !== null && selectedSession.state === "unlocked"}
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={busy}
+                onclick={() => void lockAndShowStatus(selectedDriveDir)}
+              >
+                <LockIcon data-icon="inline-start" />
+                Lock
+              </Button>
+            {/if}
+          </div>
         </div>
 
         <Tabs.Content value="status">
@@ -951,15 +964,7 @@
           {:else}
             {#if selectedSession !== null && selectedSession.state === "unlocked"}
               <div class="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-ok/30 bg-ok/10 px-4 py-3 text-sm">
-                <span class="text-foreground">Unlocked for this session — the owner is answering.</span>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={busy}
-                  onclick={() => void lockDrive(selectedDriveDir)}
-                >
-                  Lock for this session
-                </Button>
+                <span class="text-foreground">Unlocked for this session — the owner is answering. Lock from the header to end the session; unlocking needs the passphrase.</span>
               </div>
             {/if}
             <StatusView
@@ -1001,7 +1006,6 @@
                 runSettingsWrite(selectedDriveDir, update)
               }
               onRestartService={() => restartServiceForApply(selectedDriveDir)}
-              onLockForRestart={() => lockForRestart(selectedDriveDir)}
               onRefreshDrives={allDrives}
             />
           {/if}

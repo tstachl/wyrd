@@ -44,6 +44,13 @@ test("restart verdict never claims application", () => {
 });
 
 test("session path never asks the shell to hold the passphrase", () => {
-  expect(view).toContain("unlocking with the passphrase starts it again");
+  expect(view).toContain("then unlock with the passphrase to start it again with the saved values");
   expect(view).not.toContain("remember");
+});
+
+test("session banner holds no second lock button", () => {
+  // One lock affordance per screen: the header owns the action,
+  // the banner only points at it.
+  expect(view).toContain("Use Lock in the header");
+  expect(view).not.toContain("Lock now");
 });
