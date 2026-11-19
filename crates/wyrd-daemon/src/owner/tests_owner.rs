@@ -2063,8 +2063,20 @@ fn headless_run_serves_the_interface() {
     let (engine, dir) = scratch_drive();
     let composed =
         crate::vault::compose_headless_owner(engine, dir.clone(), true).expect("owner composes");
+    // Name an early run end instead of letting it masquerade as a socket
+    // deadline or a connect failure. `is_finished` keeps the read side free
+    // of channel calls, which the mailbox-construction contract scan forbids.
+    fn early_end_detail<E: std::fmt::Debug>(
+        thread: std::thread::JoinHandle<Result<crate::vault::VaultOutcome, E>>,
+    ) -> ! {
+        match thread.join() {
+            Ok(Ok(_)) => panic!("owner returned before the socket was usable"),
+            Ok(Err(err)) => panic!("owner ended before the socket was usable: {err:?}"),
+            Err(_) => panic!("owner thread panicked before the socket was usable"),
+        }
+    }
     let stop: &'static AtomicBool = Box::leak(Box::new(AtomicBool::new(false)));
-    let run_thread = std::thread::spawn(move || {
+    let mut run_thread = Some(std::thread::spawn(move || {
         run_composed_owner(
             composed,
             stop,
@@ -2073,15 +2085,35 @@ fn headless_run_serves_the_interface() {
             Arc::new(|_: crate::vault::VaultEvent| {}),
             0,
         )
-    });
+    }));
     let socket_path = super::socket_path_for(&dir);
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    // The bind is synchronous at the top of `run_composed_owner`, so the
+    // only wall-clock deadline here is thread scheduling. Under full-workspace
+    // nextest the spawned thread can be starved well past 10s (the owner
+    // tests do not serialize across nextest processes — GROUP_ENV_LOCK is
+    // process-local). 30s matches the sibling observation-publish poll
+    // above and leaves the same bounded-wait shape.
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
     while !socket_path.exists() {
         assert!(
             std::time::Instant::now() < deadline,
             "the owner serves its socket while it runs"
         );
+        if run_thread
+            .as_ref()
+            .is_some_and(|thread| thread.is_finished())
+        {
+            early_end_detail(run_thread.take().unwrap());
+        }
         std::thread::sleep(Duration::from_millis(10));
+    }
+    // The run can still end in the window between the socket appearing and
+    // the connect; report the run error, not a bare connection failure.
+    if run_thread
+        .as_ref()
+        .is_some_and(|thread| thread.is_finished())
+    {
+        early_end_detail(run_thread.take().unwrap());
     }
     let mut client = UnixStream::connect(&socket_path).unwrap();
     let request = serde_json::to_value(&RawRequest {
@@ -2095,17 +2127,19 @@ fn headless_run_serves_the_interface() {
         .unwrap(),
     })
     .unwrap();
-    let request = serde_json::to_vec(&request).unwrap();
+    let request = serde_json::to_vec(&request).expect("encode readdir request");
     client
         .write_all(&(request.len() as u32).to_be_bytes())
-        .unwrap();
-    client.write_all(&request).unwrap();
+        .expect("write request length prefix");
+    client.write_all(&request).expect("write request body");
     let mut len = [0u8; 4];
-    client.read_exact(&mut len).unwrap();
+    client
+        .read_exact(&mut len)
+        .expect("read response length prefix");
     let len = u32::from_be_bytes(len) as usize;
     let mut frame = vec![0u8; len];
-    client.read_exact(&mut frame).unwrap();
-    let response: WireResponse = serde_json::from_slice(&frame).unwrap();
+    client.read_exact(&mut frame).expect("read response body");
+    let response: WireResponse = serde_json::from_slice(&frame).expect("decode readdir response");
     match response.result {
         WireResult::Ok(ok) => match *ok {
             WireOk::Readdir { entries, .. } => {
@@ -2118,7 +2152,12 @@ fn headless_run_serves_the_interface() {
     drop(client);
 
     stop.store(true, Ordering::Relaxed);
-    let outcome = run_thread.join().unwrap().expect("the run ends clean");
+    let outcome = run_thread
+        .take()
+        .unwrap()
+        .join()
+        .expect("owner thread survives stop")
+        .expect("the run ends clean");
     let _ = outcome;
     std::fs::remove_dir_all(dir).unwrap();
 }
