@@ -465,8 +465,9 @@ gate.
    covers, retransmit (at most 32 sends per statement) what it does
    not through the existing deliver paths — and re-advertise on the
    publish pass what the response pass cannot: delivered-but-never-
-   ingested announcements the statement evidences as missing,
-   retransmit-only, once per statement.
+   ingested announcements the unioned statements evidence as
+   missing (no received page holds them), retransmit-only, once
+   per union change.
 5. **Duplicate delivery.** Engines stay idempotent over redelivery;
    the forget contract must not weaken that, and reconciliation
    itself is duplicate-prone, so the comparison is set membership.
