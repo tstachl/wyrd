@@ -35,6 +35,14 @@ is transient — no drive data is affected.
 
 ### Added
 
+- Platform-neutral credential-loading boundary
+  (`docs/contracts/credential-loading.md`,
+  `nostr:nevent1qqsv3cm6pj4xttk9ekcw87sjrgq4lkyavvkf5y2vx06zdgs50qje8hgpz9mhxue69uhkwunpwdczuap49eehgv0uac9`):
+  the loader trait and failure taxonomy live beside the secret
+  type in `wyrd-sync::keys`, and the CLI file backend conforms
+  to it with identical wording and exit codes. The OS
+  credential-store backend is specified, not yet wired.
+
 - Desktop application lifecycle contract
   (`docs/contracts/desktop-lifecycle.md`, supersedes
   `nostr:nevent1qqs2v8cey0fgkyyqfnyeg66qckky5887n7p43k6mahvr3q66typg65spz9mhxue69uhkwunpwdczuap49eehg870au2`):

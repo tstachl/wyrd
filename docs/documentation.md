@@ -10,6 +10,7 @@ to change it without creating a second source of truth.
 | What is Wyrd and where do I look next | `docs/architecture.md` (overview, not a specification) |
 | Format, identities, canonical encoding, snapshot DAG | `docs/contracts/object-model.md` |
 | Identity boundary, key hierarchy, capabilities, disclosure | `docs/contracts/trust.md`, `docs/contracts/capability-bindings.md` |
+| Credential loading (platform-neutral boundary, backends) | `docs/contracts/credential-loading.md` |
 | Membership, epochs, snapshot authorization | `docs/contracts/epochs.md` |
 | Sync protocol, peer roles, materialization, forget contract | `docs/contracts/sync-and-peers.md` |
 | Mounted write path, commit pipeline, durability ordering | `docs/contracts/write-path.md` |

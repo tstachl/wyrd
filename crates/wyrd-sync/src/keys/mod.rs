@@ -29,6 +29,7 @@ pub mod device;
 pub mod epoch;
 pub mod escrow;
 pub mod keystore;
+pub mod loader;
 pub mod owner_proof;
 pub mod root;
 
@@ -47,6 +48,9 @@ pub use escrow::{EscrowRecord, ESCROW_RECORD_LEN, ESCROW_VERSION};
 pub use keystore::{
     kdf_key, unwrap_device_secret, unwrap_root, wrap_device_secret, wrap_root, KeystoreError,
     WrappedSecret,
+};
+pub use loader::{
+    CredentialError, CredentialLoader, CredentialRef, CredentialSubject, LoadedCredential,
 };
 pub use root::DriveRootKey;
 

@@ -323,16 +323,22 @@ fn credential_symlinks_are_rejected_without_following() {
     let error = read_credentials(
         &Credentials {
             identity_file: Some(identity_file),
-            passphrase_file: Some(passphrase_link),
+            passphrase_file: Some(passphrase_link.clone()),
             passphrase_stdin: false,
         },
         None,
     )
     .unwrap_err();
+    // Through the loader boundary the refusal reports in the
+    // taxonomy vocabulary with identical wording: the target
+    // holds valid content, so any error proves the link was
+    // never followed, and the message names the link itself.
+    let CliError::Usage(detail) = &error else {
+        panic!("a symlinked passphrase must fail closed through the loader taxonomy: {error:?}");
+    };
     assert!(
-        matches!(&error, CliError::Io { source, .. }
-                if source.raw_os_error() == Some(libc::ELOOP)),
-        "a symlinked passphrase must fail closed: {error:?}"
+        detail.contains(&*passphrase_link.to_string_lossy()),
+        "the refusal names the link, not its target: {error:?}"
     );
 }
 
