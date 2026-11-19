@@ -303,7 +303,11 @@ is retransmission only: a page omitting what a sibling page holds
 re-sends (the answer re-sends, the publish pass re-advertises off
 the union of the requester's received statements, with the one-shot
 marker still naming the latest statement's digest), never loss — the same
-under-claim direction the subset rule already blesses. No new wire
+under-claim direction the subset rule already blesses. The union is
+conservative because committed evidence only grows (append-only
+base facts, no GC): installs and held snapshots never un-prove,
+so unioning pages cannot over-claim. A future reclamation change
+that lets evidence shrink must revisit this sentence. No new wire
 kind, record tag, or evidence version carries the pages: they reuse
 the statement layout, so an old reader treats each page as an
 ordinary small statement (`upgrade-contract.md`).
@@ -366,10 +370,12 @@ those classes reconciliation covers recipients with no queue fact
 at all, not sends accepted and lost; announcements outgrew that
 limit through evidence-triggered re-advertise — a
 delivered-but-never-ingested announcement whose snapshot the
-recipient's latest statement evidences as missing resends on the
-publish pass, retransmit-only (never retired: retirement still
-requires subsumption evidence), once per evidencing statement (the
-per-pair per-statement marker quenches repeats), bounded by the
+recipient's unioned statements evidence as missing (no received
+page holds it) resends on the publish pass, retransmit-only
+(never retired: retirement still requires subsumption evidence),
+once per union change (the per-pair per-latest-digest marker
+quenches repeats; a newer statement re-arms one more resend),
+bounded by the
 publish budget, and only on statements (a converged recipient's
 statement evidences the heads, so nothing re-opens, and a silent
 recipient triggers no resend); and the synthesized queue is not

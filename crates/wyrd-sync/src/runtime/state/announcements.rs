@@ -478,12 +478,17 @@ impl RuntimeState {
             .insert((snapshot, recipient, statement))
     }
 
-    /// Delivered-but-unevidenced announcements each recipient's
-    /// latest statement re-opens for resend, with the digest the
-    /// resend answers. The publish pass's eligibility half of
-    /// evidence-triggered re-advertise: the relay accepted the send,
-    /// the recipient never ingested it, and only the recipient's own
-    /// durable-state evidence can say so.
+    /// Delivered-but-unevidenced announcements the union of each
+    /// recipient's received statements re-opens for resend, with the
+    /// latest statement's digest the resend answers. The publish
+    /// pass's eligibility half of evidence-triggered re-advertise:
+    /// the relay accepted the send, the recipient never ingested it,
+    /// and only the recipient's own durable-state evidence can say
+    /// so. The union is conservative because committed evidence
+    /// only grows (installs and held snapshots never un-prove), so
+    /// a page omitting what a sibling page holds cannot close the
+    /// gap; the digest stays the latest statement's so each newer
+    /// statement re-arms exactly one more resend.
     ///
     /// Five gates, all conservative:
     /// - **Recorded announcements only.** Same as the missing set:
@@ -499,11 +504,11 @@ impl RuntimeState {
     ///   seal goes under the announcement's own epoch, so an epoch
     ///   the recipient evidences no install for stays silent until a
     ///   later statement evidences it.
-    /// - **Once per statement.** A committed marker for this
-    ///   (pair, digest) quenches repeats: the recipient never
+    /// - **Once per union change.** A committed marker for this
+    ///   (pair, latest digest) quenches repeats: the recipient never
     ///   re-states after ingesting (a static view stays quiet), so a
     ///   per-pass derivation would resend into a converged peer
-    ///   forever. A newer gap statement carries a newer digest and
+    ///   forever. A newer statement carries a newer digest and
     ///   re-arms exactly one more resend.
     ///
     /// Never retired: reconciled pairs stay out even when unevidenced
@@ -514,11 +519,11 @@ impl RuntimeState {
     /// the publish drain — canonical.
     pub fn announce_retransmit_for(
         &self,
-        latest: &BTreeMap<DeviceId, ([u8; 32], ReconciliationEvidence)>,
+        unioned: &BTreeMap<DeviceId, ([u8; 32], ReconciliationEvidence)>,
     ) -> Vec<(SnapshotId, DeviceId, [u8; 32])> {
         let recorded: Vec<(SnapshotId, u64)> = self.recorded_announcement_epochs().collect();
         let mut out = Vec::new();
-        for (recipient, (digest, evidence)) in latest {
+        for (recipient, (digest, evidence)) in unioned {
             let installs: BTreeSet<u64> = evidence
                 .capabilities
                 .iter()

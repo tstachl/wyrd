@@ -554,9 +554,9 @@ fn oversize_view_pages_into_bounded_statements() {
 /// copy expires while B is offline (modeled by committing the
 /// delivery without ever pushing the envelope), and B reconnects
 /// with more evidence than the mailbox ceiling. B's pages carry the
-/// gap to A, A's publish pass re-advertises S exactly once off the
-/// latest page, B holds S, and B's next statements quench the resend
-/// — with every page sealed under the ceiling and every pass within
+/// gap to A, A's publish pass re-advertises S exactly once off
+/// the unioned pages, B holds S, and B's next statements quench
+/// the resend — with every page sealed under the ceiling and every pass within
 /// the existing caps. Nothing here retires: retransmits never do.
 #[test]
 fn paged_statements_recover_a_lost_announcement() {
@@ -646,8 +646,8 @@ fn paged_statements_recover_a_lost_announcement() {
     );
     drop(mailbox);
 
-    // The publish pass re-advertises S off the latest page, once,
-    // naming that page's digest in the marker.
+    // The publish pass re-advertises S off the unioned pages, once,
+    // naming the latest page's digest in the marker.
     let device = pair.a.device;
     let mut mailbox = mailbox_for(&mut pair.relay, device);
     let sent = pair
