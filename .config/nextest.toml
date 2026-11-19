@@ -116,6 +116,14 @@ default-filter = "not (test(~flood_beyond_channel_capacity) or test(~saturation_
 # evidence (four blamed innocents across wyrd-cli and wyrd-core).
 leak-timeout = "5s"
 
+# A hung test must never burn the whole 30-minute job window: kill
+# any single test past 10 minutes. Headroom is ~12x over the slowest
+# legitimate default-profile test (sustained_spam ~48s; the flood
+# family is crypto-bound and machine-sensitive), so this only fires
+# on true hangs. Observed 2026-11-19: a stuck core gate ran out the
+# full allocation before the force-stop.
+test-timeout = "10m"
+
 # The local edit-loop profile: cheap deterministic tests only. Profiles
 # do not inherit filters, so the slow tests excluded from `default`
 # above are restated here. Beyond them, local additionally excludes:
