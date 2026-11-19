@@ -58,7 +58,7 @@ deployment file and renders read-only on the surface.
 | Quarantine repairs per sync pass | `max_quarantine_per_pass` (64) | remainder stays queued for the next pass — paced, never dropped |
 | Scrub probes plus scrub repairs per sync pass | `max_scrub_per_pass` (64) | the walk stats at most this many claims from its rotating cursor (O(claims) scan, one log replay only when admission took no snapshot) and the drain repairs at most this many losses — remainder waits for the next pass, never dropped |
 | Mutation queue (admitted-but-incomplete) | `max_pending_mutations` (4096) | submission fails `Saturated`; `EAGAIN` |
-| Parent create tokens (distinct retained paths) | `max_parent_tokens` (4096) | new parent capture fails closed; `ESTALE` at the FUSE boundary |
+| Parent create tokens (distinct retained paths) | `max_parent_tokens` (4096) | new parent capture fails closed; `ESTALE` at the FUSE boundary, `StaleParent` on the owner wire |
 | Write buffer per dirty handle (resident overlay bytes, not logical length) | `write_per_handle_bytes` (64 MiB) | reservation refused; `ENOSPC`, handle unchanged |
 | Write buffers aggregate (resident bytes) | `write_aggregate_bytes` (256 MiB) | reservation refused; `ENOSPC` |
 | Fold take plus submission copies (transient full images + restore overlays; the lease charges ~1× the taken lengths while ~2× is held with the queue-kind clone, so peak can reach ~2× the aggregate) | `write_aggregate_bytes` (same 256 MiB) | fold refused before materializing; `ENOSPC` on the forcing call, all taken overlays restored |

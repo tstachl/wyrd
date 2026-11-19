@@ -885,7 +885,9 @@ pub enum WireErrorCode {
     InvalidRename,
     /// The entry changed content base under the caller.
     Stale,
-    /// The parent changed between capture and submit.
+    /// The parent changed between capture and submit, or the
+    /// capture itself was refused because the parent-token table is
+    /// blocked or saturated (retry the capture).
     StaleParent,
     /// The path resolved to a different entry than the caller's
     /// expected identity (delete-plus-recreate, path reuse, kind
