@@ -82,7 +82,7 @@ silently. -->
       <span class="font-mono text-xs">{driveLabel}</span> — other drives are unaffected.
     </Empty.Description>
     <Empty.Description class="leading-relaxed">
-      This drive was ready before and its owner stopped answering — something changed since
+      This drive was ready before and has stopped answering — something changed since
       then, not something broken about the drive itself. The shell does not open the store
       itself, so there is nothing stale or empty to show, only the absence of an answer.
     </Empty.Description>
@@ -132,7 +132,7 @@ silently. -->
       </p>
     {/if}
     <p class="text-xs leading-relaxed text-muted-foreground">
-      Retry reconnects and re-reads from the owner. A stopped drive stays stopped until you
+      Retry reconnects and re-reads this drive. A stopped drive stays stopped until you
       start it — the shell never auto-starts a service. Anything that was in flight stays
       unconfirmed until reconciled — recovery never replays it and never calls it a success.
     </p>

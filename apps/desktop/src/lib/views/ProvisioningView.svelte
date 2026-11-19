@@ -1,5 +1,5 @@
-<!-- Dedicated Add a drive page: create on this device or join from a
-sealed invitation through the constrained CLI adapter. Every operation
+<!-- Dedicated Add drive page: create on this device or join with an
+invitation through the constrained CLI adapter. Every operation
 returns the outcome plus the post-run observation; observed state
 decides the display, the outcome only indicates what the operation
 reported. Leaving a drive lives in that drive's Settings — a
@@ -135,13 +135,13 @@ by hand elsewhere. -->
 </script>
 
 <PageHeader
-  title="Add a drive"
-  description="Create a drive on this device, or join one from a sealed invitation. The drive appears in the list once the registry names it."
+  title="Add drive"
+  description="Create a drive on this device, or join one with an invitation. The drive appears in the list once the registry names it."
 >
   {#snippet actions()}
     <Button variant="outline" size="sm" onclick={onBack}>
       <ArrowLeftIcon data-icon="inline-start" />
-      Drives
+      Back to drives
     </Button>
   {/snippet}
 </PageHeader>
@@ -207,7 +207,8 @@ by hand elsewhere. -->
               Relays
               <InfoHint label="About relays">
                 <p>
-                  Relays sync beyond this device. This form always runs managed (vault): at least
+                  Relays sync beyond this device. This form always runs managed, in vault service
+                  mode: the drive's background process runs without a desktop file mount. At least
                   one relay is required, and an empty set is refused before anything is created —
                   that refusal reports verbatim below.
                 </p>
@@ -279,7 +280,7 @@ by hand elsewhere. -->
             {#if relaysEmpty}
               No relays — this managed form will refuse before creating anything.
             {:else}
-              Service mode: vault (platform default). Mount mode travels with the installer follow-up.
+              Vault service mode (platform default). Mount mode travels with the installer follow-up.
             {/if}
           </p>
           <Button
@@ -347,7 +348,8 @@ by hand elsewhere. -->
               Relays
               <InfoHint label="About relays">
                 <p>
-                  Relays sync beyond this device. This form always runs managed (vault): at least
+                  Relays sync beyond this device. This form always runs managed, in vault service
+                  mode: the drive's background process runs without a desktop file mount. At least
                   one relay is required, and an empty set is refused before anything is joined —
                   that refusal reports verbatim below.
                 </p>
@@ -358,7 +360,11 @@ by hand elsewhere. -->
           </Field.Field>
 
           <Field.Field>
-            <Field.Label for="join-invitation">Sealed invitation file</Field.Label>
+            <Field.Label for="join-invitation">Invitation file</Field.Label>
+            <Field.Description>
+              A protected file that lets this device join a drive. Only the intended device can
+              open it.
+            </Field.Description>
             <InputGroup.Root>
               <InputGroup.Input
                 id="join-invitation"
@@ -370,7 +376,7 @@ by hand elsewhere. -->
                 class="font-mono text-xs"
               />
               <InputGroup.Addon align="inline-end">
-                <InputGroup.Button variant="secondary" size="xs" disabled={busy} onclick={() => void browse((p) => (invitationFile = p), "Sealed invitation file")}>
+                <InputGroup.Button variant="secondary" size="xs" disabled={busy} onclick={() => void browse((p) => (invitationFile = p), "Invitation file")}>
                   <FolderOpenIcon data-icon="inline-start" />
                   Browse…
                 </InputGroup.Button>
@@ -436,7 +442,7 @@ by hand elsewhere. -->
             {#if relaysEmpty}
               No relays — this managed form will refuse before joining anything.
             {:else}
-              Service mode: vault (platform default). Mount mode travels with the installer follow-up.
+              Vault service mode (platform default). Mount mode travels with the installer follow-up.
             {/if}
           </p>
           <Button

@@ -1,6 +1,6 @@
 <!-- Lifecycle, observational: the registered drives, each verified
 this session, plus the explicitly selected drive. Creation and
-joining live on the dedicated Add a drive page; leaving lives in the
+joining live on the dedicated Add drive page; leaving lives in the
 selected drive's Settings. The selection stays presentation state
 only: it never authorizes backend access, and every command carries
 the drive directory explicitly. -->
@@ -31,7 +31,7 @@ the drive directory explicitly. -->
     pending: boolean;
     transportNotice: string | null;
     onRefresh: () => void;
-    /** Open the dedicated Add a drive page. */
+    /** Open the dedicated Add drive page. */
     onAdd: () => void;
     onOpen: (driveDir: string) => void;
   }
@@ -44,13 +44,13 @@ the drive directory explicitly. -->
 
 <PageHeader
   title="Drives"
-  description="Registered on this device. Each drive syncs independently; open one to see its status and settings."
+  description="Drives available on this device sync independently. Open a drive to see its status and settings."
 >
   {#snippet meta()}
     <InfoHint label="About this view">
       <p>
         This view verifies what the provisioning and membership flows registered and whether each
-        drive's owner answers. Creation and joining run through the installed CLI; leaving authors
+        drive answers. Creation and joining run through the installed CLI; leaving authors
         membership where the trust contract admits it.
       </p>
       <p>Observed state decides what you see here — never the operation's exit code alone.</p>
@@ -141,14 +141,14 @@ the drive directory explicitly. -->
           <Empty.Media variant="icon"><HardDriveIcon /></Empty.Media>
           <Empty.Title>No drives registered yet</Empty.Title>
           <Empty.Description>
-            Create one or join from a sealed invitation — the drive appears here once the
+            Create one or join with an invitation — the drive appears here once the
             registry names it. One window manages every registered drive.
           </Empty.Description>
         </Empty.Header>
         <Empty.Content>
           <Button size="sm" onclick={onAdd}>
             <PlusIcon data-icon="inline-start" />
-            Add a drive
+            Add drive
           </Button>
         </Empty.Content>
       </Empty.Root>

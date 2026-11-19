@@ -354,8 +354,9 @@ never enter this component. -->
               <div class="min-w-0">
                 <p class="text-sm font-semibold">Identity key</p>
                 <p class="mt-0.5 text-xs leading-relaxed text-muted-foreground">
-                  establishes who this device is. Generated randomly; it cannot be recreated from
-                  your passphrase.
+                  A device is recognized by its public identity key. The matching private key
+                  material lives in the identity file — generated randomly, it cannot be recreated
+                  from your passphrase.
                 </p>
               </div>
             </div>
@@ -366,8 +367,8 @@ never enter this component. -->
               <div class="min-w-0">
                 <p class="text-sm font-semibold">Unlock passphrase</p>
                 <p class="mt-0.5 text-xs leading-relaxed text-muted-foreground">
-                  protects access to this device's identity key. It does not replace or recover that
-                  key.
+                  protects access to this device's private key material. It does not replace or
+                  recover that key.
                 </p>
               </div>
             </div>

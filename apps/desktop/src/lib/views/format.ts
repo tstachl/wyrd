@@ -89,11 +89,12 @@ export function restartKindFor(
 /**
  * One configured bound for the settings view. Absent stays absent:
  * the compiled default applies and the shell does not know it, so
- * the label says exactly that instead of filling a number in.
+ * the label says exactly that — "Using Wyrd's default" — and the
+ * view carries the disclosure that the shell cannot see the value.
  */
 export function boundLabel(value: number | null | undefined, unit: string): string {
   if (value === null || value === undefined) {
-    return "Not configured — compiled default applies (unknown to the shell)";
+    return "Using Wyrd's default";
   }
   return `${value} ${unit}`;
 }
@@ -123,11 +124,11 @@ export interface SettingBound {
  * enforces them again, so this is fast feedback, never authority.
  */
 export const SETTING_BOUNDS: SettingBound[] = [
-  { key: "retained_bytes_quota", label: "Storage limit", description: "Maximum amount of data Wyrd retains for this drive.", unit: "bytes", min: 0, max: Number.MAX_SAFE_INTEGER },
-  { key: "max_admit_per_pass", label: "Items processed per sync", description: "Maximum number of items admitted during one sync pass.", unit: "items", min: 1, max: 1000000 },
-  { key: "fetch_pass_budget_secs", label: "Download time limit", description: "Maximum time spent fetching content during one sync pass.", unit: "seconds", min: 1, max: 86400 },
-  { key: "max_mutation_wait_secs", label: "File change wait limit", description: "Maximum time a submitted file change waits before timing out.", unit: "seconds", min: 1, max: 86400 },
-  { key: "open_timeout_secs", label: "File open wait limit", description: "Maximum time to wait for requested file content to become available.", unit: "seconds", min: 1, max: 86400 },
+  { key: "retained_bytes_quota", label: "Storage limit", description: "The most drive data Wyrd will keep on this device. When that limit is reached, Wyrd refuses new data before writing anything. This is not a limit on your disk's free space.", unit: "bytes", min: 0, max: Number.MAX_SAFE_INTEGER },
+  { key: "max_admit_per_pass", label: "Sync work limit", description: "How many items of sync work Wyrd starts in each sync pass. Anything beyond this waits for the next pass; nothing is dropped.", unit: "items", min: 1, max: 1000000 },
+  { key: "fetch_pass_budget_secs", label: "Download time per sync pass", description: "How long Wyrd spends downloading in one sync pass. When that time runs out, unfinished downloads wait for the next pass.", unit: "seconds", min: 1, max: 86400 },
+  { key: "max_mutation_wait_secs", label: "File change wait limit", description: "How long a change you make can wait for the content it needs from other devices. If that content does not arrive in time, the change fails and you can retry it; nothing is saved.", unit: "seconds", min: 1, max: 86400 },
+  { key: "open_timeout_secs", label: "File open wait limit", description: "How long Wyrd waits for a file's content to become available on this device when you open or read it. If it takes longer, the open or read fails and you can try again while the download continues.", unit: "seconds", min: 1, max: 86400 },
 ];
 
 /**

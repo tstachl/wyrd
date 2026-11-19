@@ -1,11 +1,11 @@
-<!-- Settings: this drive's configured bounds, as configured, plus
+<!-- Settings: this drive's configured limits, plus
 the restricted editor that changes them. Absent keys leave the
 compiled defaults in place, and the shell does not know those
 defaults — so absence renders as unknown, never as a filled-in
 number. Edits commit one sparse update (set-list plus clear-list
 for this drive only) through the installed CLI and the shared
-transaction; application of the values is the running owner's
-business, at its next start.
+transaction; application of the values is the drive's business,
+at its next start.
 
 The one membership action stays as it was: leaving the drive reuses
 the identity pair the start-up gate verified (paths only), stays
@@ -287,7 +287,7 @@ never deletes local data as a side effect of the UI. -->
 <PageHeader
   title="Settings"
   size="section"
-  description="This drive's configured bounds, as configured. Absent values stay unknown — the shell never fills in a default it cannot see. Saving writes through the installed CLI; the running owner applies saved values at its next start."
+  description="These settings let you change the limits for this drive. Any setting you leave unchanged uses Wyrd's default. The app cannot see that default value, so it does not show a number."
 >
   {#snippet actions()}
     <Button variant="outline" size="sm" disabled={pending} onclick={onRefresh}>
@@ -314,7 +314,7 @@ never deletes local data as a side effect of the UI. -->
     {#if restartKind === "service"}
       <Alert.Title>Bounds saved — restart to apply</Alert.Title>
       <Alert.Description>
-        <p>The running owner keeps its startup values until it restarts. Restarting briefly interrupts availability.</p>
+        <p>The drive service keeps its startup values until it restarts. Restarting briefly interrupts availability.</p>
         <div class="mt-3 flex flex-wrap items-center gap-2">
           <Button variant="outline" size="sm" disabled={busy} onclick={() => (confirmRestart = true)}>
             {#if restarting}
@@ -327,7 +327,7 @@ never deletes local data as a side effect of the UI. -->
         </div>
         {#if restartReport !== null}
           {#if restartReport.ok}
-            <p class="mt-2">Service restarted and the owner is answering — the saved values apply from this start.</p>
+            <p class="mt-2">Service restarted and the drive is answering — the saved values apply from this start.</p>
           {:else}
             <p class="mt-2">Saved, but the restart failed: {restartReport.detail} — the saved values wait for the next start.</p>
           {/if}
@@ -336,10 +336,10 @@ never deletes local data as a side effect of the UI. -->
     {:else if restartKind === "session"}
       <Alert.Title>Bounds saved — lock and unlock to apply</Alert.Title>
       <Alert.Description>
-        <p>The running owner keeps its startup values until it restarts. Use Lock in the header to end this session's owner, then unlock with the passphrase to start it again with the saved values.</p>
+        <p>The drive keeps its startup values until it restarts. Use Lock in the header to end this session, then unlock with the passphrase to start it again with the saved values.</p>
       </Alert.Description>
     {:else}
-      <p>Bounds saved. They apply the next time the drive starts — the running owner keeps its startup values until then.</p>
+      <p>Bounds saved. They apply the next time the drive starts — the current values stay in effect until then.</p>
     {/if}
   </Alert.Root>
 {/if}
@@ -403,11 +403,11 @@ never deletes local data as a side effect of the UI. -->
     <Card.Header>
       <Card.Title class="flex items-center gap-1.5">
         Edit bounds
-          <InfoHint label="About editing bounds">
+          <InfoHint label="About these limits">
             <p>
               One sparse update for this drive: set the listed bounds, clear the listed ones.
               Multi-key edits validate fully before writing — no partial saves. Saving writes
-              through the installed CLI; the values apply at the next owner start, never live.
+              through the installed CLI; the values apply the next time the drive starts, never live.
             </p>
           </InfoHint>
         </Card.Title>
@@ -486,72 +486,72 @@ never deletes local data as a side effect of the UI. -->
     <Card.Header>
       <Card.Title class="flex items-center gap-1.5">
         Configured bounds
-        <InfoHint label="About configured bounds">
+        <InfoHint label="About these limits">
           <p>
-            As configured in the per-user settings file — not as applied. The running owner
-            applies these values at startup, command-line flags win over the file, and edits
+            As configured in the per-user settings file — not as applied. The drive reads
+            these values at startup, command-line flags win over the file, and edits
             save through the installed CLI.
           </p>
         </InfoHint>
       </Card.Title>
-      <Card.Description>One drive's saved limits, as the owner will read them.</Card.Description>
+      <Card.Description>One drive's saved limits, as read at the next start.</Card.Description>
     </Card.Header>
     <Card.Content>
       <dl>
-        <DetailRow label="Storage limit" description="Maximum amount of data Wyrd retains for this drive.">
+        <DetailRow label="Storage limit" description="The most drive data Wyrd will keep on this device. When that limit is reached, Wyrd refuses new data before writing anything. This is not a limit on your disk's free space.">
           {#if settings.retained_bytes_quota === null}
             <span class="inline-flex items-center gap-1">
               <Badge variant="outline" class="text-muted-foreground">Compiled default</Badge>
               <InfoHint label="About the storage limit">
-                <p>{boundLabel(settings.retained_bytes_quota, "bytes")}</p>
+                <p>{boundLabel(settings.retained_bytes_quota, "bytes")} — the app cannot see that default value, so it does not show a number.</p>
               </InfoHint>
             </span>
           {:else}
             <span class="font-mono tabular-nums">{boundLabel(settings.retained_bytes_quota, "bytes")}</span>
           {/if}
         </DetailRow>
-        <DetailRow label="Items processed per sync" description="Maximum number of items admitted during one sync pass.">
+        <DetailRow label="Sync work limit" description="How many items of sync work Wyrd starts in each sync pass. Anything beyond this waits for the next pass; nothing is dropped.">
           {#if settings.max_admit_per_pass === null}
             <span class="inline-flex items-center gap-1">
               <Badge variant="outline" class="text-muted-foreground">Compiled default</Badge>
-              <InfoHint label="About items processed per sync">
-                <p>{boundLabel(settings.max_admit_per_pass, "items")}</p>
+              <InfoHint label="About sync work limit">
+                <p>{boundLabel(settings.max_admit_per_pass, "items")} — the app cannot see that default value, so it does not show a number.</p>
               </InfoHint>
             </span>
           {:else}
             <span class="font-mono tabular-nums">{boundLabel(settings.max_admit_per_pass, "items")}</span>
           {/if}
         </DetailRow>
-        <DetailRow label="Download time limit" description="Maximum time spent fetching content during one sync pass.">
+        <DetailRow label="Download time per sync pass" description="How long Wyrd spends downloading in one sync pass. When that time runs out, unfinished downloads wait for the next pass.">
           {#if settings.fetch_pass_budget_secs === null}
             <span class="inline-flex items-center gap-1">
               <Badge variant="outline" class="text-muted-foreground">Compiled default</Badge>
-              <InfoHint label="About the download time limit">
-                <p>{boundLabel(settings.fetch_pass_budget_secs, "seconds")}</p>
+              <InfoHint label="About the download time per sync pass">
+                <p>{boundLabel(settings.fetch_pass_budget_secs, "seconds")} — the app cannot see that default value, so it does not show a number.</p>
               </InfoHint>
             </span>
           {:else}
             <span class="font-mono tabular-nums">{boundLabel(settings.fetch_pass_budget_secs, "seconds")}</span>
           {/if}
         </DetailRow>
-        <DetailRow label="File change wait limit" description="Maximum time a submitted file change waits before timing out.">
+        <DetailRow label="File change wait limit" description="How long a change you make can wait for the content it needs from other devices. If that content does not arrive in time, the change fails and you can retry it; nothing is saved.">
           {#if settings.max_mutation_wait_secs === null}
             <span class="inline-flex items-center gap-1">
               <Badge variant="outline" class="text-muted-foreground">Compiled default</Badge>
               <InfoHint label="About the file change wait limit">
-                <p>{boundLabel(settings.max_mutation_wait_secs, "seconds")}</p>
+                <p>{boundLabel(settings.max_mutation_wait_secs, "seconds")} — the app cannot see that default value, so it does not show a number.</p>
               </InfoHint>
             </span>
           {:else}
             <span class="font-mono tabular-nums">{boundLabel(settings.max_mutation_wait_secs, "seconds")}</span>
           {/if}
         </DetailRow>
-        <DetailRow label="File open wait limit" description="Maximum time to wait for requested file content to become available.">
+        <DetailRow label="File open wait limit" description="How long Wyrd waits for a file's content to become available on this device when you open or read it. If it takes longer, the open or read fails and you can try again while the download continues.">
           {#if settings.open_timeout_secs === null}
             <span class="inline-flex items-center gap-1">
               <Badge variant="outline" class="text-muted-foreground">Compiled default</Badge>
               <InfoHint label="About the file open wait limit">
-                <p>{boundLabel(settings.open_timeout_secs, "seconds")}</p>
+                <p>{boundLabel(settings.open_timeout_secs, "seconds")} — the app cannot see that default value, so it does not show a number.</p>
               </InfoHint>
             </span>
           {:else}
@@ -573,7 +573,7 @@ never deletes local data as a side effect of the UI. -->
     </div>
     <p class="text-sm font-medium">No settings file yet</p>
     <p class="max-w-md text-sm text-muted-foreground">
-      Nothing is configured, so the owner runs its compiled defaults. Defaults are unknown to this
+      Nothing is configured, so the drive starts with its compiled defaults. Defaults are unknown to this
       shell, so nothing is filled in here. The file would live at:
     </p>
     <p class="flex min-w-0 max-w-md items-center gap-1.5">
@@ -596,8 +596,8 @@ never deletes local data as a side effect of the UI. -->
     </div>
     <p class="text-sm font-medium">No section for this drive</p>
     <p class="max-w-md text-sm text-muted-foreground">
-      The file configures other drives, but nothing in it names this drive yet — so the owner runs
-      its compiled defaults here, which are unknown to this shell:
+      The file configures other drives, but nothing in it names this drive yet — so the drive starts
+      with its compiled defaults here, which are unknown to this shell:
     </p>
     <p class="flex min-w-0 max-w-md items-center gap-1.5">
       <span class="truncate font-mono text-xs">{settings.path}</span>
@@ -685,7 +685,7 @@ never deletes local data as a side effect of the UI. -->
         <Checkbox id="leave-acknowledged" bind:checked={acknowledged} disabled={busy} />
         <Field.Content>
           <Field.Label for="leave-acknowledged" class="leading-relaxed font-normal">
-            I understand: leaving as the sole owner is terminal — the drive freezes permanently and no future transition can ever be authorized.
+            I understand: leaving removes this device from the drive going forward — it cannot authorize future changes and cannot obtain new drive content through its former membership. It does not erase copies this device already obtained. If this device is the drive's only owner, the owner set becomes empty and no future membership or ownership change can be authorized — hand over ownership before leaving if the drive should remain manageable.
           </Field.Label>
         </Field.Content>
       </Field.Field>
@@ -721,7 +721,7 @@ never deletes local data as a side effect of the UI. -->
     <AlertDialog.Header>
       <AlertDialog.Title>Leave this drive?</AlertDialog.Title>
       <AlertDialog.Description>
-        This removes this device from the drive's membership. Leaving as the sole owner is terminal — the drive freezes permanently and no future transition can ever be authorized.
+        Leaving removes this device from the drive going forward — it cannot authorize future changes and cannot obtain new drive content through its former membership. It does not erase copies this device already obtained. If this device is the drive's only owner, the owner set becomes empty and no future membership or ownership change can be authorized — hand over ownership before leaving if the drive should remain manageable.
       </AlertDialog.Description>
     </AlertDialog.Header>
     <AlertDialog.Footer>
@@ -747,7 +747,7 @@ never deletes local data as a side effect of the UI. -->
     <AlertDialog.Header>
       <AlertDialog.Title>Restart the service?</AlertDialog.Title>
       <AlertDialog.Description>
-        Restarting briefly interrupts availability while the owner stops and starts again. The bounds you saved apply when it comes back.
+        Restarting briefly interrupts availability while the drive service stops and starts again. The bounds you saved apply when it comes back.
       </AlertDialog.Description>
     </AlertDialog.Header>
     <AlertDialog.Footer>

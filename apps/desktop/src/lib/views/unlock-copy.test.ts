@@ -12,11 +12,12 @@ const view = await Bun.file(`${import.meta.dir}/UnlockView.svelte`).text();
 test("locked state names the posture and both recoveries", () => {
   for (const line of [
     "Locked for this session",
-    "no owner serves and no service",
-    "Unlock it with its passphrase, or reinstall the managed definition",
+    "this drive isn't running",
+    "with its passphrase for this session, or use the recovery below",
   ]) {
     expect(view).toContain(line);
   }
+  expect(view).not.toContain("no owner serves");
 });
 
 test("passphrase entry is typed-only and short-lived", () => {
