@@ -1,6 +1,6 @@
 # Credential loading (v0.4)
 
-Status: Specified. Scope: how a drive owner obtains its secret
+Status: Normative. Shipped scope: the read half is implemented (the CLI file backend conforms); provisioning, replacement, deletion, and the OS backends are specified, not yet wired. Scope: how a drive owner obtains its secret
 material — the device identity secret and the passphrase protecting
 the wrapped root key — without the desktop UI alive, in the actual
 OS service context. Authority: this contract owns the
@@ -17,13 +17,17 @@ contract wins.
 
 ## The boundary
 
-One narrow loader boundary serves every consumer: the CLI, the
-daemon-supervised owner, the desktop backend, and the update
-verifier. Consumers receive secret *material* —
-(`DeviceIdentitySecret`, `Zeroizing` passphrase) — never files,
-modes, keychain handles, or OS facilities. Backends implement how
-that material is kept and retrieved. Two backends satisfy this
-contract:
+One narrow loader boundary serves every consumer that reads
+credentials: the CLI, the daemon-supervised owner, the desktop
+backend, and the update verifier. Consumers receive secret
+*material* — the device identity always, plus the keystore
+passphrase where the reference names one (`None` is the session
+posture, whose passphrase arrives via the unlock pipe or prompt:
+a valid outcome, never a missing item) — never files, modes,
+keychain handles, or OS facilities. Backends implement how that
+material is kept and retrieved. The trait carries the read half
+today; provisioning, replacement, and deletion join with the
+migration slice. Two backends satisfy this contract:
 
 - **File backend** (ships today): the hardened Unix file reader in
   `wyrd-cli` (`credentials.rs`) plus its writer, `wyrd identity`
@@ -58,7 +62,11 @@ holds for every new selector field.
 ## What the loader must do
 
 For one drive, identified by its credential reference, the loader
-provides:
+provides the operations below. Lookup and open ship with the file
+backend; provisioning, replacement, and deletion are specified
+here and join with the migration slice. (This section states the
+full boundary so backends are built once against it — it does not
+claim the trait already carries what is marked specified.)
 
 - **Lookup and open**: return the secret material or a terminal
   failure from the taxonomy below. The caller decides what the
@@ -90,7 +98,7 @@ changes nothing:
 
 | Outcome | Meaning | Drive reads |
 |---|---|---|
-| `ok` | Material returned, shape-checked | Proceeds to open |
+| `ok` | Material returned, shape-checked (passphrase present exactly where the reference names one) | Proceeds to open |
 | `missing` | No such item in the backend | Registered but unavailable (re-provision, never auto-create) |
 | `denied` | Store reachable, access refused (ACL, locked keychain) | Registered but unavailable (fix access, retry) |
 | `unavailable` | Store itself unreachable (no D-Bus session, no Secret Service) | Registered but unavailable (retry; never a weaker substitute) |

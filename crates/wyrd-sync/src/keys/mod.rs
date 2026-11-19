@@ -49,7 +49,9 @@ pub use keystore::{
     kdf_key, unwrap_device_secret, unwrap_root, wrap_device_secret, wrap_root, KeystoreError,
     WrappedSecret,
 };
-pub use loader::{CredentialError, CredentialLoader, CredentialRef, LoadedCredential};
+pub use loader::{
+    CredentialError, CredentialLoader, CredentialRef, CredentialSubject, LoadedCredential,
+};
 pub use root::DriveRootKey;
 
 /// Fill a buffer from the OS CSPRNG.

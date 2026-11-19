@@ -30,6 +30,7 @@
 //! | `EpochSecret` | epoch secret | `ZeroizeOnDrop` | redacted | yes, keyring installs from a borrowed `Capability` | derivations borrow; plaintext encodings are `Zeroizing` |
 //! | `DeviceIdentitySecret` | Nostr identity scalar | `ZeroizeOnDrop` | redacted | yes, engine/mailbox dual hold | bare `SecretKey`s are per-call transients |
 //! | `DeviceEncryptionSecret` | capability-unwrap scalar | `ZeroizeOnDrop` | redacted | yes, engine/mailbox dual hold | as above |
+//! | `LoadedCredential` | loader boundary material: identity + passphrase | members scrub (no extra drop glue, so fields stay movable) | redacted | no | passphrase `None` is the session posture, not a missing item |
 //! | `EphemeralScalar` | ECDH seed sibling | `ZeroizeOnDrop` | none at all (`pub(crate)`) | no | FFI scalar inside `SecretKey` is upstream's, out of reach |
 //! | `StoreKey` | durable capability seal key | `ZeroizeOnDrop` | none (`DurableStore` documents no-`Debug`) | no | itself passphrase-wrapped on disk |
 //! | `Zeroizing<[u8; 32]>` control keys | per-epoch control keys | wrapper | none held in a `Debug` struct (`ControlInbox` is `Clone`-only) | yes, inbox/engine split is by design (resync must not drop held material) | both copies scrub |
@@ -54,6 +55,7 @@ use super::capability::Capability;
 use super::device::{DeviceEncryptionSecret, DeviceIdentitySecret};
 use super::ephemeral::EphemeralScalar;
 use super::epoch::EpochSecret;
+use super::loader::LoadedCredential;
 use super::root::DriveRootKey;
 use crate::durable::AuthorizedCapability;
 use crate::keys::DriveKeyring;
@@ -102,6 +104,16 @@ fn secret_leaves_redact_through_debug() {
                 DeviceEncryptionSecret::from_bytes([0xAB; 32]).unwrap()
             ),
             "DeviceEncryptionSecret(REDACTED)",
+        ),
+        (
+            format!(
+                "{:?}",
+                LoadedCredential {
+                    identity: DeviceIdentitySecret::from_bytes([0xAB; 32]).unwrap(),
+                    passphrase: Some(zeroize::Zeroizing::new("hunter2".to_string())),
+                }
+            ),
+            "LoadedCredential(REDACTED)",
         ),
     ];
     for (rendered, expected) in &cases {

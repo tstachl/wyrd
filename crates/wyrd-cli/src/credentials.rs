@@ -17,7 +17,8 @@ use crate::drive_config::{
 };
 use crate::CliError;
 use wyrd_sync::keys::{
-    CredentialError, CredentialLoader, CredentialRef, DeviceIdentitySecret, LoadedCredential,
+    CredentialError, CredentialLoader, CredentialRef, CredentialSubject, DeviceIdentitySecret,
+    LoadedCredential,
 };
 use zeroize::Zeroizing;
 
@@ -116,10 +117,18 @@ fn read_credentials_with(
         passphrase_from_stdin: creds.passphrase_stdin,
         passphrase_from_prompt: false,
     };
-    let identity = read_identity(&identity_file)?;
     if creds.passphrase_stdin {
+        // The session posture loads the identity through the
+        // boundary with no passphrase item; the pipe supplies
+        // the passphrase downstream, never the loader.
+        let loaded = FileBackend
+            .load(&CredentialRef::File {
+                identity: identity_file,
+                passphrase: None,
+            })
+            .map_err(loader_to_cli)?;
         let passphrase = read_passphrase_stdin(stdin)?;
-        return Ok((identity, passphrase, provenance));
+        return Ok((loaded.identity, passphrase, provenance));
     }
     let passphrase_file = resolve_credential_path(
         creds.passphrase_file.clone(),
@@ -127,21 +136,24 @@ fn read_credentials_with(
         "--passphrase-file",
         "passphrase_file",
     )?;
-    // The file branches serve through the loader boundary: the
-    // backend runs the production readers above, and each
-    // taxonomy detail reproduces the `CliError` `Display` it
-    // came from, so every single failure reports with identical
+    // The file branches serve through the loader boundary in one
+    // call: the backend runs the production readers, and each
+    // taxonomy detail reproduces the `CliError` `Display` it came
+    // from, so every single failure reports with identical
     // wording and the same exit code. Resolution order per file
-    // is unchanged; where both files fail at once the passphrase
-    // resolution now reports first (both orders name a real
-    // problem at the same exit status).
-    FileBackend
+    // is unchanged; where the passphrase names nothing the
+    // resolution reports before the single read runs (either
+    // order names a real problem at the same exit status).
+    let loaded = FileBackend
         .load(&CredentialRef::File {
             identity: identity_file,
             passphrase: Some(passphrase_file),
         })
-        .map(|loaded| (loaded.identity, loaded.passphrase, provenance))
-        .map_err(loader_to_cli)
+        .map_err(loader_to_cli)?;
+    let passphrase = loaded.passphrase.expect(
+        "a file reference naming a passphrase item loads one: the backend read it or failed",
+    );
+    Ok((loaded.identity, passphrase, provenance))
 }
 
 /// Read one passphrase file: UTF-8 text with one trailing newline
@@ -149,8 +161,9 @@ fn read_credentials_with(
 /// Kept scrubbing: the passphrase lives in process memory until
 /// the command completes, so it stays in a `Zeroizing` rather
 /// than a plain `String`. Callers pass `&passphrase` as `&str`
-/// through deref coercion. Shared by the flag path above and the
-/// [`FileBackend`] loader below, so both open the same keystore.
+/// through deref coercion. Read by the [`FileBackend`] loader
+/// below, so the boundary and the flag path open the same
+/// keystore.
 fn read_passphrase_file(path: &Path) -> Result<Zeroizing<String>, CliError> {
     let passphrase_bytes = read_secret_file(path)?;
     let passphrase_text = std::str::from_utf8(&passphrase_bytes)
@@ -226,7 +239,17 @@ fn read_unlock_credentials_with(
         "--identity-file",
         "identity_file",
     )?;
-    let identity = read_identity(&identity_file)?;
+    // Unlock's identity loads through the boundary with no
+    // passphrase item; the pipe or prompt supplies the
+    // passphrase downstream, never the loader. Interactive
+    // surfaces stay outside the trait by design.
+    let loaded = FileBackend
+        .load(&CredentialRef::File {
+            identity: identity_file,
+            passphrase: None,
+        })
+        .map_err(loader_to_cli)?;
+    let identity = loaded.identity;
     if creds.passphrase_stdin {
         let passphrase = read_passphrase_stdin(stdin)?;
         return Ok((identity, passphrase, provenance));
@@ -540,42 +563,54 @@ pub(crate) fn read_identity(path: &Path) -> Result<DeviceIdentitySecret, CliErro
 pub struct FileBackend;
 
 /// Map a file-read failure onto the loader taxonomy. Ownership
-/// and mode refusals are access facts (`Denied`); shape refusals
-/// are validity facts (`Invalid`); a missing file is `Missing`;
+/// and mode refusals — plus a symlink the reader refuses to
+/// follow — are access facts (`Denied`); shape refusals are
+/// validity facts (`Invalid`); a missing file is `Missing`;
 /// anything else about the read itself is `Unavailable`. Every
 /// detail reproduces the `CliError` `Display` it came from, so
-/// [`loader_to_cli`] round-trips the wording exactly.
-fn cli_to_loader(error: CliError) -> CredentialError {
+/// [`loader_to_cli`] round-trips the wording exactly. The subject
+/// rides alongside so callers map without parsing prose.
+fn cli_to_loader(error: CliError, subject: CredentialSubject) -> CredentialError {
     match error {
-        CliError::Io { path, source } => match source.kind() {
-            std::io::ErrorKind::NotFound => CredentialError::Missing {
-                detail: format!("no credential file {}: {source}", path.display()),
-            },
-            std::io::ErrorKind::PermissionDenied => CredentialError::Denied {
-                detail: format!("cannot open credential file {}: {source}", path.display()),
-            },
-            _ => CredentialError::Unavailable {
-                detail: format!("cannot read credential file {}: {source}", path.display()),
-            },
-        },
+        CliError::Io { path, source } => {
+            let detail = format!("{}: {source}", path.display());
+            match source.kind() {
+                std::io::ErrorKind::NotFound => CredentialError::Missing { subject, detail },
+                std::io::ErrorKind::PermissionDenied => CredentialError::Denied { subject, detail },
+                _ => {
+                    // A symlink the reader refuses to follow surfaces
+                    // as ELOOP: the open was refused, so it is an
+                    // access fact, not an unreachable store. Matched
+                    // by number (not kind) to stay off the unstable
+                    // `io_error_more` kinds.
+                    #[cfg(unix)]
+                    if source.raw_os_error() == Some(libc::ELOOP) {
+                        return CredentialError::Denied { subject, detail };
+                    }
+                    CredentialError::Unavailable { subject, detail }
+                }
+            }
+        }
         CliError::Credential { path, reason } => {
             let detail = format!("credential file {}: {reason}", path.display());
             match reason {
                 "must be owned by the current user"
                 | "must not be accessible by group or other users" => {
-                    CredentialError::Denied { detail }
+                    CredentialError::Denied { subject, detail }
                 }
                 "credential-file protection is only implemented on Unix" => {
-                    CredentialError::Unavailable { detail }
+                    CredentialError::Unavailable { subject, detail }
                 }
-                _ => CredentialError::Invalid { detail },
+                _ => CredentialError::Invalid { subject, detail },
             }
         }
         CliError::IdentityFormat => CredentialError::Invalid {
+            subject,
             detail: "identity file must contain exactly 32 raw bytes or 64 hex characters"
                 .to_string(),
         },
         other => CredentialError::Invalid {
+            subject,
             detail: other.to_string(),
         },
     }
@@ -589,33 +624,50 @@ fn cli_to_loader(error: CliError) -> CredentialError {
 /// the CLI enum, is the reporting vocabulary from here on.
 fn loader_to_cli(error: CredentialError) -> CliError {
     match error {
-        CredentialError::Missing { detail }
-        | CredentialError::Denied { detail }
-        | CredentialError::Unavailable { detail }
-        | CredentialError::Invalid { detail } => CliError::Usage(detail),
+        CredentialError::Missing { detail, .. }
+        | CredentialError::Denied { detail, .. }
+        | CredentialError::Unavailable { detail, .. }
+        | CredentialError::Invalid { detail, .. } => CliError::Usage(detail),
     }
 }
 
 impl CredentialLoader for FileBackend {
     /// Resolve a file reference to secret material through the
-    /// production readers. `OsStore` references answer
-    /// `Unavailable`: specified, not yet wired — never an
-    /// implicit file fallback. A file reference naming no
-    /// passphrase item answers `Missing`: that passphrase
-    /// arrives via the unlock pipe, never the loader.
+    /// production readers in one call — identity first, then the
+    /// passphrase where the reference names one. `OsStore`
+    /// references answer `Unavailable`: specified, not yet wired
+    /// — never an implicit file fallback. A reference naming no
+    /// passphrase item loads the identity with no passphrase:
+    /// that is the session posture, and the unlock pipe or
+    /// prompt supplies the passphrase downstream.
     fn load(&self, reference: &CredentialRef) -> Result<LoadedCredential, CredentialError> {
         match reference {
             CredentialRef::File { identity, passphrase } => {
-                let identity = read_identity(identity).map_err(cli_to_loader)?;
-                let passphrase_path =
-                    passphrase.as_ref().ok_or_else(|| CredentialError::Missing {
-                        detail: "credential reference names no passphrase item: the session posture's passphrase arrives via the unlock pipe, never the loader"
-                            .to_string(),
-                    })?;
-                let passphrase = read_passphrase_file(passphrase_path).map_err(cli_to_loader)?;
-                Ok(LoadedCredential { identity, passphrase })
+                let subject = || CredentialSubject::File {
+                    path: identity.clone(),
+                };
+                let identity =
+                    read_identity(identity).map_err(|error| cli_to_loader(error, subject()))?;
+                let Some(passphrase_path) = passphrase.as_ref() else {
+                    return Ok(LoadedCredential {
+                        identity,
+                        passphrase: None,
+                    });
+                };
+                let subject = || CredentialSubject::File {
+                    path: passphrase_path.clone(),
+                };
+                let passphrase = read_passphrase_file(passphrase_path)
+                    .map_err(|error| cli_to_loader(error, subject()))?;
+                Ok(LoadedCredential {
+                    identity,
+                    passphrase: Some(passphrase),
+                })
             }
             CredentialRef::OsStore { account } => Err(CredentialError::Unavailable {
+                subject: CredentialSubject::Account {
+                    account: account.clone(),
+                },
                 detail: format!(
                     "OS credential store backend is not implemented: no item for account {account} can be loaded"
                 ),
@@ -869,25 +921,39 @@ mod tests {
     }
 
     /// The file backend speaks the loader taxonomy through the
-    /// production readers: a missing file is `Missing`, bad
-    /// modes are `Denied`, a broken shape is `Invalid` — the
-    /// same outcomes the flag path reports, so the boundary
-    /// cannot claim what the backend would not do.
+    /// production readers in one call: a missing file is
+    /// `Missing`, bad modes and refused symlinks are `Denied`, a
+    /// broken shape is `Invalid` — the same outcomes the flag
+    /// path reports, so the boundary cannot claim what the
+    /// backend would not do.
     #[test]
     fn file_backend_maps_failures_onto_the_taxonomy() {
         use crate::tests_harness::{write_secret, TempDir};
         use std::os::unix::fs::PermissionsExt;
         let backend = FileBackend;
         let temp = TempDir::new();
-        // Missing identity file: Missing, never Invalid.
+        // Missing identity file: Missing naming the file, never
+        // Invalid.
         let outcome = backend.load(&CredentialRef::File {
             identity: temp.0.join("no-identity"),
             passphrase: Some(temp.0.join("no-passphrase")),
         });
-        assert!(
-            matches!(outcome, Err(CredentialError::Missing { .. })),
-            "a missing identity file is Missing: {outcome:?}"
-        );
+        match outcome {
+            Err(CredentialError::Missing { subject, detail }) => {
+                assert_eq!(
+                    subject,
+                    CredentialSubject::File {
+                        path: temp.0.join("no-identity")
+                    },
+                    "the subject names the file without parsing"
+                );
+                assert!(
+                    detail.contains("no-identity"),
+                    "the evidence names it too: {detail}"
+                );
+            }
+            other => panic!("a missing identity file is Missing: {other:?}"),
+        }
         // Valid identity, missing passphrase file: Missing names it.
         let identity_file = temp.0.join("identity");
         write_secret(&identity_file, [0x11; 32]);
@@ -899,15 +965,19 @@ mod tests {
             matches!(outcome, Err(CredentialError::Missing { .. })),
             "a missing passphrase file is Missing: {outcome:?}"
         );
-        // No passphrase item at all (session posture): Missing,
-        // never an empty passphrase the owner would try.
-        let outcome = backend.load(&CredentialRef::File {
-            identity: identity_file.clone(),
-            passphrase: None,
-        });
+        // No passphrase item at all (session posture): the
+        // identity loads with no passphrase — a posture, never a
+        // missing item, and never an empty passphrase the owner
+        // would try.
+        let loaded = backend
+            .load(&CredentialRef::File {
+                identity: identity_file.clone(),
+                passphrase: None,
+            })
+            .expect("session posture loads without a passphrase item");
         assert!(
-            matches!(outcome, Err(CredentialError::Missing { .. })),
-            "no passphrase item is Missing: {outcome:?}"
+            loaded.passphrase.is_none(),
+            "no item means no material, not an empty secret"
         );
         // Group-readable identity file: Denied.
         let lax = temp.0.join("lax-identity");
@@ -943,11 +1013,77 @@ mod tests {
                 passphrase: Some(passphrase_file),
             })
             .expect("valid files load");
-        assert_eq!(loaded.passphrase.as_str(), "hunter2-hunter2");
+        assert_eq!(
+            loaded.passphrase.expect("named item loads").as_str(),
+            "hunter2-hunter2"
+        );
+    }
+
+    /// Every refusal literal lands on its taxonomy arm by rule:
+    /// each `Credential` reason and each IO kind maps to the arm
+    /// named beside it, so a renamed literal must update
+    /// `cli_to_loader` — the table fails otherwise. A refused
+    /// symlink (`ELOOP`) is `Denied`: the open was refused, and
+    /// retrying the same open cannot fix it.
+    #[test]
+    fn every_refusal_literal_maps_onto_its_arm() {
+        use std::io::ErrorKind;
+        let subject = || CredentialSubject::File {
+            path: PathBuf::from("/k/id"),
+        };
+        let arm = |error: CredentialError| match error {
+            CredentialError::Missing { .. } => "Missing",
+            CredentialError::Denied { .. } => "Denied",
+            CredentialError::Unavailable { .. } => "Unavailable",
+            CredentialError::Invalid { .. } => "Invalid",
+        };
+        for (reason, expected) in [
+            ("must be owned by the current user", "Denied"),
+            ("must not be accessible by group or other users", "Denied"),
+            (
+                "credential-file protection is only implemented on Unix",
+                "Unavailable",
+            ),
+            ("not a regular file", "Invalid"),
+            ("exceeds the 4096-byte size limit", "Invalid"),
+        ] {
+            let error = cli_to_loader(
+                CliError::Credential {
+                    path: PathBuf::from("/k/id"),
+                    reason,
+                },
+                subject(),
+            );
+            assert_eq!(
+                arm(error),
+                expected,
+                "reason literal maps by rule: {reason}"
+            );
+        }
+        for (kind, expected) in [
+            (ErrorKind::NotFound, "Missing"),
+            (ErrorKind::PermissionDenied, "Denied"),
+            (ErrorKind::Other, "Unavailable"),
+        ] {
+            let error = cli_to_loader(
+                CliError::Io {
+                    path: PathBuf::from("/k/id"),
+                    source: std::io::Error::new(kind, "probe"),
+                },
+                subject(),
+            );
+            assert_eq!(arm(error), expected, "IO kind maps by rule: {kind:?}");
+        }
+        // A refused symlink travels the Denied arm end to end:
+        // the reader will not follow it, and the taxonomy calls
+        // the refusal what it is (matched by errno, since the
+        // stable IO kinds cannot name it). Pinned behaviorally in
+        // `tests_cli::credential_symlinks_are_rejected_without_following`.
     }
 
     /// The OS store reference answers `Unavailable`, never an
-    /// implicit file fallback: specified, not yet wired.
+    /// implicit file fallback: specified, not yet wired. The
+    /// subject names the account, not a file.
     #[test]
     fn os_store_reference_is_unavailable_not_a_fallback() {
         let backend = FileBackend;
@@ -955,7 +1091,14 @@ mod tests {
             account: "wyrd-drive-alpha".to_string(),
         });
         match outcome {
-            Err(CredentialError::Unavailable { detail }) => {
+            Err(CredentialError::Unavailable { subject, detail }) => {
+                assert_eq!(
+                    subject,
+                    CredentialSubject::Account {
+                        account: "wyrd-drive-alpha".to_string()
+                    },
+                    "the subject names the account"
+                );
                 assert!(detail.contains("not implemented"), "says so: {detail}")
             }
             other => panic!("an unwired backend is Unavailable: {other:?}"),
