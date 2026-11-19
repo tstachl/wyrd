@@ -51,6 +51,12 @@
   } from "$lib/ipc/results.js";
   import type { SparseUpdateArgs } from "$lib/ipc/results.js";
   import { settingsSurviveLock, withDevCliHint } from "$lib/views/format.js";
+  import {
+    autoOpenTarget,
+    headerAffordance,
+    soleDriveDir,
+  } from "$lib/views/single-drive-select.js";
+  import type { HeaderAffordance } from "$lib/views/single-drive-select.js";
   import { presentation } from "$lib/state/presentation.svelte.js";
   import type { ShellView } from "$lib/state/presentation.svelte.js";
   import LifecycleView from "$lib/views/LifecycleView.svelte";
@@ -62,6 +68,7 @@
   import UnavailableView from "$lib/views/UnavailableView.svelte";
   import UnlockView from "$lib/views/UnlockView.svelte";
   import LayoutGridIcon from "@lucide/svelte/icons/layout-grid";
+  import PlusIcon from "@lucide/svelte/icons/plus";
   import LockIcon from "@lucide/svelte/icons/lock";
   import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
   import { onMount } from "svelte";
@@ -196,22 +203,38 @@
       () => listDrives(),
       (value) => presentation.storeLifecycle(value),
     );
-    // First-run selection: where nothing is selected yet and the
-    // registry names drives, select the first. The selection stays
-    // presentation state — later registry changes never silently
-    // move it, and an empty registry leaves it null (driveless
-    // first-run, not an implicit drive).
     const listed = registryDrives();
-    if (presentation.selectedDriveDir === null) {
+    const beforeSelected = presentation.selectedDriveDir;
+    const beforeView = presentation.selectedView;
+    // First run: nothing selected yet. The sole drive opens
+    // directly on Status (as if picked); two or more park on
+    // the overview; an empty registry stays driveless. The add
+    // page keeps the screen where it owns it — the selection
+    // still repairs behind it, but the view never yanks off an
+    // in-progress report.
+    if (beforeSelected === null) {
+      const target = autoOpenTarget(listed, null, beforeView);
+      if (target !== null) {
+        presentation.selectDrive(target.driveDir);
+        if (target.advanceToStatus) {
+          presentation.selectView("status");
+          void refreshStatus(target.driveDir);
+        }
+        return;
+      }
       if (listed.length > 0 && listed[0] !== undefined) {
         presentation.selectDrive(listed[0].drive_dir);
+      }
+      if (beforeView !== "provision") {
+        presentation.selectView("lifecycle");
       }
       return;
     }
     // The registry is the device's list of drives. Where a readable
     // registry no longer names the selected drive (it was left), the
-    // workspace has nothing to show: return to the device home. An
-    // unreadable registry proves nothing, so the selection stands.
+    // workspace has nothing to show: the remaining sole drive opens
+    // directly, otherwise return to the device home. An unreadable
+    // registry proves nothing, so the selection stands.
     const registryStatus = presentation.lifecycleSnapshot?.data.status;
     const readable = registryStatus === "ready" || registryStatus === "nofile";
     const inWorkspace =
@@ -221,7 +244,27 @@
       inWorkspace &&
       !listed.some((drive) => drive.drive_dir === presentation.selectedDriveDir)
     ) {
-      presentation.selectView("lifecycle");
+      const sole = soleDriveDir(listed);
+      if (sole !== null) {
+        presentation.selectDrive(sole);
+        presentation.selectView("status");
+        void refreshStatus(sole);
+      } else {
+        presentation.selectView("lifecycle");
+      }
+      return;
+    }
+    // Mid-session collapse: parked on the overview while the
+    // registry names a single drive — advance to it. Any other
+    // screen keeps its place; the header affordance already
+    // follows the count without a reload.
+    if (presentation.selectedView === "lifecycle") {
+      const target = autoOpenTarget(listed, presentation.selectedDriveDir, "lifecycle");
+      if (target !== null) {
+        presentation.selectDrive(target.driveDir);
+        presentation.selectView("status");
+        void refreshStatus(target.driveDir);
+      }
     }
   }
 
@@ -509,8 +552,16 @@
     void refreshStatus(driveDir);
   }
 
-  /** Back to the device-level home: the registry of drives. */
+  /** Back to the device-level home: the registry of drives —
+   * or the sole drive's workspace directly where only one drive
+   * is configured (the overview earns no keep without a choice).
+   */
   function allDrives(): void {
+    const sole = soleDriveDir(registryDrives());
+    if (sole !== null) {
+      openDrive(sole);
+      return;
+    }
     selectView("lifecycle");
   }
 
@@ -754,14 +805,22 @@
     await refreshCurrent();
   }
 
+  // The header affordance off the overview follows the drive
+  // count: the way back earns its keep at two or more drives,
+  // while at or below one drive it becomes the Add drive route.
+  // The add page always keeps its way back.
+  const headerAction = $derived<HeaderAffordance>(
+    gate === "done" ? headerAffordance(presentation.selectedView, drives.length) : "none",
+  );
+
   onMount(() => {
-    // Startup selects the device-level home — the drive list, never
-    // an implied active drive. The in-window Add button reaches the
-    // provision view through `openProvisioning` below; no backend
-    // route exists (the tray's select-provision event is gone with
-    // the tray).
+    // Startup lands through the registry read — the sole drive
+    // opens directly on Status, otherwise the drive list — never
+    // an implied active drive past that. The in-window Add button
+    // reaches the provision view through `openProvisioning` below;
+    // no backend route exists (the tray's select-provision event is
+    // gone with the tray).
     void refreshLifecycle().then(() => {
-      presentation.selectView("lifecycle");
       void checkIdentityGate();
     });
   });
@@ -789,9 +848,7 @@
       : ''}"
   >
     <Brand
-      onHome={gate === "done" && presentation.selectedView !== "lifecycle"
-        ? allDrives
-        : undefined}
+      onHome={headerAction === "back" ? allDrives : undefined}
     />
     <div class="ml-auto flex items-center gap-2">
       {#if busy}
@@ -800,7 +857,7 @@
           {presentation.pendingRequests} in flight
         </span>
       {/if}
-      {#if gate === "done" && presentation.selectedView !== "lifecycle"}
+      {#if headerAction === "back"}
         <Button
           variant="ghost"
           size="sm"
@@ -809,6 +866,16 @@
         >
           <LayoutGridIcon data-icon="inline-start" />
           Back to drives
+        </Button>
+      {:else if headerAction === "add"}
+        <Button
+          variant="ghost"
+          size="sm"
+          class="text-bone hover:bg-bone/10 hover:text-bone"
+          onclick={() => openProvisioning("create")}
+        >
+          <PlusIcon data-icon="inline-start" />
+          Add drive
         </Button>
       {/if}
     </div>
