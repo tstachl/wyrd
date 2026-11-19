@@ -117,7 +117,7 @@ export interface SettingBound {
 export const SETTING_BOUNDS: SettingBound[] = [
   { key: "retained_bytes_quota", label: "Retained bytes quota", unit: "bytes", min: 0, max: Number.MAX_SAFE_INTEGER },
   { key: "max_admit_per_pass", label: "Items admitted per sync pass", unit: "items", min: 1, max: 1000000 },
-  { key: "fetch_pass_budget_secs", label: "Fetch time per pass", unit: "seconds", min: 1, max: 86400 },
+  { key: "fetch_pass_budget_secs", label: "Fetch time limit per pass", unit: "seconds", min: 1, max: 86400 },
   { key: "max_mutation_wait_secs", label: "Mutation wait limit", unit: "seconds", min: 1, max: 86400 },
   { key: "open_timeout_secs", label: "Open wait limit", unit: "seconds", min: 1, max: 86400 },
 ];

@@ -183,6 +183,15 @@ test("bound inputs validate per key, naming the key", () => {
     "max_mutation_wait_secs",
     "open_timeout_secs",
   ]);
+  // Labels stay plain-worded and units stay honest: the suite
+  // pins them so wording cannot drift per view.
+  expect(SETTING_BOUNDS.map((bound) => [bound.key, bound.label, bound.unit])).toEqual([
+    ["retained_bytes_quota", "Retained bytes quota", "bytes"],
+    ["max_admit_per_pass", "Items admitted per sync pass", "items"],
+    ["fetch_pass_budget_secs", "Fetch time limit per pass", "seconds"],
+    ["max_mutation_wait_secs", "Mutation wait limit", "seconds"],
+    ["open_timeout_secs", "Open wait limit", "seconds"],
+  ]);
   expect(validateBoundInput("max_admit_per_pass", "64")).toBeNull();
   expect(validateBoundInput("retained_bytes_quota", "0")).toBeNull();
   expect(validateBoundInput("open_timeout_secs", " 30 ")).toBeNull();

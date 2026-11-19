@@ -502,11 +502,11 @@ never deletes local data as a side effect of the UI. -->
             <span class="font-mono tabular-nums">{boundLabel(settings.max_admit_per_pass, "items")}</span>
           {/if}
         </DetailRow>
-        <DetailRow label="Fetch time per pass">
+        <DetailRow label="Fetch time limit per pass">
           {#if settings.fetch_pass_budget_secs === null}
             <span class="inline-flex items-center gap-1">
               <Badge variant="outline" class="text-muted-foreground">Compiled default</Badge>
-              <InfoHint label="About the fetch time per pass">
+              <InfoHint label="About the fetch time limit per pass">
                 <p>{boundLabel(settings.fetch_pass_budget_secs, "seconds")}</p>
               </InfoHint>
             </span>
