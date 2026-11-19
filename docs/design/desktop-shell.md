@@ -4,7 +4,9 @@ Status: Proposed / Open. This note owns the desktop shell shape: the
 split between the Tauri backend crate and the web frontend, the IPC
 discipline between them, the Nix GUI-dependency boundary, and the
 staging into implementable pieces. Normative invariants live in the
-contracts linked below. Nothing here authorizes a contract change; the
+contracts linked below — including the desktop lifecycle contract
+(`../contracts/desktop-lifecycle.md`), which owns window close,
+application quit, reopening, and explicit lock. Nothing here authorizes a contract change; the
 drive-owner interface (`../contracts/owner-interface.md`) wins every
 conflict with this note.
 
