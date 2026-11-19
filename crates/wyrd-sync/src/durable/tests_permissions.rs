@@ -163,42 +163,122 @@ fn the_store_lock_is_owner_only() {
 #[test]
 fn a_crash_during_store_key_write_leaves_no_readable_temp() {
     use super::store::{atomic_write_mode, create_mode_temp, SECRET_FILE_MODE};
+    use std::ffi::OsStr;
     let _guard = UmaskGuard::set(0o000);
     let dir = TestDir::new("custody-temp");
     // The temp itself carries the restrictive mode from creation, so a
     // crash between creation and rename strands an owner-only file.
+    // Each writer owns a unique sibling, so the test finds it by
+    // extension rather than by a shared name.
+    let temps_in = |dir: &TestDir| -> Vec<std::path::PathBuf> {
+        std::fs::read_dir(&dir.path)
+            .unwrap()
+            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+            .filter(|path| path.extension() == Some(OsStr::new("tmp")))
+            .collect()
+    };
     {
-        let _tmp = create_mode_temp(&dir.path, "store-key.wrap", SECRET_FILE_MODE).unwrap();
+        let (_tmp, _tmp_path) =
+            create_mode_temp(&dir.path, "store-key.wrap", SECRET_FILE_MODE).unwrap();
+        let temps = temps_in(&dir);
+        assert_eq!(temps.len(), 1, "one unique temp per claim: {temps:?}");
         assert_eq!(
-            mode_of(&dir.path.join("store-key.wrap.tmp")) & 0o077,
+            mode_of(&temps[0]) & 0o077,
             0,
             "a stranded temp is never readable"
         );
     }
-    // And the completed write leaves no temp behind at all.
+    // And the completed write leaves none of its own temps behind.
     atomic_write_mode(&dir.path, "probe", b"bytes", SECRET_FILE_MODE).unwrap();
-    assert!(!dir.path.join("probe.tmp").exists());
+    assert!(
+        temps_in(&dir)
+            .iter()
+            .all(|path| !path.to_string_lossy().contains("probe.")),
+        "no probe temp survives the rename"
+    );
+}
+
+/// Two claims on the same `(dir, name)` while the first file is
+/// still open yield distinct siblings and leave the first temp
+/// intact — deterministically, with no threads or sleeps. This pins
+/// the no-unlink core (a second claim never removes the first
+/// writer's live file); the retry loop itself is pinned by the
+/// forced-collision test below.
+#[test]
+fn concurrent_claims_on_one_name_never_share_a_temp() {
+    use super::store::create_mode_temp;
+    use super::tests_harness::TestDir;
+    let dir = TestDir::new("concurrent-claim");
+    let (_first, first_path) = create_mode_temp(&dir.path, "shared", 0o600).unwrap();
+    let (_second, second_path) = create_mode_temp(&dir.path, "shared", 0o600).unwrap();
+    assert_ne!(
+        first_path, second_path,
+        "each writer owns a distinct sibling"
+    );
+    assert!(
+        first_path.is_file(),
+        "the second claim never unlinks the first writer's temp"
+    );
+    assert!(second_path.is_file(), "the second claim holds its own temp");
+}
+
+/// A forced nonce collision enters the `AlreadyExists` retry branch
+/// deterministically: the first two nonces collide with a planted
+/// blocker, the third succeeds, and the blocker survives untouched.
+/// No threads, no sleeps, no shared global state — the nonce supplier
+/// is injected, so parallel tests cannot disturb the sequence.
+#[test]
+fn a_forced_temp_collision_retries_without_unlinking() {
+    use super::store::create_mode_temp_with;
+    use super::tests_harness::TestDir;
+    let dir = TestDir::new("forced-temp-collision");
+    // The path nonce 7 resolves to, planted before the claim: both of
+    // the first two attempts must collide with it and move on.
+    let blocker = dir
+        .path
+        .join(format!("shared.{pid}-7.tmp", pid = std::process::id()));
+    std::fs::write(&blocker, b"not mine").unwrap();
+    let mut nonces = [7u64, 7, 8].into_iter();
+    let (_file, path) =
+        create_mode_temp_with(&dir.path, "shared", 0o600, &mut || nonces.next().unwrap()).unwrap();
+    assert!(
+        path.ends_with(format!("shared.{pid}-8.tmp", pid = std::process::id())),
+        "two collisions retry onto the fresh name, path: {}",
+        path.display()
+    );
+    assert_eq!(
+        std::fs::read(&blocker).unwrap(),
+        b"not mine",
+        "the retry never unlinks the colliding path"
+    );
 }
 
 #[cfg(unix)]
 #[test]
-fn a_stale_temp_is_reclaimed_at_the_hardened_mode() {
+fn a_stale_shared_temp_is_left_alone_while_the_write_hardens() {
     use super::store::{atomic_write_mode, SECRET_FILE_MODE};
     use std::os::unix::fs::PermissionsExt;
     let _guard = UmaskGuard::set(0o000);
     let dir = TestDir::new("custody-stale-temp");
-    // A loose temp stranded by a pre-fix crash: the next custody
-    // write must remove and re-claim it, not publish it.
-    std::fs::write(dir.path.join("store-key.wrap.tmp"), b"stale").unwrap();
-    std::fs::set_permissions(
-        dir.path.join("store-key.wrap.tmp"),
-        std::fs::Permissions::from_mode(0o644),
-    )
-    .unwrap();
+    // A loose temp stranded by a pre-fix crash under the old shared
+    // name: the next custody write must not remove it (it could be a
+    // live competitor's file under the new discipline) and must not
+    // publish it — the destination is claimed at the hardened mode
+    // under a unique sibling instead.
+    let legacy = dir.path.join("store-key.wrap.tmp");
+    std::fs::write(&legacy, b"stale").unwrap();
+    std::fs::set_permissions(&legacy, std::fs::Permissions::from_mode(0o644)).unwrap();
     atomic_write_mode(&dir.path, "store-key.wrap", b"fresh", SECRET_FILE_MODE).unwrap();
     drop(_guard);
     assert_eq!(mode_of(&dir.path.join("store-key.wrap")) & 0o077, 0);
-    assert!(!dir.path.join("store-key.wrap.tmp").exists());
+    assert_eq!(
+        std::fs::read(dir.path.join("store-key.wrap")).unwrap(),
+        b"fresh"
+    );
+    assert!(
+        legacy.is_file(),
+        "the legacy shared temp is never unlinked by a concurrent-safe write"
+    );
 }
 
 #[cfg(unix)]
@@ -268,5 +348,63 @@ fn a_fifo_at_the_leaf_fails_open_without_blocking() {
         error.kind(),
         std::io::ErrorKind::NotADirectory,
         "a fifo leaf fails fast, never blocks: {error:?}"
+    );
+}
+
+/// Two live writers on one destination through the public helper: no
+/// spurious I/O errors, and every observed destination is one
+/// complete payload — never mixed or partial. Under the old shared
+/// `{name}.tmp` discipline one writer unlinked the other's live temp,
+/// surfacing `ENOENT` or publishing a half-written file; unique
+/// siblings resolve last-writer-wins at the rename instead. The
+/// barrier (not sleeps) makes the overlap deterministic: both threads
+/// write together on every round.
+#[test]
+fn concurrent_atomic_writes_never_clobber_each_other() {
+    use super::store::atomic_write_mode;
+    use super::tests_harness::TestDir;
+    use std::sync::{Arc, Barrier};
+
+    const ROUNDS: usize = 25;
+    let dir = TestDir::new("concurrent-atomic-write");
+    let dir = Arc::new(dir.path.clone());
+    let barrier = Arc::new(Barrier::new(2));
+
+    let writer = |byte: u8, dir: Arc<std::path::PathBuf>, barrier: Arc<Barrier>| {
+        std::thread::spawn(move || {
+            let payload = vec![byte; 65536];
+            barrier.wait();
+            for _ in 0..ROUNDS {
+                atomic_write_mode(&dir, "shared", &payload, 0o600)?;
+            }
+            std::io::Result::Ok(())
+        })
+    };
+    let a = writer(0x41, Arc::clone(&dir), Arc::clone(&barrier));
+    let b = writer(0x42, Arc::clone(&dir), Arc::clone(&barrier));
+    a.join()
+        .expect("writer A panicked")
+        .expect("writer A saw I/O errors");
+    b.join()
+        .expect("writer B panicked")
+        .expect("writer B saw I/O errors");
+
+    let observed = std::fs::read(dir.join("shared")).unwrap();
+    assert_eq!(observed.len(), 65536, "never a partial write");
+    assert!(
+        observed.iter().all(|&byte| byte == 0x41) || observed.iter().all(|&byte| byte == 0x42),
+        "last writer wins whole, never a mixture"
+    );
+    let debris: Vec<_> = std::fs::read_dir(dir.as_path())
+        .unwrap()
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| {
+            path.extension().is_some_and(|ext| ext == "tmp")
+                && path.to_string_lossy().contains("shared.")
+        })
+        .collect();
+    assert!(
+        debris.is_empty(),
+        "no writer leaves its temp behind: {debris:?}"
     );
 }

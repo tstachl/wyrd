@@ -312,11 +312,11 @@ mod tests {
     }
 
     /// Mirrors the custody suite's
-    /// `a_stale_temp_is_reclaimed_at_the_hardened_mode`
+    /// `a_stale_shared_temp_is_left_alone_while_the_write_hardens`
     /// (`durable/tests_permissions.rs`): a stale temp stranded by a
-    /// pre-fix crash is reclaimed, and the record it precedes lands
-    /// owner-only — the escrow write inherits the primitive's
-    /// create-time mode rather than a post-hoc chmod.
+    /// pre-fix crash under the old shared name is left alone — it
+    /// could be a live competitor's file — and the record it precedes
+    /// still lands owner-only under a unique sibling.
     #[cfg(unix)]
     #[test]
     fn a_crash_during_escrow_write_leaves_no_readable_temp() {
@@ -338,8 +338,8 @@ mod tests {
             "the completed record is never readable"
         );
         assert!(
-            !stale.exists(),
-            "the stale temp is reclaimed, not published"
+            stale.is_file(),
+            "the legacy shared temp is never unlinked by a concurrent-safe write"
         );
     }
 
