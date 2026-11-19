@@ -68,8 +68,8 @@ jobs:
   # store, then the mount-free check + clippy lanes (the
   # `--no-default-features` build is a shipped configuration, so it
   # rides the fast gate instead of only the local hook), then the
-  # rustdoc broken-link gate.
-  # Build steps lead; the run step closes — no run before build.
+  # rustdoc broken-link gate. All build steps; the audit run step
+  # now lives in gates-audit below.
   gates-fast:
     steps:
       - deps:
