@@ -291,7 +291,8 @@ identity (requester plus that page's evidence) and its own
 received-request fact, answered under the existing per-statement
 caps; there is no sender-side page cursor. One armed evaluation
 sends every page of the current view, and the already-asked marker
-names the full-view digest only when every page was relay-accepted —
+names the full-view digest only when every active recipient was
+attempted and every page was relay-accepted —
 a partial fan-out retries whole, exactly like a partial send. The
 comparison is sound per page: a page is a subset of the full
 derivation, so what a page covers the full view covers too (direct
@@ -316,11 +317,15 @@ self — never the union over observed history. A removed device
 of either role holds no later epoch secret and receives nothing
 further (`epochs.md`); asking it buys no convergence while its
 sends (and per-relay timeouts) stall the live members behind
-it. The fan-out runs under the pass publish budget: a tripped
-budget defers the unattempted recipients without loss (the
-full-view digest stays unmarked, so the next armed evaluation
-retries whole), never retired, and the trip is reported in the
-pass publish outcome.
+it. The fan-out runs under the pass publish budget, checked
+between sends: a tripped budget defers the unattempted recipients
+without loss (the full-view digest stays unmarked, the reconnect
+latch re-arms so the next pass retries even with no new gap or
+edge), never retired, and the trip is reported in the pass
+publish outcome. The publish phase re-anchors the shared budget
+to its own window minus the trigger's spend, so fetch and
+mutation time between the two phases is never charged to
+publish.
 
 A relay acceptance behind a request marks only that the bytes left,
 never that the peer opened them: a sender that has rotated past the

@@ -122,7 +122,9 @@ impl Engine {
     /// re-edges through the supervisor — but a one-off failure
     /// while the transport stays up does not, so an edge-only probe
     /// lost to a blip waits for the next genuine reconnect, gap, or
-    /// view change.
+    /// view change. A budget trip is the exception: the fan-out
+    /// re-arms the latch itself when recipients go unattempted, so
+    /// the retry needs no new edge.
     pub fn note_reconnected(&mut self) {
         self.reconnect_latched = true;
     }
@@ -177,8 +179,12 @@ impl Engine {
     /// bounded statements, seal each under the newest held epoch key,
     /// fan every page out to every active recipient, and mark the
     /// full-view digest only when every recipient was attempted and
-    /// every page was relay-accepted. The mark is volatile by design
-    /// (see the module docs): a restart re-probes once.
+    /// every page was relay-accepted. A budget trip anywhere in the
+    /// attempt defers the unattempted recipients without loss,
+    /// leaves the digest unmarked, and re-arms the reconnect latch
+    /// so the next pass retries even with no new gap or edge. The
+    /// mark is volatile by design (see the module docs): a restart
+    /// re-probes once.
     fn request_once(
         &mut self,
         mailbox: &mut impl Mailbox,
@@ -199,13 +205,31 @@ impl Engine {
             Some(epoch) => *epoch,
             None => return Ok(ReconciliationOutcome::NoSealingKey),
         };
+        let recipients = self.request_recipients();
+        if recipients.is_empty() {
+            return Ok(ReconciliationOutcome::NoRecipients);
+        }
+        // Bound the whole attempt before sealing: a budget that
+        // already tripped (or that trips below) sends nothing and
+        // marks nothing — the next armed evaluation retries whole.
+        // Sealing is CPU-only, so skipping it on a dead budget is
+        // pure savings, never a semantic difference.
+        let pages = view.evidence().pages();
+        if !budget.check() {
+            budget.defer(recipients.len());
+            self.reconnect_latched = true;
+            return Ok(ReconciliationOutcome::Requested {
+                recipients: recipients.len(),
+                accepted: 0,
+                pages: pages.len(),
+            });
+        }
         // Page first, seal second: every page fits the mailbox ceiling
         // by construction, so an oversize full view fans out as
         // several bounded statements instead of sending nothing.
         // Pre-seal every page before any send: a page that still
         // exceeds the ceiling sends nothing and marks nothing — the
         // same fail-fast the single-statement path always had.
-        let pages = view.evidence().pages();
         let mut sealed_pages = Vec::with_capacity(pages.len());
         for page in &pages {
             let evidence_bytes = encode_reconciliation_view_canonical(page);
@@ -228,35 +252,39 @@ impl Engine {
             }
             sealed_pages.push(sealed_bytes);
         }
-        let recipients = self.request_recipients();
-        if recipients.is_empty() {
-            return Ok(ReconciliationOutcome::NoRecipients);
-        }
         // Fan every page out to every active recipient,
         // recipient-major: one recipient's full page set leaves
         // before the next recipient's begins, so a tripped budget
         // defers whole recipients (the documented defer unit)
-        // instead of half-fanning everyone. Pages stay independent
-        // statements with independent wire identities, answered and
-        // retired per page under the existing caps. The full-view
-        // digest marks only when every recipient was attempted and
-        // every page was relay-accepted — a partial fan-out
-        // (rejection or budget trip) retries whole, exactly like a
-        // partial send.
+        // instead of half-fanning everyone. The budget is checked
+        // between sends, never mid-send: one in-flight send can
+        // overshoot the deadline by up to the per-send relay
+        // timeout. Pages stay independent statements with
+        // independent wire identities, answered and retired per
+        // page under the existing caps. The full-view digest marks
+        // only when every recipient was attempted and every page
+        // was relay-accepted — a partial fan-out (rejection or
+        // budget trip) retries whole, exactly like a partial send.
         let mut accepted = 0usize;
         let mut page_accepted = vec![false; sealed_pages.len()];
         let mut attempted = 0usize;
-        for recipient in &recipients {
-            if !budget.check() {
-                // Publish budget tripped: this recipient and the
-                // rest stay unattempted for the next armed
-                // evaluation — deferred without loss, never
-                // retired, never marked.
-                budget.defer(recipients.len() - attempted);
-                break;
-            }
-            attempted += 1;
+        'fan: for recipient in &recipients {
             for (index, sealed_bytes) in sealed_pages.iter().enumerate() {
+                if !budget.check() {
+                    // Publish budget tripped: this recipient and
+                    // the rest stay unattempted for the next armed
+                    // evaluation — deferred without loss, never
+                    // retired, never marked. The current recipient
+                    // counts as unattempted too (its page set is
+                    // incomplete), so a retry fans it out whole.
+                    // Re-arm the reconnect latch: without a parked
+                    // gap this is the only arm the retry has, and
+                    // the pre-seal check above re-arms the same
+                    // way.
+                    budget.defer(recipients.len() - attempted);
+                    self.reconnect_latched = true;
+                    break 'fan;
+                }
                 let envelope = seal_for_recipient(&self.identity_secret, *recipient, sealed_bytes)?;
                 let report = mailbox.send(envelope)?;
                 accepted += report.accepted;
@@ -264,6 +292,7 @@ impl Engine {
                     page_accepted[index] = true;
                 }
             }
+            attempted += 1;
         }
         if attempted == recipients.len() && page_accepted.iter().all(|ready| *ready) {
             self.last_requested_digest = Some(digest);

@@ -43,12 +43,40 @@ where
     /// N_obligations x per-send timeout. Shared by the
     /// reconciliation trigger ahead of the publish phase and the
     /// publish phase itself: one pass, one deadline — whoever spends
-    /// it, the rest defers.
+    /// it, the rest defers. The publish phase never inherits the
+    /// aged object blindly: it rebases the shared budget to a fresh
+    /// deadline of now plus the unconsumed remainder (see
+    /// `rebase_for_publish`), so fetch and mutation time between the
+    /// two phases is excluded by construction while the trigger's
+    /// spend and deferrals carry over.
     fn publish_deadline(&self) -> std::time::Instant {
-        let pass_cap = std::time::Instant::now() + self.publish_pass_budget;
+        self.publish_deadline_from(std::time::Instant::now(), self.publish_pass_budget)
+    }
+
+    /// The same deadline measured from an explicit base and window:
+    /// the rebase path re-derives the publish deadline from the
+    /// publish phase start minus the trigger's spend.
+    fn publish_deadline_from(
+        &self,
+        base: std::time::Instant,
+        window: std::time::Duration,
+    ) -> std::time::Instant {
+        let pass_cap = base + window;
         self.mutations
             .nearest_deadline(self.max_mutation_wait)
             .map_or(pass_cap, |held| held.min(pass_cap))
+    }
+
+    /// Re-anchor the shared pass budget to the publish window:
+    /// fetch and mutation application ran outside any budget since
+    /// the trigger spent from it, so the publish deadline is now
+    /// plus the window remainder after the trigger's spend, still
+    /// clipped to the nearest held mutation. The trigger's clip
+    /// state carries over untouched — its deferrals are
+    /// unattempted sends either way.
+    fn rebase_for_publish(&self, budget: &mut PublishBudget, trigger_spent: std::time::Duration) {
+        let window = self.publish_pass_budget.saturating_sub(trigger_spent);
+        budget.rebase(self.publish_deadline_from(std::time::Instant::now(), window));
     }
 
     /// Send every undischarged outbound obligation: transitions and
@@ -609,8 +637,14 @@ where
         // request fan-out (or a hanging relay inside it) trips
         // the same clip the publish legs report — unattempted
         // sends stay pending for the next pass, never retired.
+        // The clock starts here, at the trigger; the publish
+        // phase rebases to its own window before sending (see
+        // `rebase_for_publish`), so fetch and mutation time in
+        // between is never charged to publish.
         let mut budget = PublishBudget::new(self.publish_deadline());
+        let budget_start = std::time::Instant::now();
         self.fire_reconciliation_trigger(mailbox, paused, &mut budget)?;
+        let trigger_spent = budget_start.elapsed();
         // Generation rotation on observed demand (OD-11-2): every
         // identity noted since the last pass whose generation
         // completed terminal reopens as a new one. Notes arrive from
@@ -892,10 +926,18 @@ where
                 // reconciliation trigger ahead of it shares the pass
                 // budget — an armed probe on an otherwise idle pass
                 // can trip the clip, so report the budget's state,
-                // not a constant.
+                // not a constant. The elapsed value is the shared
+                // budget's age at the idle decision when it clipped
+                // (the "after N ms" half of the clip line), and zero
+                // otherwise: the publish phase never ran, so there
+                // is no publish wall time to report.
                 publish_clipped: budget.clipped(),
                 publish_deferred: budget.deferred(),
-                publish_elapsed_ms: 0,
+                publish_elapsed_ms: if budget.clipped() {
+                    budget_start.elapsed().as_millis() as u64
+                } else {
+                    0
+                },
                 generation,
                 pending_heads,
                 poison: self.poison_counts(),
@@ -934,6 +976,7 @@ where
             let outcome = if paused {
                 PublishOutcome::default()
             } else {
+                self.rebase_for_publish(&mut budget, trigger_spent);
                 self.publish(mailbox, &mut budget)?
             };
             tracing::debug!(
@@ -1010,6 +1053,7 @@ where
         let outcome = if paused {
             PublishOutcome::default()
         } else {
+            self.rebase_for_publish(&mut budget, trigger_spent);
             self.publish(mailbox, &mut budget)?
         };
         tracing::debug!(

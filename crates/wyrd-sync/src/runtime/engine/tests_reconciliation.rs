@@ -14,8 +14,8 @@ use crate::membership::test_util::{admit, drive as member_drive, key, sign, Buil
 use crate::runtime::reconcile::ReconciliationOutcome;
 use crate::runtime::respond::AnswerReport;
 use crate::runtime::test_util::{
-    admit_engine, announcement_for, announcement_msg, control_key, identity, transition_message,
-    TestDir,
+    admit_engine, announcement_for, announcement_msg, control_key, encryption_key, identity,
+    transition_message, TestDir,
 };
 use crate::transport::mailbox::seal_for_recipient;
 use crate::transport::mailbox::{
@@ -23,7 +23,7 @@ use crate::transport::mailbox::{
     MemoryRelay, SendReport,
 };
 use wyrd_format::membership::{
-    set_root, MEMBER_SET_CONTEXT, OWNER_SET_CONTEXT, READER_SET_CONTEXT,
+    set_root, Admission, MEMBER_SET_CONTEXT, OWNER_SET_CONTEXT, READER_SET_CONTEXT,
 };
 
 /// A mailbox that records every envelope it accepts while
@@ -971,13 +971,14 @@ fn partial_page_fan_out_retries_whole() {
     );
 }
 
-/// Removed devices are not contacted: after C is admitted and
-/// then removed, the trigger fans out to the canonical tip's
-/// active members only. The old union-over-history would still ask
-/// C; the scoped fan-out names the owner and B, B commits the
-/// live statement, and C's drain stays empty (C holds the sealing
-/// epoch's key, so an addressed envelope would have committed —
-/// the empty drain proves no contact, not inability).
+/// Removed devices are not contacted: after C (member) and R
+/// (reader) are admitted and then removed, the trigger fans out
+/// to the canonical tip's active members only. The old
+/// union-over-history would still ask both; the scoped fan-out
+/// names the owner and B, B commits the live statement, and the
+/// removed devices' drains stay empty (both hold the sealing
+/// epoch's keys, so empty drains prove no contact, not
+/// inability).
 #[test]
 fn removed_devices_are_not_contacted() {
     let controls: Vec<(u64, [u8; 32])> = [1, 2, 3].iter().map(|e| (*e, control_key(*e))).collect();
@@ -988,18 +989,28 @@ fn removed_devices_are_not_contacted() {
         b: open_device("scoped-b", 0x13, 0xF1, &controls),
     };
     let mut c = open_device("scoped-c", 0x14, 0xF2, &controls);
-    let (a_dev, b_dev, c_dev) = (pair.a.device, pair.b.device, c.device);
+    let mut r = open_device("scoped-r", 0x15, 0xF3, &controls);
+    let (a_dev, b_dev, c_dev, r_dev) = (pair.a.device, pair.b.device, c.device, r.device);
 
-    // The chain: genesis, admit A, admit B, admit C, remove C.
-    // Routed through intake so the live log replays it; the tip
-    // names owner, A, B — C is history, not roster.
+    // The chain: genesis, admit A, admit B, admit C (member) and R
+    // (reader), remove both. Routed through intake so the live log
+    // replays it; the tip names owner, A, B — C and R are history,
+    // not roster. Both roles are covered because the derivation
+    // unions the tip's member and reader sets alike.
     let owner_sk = DeviceIdentitySecret::from_bytes([10; 32]).unwrap();
     let (mut builder, genesis) = Builder::genesis(10);
     let admit_a = admit_engine(&mut builder, a_dev);
     let admit_b = admit_engine(&mut builder, b_dev);
     let admit_c = admit_engine(&mut builder, c_dev);
+    let admit_r = builder.child(vec![Change::AdmitReader(Admission {
+        device: r_dev,
+        encryption_key: encryption_key(&r.encryption_sk),
+    })]);
     let remove_c = builder.child(vec![Change::Remove(c_dev)]);
-    for t in [&genesis, &admit_a, &admit_b, &admit_c, &remove_c] {
+    let remove_r = builder.child(vec![Change::Remove(r_dev)]);
+    for t in [
+        &genesis, &admit_a, &admit_b, &admit_c, &admit_r, &remove_c, &remove_r,
+    ] {
         send_to(
             &mut pair,
             &owner_sk,
@@ -1011,7 +1022,7 @@ fn removed_devices_are_not_contacted() {
     }
     assert_eq!(
         drain_side(&mut pair.relay, &mut pair.a).accepted,
-        5,
+        7,
         "A observes the chain"
     );
     assert!(
@@ -1056,7 +1067,12 @@ fn removed_devices_are_not_contacted() {
     assert_eq!(
         drain_side(&mut pair.relay, &mut c).accepted,
         0,
-        "the removed device is contacted never"
+        "the removed member is contacted never"
+    );
+    assert_eq!(
+        drain_side(&mut pair.relay, &mut r).accepted,
+        0,
+        "the removed reader is contacted never"
     );
 }
 
@@ -1126,17 +1142,25 @@ impl Mailbox for SleepThenSendMailbox<'_> {
     }
 }
 
-/// The clip lands mid-fan-out: the first recipient's burst goes out
-/// (one in-flight send may overshoot the deadline), the second
-/// defers, nothing marks, and the next armed evaluation retries
-/// whole — the pass deadline bounds the fan-out instead of N
-/// recipients × per-send timeout.
+/// The clip lands mid-burst, between page sends: with a three-page
+/// view the first recipient's first page goes out (one in-flight
+/// send may overshoot the deadline), the second page's check trips,
+/// both recipients defer, nothing marks, and the next armed
+/// evaluation retries whole — the pass deadline bounds the fan-out
+/// instead of N recipients × pages × per-send timeout. Per-send
+/// checks are what make this true; per-recipient checks would have
+/// sent all three pages before tripping.
 #[test]
 fn scoped_fan_out_clips_mid_burst_under_the_pass_deadline() {
     use std::time::{Duration, Instant};
 
     let (mut pair, controls, _) = scenario();
     converge(&mut pair);
+    let (mut builder, _) = Builder::genesis(10);
+    let transitions: Vec<Fact> = (0..2100)
+        .map(|_| Fact::Transition(builder.child(vec![Change::Rotate])))
+        .collect();
+    pair.a.engine.commit_facts(&transitions).expect("fits");
     park_gap(&mut pair, &controls);
     pair.a.engine.note_reconnected();
     let device = pair.a.device;
@@ -1157,19 +1181,19 @@ fn scoped_fan_out_clips_mid_burst_under_the_pass_deadline() {
             ReconciliationOutcome::Requested {
                 recipients: 2,
                 accepted: 1,
-                pages: 1,
+                pages: 3,
             },
-            "the first burst runs, the second defers"
+            "the first send runs, the second page's check trips"
         );
-        assert_eq!(budget.deferred(), 1, "one recipient defers");
+        assert_eq!(budget.deferred(), 2, "both recipients defer");
     }
     let mut mailbox = mailbox_for(&mut pair.relay, device);
     assert_eq!(
         trigger(&mut pair.a.engine, &mut mailbox),
         ReconciliationOutcome::Requested {
             recipients: 2,
-            accepted: 2,
-            pages: 1,
+            accepted: 6,
+            pages: 3,
         },
         "the clipped fan-out retries whole"
     );
