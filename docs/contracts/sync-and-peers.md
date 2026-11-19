@@ -310,7 +310,17 @@ so unioning pages cannot over-claim. A future reclamation change
 that lets evidence shrink must revisit this sentence. No new wire
 kind, record tag, or evidence version carries the pages: they reuse
 the statement layout, so an old reader treats each page as an
-ordinary small statement (`upgrade-contract.md`).
+ordinary small statement (`upgrade-contract.md`). The fan-out
+names the canonical tip's active member and reader sets, minus
+self — never the union over observed history. A removed device
+of either role holds no later epoch secret and receives nothing
+further (`epochs.md`); asking it buys no convergence while its
+sends (and per-relay timeouts) stall the live members behind
+it. The fan-out runs under the pass publish budget: a tripped
+budget defers the unattempted recipients without loss (the
+full-view digest stays unmarked, so the next armed evaluation
+retries whole), never retired, and the trip is reported in the
+pass publish outcome.
 
 A relay acceptance behind a request marks only that the bytes left,
 never that the peer opened them: a sender that has rotated past the
