@@ -99,8 +99,10 @@ export function boundLabel(value: number | null | undefined, unit: string): stri
 export interface SettingBound {
   /** The settings-file key (and sparse-update member). */
   key: string;
-  /** The row label the editor shows. */
+  /** The row label the editor shows: what the setting means to the user. */
   label: string;
+  /** One line beneath the label: precisely what the implementation enforces. */
+  description: string;
   /** The unit the value carries (display and input hint). */
   unit: string;
   /** Smallest acceptable whole number. Zero only where zero is meaningful (the quota: refuse-all). */
@@ -110,16 +112,19 @@ export interface SettingBound {
 }
 
 /**
- * The five bounds the editor owns, in file order. The validation
+ * The five bounds the editor owns, in file order. Labels say what
+ * the setting means; descriptions say what the implementation
+ * enforces — jargon (`quota`, `admitted`, `mutation`) lives here
+ * in the description at most, never in the label. The validation
  * ranges mirror the shared contract (`wyrd-settings`): the backend
  * enforces them again, so this is fast feedback, never authority.
  */
 export const SETTING_BOUNDS: SettingBound[] = [
-  { key: "retained_bytes_quota", label: "Retained bytes quota", unit: "bytes", min: 0, max: Number.MAX_SAFE_INTEGER },
-  { key: "max_admit_per_pass", label: "Items admitted per sync pass", unit: "items", min: 1, max: 1000000 },
-  { key: "fetch_pass_budget_secs", label: "Fetch time limit per pass", unit: "seconds", min: 1, max: 86400 },
-  { key: "max_mutation_wait_secs", label: "Mutation wait limit", unit: "seconds", min: 1, max: 86400 },
-  { key: "open_timeout_secs", label: "Open wait limit", unit: "seconds", min: 1, max: 86400 },
+  { key: "retained_bytes_quota", label: "Storage limit", description: "Maximum amount of data Wyrd retains for this drive.", unit: "bytes", min: 0, max: Number.MAX_SAFE_INTEGER },
+  { key: "max_admit_per_pass", label: "Items processed per sync", description: "Maximum number of items admitted during one sync pass.", unit: "items", min: 1, max: 1000000 },
+  { key: "fetch_pass_budget_secs", label: "Download time limit", description: "Maximum time spent fetching content during one sync pass.", unit: "seconds", min: 1, max: 86400 },
+  { key: "max_mutation_wait_secs", label: "File change wait limit", description: "Maximum time a submitted file change waits before timing out.", unit: "seconds", min: 1, max: 86400 },
+  { key: "open_timeout_secs", label: "File open wait limit", description: "Maximum time to wait for requested file content to become available.", unit: "seconds", min: 1, max: 86400 },
 ];
 
 /**
