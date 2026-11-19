@@ -530,17 +530,17 @@ verdict.
   line, per "Passphrase handling" below), with CLI
   stderr as opaque display detail that is never parsed
   (no CLI-output-as-UX).
-- Settings are read-only in stage 2 (OD, decided): the settings
-  view deserializes the existing `settings.json` schema through a
+- Settings edit through the stage-2 restricted writer (OD
+  `docs/design/settings-ownership.md`, decided): the settings view
+  deserializes the existing `settings.json` schema through a
   private presentation model (`DriveSettingsView`) and presents one
   drive's configured bounds — never defaults, never effective
-  runtime posture, relays untouched. The shell never writes the
-  file: a second writer would need an explicit ownership,
-  concurrency (atomic rename does not stop lost updates), and
-  runtime-application contract that does not exist yet. Editing
-  waits on either narrowly scoped owner operations (for
-  runtime-mutable values) or the installer/configuration workflow
-  with an explicit restart contract (for startup-only values).
+  runtime posture, relays untouched. Edits commit one sparse update
+  (set-list plus clear-list for this drive only) through the
+  installed CLI and the shared transaction; saving and applying
+  stay separate — saved bounds apply at the next owner start, via
+  the existing lifecycle (managed restart, session lock/unlock),
+  never live.
 
 ## Layer gate (two tiers, honestly described)
 
