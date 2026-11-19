@@ -68,6 +68,22 @@ export function settingsSurviveLock(session: SessionState | null): boolean {
 }
 
 /**
+ * How saved bounds take effect for one drive, from its registry
+ * posture: `service` where no session gate exists (managed — the
+ * shell restarts the service), `session` where the app holds an
+ * unlock session (lock, then unlock with the typed passphrase),
+ * `null` where no owner runs (locked or stopped — saved values
+ * apply at the next start). The Settings view renders from this;
+ * it never decides posture itself.
+ */
+export function restartKindFor(
+  session: SessionState | null,
+): "service" | "session" | null {
+  if (session === null) return "service";
+  return session.state === "unlocked" ? "session" : null;
+}
+
+/**
  * One configured bound for the settings view. Absent stays absent:
  * the compiled default applies and the shell does not know it, so
  * the label says exactly that instead of filling a number in.

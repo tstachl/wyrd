@@ -593,8 +593,9 @@
    * which restarts the owner where one is managed. Shared by the
    * unavailable-overlay reinstall and the settings restart-to-apply
    * so the two can never drift into different argv. Null where the
-   * gate-verified credential paths are absent or the backend itself
-   * did not answer (transport failure, not an owner answer).
+   * gate-verified credential paths are absent; transport and
+   * unexpected throws propagate to the caller, which reports them
+   * in its own surface.
    */
   async function reconfigureSame(driveDir: string): Promise<ProvisionReport | null> {
     if (onboardedIdentityFile === null || onboardedPassphraseFile === null) return null;
@@ -608,11 +609,7 @@
       mountpoint: selectedDrive?.mountpoint ?? undefined,
       noService: false,
     };
-    try {
-      return await runProvision(() => provisionReconfigure(args));
-    } catch {
-      return null;
-    }
+    return await runProvision(() => provisionReconfigure(args));
   }
 
   /**
@@ -628,16 +625,21 @@
     if (onboardedIdentityFile === null || onboardedPassphraseFile === null) return;
     recovery = null;
     unlockRefused = null;
-    const report = await reconfigureSame(driveDir);
-    if (report === null) {
+    try {
+      const report = await reconfigureSame(driveDir);
+      if (report === null) return;
+      const detail = refusedDetail(report);
+      recovery = detail === null ? null : { driveDir, detail };
+    } catch (error: unknown) {
       recovery = {
         driveDir,
-        detail: "The shell backend did not answer (transport failure, not an owner answer).",
+        detail:
+          error instanceof Error
+            ? error.message
+            : `Unexpected reinstall failure: ${String(error)}`,
       };
       return;
     }
-    const detail = refusedDetail(report);
-    recovery = detail === null ? null : { driveDir, detail };
     await refreshLifecycle();
     await readOwner(driveDir, () => liveness(driveDir));
     await refreshCurrent();
@@ -648,24 +650,32 @@
    * same stop-and-reinstall reconfigure the recovery path uses,
    * with unchanged supervision (relays kept, mode and mountpoint
    * as registered). Returns the refusal detail, or null where the
-   * restart completed — observed state decides the display, so the
-   * caller pairs this with a re-read and reports
-   * applied-on-restartup vs saved-but-restart-failed itself. A
-   * transport throw (the backend itself unreachable) returns as a
-   * detail, never as an unhandled rejection.
+   * restart completed *and* the post-restart liveness probe
+   * answered — the verdict consults the observation, never restart
+   * acceptance alone. A refused reconfigure, a silent owner after a
+   * clean restart, and a backend transport throw all return as
+   * details; the caller renders saved-but-restart-failed itself.
    */
   async function restartServiceForApply(driveDir: string): Promise<string | null> {
     if (onboardedIdentityFile === null || onboardedPassphraseFile === null) {
       return "This device's identity is not verified yet — finish the identity check first.";
     }
-    const report = await reconfigureSame(driveDir);
-    if (report === null) {
-      return "The shell backend did not answer (transport failure, not an owner answer).";
+    try {
+      const report = await reconfigureSame(driveDir);
+      if (report === null) {
+        return "This device's identity is not verified yet — finish the identity check first.";
+      }
+      const refused = refusedDetail(report);
+      if (refused !== null) return refused;
+    } catch (error: unknown) {
+      return error instanceof Error ? error.message : `Unexpected restart failure: ${String(error)}`;
     }
     await refreshLifecycle();
     await readOwner(driveDir, () => liveness(driveDir));
     await refreshCurrent();
-    return refusedDetail(report);
+    return presentation.availabilityFor(driveDir) === "available"
+      ? null
+      : "The owner is not answering after the restart — the saved values wait for it to come back.";
   }
 
   /**
@@ -984,11 +994,7 @@
               transportNotice={presentation.transportNotice}
               identityFile={onboardedIdentityFile}
               passphraseFile={onboardedPassphraseFile}
-              restartKind={selectedSession === null
-                ? "service"
-                : selectedSession.state === "unlocked"
-                  ? "session"
-                  : null}
+              session={selectedSession}
               onRefresh={() => void refreshSettings(selectedDriveDir)}
               onLeave={(args: ProvisionLeaveArgs) => runProvision(() => provisionLeave(args))}
               onApply={(update: SparseUpdateArgs) =>

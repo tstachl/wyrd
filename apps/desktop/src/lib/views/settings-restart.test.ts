@@ -34,7 +34,7 @@ test("managed restart confirms the interruption first", () => {
 
 test("restart verdict never claims application", () => {
   for (const line of [
-    "Service restarted — the observation below shows the values the owner picked up.",
+    "Service restarted and the owner is answering — the saved values apply from this start.",
     "Saved, but the restart failed:",
     "the saved values wait for the next start",
   ]) {

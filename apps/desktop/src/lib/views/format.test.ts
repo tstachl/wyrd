@@ -15,6 +15,7 @@ import {
   membershipSummary,
   nextDriveDir,
   observedRegistrySummary,
+  restartKindFor,
   sessionLabel,
   settingsSurviveLock,
   SETTING_BOUNDS,
@@ -72,6 +73,17 @@ test("locked drives keep their local settings surfaces, everything else gates on
   // Managed-down drives (no session gate) keep the overlay with
   // its Start/Reinstall recovery — file facts alone would bury it.
   expect(settingsSurviveLock(null)).toBe(false);
+});
+
+test("restart routing follows registry posture, never the view", () => {
+  // Managed (no session gate): the shell restarts the service.
+  expect(restartKindFor(null)).toBe("service");
+  // Unlocked session: lock, then unlock with the typed passphrase —
+  // one click can never restart without holding the secret.
+  expect(restartKindFor({ state: "unlocked", detail: "open" })).toBe("session");
+  // Locked or stopped: no owner runs, so saving is the whole
+  // operation — values apply at the next start.
+  expect(restartKindFor({ state: "locked", detail: "needs passphrase" })).toBe(null);
 });
 
 test("absent bounds stay unknown, never defaulted", () => {

@@ -25,13 +25,14 @@ never deletes local data as a side effect of the UI. -->
   import PageHeader from "$lib/components/page-header.svelte";
   import InfoHint from "$lib/components/info-hint.svelte";
   import type { Stamped } from "$lib/state/presentation.svelte.js";
-  import type { DriveSettingsState, ProvisionReport, SettingsWriteReport, SparseUpdateArgs } from "$lib/ipc/results.js";
+  import type { DriveSettingsState, ProvisionReport, SessionState, SettingsWriteReport, SparseUpdateArgs } from "$lib/ipc/results.js";
   import type { ProvisionLeaveArgs } from "$lib/ipc/operations.js";
   import {
     boundLabel,
     describeProvisionResult,
     membershipSummary,
     observedRegistrySummary,
+    restartKindFor,
     SETTING_BOUNDS,
     validateBoundInput,
   } from "./format.js";
@@ -61,19 +62,17 @@ never deletes local data as a side effect of the UI. -->
     /** Apply one sparse update; the report carries the outcome plus the post-run observation. */
     onApply: (update: SparseUpdateArgs) => Promise<SettingsWriteReport>;
     /**
-     * How saved bounds take effect for this drive: `service` where a
-     * service definition owns the owner (managed — restart it),
-     * `session` where the app holds an unlock session (lock, then
-     * unlock with the passphrase), `null` where no owner runs
-     * (locked or stopped — saved values apply at the next start).
-     * Decided by the shell from registry posture, never by this view.
+     * This drive's session gate (`null` where a service definition
+     * owns the drive — managed). Decides how saved bounds take
+     * effect via `restartKindFor`, never by this view.
      */
-    restartKind: "service" | "session" | null;
+    session: SessionState | null;
     /**
      * Restart the managed service with unchanged supervision so saved
      * bounds apply. Resolves the refusal detail, or null where the
-     * restart completed — the post-restart observation decides the
-     * display, never this verdict.
+     * restart completed and the post-restart probe answered — the
+     * verdict consults the observation, never restart acceptance
+     * alone.
      */
     onRestartService: () => Promise<string | null>;
     /** Lock the session owner and land on Status, where unlock lives. */
@@ -82,7 +81,9 @@ never deletes local data as a side effect of the UI. -->
     onRefreshDrives: () => void;
   }
 
-  let { driveDir, snapshot, pending, transportNotice, identityFile, passphraseFile, onRefresh, onLeave, onApply, restartKind, onRestartService, onLockForRestart, onRefreshDrives }: Props = $props();
+  let { driveDir, snapshot, pending, transportNotice, identityFile, passphraseFile, onRefresh, onLeave, onApply, session, onRestartService, onLockForRestart, onRefreshDrives }: Props = $props();
+
+  const restartKind = $derived(restartKindFor(session));
 
   const settings = $derived(snapshot?.data ?? null);
 
@@ -301,7 +302,7 @@ never deletes local data as a side effect of the UI. -->
         </div>
         {#if restartReport !== null}
           {#if restartReport.ok}
-            <p class="mt-2">Service restarted — the observation below shows the values the owner picked up.</p>
+            <p class="mt-2">Service restarted and the owner is answering — the saved values apply from this start.</p>
           {:else}
             <p class="mt-2">Saved, but the restart failed: {restartReport.detail} — the saved values wait for the next start.</p>
           {/if}
