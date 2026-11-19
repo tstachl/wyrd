@@ -76,12 +76,12 @@ never deletes local data as a side effect of the UI. -->
      */
     onRestartService: () => Promise<string | null>;
     /** Lock the session owner and land on Status, where unlock lives. */
-    onLockForRestart: () => Promise<void>;
+    onLockAndShowStatus: () => Promise<void>;
     /** Re-read the registry and return to the drive list. */
     onRefreshDrives: () => void;
   }
 
-  let { driveDir, snapshot, pending, transportNotice, identityFile, passphraseFile, onRefresh, onLeave, onApply, session, onRestartService, onLockForRestart, onRefreshDrives }: Props = $props();
+  let { driveDir, snapshot, pending, transportNotice, identityFile, passphraseFile, onRefresh, onLeave, onApply, session, onRestartService, onLockAndShowStatus, onRefreshDrives }: Props = $props();
 
   const restartKind = $derived(restartKindFor(session));
 
@@ -313,7 +313,7 @@ never deletes local data as a side effect of the UI. -->
       <Alert.Description>
         <p>The running owner keeps its startup values until it restarts. Locking ends this session's owner; unlocking with the passphrase starts it again with the saved values.</p>
         <div class="mt-3 flex flex-wrap items-center gap-2">
-          <Button variant="outline" size="sm" disabled={busy} onclick={() => void onLockForRestart()}>
+          <Button variant="outline" size="sm" disabled={busy} onclick={() => void onLockAndShowStatus()}>
             Lock now
           </Button>
         </div>
