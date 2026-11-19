@@ -924,9 +924,16 @@ fn credential_rules_are_not_reimplemented_by_the_surface() {
         )
         .unwrap();
         let error = command(pair.owner_device(vec!["keys".into()])).unwrap_err();
+        // Through the loader boundary the shared rule reports in
+        // the taxonomy vocabulary: the keys path reimplements
+        // nothing and names the same hardening reason as every
+        // other subcommand.
+        let CliError::Usage(detail) = &error else {
+            panic!("insecure passphrase refuses on the keys path: {error:?}");
+        };
         assert!(
-            matches!(error, CliError::Credential { .. }),
-            "insecure passphrase refuses on the keys path: {error:?}"
+            detail.contains("must not be accessible by group or other users"),
+            "the keys path reports the shared hardening rule: {error:?}"
         );
     }
 }

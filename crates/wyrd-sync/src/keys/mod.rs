@@ -29,6 +29,7 @@ pub mod device;
 pub mod epoch;
 pub mod escrow;
 pub mod keystore;
+pub mod loader;
 pub mod owner_proof;
 pub mod root;
 
@@ -48,6 +49,7 @@ pub use keystore::{
     kdf_key, unwrap_device_secret, unwrap_root, wrap_device_secret, wrap_root, KeystoreError,
     WrappedSecret,
 };
+pub use loader::{CredentialError, CredentialLoader, CredentialRef, LoadedCredential};
 pub use root::DriveRootKey;
 
 /// Fill a buffer from the OS CSPRNG.
