@@ -116,6 +116,18 @@ default-filter = "not (test(~flood_beyond_channel_capacity) or test(~saturation_
 # evidence (four blamed innocents across wyrd-cli and wyrd-core).
 leak-timeout = "5s"
 
+# A hung test must never burn the whole 30-minute job window: kill
+# any test still running past 10 minutes. Headroom is ~12x over the
+# slowest legitimate default-profile test (the file's own
+# local-profile notes measure sustained_spam ~48s; the flood family
+# is crypto-bound and machine-sensitive), so this only fires on true
+# hangs. Observed 2026-11-19: a stuck core gate ran out the full
+# allocation before the force-stop. (nextest calls this
+# `slow-timeout`, not `test-timeout`. Verified by probe: with
+# terminate-after = 1 the test is terminated when the period
+# expires, so period "10m" kills at 10 minutes.)
+slow-timeout = { period = "10m", terminate-after = 1 }
+
 # The local edit-loop profile: cheap deterministic tests only. Profiles
 # do not inherit filters, so the slow tests excluded from `default`
 # above are restated here. Beyond them, local additionally excludes:
@@ -158,6 +170,11 @@ leak-timeout = "5s"
 
 [profile.slow]
 default-filter = "test(~flood_beyond_channel_capacity) or test(~saturation_recovers_broadcast_drops) or test(~saturation_recoveries_keep_single) or test(~restart_past_retention_redelivers) or test(~relay_outage_marks_down) or test(~serving_restart_with_accumulated_failures) or test(~poison_flood_stays_memory_only_at_scale) or test(~retry_flood_holds_at_most_one_window) or test(~two_relays_cover) or test(~admission_commit_is_bounded_by_the_pass_budget) or test(~admission_closure_commits_bounded_batches) or test(~crash_mid_incremental_admission_resumes_without_duplicate_obligations) or test(~member_invite_rerun_resumes_across_batches) or test(~largest_accepted_read_fits_the_frame) or test(~over_ceiling_manifest_batch) or test(~vault_role_fetches) or test(~sustained_spam_commits_bounded) or test(~full_share_sliced_attempts) or test(~deep_tip_classifies_without_recursion) or test(~large_announcement_history_converges_with_exact_reports) or test(~per_sender_quota) or test(~heterogeneous) or test(~budgeted_walk_reaches_live) or test(~capped_walk_pages_dial_hangs) or test(~oversize_flood_retains_nothing) or test(~torn_commit_in_any_pass)"
+
+# Same hang backstop as the default profile: master's slow gate has
+# its own 30-minute window, and its heavyweights are measured in
+# seconds-to-minutes, so the same 10-minute kill cap applies.
+slow-timeout = { period = "10m", terminate-after = 1 }
 
 [[profile.default.overrides]]
 filter = 'test(flood)'
