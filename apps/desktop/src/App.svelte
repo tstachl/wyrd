@@ -587,6 +587,32 @@
   }
 
   /**
+   * One in-place reconfigure with unchanged supervision: empty
+   * relays keep the registered set, mode and mountpoint ride from
+   * the registry observation, and the service is reinstalled —
+   * which restarts the owner where one is managed. Shared by the
+   * unavailable-overlay reinstall and the settings restart-to-apply
+   * so the two can never drift into different argv. Null where the
+   * gate-verified credential paths are absent; transport and
+   * unexpected throws propagate to the caller, which reports them
+   * in its own surface.
+   */
+  async function reconfigureSame(driveDir: string): Promise<ProvisionReport | null> {
+    if (onboardedIdentityFile === null || onboardedPassphraseFile === null) return null;
+    const mode = selectedDrive?.mode ?? "vault";
+    const args: ProvisionReconfigureArgs = {
+      driveDir,
+      relays: [],
+      identityFile: onboardedIdentityFile,
+      passphraseFile: onboardedPassphraseFile,
+      mode,
+      mountpoint: selectedDrive?.mountpoint ?? undefined,
+      noService: false,
+    };
+    return await runProvision(() => provisionReconfigure(args));
+  }
+
+  /**
    * Reinstall one drive's service definition (the "no definition
    * installed" recovery): stop and clear, rewrite the entry, and
    * reinstall/restart through the constrained CLI adapter with the
@@ -599,18 +625,9 @@
     if (onboardedIdentityFile === null || onboardedPassphraseFile === null) return;
     recovery = null;
     unlockRefused = null;
-    const mode = selectedDrive?.mode ?? "vault";
-    const args: ProvisionReconfigureArgs = {
-      driveDir,
-      relays: [],
-      identityFile: onboardedIdentityFile,
-      passphraseFile: onboardedPassphraseFile,
-      mode,
-      mountpoint: selectedDrive?.mountpoint ?? undefined,
-      noService: false,
-    };
     try {
-      const report = await runProvision(() => provisionReconfigure(args));
+      const report = await reconfigureSame(driveDir);
+      if (report === null) return;
       const detail = refusedDetail(report);
       recovery = detail === null ? null : { driveDir, detail };
     } catch (error: unknown) {
@@ -626,6 +643,52 @@
     await refreshLifecycle();
     await readOwner(driveDir, () => liveness(driveDir));
     await refreshCurrent();
+  }
+
+  /**
+   * Restart one managed drive's service so saved bounds apply: the
+   * same stop-and-reinstall reconfigure the recovery path uses,
+   * with unchanged supervision (relays kept, mode and mountpoint
+   * as registered). Returns the refusal detail, or null where the
+   * restart completed *and* the post-restart liveness probe
+   * answered — the verdict consults the observation, never restart
+   * acceptance alone. A refused reconfigure, a silent owner after a
+   * clean restart, and a backend transport throw all return as
+   * details; the caller renders saved-but-restart-failed itself.
+   */
+  async function restartServiceForApply(driveDir: string): Promise<string | null> {
+    if (onboardedIdentityFile === null || onboardedPassphraseFile === null) {
+      return "This device's identity is not verified yet — finish the identity check first.";
+    }
+    try {
+      const report = await reconfigureSame(driveDir);
+      if (report === null) {
+        return "This device's identity is not verified yet — finish the identity check first.";
+      }
+      const refused = refusedDetail(report);
+      if (refused !== null) return refused;
+    } catch (error: unknown) {
+      return error instanceof Error ? error.message : `Unexpected restart failure: ${String(error)}`;
+    }
+    await refreshLifecycle();
+    await readOwner(driveDir, () => liveness(driveDir));
+    await refreshCurrent();
+    return presentation.availabilityFor(driveDir) === "available"
+      ? null
+      : "The owner is not answering after the restart — the saved values wait for it to come back.";
+  }
+
+  /**
+   * Lock one drive for the session as the first half of a
+   * settings restart: the running owner keeps its startup values
+   * until it restarts, and a session unlock needs the passphrase
+   * typed — so after the lock the workspace lands on Status where
+   * unlock lives. Refusals surface on the unlock card there, like
+   * every other lock.
+   */
+  async function lockForRestart(driveDir: string): Promise<void> {
+    await lockDrive(driveDir);
+    selectView("status");
   }
 
   /**
@@ -931,11 +994,14 @@
               transportNotice={presentation.transportNotice}
               identityFile={onboardedIdentityFile}
               passphraseFile={onboardedPassphraseFile}
+              session={selectedSession}
               onRefresh={() => void refreshSettings(selectedDriveDir)}
               onLeave={(args: ProvisionLeaveArgs) => runProvision(() => provisionLeave(args))}
               onApply={(update: SparseUpdateArgs) =>
                 runSettingsWrite(selectedDriveDir, update)
               }
+              onRestartService={() => restartServiceForApply(selectedDriveDir)}
+              onLockForRestart={() => lockForRestart(selectedDriveDir)}
               onRefreshDrives={allDrives}
             />
           {/if}

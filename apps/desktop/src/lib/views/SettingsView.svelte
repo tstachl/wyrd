@@ -25,13 +25,14 @@ never deletes local data as a side effect of the UI. -->
   import PageHeader from "$lib/components/page-header.svelte";
   import InfoHint from "$lib/components/info-hint.svelte";
   import type { Stamped } from "$lib/state/presentation.svelte.js";
-  import type { DriveSettingsState, ProvisionReport, SettingsWriteReport, SparseUpdateArgs } from "$lib/ipc/results.js";
+  import type { DriveSettingsState, ProvisionReport, SessionState, SettingsWriteReport, SparseUpdateArgs } from "$lib/ipc/results.js";
   import type { ProvisionLeaveArgs } from "$lib/ipc/operations.js";
   import {
     boundLabel,
     describeProvisionResult,
     membershipSummary,
     observedRegistrySummary,
+    restartKindFor,
     SETTING_BOUNDS,
     validateBoundInput,
   } from "./format.js";
@@ -60,11 +61,29 @@ never deletes local data as a side effect of the UI. -->
     onLeave: (args: ProvisionLeaveArgs) => Promise<ProvisionReport>;
     /** Apply one sparse update; the report carries the outcome plus the post-run observation. */
     onApply: (update: SparseUpdateArgs) => Promise<SettingsWriteReport>;
+    /**
+     * This drive's session gate (`null` where a service definition
+     * owns the drive — managed). Decides how saved bounds take
+     * effect via `restartKindFor`, never by this view.
+     */
+    session: SessionState | null;
+    /**
+     * Restart the managed service with unchanged supervision so saved
+     * bounds apply. Resolves the refusal detail, or null where the
+     * restart completed and the post-restart probe answered — the
+     * verdict consults the observation, never restart acceptance
+     * alone.
+     */
+    onRestartService: () => Promise<string | null>;
+    /** Lock the session owner and land on Status, where unlock lives. */
+    onLockForRestart: () => Promise<void>;
     /** Re-read the registry and return to the drive list. */
     onRefreshDrives: () => void;
   }
 
-  let { driveDir, snapshot, pending, transportNotice, identityFile, passphraseFile, onRefresh, onLeave, onApply, onRefreshDrives }: Props = $props();
+  let { driveDir, snapshot, pending, transportNotice, identityFile, passphraseFile, onRefresh, onLeave, onApply, session, onRestartService, onLockForRestart, onRefreshDrives }: Props = $props();
+
+  const restartKind = $derived(restartKindFor(session));
 
   const settings = $derived(snapshot?.data ?? null);
 
@@ -170,6 +189,7 @@ never deletes local data as a side effect of the UI. -->
     if (Object.keys(errors).length > 0) return;
     saving = true;
     saveError = null;
+    restartReport = null;
     try {
       // The report carries the outcome; the paired re-read behind
       // `onApply` decides what the display says. Committed verdicts
@@ -189,7 +209,32 @@ never deletes local data as a side effect of the UI. -->
     }
   }
 
-  const busy = $derived(pending || leaveWorking || saving);
+  /**
+   * Restart-to-apply for a managed drive: saved bounds are inert
+   * until the owner restarts, and the restart interrupts
+   * availability — so it runs behind an explicit confirmation, and
+   * the outcome renders as applied-on-restartup vs
+   * saved-but-restart-failed from the post-restart observation, not
+   * from restart acceptance. Null detail means the restart
+   * completed; observed state decides the rest.
+   */
+  let confirmRestart = $state(false);
+  let restarting = $state(false);
+  let restartReport = $state<{ ok: boolean; detail?: string } | null>(null);
+
+  const busy = $derived(pending || leaveWorking || saving || restarting);
+
+  async function restartService(): Promise<void> {
+    confirmRestart = false;
+    restarting = true;
+    restartReport = null;
+    try {
+      const detail = await onRestartService();
+      restartReport = detail === null ? { ok: true } : { ok: false, detail };
+    } finally {
+      restarting = false;
+    }
+  }
 
   async function leave(): Promise<void> {
     if (identityFile === null || passphraseFile === null) return;
@@ -241,10 +286,41 @@ never deletes local data as a side effect of the UI. -->
 {#snippet saveAlerts()}
 {#if saveReport !== null && saveReport.result.result === "applied"}
   <Alert.Root class="mt-6 border-primary/40 bg-primary/10">
-    <p>
-      Bounds saved. Restart the drive to apply them — the running owner keeps its startup
-      values until then.
-    </p>
+    {#if restartKind === "service"}
+      <Alert.Title>Bounds saved — restart to apply</Alert.Title>
+      <Alert.Description>
+        <p>The running owner keeps its startup values until it restarts. Restarting briefly interrupts availability.</p>
+        <div class="mt-3 flex flex-wrap items-center gap-2">
+          <Button variant="outline" size="sm" disabled={busy} onclick={() => (confirmRestart = true)}>
+            {#if restarting}
+              <Spinner data-icon="inline-start" />
+              Restarting…
+            {:else}
+              Restart service
+            {/if}
+          </Button>
+        </div>
+        {#if restartReport !== null}
+          {#if restartReport.ok}
+            <p class="mt-2">Service restarted and the owner is answering — the saved values apply from this start.</p>
+          {:else}
+            <p class="mt-2">Saved, but the restart failed: {restartReport.detail} — the saved values wait for the next start.</p>
+          {/if}
+        {/if}
+      </Alert.Description>
+    {:else if restartKind === "session"}
+      <Alert.Title>Bounds saved — lock and unlock to apply</Alert.Title>
+      <Alert.Description>
+        <p>The running owner keeps its startup values until it restarts. Locking ends this session's owner; unlocking with the passphrase starts it again with the saved values.</p>
+        <div class="mt-3 flex flex-wrap items-center gap-2">
+          <Button variant="outline" size="sm" disabled={busy} onclick={() => void onLockForRestart()}>
+            Lock now
+          </Button>
+        </div>
+      </Alert.Description>
+    {:else}
+      <p>Bounds saved. They apply the next time the drive starts — the running owner keeps its startup values until then.</p>
+    {/if}
   </Alert.Root>
 {/if}
 {#if saveReport !== null && saveReport.result.result === "unverified"}
@@ -623,6 +699,30 @@ never deletes local data as a side effect of the UI. -->
         }}
       >
         Leave drive
+      </AlertDialog.Action>
+    </AlertDialog.Footer>
+  </AlertDialog.Content>
+</AlertDialog.Root>
+
+<AlertDialog.Root bind:open={confirmRestart}>
+  <AlertDialog.Content>
+    <AlertDialog.Header>
+      <AlertDialog.Title>Restart the service?</AlertDialog.Title>
+      <AlertDialog.Description>
+        Restarting briefly interrupts availability while the owner stops and starts again. The bounds you saved apply when it comes back.
+      </AlertDialog.Description>
+    </AlertDialog.Header>
+    <AlertDialog.Footer>
+      <AlertDialog.Cancel>Not now</AlertDialog.Cancel>
+      <AlertDialog.Action
+        disabled={busy}
+        onclick={() => {
+          // bits-ui's Action does not close the root; close it so
+          // the report lands in the card, not behind a modal.
+          void restartService();
+        }}
+      >
+        Restart service
       </AlertDialog.Action>
     </AlertDialog.Footer>
   </AlertDialog.Content>
