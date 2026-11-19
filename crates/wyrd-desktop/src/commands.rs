@@ -1848,12 +1848,18 @@ mod tests {
             serde_json::json!({"state": "configured", "retained_bytes_quota": 0, "max_admit_per_pass": 50, "fetch_pass_budget_secs": null, "max_mutation_wait_secs": null, "open_timeout_secs": 45})
         );
         assert_eq!(
-            serde_json::to_value(DriveSettings::Nosection).unwrap(),
-            serde_json::json!({"state": "nosection"})
+            serde_json::to_value(DriveSettings::Nosection {
+                path: "/x/settings.json".to_string(),
+            })
+            .unwrap(),
+            serde_json::json!({"state": "nosection", "path": "/x/settings.json"})
         );
         assert_eq!(
-            serde_json::to_value(DriveSettings::Nofile).unwrap(),
-            serde_json::json!({"state": "nofile"})
+            serde_json::to_value(DriveSettings::Nofile {
+                path: "/x/settings.json".to_string(),
+            })
+            .unwrap(),
+            serde_json::json!({"state": "nofile", "path": "/x/settings.json"})
         );
         assert_eq!(
             serde_json::to_value(DriveSettings::Unreadable {
@@ -1966,7 +1972,9 @@ mod tests {
         ] {
             let report = SettingsWriteReport {
                 result,
-                observed: DriveSettings::Nosection,
+                observed: DriveSettings::Nosection {
+                    path: "/x/settings.json".to_string(),
+                },
             };
             assert_eq!(
                 serde_json::to_value(&report).unwrap()["result"]["result"],

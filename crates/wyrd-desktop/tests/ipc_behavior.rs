@@ -772,7 +772,9 @@ fn settings_mirror_agrees_with_the_daemon_writer() {
     }
     assert_eq!(
         wyrd_desktop::settings_view::drive_settings_at(&path, std::path::Path::new("/drives/beta")),
-        wyrd_desktop::DriveSettings::Nosection
+        wyrd_desktop::DriveSettings::Nosection {
+            path: path.to_string_lossy().into_owned(),
+        }
     );
 
     std::fs::remove_dir_all(&dir).unwrap();

@@ -39,6 +39,27 @@ ignore = [
   # iteration anywhere near it). Re-review when Tauri moves to gtk
   # 0.20+. Decided 2026-11-10 for the desktop command-layer link.
   "RUSTSEC-2024-0429",
+  # RUSTSEC-2026-0574…0582 (heapless 0.7/0.8 unsound batch, issued
+  # 2026-11-18/19, nine advisories, one crate): none reachable.
+  # faster-hex builds with `alloc`, so heapless 0.8.0 is compiled
+  # out (lockfile-only); postcard's compiled heapless use is
+  # Vec<u8> push/extend/index only, and its IndexMap use is
+  # #[cfg(test)]. Per-advisory cross-check 2026-11-19: IndexMap
+  # items test-only; spsc/Deque/SortedLinkedList/mpmc/HistoryBuf
+  # unused; vec::IntoIter::drop uncalled and untriggerable (u8
+  # elements cannot panic-drop). Re-review when the iroh or nostr
+  # trees move to heapless >=0.9.4, or if postcard's heapless use
+  # widens beyond Vec. Decided 2026-11-19 to unblock CI; follow-up
+  # issue tracks a durable approach for all ignored RUSTSECs.
+  "RUSTSEC-2026-0574",
+  "RUSTSEC-2026-0575",
+  "RUSTSEC-2026-0576",
+  "RUSTSEC-2026-0577",
+  "RUSTSEC-2026-0578",
+  "RUSTSEC-2026-0579",
+  "RUSTSEC-2026-0580",
+  "RUSTSEC-2026-0581",
+  "RUSTSEC-2026-0582",
 ]
 
 [licenses]

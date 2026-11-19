@@ -276,10 +276,10 @@ test("drive settings distinguish configured from unknown", () => {
     max_mutation_wait_secs: null,
     open_timeout_secs: 45,
   });
-  const nosection: DriveSettingsState = { state: "nosection" };
-  expect(nosection).toEqual({ state: "nosection" });
-  const nofile: DriveSettingsState = { state: "nofile" };
-  expect(nofile).toEqual({ state: "nofile" });
+  const nosection: DriveSettingsState = { state: "nosection", path: "/x/settings.json" };
+  expect(nosection).toEqual({ state: "nosection", path: "/x/settings.json" });
+  const nofile: DriveSettingsState = { state: "nofile", path: "/x/settings.json" };
+  expect(nofile).toEqual({ state: "nofile", path: "/x/settings.json" });
   const unreadable: DriveSettingsState = {
     state: "unreadable",
     reason: "settings /x/settings.json is version 2, this shell reads 1",
@@ -401,7 +401,7 @@ test("settings write report pairs the outcome with the observation", () => {
   expect(applied.observed.state).toBe("configured");
   const conflict: SettingsWriteReport = {
     result: { result: "conflict", reason: "changed under" },
-    observed: { state: "nosection" },
+    observed: { state: "nosection", path: "/x/settings.json" },
   };
   expect(conflict.result).toEqual({ result: "conflict", reason: "changed under" });
   // Exit 4 lands committed-but-unverified: never a refusal, paired
@@ -409,7 +409,7 @@ test("settings write report pairs the outcome with the observation", () => {
   // Rust `settings_write_report_serializes_verbatim` test.
   const unverified: SettingsWriteReport = {
     result: { result: "unverified", reason: "verification read failed" },
-    observed: { state: "nosection" },
+    observed: { state: "nosection", path: "/x/settings.json" },
   };
   expect(unverified.result).toEqual({ result: "unverified", reason: "verification read failed" });
 });

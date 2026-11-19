@@ -3,10 +3,10 @@
 //! Observer only: this module parses the schema-version-1 file the
 //! daemon's settings surface owns, with the same strictness (version
 //! refusal, unknown-key refusal, key validation), and presents one
-//! drive's configured bounds. It never writes the file —
-//! configuration mutation needs an explicit ownership, concurrency,
-//! and runtime-application contract that does not exist yet (OD:
-//! desktop settings ownership, stage 2).
+//! drive's configured bounds. It never writes the file — writes run
+//! through the stage-2 sparse transaction (`settings_apply.rs`,
+//! which invokes the CLI's daemon transaction in-process), and this
+//! reader only names paths for display.
 //!
 //! Presentation rules, enforced by the types:
 //!
@@ -56,9 +56,18 @@ pub enum DriveSettings {
     /// The file names this drive with its configured bounds.
     Configured(DriveSettingsView),
     /// No settings file exists: nothing configured yet, never defaults dressed as configuration.
-    Nofile,
-    /// The file exists but names no section for this drive.
-    Nosection,
+    /// Carries the resolved path the file would live at, so the
+    /// empty state can name it without guessing.
+    Nofile {
+        /// Where the settings file would live for this user.
+        path: String,
+    },
+    /// The file exists but names no section for this drive. Carries
+    /// the file's path with it, like `Nofile`.
+    Nosection {
+        /// The settings file that names no section for this drive.
+        path: String,
+    },
     /// File present but unreadable with the reason: loud, never guessed.
     Unreadable {
         /// Why the file is unreadable: version skew, parse, or invalid key.
@@ -122,10 +131,11 @@ fn unreadable(reason: String) -> DriveSettings {
 /// Parses into the shared settings-file contract, so this reader
 /// can never accept a file the daemon refuses (or vice versa).
 pub fn drive_settings_at(settings_path: &Path, drive_dir: &Path) -> DriveSettings {
+    let path = settings_path.to_string_lossy().into_owned();
     let bytes = match std::fs::read(settings_path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return DriveSettings::Nofile;
+            return DriveSettings::Nofile { path };
         }
         Err(error) => {
             return unreadable(format!("read {}: {error}", settings_path.display()));
@@ -151,7 +161,7 @@ pub fn drive_settings_at(settings_path: &Path, drive_dir: &Path) -> DriveSetting
         }
     }
     match file.drives.get(&settings_key_for(drive_dir)) {
-        None => DriveSettings::Nosection,
+        None => DriveSettings::Nosection { path },
         Some(section) => DriveSettings::Configured(DriveSettingsView {
             retained_bytes_quota: section.retained_bytes_quota,
             max_admit_per_pass: section.max_admit_per_pass,
@@ -191,7 +201,8 @@ mod tests {
     }
 
     /// A missing file is unknown (nothing configured yet), never an
-    /// error and never defaults dressed as configuration.
+    /// error and never defaults dressed as configuration. The
+    /// payload names the path the file would live at.
     #[test]
     fn missing_file_is_unknown_not_defaults() {
         let path =
@@ -199,7 +210,9 @@ mod tests {
         let _ = std::fs::remove_file(&path);
         assert_eq!(
             drive_settings_at(&path, Path::new("/drives/alpha")),
-            DriveSettings::Nofile
+            DriveSettings::Nofile {
+                path: path.to_string_lossy().into_owned(),
+            }
         );
     }
 
@@ -235,6 +248,36 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    /// The shape the empty states show as copy-paste starter parses
+    /// to exactly those configured values: the documented example
+    /// is a real configuration, not an approximation. Mirrors
+    /// `emptyExample` in `SettingsView.svelte`.
+    #[test]
+    fn documented_example_shape_configures() {
+        let dir = std::env::temp_dir().join(format!(
+            "wyrd-desktop-settings-{}-example",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        std::fs::write(
+            &path,
+            r#"{"version": 1, "drives": {"/drives/alpha": {"retained_bytes_quota": 1073741824, "max_admit_per_pass": 64, "fetch_pass_budget_secs": 30, "max_mutation_wait_secs": 120, "open_timeout_secs": 45}}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            drive_settings_at(&path, Path::new("/drives/alpha")),
+            DriveSettings::Configured(DriveSettingsView {
+                retained_bytes_quota: Some(1073741824),
+                max_admit_per_pass: Some(64),
+                fetch_pass_budget_secs: Some(30),
+                max_mutation_wait_secs: Some(120),
+                open_timeout_secs: Some(45),
+            })
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     /// Configured values round through untouched; a drive without a
     /// section is an explicit unknown, not defaults.
     #[test]
@@ -262,7 +305,9 @@ mod tests {
         );
         assert_eq!(
             drive_settings_at(&path, Path::new("/drives/beta")),
-            DriveSettings::Nosection
+            DriveSettings::Nosection {
+                path: path.to_string_lossy().into_owned(),
+            }
         );
         std::fs::remove_dir_all(&dir).unwrap();
     }

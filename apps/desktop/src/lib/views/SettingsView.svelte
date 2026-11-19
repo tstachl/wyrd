@@ -23,6 +23,7 @@ never deletes local data as a side effect of the UI. -->
   import { Spinner } from "$lib/components/ui/spinner/index.js";
   import DetailRow from "$lib/components/detail-row.svelte";
   import PageHeader from "$lib/components/page-header.svelte";
+  import CopyButton from "$lib/components/copy-button.svelte";
   import InfoHint from "$lib/components/info-hint.svelte";
   import type { Stamped } from "$lib/state/presentation.svelte.js";
   import type { DriveSettingsState, ProvisionReport, SessionState, SettingsWriteReport, SparseUpdateArgs } from "$lib/ipc/results.js";
@@ -84,6 +85,32 @@ never deletes local data as a side effect of the UI. -->
   const restartKind = $derived(restartKindFor(session));
 
   const settings = $derived(snapshot?.data ?? null);
+
+  /**
+   * Copy-paste shape for the empty states: a version-1 file naming
+   * this drive with every bound key set. Rendered from the live
+   * drive dir so the key the file needs is the key on screen. The
+   * values are illustrative starting points, not recommendations —
+   * the copy beside the example says to replace them.
+   */
+  const emptyExample = $derived(
+    JSON.stringify(
+      {
+        version: 1,
+        drives: {
+          [driveDir]: {
+            retained_bytes_quota: 1073741824,
+            max_admit_per_pass: 64,
+            fetch_pass_budget_secs: 30,
+            max_mutation_wait_secs: 120,
+            open_timeout_secs: 45,
+          },
+        },
+      },
+      null,
+      2,
+    ),
+  );
 
   /** Configured value by key for the row being rendered, from the latest observation. */
   function configuredValue(key: string): number | null {
@@ -547,8 +574,17 @@ never deletes local data as a side effect of the UI. -->
     <p class="text-sm font-medium">No settings file yet</p>
     <p class="max-w-md text-sm text-muted-foreground">
       Nothing is configured, so the owner runs its compiled defaults. Defaults are unknown to this
-      shell, so nothing is filled in here.
+      shell, so nothing is filled in here. The file would live at:
     </p>
+    <p class="flex min-w-0 max-w-md items-center gap-1.5">
+      <span class="truncate font-mono text-xs">{settings.path}</span>
+      <CopyButton text={settings.path} label="settings file path" />
+    </p>
+    <p class="max-w-md text-sm text-muted-foreground">
+      A section for this drive looks like this — every key is optional, so keep only the lines
+      you want and put in your own values:
+    </p>
+    <pre class="w-full max-w-md overflow-auto rounded-lg border border-border bg-ink px-3 py-2 text-left text-xs break-words whitespace-pre-wrap text-bone">{emptyExample}</pre>
     <Button variant="outline" size="sm" disabled={busy} onclick={startEditing}>
       Set bounds for this drive
     </Button>
@@ -560,9 +596,18 @@ never deletes local data as a side effect of the UI. -->
     </div>
     <p class="text-sm font-medium">No section for this drive</p>
     <p class="max-w-md text-sm text-muted-foreground">
-      The file configures other drives. The owner runs its compiled defaults for this drive, which
-      are unknown to this shell.
+      The file configures other drives, but nothing in it names this drive yet — so the owner runs
+      its compiled defaults here, which are unknown to this shell:
     </p>
+    <p class="flex min-w-0 max-w-md items-center gap-1.5">
+      <span class="truncate font-mono text-xs">{settings.path}</span>
+      <CopyButton text={settings.path} label="settings file path" />
+    </p>
+    <p class="max-w-md text-sm text-muted-foreground">
+      A section for this drive looks like this — every key is optional, so keep only the lines
+      you want and put in your own values:
+    </p>
+    <pre class="w-full max-w-md overflow-auto rounded-lg border border-border bg-ink px-3 py-2 text-left text-xs break-words whitespace-pre-wrap text-bone">{emptyExample}</pre>
     <Button variant="outline" size="sm" disabled={busy} onclick={startEditing}>
       Set bounds for this drive
     </Button>
