@@ -803,10 +803,10 @@ fn each_fsync_folds_its_own_snapshot() {
 /// OD-1 namespace forcing: a namespace op folds the pending writes
 /// with it — the op is the forcer, the dirty image rides as a member —
 /// so one mode change over dirty state is one snapshot, not two.
-/// (`unlink`/`mkdir` rebind their path, so writers on it stay pending
-/// for their own boundary by design; `setattr` rebinds nothing and
-/// folds same-path writers in.) Driven through `set_exec_at` in a
-/// worker (the submit blocks until the test takes the batch).
+/// Rebound paths fold like any other: a same-path writer contends
+/// and loses the tie to the privileged op. Driven through
+/// `set_exec_at` in a worker (the submit blocks until the test takes
+/// the batch).
 #[test]
 fn namespace_op_folds_pending_writes_with_it() {
     let (mut backend, _) = evolving_backend(b"first", b"second");
