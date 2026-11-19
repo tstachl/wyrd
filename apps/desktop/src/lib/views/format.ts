@@ -229,7 +229,7 @@ export function describeProvisionResult(report: ProvisionReport): string {
     case "versionmismatch":
       return `Version mismatch (reinstall the matched pair): ${withDevCliHint(result.reason)}`;
     case "busy":
-      return `Another operation is already in flight on ${result.drive_dir} — not queued.`;
+      return `Another operation is already running on ${result.drive_dir}. Wait for it to finish and try again.`;
     case "unknown":
       return `Outcome unknown: ${result.detail}. The observation below decides.`;
   }

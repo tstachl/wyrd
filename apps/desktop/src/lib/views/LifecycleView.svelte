@@ -230,7 +230,7 @@ the drive directory explicitly. -->
   {#if registry.skipped.length > 0}
     <Card.Root class="mt-4">
       <Card.Header>
-        <Card.Title class="text-sm">Skipped registry entries</Card.Title>
+        <Card.Title class="text-sm">Some drives could not be loaded</Card.Title>
         <Card.Description>
           Entries this shell refused to use. They are listed, never guessed around.
         </Card.Description>

@@ -147,7 +147,7 @@ test("provisioning outcomes name the exit code without claiming state", () => {
     "not retried",
   );
   expect(describeProvisionResult(report({ result: "busy", drive_dir: "/d/alpha" }))).toContain(
-    "not queued",
+    "already running on",
   );
   expect(describeProvisionResult(report({ result: "unknown", detail: "torn" }))).toContain(
     "observation below decides",

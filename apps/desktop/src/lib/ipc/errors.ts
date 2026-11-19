@@ -97,9 +97,11 @@ export function assertNever(value: never): never {
 }
 
 /**
- * One-line human rendering. Every variant names itself; refusals
- * name their code. Never used to decide retries — decisions switch
- * on `kind`, not on this text.
+ * One-line human rendering. Unavailable, unconfirmed and refused
+ * each name themselves; refusals name their code. `incompatible`
+ * follows R-D7 instead of naming itself: the kind carries detail
+ * text only, so the prose names the observed fact. Never used to
+ * decide retries — decisions switch on `kind`, not on this text.
  */
 export function describe(error: BackendError): string {
   switch (error.kind) {
@@ -110,8 +112,39 @@ export function describe(error: BackendError): string {
     case "refused":
       return `Owner refused (${error.code}): ${error.message}`;
     case "incompatible":
-      return `Incompatible owner: ${error.detail}`;
+      return describeIncompatible(error.detail);
     default:
       return assertNever(error);
   }
+}
+
+/**
+ * R-D7 rendering for the `incompatible` kind. Five distinct failures
+ * share this kind with detail text only (no enum redesign — D-7
+ * stays open), so the prose follows the fact the detail names.
+ * Nothing here names a remote component for a local refusal, and
+ * nothing but wire-version skew claims a version mismatch.
+ */
+function describeIncompatible(detail: string): string {
+  // Local path refusal: the command boundary refused the spelling
+  // before any socket was touched (`validate_drive_dir` in
+  // `crates/wyrd-desktop/src/lib.rs`).
+  if (detail.startsWith("drive_dir ")) {
+    return `Wyrd refused this path: ${detail}`;
+  }
+  // Wire-version skew in a response (`client.rs` transact).
+  if (detail.includes("wire version")) {
+    return `The response used a different wire version: ${detail}`;
+  }
+  // Wrong echoed id or an unexpected result shape (`client.rs`
+  // transact, `unexpected`).
+  if (
+    detail.startsWith("owner echoed id ") ||
+    detail.includes("unrelated result")
+  ) {
+    return `The answer did not match the request: ${detail}`;
+  }
+  // Non-hex bytes and anything else malformed: unreadable, never a
+  // version claim.
+  return `The answer could not be read: ${detail}`;
 }
