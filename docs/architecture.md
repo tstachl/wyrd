@@ -47,7 +47,7 @@ Three scope statements live here, exactly once, and nowhere else.
 
 **Windows is out of v0.4 entirely.** The only credential reader fails closed on non-Unix builds, so a Windows build cannot open a drive: no application, no lifecycle, no native filesystem presentation. Before the Windows presentation milestone begins, the platform assumptions are audited together (credential loading, file locking, storage durability, process ownership, filesystem presentation) rather than discovered one port at a time.
 
-**Platform mechanisms stay at the boundary.** The credential contract is platform-neutral (secret format, failure behavior, secret lifetime, zeroization), and one backend implements it today: the hardened Unix file reader in `wyrd-cli` (`credentials.rs`) plus its writer, `wyrd identity` (`commands/identity.rs`), which mints and commits the same files under the same hardening. Identity and vault logic consume secret material (`DeviceIdentitySecret`), never files, modes, or OS facilities. No OS credential store is the architecture.
+**Platform mechanisms stay at the boundary.** The credential contract is platform-neutral (secret format, failure behavior, secret lifetime, zeroization), and backends implement it: the hardened Unix file reader in `wyrd-cli` (`credentials.rs`) plus its writer, `wyrd identity` (`commands/identity.rs`), which mints and commits the same files under the same hardening, and OS credential-store backends satisfying `contracts/credential-loading.md`. Identity and vault logic consume secret material (`DeviceIdentitySecret`), never files, modes, or OS facilities.
 
 **Content IDs never reach vaults as vault disclosure.** Content IDs must not appear in vault-visible metadata. The guarantee binds the keyless-replica position (ciphertext, sizes and timing only, never plaintext, paths, or plaintext equality). A member-hosted composition holds that metadata as a drive member, not as vault disclosure. A public release drive discloses it by a deliberate, per-drive, irreversible waiver (release-read v1). The full matrix is `contracts/trust.md`.
 
@@ -57,6 +57,7 @@ Normative contracts; each invariant lives in exactly one of these:
 
 - Format and identity semantics: `contracts/object-model.md`
 - Cryptographic and authorization boundaries: `contracts/trust.md`, `contracts/capability-bindings.md`
+- Credential loading (platform-neutral loader boundary and backend obligations): `contracts/credential-loading.md`
 - Membership and epoch state: `contracts/epochs.md`
 - Sync protocol, peers, materialization: `contracts/sync-and-peers.md`
 - Mutation, commit, durability ordering: `contracts/write-path.md`
