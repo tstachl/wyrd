@@ -22,8 +22,8 @@
 # Finder boundary (honest, not a bug): an ad-hoc appex logs
 # no-group-container and stays inert — the App Group container only
 # materializes under a team-signed build with provisioning. The UI,
-# owner, registry, and tray work ad-hoc; Finder integration stays a
-# separately team-gated path (packaging/macos/README.md, "Developer
+# owner, registry, and managed service reinstall work ad-hoc; Finder
+# integration stays a separately team-gated path (packaging/macos/README.md, "Developer
 # install" plus "Production entitlements and provisioning").
 set -eu
 set -o pipefail 2>/dev/null || true
@@ -292,7 +292,7 @@ xattr -dr com.apple.quarantine "$DEST" 2>/dev/null || true
 
 echo "installed $DEST (ad-hoc, from $APP)"
 echo "note: Finder integration stays inert ad-hoc (no-group-container):"
-echo "create, status, settings, and the tray work; Finder needs the"
+echo "create, status, settings, and managed service reinstall work; Finder needs the"
 echo "team-signed path in packaging/macos/README.md."
 if [ "$OPEN_APP" -eq 1 ]; then
     open "$DEST"

@@ -326,9 +326,10 @@ them. The rules, all inherited from the interface contract:
 - Dirty-quit discipline. A sent request is not a committed write.
   Two cases, specified separately because only one of them can offer
   any guarantee:
-  - Graceful shutdown. Stop accepting new commands, track
-    outstanding requests, and let each reach its terminal answer or
-    its defined timeout. Report nothing as success without the
+  - Graceful shutdown. Track outstanding requests, and let each
+    reach its terminal answer or its defined timeout. The drain
+    does not gate admission: a command dispatched during the drain
+    still enters. Report nothing as success without the
     owner's authoritative answer. Only then finish orderly shutdown.
   - Forced termination or crash. Make no claim about any outstanding
     mutation: the owner may have committed it even though the answer
@@ -469,7 +470,7 @@ verdict.
   protocol operations; every interface response keeps its typed
   semantics end to end. Runes-based presentation cache only — never a
   second drive model (see the presentation-cache section below).
-- Menu-bar extra (tray presence): removed in v0.4 by the desktop
+- Menu-bar extra (not shipping in v0.4): a tray presence was staged during development and withdrawn before release by the desktop
   lifecycle decision (`../contracts/desktop-lifecycle.md`), which
   supersedes the landed tray shape. There is no second UI surface:
   status lives in the main window only, closing the window hides it
@@ -953,7 +954,7 @@ this note wins for architecture.
    artifacts must never hard-code, so ordering stays a UI behavior
    — unavailable until the owner answers, explicit reconnect, and
    resume without restart (landed: per-drive service observation,
-   the unavailable view with Retry/Start/Reinstall, the main window refreshes on
+   the unavailable view with Retry/Start/Reinstall refreshing on
    Retry). The stop and recovery story per platform lives where
    the installer consumes it (`packaging/macos/README.md`, "Login
    items and recovery").

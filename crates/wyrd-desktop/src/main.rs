@@ -118,9 +118,10 @@ fn drain_until_settled<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
-/// Graceful quit: stop accepting new work (quit was requested),
-/// wait until every dispatched exchange has its terminal answer or
-/// the bound fires, then exit. Nothing is reported successful
+/// Graceful quit: wait until every dispatched exchange has its
+/// terminal answer or the bound fires, then exit. The drain does
+/// not gate admission — an exchange dispatched during the drain
+/// still enters. Nothing is reported successful
 /// without the owner's authoritative answer; exchanges still
 /// outstanding past the bound stay unconfirmed — the
 /// forced-termination path, reconciled on next launch. A plain OS

@@ -75,7 +75,7 @@ grep -Fqi 'dev-only env pair' "$CONTRACT" \
 pass "contract documents daemon-half production plus pending domain half"
 
 # 6. The packaging note records the switchover acceptance: registered
-# drive in Finder with env unset, reboot survival, tray Available —
+# drive in Finder with env unset, reboot survival, main-window Available —
 # scoped to the daemon half with the signed-container check pending.
 grep -Fq 'Registry-owned switchover (production daemon half)' "$README" \
   || die "README: switchover section missing"

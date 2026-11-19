@@ -37,7 +37,7 @@ is transient — no drive data is affected.
 
 - Desktop application lifecycle contract
   (`docs/contracts/desktop-lifecycle.md`, supersedes
-  `nostr:nevent1qqs2v8cey0fgkyyqfnyeg66qckky5887n7m43k6mahvr3q66typg65spz9mhxue69uhkwunpwdczuap49eehg870au2`):
+  `nostr:nevent1qqs2v8cey0fgkyyqfnyeg66qckky5887n7p43k6mahvr3q66typg65spz9mhxue69uhkwunpwdczuap49eehg870au2`):
   window close and application quit are distinct events (macOS close
   hides, Dock reopens; Linux last-window close quits; Windows
   deferred with the platform). Clean termination affects no owner:

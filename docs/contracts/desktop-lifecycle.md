@@ -95,12 +95,13 @@ owner is a service-manager operation, not a lock.
 Two cases, specified separately because only one of them can offer
 any guarantee:
 
-- **Graceful shutdown.** Stop accepting new work, track outstanding
-  exchanges, and let each reach its terminal answer or the defined
-  30-second bound. Report nothing as successful without the owner's
-  authoritative answer. Only then exit. Exchanges still outstanding
-  past the bound stay `Unconfirmed` — never successes, never
-  failures.
+- **Graceful shutdown.** Track outstanding exchanges, and let each
+  reach its terminal answer or the defined 30-second bound. Report
+  nothing as successful without the owner's authoritative answer.
+  Only then exit. The drain does not gate admission: an exchange
+  dispatched during the drain still enters and is waited on like
+  any other. Exchanges still outstanding past the bound stay
+  `Unconfirmed` — never successes, never failures.
 - **Forced termination or crash.** Make no claim about any
   outstanding exchange: the owner may have committed it even though
   the answer never reached the shell. On next launch, reconnect and
