@@ -57,7 +57,7 @@ use std::collections::BTreeSet;
 
 use wyrd_format::DeviceId;
 
-use super::engine::{Engine, EngineError};
+use super::engine::{Engine, EngineError, PublishBudget};
 use crate::control::{seal as seal_control, Message, ReconciliationRequestPayload};
 use crate::durable::{
     encode_reconciliation_view_canonical, ReconciliationView, MAX_RECONCILIATION_PAGE_BYTES,
@@ -77,11 +77,13 @@ pub enum ReconciliationOutcome {
     /// reconnect probe or a view change re-sends.
     AlreadyStated,
     /// A request left for these recipients, every page of the current
-    /// view fanned out once per recipient; `accepted` counts relay
+    /// view fanned out once per active recipient; `accepted` counts relay
     /// acceptances across the whole burst, `pages` the statements it
     /// took. Zero marks nothing — no relay holds the bytes (offline)
     /// — so the next armed trigger retries; acceptance on every page
-    /// marks the full-view digest.
+    /// marks the full-view digest, while a budget trip that leaves
+    /// recipients unattempted marks nothing either (deferred without
+    /// loss, counted in the pass publish outcome).
     Requested {
         recipients: usize,
         accepted: usize,
@@ -97,8 +99,8 @@ pub enum ReconciliationOutcome {
     /// rotation install keys, and their arrival changes the view and
     /// re-arms the trigger.
     NoSealingKey,
-    /// Triggered, but no other device is known: the observed
-    /// membership names nobody to ask. A lone device reconciles with
+    /// Triggered, but no other active device is known: the canonical
+    /// tip names nobody to ask. A lone device reconciles with
     /// no one.
     NoRecipients,
     /// A constructed page still exceeds the mailbox ceiling, so
@@ -120,7 +122,9 @@ impl Engine {
     /// re-edges through the supervisor — but a one-off failure
     /// while the transport stays up does not, so an edge-only probe
     /// lost to a blip waits for the next genuine reconnect, gap, or
-    /// view change.
+    /// view change. A budget trip is the exception: the fan-out
+    /// re-arms the latch itself when recipients go unattempted, so
+    /// the retry needs no new edge.
     pub fn note_reconnected(&mut self) {
         self.reconnect_latched = true;
     }
@@ -141,6 +145,7 @@ impl Engine {
     pub fn maybe_request_reconciliation(
         &mut self,
         mailbox: &mut impl Mailbox,
+        budget: &mut PublishBudget,
     ) -> Result<ReconciliationOutcome, EngineError> {
         let gap = self.pending.len() > 0;
         if !gap && !self.reconnect_latched {
@@ -167,13 +172,17 @@ impl Engine {
         let facts = self.store.load()?;
         let view = ReconciliationView::derive(&facts);
         self.last_trigger_eval = Some((self.current(), view.evidence().digest()));
-        self.request_once(mailbox, view, reconnected)
+        self.request_once(mailbox, view, reconnected, budget)
     }
 
     /// One send attempt for the derived view: page the evidence into
     /// bounded statements, seal each under the newest held epoch key,
-    /// fan every page out to every known other device, and mark the
-    /// full-view digest only when every page was relay-accepted. The
+    /// fan every page out to every active recipient, and mark the
+    /// full-view digest only when every recipient was attempted and
+    /// every page was relay-accepted. A budget trip anywhere in the
+    /// attempt defers the unattempted recipients without loss,
+    /// leaves the digest unmarked, and re-arms the reconnect latch
+    /// so the next pass retries even with no new gap or edge. The
     /// mark is volatile by design (see the module docs): a restart
     /// re-probes once.
     fn request_once(
@@ -181,6 +190,7 @@ impl Engine {
         mailbox: &mut impl Mailbox,
         view: ReconciliationView,
         reconnected: bool,
+        budget: &mut PublishBudget,
     ) -> Result<ReconciliationOutcome, EngineError> {
         let digest = view.evidence().digest();
         if !reconnected && self.last_requested_digest == Some(digest) {
@@ -195,13 +205,31 @@ impl Engine {
             Some(epoch) => *epoch,
             None => return Ok(ReconciliationOutcome::NoSealingKey),
         };
+        let recipients = self.request_recipients();
+        if recipients.is_empty() {
+            return Ok(ReconciliationOutcome::NoRecipients);
+        }
+        // Bound the whole attempt before sealing: a budget that
+        // already tripped (or that trips below) sends nothing and
+        // marks nothing — the next armed evaluation retries whole.
+        // Sealing is CPU-only, so skipping it on a dead budget is
+        // pure savings, never a semantic difference.
+        let pages = view.evidence().pages();
+        if !budget.check() {
+            budget.defer(recipients.len());
+            self.reconnect_latched = true;
+            return Ok(ReconciliationOutcome::Requested {
+                recipients: recipients.len(),
+                accepted: 0,
+                pages: pages.len(),
+            });
+        }
         // Page first, seal second: every page fits the mailbox ceiling
         // by construction, so an oversize full view fans out as
         // several bounded statements instead of sending nothing.
         // Pre-seal every page before any send: a page that still
         // exceeds the ceiling sends nothing and marks nothing — the
         // same fail-fast the single-statement path always had.
-        let pages = view.evidence().pages();
         let mut sealed_pages = Vec::with_capacity(pages.len());
         for page in &pages {
             let evidence_bytes = encode_reconciliation_view_canonical(page);
@@ -224,29 +252,49 @@ impl Engine {
             }
             sealed_pages.push(sealed_bytes);
         }
-        let recipients = self.request_recipients();
-        if recipients.is_empty() {
-            return Ok(ReconciliationOutcome::NoRecipients);
-        }
-        // Fan every page out to every recipient: pages are independent
-        // statements with independent wire identities, answered and
-        // retired per page under the existing caps. Acceptance is
-        // tracked per page so a partial fan-out retries whole instead
-        // of resuming half-marked.
+        // Fan every page out to every active recipient,
+        // recipient-major: one recipient's full page set leaves
+        // before the next recipient's begins, so a tripped budget
+        // defers whole recipients (the documented defer unit)
+        // instead of half-fanning everyone. The budget is checked
+        // between sends, never mid-send: one in-flight send can
+        // overshoot the deadline by up to the per-send relay
+        // timeout. Pages stay independent statements with
+        // independent wire identities, answered and retired per
+        // page under the existing caps. The full-view digest marks
+        // only when every recipient was attempted and every page
+        // was relay-accepted — a partial fan-out (rejection or
+        // budget trip) retries whole, exactly like a partial send.
         let mut accepted = 0usize;
-        let mut pages_accepted = 0usize;
-        for sealed_bytes in &sealed_pages {
-            let mut page_accepted = 0usize;
-            for recipient in &recipients {
+        let mut page_accepted = vec![false; sealed_pages.len()];
+        let mut attempted = 0usize;
+        'fan: for recipient in &recipients {
+            for (index, sealed_bytes) in sealed_pages.iter().enumerate() {
+                if !budget.check() {
+                    // Publish budget tripped: this recipient and
+                    // the rest stay unattempted for the next armed
+                    // evaluation — deferred without loss, never
+                    // retired, never marked. The current recipient
+                    // counts as unattempted too (its page set is
+                    // incomplete), so a retry fans it out whole.
+                    // Re-arm the reconnect latch: without a parked
+                    // gap this is the only arm the retry has, and
+                    // the pre-seal check above re-arms the same
+                    // way.
+                    budget.defer(recipients.len() - attempted);
+                    self.reconnect_latched = true;
+                    break 'fan;
+                }
                 let envelope = seal_for_recipient(&self.identity_secret, *recipient, sealed_bytes)?;
-                page_accepted += mailbox.send(envelope)?.accepted;
+                let report = mailbox.send(envelope)?;
+                accepted += report.accepted;
+                if report.accepted > 0 {
+                    page_accepted[index] = true;
+                }
             }
-            accepted += page_accepted;
-            if page_accepted > 0 {
-                pages_accepted += 1;
-            }
+            attempted += 1;
         }
-        if pages_accepted == sealed_pages.len() {
+        if attempted == recipients.len() && page_accepted.iter().all(|ready| *ready) {
             self.last_requested_digest = Some(digest);
         }
         Ok(ReconciliationOutcome::Requested {
@@ -256,22 +304,26 @@ impl Engine {
         })
     }
 
-    /// Who to ask: members and readers across every observed
-    /// transition, minus self — the announcement fan-out shape, so
-    /// admitted readers keep converging past admission. Removed
-    /// devices ride along harmlessly (their intake dedupes; a
-    /// response they cannot compose is simply empty). Deterministic
+    /// Who to ask: the canonical tip's active members and readers,
+    /// minus self — admitted readers keep converging past admission.
+    /// Removed devices receive nothing further (`epochs.md`): they
+    /// hold no later epoch secret, so they could neither open the
+    /// request nor compose a useful response, while their sends (and
+    /// per-relay timeouts) stall the live members behind them. No
+    /// canonical tip (genesis conflict) names nobody: without a
+    /// canonical roster there is no active set to ask. Deterministic
     /// ascending order: the send sequence must not depend on hash
     /// iteration.
     fn request_recipients(&self) -> Vec<DeviceId> {
+        let Some(tip) = self.log.known_state().map(|state| state.transition_id) else {
+            return Vec::new();
+        };
         let mut recipients = BTreeSet::new();
-        for id in self.log.observed_ids() {
-            if let Some(members) = self.log.members_of(&id) {
-                recipients.extend(members);
-            }
-            if let Some(readers) = self.log.readers_of(&id) {
-                recipients.extend(readers);
-            }
+        if let Some(members) = self.log.members_of(&tip) {
+            recipients.extend(members);
+        }
+        if let Some(readers) = self.log.readers_of(&tip) {
+            recipients.extend(readers);
         }
         recipients.remove(&self.device);
         recipients.into_iter().collect()

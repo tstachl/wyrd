@@ -1,18 +1,21 @@
-use super::tests_harness::{drain_side, restart, scenario, send_to, Pair};
+use super::tests_harness::{drain_side, open_device, restart, scenario, send_to, Pair};
 use super::*;
 
 use wyrd_format::Change;
 use zeroize::Zeroizing;
 
+use crate::bulk::MemoryBulkSource;
 use crate::control::seal;
 use crate::control::{Message, ReconciliationRequestPayload};
 use crate::durable::Fact;
 use crate::keys::DeviceEncryptionSecret;
+use crate::keys::DeviceIdentitySecret;
 use crate::membership::test_util::{admit, drive as member_drive, key, sign, Builder};
 use crate::runtime::reconcile::ReconciliationOutcome;
 use crate::runtime::respond::AnswerReport;
 use crate::runtime::test_util::{
-    announcement_for, announcement_msg, identity, transition_message, TestDir,
+    admit_engine, announcement_for, announcement_msg, control_key, encryption_key, identity,
+    transition_message, TestDir,
 };
 use crate::transport::mailbox::seal_for_recipient;
 use crate::transport::mailbox::{
@@ -20,7 +23,7 @@ use crate::transport::mailbox::{
     MemoryRelay, SendReport,
 };
 use wyrd_format::membership::{
-    set_root, MEMBER_SET_CONTEXT, OWNER_SET_CONTEXT, READER_SET_CONTEXT,
+    set_root, Admission, MEMBER_SET_CONTEXT, OWNER_SET_CONTEXT, READER_SET_CONTEXT,
 };
 
 /// A mailbox that records every envelope it accepts while
@@ -68,7 +71,9 @@ fn send_failure_leaves_the_trigger_armed() {
     };
     assert!(
         matches!(
-            pair.a.engine.maybe_request_reconciliation(&mut failing),
+            pair.a
+                .engine
+                .maybe_request_reconciliation(&mut failing, &mut PublishBudget::unbounded()),
             Err(EngineError::Mailbox(_))
         ),
         "transport failure surfaces to the caller (the loop absorbs it)"
@@ -108,7 +113,9 @@ fn send_failure_mid_fan_out_marks_nothing() {
     };
     assert!(
         matches!(
-            pair.a.engine.maybe_request_reconciliation(&mut failing),
+            pair.a
+                .engine
+                .maybe_request_reconciliation(&mut failing, &mut PublishBudget::unbounded()),
             Err(EngineError::Mailbox(_))
         ),
         "the second send fails the evaluation"
@@ -163,7 +170,7 @@ fn mailbox_for<'a>(relay: &'a mut MemoryRelay, device: DeviceId) -> RecordingMai
 /// io-ish payloads).
 fn trigger(engine: &mut Engine, mailbox: &mut impl Mailbox) -> ReconciliationOutcome {
     engine
-        .maybe_request_reconciliation(mailbox)
+        .maybe_request_reconciliation(mailbox, &mut PublishBudget::unbounded())
         .expect("trigger evaluates")
 }
 
@@ -883,7 +890,9 @@ fn paged_retransmit_finds_installs_on_a_non_latest_page() {
 
 /// A mailbox that accepts only the first `limit` sends and reports
 /// the rest unaccepted without blocking: models a partial page
-/// fan-out where one page lands and its siblings do not.
+/// fan-out where some sends land and their siblings do not. The
+/// fan-out is recipient-major, so the first sends belong to the
+/// first recipient.
 struct AcceptFirstN<'a> {
     inner: MemoryMailbox<'a>,
     recorded: Vec<MailboxEnvelope>,
@@ -922,8 +931,8 @@ fn accept_first_n<'a>(
     }
 }
 
-/// A partial page fan-out marks nothing and retries whole: one page
-/// accepted, its siblings relay-rejected, leaves the full-view
+/// A partial page fan-out marks nothing and retries whole: two
+/// sends accepted, the rest relay-rejected, leaves the full-view
 /// digest unmarked, so the still-parked gap fires the full fan-out
 /// again — never a resumed half-mark, never `ViewTooLarge`.
 #[test]
@@ -946,9 +955,9 @@ fn partial_page_fan_out_retries_whole() {
             accepted: 2,
             pages: 3,
         },
-        "one page lands, two do not"
+        "two sends land, the rest do not"
     );
-    assert_eq!(partial.recorded.len(), 2, "only the first page left");
+    assert_eq!(partial.recorded.len(), 2, "only the first sends left");
     drop(partial);
     let mut mailbox = mailbox_for(&mut pair.relay, device);
     assert_eq!(
@@ -959,6 +968,234 @@ fn partial_page_fan_out_retries_whole() {
             pages: 3,
         },
         "a partial fan-out retries whole"
+    );
+}
+
+/// Removed devices are not contacted: after C (member) and R
+/// (reader) are admitted and then removed, the trigger fans out
+/// to the canonical tip's active members only. The old
+/// union-over-history would still ask both; the scoped fan-out
+/// names the owner and B, B commits the live statement, and the
+/// removed devices' drains stay empty (both hold the sealing
+/// epoch's keys, so empty drains prove no contact, not
+/// inability).
+#[test]
+fn removed_devices_are_not_contacted() {
+    let controls: Vec<(u64, [u8; 32])> = [1, 2, 3].iter().map(|e| (*e, control_key(*e))).collect();
+    let mut pair = Pair {
+        relay: MemoryRelay::default(),
+        bulk: MemoryBulkSource::default(),
+        a: open_device("scoped-a", 0x12, 0xF0, &controls),
+        b: open_device("scoped-b", 0x13, 0xF1, &controls),
+    };
+    let mut c = open_device("scoped-c", 0x14, 0xF2, &controls);
+    let mut r = open_device("scoped-r", 0x15, 0xF3, &controls);
+    let (a_dev, b_dev, c_dev, r_dev) = (pair.a.device, pair.b.device, c.device, r.device);
+
+    // The chain: genesis, admit A, admit B, admit C (member) and R
+    // (reader), remove both. Routed through intake so the live log
+    // replays it; the tip names owner, A, B — C and R are history,
+    // not roster. Both roles are covered because the derivation
+    // unions the tip's member and reader sets alike.
+    let owner_sk = DeviceIdentitySecret::from_bytes([10; 32]).unwrap();
+    let (mut builder, genesis) = Builder::genesis(10);
+    let admit_a = admit_engine(&mut builder, a_dev);
+    let admit_b = admit_engine(&mut builder, b_dev);
+    let admit_c = admit_engine(&mut builder, c_dev);
+    let admit_r = builder.child(vec![Change::AdmitReader(Admission {
+        device: r_dev,
+        encryption_key: encryption_key(&r.encryption_sk),
+    })]);
+    let remove_c = builder.child(vec![Change::Remove(c_dev)]);
+    let remove_r = builder.child(vec![Change::Remove(r_dev)]);
+    for t in [
+        &genesis, &admit_a, &admit_b, &admit_c, &admit_r, &remove_c, &remove_r,
+    ] {
+        send_to(
+            &mut pair,
+            &owner_sk,
+            a_dev,
+            1,
+            &controls[0].1,
+            &transition_message(t),
+        );
+    }
+    assert_eq!(
+        drain_side(&mut pair.relay, &mut pair.a).accepted,
+        7,
+        "A observes the chain"
+    );
+    assert!(
+        !pair
+            .a
+            .engine
+            .log
+            .members_of(
+                &pair
+                    .a
+                    .engine
+                    .log
+                    .known_state()
+                    .expect("canonical tip")
+                    .transition_id
+            )
+            .expect("tip state")
+            .contains(&c_dev),
+        "the tip no longer members C"
+    );
+
+    // Park a gap and an edge so the trigger fires.
+    park_gap(&mut pair, &controls);
+    pair.a.engine.note_reconnected();
+    let device = pair.a.device;
+    let mut mailbox = mailbox_for(&mut pair.relay, device);
+    assert_eq!(
+        trigger(&mut pair.a.engine, &mut mailbox),
+        ReconciliationOutcome::Requested {
+            recipients: 2,
+            accepted: 2,
+            pages: 1,
+        },
+        "the fan-out names the tip's active members, never the removed device"
+    );
+    drop(mailbox);
+    assert_eq!(
+        drain_side(&mut pair.relay, &mut pair.b).accepted,
+        1,
+        "B commits the live statement"
+    );
+    assert_eq!(
+        drain_side(&mut pair.relay, &mut c).accepted,
+        0,
+        "the removed member is contacted never"
+    );
+    assert_eq!(
+        drain_side(&mut pair.relay, &mut r).accepted,
+        0,
+        "the removed reader is contacted never"
+    );
+}
+
+/// A tripped budget defers without loss: with the deadline already
+/// past, the armed trigger attempts no send, defers both active
+/// recipients, and marks nothing — so the still-parked gap fires
+/// the whole fan-out again on the next evaluation with a healthy
+/// budget, never `AlreadyStated`, never half-marked.
+#[test]
+fn scoped_fan_out_defers_without_loss_on_a_tripped_budget() {
+    use std::time::{Duration, Instant};
+
+    let (mut pair, controls, _) = scenario();
+    converge(&mut pair);
+    park_gap(&mut pair, &controls);
+    pair.a.engine.note_reconnected();
+    let device = pair.a.device;
+    let mut mailbox = mailbox_for(&mut pair.relay, device);
+    let mut expired = PublishBudget::new(Instant::now() - Duration::from_secs(1));
+    assert_eq!(
+        pair.a
+            .engine
+            .maybe_request_reconciliation(&mut mailbox, &mut expired)
+            .expect("trigger evaluates"),
+        ReconciliationOutcome::Requested {
+            recipients: 2,
+            accepted: 0,
+            pages: 1,
+        },
+        "a tripped budget attempts no send"
+    );
+    assert_eq!(expired.deferred(), 2, "both recipients defer");
+    assert!(mailbox.recorded.is_empty(), "nothing left the outbox");
+    drop(mailbox);
+    // Nothing marked: the parked gap retries whole, exactly like a
+    // partial fan-out.
+    let mut mailbox = mailbox_for(&mut pair.relay, device);
+    assert_eq!(
+        trigger(&mut pair.a.engine, &mut mailbox),
+        ReconciliationOutcome::Requested {
+            recipients: 2,
+            accepted: 2,
+            pages: 1,
+        },
+        "the deferral carries over to the next armed evaluation"
+    );
+}
+
+/// A mailbox that sleeps past the budget on every send: the first
+/// recipient's burst runs (the check is between sends, never
+/// mid-send), the second recipient's check trips the clip.
+struct SleepThenSendMailbox<'a> {
+    inner: MemoryMailbox<'a>,
+    stall: std::time::Duration,
+}
+
+impl Mailbox for SleepThenSendMailbox<'_> {
+    fn send(&mut self, envelope: MailboxEnvelope) -> Result<SendReport, MailboxError> {
+        std::thread::sleep(self.stall);
+        self.inner.send(envelope)
+    }
+    fn recv(&mut self) -> Result<Option<Delivery>, MailboxError> {
+        self.inner.recv()
+    }
+    fn settle(&mut self, id: DeliveryId, disposition: Disposition) -> Result<(), MailboxError> {
+        self.inner.settle(id, disposition)
+    }
+}
+
+/// The clip lands mid-burst, between page sends: with a three-page
+/// view the first recipient's first page goes out (one in-flight
+/// send may overshoot the deadline), the second page's check trips,
+/// both recipients defer, nothing marks, and the next armed
+/// evaluation retries whole — the pass deadline bounds the fan-out
+/// instead of N recipients × pages × per-send timeout. Per-send
+/// checks are what make this true; per-recipient checks would have
+/// sent all three pages before tripping.
+#[test]
+fn scoped_fan_out_clips_mid_burst_under_the_pass_deadline() {
+    use std::time::{Duration, Instant};
+
+    let (mut pair, controls, _) = scenario();
+    converge(&mut pair);
+    let (mut builder, _) = Builder::genesis(10);
+    let transitions: Vec<Fact> = (0..2100)
+        .map(|_| Fact::Transition(builder.child(vec![Change::Rotate])))
+        .collect();
+    pair.a.engine.commit_facts(&transitions).expect("fits");
+    park_gap(&mut pair, &controls);
+    pair.a.engine.note_reconnected();
+    let device = pair.a.device;
+    {
+        let mut sleepy = SleepThenSendMailbox {
+            inner: MemoryMailbox {
+                relay: &mut pair.relay,
+                owner: device,
+            },
+            stall: Duration::from_secs(1),
+        };
+        let mut budget = PublishBudget::new(Instant::now() + Duration::from_millis(300));
+        assert_eq!(
+            pair.a
+                .engine
+                .maybe_request_reconciliation(&mut sleepy, &mut budget)
+                .expect("trigger evaluates"),
+            ReconciliationOutcome::Requested {
+                recipients: 2,
+                accepted: 1,
+                pages: 3,
+            },
+            "the first send runs, the second page's check trips"
+        );
+        assert_eq!(budget.deferred(), 2, "both recipients defer");
+    }
+    let mut mailbox = mailbox_for(&mut pair.relay, device);
+    assert_eq!(
+        trigger(&mut pair.a.engine, &mut mailbox),
+        ReconciliationOutcome::Requested {
+            recipients: 2,
+            accepted: 6,
+            pages: 3,
+        },
+        "the clipped fan-out retries whole"
     );
 }
 

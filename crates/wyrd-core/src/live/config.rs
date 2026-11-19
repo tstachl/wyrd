@@ -343,7 +343,10 @@ pub struct LiveConfig {
     /// answers, transition/capability deliveries, announcement
     /// discharge), measured from phase start and further clipped to
     /// the nearest held mutation's remaining time like the fetch
-    /// budget. A relay that accepts connections but never returns OK
+    /// budget. The reconciliation trigger ahead of the phase shares
+    /// this window: its spend is subtracted when the phase
+    /// re-anchors the deadline, so one hanging relay inside the
+    /// probe still cannot spend the pass. A relay that accepts connections but never returns OK
     /// otherwise spends N_obligations x per-send-timeout on the loop
     /// thread per pass with nothing logged as an error; the clip
     /// leaves unattempted obligations pending for the next pass —

@@ -80,6 +80,18 @@ impl PublishBudget {
         self.clipped
     }
 
+    /// Re-anchor the deadline to a fresh window, preserving the
+    /// clip state: the live pass shares one budget between the
+    /// reconciliation trigger and the publish phase, but fetch and
+    /// mutation application run between them outside any budget, so
+    /// the publish phase re-derives its deadline from its own start
+    /// (minus the trigger's spend, computed by the caller) instead
+    /// of inheriting the aged one. The trigger's deferrals stay in
+    /// the pass report — they are unattempted sends either way.
+    pub fn rebase(&mut self, deadline: Instant) {
+        self.deadline = deadline;
+    }
+
     /// Obligations unattempted because the budget tripped.
     pub fn deferred(&self) -> usize {
         self.deferred

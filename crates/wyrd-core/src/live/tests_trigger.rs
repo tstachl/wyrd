@@ -362,3 +362,52 @@ fn attach_while_paused_fires_on_first_unpaused_pass() {
     );
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+/// A budget-clipped probe re-arms the latch: with no parked gap,
+/// only the reconnect edge arms the trigger. A zero-window budget
+/// trips before the first send — the probe defers its recipient
+/// instead of dropping it — and the re-armed latch fires the whole
+/// fan-out on the next pass once the budget is healthy, with no
+/// new edge. Without the re-arm the second pass would stay quiet
+/// and the deferral would never retry.
+#[test]
+fn clipped_probe_rearms_the_latch_without_a_gap() {
+    use std::time::Duration;
+
+    let (mut node, dir, peer_sk, peer) = trigger_node("rearm");
+    let mut mailbox = TriggerMailbox {
+        sent: Vec::new(),
+        inbound: VecDeque::new(),
+        reconnects: 0,
+        connected: 1,
+    };
+    // Session start arms the probe, but the zero window trips
+    // before the first send: nothing leaves, one recipient
+    // defers, nothing marks.
+    node.publish_pass_budget = Duration::ZERO;
+    node.sync_once(&mut mailbox, None::<&mut wyrd_sync::bulk::MemoryBulkSource>)
+        .unwrap();
+    assert_eq!(
+        request_sends(&mailbox.sent, &peer_sk, peer),
+        0,
+        "a tripped budget sends no probe"
+    );
+    // Healthy budget, no new edge, no gap: the re-armed latch
+    // retries the probe whole, then stays quiet once marked.
+    node.publish_pass_budget = Duration::from_secs(10);
+    node.sync_once(&mut mailbox, None::<&mut wyrd_sync::bulk::MemoryBulkSource>)
+        .unwrap();
+    assert_eq!(
+        request_sends(&mailbox.sent, &peer_sk, peer),
+        1,
+        "the re-armed latch retries the probe"
+    );
+    node.sync_once(&mut mailbox, None::<&mut wyrd_sync::bulk::MemoryBulkSource>)
+        .unwrap();
+    assert_eq!(
+        request_sends(&mailbox.sent, &peer_sk, peer),
+        1,
+        "the retried probe marks: quiet after"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}

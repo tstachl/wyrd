@@ -36,6 +36,49 @@ where
     V::Store: ObjectStore,
     <V::Store as ObjectStore>::Error: std::fmt::Debug,
 {
+    /// The per-pass publish deadline: the config budget clipped to
+    /// the nearest held mutation like the fetch budget, so one
+    /// hanging relay costs at most this per pass (plus the serving
+    /// barrier window, which runs outside the budget) instead of
+    /// N_obligations x per-send timeout. Shared by the
+    /// reconciliation trigger ahead of the publish phase and the
+    /// publish phase itself: one pass, one deadline — whoever spends
+    /// it, the rest defers. The publish phase never inherits the
+    /// aged object blindly: it rebases the shared budget to a fresh
+    /// deadline of now plus the unconsumed remainder (see
+    /// `rebase_for_publish`), so fetch and mutation time between the
+    /// two phases is excluded by construction while the trigger's
+    /// spend and deferrals carry over.
+    fn publish_deadline(&self) -> std::time::Instant {
+        self.publish_deadline_from(std::time::Instant::now(), self.publish_pass_budget)
+    }
+
+    /// The same deadline measured from an explicit base and window:
+    /// the rebase path re-derives the publish deadline from the
+    /// publish phase start minus the trigger's spend.
+    fn publish_deadline_from(
+        &self,
+        base: std::time::Instant,
+        window: std::time::Duration,
+    ) -> std::time::Instant {
+        let pass_cap = base + window;
+        self.mutations
+            .nearest_deadline(self.max_mutation_wait)
+            .map_or(pass_cap, |held| held.min(pass_cap))
+    }
+
+    /// Re-anchor the shared pass budget to the publish window:
+    /// fetch and mutation application ran outside any budget since
+    /// the trigger spent from it, so the publish deadline is now
+    /// plus the window remainder after the trigger's spend, still
+    /// clipped to the nearest held mutation. The trigger's clip
+    /// state carries over untouched — its deferrals are
+    /// unattempted sends either way.
+    fn rebase_for_publish(&self, budget: &mut PublishBudget, trigger_spent: std::time::Duration) {
+        let window = self.publish_pass_budget.saturating_sub(trigger_spent);
+        budget.rebase(self.publish_deadline_from(std::time::Instant::now(), window));
+    }
+
     /// Send every undischarged outbound obligation: transitions and
     /// capabilities first (tip-first minimizes intake deferrals on the
     /// receiving side), then announcements. Durable and retryable —
@@ -59,8 +102,15 @@ where
     /// obligations stay pending for the next pass, never retired.
     /// The bound is within one in-flight per-send timeout of the
     /// deadline (checks run between sends, never mid-send), and the
-    /// serving barrier below runs outside this budget.
-    fn publish<M: Mailbox>(&mut self, mailbox: &mut M) -> Result<PublishOutcome, LiveError> {
+    /// serving barrier below runs outside this budget. The budget is
+    /// created by the caller (the pass shares one object between the
+    /// reconciliation trigger and this phase); the phase still
+    /// reports its own elapsed wall time.
+    fn publish<M: Mailbox>(
+        &mut self,
+        mailbox: &mut M,
+        budget: &mut PublishBudget,
+    ) -> Result<PublishOutcome, LiveError> {
         let phase_start = std::time::Instant::now();
         // Deadline from the per-pass publish budget, clipped to the
         // nearest held mutation like the fetch cap: a held mutation's
@@ -71,12 +121,6 @@ where
         // unreachable relay costs at most this per pass plus the
         // serving-barrier window (which runs outside this budget)
         // instead of N_obligations x per-send timeout.
-        let pass_cap = phase_start + self.publish_pass_budget;
-        let deadline = self
-            .mutations
-            .nearest_deadline(self.max_mutation_wait)
-            .map_or(pass_cap, |held| held.min(pass_cap));
-        let mut budget = PublishBudget::new(deadline);
         let mut sent = 0usize;
         // A stalled delivery step must not starve announcements (or
         // vice versa): each step absorbs its own mailbox failure and
@@ -91,12 +135,12 @@ where
         // not accumulated per pass. A dead transport stalls the
         // answer, never the loop, and the statement stays unanswered
         // for the next pass.
-        sent += match self.engine.answer_reconciliation(mailbox, &mut budget) {
+        sent += match self.engine.answer_reconciliation(mailbox, budget) {
             Ok(report) => report.sent,
             Err(EngineError::Mailbox(_)) => 0,
             Err(other) => return Err(LiveError::Engine(other)),
         };
-        sent += match self.engine.deliver_pending(mailbox, &mut budget) {
+        sent += match self.engine.deliver_pending(mailbox, budget) {
             Ok(n) => n,
             Err(EngineError::Mailbox(_)) => 0,
             Err(other) => return Err(LiveError::Engine(other)),
@@ -143,7 +187,7 @@ where
         let route = self.announce_route().map(|bytes| bytes.to_vec());
         sent += match self
             .engine
-            .announce_pending(mailbox, route.as_deref(), &mut budget)
+            .announce_pending(mailbox, route.as_deref(), budget)
         {
             Ok(n) => n,
             Err(EngineError::Mailbox(_)) => 0,
@@ -434,13 +478,17 @@ where
     /// outcome is dropped here (the loop stays free of reporting
     /// dependencies): the sent half is observable on the recipient
     /// as a received statement — which is what 21d surfaces — so
-    /// the local probe needs no counter of its own.
+    /// the local probe needs no counter of its own. The probe
+    /// shares the pass publish budget: the fan-out is scoped to the
+    /// canonical tip's active recipients, and a tripped budget
+    /// defers unattempted recipients for the next armed evaluation.
     ///
     /// Paused passes skip the edge and the probe: both send.
     fn fire_reconciliation_trigger<M: Mailbox>(
         &mut self,
         mailbox: &mut M,
         paused: bool,
+        budget: &mut PublishBudget,
     ) -> Result<(), LiveError> {
         if !paused {
             let reconnects = mailbox.reconnects();
@@ -463,7 +511,7 @@ where
             if self.last_connected_relays.replace(connected) == Some(0) && connected > 0 {
                 self.engine.note_reconnected();
             }
-            match self.engine.maybe_request_reconciliation(mailbox) {
+            match self.engine.maybe_request_reconciliation(mailbox, budget) {
                 Ok(_) => {}
                 Err(EngineError::Mailbox(_)) => {}
                 Err(other) => return Err(LiveError::Engine(other)),
@@ -583,7 +631,20 @@ where
         <V::Store as DiscardRejectedRepresentation>::Error: std::fmt::Debug,
     {
         let (paused, drained) = self.drain_intake(mailbox)?;
-        self.fire_reconciliation_trigger(mailbox, paused)?;
+        // One pass, one publish deadline: the reconciliation
+        // trigger ahead of the publish phase shares the budget
+        // object with the publish phase itself, so a large
+        // request fan-out (or a hanging relay inside it) trips
+        // the same clip the publish legs report — unattempted
+        // sends stay pending for the next pass, never retired.
+        // The clock starts here, at the trigger; the publish
+        // phase rebases to its own window before sending (see
+        // `rebase_for_publish`), so fetch and mutation time in
+        // between is never charged to publish.
+        let mut budget = PublishBudget::new(self.publish_deadline());
+        let budget_start = std::time::Instant::now();
+        self.fire_reconciliation_trigger(mailbox, paused, &mut budget)?;
+        let trigger_spent = budget_start.elapsed();
         // Generation rotation on observed demand (OD-11-2): every
         // identity noted since the last pass whose generation
         // completed terminal reopens as a new one. Notes arrive from
@@ -861,11 +922,22 @@ where
                 scrubbed,
                 published: false,
                 sent: 0,
-                // Idle passes never reach the publish phase, so no
-                // clip can trip and nothing is deferred by one.
-                publish_clipped: false,
-                publish_deferred: 0,
-                publish_elapsed_ms: 0,
+                // Idle passes never reach the publish phase, but the
+                // reconciliation trigger ahead of it shares the pass
+                // budget — an armed probe on an otherwise idle pass
+                // can trip the clip, so report the budget's state,
+                // not a constant. The elapsed value is the shared
+                // budget's age at the idle decision when it clipped
+                // (the "after N ms" half of the clip line), and zero
+                // otherwise: the publish phase never ran, so there
+                // is no publish wall time to report.
+                publish_clipped: budget.clipped(),
+                publish_deferred: budget.deferred(),
+                publish_elapsed_ms: if budget.clipped() {
+                    budget_start.elapsed().as_millis() as u64
+                } else {
+                    0
+                },
                 generation,
                 pending_heads,
                 poison: self.poison_counts(),
@@ -904,7 +976,8 @@ where
             let outcome = if paused {
                 PublishOutcome::default()
             } else {
-                self.publish(mailbox)?
+                self.rebase_for_publish(&mut budget, trigger_spent);
+                self.publish(mailbox, &mut budget)?
             };
             tracing::debug!(
                 pending_heads,
@@ -980,7 +1053,8 @@ where
         let outcome = if paused {
             PublishOutcome::default()
         } else {
-            self.publish(mailbox)?
+            self.rebase_for_publish(&mut budget, trigger_spent);
+            self.publish(mailbox, &mut budget)?
         };
         tracing::debug!(
             elapsed_ms = phase.elapsed().as_millis(),
