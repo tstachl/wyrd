@@ -88,11 +88,28 @@ never deletes local data as a side effect of the UI. -->
 
   /**
    * Copy-paste shape for the empty states: a version-1 file naming
-   * this drive with one bound set. Rendered from the live drive dir
-   * so the key the file needs is the key on screen.
+   * this drive with every bound key set. Rendered from the live
+   * drive dir so the key the file needs is the key on screen. The
+   * values are illustrative starting points, not recommendations —
+   * the copy beside the example says to replace them.
    */
   const emptyExample = $derived(
-    JSON.stringify({ version: 1, drives: { [driveDir]: { max_admit_per_pass: 64 } } }, null, 2),
+    JSON.stringify(
+      {
+        version: 1,
+        drives: {
+          [driveDir]: {
+            retained_bytes_quota: 1073741824,
+            max_admit_per_pass: 64,
+            fetch_pass_budget_secs: 30,
+            max_mutation_wait_secs: 120,
+            open_timeout_secs: 45,
+          },
+        },
+      },
+      null,
+      2,
+    ),
   );
 
   /** Configured value by key for the row being rendered, from the latest observation. */
@@ -564,8 +581,8 @@ never deletes local data as a side effect of the UI. -->
       <CopyButton text={settings.path} label="settings file path" />
     </p>
     <p class="max-w-md text-sm text-muted-foreground">
-      A section for this drive looks like this — every key is optional, so set only what you want
-      to change:
+      A section for this drive looks like this — every key is optional, so keep only the lines
+      you want and put in your own values:
     </p>
     <pre class="w-full max-w-md overflow-auto rounded-lg border border-border bg-ink px-3 py-2 text-left text-xs break-words whitespace-pre-wrap text-bone">{emptyExample}</pre>
     <Button variant="outline" size="sm" disabled={busy} onclick={startEditing}>
@@ -587,8 +604,8 @@ never deletes local data as a side effect of the UI. -->
       <CopyButton text={settings.path} label="settings file path" />
     </p>
     <p class="max-w-md text-sm text-muted-foreground">
-      A section for this drive looks like this — every key is optional, so set only what you want
-      to change:
+      A section for this drive looks like this — every key is optional, so keep only the lines
+      you want and put in your own values:
     </p>
     <pre class="w-full max-w-md overflow-auto rounded-lg border border-border bg-ink px-3 py-2 text-left text-xs break-words whitespace-pre-wrap text-bone">{emptyExample}</pre>
     <Button variant="outline" size="sm" disabled={busy} onclick={startEditing}>

@@ -248,6 +248,36 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    /// The shape the empty states show as copy-paste starter parses
+    /// to exactly those configured values: the documented example
+    /// is a real configuration, not an approximation. Mirrors
+    /// `emptyExample` in `SettingsView.svelte`.
+    #[test]
+    fn documented_example_shape_configures() {
+        let dir = std::env::temp_dir().join(format!(
+            "wyrd-desktop-settings-{}-example",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        std::fs::write(
+            &path,
+            r#"{"version": 1, "drives": {"/drives/alpha": {"retained_bytes_quota": 1073741824, "max_admit_per_pass": 64, "fetch_pass_budget_secs": 30, "max_mutation_wait_secs": 120, "open_timeout_secs": 45}}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            drive_settings_at(&path, Path::new("/drives/alpha")),
+            DriveSettings::Configured(DriveSettingsView {
+                retained_bytes_quota: Some(1073741824),
+                max_admit_per_pass: Some(64),
+                fetch_pass_budget_secs: Some(30),
+                max_mutation_wait_secs: Some(120),
+                open_timeout_secs: Some(45),
+            })
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     /// Configured values round through untouched; a drive without a
     /// section is an explicit unknown, not defaults.
     #[test]

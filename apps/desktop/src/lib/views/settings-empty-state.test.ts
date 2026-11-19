@@ -30,15 +30,27 @@ test("both empty states show the section shape with the live drive dir", () => {
   // The example is derived from the drive on screen, so the key
   // the file needs is the key shown — never a hardcoded drive.
   // (Quoted `"version"` only exists at runtime via JSON.stringify;
-  // the source holds the object literal.)
+  // the source holds the object literal.) All five bound keys are
+  // present: the issue scope asks for the schema, not one key.
   expect(view).toContain("[driveDir]");
   expect(view).toContain("version: 1");
-  expect(view).toContain("max_admit_per_pass: 64");
+  for (const key of [
+    "retained_bytes_quota",
+    "max_admit_per_pass",
+    "fetch_pass_budget_secs",
+    "max_mutation_wait_secs",
+    "open_timeout_secs",
+  ]) {
+    expect(view).toContain(key);
+  }
   expect(view).toContain("{emptyExample}");
   expect(view.match(/\{emptyExample\}/g)?.length).toBe(2);
 });
 
 test("the shape is honest about optionality and keeps the editor entry", () => {
+  // Values read as starting points, never recommendations: the copy
+  // says to keep only wanted lines with the operator's own values.
   expect(view).toContain("every key is optional");
+  expect(view).toContain("put in your own values");
   expect(view).toContain("Set bounds for this drive");
 });
