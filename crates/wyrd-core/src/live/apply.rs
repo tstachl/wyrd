@@ -956,10 +956,10 @@ where
 
     /// The paths one member contends on: a same-path tie is decided
     /// per path. A rename contends only on its destination (which it
-    /// replaces). Its source end is not a contention point here: the
-    /// daemon excludes source-end writers from a rename fold before
-    /// submission, so they stay pending and resolve at their own
-    /// boundary instead of joining the rebinding.
+    /// replaces). Its source end is not a contention point: a
+    /// source-end writer applies pre-rename and rides the subtree,
+    /// going terminal at settle when its path is gone, instead of
+    /// tying against the rebinding.
     fn member_paths(kind: &MutationKind) -> Vec<&str> {
         match kind {
             MutationKind::Mkdir { path }

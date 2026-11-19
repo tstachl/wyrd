@@ -563,17 +563,10 @@ where
                 continue;
             }
             let is_own = filter.own.is_some_and(|own| Arc::ptr_eq(own, handle));
-            if !is_own {
-                if filter.skip_paths.iter().any(|path| *path == write.path) {
-                    // A namespace operation rebinds these paths; the
-                    // buffered content resolves at its own boundary.
-                    continue;
-                }
-                if filter.exclude_absent && !self.path_resolves(&write.path) {
-                    // Already stale against the served view; folding
-                    // it now would only fail it early.
-                    continue;
-                }
+            if !is_own && filter.exclude_absent && !self.path_resolves(&write.path) {
+                // Already stale against the served view; folding
+                // it now would only fail it early.
+                continue;
             }
             // A dirty handle always carries its buffered overlay:
             // every dirty transition pairs with one. If the overlay

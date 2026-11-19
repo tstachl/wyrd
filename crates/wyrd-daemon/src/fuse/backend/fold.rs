@@ -62,17 +62,19 @@ struct SubmitMember {
     forcer: bool,
 }
 
-/// Which dirty handles one gather leaves pending: namespace
-/// operations rebind the paths they touch, so content buffered for
-/// those paths stays for its own later boundary (resolving stale
-/// like today) instead of entangling its base with the rebinding —
-/// while every other dirty handle folds. A handle whose path no
-/// longer resolves is likewise left alone: it is already stale, and
-/// folding it now would only fail it early. The forcing handle
-/// itself is never filtered: its syscall reports its own outcome.
+/// Which dirty handles one gather leaves pending: a writer whose
+/// path no longer resolves is already stale, and folding it now
+/// would only fail it early. The forcing handle itself is never
+/// filtered: its syscall reports its own outcome.
+///
+/// Namespace operations take writers on the exact paths they
+/// rebind or destroy into the same fold: a rename-source writer
+/// applies pre-rename and rides the subtree (going terminal at
+/// settle when its path is gone), while a writer on a replaced or
+/// removed path contends and loses to the privileged forcer per the
+/// write-path tie-break. Skipping rebound paths would strand
+/// buffered intent as volatile bytes that can never land.
 pub(super) struct GatherFilter<'a> {
-    /// Paths the operation rebinds or destroys; writers there stay.
-    pub(super) skip_paths: &'a [String],
     /// Leave already-stale (unresolvable) writers pending.
     pub(super) exclude_absent: bool,
     /// The forcing handle: always taken when dirty.
@@ -255,26 +257,6 @@ where
             return true;
         };
         !matches!(projection.view().lookup(path), Err(ViewError::NotFound))
-    }
-
-    /// The paths one operation rebinds or destroys: writers buffered
-    /// for these stay pending for their own boundary instead of
-    /// folding into the rebinding. Only exact paths are excluded — a
-    /// writer under a renamed source still folds pre-rename and rides
-    /// the subtree to the new path (its handle goes terminal at
-    /// settle), per the rename contract in `docs/contracts/write-path.md`. A
-    /// truncating `setattr` rebinds nothing — its same-path writers
-    /// fold and lose the tie, per the write-path contract — so it
-    /// filters no path.
-    fn forcer_skip_paths(kind: &MutationKind) -> Vec<String> {
-        match kind {
-            MutationKind::Mkdir { path }
-            | MutationKind::Unlink { path, .. }
-            | MutationKind::Rmdir { path, .. }
-            | MutationKind::CreateFile { path, .. } => vec![path.clone()],
-            MutationKind::Rename { from, to, .. } => vec![from.clone(), to.clone()],
-            _ => Vec::new(),
-        }
     }
 
     /// Submit one fold over taken members: the non-forcing members in
@@ -645,7 +627,6 @@ where
             let (taken, _fold_lease) = self.gather_taken(
                 std::slice::from_ref(handle),
                 &GatherFilter {
-                    skip_paths: &[],
                     exclude_absent: true,
                     own: Some(handle),
                 },
@@ -709,11 +690,9 @@ where
             log_budget_refusal("force-op-size", error);
             fuser::Errno::ENOSPC
         })?;
-        let skip_paths = Self::forcer_skip_paths(&kind);
         let (taken, _fold_lease) = self.gather_taken(
             &[],
             &GatherFilter {
-                skip_paths: &skip_paths,
                 exclude_absent: true,
                 own: None,
             },
@@ -742,7 +721,6 @@ where
         let (taken, _fold_lease) = match self.gather_taken(
             candidates,
             &GatherFilter {
-                skip_paths: &[],
                 exclude_absent: false,
                 own: None,
             },

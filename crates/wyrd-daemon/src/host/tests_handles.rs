@@ -131,8 +131,12 @@ fn rmdir_retires_the_inode_before_recreation() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// A rename folds a dirty writer on its source path: the buffered
+/// bytes apply pre-rename and ride the subtree, and the source
+/// handle goes terminal at the fold — so attribute reads fall back
+/// to the committed state instead of the handle's volatile overlay.
 #[test]
-fn getattr_uses_writable_handle_after_rename() {
+fn getattr_after_source_rename_uses_committed_state() {
     let (engine, dir, _) = scratch_drive();
     let daemon: WyrdNode<DriveView<_, RuntimeMaterialization>> =
         WyrdNode::new(engine, MemoryObjectStore::default()).unwrap();
@@ -157,14 +161,28 @@ fn getattr_uses_writable_handle_after_rename() {
     backend
         .rename_at(1, "source.txt", 1, "target.txt", false)
         .unwrap();
+    // The rename folds the dirty source write, so the bytes ride;
+    // the source path is gone, so the writer is terminal at the fold.
+    assert_eq!(
+        backend.commit_handle(writer),
+        Err(fuser::Errno::EIO),
+        "the source handle is terminal at the fold"
+    );
     backend.set_size_at(source_ino, 4).unwrap();
 
-    let attr = backend.getattr_at(source_ino, Some(writer)).unwrap();
-    assert_eq!(attr.ino.0, source_ino);
-    assert_eq!(attr.size, 8);
-    assert_eq!(attr.kind, fuser::FileType::RegularFile);
-    assert_eq!(attr.perm, 0o755);
+    assert_eq!(
+        backend.getattr_at(source_ino, Some(writer)),
+        Err(fuser::Errno::EIO),
+        "a terminal handle serves no attr"
+    );
     assert_eq!(backend.attr_at("target.txt").unwrap().size, 4);
+    let read = backend.open_at("target.txt").unwrap();
+    assert_eq!(
+        backend.read_handle(read, 0, 64).unwrap(),
+        b"chan",
+        "the ridden bytes truncate like any committed content"
+    );
+    backend.release_handle(read).unwrap();
     backend.release_handle(writer).unwrap();
 
     stop.store(true, Ordering::Relaxed);

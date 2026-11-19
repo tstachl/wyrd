@@ -495,6 +495,159 @@ fn failed_namespace_forcer_aborts_fold_leaves_pending_retryable() {
     teardown(drive);
 }
 
+/// A rename folds a dirty writer on its source path: the buffered
+/// bytes apply pre-rename and ride the subtree to the new path —
+/// the same outcome as a descendant handle — while the writer's own
+/// handle goes terminal at settle because its path is gone. Nothing
+/// stays volatile: the bytes land or the handle dies at the fold,
+/// never later.
+#[test]
+fn rename_folds_a_dirty_source_handle_and_it_goes_terminal() {
+    let drive = setup();
+    create_empty(&drive, "a.txt");
+    let ha = overwrite(&drive, "a.txt", b"RIDES");
+
+    let before = generation(&drive);
+    drive
+        .backend
+        .rename_at(1, "a.txt", 1, "b.txt", false)
+        .unwrap();
+    assert_eq!(
+        generation(&drive) - before,
+        1,
+        "the rename folds the pending write into one snapshot"
+    );
+    assert_eq!(
+        read_all(&drive, "b.txt"),
+        b"RIDES",
+        "the buffered bytes ride the rename to the new path"
+    );
+    assert_eq!(
+        drive.backend.attr_at("a.txt"),
+        Err(fuser::Errno::ENOENT),
+        "the source path is gone"
+    );
+    assert_eq!(
+        drive.backend.commit_handle(ha),
+        Err(fuser::Errno::EIO),
+        "the source handle is terminal at the fold"
+    );
+    assert_eq!(
+        drive.backend.write_handle(ha, 0, b"X"),
+        Err(fuser::Errno::EIO),
+        "a terminal handle stays terminal"
+    );
+
+    drive.backend.release_handle(ha).unwrap();
+    teardown(drive);
+}
+
+/// A rename folds a dirty writer on its destination path, and the
+/// writer loses the tie: the forcer replaces the path, so the
+/// buffered bytes never land and the handle is terminal at the fold.
+#[test]
+fn rename_destination_dirty_handle_loses_the_tie() {
+    let drive = setup();
+    create_empty(&drive, "a.txt");
+    create_empty(&drive, "b.txt");
+    let ha = overwrite(&drive, "a.txt", b"A");
+    drive.backend.commit_handle(ha).unwrap();
+    drive.backend.release_handle(ha).unwrap();
+    let hb = overwrite(&drive, "b.txt", b"DOOMED");
+
+    let before = generation(&drive);
+    drive
+        .backend
+        .rename_at(1, "a.txt", 1, "b.txt", false)
+        .unwrap();
+    assert_eq!(
+        generation(&drive) - before,
+        1,
+        "the rename folds into one snapshot"
+    );
+    assert_eq!(
+        read_all(&drive, "b.txt"),
+        b"A",
+        "the forcer replaces the destination; the loser's bytes never land"
+    );
+    assert_eq!(
+        drive.backend.commit_handle(hb),
+        Err(fuser::Errno::EIO),
+        "the destination handle is terminal at the fold"
+    );
+
+    drive.backend.release_handle(hb).unwrap();
+    teardown(drive);
+}
+
+/// An unlink folds a dirty writer on its path, and the writer loses
+/// the tie: the file is gone, so the buffered bytes never land and
+/// the handle is terminal at the fold instead of staying volatile.
+#[test]
+fn unlink_folds_a_dirty_handle_and_it_goes_terminal() {
+    let drive = setup();
+    create_empty(&drive, "a.txt");
+    let ha = overwrite(&drive, "a.txt", b"DOOMED");
+
+    let before = generation(&drive);
+    drive.backend.unlink_at(1, "a.txt").unwrap();
+    assert_eq!(
+        generation(&drive) - before,
+        1,
+        "the unlink folds into one snapshot"
+    );
+    assert_eq!(
+        drive.backend.attr_at("a.txt"),
+        Err(fuser::Errno::ENOENT),
+        "the file is gone"
+    );
+    assert_eq!(
+        drive.backend.commit_handle(ha),
+        Err(fuser::Errno::EIO),
+        "the unlinked handle is terminal at the fold"
+    );
+    assert_eq!(
+        drive.backend.write_handle(ha, 0, b"X"),
+        Err(fuser::Errno::EIO),
+        "a terminal handle stays terminal"
+    );
+
+    drive.backend.release_handle(ha).unwrap();
+    teardown(drive);
+}
+
+/// A create on a taken name is refused and restores the pending
+/// writer: the failed forcer aborts the fold with nothing committed,
+/// and the dirty handle stays usable for its own boundary.
+#[test]
+fn create_on_a_taken_name_restores_the_pending_writer() {
+    let drive = setup();
+    create_empty(&drive, "a.txt");
+    let ha = overwrite(&drive, "a.txt", b"KEEP");
+
+    let before = generation(&drive);
+    assert_eq!(
+        drive.backend.create_at(1, "a.txt", libc::O_RDWR),
+        Err(fuser::Errno::EEXIST),
+        "create on a taken name is refused"
+    );
+    assert_eq!(
+        generation(&drive) - before,
+        0,
+        "a failed forcer commits nothing, not even the pending set"
+    );
+
+    drive.backend.commit_handle(ha).unwrap();
+    assert_eq!(
+        read_all(&drive, "a.txt"),
+        b"KEEP",
+        "the restored writer still commits on its own forcing event"
+    );
+
+    drive.backend.release_handle(ha).unwrap();
+    teardown(drive);
+}
+
 /// Releasing a dirty handle folds every other pending write into the
 /// same snapshot: close is a commit boundary for the whole pending
 /// set, best-effort.
