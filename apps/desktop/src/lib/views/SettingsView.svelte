@@ -391,7 +391,7 @@ never deletes local data as a side effect of the UI. -->
     </div>
     <p class="text-sm font-medium">No settings read yet</p>
     <p class="max-w-sm text-sm text-muted-foreground">
-      Refresh to read this drive's configured bounds. Nothing is filled in from memory.
+      Refresh to read this drive's limits. Nothing is filled in from memory.
     </p>
   </div>
   <div class="mt-3">
@@ -501,9 +501,9 @@ never deletes local data as a side effect of the UI. -->
         <DetailRow label="Storage limit" description="The most drive data Wyrd will keep on this device. When that limit is reached, Wyrd refuses new data before writing anything. This is not a limit on your disk's free space.">
           {#if settings.retained_bytes_quota === null}
             <span class="inline-flex items-center gap-1">
-              <Badge variant="outline" class="text-muted-foreground">Compiled default</Badge>
+              <Badge variant="outline" class="text-muted-foreground">Using Wyrd's default</Badge>
               <InfoHint label="About the storage limit">
-                <p>{boundLabel(settings.retained_bytes_quota, "bytes")} — the app cannot see that default value, so it does not show a number.</p>
+                <p>The app cannot see that default value, so it does not show a number.</p>
               </InfoHint>
             </span>
           {:else}
@@ -513,9 +513,9 @@ never deletes local data as a side effect of the UI. -->
         <DetailRow label="Sync work limit" description="How many items of sync work Wyrd starts in each sync pass. Anything beyond this waits for the next pass; nothing is dropped.">
           {#if settings.max_admit_per_pass === null}
             <span class="inline-flex items-center gap-1">
-              <Badge variant="outline" class="text-muted-foreground">Compiled default</Badge>
+              <Badge variant="outline" class="text-muted-foreground">Using Wyrd's default</Badge>
               <InfoHint label="About sync work limit">
-                <p>{boundLabel(settings.max_admit_per_pass, "items")} — the app cannot see that default value, so it does not show a number.</p>
+                <p>The app cannot see that default value, so it does not show a number.</p>
               </InfoHint>
             </span>
           {:else}
@@ -525,9 +525,9 @@ never deletes local data as a side effect of the UI. -->
         <DetailRow label="Download time per sync pass" description="How long Wyrd spends downloading in one sync pass. When that time runs out, unfinished downloads wait for the next pass.">
           {#if settings.fetch_pass_budget_secs === null}
             <span class="inline-flex items-center gap-1">
-              <Badge variant="outline" class="text-muted-foreground">Compiled default</Badge>
+              <Badge variant="outline" class="text-muted-foreground">Using Wyrd's default</Badge>
               <InfoHint label="About the download time per sync pass">
-                <p>{boundLabel(settings.fetch_pass_budget_secs, "seconds")} — the app cannot see that default value, so it does not show a number.</p>
+                <p>The app cannot see that default value, so it does not show a number.</p>
               </InfoHint>
             </span>
           {:else}
@@ -537,9 +537,9 @@ never deletes local data as a side effect of the UI. -->
         <DetailRow label="File change wait limit" description="How long a change you make can wait for the content it needs from other devices. If that content does not arrive in time, the change fails and you can retry it; nothing is saved.">
           {#if settings.max_mutation_wait_secs === null}
             <span class="inline-flex items-center gap-1">
-              <Badge variant="outline" class="text-muted-foreground">Compiled default</Badge>
+              <Badge variant="outline" class="text-muted-foreground">Using Wyrd's default</Badge>
               <InfoHint label="About the file change wait limit">
-                <p>{boundLabel(settings.max_mutation_wait_secs, "seconds")} — the app cannot see that default value, so it does not show a number.</p>
+                <p>The app cannot see that default value, so it does not show a number.</p>
               </InfoHint>
             </span>
           {:else}
@@ -549,9 +549,9 @@ never deletes local data as a side effect of the UI. -->
         <DetailRow label="File open wait limit" description="How long Wyrd waits for a file's content to become available on this device when you open or read it. If it takes longer, the open or read fails and you can try again while the download continues.">
           {#if settings.open_timeout_secs === null}
             <span class="inline-flex items-center gap-1">
-              <Badge variant="outline" class="text-muted-foreground">Compiled default</Badge>
+              <Badge variant="outline" class="text-muted-foreground">Using Wyrd's default</Badge>
               <InfoHint label="About the file open wait limit">
-                <p>{boundLabel(settings.open_timeout_secs, "seconds")} — the app cannot see that default value, so it does not show a number.</p>
+                <p>The app cannot see that default value, so it does not show a number.</p>
               </InfoHint>
             </span>
           {:else}
@@ -573,8 +573,7 @@ never deletes local data as a side effect of the UI. -->
     </div>
     <p class="text-sm font-medium">No settings file yet</p>
     <p class="max-w-md text-sm text-muted-foreground">
-      Nothing is configured, so the drive starts with its compiled defaults. Defaults are unknown to this
-      shell, so nothing is filled in here. The file would live at:
+      Nothing is configured, so the drive starts with its compiled defaults. The app cannot see those default values, so it does not show them here. The file would live at:
     </p>
     <p class="flex min-w-0 max-w-md items-center gap-1.5">
       <span class="truncate font-mono text-xs">{settings.path}</span>
@@ -597,7 +596,7 @@ never deletes local data as a side effect of the UI. -->
     <p class="text-sm font-medium">No section for this drive</p>
     <p class="max-w-md text-sm text-muted-foreground">
       The file configures other drives, but nothing in it names this drive yet — so the drive starts
-      with its compiled defaults here, which are unknown to this shell:
+      with its compiled defaults here. The app cannot see those default values, so it does not show them here:
     </p>
     <p class="flex min-w-0 max-w-md items-center gap-1.5">
       <span class="truncate font-mono text-xs">{settings.path}</span>

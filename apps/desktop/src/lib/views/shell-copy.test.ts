@@ -66,9 +66,12 @@ test("settings header, tooltip and null bound use the approved explanations", ()
     "These settings let you change the limits for this drive.",
   );
   expect(settings).toContain("About these limits");
+  // The null-bound badge names the default; the helper in
+  // `format.ts` renders it for values.
+  expect(settings).toContain("Using Wyrd's default");
   expect(formatSrc).toContain("Using Wyrd's default");
   expect(settings).toContain(
-    "the app cannot see that default value, so it does not show a number",
+    "The app cannot see that default value, so it does not show a number",
   );
   expect(settings).not.toContain("configured bounds, as configured");
   expect(settings).not.toContain("About editing bounds");
