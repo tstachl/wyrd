@@ -1640,7 +1640,7 @@ fn sync_status_reconciliation_row_names_classes_not_identities() {
 }
 
 /// The outcome maps to the process result: quiet succeeds, a capped
-/// run fails as incomplete with its pass and pending counts.
+/// run fails as incomplete with its pending count.
 #[test]
 fn run_outcome_maps_to_success_or_incomplete() {
     let quiet = SyncRunReport {
@@ -1782,14 +1782,13 @@ fn run_outcome_maps_to_success_or_incomplete() {
     };
     let error = run_outcome_error(&capped).unwrap_err();
     assert!(
-        matches!(
-            error,
-            CliError::Incomplete {
-                passes: MAX_SYNC_NOW_PASSES,
-                pending: 4
-            }
-        ),
+        matches!(error, CliError::Incomplete { pending: 4 }),
         "{error}"
+    );
+    assert_eq!(
+        error.to_string(),
+        "Sync did not finish: the maximum number of passes was reached with 4 pieces of work still pending. Run `wyrd sync now` again to continue.",
+        "frozen copy renders verbatim: {error}"
     );
 }
 

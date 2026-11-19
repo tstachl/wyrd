@@ -1112,7 +1112,6 @@ pub(crate) fn run_outcome_error(report: &SyncRunReport) -> Result<(), CliError> 
     match report.outcome {
         RunOutcome::Quiet | RunOutcome::RemoteStalled => Ok(()),
         RunOutcome::PassLimit => Err(CliError::Incomplete {
-            passes: report.passes,
             pending: report.pending,
         }),
     }?;

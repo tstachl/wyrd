@@ -208,10 +208,8 @@ pub enum CliError {
     /// still owed: rerun to continue converging. Reported, never
     /// silent, so automation cannot mistake a capped run for a
     /// converged device. Exits non-zero like any other failure.
-    #[error("Sync did not finish: the maximum number of passes ({passes}) was reached with {pending} pieces of work still pending. Run `wyrd sync now` again to continue.")]
+    #[error("Sync did not finish: the maximum number of passes was reached with {pending} pieces of work still pending. Run `wyrd sync now` again to continue.")]
     Incomplete {
-        /// The pass cap the run stopped at.
-        passes: u32,
         /// Obligations still owed when the cap hit.
         pending: usize,
     },
