@@ -41,7 +41,16 @@ is transient — no drive data is affected.
   the loader trait and failure taxonomy live beside the secret
   type in `wyrd-sync::keys`, and the CLI file backend conforms
   to it with identical wording and exit codes. The OS
-  credential-store backend is specified, not yet wired.
+  credential-store backend is specified there and wired by the
+  entry below.
+
+- OS credential-store backends behind the loader boundary
+  (`nostr:nevent1qqs2mmdv6cnl7hjfpmkvn2jhc5lfcypshc87uuja26l0ne8xvp2qf4qpz9mhxue69uhkwunpwdczuap49eehgs5kx24`):
+  the `wyrd-credential-store` leaf crate serves
+  `CredentialRef::OsStore` reads — Keychain on macOS, Secret
+  Service on Linux — through the same failure taxonomy, with no
+  fallback between backends. Provisioning, replacement, deletion,
+  and migration stay specified, not yet wired.
 
 - Desktop application lifecycle contract
   (`docs/contracts/desktop-lifecycle.md`, supersedes

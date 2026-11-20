@@ -1,6 +1,6 @@
 # Credential loading (v0.4)
 
-Status: Normative. Shipped scope: the read half is implemented (the CLI file backend conforms); provisioning, replacement, deletion, and the OS backends are specified, not yet wired. Scope: how a drive owner obtains its secret
+Status: Normative. Shipped scope: the read half is implemented (the CLI file backend and the OS credential-store backends conform); provisioning, replacement, deletion, and migration are specified, not yet wired. Scope: how a drive owner obtains its secret
 material — the device identity secret and the passphrase protecting
 the wrapped root key — without the desktop UI alive, in the actual
 OS service context. Authority: this contract owns the
@@ -34,10 +34,12 @@ migration slice. Two backends are specified by this contract:
   (`commands/identity.rs`). Owner-only files, never overwritten,
   `O_NOFOLLOW`, uid and mode checks, bounded reads, zeroized
   buffers.
-- **OS credential-store backend** (specified here, implemented per
-  platform): the platform's credential store — Keychain on macOS,
-  an OS credential service (Secret Service expected) on Linux —
-  reached through the same loader boundary.
+- **OS credential-store backend** (implemented per
+  platform in `wyrd-credential-store`): the platform's credential
+  store — Keychain on macOS, an OS credential service (Secret
+  Service expected) on Linux — reached through the same loader
+  boundary. Reads only; the writer joins with the migration
+  slice, in the encoding this contract's backend section pins.
 
 Adding a backend changes no secret format, no keystore wrap, no
 membership or epoch behavior, and no wire byte. Hardware-backed
@@ -63,8 +65,9 @@ holds for every new selector field.
 
 For one drive, identified by its credential reference, the loader
 provides the operations below. Lookup and open ship with the file
-backend; provisioning, replacement, and deletion are specified
-here and join with the migration slice. (This section states the
+backend and the OS credential-store backends; provisioning,
+replacement, and deletion are specified here and join with the
+migration slice. (This section states the
 full boundary so backends are built once against it — it does not
 claim the trait already carries what is marked specified.)
 
@@ -189,7 +192,8 @@ The loader trait lives where the secret type lives
 zeroization discipline). The file backend stays in `wyrd-cli`.
 Each OS backend lives in the narrowest holder that keeps
 platform FFI out of the audited substrate and out of desktop
-reach: a new leaf crate at the first OS binding if the
-dependency policy requires it, never `wyrd-sync`'s allow-list,
-never `wyrd-desktop`. `wyrd-contracts` pins every new edge,
-feature, and `unsafe` site before the backend lands.
+reach: the `wyrd-credential-store` leaf crate, holding the first
+OS binding (`keyring`, per-OS target tables), never
+`wyrd-sync`'s allow-list, never `wyrd-desktop`. `wyrd-contracts`
+pins every new edge, feature, and `unsafe` site before the
+backend lands.

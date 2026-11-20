@@ -9,9 +9,11 @@
 //! knowing which backend served them.
 //!
 //! Backends: the hardened Unix file reader (implemented in
-//! `wyrd-cli` as `FileBackend`, conforming to this trait); OS
-//! credential stores (specified, not yet wired). Adding a backend
-//! changes no secret format and no caller.
+//! `wyrd-cli` as `FileBackend`, conforming to this trait); the OS
+//! credential-store backend (implemented in
+//! `wyrd-credential-store` as `OsStoreBackend`: Keychain on macOS,
+//! Secret Service on Linux). Adding a backend changes no secret
+//! format and no caller.
 
 use std::path::PathBuf;
 
@@ -39,9 +41,9 @@ pub enum CredentialRef {
         passphrase: Option<PathBuf>,
     },
     /// One item (identity plus passphrase) in the platform's
-    /// credential store, named by its account label. Specified,
-    /// not yet wired: loading answers `Unavailable` until the
-    /// OS backend lands.
+    /// credential store, named by its account label. Served by the
+    /// OS credential-store backend (`wyrd-credential-store`):
+    /// Keychain on macOS, Secret Service on Linux.
     OsStore {
         /// The store account label naming the drive's item.
         account: String,
@@ -113,9 +115,9 @@ pub enum CredentialError {
         detail: String,
     },
     /// The store or mechanism itself is unreachable (no D-Bus
-    /// session, no Secret Service, non-Unix file hardening,
-    /// backend not yet wired). Retry; never substitute a weaker
-    /// mechanism.
+    /// session, no Secret Service, non-Unix file hardening, a
+    /// reference served by the wrong backend). Retry; never
+    /// substitute a weaker mechanism.
     #[error("credential store unavailable: {detail}")]
     Unavailable {
         /// What was unreachable and where.

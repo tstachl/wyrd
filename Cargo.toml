@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/wyrd-format",
     "crates/wyrd-sync",
+    "crates/wyrd-credential-store",
     "crates/wyrd-namespace",
     "crates/wyrd-view",
     "crates/wyrd-core",
@@ -79,6 +80,12 @@ wyrd-settings = { path = "crates/wyrd-settings" }
 # domain-to-wire conversion — so consumers link the interface without
 # the authoring surface.
 wyrd-owner-client = { path = "crates/wyrd-owner-client" }
+# OS credential-store binding (credential-loading.md OS backend): the
+# platform's credential store behind the loader boundary — Keychain on
+# macOS, Secret Service on Linux. MIT/Apache-2.0, like the rest of the
+# graph. Only the leaf `wyrd-credential-store` crate may name it: never
+# the audited substrate, never the desktop.
+keyring = "3.6"
 
 # content hashing
 blake3 = "1.8"

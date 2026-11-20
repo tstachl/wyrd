@@ -16,6 +16,7 @@ use crate::drive_config::{
     load_drive_config, resolve_credential_path, CredentialProvenance, LoadedConfig,
 };
 use crate::CliError;
+use wyrd_credential_store::OsStoreBackend;
 use wyrd_sync::keys::{
     CredentialError, CredentialLoader, CredentialRef, CredentialSubject, DeviceIdentitySecret,
     LoadedCredential,
@@ -57,6 +58,22 @@ pub(crate) fn load_credentials(
     let config = load_drive_config(drive_dir, override_path)?;
     let (identity, passphrase, provenance) = read_credentials(creds, config.as_ref())?;
     Ok((identity, passphrase, provenance, config))
+}
+
+/// Route one credential reference to the backend that serves it:
+/// file references to the hardened file reader below, store
+/// references to the OS credential-store backend
+/// (`wyrd-credential-store`). The reference already chose its
+/// backend; the dispatcher never retries across them and never
+/// prompts — a wrong-backend answer stays terminal, exactly as the
+/// backend reported it.
+pub(crate) fn load_credential(
+    reference: &CredentialRef,
+) -> Result<LoadedCredential, CredentialError> {
+    match reference {
+        CredentialRef::File { .. } => FileBackend.load(reference),
+        CredentialRef::OsStore { .. } => OsStoreBackend.load(reference),
+    }
 }
 
 /// Read and harden the credential files. The passphrase keeps its
@@ -121,12 +138,11 @@ fn read_credentials_with(
         // The session posture loads the identity through the
         // boundary with no passphrase item; the pipe supplies
         // the passphrase downstream, never the loader.
-        let loaded = FileBackend
-            .load(&CredentialRef::File {
-                identity: identity_file,
-                passphrase: None,
-            })
-            .map_err(loader_to_cli)?;
+        let loaded = load_credential(&CredentialRef::File {
+            identity: identity_file,
+            passphrase: None,
+        })
+        .map_err(loader_to_cli)?;
         let passphrase = read_passphrase_stdin(stdin)?;
         return Ok((loaded.identity, passphrase, provenance));
     }
@@ -144,12 +160,11 @@ fn read_credentials_with(
     // is unchanged; where the passphrase names nothing the
     // resolution reports before the single read runs (either
     // order names a real problem at the same exit status).
-    let loaded = FileBackend
-        .load(&CredentialRef::File {
-            identity: identity_file,
-            passphrase: Some(passphrase_file),
-        })
-        .map_err(loader_to_cli)?;
+    let loaded = load_credential(&CredentialRef::File {
+        identity: identity_file,
+        passphrase: Some(passphrase_file),
+    })
+    .map_err(loader_to_cli)?;
     let passphrase = loaded.passphrase.expect(
         "a file reference naming a passphrase item loads one: the backend read it or failed",
     );
@@ -243,12 +258,11 @@ fn read_unlock_credentials_with(
     // passphrase item; the pipe or prompt supplies the
     // passphrase downstream, never the loader. Interactive
     // surfaces stay outside the trait by design.
-    let loaded = FileBackend
-        .load(&CredentialRef::File {
-            identity: identity_file,
-            passphrase: None,
-        })
-        .map_err(loader_to_cli)?;
+    let loaded = load_credential(&CredentialRef::File {
+        identity: identity_file,
+        passphrase: None,
+    })
+    .map_err(loader_to_cli)?;
     let identity = loaded.identity;
     if creds.passphrase_stdin {
         let passphrase = read_passphrase_stdin(stdin)?;
@@ -645,11 +659,13 @@ impl CredentialLoader for FileBackend {
     /// Resolve a file reference to secret material through the
     /// production readers in one call — identity first, then the
     /// passphrase where the reference names one. `OsStore`
-    /// references answer `Unavailable`: specified, not yet wired
-    /// — never an implicit file fallback. A reference naming no
-    /// passphrase item loads the identity with no passphrase:
-    /// that is the session posture, and the unlock pipe or
-    /// prompt supplies the passphrase downstream.
+    /// references answer `Unavailable`: the file backend never
+    /// serves the store — the CLI dispatcher routes those to the OS
+    /// credential-store backend, and this arm stays terminal so no
+    /// path silently substitutes one backend for the other. A
+    /// reference naming no passphrase item loads the identity with
+    /// no passphrase: that is the session posture, and the unlock
+    /// pipe or prompt supplies the passphrase downstream.
     fn load(&self, reference: &CredentialRef) -> Result<LoadedCredential, CredentialError> {
         match reference {
             CredentialRef::File { identity, passphrase } => {
@@ -679,7 +695,7 @@ impl CredentialLoader for FileBackend {
                     account: account.clone(),
                 },
                 detail: format!(
-                    "OS credential store backend is not implemented: no item for account {account} can be loaded"
+                    "the file backend never serves OS store references: no item for account {account} can be loaded here"
                 ),
             }),
         }
@@ -1185,8 +1201,9 @@ mod tests {
         assert_eq!(err.exit_code(), 2);
     }
 
-    /// The OS store reference answers `Unavailable`, never an
-    /// implicit file fallback: specified, not yet wired. The
+    /// The OS store reference answers `Unavailable` at the file
+    /// backend, never an implicit file fallback: the dispatcher
+    /// routes those to the OS credential-store backend instead. The
     /// subject names the account, not a file.
     #[test]
     fn os_store_reference_is_unavailable_not_a_fallback() {
@@ -1203,9 +1220,45 @@ mod tests {
                     },
                     "the subject names the account"
                 );
-                assert!(detail.contains("not implemented"), "says so: {detail}")
+                assert!(
+                    detail.contains("never serves OS store references"),
+                    "says so: {detail}"
+                )
             }
-            other => panic!("an unwired backend is Unavailable: {other:?}"),
+            other => panic!("the file backend never serves the store: {other:?}"),
         }
+    }
+
+    /// The dispatcher routes by reference: file references load
+    /// through the file backend, store references through the OS
+    /// backend — so a store reference dispatched here never reports
+    /// the file backend's refusal. The store side is unwired in
+    /// this test's context (no item stored), which reads `Missing`
+    /// or `Unavailable` depending on the platform store, never a
+    /// file error.
+    #[test]
+    fn dispatcher_routes_store_references_to_the_os_backend() {
+        let missing = CredentialRef::OsStore {
+            account: "wyrd-test-dispatcher-absent".to_string(),
+        };
+        match load_credential(&missing) {
+            Err(
+                CredentialError::Missing { .. }
+                | CredentialError::Unavailable { .. }
+                | CredentialError::Denied { .. },
+            ) => {}
+            other => panic!("a store reference never reports a file error: {other:?}"),
+        }
+        let file_missing = CredentialRef::File {
+            identity: std::path::PathBuf::from("/keys/no-identity"),
+            passphrase: None,
+        };
+        assert!(
+            matches!(
+                load_credential(&file_missing),
+                Err(CredentialError::Missing { .. })
+            ),
+            "file references still load through the file backend"
+        );
     }
 }
