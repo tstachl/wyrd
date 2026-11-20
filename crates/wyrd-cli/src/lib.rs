@@ -12,6 +12,7 @@ use clap::Parser;
 
 use crate::args::{Cli, Command, MaterializationAction, OwnerAction, RoleAction};
 use crate::drive_config::resolve_relays;
+use crate::migrate::migrate_drive_credentials;
 use wyrd_daemon::process::{install_shutdown_handler, SHUTDOWN};
 // Re-exported for the `tests_*` modules, which resolve argument types
 // and credential readers through `super::*` and must stay untouched
@@ -544,6 +545,28 @@ pub fn command(args: Vec<String>) -> Result<(), CliError> {
         }
         Command::Drive {
             drive_dir,
+            action: crate::args::DriveAction::MigrateCredentials { account },
+            credentials,
+            ..
+        } => {
+            // Migration resolves its own credentials: the files it
+            // migrates from, never the pipe — a piped passphrase
+            // would leave no file pair to retire and no proof the
+            // keystore opens under persisted material.
+            if credentials.passphrase_stdin {
+                return Err(CliError::Usage(
+                    "migration needs credential files, not --passphrase-stdin: pass --identity-file/--passphrase-file or set them in the drive configuration".to_string(),
+                ));
+            }
+            return migrate_drive_credentials(
+                drive_dir.clone(),
+                account.clone(),
+                credentials,
+                cli.config.clone(),
+            );
+        }
+        Command::Drive {
+            drive_dir,
             credentials,
             ..
         } => load_credentials(drive_dir, credentials, cli.config.as_deref())?,
@@ -602,7 +625,7 @@ pub fn command(args: Vec<String>) -> Result<(), CliError> {
         // Dead by construction: the credentials match above returns
         // from update, build-info, identity, drive service-start,
         // drive service-enable, drive service-disable, drive unlock,
-        // and settings before secrets load. The arm
+        // drive migrate-credentials, and settings before secrets load. The arm
         // exists only because the match is exhaustive.
         Command::Update { .. }
         | Command::BuildInfo
@@ -615,6 +638,12 @@ pub fn command(args: Vec<String>) -> Result<(), CliError> {
             ..
         } => {
             unreachable!("drive unlock runs before credential loading")
+        }
+        Command::Drive {
+            action: crate::args::DriveAction::MigrateCredentials { .. },
+            ..
+        } => {
+            unreachable!("drive migrate-credentials runs before credential loading")
         }
         Command::UpdateVerify { drive_dir, .. } => {
             update::run_update_verify(&drive_dir, identity, &passphrase)
@@ -826,6 +855,7 @@ mod composer;
 mod credentials;
 mod drive_config;
 mod logging;
+mod migrate;
 mod preflight;
 mod teardown;
 mod update;

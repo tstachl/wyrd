@@ -11,10 +11,10 @@
 //! secret in it would leak through the filesystem where none of the
 //! output discipline applies.
 //!
-//! Schema (deliberately narrow — relays plus the two credential
-//! paths; role, replication targets, retention, and budgets arrive as
-//! keys when they have real semantics, never as ignored
-//! placeholders):
+//! Schema (deliberately narrow — relays, the two credential
+//! paths, plus the credential-backend selector; role, replication
+//! targets, retention, and budgets arrive as keys when they have
+//! real semantics, never as ignored placeholders):
 //!
 //! ```toml
 //! [drive]
@@ -23,15 +23,32 @@
 //! passphrase_file = "/etc/wyrd/passphrase"
 //! ```
 //!
-//! Unknown keys are refused with their name: a typo'd key silently
-//! discarded is the failure mode that makes configuration files
-//! untrustworthy. Precedence is flags, then file, then defaults —
-//! and for `--relay` specifically flags *replace* the configured
-//! list, so the effective set is always knowable.
+//! A drive migrated to the OS credential store names the backend and
+//! the store account instead of file paths (migration slice,
+//! `docs/contracts/credential-loading.md`):
+//!
+//! ```toml
+//! [drive]
+//! relays = ["wss://relay.example"]
+//! credential_backend = "os-store"
+//! credential_account = "wyrd-drive-alpha"
+//! ```
+//!
+//! The two forms are exclusive: a drive names one backend. File
+//! paths beside a store backend (or an account beside the file
+//! backend) refuse — ambiguity between backends is a parse error,
+//! never a precedence rule. Unknown keys are refused with their
+//! name: a typo'd key silently discarded is the failure mode that
+//! makes configuration files untrustworthy. Precedence is flags,
+//! then file, then defaults — and for `--relay` specifically flags
+//! *replace* the configured list, so the effective set is always
+//! knowable.
 
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
+
+use wyrd_sync::keys::CredentialRef;
 
 use super::CliError;
 
@@ -57,10 +74,12 @@ struct DriveConfigFile {
     drive: DriveSection,
 }
 
-/// The `[drive]` section: the entire v0.3 key set. No secret
-/// *material* key exists and none may be added without revisiting
-/// the no-secrets contract pinned by the structural test below —
-/// the parser's key set is the assertion.
+/// The `[drive]` section: relays, credential paths, and the
+/// credential-backend selector. No secret *material* key exists and
+/// none may be added without revisiting the no-secrets contract
+/// pinned by the structural test below — the parser's key set is the
+/// assertion. The backend selector and account are references (kind
+/// plus label), never secrets, under the same rule.
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct DriveSection {
@@ -70,6 +89,15 @@ struct DriveSection {
     identity_file: Option<PathBuf>,
     #[serde(default)]
     passphrase_file: Option<PathBuf>,
+    /// Credential backend: absent means `"file"`; `"os-store"`
+    /// routes through the OS credential store. Anything else is
+    /// refused with its name.
+    #[serde(default)]
+    credential_backend: Option<String>,
+    /// Store account label, required exactly where the backend is
+    /// `"os-store"` and refused everywhere else.
+    #[serde(default)]
+    credential_account: Option<String>,
 }
 
 /// A configuration file that was found and parsed: its path (for
@@ -87,6 +115,13 @@ pub(crate) struct LoadedConfig {
     pub identity_file: Option<PathBuf>,
     /// Configured credential paths: defaults the flags override.
     pub passphrase_file: Option<PathBuf>,
+    /// Configured credential backend: `None` (or `"file"`) is the
+    /// file backend; `Some("os-store")` is the OS credential store.
+    /// Validated at parse — no other value can be loaded.
+    pub credential_backend: Option<String>,
+    /// Configured store account: `Some` exactly where the backend is
+    /// `"os-store"`, validated at parse.
+    pub credential_account: Option<String>,
 }
 
 /// Where the effective relay list came from: what the provenance
@@ -194,12 +229,228 @@ pub(crate) fn load_drive_config(
             path.display()
         ))
     })?;
+    validate_credential_selector(&path, &file.drive)?;
     Ok(Some(LoadedConfig {
         path,
         relays: file.drive.relays,
         identity_file: file.drive.identity_file,
         passphrase_file: file.drive.passphrase_file,
+        credential_backend: file.drive.credential_backend,
+        credential_account: file.drive.credential_account,
     }))
+}
+
+/// The credential-backend selector is one backend, never a mix:
+/// absent means the file backend; `"os-store"` needs exactly the
+/// store account and no file paths; anything else is refused with
+/// its name. File paths beside a store backend would leave two
+/// authorities for one drive's secret — ambiguity is a parse error,
+/// never a precedence rule.
+fn validate_credential_selector(path: &Path, drive: &DriveSection) -> Result<(), CliError> {
+    let backend = drive.credential_backend.as_deref().unwrap_or("file");
+    match backend {
+        "file" => {
+            if let Some(account) = drive.credential_account.as_deref() {
+                return Err(CliError::Usage(format!(
+                    "{}: credential_account {account:?} is set but credential_backend is not \"os-store\": one backend per drive",
+                    path.display()
+                )));
+            }
+            Ok(())
+        }
+        "os-store" => {
+            let Some(account) = drive.credential_account.as_deref() else {
+                return Err(CliError::Usage(format!(
+                    "{}: credential_backend is \"os-store\" but no credential_account is set: name the store item",
+                    path.display()
+                )));
+            };
+            validate_credential_account(path, account)?;
+            if drive.identity_file.is_some() || drive.passphrase_file.is_some() {
+                return Err(CliError::Usage(format!(
+                    "{}: credential file paths beside credential_backend \"os-store\": one backend per drive — remove the file paths",
+                    path.display()
+                )));
+            }
+            Ok(())
+        }
+        unknown => Err(CliError::Usage(format!(
+            "{}: unknown credential_backend {unknown:?}: expected \"file\" or \"os-store\"",
+            path.display()
+        ))),
+    }
+}
+
+/// A store account label is a reference, never a secret, but it
+/// still has a shape: non-empty, bounded, no control bytes, no
+/// surrounding whitespace to misroute by. The Keychain and Secret
+/// Service both accept more; the bound here is the narrow, portable
+/// intersection, refused with its name.
+pub(crate) fn validate_credential_account(path: &Path, account: &str) -> Result<(), CliError> {
+    if account.is_empty() || account.len() > 128 {
+        return Err(CliError::Usage(format!(
+            "{}: credential_account must be 1-128 bytes: {account:?} is not",
+            path.display()
+        )));
+    }
+    if account.bytes().any(|byte| byte.is_ascii_control()) {
+        return Err(CliError::Usage(format!(
+            "{}: credential_account must not contain control bytes",
+            path.display()
+        )));
+    }
+    if account != account.trim_matches(|character: char| character.is_ascii_whitespace()) {
+        return Err(CliError::Usage(format!(
+            "{}: credential_account must not have leading or trailing whitespace",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+/// Build the OS store reference for a drive configured on the store
+/// backend. A file-backed drive has no store reference — that is a
+/// usage refusal, never an invented account — so migration routes
+/// its verification steps through the production reader without
+/// naming an item out of thin air.
+pub(crate) fn os_store_reference(config: &LoadedConfig) -> Result<CredentialRef, CliError> {
+    match config.credential_backend.as_deref() {
+        Some("os-store") => match config.credential_account.clone() {
+            Some(account) => Ok(CredentialRef::OsStore { account }),
+            None => Err(CliError::Usage(format!(
+                "{}: credential_backend is \"os-store\" but no credential_account is set",
+                config.path.display()
+            ))),
+        },
+        _ => Err(CliError::Usage(format!(
+            "{}: drive is file-backed: no OS credential-store reference",
+            config.path.display()
+        ))),
+    }
+}
+
+/// Rewrite the drive configuration adopting the OS store backend
+/// (migration step 4): relays preserved, credential file paths
+/// removed, backend and account recorded. The rewrite is whole-file
+/// — unknown keys were already refused at parse, so nothing else
+/// can exist — written atomically (temporary sibling, fsync,
+/// rename, parent fsync) under the existing file's mode. Comments
+/// and layout are not preserved; the file holds a reference, never
+/// secrets, under the same world-readable posture as before.
+pub(crate) fn write_os_store_config(
+    path: &Path,
+    relays: &[String],
+    account: &str,
+) -> Result<(), CliError> {
+    let mut drive = toml::map::Map::new();
+    drive.insert(
+        "relays".to_string(),
+        toml::Value::Array(
+            relays
+                .iter()
+                .map(|relay| toml::Value::String(relay.clone()))
+                .collect(),
+        ),
+    );
+    drive.insert(
+        "credential_backend".to_string(),
+        toml::Value::String("os-store".to_string()),
+    );
+    drive.insert(
+        "credential_account".to_string(),
+        toml::Value::String(account.to_string()),
+    );
+    let mut root = toml::map::Map::new();
+    root.insert("drive".to_string(), toml::Value::Table(drive));
+    let text = toml::to_string(&toml::Value::Table(root))
+        .map_err(|error| CliError::Usage(format!("cannot render {}: {error}", path.display())))?;
+    // Atomic like the credential writers: a torn configuration is a
+    // drive that refuses every command, so the new content lands on
+    // a temporary sibling (fsync), renames over the target, and
+    // fsyncs the parent. The sibling carries the process id so
+    // concurrent rewrites cannot collide; a failed rewrite removes
+    // it. A symlinked configuration refuses rather than being
+    // replaced by a regular file behind the operator's back.
+    if std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+        return Err(CliError::Usage(format!(
+            "{} is a symlink: refusing to replace it with a regular file — point the configuration at a real file",
+            path.display()
+        )));
+    }
+    let temp = path.with_extension(format!("toml-new-{}", std::process::id()));
+    // A stale sibling from a killed run must not collide: remove it
+    // first (missing is fine), then create_new.
+    match std::fs::remove_file(&temp) {
+        Ok(()) => {}
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => {}
+        Err(source) => {
+            return Err(CliError::Io {
+                path: temp.clone(),
+                source,
+            });
+        }
+    }
+    let outcome = (|| {
+        {
+            use std::io::Write;
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temp)
+                .map_err(|source| CliError::Io {
+                    path: temp.clone(),
+                    source,
+                })?;
+            file.write_all(text.as_bytes())
+                .map_err(|source| CliError::Io {
+                    path: temp.clone(),
+                    source,
+                })?;
+            file.sync_all().map_err(|source| CliError::Io {
+                path: temp.clone(),
+                source,
+            })?;
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            // Keep the deployed posture: adopt the existing file's
+            // mode where one exists, else the operator umask decides
+            // (the file holds a reference, never secrets, like before).
+            if let Ok(metadata) = std::fs::symlink_metadata(path) {
+                let mode = metadata.permissions().mode() & 0o777;
+                std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(mode)).map_err(
+                    |source| CliError::Io {
+                        path: temp.clone(),
+                        source,
+                    },
+                )?;
+            }
+        }
+        std::fs::rename(&temp, path).map_err(|source| CliError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?;
+        #[cfg(unix)]
+        {
+            if let Some(parent) = path
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+            {
+                if let Ok(handle) = std::fs::File::open(parent) {
+                    handle.sync_all().map_err(|source| CliError::Io {
+                        path: parent.to_path_buf(),
+                        source,
+                    })?;
+                }
+            }
+        }
+        Ok(())
+    })();
+    if outcome.is_err() {
+        let _ = std::fs::remove_file(&temp);
+    }
+    outcome
 }
 
 /// Resolve the effective relay list: flags win when given (and
@@ -310,6 +561,11 @@ pub(crate) struct CredentialProvenance {
     /// echo): no file was resolved and no pipe was read, so `word`
     /// must name the prompt rather than misreporting a flag.
     pub passphrase_from_prompt: bool,
+    /// Both surfaces came from the OS credential store (the drive
+    /// configuration names the store backend): no file was resolved
+    /// and no flag was read, so the report lines name the store
+    /// instead of a path.
+    pub from_os_store: bool,
 }
 
 impl CredentialProvenance {
@@ -321,11 +577,23 @@ impl CredentialProvenance {
         }
     }
 
-    /// The passphrase surface in report words: stdin and the
-    /// terminal prompt name themselves, otherwise the flag/file
-    /// rule applies.
+    /// The identity surface in report words: the store names
+    /// itself, otherwise the flag/file rule applies.
+    pub(crate) fn identity_word(&self) -> &'static str {
+        if self.from_os_store {
+            "OS credential store"
+        } else {
+            Self::word(self.identity_from_file)
+        }
+    }
+
+    /// The passphrase surface in report words: the store names
+    /// itself, then stdin and the terminal prompt name themselves,
+    /// otherwise the flag/file rule applies.
     pub(crate) fn passphrase_word(&self) -> &'static str {
-        if self.passphrase_from_stdin {
+        if self.from_os_store {
+            "OS credential store"
+        } else if self.passphrase_from_stdin {
             "stdin (`--passphrase-stdin`)"
         } else if self.passphrase_from_prompt {
             "terminal prompt (no echo)"
@@ -409,6 +677,138 @@ mod tests {
         assert_eq!(
             loaded.passphrase_file,
             Some(PathBuf::from("/etc/wyrd/passphrase"))
+        );
+        assert!(loaded.credential_backend.is_none());
+        assert!(loaded.credential_account.is_none());
+    }
+
+    /// The store selector parses: backend plus account, no file
+    /// paths — one backend per drive, recorded as a reference.
+    #[test]
+    fn the_store_selector_parses_without_file_paths() {
+        let (_temp, drive) = drive_with(
+            "[drive]\nrelays = [\"wss://one.example\"]\ncredential_backend = \"os-store\"\ncredential_account = \"wyrd-drive-alpha\"\n",
+        );
+        let loaded = load_drive_config(&drive, None).unwrap().unwrap();
+        assert_eq!(loaded.relays, vec!["wss://one.example".to_string()]);
+        assert_eq!(loaded.credential_backend.as_deref(), Some("os-store"));
+        assert_eq!(
+            loaded.credential_account.as_deref(),
+            Some("wyrd-drive-alpha")
+        );
+        assert!(loaded.identity_file.is_none());
+        let reference = os_store_reference(&loaded).expect("a store drive names its item");
+        assert_eq!(
+            reference,
+            CredentialRef::OsStore {
+                account: "wyrd-drive-alpha".to_string()
+            }
+        );
+    }
+
+    /// The selector is one backend: an unknown backend, an account
+    /// without the store backend, a store backend without an
+    /// account, and file paths beside the store backend all refuse
+    /// with their name — ambiguity is a parse error, never a
+    /// precedence rule.
+    #[test]
+    fn mixed_and_unknown_selectors_refuse() {
+        for (text, fragment) in [
+            (
+                "[drive]\ncredential_backend = \"cloud\"\n",
+                "unknown credential_backend",
+            ),
+            (
+                "[drive]\ncredential_account = \"wyrd-drive-alpha\"\n",
+                "not \"os-store\"",
+            ),
+            (
+                "[drive]\ncredential_backend = \"os-store\"\n",
+                "no credential_account",
+            ),
+            (
+                "[drive]\ncredential_backend = \"os-store\"\ncredential_account = \"a\"\nidentity_file = \"/k\"\n",
+                "one backend per drive",
+            ),
+            (
+                "[drive]\ncredential_backend = \"file\"\ncredential_account = \"a\"\n",
+                "not \"os-store\"",
+            ),
+        ] {
+            let (temp, drive) = drive_with(text);
+            let error = load_drive_config(&drive, None).unwrap_err();
+            let CliError::Usage(message) = error else {
+                panic!("expected a usage refusal for {text:?}, got: {error:?}");
+            };
+            assert!(
+                message.contains(fragment),
+                "refusal names the rule for {text:?}: {message}"
+            );
+            drop(temp);
+        }
+    }
+
+    /// Account labels are references with a shape: empty, over-long,
+    /// control-bearing, and padded labels refuse; the file backend
+    /// has no store reference to build.
+    #[test]
+    fn account_labels_have_a_shape() {
+        for (account, _) in [
+            ("", "1-128"),
+            (&"a".repeat(129), "1-128"),
+            ("bad\x07label", "control"),
+            (" padded ", "whitespace"),
+        ] {
+            let text = format!(
+                "[drive]\ncredential_backend = \"os-store\"\ncredential_account = \"{account}\"\n"
+            );
+            let (temp, drive) = drive_with(&text);
+            let error = load_drive_config(&drive, None).unwrap_err();
+            assert!(
+                matches!(error, CliError::Usage(_)),
+                "account {account:?} refuses"
+            );
+            drop(temp);
+        }
+        let (_temp, drive) = drive_with("[drive]\nidentity_file = \"/k\"\n");
+        let loaded = load_drive_config(&drive, None).unwrap().unwrap();
+        assert!(
+            os_store_reference(&loaded).is_err(),
+            "a file-backed drive has no store reference"
+        );
+    }
+
+    /// The step-4 rewrite preserves relays, records the backend and
+    /// account, and removes the file paths — and the rewritten file
+    /// parses back to the same reference.
+    #[test]
+    fn the_step_four_rewrite_preserves_relays_and_reference() {
+        use crate::tests_harness::TempDir;
+        let temp = TempDir::new();
+        let path = temp.0.join("default.toml");
+        std::fs::write(
+            &path,
+            "[drive]\nrelays = [\"wss://one.example\"]\nidentity_file = \"/k/identity\"\npassphrase_file = \"/k/passphrase\"\n",
+        )
+        .unwrap();
+        write_os_store_config(
+            &path,
+            &["wss://one.example".to_string()],
+            "wyrd-drive-alpha",
+        )
+        .expect("rewrite records the store reference");
+        let loaded = load_drive_config(&temp.0, None).unwrap().unwrap();
+        assert_eq!(
+            loaded.relays,
+            vec!["wss://one.example".to_string()],
+            "relays survive the rewrite"
+        );
+        assert!(loaded.identity_file.is_none());
+        assert_eq!(
+            os_store_reference(&loaded).expect("rewritten file names its item"),
+            CredentialRef::OsStore {
+                account: "wyrd-drive-alpha".to_string()
+            }
         );
     }
 
@@ -647,6 +1047,35 @@ mod tests {
         assert_eq!(
             relay_source_line(RelaySource::File, Some(path)),
             "relays from: config file (/drive/default.toml)\n"
+        );
+    }
+
+    /// The step-4 rewrite refuses a symlinked configuration rather
+    /// than replacing the link with a regular file behind the
+    /// operator's back.
+    #[test]
+    #[cfg(unix)]
+    fn the_step_four_rewrite_refuses_a_symlinked_config() {
+        use crate::tests_harness::TempDir;
+        let temp = TempDir::new();
+        let target = temp.0.join("real.toml");
+        std::fs::write(&target, "[drive]\nrelays = []\n").unwrap();
+        let link = temp.0.join("default.toml");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let err = write_os_store_config(&link, &[], "wyrd-drive-alpha").unwrap_err();
+        let CliError::Usage(message) = err else {
+            panic!("expected a usage refusal, got: {err:?}");
+        };
+        assert!(
+            message.contains("symlink"),
+            "refusal names the symlink: {message}"
+        );
+        assert!(
+            std::fs::symlink_metadata(&link)
+                .expect("link stands")
+                .file_type()
+                .is_symlink(),
+            "the link is left in place"
         );
     }
 }

@@ -113,6 +113,35 @@ fn read_credentials_with(
     ),
     CliError,
 > {
+    // A store-backed drive resolves through the OS credential store:
+    // file flags beside a store configuration are ambiguity, not
+    // precedence — one backend per drive, refused by name.
+    if let Some(config) = config {
+        if config.credential_backend.as_deref() == Some("os-store") {
+            if creds.identity_file.is_some() || creds.passphrase_file.is_some() {
+                return Err(CliError::Usage(
+                    "drive configuration names the OS credential store but --identity-file/--passphrase-file name files: one backend per drive".to_string(),
+                ));
+            }
+            if creds.passphrase_stdin {
+                return Err(CliError::Usage(
+                    "drive configuration names the OS credential store: --passphrase-stdin names a pipe the store backend never reads".to_string(),
+                ));
+            }
+            let reference = crate::drive_config::os_store_reference(config)?;
+            let loaded = load_credential(&reference).map_err(loader_to_cli)?;
+            let passphrase = loaded.passphrase.ok_or_else(|| {
+                CliError::Usage(
+                    "OS credential-store item names no passphrase: file-backed session posture has no store equivalent here".to_string(),
+                )
+            })?;
+            let provenance = CredentialProvenance {
+                from_os_store: true,
+                ..CredentialProvenance::default()
+            };
+            return Ok((loaded.identity, passphrase, provenance));
+        }
+    }
     let identity_file = resolve_credential_path(
         creds.identity_file.clone(),
         config.and_then(|c| c.identity_file.clone()),
@@ -133,6 +162,7 @@ fn read_credentials_with(
         passphrase_from_file: !creds.passphrase_stdin && creds.passphrase_file.is_none(),
         passphrase_from_stdin: creds.passphrase_stdin,
         passphrase_from_prompt: false,
+        from_os_store: false,
     };
     if creds.passphrase_stdin {
         // The session posture loads the identity through the
@@ -242,11 +272,22 @@ fn read_unlock_credentials_with(
                 .to_string(),
         ));
     }
+    // The session unlock flow for store-backed drives (store
+    // identity plus a typed session passphrase) arrives with the
+    // desktop-wiring slice; until then unlock stays file-backed.
+    if let Some(config) = config {
+        if config.credential_backend.as_deref() == Some("os-store") {
+            return Err(CliError::Usage(
+                "unlock for an OS credential-store drive is not supported yet: the session unlock flow for store-backed drives arrives with the desktop-wiring slice".to_string(),
+            ));
+        }
+    }
     let provenance = CredentialProvenance {
         identity_from_file: creds.identity_file.is_none(),
         passphrase_from_file: false,
         passphrase_from_stdin: creds.passphrase_stdin,
         passphrase_from_prompt: !creds.passphrase_stdin,
+        from_os_store: false,
     };
     let identity_file = resolve_credential_path(
         creds.identity_file.clone(),
@@ -407,6 +448,17 @@ pub(crate) fn resolve_service_credential_files(
     config: Option<&LoadedConfig>,
     manage_service: bool,
 ) -> Result<(PathBuf, Option<PathBuf>), CliError> {
+    // Service definitions for store-backed drives (no
+    // `--passphrase-file` in the rendered unit) arrive with the
+    // desktop-wiring slice; until then service installation stays
+    // file-backed.
+    if let Some(config) = config {
+        if config.credential_backend.as_deref() == Some("os-store") {
+            return Err(CliError::Usage(
+                "drive configuration names the OS credential store: service definitions for store-backed drives arrive with the desktop-wiring slice".to_string(),
+            ));
+        }
+    }
     if creds.passphrase_stdin && manage_service {
         return Err(CliError::Usage(
             "managed service needs a passphrase file the manager can read: omit --passphrase-stdin (or provision with --no-service and start sessions with `drive unlock`)"
@@ -651,7 +703,9 @@ fn cli_to_loader(error: CliError, subject: CredentialSubject) -> CredentialError
 /// code (usage-class, exit 2 throughout) are unchanged by the
 /// cutover. The variant collapses by design — the taxonomy, not
 /// the CLI enum, is the reporting vocabulary from here on.
-fn loader_to_cli(error: CredentialError) -> CliError {
+/// Shared with the migration path, which reports backend refusals
+/// the same way.
+pub(crate) fn loader_to_cli(error: CredentialError) -> CliError {
     match error {
         CredentialError::Missing { detail, .. }
         | CredentialError::Denied { detail, .. }
@@ -705,6 +759,459 @@ impl CredentialLoader for FileBackend {
             }),
         }
     }
+
+    /// Provision fresh credential files under the commit boundary:
+    /// validate in memory (reference and material agree on the
+    /// passphrase item), write owner-only without overwriting
+    /// (presence is `Invalid` — provisioning never overwrites),
+    /// then read back through [`FileBackend::load`] and compare.
+    /// Success is reported only where the read-back matches. The
+    /// identity stores as the canonical hex the reader accepts, so
+    /// raw and migrated files open the same keystore. `OsStore`
+    /// references answer `Unavailable`, exactly as in `load`.
+    fn store(
+        &self,
+        reference: &CredentialRef,
+        material: &LoadedCredential,
+    ) -> Result<(), CredentialError> {
+        match reference {
+            CredentialRef::File { identity, passphrase } => {
+                check_posture_agreement(identity, passphrase, material)?;
+                store_file_credential(identity, passphrase.as_ref(), material)
+            }
+            CredentialRef::OsStore { account } => Err(CredentialError::Unavailable {
+                subject: CredentialSubject::Account {
+                    account: account.clone(),
+                },
+                detail: format!(
+                    "the file backend never serves OS store references: no item for account {account} can be stored here"
+                ),
+            }),
+        }
+    }
+
+    /// Replace the credential files under the same commit boundary
+    /// as [`FileBackend::store`], with backups: existing files copy
+    /// aside to `<path>.bak` first (a stale backup from a killed run
+    /// refuses — recover it by hand), then both files overwrite
+    /// atomically, read back, and compare. A mismatch restores the
+    /// backups and reports `Invalid`; only a verified pair removes
+    /// them. Upserts, so retried callers stay idempotent.
+    fn replace(
+        &self,
+        reference: &CredentialRef,
+        material: &LoadedCredential,
+    ) -> Result<(), CredentialError> {
+        match reference {
+            CredentialRef::File { identity, passphrase } => {
+                check_posture_agreement(identity, passphrase, material)?;
+                replace_file_credential(identity, passphrase.as_ref(), material)
+            }
+            CredentialRef::OsStore { account } => Err(CredentialError::Unavailable {
+                subject: CredentialSubject::Account {
+                    account: account.clone(),
+                },
+                detail: format!(
+                    "the file backend never serves OS store references: no item for account {account} can be replaced here"
+                ),
+            }),
+        }
+    }
+
+    /// Delete the credential files: identity first, then the
+    /// passphrase where the reference names one. Answers `Missing`
+    /// naming the first absent path, refuses to delete through a
+    /// symlink (`Denied`), and verifies the removal with a
+    /// read-back — a still-present or unverifiable pair is
+    /// `Invalid`, never a claimed success.
+    fn delete(&self, reference: &CredentialRef) -> Result<(), CredentialError> {
+        match reference {
+            CredentialRef::File { identity, passphrase } => {
+                delete_file_credential(identity, passphrase.as_ref())?;
+                match FileBackend.load(reference) {
+                    Err(CredentialError::Missing { .. }) => Ok(()),
+                    Err(error) => Err(CredentialError::Invalid {
+                        subject: CredentialSubject::File {
+                            path: identity.clone(),
+                        },
+                        detail: format!(
+                            "credential files for {} are removed but unverifiable: {error}",
+                            identity.display()
+                        ),
+                    }),
+                    Ok(_) => Err(CredentialError::Invalid {
+                        subject: CredentialSubject::File {
+                            path: identity.clone(),
+                        },
+                        detail: format!(
+                            "credential files for {} are still present after deletion",
+                            identity.display()
+                        ),
+                    }),
+                }
+            }
+            CredentialRef::OsStore { account } => Err(CredentialError::Unavailable {
+                subject: CredentialSubject::Account {
+                    account: account.clone(),
+                },
+                detail: format!(
+                    "the file backend never serves OS store references: no item for account {account} can be deleted here"
+                ),
+            }),
+        }
+    }
+}
+
+/// Reference and material must agree on the passphrase item: a file
+/// reference naming a passphrase file with passphrase-less material
+/// (or a bare identity reference with material carrying one) is
+/// `Invalid` — the writer never invents or drops an item the
+/// reference does not name.
+fn check_posture_agreement(
+    identity: &Path,
+    passphrase: &Option<PathBuf>,
+    material: &LoadedCredential,
+) -> Result<(), CredentialError> {
+    let agrees = passphrase.is_some() == material.passphrase.is_some();
+    if agrees {
+        Ok(())
+    } else {
+        Err(CredentialError::Invalid {
+            subject: CredentialSubject::File {
+                path: identity.to_path_buf(),
+            },
+            detail: "credential reference and material disagree on the passphrase item: a writer never invents or drops one".to_string(),
+        })
+    }
+}
+
+/// The write-half commit boundary for files, shared by provisioning
+/// and replacement: the read-back through the production loader
+/// with identity compared by device id (the public output, never
+/// the bytes) and passphrase byte for byte. A mismatch is `Invalid`:
+/// the write is never reported successful unverified. Material with
+/// a trailing-newline passphrase cannot round-trip the file line
+/// discipline — that write is `Invalid`, fail closed, never a
+/// silent rewrite.
+fn verify_file_written(
+    identity: &Path,
+    passphrase: Option<&PathBuf>,
+    material: &LoadedCredential,
+) -> Result<(), CredentialError> {
+    let reference = CredentialRef::File {
+        identity: identity.to_path_buf(),
+        passphrase: passphrase.cloned(),
+    };
+    let loaded = FileBackend.load(&reference)?;
+    if loaded.identity.device_id() != material.identity.device_id()
+        || loaded.passphrase.as_deref() != material.passphrase.as_deref()
+    {
+        return Err(CredentialError::Invalid {
+            subject: CredentialSubject::File {
+                path: identity.to_path_buf(),
+            },
+            detail: format!(
+                "credential files for {} did not read back: refusing unverified success",
+                identity.display()
+            ),
+        });
+    }
+    Ok(())
+}
+
+/// Provision fresh files on Unix: owner-only parents, never
+/// overwrite (presence is `Invalid` via `write_new`), identity
+/// first with passphrase rollback on failure — the same order and
+/// rollback `commit` uses — then [`verify_file_written`].
+#[cfg(unix)]
+fn store_file_credential(
+    identity: &Path,
+    passphrase: Option<&PathBuf>,
+    material: &LoadedCredential,
+) -> Result<(), CredentialError> {
+    use crate::commands::identity::{ensure_parent, fsync_parent, write_new};
+    let subject = || CredentialSubject::File {
+        path: identity.to_path_buf(),
+    };
+    // Both parents before either write: a refused passphrase
+    // parent must not leave a half-provisioned identity behind
+    // (a retry would then fail with "already exists").
+    ensure_parent(identity).map_err(|error| cli_to_loader(error, subject()))?;
+    if let Some(passphrase_path) = passphrase {
+        let subject = || CredentialSubject::File {
+            path: passphrase_path.clone(),
+        };
+        ensure_parent(passphrase_path).map_err(|error| cli_to_loader(error, subject()))?;
+    }
+    let identity_hex = material.identity.to_hex();
+    write_new(identity, identity_hex.as_bytes())
+        .map_err(|error| cli_to_loader(error, subject()))?;
+    if let (Some(passphrase_path), Some(passphrase_material)) =
+        (passphrase, material.passphrase.as_ref())
+    {
+        let subject = || CredentialSubject::File {
+            path: passphrase_path.clone(),
+        };
+        let outcome = write_new(passphrase_path, passphrase_material.as_bytes());
+        if let Err(error) = outcome {
+            // Rollback the identity: a half-provisioned pair is worse
+            // than none — the same rollback `commit` performs.
+            let _ = std::fs::remove_file(identity);
+            let _ = fsync_parent(identity);
+            return Err(cli_to_loader(error, subject()));
+        }
+    }
+    verify_file_written(identity, passphrase, material)
+}
+
+/// No file backend off Unix: credential files are Unix-only, so the
+/// write half answers `Unavailable` like the read half does.
+#[cfg(not(unix))]
+fn store_file_credential(
+    identity: &Path,
+    _passphrase: Option<&PathBuf>,
+    _material: &LoadedCredential,
+) -> Result<(), CredentialError> {
+    Err(cli_to_loader(
+        CliError::Credential {
+            path: identity.to_path_buf(),
+            reason: REASON_UNIX_ONLY,
+        },
+        CredentialSubject::File {
+            path: identity.to_path_buf(),
+        },
+    ))
+}
+
+/// Replace files on Unix under backup: existing files copy aside to
+/// `<path>.bak` first (a stale backup refuses — recover it by hand,
+/// the writer never destroys the only copy), then both files
+/// overwrite atomically, read back, and compare. A mismatch restores
+/// the backups and reports `Invalid`; only a verified pair removes
+/// them, so an interrupted replace leaves the old pair or the new
+/// pair plus backups — never a torn file, never a silent loss.
+#[cfg(unix)]
+fn replace_file_credential(
+    identity: &Path,
+    passphrase: Option<&PathBuf>,
+    material: &LoadedCredential,
+) -> Result<(), CredentialError> {
+    use crate::commands::identity::{ensure_parent, fsync_parent, overwrite_file};
+    let subject = || CredentialSubject::File {
+        path: identity.to_path_buf(),
+    };
+    ensure_parent(identity).map_err(|error| cli_to_loader(error, subject()))?;
+    let identity_hex = material.identity.to_hex();
+    let pairs: Vec<(&Path, &[u8])> = match (passphrase, material.passphrase.as_ref()) {
+        (Some(passphrase_path), Some(passphrase_material)) => {
+            ensure_parent(passphrase_path).map_err(|error| cli_to_loader(error, subject()))?;
+            vec![
+                (identity, identity_hex.as_bytes()),
+                (passphrase_path, passphrase_material.as_bytes()),
+            ]
+        }
+        (None, None) => vec![(identity, identity_hex.as_bytes())],
+        // Unreachable: `check_posture_agreement` ran first. The
+        // explicit arm keeps a future refactor from silently
+        // inventing or dropping an item here.
+        _ => {
+            return Err(CredentialError::Invalid {
+                subject: subject(),
+                detail: "credential reference and material disagree on the passphrase item: a writer never invents or drops one".to_string(),
+            });
+        }
+    };
+    // Back up what exists; refuse over a stale backup.
+    let mut backups: Vec<(PathBuf, PathBuf)> = Vec::new();
+    for (path, _) in &pairs {
+        let backup = match path.extension().and_then(|extension| extension.to_str()) {
+            Some(previous) => path.with_extension(format!("{previous}-bak")),
+            None => path.with_extension("bak"),
+        };
+        if std::fs::symlink_metadata(&backup).is_ok() {
+            return Err(CredentialError::Invalid {
+                subject: CredentialSubject::File { path: backup },
+                detail:
+                    "a stale credential backup already exists: recover it by hand before replacing"
+                        .to_string(),
+            });
+        }
+        if std::fs::symlink_metadata(path).is_ok() {
+            std::fs::copy(path, &backup).map_err(|source| {
+                cli_to_loader(
+                    CliError::Io {
+                        path: path.to_path_buf(),
+                        source,
+                    },
+                    CredentialSubject::File {
+                        path: path.to_path_buf(),
+                    },
+                )
+            })?;
+            backups.push((path.to_path_buf(), backup));
+        }
+    }
+    let outcome = (|| {
+        for (path, bytes) in &pairs {
+            overwrite_file(path, bytes).map_err(|error| {
+                cli_to_loader(
+                    error,
+                    CredentialSubject::File {
+                        path: path.to_path_buf(),
+                    },
+                )
+            })?;
+        }
+        verify_file_written(identity, passphrase, material)
+    })();
+    match outcome {
+        Ok(()) => {
+            for (_, backup) in &backups {
+                let _ = std::fs::remove_file(backup);
+            }
+            let _ = fsync_parent(identity);
+            Ok(())
+        }
+        Err(error) => {
+            // Restore what was backed up: the pair returns to the
+            // pre-replace state, and the error names the failed
+            // verification, never secret bytes. A backup whose
+            // restore fails is kept — never destroy the only copy
+            // — and named in the error.
+            let mut leftovers: Vec<PathBuf> = Vec::new();
+            for (path, backup) in &backups {
+                if std::fs::copy(backup, path).is_err() {
+                    leftovers.push(backup.clone());
+                    continue;
+                }
+                let _ = std::fs::remove_file(backup);
+            }
+            if leftovers.is_empty() {
+                Err(error)
+            } else {
+                let names = leftovers
+                    .iter()
+                    .map(|path| path.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                Err(CredentialError::Invalid {
+                    subject: CredentialSubject::File {
+                        path: identity.to_path_buf(),
+                    },
+                    detail: format!(
+                        "credential files for {} did not read back and the backup restore failed, backup kept at {names}: {error}",
+                        identity.display()
+                    ),
+                })
+            }
+        }
+    }
+}
+
+/// No file backend off Unix: see [`store_file_credential`].
+#[cfg(not(unix))]
+fn replace_file_credential(
+    identity: &Path,
+    _passphrase: Option<&PathBuf>,
+    _material: &LoadedCredential,
+) -> Result<(), CredentialError> {
+    Err(cli_to_loader(
+        CliError::Credential {
+            path: identity.to_path_buf(),
+            reason: REASON_UNIX_ONLY,
+        },
+        CredentialSubject::File {
+            path: identity.to_path_buf(),
+        },
+    ))
+}
+
+/// Delete files on Unix: refuse through symlinks, `Missing` where
+/// absent, identity first then the passphrase. Removal of a symlink
+/// itself would be safe, but a link where a credential file belongs
+/// is a fact to refuse (`Denied`), never to clean up quietly.
+#[cfg(unix)]
+fn delete_file_credential(
+    identity: &Path,
+    passphrase: Option<&PathBuf>,
+) -> Result<(), CredentialError> {
+    use crate::commands::identity::fsync_parent;
+    remove_one_credential_file(identity)?;
+    if let Some(passphrase_path) = passphrase {
+        remove_one_credential_file(passphrase_path)?;
+    }
+    let _ = fsync_parent(identity);
+    Ok(())
+}
+
+/// Remove one credential file: `Missing` where absent, `Denied`
+/// through a symlink (a link where a credential file belongs is a
+/// fact to refuse, never to clean up quietly), `Invalid` for a
+/// directory.
+#[cfg(unix)]
+fn remove_one_credential_file(path: &Path) -> Result<(), CredentialError> {
+    let subject = || CredentialSubject::File {
+        path: path.to_path_buf(),
+    };
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+            return Err(CredentialError::Missing {
+                subject: subject(),
+                detail: format!("no credential file {}", path.display()),
+            });
+        }
+        Err(source) => {
+            return Err(cli_to_loader(
+                CliError::Io {
+                    path: path.to_path_buf(),
+                    source,
+                },
+                subject(),
+            ));
+        }
+    };
+    if metadata.file_type().is_symlink() {
+        return Err(CredentialError::Denied {
+            subject: subject(),
+            detail: format!(
+                "credential file {} is a symlink: refusing to delete through it",
+                path.display()
+            ),
+        });
+    }
+    if metadata.is_dir() {
+        return Err(CredentialError::Invalid {
+            subject: subject(),
+            detail: format!("credential file {} is not a regular file", path.display()),
+        });
+    }
+    std::fs::remove_file(path).map_err(|source| {
+        cli_to_loader(
+            CliError::Io {
+                path: path.to_path_buf(),
+                source,
+            },
+            subject(),
+        )
+    })
+}
+
+/// No file backend off Unix: see [`store_file_credential`].
+#[cfg(not(unix))]
+fn delete_file_credential(
+    identity: &Path,
+    _passphrase: Option<&PathBuf>,
+) -> Result<(), CredentialError> {
+    Err(cli_to_loader(
+        CliError::Credential {
+            path: identity.to_path_buf(),
+            reason: REASON_UNIX_ONLY,
+        },
+        CredentialSubject::File {
+            path: identity.to_path_buf(),
+        },
+    ))
 }
 
 #[cfg(test)]
@@ -808,6 +1315,8 @@ mod tests {
             // A config naming a passphrase file must not matter:
             // stdin mode never resolves it.
             passphrase_file: Some(temp.0.join("passphrase")),
+            credential_backend: None,
+            credential_account: None,
         };
         let creds = Credentials {
             identity_file: Some(identity_file),
@@ -849,6 +1358,174 @@ mod tests {
             err.to_string().contains("never reads a passphrase file"),
             "names the rule: {err}"
         );
+    }
+
+    /// Provisioning stores fresh files under the commit boundary:
+    /// the identity lands as the canonical hex the reader accepts,
+    /// the passphrase verbatim, and the pair reads back through the
+    /// production loader. A second provision is `Invalid` — never an
+    /// overwrite — and a reference/material posture mismatch is
+    /// `Invalid` before anything is written.
+    #[test]
+    fn store_provisions_fresh_files_and_refuses_overwrite() {
+        use crate::tests_harness::TempDir;
+        let backend = FileBackend;
+        let temp = TempDir::new();
+        let identity = temp.0.join("identity");
+        let passphrase = temp.0.join("passphrase");
+        let reference = CredentialRef::File {
+            identity: identity.clone(),
+            passphrase: Some(passphrase.clone()),
+        };
+        let material = LoadedCredential {
+            identity: DeviceIdentitySecret::from_bytes([0x11; 32]).unwrap(),
+            passphrase: Some(Zeroizing::new("hunter2-hunter2".to_string())),
+        };
+        backend
+            .store(&reference, &material)
+            .expect("fresh provision stores");
+        // Hex on disk, verbatim passphrase, both read back.
+        let raw = std::fs::read_to_string(&identity).expect("identity file written");
+        assert_eq!(raw, "11".repeat(32));
+        let loaded = backend.load(&reference).expect("provisioned pair loads");
+        assert_eq!(loaded.identity.device_id(), material.identity.device_id());
+        assert_eq!(
+            loaded.passphrase.expect("named item loads").as_str(),
+            "hunter2-hunter2"
+        );
+        // Provision again: Invalid, and the files are untouched.
+        match backend.store(&reference, &material) {
+            Err(CredentialError::Invalid { detail, .. }) => assert!(
+                detail.contains("already exists"),
+                "names the guard: {detail}"
+            ),
+            other => panic!("re-provisioning is Invalid: {other:?}"),
+        }
+        // Posture mismatch: nothing is written.
+        let bare = CredentialRef::File {
+            identity: temp.0.join("bare-identity"),
+            passphrase: None,
+        };
+        match backend.store(&bare, &material) {
+            Err(CredentialError::Invalid { detail, .. }) => assert!(
+                detail.contains("disagree on the passphrase item"),
+                "names the rule: {detail}"
+            ),
+            other => panic!("a posture mismatch is Invalid: {other:?}"),
+        }
+        assert!(
+            !temp.0.join("bare-identity").exists(),
+            "a refused provision writes nothing"
+        );
+    }
+
+    /// Session posture provisions the identity alone: no passphrase
+    /// file, no empty material — and the pair still reads back.
+    #[test]
+    fn store_provisions_session_posture_identity_only() {
+        use crate::tests_harness::TempDir;
+        let backend = FileBackend;
+        let temp = TempDir::new();
+        let identity = temp.0.join("identity");
+        let reference = CredentialRef::File {
+            identity: identity.clone(),
+            passphrase: None,
+        };
+        let material = LoadedCredential {
+            identity: DeviceIdentitySecret::from_bytes([0x22; 32]).unwrap(),
+            passphrase: None,
+        };
+        backend
+            .store(&reference, &material)
+            .expect("session provision stores");
+        let loaded = backend.load(&reference).expect("identity loads");
+        assert!(loaded.passphrase.is_none());
+        assert_eq!(loaded.identity.device_id(), material.identity.device_id());
+    }
+
+    /// Replacement overwrites under backup: the new pair reads back,
+    /// the backups are removed on success, and a stale backup from a
+    /// killed run refuses before anything is touched.
+    #[test]
+    fn replace_overwrites_and_cleans_up_backups() {
+        use crate::tests_harness::{write_secret, TempDir};
+        let backend = FileBackend;
+        let temp = TempDir::new();
+        let identity = temp.0.join("identity");
+        let passphrase = temp.0.join("passphrase");
+        write_secret(&identity, [0x11; 32]);
+        write_secret(&passphrase, b"old-pass\n");
+        let reference = CredentialRef::File {
+            identity: identity.clone(),
+            passphrase: Some(passphrase.clone()),
+        };
+        let material = LoadedCredential {
+            identity: DeviceIdentitySecret::from_bytes([0x33; 32]).unwrap(),
+            passphrase: Some(Zeroizing::new("new-pass".to_string())),
+        };
+        backend
+            .replace(&reference, &material)
+            .expect("replacement overwrites");
+        let loaded = backend.load(&reference).expect("replaced pair loads");
+        assert_eq!(loaded.identity.device_id(), material.identity.device_id());
+        assert_eq!(
+            loaded.passphrase.expect("named item loads").as_str(),
+            "new-pass"
+        );
+        assert!(
+            !temp.0.join("identity.bak").exists(),
+            "backups are removed after a verified replace"
+        );
+        // A stale backup refuses: the writer never destroys the only
+        // copy it cannot account for.
+        write_secret(&temp.0.join("identity.bak"), b"stale");
+        match backend.replace(&reference, &material) {
+            Err(CredentialError::Invalid { detail, .. }) => assert!(
+                detail.contains("stale credential backup"),
+                "names the guard: {detail}"
+            ),
+            other => panic!("a stale backup refuses: {other:?}"),
+        }
+    }
+
+    /// Deletion removes both files and verifies: a second deletion
+    /// is `Missing` naming the identity, and a symlink is `Denied`
+    /// — never deleted through.
+    #[test]
+    fn delete_removes_and_verifies() {
+        use crate::tests_harness::{write_secret, TempDir};
+        let backend = FileBackend;
+        let temp = TempDir::new();
+        let identity = temp.0.join("identity");
+        let passphrase = temp.0.join("passphrase");
+        write_secret(&identity, [0x11; 32]);
+        write_secret(&passphrase, b"hunter2-hunter2\n");
+        let reference = CredentialRef::File {
+            identity: identity.clone(),
+            passphrase: Some(passphrase.clone()),
+        };
+        backend.delete(&reference).expect("deletion removes");
+        assert!(!identity.exists() && !passphrase.exists());
+        match backend.delete(&reference) {
+            Err(CredentialError::Missing { subject, .. }) => assert_eq!(
+                subject,
+                CredentialSubject::File { path: identity },
+                "names the identity"
+            ),
+            other => panic!("deleting nothing is Missing: {other:?}"),
+        }
+        // A symlink where a credential file belongs is Denied.
+        let link = temp.0.join("linked");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(temp.0.join("nowhere"), &link).unwrap();
+        #[cfg(unix)]
+        match backend.delete(&CredentialRef::File {
+            identity: link,
+            passphrase: None,
+        }) {
+            Err(CredentialError::Denied { .. }) => {}
+            other => panic!("a symlink delete is Denied: {other:?}"),
+        }
     }
 
     /// Unlock without a terminal and without the pipe refuses
@@ -1273,6 +1950,126 @@ mod tests {
                 Err(CredentialError::Missing { .. })
             ),
             "file references still load through the file backend"
+        );
+    }
+
+    /// The store-backed read branch honors a migrated
+    /// configuration: file flags beside it refuse (one backend per
+    /// drive), the pipe refuses (the store backend never reads
+    /// it), and a flag-free invocation reaches the OS backend —
+    /// whose own refusal (item or store, never the file backend's
+    /// "never serves") proves the dispatch took the store path.
+    #[test]
+    fn store_backed_read_branch_refuses_flags_and_reaches_the_store() {
+        use crate::tests_harness::TempDir;
+        let temp = TempDir::new();
+        let config = LoadedConfig {
+            path: temp.0.join("default.toml"),
+            relays: Vec::new(),
+            identity_file: None,
+            passphrase_file: None,
+            credential_backend: Some("os-store".to_string()),
+            credential_account: Some("wyrd-test-store-branch-absent".to_string()),
+        };
+        // File flags beside a store configuration: ambiguity, not
+        // precedence.
+        let creds = Credentials {
+            identity_file: Some(PathBuf::from("/k/identity")),
+            passphrase_file: None,
+            passphrase_stdin: false,
+        };
+        let err = read_credentials_with(&creds, Some(&config), Cursor::new(b""))
+            .expect_err("file flags beside a store config must refuse");
+        assert!(
+            err.to_string().contains("one backend per drive"),
+            "names the rule: {err}"
+        );
+        // The pipe beside a store configuration refuses before any
+        // store access.
+        let creds = Credentials {
+            identity_file: None,
+            passphrase_file: None,
+            passphrase_stdin: true,
+        };
+        let err = read_credentials_with(&creds, Some(&config), Cursor::new(b""))
+            .expect_err("the pipe beside a store config must refuse");
+        assert!(
+            err.to_string().contains("OS credential store"),
+            "names the store: {err}"
+        );
+        // Flag-free against a store configuration reaches the OS
+        // backend: the absent item answers with the store's own
+        // refusal, never the file backend's.
+        let creds = Credentials {
+            identity_file: None,
+            passphrase_file: None,
+            passphrase_stdin: false,
+        };
+        let err = read_credentials_with(&creds, Some(&config), Cursor::new(b""))
+            .expect_err("an absent store item must refuse");
+        assert!(
+            err.to_string().contains("OS credential"),
+            "the OS backend answers: {err}"
+        );
+        assert!(
+            !err.to_string().contains("never serves"),
+            "never the file backend's refusal: {err}"
+        );
+        // Provenance for the store path names the store on both
+        // surfaces.
+        let provenance = CredentialProvenance {
+            from_os_store: true,
+            ..CredentialProvenance::default()
+        };
+        assert_eq!(provenance.identity_word(), "OS credential store");
+        assert_eq!(provenance.passphrase_word(), "OS credential store");
+    }
+
+    /// Unlock for a store-backed drive refuses with the wiring
+    /// pointer before touching any store: the session unlock flow
+    /// arrives with the desktop-wiring slice.
+    #[test]
+    fn unlock_refuses_a_store_backed_drive() {
+        use crate::tests_harness::TempDir;
+        let temp = TempDir::new();
+        let config = LoadedConfig {
+            path: temp.0.join("default.toml"),
+            relays: Vec::new(),
+            identity_file: None,
+            passphrase_file: None,
+            credential_backend: Some("os-store".to_string()),
+            credential_account: Some("wyrd-drive-alpha".to_string()),
+        };
+        let err =
+            read_unlock_credentials_with(&unlock_creds(), Some(&config), Cursor::new(b""), true)
+                .expect_err("store-backed unlock must refuse");
+        assert!(
+            err.to_string().contains("desktop-wiring"),
+            "points at the wiring slice: {err}"
+        );
+    }
+
+    /// Service definitions for a store-backed drive refuse with the
+    /// wiring pointer before resolving any path: no unit may render
+    /// the retired file paths.
+    #[test]
+    fn service_definition_refuses_a_store_backed_drive() {
+        use crate::tests_harness::TempDir;
+        let temp = TempDir::new();
+        let config = LoadedConfig {
+            path: temp.0.join("default.toml"),
+            relays: Vec::new(),
+            identity_file: None,
+            passphrase_file: None,
+            credential_backend: Some("os-store".to_string()),
+            credential_account: Some("wyrd-drive-alpha".to_string()),
+        };
+        let err =
+            resolve_service_credential_files(&service_creds(false, None), Some(&config), true)
+                .expect_err("store-backed service install must refuse");
+        assert!(
+            err.to_string().contains("desktop-wiring"),
+            "points at the wiring slice: {err}"
         );
     }
 }

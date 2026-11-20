@@ -3,14 +3,14 @@ name = "wyrd-credential-store"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Wyrd's OS credential-store backends: Keychain on macOS, Secret Service on Linux, behind the platform-neutral loader boundary. Reads only; provisioning joins the migration slice."
+description = "Wyrd's OS credential-store backends: Keychain on macOS, Secret Service on Linux, behind the platform-neutral loader boundary. Reads plus the migration write half (provision, replace, delete) under the loader's commit boundary."
 
 [dependencies]
 wyrd-sync.workspace = true
 hex.workspace = true
-# The canonical stored-item encoding is JSON (`StoredPayload` below):
-# parse-only here, the future provisioner writes it. Already in the
-# lock file, so no new supply chain beyond `keyring`.
+# The canonical stored-item encoding is JSON (`StoredPayload`):
+# parsed and written here through the loader's commit boundary.
+# Already in the lock file, so no new supply chain beyond `keyring`.
 serde.workspace = true
 serde_json.workspace = true
 # `serde` beside the workspace entry: `Zeroizing` must deserialize

@@ -68,7 +68,7 @@ fn mint_passphrase() -> Result<Zeroizing<String>, CliError> {
 /// Parent directory: created 0700, verified owner-only. Fails closed
 /// on non-Unix like the reader.
 #[cfg(unix)]
-fn ensure_parent(dir: &Path) -> Result<(), CliError> {
+pub(crate) fn ensure_parent(dir: &Path) -> Result<(), CliError> {
     use std::os::unix::fs::PermissionsExt;
     if let Some(parent) = dir.parent() {
         if !parent.as_os_str().is_empty() {
@@ -92,7 +92,7 @@ fn ensure_parent(dir: &Path) -> Result<(), CliError> {
 /// orders the bytes; this orders the name. Best-effort where there
 /// is nothing to report (rollback), hard-error on the commit path.
 #[cfg(unix)]
-fn fsync_parent(path: &Path) -> Result<(), CliError> {
+pub(crate) fn fsync_parent(path: &Path) -> Result<(), CliError> {
     let parent = path.parent().filter(|p| !p.as_os_str().is_empty());
     let Some(dir) = parent else {
         return Ok(());
@@ -113,7 +113,7 @@ fn fsync_parent(path: &Path) -> Result<(), CliError> {
 /// Presence resolves to a usage error (the desktop's Repair state),
 /// not a silent replace.
 #[cfg(unix)]
-fn write_new(path: &Path, bytes: &[u8]) -> Result<(), CliError> {
+pub(crate) fn write_new(path: &Path, bytes: &[u8]) -> Result<(), CliError> {
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     if std::fs::symlink_metadata(path).is_ok() {
         return Err(CliError::Usage(format!(
@@ -156,6 +156,68 @@ fn write_new(path: &Path, bytes: &[u8]) -> Result<(), CliError> {
     })?;
     fsync_parent(path)?;
     Ok(())
+}
+
+/// Overwrite one credential file atomically: write the bytes to a
+/// fresh temporary sibling (never overwrite, never follow a
+/// symlink, owner-only like [`write_new`]), fsync it, then rename
+/// over the target and fsync the parent. A crash leaves the old
+/// item or the new one, never a torn file — the same atomicity the
+/// loader's commit boundary rests on. Creates the item where none
+/// exists, so replacement upserts. The temporary name carries the
+/// process id; a stale sibling from a killed run is cleaned up
+/// before writing.
+#[cfg(unix)]
+pub(crate) fn overwrite_file(path: &Path, bytes: &[u8]) -> Result<(), CliError> {
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    let temp = path.with_extension(format!("replace-tmp-{}", std::process::id()));
+    // A stale sibling from a killed run must not collide: remove it
+    // first (missing is fine — nothing to clean), then create_new.
+    match std::fs::remove_file(&temp) {
+        Ok(()) => {}
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => {}
+        Err(source) => {
+            return Err(CliError::Io {
+                path: temp.clone(),
+                source,
+            });
+        }
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    OpenOptionsExt::custom_flags(&mut options, libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    options.mode(0o600);
+    let outcome = (|| {
+        let mut file = options.open(&temp).map_err(|source| CliError::Io {
+            path: temp.clone(),
+            source,
+        })?;
+        use std::io::Write;
+        file.write_all(bytes).map_err(|source| CliError::Io {
+            path: temp.clone(),
+            source,
+        })?;
+        file.sync_all().map_err(|source| CliError::Io {
+            path: temp.clone(),
+            source,
+        })?;
+        drop(file);
+        std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(0o600)).map_err(
+            |source| CliError::Io {
+                path: temp.clone(),
+                source,
+            },
+        )?;
+        std::fs::rename(&temp, path).map_err(|source| CliError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?;
+        fsync_parent(path)
+    })();
+    if outcome.is_err() {
+        let _ = std::fs::remove_file(&temp);
+    }
+    outcome
 }
 
 /// Generate both credential files and print the passphrase on stdout.

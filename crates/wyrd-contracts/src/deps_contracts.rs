@@ -61,8 +61,8 @@ fn policy_for(member: &str) -> Option<MemberPolicy> {
         // below for the trait and secret types, `keyring` for the
         // platform stores (per-OS target tables, so a build links only
         // the store it can reach), `serde`/`serde_json` for the
-        // canonical stored-item encoding (parse-only until the
-        // migration slice adds the writer), `hex` for the identity
+        // canonical stored-item encoding (parsed and written here
+        // through the loader's commit boundary), `hex` for the identity
         // text form, `zeroize` (`serde` for the scrub-on-drop parse
         // boundary) for the buffers, `security-framework` for the
         // macOS status codes only (never a Keychain call — the facade
@@ -184,12 +184,15 @@ fn policy_for(member: &str) -> Option<MemberPolicy> {
         // the artifact digest that names the archive in reports and
         // the transaction log — an identity, never trust. The drive
         // deployment configuration (27) adds `toml`: strict parsing
-        // of the relay list and credential paths from `default.toml`
-        // — parse-only, the file holds no secrets. The OS
+        // of the relay list, credential paths, and the credential
+        // selector from `default.toml` — parse-only, the file holds
+        // references, never secrets. The OS
         // credential-store backend (credential-loading.md) adds
         // `wyrd-credential-store`: store references route to it, file
         // references stay on the hardened file reader — never a
-        // cross-backend fallback. No other
+        // cross-backend fallback. The migration slice teaches both
+        // backends the write half (provision, replace, delete under
+        // the commit boundary). No other
         // crate may follow.
         "wyrd-cli" => Some(MemberPolicy {
             workspace_allow: &[
