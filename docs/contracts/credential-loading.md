@@ -272,8 +272,12 @@ overwriting.
   `docs/contracts/desktop-lifecycle.md`.
 - Session-posture unlock (typed passphrase, per-session owner):
   unchanged by this contract except that unlock loads the store
-  identity for store-backed drives; unattended startup is
-  server-only and explicitly out of scope for desktop.
+  identity for store-backed drives. Pre-login and
+  user-session-independent unattended startup are server-only and
+  explicitly out of scope for desktop. Desktop-managed owners may
+  start non-interactively after the authenticated user-session
+  domain exists, using credentials available from the OS
+  credential store.
 - Service enablement at login (whether the manager starts the
   unit): separate observation, separate issue. Enablement must
   never be mistaken for credential availability, and
