@@ -125,8 +125,10 @@ claim the trait already carries what is marked specified.)
   macOS backend is verified by hand (login session plus a
   no-terminal LaunchAgent run of the ignored probe); the Linux
   backend's service-context verification is deferred — no Linux
-  host was available and headless CI has no bus, so CI pins the
-  fail-closed `unavailable` there instead.
+  host was available and headless CI has no bus. CI exercises the
+  fail-closed path there instead (the dispatcher test routes a
+  bus-less store to the OS backend, never the file backend, and
+  the taxonomy test pins `PlatformFailure` to `unavailable`).
 
 ## Failure taxonomy
 

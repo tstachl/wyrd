@@ -89,9 +89,10 @@ const MAX_STORED_BYTES: usize = 24576 + 256;
 
 /// Bound on a stored passphrase: the same 4096-byte bound the file,
 /// stdin, and prompt surfaces enforce, so every backend opens the
-/// same keystore. Shared with the CLI: `read_passphrase_stdin`
-/// reads this constant, so either side changing it fails the
-/// other's suite, not silently.
+/// same keystore. Shared with the CLI's stdin reader: one literal,
+/// so a divergence fails compilation, not silently. (The terminal
+/// prompt and the identity writer keep their own literals; see the
+/// CLI comment at the import site.)
 pub const MAX_PASSPHRASE_BYTES: usize = 4096;
 
 /// The OS credential-store backend: serves `CredentialRef::OsStore`
@@ -447,7 +448,7 @@ mod tests {
     /// downcast source.
     #[cfg(target_os = "macos")]
     #[test]
-    fn macos_auth_failed_is_denied_not_unavailable() {
+    fn macos_access_refusals_are_denied_not_unavailable() {
         let account = "wyrd-drive-alpha";
         use security_framework::base::Error as SecError;
         for code in [-25293, -25308, -128] {
