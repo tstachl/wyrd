@@ -182,7 +182,7 @@ supported configuration proves it.
 | macOS logged out | Session ends; user agents terminate; login keychain locks | Owners terminated per `desktop-lifecycle.md`; next login re-eligible | Termination behavior tested per supported configuration before it is claimed |
 | Linux graphical login, collection unlocked | Secret Service reachable from the user unit | Owner starts when enabled and the item loads | Deferred: no Linux host; headless CI has no bus |
 | Linux screen locked | Collection stays unlocked by default | Owner keeps serving | Deferred, same as above |
-| Linux logged out | User manager stops without lingering; collection locks | Owners terminated; next login re-eligible | Termination behavior tested per supported configuration before it is claimed |
+| Linux logged out | User manager stops without lingering; collection locks | Termination requested through session teardown; unresolved stays `Unconfirmed`; next login re-eligible | Termination behavior tested per supported configuration before it is claimed |
 
 Unattended operation — retrieval with no authenticated user
 session, now or ever — belongs to server deployments with

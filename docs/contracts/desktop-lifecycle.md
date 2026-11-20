@@ -97,6 +97,15 @@ started, allowing that owner to survive logout. This is an
 explicit limitation of the desktop session boundary, not a
 condition Wyrd can guarantee against.
 
+Wyrd-managed service definitions are user-scoped desktop
+lifecycle infrastructure (launchd user agents, systemd user
+units): Wyrd ships no system-scope service. Server deployments
+register with `--no-service` and supervise `wyrd owner start`
+independently; they never pass through the managed enable/start
+paths, so the lingering refusal does not apply to them. There is
+no opt-out flag: the boundary follows the supervision path, not
+the credential backend — file-backed desktop drives share it.
+
 Subject to that limitation, owner termination at the end of the
 user-session domain relies on operating-system session teardown.
 Wyrd requests graceful shutdown where the operating system
