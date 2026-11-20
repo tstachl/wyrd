@@ -2,7 +2,8 @@
 # Four jobs sharing nothing: three build jobs each sharing one store,
 # plus one run-only job. Every job gets a fresh Incus VM with a cold
 # /nix/store, and crane sharing (cargoArtifacts = rustDeps) only helps
-# on a binary-cache hit — with no cache served, per-gate build jobs
+# on a binary-cache hit — without a prior master publish (deps.yaml,
+# the push-only rust-deps publisher), per-gate build jobs
 # each rebuild rust-deps independently. Steps in one job share the
 # same VM and store, so deps builds once per job instead of once per
 # step: three rust-deps builds per run, the cost of the separate
