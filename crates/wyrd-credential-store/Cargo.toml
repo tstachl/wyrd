@@ -31,9 +31,11 @@ keyring.workspace = true
 # desktop process alive; a locked or ACL-refused keychain is `Denied`,
 # never a fallback.
 keyring = { workspace = true, features = ["apple-native"] }
-# Status codes only: tells the Keychain's auth-failed answers apart
-# from store-unreachable ones inside the facade's opaque platform
-# failure (see `is_access_refusal`). No Keychain calls of its own.
+# Status codes only: tells the Keychain's auth-failed,
+# interaction-not-allowed, and user-canceled answers apart from
+# store-unreachable ones inside the facade's opaque platform
+# failure (see the `PlatformFailure` arm of `map_keyring_error`).
+# No Keychain calls of its own.
 security-framework = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]

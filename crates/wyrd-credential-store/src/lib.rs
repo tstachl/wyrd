@@ -37,7 +37,7 @@
 //! | Platform answer | Loader fact |
 //! |---|
 //! | No such item | `missing` (re-provision, never auto-create) |
-//! | Store reachable, access refused (locked keychain, ACL, macOS auth-failed) | `denied` (fix access, retry) |
+//! | Store reachable, access refused (locked keychain, ACL, macOS auth/interaction/cancel) | `denied` (fix access, retry) |
 //! | Store unreachable (no D-Bus session, no Secret Service, other platform failures, future variants) | `unavailable` (retry; never a weaker substitute) |
 //! | Item present but shape-broken (non-UTF-8, bad JSON, bad identity, over-long) | `invalid` (fail closed; never guess) |
 //!
@@ -241,11 +241,20 @@ fn decode_stored_value(account: &str, blob: &str) -> Result<LoadedCredential, Cr
     })
 }
 
-/// Keychain authentication/ACL refusal (`SecBase.h`): the one
-/// access fact keyring's status table never names, so it arrives
-/// inside the facade's opaque platform failure. macOS only.
+/// Keychain authentication/ACL refusal and interaction outcomes
+/// (`SecBase.h`): the access facts keyring's status table never
+/// names, so they arrive inside the facade's opaque platform
+/// failure. macOS only.
 #[cfg(target_os = "macos")]
 const ERR_SEC_AUTH_FAILED: i32 = -25293;
+/// Locked keychain with no UI to unlock through (the launchd
+/// context): `SecBase.h` `errSecInteractionNotAllowed`.
+#[cfg(target_os = "macos")]
+const ERR_SEC_INTERACTION_NOT_ALLOWED: i32 = -25308;
+/// The operator refused the access prompt: `SecBase.h`
+/// `errSecUserCanceled`. A refusal, not an outage.
+#[cfg(target_os = "macos")]
+const ERR_SEC_USER_CANCELED: i32 = -128;
 
 /// Map one platform answer onto the loader taxonomy. Details carry
 /// the account label and the platform's status text — never the item
@@ -277,7 +286,14 @@ fn map_keyring_error(account: &str, error: keyring::Error) -> CredentialError {
             #[cfg(target_os = "macos")]
             let denied = source
                 .downcast_ref::<security_framework::base::Error>()
-                .is_some_and(|error| error.code() == ERR_SEC_AUTH_FAILED);
+                .is_some_and(|error| {
+                    matches!(
+                        error.code(),
+                        ERR_SEC_AUTH_FAILED
+                            | ERR_SEC_INTERACTION_NOT_ALLOWED
+                            | ERR_SEC_USER_CANCELED
+                    )
+                });
             #[cfg(not(target_os = "macos"))]
             let denied = false;
             if denied {
@@ -421,31 +437,36 @@ mod tests {
         }
     }
 
-    /// macOS names the Keychain's authentication refusal inside the
-    /// facade's opaque platform failure: `errSecAuthFailed` is an
-    /// access fact (`denied`), while any other Security status stays
-    /// `unavailable`. Keyring's own table never names the code, so
-    /// the backend reads it off the downcast source.
+    /// macOS names the Keychain's authentication and interaction
+    /// refusals inside the facade's opaque platform failure:
+    /// `errSecAuthFailed`, `errSecInteractionNotAllowed` (locked
+    /// keychain with no UI — the launchd case), and
+    /// `errSecUserCanceled` are access facts (`denied`), while any
+    /// other Security status stays `unavailable`. Keyring's own table
+    /// never names these codes, so the backend reads them off the
+    /// downcast source.
     #[cfg(target_os = "macos")]
     #[test]
     fn macos_auth_failed_is_denied_not_unavailable() {
         let account = "wyrd-drive-alpha";
         use security_framework::base::Error as SecError;
-        let denied = map_keyring_error(
-            account,
-            keyring::Error::PlatformFailure(Box::new(SecError::from(-25293))),
-        );
-        match denied {
-            CredentialError::Denied { subject, detail } => {
-                assert_eq!(
-                    subject,
-                    CredentialSubject::Account {
-                        account: account.to_string()
-                    }
-                );
-                assert!(detail.contains(account), "names the account: {detail}");
+        for code in [-25293, -25308, -128] {
+            let denied = map_keyring_error(
+                account,
+                keyring::Error::PlatformFailure(Box::new(SecError::from(code))),
+            );
+            match denied {
+                CredentialError::Denied { subject, detail } => {
+                    assert_eq!(
+                        subject,
+                        CredentialSubject::Account {
+                            account: account.to_string()
+                        }
+                    );
+                    assert!(detail.contains(account), "names the account: {detail}");
+                }
+                other => panic!("status {code} is Denied: {other:?}"),
             }
-            other => panic!("an auth refusal is Denied: {other:?}"),
         }
         // Any other Security status is still an unreachable store.
         let unreachable = map_keyring_error(
@@ -500,10 +521,11 @@ mod tests {
                 "a broken shape is Invalid: {blob:.64}"
             );
         }
-        // A worst-case passphrase — 4096 bytes that all escape —
-        // still loads: the blob bound admits the encoding's
-        // expansion, so the file backend's passphrase is the store
-        // backend's passphrase byte for byte.
+        // A heavily-escaped passphrase still loads: 4096 backslashes
+        // escape to two bytes each, so the blob exceeds the old
+        // bound but stays inside the encoding-aware one — the file
+        // backend's passphrase is the store backend's passphrase
+        // byte for byte.
         let escaped = "\\".repeat(MAX_PASSPHRASE_BYTES);
         let blob = encode_for_tests(&fixture_hex(), Some(&escaped));
         let loaded = decode_stored_value(account, &blob).expect("an escaped item loads");
@@ -511,6 +533,18 @@ mod tests {
             loaded.passphrase.expect("named item loads").as_str(),
             escaped.as_str(),
             "escaping never changes the material"
+        );
+        // The derivation's true worst case: control characters
+        // escape to six bytes each, 24576 plus framing against the
+        // 24832 bound. This pins the bound the derivation rests on,
+        // not just the 2x case above.
+        let worst = "\u{0}".repeat(MAX_PASSPHRASE_BYTES);
+        let blob = encode_for_tests(&fixture_hex(), Some(&worst));
+        let loaded = decode_stored_value(account, &blob).expect("a worst-case item loads");
+        assert_eq!(
+            loaded.passphrase.expect("named item loads").as_str(),
+            worst.as_str(),
+            "the 6x expansion is admitted"
         );
         // Surrounding ASCII whitespace around the hex is tolerated,
         // like the file reader's trim — migrated material parses
@@ -599,6 +633,17 @@ mod tests {
     #[ignore = "touches the real platform store; run by hand per the contract's service-context clause"]
     #[test]
     fn real_store_probe_round_trip() {
+        /// Deletes the probe item on drop, so a panic between store
+        /// and delete cannot leave a residue a later run's distinct
+        /// account would never clear.
+        struct ProbeGuard<'a> {
+            entry: &'a keyring::Entry,
+        }
+        impl Drop for ProbeGuard<'_> {
+            fn drop(&mut self) {
+                let _ = self.entry.delete_credential();
+            }
+        }
         let backend = OsStoreBackend;
         let account = format!("wyrd-probe-{}-{}", std::process::id(), "service-context");
         let reference = || CredentialRef::OsStore {
@@ -608,6 +653,7 @@ mod tests {
         let entry = keyring::Entry::new(OS_SERVICE, &account).expect("probe entry builds");
         // A previous interrupted run must not poison this one.
         let _ = entry.delete_credential();
+        let _guard = ProbeGuard { entry: &entry };
         entry.set_password(&blob).expect("probe item stores");
         let loaded = backend
             .load(&reference())

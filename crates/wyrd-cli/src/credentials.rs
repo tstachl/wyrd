@@ -450,8 +450,11 @@ fn strip_trailing_newline(text: &str) -> &str {
 /// partially initialized. The buffer stays in a `Zeroizing`,
 /// scrubbed on drop.
 fn read_passphrase_stdin(reader: impl std::io::Read) -> Result<Zeroizing<String>, CliError> {
-    // The bound is the OS backend's: one literal for every surface,
-    // so a passphrase the pipe accepts is one the store accepts.
+    // The bound is the OS backend's: the stdin and store surfaces
+    // share one literal, so a passphrase the pipe accepts is one
+    // the store accepts. (The terminal prompt and the identity
+    // writer pin their own 4096; see `prompt_passphrase_tty` and
+    // `commands/identity.rs`.)
     use wyrd_credential_store::MAX_PASSPHRASE_BYTES;
     let mut bytes = Zeroizing::new(Vec::new());
     reader

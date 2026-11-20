@@ -90,7 +90,11 @@ keyring = "3.6"
 # backend): distinguishes the Keychain's auth-failed answers (Denied)
 # from store-unreachable ones (Unavailable) when classifying the
 # `keyring` facade's opaque platform failure. macOS target table of
-# the leaf crate only — same reservation as `keyring` above.
+# the leaf crate only — same reservation as `keyring` above. Track
+# keyring's macOS edge as a set: the backend downcasts to this major,
+# so if keyring moves off `security-framework 3` (or this pin moves
+# without it) the mapping silently degrades to `Unavailable` — bump
+# both together and re-run the macOS status test.
 security-framework = "3"
 
 # content hashing

@@ -1,6 +1,6 @@
 # Credential loading (v0.4)
 
-Status: Normative. Shipped scope: the read half is implemented (the CLI file backend and the OS credential-store backends conform); provisioning, replacement, deletion, and migration are specified, not yet wired. Scope: how a drive owner obtains its secret
+Status: Normative. Shipped scope: the read half is implemented (the CLI file backend conforms; the OS credential-store backends conform on macOS, where service-context retrieval is verified by hand — the Linux service-context proof is deferred, see below); provisioning, replacement, deletion, and migration are specified, not yet wired. Scope: how a drive owner obtains its secret
 material — the device identity secret and the passphrase protecting
 the wrapped root key — without the desktop UI alive, in the actual
 OS service context. Authority: this contract owns the
@@ -121,7 +121,12 @@ claim the trait already carries what is marked specified.)
   real service context (launchd agent, systemd user unit — never
   a login shell). GUI-side access never proves service-side
   access: each backend is verified from the actual service
-  context on each supported platform.
+  context on each supported platform. Verification state: the
+  macOS backend is verified by hand (login session plus a
+  no-terminal LaunchAgent run of the ignored probe); the Linux
+  backend's service-context verification is deferred — no Linux
+  host was available and headless CI has no bus, so CI pins the
+  fail-closed `unavailable` there instead.
 
 ## Failure taxonomy
 
