@@ -23,6 +23,11 @@
 //! session. Derived `Clone` stays for these owners; nothing else may
 //! retain the bytes, and raw export is crate-private (encryption
 //! only, for the keystore wraps) so no downstream layer can either.
+//! The one exception is the identity's hex rendering
+//! ([`DeviceIdentitySecret::to_hex`]): the credential write half
+//! needs the canonical text form the file reader already accepts, so
+//! the accessor returns it in a `Zeroizing` wrapper — never logged,
+//! never placed in configuration, scrubbed on drop like the scalar.
 
 use secp256k1::{Keypair, SecretKey, XOnlyPublicKey, SECP256K1};
 use zeroize::ZeroizeOnDrop;
@@ -121,6 +126,22 @@ impl DeviceIdentitySecret {
     pub fn signer_keys(&self) -> nostr::key::Keys {
         nostr::key::Keys::new(self.secret_key().into())
     }
+
+    /// Hex rendering of the scalar for the credential write half:
+    /// the canonical 64-char text form the file reader already
+    /// accepts, so both backends store and open the same material.
+    /// The write-half accessor only — loaders never need it — and
+    /// the return is `Zeroizing`: never logged, never placed in
+    /// configuration, scrubbed on drop like the scalar itself.
+    pub fn to_hex(&self) -> zeroize::Zeroizing<String> {
+        use std::fmt::Write as _;
+        let mut hex = zeroize::Zeroizing::new(String::with_capacity(64));
+        for byte in self.0 {
+            write!(&mut *hex, "{byte:02x}").expect("writing to a String cannot fail");
+        }
+        debug_assert_eq!(hex.len(), 64, "a 32-byte scalar renders as 64 hex chars");
+        hex
+    }
 }
 
 /// The local endpoint of [`SignerSession`]: the device signing for
@@ -210,5 +231,28 @@ mod tests {
             ),
             "DeviceEncryptionSecret(REDACTED)"
         );
+    }
+
+    /// The write-half rendering is the canonical text form the file
+    /// reader accepts: 64 hex chars, lowercase, round-tripping
+    /// through `from_bytes`, and a `Zeroizing` wrapper — never a
+    /// plain `String` that `drop` would leave in memory.
+    #[test]
+    fn identity_hex_renders_canonical_and_round_trips() {
+        let secret = DeviceIdentitySecret::from_bytes([0x11; 32]).unwrap();
+        let hex = secret.to_hex();
+        assert_eq!(hex.as_str(), "11".repeat(32));
+        assert_eq!(hex.len(), 64);
+        // The file reader's gate accepts exactly this form.
+        let raw = hex::decode(hex.as_str()).expect("canonical hex decodes");
+        let mut bytes = [0u8; 32];
+        bytes.copy_from_slice(&raw);
+        assert_eq!(
+            DeviceIdentitySecret::from_bytes(bytes).unwrap().device_id(),
+            secret.device_id(),
+            "hex round-trips to the same identity"
+        );
+        fn assert_zeroizing(_: &zeroize::Zeroizing<String>) {}
+        assert_zeroizing(&hex);
     }
 }

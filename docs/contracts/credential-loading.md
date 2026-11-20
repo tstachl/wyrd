@@ -1,6 +1,6 @@
 # Credential loading (v0.4)
 
-Status: Normative. Shipped scope: the read half is implemented (the CLI file backend conforms; the OS credential-store backends conform on macOS, where service-context retrieval is verified by hand — the Linux service-context proof is deferred, see below); provisioning, replacement, deletion, and migration are specified, not yet wired. Scope: how a drive owner obtains its secret
+Status: Normative. Shipped scope: the loader boundary carries reads and the migration write half (the CLI file backend conforms; the OS credential-store backends conform on macOS, where service-context retrieval is verified by hand — the Linux service-context proof is deferred, see below); `wyrd drive migrate-credentials` runs the six gated migration steps, and the owner/drive read paths honor a migrated configuration. Create/join provisioning into the store, service-definition re-rendering, session unlock for store-backed drives, and registration-time Keychain access arrive with the desktop-wiring slice. Scope: how a drive owner obtains its secret
 material — the device identity secret and the passphrase protecting
 the wrapped root key — without the desktop UI alive, in the actual
 OS service context. Authority: this contract owns the
@@ -25,9 +25,11 @@ passphrase where the reference names one (`None` is the session
 posture, whose passphrase arrives via the unlock pipe or prompt:
 a valid outcome, never a missing item) — never files, modes,
 keychain handles, or OS facilities. Backends implement how that
-material is kept and retrieved. The trait carries the read half
-today; provisioning, replacement, and deletion join with the
-migration slice. Two backends implement the read half:
+material is kept and retrieved. The trait carries reads plus the
+migration write half (provision, replace, delete, each under the
+commit boundary: validate in memory, write, read back through the
+production reader, compare). Two backends implement the full
+boundary:
 
 - **File backend** (ships today): the hardened Unix file reader in
   `wyrd-cli` (`credentials.rs`) plus its writer, `wyrd identity`
@@ -38,8 +40,8 @@ migration slice. Two backends implement the read half:
   platform in `wyrd-credential-store`): the platform's credential
   store — Keychain on macOS, an OS credential service (Secret
   Service expected) on Linux — reached through the same loader
-  boundary. Reads only; the writer joins with the migration
-  slice, in the encoding this contract's backend section pins.
+  boundary. Reads plus the migration writer, in the encoding this
+  contract's backend section pins.
 
 Adding a backend changes no secret format, no keystore wrap, no
 membership or epoch behavior, and no wire byte. Hardware-backed
@@ -68,14 +70,16 @@ characters to 6), plus framing; a larger item is shape-broken.
 The platform fetch itself is not bounded — the store facade
 exposes no streaming read — so the refusal lands after the store
 answers. Provisioning, replacement, and deletion write this
-encoding with the migration slice.
+encoding through the loader's commit boundary (shipped).
 
 How a drive's configuration comes to *name* an OS-store account
-(a flag, a config key, a service definition) is not this slice:
-reads are implemented and integrated at the loader boundary, and
-the reference selectors that let production traffic reach them
-arrive with the desktop-wiring slice, alongside registration-time
-Keychain access.
+is a config key in this slice (`credential_backend` plus
+`credential_account` in `default.toml`: one backend per drive,
+ambiguity refused at parse) honored by the owner/drive read paths;
+file flags beside a store configuration refuse. Create/join
+provisioning into the store, service-definition re-rendering,
+session unlock for store-backed drives, and registration-time
+Keychain access arrive with the desktop-wiring slice.
 
 ## Credential references, never secrets, in configuration
 
@@ -95,12 +99,11 @@ holds for every new selector field.
 ## What the loader must do
 
 For one drive, identified by its credential reference, the loader
-provides the operations below. Lookup and open ship with the file
-backend and the OS credential-store backends; provisioning,
-replacement, and deletion are specified here and join with the
-migration slice. (This section states the
-full boundary so backends are built once against it — it does not
-claim the trait already carries what is marked specified.)
+provides the operations below. Lookup and open run on every owner
+start; provision stores a fresh credential, replace overwrites
+under the same boundary, and delete removes the backend item. (This
+section states the full boundary so backends are built once against
+it.)
 
 - **Lookup and open**: return the secret material or a terminal
   failure from the taxonomy below. The caller decides what the
@@ -189,7 +192,8 @@ platform (`docs/architecture.md:48`).
 ## Migration
 
 Existing desktop-managed drives on file credentials migrate
-explicitly and failure-safe, in this order:
+explicitly and failure-safe through `wyrd drive
+migrate-credentials`, in this order:
 
 1. Read and validate the existing credential through the
    hardened file reader.
@@ -202,7 +206,15 @@ explicitly and failure-safe, in this order:
 
 Steps 3 and 5 are the gates: never delete the old path before
 the new one is verified. Migration changes where the passphrase
-is kept, never the Drive Root Key, never the keystore wrap.
+is kept, never the Drive Root Key, never the keystore wrap. The
+configuration rewrite (step 4) is the store-backend key pair in
+`default.toml`; the manager's installed service definition still
+names the retired files until the desktop-wiring slice re-renders
+it, so the migrate command warns where a unit is installed and a
+migrated drive restarts through the store-aware owner path until
+then. Re-runs converge: an identical store item continues, a
+completed migration re-verifies and reports done, and a differing
+store item refuses rather than overwriting.
 
 ## What this contract does not own
 
@@ -214,8 +226,9 @@ is kept, never the Drive Root Key, never the keystore wrap.
 - Window close, quit, lock, and what survives them:
   `docs/contracts/desktop-lifecycle.md`.
 - Session-posture unlock (typed passphrase, per-session owner):
-  unchanged by this contract; unattended session startup is a
-  separate decision.
+  unchanged by this contract except that unlock stays file-backed
+  until the wiring slice teaches it the store; unattended session
+  startup is a separate decision.
 - Service enablement at login (whether the manager starts the
   unit): separate observation, separate issue. Enablement must
   never be mistaken for credential availability, and

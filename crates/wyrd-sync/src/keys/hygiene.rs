@@ -28,7 +28,7 @@
 //! |---|---|---|---|---|---|
 //! | `DriveRootKey` | root | `ZeroizeOnDrop` | redacted | yes, owner engine retains one for escrow minting | never serialized; escrow unwraps into fresh wrappers |
 //! | `EpochSecret` | epoch secret | `ZeroizeOnDrop` | redacted | yes, keyring installs from a borrowed `Capability` | derivations borrow; plaintext encodings are `Zeroizing` |
-//! | `DeviceIdentitySecret` | Nostr identity scalar | `ZeroizeOnDrop` | redacted | yes, engine/mailbox dual hold | bare `SecretKey`s are per-call transients |
+//! | `DeviceIdentitySecret` | Nostr identity scalar | `ZeroizeOnDrop` | redacted | yes, engine/mailbox dual hold | bare `SecretKey`s are per-call transients; the `to_hex` write-half rendering is `Zeroizing`, never logged |
 //! | `DeviceEncryptionSecret` | capability-unwrap scalar | `ZeroizeOnDrop` | redacted | yes, engine/mailbox dual hold | as above |
 //! | `LoadedCredential` | loader boundary material: identity + passphrase | members scrub (no extra drop glue, so fields stay movable) | redacted | no | passphrase `None` is the session posture, not a missing item |
 //! | `EphemeralScalar` | ECDH seed sibling | `ZeroizeOnDrop` | none at all (`pub(crate)`) | no | FFI scalar inside `SecretKey` is upstream's, out of reach |

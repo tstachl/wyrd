@@ -137,11 +137,13 @@ pub enum CredentialError {
     },
 }
 
-/// Load one drive's secret material from a backend. One method:
-/// provisioning (store), replacement, and deletion join the
-/// boundary with the migration slice; until then backends serve
-/// reads only. Implementations must not retry across backends —
-/// the reference already chose one — and must not prompt.
+/// Load one drive's secret material from a backend, and manage the
+/// items it holds. The read half is the hot path (every owner start);
+/// the write half is the migration slice: provisioning (store),
+/// replacement, and deletion under the same commit boundary, so a
+/// backend that reports success has proven the item reads back.
+/// Implementations must not retry across backends — the reference
+/// already chose one — and must not prompt.
 pub trait CredentialLoader {
     /// Resolve `reference` to secret material or a terminal
     /// [`CredentialError`]. Pure retrieval: no registration, no
@@ -150,6 +152,42 @@ pub trait CredentialLoader {
     /// reference names a passphrase item; a session-posture
     /// reference loads the identity with no passphrase.
     fn load(&self, reference: &CredentialRef) -> Result<LoadedCredential, CredentialError>;
+
+    /// Provision a fresh credential at `reference`: validate the
+    /// material in memory, write it, then read it back through
+    /// [`CredentialLoader::load`] and compare (identity by device
+    /// id, passphrase byte for byte). Reports success only where
+    /// the read-back matches. Refuses with `Invalid` where an item
+    /// already exists — provisioning never overwrites; that is
+    /// [`CredentialLoader::replace`]. A reference naming the wrong
+    /// backend answers exactly as [`CredentialLoader::load`] does
+    /// for it, so no path silently substitutes one backend for
+    /// another.
+    fn store(
+        &self,
+        reference: &CredentialRef,
+        material: &LoadedCredential,
+    ) -> Result<(), CredentialError>;
+
+    /// Replace the credential at `reference` under the same commit
+    /// boundary as [`CredentialLoader::store`]: overwrite, read
+    /// back through [`CredentialLoader::load`], and report success
+    /// only where the read-back matches. Upserts: a missing item is
+    /// created, so retried or converged callers stay idempotent;
+    /// use `store` where overwriting would mask a bug.
+    fn replace(
+        &self,
+        reference: &CredentialRef,
+        material: &LoadedCredential,
+    ) -> Result<(), CredentialError>;
+
+    /// Delete the credential at `reference`. Answers `Missing`
+    /// where no item exists, so callers distinguish "nothing to
+    /// retire" from a completed removal. Verifies the removal with
+    /// a read-back where the store is reachable: a still-present
+    /// item, or an unverifiable one, is `Invalid` — never a
+    /// claimed success.
+    fn delete(&self, reference: &CredentialRef) -> Result<(), CredentialError>;
 }
 
 #[cfg(test)]

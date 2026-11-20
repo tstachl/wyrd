@@ -54,7 +54,28 @@ is transient — no drive data is affected.
   production reference selectors (flag, config key, service
   definition) and registration-time Keychain access arrive with
   the desktop-wiring slice. Provisioning, replacement, deletion,
-  and migration stay specified, not yet wired.
+  and migration are specified there and implemented by the entry
+  below.
+
+- Failure-safe migration from file credentials to the OS
+  credential store
+  (`nostr:nevent1qqsytuswfeupvrthe6qzyr05eup9ex79ervqu8g02mk9kfxmqdnhxngpz9mhxue69uhkwunpwdczuap49eehg5r3x6m`):
+  the loader trait carries the write half (provision, replace,
+  delete under the commit boundary: write, read back, compare),
+  both backends implement it (the file backend with backup-guarded
+  replacement, the store backend in the contract's canonical
+  encoding), and `wyrd drive migrate-credentials` runs the six
+  gated steps — read and validate the files, store, verify the
+  owner retrieves, rewrite the drive configuration to the store
+  reference (`credential_backend` plus `credential_account`: one
+  backend per drive), verify the owner opens the existing
+  keystore, and only then retire the files. Re-runs converge and
+  a completed migration re-verifies; a differing store item
+  refuses rather than overwriting. The owner/drive read paths
+  honor a migrated configuration; create/join provisioning into
+  the store, service-definition re-rendering, store session
+  unlock, and registration-time Keychain access arrive with the
+  desktop-wiring slice.
 
 - Desktop application lifecycle contract
   (`docs/contracts/desktop-lifecycle.md`, supersedes

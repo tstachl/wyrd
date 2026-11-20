@@ -133,6 +133,9 @@ pub(crate) fn drive(
         DriveAction::Unlock { .. } => {
             unreachable!("unlock runs the owner in the dispatcher before drive()")
         }
+        DriveAction::MigrateCredentials { .. } => {
+            unreachable!("migrate-credentials resolves in the dispatcher before drive()")
+        }
     }
 }
 

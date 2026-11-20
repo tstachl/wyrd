@@ -23,7 +23,7 @@ Listed in dependency order. Dependencies point only at rows above, and `wyrd-con
 | `wyrd-settings` | Per-user application settings file schema: version, per-drive sections, strict validation; serialization and rules only, no filesystem, no runtime application | serde only; never `wyrd-*` |
 | `wyrd-desktop` | Desktop management UI backend: non-owning Tauri client of the drive-owner interface; never opens a drive | `wyrd-owner-client` only; reserved `tauri` toolkit + `tauri-plugin-dialog` file-picker edges, serde, thiserror; build-time `tauri-build` (counted as a production edge by the DAG checker) |
 | `wyrd-sync` | iroh transport, encryption, storage addressing, capabilities, authorization, replication | `wyrd-format`, `wyrd-namespace`, iroh stack, nostr crate |
-| `wyrd-credential-store` | OS credential-store backends (reads): Keychain on macOS, Secret Service on Linux, behind the loader boundary | `wyrd-sync`, keyring, serde, serde_json, hex, zeroize (plus macOS `security-framework`) |
+| `wyrd-credential-store` | OS credential-store backends (reads + migration write half): Keychain on macOS, Secret Service on Linux, behind the loader boundary | `wyrd-sync`, keyring, serde, serde_json, hex, zeroize (plus macOS `security-framework`) |
 | `wyrd-core` | Embeddable local node: namespace, snapshots, mutations, materialization, sync control | format, namespace, sync; never presentation |
 | `wyrd-view` | Filesystem-shaped read surface; never mounts or authors content | `wyrd-format`, `wyrd-namespace` |
 | `wyrd-daemon` | Composes the core, view and presentation backends | `wyrd-core`, `wyrd-view`, `wyrd-owner-client` |

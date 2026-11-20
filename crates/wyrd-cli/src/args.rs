@@ -749,6 +749,26 @@ pub(crate) enum DriveAction {
         #[arg(long, value_name = "BYTES")]
         retained_quota: Option<u64>,
     },
+    /// Migrate this drive's credential from files to the OS
+    /// credential store: read and validate the files, store the
+    /// material under `--account` through the loader's commit
+    /// boundary, verify the owner retrieves it and opens the
+    /// existing keystore with it, rewrite the drive configuration
+    /// to the store reference, and only then retire the files. The
+    /// Drive Root Key and the keystore wrap are untouched. A
+    /// re-run converges (an identical store item continues; a
+    /// completed migration re-verifies and reports done), and a
+    /// differing store item refuses rather than overwriting. The
+    /// manager's installed service still names the retired files
+    /// until the desktop-wiring slice re-renders it — plan that
+    /// reinstall before migrating a managed drive.
+    MigrateCredentials {
+        /// Store account label the credential migrates under: the
+        /// reference the rewritten configuration names. 1-128
+        /// bytes, no control bytes, no surrounding whitespace.
+        #[arg(long, value_name = "ACCOUNT")]
+        account: String,
+    },
 }
 
 /// One owner-runtime action. `Start` runs the persistent owner
