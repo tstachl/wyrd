@@ -1,6 +1,6 @@
 # Credential loading (v0.4)
 
-Status: Normative. Shipped scope: the loader boundary carries reads and the migration write half (the CLI file backend conforms; the OS credential-store backends conform on macOS, where service-context retrieval is verified by hand — the Linux service-context proof is deferred, see below); `wyrd drive migrate-credentials` runs the six gated migration steps, and the owner/drive read paths honor a migrated configuration. Create/join provisioning into the store, service-definition re-rendering, session unlock for store-backed drives, and registration-time Keychain access arrive with the desktop-wiring slice. Scope: how a drive owner obtains its secret
+Status: Normative. Shipped scope: the loader boundary carries reads and the migration write half (the CLI file backend conforms; the OS credential-store backends conform on macOS, where service-context retrieval is verified by hand — the Linux service-context proof is deferred, see below); `wyrd drive migrate-credentials` runs the six gated migration steps, and the owner/drive read paths honor a migrated configuration. `wyrd bootstrap` provisions store-backed drives through the same commit boundary (input files or pipe seed the item, the configuration records the backend after the daemon accepts the material), service definitions render the store reference (`--credential-backend os-store --credential-account`), session unlock loads the store identity with a typed passphrase, and `drive reconfigure` reinstalls a managed definition on either backend. Registration-time Keychain access (first unlock without a prior GUI visit) stays the deferred follow-up. Scope: how a drive owner obtains its secret
 material — the device identity secret and the passphrase protecting
 the wrapped root key — without the desktop UI alive, in the actual
 OS service context. Authority: this contract owns the
@@ -76,10 +76,13 @@ How a drive's configuration comes to *name* an OS-store account
 is a config key in this slice (`credential_backend` plus
 `credential_account` in `default.toml`: one backend per drive,
 ambiguity refused at parse) honored by the owner/drive read paths;
-file flags beside a store configuration refuse. Create/join
-provisioning into the store, service-definition re-rendering,
-session unlock for store-backed drives, and registration-time
-Keychain access arrive with the desktop-wiring slice.
+file flags beside a store configuration refuse. `wyrd bootstrap`
+provisions into the store (input files or the pipe seed the item;
+the configuration records the backend after the daemon accepts
+the material), service definitions render the store reference for
+managed drives, session unlock loads the store identity with a
+typed passphrase, and `drive reconfigure` reinstalls the
+definition on either backend.
 
 ## Credential references, never secrets, in configuration
 
@@ -121,17 +124,20 @@ it.)
   not loader business.
 - **Service-context retrieval**: the owner retrieves its material
   with no desktop process alive, no interactive prompt, in the
-  real service context (launchd agent, systemd user unit — never
-  a login shell). GUI-side access never proves service-side
-  access: each backend is verified from the actual service
-  context on each supported platform. Verification state: the
-  macOS backend is verified by hand (login session plus a
-  no-terminal LaunchAgent run of the ignored probe); the Linux
-  backend's service-context verification is deferred — no Linux
-  host was available and headless CI has no bus. CI exercises the
-  fail-closed path there instead (the dispatcher test routes a
-  bus-less store to the OS backend, never the file backend, and
-  the taxonomy test pins `PlatformFailure` to `unavailable`).
+  real service context (launchd user agent, systemd user unit —
+  never a login shell) and within the authenticated user session
+  (see `docs/contracts/desktop-lifecycle.md`: the session bounds
+  desktop owners; pre-login retrieval is out of scope).
+  GUI-side access never proves service-side access: each backend
+  is verified from the actual service context on each supported
+  platform. Verification state: the macOS backend is verified by
+  hand (login session plus a no-terminal LaunchAgent run of the
+  ignored probe); the Linux backend's service-context verification
+  is deferred — no Linux host was available and headless CI has
+  no bus. CI exercises the fail-closed path there instead (the
+  dispatcher test routes a bus-less store to the OS backend,
+  never the file backend, and the taxonomy test pins
+  `PlatformFailure` to `unavailable`).
 
 ## Failure taxonomy
 
@@ -153,6 +159,37 @@ prompts from the owner service, and never silently falls back to
 another backend. Interrupted provision/replace/migrate leaves at
 least one working credential path (see "Migration" below).
 
+## Credential availability (desktop)
+
+Storage, availability, lifecycle, supervision, and
+materialization are separate concerns: storing in a backend does
+not imply the owner can retrieve at any moment, supervision does
+not imply availability, and neither implies a server lifecycle.
+In particular, Keychain storage never implies pre-login start,
+and a systemd unit never implies unattended operation.
+
+Each row below states three things separately: the expected
+platform behavior, Wyrd's requirement, and what is verified.
+Expected behavior is not a guarantee — access-control
+configuration, lock state, and the supported configuration can
+change it — and no row is claimed verified until a test on a
+supported configuration proves it.
+
+| Session state | Expected platform behavior | Wyrd requirement | Verified |
+|---|---|---|---|
+| macOS logged in, keychain unlocked | Login keychain readable from the user agent | Owner starts when enabled and the item loads | By hand (login session + no-terminal agent probe) |
+| macOS screen locked | Login keychain stays unlocked by default | Owner keeps serving; new opens succeed | Not verified: access-control configuration can change this |
+| macOS logged out | Session ends; user agents terminate; login keychain locks | Owners terminated per `desktop-lifecycle.md`; next login re-eligible | Termination behavior tested per supported configuration before it is claimed |
+| Linux graphical login, collection unlocked | Secret Service reachable from the user unit | Owner starts when enabled and the item loads | Deferred: no Linux host; headless CI has no bus |
+| Linux screen locked | Collection stays unlocked by default | Owner keeps serving | Deferred, same as above |
+| Linux logged out | User manager stops without lingering; collection locks | Termination requested through session teardown; unresolved stays `Unconfirmed`; next login re-eligible | Termination behavior tested per supported configuration before it is claimed |
+
+Unattended operation — retrieval with no authenticated user
+session, now or ever — belongs to server deployments with
+explicitly provisioned credentials, never to a desktop login
+preference. A desktop drive that cannot retrieve reads
+registered-but-unavailable; it never invents a weaker path.
+
 ## Secret lifetime and zeroization
 
 - Material lives in `Zeroizing` buffers from load to use; no
@@ -169,19 +206,26 @@ least one working credential path (see "Migration" below).
 ## Platform obligations
 
 - **macOS**: Keychain items for desktop-managed drive
-  credentials, retrievable from the launchd agent context.
-  Keychain access is requested at registration; the ACLs travel
-  with the settings contract. Account for the logged-in/unlocked
-  session vs service-restart distinction: an item the GUI can
-  read while the service context cannot is `denied`, and the
-  drive reads unavailable — never broken.
+  credentials, retrievable from the launchd user-agent context
+  within the authenticated session. Keychain access is requested
+  at registration; the ACLs travel with the settings contract.
+  Account for the session-vs-service distinction: an item the GUI
+  can read while the service context cannot is `denied`, and the
+  drive reads unavailable — never broken. Lock-state and
+  access-control effects follow the availability matrix above;
+  they are requirements on Wyrd's behavior, not promises about
+  the platform.
 - **Linux**: Secret Service (or the credential service of the
   supported desktop environment) in the systemd user-unit
-  context. Never assume a D-Bus session exists because the
+  context, within the authenticated session and without
+  lingering. Never assume a D-Bus session exists because the
   desktop could reach one. Where the supported context cannot
   retrieve reliably, the drive reads unavailable.
 - **File backend**: retained unchanged for CLI and
-  operator-provisioned deployments, with its existing hardening.
+  operator-provisioned deployments — including headless server
+  deployments with independent supervision and unattended
+  operation — with its existing hardening. It is the server
+  credential mechanism, not a temporary compatibility layer.
   File paths stay out of desktop-managed service definitions
   once a drive migrates; the file backend itself is never
   weakened to make the OS backend look convenient.
@@ -209,12 +253,13 @@ the new one is verified. Migration changes where the passphrase
 is kept, never the Drive Root Key, never the keystore wrap. The
 configuration rewrite (step 4) is the store-backend key pair in
 `default.toml`; the manager's installed service definition still
-names the retired files until the desktop-wiring slice re-renders
-it, so the migrate command warns where a unit is installed and a
-migrated drive restarts through the store-aware owner path until
-then. Re-runs converge: an identical store item continues, a
-completed migration re-verifies and reports done, and a differing
-store item refuses rather than overwriting.
+names the retired files until `drive reconfigure` reinstalls it
+with the store reference, so the migrate command warns where a
+unit is installed and a migrated drive restarts through the
+store-aware owner path until then. Re-runs converge: an identical
+store item continues, a completed migration re-verifies and
+reports done, and a differing store item refuses rather than
+overwriting.
 
 ## What this contract does not own
 
@@ -226,9 +271,13 @@ store item refuses rather than overwriting.
 - Window close, quit, lock, and what survives them:
   `docs/contracts/desktop-lifecycle.md`.
 - Session-posture unlock (typed passphrase, per-session owner):
-  unchanged by this contract except that unlock stays file-backed
-  until the wiring slice teaches it the store; unattended session
-  startup is a separate decision.
+  unchanged by this contract except that unlock loads the store
+  identity for store-backed drives. Pre-login and
+  user-session-independent unattended startup are server-only and
+  explicitly out of scope for desktop. Desktop-managed owners may
+  start non-interactively after the authenticated user-session
+  domain exists, using credentials available from the OS
+  credential store.
 - Service enablement at login (whether the manager starts the
   unit): separate observation, separate issue. Enablement must
   never be mistaken for credential availability, and

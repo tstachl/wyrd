@@ -325,6 +325,8 @@ fn credential_symlinks_are_rejected_without_following() {
             identity_file: Some(identity_file),
             passphrase_file: Some(passphrase_link.clone()),
             passphrase_stdin: false,
+            credential_backend: None,
+            credential_account: None,
         },
         None,
     )
@@ -391,6 +393,8 @@ fn credential_contents_never_appear_in_errors() {
             identity_file: Some(identity_file.clone()),
             passphrase_file: Some(passphrase_file),
             passphrase_stdin: false,
+            credential_backend: None,
+            credential_account: None,
         },
         None,
     )

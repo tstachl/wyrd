@@ -86,8 +86,9 @@ subcommand; subcommand flags (names, modes, paths) follow it.
 wyrd identity (generate --identity-file … --passphrase-file …
     | new-passphrase | commit --identity-file … --passphrase-file …
     | verify --identity-file … --passphrase-file …)
-wyrd drive <dir> [--identity-file …] [--passphrase-file …]
-    (init | bootstrap --name … [--mode …] … | delete [--yes] | reconfigure … | service-start … | service-enable … | service-disable … | unlock …)
+wyrd drive <dir> [--identity-file …] [--passphrase-file …] [--passphrase-stdin]
+    [--credential-backend …] [--credential-account …]
+    (init | bootstrap --name … [--mode …] … | delete [--yes] | reconfigure … | service-start … | service-enable … | service-disable … | unlock … | migrate-credentials --account …)
 wyrd device <dir> (id | keys | pairing-request <out> | join <invitation>)
 wyrd member <dir> (list | log | status | invite | reissue | remove | leave
     | rotate | set-owner | resolve)
@@ -142,15 +143,15 @@ preserved; only spelling and hierarchy move.
 ## Subcommands
 
 ```
-wyrd [--config <path>] drive [--identity-file <path>] [--passphrase-file <path>] <drive_dir>
-    (init | bootstrap --name <name> [--mode <mode>] [--mountpoint <path>] [--relay <url>...] [--invitation-file <path>] [--registry <path>] [--owner-bin <path>] [--supervise-bin <path>] [--no-service] | delete [--yes] | reconfigure --mode <mode> [--mountpoint <path>] [--relay <url>...] [--registry <path>] [--owner-bin <path>] [--supervise-bin <path>] [--no-service] | service-start [--registry <path>] | service-enable [--registry <path>] | service-disable [--registry <path>] | unlock [--relay <url>...] [--retained-quota <bytes>])
+wyrd [--config <path>] drive [--identity-file <path>] [--passphrase-file <path>] [--passphrase-stdin] [--credential-backend <backend>] [--credential-account <account>] <drive_dir>
+    (init | bootstrap --name <name> [--mode <mode>] [--mountpoint <path>] [--relay <url>...] [--invitation-file <path>] [--registry <path>] [--owner-bin <path>] [--supervise-bin <path>] [--no-service] | delete [--yes] | reconfigure --mode <mode> [--mountpoint <path>] [--relay <url>...] [--registry <path>] [--owner-bin <path>] [--supervise-bin <path>] [--no-service] | service-start [--registry <path>] | service-enable [--registry <path>] | service-disable [--registry <path>] | unlock [--relay <url>...] [--retained-quota <bytes>] | migrate-credentials --account <account>)
 wyrd [--config <path>] mount [--relay <url>...] [--verbose] [--interval <secs>] \
-    [--identity-file <path>] [--passphrase-file <path>] <drive_dir> <mountpoint>
+    [--identity-file <path>] [--passphrase-file <path>] [--credential-backend <backend>] [--credential-account <account>] <drive_dir> <mountpoint>
 wyrd [--config <path>] export [--identity-file <path>] [--passphrase-file <path>] <drive_dir> <out_dir>
 wyrd [--config <path>] member [--identity-file <path>] [--passphrase-file <path>] <drive_dir> (list | log | status | remove <device> [--yes] | leave [--yes] | rotate | set-owner <device> | invite <device> <encryption-key> <out> [--reader] | reissue <device> <out>)
 wyrd [--config <path>] device [--identity-file <path>] [--passphrase-file <path>] <drive_dir> (id | keys | pairing-request <out> | join <invitation>)
 wyrd [--config <path>] sync [--relay <url>...] [--identity-file <path>] [--passphrase-file <path>] <drive_dir> (status | now)
-wyrd [--config <path>] owner [--relay <url>...] [--log-file <path>] [--identity-file <path>] [--passphrase-file <path>] <drive_dir> [start [--retained-quota <bytes>] | status]
+wyrd [--config <path>] owner [--relay <url>...] [--log-file <path>] [--identity-file <path>] [--passphrase-file <path>] [--credential-backend <backend>] [--credential-account <account>] <drive_dir> [start [--retained-quota <bytes>] | status]
 wyrd [--config <path>] materialization <drive_dir> \
     (status [path] creds | budgets creds | role (set <mirror|vault> [--yes] | status creds) | pin <path> creds | unpin <path> creds | evict <path> creds)
 wyrd [--config <path>] snapshot [--identity-file <path>] [--passphrase-file <path>] <drive_dir> \

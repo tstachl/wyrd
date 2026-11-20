@@ -76,6 +76,97 @@ pub(crate) fn load_credential(
     }
 }
 
+/// Which backend one invocation resolves to: exactly one per
+/// drive, from the `--credential-backend` flag (winning where
+/// present) or the drive configuration. A flag that contradicts
+/// the configuration refuses — never a silent fallback — so the
+/// service definition and the configuration can never name
+/// different backends without the operator hearing about it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum EffectiveBackend {
+    /// The hardened file backend: flags, then configuration.
+    File,
+    /// The OS credential store: the account label, from the flag
+    /// where present, else the configuration. Always validated at
+    /// parse shape (see `validate_credential_account`).
+    OsStore {
+        /// The store account label naming the drive's item.
+        account: String,
+    },
+}
+
+/// Resolve the effective backend for one invocation from the flag
+/// and the loaded configuration. The flag wins where present; a
+/// flag that contradicts the configuration is a usage refusal
+/// naming both, never a precedence rule. The account follows the
+/// same rule: the flag wins, a contradiction refuses, and
+/// `os-store` without an account refuses naming the missing
+/// selector.
+pub(crate) fn effective_backend(
+    creds: &Credentials,
+    config: Option<&LoadedConfig>,
+) -> Result<EffectiveBackend, CliError> {
+    if let Some(backend) = creds.credential_backend.as_deref() {
+        if backend != "file" && backend != "os-store" {
+            return Err(CliError::Usage(format!(
+                "unknown --credential-backend {backend:?}: expected \"file\" or \"os-store\""
+            )));
+        }
+    }
+    let flag_backend = creds.credential_backend.as_deref();
+    let config_backend = config.and_then(|c| c.credential_backend.as_deref());
+    if let (Some(flag), Some(configured)) = (flag_backend, config_backend) {
+        if flag != configured {
+            return Err(CliError::Usage(format!(
+                "credential backend mismatch: --credential-backend {flag:?} names one backend but the drive configuration names {configured:?}: one backend per drive"
+            )));
+        }
+    }
+    let backend = flag_backend.or(config_backend).unwrap_or("file");
+    let flag_account = creds.credential_account.as_deref();
+    let config_account = config.and_then(|c| c.credential_account.as_deref());
+    if let (Some(flag), Some(configured)) = (flag_account, config_account) {
+        if flag != configured {
+            return Err(CliError::Usage(
+                "credential account mismatch: --credential-account names one store item but the drive configuration names another: one backend per drive"
+                    .to_string(),
+            ));
+        }
+    }
+    match backend {
+        "os-store" => {
+            let account = flag_account.or(config_account).ok_or_else(|| {
+                CliError::Usage(
+                    "credential backend is \"os-store\" but no credential account is set: pass --credential-account or set credential_account in the drive configuration"
+                        .to_string(),
+                )
+            })?;
+            // The account shape check rides the same rule as the
+            // configuration parser: the flag-spelled account is
+            // validated before anything loads, so a bad flag
+            // refuses with its name.
+            crate::drive_config::validate_credential_account(
+                std::path::Path::new("--credential-account"),
+                account,
+            )?;
+            Ok(EffectiveBackend::OsStore {
+                account: account.to_string(),
+            })
+        }
+        _ => {
+            // The configuration parser already refuses an account
+            // beside the file backend; the flag needs the same
+            // guard for a config-less invocation.
+            if let Some(account) = flag_account {
+                return Err(CliError::Usage(format!(
+                    "--credential-account {account:?} is set but the credential backend is not \"os-store\": one backend per drive"
+                )));
+            }
+            Ok(EffectiveBackend::File)
+        }
+    }
+}
+
 /// Read and harden the credential files. The passphrase keeps its
 /// trailing newline stripped; the identity may be raw or hex. Paths
 /// resolve flags-first, file-second; the resolved paths travel
@@ -115,20 +206,22 @@ fn read_credentials_with(
 > {
     // A store-backed drive resolves through the OS credential store:
     // file flags beside a store configuration are ambiguity, not
-    // precedence — one backend per drive, refused by name.
-    if let Some(config) = config {
-        if config.credential_backend.as_deref() == Some("os-store") {
+    // precedence — one backend per drive, refused by name. The
+    // flag wins where present; a flag that contradicts the
+    // configuration refuses, never silently falls back.
+    match effective_backend(creds, config)? {
+        EffectiveBackend::OsStore { account } => {
             if creds.identity_file.is_some() || creds.passphrase_file.is_some() {
                 return Err(CliError::Usage(
-                    "drive configuration names the OS credential store but --identity-file/--passphrase-file name files: one backend per drive".to_string(),
+                    "drive credentials name the OS credential store but --identity-file/--passphrase-file name files: one backend per drive".to_string(),
                 ));
             }
             if creds.passphrase_stdin {
                 return Err(CliError::Usage(
-                    "drive configuration names the OS credential store: --passphrase-stdin names a pipe the store backend never reads".to_string(),
+                    "drive credentials name the OS credential store: --passphrase-stdin names a pipe the store backend never reads".to_string(),
                 ));
             }
-            let reference = crate::drive_config::os_store_reference(config)?;
+            let reference = CredentialRef::OsStore { account };
             let loaded = load_credential(&reference).map_err(loader_to_cli)?;
             let passphrase = loaded.passphrase.ok_or_else(|| {
                 CliError::Usage(
@@ -141,6 +234,7 @@ fn read_credentials_with(
             };
             return Ok((loaded.identity, passphrase, provenance));
         }
+        EffectiveBackend::File => {}
     }
     let identity_file = resolve_credential_path(
         creds.identity_file.clone(),
@@ -272,15 +366,47 @@ fn read_unlock_credentials_with(
                 .to_string(),
         ));
     }
-    // The session unlock flow for store-backed drives (store
-    // identity plus a typed session passphrase) arrives with the
-    // desktop-wiring slice; until then unlock stays file-backed.
-    if let Some(config) = config {
-        if config.credential_backend.as_deref() == Some("os-store") {
+    // The session unlock flow for store-backed drives loads the
+    // identity from the store and takes the passphrase from the
+    // terminal prompt or the stdin pipe — never from a file, never
+    // from the store. The stored item stays the managed credential;
+    // unlock borrows only its identity and proves the keystore with
+    // a typed session passphrase, so adopting the store never
+    // enables unattended startup by accident.
+    if let EffectiveBackend::OsStore { account } = effective_backend(creds, config)? {
+        // File flags beside a store unlock are ambiguity, not
+        // precedence: the passphrase file already refused above
+        // for every unlock, and the identity file refuses here —
+        // the store names the identity, never a file.
+        if creds.identity_file.is_some() {
             return Err(CliError::Usage(
-                "unlock for an OS credential-store drive is not supported yet: the session unlock flow for store-backed drives arrives with the desktop-wiring slice".to_string(),
+                "unlock for an OS credential-store drive loads the identity from the store: omit --identity-file".to_string(),
             ));
         }
+        let loaded = load_credential(&CredentialRef::OsStore { account }).map_err(loader_to_cli)?;
+        let identity = loaded.identity;
+        // The stored passphrase (where the item names one) is
+        // dropped here: the session proves the keystore with what
+        // the operator types, not with what the manager reads.
+        drop(loaded.passphrase);
+        let provenance = CredentialProvenance {
+            identity_from_file: false,
+            passphrase_from_file: false,
+            passphrase_from_stdin: creds.passphrase_stdin,
+            passphrase_from_prompt: !creds.passphrase_stdin,
+            from_os_store: true,
+        };
+        if creds.passphrase_stdin {
+            let passphrase = read_passphrase_stdin(stdin)?;
+            return Ok((identity, passphrase, provenance));
+        }
+        if !stdin_is_tty {
+            return Err(CliError::Usage(
+                format!("not a terminal: pipe the passphrase with --passphrase-stdin or run unlock on a terminal. {NO_PASSPHRASE_TAIL}").to_string(),
+            ));
+        }
+        let passphrase = prompt_passphrase_tty()?;
+        return Ok((identity, passphrase, provenance));
     }
     let provenance = CredentialProvenance {
         identity_from_file: creds.identity_file.is_none(),
@@ -436,53 +562,55 @@ fn prompt_passphrase_tty() -> Result<Zeroizing<String>, CliError> {
             .to_string(),
     ))
 }
-/// Resolve the credential *paths* a provision or reconfigure hands
-/// the daemon: the identity file always (every posture reads it),
-/// the passphrase file only for a managed service. A piped or
-/// prompted passphrase with `manage_service` refuses — a definition
-/// embedding no readable file would install cleanly and then
-/// crash-loop under the manager. Session posture is `--no-service`
-/// (no definition rendered) plus `drive unlock` for starts.
-pub(crate) fn resolve_service_credential_files(
+/// Resolve the credential a provision or reconfigure hands the
+/// daemon: exactly one backend, as a reference (paths or the store
+/// account) — never secrets. File postures resolve paths the way
+/// `load_credentials` resolves them: the identity file always
+/// (every posture reads it), the passphrase file only for a
+/// managed service. A piped or prompted passphrase with
+/// `manage_service` refuses — a definition embedding no readable
+/// file would install cleanly and then crash-loop under the
+/// manager. Session posture is `--no-service` (no definition
+/// rendered) plus `drive unlock` for starts. Store postures name
+/// the account; the manager resolves the item, no files involved.
+pub(crate) fn resolve_service_credential(
     creds: &Credentials,
     config: Option<&LoadedConfig>,
     manage_service: bool,
-) -> Result<(PathBuf, Option<PathBuf>), CliError> {
-    // Service definitions for store-backed drives (no
-    // `--passphrase-file` in the rendered unit) arrive with the
-    // desktop-wiring slice; until then service installation stays
-    // file-backed.
-    if let Some(config) = config {
-        if config.credential_backend.as_deref() == Some("os-store") {
-            return Err(CliError::Usage(
-                "drive configuration names the OS credential store: service definitions for store-backed drives arrive with the desktop-wiring slice".to_string(),
-            ));
+) -> Result<wyrd_daemon::bootstrap::ServiceCredential, CliError> {
+    use wyrd_daemon::bootstrap::ServiceCredential;
+    match effective_backend(creds, config)? {
+        EffectiveBackend::OsStore { account } => Ok(ServiceCredential::OsStore { account }),
+        EffectiveBackend::File => {
+            if creds.passphrase_stdin && manage_service {
+                return Err(CliError::Usage(
+                    "managed service needs a passphrase file the manager can read: omit --passphrase-stdin (or provision with --no-service and start sessions with `drive unlock`)".to_string(),
+                ));
+            }
+            let identity_file = resolve_credential_path(
+                creds.identity_file.clone(),
+                config.and_then(|c| c.identity_file.clone()),
+                "--identity-file",
+                "identity_file",
+            )?;
+            let passphrase_file = if manage_service {
+                Some(resolve_credential_path(
+                    creds.passphrase_file.clone(),
+                    config.and_then(|c| c.passphrase_file.clone()),
+                    "--passphrase-file",
+                    "passphrase_file",
+                )?)
+            } else {
+                None
+            };
+            Ok(ServiceCredential::File {
+                identity_file,
+                passphrase_file,
+            })
         }
     }
-    if creds.passphrase_stdin && manage_service {
-        return Err(CliError::Usage(
-            "managed service needs a passphrase file the manager can read: omit --passphrase-stdin (or provision with --no-service and start sessions with `drive unlock`)"
-                .to_string(),
-        ));
-    }
-    let identity_file = resolve_credential_path(
-        creds.identity_file.clone(),
-        config.and_then(|c| c.identity_file.clone()),
-        "--identity-file",
-        "identity_file",
-    )?;
-    let passphrase_file = if manage_service {
-        Some(resolve_credential_path(
-            creds.passphrase_file.clone(),
-            config.and_then(|c| c.passphrase_file.clone()),
-            "--passphrase-file",
-            "passphrase_file",
-        )?)
-    } else {
-        None
-    };
-    Ok((identity_file, passphrase_file))
 }
+
 /// One trailing newline is the line discipline, not part of the
 /// passphrase — shared by the file, stdin, and prompt surfaces, so
 /// all three open the same keystore.
@@ -501,7 +629,9 @@ fn strip_trailing_newline(text: &str) -> &str {
 /// refuse before the keystore opens: the owner never starts
 /// partially initialized. The buffer stays in a `Zeroizing`,
 /// scrubbed on drop.
-fn read_passphrase_stdin(reader: impl std::io::Read) -> Result<Zeroizing<String>, CliError> {
+pub(crate) fn read_passphrase_stdin(
+    reader: impl std::io::Read,
+) -> Result<Zeroizing<String>, CliError> {
     // The bound is the OS backend's: the stdin and store surfaces
     // share one literal, so a passphrase the pipe accepts is one
     // the store accepts. (The terminal prompt and the identity
@@ -1292,6 +1422,8 @@ mod tests {
             identity_file: Some(PathBuf::from("/k/identity")),
             passphrase_file: Some(PathBuf::from("/k/passphrase")),
             passphrase_stdin: true,
+            credential_backend: None,
+            credential_account: None,
         };
         assert!(read_credentials(&creds, None).is_err());
     }
@@ -1322,6 +1454,8 @@ mod tests {
             identity_file: Some(identity_file),
             passphrase_file: None,
             passphrase_stdin: true,
+            credential_backend: None,
+            credential_account: None,
         };
         let (identity, passphrase, provenance) =
             read_credentials_with(&creds, Some(&config), Cursor::new(b"piped-passphrase\n"))
@@ -1343,6 +1477,8 @@ mod tests {
             identity_file: None,
             passphrase_file: None,
             passphrase_stdin: false,
+            credential_backend: None,
+            credential_account: None,
         }
     }
 
@@ -1579,6 +1715,8 @@ mod tests {
             identity_file: None,
             passphrase_file: file.map(PathBuf::from),
             passphrase_stdin: stdin,
+            credential_backend: None,
+            credential_account: None,
         }
     }
 
@@ -1587,12 +1725,29 @@ mod tests {
     /// installing one would crash-loop under the manager.
     #[test]
     fn managed_service_with_a_pipe_refuses() {
-        let err = resolve_service_credential_files(&service_creds(true, None), None, true)
+        use wyrd_daemon::bootstrap::ServiceCredential;
+        let err = resolve_service_credential(&service_creds(true, None), None, true)
             .expect_err("managed plus stdin must refuse");
         assert!(
             err.to_string()
                 .contains("managed service needs a passphrase file"),
             "names the managed requirement: {err}"
+        );
+        // The refusal is backend-independent: a store drive never
+        // reaches the pipe check, it resolves.
+        let store_creds = Credentials {
+            identity_file: None,
+            passphrase_file: None,
+            passphrase_stdin: true,
+            credential_backend: Some("os-store".to_string()),
+            credential_account: Some("wyrd-drive-alpha".to_string()),
+        };
+        assert!(
+            matches!(
+                resolve_service_credential(&store_creds, None, true),
+                Ok(ServiceCredential::OsStore { .. })
+            ),
+            "a store drive resolves without a pipe: the manager reads the item"
         );
     }
 
@@ -1602,30 +1757,144 @@ mod tests {
     #[test]
     fn unmanaged_service_with_a_pipe_carries_no_passphrase_file() {
         use crate::tests_harness::{write_secret, TempDir};
+        use wyrd_daemon::bootstrap::ServiceCredential;
         let temp = TempDir::new();
         let identity_file = temp.0.join("identity");
         write_secret(&identity_file, [0x44; 32]);
         let mut creds = service_creds(true, None);
         creds.identity_file = Some(identity_file.clone());
-        let (identity, passphrase) = resolve_service_credential_files(&creds, None, false)
-            .expect("session posture resolves without a passphrase file");
-        assert_eq!(identity, identity_file);
-        assert!(passphrase.is_none(), "no file for the daemon to render");
+        match resolve_service_credential(&creds, None, false)
+            .expect("session posture resolves without a passphrase file")
+        {
+            ServiceCredential::File {
+                identity_file: resolved,
+                passphrase_file,
+            } => {
+                assert_eq!(resolved, identity_file);
+                assert!(
+                    passphrase_file.is_none(),
+                    "no file for the daemon to render"
+                );
+            }
+            ServiceCredential::OsStore { .. } => {
+                panic!("a file posture never resolves the store");
+            }
+        }
     }
 
     /// File posture is unchanged: managed resolves both paths for
     /// the definition exactly like before.
     #[test]
     fn managed_service_with_files_resolves_both_paths() {
+        use wyrd_daemon::bootstrap::ServiceCredential;
         let creds = Credentials {
             identity_file: Some(PathBuf::from("/k/identity")),
             passphrase_file: Some(PathBuf::from("/k/passphrase")),
             passphrase_stdin: false,
+            credential_backend: None,
+            credential_account: None,
         };
-        let (identity, passphrase) =
-            resolve_service_credential_files(&creds, None, true).expect("file posture resolves");
-        assert_eq!(identity, PathBuf::from("/k/identity"));
-        assert_eq!(passphrase, Some(PathBuf::from("/k/passphrase")));
+        match resolve_service_credential(&creds, None, true).expect("file posture resolves") {
+            ServiceCredential::File {
+                identity_file,
+                passphrase_file,
+            } => {
+                assert_eq!(identity_file, PathBuf::from("/k/identity"));
+                assert_eq!(passphrase_file, Some(PathBuf::from("/k/passphrase")));
+            }
+            ServiceCredential::OsStore { .. } => {
+                panic!("a file posture never resolves the store");
+            }
+        }
+    }
+
+    /// The flag names the store where no configuration exists: the
+    /// account travels from the flag, and a missing account
+    /// refuses before anything loads.
+    #[test]
+    fn service_credential_flags_name_the_store_without_a_config() {
+        use wyrd_daemon::bootstrap::ServiceCredential;
+        let creds = Credentials {
+            identity_file: None,
+            passphrase_file: None,
+            passphrase_stdin: false,
+            credential_backend: Some("os-store".to_string()),
+            credential_account: Some("wyrd-drive-flagged".to_string()),
+        };
+        match resolve_service_credential(&creds, None, true).expect("flag store resolves") {
+            ServiceCredential::OsStore { account } => {
+                assert_eq!(account, "wyrd-drive-flagged");
+            }
+            ServiceCredential::File { .. } => panic!("a store flag never resolves files"),
+        }
+        let missing_account = Credentials {
+            identity_file: None,
+            passphrase_file: None,
+            passphrase_stdin: false,
+            credential_backend: Some("os-store".to_string()),
+            credential_account: None,
+        };
+        let err = resolve_service_credential(&missing_account, None, true)
+            .expect_err("a store backend without an account must refuse");
+        assert!(
+            err.to_string().contains("no credential account"),
+            "names the missing selector: {err}"
+        );
+    }
+
+    /// One backend per drive, enforced on the flag surface: an
+    /// unknown backend, a flag that contradicts the configuration,
+    /// a mismatched account, and an account beside the file
+    /// backend all refuse — never a silent fallback.
+    #[test]
+    fn effective_backend_refuses_ambiguity() {
+        use crate::tests_harness::TempDir;
+        let temp = TempDir::new();
+        let file_config = LoadedConfig {
+            path: temp.0.join("default.toml"),
+            relays: Vec::new(),
+            identity_file: Some(temp.0.join("identity")),
+            passphrase_file: Some(temp.0.join("passphrase")),
+            credential_backend: None,
+            credential_account: None,
+        };
+        // Unknown backend flag.
+        let mut creds = service_creds(false, None);
+        creds.credential_backend = Some("vault".to_string());
+        assert!(effective_backend(&creds, Some(&file_config))
+            .expect_err("unknown backend must refuse")
+            .to_string()
+            .contains("unknown --credential-backend"),);
+        // Flag contradicts the configuration.
+        let mut creds = service_creds(false, None);
+        creds.credential_backend = Some("file".to_string());
+        let store_config = LoadedConfig {
+            path: temp.0.join("default.toml"),
+            relays: Vec::new(),
+            identity_file: None,
+            passphrase_file: None,
+            credential_backend: Some("os-store".to_string()),
+            credential_account: Some("wyrd-drive-alpha".to_string()),
+        };
+        assert!(effective_backend(&creds, Some(&store_config))
+            .expect_err("a contradicting flag must refuse")
+            .to_string()
+            .contains("mismatch"),);
+        // Account beside the file backend.
+        let mut creds = service_creds(false, None);
+        creds.credential_account = Some("wyrd-drive-alpha".to_string());
+        assert!(effective_backend(&creds, Some(&file_config))
+            .expect_err("an account beside files must refuse")
+            .to_string()
+            .contains("one backend per drive"),);
+        // Mismatched accounts.
+        let mut creds = service_creds(false, None);
+        creds.credential_backend = Some("os-store".to_string());
+        creds.credential_account = Some("wyrd-drive-other".to_string());
+        assert!(effective_backend(&creds, Some(&store_config))
+            .expect_err("mismatched accounts must refuse")
+            .to_string()
+            .contains("mismatch"),);
     }
 
     /// The file backend speaks the loader taxonomy through the
@@ -1828,6 +2097,8 @@ mod tests {
             identity_file: Some(identity_file.clone()),
             passphrase_file: Some(missing.clone()),
             passphrase_stdin: false,
+            credential_backend: None,
+            credential_account: None,
         };
         let err = read_credentials(&creds, None).expect_err("missing file must refuse");
         let probe = std::fs::File::open(&missing).expect_err("fixture file stays missing");
@@ -1851,6 +2122,8 @@ mod tests {
             identity_file: Some(identity_file.clone()),
             passphrase_file: Some(lax.clone()),
             passphrase_stdin: false,
+            credential_backend: None,
+            credential_account: None,
         };
         let err = read_credentials(&creds, None).expect_err("bad mode must refuse");
         assert_eq!(
@@ -1868,6 +2141,8 @@ mod tests {
             identity_file: Some(bad),
             passphrase_file: Some(passphrase_file),
             passphrase_stdin: false,
+            credential_backend: None,
+            credential_account: None,
         };
         let err = read_credentials(&creds, None).expect_err("bad shape must refuse");
         assert_eq!(
@@ -1977,6 +2252,8 @@ mod tests {
             identity_file: Some(PathBuf::from("/k/identity")),
             passphrase_file: None,
             passphrase_stdin: false,
+            credential_backend: None,
+            credential_account: None,
         };
         let err = read_credentials_with(&creds, Some(&config), Cursor::new(b""))
             .expect_err("file flags beside a store config must refuse");
@@ -1990,6 +2267,8 @@ mod tests {
             identity_file: None,
             passphrase_file: None,
             passphrase_stdin: true,
+            credential_backend: None,
+            credential_account: None,
         };
         let err = read_credentials_with(&creds, Some(&config), Cursor::new(b""))
             .expect_err("the pipe beside a store config must refuse");
@@ -2004,6 +2283,8 @@ mod tests {
             identity_file: None,
             passphrase_file: None,
             passphrase_stdin: false,
+            credential_backend: None,
+            credential_account: None,
         };
         let err = read_credentials_with(&creds, Some(&config), Cursor::new(b""))
             .expect_err("an absent store item must refuse");
@@ -2025,11 +2306,12 @@ mod tests {
         assert_eq!(provenance.passphrase_word(), "OS credential store");
     }
 
-    /// Unlock for a store-backed drive refuses with the wiring
-    /// pointer before touching any store: the session unlock flow
-    /// arrives with the desktop-wiring slice.
+    /// Unlock for a store-backed drive loads the identity from the
+    /// store and takes the session passphrase from the pipe or the
+    /// prompt — never from a file. A file flag beside a store
+    /// unlock refuses before anything loads: one backend per drive.
     #[test]
-    fn unlock_refuses_a_store_backed_drive() {
+    fn unlock_refuses_file_flags_beside_the_store() {
         use crate::tests_harness::TempDir;
         let temp = TempDir::new();
         let config = LoadedConfig {
@@ -2040,21 +2322,100 @@ mod tests {
             credential_backend: Some("os-store".to_string()),
             credential_account: Some("wyrd-drive-alpha".to_string()),
         };
-        let err =
-            read_unlock_credentials_with(&unlock_creds(), Some(&config), Cursor::new(b""), true)
-                .expect_err("store-backed unlock must refuse");
+        let mut creds = unlock_creds();
+        creds.passphrase_file = Some(PathBuf::from("/k/passphrase"));
+        let err = read_unlock_credentials_with(&creds, Some(&config), Cursor::new(b""), true)
+            .expect_err("a passphrase file beside the store must refuse");
         assert!(
-            err.to_string().contains("desktop-wiring"),
-            "points at the wiring slice: {err}"
+            err.to_string().contains("never reads a passphrase file"),
+            "names the rule: {err}"
+        );
+        let mut creds = unlock_creds();
+        creds.identity_file = Some(PathBuf::from("/k/identity"));
+        let err = read_unlock_credentials_with(&creds, Some(&config), Cursor::new(b""), true)
+            .expect_err("an identity file beside the store must refuse");
+        assert!(
+            err.to_string().contains("omit --identity-file"),
+            "names the rule: {err}"
         );
     }
 
-    /// Service definitions for a store-backed drive refuse with the
-    /// wiring pointer before resolving any path: no unit may render
-    /// the retired file paths.
+    /// Unlock for a store-backed drive proves the keystore with
+    /// what the operator types, not with what the manager reads:
+    /// the identity loads from the store item, the stored
+    /// passphrase is dropped, and the piped session passphrase is
+    /// what unlock returns. Where no platform store answers, the
+    /// provisioning fails closed with `Unavailable` — that refusal
+    /// is the assertion there, never a silent pass.
     #[test]
-    fn service_definition_refuses_a_store_backed_drive() {
+    fn unlock_for_a_store_drive_uses_the_typed_session_passphrase() {
+        use wyrd_credential_store::OsStoreBackend;
+        use wyrd_sync::keys::{CredentialLoader, CredentialRef, LoadedCredential};
+        let account = "wyrd-test-unlock-typed-session";
+        let store_ref = CredentialRef::OsStore {
+            account: account.to_string(),
+        };
+        // Converge the fixture item: provision it, or reuse the
+        // identical one a previous run left behind. A differing
+        // item refuses rather than being overwritten.
+        let material = LoadedCredential {
+            identity: DeviceIdentitySecret::from_bytes([0x51; 32]).unwrap(),
+            passphrase: Some(Zeroizing::new("stored-manager-pass".to_string())),
+        };
+        match OsStoreBackend.store(&store_ref, &material) {
+            Ok(()) => {}
+            Err(CredentialError::Invalid { .. }) => {
+                let existing = OsStoreBackend.load(&store_ref).expect("a store item reads");
+                assert!(
+                    existing.identity.device_id() == material.identity.device_id(),
+                    "a foreign item is never overwritten by a test"
+                );
+            }
+            Err(CredentialError::Unavailable { .. }) => return,
+            Err(error) => panic!("the fixture item must provision: {error}"),
+        }
+        let config = LoadedConfig {
+            path: PathBuf::from("default.toml"),
+            relays: Vec::new(),
+            identity_file: None,
+            passphrase_file: None,
+            credential_backend: Some("os-store".to_string()),
+            credential_account: Some(account.to_string()),
+        };
+        let creds = Credentials {
+            identity_file: None,
+            passphrase_file: None,
+            passphrase_stdin: true,
+            credential_backend: None,
+            credential_account: None,
+        };
+        let (identity, passphrase, provenance) = read_unlock_credentials_with(
+            &creds,
+            Some(&config),
+            Cursor::new(b"typed-session-pass\n"),
+            false,
+        )
+        .expect("store unlock reads the identity and pipes the passphrase");
+        assert_eq!(identity.device_id(), material.identity.device_id());
+        assert_eq!(
+            passphrase.as_str(),
+            "typed-session-pass",
+            "the session proves with what was typed, never the stored passphrase"
+        );
+        assert!(provenance.from_os_store);
+        assert!(provenance.passphrase_from_stdin);
+        OsStoreBackend
+            .delete(&store_ref)
+            .expect("the fixture item cleans up");
+    }
+
+    /// Service definitions for a store-backed drive name the store
+    /// account — no file paths, no secrets — so the manager starts
+    /// the backend the drive is configured for.
+    #[test]
+    fn service_definition_names_the_store_account() {
         use crate::tests_harness::TempDir;
+        use wyrd_daemon::bootstrap::ServiceCredential;
         let temp = TempDir::new();
         let config = LoadedConfig {
             path: temp.0.join("default.toml"),
@@ -2064,12 +2425,15 @@ mod tests {
             credential_backend: Some("os-store".to_string()),
             credential_account: Some("wyrd-drive-alpha".to_string()),
         };
-        let err =
-            resolve_service_credential_files(&service_creds(false, None), Some(&config), true)
-                .expect_err("store-backed service install must refuse");
-        assert!(
-            err.to_string().contains("desktop-wiring"),
-            "points at the wiring slice: {err}"
-        );
+        match resolve_service_credential(&service_creds(false, None), Some(&config), true)
+            .expect("a store-backed drive resolves its account")
+        {
+            ServiceCredential::OsStore { account } => {
+                assert_eq!(account, "wyrd-drive-alpha");
+            }
+            ServiceCredential::File { .. } => {
+                panic!("a store configuration never resolves files");
+            }
+        }
     }
 }

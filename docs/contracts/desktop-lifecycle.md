@@ -64,21 +64,113 @@ kind:
   child and does not scrub the owner's own loaded secret. Relaunch
   reattaches through the socket probe, which reads `Unlocked` without
   consulting the (empty) session map. Only an explicit lock ends a
-  session-backed owner (see "Explicit lock").
+  session-backed owner while its session continues (see "Explicit
+  lock"); session end terminates it per "Logout discipline" below.
 
 **Quit never locks.** Quit is a UI lifecycle action; lock is a drive
 security action. Quitting the shell must not implicitly lock a
 session drive, kill a session owner, or scrub session state. Any copy
 claiming otherwise contradicts this contract and is wrong.
 
+## The login session bounds desktop owners
+
+Quitting the GUI is not the boundary — logging out (or otherwise
+ending the user session) is.
+
+### Desktop owner session boundary
+
+A desktop drive owner is intended to be bounded by the
+authenticated user-session domain in which it was started.
+
+Before enabling or starting a managed owner, Wyrd MUST determine
+the applicable session-boundary configuration. On Linux systemd
+hosts, Wyrd MUST refuse enablement or start when lingering is
+enabled or its state cannot be determined. Wyrd MUST NOT change
+the user's lingering configuration. Non-systemd hosts do not
+support this user-unit boundary and are handled by the existing
+service-manager error path.
+
+Wyrd checks this condition at manager interactions: enablement,
+start, and the login-start enablement toggle. It does not
+continuously monitor the setting while an owner runs. An
+administrator can therefore enable lingering after an owner has
+started, allowing that owner to survive logout. This is an
+explicit limitation of the desktop session boundary, not a
+condition Wyrd can guarantee against.
+
+Wyrd-managed service definitions are user-scoped desktop
+lifecycle infrastructure (launchd user agents, systemd user
+units): Wyrd ships no system-scope service. Server deployments
+register with `--no-service` and supervise `wyrd owner start`
+independently; they never pass through the managed enable/start
+paths, so the lingering refusal does not apply to them. There is
+no opt-out flag: the boundary follows the supervision path, not
+the credential backend — file-backed desktop drives share it.
+
+Subject to that limitation, owner termination at the end of the
+user-session domain relies on operating-system session teardown.
+Wyrd requests graceful shutdown where the operating system
+delivers the termination signal and preserves unresolved
+operations as `Unconfirmed` if the operating system forces
+termination.
+
+### User-session domain
+
+The desktop user-session domain is per UID. It remains active
+while at least one authenticated login session for that UID
+exists and ends when the last session ends.
+
+Ending one session while another remains does not terminate the
+user manager, its units or agents, or their owners. No owner
+termination is attempted solely because one of several sessions
+ends. Fast user switching is not session end; full logout is.
+
+A concurrent login must not create a duplicate owner for an
+existing drive. The drive ownership and store-lock mechanisms
+prevent a second owner from acquiring the same drive.
+Provisioning an existing drive reconciles and verifies it rather
+than creating another owner.
+
+On Linux, this domain follows the per-UID systemd user manager.
+The equivalent macOS behavior is expected from the per-user
+launchd domain but remains subject to platform verification in
+the logout and multi-session drills.
+
+Logout termination behavior must be tested on each supported
+configuration (see "Platform differences" below): the bound is
+verified, not assumed.
+
+## Logout discipline
+
+Session end is where all desktop owners in that session domain
+terminate — session-backed and service-backed alike — after an
+orderly shutdown is requested:
+
+- On orderly session termination, Wyrd requests a bounded
+  graceful shutdown. The owner attempts to drain in-flight
+  exchanges within the available termination window.
+- Termination may be forced by the operating system (including
+  SIGKILL without further notice). This is expected, not a
+  failure of the drain.
+- The durable outcome stays correct either way: any exchange
+  without a confirmed terminal outcome remains `Unconfirmed`;
+  it must never be recast as successful or failed.
+
+Logout is not lock: lock remains the in-session explicit action
+defined below, and logout creates no locked state that survives
+into the next session. After logout the drives are stopped, not
+locked.
+
 ## Explicit lock
 
-Only an explicit lock ends a session-backed owner:
+Only an explicit lock ends a session-backed owner while its
+session continues:
 
 - Lock is the user's explicit action (the header Lock control,
-  `drive_lock` underneath). It kills only children this application
-  instance spawned (handles held in the session map) and scrubs the
-  in-memory secret.
+  `drive_lock` underneath). It kills only session children this
+  application instance spawned (handles held in the session map)
+  and scrubs the in-memory secret. Service-backed owners are
+  unchanged by a lock, unless separately specified.
 - Lock refuses where the application holds no session for the drive:
   a reattached owner the application did not start is never killed —
   the shell stays non-owning even when asked to lock.
@@ -89,6 +181,15 @@ Only an explicit lock ends a session-backed owner:
 Who may lock: the local user through the running shell. There is no
 remote, scheduled, or manager-driven lock; stopping a service-backed
 owner is a service-manager operation, not a lock.
+
+## Lock, quit, logout, and next login by owner kind
+
+| Situation | Session-backed owner | Service-backed owner |
+|---|---|---|
+| Explicit lock | Terminated | Unchanged, unless separately specified |
+| GUI quit | Unchanged | Unchanged |
+| Logout | Already stopped if locked; otherwise termination attempt | Termination attempt |
+| Next login | Starts locked, requiring explicit unlock | Eligible to start if enabled and credentials available |
 
 ## Dirty quit and its guarantees
 
@@ -146,7 +247,13 @@ lock before quitting if the session must not survive.
 
 Whether the service manager starts a drive's owner at login is a
 persistent per-drive preference, independent of whether the owner
-is running now. Enablement and lifecycle are two separate
+is running now. "At login" means after the user authenticates and
+the session exists: the manager loads the agent within the
+session, and the drive starts when its credentials are
+available. Pre-login startup is explicitly out of scope for
+desktop — unattended operation before any user authenticates
+belongs to server deployments, never to a desktop login
+preference. Enablement and lifecycle are two separate
 observations (lifecycle × enablement: Running/Stopped/Unknown ×
 Enabled/Disabled/Unknown) — never one enum, never inferred from
 each other, and never new `Stopped*` variants. A manually started
@@ -218,6 +325,13 @@ R-D1).
 - Per-session drives have no manager definition to start: there is
   nothing to auto-start or restart, and a down definition-less drive
   reads locked.
+- The session bound is enforced per platform, not assumed from
+  the unit type: Linux desktop installation must not enable
+  lingering, and pre-existing lingering is detected and handled
+  explicitly; concurrent logins for one UID share the
+  per-user manager domain (no duplicate owners — the existing
+  owner serves). Logout termination is tested on each supported
+  configuration before it is claimed.
 - The tray's five-second registry-and-liveness poll is gone with the
   tray. Nothing else depended on its cadence: the main window reads
   state on explicit refresh and retry only. Status is pull-based;

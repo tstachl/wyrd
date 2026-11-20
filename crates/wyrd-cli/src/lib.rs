@@ -569,7 +569,56 @@ pub fn command(args: Vec<String>) -> Result<(), CliError> {
             drive_dir,
             credentials,
             ..
-        } => load_credentials(drive_dir, credentials, cli.config.as_deref())?,
+        } => {
+            // Store-backed bootstrap provisions its input before
+            // anything loads from the store: the input material
+            // comes from files or the pipe, the drive it
+            // provisions is store-backed, and the generic loader
+            // (which would read the not-yet-provisioned store item)
+            // is the wrong path. File-backed bootstrap flows
+            // through the generic loader below unchanged.
+            if let Command::Drive {
+                action:
+                    crate::args::DriveAction::Bootstrap {
+                        name,
+                        mode,
+                        mountpoint,
+                        relays,
+                        invitation_file,
+                        registry,
+                        owner_bin,
+                        supervise_bin,
+                        no_service,
+                    },
+                ..
+            } = &cli.command
+            {
+                let peek =
+                    crate::drive_config::load_drive_config(drive_dir, cli.config.as_deref())?;
+                if matches!(
+                    crate::credentials::effective_backend(credentials, peek.as_ref())?,
+                    crate::credentials::EffectiveBackend::OsStore { .. }
+                ) {
+                    return crate::commands::bootstrap::bootstrap_store(
+                        crate::commands::bootstrap::BootstrapArgs {
+                            name: name.clone(),
+                            drive_dir: drive_dir.clone(),
+                            mode: mode.clone(),
+                            mountpoint: mountpoint.clone(),
+                            relays: relays.clone(),
+                            credentials: credentials.clone(),
+                            invitation_file: invitation_file.clone(),
+                            registry: registry.clone(),
+                            owner_bin: owner_bin.clone(),
+                            supervise_bin: supervise_bin.clone(),
+                            no_service: *no_service,
+                        },
+                        cli.config.clone(),
+                    );
+                }
+            }
+            load_credentials(drive_dir, credentials, cli.config.as_deref())?
+        }
         Command::Sync {
             drive_dir,
             credentials,

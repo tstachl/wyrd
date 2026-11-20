@@ -176,6 +176,42 @@ impl Fixture {
             drain: Some(drain),
         }
     }
+
+    /// Spawn the vault resolving its credential from the OS store
+    /// instead of files: the supervised-service argv shape
+    /// (`--credential-backend os-store --credential-account`),
+    /// through the production backend selection and store load.
+    /// The store item must already hold material opening this
+    /// drive's keystore (see the store SIGTERM test below).
+    fn spawn_store_until_ready(&self, relay: &TestRelay, account: &str) -> VaultChild {
+        let mut child = self
+            .wyrd(&[
+                "owner",
+                self.drive.to_str().unwrap(),
+                "--relay",
+                &relay.url,
+                "--credential-backend",
+                "os-store",
+                "--credential-account",
+                account,
+                "start",
+            ])
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("wyrd owner spawns");
+        let (lines, drain) =
+            await_stderr_line(&mut child, "owner ready: serving ", Duration::from_secs(90));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("serving over iroh: ")),
+            "the bind line precedes readiness, got: {lines:?}"
+        );
+        VaultChild {
+            child,
+            drain: Some(drain),
+        }
+    }
 }
 
 impl Drop for Fixture {
@@ -279,6 +315,86 @@ fn owner_sigterm_after_ready_exits_zero() {
     assert!(
         status.success(),
         "SIGTERM after readiness exits 0, got {status:?}"
+    );
+}
+
+/// Store-backed owner answers SIGTERM with a clean stop through
+/// the production credential path: argv → backend selection →
+/// OS-store load → owner startup → SIGTERM → exit 0. This pins
+/// the path the file-backed tests above never exercise.
+///
+/// Backend availability is an environment fact, not a test
+/// failure: where no platform store answers (`Unavailable`,
+/// e.g. headless Linux with no bus) the test returns without
+/// asserting. A locked or denied store fails instead of
+/// skipping — and running this test on macOS CI requires an
+/// unlocked login keychain (explicit prerequisite, not an
+/// assumption).
+#[test]
+fn owner_store_sigterm_after_ready_exits_zero() {
+    use wyrd_credential_store::OsStoreBackend;
+    use wyrd_sync::keys::{CredentialError, CredentialLoader, CredentialRef, LoadedCredential};
+    use zeroize::Zeroizing;
+    let fixture = Fixture::new("storeterm");
+    // Fixed input material: the keystore and the store item must
+    // agree exactly, so overwrite the random fixture bytes before
+    // init (permissions already owner-only from the fixture).
+    std::fs::write(&fixture.identity, [0x5a; 32]).unwrap();
+    std::fs::write(&fixture.passphrase, "store-sigterm-pass").unwrap();
+    fixture.init();
+    let account = "wyrd-test-owner-store-sigterm";
+    let store_ref = CredentialRef::OsStore {
+        account: account.to_string(),
+    };
+    let material = LoadedCredential {
+        identity: wyrd_sync::keys::DeviceIdentitySecret::from_bytes([0x5a; 32]).unwrap(),
+        passphrase: Some(Zeroizing::new("store-sigterm-pass".to_string())),
+    };
+    // Converge the fixture item: provision it, or reuse the
+    // identical one a previous run left behind. A differing item
+    // is a foreign item, never overwritten by a test. The guard
+    // below is established immediately after this converge step so
+    // any later panic — child startup, signal, assertion — still
+    // removes the fixture item; its Drop never panics and the
+    // explicit delete at the end stays the success-path cleanup.
+    match OsStoreBackend.store(&store_ref, &material) {
+        Ok(()) => {}
+        Err(CredentialError::Invalid { detail, .. }) => {
+            assert!(
+                detail.contains("already exists"),
+                "Invalid here means the exists-guard fired, nothing else: {detail}"
+            );
+            let existing = OsStoreBackend.load(&store_ref).expect("a store item reads");
+            assert!(
+                existing.identity.device_id() == material.identity.device_id(),
+                "a foreign item is never overwritten by a test"
+            );
+        }
+        Err(CredentialError::Unavailable { .. }) => return,
+        Err(error) => panic!("the fixture item must provision: {error}"),
+    }
+    struct StoreCleanup<'a> {
+        store_ref: &'a CredentialRef,
+    }
+    impl Drop for StoreCleanup<'_> {
+        fn drop(&mut self) {
+            let _ = OsStoreBackend.delete(self.store_ref);
+        }
+    }
+    let _cleanup = StoreCleanup {
+        store_ref: &store_ref,
+    };
+    let relay = TestRelay::spawn();
+    let child = fixture.spawn_store_until_ready(&relay, account);
+    sigterm(&child);
+    let status: ExitStatus = child.wait();
+    relay.shutdown();
+    OsStoreBackend
+        .delete(&store_ref)
+        .expect("the fixture item cleans up");
+    assert!(
+        status.success(),
+        "SIGTERM after readiness exits 0 on the store path, got {status:?}"
     );
 }
 

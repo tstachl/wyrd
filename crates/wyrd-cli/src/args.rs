@@ -31,7 +31,7 @@ pub(crate) struct Cli {
     pub(crate) command: Command,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Args, Clone)]
 pub(crate) struct Credentials {
     /// Nostr identity secret: 32 raw bytes or 64 hex characters.
     /// Defaults to the configuration file's `identity_file` when
@@ -54,6 +54,22 @@ pub(crate) struct Credentials {
     /// Conflicts with `--passphrase-file`.
     #[arg(long, conflicts_with = "passphrase_file")]
     pub(crate) passphrase_stdin: bool,
+
+    /// Credential backend selector: `file` (the default) reads the
+    /// hardened credential files; `os-store` resolves the drive
+    /// through the OS credential store. One backend per drive —
+    /// naming `os-store` beside `--identity-file`/`--passphrase-file`
+    /// refuses, and `os-store` needs `--credential-account` (or the
+    /// drive configuration's `credential_account`). Anything else
+    /// refuses with its name.
+    #[arg(long, value_name = "BACKEND")]
+    pub(crate) credential_backend: Option<String>,
+
+    /// OS credential-store account naming the drive's item (the
+    /// reference, never a secret). Required exactly where the
+    /// effective backend is `os-store`, refused everywhere else.
+    #[arg(long, value_name = "ACCOUNT")]
+    pub(crate) credential_account: Option<String>,
 }
 
 /// Control-plane relays: repeatable deployment state shared by every
@@ -64,7 +80,7 @@ pub(crate) struct Credentials {
 /// none, the drive's configuration file supplies the list (see
 /// `drive_config`); explicit flags replace the configured list
 /// rather than appending to it, so the effective set is knowable.
-#[derive(Debug, Args)]
+#[derive(Debug, Args, Clone)]
 pub(crate) struct RelayArgs {
     /// Control-plane relay; repeatable. With none given and none
     /// configured, intake stays idle and the command runs offline
@@ -760,8 +776,9 @@ pub(crate) enum DriveAction {
     /// completed migration re-verifies and reports done), and a
     /// differing store item refuses rather than overwriting. The
     /// manager's installed service still names the retired files
-    /// until the desktop-wiring slice re-renders it — plan that
-    /// reinstall before migrating a managed drive.
+    /// until `drive reconfigure` reinstalls it with the store
+    /// reference — plan that reinstall before migrating a managed
+    /// drive.
     MigrateCredentials {
         /// Store account label the credential migrates under: the
         /// reference the rewritten configuration names. 1-128

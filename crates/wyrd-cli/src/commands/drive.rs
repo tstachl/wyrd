@@ -388,16 +388,30 @@ fn reconfigure_drive(
     passphrase: &str,
     identity: DeviceIdentitySecret,
 ) -> Result<(), CliError> {
-    // Credential paths for the definition: the identity file
-    // always, the passphrase file only when a definition will
-    // actually render one. Session posture (`--passphrase-stdin`
-    // with `--no-service`) skips the file entirely.
-    let (identity_file, passphrase_file) =
-        crate::credentials::resolve_service_credential_files(credentials, config, !no_service)?;
-    let identity_file = canonicalize(&identity_file)?;
-    let passphrase_file = passphrase_file
-        .map(|path| canonicalize(&path))
-        .transpose()?;
+    // Credential reference for the definition: file paths where
+    // the backend is the file backend (the identity file always,
+    // the passphrase file only when a definition will actually
+    // render one — session posture with `--no-service` skips the
+    // file entirely), the store account where the backend is the
+    // OS credential store.
+    let credential =
+        crate::credentials::resolve_service_credential(credentials, config, !no_service)?;
+    let credential = match credential {
+        wyrd_daemon::bootstrap::ServiceCredential::File {
+            identity_file,
+            passphrase_file,
+        } => {
+            let identity_file = canonicalize(&identity_file)?;
+            let passphrase_file = passphrase_file
+                .map(|path| canonicalize(&path))
+                .transpose()?;
+            wyrd_daemon::bootstrap::ServiceCredential::File {
+                identity_file,
+                passphrase_file,
+            }
+        }
+        store => store,
+    };
     let owner_bin = owner_bin.map(absolutize);
     let supervise_bin = supervise_bin.map(absolutize);
     // Flags replace the registered set; no flags keep it, so a
@@ -420,8 +434,7 @@ fn reconfigure_drive(
         registry_path,
         wyrd_bin: owner_bin,
         supervise_bin,
-        identity_file,
-        passphrase_file,
+        credential,
         service_definition: None,
         manage_service: !no_service,
         verify_timeout: Duration::from_secs(30),

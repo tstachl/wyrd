@@ -9,21 +9,35 @@ home the implementation and its fixtures cite.
 
 - Onboarding persists the device identity + passphrase files on
   this device (0600, owner-only, never overwrite) in both drive
-  postures — the device gate and the unlock's `--identity-file`
-  need them. The file-backed posture stays the default for managed
-  drives: the drive passphrase file exists, so the service manager
-  starts and restarts the owner unattended and the device remembers.
-  The per-session posture persists no drive passphrase file and
-  renders no service definition, so the drive is locked-until-unlock
-  from registration — reboot, explicit lock, or stopping the drive
+  postures — the device gate and the file-backed unlock's
+  `--identity-file` need them. Managed drives provision into the
+  OS credential store by default (`wyrd bootstrap --credential-
+  backend os-store`): the store item exists, so the service
+  manager starts and restarts the owner within the login session
+  without interaction and the device remembers — with no
+  passphrase file on disk for the manager to read. The owner
+  is intended to be bounded by the login session (see
+  `docs/contracts/desktop-lifecycle.md`): logout stops it subject
+  to OS teardown, and the next login makes an enabled drive
+  eligible to start again.
+  The file-backed posture stays supported for
+  operator-provisioned deployments (the drive passphrase file
+  exists and the service definition names it). The per-session
+  posture persists no drive passphrase file and renders no
+  service definition, so the drive is locked-until-unlock from
+  registration — reboot, explicit lock, or stopping the drive
   relocks it (quitting the app leaves a running session drive
   unlocked: quit never locks, per
   `docs/contracts/desktop-lifecycle.md`), and only a typed
-  passphrase opens it for the session. The mandate
+  passphrase opens it for the session — including for
+  store-backed drives, where unlock loads the store identity and
+  the operator types the session passphrase. The mandate
   below (write-down proof, backup acknowledgement, never overwrite,
-  read-back) binds in both postures. OS keychain migration stays the
-  tracked follow-up owned by settings — a security feature, not a
-  convenience option.
+  read-back) binds in both postures. Migrating an existing
+  file-backed drive to the store is `wyrd drive
+  migrate-credentials` followed by `drive reconfigure` to reinstall
+  the service definition (per
+  `docs/contracts/credential-loading.md`).
 - Terminology is always "this device's identity", never "your
   identity". Entry is named "Restore from backup" (never Import,
   never a Recommended nudge). Stage name is Passphrase; the
