@@ -1527,7 +1527,7 @@ fn verify_service_enabled(entry: &RegistryEntry, enabled: bool) -> Result<(), Bo
 #[cfg(unix)]
 pub fn set_service_enabled(
     entry: &RegistryEntry,
-    definition: &Path,
+    #[cfg_attr(not(target_os = "macos"), allow(unused_variables))] definition: &Path,
     enabled: bool,
 ) -> Result<(), BootstrapError> {
     #[cfg(target_os = "macos")]
@@ -1635,7 +1635,10 @@ pub fn set_service_enabled(
 /// re-run with a changed definition brings the new owner live
 /// instead of verifying the still-running old one).
 #[cfg(unix)]
-pub fn start_service_only(entry: &RegistryEntry, definition: &Path) -> Result<(), BootstrapError> {
+pub fn start_service_only(
+    entry: &RegistryEntry,
+    #[cfg_attr(not(target_os = "macos"), allow(unused_variables))] definition: &Path,
+) -> Result<(), BootstrapError> {
     #[cfg(target_os = "macos")]
     {
         let label = format!("md.enesis.wyrd.{}", entry.service);

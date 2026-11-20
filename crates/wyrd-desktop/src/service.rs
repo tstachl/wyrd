@@ -649,7 +649,14 @@ mod tests {
     /// parallel tests.
     #[test]
     fn enablement_probe_maps_fetch_onto_states() {
+        // The disabled fixture is platform-shaped: the macOS probe
+        // parses the `print-disabled` record, the Linux probe parses
+        // the `is-enabled` word — each rejects the other's shape as
+        // Unknown, so one shared dump cannot serve both.
+        #[cfg(target_os = "macos")]
         let dump = "\"md.enesis.wyrd.drive-x\" => disabled\n";
+        #[cfg(not(target_os = "macos"))]
+        let dump = "disabled\n";
         #[cfg(target_os = "macos")]
         let enabled_word = "\"md.enesis.wyrd.drive-x\" => enabled\n";
         #[cfg(not(target_os = "macos"))]

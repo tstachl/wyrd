@@ -176,10 +176,11 @@ Enablement probes (observation only, never supervision):
 - **Linux:** `systemctl --user is-enabled <unit>`, word parsed
   from stdout (`enabled`/`disabled`/`masked` decide; any other
   word, or a bus failure printing no word, reads Unknown).
-  Exit 0 is Enabled; a completed answer printing `disabled` is
-  Disabled; a missing tool, a probe timeout, or an unparseable
-  answer is Unknown, never Disabled. Passing `--quiet` would
-  suppress the very word the parser reads.
+  A completed answer printing `enabled` is Enabled; a completed
+  answer printing `disabled`/`masked` is Disabled; a missing
+  tool, a probe timeout, or an unparseable answer is Unknown,
+  never Disabled — the exit status is ignored throughout.
+  Passing `--quiet` would suppress the very word the parser reads.
 - **macOS:** `launchctl print-disabled user/<uid>`, parsed for the
   `"md.enesis.wyrd.<service>" => enabled|disabled` record. A
   present record maps to its value; an absent record is Unknown
