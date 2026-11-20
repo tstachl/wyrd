@@ -196,11 +196,19 @@ pub(crate) fn bootstrap_store(
     // Record the drive as store-backed once the daemon accepted
     // the material (initialized, verified open, registered): the
     // store item and the on-disk drive agree before the
-    // configuration says so. An incomplete run writes nothing —
-    // the input files and the converged store item are the re-run
-    // path, never a half-adopted configuration.
+    // configuration says so. The write targets the resolved
+    // configuration path — the `--config` override where one was
+    // given, else the drive directory default — so a later run
+    // with the same override resolves the backend it just
+    // adopted. An incomplete run writes nothing — the input files
+    // and the converged store item are the re-run path, never a
+    // half-adopted configuration.
     if !matches!(report, ProvisionState::ProvisioningIncomplete { .. }) {
-        write_os_store_config(&drive_dir.join(DEFAULT_CONFIG_NAME), &relays, &account)?;
+        let config_path = config
+            .as_ref()
+            .map(|loaded| loaded.path.clone())
+            .unwrap_or_else(|| drive_dir.join(DEFAULT_CONFIG_NAME));
+        write_os_store_config(&config_path, &relays, &account)?;
     }
     report_bootstrap(report)
 }

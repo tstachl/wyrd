@@ -374,10 +374,13 @@ fn read_unlock_credentials_with(
     // a typed session passphrase, so adopting the store never
     // enables unattended startup by accident.
     if let EffectiveBackend::OsStore { account } = effective_backend(creds, config)? {
-        if creds.passphrase_file.is_some() {
+        // File flags beside a store unlock are ambiguity, not
+        // precedence: the passphrase file already refused above
+        // for every unlock, and the identity file refuses here —
+        // the store names the identity, never a file.
+        if creds.identity_file.is_some() {
             return Err(CliError::Usage(
-                "unlock never reads a passphrase file: omit --passphrase-file and type at the prompt (or pipe with --passphrase-stdin)"
-                    .to_string(),
+                "unlock for an OS credential-store drive loads the identity from the store: omit --identity-file".to_string(),
             ));
         }
         let loaded = load_credential(&CredentialRef::OsStore { account }).map_err(loader_to_cli)?;
@@ -2305,10 +2308,10 @@ mod tests {
 
     /// Unlock for a store-backed drive loads the identity from the
     /// store and takes the session passphrase from the pipe or the
-    /// prompt — never from a file. A passphrase file beside a store
-    /// drive refuses before anything loads.
+    /// prompt — never from a file. A file flag beside a store
+    /// unlock refuses before anything loads: one backend per drive.
     #[test]
-    fn unlock_refuses_a_passphrase_file_beside_the_store() {
+    fn unlock_refuses_file_flags_beside_the_store() {
         use crate::tests_harness::TempDir;
         let temp = TempDir::new();
         let config = LoadedConfig {
@@ -2325,6 +2328,14 @@ mod tests {
             .expect_err("a passphrase file beside the store must refuse");
         assert!(
             err.to_string().contains("never reads a passphrase file"),
+            "names the rule: {err}"
+        );
+        let mut creds = unlock_creds();
+        creds.identity_file = Some(PathBuf::from("/k/identity"));
+        let err = read_unlock_credentials_with(&creds, Some(&config), Cursor::new(b""), true)
+            .expect_err("an identity file beside the store must refuse");
+        assert!(
+            err.to_string().contains("omit --identity-file"),
             "names the rule: {err}"
         );
     }

@@ -567,6 +567,82 @@ fn drive_bootstrap_provisions_a_store_backed_drive_without_a_manager() {
         .expect("the fixture item cleans up");
 }
 
+/// Store-backed bootstrap honors a `--config` override: a
+/// pre-existing configuration holding only relays is rewritten in
+/// place with the adopted backend, and no `default.toml` appears
+/// beside the drive. Without this the next `--config` run would
+/// resolve the file backend again.
+#[test]
+fn drive_bootstrap_store_honors_a_config_override() {
+    use wyrd_credential_store::OsStoreBackend;
+    use wyrd_sync::keys::{CredentialLoader, CredentialRef};
+    let temp = TempDir::new();
+    let drive = temp.0.join("drive");
+    let identity_file = temp.0.join("identity");
+    let passphrase_file = temp.0.join("passphrase");
+    let registry = temp.0.join("drives.json");
+    let custom = temp.0.join("custom.toml");
+    write_secret(&identity_file, [0x78; 32]);
+    write_secret(&passphrase_file, b"bootstrap-override-pass\n");
+    std::fs::write(&custom, "[drive]\nrelays = [\"relay://kept\"]\n").unwrap();
+    let account = "wyrd-test-bootstrap-override";
+    match command(vec![
+        "--config".into(),
+        custom.display().to_string(),
+        "drive".into(),
+        drive.display().to_string(),
+        "--credential-backend".into(),
+        "os-store".into(),
+        "--credential-account".into(),
+        account.into(),
+        "--identity-file".into(),
+        identity_file.display().to_string(),
+        "--passphrase-file".into(),
+        passphrase_file.display().to_string(),
+        "bootstrap".into(),
+        "--name".into(),
+        "stoverride".into(),
+        "--no-service".into(),
+        "--registry".into(),
+        registry.display().to_string(),
+    ]) {
+        Err(CliError::Usage(reason)) if reason.contains("registered but unavailable") => {}
+        Err(error) if error.to_string().contains("navailable") => return,
+        other => panic!("an unmanageable store bootstrap registers the drive: {other:?}"),
+    }
+    let store_ref = CredentialRef::OsStore {
+        account: account.to_string(),
+    };
+    let stored = OsStoreBackend
+        .load(&store_ref)
+        .expect("the provisioned item reads back");
+    assert_eq!(
+        stored
+            .passphrase
+            .expect("a managed item names a passphrase")
+            .as_str(),
+        "bootstrap-override-pass",
+    );
+    // The override path carries the adopted backend with its
+    // relays preserved; the drive default never appears.
+    let custom_text = std::fs::read_to_string(&custom).expect("the override is rewritten");
+    assert!(
+        custom_text.contains("credential_backend = \"os-store\""),
+        "the override names the backend: {custom_text}"
+    );
+    assert!(
+        custom_text.contains("relay://kept"),
+        "the override keeps its relays: {custom_text}"
+    );
+    assert!(
+        !drive.join("default.toml").exists(),
+        "no drive default shadows the override"
+    );
+    OsStoreBackend
+        .delete(&store_ref)
+        .expect("the fixture item cleans up");
+}
+
 /// Reconfigure replaces the relay set through the CLI surface: the
 /// entry is rewritten and the run reports reconfigured-and-verified
 /// (a stub owner answers the pre-first-pass refusal this session).
