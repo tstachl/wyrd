@@ -173,9 +173,13 @@ anywhere.
 
 Enablement probes (observation only, never supervision):
 
-- **Linux:** `systemctl --user is-enabled --quiet <unit>`.
-  Exit 0 is Enabled; a completed non-zero answer is Disabled; a
-  missing tool or a probe timeout is Unknown, never Disabled.
+- **Linux:** `systemctl --user is-enabled <unit>`, word parsed
+  from stdout (`enabled`/`disabled`/`masked` decide; any other
+  word, or a bus failure printing no word, reads Unknown).
+  Exit 0 is Enabled; a completed answer printing `disabled` is
+  Disabled; a missing tool, a probe timeout, or an unparseable
+  answer is Unknown, never Disabled. Passing `--quiet` would
+  suppress the very word the parser reads.
 - **macOS:** `launchctl print-disabled user/<uid>`, parsed for the
   `"md.enesis.wyrd.<service>" => enabled|disabled` record. A
   present record maps to its value; an absent record is Unknown
@@ -191,7 +195,12 @@ Enablement probes (observation only, never supervision):
   definition file. Exit codes lie here (`load` on a disabled job
   exits 0 without loading; `unload -w` on a stopped job exits 0
   with an error on stderr) — every mutation verifies the record
-  and the loaded state after, never the exit code alone.
+  and the loaded state after, never the exit code alone. One window
+  stays best-effort by construction: a manual Start on a disabled
+  drive lifts the record to load and re-persists disabled after, so
+  a kill landing exactly between the two leaves Enabled — the next
+  toggle read reports it honestly, and no completed command ever
+  leaves the toggle flipped.
 
 Managed drives only: session-posture (`--no-service`) drives have
 no unit to enable or disable and carry no toggle. The toggle reads

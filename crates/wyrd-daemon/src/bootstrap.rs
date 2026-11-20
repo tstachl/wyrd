@@ -1342,19 +1342,55 @@ fn current_uid() -> u32 {
     unsafe { libc::geteuid() }
 }
 
+/// How long one manager output probe may run. A status answer
+/// is instant; the bound only fires on a wedged manager, and
+/// expiry reads as no answer — never an enablement state.
+#[cfg(unix)]
+const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Run one manager probe and capture its stdout. The exit status is
 /// ignored here: `is-enabled` exits non-zero for a disabled unit
 /// and `print-disabled` callers parse the record, so only a spawn
-/// failure (missing tool) is no output. Callers map unparseable
-/// output to `Unknown`, never to a lifecycle state.
+/// failure (missing tool) or an overrun past [`PROBE_TIMEOUT`] is
+/// no output. Callers map unparseable output to `Unknown`, never
+/// to a lifecycle state.
 #[cfg(unix)]
 fn probe_output(program: &str, args: &[&str]) -> Option<String> {
-    let output = std::process::Command::new(program)
+    use std::time::Instant;
+    let mut child = std::process::Command::new(program)
         .args(args)
         .stdin(std::process::Stdio::null())
-        .output()
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
         .ok()?;
-    Some(String::from_utf8_lossy(&output.stdout).into_owned())
+    let deadline = Instant::now() + PROBE_TIMEOUT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => {
+                let mut stdout = String::new();
+                if let Some(mut pipe) = child.stdout.take() {
+                    use std::io::Read as _;
+                    let _ = pipe.read_to_string(&mut stdout);
+                }
+                let _ = child.wait();
+                return Some(stdout);
+            }
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return None;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
 }
 
 /// Query one drive's persistent login-start preference without
@@ -1393,6 +1429,11 @@ pub fn service_enabled(entry: &RegistryEntry) -> ServiceEnabled {
 /// or was externally removed — never a license to claim
 /// `Disabled`). The label match includes the closing quote so
 /// `drive-foo` never matches a `drive-foo-bar` record.
+///
+/// Mirror: the desktop holds the same parser beside its own probe
+/// (`wyrd-desktop/src/service.rs`) — the desktop cannot depend on
+/// this crate, so the two copies evolve together by contract.
+/// The Unknown-on-absent/garbage rule is the shared invariant.
 #[cfg(any(test, target_os = "macos"))]
 fn parse_print_disabled(output: &str, service: &str) -> ServiceEnabled {
     let prefix = format!("\"md.enesis.wyrd.{service}\" => ");
@@ -1412,6 +1453,10 @@ fn parse_print_disabled(output: &str, service: &str) -> ServiceEnabled {
 /// `enabled`/`disabled`/`masked` decide; any other word (static,
 /// alias, indirect) or a bus failure printing no word reads
 /// `Unknown`, never `Disabled`.
+///
+/// Mirror: the desktop holds the same word map beside its own probe
+/// (`wyrd-desktop/src/service.rs`) — same layering reason as above;
+/// the word map is the shared invariant.
 #[cfg(any(test, not(target_os = "macos")))]
 fn parse_is_enabled(output: &str) -> ServiceEnabled {
     match output.trim() {
@@ -3503,6 +3548,20 @@ mod tests {
             mountpoint: None,
         };
         assert_eq!(service_enabled(&entry), ServiceEnabled::Unknown);
+    }
+
+    /// A wedged manager probe reads as no answer, bounded: a
+    /// child that never exits is killed past the probe bound, so
+    /// a hung `launchctl`/`systemctl` hangs the toggle only up to
+    /// the bound, never the desktop adapter's full timeout.
+    #[test]
+    fn wedged_probe_output_reads_as_no_answer() {
+        let start = std::time::Instant::now();
+        assert_eq!(probe_output("sleep", &["30"]), None);
+        assert!(
+            start.elapsed() < Duration::from_secs(20),
+            "the probe is bounded by its own deadline"
+        );
     }
     /// `run` reports spawn and command failures with their program
     /// and detail: missing programs never spawn, failing programs

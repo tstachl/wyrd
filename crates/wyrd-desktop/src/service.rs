@@ -195,6 +195,13 @@ fn run_probe_capture(argv: &[&str]) -> Option<String> {
 /// record is `Unknown` (never `Disabled`); garbage reads
 /// `Unknown`. The label match includes the closing quote so
 /// `drive-foo` never matches a `drive-foo-bar` record.
+///
+/// Mirror: the daemon holds the same parser beside its own probe
+/// (`wyrd-daemon/src/bootstrap.rs`, `parse_print_disabled`) —
+/// layering keeps manager reach out of the desktop's dependency
+/// closure, so the two copies evolve together by contract, not by
+/// import. The Unknown-on-absent/garbage rule is the shared
+/// invariant; evidence wording differs per surface.
 #[cfg(any(test, target_os = "macos"))]
 fn parse_print_disabled_output(output: &str, service: &str) -> EnablementState {
     let prefix = format!("\"md.enesis.wyrd.{service}\" => ");
@@ -219,6 +226,10 @@ fn parse_print_disabled_output(output: &str, service: &str) -> EnablementState {
 /// `enabled`/`disabled`/`masked` decide; any other word (static,
 /// alias, indirect) or a bus failure printing no word reads
 /// `Unknown`, never `Disabled`.
+///
+/// Mirror: the daemon holds the same word map beside its own probe
+/// (`wyrd-daemon/src/bootstrap.rs`, `parse_is_enabled`) — same
+/// layering reason as above; the word map is the shared invariant.
 #[cfg(any(test, not(target_os = "macos")))]
 fn parse_is_enabled_output(output: &str) -> EnablementState {
     let word = output.trim();
