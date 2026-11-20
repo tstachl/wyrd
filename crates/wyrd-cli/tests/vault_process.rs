@@ -352,10 +352,18 @@ fn owner_store_sigterm_after_ready_exits_zero() {
     };
     // Converge the fixture item: provision it, or reuse the
     // identical one a previous run left behind. A differing item
-    // is a foreign item, never overwritten by a test.
+    // is a foreign item, never overwritten by a test. The guard
+    // below is established immediately after this converge step so
+    // any later panic — child startup, signal, assertion — still
+    // removes the fixture item; its Drop never panics and the
+    // explicit delete at the end stays the success-path cleanup.
     match OsStoreBackend.store(&store_ref, &material) {
         Ok(()) => {}
-        Err(CredentialError::Invalid { .. }) => {
+        Err(CredentialError::Invalid { detail, .. }) => {
+            assert!(
+                detail.contains("already exists"),
+                "Invalid here means the exists-guard fired, nothing else: {detail}"
+            );
             let existing = OsStoreBackend.load(&store_ref).expect("a store item reads");
             assert!(
                 existing.identity.device_id() == material.identity.device_id(),
@@ -365,6 +373,17 @@ fn owner_store_sigterm_after_ready_exits_zero() {
         Err(CredentialError::Unavailable { .. }) => return,
         Err(error) => panic!("the fixture item must provision: {error}"),
     }
+    struct StoreCleanup<'a> {
+        store_ref: &'a CredentialRef,
+    }
+    impl Drop for StoreCleanup<'_> {
+        fn drop(&mut self) {
+            let _ = OsStoreBackend.delete(self.store_ref);
+        }
+    }
+    let _cleanup = StoreCleanup {
+        store_ref: &store_ref,
+    };
     let relay = TestRelay::spawn();
     let child = fixture.spawn_store_until_ready(&relay, account);
     sigterm(&child);

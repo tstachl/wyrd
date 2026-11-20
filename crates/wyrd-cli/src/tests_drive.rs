@@ -521,7 +521,19 @@ fn drive_bootstrap_provisions_a_store_backed_drive_without_a_manager() {
         registry.display().to_string(),
     ]) {
         Err(CliError::Usage(reason)) if reason.contains("registered but unavailable") => {}
-        Err(error) if error.to_string().contains("navailable") => return,
+        // Precise skip: the backend's own Unreachable diagnostic
+        // (bus-less Linux hosts surface here). `command` folds the
+        // typed `CredentialError::Unavailable` into `Usage(String)`,
+        // so no typed classification survives at this boundary —
+        // match the backend's exact detail string, never a bare
+        // "navailable" substring that could mute an unrelated
+        // regression into a skip. Denied (locked/refused) never
+        // matches and fails loud.
+        Err(CliError::Usage(reason))
+            if reason.contains("OS credential store unreachable for account") =>
+        {
+            return
+        }
         other => panic!("an unmanageable store bootstrap registers the drive: {other:?}"),
     }
     // The store holds the input material: the identity the files
@@ -529,6 +541,17 @@ fn drive_bootstrap_provisions_a_store_backed_drive_without_a_manager() {
     // is the line discipline, never stored).
     let store_ref = CredentialRef::OsStore {
         account: account.to_string(),
+    };
+    struct StoreCleanup<'a> {
+        store_ref: &'a CredentialRef,
+    }
+    impl Drop for StoreCleanup<'_> {
+        fn drop(&mut self) {
+            let _ = OsStoreBackend.delete(self.store_ref);
+        }
+    }
+    let _cleanup = StoreCleanup {
+        store_ref: &store_ref,
     };
     let stored = OsStoreBackend
         .load(&store_ref)
@@ -607,11 +630,30 @@ fn drive_bootstrap_store_honors_a_config_override() {
         registry.display().to_string(),
     ]) {
         Err(CliError::Usage(reason)) if reason.contains("registered but unavailable") => {}
-        Err(error) if error.to_string().contains("navailable") => return,
+        // Precise skip: same boundary note as the store bootstrap
+        // test above — `command` folds `Unavailable` into
+        // `Usage(String)`, so match the backend's exact Unreachable
+        // detail, never a bare substring.
+        Err(CliError::Usage(reason))
+            if reason.contains("OS credential store unreachable for account") =>
+        {
+            return
+        }
         other => panic!("an unmanageable store bootstrap registers the drive: {other:?}"),
     }
     let store_ref = CredentialRef::OsStore {
         account: account.to_string(),
+    };
+    struct StoreCleanup<'a> {
+        store_ref: &'a CredentialRef,
+    }
+    impl Drop for StoreCleanup<'_> {
+        fn drop(&mut self) {
+            let _ = OsStoreBackend.delete(self.store_ref);
+        }
+    }
+    let _cleanup = StoreCleanup {
+        store_ref: &store_ref,
     };
     let stored = OsStoreBackend
         .load(&store_ref)
@@ -638,6 +680,21 @@ fn drive_bootstrap_store_honors_a_config_override() {
         !drive.join("default.toml").exists(),
         "no drive default shadows the override"
     );
+    // The regression this test protects: a subsequent production
+    // invocation through the same `--config` override must resolve
+    // the adopted backend and load the store item — not fall back
+    // to a file backend demanding `--identity-file`. `sync status`
+    // is offline (never connects) but still loads credentials
+    // through `effective_backend`, so success proves the
+    // resolution, not just the serialized TOML.
+    command(vec![
+        "--config".into(),
+        custom.display().to_string(),
+        "sync".into(),
+        drive.display().to_string(),
+        "status".into(),
+    ])
+    .expect("the override resolves and the store item loads through the production path");
     OsStoreBackend
         .delete(&store_ref)
         .expect("the fixture item cleans up");
