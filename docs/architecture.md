@@ -23,6 +23,7 @@ Listed in dependency order. Dependencies point only at rows above, and `wyrd-con
 | `wyrd-settings` | Per-user application settings file schema: version, per-drive sections, strict validation; serialization and rules only, no filesystem, no runtime application | serde only; never `wyrd-*` |
 | `wyrd-desktop` | Desktop management UI backend: non-owning Tauri client of the drive-owner interface; never opens a drive | `wyrd-owner-client` only; reserved `tauri` toolkit + `tauri-plugin-dialog` file-picker edges, serde, thiserror; build-time `tauri-build` (counted as a production edge by the DAG checker) |
 | `wyrd-sync` | iroh transport, encryption, storage addressing, capabilities, authorization, replication | `wyrd-format`, `wyrd-namespace`, iroh stack, nostr crate |
+| `wyrd-credential-store` | OS credential-store backends (reads): Keychain on macOS, Secret Service on Linux, behind the loader boundary | `wyrd-sync`, keyring, serde, serde_json, hex, zeroize (plus macOS `security-framework`) |
 | `wyrd-core` | Embeddable local node: namespace, snapshots, mutations, materialization, sync control | format, namespace, sync; never presentation |
 | `wyrd-view` | Filesystem-shaped read surface; never mounts or authors content | `wyrd-format`, `wyrd-namespace` |
 | `wyrd-daemon` | Composes the core, view and presentation backends | `wyrd-core`, `wyrd-view`, `wyrd-owner-client` |
@@ -45,7 +46,7 @@ Pre-alpha. Protocol identity, wire format, authorization model and control-plane
 
 Three scope statements live here, exactly once, and nowhere else.
 
-**Windows is out of v0.4 entirely.** The only credential reader fails closed on non-Unix builds, so a Windows build cannot open a drive: no application, no lifecycle, no native filesystem presentation. Before the Windows presentation milestone begins, the platform assumptions are audited together (credential loading, file locking, storage durability, process ownership, filesystem presentation) rather than discovered one port at a time.
+**Windows is out of v0.4 entirely.** The file credential reader fails closed on non-Unix builds, and the OS credential-store backend answers `unavailable` where no platform store exists, so a Windows build cannot open a drive: no application, no lifecycle, no native filesystem presentation. Before the Windows presentation milestone begins, the platform assumptions are audited together (credential loading, file locking, storage durability, process ownership, filesystem presentation) rather than discovered one port at a time.
 
 **Platform mechanisms stay at the boundary.** The credential contract is platform-neutral (secret format, failure behavior, secret lifetime, zeroization), and backends implement it: the hardened Unix file reader in `wyrd-cli` (`credentials.rs`) plus its writer, `wyrd identity` (`commands/identity.rs`), which mints and commits the same files under the same hardening, and OS credential-store backends satisfying `contracts/credential-loading.md`. Identity and vault logic consume secret material (`DeviceIdentitySecret`), never files, modes, or OS facilities.
 

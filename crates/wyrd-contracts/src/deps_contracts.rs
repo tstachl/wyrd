@@ -55,6 +55,32 @@ fn policy_for(member: &str) -> Option<MemberPolicy> {
                 "libc",
             ],
         }),
+        // The OS credential-store backend: the platform's store
+        // (Keychain on macOS, Secret Service on Linux) behind the
+        // loader boundary. A leaf beside the file backend: `wyrd-sync`
+        // below for the trait and secret types, `keyring` for the
+        // platform stores (per-OS target tables, so a build links only
+        // the store it can reach), `serde`/`serde_json` for the
+        // canonical stored-item encoding (parse-only until the
+        // migration slice adds the writer), `hex` for the identity
+        // text form, `zeroize` (`serde` for the scrub-on-drop parse
+        // boundary) for the buffers, `security-framework` for the
+        // macOS status codes only (never a Keychain call — the facade
+        // owns the store). Never
+        // `wyrd-cli` (the dispatcher lives there, not here), never
+        // `wyrd-desktop` (no drive opens through the UI backend), and
+        // nothing transport-shaped.
+        "wyrd-credential-store" => Some(MemberPolicy {
+            workspace_allow: &["wyrd-sync"],
+            external_allow: &[
+                "hex",
+                "keyring",
+                "security-framework",
+                "serde",
+                "serde_json",
+                "zeroize",
+            ],
+        }),
         // The embeddable node: view, sync, and format below; the mailbox
         // subsystem's async and control-plane crates; never presentation
         // (fuser), argument parsing (clap), POSIX errno mapping (libc),
@@ -159,10 +185,20 @@ fn policy_for(member: &str) -> Option<MemberPolicy> {
         // the transaction log — an identity, never trust. The drive
         // deployment configuration (27) adds `toml`: strict parsing
         // of the relay list and credential paths from `default.toml`
-        // — parse-only, the file holds no secrets. No other
+        // — parse-only, the file holds no secrets. The OS
+        // credential-store backend (credential-loading.md) adds
+        // `wyrd-credential-store`: store references route to it, file
+        // references stay on the hardened file reader — never a
+        // cross-backend fallback. No other
         // crate may follow.
         "wyrd-cli" => Some(MemberPolicy {
-            workspace_allow: &["wyrd-format", "wyrd-sync", "wyrd-core", "wyrd-daemon"],
+            workspace_allow: &[
+                "wyrd-format",
+                "wyrd-sync",
+                "wyrd-credential-store",
+                "wyrd-core",
+                "wyrd-daemon",
+            ],
             external_allow: &[
                 "blake3",
                 "clap",
@@ -316,6 +352,7 @@ fn dev_dep_policy(member: &str) -> Option<&'static [&'static str]> {
         "wyrd-sync" => Some(&["hex", "proptest"]),
         "wyrd-namespace" => Some(&[]),
         "wyrd-view" => Some(&["wyrd-core"]),
+        "wyrd-credential-store" => Some(&[]),
         "wyrd-core" => Some(&[
             "iroh",
             "nostr-sdk",
@@ -434,6 +471,22 @@ fn feature_pins(member: &str) -> Option<&'static [FeaturePin]> {
             ("dev-dependencies", "hex", &[], true),
             ("dev-dependencies", "proptest", &[], true),
         ]),
+        "wyrd-credential-store" => Some(&[
+            ("dependencies", "hex", &[], true),
+            ("dependencies", "keyring", &[], true),
+            ("dependencies", "keyring", &["apple-native"], true),
+            (
+                "dependencies",
+                "keyring",
+                &["crypto-rust", "sync-secret-service", "vendored"],
+                true,
+            ),
+            ("dependencies", "security-framework", &[], true),
+            ("dependencies", "serde", &["derive"], true),
+            ("dependencies", "serde_json", &[], true),
+            ("dependencies", "wyrd-sync", &[], true),
+            ("dependencies", "zeroize", &["serde"], true),
+        ]),
         "wyrd-namespace" => Some(&[
             ("dependencies", "thiserror", &[], true),
             ("dependencies", "wyrd-format", &[], true),
@@ -543,6 +596,7 @@ fn feature_pins(member: &str) -> Option<&'static [FeaturePin]> {
                 true,
             ),
             ("dependencies", "wyrd-core", &[], true),
+            ("dependencies", "wyrd-credential-store", &[], true),
             ("dependencies", "wyrd-daemon", &[], false),
             ("dependencies", "wyrd-format", &[], true),
             ("dependencies", "wyrd-sync", &[], true),
@@ -904,6 +958,11 @@ fn workspace_members_are_exact() {
     let mut expected = [
         "crates/wyrd-format",
         "crates/wyrd-sync",
+        // The OS credential-store backend: the Keychain / Secret
+        // Service reader behind the loader boundary. A leaf beside
+        // the file backend — never the audited substrate, never the
+        // desktop — so the member set names it deliberately here.
+        "crates/wyrd-credential-store",
         "crates/wyrd-namespace",
         "crates/wyrd-view",
         "crates/wyrd-core",

@@ -12,6 +12,11 @@ path = "src/main.rs"
 [dependencies]
 wyrd-format.workspace = true
 wyrd-sync.workspace = true
+# OS credential-store backend (credential-loading.md): the Keychain /
+# Secret Service reader behind the loader boundary. The CLI routes
+# `CredentialRef::OsStore` to it; the file backend keeps serving
+# `CredentialRef::File` only — never a cross-backend fallback.
+wyrd-credential-store = { path = "../wyrd-credential-store" }
 wyrd-core.workspace = true
 # The `mount` feature below re-enables the daemon's mount explicitly;
 # the workspace dependency carries no defaults (see the root manifest).

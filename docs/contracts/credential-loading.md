@@ -1,6 +1,6 @@
 # Credential loading (v0.4)
 
-Status: Normative. Shipped scope: the read half is implemented (the CLI file backend conforms); provisioning, replacement, deletion, and the OS backends are specified, not yet wired. Scope: how a drive owner obtains its secret
+Status: Normative. Shipped scope: the read half is implemented (the CLI file backend conforms; the OS credential-store backends conform on macOS, where service-context retrieval is verified by hand — the Linux service-context proof is deferred, see below); provisioning, replacement, deletion, and migration are specified, not yet wired. Scope: how a drive owner obtains its secret
 material — the device identity secret and the passphrase protecting
 the wrapped root key — without the desktop UI alive, in the actual
 OS service context. Authority: this contract owns the
@@ -27,22 +27,55 @@ a valid outcome, never a missing item) — never files, modes,
 keychain handles, or OS facilities. Backends implement how that
 material is kept and retrieved. The trait carries the read half
 today; provisioning, replacement, and deletion join with the
-migration slice. Two backends are specified by this contract:
+migration slice. Two backends implement the read half:
 
 - **File backend** (ships today): the hardened Unix file reader in
   `wyrd-cli` (`credentials.rs`) plus its writer, `wyrd identity`
   (`commands/identity.rs`). Owner-only files, never overwritten,
   `O_NOFOLLOW`, uid and mode checks, bounded reads, zeroized
   buffers.
-- **OS credential-store backend** (specified here, implemented per
-  platform): the platform's credential store — Keychain on macOS,
-  an OS credential service (Secret Service expected) on Linux —
-  reached through the same loader boundary.
+- **OS credential-store backend** (implemented per
+  platform in `wyrd-credential-store`): the platform's credential
+  store — Keychain on macOS, an OS credential service (Secret
+  Service expected) on Linux — reached through the same loader
+  boundary. Reads only; the writer joins with the migration
+  slice, in the encoding this contract's backend section pins.
 
 Adding a backend changes no secret format, no keystore wrap, no
 membership or epoch behavior, and no wire byte. Hardware-backed
 unwrapping stays a storage upgrade that changes nothing about the
 format (`docs/contracts/trust.md:150-151`).
+
+## Stored-item encoding (normative)
+
+One OS-store item per drive, named by its account label under the
+fixed `wyrd-drive-credential` service, is UTF-8 JSON:
+
+```json
+{"identity_hex":"<64 hex chars>","passphrase":"<optional>"}
+```
+
+`identity_hex` decodes to 32 bytes forming a valid identity
+scalar (the same gate as the file reader, including its ASCII
+whitespace trim); `passphrase`, where present, is bounded at 4096
+bytes and returned verbatim — the trailing-newline strip is the
+file reader's line discipline, applied once when material is
+stored, never on load, so both backends open the same keystore.
+Unknown fields are refused. The wire form is bounded at 24576 +
+256 bytes: the worst case is a legal 4096-byte passphrase whose
+every byte escapes to 6 (`"` and `\` escape to 2, control
+characters to 6), plus framing; a larger item is shape-broken.
+The platform fetch itself is not bounded — the store facade
+exposes no streaming read — so the refusal lands after the store
+answers. Provisioning, replacement, and deletion write this
+encoding with the migration slice.
+
+How a drive's configuration comes to *name* an OS-store account
+(a flag, a config key, a service definition) is not this slice:
+reads are implemented and integrated at the loader boundary, and
+the reference selectors that let production traffic reach them
+arrive with the desktop-wiring slice, alongside registration-time
+Keychain access.
 
 ## Credential references, never secrets, in configuration
 
@@ -63,8 +96,9 @@ holds for every new selector field.
 
 For one drive, identified by its credential reference, the loader
 provides the operations below. Lookup and open ship with the file
-backend; provisioning, replacement, and deletion are specified
-here and join with the migration slice. (This section states the
+backend and the OS credential-store backends; provisioning,
+replacement, and deletion are specified here and join with the
+migration slice. (This section states the
 full boundary so backends are built once against it — it does not
 claim the trait already carries what is marked specified.)
 
@@ -87,7 +121,14 @@ claim the trait already carries what is marked specified.)
   real service context (launchd agent, systemd user unit — never
   a login shell). GUI-side access never proves service-side
   access: each backend is verified from the actual service
-  context on each supported platform.
+  context on each supported platform. Verification state: the
+  macOS backend is verified by hand (login session plus a
+  no-terminal LaunchAgent run of the ignored probe); the Linux
+  backend's service-context verification is deferred — no Linux
+  host was available and headless CI has no bus. CI exercises the
+  fail-closed path there instead (the dispatcher test routes a
+  bus-less store to the OS backend, never the file backend, and
+  the taxonomy test pins `PlatformFailure` to `unavailable`).
 
 ## Failure taxonomy
 
@@ -189,7 +230,8 @@ The loader trait lives where the secret type lives
 zeroization discipline). The file backend stays in `wyrd-cli`.
 Each OS backend lives in the narrowest holder that keeps
 platform FFI out of the audited substrate and out of desktop
-reach: a new leaf crate at the first OS binding if the
-dependency policy requires it, never `wyrd-sync`'s allow-list,
-never `wyrd-desktop`. `wyrd-contracts` pins every new edge,
-feature, and `unsafe` site before the backend lands.
+reach: the `wyrd-credential-store` leaf crate, holding the first
+OS binding (`keyring`, per-OS target tables), never
+`wyrd-sync`'s allow-list, never `wyrd-desktop`. `wyrd-contracts`
+pins every new edge, feature, and `unsafe` site before the
+backend lands.

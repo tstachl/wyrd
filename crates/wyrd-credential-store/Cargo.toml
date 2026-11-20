@@ -1,0 +1,49 @@
+[package]
+name = "wyrd-credential-store"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Wyrd's OS credential-store backends: Keychain on macOS, Secret Service on Linux, behind the platform-neutral loader boundary. Reads only; provisioning joins the migration slice."
+
+[dependencies]
+wyrd-sync.workspace = true
+hex.workspace = true
+# The canonical stored-item encoding is JSON (`StoredPayload` below):
+# parse-only here, the future provisioner writes it. Already in the
+# lock file, so no new supply chain beyond `keyring`.
+serde.workspace = true
+serde_json.workspace = true
+# `serde` beside the workspace entry: `Zeroizing` must deserialize
+# (stored fields land scrubbed), while every other edge keeps the
+# bare crate. The union is this crate's pin alone.
+zeroize = { workspace = true, features = ["serde"] }
+# Platform credential store behind the loader boundary. No features
+# here: each OS enables its store in its target table below, so a
+# build only links the store it can reach. Builds without a store
+# (Windows, out of v0.4) fall back to keyring's mock, which the
+# backend never consults — non-Unix targets answer `Unavailable`
+# before touching it.
+keyring.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Keychain via the system Security framework. The launchd agent
+# context shares the login keychain, so the owner retrieves with no
+# desktop process alive; a locked or ACL-refused keychain is `Denied`,
+# never a fallback.
+keyring = { workspace = true, features = ["apple-native"] }
+# Status codes only: tells the Keychain's auth-failed,
+# interaction-not-allowed, and user-canceled answers apart from
+# store-unreachable ones inside the facade's opaque platform
+# failure (see the `PlatformFailure` arm of `map_keyring_error`).
+# No Keychain calls of its own.
+security-framework = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Secret Service over D-Bus in the systemd user-unit context, with
+# pure-Rust crypto and a vendored libdbus: no system D-Bus or OpenSSL
+# needed, so the mount-free CI legs build without the GUI closure.
+# No D-Bus session is assumed — its absence is `Unavailable`.
+keyring = { workspace = true, features = ["crypto-rust", "sync-secret-service", "vendored"] }
+
+[lints]
+workspace = true
