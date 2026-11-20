@@ -121,6 +121,7 @@ import type {
   DriveAvailability,
   DriveSettingsState,
   DriveView,
+  EnablementState,
   RegistryState,
   ServiceState,
   SessionState,
@@ -155,6 +156,10 @@ test("drive view carries facts plus the live verdict", () => {
       state: "running",
       detail: "the service manager reports the owner running",
     },
+    enablement: {
+      enablement: "enabled",
+      detail: "login start recorded",
+    },
     session: {
       state: "unlocked",
       detail: "the owner answered this session — the drive is open",
@@ -171,6 +176,10 @@ test("drive view carries facts plus the live verdict", () => {
     service_state: {
       state: "running",
       detail: "the service manager reports the owner running",
+    },
+    enablement: {
+      enablement: "enabled",
+      detail: "login start recorded",
     },
     session: {
       state: "unlocked",
@@ -222,6 +231,24 @@ test("service states distinguish the three unavailable causes", () => {
   expect(unknown.state).toBe("unknown");
 });
 
+test("enablement states pair with lifecycle states instead of merging", () => {
+  const enabled: EnablementState = {
+    enablement: "enabled",
+    detail: "login start recorded",
+  };
+  expect(enabled.enablement).toBe("enabled");
+  const disabled: EnablementState = {
+    enablement: "disabled",
+    detail: "no login start",
+  };
+  expect(disabled.enablement).toBe("disabled");
+  const unknown: EnablementState = {
+    enablement: "unknown",
+    detail: "the manager did not answer",
+  };
+  expect(unknown.enablement).toBe("unknown");
+});
+
 test("registry states flatten the status without stutter", () => {
   const ready: RegistryState = {
     status: "ready",
@@ -237,6 +264,10 @@ test("registry states flatten the status without stutter", () => {
         service_state: {
           state: "running",
           detail: "the service manager reports the owner running",
+        },
+        enablement: {
+          enablement: "enabled",
+          detail: "login start recorded",
         },
         session: {
           state: "unlocked",

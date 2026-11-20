@@ -725,3 +725,105 @@ fn drive_reconfigure_refuses_a_held_drive_with_78() {
     );
     assert_eq!(fs::read(&registry).unwrap(), before);
 }
+
+/// The toggle refuses the stdin flag loudly instead of running a
+/// preference write the flag cannot affect: enablement opens no
+/// keystore, so the pipe has no surface here. No manager contact —
+/// the refusal precedes the resolve.
+#[test]
+fn service_toggle_refuses_stdin() {
+    for action in ["service-enable", "service-disable"] {
+        let error = command(vec![
+            "drive".into(),
+            "/drives/alpha".into(),
+            "--passphrase-stdin".into(),
+            action.into(),
+        ])
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("has no effect on `drive service-"),
+            "{action} names the stdin refusal: {error}"
+        );
+        assert_eq!(error.exit_code(), 2, "{action} exits usage: {error:?}");
+    }
+}
+
+/// The toggle resolves before credential loading: with no
+/// credentials and no registry entry, the error names the
+/// registry, never the missing credential files.
+#[test]
+fn service_toggle_resolves_before_credential_loading() {
+    let temp = TempDir::new();
+    for action in ["service-enable", "service-disable"] {
+        let error = command(vec![
+            "drive".into(),
+            temp.0.join("drive").display().to_string(),
+            action.into(),
+            "--registry".into(),
+            temp.0.join("absent.json").display().to_string(),
+        ])
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("no registry entry"),
+            "{action} names the registry: {error}"
+        );
+        assert_eq!(error.exit_code(), 2);
+    }
+}
+
+/// A staged entry with no definition file refuses with the
+/// reinstall pointer: session-posture drives have no unit to
+/// enable, and a removed definition is the reinstall recovery —
+/// never a toggle. No manager contact.
+#[test]
+fn service_toggle_refuses_a_missing_definition() {
+    let fixture = Fixture::new();
+    let name = unique_reconf_name("toggle-nodef");
+    let registry = fixture._temp.0.join("drives.json");
+    write_registry_entry(&registry, &name, &fixture.drive, &[]);
+    for action in ["service-enable", "service-disable", "service-start"] {
+        let error = command(vec![
+            "drive".into(),
+            fixture.drive.display().to_string(),
+            action.into(),
+            "--registry".into(),
+            registry.display().to_string(),
+        ])
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("no service definition installed"),
+            "{action} names the reinstall recovery: {error}"
+        );
+    }
+}
+
+/// Conflicting registry entries refuse by name: the toggle never
+/// guesses which entry owns the drive.
+#[test]
+fn service_toggle_refuses_conflicting_entries() {
+    let fixture = Fixture::new();
+    let registry = fixture._temp.0.join("drives.json");
+    write_registry_entry(&registry, "toggle-a", &fixture.drive, &[]);
+    // A second entry naming the same directory: hand-append, like
+    // a duplicate registration left behind by a crashed run.
+    let mut raw: serde_json::Value = serde_json::from_slice(&fs::read(&registry).unwrap()).unwrap();
+    raw["drives"]["toggle-b"] = raw["drives"]["toggle-a"].clone();
+    raw["drives"]["toggle-b"]["name"] = serde_json::Value::String("toggle-b".to_string());
+    fs::write(&registry, serde_json::to_vec(&raw).unwrap()).unwrap();
+    let error = command(vec![
+        "drive".into(),
+        fixture.drive.display().to_string(),
+        "service-enable".into(),
+        "--registry".into(),
+        registry.display().to_string(),
+    ])
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("conflicting registry entries"),
+        "the toggle names the conflict: {error}"
+    );
+}

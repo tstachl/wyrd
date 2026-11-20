@@ -142,6 +142,62 @@ running and re-openable without a passphrase by anyone holding the
 device unlocked. That is the stated behavior, not a vague promise —
 lock before quitting if the session must not survive.
 
+## Service enablement at login (per-drive auto-start)
+
+Whether the service manager starts a drive's owner at login is a
+persistent per-drive preference, independent of whether the owner
+is running now. Enablement and lifecycle are two separate
+observations (lifecycle × enablement: Running/Stopped/Unknown ×
+Enabled/Disabled/Unknown) — never one enum, never inferred from
+each other, and never new `Stopped*` variants. A manually started
+service may run while disabled at login; the UI shows both facts.
+
+Semantics (both platforms):
+
+| Operation | Starts now | Starts at login |
+|---|---|---|
+| Enable at login | No | Yes |
+| Disable at login | Stops the service | No |
+| Start manually | Yes | Unchanged |
+| Stop manually | No | Unchanged |
+| Initial provisioning | Yes | Yes |
+
+Starting never changes enablement: a disabled drive started
+manually stays disabled at the next login — the toggle is never
+silently reversed by pressing Start. Provisioning explicitly
+performs install, enable, start. Toggling enablement never touches
+drive data, never opens the keystore, and never implies the owner
+answered: a disabled drive reads `Stopped` with the same explicit
+Start recovery it always had, and no auto-start path is added
+anywhere.
+
+Enablement probes (observation only, never supervision):
+
+- **Linux:** `systemctl --user is-enabled --quiet <unit>`.
+  Exit 0 is Enabled; a completed non-zero answer is Disabled; a
+  missing tool or a probe timeout is Unknown, never Disabled.
+- **macOS:** `launchctl print-disabled user/<uid>`, parsed for the
+  `"md.enesis.wyrd.<service>" => enabled|disabled` record. A
+  present record maps to its value; an absent record is Unknown
+  (managed drives provisioned by `load -w` always carry one, so
+  absence means the record was never written or was externally
+  removed — never a license to claim Disabled); a missing tool,
+  timeout, or non-zero answer is Unknown. Verified against the
+  live manager: `enable`/`disable` persist without loading or
+  stopping (a running job keeps running through a disable, a
+  stopped job stays stopped through an enable), plain `load`
+  starts without touching the record but refuses a disabled job,
+  and `unload -w` stops and persists disabled while keeping the
+  definition file. Exit codes lie here (`load` on a disabled job
+  exits 0 without loading; `unload -w` on a stopped job exits 0
+  with an error on stderr) — every mutation verifies the record
+  and the loaded state after, never the exit code alone.
+
+Managed drives only: session-posture (`--no-service`) drives have
+no unit to enable or disable and carry no toggle. The toggle reads
+"Start drive service at login" (frozen-glossary "Drive service,"
+R-D1).
+
 ## Platform differences
 
 - Startup ordering is a UI behavior, not a manager ordering: owner

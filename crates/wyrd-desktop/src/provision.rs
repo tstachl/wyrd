@@ -139,12 +139,38 @@ pub struct ReconfigureRequest {
 }
 
 /// Start one registered drive's installed service without
-/// rewriting anything: the recovery for "installed but stopped".
-/// No credentials travel — starting proves nothing about membership
+/// rewriting anything and without touching its login-start
+/// preference: the recovery for "installed but stopped". No
+/// credentials travel — starting proves nothing about membership
 /// and the CLI opens no keystore — only the drive directory plus the
 /// registry override (tests and non-standard layouts).
 #[derive(Debug, Clone)]
 pub struct ServiceStartRequest {
+    /// Absolute drive directory, exact string (shared drive-identity rule).
+    pub drive_dir: PathBuf,
+    /// Explicit registry path (tests); `None` = platform default.
+    pub registry_path: Option<PathBuf>,
+}
+
+/// Enable one registered drive's login start without starting it:
+/// record the preference with the service manager, then verify the
+/// record. No credentials travel — enabling opens no keystore —
+/// only the drive directory plus the registry override.
+#[derive(Debug, Clone)]
+pub struct ServiceEnableRequest {
+    /// Absolute drive directory, exact string (shared drive-identity rule).
+    pub drive_dir: PathBuf,
+    /// Explicit registry path (tests); `None` = platform default.
+    pub registry_path: Option<PathBuf>,
+}
+
+/// Disable one registered drive's login start and stop it now,
+/// keeping the definition file: record the preference with the
+/// service manager, then verify the record and the stopped state.
+/// No credentials travel — only the drive directory plus the
+/// registry override.
+#[derive(Debug, Clone)]
+pub struct ServiceDisableRequest {
     /// Absolute drive directory, exact string (shared drive-identity rule).
     pub drive_dir: PathBuf,
     /// Explicit registry path (tests); `None` = platform default.
@@ -487,6 +513,42 @@ pub fn service_start_argv(request: &ServiceStartRequest) -> Vec<OsString> {
         "drive".into(),
         request.drive_dir.as_os_str().to_owned(),
         "service-start".into(),
+    ];
+    if let Some(registry) = &request.registry_path {
+        argv.push("--registry".into());
+        argv.push(registry.as_os_str().to_owned());
+    }
+    argv
+}
+
+/// Pure argv builder for `wyrd drive <dir> service-enable …`: every
+/// argument is a separate argv element, never shell-constructed.
+/// Mirrors `crates/wyrd-cli/src/args.rs`
+/// (`DriveAction::ServiceEnable`). No credentials: enabling records
+/// a login-start preference and opens no keystore.
+pub fn service_enable_argv(request: &ServiceEnableRequest) -> Vec<OsString> {
+    let mut argv: Vec<OsString> = vec![
+        "drive".into(),
+        request.drive_dir.as_os_str().to_owned(),
+        "service-enable".into(),
+    ];
+    if let Some(registry) = &request.registry_path {
+        argv.push("--registry".into());
+        argv.push(registry.as_os_str().to_owned());
+    }
+    argv
+}
+
+/// Pure argv builder for `wyrd drive <dir> service-disable …`:
+/// every argument is a separate argv element, never
+/// shell-constructed. Mirrors `crates/wyrd-cli/src/args.rs`
+/// (`DriveAction::ServiceDisable`). No credentials: disabling stops
+/// the unit now and records no login start, and opens no keystore.
+pub fn service_disable_argv(request: &ServiceDisableRequest) -> Vec<OsString> {
+    let mut argv: Vec<OsString> = vec![
+        "drive".into(),
+        request.drive_dir.as_os_str().to_owned(),
+        "service-disable".into(),
     ];
     if let Some(registry) = &request.registry_path {
         argv.push("--registry".into());
@@ -881,6 +943,52 @@ pub fn run_service_start(
         };
     }
     let argv = service_start_argv(request);
+    let output = run_cli(cli_bin, &argv, None, timeout);
+    map_exit_output(&output)
+}
+
+/// Run one `drive service-enable` through the version-matched CLI,
+/// with the same version-first, observation-after contract as
+/// [`run_bootstrap`]. The caller pairs every path with a registry
+/// re-read and a fresh enablement probe; no path reports
+/// enablement state. No credentials travel: the CLI opens no
+/// keystore for an enable.
+pub fn run_service_enable(
+    cli_bin: &Path,
+    request: &ServiceEnableRequest,
+    timeout: Duration,
+) -> ProvisionOutcome {
+    if let Err(mismatch) = check_cli_version(cli_bin, timeout) {
+        return ProvisionOutcome {
+            result: mismatch,
+            stderr: String::new(),
+            code: None,
+        };
+    }
+    let argv = service_enable_argv(request);
+    let output = run_cli(cli_bin, &argv, None, timeout);
+    map_exit_output(&output)
+}
+
+/// Run one `drive service-disable` through the version-matched CLI,
+/// with the same version-first, observation-after contract as
+/// [`run_bootstrap`]. The caller pairs every path with a registry
+/// re-read and a fresh enablement probe; no path reports
+/// enablement state. No credentials travel: the CLI opens no
+/// keystore for a disable.
+pub fn run_service_disable(
+    cli_bin: &Path,
+    request: &ServiceDisableRequest,
+    timeout: Duration,
+) -> ProvisionOutcome {
+    if let Err(mismatch) = check_cli_version(cli_bin, timeout) {
+        return ProvisionOutcome {
+            result: mismatch,
+            stderr: String::new(),
+            code: None,
+        };
+    }
+    let argv = service_disable_argv(request);
     let output = run_cli(cli_bin, &argv, None, timeout);
     map_exit_output(&output)
 }
@@ -1960,6 +2068,57 @@ mod tests {
         assert!(
             !rendered.iter().any(|arg| arg.contains("identity")),
             "no credential paths travel on a start: {rendered:?}"
+        );
+    }
+
+    /// The service-enable argv is one structured element per
+    /// argument: `drive <dir> service-enable` — recording a
+    /// login-start preference opens no keystore, so no credential
+    /// paths travel — plus the registry override where set.
+    #[test]
+    fn service_enable_argv_is_structured_without_credentials() {
+        let request = ServiceEnableRequest {
+            drive_dir: PathBuf::from("/drives/alpha"),
+            registry_path: Some(PathBuf::from("/tmp/drives.json")),
+        };
+        let rendered: Vec<String> = service_enable_argv(&request)
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            rendered,
+            vec![
+                "drive",
+                "/drives/alpha",
+                "service-enable",
+                "--registry",
+                "/tmp/drives.json",
+            ]
+        );
+        assert!(
+            !rendered.iter().any(|arg| arg.contains("identity")),
+            "no credential paths travel on an enable: {rendered:?}"
+        );
+    }
+
+    /// The service-disable argv is one structured element per
+    /// argument: `drive <dir> service-disable` — stopping now and
+    /// recording no login start opens no keystore — plus the
+    /// registry override where set.
+    #[test]
+    fn service_disable_argv_is_structured_without_credentials() {
+        let request = ServiceDisableRequest {
+            drive_dir: PathBuf::from("/drives/alpha"),
+            registry_path: None,
+        };
+        let rendered: Vec<String> = service_disable_argv(&request)
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(rendered, vec!["drive", "/drives/alpha", "service-disable"]);
+        assert!(
+            !rendered.iter().any(|arg| arg.contains("identity")),
+            "no credential paths travel on a disable: {rendered:?}"
         );
     }
 

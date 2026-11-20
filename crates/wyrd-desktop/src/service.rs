@@ -113,6 +113,184 @@ pub fn service_definition_path(service: &str) -> PathBuf {
     }
 }
 
+/// Persistent login-start preference as the service manager
+/// records it: whether the unit starts at login. Independent of
+/// [`ServiceState`] — a manually started service may run while
+/// disabled at login, so the two observations pair instead of
+/// merging (no `Stopped*` variants). All variants carry the
+/// evidence string so the frontend renders without parsing.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "enablement", rename_all = "lowercase")]
+pub enum EnablementState {
+    /// The manager starts the unit at login.
+    Enabled {
+        /// Evidence string naming the record.
+        detail: String,
+    },
+    /// The manager does not start the unit at login.
+    Disabled {
+        /// Evidence string naming the record.
+        detail: String,
+    },
+    /// The manager did not answer, or keeps no record for this
+    /// drive: retry the probe. Not evidence about login behavior —
+    /// a session-posture drive (no definition) also reads
+    /// `Unknown`, since there is no unit to enable.
+    Unknown {
+        /// Evidence string: the manager did not answer, or no
+        /// record exists; retry the probe.
+        detail: String,
+    },
+}
+
+/// Run one manager probe and capture its stdout with the same hard
+/// bound as [`run_probe`]. A missing binary or an overrun is
+/// `None` — no answer, never an enablement state. A completed
+/// non-zero answer still yields its stdout: `is-enabled` exits
+/// non-zero for a disabled unit, and the word decides (see
+/// [`parse_is_enabled_output`]).
+fn run_probe_capture(argv: &[&str]) -> Option<String> {
+    let (program, args) = match argv.split_first() {
+        Some((program, args)) => (*program, args),
+        None => return None,
+    };
+    let mut child = std::process::Command::new(program)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+    let deadline = std::time::Instant::now() + SERVICE_PROBE_TIMEOUT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => {
+                let mut stdout = String::new();
+                if let Some(mut pipe) = child.stdout.take() {
+                    use std::io::Read as _;
+                    let _ = pipe.read_to_string(&mut stdout);
+                }
+                let _ = child.wait();
+                return Some(stdout);
+            }
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return None;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
+}
+
+/// Map a `launchctl print-disabled` dump onto one drive's record:
+/// the `"label" => enabled|disabled` line decides; an absent
+/// record is `Unknown` (never `Disabled`); garbage reads
+/// `Unknown`. The label match includes the closing quote so
+/// `drive-foo` never matches a `drive-foo-bar` record.
+#[cfg(any(test, target_os = "macos"))]
+fn parse_print_disabled_output(output: &str, service: &str) -> EnablementState {
+    let prefix = format!("\"md.enesis.wyrd.{service}\" => ");
+    for line in output.lines() {
+        if let Some(value) = line.trim().strip_prefix(prefix.as_str()) {
+            let detail = format!("login-start record for this drive reads {}", value.trim());
+            return match value.trim() {
+                "enabled" => EnablementState::Enabled { detail },
+                "disabled" => EnablementState::Disabled { detail },
+                _ => EnablementState::Unknown {
+                    detail: format!("{detail} — not a known value; retry the probe"),
+                },
+            };
+        }
+    }
+    EnablementState::Unknown {
+        detail: "the service manager keeps no login-start record for this drive: retry the probe — this is not evidence the drive is disabled".to_string(),
+    }
+}
+
+/// Map a `systemctl --user is-enabled` word onto the preference:
+/// `enabled`/`disabled`/`masked` decide; any other word (static,
+/// alias, indirect) or a bus failure printing no word reads
+/// `Unknown`, never `Disabled`.
+#[cfg(any(test, not(target_os = "macos")))]
+fn parse_is_enabled_output(output: &str) -> EnablementState {
+    let word = output.trim();
+    let detail = format!("login-start record for this drive reads {word}");
+    match word {
+        "enabled" => EnablementState::Enabled { detail },
+        "disabled" | "masked" => EnablementState::Disabled { detail },
+        _ => EnablementState::Unknown {
+            detail: format!("{detail} — not a known value; retry the probe"),
+        },
+    }
+}
+
+/// Observe one drive's login-start preference: the manager record
+/// for the label/unit, nothing else. Pure observation — never
+/// starts, stops, enables, or installs anything.
+pub fn probe_enablement(service: &str) -> EnablementState {
+    probe_enablement_with_fetcher(service, fetch_enablement_output)
+}
+
+/// The test seam: production fetches through the real `PATH`;
+/// tests inject a fake dump without touching the environment.
+fn probe_enablement_with_fetcher(
+    service: &str,
+    fetch: impl Fn(&str) -> Option<String>,
+) -> EnablementState {
+    match fetch(service) {
+        Some(output) => parse_enablement_output(&output, service),
+        None => EnablementState::Unknown {
+            detail: "the service manager did not answer the enablement probe (probe timeout or missing tool): retry the probe — the drive and its service are unchanged".to_string(),
+        },
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn parse_enablement_output(output: &str, service: &str) -> EnablementState {
+    parse_print_disabled_output(output, service)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn parse_enablement_output(output: &str, _service: &str) -> EnablementState {
+    parse_is_enabled_output(output)
+}
+
+/// Fetch one drive's raw enablement dump from the manager, or
+/// `None` where the manager did not answer.
+#[cfg(target_os = "macos")]
+fn fetch_enablement_output(_service: &str) -> Option<String> {
+    let domain = std::process::Command::new("id")
+        .arg("-u")
+        .output()
+        .ok()
+        .and_then(|output| {
+            if output.status.success() {
+                Some(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+            } else {
+                None
+            }
+        });
+    let domain = format!("user/{}", domain?);
+    run_probe_capture(&["launchctl", "print-disabled", &domain])
+}
+
+/// Fetch one unit's raw `is-enabled` word, or `None` where the
+/// manager did not answer. The exit status is ignored: a disabled
+/// unit exits non-zero, and the word decides.
+#[cfg(not(target_os = "macos"))]
+fn fetch_enablement_output(service: &str) -> Option<String> {
+    let unit = format!("wyrd-{service}.service");
+    run_probe_capture(&["systemctl", "--user", "is-enabled", &unit])
+}
+
 /// Whether the unit is loaded/active according to the OS service
 /// manager. Exit codes are the only signal (output is never parsed):
 /// 0 means loaded/active; documented not-loaded codes mean stopped;
@@ -389,6 +567,108 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap_or(());
     }
 
+    /// The enablement records parse by value, never by exit
+    /// code: a present record maps to its value, an absent record
+    /// or garbage reads Unknown (never Disabled), and a label never
+    /// matches a longer label's record.
+    #[test]
+    fn enablement_records_parse_by_value() {
+        // macOS `print-disabled` shape, as observed live.
+        let dump = "\tdisabled services = {\n\t\t\"md.enesis.wyrd.drive-alpha\" => enabled\n\t\t\"md.enesis.wyrd.drive-foobar\" => disabled\n\t}\n";
+        assert!(matches!(
+            parse_print_disabled_output(dump, "drive-alpha"),
+            EnablementState::Enabled { .. }
+        ));
+        assert!(matches!(
+            parse_print_disabled_output(dump, "drive-foobar"),
+            EnablementState::Disabled { .. }
+        ));
+        // Prefix collision: `drive-foo` must not read the
+        // `drive-foobar` record; the closing quote guards it.
+        assert!(matches!(
+            parse_print_disabled_output(dump, "drive-foo"),
+            EnablementState::Unknown { .. }
+        ));
+        assert!(matches!(
+            parse_print_disabled_output(dump, "drive-missing"),
+            EnablementState::Unknown { .. }
+        ));
+        match parse_print_disabled_output(dump, "drive-missing") {
+            EnablementState::Unknown { detail } => {
+                assert!(detail.contains("no login-start record"), "detail: {detail}")
+            }
+            other => panic!("an absent record is Unknown: {other:?}"),
+        }
+        // Garbage value: Unknown, never Disabled.
+        assert!(matches!(
+            parse_print_disabled_output("\"md.enesis.wyrd.drive-x\" => maybe\n", "drive-x"),
+            EnablementState::Unknown { .. }
+        ));
+        // Linux `is-enabled` words.
+        assert!(matches!(
+            parse_is_enabled_output("enabled\n"),
+            EnablementState::Enabled { .. }
+        ));
+        assert!(matches!(
+            parse_is_enabled_output("disabled\n"),
+            EnablementState::Disabled { .. }
+        ));
+        assert!(matches!(
+            parse_is_enabled_output("masked\n"),
+            EnablementState::Disabled { .. }
+        ));
+        assert!(matches!(
+            parse_is_enabled_output("static\n"),
+            EnablementState::Unknown { .. }
+        ));
+        // A bus failure prints no word: Unknown, never Disabled.
+        assert!(matches!(
+            parse_is_enabled_output("Failed to connect to bus.\n"),
+            EnablementState::Unknown { .. }
+        ));
+        assert!(matches!(
+            parse_is_enabled_output(""),
+            EnablementState::Unknown { .. }
+        ));
+    }
+
+    /// The enablement probe maps fetch outcomes onto states: a
+    /// dump parses, a missing tool or timeout reads Unknown. The
+    /// fetch is injected — no `PATH` mutation, which would race
+    /// parallel tests.
+    #[test]
+    fn enablement_probe_maps_fetch_onto_states() {
+        let dump = "\"md.enesis.wyrd.drive-x\" => disabled\n";
+        #[cfg(target_os = "macos")]
+        let enabled_word = "\"md.enesis.wyrd.drive-x\" => enabled\n";
+        #[cfg(not(target_os = "macos"))]
+        let enabled_word = "enabled\n";
+        assert!(matches!(
+            probe_enablement_with_fetcher("drive-x", |_| Some(enabled_word.to_string())),
+            EnablementState::Enabled { .. }
+        ));
+        assert!(matches!(
+            probe_enablement_with_fetcher("drive-x", |_| Some(dump.to_string())),
+            EnablementState::Disabled { .. }
+        ));
+        match probe_enablement_with_fetcher("drive-x", |_| None) {
+            EnablementState::Unknown { detail } => {
+                assert!(detail.contains("did not answer"), "detail: {detail}")
+            }
+            other => panic!("no answer is Unknown: {other:?}"),
+        }
+    }
+
+    /// A missing manager tool captures nothing: the probe has no
+    /// answer, never a state.
+    #[test]
+    fn missing_probe_tool_captures_nothing() {
+        assert_eq!(
+            run_probe_capture(&["wyrd-definitely-missing-binary-xyz"]),
+            None,
+            "a missing tool is no answer"
+        );
+    }
     /// A missing manager tool is `Unsupported`, never stopped: dev-build
     /// honesty — "no managed service in this build" — instead of a
     /// state the recovery would misread. A timeout or an unexpected

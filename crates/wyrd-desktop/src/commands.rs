@@ -766,6 +766,99 @@ pub async fn provision_service_start<R: Runtime>(
     .await
 }
 
+/// Enable one registered drive's login start through the installed
+/// CLI (`drive service-enable`), then re-read and probe. No start
+/// happens: the preference is recorded and verified, and the fresh
+/// enablement probe decides the display.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProvisionServiceEnableArgs {
+    /// Absolute drive directory as an exact string.
+    pub drive_dir: String,
+}
+
+/// Enable one registered drive's login start through the installed
+/// CLI (`drive service-enable`), then re-read and probe.
+#[tauri::command]
+pub async fn provision_service_enable<R: Runtime>(
+    app: AppHandle<R>,
+    args: ProvisionServiceEnableArgs,
+) -> ProvisionReport {
+    run_provision(
+        app,
+        "provision_service_enable",
+        args.drive_dir.clone(),
+        true,
+        move |state, dir| {
+            let request = super::provision::ServiceEnableRequest {
+                drive_dir: dir,
+                registry_path: None,
+            };
+            let cli = state.cli_bin();
+            match cli {
+                Ok(bin) => super::provision::run_service_enable(
+                    &bin,
+                    &request,
+                    super::provision::PROVISION_TIMEOUT,
+                ),
+                Err(reason) => super::provision::ProvisionOutcome {
+                    result: super::provision::ProvisionResult::VersionMismatch { reason },
+                    stderr: String::new(),
+                    code: None,
+                },
+            }
+        },
+    )
+    .await
+}
+
+/// Disable one registered drive's login start and stop it now
+/// through the installed CLI (`drive service-disable`), then
+/// re-read and probe. The definition file stays: the fresh
+/// enablement probe and the service verdict decide the display.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProvisionServiceDisableArgs {
+    /// Absolute drive directory as an exact string.
+    pub drive_dir: String,
+}
+
+/// Disable one registered drive's login start and stop it now
+/// through the installed CLI (`drive service-disable`), then
+/// re-read and probe.
+#[tauri::command]
+pub async fn provision_service_disable<R: Runtime>(
+    app: AppHandle<R>,
+    args: ProvisionServiceDisableArgs,
+) -> ProvisionReport {
+    run_provision(
+        app,
+        "provision_service_disable",
+        args.drive_dir.clone(),
+        true,
+        move |state, dir| {
+            let request = super::provision::ServiceDisableRequest {
+                drive_dir: dir,
+                registry_path: None,
+            };
+            let cli = state.cli_bin();
+            match cli {
+                Ok(bin) => super::provision::run_service_disable(
+                    &bin,
+                    &request,
+                    super::provision::PROVISION_TIMEOUT,
+                ),
+                Err(reason) => super::provision::ProvisionOutcome {
+                    result: super::provision::ProvisionResult::VersionMismatch { reason },
+                    stderr: String::new(),
+                    code: None,
+                },
+            }
+        },
+    )
+    .await
+}
+
 /// Unlock arguments: the drive identity, the device identity file
 /// path, and the passphrase text. The text travels backend -> CLI
 /// on the stdin pipe (never argv); the frontend holds it only for
@@ -1702,6 +1795,7 @@ mod tests {
     /// `results.test.ts` verbatim.
     #[test]
     fn local_query_shapes_serialize_verbatim() {
+        use super::super::service::EnablementState;
         use super::super::service::ServiceState;
         use super::super::{DriveAvailability, DriveSettings, DriveSettingsView};
         use super::super::{DriveView, RegistryState, RegistryStatus};
@@ -1764,6 +1858,32 @@ mod tests {
             serde_json::json!({"state": "unsupported", "detail": "no managed service in this build"})
         );
 
+        // The enablement taxonomy beside the lifecycle state: the
+        // frontend tells the toggle position apart from the JSON
+        // alone. Independent of the lifecycle observation — a
+        // manually started service may run while disabled.
+        assert_eq!(
+            serde_json::to_value(EnablementState::Enabled {
+                detail: "login start recorded".to_string()
+            })
+            .unwrap(),
+            serde_json::json!({"enablement": "enabled", "detail": "login start recorded"})
+        );
+        assert_eq!(
+            serde_json::to_value(EnablementState::Disabled {
+                detail: "no login start".to_string()
+            })
+            .unwrap(),
+            serde_json::json!({"enablement": "disabled", "detail": "no login start"})
+        );
+        assert_eq!(
+            serde_json::to_value(EnablementState::Unknown {
+                detail: "the manager did not answer".to_string()
+            })
+            .unwrap(),
+            serde_json::json!({"enablement": "unknown", "detail": "the manager did not answer"})
+        );
+
         let drive = DriveView {
             name: "alpha".to_string(),
             drive_dir: "/drives/alpha".to_string(),
@@ -1774,6 +1894,9 @@ mod tests {
             availability: DriveAvailability::Available,
             service_state: ServiceState::Running {
                 detail: "the service manager reports the owner running".to_string(),
+            },
+            enablement: EnablementState::Enabled {
+                detail: "login start recorded".to_string(),
             },
             session: Some(super::super::SessionState::Unlocked {
                 detail: "the owner answered this session — the drive is open".to_string(),
@@ -1790,6 +1913,7 @@ mod tests {
                 "mountpoint": null,
                 "availability": {"state": "available"},
                 "service_state": {"state": "running", "detail": "the service manager reports the owner running"},
+                "enablement": {"enablement": "enabled", "detail": "login start recorded"},
                 "session": {"state": "unlocked", "detail": "the owner answered this session — the drive is open"},
             })
         );
@@ -1814,6 +1938,7 @@ mod tests {
                     "mountpoint": null,
                     "availability": {"state": "available"},
                     "service_state": {"state": "running", "detail": "the service manager reports the owner running"},
+                    "enablement": {"enablement": "enabled", "detail": "login start recorded"},
                     "session": {"state": "unlocked", "detail": "the owner answered this session — the drive is open"},
                 }],
                 "skipped": ["entry \"bad\": key \"bad\" does not match entry name \"other\""],

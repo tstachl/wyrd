@@ -1318,6 +1318,349 @@ pub fn start_service(entry: &RegistryEntry) -> Result<(), BootstrapError> {
     }
 }
 
+/// Persistent login-start preference for one drive: whether the
+/// service manager starts the unit at login. Independent of
+/// whether the unit runs now. `Unknown` is the no-answer verdict
+/// (missing tool, unparseable answer, no macOS record) — never
+/// `Disabled`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ServiceEnabled {
+    /// The manager starts the unit at login.
+    Enabled,
+    /// The manager does not start the unit at login.
+    Disabled,
+    /// The manager did not answer, or keeps no record: retry the
+    /// probe. Not evidence about login behavior.
+    Unknown,
+}
+
+#[cfg(all(unix, target_os = "macos"))]
+#[allow(unsafe_code)]
+fn current_uid() -> u32 {
+    // SAFETY: `geteuid` takes no arguments and returns the
+    // caller's effective uid; it cannot fail and touches no memory.
+    unsafe { libc::geteuid() }
+}
+
+/// Run one manager probe and capture its stdout. The exit status is
+/// ignored here: `is-enabled` exits non-zero for a disabled unit
+/// and `print-disabled` callers parse the record, so only a spawn
+/// failure (missing tool) is no output. Callers map unparseable
+/// output to `Unknown`, never to a lifecycle state.
+#[cfg(unix)]
+fn probe_output(program: &str, args: &[&str]) -> Option<String> {
+    let output = std::process::Command::new(program)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    Some(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// Query one drive's persistent login-start preference without
+/// changing anything: no load, no unload, no record write. macOS
+/// reads the `print-disabled` record for the label (a present
+/// record maps to its value; an absent record is `Unknown` —
+/// managed drives provisioned by `load -w` always carry one, so
+/// absence means the record was never written or was externally
+/// removed, never a license to claim `Disabled`). Linux reads the
+/// `is-enabled` word (`enabled`/`disabled`/`masked` decide; a bus
+/// failure prints no word and reads `Unknown`, never `Disabled`).
+#[cfg(unix)]
+pub fn service_enabled(entry: &RegistryEntry) -> ServiceEnabled {
+    #[cfg(target_os = "macos")]
+    {
+        let domain = format!("user/{}", current_uid());
+        match probe_output("launchctl", &["print-disabled", &domain]) {
+            Some(output) => parse_print_disabled(&output, &entry.service),
+            None => ServiceEnabled::Unknown,
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let unit = format!("wyrd-{}.service", entry.service);
+        match probe_output("systemctl", &["--user", "is-enabled", &unit]) {
+            Some(output) => parse_is_enabled(&output),
+            None => ServiceEnabled::Unknown,
+        }
+    }
+}
+
+/// Map a `launchctl print-disabled` dump onto one drive's record:
+/// a present `"label" => enabled|disabled` line decides; an absent
+/// record is `Unknown` (managed drives provisioned by `load -w`
+/// always carry one, so absence means the record was never written
+/// or was externally removed — never a license to claim
+/// `Disabled`). The label match includes the closing quote so
+/// `drive-foo` never matches a `drive-foo-bar` record.
+#[cfg(any(test, target_os = "macos"))]
+fn parse_print_disabled(output: &str, service: &str) -> ServiceEnabled {
+    let prefix = format!("\"md.enesis.wyrd.{service}\" => ");
+    for line in output.lines() {
+        if let Some(value) = line.trim().strip_prefix(prefix.as_str()) {
+            return match value.trim() {
+                "enabled" => ServiceEnabled::Enabled,
+                "disabled" => ServiceEnabled::Disabled,
+                _ => ServiceEnabled::Unknown,
+            };
+        }
+    }
+    ServiceEnabled::Unknown
+}
+
+/// Map a `systemctl is-enabled` word onto the preference:
+/// `enabled`/`disabled`/`masked` decide; any other word (static,
+/// alias, indirect) or a bus failure printing no word reads
+/// `Unknown`, never `Disabled`.
+#[cfg(any(test, not(target_os = "macos")))]
+fn parse_is_enabled(output: &str) -> ServiceEnabled {
+    match output.trim() {
+        "enabled" => ServiceEnabled::Enabled,
+        "disabled" | "masked" => ServiceEnabled::Disabled,
+        _ => ServiceEnabled::Unknown,
+    }
+}
+
+/// No manager verdict off Unix: the probe cannot answer where no
+/// Unix manager exists.
+#[cfg(not(unix))]
+pub fn service_enabled(_entry: &RegistryEntry) -> ServiceEnabled {
+    ServiceEnabled::Unknown
+}
+
+/// Confirm the persisted preference after a toggle: the record
+/// must read back the requested value. Exit codes lie on no-op
+/// manager paths (`load` on a disabled job exits 0 without
+/// loading; `unload -w` on a stopped job exits 0 with an error on
+/// stderr), so the record decides, never the exit code alone.
+#[cfg(unix)]
+fn verify_service_enabled(entry: &RegistryEntry, enabled: bool) -> Result<(), BootstrapError> {
+    let want = if enabled {
+        ServiceEnabled::Enabled
+    } else {
+        ServiceEnabled::Disabled
+    };
+    if service_enabled(entry) != want {
+        let detail = format!(
+            "login-start record still reads the old value after the toggle (want {want:?})"
+        );
+        let probe = if cfg!(target_os = "macos") {
+            ("launchctl", "print-disabled")
+        } else {
+            ("systemctl", "is-enabled")
+        };
+        let wrap = |source: BootstrapError| {
+            if enabled {
+                BootstrapError::EnableService {
+                    name: entry.service.clone(),
+                    source: Box::new(source),
+                }
+            } else {
+                BootstrapError::StopService {
+                    name: entry.service.clone(),
+                    source: Box::new(source),
+                }
+            }
+        };
+        return Err(wrap(BootstrapError::CommandFailed {
+            program: probe.0.to_string(),
+            args: probe.1.to_string(),
+            detail,
+        }));
+    }
+    Ok(())
+}
+
+/// Persist one drive's login-start preference without rewriting
+/// the definition: enable records login start without starting
+/// anything; disable stops the unit now and records no login
+/// start. The definition file stays either way — unlike
+/// [`disable_service`], which clears it for reconfiguration.
+/// Verifies the record (and, for disable, the stopped state)
+/// before returning: the toggle reports the verified preference,
+/// never the manager's exit code.
+#[cfg(unix)]
+pub fn set_service_enabled(
+    entry: &RegistryEntry,
+    definition: &Path,
+    enabled: bool,
+) -> Result<(), BootstrapError> {
+    #[cfg(target_os = "macos")]
+    {
+        let label = format!("md.enesis.wyrd.{}", entry.service);
+        if enabled {
+            // Persist-only: `enable` writes the record without
+            // loading — a stopped job stays stopped, a running job
+            // keeps running. Enablement never starts anything.
+            run(
+                "launchctl",
+                &["enable", &format!("user/{}/{}", current_uid(), label)],
+            )
+            .map_err(|source| BootstrapError::EnableService {
+                name: label.clone(),
+                source: Box::new(source),
+            })?;
+        } else {
+            // One op stops and persists: `unload -w` unloads the
+            // job (a no-op on an already-stopped one — exit 0 with
+            // an error on stderr, which the verify below absorbs)
+            // and records disabled, keeping the plist file.
+            run(
+                "launchctl",
+                &["unload", "-w", &definition.to_string_lossy()],
+            )
+            .map_err(|source| BootstrapError::StopService {
+                name: label.clone(),
+                source: Box::new(source),
+            })?;
+        }
+        verify_service_enabled(entry, enabled)?;
+        if !enabled && run("launchctl", &["list", &label]).is_ok() {
+            // Disable stops: a succeeding `list` means the unit is
+            // still loaded — the record alone does not prove the
+            // stop stuck.
+            return Err(BootstrapError::StopService {
+                name: label.clone(),
+                source: Box::new(BootstrapError::CommandFailed {
+                    program: "launchctl".to_string(),
+                    args: format!("list {label}"),
+                    detail: "unit still loaded after disable".to_string(),
+                }),
+            });
+        }
+        Ok(())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let unit = format!("wyrd-{}.service", entry.service);
+        if enabled {
+            // The definition is unchanged, so no reload: enable
+            // only records login start, never starts the unit.
+            run("systemctl", &["--user", "enable", &unit]).map_err(|source| {
+                BootstrapError::EnableService {
+                    name: unit.clone(),
+                    source: Box::new(source),
+                }
+            })?;
+        } else {
+            // `disable --now` stops a running unit and persists
+            // disabled in one op; the definition file stays.
+            run("systemctl", &["--user", "disable", "--now", &unit]).map_err(|source| {
+                BootstrapError::StopService {
+                    name: unit.clone(),
+                    source: Box::new(source),
+                }
+            })?;
+        }
+        verify_service_enabled(entry, enabled)?;
+        if !enabled {
+            // Disable stops: confirm the unit is inactive.
+            if run("systemctl", &["--user", "is-active", "--quiet", &unit]).is_ok() {
+                return Err(BootstrapError::StopService {
+                    name: unit.clone(),
+                    source: Box::new(BootstrapError::CommandFailed {
+                        program: "systemctl".to_string(),
+                        args: format!("is-active {unit}"),
+                        detail: "unit still active after disable".to_string(),
+                    }),
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Persisting login start needs a Unix manager.
+#[cfg(not(unix))]
+pub fn set_service_enabled(
+    _entry: &RegistryEntry,
+    _definition: &Path,
+    _enabled: bool,
+) -> Result<(), BootstrapError> {
+    Err(BootstrapError::ServicesUnsupported)
+}
+
+/// Start the installed service now without touching its
+/// login-start preference: the manual-Start path. An already
+/// loaded job verifies in place; an enabled-or-unrecorded job
+/// loads without touching the record; a disabled job loads
+/// through a temporary enable that is re-persisted immediately
+/// after — verified loaded AND disabled before returning, so a
+/// completed start never flips the toggle. Linux restarts (a
+/// re-run with a changed definition brings the new owner live
+/// instead of verifying the still-running old one).
+#[cfg(unix)]
+pub fn start_service_only(entry: &RegistryEntry, definition: &Path) -> Result<(), BootstrapError> {
+    #[cfg(target_os = "macos")]
+    {
+        let label = format!("md.enesis.wyrd.{}", entry.service);
+        if run("launchctl", &["list", &label]).is_ok() {
+            return Ok(());
+        }
+        if service_enabled(entry) == ServiceEnabled::Disabled {
+            // Plain `load` refuses a disabled job, so the record is
+            // lifted for the load and restored right after — the
+            // running job survives the re-disable, verified below.
+            // Best-effort ordering (disabled restored last): the
+            // completed command always leaves the toggle as found.
+            run("launchctl", &["load", "-w", &definition.to_string_lossy()]).map_err(|source| {
+                BootstrapError::AgentNotLoaded {
+                    label: label.clone(),
+                    source: Box::new(source),
+                }
+            })?;
+            verify_loaded_macos(&label)?;
+            run(
+                "launchctl",
+                &["disable", &format!("user/{}/{}", current_uid(), label)],
+            )
+            .map_err(|source| BootstrapError::AgentNotLoaded {
+                label: label.clone(),
+                source: Box::new(source),
+            })?;
+            verify_loaded_macos(&label)?;
+            verify_service_enabled(entry, false).map_err(|source| {
+                BootstrapError::AgentNotLoaded {
+                    label: label.clone(),
+                    source: Box::new(source),
+                }
+            })?;
+            return Ok(());
+        }
+        run("launchctl", &["load", &definition.to_string_lossy()]).map_err(|source| {
+            BootstrapError::AgentNotLoaded {
+                label: label.clone(),
+                source: Box::new(source),
+            }
+        })?;
+        verify_loaded_macos(&label)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        start_service(entry)
+    }
+}
+
+/// Confirm a macOS agent is loaded after a start: `list` exiting
+/// non-zero is the not-loaded verdict (a missing job and a
+/// failed load read the same — neither is running).
+#[cfg(all(unix, target_os = "macos"))]
+fn verify_loaded_macos(label: &str) -> Result<(), BootstrapError> {
+    run("launchctl", &["list", label]).map_err(|source| BootstrapError::AgentNotLoaded {
+        label: label.to_string(),
+        source: Box::new(source),
+    })?;
+    Ok(())
+}
+
+/// Starting needs a Unix manager.
+#[cfg(not(unix))]
+pub fn start_service_only(
+    _entry: &RegistryEntry,
+    _definition: &Path,
+) -> Result<(), BootstrapError> {
+    Err(BootstrapError::ServicesUnsupported)
+}
 /// Stop and clear the per-drive service definition before a
 /// reconfiguration: disable the manager unit (or unload the agent)
 /// so a restart cannot bring the old definition back over the new
@@ -2651,7 +2994,7 @@ pub fn reconfigure(config: ReconfigureConfig) -> ProvisionState {
 /// this only on the person's explicit decision, and a deliberately
 /// stopped drive stays stopped until they do.
 ///
-/// Against a live drive this restarts the owner: the enable/start
+/// Against a live drive this restarts the owner: the start
 /// primitives are the reconfigure ones (macOS unloads then loads,
 /// systemd restarts), so in-flight work turns `Unconfirmed`. The
 /// desktop offers the verb only for stopped and wedged drives; a
@@ -2661,7 +3004,7 @@ pub fn reconfigure(config: ReconfigureConfig) -> ProvisionState {
 /// No binary preflight: the definition names its own programs, so
 /// sibling checks would validate the wrong files and refuse starts
 /// that would work. A missing program surfaces through
-/// `enable_and_start` and the socket verify instead.
+/// `start_service_only` and the socket verify instead.
 pub struct StartServiceConfig {
     /// Absolute drive directory identifying the entry to start.
     pub drive_dir: PathBuf,
@@ -2754,18 +3097,20 @@ pub fn start_managed_service(config: StartServiceConfig) -> ProvisionState {
             ),
         };
     }
-    // 3. Enable and start the existing definition, then verify the
-    // socket with the reconfigure retry (a freshly restarted owner
-    // still binding never reads as unavailable). No binary preflight:
-    // the definition names its own programs; a missing program fails
+    // 3. Start the existing definition without touching its
+    // login-start preference, then verify the socket with the
+    // reconfigure retry (a freshly restarted owner still binding
+    // never reads as unavailable). No binary preflight: the
+    // definition names its own programs; a missing program fails
     // here and in the verify below, which is where the recovery
-    // actually runs.
-    if let Err((kind, reason)) = enable_and_start(&entry, definition) {
+    // actually runs. Starting never enables: a disabled drive
+    // started manually stays disabled at the next login.
+    if let Err(error) = start_service_only(&entry, definition) {
         return ProvisionState::RegisteredButUnavailable {
             entry,
             skipped: registry.skipped.clone(),
-            kind,
-            reason,
+            kind: ProvisionFailureKind::StartService,
+            reason: format!("start-service: {error}"),
         };
     }
     match verify_owner_socket(&config.drive_dir, config.verify_timeout, true) {
@@ -3100,6 +3445,65 @@ mod tests {
         }
     }
 
+    /// The enablement parsers decide by record/word, never by
+    /// exit code: present records map to their value, absent
+    /// records and garbage read Unknown (never Disabled), and a
+    /// label never matches a longer label's record.
+    #[test]
+    fn enablement_parsers_map_records_not_exit_codes() {
+        // macOS `print-disabled` shape, as observed live.
+        let dump = "\tdisabled services = {\n\t\t\"md.enesis.wyrd.drive-alpha\" => enabled\n\t\t\"md.enesis.wyrd.drive-foobar\" => disabled\n\t}\n";
+        assert_eq!(
+            parse_print_disabled(dump, "drive-alpha"),
+            ServiceEnabled::Enabled
+        );
+        assert_eq!(
+            parse_print_disabled(dump, "drive-foobar"),
+            ServiceEnabled::Disabled
+        );
+        // Prefix collision: `drive-foo` must not read the
+        // `drive-foobar` record; the closing quote guards it.
+        assert_eq!(
+            parse_print_disabled(dump, "drive-foo"),
+            ServiceEnabled::Unknown
+        );
+        assert_eq!(
+            parse_print_disabled(dump, "drive-missing"),
+            ServiceEnabled::Unknown
+        );
+        assert_eq!(
+            parse_print_disabled("\"md.enesis.wyrd.drive-x\" => maybe\n", "drive-x"),
+            ServiceEnabled::Unknown
+        );
+        // Linux `is-enabled` words.
+        assert_eq!(parse_is_enabled("enabled\n"), ServiceEnabled::Enabled);
+        assert_eq!(parse_is_enabled("disabled\n"), ServiceEnabled::Disabled);
+        assert_eq!(parse_is_enabled("masked\n"), ServiceEnabled::Disabled);
+        assert_eq!(parse_is_enabled("static\n"), ServiceEnabled::Unknown);
+        // A bus failure prints no word: Unknown, never Disabled.
+        assert_eq!(
+            parse_is_enabled("Failed to connect to bus.\n"),
+            ServiceEnabled::Unknown
+        );
+        assert_eq!(parse_is_enabled(""), ServiceEnabled::Unknown);
+    }
+
+    /// The live-manager probe on a service that was never
+    /// registered reads Unknown without writing anything: no
+    /// record exists, and the probe performs no mutation. Read
+    /// only — safe on any machine.
+    #[test]
+    fn enablement_probe_on_unknown_service_is_unknown() {
+        let entry = RegistryEntry {
+            name: "wyrd-probe-missing-xyz".to_string(),
+            drive_dir: PathBuf::from("/tmp/wyrd-probe-missing-xyz"),
+            relays: Vec::new(),
+            service: "wyrd-probe-missing-xyz".to_string(),
+            mode: ServiceMode::Vault,
+            mountpoint: None,
+        };
+        assert_eq!(service_enabled(&entry), ServiceEnabled::Unknown);
+    }
     /// `run` reports spawn and command failures with their program
     /// and detail: missing programs never spawn, failing programs
     /// report their own text. The service-stage `ProvisionFailureKind`

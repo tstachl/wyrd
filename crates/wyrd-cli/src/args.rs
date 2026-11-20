@@ -698,13 +698,35 @@ pub(crate) enum DriveAction {
         no_service: bool,
     },
     /// Start this registered drive's installed service without
-    /// rewriting anything: enable and start the existing definition
-    /// and verify the socket. The recovery for "installed but
-    /// stopped" — explicit, never automatic. A missing definition
-    /// refuses with the reinstall pointer. Against a live drive this
-    /// restarts the owner by design (the enable/start primitives
-    /// restart), so offer it only for stopped and wedged drives.
+    /// rewriting anything and without touching its login-start
+    /// preference: start the existing definition now and verify the
+    /// socket. A disabled drive started manually stays disabled at
+    /// the next login — starting never enables. The recovery for
+    /// "installed but stopped" — explicit, never automatic. A
+    /// missing definition refuses with the reinstall pointer.
+    /// Against a live drive this restarts the owner by design, so
+    /// offer it only for stopped and wedged drives.
     ServiceStart {
+        /// Registry file elsewhere than the platform default.
+        #[arg(long, value_name = "PATH")]
+        registry: Option<PathBuf>,
+    },
+    /// Enable this registered drive's login start without starting
+    /// it: record the preference with the service manager, then
+    /// verify the record — the running state is unchanged either
+    /// way. Managed drives only: a missing definition refuses with
+    /// the reinstall pointer (session-posture drives have no unit
+    /// to enable).
+    ServiceEnable {
+        /// Registry file elsewhere than the platform default.
+        #[arg(long, value_name = "PATH")]
+        registry: Option<PathBuf>,
+    },
+    /// Disable this registered drive's login start and stop it now,
+    /// keeping the definition file: record the preference with the
+    /// service manager, then verify the record and the stopped
+    /// state. Managed drives only, like `service-enable`.
+    ServiceDisable {
         /// Registry file elsewhere than the platform default.
         #[arg(long, value_name = "PATH")]
         registry: Option<PathBuf>,

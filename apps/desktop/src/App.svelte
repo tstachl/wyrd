@@ -27,6 +27,8 @@
     provisionJoin,
     provisionLeave,
     provisionReconfigure,
+    provisionServiceDisable,
+    provisionServiceEnable,
     provisionServiceStart,
     reconnect,
     revealInFolder,
@@ -39,6 +41,8 @@
     ProvisionJoinArgs,
     ProvisionLeaveArgs,
     ProvisionReconfigureArgs,
+    ProvisionServiceDisableArgs,
+    ProvisionServiceEnableArgs,
     ProvisionServiceStartArgs,
   } from "$lib/ipc/operations.js";
   import type { IpcResult } from "$lib/ipc/types.js";
@@ -387,6 +391,7 @@
   let unlockRefused: { driveDir: string; detail: string } | null = $state(null);
 
   const selectedServiceState = $derived(selectedDrive?.service_state ?? null);
+  const selectedEnablement = $derived(selectedDrive?.enablement ?? null);
   const selectedSession = $derived(selectedDrive?.session ?? null);
   const selectedSessionDetail = $derived(
     selectedSession !== null && selectedSession.state === "locked"
@@ -604,8 +609,8 @@
 
   /**
    * Start one drive's installed service (the "installed but
-   * stopped" / "wedged" recovery): enable and start the existing
-   * definition through the constrained CLI adapter, then re-read
+   * stopped" / "wedged" recovery): start the existing definition
+   * now without touching its login-start preference, through the
    * the registry and re-derive availability like `retryConnection`
    * does — a settings-scoped re-read never touches the taxonomy,
    * so without the explicit probe the overlay would persist after
@@ -630,6 +635,68 @@
         detail:
           error instanceof Error ? error.message : `Unexpected start failure: ${String(error)}`,
       };
+      return;
+    }
+    await refreshLifecycle();
+    await readOwner(driveDir, () => liveness(driveDir));
+    await refreshCurrent();
+  }
+
+  /**
+   * Flip one drive's login-start preference and report the
+   * refusal detail, or null where the toggle completed and the
+   * post-toggle probe answered — the verdict consults the
+   * observation, never toggle acceptance alone. Shared by the
+   * unavailable-overlay toggle (which surfaces the detail as
+   * recovery) and the settings toggle (which renders it beside
+   * the switch).
+   */
+  async function toggleEnablementReport(driveDir: string, enable: boolean): Promise<string | null> {
+    const args = { driveDir };
+    try {
+      const report = await runProvision(() =>
+        enable ? provisionServiceEnable(args) : provisionServiceDisable(args),
+      );
+      return refusedDetail(report);
+    } catch (error: unknown) {
+      return error instanceof Error ? error.message : `Unexpected toggle failure: ${String(error)}`;
+    }
+  }
+
+  /**
+   * Flip one drive's login-start preference from Settings: record
+   * through the adapter, then re-read the registry, the drive
+   * settings, and availability — the fresh enablement probe
+   * updates the card, and the detail (if any) renders beside the
+   * switch.
+   */
+  async function toggleEnablementFromSettings(
+    driveDir: string,
+    enable: boolean,
+  ): Promise<string | null> {
+    const detail = await toggleEnablementReport(driveDir, enable);
+    await refreshLifecycle();
+    await refreshSettings(driveDir);
+    await refreshCurrent();
+    return detail;
+  }
+
+  /**
+   * Flip one drive's login-start preference (the toggle beside
+   * Start/Reinstall): record enable or disable through the
+   * constrained CLI adapter, then re-read the registry and
+   * re-derive availability like `retryConnection` does — the fresh
+   * enablement probe decides the display, never the toggle action.
+   * Enabling never starts anything; disabling stops the service
+   * now but keeps the definition. A refused outcome surfaces on
+   * the screen; a transport throw surfaces as the recovery detail.
+   */
+  async function toggleEnablement(driveDir: string, enable: boolean): Promise<void> {
+    recovery = null;
+    unlockRefused = null;
+    const detail = await toggleEnablementReport(driveDir, enable);
+    if (detail !== null) {
+      recovery = { driveDir, detail };
       return;
     }
     await refreshLifecycle();
@@ -833,10 +900,12 @@
     pending={busy}
     onRetry={() => void retryConnection(driveDir)}
     serviceState={selectedServiceState}
+    enablement={selectedEnablement}
     canReinstall={canReinstall}
     recoveryDetail={recovery !== null && recovery.driveDir === driveDir ? recovery.detail : null}
     onStart={() => void startService(driveDir)}
     onReinstall={() => void reinstallService(driveDir)}
+    onToggleEnablement={(enable: boolean) => void toggleEnablement(driveDir, enable)}
   />
 {/snippet}
 
@@ -1058,6 +1127,11 @@
                 runSettingsWrite(selectedDriveDir, update)
               }
               onRestartService={() => restartServiceForApply(selectedDriveDir)}
+              serviceState={selectedServiceState}
+              enablement={selectedEnablement}
+              onToggleEnablement={(enable: boolean) =>
+                toggleEnablementFromSettings(selectedDriveDir, enable)
+              }
               onRefreshDrives={allDrives}
             />
           {/if}
