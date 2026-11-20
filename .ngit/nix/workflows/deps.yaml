@@ -36,4 +36,7 @@ on:
 
 jobs:
   deps:
+    requirements:
+      resources:
+        memory-mib: {gte: 4096}
     build: checks.x86_64-linux.rust-deps
