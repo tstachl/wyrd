@@ -176,6 +176,14 @@ export interface ProvisionServiceStartArgs {
   driveDir: string;
 }
 
+export interface ProvisionServiceEnableArgs {
+  driveDir: string;
+}
+
+export interface ProvisionServiceDisableArgs {
+  driveDir: string;
+}
+
 /**
  * Create one drive through the installed CLI, then re-read and
  * probe. `mode` is `vault` or `mount` (`mount` needs `mountpoint`).
@@ -212,12 +220,35 @@ export function provisionReconfigure(args: ProvisionReconfigureArgs): Promise<Pr
 
 /**
  * Start the drive's installed service through the installed CLI
- * (enable and start the existing definition, verify the socket),
- * then re-read and probe. The recovery for "installed but
- * stopped" — explicit, never automatic; no credentials travel.
+ * (start the existing definition now without touching its
+ * login-start preference, verify the socket), then re-read and
+ * probe. The recovery for "installed but stopped" — explicit,
+ * never automatic; no credentials travel.
  */
 export function provisionServiceStart(args: ProvisionServiceStartArgs): Promise<ProvisionReport> {
   return invokeValue<ProvisionReport>("provision_service_start", { args });
+}
+
+/**
+ * Enable the drive's login start through the installed CLI
+ * (record the preference with the service manager without
+ * starting anything, verify the record), then re-read and probe.
+ * No credentials travel.
+ */
+export function provisionServiceEnable(args: ProvisionServiceEnableArgs): Promise<ProvisionReport> {
+  return invokeValue<ProvisionReport>("provision_service_enable", { args });
+}
+
+/**
+ * Disable the drive's login start and stop it now through the
+ * installed CLI (record the preference, verify the record and the
+ * stopped state, keep the definition file), then re-read and
+ * probe. No credentials travel.
+ */
+export function provisionServiceDisable(
+  args: ProvisionServiceDisableArgs,
+): Promise<ProvisionReport> {
+  return invokeValue<ProvisionReport>("provision_service_disable", { args });
 }
 
 /**

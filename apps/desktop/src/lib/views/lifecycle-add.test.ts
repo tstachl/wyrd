@@ -38,6 +38,7 @@ function readySnapshot(): Stamped<RegistryState> {
           mountpoint: null,
           availability: { state: "available" },
           service_state: { state: "unknown", detail: "probe" },
+          enablement: { enablement: "unknown", detail: "probe" },
           session: null,
         },
       ],

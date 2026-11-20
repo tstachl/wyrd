@@ -63,12 +63,24 @@ is transient — no drive data is affected.
   (service definition not installed, installed but stopped, running
   but socket-absent) beside the transport verdict and offers the
   matching recovery through the constrained CLI adapter — Start the
-  installed agent (new `wyrd drive <dir> service-start`: enable and
-  start the existing definition, verify the socket, no keystore, no
+  installed agent (new `wyrd drive <dir> service-start`: start the
+  existing definition without touching its login-start preference,
+  verify the socket, no keystore, no
   credentials) or Reinstall the definition (existing `drive
   reconfigure` keeping relays and mode). Never auto-start; refused
   recoveries report their outcome on the screen; dev builds without
   managed pieces say so instead of a dead Retry.
+
+- Per-drive auto-start toggle
+  (`nostr:nevent1qqs2psl57a4xgd6valvnc8j2t2f6ymsafny245upu0uvg0675sljycgpz9mhxue69uhkwunpwdczuap49eehg8aer9s`):
+  one toggle per managed drive ("Start drive service at login")
+  recording the login-start preference with the service manager
+  without starting anything (`wyrd drive <dir> service-enable` /
+  `service-disable`, the latter stopping now but keeping the
+  definition). Enablement is observed independently of lifecycle
+  (Enabled/Disabled/Unknown, never inferred from loaded state),
+  starting never enables, and the preference never implies the
+  owner answered. Managed drives only.
 
 - Read-only conflict inspector for File Provider (File Provider
   Stage 3, sub-PR 3, OD-17-B,

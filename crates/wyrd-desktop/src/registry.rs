@@ -169,6 +169,15 @@ pub struct DriveView {
     /// not-installed vs stopped vs wedged vs running vs unknown vs
     /// unsupported. Observation only — never supervision.
     pub service_state: super::service::ServiceState,
+    /// The login-start preference as the manager records it:
+    /// enabled vs disabled vs unknown. Independent of
+    /// `service_state` — a manually started service may run while
+    /// disabled at login. Probed wherever a definition exists on
+    /// explicit refresh (one cheap fork per managed drive, read by
+    /// the toggle); `Unknown` where there is no definition to
+    /// enable (managed-only toggle) or the manager did not answer.
+    /// Observation only — never supervision.
+    pub enablement: super::service::EnablementState,
     /// The per-session gate beside the transport verdict: locked
     /// vs unlocked for definition-less drives, `None` where a
     /// service definition exists (managed recovery owns that
@@ -549,6 +558,28 @@ pub fn list_drives_at(registry_path: &Path) -> RegistryState {
                     // reads the answer. `Unknown` availability gets only
                     // the definition-file fact, never a manager spawn:
                     // the screen does not render it either.
+                    // The enablement probe runs wherever a definition
+                    // exists: the toggle reads it on every managed
+                    // drive, available or not — one cheap fork per
+                    // managed drive per explicit refresh, beside the
+                    // lifecycle probe above. No definition means no
+                    // unit to enable (managed-only toggle): Unknown
+                    // with the managed-only reason, never a fork.
+                    // Unknown availability probes nothing either.
+                    let enablement = if !definition_exists {
+                        super::service::EnablementState::Unknown {
+                            detail: "no service definition installed: enablement applies to managed drives only".to_string(),
+                        }
+                    } else if matches!(
+                        availability,
+                        DriveAvailability::Unknown { .. }
+                    ) {
+                        super::service::EnablementState::Unknown {
+                            detail: "enablement not probed while availability is unknown — retry the owner probe".to_string(),
+                        }
+                    } else {
+                        super::service::probe_enablement(&entry.service)
+                    };
                     let service_state = match &availability {
                         DriveAvailability::Available => super::service::ServiceState::Running {
                             detail:
@@ -591,6 +622,7 @@ pub fn list_drives_at(registry_path: &Path) -> RegistryState {
                             .map(|path| path.to_string_lossy().into_owned()),
                         availability,
                         service_state,
+                        enablement,
                         session,
                     }
                 })

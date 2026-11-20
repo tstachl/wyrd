@@ -323,6 +323,12 @@ export type ServiceState =
   | { state: "unknown"; detail: string }
   | { state: "unsupported"; detail: string };
 
+/** One drive's login-start preference as the service manager records it: enabled vs disabled vs unknown. Independent of `ServiceState` — a manually started service may run while disabled at login. No `Stopped*` variants: the two observations pair instead of merging. */
+export type EnablementState =
+  | { enablement: "enabled"; detail: string }
+  | { enablement: "disabled"; detail: string }
+  | { enablement: "unknown"; detail: string };
+
 /**
  * One drive's session gate for the per-session posture: whether the
  * drive is open in this session or needs an explicit unlock. `null`
@@ -344,6 +350,7 @@ export interface DriveView {
   mountpoint: string | null;
   availability: DriveAvailability;
   service_state: ServiceState;
+  enablement: EnablementState;
   session: SessionState | null;
 }
 

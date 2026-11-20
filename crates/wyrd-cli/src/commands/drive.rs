@@ -43,12 +43,13 @@
 //! other lifecycle operation on the drive — the last writer wins the
 //! entry while each rewrite stays atomic.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use wyrd_core::lifecycle_surface::{render_deletion_confirmation, render_leave_refusal};
 use wyrd_daemon::bootstrap::{
-    default_registry_path, reconfigure, start_managed_service, ReconfigureConfig,
+    default_registry_path, read_registry, reconfigure, service_definition_path_for_service,
+    set_service_enabled, start_managed_service, ReconfigureConfig, RegistryEntry,
     StartServiceConfig,
 };
 use wyrd_format::{Change, DeviceId, MembershipTransition};
@@ -123,6 +124,12 @@ pub(crate) fn drive(
         DriveAction::ServiceStart { .. } => {
             unreachable!("service-start resolves in the dispatcher before drive()")
         }
+        DriveAction::ServiceEnable { .. } => {
+            unreachable!("service-enable resolves in the dispatcher before drive()")
+        }
+        DriveAction::ServiceDisable { .. } => {
+            unreachable!("service-disable resolves in the dispatcher before drive()")
+        }
         DriveAction::Unlock { .. } => {
             unreachable!("unlock runs the owner in the dispatcher before drive()")
         }
@@ -130,20 +137,20 @@ pub(crate) fn drive(
 }
 
 /// Start this registered drive's installed service without rewriting
-/// anything: enable and start the existing definition, then verify
-/// the socket. No keystore opens and no credentials load — the
-/// dispatcher calls this before credential loading, so a stopped
-/// service starts even where the operator's key files are momentarily
-/// unavailable. Ready is reported only when the socket verifies this
-/// session.
+/// anything and without touching its login-start preference: start
+/// the existing definition now, then verify the socket. A disabled
+/// drive started manually stays disabled at the next login. No
+/// keystore opens and no credentials load — the dispatcher calls
+/// this before credential loading, so a stopped service starts even
+/// where the operator's key files are momentarily unavailable.
+/// Ready is reported only when the socket verifies this session.
 pub(crate) fn service_start_drive(
     drive_dir: PathBuf,
     registry: Option<PathBuf>,
 ) -> Result<(), CliError> {
-    let registry_path = registry.unwrap_or_else(default_registry_path);
     let report = start_managed_service(StartServiceConfig {
         drive_dir: drive_dir.clone(),
-        registry_path,
+        registry_path: registry.unwrap_or_else(default_registry_path),
         service_definition: None,
         verify_timeout: Duration::from_secs(30),
     });
@@ -178,6 +185,101 @@ pub(crate) fn service_start_drive(
             "service start incomplete at {stage}: {reason}"
         ))),
     }
+}
+
+/// Resolve the registry entry and definition file a service-toggle
+/// operates on: managed drives only. A missing definition refuses
+/// with the reinstall pointer — session-posture (`--no-service`)
+/// drives have no unit to enable, disable, or start, and a removed
+/// definition is the reinstall recovery, never a toggle.
+fn resolve_service_toggle_target(
+    drive_dir: &Path,
+    registry: Option<PathBuf>,
+) -> Result<(RegistryEntry, PathBuf), CliError> {
+    let registry = read_registry(&registry.unwrap_or_else(default_registry_path)).map_err(|error| {
+        CliError::Usage(format!(
+            "service toggle cannot read the registry: {error} (register with `wyrd bootstrap` first)"
+        ))
+    })?;
+    let mut matches: Vec<RegistryEntry> = registry
+        .drives
+        .values()
+        .filter(|entry| entry.drive_dir == drive_dir)
+        .cloned()
+        .collect();
+    matches.sort_by(|left, right| left.name.cmp(&right.name));
+    let entry = match matches.len() {
+        0 => {
+            return Err(CliError::Usage(format!(
+                "no registry entry for {}: register with `wyrd bootstrap` first",
+                drive_dir.display()
+            )));
+        }
+        1 => matches.pop().expect("one match"),
+        _ => {
+            let names: Vec<&str> = matches.iter().map(|entry| entry.name.as_str()).collect();
+            return Err(CliError::Usage(format!(
+                "conflicting registry entries for {}: {} — resolve the duplicate by hand first",
+                drive_dir.display(),
+                names.join(", ")
+            )));
+        }
+    };
+    let definition = service_definition_path_for_service(&entry.service);
+    if !definition.exists() {
+        return Err(CliError::Usage(format!(
+            "no service definition installed for {} ({} missing): reinstall with `wyrd drive {} reconfigure --mode <vault|mount>`, or start a session directly with `wyrd drive {} unlock`",
+            entry.name,
+            definition.display(),
+            drive_dir.display(),
+            drive_dir.display()
+        )));
+    }
+    Ok((entry, definition))
+}
+
+/// Enable this registered drive's login start without starting it:
+/// record the preference with the service manager, then verify the
+/// record — the running state is unchanged either way. Managed
+/// drives only (see [`resolve_service_toggle_target`]).
+pub(crate) fn service_enable_drive(
+    drive_dir: PathBuf,
+    registry: Option<PathBuf>,
+) -> Result<(), CliError> {
+    let (entry, definition) = resolve_service_toggle_target(&drive_dir, registry)?;
+    set_service_enabled(&entry, &definition, true).map_err(|error| {
+        CliError::Usage(format!(
+            "drive {} login start could not be enabled: {error}",
+            entry.name
+        ))
+    })?;
+    println!(
+        "drive {} login start enabled (starts at next login; running state unchanged)",
+        entry.name
+    );
+    Ok(())
+}
+
+/// Disable this registered drive's login start and stop it now,
+/// keeping the definition file: record the preference with the
+/// service manager, then verify the record and the stopped state.
+/// Managed drives only (see [`resolve_service_toggle_target`]).
+pub(crate) fn service_disable_drive(
+    drive_dir: PathBuf,
+    registry: Option<PathBuf>,
+) -> Result<(), CliError> {
+    let (entry, definition) = resolve_service_toggle_target(&drive_dir, registry)?;
+    set_service_enabled(&entry, &definition, false).map_err(|error| {
+        CliError::Usage(format!(
+            "drive {} login start could not be disabled: {error}",
+            entry.name
+        ))
+    })?;
+    println!(
+        "drive {} login start disabled (service stopped; stays stopped at login)",
+        entry.name
+    );
+    Ok(())
 }
 
 /// Delete this drive locally: refuse a non-owner before anything is

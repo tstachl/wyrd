@@ -18,6 +18,8 @@ recovery reports its outcome on this screen instead of failing
 silently. -->
 <script lang="ts">
   import { Button } from "$lib/components/ui/button/index.js";
+  import { Checkbox } from "$lib/components/ui/checkbox/index.js";
+  import * as Field from "$lib/components/ui/field/index.js";
   import * as Alert from "$lib/components/ui/alert/index.js";
   import * as Empty from "$lib/components/ui/empty/index.js";
   import { Spinner } from "$lib/components/ui/spinner/index.js";
@@ -25,7 +27,7 @@ silently. -->
   import PlayIcon from "@lucide/svelte/icons/play";
   import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
   import WrenchIcon from "@lucide/svelte/icons/wrench";
-  import type { ServiceState } from "$lib/ipc/results.js";
+  import type { EnablementState, ServiceState } from "$lib/ipc/results.js";
 
   interface Props {
     driveLabel: string;
@@ -34,12 +36,16 @@ silently. -->
     onRetry: () => void;
     /** The service-manager fact beside the transport verdict, if the registry named it. */
     serviceState?: ServiceState | null;
+    /** The login-start preference as the manager records it, if the registry named it. */
+    enablement?: EnablementState | null;
     /** Whether the reinstall recovery can run (credential paths verified at the gate). */
     canReinstall?: boolean;
     /** The last recovery attempt's outcome, where it refused — never lifecycle state. */
     recoveryDetail?: string | null;
     onStart?: () => void;
     onReinstall?: () => void;
+    /** Flip the login-start preference; the caller re-reads and the fresh probe decides the display. */
+    onToggleEnablement?: (enable: boolean) => void;
   }
 
   let {
@@ -48,10 +54,12 @@ silently. -->
     pending,
     onRetry,
     serviceState = null,
+    enablement = null,
     canReinstall = false,
     recoveryDetail = null,
     onStart,
     onReinstall,
+    onToggleEnablement,
   }: Props = $props();
 
   const serviceDetail = $derived(
@@ -65,6 +73,20 @@ silently. -->
   const showReinstall = $derived(
     serviceState !== null && serviceState.state === "notinstalled" && onReinstall !== undefined,
   );
+  // The toggle rides beside Start/Reinstall, never on definition-less
+  // or unanswered states: a session-posture drive has no unit to
+  // enable, and an unanswered probe is not evidence either way.
+  const showToggle = $derived(
+    serviceState !== null &&
+      (serviceState.state === "stopped" || serviceState.state === "wedged") &&
+      onToggleEnablement !== undefined,
+  );
+  // Checked only where the manager positively records enabled;
+  // indeterminate where it did not answer or keeps no record —
+  // unchecked is a decision, never the display of an unknown.
+  const toggleChecked = $derived(enablement !== null && enablement.enablement === "enabled");
+  const toggleUnknown = $derived(enablement === null || enablement.enablement === "unknown");
+  const enablementDetail = $derived(enablement !== null ? enablement.detail : null);
   // Dev-only honesty: no manager tool exists in this build, so no
   // managed-service verdict is possible. Shipped builds always
   // supervise the owner; their timeouts read `unknown` instead and
@@ -102,6 +124,34 @@ silently. -->
       <Alert.Root variant="destructive" class="text-left">
         <p>{recoveryDetail}</p>
       </Alert.Root>
+    {/if}
+    {#if showToggle}
+      <Field.Group>
+        <Field.Field orientation="horizontal">
+          <Checkbox
+            id="auto-start-toggle"
+            checked={toggleChecked}
+            indeterminate={toggleUnknown}
+            disabled={pending || onToggleEnablement === undefined}
+            onCheckedChange={(next) => {
+              if (typeof next === "boolean" && onToggleEnablement !== undefined) {
+                onToggleEnablement(next);
+              }
+            }}
+          />
+          <Field.Label for="auto-start-toggle" class="font-normal">
+            Start drive service at login
+          </Field.Label>
+        </Field.Field>
+        <Field.Description>
+          The per-drive owner service the manager starts at login. Toggling never touches
+          drive data and never implies the owner answered — a disabled drive stays stopped
+          until started manually.
+          {#if enablementDetail !== null}
+            <span class="mt-1 block">{enablementDetail}</span>
+          {/if}
+        </Field.Description>
+      </Field.Group>
     {/if}
     <div class="flex flex-wrap gap-2">
       <Button disabled={pending} onclick={onRetry}>

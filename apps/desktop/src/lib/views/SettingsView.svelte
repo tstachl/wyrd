@@ -26,7 +26,7 @@ never deletes local data as a side effect of the UI. -->
   import CopyButton from "$lib/components/copy-button.svelte";
   import InfoHint from "$lib/components/info-hint.svelte";
   import type { Stamped } from "$lib/state/presentation.svelte.js";
-  import type { DriveSettingsState, ProvisionReport, SessionState, SettingsWriteReport, SparseUpdateArgs } from "$lib/ipc/results.js";
+  import type { DriveSettingsState, EnablementState, ProvisionReport, ServiceState, SessionState, SettingsWriteReport, SparseUpdateArgs } from "$lib/ipc/results.js";
   import type { ProvisionLeaveArgs } from "$lib/ipc/operations.js";
   import {
     boundLabel,
@@ -76,11 +76,29 @@ never deletes local data as a side effect of the UI. -->
      * alone.
      */
     onRestartService: () => Promise<string | null>;
+    /**
+     * The service-manager fact beside the transport verdict, where
+     * the registry named it. Decides whether the login-start
+     * toggle renders: managed stop states only.
+     */
+    serviceState?: ServiceState | null;
+    /**
+     * The login-start preference as the manager records it, where
+     * the registry named it. Independent of `serviceState`.
+     */
+    enablement?: EnablementState | null;
+    /**
+     * Flip the login-start preference; resolves the refusal detail,
+     * or null where the toggle completed and the post-toggle probe
+     * answered — the verdict consults the observation, never toggle
+     * acceptance alone.
+     */
+    onToggleEnablement?: (enable: boolean) => Promise<string | null>;
     /** Re-read the registry and return to the drive list. */
     onRefreshDrives: () => void;
   }
 
-  let { driveDir, snapshot, pending, transportNotice, identityFile, passphraseFile, onRefresh, onLeave, onApply, session, onRestartService, onRefreshDrives }: Props = $props();
+  let { driveDir, snapshot, pending, transportNotice, identityFile, passphraseFile, onRefresh, onLeave, onApply, session, onRestartService, serviceState = null, enablement = null, onToggleEnablement, onRefreshDrives }: Props = $props();
 
   const restartKind = $derived(restartKindFor(session));
 
@@ -246,8 +264,22 @@ never deletes local data as a side effect of the UI. -->
   let confirmRestart = $state(false);
   let restarting = $state(false);
   let restartReport = $state<{ ok: boolean; detail?: string } | null>(null);
+  let toggling = $state(false);
+  let toggleReport = $state<{ ok: boolean; detail?: string } | null>(null);
 
-  const busy = $derived(pending || leaveWorking || saving || restarting);
+  const busy = $derived(pending || leaveWorking || saving || restarting || toggling);
+
+  async function toggleEnablement(enable: boolean): Promise<void> {
+    if (onToggleEnablement === undefined) return;
+    toggling = true;
+    toggleReport = null;
+    try {
+      const detail = await onToggleEnablement(enable);
+      toggleReport = detail === null ? { ok: true } : { ok: false, detail };
+    } finally {
+      toggling = false;
+    }
+  }
 
   async function restartService(): Promise<void> {
     confirmRestart = false;
@@ -306,6 +338,52 @@ never deletes local data as a side effect of the UI. -->
   <Alert.Root class="mt-4 border-primary/40 bg-primary/10">
     <p>{transportNotice}</p>
   </Alert.Root>
+{/if}
+
+{#if session === null && onToggleEnablement !== undefined && serviceState !== null && serviceState.state !== "notinstalled" && serviceState.state !== "unsupported"}
+  {@const toggleChecked = enablement !== null && enablement.enablement === "enabled"}
+  {@const toggleUnknown = enablement === null || enablement.enablement === "unknown"}
+  <Card.Root class="mt-6">
+    <Card.Header>
+      <Card.Title class="text-sm">Start at login</Card.Title>
+      <Card.Description>
+        The per-drive owner service the manager starts at login — a Drive service. Toggling
+        never touches drive data and never implies the owner answered.
+      </Card.Description>
+    </Card.Header>
+    <Card.Content class="flex flex-col gap-3">
+      <Field.Group>
+        <Field.Field orientation="horizontal">
+          <Checkbox
+            id="settings-auto-start-toggle"
+            checked={toggleChecked}
+            indeterminate={toggleUnknown}
+            disabled={busy}
+            onCheckedChange={(next) => {
+              if (typeof next === "boolean") void toggleEnablement(next);
+            }}
+          />
+          <Field.Label for="settings-auto-start-toggle" class="font-normal">
+            Start drive service at login
+          </Field.Label>
+        </Field.Field>
+        {#if enablement !== null}
+          <Field.Description>{enablement.detail}</Field.Description>
+        {/if}
+      </Field.Group>
+      {#if toggleReport !== null}
+        {#if toggleReport.ok}
+          <p class="text-xs text-muted-foreground">
+            Preference recorded — the fresh probe above decides what holds.
+          </p>
+        {:else}
+          <Alert.Root variant="destructive">
+            <p>{toggleReport.detail}</p>
+          </Alert.Root>
+        {/if}
+      {/if}
+    </Card.Content>
+  </Card.Root>
 {/if}
 
 {#snippet saveAlerts()}

@@ -44,6 +44,7 @@ pub use registry::{
     DriveAvailability, DriveView, RegistryEntryWrite, RegistryState, RegistryStatus,
     RegistryWriteError, SessionState,
 };
+pub use service::EnablementState;
 pub use service::ServiceState;
 pub use session::{MAX_UNLOCK_RESTARTS, UNLOCK_POLL_INTERVAL, UNLOCK_RESTART_BACKOFF};
 pub use settings_apply::{
@@ -431,6 +432,8 @@ pub fn invoke_handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> 
         commands::provision_leave,
         commands::provision_reconfigure,
         commands::provision_service_start,
+        commands::provision_service_enable,
+        commands::provision_service_disable,
         commands::drive_unlock,
         commands::drive_lock,
         commands::onboarding_defaults,

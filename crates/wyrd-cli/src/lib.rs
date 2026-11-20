@@ -505,6 +505,45 @@ pub fn command(args: Vec<String>) -> Result<(), CliError> {
         }
         Command::Drive {
             drive_dir,
+            action: crate::args::DriveAction::ServiceEnable { registry },
+            credentials,
+            ..
+        } => {
+            // Enabling records a login-start preference and opens
+            // nothing: resolve before credential loading, like
+            // service-start, and refuse the stdin flag for the same
+            // reason — it cannot affect an enablement record.
+            if credentials.passphrase_stdin {
+                return Err(CliError::Usage(
+                    "--passphrase-stdin has no effect on `drive service-enable`: enabling records a login-start preference and opens no keystore".to_string(),
+                ));
+            }
+            return crate::commands::drive::service_enable_drive(
+                drive_dir.clone(),
+                registry.clone(),
+            );
+        }
+        Command::Drive {
+            drive_dir,
+            action: crate::args::DriveAction::ServiceDisable { registry },
+            credentials,
+            ..
+        } => {
+            // Disabling stops the unit now and records no login
+            // start; it opens nothing, so the same stdin refusal
+            // applies.
+            if credentials.passphrase_stdin {
+                return Err(CliError::Usage(
+                    "--passphrase-stdin has no effect on `drive service-disable`: disabling stops the service and records a preference, and opens no keystore".to_string(),
+                ));
+            }
+            return crate::commands::drive::service_disable_drive(
+                drive_dir.clone(),
+                registry.clone(),
+            );
+        }
+        Command::Drive {
+            drive_dir,
             credentials,
             ..
         } => load_credentials(drive_dir, credentials, cli.config.as_deref())?,
@@ -562,13 +601,14 @@ pub fn command(args: Vec<String>) -> Result<(), CliError> {
     match cli.command {
         // Dead by construction: the credentials match above returns
         // from update, build-info, identity, drive service-start,
-        // drive unlock, and settings before secrets load. The arm
+        // drive service-enable, drive service-disable, drive unlock,
+        // and settings before secrets load. The arm
         // exists only because the match is exhaustive.
         Command::Update { .. }
         | Command::BuildInfo
         | Command::Identity { .. }
         | Command::Settings { .. } => {
-            unreachable!("update, build-info, identity, service-start, unlock, and settings resolve before credential loading")
+            unreachable!("update, build-info, identity, service-start, service-enable, service-disable, unlock, and settings resolve before credential loading")
         }
         Command::Drive {
             action: crate::args::DriveAction::Unlock { .. },

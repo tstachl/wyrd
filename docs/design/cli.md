@@ -87,7 +87,7 @@ wyrd identity (generate --identity-file … --passphrase-file …
     | new-passphrase | commit --identity-file … --passphrase-file …
     | verify --identity-file … --passphrase-file …)
 wyrd drive <dir> [--identity-file …] [--passphrase-file …]
-    (init | bootstrap --name … [--mode …] … | delete [--yes] | reconfigure … | service-start … | unlock …)
+    (init | bootstrap --name … [--mode …] … | delete [--yes] | reconfigure … | service-start … | service-enable … | service-disable … | unlock …)
 wyrd device <dir> (id | keys | pairing-request <out> | join <invitation>)
 wyrd member <dir> (list | log | status | invite | reissue | remove | leave
     | rotate | set-owner | resolve)
@@ -143,7 +143,7 @@ preserved; only spelling and hierarchy move.
 
 ```
 wyrd [--config <path>] drive [--identity-file <path>] [--passphrase-file <path>] <drive_dir>
-    (init | bootstrap --name <name> [--mode <mode>] [--mountpoint <path>] [--relay <url>...] [--invitation-file <path>] [--registry <path>] [--owner-bin <path>] [--supervise-bin <path>] [--no-service] | delete [--yes] | reconfigure --mode <mode> [--mountpoint <path>] [--relay <url>...] [--registry <path>] [--owner-bin <path>] [--supervise-bin <path>] [--no-service] | service-start [--registry <path>] | unlock [--relay <url>...] [--retained-quota <bytes>])
+    (init | bootstrap --name <name> [--mode <mode>] [--mountpoint <path>] [--relay <url>...] [--invitation-file <path>] [--registry <path>] [--owner-bin <path>] [--supervise-bin <path>] [--no-service] | delete [--yes] | reconfigure --mode <mode> [--mountpoint <path>] [--relay <url>...] [--registry <path>] [--owner-bin <path>] [--supervise-bin <path>] [--no-service] | service-start [--registry <path>] | service-enable [--registry <path>] | service-disable [--registry <path>] | unlock [--relay <url>...] [--retained-quota <bytes>])
 wyrd [--config <path>] mount [--relay <url>...] [--verbose] [--interval <secs>] \
     [--identity-file <path>] [--passphrase-file <path>] <drive_dir> <mountpoint>
 wyrd [--config <path>] export [--identity-file <path>] [--passphrase-file <path>] <drive_dir> <out_dir>
@@ -615,10 +615,12 @@ through its constrained adapter (structured argv, secret paths only,
 version check first, exit codes plus independent registry, socket,
 and membership re-observation) and never writes the registry itself.
 
-### `drive service-start` — start the installed service, rewrite nothing
+### `drive service-start` — start the installed service, rewrite nothing, enable nothing
 
-Enable and start the existing definition for one registered drive,
-then verify the socket. The recovery for "installed but stopped":
+Start the existing definition now without touching its login-start
+preference, then verify the socket. A disabled drive started
+manually stays disabled at the next login — starting never
+enables. The recovery for "installed but stopped":
 explicit, never automatic. The entry resolves by drive directory
 (exact match; zero and duplicates refuse without writing), a missing
 definition file refuses naming both recoveries — the reinstall
@@ -628,7 +630,7 @@ unmanaged `--no-service` per-session drive, which never has a
 definition to reinstall) — and no keystore opens — starting proves nothing
 about membership and needs no credentials, so it runs before
 credential loading. The definition names its own programs: no binary
-preflight runs, and a missing program surfaces through enable/start
+preflight runs, and a missing program surfaces through the start
 and the socket verify instead. Ready is reported only when the
 socket verifies this session. The desktop drives this surface
 through the same constrained adapter as the other lifecycle
@@ -636,7 +638,7 @@ operations (structured argv, version check first, exit codes plus
 independent re-observation).
 
 Against a live drive this restarts the owner by design: the
-enable/start primitives are the reconfigure ones (macOS unloads then
+start primitives are the reconfigure ones (macOS unloads then
 loads, Linux restarts the unit), so in-flight work turns
 `Unconfirmed` and the fresh socket verify proves the new owner.
 Offer it only for stopped and wedged drives; a direct CLI run
@@ -644,6 +646,27 @@ against a healthy drive is a deliberate restart, and it serializes
 against other lifecycle operations on the drive like any manager
 would — a start writes nothing, but its restart still races another
 writer's stop.
+
+### `drive service-enable` — record login start, start nothing
+
+Enable one registered drive's login start without starting it:
+record the preference with the service manager
+(`launchctl enable` on macOS, `systemctl --user enable` on Linux),
+then verify the record — the running state is unchanged either
+way. Managed drives only: a missing definition refuses with the
+reinstall pointer (session-posture drives have no unit to enable).
+No keystore opens, so it runs before credential loading like
+`service-start`, and `--passphrase-stdin` refuses (the flag cannot
+affect an enablement record).
+
+### `drive service-disable` — stop now, record no login start
+
+Disable one registered drive's login start and stop it now,
+keeping the definition file: record the preference with the service
+manager (`launchctl unload -w` on macOS, `systemctl --user
+disable --now` on Linux), then verify the record and the stopped
+state. Managed drives only, like `service-enable`. No keystore
+opens; `--passphrase-stdin` refuses.
 
 ### `drive unlock` — start the owner for the session, nothing installed
 

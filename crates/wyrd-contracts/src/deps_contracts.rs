@@ -717,6 +717,7 @@ fn check_unsafe_sites(holders: &[(String, usize)]) -> Vec<String> {
         ("crates/wyrd-cli/src/tests_cli.rs", 2),
         ("crates/wyrd-cli/src/update/supervise.rs", 1),
         ("crates/wyrd-contracts/src/support/view.rs", 1),
+        ("crates/wyrd-daemon/src/bootstrap.rs", 1),
         ("crates/wyrd-daemon/src/host/tests_mount_free.rs", 1),
         ("crates/wyrd-daemon/src/fuse/backend.rs", 1),
         ("crates/wyrd-daemon/src/fuse/tests_harness.rs", 1),
