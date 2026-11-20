@@ -350,6 +350,26 @@ pub enum BootstrapError {
         #[source]
         source: Box<BootstrapError>,
     },
+    /// Lingering is enabled for this user: the user manager (and a
+    /// managed unit) would survive logout, violating the desktop
+    /// session bound. Refusal only — Wyrd never changes lingering
+    /// configuration; disable it by hand and retry.
+    #[error("lingering is enabled for UID {uid}: a managed unit would survive logout, violating the desktop session bound — run `loginctl disable-linger {uid}` (requires privilege) and retry; Wyrd never changes lingering configuration")]
+    LingeringEnabled {
+        /// UID whose user manager lingers past logout.
+        uid: u32,
+    },
+    /// Lingering state could not be determined on a systemd host.
+    /// Refusal, never an assumed safe default: enabling login-start
+    /// without knowing whether the manager lingers could silently
+    /// violate the session bound.
+    #[error("cannot determine lingering state for UID {uid}: {detail} — refusing rather than assuming the session bound holds")]
+    LingerUnknown {
+        /// UID whose lingering state was probed.
+        uid: u32,
+        /// What the probe ran into.
+        detail: String,
+    },
     /// Reloading the user service manager failed.
     #[error("reload user units: {source}")]
     ReloadUnits {
@@ -1330,6 +1350,10 @@ pub fn enable_service(
     }
     #[cfg(not(target_os = "macos"))]
     {
+        // Session bound first: a lingering user manager would let
+        // the enabled unit outlive logout. Refusal, never a silent
+        // configuration change.
+        check_session_bound()?;
         let unit = format!("wyrd-{}.service", entry.service);
         run("systemctl", &["--user", "daemon-reload"]).map_err(|source| {
             BootstrapError::ReloadUnits {
@@ -1392,12 +1416,70 @@ pub enum ServiceEnabled {
     Unknown,
 }
 
-#[cfg(all(unix, target_os = "macos"))]
+#[cfg(unix)]
 #[allow(unsafe_code)]
 fn current_uid() -> u32 {
     // SAFETY: `geteuid` takes no arguments and returns the
     // caller's effective uid; it cannot fail and touches no memory.
     unsafe { libc::geteuid() }
+}
+
+/// Parse `loginctl show-user -p Linger --value`: `yes` means the
+/// user manager lingers past logout. Pure over the command output
+/// so tests pin the mapping without touching a manager. Compiled
+/// on Linux (where the session-bound probe uses it) and in tests
+/// everywhere.
+#[cfg(any(test, all(unix, not(target_os = "macos"))))]
+fn parse_linger_state(output: &str) -> Result<bool, String> {
+    match output.trim().to_ascii_lowercase().as_str() {
+        "yes" => Ok(true),
+        "no" => Ok(false),
+        other => Err(format!(
+            "loginctl answered {other:?}: expected \"yes\" or \"no\""
+        )),
+    }
+}
+
+/// Linux session bound: lingering keeps the user manager (and its
+/// units) alive after logout, which would let an owner outlive the
+/// login session. Refuses where lingering is enabled or its state
+/// cannot be determined — never silently disabling it, never
+/// treating Unknown as safe.
+///
+/// Checked at every enable and start; a change while the owner
+/// runs is caught at the next manager interaction, not monitored
+/// in between (no D-Bus polling in the owner loop). Install-only
+/// and disable paths skip it: nothing persists at login there.
+/// Non-systemd hosts skip it: no user manager exists to linger,
+/// and `systemctl` reports its own errors downstream. macOS needs
+/// no probe: installation is user-agent-only by construction.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn check_session_bound() -> Result<(), BootstrapError> {
+    if !std::path::Path::new("/run/systemd/system").exists() {
+        return Ok(());
+    }
+    let uid = current_uid();
+    let output = std::process::Command::new("loginctl")
+        .args(["show-user", &uid.to_string(), "-p", "Linger", "--value"])
+        .output()
+        .map_err(|source| BootstrapError::LingerUnknown {
+            uid,
+            detail: format!("loginctl did not run: {source}"),
+        })?;
+    if !output.status.success() {
+        return Err(BootstrapError::LingerUnknown {
+            uid,
+            detail: format!(
+                "loginctl refused: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ),
+        });
+    }
+    match parse_linger_state(&String::from_utf8_lossy(&output.stdout)) {
+        Ok(true) => Err(BootstrapError::LingeringEnabled { uid }),
+        Ok(false) => Ok(()),
+        Err(detail) => Err(BootstrapError::LingerUnknown { uid, detail }),
+    }
 }
 
 /// How long one manager output probe may run. A status answer
@@ -1639,6 +1721,9 @@ pub fn set_service_enabled(
         if enabled {
             // The definition is unchanged, so no reload: enable
             // only records login start, never starts the unit.
+            // The session bound applies to recording login start
+            // exactly as to enabling at provision time.
+            check_session_bound()?;
             run("systemctl", &["--user", "enable", &unit]).map_err(|source| {
                 BootstrapError::EnableService {
                     name: unit.clone(),
@@ -1743,6 +1828,10 @@ pub fn start_service_only(
     }
     #[cfg(not(target_os = "macos"))]
     {
+        // Session bound on every start, not just enable: lingering
+        // enabled after the fact is caught here, at the next
+        // manager interaction — never monitored in between.
+        check_session_bound()?;
         start_service(entry)
     }
 }
@@ -4531,6 +4620,54 @@ mod tests {
             }
             other => panic!("a missing definition refuses with reinstall: {other:?}"),
         }
+    }
+
+    /// The lingering probe parses `loginctl -p Linger --value`
+    /// without touching a manager: `yes` refuses, `no` proceeds,
+    /// anything else is Unknown (never safe). The live `loginctl`
+    /// invocation is covered by the manual logout drill, not by
+    /// hermetic tests — unit tests must never shell out to the
+    /// service manager.
+    #[test]
+    fn linger_probe_parses_loginctl_answers() {
+        assert_eq!(parse_linger_state("yes\n"), Ok(true));
+        assert_eq!(parse_linger_state("no\n"), Ok(false));
+        assert_eq!(parse_linger_state("YES"), Ok(true));
+        assert!(parse_linger_state("").is_err(), "empty is Unknown");
+        assert!(
+            parse_linger_state("lingering\n").is_err(),
+            "a State word is not a Linger value"
+        );
+        assert!(
+            parse_linger_state("unknown\n").is_err(),
+            "garbage is Unknown"
+        );
+    }
+
+    /// The lingering refusal names the bound and the remediation —
+    /// never a silent configuration change, never a generic
+    /// manager failure a retry could clear.
+    #[test]
+    fn lingering_refusals_name_the_bound() {
+        let enabled = BootstrapError::LingeringEnabled { uid: 1000 };
+        assert!(
+            enabled.to_string().contains("disable-linger"),
+            "names the remediation: {enabled}"
+        );
+        assert!(
+            enabled.to_string().contains("never changes"),
+            "disclaims modification: {enabled}"
+        );
+        let unknown = BootstrapError::LingerUnknown {
+            uid: 1000,
+            detail: "loginctl refused".to_string(),
+        };
+        assert!(
+            unknown
+                .to_string()
+                .contains("refusing rather than assuming"),
+            "Unknown is fail-closed: {unknown}"
+        );
     }
 
     /// Session-supplied credentials never render: the managed
