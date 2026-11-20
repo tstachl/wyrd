@@ -132,10 +132,11 @@ pub enum LiveError {
 // Not `Copy`: the drained intake report carries the observed peer
 // set (OD-17-4), which is heap-allocated. Pass reports move by value
 // or by reference; nothing relied on implicit duplication.
-/// Lock-poison observations behind one sync pass, by registry: the
-/// loop's fail-closed reads (an empty admission, an uncounted
-/// total) are indistinguishable from idle without them, so each
-/// pass snapshots the counters beside the report. Any nonzero
+/// Cumulative lock-poison observations since construction, sampled beside
+/// each sync-pass report, by registry: the loop's fail-closed reads
+/// (an empty admission, an uncounted total) are indistinguishable
+/// from idle without them, so each pass samples the cumulative
+/// counters beside the report. Any nonzero
 /// value means the state behind that registry's infallible
 /// diagnostics is suspect: reservations still fail closed, but
 /// totals may under-report. The write budget is not here: the
@@ -200,8 +201,9 @@ pub struct SyncReport {
     /// installed, retried next pass. Zero on idle passes (the gate
     /// never ran) and on passes whose damage failed closed.
     pub pending_heads: usize,
-    /// Lock-poison observations behind this pass, by registry: a
-    /// poisoned registry reads healthy-empty, so nonzero here is
+    /// Cumulative lock-poison observations since construction, sampled on
+    /// this pass, by registry: a poisoned registry reads
+    /// healthy-empty, so nonzero here is
     /// what tells dead from idle without reading logs.
     pub poison: PoisonCounts,
 }

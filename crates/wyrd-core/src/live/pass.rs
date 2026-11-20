@@ -340,7 +340,7 @@ where
         }
     }
 
-    /// Snapshot the loop-visible lock-poison counters beside the pass
+    /// Sample the cumulative loop-visible lock-poison counters beside the pass
     /// report: fail-closed reads (an empty admission, an uncounted
     /// total) are indistinguishable from idle without them, so a
     /// poisoned registry is machine-readable as dead, never as

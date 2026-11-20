@@ -510,8 +510,8 @@ pub struct WireScrubReport {
     pub failures: u64,
 }
 
-/// The wire form of `PoisonCounts`: per-registry lock-poison
-/// observations behind one pass. Every field defaults to zero (no
+/// The wire form of `PoisonCounts`: per-registry cumulative
+/// lock-poison observations, sampled each pass. Every field defaults to zero (no
 /// poison observed) so a v1 reader from before the poison surface
 /// degrades to "healthy" instead of failing the parse; both sides
 /// of this change ship together, so the defaults only cover
