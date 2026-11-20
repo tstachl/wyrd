@@ -36,9 +36,9 @@
 //! continues; a rewritten configuration rewrites identically; an
 //! already-migrated drive reports done after verifying), and every
 //! other partial state fails closed with the old files untouched.
-//! Service definitions are out of scope: the manager's installed
-//! unit still names the retired files until the desktop-wiring slice
-//! re-renders it, so the command warns where a definition exists.
+//! Service re-rendering is a separate step: the manager's installed
+//! unit still names the retired files until `drive reconfigure`
+//! reinstalls it, so the command warns where a definition exists.
 //! Until then a migrated drive starts through the store-aware owner
 //! path, not the old unit.
 
@@ -271,7 +271,7 @@ pub(crate) fn migrate_credential(
 /// public id, never by bytes) and byte-identical passphrase posture
 /// (`None` matches only `None` — a session item is never equal to a
 /// named one).
-fn materials_match(first: &LoadedCredential, second: &LoadedCredential) -> bool {
+pub(crate) fn materials_match(first: &LoadedCredential, second: &LoadedCredential) -> bool {
     first.identity.device_id() == second.identity.device_id()
         && first.passphrase.as_deref() == second.passphrase.as_deref()
 }
@@ -400,7 +400,7 @@ pub(crate) fn migrate_drive_credentials(
                 drive_dir.display()
             );
             eprintln!(
-                "warning: the OS service definition (if installed) still names the retired files: reinstall it once the desktop-wiring slice lands; until then start the owner with the migrated configuration, not the old unit"
+                "warning: the OS service definition (if installed) still names the retired files: run `drive reconfigure` to reinstall it with the store reference; until then start the owner with the migrated configuration, not the old unit"
             );
         }
         MigrateOutcome::AlreadyMigrated { account } => {

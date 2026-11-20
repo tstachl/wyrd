@@ -957,10 +957,46 @@ fn systemd_quote(arg: &str) -> String {
 /// onto the exit the supervisor's policy wants (restart-worthy per
 /// manager, 78 never). Routing through the wrapper is what makes the
 /// restart policy below truthful; a bare owner binary cannot express
-/// it. The mount argv mirrors the owner argv with the mount
-/// subcommand, its mountpoint, and the mount posture sidecar — the
-/// restart contract is identical, since a held mount is terminal the
-/// same way a held vault is.
+/// What credential the supervised owner starts with: exactly one
+/// backend per drive, carried as a reference (paths or the store
+/// account label) — never secret bytes. The service definition
+/// renders this verbatim, so the manager starts the backend the
+/// drive is configured for; ambiguity between backends is a
+/// construction-time refusal, never a precedence rule. Owner and
+/// mount share the shape: both startup paths select identically.
+#[derive(Debug, Clone)]
+pub enum ServiceCredential {
+    /// Hardened credential files, resolved the way
+    /// `load_credentials` resolves them. Paths, never secrets,
+    /// travel here.
+    File {
+        /// Identity credential file named by the service definition.
+        identity_file: PathBuf,
+        /// Passphrase credential file named by the service
+        /// definition. `None` means session-supplied (prompt or
+        /// stdin pipe): no managed definition may render it, so a
+        /// managed run with `None` refuses at install time instead
+        /// of writing a definition the manager could never start.
+        /// `no_service` registrations carry `None` freely — that is
+        /// the per-session posture.
+        passphrase_file: Option<PathBuf>,
+    },
+    /// One item in the OS credential store, named by its account
+    /// label (the reference, never a secret). The supervised owner
+    /// resolves it through the loader boundary at start — no files
+    /// on disk, no pipe, no prompt.
+    OsStore {
+        /// The store account label naming the drive's item.
+        account: String,
+    },
+}
+
+/// The supervised owner (or mount) command the service manager
+/// runs: wrapper, restart policy, posture path, then the owner or
+/// mount command. Owner and mount share the credential and relay
+/// flags; mount adds its mountpoint and serves the mount posture
+/// sidecar — the restart contract is identical, since a held mount
+/// is terminal the same way a held vault is.
 #[derive(Debug, Clone)]
 pub struct SupervisedOwner {
     /// `wyrd-supervise` (`nix/drive/supervise.py`): same installer
@@ -969,15 +1005,43 @@ pub struct SupervisedOwner {
     /// The `wyrd` binary whose `vault` or `mount` subcommand serves
     /// the drive and binds the interface socket.
     pub wyrd_bin: PathBuf,
-    /// Hardened credential files, resolved the way `load_credentials`
-    /// resolves them. Paths, not secrets, travel here — the service
-    /// definition names the same files the operator already keeps.
-    pub identity_file: PathBuf,
-    /// Passphrase credential file named by the service definition.
-    pub passphrase_file: PathBuf,
+    /// Which credential the supervised command starts with: file
+    /// paths or the store reference. Paths here name the same files
+    /// (or the same store item) the operator already keeps.
+    pub credential: ServiceCredential,
 }
 
 impl SupervisedOwner {
+    /// Append the credential selection to a supervised argv: file
+    /// backends name both files, store backends name the backend and
+    /// the account. Exactly one backend renders — a store drive never
+    /// carries file flags, a file drive never carries store flags.
+    fn push_credential_argv(&self, argv: &mut Vec<String>) {
+        match &self.credential {
+            ServiceCredential::File {
+                identity_file,
+                passphrase_file,
+            } => {
+                argv.push("--identity-file".to_string());
+                argv.push(identity_file.to_string_lossy().into_owned());
+                argv.push("--passphrase-file".to_string());
+                argv.push(
+                    passphrase_file
+                        .as_ref()
+                        .expect("managed file credential carries a passphrase file: validated at install")
+                        .to_string_lossy()
+                        .into_owned(),
+                );
+            }
+            ServiceCredential::OsStore { account } => {
+                argv.push("--credential-backend".to_string());
+                argv.push("os-store".to_string());
+                argv.push("--credential-account".to_string());
+                argv.push(account.clone());
+            }
+        }
+    }
+
     /// The full supervised argv: wrapper, per-manager restart
     /// status, posture path, `--` separator, then the owner or mount
     /// command. Owner and mount share the credential and relay flags;
@@ -1008,10 +1072,7 @@ impl SupervisedOwner {
                         .to_string_lossy()
                         .into_owned(),
                 );
-                argv.push("--identity-file".to_string());
-                argv.push(self.identity_file.to_string_lossy().into_owned());
-                argv.push("--passphrase-file".to_string());
-                argv.push(self.passphrase_file.to_string_lossy().into_owned());
+                self.push_credential_argv(&mut argv);
                 for relay in &entry.relays {
                     argv.push("--relay".to_string());
                     argv.push(relay.clone());
@@ -1022,10 +1083,7 @@ impl SupervisedOwner {
                 // `owner <dir> [flags] start`, never flags after `start`.
                 argv.push("owner".to_string());
                 argv.push(entry.drive_dir.to_string_lossy().into_owned());
-                argv.push("--identity-file".to_string());
-                argv.push(self.identity_file.to_string_lossy().into_owned());
-                argv.push("--passphrase-file".to_string());
-                argv.push(self.passphrase_file.to_string_lossy().into_owned());
+                self.push_credential_argv(&mut argv);
                 for relay in &entry.relays {
                     argv.push("--relay".to_string());
                     argv.push(relay.clone());
@@ -1908,20 +1966,17 @@ pub struct ProvisionConfig {
     /// distinction — so pass an explicit path wherever the layout
     /// differs instead of running unmanaged.
     pub supervise_bin: Option<PathBuf>,
-    /// Hardened credential files for the service definition,
-    /// resolved the way `load_credentials` resolves them. Paths,
-    /// never secrets, travel here. The passphrase `None` means
-    /// session-supplied (prompt or stdin pipe): no managed
-    /// definition may render it, so a managed run with `None`
-    /// refuses at install time instead of writing a definition
-    /// the manager could never start. `no_service` registrations
-    /// carry `None` freely — that is the per-session posture. The
-    /// identity file is required in every posture: the identity
-    /// secret always comes from its file, never the pipe.
-    pub identity_file: PathBuf,
-    /// Passphrase credential file named by the service definition.
-    /// `None` means session-supplied: see `identity_file`.
-    pub passphrase_file: Option<PathBuf>,
+    /// How one provisioning run starts the supervised owner:
+    /// exactly one credential backend, as a reference (paths or the
+    /// store account) — never secrets. A managed file run names both
+    /// files; a managed store run names the account; `no_service`
+    /// file runs carry `None` for the passphrase (the per-session
+    /// posture). A managed file run with `None` refuses at install
+    /// time instead of writing a definition the manager could never
+    /// start. The identity file is required in every file posture:
+    /// the identity secret always comes from its file, never the
+    /// pipe.
+    pub credential: ServiceCredential,
     /// Install, enable, and start the per-drive service. Off skips
     /// all three: registration only, for operators who supervise
     /// the owner themselves.
@@ -2220,8 +2275,8 @@ pub fn provision(config: ProvisionConfig) -> ProvisionState {
                 }
             },
         };
-        let passphrase_file = match managed_passphrase_file(&config.passphrase_file) {
-            Ok(path) => path,
+        let credential = match managed_credential(&config.credential) {
+            Ok(credential) => credential,
             Err((kind, reason)) => {
                 return ProvisionState::RegisteredButUnavailable {
                     entry,
@@ -2234,8 +2289,7 @@ pub fn provision(config: ProvisionConfig) -> ProvisionState {
         let owner = SupervisedOwner {
             supervise_bin,
             wyrd_bin,
-            identity_file: config.identity_file.clone(),
-            passphrase_file,
+            credential,
         };
         let definition = match install_service_definition(&entry, &owner, None) {
             Ok(definition) => definition,
@@ -2312,20 +2366,10 @@ pub struct ReconfigureConfig {
     /// owner binary cannot express the terminal distinction — so an
     /// explicit path is required wherever the layout differs.
     pub supervise_bin: Option<PathBuf>,
-    /// Hardened credential files for the service definition,
-    /// resolved the way `load_credentials` resolves them. Paths,
-    /// never secrets, travel here. The passphrase `None` means
-    /// session-supplied (prompt or stdin pipe): no managed
-    /// definition may render it, so a managed run with `None`
-    /// refuses at install time instead of writing a definition
-    /// the manager could never start. `no_service` rewrites carry
-    /// `None` freely — that is the per-session posture. The
-    /// identity file is required in every posture: the identity
-    /// secret always comes from its file, never the pipe.
-    pub identity_file: PathBuf,
-    /// Passphrase credential file named by the service definition.
-    /// `None` means session-supplied: see `identity_file`.
-    pub passphrase_file: Option<PathBuf>,
+    /// How one reconfiguration starts the supervised owner:
+    /// exactly one credential backend, as a reference (paths or the
+    /// store account) — never secrets. See `ProvisionConfig::credential`.
+    pub credential: ServiceCredential,
     /// Explicit service definition path (tests); `None` resolves the
     /// platform path. Clearing and installing share it, so the two
     /// can never name different files — and hermetic tests name a
@@ -2387,20 +2431,24 @@ fn install_service_definition(
     })
 }
 
-/// Passphrase file for one managed install: session-supplied
-/// (`None`) refuses here, never renders. A definition embedding
-/// no readable file would install cleanly and then crash-loop
-/// under the manager — this fails that run closed at install
-/// time instead. Every managed install site routes through this
-/// for the same kind and reason. The identity file is not
-/// checked: it is required in every posture, so its type carries
-/// the invariant and there is nothing to refuse.
-fn managed_passphrase_file(
-    passphrase_file: &Option<PathBuf>,
-) -> Result<PathBuf, (ProvisionFailureKind, String)> {
-    match passphrase_file {
-        Some(passphrase) => Ok(passphrase.clone()),
-        None => Err((
+/// The credential a managed install renders: session-supplied
+/// file credentials (`None` passphrase) refuse here, never render.
+/// A definition embedding no readable credential would install
+/// cleanly and then crash-loop under the manager — this fails that
+/// run closed at install time instead. Every managed install site
+/// routes through this for the same kind and reason. Store
+/// credentials render as-is: the manager reads the item, no file
+/// needed. The identity file is not checked: it is required in every
+/// file posture, so its type carries the invariant and there is
+/// nothing to refuse.
+fn managed_credential(
+    credential: &ServiceCredential,
+) -> Result<ServiceCredential, (ProvisionFailureKind, String)> {
+    match credential {
+        ServiceCredential::File {
+            passphrase_file: None,
+            ..
+        } => Err((
             ProvisionFailureKind::InstallService,
             "managed service needs a passphrase file the manager can read: \
              session-supplied credentials (prompt or --passphrase-stdin) cannot render \
@@ -2408,6 +2456,7 @@ fn managed_passphrase_file(
              sessions with `drive unlock`"
                 .to_string(),
         )),
+        credential => Ok(credential.clone()),
     }
 }
 
@@ -2845,8 +2894,8 @@ pub fn reconfigure(config: ReconfigureConfig) -> ProvisionState {
     // new entry. Without management the definition is already cleared
     // above.
     let definition = if config.manage_service {
-        let passphrase_file = match managed_passphrase_file(&config.passphrase_file) {
-            Ok(path) => path,
+        let credential = match managed_credential(&config.credential) {
+            Ok(credential) => credential,
             Err((kind, reason)) => {
                 return ProvisionState::ProvisioningIncomplete {
                     stage: "install-service",
@@ -2858,8 +2907,7 @@ pub fn reconfigure(config: ReconfigureConfig) -> ProvisionState {
         let owner = SupervisedOwner {
             supervise_bin: supervise_bin.clone().expect("resolved when managed"),
             wyrd_bin: wyrd_bin.clone().expect("resolved when managed"),
-            identity_file: config.identity_file.clone(),
-            passphrase_file,
+            credential,
         };
         match install_service_definition(&working, &owner, config.service_definition.as_ref()) {
             Ok(definition) => Some(definition),
@@ -2970,8 +3018,8 @@ pub fn reconfigure(config: ReconfigureConfig) -> ProvisionState {
     let effective = written;
     let mut definition = definition;
     if definition.is_some() && definition_needs_reinstall(&working, &effective) {
-        let passphrase_file = match managed_passphrase_file(&config.passphrase_file) {
-            Ok(path) => path,
+        let credential = match managed_credential(&config.credential) {
+            Ok(credential) => credential,
             Err((kind, reason)) => {
                 return ProvisionState::RegisteredButUnavailable {
                     entry: effective,
@@ -2984,8 +3032,7 @@ pub fn reconfigure(config: ReconfigureConfig) -> ProvisionState {
         let owner = SupervisedOwner {
             supervise_bin: supervise_bin.expect("resolved when managed"),
             wyrd_bin: wyrd_bin.expect("resolved when managed"),
-            identity_file: config.identity_file.clone(),
-            passphrase_file,
+            credential,
         };
         match install_service_definition(&effective, &owner, config.service_definition.as_ref()) {
             Ok(definition_path) => definition = Some(definition_path),
@@ -3862,8 +3909,10 @@ mod tests {
         let owner = SupervisedOwner {
             supervise_bin: PathBuf::from("/opt/wyrd/bin/wyrd-supervise"),
             wyrd_bin: PathBuf::from("/opt/wyrd/bin/wyrd"),
-            identity_file: dir.join("identity"),
-            passphrase_file: dir.join("passphrase"),
+            credential: ServiceCredential::File {
+                identity_file: dir.join("identity"),
+                passphrase_file: Some(dir.join("passphrase")),
+            },
         };
         let owned = entry("demo", &dir);
         // Whole-argv pin, order-sensitive: clap parses
@@ -3921,14 +3970,92 @@ mod tests {
         assert!(unit.contains(&*owned.drive_dir.display().to_string()));
     }
 
+    /// A store-backed definition names the backend and the account
+    /// and carries no file flags: the manager starts the store
+    /// backend, and no credential path can leak from a file
+    /// posture into a store unit. The whole supervised tail pins
+    /// exactly like the file posture above, on both renderers.
+    #[test]
+    fn store_templates_name_the_backend_and_account_without_files() {
+        let dir = scratch("templates-store");
+        let owner = SupervisedOwner {
+            supervise_bin: PathBuf::from("/opt/wyrd/bin/wyrd-supervise"),
+            wyrd_bin: PathBuf::from("/opt/wyrd/bin/wyrd"),
+            credential: ServiceCredential::OsStore {
+                account: "wyrd-drive-alpha".to_string(),
+            },
+        };
+        let owned = entry("demo", &dir);
+        let argv = owner.argv(&owned, "0");
+        let tail = argv
+            .iter()
+            .skip_while(|arg| *arg != "--")
+            .skip(1)
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            tail,
+            vec![
+                "/opt/wyrd/bin/wyrd",
+                "owner",
+                &owned.drive_dir.to_string_lossy(),
+                "--credential-backend",
+                "os-store",
+                "--credential-account",
+                "wyrd-drive-alpha",
+                "--relay",
+                "relay://example",
+                "start",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>(),
+            "{argv:?}"
+        );
+        for arg in &argv {
+            assert!(
+                !arg.contains("identity") && !arg.contains("passphrase"),
+                "no file flag survives on a store unit: {argv:?}"
+            );
+        }
+        let plist = render_launchd_plist("md.enesis.wyrd.drive-demo", &owner, &owned);
+        assert!(plist.contains("--credential-backend"), "{plist}");
+        assert!(plist.contains("--credential-account"), "{plist}");
+        assert!(plist.contains("wyrd-drive-alpha"), "{plist}");
+        assert!(!plist.contains("--identity-file"), "{plist}");
+        assert!(!plist.contains("--passphrase-file"), "{plist}");
+        let unit = render_systemd_unit("Wyrd drive demo", &owner, &owned);
+        assert!(unit.contains("--credential-backend"), "{unit}");
+        assert!(unit.contains("--credential-account"), "{unit}");
+        assert!(unit.contains("wyrd-drive-alpha"), "{unit}");
+        assert!(!unit.contains("--identity-file"), "{unit}");
+        assert!(!unit.contains("--passphrase-file"), "{unit}");
+        // Mount shares the credential shape: the same account
+        // renders on the mount argv, never file flags.
+        let mountpoint = dir.join("mnt");
+        let mounted = mount_entry("demo", &dir, &mountpoint);
+        let mount_argv = owner.argv(&mounted, "1");
+        assert!(mount_argv.contains(&"mount".to_string()), "{mount_argv:?}");
+        assert!(
+            mount_argv.contains(&"--credential-account".to_string()),
+            "{mount_argv:?}"
+        );
+        assert!(
+            !mount_argv.iter().any(|arg| arg.contains("passphrase-file")),
+            "{mount_argv:?}"
+        );
+    }
+
     #[test]
     fn mount_templates_name_the_mountpoint_and_posture() {
         let dir = scratch("templates-mount");
         let owner = SupervisedOwner {
             supervise_bin: PathBuf::from("/opt/wyrd/bin/wyrd-supervise"),
             wyrd_bin: PathBuf::from("/opt/wyrd/bin/wyrd"),
-            identity_file: dir.join("identity"),
-            passphrase_file: dir.join("passphrase"),
+            credential: ServiceCredential::File {
+                identity_file: dir.join("identity"),
+                passphrase_file: Some(dir.join("passphrase")),
+            },
         };
         // A mountpoint with spaces and an ampersand pins the
         // operator-input escaping on both managers: the argv must
@@ -4332,8 +4459,10 @@ mod tests {
         let owner = SupervisedOwner {
             supervise_bin: dir.join("wyrd-supervise"),
             wyrd_bin: dir.join("wyrd"),
-            identity_file: dir.join("identity"),
-            passphrase_file: dir.join("passphrase"),
+            credential: ServiceCredential::File {
+                identity_file: dir.join("identity"),
+                passphrase_file: Some(dir.join("passphrase")),
+            },
         };
         let blocker = dir.join("blocker");
         std::fs::write(&blocker, b"x").unwrap();
@@ -4406,10 +4535,15 @@ mod tests {
 
     /// Session-supplied credentials never render: the managed
     /// install guard fails closed with the install-service kind,
-    /// naming the session repair instead of a manager retry.
+    /// naming the session repair instead of a manager retry. Store
+    /// credentials render as-is: the manager reads the item, no
+    /// file needed.
     #[test]
     fn managed_install_without_credential_files_refuses() {
-        match managed_passphrase_file(&None) {
+        match managed_credential(&ServiceCredential::File {
+            identity_file: PathBuf::from("/keys/identity"),
+            passphrase_file: None,
+        }) {
             Err((ProvisionFailureKind::InstallService, reason)) => {
                 assert!(reason.contains("unlock"), "{reason}");
                 assert!(reason.contains("--no-service"), "{reason}");
@@ -4417,7 +4551,19 @@ mod tests {
             other => panic!("a file-less managed install refuses: {other:?}"),
         }
         let path = PathBuf::from("/keys/passphrase");
-        assert_eq!(managed_passphrase_file(&Some(path.clone())).unwrap(), path);
+        assert!(matches!(
+            managed_credential(&ServiceCredential::File {
+                identity_file: PathBuf::from("/keys/identity"),
+                passphrase_file: Some(path.clone()),
+            }),
+            Ok(ServiceCredential::File { .. })
+        ));
+        assert!(matches!(
+            managed_credential(&ServiceCredential::OsStore {
+                account: "wyrd-drive-demo".to_string(),
+            }),
+            Ok(ServiceCredential::OsStore { .. })
+        ));
     }
 
     /// The guard wires into provisioning: a managed provision with
@@ -4513,8 +4659,10 @@ mod tests {
         let owner = SupervisedOwner {
             supervise_bin: dir.join("wyrd-supervise"),
             wyrd_bin: dir.join("wyrd"),
-            identity_file: dir.join("identity"),
-            passphrase_file: dir.join("passphrase"),
+            credential: ServiceCredential::File {
+                identity_file: dir.join("identity"),
+                passphrase_file: Some(dir.join("passphrase")),
+            },
         };
         let definition = dir.join("wyrd-test-definition");
         install_service_definition(&stale, &owner, Some(&definition)).unwrap();
@@ -4681,8 +4829,10 @@ mod tests {
             registry_path: registry.to_path_buf(),
             wyrd_bin: Some(dir.join("wyrd")),
             supervise_bin: Some(dir.join("wyrd-supervise")),
-            identity_file: dir.join("identity"),
-            passphrase_file: None,
+            credential: ServiceCredential::File {
+                identity_file: dir.join("identity"),
+                passphrase_file: None,
+            },
             manage_service: false,
             verify_timeout: Duration::from_secs(10),
         }
@@ -4781,8 +4931,10 @@ mod tests {
             registry_path: registry.to_path_buf(),
             wyrd_bin: Some(dir.join("wyrd")),
             supervise_bin: Some(dir.join("wyrd-supervise")),
-            identity_file: dir.join("identity"),
-            passphrase_file: None,
+            credential: ServiceCredential::File {
+                identity_file: dir.join("identity"),
+                passphrase_file: None,
+            },
             // A scratch definition that never exists: hermetic tests
             // must stop and clear nothing real, and the missing file
             // is the not-managed case — never a manager touch.
@@ -5396,8 +5548,10 @@ mod tests {
         let owner = SupervisedOwner {
             supervise_bin: dir.join("wyrd-supervise"),
             wyrd_bin: dir.join("wyrd"),
-            identity_file: dir.join("identity"),
-            passphrase_file: dir.join("passphrase"),
+            credential: ServiceCredential::File {
+                identity_file: dir.join("identity"),
+                passphrase_file: Some(dir.join("passphrase")),
+            },
         };
         let stored = entry("demo", &dir);
         let updated = updated_entry(
@@ -5474,8 +5628,10 @@ mod hardening_tests {
         let owner = SupervisedOwner {
             supervise_bin: PathBuf::from("/opt/wyrd/bin/wyrd-supervise"),
             wyrd_bin: PathBuf::from("/opt/wyrd/bin/wyrd"),
-            identity_file: dir.join("identity"),
-            passphrase_file: dir.join("passphrase"),
+            credential: ServiceCredential::File {
+                identity_file: dir.join("identity"),
+                passphrase_file: Some(dir.join("passphrase")),
+            },
         };
         let owned = entry("demo", &dir);
         write_service_file(
@@ -5508,8 +5664,10 @@ mod hardening_tests {
         let owner = SupervisedOwner {
             supervise_bin: PathBuf::from("/opt/wyrd/bin/with space/wyrd-supervise"),
             wyrd_bin: PathBuf::from("/opt/wyrd/bin/wyrd"),
-            identity_file: dir.join("identity"),
-            passphrase_file: dir.join("passphrase"),
+            credential: ServiceCredential::File {
+                identity_file: dir.join("identity"),
+                passphrase_file: Some(dir.join("passphrase")),
+            },
         };
         let plist = render_launchd_plist("md.enesis.wyrd.drive-demo", &owner, &owned);
         assert!(plist.contains("with space"), "paths survive escaped");

@@ -158,9 +158,12 @@ plane. Three pieces, all precedented in-tree:
   that exits or crashes never takes the owner down with it, because
   launchd/systemd — not the UI — is the parent. The service runs
   `wyrd owner start` or `wyrd mount` (at its registered mountpoint) with
-  the registration's credential files (never a
-  bare env-keyed binary: the supervised owner must load secrets in
-  service context, and only the file-credential form works there),
+  the registration's credential reference (`--identity-file` /
+  `--passphrase-file` for file-backed drives, `--credential-backend
+  os-store` plus `--credential-account` for store-backed drives;
+  never a bare env-keyed binary: the supervised owner must load
+  secrets in service context through the loader boundary, never
+  from the environment or a pipe),
   routed through the `wyrd-supervise` wrapper from `nix/drive`
   (OD-34-C). Managers cannot distinguish the binary's collapsed
   exit codes on their own — every CLI failure is 2 except the

@@ -1,6 +1,6 @@
 # Credential loading (v0.4)
 
-Status: Normative. Shipped scope: the loader boundary carries reads and the migration write half (the CLI file backend conforms; the OS credential-store backends conform on macOS, where service-context retrieval is verified by hand — the Linux service-context proof is deferred, see below); `wyrd drive migrate-credentials` runs the six gated migration steps, and the owner/drive read paths honor a migrated configuration. Create/join provisioning into the store, service-definition re-rendering, session unlock for store-backed drives, and registration-time Keychain access arrive with the desktop-wiring slice. Scope: how a drive owner obtains its secret
+Status: Normative. Shipped scope: the loader boundary carries reads and the migration write half (the CLI file backend conforms; the OS credential-store backends conform on macOS, where service-context retrieval is verified by hand — the Linux service-context proof is deferred, see below); `wyrd drive migrate-credentials` runs the six gated migration steps, and the owner/drive read paths honor a migrated configuration. `wyrd bootstrap` provisions store-backed drives through the same commit boundary (input files or pipe seed the item, the configuration records the backend after the daemon accepts the material), service definitions render the store reference (`--credential-backend os-store --credential-account`), session unlock loads the store identity with a typed passphrase, and `drive reconfigure` reinstalls a managed definition on either backend. Registration-time Keychain access (first unlock without a prior GUI visit) stays the deferred follow-up. Scope: how a drive owner obtains its secret
 material — the device identity secret and the passphrase protecting
 the wrapped root key — without the desktop UI alive, in the actual
 OS service context. Authority: this contract owns the
@@ -76,10 +76,13 @@ How a drive's configuration comes to *name* an OS-store account
 is a config key in this slice (`credential_backend` plus
 `credential_account` in `default.toml`: one backend per drive,
 ambiguity refused at parse) honored by the owner/drive read paths;
-file flags beside a store configuration refuse. Create/join
-provisioning into the store, service-definition re-rendering,
-session unlock for store-backed drives, and registration-time
-Keychain access arrive with the desktop-wiring slice.
+file flags beside a store configuration refuse. `wyrd bootstrap`
+provisions into the store (input files or the pipe seed the item;
+the configuration records the backend after the daemon accepts
+the material), service definitions render the store reference for
+managed drives, session unlock loads the store identity with a
+typed passphrase, and `drive reconfigure` reinstalls the
+definition on either backend.
 
 ## Credential references, never secrets, in configuration
 
@@ -209,12 +212,13 @@ the new one is verified. Migration changes where the passphrase
 is kept, never the Drive Root Key, never the keystore wrap. The
 configuration rewrite (step 4) is the store-backend key pair in
 `default.toml`; the manager's installed service definition still
-names the retired files until the desktop-wiring slice re-renders
-it, so the migrate command warns where a unit is installed and a
-migrated drive restarts through the store-aware owner path until
-then. Re-runs converge: an identical store item continues, a
-completed migration re-verifies and reports done, and a differing
-store item refuses rather than overwriting.
+names the retired files until `drive reconfigure` reinstalls it
+with the store reference, so the migrate command warns where a
+unit is installed and a migrated drive restarts through the
+store-aware owner path until then. Re-runs converge: an identical
+store item continues, a completed migration re-verifies and
+reports done, and a differing store item refuses rather than
+overwriting.
 
 ## What this contract does not own
 
@@ -226,9 +230,9 @@ store item refuses rather than overwriting.
 - Window close, quit, lock, and what survives them:
   `docs/contracts/desktop-lifecycle.md`.
 - Session-posture unlock (typed passphrase, per-session owner):
-  unchanged by this contract except that unlock stays file-backed
-  until the wiring slice teaches it the store; unattended session
-  startup is a separate decision.
+  unchanged by this contract except that unlock loads the store
+  identity for store-backed drives; unattended session startup is
+  a separate decision.
 - Service enablement at login (whether the manager starts the
   unit): separate observation, separate issue. Enablement must
   never be mistaken for credential availability, and
