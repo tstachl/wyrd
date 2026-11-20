@@ -13,9 +13,13 @@ home the implementation and its fixtures cite.
   `--identity-file` need them. Managed drives provision into the
   OS credential store by default (`wyrd bootstrap --credential-
   backend os-store`): the store item exists, so the service
-  manager starts and restarts the owner unattended and the device
-  remembers — with no passphrase file on disk for the manager to
-  read. The file-backed posture stays supported for
+  manager starts and restarts the owner within the login session
+  without interaction and the device remembers — with no
+  passphrase file on disk for the manager to read. The owner
+  never outlives the login session (see
+  `docs/contracts/desktop-lifecycle.md`): logout stops it, and
+  the next login makes an enabled drive eligible to start again.
+  The file-backed posture stays supported for
   operator-provisioned deployments (the drive passphrase file
   exists and the service definition names it). The per-session
   posture persists no drive passphrase file and renders no

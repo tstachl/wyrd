@@ -154,9 +154,11 @@ plane. Three pieces, all precedented in-tree:
   user unit per drive on Linux — the same shapes `nix/drive`
   already supervises declaratively, but provisioned imperatively at
   registration time for non-Nix users. The OS service manager owns
-  the process lifecycle: enablement is startup-at-login, and a UI
+  the process lifecycle within the login session: enablement is
+  startup-at-login (after authentication, never pre-login), and a UI
   that exits or crashes never takes the owner down with it, because
-  launchd/systemd — not the UI — is the parent. The service runs
+  launchd/systemd — not the UI — is the parent. Logout ends the
+  session and its owners; lingering past logout is forbidden. The service runs
   `wyrd owner start` or `wyrd mount` (at its registered mountpoint) with
   the registration's credential reference (`--identity-file` /
   `--passphrase-file` for file-backed drives, `--credential-backend
@@ -190,17 +192,21 @@ plane. Three pieces, all precedented in-tree:
   first-class states, never an error toast.
 - **Owner credential loading independent of the UI.** The owner
   must obtain its secrets without the UI alive: at login, at
-  restart, at 3 a.m. with nobody watching. Secrets live in the OS
-  keychain / credential files (issue 25 owns the mechanism), and
-  the service's loading behavior must work in the actual service
-  context — a launchd user agent or systemd user unit, not a login
-  shell. The sharp edge is macOS, where keychain access can depend
-  on login and unlock state: the installer requests the needed
-  keychain access at registration time, and the exact ACLs travel
-  with the settings contract, but the requirement is fixed here —
-  if the secrets are unreachable in service context, the drive
-  reads as registered but unavailable, never as broken, and the UI
-  says exactly that.
+  restart, whenever the session runs and the UI is closed.
+  Secrets live in the OS keychain / credential store (issue 25
+  owns the mechanism), and the service's loading behavior must
+  work in the actual service context — a launchd user agent or
+  systemd user unit within the authenticated session, not a login
+  shell and never pre-login. The owner never outlives the login
+  session (see `docs/contracts/desktop-lifecycle.md`); logout
+  ends it, and lingering past logout is forbidden. The sharp edge
+  is macOS, where keychain access can depend on login and unlock
+  state: the installer requests the needed keychain access at
+  registration time, and the exact ACLs travel with the settings
+  contract, but the requirement is fixed here — if the secrets
+  are unreachable in service context, the drive reads as
+  registered but unavailable, never as broken, and the UI says
+  exactly that.
 - **A fixed handoff sequence** for create and join, with
   initialization as an explicit owner-side provisioning operation
   that runs before anything is registered. Creating is
