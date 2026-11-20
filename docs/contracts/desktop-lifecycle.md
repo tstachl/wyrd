@@ -73,35 +73,67 @@ claiming otherwise contradicts this contract and is wrong.
 
 ## The login session bounds desktop owners
 
-A desktop drive owner must not outlive the authenticated
-user-session domain in which it was started. Quitting the GUI is
-not the boundary — logging out (or otherwise ending the user
-session) is.
+Quitting the GUI is not the boundary — logging out (or otherwise
+ending the user session) is.
 
-This is a policy the implementation must establish, not a fact
-inferred from the supervision mechanism. Installing a launchd user
-agent or a systemd user unit does not by itself prove the bound:
+### Desktop owner session boundary
 
-- Linux desktop installation must not enable lingering for
-  Wyrd's owner: lingering keeps the user manager (and its units)
-  running after logout, which would violate this section.
-  Pre-existing lingering must be detected and handled
-  explicitly — refused with a pointer or disabled with consent —
-  never silently ignored.
-- The user-session domain is per-user, not per graphical login:
-  a systemd user manager is associated with the UID, so
-  concurrent logins for one account share one domain. A second
-  login never starts a duplicate owner for a drive that already
-  has one; the existing owner serves both. The domain ends when
-  the last session of that user ends.
-- Logout termination behavior must be tested on each supported
-  configuration (see "Platform differences" below): the bound is
-  verified, not assumed.
+A desktop drive owner is intended to be bounded by the
+authenticated user-session domain in which it was started.
+
+Before enabling or starting a managed owner, Wyrd MUST determine
+the applicable session-boundary configuration. On Linux systemd
+hosts, Wyrd MUST refuse enablement or start when lingering is
+enabled or its state cannot be determined. Wyrd MUST NOT change
+the user's lingering configuration. Non-systemd hosts do not
+support this user-unit boundary and are handled by the existing
+service-manager error path.
+
+Wyrd checks this condition at manager interactions: enablement,
+start, and the login-start enablement toggle. It does not
+continuously monitor the setting while an owner runs. An
+administrator can therefore enable lingering after an owner has
+started, allowing that owner to survive logout. This is an
+explicit limitation of the desktop session boundary, not a
+condition Wyrd can guarantee against.
+
+Subject to that limitation, owner termination at the end of the
+user-session domain relies on operating-system session teardown.
+Wyrd requests graceful shutdown where the operating system
+delivers the termination signal and preserves unresolved
+operations as `Unconfirmed` if the operating system forces
+termination.
+
+### User-session domain
+
+The desktop user-session domain is per UID. It remains active
+while at least one authenticated login session for that UID
+exists and ends when the last session ends.
+
+Ending one session while another remains does not terminate the
+user manager, its units or agents, or their owners. No owner
+termination is attempted solely because one of several sessions
+ends. Fast user switching is not session end; full logout is.
+
+A concurrent login must not create a duplicate owner for an
+existing drive. The drive ownership and store-lock mechanisms
+prevent a second owner from acquiring the same drive.
+Provisioning an existing drive reconciles and verifies it rather
+than creating another owner.
+
+On Linux, this domain follows the per-UID systemd user manager.
+The equivalent macOS behavior is expected from the per-user
+launchd domain but remains subject to platform verification in
+the logout and multi-session drills.
+
+Logout termination behavior must be tested on each supported
+configuration (see "Platform differences" below): the bound is
+verified, not assumed.
 
 ## Logout discipline
 
-Session end terminates all desktop owners in that session
-domain — session-backed and service-backed alike — after an
+Session end is where all desktop owners in that session domain
+terminate — session-backed and service-backed alike — after an
 orderly shutdown is requested:
 
 - On orderly session termination, Wyrd requests a bounded
