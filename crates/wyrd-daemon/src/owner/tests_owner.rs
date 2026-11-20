@@ -9,6 +9,7 @@ use super::mapping::{
     attr_from_wire, file_identity_from_wire, kind_from_wire, map_policy_error,
     mutation_kind_from_wire, node_from_wire, node_token, wire_attr, wire_dir_entry,
     wire_mutation_error, wire_mutation_outcome, wire_node, wire_presence, wire_retention_policy,
+    wire_sync_report,
 };
 use super::server::bound_read_refusal;
 use super::wire::{
@@ -30,7 +31,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use wyrd_core::live::LiveParts;
+use wyrd_core::live::{LiveParts, PoisonCounts, SyncReport};
 use wyrd_core::view::{Attr, ConflictVersion, DirEntry, Kind, Node};
 use wyrd_format::{ContentId, DriveId, EntryIdentity, SnapshotId};
 use wyrd_sync::keys::DeviceIdentitySecret;
@@ -1686,6 +1687,34 @@ fn poisoned_parent_table_surfaces_poisoned_not_not_found() {
     stop.store(true, Ordering::Relaxed);
     spawn_loop_done(loop_thread);
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// `wire_sync_report` carries every poison counter to the wire, not
+/// just parents: wants/quarantine/scrub share the same cumulative
+/// plumbing, and the mapping destructure is exhaustive, so a nonzero
+/// anywhere must survive the mapping — a dead registry stays
+/// machine-readable as dead past the owner boundary too. No lock
+/// seams: the counters are set on the report, never taken from a
+/// poisoned lock.
+#[test]
+fn wire_sync_report_carries_all_poison_counters() {
+    let report = SyncReport {
+        poison: PoisonCounts {
+            wants: 2,
+            quarantine: 3,
+            scrub: 5,
+            parents: 7,
+        },
+        ..SyncReport::default()
+    };
+    let wire = wire_sync_report(&report);
+    assert_eq!(wire.poison.wants, 2, "wants poison crosses the wire");
+    assert_eq!(
+        wire.poison.quarantine, 3,
+        "quarantine poison crosses the wire"
+    );
+    assert_eq!(wire.poison.scrub, 5, "scrub poison crosses the wire");
+    assert_eq!(wire.poison.parents, 7, "parents poison crosses the wire");
 }
 
 /// All nine mutation kinds encode to JSON and decode back to an

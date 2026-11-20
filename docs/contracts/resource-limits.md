@@ -241,8 +241,8 @@ surfaces:
   classification ran before the bound tripped); the sub-counters
   partition `shed` and nothing else, and `sync now` renders them
   beside the shed total only when the run shed anything.
-- `SyncReport.poison` (`PoisonCounts`): per-pass lock-poison
-  observations by registry (wants, quarantine, scrub, parents).
+- `SyncReport.poison` (`PoisonCounts`): cumulative lock-poison
+  counters by registry (wants, quarantine, scrub, parents), sampled on each pass.
   A poisoned registry reads healthy-empty through its fail-closed
   paths, so any nonzero count is what tells a dead registry from
   an idle one without reading logs. The write budget is not

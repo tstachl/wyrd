@@ -1285,6 +1285,14 @@ impl Engine {
     /// matter how many projections it consults. Commits advance the
     /// tip and miss on the next lookup — staleness is impossible
     /// without a store write, and every store write moves the key.
+    ///
+    /// Detection scope on a hit: only the CURRENT watermark is
+    /// re-read. Commit-file rot under an intact marker is served
+    /// from the last verified projection until a commit, a marker
+    /// change, or a reopen forces a miss, which replays from disk
+    /// under the post-corruption policy — so hits trade detection
+    /// latency for commit-file rot, never the last-known-good
+    /// guarantee.
     pub fn cached_rebuilt(&self) -> Result<Rebuilt, EngineError> {
         let tip = self.store.current();
         // Re-validate the watermark before serving the memo: the
