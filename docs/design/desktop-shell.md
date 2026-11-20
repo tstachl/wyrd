@@ -197,9 +197,12 @@ plane. Three pieces, all precedented in-tree:
   owns the mechanism), and the service's loading behavior must
   work in the actual service context — a launchd user agent or
   systemd user unit within the authenticated session, not a login
-  shell and never pre-login. The owner never outlives the login
-  session (see `docs/contracts/desktop-lifecycle.md`); logout
-  ends it, and lingering past logout is forbidden. The sharp edge
+  shell and never pre-login. The owner is intended to be bounded
+  by the login session (see `docs/contracts/desktop-lifecycle.md`):
+  logout ends it subject to OS teardown, and lingering past logout
+  is forbidden (enforced at enable and start; a lingering change
+  while the owner runs is an explicit limitation, not monitored).
+  The sharp edge
   is macOS, where keychain access can depend on login and unlock
   state: the installer requests the needed keychain access at
   registration time, and the exact ACLs travel with the settings
