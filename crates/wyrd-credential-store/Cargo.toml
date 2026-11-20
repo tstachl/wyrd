@@ -13,7 +13,10 @@ hex.workspace = true
 # lock file, so no new supply chain beyond `keyring`.
 serde.workspace = true
 serde_json.workspace = true
-zeroize.workspace = true
+# `serde` beside the workspace entry: `Zeroizing` must deserialize
+# (stored fields land scrubbed), while every other edge keeps the
+# bare crate. The union is this crate's pin alone.
+zeroize = { workspace = true, features = ["serde"] }
 # Platform credential store behind the loader boundary. No features
 # here: each OS enables its store in its target table below, so a
 # build only links the store it can reach. Builds without a store
@@ -28,6 +31,10 @@ keyring.workspace = true
 # desktop process alive; a locked or ACL-refused keychain is `Denied`,
 # never a fallback.
 keyring = { workspace = true, features = ["apple-native"] }
+# Status codes only: tells the Keychain's auth-failed answers apart
+# from store-unreachable ones inside the facade's opaque platform
+# failure (see `is_access_refusal`). No Keychain calls of its own.
+security-framework = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Secret Service over D-Bus in the systemd user-unit context, with

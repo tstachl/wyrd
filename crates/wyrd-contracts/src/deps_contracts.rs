@@ -63,13 +63,23 @@ fn policy_for(member: &str) -> Option<MemberPolicy> {
         // the store it can reach), `serde`/`serde_json` for the
         // canonical stored-item encoding (parse-only until the
         // migration slice adds the writer), `hex` for the identity
-        // text form, `zeroize` for the scrub-on-drop buffers. Never
+        // text form, `zeroize` (`serde` for the scrub-on-drop parse
+        // boundary) for the buffers, `security-framework` for the
+        // macOS status codes only (never a Keychain call — the facade
+        // owns the store). Never
         // `wyrd-cli` (the dispatcher lives there, not here), never
         // `wyrd-desktop` (no drive opens through the UI backend), and
         // nothing transport-shaped.
         "wyrd-credential-store" => Some(MemberPolicy {
             workspace_allow: &["wyrd-sync"],
-            external_allow: &["hex", "keyring", "serde", "serde_json", "zeroize"],
+            external_allow: &[
+                "hex",
+                "keyring",
+                "security-framework",
+                "serde",
+                "serde_json",
+                "zeroize",
+            ],
         }),
         // The embeddable node: view, sync, and format below; the mailbox
         // subsystem's async and control-plane crates; never presentation
@@ -471,10 +481,11 @@ fn feature_pins(member: &str) -> Option<&'static [FeaturePin]> {
                 &["crypto-rust", "sync-secret-service", "vendored"],
                 true,
             ),
+            ("dependencies", "security-framework", &[], true),
             ("dependencies", "serde", &["derive"], true),
             ("dependencies", "serde_json", &[], true),
             ("dependencies", "wyrd-sync", &[], true),
-            ("dependencies", "zeroize", &[], true),
+            ("dependencies", "zeroize", &["serde"], true),
         ]),
         "wyrd-namespace" => Some(&[
             ("dependencies", "thiserror", &[], true),

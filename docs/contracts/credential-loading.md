@@ -27,7 +27,7 @@ a valid outcome, never a missing item) — never files, modes,
 keychain handles, or OS facilities. Backends implement how that
 material is kept and retrieved. The trait carries the read half
 today; provisioning, replacement, and deletion join with the
-migration slice. Two backends are specified by this contract:
+migration slice. Two backends implement the read half:
 
 - **File backend** (ships today): the hardened Unix file reader in
   `wyrd-cli` (`credentials.rs`) plus its writer, `wyrd identity`
@@ -45,6 +45,37 @@ Adding a backend changes no secret format, no keystore wrap, no
 membership or epoch behavior, and no wire byte. Hardware-backed
 unwrapping stays a storage upgrade that changes nothing about the
 format (`docs/contracts/trust.md:150-151`).
+
+## Stored-item encoding (normative)
+
+One OS-store item per drive, named by its account label under the
+fixed `wyrd-drive-credential` service, is UTF-8 JSON:
+
+```json
+{"identity_hex":"<64 hex chars>","passphrase":"<optional>"}
+```
+
+`identity_hex` decodes to 32 bytes forming a valid identity
+scalar (the same gate as the file reader, including its ASCII
+whitespace trim); `passphrase`, where present, is bounded at 4096
+bytes and returned verbatim — the trailing-newline strip is the
+file reader's line discipline, applied once when material is
+stored, never on load, so both backends open the same keystore.
+Unknown fields are refused. The wire form is bounded at 24576 +
+256 bytes: the worst case is a legal 4096-byte passphrase whose
+every byte escapes to 6 (`"` and `\` escape to 2, control
+characters to 6), plus framing; a larger item is shape-broken.
+The platform fetch itself is not bounded — the store facade
+exposes no streaming read — so the refusal lands after the store
+answers. Provisioning, replacement, and deletion write this
+encoding with the migration slice.
+
+How a drive's configuration comes to *name* an OS-store account
+(a flag, a config key, a service definition) is not this slice:
+reads are implemented and integrated at the loader boundary, and
+the reference selectors that let production traffic reach them
+arrive with the desktop-wiring slice, alongside registration-time
+Keychain access.
 
 ## Credential references, never secrets, in configuration
 

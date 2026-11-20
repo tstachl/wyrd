@@ -8229,6 +8229,7 @@ version = "0.3.0-alpha"
 dependencies = [
  "hex",
  "keyring",
+ "security-framework 3.7.0",
  "serde",
  "serde_json",
  "wyrd-sync",
@@ -8547,6 +8548,7 @@ version = "1.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e13c156562582aa81c60cb29407084cdb54c4164760106ab78e6c5b0858cf64e"
 dependencies = [
+ "serde",
  "zeroize_derive",
 ]
 

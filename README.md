@@ -134,6 +134,7 @@ Wyrd's bet is that these are one system: git's object model, Syncthing's replica
 |---|---|
 | `crates/wyrd-format` | The format contract: two identities (content/storage), canonical encoding, chunking, Merkle file trees, snapshot DAG |
 | `crates/wyrd-sync` | Peer replication on iroh: snapshot announcements, encrypted manifests, roles × materialization, two-phase content, zero-trust encryption |
+| `crates/wyrd-credential-store` | OS credential-store backends (reads): Keychain on macOS, Secret Service on Linux, behind the loader boundary |
 | `crates/wyrd-namespace` | Provider-neutral namespace: value types, verified-head handle, and read surface every presentation backend serves; depends on `wyrd-format` only |
 | `crates/wyrd-view` | The drive as a filesystem: live view, conflict-version lookup, visible conflicts |
 | `crates/wyrd-core` | Embeddable local node: namespace, snapshots, mutations, materialization, and sync control; no presentation, no argument parsing, no process supervision |

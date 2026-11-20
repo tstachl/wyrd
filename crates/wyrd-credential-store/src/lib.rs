@@ -37,8 +37,8 @@
 //! | Platform answer | Loader fact |
 //! |---|
 //! | No such item | `missing` (re-provision, never auto-create) |
-//! | Store reachable, access refused (locked keychain, ACL) | `denied` (fix access, retry) |
-//! | Store unreachable (no D-Bus session, no Secret Service, platform failure, future variants) | `unavailable` (retry; never a weaker substitute) |
+//! | Store reachable, access refused (locked keychain, ACL, macOS auth-failed) | `denied` (fix access, retry) |
+//! | Store unreachable (no D-Bus session, no Secret Service, other platform failures, future variants) | `unavailable` (retry; never a weaker substitute) |
 //! | Item present but shape-broken (non-UTF-8, bad JSON, bad identity, over-long) | `invalid` (fail closed; never guess) |
 //!
 //! A file reference served here is `invalid`: this backend serves
@@ -59,10 +59,10 @@
 //!   targets answer `unavailable` before touching any store.
 //!
 //! Secret lifetime matches the contract: the retrieved blob lives in
-//! a `Zeroizing` buffer from read to parse, the material in
-//! `Zeroizing` buffers from parse to return, and nothing renders —
-//! [`LoadedCredential`] redacts.
-//! Platform-side copies (keychain/D-Bus buffers, crash reports) are
+//! a `Zeroizing` buffer from read to parse, the parsed fields in
+//! `Zeroizing` wrappers from parse to return, and nothing renders —
+//! [`LoadedCredential`] redacts. Parser-transient and platform-side
+//! copies (serde buffers, keychain/D-Bus buffers, crash reports) are
 //! best-effort like every backend, not a loader guarantee.
 
 use wyrd_sync::keys::{
@@ -76,18 +76,23 @@ use zeroize::Zeroizing;
 /// ACL/request covers the backend and items stay enumerable.
 pub const OS_SERVICE: &str = "wyrd-drive-credential";
 
-/// Bound on the stored JSON blob: the identity (64 hex chars) plus a
-/// bounded passphrase plus JSON framing never legitimately reach it.
-/// Mirrors the file reader's posture (bounded reads everywhere); a
-/// larger item is shape-broken, not a larger secret.
-const MAX_STORED_BYTES: usize = 8192;
+/// Bound on the stored JSON blob: framing plus the identity plus
+/// the worst-case encoding of a bounded passphrase. `serde_json`
+/// escapes quotes, backslashes (2 bytes) and control characters (6
+/// bytes), so a legal 4096-byte passphrase can occupy 24576 bytes on
+/// the wire; the bound admits exactly that plus framing slack, and a
+/// larger item is shape-broken, not a larger secret. The platform
+/// fetch itself is not bounded — `keyring` exposes no streaming
+/// read — so the refusal lands after the store answers; a corrupt
+/// or hostile item can allocate up to this bound before refusing.
+const MAX_STORED_BYTES: usize = 24576 + 256;
 
 /// Bound on a stored passphrase: the same 4096-byte bound the file,
 /// stdin, and prompt surfaces enforce, so every backend opens the
-/// same keystore. Owns no constant with the CLI — the two readers
-/// pin the same literal, and either side changing it fails its own
-/// suite, not silently.
-const MAX_PASSPHRASE_BYTES: usize = 4096;
+/// same keystore. Shared with the CLI: `read_passphrase_stdin`
+/// reads this constant, so either side changing it fails the
+/// other's suite, not silently.
+pub const MAX_PASSPHRASE_BYTES: usize = 4096;
 
 /// The OS credential-store backend: serves `CredentialRef::OsStore`
 /// through the platform store, nothing else.
@@ -159,13 +164,15 @@ fn load_account(account: &str) -> Result<LoadedCredential, CredentialError> {
 
 /// The canonical stored item: identity hex always, passphrase where
 /// the drive has one (`None` is the session posture — the unlock pipe
-/// supplies it downstream, never the loader). No `Debug`: the
-/// evidence slot carries the diagnosis, never the bytes.
+/// supplies it downstream, never the loader). Fields land in
+/// `Zeroizing` wrappers at the serde boundary, so a refusal below
+/// scrubs what it held. No `Debug`: the evidence slot carries the
+/// diagnosis, never the bytes.
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct StoredPayload {
-    identity_hex: String,
-    passphrase: Option<String>,
+    identity_hex: Zeroizing<String>,
+    passphrase: Option<Zeroizing<String>>,
 }
 
 /// Parse one stored blob into secret material. Every refusal is
@@ -191,10 +198,13 @@ fn decode_stored_value(account: &str, blob: &str) -> Result<LoadedCredential, Cr
             "stored credential for account {account} is not a valid credential record"
         ))
     })?;
-    // The file reader trims surrounding whitespace around hex
-    // identities; the store mirrors it so migrated material parses
-    // exactly like the file it came from.
-    let trimmed = payload.identity_hex.trim();
+    // The file reader trims surrounding ASCII whitespace around
+    // hex identities; the store mirrors it exactly (not Unicode
+    // `trim`, which the file reader never accepted) so migrated
+    // material parses exactly like the file it came from.
+    let trimmed = payload
+        .identity_hex
+        .trim_matches(|character: char| character.is_ascii_whitespace());
     if trimmed.len() != 64 {
         return Err(invalid(&format!(
             "stored credential for account {account} names an identity that is not 64 hex characters"
@@ -212,6 +222,9 @@ fn decode_stored_value(account: &str, blob: &str) -> Result<LoadedCredential, Cr
         ))
     })?;
     let passphrase = match payload.passphrase {
+        // The over-long text is already `Zeroizing`, so the refusal
+        // scrubs it on the way out — unlike a plain `String`, which
+        // `drop` would leave in memory.
         None => None,
         Some(text) => {
             if text.len() > MAX_PASSPHRASE_BYTES {
@@ -219,7 +232,7 @@ fn decode_stored_value(account: &str, blob: &str) -> Result<LoadedCredential, Cr
                     "stored credential for account {account} exceeds the {MAX_PASSPHRASE_BYTES}-byte passphrase limit"
                 )));
             }
-            Some(Zeroizing::new(text))
+            Some(text)
         }
     };
     Ok(LoadedCredential {
@@ -228,11 +241,18 @@ fn decode_stored_value(account: &str, blob: &str) -> Result<LoadedCredential, Cr
     })
 }
 
+/// Keychain authentication/ACL refusal (`SecBase.h`): the one
+/// access fact keyring's status table never names, so it arrives
+/// inside the facade's opaque platform failure. macOS only.
+#[cfg(target_os = "macos")]
+const ERR_SEC_AUTH_FAILED: i32 = -25293;
+
 /// Map one platform answer onto the loader taxonomy. Details carry
 /// the account label and the platform's status text — never the item
-/// bytes: `BadEncoding` drops its buffer and `Ambiguous` drops its
-/// handles uninspected.
+/// bytes: `BadEncoding` scrubs its buffer before answering and
+/// `Ambiguous` drops its handles uninspected.
 fn map_keyring_error(account: &str, error: keyring::Error) -> CredentialError {
+    use zeroize::Zeroize;
     let subject = || CredentialSubject::Account {
         account: account.to_owned(),
     };
@@ -245,14 +265,47 @@ fn map_keyring_error(account: &str, error: keyring::Error) -> CredentialError {
             subject: subject(),
             detail: format!("OS credential store refused access for account {account}: {source}"),
         },
-        keyring::Error::PlatformFailure(source) => CredentialError::Unavailable {
-            subject: subject(),
-            detail: format!("OS credential store unreachable for account {account}: {source}"),
-        },
-        keyring::Error::BadEncoding(_) => CredentialError::Invalid {
-            subject: subject(),
-            detail: format!("stored credential for account {account} is not UTF-8 text"),
-        },
+        keyring::Error::PlatformFailure(source) => {
+            // The facade funnels every unlisted Security status here,
+            // including the authentication refusal keyring never
+            // names: an ACL or locked-keychain answer is an access
+            // fact (`denied`), not an unreachable store. macOS reads
+            // the status off the downcast source (the box owns a
+            // `'static` object, which is what the downcast needs);
+            // elsewhere the facade's own `NoStorageAccess` is the
+            // only access signal, so nothing is.
+            #[cfg(target_os = "macos")]
+            let denied = source
+                .downcast_ref::<security_framework::base::Error>()
+                .is_some_and(|error| error.code() == ERR_SEC_AUTH_FAILED);
+            #[cfg(not(target_os = "macos"))]
+            let denied = false;
+            if denied {
+                CredentialError::Denied {
+                    subject: subject(),
+                    detail: format!(
+                        "OS credential store refused access for account {account}: {source}"
+                    ),
+                }
+            } else {
+                CredentialError::Unavailable {
+                    subject: subject(),
+                    detail: format!(
+                        "OS credential store unreachable for account {account}: {source}"
+                    ),
+                }
+            }
+        }
+        // The buffer holds the raw stored item — identity plus
+        // passphrase — so it is scrubbed before the refusal, never
+        // dropped as plaintext.
+        keyring::Error::BadEncoding(mut raw) => {
+            raw.zeroize();
+            CredentialError::Invalid {
+                subject: subject(),
+                detail: format!("stored credential for account {account} is not UTF-8 text"),
+            }
+        }
         keyring::Error::TooLong(name, limit) => CredentialError::Invalid {
             subject: subject(),
             detail: format!(
@@ -327,7 +380,12 @@ mod tests {
                 ))),
                 "Unavailable",
             ),
-            (keyring::Error::BadEncoding(vec![0xff, 0xfe]), "Invalid"),
+            // The attached buffer is the raw stored item — this one
+            // even names the passphrase, so the detail must not.
+            (
+                keyring::Error::BadEncoding(b"hunter2-hunter2\xff".to_vec()),
+                "Invalid",
+            ),
             (keyring::Error::TooLong("user".to_string(), 32), "Invalid"),
             (
                 keyring::Error::Invalid("user".to_string(), "empty".to_string()),
@@ -361,6 +419,43 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// macOS names the Keychain's authentication refusal inside the
+    /// facade's opaque platform failure: `errSecAuthFailed` is an
+    /// access fact (`denied`), while any other Security status stays
+    /// `unavailable`. Keyring's own table never names the code, so
+    /// the backend reads it off the downcast source.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_auth_failed_is_denied_not_unavailable() {
+        let account = "wyrd-drive-alpha";
+        use security_framework::base::Error as SecError;
+        let denied = map_keyring_error(
+            account,
+            keyring::Error::PlatformFailure(Box::new(SecError::from(-25293))),
+        );
+        match denied {
+            CredentialError::Denied { subject, detail } => {
+                assert_eq!(
+                    subject,
+                    CredentialSubject::Account {
+                        account: account.to_string()
+                    }
+                );
+                assert!(detail.contains(account), "names the account: {detail}");
+            }
+            other => panic!("an auth refusal is Denied: {other:?}"),
+        }
+        // Any other Security status is still an unreachable store.
+        let unreachable = map_keyring_error(
+            account,
+            keyring::Error::PlatformFailure(Box::new(SecError::from(-1))),
+        );
+        assert!(
+            matches!(unreachable, CredentialError::Unavailable { .. }),
+            "other statuses stay Unavailable: {unreachable:?}"
+        );
     }
 
     /// The shape gate mirrors the file reader: a valid item loads
@@ -405,9 +500,21 @@ mod tests {
                 "a broken shape is Invalid: {blob:.64}"
             );
         }
-        // Surrounding whitespace around the hex is tolerated, like
-        // the file reader's trim — migrated material parses exactly
-        // like the file it came from.
+        // A worst-case passphrase — 4096 bytes that all escape —
+        // still loads: the blob bound admits the encoding's
+        // expansion, so the file backend's passphrase is the store
+        // backend's passphrase byte for byte.
+        let escaped = "\\".repeat(MAX_PASSPHRASE_BYTES);
+        let blob = encode_for_tests(&fixture_hex(), Some(&escaped));
+        let loaded = decode_stored_value(account, &blob).expect("an escaped item loads");
+        assert_eq!(
+            loaded.passphrase.expect("named item loads").as_str(),
+            escaped.as_str(),
+            "escaping never changes the material"
+        );
+        // Surrounding ASCII whitespace around the hex is tolerated,
+        // like the file reader's trim — migrated material parses
+        // exactly like the file it came from.
         let padded = encode_for_tests(&format!("  {}  ", fixture_hex()), None);
         assert!(
             decode_stored_value(account, &padded).is_ok(),
@@ -479,5 +586,43 @@ mod tests {
         };
         assert!(!detail.contains(secret_pass), "no secret echo: {detail}");
         assert!(!detail.contains("not-hex"), "no blob echo: {detail}");
+    }
+
+    /// Manual service-context probe: stores a random item through the
+    /// real platform store, loads it back through the backend, then
+    /// deletes it. Ignored by default — it touches the login
+    /// keychain / Secret Service — and run by hand where it matters:
+    /// in the login session, then again under the launchd agent /
+    /// systemd user unit with no terminal, to prove service-context
+    /// retrieval (GUI-side access proves nothing). Never runs in CI.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[ignore = "touches the real platform store; run by hand per the contract's service-context clause"]
+    #[test]
+    fn real_store_probe_round_trip() {
+        let backend = OsStoreBackend;
+        let account = format!("wyrd-probe-{}-{}", std::process::id(), "service-context");
+        let reference = || CredentialRef::OsStore {
+            account: account.clone(),
+        };
+        let blob = encode_for_tests(&fixture_hex(), Some("probe-pass"));
+        let entry = keyring::Entry::new(OS_SERVICE, &account).expect("probe entry builds");
+        // A previous interrupted run must not poison this one.
+        let _ = entry.delete_credential();
+        entry.set_password(&blob).expect("probe item stores");
+        let loaded = backend
+            .load(&reference())
+            .expect("the owner retrieves its material");
+        assert_eq!(
+            loaded.passphrase.expect("named item loads").as_str(),
+            "probe-pass"
+        );
+        entry.delete_credential().expect("probe item cleans up");
+        assert!(
+            matches!(
+                backend.load(&reference()),
+                Err(CredentialError::Missing { .. })
+            ),
+            "a deleted item reads Missing, never stale material"
+        );
     }
 }

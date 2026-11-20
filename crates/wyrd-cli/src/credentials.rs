@@ -450,7 +450,9 @@ fn strip_trailing_newline(text: &str) -> &str {
 /// partially initialized. The buffer stays in a `Zeroizing`,
 /// scrubbed on drop.
 fn read_passphrase_stdin(reader: impl std::io::Read) -> Result<Zeroizing<String>, CliError> {
-    const MAX_PASSPHRASE_BYTES: usize = 4096;
+    // The bound is the OS backend's: one literal for every surface,
+    // so a passphrase the pipe accepts is one the store accepts.
+    use wyrd_credential_store::MAX_PASSPHRASE_BYTES;
     let mut bytes = Zeroizing::new(Vec::new());
     reader
         .take((MAX_PASSPHRASE_BYTES + 1) as u64)
@@ -1231,11 +1233,11 @@ mod tests {
 
     /// The dispatcher routes by reference: file references load
     /// through the file backend, store references through the OS
-    /// backend — so a store reference dispatched here never reports
-    /// the file backend's refusal. The store side is unwired in
-    /// this test's context (no item stored), which reads `Missing`
-    /// or `Unavailable` depending on the platform store, never a
-    /// file error.
+    /// backend. The absent store item answers with the OS backend's
+    /// own refusal — item or store, never the file backend's "never
+    /// serves OS store references" — which is what distinguishes the
+    /// two paths on every platform (macOS reads `Missing` here, a
+    /// headless Linux reads `Unavailable`, both name the store).
     #[test]
     fn dispatcher_routes_store_references_to_the_os_backend() {
         let missing = CredentialRef::OsStore {
@@ -1243,10 +1245,19 @@ mod tests {
         };
         match load_credential(&missing) {
             Err(
-                CredentialError::Missing { .. }
-                | CredentialError::Unavailable { .. }
-                | CredentialError::Denied { .. },
-            ) => {}
+                CredentialError::Missing { detail, .. }
+                | CredentialError::Unavailable { detail, .. }
+                | CredentialError::Denied { detail, .. },
+            ) => {
+                assert!(
+                    detail.contains("OS credential"),
+                    "the OS backend answers, not the file backend: {detail}"
+                );
+                assert!(
+                    !detail.contains("never serves"),
+                    "never the file backend's refusal: {detail}"
+                );
+            }
             other => panic!("a store reference never reports a file error: {other:?}"),
         }
         let file_missing = CredentialRef::File {

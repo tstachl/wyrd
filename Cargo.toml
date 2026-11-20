@@ -86,6 +86,12 @@ wyrd-owner-client = { path = "crates/wyrd-owner-client" }
 # graph. Only the leaf `wyrd-credential-store` crate may name it: never
 # the audited substrate, never the desktop.
 keyring = "3.6"
+# macOS Security framework status codes (credential-loading.md OS
+# backend): distinguishes the Keychain's auth-failed answers (Denied)
+# from store-unreachable ones (Unavailable) when classifying the
+# `keyring` facade's opaque platform failure. macOS target table of
+# the leaf crate only — same reservation as `keyring` above.
+security-framework = "3"
 
 # content hashing
 blake3 = "1.8"
