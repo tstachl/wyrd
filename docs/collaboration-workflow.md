@@ -8,10 +8,11 @@ Describe the problem or change, its context, and how to verify it. If the issue 
 
 Apply one label per category:
 
-- **Type:** `bug`, `enhancement`, or `chore`
+- **Type:** `bug`, `enhancement`, `chore`, or `docs` (for documentation-focused work)
 - **Priority:** `P0` to `P4`
 - **Milestone:** one `release:*` label, chosen against the milestone thesis in `ROADMAP.md` (including the v0.2 entry test), not by recency or the current release line. Uncommitted future work takes `release:backlog`. No triaged issue goes without one.
 - **Review (only for review reports):** one `review:*` label (`review:architecture`, `review:security`, `review:code-quality`, `review:release`), swapping within its family. Review issues are otherwise triaged as `chore`/`P3`/`release:backlog`.
+- **Audit (only for audit findings):** one `audit:*` label (`audit:blocker`, `audit:should-fix`, `audit:nice-to-have`), swapping within its family. Audit issues otherwise carry a normal type, priority and milestone.
 
 ```bash
 gate issue create --subject "feat(format): path-level tree mutation" \
