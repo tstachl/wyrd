@@ -566,7 +566,8 @@ pub struct WireSyncReport {
     /// Publish-phase elapsed time in ms.
     #[serde(default)]
     pub publish_elapsed_ms: u64,
-    /// Lock-poison observations behind the pass, by registry.
+    /// Cumulative lock-poison observations since construction, sampled on
+    /// this pass, by registry.
     #[serde(default)]
     pub poison: WirePoisonCounts,
 }
