@@ -1,0 +1,39 @@
+# Push-only Rust dependency publisher (shared binary-cache leg).
+#
+# PR build jobs always get `cache-write=None` by coordinator policy
+# (confirmed_maintainer && !pull_request required for Shared), so the
+# `rust-deps` derivation all three PR gates share is never published
+# from a PR run — each PR job rebuilds it cold. This workflow runs the
+# same derivation as a pure build on push to master, where the
+# maintainer push qualifies for Shared publication; the sealed output
+# lands in the provider's fleet-wide index and subsequent PR jobs
+# substitute it instead of rebuilding.
+#
+# Master pushes only, no pull_request leg: publishing from a PR could
+# never happen, so a PR leg would spend a job slot for zero cache
+# effect. No secrets, no run steps, no artifacts — a pure build whose
+# succeeding IS the publication.
+#
+# Path filter covers exactly what changes the `rust-deps` store path:
+# the lockfile and manifests, the toolchain, the flake inputs, and the
+# derivation itself. A push touching only `.rs` bodies re-runs cheaply
+# (same store path → already-cached, counted as reused, not rebuilt).
+version: 1
+system: x86_64-linux
+name: deps
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "crates/**"
+      - "rust-toolchain.toml"
+      - "flake.nix"
+      - "flake.lock"
+      - ".ngit/nix/**"
+
+jobs:
+  deps:
+    build: checks.x86_64-linux.rust-deps
