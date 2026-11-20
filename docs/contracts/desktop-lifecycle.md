@@ -64,7 +64,8 @@ kind:
   child and does not scrub the owner's own loaded secret. Relaunch
   reattaches through the socket probe, which reads `Unlocked` without
   consulting the (empty) session map. Only an explicit lock ends a
-  session-backed owner (see "Explicit lock").
+  session-backed owner while its session continues (see "Explicit
+  lock"); session end terminates it per "Logout discipline" below.
 
 **Quit never locks.** Quit is a UI lifecycle action; lock is a drive
 security action. Quitting the shell must not implicitly lock a

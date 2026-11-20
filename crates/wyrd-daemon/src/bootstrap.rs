@@ -1478,7 +1478,15 @@ fn check_session_bound() -> Result<(), BootstrapError> {
     ) {
         None => Err(BootstrapError::LingerUnknown {
             uid,
-            detail: "loginctl gave no usable answer within 5s".to_string(),
+            // No cause is claimed beyond "no usable answer": the
+            // probe collapses a missing tool, a failed command, and
+            // a wedged-manager overrun into one refusal, and the
+            // bound derives from PROBE_TIMEOUT rather than a
+            // literal so the two cannot drift.
+            detail: format!(
+                "loginctl gave no usable answer within {:?} (missing, failed, or timed out)",
+                PROBE_TIMEOUT
+            ),
         }),
         Some(out) => match parse_linger_state(&out) {
             Ok(true) => Err(BootstrapError::LingeringEnabled { uid }),
@@ -2642,7 +2650,10 @@ fn classify_post_stop_failure(
 }
 
 /// Enable the installed definition and start it now. Shared by both
-/// handoffs so their service failures carry the same kinds.
+/// handoffs so their service failures carry the same kinds. The
+/// start leg goes through `start_service_only` so the session bound
+/// is established on the start path too, not just the enable that
+/// precedes it in this same operation.
 fn enable_and_start(
     entry: &RegistryEntry,
     definition: &Path,
@@ -2653,7 +2664,7 @@ fn enable_and_start(
             format!("enable-service: {error}"),
         ));
     }
-    if let Err(error) = start_service(entry) {
+    if let Err(error) = start_service_only(entry, definition) {
         return Err((
             ProvisionFailureKind::StartService,
             format!("start-service: {error}"),
