@@ -6,41 +6,51 @@
 repo_naddr = "naddr1qqz8w7tjvspzpv7ftn3nm75yxfnpr69h48qsk7xl9p65cw93q6jtcqvkhxl97nj2qvzqqqrhnyzuuxrw"
 # Branch prefix that marks a proposal branch.
 branch_prefix = "pr/"
+# NOTE: defaulted in ~/.config/gate/config.toml
 # Signer whose comments count as review (resolved to an npub at runtime).
-review_signer = "scout"
+# review_signer = "scout"
+# NOTE: defaulted in ~/.config/gate/config.toml
 # Draft a newly created proposal as part of the first push, matching the
 # "draft immediately after the first push" policy (CI runs on
 # ready_for_review only). This replaces the old CI auto-draft job (removed
 # from .ngit/act/workflows/): new PRs land open, and the project works
 # draft-first. Omit for the default (proposal stays open).
-auto_draft = true
+# auto_draft = true
 
-[ci]
+# NOTE: defaulted in ~/.config/gate/config.toml
+# [ci]
 # Trust floor passed to `ngit ci status --require-ci-trust`.
-trust_level = "maintainer-directed"
+# trust_level = "maintainer-directed"
 
-[log]
+# NOTE: defaulted in ~/.config/gate/config.toml
+# [log]
 # Per-user invocation log, outside the repo by design.
-path = "~/.local/state/gate/invocations.jsonl"
+# path = "~/.local/state/gate/invocations.jsonl"
 
-# Triage taxonomy, mirroring CONTRIBUTING.md: every triaged issue carries
-# exactly one label from each category. `gate issue label` validates
-# against these and swaps any existing label in the same category, so
-# milestones never stack. Unlisted `release:*` values are still accepted
-# (and swapped) by prefix; extend the milestone list as the roadmap firms
-# up. Omit the table to allow only a bare `gate issue create`.
+# Triage taxonomy, mirroring docs/collaboration-workflow.md: every triaged
+# issue carries exactly one label from each category. `gate issue label`
+# validates against these and swaps any existing label in the same
+# category, so milestones never stack. Unlisted `release:*` values are
+# still accepted (and swapped) by prefix; extend the milestone list as the
+# roadmap firms up. Omit the table to allow only a bare `gate issue create`.
 [issues]
-types = ["bug", "enhancement", "chore"]
-priorities = ["P0", "P1", "P2", "P3", "P4"]
+types = ["bug", "enhancement", "chore", "docs"]
+# NOTE: defaulted in ~/.config/gate/config.toml
+# priorities = ["P0", "P1", "P2", "P3", "P4"]
 # Namespaced review labels for point-in-time external reviews, which live
-# on ngit as issues (`review(<type>): <model> <date> @ <sha>`). Applied
-# via `gate issue create/label --label`; `review:*` swaps within its
-# family. Listed here so the taxonomy stays in one place.
+# on ngit as issues (`review(<type>): <model> <date> @ <sha>`). Audit
+# findings from the pre-alpha audit keep their severity the same way.
+# Applied via `gate issue create/label --label`; `review:*` and `audit:*`
+# each swap within their family. Listed here so the taxonomy stays in one
+# place.
 labels = [
   "review:architecture",
   "review:security",
   "review:code-quality",
   "review:release",
+  "audit:blocker",
+  "audit:should-fix",
+  "audit:nice-to-have",
 ]
 milestones = [
   "release:v0.1.0-alpha",
@@ -66,8 +76,9 @@ milestones = [
 # their own copy), so the path is checkout-relative.
 [review]
 prompt = ".agents/prompts/branch-review-wyrd.md"
-model = "opencode-go/hy4-flash-free"
-variant = "high"
+# NOTE: defaulted in ~/.config/gate/config.toml
+# model = "opencode-go/hy4-flash-free"
+# variant = "high"
 
 # Odin runner resource: the forced-command ssh path. The machine id comes
 # from the key entry server-side; nothing here can forge it.
