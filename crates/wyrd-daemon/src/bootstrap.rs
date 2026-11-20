@@ -353,8 +353,11 @@ pub enum BootstrapError {
     /// Lingering is enabled for this user: the user manager (and a
     /// managed unit) would survive logout, violating the desktop
     /// session bound. Refusal only — Wyrd never changes lingering
-    /// configuration; disable it by hand and retry.
-    #[error("lingering is enabled for UID {uid}: a managed unit would survive logout, violating the desktop session bound — run `loginctl disable-linger {uid}` (requires privilege) and retry; Wyrd never changes lingering configuration")]
+    /// configuration; disable it by hand and retry, or run this
+    /// drive outside a login session via `--no-service`
+    /// registration with independent supervision of
+    /// `wyrd owner start`.
+    #[error("lingering is enabled for UID {uid}: a managed unit would survive logout, violating the desktop session bound — run `loginctl disable-linger {uid}` (requires privilege) and retry; Wyrd never changes lingering configuration. For headless operation without a login session, register with `--no-service` and supervise `wyrd owner start` independently: managed user-scope services are desktop lifecycle infrastructure")]
     LingeringEnabled {
         /// UID whose user manager lingers past logout.
         uid: u32,
@@ -363,7 +366,7 @@ pub enum BootstrapError {
     /// Refusal, never an assumed safe default: enabling login-start
     /// without knowing whether the manager lingers could silently
     /// violate the session bound.
-    #[error("cannot determine lingering state for UID {uid}: {detail} — refusing rather than assuming the session bound holds")]
+    #[error("cannot determine lingering state for UID {uid}: {detail} — refusing rather than assuming the session bound holds. Managed user-scope services are desktop lifecycle infrastructure; for headless operation without a login session, register with `--no-service` and supervise `wyrd owner start` independently")]
     LingerUnknown {
         /// UID whose lingering state was probed.
         uid: u32,
@@ -1453,32 +1456,35 @@ fn parse_linger_state(output: &str) -> Result<bool, String> {
 /// Non-systemd hosts skip it: no user manager exists to linger,
 /// and `systemctl` reports its own errors downstream. macOS needs
 /// no probe: installation is user-agent-only by construction.
+///
+/// Scope: Wyrd-managed service definitions are user-scoped
+/// desktop lifecycle infrastructure (launchd user agents, systemd
+/// user units) — Wyrd ships no system-scope service. Server
+/// deployments register with `--no-service` and supervise
+/// `wyrd owner start` independently; they never pass through the
+/// managed enable/start paths, so this refusal does not apply to
+/// them. The boundary follows the supervision path, never the
+/// credential backend: file-backed desktop drives share it.
 #[cfg(all(unix, not(target_os = "macos")))]
 fn check_session_bound() -> Result<(), BootstrapError> {
     if !std::path::Path::new("/run/systemd/system").exists() {
         return Ok(());
     }
     let uid = current_uid();
-    let output = std::process::Command::new("loginctl")
-        .args(["show-user", &uid.to_string(), "-p", "Linger", "--value"])
-        .output()
-        .map_err(|source| BootstrapError::LingerUnknown {
+    let uid_text = uid.to_string();
+    match probe_success_output(
+        "loginctl",
+        &["show-user", &uid_text, "-p", "Linger", "--value"],
+    ) {
+        None => Err(BootstrapError::LingerUnknown {
             uid,
-            detail: format!("loginctl did not run: {source}"),
-        })?;
-    if !output.status.success() {
-        return Err(BootstrapError::LingerUnknown {
-            uid,
-            detail: format!(
-                "loginctl refused: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            ),
-        });
-    }
-    match parse_linger_state(&String::from_utf8_lossy(&output.stdout)) {
-        Ok(true) => Err(BootstrapError::LingeringEnabled { uid }),
-        Ok(false) => Ok(()),
-        Err(detail) => Err(BootstrapError::LingerUnknown { uid, detail }),
+            detail: "loginctl gave no usable answer within 5s".to_string(),
+        }),
+        Some(out) => match parse_linger_state(&out) {
+            Ok(true) => Err(BootstrapError::LingeringEnabled { uid }),
+            Ok(false) => Ok(()),
+            Err(detail) => Err(BootstrapError::LingerUnknown { uid, detail }),
+        },
     }
 }
 
@@ -1508,6 +1514,57 @@ fn probe_output(program: &str, args: &[&str]) -> Option<String> {
     loop {
         match child.try_wait() {
             Ok(Some(_)) => {
+                let mut stdout = String::new();
+                if let Some(mut pipe) = child.stdout.take() {
+                    use std::io::Read as _;
+                    let _ = pipe.read_to_string(&mut stdout);
+                }
+                let _ = child.wait();
+                return Some(stdout);
+            }
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return None;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
+}
+
+/// Run one manager probe and capture stdout only on exit success.
+/// Unlike [`probe_output`] — which deliberately ignores exit status
+/// because `is-enabled` exits non-zero for a disabled unit — a
+/// failed `loginctl` with plausible stdout must never parse as a
+/// safe answer. Spawn failure, non-zero exit, wedged-manager
+/// overrun past [`PROBE_TIMEOUT`], and wait errors all read as no
+/// answer; only exit-success stdout reaches `parse_linger_state`.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn probe_success_output(program: &str, args: &[&str]) -> Option<String> {
+    use std::time::Instant;
+    let mut child = std::process::Command::new(program)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+    let deadline = Instant::now() + PROBE_TIMEOUT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                if !status.success() {
+                    drop(child.stdout.take());
+                    let _ = child.wait();
+                    return None;
+                }
                 let mut stdout = String::new();
                 if let Some(mut pipe) = child.stdout.take() {
                     use std::io::Read as _;
