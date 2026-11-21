@@ -21,6 +21,7 @@ import {
   SETTING_BOUNDS,
   shortId,
   storeAccountFor,
+  SUGGESTED_RELAYS,
   suggestedDriveDirFor,
   validateBoundInput,
   withDevCliHint,
@@ -119,6 +120,21 @@ test("store accounts derive one label per drive name", () => {
   expect(storeAccountFor("  beta-2  ")).toBe("wyrd-drive-beta-2");
   expect(storeAccountFor("")).toBe("wyrd-drive-alpha");
   expect(storeAccountFor("   ")).toBe("wyrd-drive-alpha");
+});
+
+test("the relay suggestion names the probed default set", () => {
+  // The 2026-11-19 live policy probes picked these five (no auth on
+  // gift-wrap reads, no payment, unrestricted writes, write accepted
+  // and read back, 3/3 repeat consistency); the form pre-fills from
+  // this constant, so the set pins here. A copy keeps RelayEditor
+  // from mutating the shared list.
+  expect(SUGGESTED_RELAYS).toEqual([
+    "wss://relay.primal.net",
+    "wss://relay.ditto.pub",
+    "wss://purplerelay.com",
+    "wss://relay.snort.social",
+    "wss://offchain.pub",
+  ]);
 });
 
 test("the suggestion follows the name while untouched", () => {

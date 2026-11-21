@@ -37,6 +37,7 @@ by hand elsewhere. Secret contents never travel. -->
     nextDriveDir,
     observedRegistrySummary,
     storeAccountFor,
+    SUGGESTED_RELAYS,
     suggestedDriveDirFor,
   } from "./format.js";
   import ArrowLeftIcon from "@lucide/svelte/icons/arrow-left";
@@ -69,7 +70,16 @@ by hand elsewhere. Secret contents never travel. -->
   let name = $state("");
   let driveDir = $state("");
   let driveDirTouched = $state(false);
-  let relays = $state<string[]>([]);
+  // Suggested relays pre-filled (a copy — RelayEditor mutates its
+  // own list): keep, edit, or clear before saving; the drive keeps
+  // exactly what is listed. Shared across the create and join tabs.
+  let relays = $state<string[]>([...SUGGESTED_RELAYS]);
+  // True where the list no longer matches the suggestion (including a
+  // full clear) — the restore affordance below shows itself then.
+  const relaysDiffer = $derived(
+    relays.length !== SUGGESTED_RELAYS.length ||
+      relays.some((relay, index) => relay !== SUGGESTED_RELAYS[index]),
+  );
   let identityFile = $state("");
   let passphraseFile = $state("");
   let invitationFile = $state("");
@@ -128,8 +138,10 @@ by hand elsewhere. Secret contents never travel. -->
   // always runs managed (`noService: false`), so the CLI's
   // managed-service refusal is the honest outcome and the detail
   // below reports it verbatim. There is no local-only mode in this
-  // form and no product default relay set ships in the repo — the
-  // field starts empty with the example placeholder as a shape hint.
+  // form. The field starts with the suggested relays (see
+  // `SUGGESTED_RELAYS` in `./format.js`) — an editable starting
+  // point, not a requirement: the drive saves exactly what is
+  // listed, including an explicit clear.
   const relaysEmpty = $derived(relays.length === 0);
 
   async function run(call: () => Promise<ProvisionReport>): Promise<void> {
@@ -262,13 +274,31 @@ by hand elsewhere. Secret contents never travel. -->
                   that refusal reports verbatim below.
                 </p>
                 <p>
-                  No product default relay set ships in the repo, so the field starts empty. The
-                  example placeholder is a shape hint, not a suggestion to use.
+                  The field starts with Wyrd's suggested relays — keep them, edit the list, or
+                  clear it entirely. The drive saves exactly what is listed.
                 </p>
               </InfoHint>
             </Field.Label>
             <RelayEditor bind:relays disabled={busy} />
-            <Field.Description>Add at least one relay for a managed drive.</Field.Description>
+            <Field.Description>Suggested relays are pre-filled — edit or clear the list. Add at least one relay for a managed drive.</Field.Description>
+            {#if relaysDiffer}
+              <div class="flex flex-wrap items-center gap-2">
+                <span class="min-w-0 truncate font-mono text-xs text-muted-foreground">
+                  Suggested: {SUGGESTED_RELAYS.join(", ")}
+                </span>
+                <Button
+                  variant="link"
+                  size="xs"
+                  disabled={busy}
+                  onclick={() => {
+                    relays = [...SUGGESTED_RELAYS];
+                  }}
+                >
+                  <SparklesIcon data-icon="inline-start" />
+                  Restore suggested relays
+                </Button>
+              </div>
+            {/if}
           </Field.Field>
 
           {#if credentialMode === "store"}
@@ -432,10 +462,32 @@ by hand elsewhere. Secret contents never travel. -->
                   one relay is required, and an empty set is refused before anything is joined —
                   that refusal reports verbatim below.
                 </p>
+                <p>
+                  The field starts with Wyrd's suggested relays — keep them, edit the list, or
+                  clear it entirely. The drive saves exactly what is listed.
+                </p>
               </InfoHint>
             </Field.Label>
             <RelayEditor id="join-relays" bind:relays disabled={busy} />
-            <Field.Description>Add at least one relay for a managed drive.</Field.Description>
+            <Field.Description>Suggested relays are pre-filled — edit or clear the list. Add at least one relay for a managed drive.</Field.Description>
+            {#if relaysDiffer}
+              <div class="flex flex-wrap items-center gap-2">
+                <span class="min-w-0 truncate font-mono text-xs text-muted-foreground">
+                  Suggested: {SUGGESTED_RELAYS.join(", ")}
+                </span>
+                <Button
+                  variant="link"
+                  size="xs"
+                  disabled={busy}
+                  onclick={() => {
+                    relays = [...SUGGESTED_RELAYS];
+                  }}
+                >
+                  <SparklesIcon data-icon="inline-start" />
+                  Restore suggested relays
+                </Button>
+              </div>
+            {/if}
           </Field.Field>
 
           <Field.Field>
