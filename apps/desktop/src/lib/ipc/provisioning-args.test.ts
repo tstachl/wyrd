@@ -8,7 +8,7 @@
 // Run: `bun run test` from `apps/desktop/`.
 
 import { expect, test } from "bun:test";
-import { buildCreateArgs, buildJoinArgs, buildLeaveArgs } from "./provisioning-args.js";
+import { buildCreateArgs, buildJoinArgs, buildLeaveArgs, buildReconfigureArgs } from "./provisioning-args.js";
 
 test("store create seeds the item and names the reference", () => {
   expect(
@@ -88,8 +88,7 @@ test("store join adds the invitation beside the seeds and reference", () => {
   });
 });
 
-test("store leave names only the item, never seeds", () => {
-  expect(
+test("store leave names only the item, never seeds", () => {  expect(
     buildLeaveArgs({
       driveDir: "/drives/alpha",
       credentialMode: "store",
@@ -122,4 +121,68 @@ test("file leave carries the verified pair and no backend keys", () => {
     passphraseFile: "/keys/passphrase",
     acknowledged: true,
   });
+});
+
+test("store reconfigure names the reference and keeps supervision", () => {
+  expect(
+    buildReconfigureArgs({
+      driveDir: "/drives/alpha",
+      relays: [],
+      credentialMode: "store",
+      storeAccount: "wyrd-drive-alpha",
+      identityFile: "/keys/identity",
+      passphraseFile: "/keys/passphrase",
+      mode: "vault",
+      mountpoint: undefined,
+      noService: false,
+    }),
+  ).toEqual({
+    driveDir: "/drives/alpha",
+    relays: [],
+    credentialBackend: "os-store",
+    credentialAccount: "wyrd-drive-alpha",
+    mode: "vault",
+    mountpoint: undefined,
+    noService: false,
+  });
+});
+
+test("file reconfigure carries the verified pair and no backend keys", () => {
+  expect(
+    buildReconfigureArgs({
+      driveDir: "/drives/alpha",
+      relays: [],
+      credentialMode: "file",
+      storeAccount: "wyrd-drive-alpha",
+      identityFile: "/keys/identity",
+      passphraseFile: "/keys/passphrase",
+      mode: "vault",
+      mountpoint: undefined,
+      noService: false,
+    }),
+  ).toEqual({
+    driveDir: "/drives/alpha",
+    relays: [],
+    identityFile: "/keys/identity",
+    passphraseFile: "/keys/passphrase",
+    mode: "vault",
+    mountpoint: undefined,
+    noService: false,
+  });
+});
+
+test("file reconfigure refuses before any spawn where the pair is absent", () => {
+  expect(
+    buildReconfigureArgs({
+      driveDir: "/drives/alpha",
+      relays: [],
+      credentialMode: "file",
+      storeAccount: "wyrd-drive-alpha",
+      identityFile: null,
+      passphraseFile: "/keys/passphrase",
+      mode: "vault",
+      mountpoint: undefined,
+      noService: false,
+    }),
+  ).toBeNull();
 });

@@ -33,6 +33,7 @@
     reconnect,
     revealInFolder,
   } from "$lib/ipc/operations.js";
+  import { buildReconfigureArgs } from "$lib/ipc/provisioning-args.js";
   import type {
     OnboardingAdoptArgs,
     OnboardingCommitArgs,
@@ -40,7 +41,6 @@
     ProvisionCreateArgs,
     ProvisionJoinArgs,
     ProvisionLeaveArgs,
-    ProvisionReconfigureArgs,
     ProvisionServiceDisableArgs,
     ProvisionServiceEnableArgs,
     ProvisionServiceStartArgs,
@@ -721,29 +721,18 @@
   async function reconfigureSame(driveDir: string, useStore: boolean): Promise<ProvisionReport | null> {
     const target = registryDrives().find((drive) => drive.drive_dir === driveDir) ?? null;
     if (target === null) return null;
-    const mode = selectedDrive?.mode ?? "vault";
-    if (useStore) {
-      const args: ProvisionReconfigureArgs = {
-        driveDir,
-        relays: [],
-        credentialBackend: "os-store",
-        credentialAccount: storeAccountFor(target.name),
-        mode,
-        mountpoint: selectedDrive?.mountpoint ?? undefined,
-        noService: false,
-      };
-      return await runProvision(() => provisionReconfigure(args));
-    }
-    if (onboardedIdentityFile === null || onboardedPassphraseFile === null) return null;
-    const args: ProvisionReconfigureArgs = {
+    const args = buildReconfigureArgs({
       driveDir,
       relays: [],
+      credentialMode: useStore ? "store" : "file",
+      storeAccount: storeAccountFor(target.name),
       identityFile: onboardedIdentityFile,
       passphraseFile: onboardedPassphraseFile,
-      mode,
+      mode: selectedDrive?.mode ?? "vault",
       mountpoint: selectedDrive?.mountpoint ?? undefined,
       noService: false,
-    };
+    });
+    if (args === null) return null;
     return await runProvision(() => provisionReconfigure(args));
   }
 

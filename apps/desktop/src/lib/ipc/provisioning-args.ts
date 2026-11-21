@@ -12,6 +12,7 @@ import type {
   ProvisionCreateArgs,
   ProvisionJoinArgs,
   ProvisionLeaveArgs,
+  ProvisionReconfigureArgs,
 } from "./operations.js";
 
 export type CredentialMode = "store" | "file";
@@ -62,6 +63,48 @@ export function buildJoinArgs(
 ): ProvisionJoinArgs {
   const { invitationFile, ...rest } = input;
   return { ...buildCreateArgs(rest), invitationFile };
+}
+
+/**
+ * One reconfigure payload: empty relays keep the registered set,
+ * mode and mountpoint ride from the registry observation. Store mode
+ * names the derived reference (reads the provisioned item, never
+ * seeds); file mode carries the verified pair. The file branch
+ * refuses before any spawn where the pair is absent — mirrored by
+ * the caller's gate.
+ */
+export function buildReconfigureArgs(input: {
+  driveDir: string;
+  relays: string[];
+  credentialMode: CredentialMode;
+  storeAccount: string;
+  identityFile: string | null;
+  passphraseFile: string | null;
+  mode: string;
+  mountpoint: string | undefined;
+  noService: boolean;
+}): ProvisionReconfigureArgs | null {
+  if (input.credentialMode === "store") {
+    return {
+      driveDir: input.driveDir,
+      relays: input.relays,
+      credentialBackend: "os-store",
+      credentialAccount: input.storeAccount,
+      mode: input.mode,
+      mountpoint: input.mountpoint,
+      noService: input.noService,
+    };
+  }
+  if (input.identityFile === null || input.passphraseFile === null) return null;
+  return {
+    driveDir: input.driveDir,
+    relays: input.relays,
+    identityFile: input.identityFile,
+    passphraseFile: input.passphraseFile,
+    mode: input.mode,
+    mountpoint: input.mountpoint,
+    noService: input.noService,
+  };
 }
 
 /**
