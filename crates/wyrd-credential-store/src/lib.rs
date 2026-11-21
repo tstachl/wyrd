@@ -77,7 +77,9 @@ use zeroize::Zeroizing;
 
 /// Fixed service label naming every Wyrd drive item in the platform
 /// store. Drives differ by account label, never by service, so one
-/// ACL/request covers the backend and items stay enumerable.
+/// lookup covers the backend and items stay enumerable. (No ACL is
+/// implied: macOS items carry default access with no per-application
+/// trust list — see the platform notes above.)
 pub const OS_SERVICE: &str = "wyrd-drive-credential";
 
 /// Bound on the stored JSON blob: framing plus the identity plus
