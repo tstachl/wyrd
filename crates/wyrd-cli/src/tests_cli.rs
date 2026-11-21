@@ -425,47 +425,46 @@ fn credential_contents_never_appear_in_errors() {
     assert!(!text.contains("ssss"), "oversized content leaked: {text}");
 }
 
-/// Every `src/*.rs` file is reachable from a `mod` declaration: an
-/// orphaned test module compiles nothing and fails nothing, so the
-/// wiring itself needs a pin. Reads the source tree at the
-/// build-time manifest directory; every file but the two roots
-/// (`main.rs`, the thin binary shim, and `lib.rs`, the library
-/// root) must be named by a `mod <stem>;` line in `lib.rs`. The
-/// `commands/` family tree gets the same pin one level down:
-/// every file in `src/commands/` must be named by a `mod <stem>;`
-/// line in `commands.rs`, or the family compiles nothing and fails
-/// nothing.
+/// Every `src/**/*.rs` file is reachable from a `mod` declaration:
+/// an orphaned test module compiles nothing and fails nothing, so
+/// the wiring itself needs a pin. Reads the source tree at the
+/// build-time manifest directory. A file is declared when any
+/// source names it in `mod <stem>;` or in `#[path = "<name>"]` —
+/// the latter is how a sibling test module of a non-root parent is
+/// declared. `main.rs`, `lib.rs` and `mod.rs` are module roots,
+/// not children.
 #[test]
 fn every_src_file_is_a_declared_module() {
-    let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
-    let root = fs::read_to_string(src.join("lib.rs")).unwrap();
-    let mut orphaned = Vec::new();
-    let mut entries: Vec<_> = fs::read_dir(&src).unwrap().collect();
-    entries.sort_by_key(|entry| entry.as_ref().unwrap().file_name());
-    for entry in entries {
-        let entry = entry.unwrap();
-        let name = entry.file_name().into_string().unwrap();
-        let Some(stem) = name.strip_suffix(".rs") else {
-            continue;
-        };
-        if stem == "main" || stem == "lib" {
-            continue;
-        }
-        if !root.contains(&format!("mod {stem};")) {
-            orphaned.push(name);
+    fn collect(dir: &std::path::Path, text: &mut String, files: &mut Vec<PathBuf>) {
+        for entry in fs::read_dir(dir).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if path.is_dir() {
+                collect(&path, text, files);
+            } else if path.extension().is_some_and(|ext| ext == "rs") {
+                text.push_str(&fs::read_to_string(&path).unwrap());
+                files.push(path);
+            }
         }
     }
-    let commands = fs::read_to_string(src.join("commands.rs")).unwrap();
-    let mut family: Vec<_> = fs::read_dir(src.join("commands")).unwrap().collect();
-    family.sort_by_key(|entry| entry.as_ref().unwrap().file_name());
-    for entry in family {
-        let entry = entry.unwrap();
-        let name = entry.file_name().into_string().unwrap();
+
+    let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut text = String::new();
+    let mut files = Vec::new();
+    collect(&src, &mut text, &mut files);
+    let mut orphaned = Vec::new();
+    for path in files {
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        if matches!(name.as_str(), "main.rs" | "lib.rs" | "mod.rs") {
+            continue;
+        }
         let Some(stem) = name.strip_suffix(".rs") else {
             continue;
         };
-        if !commands.contains(&format!("mod {stem};")) {
-            orphaned.push(format!("commands/{name}"));
+        if !text.contains(&format!("mod {stem};"))
+            && !text.contains(&format!("#[path = \"{name}\"]"))
+        {
+            orphaned.push(name);
         }
     }
     assert!(orphaned.is_empty(), "uncompiled modules: {orphaned:?}");
