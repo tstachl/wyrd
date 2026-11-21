@@ -237,6 +237,38 @@ with_creds() {
   esac
 }
 
+# start_bg <out> <err> <pidfile> <cred-dir> <subcommand> <args...>:
+# launch a backgrounded wyrd process whose recorded PID is the binary.
+# Bash execs a backgrounded simple command, so $! is the process a later
+# KILL/TERM reaches. Do not background with_creds: its `case` keeps a
+# subshell wrapper that ignores those signals, leaving the real process
+# alive (and holding the drive lock) after the test signals the PID.
+start_bg() {
+  local out="$1" err="$2" pidfile="$3" c="$4" sub="$5"; shift 5
+  local -a cmd
+  case "$sub" in
+    drive|owner)
+      local d="$1"; shift
+      cmd=("$WYRD_BIN" "$sub" "$d" --identity-file "$c/identity" \
+        --passphrase-file "$c/passphrase" "$@")
+      ;;
+    *)
+      cmd=("$WYRD_BIN" "$sub" --identity-file "$c/identity" \
+        --passphrase-file "$c/passphrase" "$@")
+      ;;
+  esac
+  mkdir -p "$PIDDIR"
+  "${cmd[@]}" >"$out" 2>"$err" &
+  local pid=$!
+  echo "$pid" > "$pidfile"
+  if command -v ps >/dev/null 2>&1; then
+    local comm
+    comm="$(ps -o comm= -p "$pid" 2>/dev/null || true)"
+    [[ "$comm" == "wyrd" ]] \
+      || die "background $sub pid $pid is '$comm', want wyrd (must exec the binary)"
+  fi
+}
+
 # expect_exit <code> <log-name> <cmd...>: run, capture stderr to the log,
 # assert the exit code. stdout passes through for command substitution.
 expect_exit() {
@@ -371,22 +403,8 @@ start_mount() { # <name> <cred-dir> <drive> <mnt> [mount args...]
     echo "start_mount $name: live-interval ${E2E_INTERVAL}s" >&2
     set -- --interval "$E2E_INTERVAL" "$@"
   fi
-  # Bash execs a backgrounded simple command, so $! is the wyrd process and
-  # a signal sent to it reaches the binary. Do not background with_creds:
-  # its `case` statement makes bash keep a subshell wrapper, whose SIGINT is
-  # ignored when the shell is non-interactive.
-  "$WYRD_BIN" mount --identity-file "$c/identity" \
-    --passphrase-file "$c/passphrase" "$d" "$m" "$@" \
-    >"$LOGDIR/mount-$name.out" 2>"$LOGDIR/mount-$name.err" &
-  mkdir -p "$PIDDIR"
-  local pid=$!
-  echo "$pid" > "$PIDDIR/mount-$name.pid"
-  if command -v ps >/dev/null 2>&1; then
-    local comm
-    comm="$(ps -o comm= -p "$pid" 2>/dev/null || true)"
-    [[ "$comm" == "wyrd" ]] \
-      || die "$name: mount pid $pid is '$comm', want wyrd (background mount must exec the binary)"
-  fi
+  start_bg "$LOGDIR/mount-$name.out" "$LOGDIR/mount-$name.err" \
+    "$PIDDIR/mount-$name.pid" "$c" mount "$d" "$m" "$@"
   if [[ "$old_rust_log" == "__unset" ]]; then unset RUST_LOG; else export RUST_LOG="$old_rust_log"; fi
   poll_until 20 mountpoint -q "$m" \
     || die "$name: mountpoint never came up (see mount-$name.err)"

@@ -1153,9 +1153,8 @@ leg_headless_serve() {
   # serve#1: the vault announces with its serve route, then keeps
   # syncing. The ready line proves the first routed pass completed,
   # so a fetcher starting now races nothing.
-  with_creds "$c" owner "$d" --relay "$relay" start \
-    >"$LOGDIR/headless-serve-1.out" 2>"$LOGDIR/headless-serve-1.err" &
-  echo $! > "$PIDDIR/headless-serve.pid"
+  start_bg "$LOGDIR/headless-serve-1.out" "$LOGDIR/headless-serve-1.err" \
+    "$PIDDIR/headless-serve.pid" "$c" owner "$d" --relay "$relay" start
   poll_until 300 grep -q "owner ready: serving " "$LOGDIR/headless-serve-1.err" \
     || die "serve#1 never reported ready (see headless-serve-1.err)"
   grep -q "serving over iroh" "$LOGDIR/headless-serve-1.err" \
@@ -1218,9 +1217,8 @@ leg_headless_serve() {
   # the new route), and info level hides them.
   local old_serve_log="${RUST_LOG-__unset}"
   export RUST_LOG="wyrd_core=debug"
-  with_creds "$c" owner "$d" --relay "$relay" start \
-    >"$LOGDIR/headless-serve-2.out" 2>"$LOGDIR/headless-serve-2.err" &
-  echo $! > "$PIDDIR/headless-serve.pid"
+  start_bg "$LOGDIR/headless-serve-2.out" "$LOGDIR/headless-serve-2.err" \
+    "$PIDDIR/headless-serve.pid" "$c" owner "$d" --relay "$relay" start
   if [[ "$old_serve_log" == "__unset" ]]; then unset RUST_LOG; else export RUST_LOG="$old_serve_log"; fi
   poll_until 300 grep -q "owner ready: serving " "$LOGDIR/headless-serve-2.err" \
     || die "serve#2 never reported ready after KILL (see headless-serve-2.err)"
@@ -1281,9 +1279,8 @@ leg_headless_serve() {
   # D's fresh obligations with its own route.
   poll_until 300 test -f "$E2E_ROOT/signals/headless-d-invited" \
     || die "host never admitted D"
-  with_creds "$c" owner "$d" --relay "$relay" start \
-    >"$LOGDIR/headless-serve-3.out" 2>"$LOGDIR/headless-serve-3.err" &
-  echo $! > "$PIDDIR/headless-serve.pid"
+  start_bg "$LOGDIR/headless-serve-3.out" "$LOGDIR/headless-serve-3.err" \
+    "$PIDDIR/headless-serve.pid" "$c" owner "$d" --relay "$relay" start
   poll_until 300 grep -q "owner ready: serving " "$LOGDIR/headless-serve-3.err" \
     || die "serve#3 never reported ready (see headless-serve-3.err)"
   pass "serve#3 reports ready with D's obligations announced"
@@ -1409,9 +1406,8 @@ leg_pause_owner() {
   # serve#1: the vault announces and keeps syncing. The ready line
   # proves the first routed pass completed, so pausing now races
   # nothing.
-  with_creds "$c" owner "$d" --relay "$relay" start \
-    >"$LOGDIR/pause-serve-1.out" 2>"$LOGDIR/pause-serve-1.err" &
-  echo $! > "$PIDDIR/pause-serve.pid"
+  start_bg "$LOGDIR/pause-serve-1.out" "$LOGDIR/pause-serve-1.err" \
+    "$PIDDIR/pause-serve.pid" "$c" owner "$d" --relay "$relay" start
   poll_until 300 grep -q "owner ready: serving " "$LOGDIR/pause-serve-1.err" \
     || die "pause serve#1 never reported ready (see pause-serve-1.err)"
   grep -q "serving over iroh" "$LOGDIR/pause-serve-1.err" \
@@ -1465,9 +1461,8 @@ leg_pause_owner() {
   # serve#2: restart through the normal production path over the
   # same drive. The ready line proves the first post-restart pass
   # completed, so the checks below race nothing.
-  with_creds "$c" owner "$d" --relay "$relay" start \
-    >"$LOGDIR/pause-serve-2.out" 2>"$LOGDIR/pause-serve-2.err" &
-  echo $! > "$PIDDIR/pause-serve.pid"
+  start_bg "$LOGDIR/pause-serve-2.out" "$LOGDIR/pause-serve-2.err" \
+    "$PIDDIR/pause-serve.pid" "$c" owner "$d" --relay "$relay" start
   poll_until 300 grep -q "owner ready: serving " "$LOGDIR/pause-serve-2.err" \
     || die "pause serve#2 never reported ready (see pause-serve-2.err)"
   pass "restarted owner reports ready"
@@ -1557,9 +1552,8 @@ leg_retransmit_owner() {
   # The vault announces and keeps syncing. The ready line proves
   # the first routed pass completed, so authoring now races nothing
   # and any admission-time obligation already drained.
-  with_creds "$c" owner "$d" --relay "$relay" start \
-    >"$LOGDIR/retransmit-serve.out" 2>"$LOGDIR/retransmit-serve.err" &
-  echo $! > "$PIDDIR/retransmit-serve.pid"
+  start_bg "$LOGDIR/retransmit-serve.out" "$LOGDIR/retransmit-serve.err" \
+    "$PIDDIR/retransmit-serve.pid" "$c" owner "$d" --relay "$relay" start
   poll_until 300 grep -q "owner ready: serving " "$LOGDIR/retransmit-serve.err" \
     || die "retransmit serve never reported ready (see retransmit-serve.err)"
   grep -q "serving over iroh" "$LOGDIR/retransmit-serve.err" \
