@@ -7,10 +7,12 @@ for this drive only) through the installed CLI and the shared
 transaction; application of the values is the drive's business,
 at its next start.
 
-The one membership action stays as it was: leaving the drive reuses
-the identity pair the start-up gate verified (paths only), stays
-behind an explicit acknowledgement and a confirmation dialog, and
-never deletes local data as a side effect of the UI. -->
+The one membership action stays as it was: leaving the drive reads
+the drive's OS credential-store item by default (one label per
+drive, never a secret) with the verified identity pair as the
+operator fallback, stays behind an explicit acknowledgement and a
+confirmation dialog, and never deletes local data as a side effect
+of the UI. -->
 <script lang="ts">
   import { Button } from "$lib/components/ui/button/index.js";
   import * as Card from "$lib/components/ui/card/index.js";
@@ -25,9 +27,11 @@ never deletes local data as a side effect of the UI. -->
   import PageHeader from "$lib/components/page-header.svelte";
   import CopyButton from "$lib/components/copy-button.svelte";
   import InfoHint from "$lib/components/info-hint.svelte";
+  import CredentialStorageToggle from "./credential-storage-toggle.svelte";
   import type { Stamped } from "$lib/state/presentation.svelte.js";
   import type { DriveSettingsState, EnablementState, ProvisionReport, ServiceState, SessionState, SettingsWriteReport, SparseUpdateArgs } from "$lib/ipc/results.js";
   import type { ProvisionLeaveArgs } from "$lib/ipc/operations.js";
+  import { buildLeaveArgs, type CredentialMode } from "$lib/ipc/provisioning-args.js";
   import {
     boundLabel,
     describeProvisionResult,
@@ -35,6 +39,7 @@ never deletes local data as a side effect of the UI. -->
     observedRegistrySummary,
     restartKindFor,
     SETTING_BOUNDS,
+    storeAccountFor,
     validateBoundInput,
   } from "./format.js";
   import {
@@ -52,6 +57,8 @@ never deletes local data as a side effect of the UI. -->
 
   interface Props {
     driveDir: string;
+    /** Registry entry name for this drive; derives the store account label. */
+    driveName: string | null;
     snapshot: Stamped<DriveSettingsState> | null;
     pending: boolean;
     transportNotice: string | null;
@@ -70,12 +77,13 @@ never deletes local data as a side effect of the UI. -->
     session: SessionState | null;
     /**
      * Restart the managed service with unchanged supervision so saved
-     * bounds apply. Resolves the refusal detail, or null where the
+     * bounds apply. Takes the toggle-named backend: store reference or
+     * verified pair. Resolves the refusal detail, or null where the
      * restart completed and the post-restart probe answered — the
      * verdict consults the observation, never restart acceptance
      * alone.
      */
-    onRestartService: () => Promise<string | null>;
+    onRestartService: (useStore: boolean) => Promise<string | null>;
     /**
      * The service-manager fact beside the transport verdict, where
      * the registry named it. Decides whether the login-start
@@ -98,7 +106,7 @@ never deletes local data as a side effect of the UI. -->
     onRefreshDrives: () => void;
   }
 
-  let { driveDir, snapshot, pending, transportNotice, identityFile, passphraseFile, onRefresh, onLeave, onApply, session, onRestartService, serviceState = null, enablement = null, onToggleEnablement, onRefreshDrives }: Props = $props();
+  let { driveDir, driveName, snapshot, pending, transportNotice, identityFile, passphraseFile, onRefresh, onLeave, onApply, session, onRestartService, serviceState = null, enablement = null, onToggleEnablement, onRefreshDrives }: Props = $props();
 
   const restartKind = $derived(restartKindFor(session));
 
@@ -154,8 +162,13 @@ never deletes local data as a side effect of the UI. -->
   let leaveWorking = $state(false);
   let leaveReport = $state<ProvisionReport | null>(null);
   let leaveError = $state<string | null>(null);
+  let leaveCredentialMode = $state<CredentialMode>("store");
 
-  const credentialsReady = $derived(identityFile !== null && passphraseFile !== null);
+  const leaveAccount = $derived(driveName === null ? null : storeAccountFor(driveName));
+  const fileCredentialsReady = $derived(identityFile !== null && passphraseFile !== null);
+  const credentialsReady = $derived(
+    leaveCredentialMode === "store" ? leaveAccount !== null : fileCredentialsReady,
+  );
 
   // Editor draft: one pending sparse update for this drive. `inputs`
   // holds the row text (empty means no change), `cleared` names keys
@@ -264,6 +277,7 @@ never deletes local data as a side effect of the UI. -->
   let confirmRestart = $state(false);
   let restarting = $state(false);
   let restartReport = $state<{ ok: boolean; detail?: string } | null>(null);
+  let restartUseStore = $state(true);
   let toggling = $state(false);
   let toggleReport = $state<{ ok: boolean; detail?: string } | null>(null);
 
@@ -286,7 +300,7 @@ never deletes local data as a side effect of the UI. -->
     restarting = true;
     restartReport = null;
     try {
-      const detail = await onRestartService();
+      const detail = await onRestartService(restartUseStore);
       restartReport = detail === null ? { ok: true } : { ok: false, detail };
     } finally {
       restarting = false;
@@ -294,13 +308,23 @@ never deletes local data as a side effect of the UI. -->
   }
 
   async function leave(): Promise<void> {
-    if (identityFile === null || passphraseFile === null) return;
+    if (!credentialsReady) return;
+    if (leaveCredentialMode === "store" && leaveAccount === null) return;
     leaveWorking = true;
     leaveError = null;
     try {
       // The report carries the post-run observation; only that decides
       // what changed. A transport throw is not an outcome.
-      leaveReport = await onLeave({ driveDir, identityFile, passphraseFile, acknowledged });
+      leaveReport = await onLeave(
+        buildLeaveArgs({
+          driveDir,
+          credentialMode: leaveCredentialMode,
+          storeAccount: leaveAccount,
+          identityFile,
+          passphraseFile,
+          acknowledged,
+        }),
+      );
     } catch (failure: unknown) {
       leaveError = failure instanceof Error ? failure.message : String(failure);
     } finally {
@@ -711,26 +735,49 @@ never deletes local data as a side effect of the UI. -->
     <Card.Description>This removes this device from the drive's membership.</Card.Description>
   </Card.Header>
   <Card.Content class="flex flex-col gap-4">
-    <dl>
-      <DetailRow label="Identity file" hint={credentialsHint} hintLabel="About the credential paths">
-        <span class="inline-flex min-w-0 items-center gap-1.5">
-          {#if identityFile === null}
-            <span class="text-muted-foreground">Unknown</span>
-          {:else}
-            <span class="truncate font-mono text-xs">{identityFile}</span>
-          {/if}
-        </span>
-      </DetailRow>
-      <DetailRow label="Passphrase file" hint={credentialsHint} hintLabel="About the credential paths">
-        <span class="inline-flex min-w-0 items-center gap-1.5">
-          {#if passphraseFile === null}
-            <span class="text-muted-foreground">Unknown</span>
-          {:else}
-            <span class="truncate font-mono text-xs">{passphraseFile}</span>
-          {/if}
-        </span>
-      </DetailRow>
-    </dl>
+    <!-- Toggle extracted to a child component: sibling interactive
+      templates inline here break the happy-dom re-registration the
+      mounted tests rely on (second mount crashes traversing the
+      cloned template). The toggle flips local display state only, so
+      it never needs the flight gate — the leave submit below stays
+      gated. -->
+    <CredentialStorageToggle
+      useStore={leaveCredentialMode === "store"}
+      onSelect={(next) => (leaveCredentialMode = next ? "store" : "file")}
+    />
+      {#if leaveCredentialMode === "store"}
+        <p class="text-xs leading-relaxed text-muted-foreground">
+          Reads this drive's store item
+          {#if leaveAccount !== null}<span class="font-mono text-xs">{leaveAccount}</span>{/if} —
+          one item per drive, never a secret.
+        </p>
+      {:else}
+        <p class="text-xs leading-relaxed text-muted-foreground">
+          Operator deployments only: reads the verified identity pair below.
+        </p>
+      {/if}
+    {#if leaveCredentialMode === "file"}
+      <dl>
+        <DetailRow label="Identity file" hint={credentialsHint} hintLabel="About the credential paths">
+          <span class="inline-flex min-w-0 items-center gap-1.5">
+            {#if identityFile === null}
+              <span class="text-muted-foreground">Unknown</span>
+            {:else}
+              <span class="truncate font-mono text-xs">{identityFile}</span>
+            {/if}
+          </span>
+        </DetailRow>
+        <DetailRow label="Passphrase file" hint={credentialsHint} hintLabel="About the credential paths">
+          <span class="inline-flex min-w-0 items-center gap-1.5">
+            {#if passphraseFile === null}
+              <span class="text-muted-foreground">Unknown</span>
+            {:else}
+              <span class="truncate font-mono text-xs">{passphraseFile}</span>
+            {/if}
+          </span>
+        </DetailRow>
+      </dl>
+    {/if}
 
     {#if leaveReport !== null}
       <Alert.Root class="border-primary/30 bg-primary/5">
@@ -754,8 +801,13 @@ never deletes local data as a side effect of the UI. -->
     {#if leaveReport === null}
       {#if !credentialsReady}
         <p class="text-sm text-destructive">
-          This device's verified identity pair is unavailable, so leaving is disabled. Fix the
-          identity gate first.
+          {#if leaveCredentialMode === "store"}
+            This drive has no registry name to derive its store item from, so leaving
+            is disabled.
+          {:else}
+            This device's verified identity pair is unavailable, so leaving is disabled. Fix the
+            identity gate first.
+          {/if}
         </p>
       {/if}
       <Field.Field orientation="horizontal" class="rounded-xl border border-destructive/30 bg-destructive/5 p-3">
@@ -826,6 +878,21 @@ never deletes local data as a side effect of the UI. -->
       <AlertDialog.Description>
         Restarting briefly interrupts availability while the drive service stops and starts again. The bounds you saved apply when it comes back.
       </AlertDialog.Description>
+      <div class="py-2">
+        <CredentialStorageToggle
+          useStore={restartUseStore}
+          onSelect={(next) => (restartUseStore = next)}
+        />
+        {#if restartUseStore}
+          <p class="mt-2 text-sm text-muted-foreground">
+            Restarts the drive service against this drive's store item.
+          </p>
+        {:else}
+          <p class="mt-2 text-sm text-muted-foreground">
+            Operator deployments only: restarts against the verified identity pair.
+          </p>
+        {/if}
+      </div>
     </AlertDialog.Header>
     <AlertDialog.Footer>
       <AlertDialog.Cancel>Not now</AlertDialog.Cancel>

@@ -8,6 +8,7 @@
 import { expect, test } from "bun:test";
 
 const view = await Bun.file(`${import.meta.dir}/UnlockView.svelte`).text();
+const toggle = await Bun.file(`${import.meta.dir}/credential-storage-toggle.svelte`).text();
 
 test("locked state names the posture and both recoveries", () => {
   for (const line of [
@@ -31,6 +32,13 @@ test("passphrase entry is typed-only and short-lived", () => {
   expect(view).not.toContain("remember");
 });
 
-test("identity gate blocks the form before it can run", () => {
+test("identity gate blocks the file fallback before it can run", () => {
   expect(view).toContain("finish the identity check first");
+});
+
+test("store unlock names the item reference, never a secret", () => {
+  for (const line of ["OS credential store", "never a secret"]) {
+    expect(view + toggle).toContain(line);
+  }
+  expect(view).not.toContain("passphrase file");
 });
