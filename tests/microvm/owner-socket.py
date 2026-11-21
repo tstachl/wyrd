@@ -22,7 +22,7 @@ import struct
 import sys
 
 FRAME_CEILING = 96 * 1024 * 1024
-WIRE_VERSION = 1
+WIRE_VERSION = 2
 
 
 def die(msg):

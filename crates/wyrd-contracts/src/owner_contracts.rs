@@ -219,3 +219,20 @@ fn submit_against_two_heads_relays_conflicted() {
     drop(server);
     std::fs::remove_dir_all(view_dir).unwrap();
 }
+
+/// The Python owner-socket helper used by the Odin legs pins the wire
+/// version as a literal. A Rust wire bump must not leave it behind: the
+/// helper would then get `UnknownVersion` refusals for every owner op.
+#[test]
+fn owner_socket_helper_tracks_wire_version() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/microvm/owner-socket.py"
+    );
+    let source = std::fs::read_to_string(path).expect("the helper is checked in");
+    let expected = format!("WIRE_VERSION = {WIRE_VERSION}");
+    assert!(
+        source.lines().any(|line| line.trim() == expected),
+        "the Python owner-socket helper must pin {expected}"
+    );
+}
