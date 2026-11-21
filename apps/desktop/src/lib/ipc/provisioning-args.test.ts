@@ -88,7 +88,8 @@ test("store join adds the invitation beside the seeds and reference", () => {
   });
 });
 
-test("store leave names only the item, never seeds", () => {  expect(
+test("store leave names only the item, never seeds", () => {
+  expect(
     buildLeaveArgs({
       driveDir: "/drives/alpha",
       credentialMode: "store",
