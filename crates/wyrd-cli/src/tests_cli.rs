@@ -509,6 +509,24 @@ fn a_declaration_in_an_unrelated_directory_does_not_cover_an_orphan() {
     );
 }
 
+/// A file three levels down is declared by its parent's sibling
+/// module file (`src/a/b.rs` declares `mod c;` for `src/a/b/c.rs`),
+/// not by a file at the top of `src`.
+#[test]
+fn a_deeply_nested_file_is_declared_by_its_parent_module_file() {
+    let temp = TempDir::new();
+    let src = temp.0.join("src");
+    fs::create_dir_all(src.join("a/b")).unwrap();
+    fs::write(src.join("lib.rs"), "mod a;\n").unwrap();
+    fs::write(src.join("a.rs"), "mod b;\n").unwrap();
+    fs::write(src.join("a/b.rs"), "mod c;\n").unwrap();
+    fs::write(src.join("a/b/c.rs"), "// declared\n").unwrap();
+    assert!(
+        orphaned_modules(&src).is_empty(),
+        "each nested file is declared by its own parent module"
+    );
+}
+
 /// Bare `wyrd owner <drive>` keeps starting the process (the 22b
 /// surface); the subcommand selects the 22c query. Both shapes parse
 /// through one optional subcommand, not two commands.
