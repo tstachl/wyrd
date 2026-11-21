@@ -1,6 +1,6 @@
 # Credential loading (v0.4)
 
-Status: Normative. Shipped scope: the loader boundary carries reads and the migration write half (the CLI file backend conforms; the OS credential-store backends conform on macOS, where service-context retrieval is verified by hand — the Linux service-context proof is deferred, see below); `wyrd drive migrate-credentials` runs the six gated migration steps, and the owner/drive read paths honor a migrated configuration. `wyrd bootstrap` provisions store-backed drives through the same commit boundary (input files or pipe seed the item, the configuration records the backend after the daemon accepts the material), service definitions render the store reference (`--credential-backend os-store --credential-account`), session unlock loads the store identity with a typed passphrase, and `drive reconfigure` reinstalls a managed definition on either backend. Registration-time Keychain access (first unlock without a prior GUI visit) stays the deferred follow-up. Scope: how a drive owner obtains its secret
+Status: Normative. Shipped scope: the loader boundary carries reads and the migration write half (the CLI file backend conforms; the OS credential-store backends conform on macOS, where service-context retrieval is verified by hand — the Linux service-context proof is deferred, see below); `wyrd drive migrate-credentials` runs the six gated migration steps, and the owner/drive read paths honor a migrated configuration. `wyrd bootstrap` provisions store-backed drives through the same commit boundary (input files or pipe seed the item, the configuration records the backend after the daemon accepts the material), service definitions render the store reference (`--credential-backend os-store --credential-account`), session unlock loads the store identity with a typed passphrase, and `drive reconfigure` reinstalls a managed definition on either backend. First unlock without a prior GUI visit is verified on macOS (two-phase hand probe: store in the login session, first retrieval under a no-terminal LaunchAgent); the Linux service-context proof is deferred, see below. Scope: how a drive owner obtains its secret
 material — the device identity secret and the passphrase protecting
 the wrapped root key — without the desktop UI alive, in the actual
 OS service context. Authority: this contract owns the
@@ -131,13 +131,16 @@ it.)
   GUI-side access never proves service-side access: each backend
   is verified from the actual service context on each supported
   platform. Verification state: the macOS backend is verified by
-  hand (login session plus a no-terminal LaunchAgent run of the
-  ignored probe); the Linux backend's service-context verification
-  is deferred — no Linux host was available and headless CI has
-  no bus. CI exercises the fail-closed path there instead (the
-  dispatcher test routes a bus-less store to the OS backend,
-  never the file backend, and the taxonomy test pins
-  `PlatformFailure` to `unavailable`).
+  hand with the two-phase probe (`real_store_probe_round_trip`
+  with `WYRD_PROBE_PHASE=store/load`): store through the commit
+  boundary in the login session, then first retrieval plus delete
+  under a no-terminal LaunchAgent with the material asserted and
+  the post-delete `Missing` asserted; the Linux backend's
+  service-context verification is deferred — no Linux host was
+  available and headless CI has no bus. CI exercises the
+  fail-closed path there instead (the dispatcher test routes a
+  bus-less store to the OS backend, never the file backend, and
+  the taxonomy test pins `PlatformFailure` to `unavailable`).
 
 ## Failure taxonomy
 
@@ -177,7 +180,7 @@ supported configuration proves it.
 
 | Session state | Expected platform behavior | Wyrd requirement | Verified |
 |---|---|---|---|
-| macOS logged in, keychain unlocked | Login keychain readable from the user agent | Owner starts when enabled and the item loads | By hand (login session + no-terminal agent probe) |
+| macOS logged in, keychain unlocked | Login keychain readable from the user agent | Owner starts when enabled and the item loads | By hand: two-phase probe (store in session, first retrieval under a no-terminal LaunchAgent, material plus post-delete `Missing` asserted) |
 | macOS screen locked | Login keychain stays unlocked by default | Owner keeps serving; new opens succeed | Not verified: access-control configuration can change this |
 | macOS logged out | Session ends; user agents terminate; login keychain locks | Owners terminated per `desktop-lifecycle.md`; next login re-eligible | Termination behavior tested per supported configuration before it is claimed |
 | Linux graphical login, collection unlocked | Secret Service reachable from the user unit | Owner starts when enabled and the item loads | Deferred: no Linux host; headless CI has no bus |
@@ -207,8 +210,18 @@ registered-but-unavailable; it never invents a weaker path.
 
 - **macOS**: Keychain items for desktop-managed drive
   credentials, retrievable from the launchd user-agent context
-  within the authenticated session. Keychain access is requested
-  at registration; the ACLs travel with the settings contract.
+  within the authenticated session. Items carry default (NULL)
+  access — no per-application trust list, no biometric flags —
+  so there is no registration-time grant to request and none is
+  needed: the first agent read succeeds with no prior GUI visit
+  while the login keychain is unlocked (verified by hand, two-phase
+  probe). The posture is fixed here, not in settings: per-app ACL
+  calls would need a contract amendment (the facade owns the
+  store — see Placement), and biometric-gated reads would
+  contradict non-interactive service-context retrieval. A locked
+  keychain reads as `denied` through the mapped statuses
+  (unit-pinned; the locked state itself is not hand-triggered —
+  locking the operator's login keychain is not part of the probe).
   Account for the session-vs-service distinction: an item the GUI
   can read while the service context cannot is `denied`, and the
   drive reads unavailable — never broken. Lock-state and
