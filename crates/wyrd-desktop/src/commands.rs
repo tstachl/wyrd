@@ -450,6 +450,15 @@ pub struct MembershipObservation {
 /// owned strings; secret *paths* travel, never contents. `mode` is
 /// `vault` or `mount` (`mount` needs `mountpoint`); any other value
 /// refuses before any process spawns.
+///
+/// Credential addressing is two-shaped: file paths (today's
+/// frontend flow — both required) or one OS credential-store
+/// reference (`credentialBackend: "os-store"` plus
+/// `credentialAccount`; files beside it are the one-time seed
+/// inputs for a fresh store-backed bootstrap, absent on a
+/// converged re-run). Absent backend means the file backend, as
+/// before — existing callers pass paths only and behave
+/// byte-identically.
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProvisionCreateArgs {
@@ -459,10 +468,20 @@ pub struct ProvisionCreateArgs {
     pub drive_dir: String,
     /// Relays for the managed service; empty is refused before anything is created.
     pub relays: Vec<String>,
-    /// Credential path, never contents.
-    pub identity_file: String,
-    /// Credential path, never contents.
-    pub passphrase_file: String,
+    /// Credential path, never contents. Required with the file
+    /// backend; the seed identity beside a store bootstrap.
+    pub identity_file: Option<String>,
+    /// Credential path, never contents. Required with the file
+    /// backend; the seed passphrase beside a store bootstrap.
+    pub passphrase_file: Option<String>,
+    /// Credential backend selector: absent or `"file"` reads the
+    /// hardened credential files; `"os-store"` resolves the drive
+    /// through the OS credential store.
+    pub credential_backend: Option<String>,
+    /// OS credential-store account naming the drive's item (the
+    /// reference, never a secret). Required exactly where the
+    /// backend is `"os-store"`, refused everywhere else.
+    pub credential_account: Option<String>,
     /// Service mode display string: `vault` or `mount`.
     pub mode: String,
     /// FUSE mountpoint: required in `mount` mode, refused in `vault` mode.
@@ -482,10 +501,20 @@ pub struct ProvisionJoinArgs {
     pub drive_dir: String,
     /// Relays for the managed service; empty is refused before anything is created.
     pub relays: Vec<String>,
-    /// Credential path, never contents.
-    pub identity_file: String,
-    /// Credential path, never contents.
-    pub passphrase_file: String,
+    /// Credential path, never contents: required with the file
+    /// backend, the seed identity beside a store bootstrap.
+    pub identity_file: Option<String>,
+    /// Credential path, never contents: required with the file
+    /// backend, the seed passphrase beside a store bootstrap.
+    pub passphrase_file: Option<String>,
+    /// Credential backend selector: absent or `"file"` reads the
+    /// hardened credential files; `"os-store"` resolves the drive
+    /// through the OS credential store.
+    pub credential_backend: Option<String>,
+    /// OS credential-store account naming the drive's item (the
+    /// reference, never a secret). Required exactly where the
+    /// backend is `"os-store"`, refused everywhere else.
+    pub credential_account: Option<String>,
     /// Sealed invitation file path, selected out-of-band.
     pub invitation_file: String,
     /// Service mode display string: `vault` or `mount`.
@@ -503,10 +532,21 @@ pub struct ProvisionJoinArgs {
 pub struct ProvisionLeaveArgs {
     /// Absolute drive directory as an exact string.
     pub drive_dir: String,
-    /// Credential path, never contents.
-    pub identity_file: String,
-    /// Credential path, never contents.
-    pub passphrase_file: String,
+    /// Credential path, never contents: required with the file
+    /// backend, refused beside a store reference (leave reads the
+    /// provisioned credential, never seed inputs).
+    pub identity_file: Option<String>,
+    /// Credential path, never contents: required with the file
+    /// backend, refused beside a store reference.
+    pub passphrase_file: Option<String>,
+    /// Credential backend selector: absent or `"file"` reads the
+    /// hardened credential files; `"os-store"` resolves the drive
+    /// through the OS credential store.
+    pub credential_backend: Option<String>,
+    /// OS credential-store account naming the drive's item (the
+    /// reference, never a secret). Required exactly where the
+    /// backend is `"os-store"`, refused everywhere else.
+    pub credential_account: Option<String>,
     /// Sole-owner terminal confirmation carried to the `--yes` boundary.
     pub acknowledged: bool,
 }
@@ -516,6 +556,82 @@ pub struct ProvisionLeaveArgs {
 /// owned strings; secret *paths* travel, never contents. `mode` is
 /// `vault` or `mount` (`mount` needs `mountpoint`); any other value
 /// refuses before any process spawns.
+/// Map one IPC credential selection to the adapter's credential
+/// source. Absent backend (or `"file"`) is the file backend: both
+/// paths required, an account beside it refused. `"os-store"`
+/// needs the account; file paths beside it are the one-time seed
+/// inputs where the operation takes seeds (create/join) and a
+/// refusal everywhere else — mirroring the CLI's
+/// one-backend-per-drive rule before any process spawns. Anything
+/// else refuses with its name. `seeds_allowed` is create/join
+/// only; leave, reconfigure, and unlock read the provisioned
+/// credential, never bootstrap input.
+fn credential_source(
+    backend: Option<String>,
+    account: Option<String>,
+    identity_file: Option<String>,
+    passphrase_file: Option<String>,
+    seeds_allowed: bool,
+) -> Result<super::provision::CredentialSource, String> {
+    use super::provision::{CredentialSource, SeedFiles};
+    match backend.as_deref() {
+        None | Some("file") => {
+            if let Some(account) = account {
+                return Err(format!(
+                    "--credential-account {account:?} is set but the credential backend is not \"os-store\": one backend per drive"
+                ));
+            }
+            // Paths pass through untouched: each argv builder
+            // consumes what its operation needs and refuses what
+            // is missing before any process spawns (unlock, for
+            // example, never takes a passphrase file).
+            Ok(CredentialSource::File {
+                identity_file: identity_file.map(PathBuf::from),
+                passphrase_file: passphrase_file.map(PathBuf::from),
+            })
+        }
+        Some("os-store") => {
+            let account = account.ok_or_else(|| {
+                "credential backend is \"os-store\" but no credential account is set: name the drive's store item".to_string()
+            })?;
+            if account.is_empty() {
+                return Err(
+                    "no OS credential-store account: name the drive's store item".to_string(),
+                );
+            }
+            let seed = match (identity_file, passphrase_file) {
+                (Some(identity), Some(passphrase)) => {
+                    if !seeds_allowed {
+                        return Err(
+                            "seed files are bootstrap input only: this operation reads the provisioned store item, never files".to_string(),
+                        );
+                    }
+                    Some(SeedFiles {
+                        identity_file: PathBuf::from(identity),
+                        passphrase_file: PathBuf::from(passphrase),
+                    })
+                }
+                (None, None) => None,
+                _ => {
+                    return Err(
+                        "partial seed files: pass both the identity and passphrase inputs or neither"
+                            .to_string(),
+                    );
+                }
+            };
+            Ok(CredentialSource::OsStore { account, seed })
+        }
+        Some(other) => Err(format!(
+            "unknown credential backend {other:?}: expected \"file\" or \"os-store\""
+        )),
+    }
+}
+
+/// Create one drive through the installed CLI (`bootstrap` without
+/// an invitation file), then re-read and probe. Credential
+/// selection rides the IPC args (files or one store reference, with
+/// seeds for a fresh store-backed bootstrap); mapping refusals
+/// resolve expected-failure without spawning.
 #[tauri::command]
 pub async fn provision_create<R: Runtime>(
     app: AppHandle<R>,
@@ -527,12 +643,29 @@ pub async fn provision_create<R: Runtime>(
         args.drive_dir.clone(),
         true,
         move |state, dir| {
+            let credentials = match credential_source(
+                args.credential_backend,
+                args.credential_account,
+                args.identity_file,
+                args.passphrase_file,
+                true,
+            ) {
+                Ok(source) => source,
+                Err(reason) => {
+                    return super::provision::ProvisionOutcome {
+                        result: super::provision::ProvisionResult::ExpectedFailure {
+                            detail: reason,
+                        },
+                        stderr: String::new(),
+                        code: None,
+                    };
+                }
+            };
             let request = super::provision::ProvisionRequest {
                 name: args.name,
                 drive_dir: dir,
                 relays: args.relays,
-                identity_file: PathBuf::from(args.identity_file),
-                passphrase_file: PathBuf::from(args.passphrase_file),
+                credentials,
                 invitation_file: None,
                 registry_path: None,
                 owner_bin: None,
@@ -575,12 +708,29 @@ pub async fn provision_join<R: Runtime>(
         args.drive_dir.clone(),
         true,
         move |state, dir| {
+            let credentials = match credential_source(
+                args.credential_backend,
+                args.credential_account,
+                args.identity_file,
+                args.passphrase_file,
+                true,
+            ) {
+                Ok(source) => source,
+                Err(reason) => {
+                    return super::provision::ProvisionOutcome {
+                        result: super::provision::ProvisionResult::ExpectedFailure {
+                            detail: reason,
+                        },
+                        stderr: String::new(),
+                        code: None,
+                    };
+                }
+            };
             let request = super::provision::ProvisionRequest {
                 name: args.name,
                 drive_dir: dir,
                 relays: args.relays,
-                identity_file: PathBuf::from(args.identity_file),
-                passphrase_file: PathBuf::from(args.passphrase_file),
+                credentials,
                 invitation_file: Some(PathBuf::from(args.invitation_file)),
                 registry_path: None,
                 owner_bin: None,
@@ -624,10 +774,27 @@ pub async fn provision_leave<R: Runtime>(
         args.drive_dir.clone(),
         false,
         move |state, dir| {
+            let credentials = match credential_source(
+                args.credential_backend,
+                args.credential_account,
+                args.identity_file,
+                args.passphrase_file,
+                false,
+            ) {
+                Ok(source) => source,
+                Err(reason) => {
+                    return super::provision::ProvisionOutcome {
+                        result: super::provision::ProvisionResult::ExpectedFailure {
+                            detail: reason,
+                        },
+                        stderr: String::new(),
+                        code: None,
+                    };
+                }
+            };
             let request = super::provision::LeaveRequest {
                 drive_dir: dir,
-                identity_file: PathBuf::from(args.identity_file),
-                passphrase_file: PathBuf::from(args.passphrase_file),
+                credentials,
                 acknowledged: args.acknowledged,
             };
             let cli = state.cli_bin();
@@ -663,10 +830,21 @@ pub struct ProvisionReconfigureArgs {
     pub drive_dir: String,
     /// Replacement relays when non-empty; empty keeps the registered set.
     pub relays: Vec<String>,
-    /// Credential path, never contents.
-    pub identity_file: String,
-    /// Credential path, never contents.
-    pub passphrase_file: String,
+    /// Credential path, never contents: required with the file
+    /// backend, refused beside a store reference (reconfigure reads
+    /// the provisioned credential, never seed inputs).
+    pub identity_file: Option<String>,
+    /// Credential path, never contents: required with the file
+    /// backend, refused beside a store reference.
+    pub passphrase_file: Option<String>,
+    /// Credential backend selector: absent or `"file"` reads the
+    /// hardened credential files; `"os-store"` resolves the drive
+    /// through the OS credential store.
+    pub credential_backend: Option<String>,
+    /// OS credential-store account naming the drive's item (the
+    /// reference, never a secret). Required exactly where the
+    /// backend is `"os-store"`, refused everywhere else.
+    pub credential_account: Option<String>,
     /// Service mode display string: `vault` or `mount`.
     pub mode: String,
     /// FUSE mountpoint: required in `mount` mode, refused in `vault` mode.
@@ -688,11 +866,28 @@ pub async fn provision_reconfigure<R: Runtime>(
         args.drive_dir.clone(),
         true,
         move |state, dir| {
+            let credentials = match credential_source(
+                args.credential_backend,
+                args.credential_account,
+                args.identity_file,
+                args.passphrase_file,
+                false,
+            ) {
+                Ok(source) => source,
+                Err(reason) => {
+                    return super::provision::ProvisionOutcome {
+                        result: super::provision::ProvisionResult::ExpectedFailure {
+                            detail: reason,
+                        },
+                        stderr: String::new(),
+                        code: None,
+                    };
+                }
+            };
             let request = super::provision::ReconfigureRequest {
                 drive_dir: dir,
                 relays: args.relays,
-                identity_file: PathBuf::from(args.identity_file),
-                passphrase_file: PathBuf::from(args.passphrase_file),
+                credentials,
                 registry_path: None,
                 owner_bin: None,
                 supervise_bin: None,
@@ -860,9 +1055,10 @@ pub async fn provision_service_disable<R: Runtime>(
 }
 
 /// Unlock arguments: the drive identity, the device identity file
-/// path, and the passphrase text. The text travels backend -> CLI
-/// on the stdin pipe (never argv); the frontend holds it only for
-/// the unlock entry, never persisted there. `Debug` is redacted
+/// path (or the store reference), and the passphrase text. The text
+/// travels backend -> CLI on the stdin pipe (never argv); the
+/// frontend holds it only for the unlock entry, never persisted
+/// there. `Debug` is redacted
 /// so no log line carries the secret.
 #[derive(Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -870,8 +1066,17 @@ pub struct DriveUnlockArgs {
     /// Absolute drive directory as an exact string.
     pub drive_dir: String,
     /// Credential path, never contents: the device identity file
-    /// the start-up gate verified.
-    pub identity_file: String,
+    /// the start-up gate verified. Absent beside a store
+    /// reference, which names the identity instead.
+    pub identity_file: Option<String>,
+    /// Credential backend selector: absent or `"file"` reads the
+    /// identity file; `"os-store"` loads the identity from the
+    /// drive's store item.
+    pub credential_backend: Option<String>,
+    /// OS credential-store account naming the drive's item (the
+    /// reference, never a secret). Required exactly where the
+    /// backend is `"os-store"`, refused everywhere else.
+    pub credential_account: Option<String>,
     /// Passphrase text piped to the CLI on stdin, never argv.
     pub passphrase: String,
 }
@@ -881,6 +1086,8 @@ impl std::fmt::Debug for DriveUnlockArgs {
         f.debug_struct("DriveUnlockArgs")
             .field("drive_dir", &self.drive_dir)
             .field("identity_file", &self.identity_file)
+            .field("credential_backend", &self.credential_backend)
+            .field("credential_account", &self.credential_account)
             .field("passphrase", &"REDACTED")
             .finish()
     }
@@ -1472,9 +1679,28 @@ where
             };
         }
     };
+    // Unlock never takes a passphrase file: the session passphrase
+    // rides the stdin pipe, with the file backend naming only the
+    // identity file and the store backend naming only the item.
+    let credentials = match credential_source(
+        args.credential_backend.clone(),
+        args.credential_account.clone(),
+        args.identity_file.clone(),
+        None,
+        false,
+    ) {
+        Ok(source) => source,
+        Err(reason) => {
+            return super::provision::ProvisionOutcome {
+                result: ProvisionResult::ExpectedFailure { detail: reason },
+                stderr: String::new(),
+                code: None,
+            };
+        }
+    };
     let request = super::provision::UnlockRequest {
         drive_dir: dir.to_path_buf(),
-        identity_file: PathBuf::from(&args.identity_file),
+        credentials,
         // The registered relay set: managed starts bake it into the
         // service definition, but unlock spawns the owner directly —
         // without the registry relays a drive with no `default.toml`
@@ -2030,7 +2256,9 @@ mod tests {
     fn unlock_args_debug_redacts_the_passphrase() {
         let args = DriveUnlockArgs {
             drive_dir: "/drives/alpha".to_string(),
-            identity_file: "/keys/identity".to_string(),
+            identity_file: Some("/keys/identity".to_string()),
+            credential_backend: None,
+            credential_account: None,
             passphrase: "hunter2-hunter2".to_string(),
         };
         let rendered = format!("{args:?}");
@@ -2039,6 +2267,174 @@ mod tests {
         assert!(
             rendered.contains("/drives/alpha") && rendered.contains("/keys/identity"),
             "identities stay visible: {rendered}"
+        );
+    }
+
+    /// IPC credential mapping: absent backend is the file backend
+    /// (paths pass through for the argv builders to consume);
+    /// `os-store` needs the account, with seeds only where the
+    /// operation takes them; anything else refuses with its name —
+    /// all before any process spawns.
+    #[test]
+    fn credential_source_mapping_pins_both_backends() {
+        use super::super::provision::{CredentialSource, SeedFiles};
+        let file = |backend: Option<String>| {
+            credential_source(
+                backend,
+                None,
+                Some("/keys/identity".to_string()),
+                Some("/keys/passphrase".to_string()),
+                true,
+            )
+        };
+        assert_eq!(
+            file(None).unwrap(),
+            CredentialSource::File {
+                identity_file: Some(PathBuf::from("/keys/identity")),
+                passphrase_file: Some(PathBuf::from("/keys/passphrase")),
+            }
+        );
+        assert_eq!(
+            file(Some("file".to_string())).unwrap(),
+            file(None).unwrap(),
+            "an explicit file backend matches the absent default"
+        );
+        // A store create seeds from the input files; a converged
+        // re-run names only the item.
+        let seeded = credential_source(
+            Some("os-store".to_string()),
+            Some("wyrd-drive-alpha".to_string()),
+            Some("/keys/identity".to_string()),
+            Some("/keys/passphrase".to_string()),
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            seeded,
+            CredentialSource::OsStore {
+                account: "wyrd-drive-alpha".to_string(),
+                seed: Some(SeedFiles {
+                    identity_file: PathBuf::from("/keys/identity"),
+                    passphrase_file: PathBuf::from("/keys/passphrase"),
+                }),
+            }
+        );
+        let converged = credential_source(
+            Some("os-store".to_string()),
+            Some("wyrd-drive-alpha".to_string()),
+            None,
+            None,
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            converged,
+            CredentialSource::OsStore {
+                account: "wyrd-drive-alpha".to_string(),
+                seed: None,
+            }
+        );
+        // Partial seeds refuse (one path without the other is
+        // never a drive credential), and seeds refuse where the
+        // operation never takes them.
+        let partial = credential_source(
+            Some("os-store".to_string()),
+            Some("wyrd-drive-alpha".to_string()),
+            Some("/keys/identity".to_string()),
+            None,
+            true,
+        )
+        .unwrap_err();
+        assert!(partial.contains("partial seed"), "{partial}");
+        let misplaced = credential_source(
+            Some("os-store".to_string()),
+            Some("wyrd-drive-alpha".to_string()),
+            Some("/keys/identity".to_string()),
+            Some("/keys/passphrase".to_string()),
+            false,
+        )
+        .unwrap_err();
+        assert!(misplaced.contains("bootstrap input only"), "{misplaced}");
+        // A store backend without an account, an account without
+        // the store backend, and an unknown backend all refuse
+        // with their names.
+        let no_account =
+            credential_source(Some("os-store".to_string()), None, None, None, true).unwrap_err();
+        assert!(no_account.contains("no credential account"), "{no_account}");
+        let stray_account = credential_source(
+            None,
+            Some("wyrd-drive-alpha".to_string()),
+            Some("/keys/identity".to_string()),
+            Some("/keys/passphrase".to_string()),
+            true,
+        )
+        .unwrap_err();
+        assert!(
+            stray_account.contains("one backend per drive"),
+            "{stray_account}"
+        );
+        let unknown = credential_source(
+            Some("vault".to_string()),
+            None,
+            Some("/keys/identity".to_string()),
+            Some("/keys/passphrase".to_string()),
+            true,
+        )
+        .unwrap_err();
+        assert!(unknown.contains("unknown credential backend"), "{unknown}");
+    }
+
+    /// IPC wire agreement: the credential fields deserialize from
+    /// the frontend's camelCase keys, and absent keys default to
+    /// `None` — an older frontend sending paths only keeps working.
+    /// This pins the Rust half of the boundary the `mockIPC` store
+    /// test pins from the TS half (`operations.test.ts`).
+    #[test]
+    fn credential_ipc_fields_deserialize_from_camel_case() {
+        let create: ProvisionCreateArgs = serde_json::from_value(serde_json::json!({
+            "name": "alpha",
+            "driveDir": "/drives/alpha",
+            "relays": [],
+            "identityFile": "/keys/identity",
+            "passphraseFile": "/keys/passphrase",
+            "credentialBackend": "os-store",
+            "credentialAccount": "wyrd-drive-alpha",
+            "mode": "vault",
+            "noService": false,
+        }))
+        .expect("store-backed create deserializes");
+        assert_eq!(
+            create.credential_backend.as_deref(),
+            Some("os-store"),
+            "backend rides credentialBackend"
+        );
+        assert_eq!(
+            create.credential_account.as_deref(),
+            Some("wyrd-drive-alpha"),
+            "account rides credentialAccount"
+        );
+        // Absent keys are the file-backend default, never an error.
+        let leave: ProvisionLeaveArgs = serde_json::from_value(serde_json::json!({
+            "driveDir": "/drives/alpha",
+            "identityFile": "/keys/identity",
+            "passphraseFile": "/keys/passphrase",
+            "acknowledged": true,
+        }))
+        .expect("a paths-only leave deserializes");
+        assert_eq!(leave.credential_backend, None);
+        assert_eq!(leave.credential_account, None);
+        assert_eq!(leave.identity_file.as_deref(), Some("/keys/identity"));
+        let unlock: DriveUnlockArgs = serde_json::from_value(serde_json::json!({
+            "driveDir": "/drives/alpha",
+            "credentialBackend": "os-store",
+            "credentialAccount": "wyrd-drive-alpha",
+            "passphrase": "hunter2-hunter2",
+        }))
+        .expect("a store unlock deserializes with no identity file");
+        assert_eq!(unlock.identity_file, None);
+        assert_eq!(
+            unlock.credential_account.as_deref(),
+            Some("wyrd-drive-alpha")
         );
     }
 

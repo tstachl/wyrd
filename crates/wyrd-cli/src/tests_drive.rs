@@ -483,7 +483,10 @@ fn registry_relays(registry: &Path, name: &str) -> Vec<String> {
 /// files seed the store item under the loader's commit boundary,
 /// the configuration names the store backend, and the daemon
 /// initializes the drive on the same material — no credential
-/// files travel toward any service definition. Hermetic: nothing
+/// files travel toward any service definition. This is the seed
+/// exemption to the one-backend-per-drive rule: seed files ride
+/// beside the store flags here (and only here — the generic loader
+/// refuses the mix everywhere else). Hermetic: nothing
 /// installs (`--no-service`) and no socket answers (the run
 /// reports registered-but-unavailable), the registry and config
 /// live in scratch, and the fixture store item is deleted

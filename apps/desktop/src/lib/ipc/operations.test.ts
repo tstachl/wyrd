@@ -26,6 +26,7 @@ import {
   provisionCreate,
   provisionJoin,
   provisionLeave,
+  provisionReconfigure,
   reconnect,
   revealInFolder,
   submit,
@@ -226,6 +227,133 @@ test("provisioning wrappers send one args object per command", async () => {
           identityFile: "/keys/identity",
           passphraseFile: "/keys/passphrase",
           acknowledged: true,
+        },
+      },
+    },
+  ]);
+});
+
+test("provisioning wrappers send the store reference for os-store drives", async () => {
+  // Wire-agreement pin for the store backend: the camelCase keys
+  // and the file-or-reference shapes below must match
+  // `crates/wyrd-desktop/src/commands.rs` verbatim — types alone
+  // do not prove the boundary agrees.
+  const seen: Array<{ cmd: string; args: unknown }> = [];
+  mockIPC((cmd, args) => {
+    seen.push({ cmd, args });
+    return {
+      result: { result: "completed", detail: "ok" },
+      observed: { status: "nofile", drives: [], skipped: [] },
+      membership: null,
+    };
+  });
+  // A fresh store-backed create seeds from the input files.
+  await provisionCreate({
+    name: "alpha",
+    driveDir: "/drives/alpha",
+    relays: [],
+    identityFile: "/keys/identity",
+    passphraseFile: "/keys/passphrase",
+    credentialBackend: "os-store",
+    credentialAccount: "wyrd-drive-alpha",
+    mode: "vault",
+    noService: false,
+  });
+  // A converged store-backed join names only the item.
+  await provisionJoin({
+    name: "beta",
+    driveDir: "/drives/beta",
+    relays: [],
+    credentialBackend: "os-store",
+    credentialAccount: "wyrd-drive-beta",
+    invitationFile: "/tmp/invite.sealed",
+    mode: "vault",
+    noService: true,
+  });
+  await provisionLeave({
+    driveDir: "/drives/alpha",
+    credentialBackend: "os-store",
+    credentialAccount: "wyrd-drive-alpha",
+    acknowledged: true,
+  });
+  await provisionReconfigure({
+    driveDir: "/drives/alpha",
+    relays: [],
+    credentialBackend: "os-store",
+    credentialAccount: "wyrd-drive-alpha",
+    mode: "vault",
+    noService: true,
+  });
+  await driveUnlock({
+    driveDir: "/drives/alpha",
+    credentialBackend: "os-store",
+    credentialAccount: "wyrd-drive-alpha",
+    passphrase: "hunter2-hunter2",
+  });
+  expect(seen).toEqual([
+    {
+      cmd: "provision_create",
+      args: {
+        args: {
+          name: "alpha",
+          driveDir: "/drives/alpha",
+          relays: [],
+          identityFile: "/keys/identity",
+          passphraseFile: "/keys/passphrase",
+          credentialBackend: "os-store",
+          credentialAccount: "wyrd-drive-alpha",
+          mode: "vault",
+          noService: false,
+        },
+      },
+    },
+    {
+      cmd: "provision_join",
+      args: {
+        args: {
+          name: "beta",
+          driveDir: "/drives/beta",
+          relays: [],
+          credentialBackend: "os-store",
+          credentialAccount: "wyrd-drive-beta",
+          invitationFile: "/tmp/invite.sealed",
+          mode: "vault",
+          noService: true,
+        },
+      },
+    },
+    {
+      cmd: "provision_leave",
+      args: {
+        args: {
+          driveDir: "/drives/alpha",
+          credentialBackend: "os-store",
+          credentialAccount: "wyrd-drive-alpha",
+          acknowledged: true,
+        },
+      },
+    },
+    {
+      cmd: "provision_reconfigure",
+      args: {
+        args: {
+          driveDir: "/drives/alpha",
+          relays: [],
+          credentialBackend: "os-store",
+          credentialAccount: "wyrd-drive-alpha",
+          mode: "vault",
+          noService: true,
+        },
+      },
+    },
+    {
+      cmd: "drive_unlock",
+      args: {
+        args: {
+          driveDir: "/drives/alpha",
+          credentialBackend: "os-store",
+          credentialAccount: "wyrd-drive-alpha",
+          passphrase: "hunter2-hunter2",
         },
       },
     },

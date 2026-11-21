@@ -314,7 +314,10 @@ mod tests {
     fn unlock_request(dir: &Path) -> UnlockRequest {
         UnlockRequest {
             drive_dir: dir.join("drive"),
-            identity_file: dir.join("identity"),
+            credentials: super::provision::CredentialSource::File {
+                identity_file: Some(dir.join("identity")),
+                passphrase_file: None,
+            },
             relays: Vec::new(),
             retained_quota: None,
         }
@@ -425,7 +428,10 @@ mod tests {
                 cli_bin: cli,
                 request: UnlockRequest {
                     drive_dir: dir.clone(),
-                    identity_file: PathBuf::from("/keys/identity"),
+                    credentials: provision::CredentialSource::File {
+                        identity_file: Some(PathBuf::from("/keys/identity")),
+                        passphrase_file: None,
+                    },
                     relays: Vec::new(),
                     retained_quota: None,
                 },
@@ -570,7 +576,10 @@ mod tests {
             cli_bin: PathBuf::from("/no/such/wyrd"),
             request: UnlockRequest {
                 drive_dir: PathBuf::from("/drives/alpha"),
-                identity_file: PathBuf::from("/keys/identity"),
+                credentials: provision::CredentialSource::File {
+                    identity_file: Some(PathBuf::from("/keys/identity")),
+                    passphrase_file: None,
+                },
                 relays: Vec::new(),
                 retained_quota: None,
             },

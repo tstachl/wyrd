@@ -58,10 +58,13 @@ pub(crate) struct Credentials {
     /// Credential backend selector: `file` (the default) reads the
     /// hardened credential files; `os-store` resolves the drive
     /// through the OS credential store. One backend per drive —
-    /// naming `os-store` beside `--identity-file`/`--passphrase-file`
-    /// refuses, and `os-store` needs `--credential-account` (or the
-    /// drive configuration's `credential_account`). Anything else
-    /// refuses with its name.
+    /// the credential loader refuses `os-store` beside
+    /// `--identity-file`/`--passphrase-file`; `drive bootstrap`
+    /// alone accepts those flags as the one-time seed inputs that
+    /// provision a fresh drive's store item (see `bootstrap_store`).
+    /// `os-store` needs `--credential-account` (or the drive
+    /// configuration's `credential_account`). Anything else refuses
+    /// with its name.
     #[arg(long, value_name = "BACKEND")]
     pub(crate) credential_backend: Option<String>,
 
