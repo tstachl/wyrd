@@ -790,10 +790,11 @@ search.
    spawning, no new plugins.
 5. Runtime provisioning (nostr:nevent1qqsx9357fqqfup9g7kurf7gdcgtjf8qaceay3a90wzxjw6sresg69eqpz9mhxue69uhkwunpwdczuap49eehgcl6hz9):
    the constrained CLI adapter for create/join/leave with
-   verification-via-reread, credential-file selection,
-   sole-owner confirmation as operation contract (`--yes` at the
-   CLI boundary), and per-drive mode selection and
-   reconfiguration.
+   verification-via-reread, OS-store-by-default credential sourcing
+   (account derived from the drive name, seeds from the verified
+   device identity; file-backed operator flows kept), sole-owner
+   confirmation as operation contract (`--yes` at the CLI boundary),
+   and per-drive mode selection and reconfiguration.
 
 ## Multi-drive commitment (decided, v0.4)
 

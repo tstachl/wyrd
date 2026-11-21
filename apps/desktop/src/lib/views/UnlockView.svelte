@@ -10,35 +10,47 @@ success or failure. Never persisted here, never logged. -->
   import * as Field from "$lib/components/ui/field/index.js";
   import { Input } from "$lib/components/ui/input/index.js";
   import { Spinner } from "$lib/components/ui/spinner/index.js";
+  import { storeAccountFor } from "./format.js";
+  import CredentialStorageToggle from "./credential-storage-toggle.svelte";
   import LockKeyholeIcon from "@lucide/svelte/icons/lock-keyhole";
   import CircleAlertIcon from "@lucide/svelte/icons/circle-alert";
   import KeyRoundIcon from "@lucide/svelte/icons/key-round";
 
   interface Props {
     driveLabel: string;
+    /** Registry entry name; derives the store account label. Null where unknown. */
+    driveName: string | null;
     /** The locked-gate detail naming both recoveries (session unlock and managed reinstall). */
     detail: string | null;
     pending: boolean;
-    /** False where the start-up gate never verified credential paths — the form cannot run. */
+    /** False where the start-up gate never verified credential paths — file unlock cannot run. Store unlock needs only the drive name. */
     identityReady: boolean;
     /** The last unlock attempt's refused outcome, or null where it completed. */
     unlockError: string | null;
-    onUnlock: (passphrase: string) => Promise<void>;
+    onUnlock: (passphrase: string, useStore: boolean) => Promise<void>;
   }
 
-  let { driveLabel, detail, pending, identityReady, unlockError, onUnlock }: Props = $props();
+  let { driveLabel, driveName, detail, pending, identityReady, unlockError, onUnlock }: Props = $props();
 
   let passphrase = $state("");
   let showPassphrase = $state(false);
   let working = $state(false);
   let localError: string | null = $state(null);
+  let useStore = $state(true);
 
   const busy = $derived(pending || working);
-  const canSubmit = $derived(identityReady && passphrase !== "" && !busy);
+  const storeAccount = $derived(driveName === null ? null : storeAccountFor(driveName));
+  const canSubmit = $derived(
+    passphrase !== "" && !busy && (useStore ? storeAccount !== null : identityReady),
+  );
 
   async function submit(): Promise<void> {
     localError = null;
-    if (!identityReady) {
+    if (useStore && storeAccount === null) {
+      localError = "This drive has no registry name to derive its store item from.";
+      return;
+    }
+    if (!useStore && !identityReady) {
       localError = "This device's identity is not verified yet — finish the identity check first.";
       return;
     }
@@ -52,7 +64,7 @@ success or failure. Never persisted here, never logged. -->
     passphrase = "";
     working = true;
     try {
-      await onUnlock(attempt);
+      await onUnlock(attempt, useStore);
     } finally {
       working = false;
     }
@@ -76,6 +88,22 @@ success or failure. Never persisted here, never logged. -->
         <KeyRoundIcon />
         <Alert.Description class="text-foreground/80">{detail}</Alert.Description>
       </Alert.Root>
+    {/if}
+    <!-- Toggle extracted to a child component: sibling interactive
+      templates inline here break the happy-dom re-registration the
+      mounted tests rely on (second mount crashes traversing the
+      cloned template). -->
+    <CredentialStorageToggle useStore={useStore} onSelect={(next) => (useStore = next)} />
+    {#if useStore}
+      <p class="text-xs leading-relaxed text-muted-foreground">
+        Loads this drive's identity from its store item — one item per drive,
+        never a secret. Only the passphrase below is typed.
+      </p>
+    {:else}
+      <p class="text-xs leading-relaxed text-muted-foreground">
+        Operator deployments only: loads the identity from this device's verified
+        identity file. Only the passphrase below is typed.
+      </p>
     {/if}
     <Field.Field>
       <Field.Label for="unlock-passphrase">Drive passphrase</Field.Label>
@@ -114,9 +142,13 @@ success or failure. Never persisted here, never logged. -->
         <Alert.Description>{unlockError}</Alert.Description>
       </Alert.Root>
     {/if}
-    {#if !identityReady}
+    {#if useStore ? storeAccount === null : !identityReady}
       <p class="text-xs leading-relaxed text-muted-foreground">
-        Unlock needs this device's verified identity — finish the identity check first.
+        {#if useStore}
+          Unlock needs this drive's registry name to derive its store item.
+        {:else}
+          Unlock needs this device's verified identity — finish the identity check first.
+        {/if}
       </p>
     {/if}
   </Card.Content>

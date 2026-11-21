@@ -181,6 +181,20 @@ export function suggestedDriveDirFor(nameValue: string, identityPath: string): s
 }
 
 /**
+ * OS credential-store account for one drive (`wyrd-drive-<name>`,
+ * `alpha` where the name is blank so the label stays stable while
+ * typing). One account per drive; the label is a reference, never a
+ * secret. The drive-name alphabet (`[a-z0-9-]`, 1–58 chars) keeps the
+ * label inside the account shape (1–128 bytes, no control bytes, no
+ * surrounding whitespace); the CLI re-validates it before anything
+ * provisions.
+ */
+export function storeAccountFor(nameValue: string): string {
+  const safeName = nameValue.trim() === "" ? "alpha" : nameValue.trim();
+  return `wyrd-drive-${safeName}`;
+}
+
+/**
  * Next drive-dir value from the form's state (pure, pinned below):
  * while untouched, follow the suggestion; otherwise keep the
  * operator's value. An explicit clear marks the field touched

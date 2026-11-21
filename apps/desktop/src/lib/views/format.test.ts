@@ -20,6 +20,7 @@ import {
   settingsSurviveLock,
   SETTING_BOUNDS,
   shortId,
+  storeAccountFor,
   suggestedDriveDirFor,
   validateBoundInput,
   withDevCliHint,
@@ -111,6 +112,13 @@ test("drive suggestions derive from the credential base, never guesses", () => {
     suggestedDriveDirFor("beta", "/a/keys/identity"),
   ).toBe("/a/drives/beta");
   expect(suggestedDriveDirFor("beta", "")).toBeNull();
+});
+
+test("store accounts derive one label per drive name", () => {
+  expect(storeAccountFor("alpha")).toBe("wyrd-drive-alpha");
+  expect(storeAccountFor("  beta-2  ")).toBe("wyrd-drive-beta-2");
+  expect(storeAccountFor("")).toBe("wyrd-drive-alpha");
+  expect(storeAccountFor("   ")).toBe("wyrd-drive-alpha");
 });
 
 test("the suggestion follows the name while untouched", () => {

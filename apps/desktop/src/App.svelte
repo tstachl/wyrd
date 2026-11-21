@@ -54,7 +54,7 @@
     SettingsWriteReport,
   } from "$lib/ipc/results.js";
   import type { SparseUpdateArgs } from "$lib/ipc/results.js";
-  import { settingsSurviveLock, withDevCliHint } from "$lib/views/format.js";
+  import { settingsSurviveLock, storeAccountFor, withDevCliHint } from "$lib/views/format.js";
   import {
     autoOpenTarget,
     headerAffordance,
@@ -710,19 +710,24 @@
    * the registry observation, and the service is reinstalled —
    * which restarts the owner where one is managed. Shared by the
    * unavailable-overlay reinstall and the settings restart-to-apply
-   * so the two can never drift into different argv. Null where the
-   * gate-verified credential paths are absent; transport and
-   * unexpected throws propagate to the caller, which reports them
-   * in its own surface.
+   * so the two can never drift into different argv. The store
+   * reference derives from the registry entry name (one item per
+   * drive); file-backed drives pre-dating the store default migrate
+   * through the CLI (`migrate-credentials` + `reconfigure`), and a
+   * reinstall attempt on one refuses with that mismatch instead of
+   * touching the drive. Null where the registry no longer names the
+   * drive; transport and unexpected throws propagate to the caller,
+   * which reports them in its own surface.
    */
   async function reconfigureSame(driveDir: string): Promise<ProvisionReport | null> {
-    if (onboardedIdentityFile === null || onboardedPassphraseFile === null) return null;
+    const target = registryDrives().find((drive) => drive.drive_dir === driveDir) ?? null;
+    if (target === null) return null;
     const mode = selectedDrive?.mode ?? "vault";
     const args: ProvisionReconfigureArgs = {
       driveDir,
       relays: [],
-      identityFile: onboardedIdentityFile,
-      passphraseFile: onboardedPassphraseFile,
+      credentialBackend: "os-store",
+      credentialAccount: storeAccountFor(target.name),
       mode,
       mountpoint: selectedDrive?.mountpoint ?? undefined,
       noService: false,
@@ -734,10 +739,13 @@
    * Reinstall one drive's service definition (the "no definition
    * installed" recovery): stop and clear, rewrite the entry, and
    * reinstall/restart through the constrained CLI adapter with the
-   * gate-verified credential paths, keeping the registered relays
-   * and mode. Then re-read the registry and re-derive availability
-   * like `retryConnection` does. The same no-silent-refusal rule
-   * as `startService` applies.
+   * drive's store reference (derived from its registry name),
+   * keeping the registered relays and mode. Then re-read the
+   * registry and re-derive availability like `retryConnection`
+   * does. The same no-silent-refusal rule as `startService`
+   * applies. File-backed drives pre-dating the store default
+   * migrate through the CLI; the gate check below keeps the
+   * recovery honest where no verified identity exists at all.
    */
   async function reinstallService(driveDir: string): Promise<void> {
     if (onboardedIdentityFile === null || onboardedPassphraseFile === null) return;
@@ -775,13 +783,10 @@
    * details; the caller renders saved-but-restart-failed itself.
    */
   async function restartServiceForApply(driveDir: string): Promise<string | null> {
-    if (onboardedIdentityFile === null || onboardedPassphraseFile === null) {
-      return "This device's identity is not verified yet — finish the identity check first.";
-    }
     try {
       const report = await reconfigureSame(driveDir);
       if (report === null) {
-        return "This device's identity is not verified yet — finish the identity check first.";
+        return "This drive is no longer registered — refresh the drive list.";
       }
       const refused = refusedDetail(report);
       if (refused !== null) return refused;
@@ -814,11 +819,48 @@
    * stdin pipe, verify the socket answers, then re-read the
    * registry and re-derive availability like `startService` does.
    * Explicit, never automatic — a locked drive stays locked until
-   * this runs. A refused outcome surfaces on the unlock card;
+   * this runs. Store-backed drives load their identity from the
+   * drive's store item (one label per drive, never a secret);
+   * operator file-backed drives load it from the verified identity
+   * file. A refused outcome surfaces on the unlock card;
    * the passphrase that produced it is already cleared by the
    * unlock view and never re-renders.
    */
-  async function unlockDrive(driveDir: string, passphrase: string): Promise<void> {
+  async function unlockDrive(driveDir: string, passphrase: string, useStore: boolean): Promise<void> {
+    if (useStore) {
+      const target = registryDrives().find((drive) => drive.drive_dir === driveDir) ?? null;
+      if (target === null) {
+        unlockRefused = {
+          driveDir,
+          detail: "This drive is no longer registered — refresh the drive list.",
+        };
+        return;
+      }
+      unlockRefused = null;
+      try {
+        const report = await runProvision(() =>
+          driveUnlock({
+            driveDir,
+            credentialBackend: "os-store",
+            credentialAccount: storeAccountFor(target.name),
+            passphrase,
+          }),
+        );
+        const detail = refusedDetail(report);
+        unlockRefused = detail === null ? null : { driveDir, detail };
+      } catch (error: unknown) {
+        unlockRefused = {
+          driveDir,
+          detail:
+            error instanceof Error ? error.message : `Unexpected unlock failure: ${String(error)}`,
+        };
+        return;
+      }
+      await refreshLifecycle();
+      await readOwner(driveDir, () => liveness(driveDir));
+      await refreshCurrent();
+      return;
+    }
     const identityFile = onboardedIdentityFile;
     if (identityFile === null) {
       unlockRefused = {
@@ -1071,13 +1113,14 @@
           {#if selectedSession !== null && selectedSession.state === "locked"}
             <UnlockView
               driveLabel={selectedDriveDir}
+              driveName={selectedDriveName}
               detail={selectedSessionDetail}
               pending={busy}
               identityReady={canUnlock}
               unlockError={unlockRefused !== null && unlockRefused.driveDir === selectedDriveDir
                 ? unlockRefused.detail
                 : null}
-              onUnlock={(passphrase) => unlockDrive(selectedDriveDir, passphrase)}
+              onUnlock={(passphrase, useStore) => unlockDrive(selectedDriveDir, passphrase, useStore)}
             />
             {@render unavailableOverlay(selectedDriveDir)}
           {:else if selectedAvailability === "unavailable"}
@@ -1115,6 +1158,7 @@
                  overlay with its Start/Reinstall recovery. -->
             <SettingsView
               driveDir={selectedDriveDir}
+              driveName={selectedDriveName}
               snapshot={presentation.settingsSnapshotFor(selectedDriveDir)}
               pending={busy}
               transportNotice={presentation.transportNotice}

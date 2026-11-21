@@ -29,6 +29,9 @@ const lifecycle = rendered(
 const provisioning = rendered(
   await Bun.file(`${dir}/ProvisioningView.svelte`).text(),
 );
+const credentialToggle = rendered(
+  await Bun.file(`${dir}/credential-storage-toggle.svelte`).text(),
+);
 const onboarding = rendered(
   await Bun.file(`${dir}/OnboardingView.svelte`).text(),
 );
@@ -121,6 +124,20 @@ test("in-window Add drive routes to the provision view", () => {
 test("invitation carries the protection explanation", () => {
   expect(provisioning).toContain("Invitation file");
   expect(provisioning).toContain("Only the intended device can open it.");
+});
+
+test("new drives default to the OS credential store", () => {
+  for (const line of [
+    "OS credential store (recommended)",
+    "Credential files (operator)",
+    "no passphrase file is created",
+  ]) {
+    expect(provisioning + credentialToggle).toContain(line);
+  }
+  // The store item derives from the drive name; the label is a
+  // reference, never a secret (the derivation itself pins in
+  // `format.test.ts`).
+  expect(provisioning).toContain("Store item");
 });
 
 test("onboarding follows the approved key explanation", () => {
