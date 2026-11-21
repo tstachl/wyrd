@@ -425,33 +425,34 @@ fn credential_contents_never_appear_in_errors() {
     assert!(!text.contains("ssss"), "oversized content leaked: {text}");
 }
 
-/// Every `src/**/*.rs` file is reachable from a `mod` declaration:
-/// an orphaned test module compiles nothing and fails nothing, so
-/// the wiring itself needs a pin. Reads the source tree at the
-/// build-time manifest directory. A file is declared when any
-/// source names it in `mod <stem>;` or in `#[path = "<name>"]` —
-/// the latter is how a sibling test module of a non-root parent is
-/// declared. `main.rs`, `lib.rs` and `mod.rs` are module roots,
-/// not children.
-#[test]
-fn every_src_file_is_a_declared_module() {
-    fn collect(dir: &std::path::Path, text: &mut String, files: &mut Vec<PathBuf>) {
+/// Find `src/**/*.rs` files no `mod` declaration reaches.
+///
+/// A `mod <stem>;` must live in the file's own parent module
+/// (`lib.rs` at the top level, `<dir>.rs` or `<dir>/mod.rs` below
+/// it): a same-named module in an unrelated directory must not
+/// count. `#[path = "<name>"]` names the file exactly, so that
+/// form is checked across the tree. `main.rs`, `lib.rs` and
+/// `mod.rs` are module roots, not children.
+fn orphaned_modules(src: &std::path::Path) -> Vec<String> {
+    fn collect(dir: &std::path::Path, files: &mut Vec<PathBuf>) {
         for entry in fs::read_dir(dir).unwrap() {
             let entry = entry.unwrap();
             let path = entry.path();
             if path.is_dir() {
-                collect(&path, text, files);
+                collect(&path, files);
             } else if path.extension().is_some_and(|ext| ext == "rs") {
-                text.push_str(&fs::read_to_string(&path).unwrap());
                 files.push(path);
             }
         }
     }
 
-    let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
-    let mut text = String::new();
     let mut files = Vec::new();
-    collect(&src, &mut text, &mut files);
+    collect(src, &mut files);
+    files.sort();
+    let all: String = files
+        .iter()
+        .map(|path| fs::read_to_string(path).unwrap())
+        .collect();
     let mut orphaned = Vec::new();
     for path in files {
         let name = path.file_name().unwrap().to_string_lossy().into_owned();
@@ -461,13 +462,50 @@ fn every_src_file_is_a_declared_module() {
         let Some(stem) = name.strip_suffix(".rs") else {
             continue;
         };
-        if !text.contains(&format!("mod {stem};"))
-            && !text.contains(&format!("#[path = \"{name}\"]"))
-        {
+        let parent = path.parent().unwrap();
+        let declaring = if parent == src {
+            vec![src.join("lib.rs")]
+        } else {
+            let dir = parent.file_name().unwrap().to_string_lossy().into_owned();
+            vec![src.join(format!("{dir}.rs")), parent.join("mod.rs")]
+        };
+        let declared_by_mod = declaring.iter().any(|parent| {
+            fs::read_to_string(parent).is_ok_and(|text| text.contains(&format!("mod {stem};")))
+        });
+        let declared_by_path = all.contains(&format!("#[path = \"{name}\"]"));
+        if !declared_by_mod && !declared_by_path {
             orphaned.push(name);
         }
     }
+    orphaned
+}
+
+/// Every `src/**/*.rs` file is reachable from a `mod` declaration:
+/// an orphaned test module compiles nothing and fails nothing, so
+/// the wiring itself needs a pin. Reads the source tree at the
+/// build-time manifest directory.
+#[test]
+fn every_src_file_is_a_declared_module() {
+    let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
+    let orphaned = orphaned_modules(&src);
     assert!(orphaned.is_empty(), "uncompiled modules: {orphaned:?}");
+}
+
+/// A `mod drive;` in `commands.rs` must not cover a top-level
+/// `drive.rs`: only the file's own parent module may declare it.
+#[test]
+fn a_declaration_in_an_unrelated_directory_does_not_cover_an_orphan() {
+    let temp = TempDir::new();
+    let src = temp.0.join("src");
+    fs::create_dir_all(&src).unwrap();
+    fs::write(src.join("lib.rs"), "mod commands;\n").unwrap();
+    fs::write(src.join("commands.rs"), "mod drive;\n").unwrap();
+    fs::write(src.join("drive.rs"), "// orphan\n").unwrap();
+    assert_eq!(
+        orphaned_modules(&src),
+        vec!["drive.rs".to_string()],
+        "a sibling directory's declaration must not mask the orphan"
+    );
 }
 
 /// Bare `wyrd owner <drive>` keeps starting the process (the 22b

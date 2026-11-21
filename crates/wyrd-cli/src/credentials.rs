@@ -1346,4 +1346,4 @@ fn delete_file_credential(
 
 #[cfg(test)]
 #[path = "tests_credentials.rs"]
-mod tests;
+mod tests_credentials;
