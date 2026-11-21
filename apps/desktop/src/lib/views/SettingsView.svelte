@@ -31,6 +31,7 @@ of the UI. -->
   import type { Stamped } from "$lib/state/presentation.svelte.js";
   import type { DriveSettingsState, EnablementState, ProvisionReport, ServiceState, SessionState, SettingsWriteReport, SparseUpdateArgs } from "$lib/ipc/results.js";
   import type { ProvisionLeaveArgs } from "$lib/ipc/operations.js";
+  import { buildLeaveArgs, type CredentialMode } from "$lib/ipc/provisioning-args.js";
   import {
     boundLabel,
     describeProvisionResult,
@@ -76,12 +77,13 @@ of the UI. -->
     session: SessionState | null;
     /**
      * Restart the managed service with unchanged supervision so saved
-     * bounds apply. Resolves the refusal detail, or null where the
+     * bounds apply. Takes the toggle-named backend: store reference or
+     * verified pair. Resolves the refusal detail, or null where the
      * restart completed and the post-restart probe answered — the
      * verdict consults the observation, never restart acceptance
      * alone.
      */
-    onRestartService: () => Promise<string | null>;
+    onRestartService: (useStore: boolean) => Promise<string | null>;
     /**
      * The service-manager fact beside the transport verdict, where
      * the registry named it. Decides whether the login-start
@@ -160,7 +162,7 @@ of the UI. -->
   let leaveWorking = $state(false);
   let leaveReport = $state<ProvisionReport | null>(null);
   let leaveError = $state<string | null>(null);
-  let leaveCredentialMode = $state<"store" | "file">("store");
+  let leaveCredentialMode = $state<CredentialMode>("store");
 
   const leaveAccount = $derived(driveName === null ? null : storeAccountFor(driveName));
   const fileCredentialsReady = $derived(identityFile !== null && passphraseFile !== null);
@@ -275,6 +277,7 @@ of the UI. -->
   let confirmRestart = $state(false);
   let restarting = $state(false);
   let restartReport = $state<{ ok: boolean; detail?: string } | null>(null);
+  let restartUseStore = $state(true);
   let toggling = $state(false);
   let toggleReport = $state<{ ok: boolean; detail?: string } | null>(null);
 
@@ -297,7 +300,7 @@ of the UI. -->
     restarting = true;
     restartReport = null;
     try {
-      const detail = await onRestartService();
+      const detail = await onRestartService(restartUseStore);
       restartReport = detail === null ? { ok: true } : { ok: false, detail };
     } finally {
       restarting = false;
@@ -306,24 +309,22 @@ of the UI. -->
 
   async function leave(): Promise<void> {
     if (!credentialsReady) return;
+    if (leaveCredentialMode === "store" && leaveAccount === null) return;
     leaveWorking = true;
     leaveError = null;
     try {
       // The report carries the post-run observation; only that decides
       // what changed. A transport throw is not an outcome.
-      if (leaveCredentialMode === "store") {
-        const account = leaveAccount;
-        if (account === null) return;
-        leaveReport = await onLeave({
+      leaveReport = await onLeave(
+        buildLeaveArgs({
           driveDir,
-          credentialBackend: "os-store",
-          credentialAccount: account,
+          credentialMode: leaveCredentialMode,
+          storeAccount: leaveAccount,
+          identityFile,
+          passphraseFile,
           acknowledged,
-        });
-      } else {
-        if (identityFile === null || passphraseFile === null) return;
-        leaveReport = await onLeave({ driveDir, identityFile, passphraseFile, acknowledged });
-      }
+        }),
+      );
     } catch (failure: unknown) {
       leaveError = failure instanceof Error ? failure.message : String(failure);
     } finally {
@@ -877,6 +878,21 @@ of the UI. -->
       <AlertDialog.Description>
         Restarting briefly interrupts availability while the drive service stops and starts again. The bounds you saved apply when it comes back.
       </AlertDialog.Description>
+      <div class="py-2">
+        <CredentialStorageToggle
+          useStore={restartUseStore}
+          onSelect={(next) => (restartUseStore = next)}
+        />
+        {#if restartUseStore}
+          <p class="mt-2 text-sm text-muted-foreground">
+            Restarts the drive service against this drive's store item.
+          </p>
+        {:else}
+          <p class="mt-2 text-sm text-muted-foreground">
+            Operator deployments only: restarts against the verified identity pair.
+          </p>
+        {/if}
+      </div>
     </AlertDialog.Header>
     <AlertDialog.Footer>
       <AlertDialog.Cancel>Not now</AlertDialog.Cancel>

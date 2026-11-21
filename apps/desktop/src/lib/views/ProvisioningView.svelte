@@ -27,6 +27,11 @@ by hand elsewhere. Secret contents never travel. -->
   import { pickExistingFile } from "$lib/ipc/files.js";
   import type { ProvisionCreateArgs, ProvisionJoinArgs } from "$lib/ipc/operations.js";
   import {
+    buildCreateArgs,
+    buildJoinArgs,
+    type CredentialMode,
+  } from "$lib/ipc/provisioning-args.js";
+  import {
     describeProvisionResult,
     membershipSummary,
     nextDriveDir,
@@ -58,7 +63,6 @@ by hand elsewhere. Secret contents never travel. -->
   let { pending, initialIdentityFile, initialPassphraseFile, initialMode, onCreate, onJoin, onDone, onBack }: Props = $props();
 
   type Mode = "create" | "join";
-  type CredentialMode = "store" | "file";
 
   let mode = $state<Mode>("create");
   let credentialMode = $state<CredentialMode>("store");
@@ -347,28 +351,23 @@ by hand elsewhere. Secret contents never travel. -->
           </p>
           <Button
             disabled={busy || name.trim() === "" || driveDir.trim() === "" || !credentialsReady}
-            onclick={() => {
-              if (credentialMode === "store") {
-                const seedIdentity = initialIdentityFile ?? "";
-                const seedPassphrase = initialPassphraseFile ?? "";
-                return void run(() =>
-                  onCreate({
+            onclick={() =>
+              void run(() =>
+                onCreate(
+                  buildCreateArgs({
                     name,
                     driveDir,
                     relays,
-                    identityFile: seedIdentity,
-                    passphraseFile: seedPassphrase,
-                    credentialBackend: "os-store",
-                    credentialAccount: storeAccount,
-                    mode: "vault",
-                    noService: false,
+                    credentialMode,
+                    storeAccount,
+                    seedIdentityFile: initialIdentityFile ?? "",
+                    seedPassphraseFile: initialPassphraseFile ?? "",
+                    fileIdentityFile: identityFile,
+                    filePassphraseFile: passphraseFile,
                   }),
-                );
-              }
-              return void run(() =>
-                onCreate({ name, driveDir, relays, identityFile, passphraseFile, mode: "vault", noService: false }),
-              );
-            }}
+                ),
+              )
+            }
           >
             {#if working}
               <Spinner data-icon="inline-start" />
@@ -544,38 +543,24 @@ by hand elsewhere. Secret contents never travel. -->
           </p>
           <Button
             disabled={busy || name.trim() === "" || driveDir.trim() === "" || invitationFile.trim() === "" || !credentialsReady}
-            onclick={() => {
-              if (credentialMode === "store") {
-                const seedIdentity = initialIdentityFile ?? "";
-                const seedPassphrase = initialPassphraseFile ?? "";
-                return void run(() =>
-                  onJoin({
+            onclick={() =>
+              void run(() =>
+                onJoin(
+                  buildJoinArgs({
                     name,
                     driveDir,
                     relays,
-                    identityFile: seedIdentity,
-                    passphraseFile: seedPassphrase,
-                    credentialBackend: "os-store",
-                    credentialAccount: storeAccount,
+                    credentialMode,
+                    storeAccount,
+                    seedIdentityFile: initialIdentityFile ?? "",
+                    seedPassphraseFile: initialPassphraseFile ?? "",
+                    fileIdentityFile: identityFile,
+                    filePassphraseFile: passphraseFile,
                     invitationFile,
-                    mode: "vault",
-                    noService: false,
                   }),
-                );
-              }
-              return void run(() =>
-                onJoin({
-                  name,
-                  driveDir,
-                  relays,
-                  identityFile,
-                  passphraseFile,
-                  invitationFile,
-                  mode: "vault",
-                  noService: false,
-                }),
-              );
-            }}
+                ),
+              )
+            }
           >
             {#if working}
               <Spinner data-icon="inline-start" />

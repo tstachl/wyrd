@@ -27,6 +27,7 @@ silently. -->
   import PlayIcon from "@lucide/svelte/icons/play";
   import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
   import WrenchIcon from "@lucide/svelte/icons/wrench";
+  import CredentialStorageToggle from "./credential-storage-toggle.svelte";
   import type { EnablementState, ServiceState } from "$lib/ipc/results.js";
 
   interface Props {
@@ -43,7 +44,8 @@ silently. -->
     /** The last recovery attempt's outcome, where it refused — never lifecycle state. */
     recoveryDetail?: string | null;
     onStart?: () => void;
-    onReinstall?: () => void;
+    /** Reinstall with the toggle-named backend: store reference or verified pair. */
+    onReinstall?: (useStore: boolean) => void;
     /** Flip the login-start preference; the caller re-reads and the fresh probe decides the display. */
     onToggleEnablement?: (enable: boolean) => void;
   }
@@ -87,6 +89,12 @@ silently. -->
   const toggleChecked = $derived(enablement !== null && enablement.enablement === "enabled");
   const toggleUnknown = $derived(enablement === null || enablement.enablement === "unknown");
   const enablementDetail = $derived(enablement !== null ? enablement.detail : null);
+  // Reinstall backend toggle: store-backed by default (the derived
+  // item), operator file-backed beside it. Local display state only;
+  // the caller decides the IPC args. A child component, not inline
+  // buttons: sibling interactive templates inline here break the
+  // happy-dom re-registration the mounted tests rely on.
+  let reinstallUseStore = $state(true);
   // Dev-only honesty: no manager tool exists in this build, so no
   // managed-service verdict is possible. Shipped builds always
   // supervise the owner; their timeouts read `unknown` instead and
@@ -170,12 +178,34 @@ silently. -->
         </Button>
       {/if}
       {#if showReinstall}
-        <Button variant="outline" disabled={pending || !canReinstall} onclick={onReinstall}>
+        <Button
+          variant="outline"
+          disabled={pending || !canReinstall}
+          onclick={() => onReinstall?.(reinstallUseStore)}
+        >
           <WrenchIcon data-icon="inline-start" />
           Reinstall service
         </Button>
       {/if}
     </div>
+    {#if showReinstall}
+      <div class="mt-3 text-left">
+        <CredentialStorageToggle
+          useStore={reinstallUseStore}
+          onSelect={(next) => (reinstallUseStore = next)}
+        />
+        {#if reinstallUseStore}
+          <p class="mt-2 text-xs leading-relaxed text-muted-foreground">
+            Reinstalls the drive service against this drive's store item — one item
+            per drive, never a secret.
+          </p>
+        {:else}
+          <p class="mt-2 text-xs leading-relaxed text-muted-foreground">
+            Operator deployments only: reinstalls against the verified identity pair.
+          </p>
+        {/if}
+      </div>
+    {/if}
     {#if showReinstall && !canReinstall}
       <p class="text-xs leading-relaxed text-muted-foreground">
         Reinstall needs this device's credential paths — finish the identity check first.

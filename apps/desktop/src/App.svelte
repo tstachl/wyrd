@@ -712,22 +712,34 @@
    * unavailable-overlay reinstall and the settings restart-to-apply
    * so the two can never drift into different argv. The store
    * reference derives from the registry entry name (one item per
-   * drive); file-backed drives pre-dating the store default migrate
-   * through the CLI (`migrate-credentials` + `reconfigure`), and a
-   * reinstall attempt on one refuses with that mismatch instead of
-   * touching the drive. Null where the registry no longer names the
-   * drive; transport and unexpected throws propagate to the caller,
-   * which reports them in its own surface.
+   * drive); the file branch reads the gate-verified pair for
+   * operator deployments, refusing before any spawn where it is
+   * absent. Null where the registry no longer names the drive;
+   * transport and unexpected throws propagate to the caller, which
+   * reports them in its own surface.
    */
-  async function reconfigureSame(driveDir: string): Promise<ProvisionReport | null> {
+  async function reconfigureSame(driveDir: string, useStore: boolean): Promise<ProvisionReport | null> {
     const target = registryDrives().find((drive) => drive.drive_dir === driveDir) ?? null;
     if (target === null) return null;
     const mode = selectedDrive?.mode ?? "vault";
+    if (useStore) {
+      const args: ProvisionReconfigureArgs = {
+        driveDir,
+        relays: [],
+        credentialBackend: "os-store",
+        credentialAccount: storeAccountFor(target.name),
+        mode,
+        mountpoint: selectedDrive?.mountpoint ?? undefined,
+        noService: false,
+      };
+      return await runProvision(() => provisionReconfigure(args));
+    }
+    if (onboardedIdentityFile === null || onboardedPassphraseFile === null) return null;
     const args: ProvisionReconfigureArgs = {
       driveDir,
       relays: [],
-      credentialBackend: "os-store",
-      credentialAccount: storeAccountFor(target.name),
+      identityFile: onboardedIdentityFile,
+      passphraseFile: onboardedPassphraseFile,
       mode,
       mountpoint: selectedDrive?.mountpoint ?? undefined,
       noService: false,
@@ -739,20 +751,22 @@
    * Reinstall one drive's service definition (the "no definition
    * installed" recovery): stop and clear, rewrite the entry, and
    * reinstall/restart through the constrained CLI adapter with the
-   * drive's store reference (derived from its registry name),
-   * keeping the registered relays and mode. Then re-read the
-   * registry and re-derive availability like `retryConnection`
+   * backend the overlay toggle names (store reference derived from
+   * the registry name, or the verified pair for operator file-backed
+   * drives), keeping the registered relays and mode. Then re-read
+   * the registry and re-derive availability like `retryConnection`
    * does. The same no-silent-refusal rule as `startService`
-   * applies. File-backed drives pre-dating the store default
-   * migrate through the CLI; the gate check below keeps the
-   * recovery honest where no verified identity exists at all.
+   * applies. The gate below keeps the recovery honest where no
+   * verified identity exists at all: the file branch reads the
+   * pair, and the button is already gated by the same condition
+   * (`canReinstall`).
    */
-  async function reinstallService(driveDir: string): Promise<void> {
+  async function reinstallService(driveDir: string, useStore: boolean): Promise<void> {
     if (onboardedIdentityFile === null || onboardedPassphraseFile === null) return;
     recovery = null;
     unlockRefused = null;
     try {
-      const report = await reconfigureSame(driveDir);
+      const report = await reconfigureSame(driveDir, useStore);
       if (report === null) return;
       const detail = refusedDetail(report);
       recovery = detail === null ? null : { driveDir, detail };
@@ -782,9 +796,15 @@
    * clean restart, and a backend transport throw all return as
    * details; the caller renders saved-but-restart-failed itself.
    */
-  async function restartServiceForApply(driveDir: string): Promise<string | null> {
+  async function restartServiceForApply(driveDir: string, useStore: boolean): Promise<string | null> {
+    if (
+      !useStore &&
+      (onboardedIdentityFile === null || onboardedPassphraseFile === null)
+    ) {
+      return "This device's identity is not verified yet — finish the identity check first.";
+    }
     try {
-      const report = await reconfigureSame(driveDir);
+      const report = await reconfigureSame(driveDir, useStore);
       if (report === null) {
         return "This drive is no longer registered — refresh the drive list.";
       }
@@ -946,7 +966,7 @@
     canReinstall={canReinstall}
     recoveryDetail={recovery !== null && recovery.driveDir === driveDir ? recovery.detail : null}
     onStart={() => void startService(driveDir)}
-    onReinstall={() => void reinstallService(driveDir)}
+    onReinstall={(useStore) => void reinstallService(driveDir, useStore)}
     onToggleEnablement={(enable: boolean) => void toggleEnablement(driveDir, enable)}
   />
 {/snippet}
@@ -1113,7 +1133,7 @@
           {#if selectedSession !== null && selectedSession.state === "locked"}
             <UnlockView
               driveLabel={selectedDriveDir}
-              driveName={selectedDriveName}
+              driveName={selectedDrive?.name ?? null}
               detail={selectedSessionDetail}
               pending={busy}
               identityReady={canUnlock}
@@ -1158,7 +1178,7 @@
                  overlay with its Start/Reinstall recovery. -->
             <SettingsView
               driveDir={selectedDriveDir}
-              driveName={selectedDriveName}
+              driveName={selectedDrive?.name ?? null}
               snapshot={presentation.settingsSnapshotFor(selectedDriveDir)}
               pending={busy}
               transportNotice={presentation.transportNotice}
@@ -1170,7 +1190,7 @@
               onApply={(update: SparseUpdateArgs) =>
                 runSettingsWrite(selectedDriveDir, update)
               }
-              onRestartService={() => restartServiceForApply(selectedDriveDir)}
+              onRestartService={(useStore) => restartServiceForApply(selectedDriveDir, useStore)}
               serviceState={selectedServiceState}
               enablement={selectedEnablement}
               onToggleEnablement={(enable: boolean) =>

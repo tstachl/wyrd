@@ -184,9 +184,10 @@ export function suggestedDriveDirFor(nameValue: string, identityPath: string): s
  * OS credential-store account for one drive (`wyrd-drive-<name>`,
  * `alpha` where the name is blank so the label stays stable while
  * typing). One account per drive; the label is a reference, never a
- * secret. The drive-name alphabet (`[a-z0-9-]`, 1–58 chars) keeps the
- * label inside the account shape (1–128 bytes, no control bytes, no
- * surrounding whitespace); the CLI re-validates it before anything
+ * secret. Registry names keep the label inside the account shape
+ * (1–128 bytes, no control bytes, no surrounding whitespace); the
+ * form gates only on non-empty, so anything outside the registry
+ * alphabet refuses at the CLI with the account rule before anything
  * provisions.
  */
 export function storeAccountFor(nameValue: string): string {

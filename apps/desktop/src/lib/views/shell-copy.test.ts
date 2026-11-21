@@ -126,7 +126,19 @@ test("invitation carries the protection explanation", () => {
   expect(provisioning).toContain("Only the intended device can open it.");
 });
 
+test("reinstall and restart name the backend choice", () => {
+  // The reinstall recovery and the restart-to-apply dialog carry the
+  // same store/file choice as the add and leave flows, so a
+  // file-backed operator drive keeps its UI recovery.
+  for (const line of ["OS credential store", "Credential files (operator)"]) {
+    expect(settings + credentialToggle).toContain(line);
+    expect(unavailable + credentialToggle).toContain(line);
+  }
+  expect(unavailable).toContain("Reinstalls the drive service against this drive's store item");
+});
+
 test("new drives default to the OS credential store", () => {
+
   for (const line of [
     "OS credential store (recommended)",
     "Credential files (operator)",
