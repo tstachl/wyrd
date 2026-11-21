@@ -17,8 +17,9 @@ the words that mislead, and the order to read them in.
    representations live here and nowhere else.
 4. `wyrd-sync` — transport, encryption, storage addressing,
    capabilities, authorization, replication. Start at
-   `runtime/engine/` (membership intake, authoring, fetch plans),
-   then `serving/` (endpoint, mirror, vault) and `control/`
+   `runtime/engine/` (membership intake, authoring) and
+   `runtime/plan/` (fetch plans, `execute_inner` in `mod.rs`), then
+   `serving/` (endpoint, mirror, vault) and `control/`
    (sealed envelopes, mailbox).
 5. `wyrd-core` — the embeddable local node. Start at `live/`
    (`pass.rs` runs the loop, `apply.rs` applies mutations,
@@ -102,6 +103,7 @@ the crate or file where that meaning lives.
 |---|---|
 | `owner` | The single writer process holding `LOCK` (`wyrd-daemon/src/vault.rs`, `docs/contracts/owner-interface.md`); the `owner.sock` op-submission API (`wyrd-daemon/src/owner/`); the outgoing owner of a handover pre-state (`docs/contracts/capability-bindings.md`); a filesystem UID (`vendor/fuser`, packaging) — never the Rust borrow checker |
 | `ownership` | Runtime process ownership of the durable store (exactly one writer; `docs/architecture.md`); distinct from the owner role above only in that it names the invariant, not the process |
+| `bootstrap` | First-drive registry and service provisioning (`wyrd-daemon/src/bootstrap.rs`); the `wyrd bootstrap` CLI command (`wyrd-cli/src/commands/bootstrap.rs`); sealed invitation and first-key-delivery framing (`wyrd-sync/src/control/bootstrap.rs`); local drive creation and reopen, plus invitation orchestration (`wyrd-sync/src/runtime/bootstrap/`) |
 | `vault` | The durable sealed-representation CAS (`wyrd-sync/src/serving/vault.rs`); the serving adapters over it (`serving/source.rs`, `serving/mirror.rs`); the vault peer role vs mirror (a replica that keeps history but cannot decrypt); `wyrd owner`, the headless-owner run (`wyrd-daemon/src/vault.rs`); the on-disk `vault/` dir and `vault.posture` status file |
 | `snapshot` | The signed format body (`wyrd-format/src/snapshot.rs`); the DAG and its eligible/live heads (`wyrd-sync/src/authorization`, `wyrd-core/src/node.rs`); the fetch units body vs manifest vs announcement (`wyrd-sync/src/runtime/`); `wyrd snapshot`, the CLI surface including content-recovery grafts |
 | `live` | The mounted projection: live heads, the live view (`wyrd-core/src/node.rs`, `wyrd-view/src/view/drive.rs`); the live network/relay/sync: real iroh vs loopback (`ROADMAP.md`, `cargo nextest --profile slow`) |
@@ -110,5 +112,5 @@ the crate or file where that meaning lives.
 | `view` | `DriveView`, the mounted read-only projection (`wyrd-view/src/view/drive.rs`); the `NamespaceView` trait and `ViewHead` capability types (`wyrd-namespace/src/view.rs`, `view/head.rs`); the live view as policy over heads; the reconciliation view, a signed projection of durable state (`docs/contracts/sync-and-peers.md`) |
 | `close` vs `closure` | `close`: graceful-or-abort transport teardown (5s `GRACEFUL_CLOSE_DEADLINE`); `closure`: tree/manifest correspondence completeness, plus the history/admission ancestor set |
 | `ingest` vs `intake` | `ingest`: one sealed control envelope in (`wyrd-sync/src/control/`); `intake`: the mailbox-drain-to-durable-facts pipeline (`wyrd-sync/src/runtime/engine/intake.rs`) |
-| `plan` | The fetch plan: what to fetch next (`wyrd-sync/src/runtime/engine/plan.rs`); the merge/snapshot dry-run preview (`wyrd snapshot plan`) |
+| `plan` | The fetch plan: what to fetch next, executed by `execute_inner` (`wyrd-sync/src/runtime/plan/mod.rs`; `engine/plan.rs` is a forwarding shim); the merge/snapshot dry-run preview (`wyrd snapshot plan`) |
 | `materialization` | Per-content residency policy: pinned vs remote-only (`wyrd-sync/src/runtime/engine/materialization.rs`); the vault-vs-mirror role file the loop reads; the `wyrd export` projection to a directory tree; the FUSE/owner read verdict for remote-only content (bounded `EIO`/`ENOENT`, never a hang) |

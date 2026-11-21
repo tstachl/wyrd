@@ -1,5 +1,6 @@
 //! Runtime: the sync engine and its durable bookkeeping.
-//! `plan/` orchestrates passes; `engine/plan.rs` executes one pass.
+//! `plan/` orchestrates passes; `plan/mod.rs::execute_inner` runs the
+//! reconcile/fetch/commit loop. `engine/plan.rs` only forwards to it.
 //! `state/` is the durable ledger of seen messages and fetch backlog.
 //! `author/` is the write half (merges, recovery, admission).
 //! `intake/` classifies arrivals before they touch state.
