@@ -54,7 +54,7 @@
     SettingsWriteReport,
   } from "$lib/ipc/results.js";
   import type { SparseUpdateArgs } from "$lib/ipc/results.js";
-  import { reportNamesDrive, settingsSurviveLock, storeAccountFor, withDevCliHint } from "$lib/views/format.js";
+  import { settingsSurviveLock, shouldAdvanceAfterProvision, storeAccountFor, withDevCliHint } from "$lib/views/format.js";
   import {
     autoOpenTarget,
     headerAffordance,
@@ -580,28 +580,27 @@
   }
 
   /**
-   * Run one add-drive provision, then leave the form where the
-   * post-run observation proves the drive registered: re-read the
-   * registry first so the landing view is current, then follow the
-   * existing all-drives routing (list, or the sole workspace).
-   * Resolves null where navigation took over — the form unmounts,
-   * so no report renders and its `onDone` stays silent. Resolves
-   * the report otherwise, so the form keeps its values and shows
-   * why. The observation decides, never the CLI exit alone; a
-   * transport or unexpected throw propagates to the caller, which
-   * reports it in its own surface.
+   * Run one add-drive provision, then leave the form where the run
+   * both reported no error and the post-run observation proves the
+   * drive registered: re-read the registry first so the landing
+   * view is current, then follow the existing all-drives routing
+   * (list, or the sole workspace). Resolves null where navigation
+   * took over — the form unmounts, so no report renders and its
+   * `onDone` stays silent. Resolves the report otherwise, so the
+   * form keeps its values and shows why — the form's own `onDone`
+   * re-reads there, keeping one registry read per submission on
+   * each path. A transport or unexpected throw propagates to the
+   * caller, which reports it in its own surface.
    */
   async function provisionAndAdvance(
     driveDir: string,
     call: () => Promise<ProvisionReport>,
   ): Promise<ProvisionReport | null> {
     const report = await runProvision(call);
+    if (!shouldAdvanceAfterProvision(report, driveDir)) return report;
     await refreshLifecycle();
-    if (reportNamesDrive(report, driveDir)) {
-      allDrives();
-      return null;
-    }
-    return report;
+    allDrives();
+    return null;
   }
 
   /** Explicit retry for one drive: reconnect, then re-read. Recovery proves nothing by itself. */

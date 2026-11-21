@@ -284,13 +284,17 @@ export function observedRegistrySummary(report: ProvisionReport): string {
 }
 
 /**
- * Whether one provision's post-run observation names a drive dir:
- * the registry read ready and lists it. The add-drive flow advances
- * off the form on this (and only this) — the CLI exit alone never
- * decides, and an unreadable or missing registry proves nothing, so
- * those stay false and the form keeps its report.
+ * Whether one provision should leave the form: the CLI reported no
+ * error (`completed`) and the post-run observation names the drive
+ * dir (the registry read ready and lists it). Both halves are
+ * required — a clean exit alone never advances (the registry has
+ * the last word), and a refused or uncertain outcome never
+ * advances even where the observation still names the drive (its
+ * reason stays on the form). An unreadable or missing registry
+ * proves nothing and stays false.
  */
-export function reportNamesDrive(report: ProvisionReport, driveDir: string): boolean {
+export function shouldAdvanceAfterProvision(report: ProvisionReport, driveDir: string): boolean {
+  if (report.result.result !== "completed") return false;
   const observed = report.observed;
   return (
     observed.status === "ready" &&

@@ -15,7 +15,7 @@ import {
   membershipSummary,
   nextDriveDir,
   observedRegistrySummary,
-  reportNamesDrive,
+  shouldAdvanceAfterProvision,
   restartKindFor,
   sessionLabel,
   settingsSurviveLock,
@@ -151,26 +151,40 @@ test("the suggestion follows the name while untouched", () => {
   expect(nextDriveDir(false, "/operator/kept", null)).toBe("/operator/kept");
 });
 
-test("the advance predicate follows the observation, never the exit", () => {
+test("the advance decision needs a clean exit and a naming observation", () => {
   const betaDrive = { name: "beta", drive_dir: "/drives/beta" } as DriveView;
   const named: ProvisionReport = {
     result: { result: "completed", detail: "wrote" },
     observed: { status: "ready", drives: [betaDrive], skipped: [] },
     membership: null,
   };
-  // Ready and listed: advance. Any other registry state — missing
-  // file, unreadable, or naming another drive — keeps the form.
-  expect(reportNamesDrive(named, "/drives/beta")).toBe(true);
-  expect(reportNamesDrive(named, "/drives/gamma")).toBe(false);
+  // Clean exit plus ready observation naming the drive: advance.
+  expect(shouldAdvanceAfterProvision(named, "/drives/beta")).toBe(true);
+  // Any other registry state keeps the form.
+  expect(shouldAdvanceAfterProvision(named, "/drives/gamma")).toBe(false);
   expect(
-    reportNamesDrive({ ...named, observed: { status: "nofile", drives: [], skipped: [] } }, "/drives/beta"),
+    shouldAdvanceAfterProvision(
+      { ...named, observed: { status: "nofile", drives: [], skipped: [] } },
+      "/drives/beta",
+    ),
   ).toBe(false);
   expect(
-    reportNamesDrive(
+    shouldAdvanceAfterProvision(
       { ...named, observed: { status: "unreadable", reason: "denied", drives: [], skipped: [] } },
       "/drives/beta",
     ),
   ).toBe(false);
+  // A refused or uncertain outcome never advances, even where the
+  // observation still names the drive — its reason stays on the form.
+  for (const result of [
+    { result: "expectedfailure", detail: "refused" },
+    { result: "helddrive", detail: "held" },
+    { result: "versionmismatch", detail: "mismatch" },
+    { result: "busy", drive_dir: "/drives/beta" },
+    { result: "unknown", detail: "torn" },
+  ] as ProvisionReport["result"][]) {
+    expect(shouldAdvanceAfterProvision({ ...named, result }, "/drives/beta")).toBe(false);
+  }
 });
 
 const emptyRegistry: RegistryState = { status: "ready", drives: [], skipped: [] };

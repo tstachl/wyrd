@@ -139,12 +139,13 @@ test("reinstall and restart name the backend choice", () => {
 
 test("successful adds leave the form, failures keep it", () => {
   // The App routes create/join through `provisionAndAdvance`, which
-  // advances off the form only where the post-run observation names
-  // the new drive (`reportNamesDrive`, pinned in `format.test.ts`);
-  // the form renders no report and re-reads nothing on a null
-  // return (pinned behaviorally in `provisioning-submit.test.ts`).
+  // advances off the form only on a clean exit whose post-run
+  // observation names the new drive (`shouldAdvanceAfterProvision`,
+  // pinned in `format.test.ts`); the form renders no report and
+  // re-reads nothing on a null return (pinned behaviorally in
+  // `provisioning-submit.test.ts`).
   expect(app).toContain("provisionAndAdvance(args.driveDir");
-  expect(app).toContain("reportNamesDrive(report, driveDir)");
+  expect(app).toContain("shouldAdvanceAfterProvision(report, driveDir)");
   expect(app).not.toContain("onCreate={(args: ProvisionCreateArgs) => runProvision(");
   expect(provisioning).toContain("if (report !== null) onDone();");
 });

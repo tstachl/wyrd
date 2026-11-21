@@ -2,11 +2,11 @@
 invitation through the constrained CLI adapter. Every operation
 returns the outcome plus the post-run observation; observed state
 decides the display, the outcome only indicates what the operation
-reported. A provision the observation confirms (the registry names
-the new drive) resolves null — the caller navigates off this form,
-so no success report renders here. Anything else resolves the
-report, which renders below with the entered values kept for
-fix-and-retry. Leaving a drive lives in that drive's Settings — a
+reported. A provision that both reported no error and is confirmed
+by the observation (the registry names the new drive) resolves
+null — the caller navigates off this form, so no success report
+renders here. Anything else resolves the report, which renders
+below with the entered values kept for fix-and-retry. Leaving a drive lives in that drive's Settings — a
 destructive membership action does not belong in an add flow. New
 drives provision into the OS credential store by default (the
 account derives from the drive name, seeds come from this device's
@@ -58,10 +58,10 @@ by hand elsewhere. Secret contents never travel. -->
     initialPassphraseFile: string | null;
     initialMode: "create" | "join";
     /**
-     * Null where the caller navigated off the form (the observation
-     * confirmed the new drive) — no report renders and `onDone`
-     * stays silent because the caller already re-read. A report
-     * otherwise, rendered below with values kept.
+     * Null where the caller navigated off the form (clean exit plus
+     * an observation confirming the new drive) — no report renders
+     * and `onDone` stays silent because the caller already re-read.
+     * A report otherwise, rendered below with values kept.
      */
     onCreate: (args: ProvisionCreateArgs) => Promise<ProvisionReport | null>;
     onJoin: (args: ProvisionJoinArgs) => Promise<ProvisionReport | null>;
