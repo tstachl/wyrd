@@ -371,10 +371,22 @@ start_mount() { # <name> <cred-dir> <drive> <mnt> [mount args...]
     echo "start_mount $name: live-interval ${E2E_INTERVAL}s" >&2
     set -- --interval "$E2E_INTERVAL" "$@"
   fi
-  with_creds "$c" mount "$d" "$m" "$@" \
+  # Bash execs a backgrounded simple command, so $! is the wyrd process and
+  # a signal sent to it reaches the binary. Do not background with_creds:
+  # its `case` statement makes bash keep a subshell wrapper, whose SIGINT is
+  # ignored when the shell is non-interactive.
+  "$WYRD_BIN" mount --identity-file "$c/identity" \
+    --passphrase-file "$c/passphrase" "$d" "$m" "$@" \
     >"$LOGDIR/mount-$name.out" 2>"$LOGDIR/mount-$name.err" &
   mkdir -p "$PIDDIR"
-  echo $! > "$PIDDIR/mount-$name.pid"
+  local pid=$!
+  echo "$pid" > "$PIDDIR/mount-$name.pid"
+  if command -v ps >/dev/null 2>&1; then
+    local comm
+    comm="$(ps -o comm= -p "$pid" 2>/dev/null || true)"
+    [[ "$comm" == "wyrd" ]] \
+      || die "$name: mount pid $pid is '$comm', want wyrd (background mount must exec the binary)"
+  fi
   if [[ "$old_rust_log" == "__unset" ]]; then unset RUST_LOG; else export RUST_LOG="$old_rust_log"; fi
   poll_until 20 mountpoint -q "$m" \
     || die "$name: mountpoint never came up (see mount-$name.err)"
@@ -399,7 +411,19 @@ stop_mount() { # <name> <signal> [budget-s = 15]: signal, wait for exit,
     sleep 0.2
   done
   elapsed=$(( $(date +%s) - started ))
-  [[ "$status" == "0" ]] || die "$name: shutdown exit $status on $sig after ${elapsed}s, want clean 0"
+  if [[ "$status" != "0" ]]; then
+    local child comm children=""
+    if command -v ps >/dev/null 2>&1; then
+      comm="$(ps -o comm= -p "$pid" 2>/dev/null || echo '?')"
+      if command -v pgrep >/dev/null 2>&1; then
+        for child in $(pgrep -P "$pid" 2>/dev/null); do
+          children+=" $child:$(ps -o comm= -p "$child" 2>/dev/null || echo '?')"
+        done
+      fi
+      echo "  INFO: $name pid=$pid comm=$comm children=${children:-none}" >&2
+    fi
+    die "$name: shutdown exit $status on $sig after ${elapsed}s, want clean 0"
+  fi
   mountpoint -q "$MNTS/$name" && die "$name: still mounted after $sig"
   # Remove the pid file on the clean path: a stale pid plus pid
   # reuse lets a later cleanup_mounts SIGKILL an unrelated process.
