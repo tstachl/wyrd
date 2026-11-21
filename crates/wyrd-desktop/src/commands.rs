@@ -2384,6 +2384,60 @@ mod tests {
         assert!(unknown.contains("unknown credential backend"), "{unknown}");
     }
 
+    /// IPC wire agreement: the credential fields deserialize from
+    /// the frontend's camelCase keys, and absent keys default to
+    /// `None` — an older frontend sending paths only keeps working.
+    /// This pins the Rust half of the boundary the `mockIPC` store
+    /// test pins from the TS half (`operations.test.ts`).
+    #[test]
+    fn credential_ipc_fields_deserialize_from_camel_case() {
+        let create: ProvisionCreateArgs = serde_json::from_value(serde_json::json!({
+            "name": "alpha",
+            "driveDir": "/drives/alpha",
+            "relays": [],
+            "identityFile": "/keys/identity",
+            "passphraseFile": "/keys/passphrase",
+            "credentialBackend": "os-store",
+            "credentialAccount": "wyrd-drive-alpha",
+            "mode": "vault",
+            "noService": false,
+        }))
+        .expect("store-backed create deserializes");
+        assert_eq!(
+            create.credential_backend.as_deref(),
+            Some("os-store"),
+            "backend rides credentialBackend"
+        );
+        assert_eq!(
+            create.credential_account.as_deref(),
+            Some("wyrd-drive-alpha"),
+            "account rides credentialAccount"
+        );
+        // Absent keys are the file-backend default, never an error.
+        let leave: ProvisionLeaveArgs = serde_json::from_value(serde_json::json!({
+            "driveDir": "/drives/alpha",
+            "identityFile": "/keys/identity",
+            "passphraseFile": "/keys/passphrase",
+            "acknowledged": true,
+        }))
+        .expect("a paths-only leave deserializes");
+        assert_eq!(leave.credential_backend, None);
+        assert_eq!(leave.credential_account, None);
+        assert_eq!(leave.identity_file.as_deref(), Some("/keys/identity"));
+        let unlock: DriveUnlockArgs = serde_json::from_value(serde_json::json!({
+            "driveDir": "/drives/alpha",
+            "credentialBackend": "os-store",
+            "credentialAccount": "wyrd-drive-alpha",
+            "passphrase": "hunter2-hunter2",
+        }))
+        .expect("a store unlock deserializes with no identity file");
+        assert_eq!(unlock.identity_file, None);
+        assert_eq!(
+            unlock.credential_account.as_deref(),
+            Some("wyrd-drive-alpha")
+        );
+    }
+
     /// The settings-write report serializes verbatim for the shell:
     /// the tagged result plus the observed read state, so the
     /// frontend mirrors this shape without invention.
