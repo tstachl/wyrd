@@ -49,9 +49,12 @@
 //! ## Platform notes
 //!
 //! - **macOS**: the launchd agent context shares the login keychain,
-//!   so the owner retrieves with no desktop process alive. Keychain
-//!   access is requested at registration (a later slice); a locked
-//!   or ACL-refused keychain reads as `denied`.
+//!   so the owner retrieves with no desktop process alive. Items
+//!   carry default (NULL) access — no per-application trust list,
+//!   no biometric flags — so the first agent read needs no prior
+//!   GUI visit while the login keychain is unlocked (verified by
+//!   hand with the two-phase probe); a locked keychain reads as
+//!   `denied`.
 //! - **Linux**: Secret Service in the systemd user-unit context. No
 //!   D-Bus session is assumed or synthesized: where none answers,
 //!   the drive reads `unavailable`.
@@ -74,7 +77,9 @@ use zeroize::Zeroizing;
 
 /// Fixed service label naming every Wyrd drive item in the platform
 /// store. Drives differ by account label, never by service, so one
-/// ACL/request covers the backend and items stay enumerable.
+/// lookup covers the backend and items stay enumerable. (No ACL is
+/// implied: macOS items carry default access with no per-application
+/// trust list — see the platform notes above.)
 pub const OS_SERVICE: &str = "wyrd-drive-credential";
 
 /// Bound on the stored JSON blob: framing plus the identity plus
@@ -1131,20 +1136,46 @@ mod tests {
         assert!(!detail.contains("not-hex"), "no blob echo: {detail}");
     }
 
-    /// Manual service-context probe: stores a random item through the
+    /// Manual service-context probe: stores an item through the
     /// real platform store, loads it back through the backend, then
     /// deletes it. Ignored by default — it touches the login
-    /// keychain / Secret Service — and run by hand where it matters:
-    /// in the login session, then again under the launchd agent /
-    /// systemd user unit with no terminal, to prove service-context
-    /// retrieval (GUI-side access proves nothing). Never runs in CI.
+    /// keychain / Secret Service — and run by hand where it matters.
+    /// Never runs in CI.
+    ///
+    /// Two modes. Unset `WYRD_PROBE_PHASE` keeps the legacy
+    /// single-process round trip (login session convenience). Split
+    /// mode proves first unlock without a prior GUI visit:
+    /// - `store` in the login session / GUI context: converges any
+    ///   leftover item, then stores through the backend commit
+    ///   boundary (including its in-context read-back, exactly like
+    ///   production bootstrap) and exits WITHOUT a retrieval — the
+    ///   item is provisioned, never yet read out-of-context.
+    /// - `load` under the launchd agent / systemd user unit with no
+    ///   terminal: loads through the backend (this is the first
+    ///   out-of-context retrieval), asserts the material, deletes,
+    ///   and asserts `Missing`.
+    ///
+    /// Both phases share the account in `WYRD_PROBE_ACCOUNT`
+    /// (default: pid-based, for the single-process mode); split runs
+    /// must export the same account in both phases. A run between
+    /// phases leaves the probe item behind by design — re-running
+    /// the store phase converges it.
+    ///
+    /// Hand run (macOS): `WYRD_PROBE_ACCOUNT=wyrd-probe-<n>
+    /// cargo test -p wyrd-credential-store --lib -- --ignored
+    /// real_store_probe_round_trip` with `WYRD_PROBE_PHASE=store`,
+    /// then the same binary under a `RunAtLoad` LaunchAgent plist
+    /// with `WYRD_PROBE_PHASE=load` (plus `WYRD_PROBE_ACCOUNT`)
+    /// and no terminal; the agent log must show the loaded
+    /// material and the post-delete `Missing`.
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[ignore = "touches the real platform store; run by hand per the contract's service-context clause"]
     #[test]
     fn real_store_probe_round_trip() {
         /// Deletes the probe item on drop, so a panic between store
         /// and delete cannot leave a residue a later run's distinct
-        /// account would never clear.
+        /// account would never clear. Split-mode store takes no
+        /// guard: the item must survive for the load phase.
         struct ProbeGuard<'a> {
             entry: &'a keyring::Entry,
         }
@@ -1154,30 +1185,81 @@ mod tests {
             }
         }
         let backend = OsStoreBackend;
-        let account = format!("wyrd-probe-{}-{}", std::process::id(), "service-context");
+        let account = std::env::var("WYRD_PROBE_ACCOUNT")
+            .unwrap_or_else(|_| format!("wyrd-probe-{}-{}", std::process::id(), "service-context"));
         let reference = || CredentialRef::OsStore {
             account: account.clone(),
         };
-        let blob = encode_for_tests(&fixture_hex(), Some("probe-pass"));
-        let entry = keyring::Entry::new(OS_SERVICE, &account).expect("probe entry builds");
-        // A previous interrupted run must not poison this one.
-        let _ = entry.delete_credential();
-        let _guard = ProbeGuard { entry: &entry };
-        entry.set_password(&blob).expect("probe item stores");
-        let loaded = backend
-            .load(&reference())
-            .expect("the owner retrieves its material");
-        assert_eq!(
-            loaded.passphrase.expect("named item loads").as_str(),
-            "probe-pass"
-        );
-        entry.delete_credential().expect("probe item cleans up");
-        assert!(
-            matches!(
-                backend.load(&reference()),
-                Err(CredentialError::Missing { .. })
-            ),
-            "a deleted item reads Missing, never stale material"
-        );
+        let material = LoadedCredential {
+            identity: DeviceIdentitySecret::from_bytes(
+                hex::decode(fixture_hex())
+                    .expect("fixture hex decodes")
+                    .try_into()
+                    .expect("32 bytes"),
+            )
+            .expect("fixture scalar"),
+            passphrase: Some(Zeroizing::new("probe-pass".to_string())),
+        };
+        let phase = std::env::var("WYRD_PROBE_PHASE").unwrap_or_default();
+        match phase.as_str() {
+            // Registration: converge any leftover, store through the
+            // commit boundary, exit with the item in place and never
+            // retrieved out-of-context.
+            "store" => {
+                match backend.delete(&reference()) {
+                    Ok(()) | Err(CredentialError::Missing { .. }) => {}
+                    Err(error) => panic!("a leftover probe item deletes: {error:?}"),
+                }
+                backend
+                    .store(&reference(), &material)
+                    .expect("probe item stores through the commit boundary");
+            }
+            // First unlock: the first out-of-context retrieval,
+            // then cleanup with the post-delete `Missing` proof.
+            "load" => {
+                let entry = keyring::Entry::new(OS_SERVICE, &account).expect("probe entry builds");
+                let _guard = ProbeGuard { entry: &entry };
+                let loaded = backend
+                    .load(&reference())
+                    .expect("the owner retrieves its material with no prior GUI visit");
+                assert_eq!(
+                    loaded.passphrase.expect("named item loads").as_str(),
+                    "probe-pass"
+                );
+                backend.delete(&reference()).expect("probe item cleans up");
+                assert!(
+                    matches!(
+                        backend.load(&reference()),
+                        Err(CredentialError::Missing { .. })
+                    ),
+                    "a deleted item reads Missing, never stale material"
+                );
+            }
+            // Single-process round trip: the login-session
+            // convenience path, unchanged.
+            _ => {
+                let blob = encode_for_tests(&fixture_hex(), Some("probe-pass"));
+                let entry = keyring::Entry::new(OS_SERVICE, &account).expect("probe entry builds");
+                // A previous interrupted run must not poison this one.
+                let _ = entry.delete_credential();
+                let _guard = ProbeGuard { entry: &entry };
+                entry.set_password(&blob).expect("probe item stores");
+                let loaded = backend
+                    .load(&reference())
+                    .expect("the owner retrieves its material");
+                assert_eq!(
+                    loaded.passphrase.expect("named item loads").as_str(),
+                    "probe-pass"
+                );
+                entry.delete_credential().expect("probe item cleans up");
+                assert!(
+                    matches!(
+                        backend.load(&reference()),
+                        Err(CredentialError::Missing { .. })
+                    ),
+                    "a deleted item reads Missing, never stale material"
+                );
+            }
+        }
     }
 }

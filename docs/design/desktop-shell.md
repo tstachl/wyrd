@@ -204,9 +204,11 @@ plane. Three pieces, all precedented in-tree:
   while the owner runs is an explicit limitation, not monitored).
   The sharp edge
   is macOS, where keychain access can depend on login and unlock
-  state: the installer requests the needed keychain access at
-  registration time, and the exact ACLs travel with the settings
-  contract, but the requirement is fixed here — if the secrets
+  state: items carry default access with no per-application trust
+  list (see `docs/contracts/credential-loading.md`), so no
+  registration-time grant is needed — the first agent read
+  succeeds with no prior GUI visit while the login keychain is
+  unlocked — but the requirement is fixed here — if the secrets
   are unreachable in service context, the drive reads as
   registered but unavailable, never as broken, and the UI says
   exactly that.
