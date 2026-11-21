@@ -361,64 +361,16 @@ pub fn command(args: Vec<String>) -> Result<(), CliError> {
         }
         Err(error) => return Err(CliError::Usage(error.to_string())),
     };
+
+    // Commands that must not open the keystore resolve here. `None`
+    // means the command needs the shared credential prelude below.
+    if let Some(result) = dispatch_secretless(&cli) {
+        return result;
+    }
+
+    // Every credential-bearing command loads through this one match,
+    // so a new command cannot skip the shared rules.
     let (identity, passphrase, credential_provenance, config) = match &cli.command {
-        // Update runs secretless (credential paths forward to the
-        // verification child): `update::update_from_cli` returns
-        // before credential loading.
-        Command::Update {
-            drive_dir,
-            archive,
-            relays,
-            restart,
-            credentials,
-            expect_blake3,
-        } => {
-            return update::update_from_cli(
-                drive_dir,
-                archive,
-                relays,
-                *restart,
-                credentials,
-                cli.config.as_deref(),
-                expect_blake3.clone(),
-            );
-        }
-        Command::BuildInfo => {
-            println!("{}", update::render_build_info(&update::own_build_info()));
-            return Ok(());
-        }
-        Command::Identity { action } => match action {
-            crate::args::IdentityAction::Generate {
-                identity_file,
-                passphrase_file,
-            } => {
-                return crate::commands::identity::generate(
-                    identity_file.clone(),
-                    passphrase_file.clone(),
-                );
-            }
-            crate::args::IdentityAction::Verify {
-                identity_file,
-                passphrase_file,
-            } => {
-                return crate::commands::identity::verify(
-                    identity_file.clone(),
-                    passphrase_file.clone(),
-                );
-            }
-            crate::args::IdentityAction::NewPassphrase => {
-                return crate::commands::identity::new_passphrase();
-            }
-            crate::args::IdentityAction::Commit {
-                identity_file,
-                passphrase_file,
-            } => {
-                return crate::commands::identity::commit(
-                    identity_file.clone(),
-                    passphrase_file.clone(),
-                );
-            }
-        },
         #[cfg(feature = "mount")]
         Command::Mount {
             drive_dir,
@@ -429,207 +381,38 @@ pub fn command(args: Vec<String>) -> Result<(), CliError> {
             drive_dir,
             credentials,
             ..
-        } => load_credentials(drive_dir, credentials, cli.config.as_deref())?,
-        Command::Member {
-            drive_dir,
-            credentials,
-            ..
-        } => load_credentials(drive_dir, credentials, cli.config.as_deref())?,
-        Command::Snapshot {
-            drive_dir,
-            credentials,
-            ..
-        } => load_credentials(drive_dir, credentials, cli.config.as_deref())?,
-        Command::Device {
-            drive_dir,
-            credentials,
-            ..
-        } => load_credentials(drive_dir, credentials, cli.config.as_deref())?,
-        Command::Drive {
-            drive_dir,
-            action:
-                crate::args::DriveAction::Unlock {
-                    relays,
-                    retained_quota,
-                },
-            credentials,
-            ..
-        } => {
-            // Unlock never loads the passphrase from a file: the
-            // terminal prompt or the stdin pipe, then the owner in
-            // the foreground exactly like `owner start`. Nothing is
-            // installed, enabled, or rewritten — the manager learns
-            // nothing, so a reboot or an explicit stop locks the
-            // drive again.
-            use std::io::IsTerminal as _;
-            let stdin_is_tty = std::io::stdin().is_terminal();
-            let config = crate::drive_config::load_drive_config(drive_dir, cli.config.as_deref())?;
-            let (identity, passphrase, _) = crate::credentials::read_unlock_credentials(
-                credentials,
-                config.as_ref(),
-                stdin_is_tty,
-            )?;
-            let resolution = resolve_relays(relays.relay.clone(), config.as_ref());
-            return owner(
-                drive_dir.clone(),
-                resolution,
-                config.as_ref(),
-                None,
-                *retained_quota,
-                &passphrase,
-                identity,
-            );
         }
-        Command::Drive {
+        | Command::Member {
             drive_dir,
-            action: crate::args::DriveAction::ServiceStart { registry },
             credentials,
             ..
-        } => {
-            // Starting needs no keystore and no credentials: resolve
-            // before credential loading, so a stopped service starts
-            // even where key files are momentarily unavailable. The
-            // per-session stdin handoff has no direct-spawn target
-            // yet (that slice lands the app-supervised start), so a
-            // stdin flag here would parse cleanly and then silently
-            // start the file-backed definition — refuse it loudly
-            // instead of running a start the flag cannot affect.
-            if credentials.passphrase_stdin {
-                return Err(CliError::Usage(
-                    "--passphrase-stdin has no effect on `drive service-start` yet: the direct-spawn handoff is a follow-up slice; start the file-backed service without it".to_string(),
-                ));
-            }
-            return crate::commands::drive::service_start_drive(
-                drive_dir.clone(),
-                registry.clone(),
-            );
         }
-        Command::Drive {
+        | Command::Snapshot {
             drive_dir,
-            action: crate::args::DriveAction::ServiceEnable { registry },
             credentials,
             ..
-        } => {
-            // Enabling records a login-start preference and opens
-            // nothing: resolve before credential loading, like
-            // service-start, and refuse the stdin flag for the same
-            // reason — it cannot affect an enablement record.
-            if credentials.passphrase_stdin {
-                return Err(CliError::Usage(
-                    "--passphrase-stdin has no effect on `drive service-enable`: enabling records a login-start preference and opens no keystore".to_string(),
-                ));
-            }
-            return crate::commands::drive::service_enable_drive(
-                drive_dir.clone(),
-                registry.clone(),
-            );
         }
-        Command::Drive {
+        | Command::Device {
             drive_dir,
-            action: crate::args::DriveAction::ServiceDisable { registry },
             credentials,
             ..
-        } => {
-            // Disabling stops the unit now and records no login
-            // start; it opens nothing, so the same stdin refusal
-            // applies.
-            if credentials.passphrase_stdin {
-                return Err(CliError::Usage(
-                    "--passphrase-stdin has no effect on `drive service-disable`: disabling stops the service and records a preference, and opens no keystore".to_string(),
-                ));
-            }
-            return crate::commands::drive::service_disable_drive(
-                drive_dir.clone(),
-                registry.clone(),
-            );
         }
-        Command::Drive {
+        | Command::Drive {
             drive_dir,
-            action: crate::args::DriveAction::MigrateCredentials { account },
             credentials,
             ..
-        } => {
-            // Migration resolves its own credentials: the files it
-            // migrates from, never the pipe — a piped passphrase
-            // would leave no file pair to retire and no proof the
-            // keystore opens under persisted material.
-            if credentials.passphrase_stdin {
-                return Err(CliError::Usage(
-                    "migration needs credential files, not --passphrase-stdin: pass --identity-file/--passphrase-file or set them in the drive configuration".to_string(),
-                ));
-            }
-            return migrate_drive_credentials(
-                drive_dir.clone(),
-                account.clone(),
-                credentials,
-                cli.config.clone(),
-            );
         }
-        Command::Drive {
+        | Command::Sync {
             drive_dir,
             credentials,
             ..
-        } => {
-            // Store-backed bootstrap provisions its input before
-            // anything loads from the store: the input material
-            // comes from files or the pipe, the drive it
-            // provisions is store-backed, and the generic loader
-            // (which would read the not-yet-provisioned store item)
-            // is the wrong path. File-backed bootstrap flows
-            // through the generic loader below unchanged.
-            if let Command::Drive {
-                action:
-                    crate::args::DriveAction::Bootstrap {
-                        name,
-                        mode,
-                        mountpoint,
-                        relays,
-                        invitation_file,
-                        registry,
-                        owner_bin,
-                        supervise_bin,
-                        no_service,
-                    },
-                ..
-            } = &cli.command
-            {
-                let peek =
-                    crate::drive_config::load_drive_config(drive_dir, cli.config.as_deref())?;
-                if matches!(
-                    crate::credentials::effective_backend(credentials, peek.as_ref())?,
-                    crate::credentials::EffectiveBackend::OsStore { .. }
-                ) {
-                    return crate::commands::bootstrap::bootstrap_store(
-                        crate::commands::bootstrap::BootstrapArgs {
-                            name: name.clone(),
-                            drive_dir: drive_dir.clone(),
-                            mode: mode.clone(),
-                            mountpoint: mountpoint.clone(),
-                            relays: relays.clone(),
-                            credentials: credentials.clone(),
-                            invitation_file: invitation_file.clone(),
-                            registry: registry.clone(),
-                            owner_bin: owner_bin.clone(),
-                            supervise_bin: supervise_bin.clone(),
-                            no_service: *no_service,
-                        },
-                        cli.config.clone(),
-                    );
-                }
-            }
-            load_credentials(drive_dir, credentials, cli.config.as_deref())?
         }
-        Command::Sync {
+        | Command::Owner {
             drive_dir,
             credentials,
             ..
-        } => load_credentials(drive_dir, credentials, cli.config.as_deref())?,
-        Command::Owner {
-            drive_dir,
-            credentials,
-            ..
-        } => load_credentials(drive_dir, credentials, cli.config.as_deref())?,
-        Command::UpdateVerify {
+        }
+        | Command::UpdateVerify {
             drive_dir,
             credentials,
             ..
@@ -637,17 +420,6 @@ pub fn command(args: Vec<String>) -> Result<(), CliError> {
         Command::Materialization {
             drive_dir, action, ..
         } => match action {
-            // Setting touches one local file and no key: return
-            // before credential loading, so a role is settable on
-            // a machine whose keystore is unavailable (OD-24-R).
-            // Every other action loads below like every other
-            // command — the credential flags ride each action, so
-            // `policy role set` alone takes neither.
-            MaterializationAction::Role {
-                action: RoleAction::Set { role, yes },
-            } => {
-                return role_set(drive_dir.clone(), role.clone(), *yes);
-            }
             MaterializationAction::Role {
                 action: RoleAction::Status { credentials },
             }
@@ -658,45 +430,35 @@ pub fn command(args: Vec<String>) -> Result<(), CliError> {
             | MaterializationAction::Evict { credentials, .. } => {
                 load_credentials(drive_dir, credentials, cli.config.as_deref())?
             }
+            MaterializationAction::Role {
+                action: RoleAction::Set { .. },
+            } => unreachable!("materialization role set resolves before credential loading"),
         },
-        Command::Settings { drive_dir, action } => {
-            // Settings touch one per-user file and no key: return
-            // before credential loading, so a save works where the
-            // keystore is unavailable — including a stopped drive,
-            // whose owner cannot serve and whose keys may be
-            // momentarily unreachable. Every other command loads
-            // below like every other family.
-            return crate::commands::settings::settings(drive_dir.clone(), action.clone());
-        }
-    };
-
-    match cli.command {
-        // Dead by construction: the credentials match above returns
-        // from update, build-info, identity, drive service-start,
-        // drive service-enable, drive service-disable, drive unlock,
-        // drive migrate-credentials, and settings before secrets load. The arm
-        // exists only because the match is exhaustive.
+        // Listed explicitly so adding a command variant is a compile
+        // error here, not a runtime panic in the exhaustiveness arm.
         Command::Update { .. }
         | Command::BuildInfo
         | Command::Identity { .. }
         | Command::Settings { .. } => {
-            unreachable!("update, build-info, identity, service-start, service-enable, service-disable, unlock, and settings resolve before credential loading")
+            unreachable!("secretless command reached the credential prelude")
         }
-        Command::Drive {
-            action: crate::args::DriveAction::Unlock { .. },
-            ..
-        } => {
-            unreachable!("drive unlock runs before credential loading")
-        }
-        Command::Drive {
-            action: crate::args::DriveAction::MigrateCredentials { .. },
-            ..
-        } => {
-            unreachable!("drive migrate-credentials runs before credential loading")
-        }
+    };
+
+    match cli.command {
         Command::UpdateVerify { drive_dir, .. } => {
             update::run_update_verify(&drive_dir, identity, &passphrase)
         }
+        // Dead by construction: these resolved in `dispatch_secretless`
+        // before any credential was loaded. Keep them ahead of the
+        // general drive arm.
+        Command::Drive {
+            action: crate::args::DriveAction::Unlock { .. },
+            ..
+        } => unreachable!("drive unlock runs before credential loading"),
+        Command::Drive {
+            action: crate::args::DriveAction::MigrateCredentials { .. },
+            ..
+        } => unreachable!("drive migrate-credentials runs before credential loading"),
         Command::Drive {
             drive_dir,
             action,
@@ -858,6 +620,278 @@ pub fn command(args: Vec<String>) -> Result<(), CliError> {
                 identity,
             )
         }
+        // Dead by construction: these resolved in `dispatch_secretless`
+        // before any credential was loaded. Listing them keeps the
+        // match exhaustive, so a new command variant cannot slip in.
+        Command::Update { .. }
+        | Command::BuildInfo
+        | Command::Identity { .. }
+        | Command::Settings { .. } => {
+            unreachable!("secretless command reached the credential dispatch")
+        }
+    }
+}
+
+/// Resolve the commands that must run before the shared credential
+/// prelude. `None` means the command needs credentials; `Some` is its
+/// outcome. A file-backed `drive bootstrap` falls through after the
+/// backend check, while a store-backed one resolves here.
+fn dispatch_secretless(cli: &Cli) -> Option<Result<(), CliError>> {
+    match &cli.command {
+        // Update runs secretless (credential paths forward to the
+        // verification child): `update::update_from_cli` returns
+        // before credential loading.
+        Command::Update {
+            drive_dir,
+            archive,
+            relays,
+            restart,
+            credentials,
+            expect_blake3,
+        } => Some(update::update_from_cli(
+            drive_dir,
+            archive,
+            relays,
+            *restart,
+            credentials,
+            cli.config.as_deref(),
+            expect_blake3.clone(),
+        )),
+        Command::BuildInfo => {
+            println!("{}", update::render_build_info(&update::own_build_info()));
+            Some(Ok(()))
+        }
+        Command::Identity { action } => Some(match action {
+            crate::args::IdentityAction::Generate {
+                identity_file,
+                passphrase_file,
+            } => {
+                crate::commands::identity::generate(identity_file.clone(), passphrase_file.clone())
+            }
+            crate::args::IdentityAction::Verify {
+                identity_file,
+                passphrase_file,
+            } => crate::commands::identity::verify(identity_file.clone(), passphrase_file.clone()),
+            crate::args::IdentityAction::NewPassphrase => {
+                crate::commands::identity::new_passphrase()
+            }
+            crate::args::IdentityAction::Commit {
+                identity_file,
+                passphrase_file,
+            } => crate::commands::identity::commit(identity_file.clone(), passphrase_file.clone()),
+        }),
+        Command::Drive {
+            drive_dir,
+            action:
+                crate::args::DriveAction::Unlock {
+                    relays,
+                    retained_quota,
+                },
+            credentials,
+            ..
+        } => {
+            // Unlock never loads the passphrase from a file: the
+            // terminal prompt or the stdin pipe, then the owner in
+            // the foreground exactly like `owner start`. Nothing is
+            // installed, enabled, or rewritten — the manager learns
+            // nothing, so a reboot or an explicit stop locks the
+            // drive again.
+            use std::io::IsTerminal as _;
+            let stdin_is_tty = std::io::stdin().is_terminal();
+            let config =
+                match crate::drive_config::load_drive_config(drive_dir, cli.config.as_deref()) {
+                    Ok(config) => config,
+                    Err(error) => return Some(Err(error)),
+                };
+            let (identity, passphrase, _) = match crate::credentials::read_unlock_credentials(
+                credentials,
+                config.as_ref(),
+                stdin_is_tty,
+            ) {
+                Ok(values) => values,
+                Err(error) => return Some(Err(error)),
+            };
+            let resolution = resolve_relays(relays.relay.clone(), config.as_ref());
+            Some(owner(
+                drive_dir.clone(),
+                resolution,
+                config.as_ref(),
+                None,
+                *retained_quota,
+                &passphrase,
+                identity,
+            ))
+        }
+        Command::Drive {
+            drive_dir,
+            action: crate::args::DriveAction::ServiceStart { registry },
+            credentials,
+            ..
+        } => {
+            // Starting needs no keystore and no credentials: resolve
+            // before credential loading, so a stopped service starts
+            // even where key files are momentarily unavailable. The
+            // per-session stdin handoff has no direct-spawn target
+            // yet (that slice lands the app-supervised start), so a
+            // stdin flag here would parse cleanly and then silently
+            // start the file-backed definition — refuse it loudly
+            // instead of running a start the flag cannot affect.
+            if credentials.passphrase_stdin {
+                return Some(Err(CliError::Usage(
+                    "--passphrase-stdin has no effect on `drive service-start` yet: the direct-spawn handoff is a follow-up slice; start the file-backed service without it".to_string(),
+                )));
+            }
+            Some(crate::commands::drive::service_start_drive(
+                drive_dir.clone(),
+                registry.clone(),
+            ))
+        }
+        Command::Drive {
+            drive_dir,
+            action: crate::args::DriveAction::ServiceEnable { registry },
+            credentials,
+            ..
+        } => {
+            // Enabling records a login-start preference and opens
+            // nothing: resolve before credential loading, like
+            // service-start, and refuse the stdin flag for the same
+            // reason — it cannot affect an enablement record.
+            if credentials.passphrase_stdin {
+                return Some(Err(CliError::Usage(
+                    "--passphrase-stdin has no effect on `drive service-enable`: enabling records a login-start preference and opens no keystore".to_string(),
+                )));
+            }
+            Some(crate::commands::drive::service_enable_drive(
+                drive_dir.clone(),
+                registry.clone(),
+            ))
+        }
+        Command::Drive {
+            drive_dir,
+            action: crate::args::DriveAction::ServiceDisable { registry },
+            credentials,
+            ..
+        } => {
+            // Disabling stops the unit now and records no login
+            // start; it opens nothing, so the same stdin refusal
+            // applies.
+            if credentials.passphrase_stdin {
+                return Some(Err(CliError::Usage(
+                    "--passphrase-stdin has no effect on `drive service-disable`: disabling stops the service and records a preference, and opens no keystore".to_string(),
+                )));
+            }
+            Some(crate::commands::drive::service_disable_drive(
+                drive_dir.clone(),
+                registry.clone(),
+            ))
+        }
+        Command::Drive {
+            drive_dir,
+            action: crate::args::DriveAction::MigrateCredentials { account },
+            credentials,
+            ..
+        } => {
+            // Migration resolves its own credentials: the files it
+            // migrates from, never the pipe — a piped passphrase
+            // would leave no file pair to retire and no proof the
+            // keystore opens under persisted material.
+            if credentials.passphrase_stdin {
+                return Some(Err(CliError::Usage(
+                    "migration needs credential files, not --passphrase-stdin: pass --identity-file/--passphrase-file or set them in the drive configuration".to_string(),
+                )));
+            }
+            Some(migrate_drive_credentials(
+                drive_dir.clone(),
+                account.clone(),
+                credentials,
+                cli.config.clone(),
+            ))
+        }
+        Command::Drive {
+            drive_dir,
+            action:
+                crate::args::DriveAction::Bootstrap {
+                    name,
+                    mode,
+                    mountpoint,
+                    relays,
+                    invitation_file,
+                    registry,
+                    owner_bin,
+                    supervise_bin,
+                    no_service,
+                },
+            credentials,
+            ..
+        } => {
+            // Store-backed bootstrap provisions its input before
+            // anything loads from the store: the input material
+            // comes from files or the pipe, the drive it
+            // provisions is store-backed, and the generic loader
+            // (which would read the not-yet-provisioned store item)
+            // is the wrong path. File-backed bootstrap falls through
+            // to the generic loader unchanged.
+            let peek =
+                match crate::drive_config::load_drive_config(drive_dir, cli.config.as_deref()) {
+                    Ok(peek) => peek,
+                    Err(error) => return Some(Err(error)),
+                };
+            let backend = match crate::credentials::effective_backend(credentials, peek.as_ref()) {
+                Ok(backend) => backend,
+                Err(error) => return Some(Err(error)),
+            };
+            if matches!(
+                backend,
+                crate::credentials::EffectiveBackend::OsStore { .. }
+            ) {
+                return Some(crate::commands::bootstrap::bootstrap_store(
+                    crate::commands::bootstrap::BootstrapArgs {
+                        name: name.clone(),
+                        drive_dir: drive_dir.clone(),
+                        mode: mode.clone(),
+                        mountpoint: mountpoint.clone(),
+                        relays: relays.clone(),
+                        credentials: credentials.clone(),
+                        invitation_file: invitation_file.clone(),
+                        registry: registry.clone(),
+                        owner_bin: owner_bin.clone(),
+                        supervise_bin: supervise_bin.clone(),
+                        no_service: *no_service,
+                    },
+                    cli.config.clone(),
+                ));
+            }
+            None
+        }
+        Command::Materialization {
+            drive_dir,
+            action:
+                MaterializationAction::Role {
+                    action: RoleAction::Set { role, yes },
+                },
+            ..
+        } => {
+            // Setting touches one local file and no key: return
+            // before credential loading, so a role is settable on
+            // a machine whose keystore is unavailable (OD-24-R).
+            // Every other action loads in the common prelude — the
+            // credential flags ride each action, so `policy role
+            // set` alone takes neither.
+            Some(role_set(drive_dir.clone(), role.clone(), *yes))
+        }
+        Command::Settings { drive_dir, action } => {
+            // Settings touch one per-user file and no key: return
+            // before credential loading, so a save works where the
+            // keystore is unavailable — including a stopped drive,
+            // whose owner cannot serve and whose keys may be
+            // momentarily unreachable. Every other command loads
+            // in the common prelude like every other family.
+            Some(crate::commands::settings::settings(
+                drive_dir.clone(),
+                action.clone(),
+            ))
+        }
+        _ => None,
     }
 }
 
