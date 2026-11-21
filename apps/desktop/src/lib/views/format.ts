@@ -283,6 +283,21 @@ export function observedRegistrySummary(report: ProvisionReport): string {
   return `Registry ready: ${observed.drives.length} drive(s)${names.length > 0 ? ` (${names})` : ""}.`;
 }
 
+/**
+ * Whether one provision's post-run observation names a drive dir:
+ * the registry read ready and lists it. The add-drive flow advances
+ * off the form on this (and only this) — the CLI exit alone never
+ * decides, and an unreadable or missing registry proves nothing, so
+ * those stay false and the form keeps its report.
+ */
+export function reportNamesDrive(report: ProvisionReport, driveDir: string): boolean {
+  const observed = report.observed;
+  return (
+    observed.status === "ready" &&
+    observed.drives.some((drive) => drive.drive_dir === driveDir)
+  );
+}
+
 /** Post-run membership tip for the operated drive; absent owner answer stays unknown. */
 export function membershipSummary(report: ProvisionReport): string {
   const membership = report.membership;

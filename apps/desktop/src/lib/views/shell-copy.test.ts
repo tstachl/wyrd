@@ -137,6 +137,18 @@ test("reinstall and restart name the backend choice", () => {
   expect(unavailable).toContain("Reinstalls the drive service against this drive's store item");
 });
 
+test("successful adds leave the form, failures keep it", () => {
+  // The App routes create/join through `provisionAndAdvance`, which
+  // advances off the form only where the post-run observation names
+  // the new drive (`reportNamesDrive`, pinned in `format.test.ts`);
+  // the form renders no report and re-reads nothing on a null
+  // return (pinned behaviorally in `provisioning-submit.test.ts`).
+  expect(app).toContain("provisionAndAdvance(args.driveDir");
+  expect(app).toContain("reportNamesDrive(report, driveDir)");
+  expect(app).not.toContain("onCreate={(args: ProvisionCreateArgs) => runProvision(");
+  expect(provisioning).toContain("if (report !== null) onDone();");
+});
+
 test("new drives start with the suggested relays", () => {
   // The relay field pre-fills from `SUGGESTED_RELAYS` (the set pins
   // in `format.test.ts`); the copy promises the suggestion is

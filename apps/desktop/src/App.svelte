@@ -54,7 +54,7 @@
     SettingsWriteReport,
   } from "$lib/ipc/results.js";
   import type { SparseUpdateArgs } from "$lib/ipc/results.js";
-  import { settingsSurviveLock, storeAccountFor, withDevCliHint } from "$lib/views/format.js";
+  import { reportNamesDrive, settingsSurviveLock, storeAccountFor, withDevCliHint } from "$lib/views/format.js";
   import {
     autoOpenTarget,
     headerAffordance,
@@ -579,6 +579,31 @@
     presentation.selectView("provision");
   }
 
+  /**
+   * Run one add-drive provision, then leave the form where the
+   * post-run observation proves the drive registered: re-read the
+   * registry first so the landing view is current, then follow the
+   * existing all-drives routing (list, or the sole workspace).
+   * Resolves null where navigation took over — the form unmounts,
+   * so no report renders and its `onDone` stays silent. Resolves
+   * the report otherwise, so the form keeps its values and shows
+   * why. The observation decides, never the CLI exit alone; a
+   * transport or unexpected throw propagates to the caller, which
+   * reports it in its own surface.
+   */
+  async function provisionAndAdvance(
+    driveDir: string,
+    call: () => Promise<ProvisionReport>,
+  ): Promise<ProvisionReport | null> {
+    const report = await runProvision(call);
+    await refreshLifecycle();
+    if (reportNamesDrive(report, driveDir)) {
+      allDrives();
+      return null;
+    }
+    return report;
+  }
+
   /** Explicit retry for one drive: reconnect, then re-read. Recovery proves nothing by itself. */
   async function retryConnection(driveDir: string): Promise<void> {
     recovery = null;
@@ -1058,8 +1083,8 @@
         initialIdentityFile={onboardedIdentityFile}
         initialPassphraseFile={onboardedPassphraseFile}
         initialMode={pendingProvisionMode}
-        onCreate={(args: ProvisionCreateArgs) => runProvision(() => provisionCreate(args))}
-        onJoin={(args: ProvisionJoinArgs) => runProvision(() => provisionJoin(args))}
+        onCreate={(args: ProvisionCreateArgs) => provisionAndAdvance(args.driveDir, () => provisionCreate(args))}
+        onJoin={(args: ProvisionJoinArgs) => provisionAndAdvance(args.driveDir, () => provisionJoin(args))}
         onDone={() => void refreshLifecycle()}
         onBack={allDrives}
       />

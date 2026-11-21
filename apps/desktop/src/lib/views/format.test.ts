@@ -15,6 +15,7 @@ import {
   membershipSummary,
   nextDriveDir,
   observedRegistrySummary,
+  reportNamesDrive,
   restartKindFor,
   sessionLabel,
   settingsSurviveLock,
@@ -26,7 +27,7 @@ import {
   validateBoundInput,
   withDevCliHint,
 } from "./format.js";
-import type { ProvisionReport, RegistryState } from "$lib/ipc/results.js";
+import type { DriveView, ProvisionReport, RegistryState } from "$lib/ipc/results.js";
 
 test("observation stamps render as UTC clock times", () => {
   expect(formatObservedAt(Date.UTC(2026, 4, 1, 7, 8, 9))).toBe("07:08:09 UTC");
@@ -148,6 +149,28 @@ test("the suggestion follows the name while untouched", () => {
   expect(nextDriveDir(true, "", "/b/drives/alpha")).toBe("");
   // No suggestion keeps whatever is there.
   expect(nextDriveDir(false, "/operator/kept", null)).toBe("/operator/kept");
+});
+
+test("the advance predicate follows the observation, never the exit", () => {
+  const betaDrive = { name: "beta", drive_dir: "/drives/beta" } as DriveView;
+  const named: ProvisionReport = {
+    result: { result: "completed", detail: "wrote" },
+    observed: { status: "ready", drives: [betaDrive], skipped: [] },
+    membership: null,
+  };
+  // Ready and listed: advance. Any other registry state — missing
+  // file, unreadable, or naming another drive — keeps the form.
+  expect(reportNamesDrive(named, "/drives/beta")).toBe(true);
+  expect(reportNamesDrive(named, "/drives/gamma")).toBe(false);
+  expect(
+    reportNamesDrive({ ...named, observed: { status: "nofile", drives: [], skipped: [] } }, "/drives/beta"),
+  ).toBe(false);
+  expect(
+    reportNamesDrive(
+      { ...named, observed: { status: "unreadable", reason: "denied", drives: [], skipped: [] } },
+      "/drives/beta",
+    ),
+  ).toBe(false);
 });
 
 const emptyRegistry: RegistryState = { status: "ready", drives: [], skipped: [] };
