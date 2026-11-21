@@ -1168,6 +1168,20 @@ mod tests {
     /// with `WYRD_PROBE_PHASE=load` (plus `WYRD_PROBE_ACCOUNT`)
     /// and no terminal; the agent log must show the loaded
     /// material and the post-delete `Missing`.
+    ///
+    /// Hand run (Linux): same split with a transient user unit —
+    /// store in the graphical session exactly as above (fish:
+    /// `env WYRD_PROBE_ACCOUNT=$ACCT WYRD_PROBE_PHASE=store ...`),
+    /// then `systemd-run --user --wait --pipe -p
+    /// Environment=WYRD_PROBE_PHASE=load -p
+    /// Environment=WYRD_PROBE_ACCOUNT=$ACCT <test-binary>
+    /// real_store_probe_round_trip --ignored --nocapture`; the unit
+    /// log must pass with the material and post-delete `Missing`
+    /// asserted. Needs a Secret Service provider with the default
+    /// collection unlocked (e.g. gnome-keyring) and lingering off
+    /// (`loginctl show-user -p Linger`); a bus-less host fails
+    /// closed with `Unavailable`, which is the CI-pinned path, not
+    /// this proof.
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[ignore = "touches the real platform store; run by hand per the contract's service-context clause"]
     #[test]

@@ -1,6 +1,6 @@
 # Credential loading (v0.4)
 
-Status: Normative. Shipped scope: the loader boundary carries reads and the migration write half (the CLI file backend conforms; the OS credential-store backends conform on macOS, where service-context retrieval is verified by hand — the Linux service-context proof is deferred, see below); `wyrd drive migrate-credentials` runs the six gated migration steps, and the owner/drive read paths honor a migrated configuration. `wyrd bootstrap` provisions store-backed drives through the same commit boundary (input files or pipe seed the item, the configuration records the backend after the daemon accepts the material), service definitions render the store reference (`--credential-backend os-store --credential-account`), session unlock loads the store identity with a typed passphrase, and `drive reconfigure` reinstalls a managed definition on either backend. First unlock without a prior GUI visit is verified on macOS (two-phase hand probe: store in the login session, first retrieval under a no-terminal LaunchAgent); the Linux service-context proof is deferred, see below. Scope: how a drive owner obtains its secret
+Status: Normative. Shipped scope: the loader boundary carries reads and the migration write half (the CLI file backend conforms; the OS credential-store backends conform on macOS and Linux, where service-context retrieval is verified by hand); `wyrd drive migrate-credentials` runs the six gated migration steps, and the owner/drive read paths honor a migrated configuration. `wyrd bootstrap` provisions store-backed drives through the same commit boundary (input files or pipe seed the item, the configuration records the backend after the daemon accepts the material), service definitions render the store reference (`--credential-backend os-store --credential-account`), session unlock loads the store identity with a typed passphrase, and `drive reconfigure` reinstalls a managed definition on either backend. First unlock without a prior GUI visit is verified on macOS (two-phase hand probe: store in the login session, first retrieval under a no-terminal LaunchAgent) and for graphical-login sessions on Linux (same probe: store in the graphical session, first retrieval under a transient systemd user unit; screen-locked and logged-out stay unverified — see the matrix). Scope: how a drive owner obtains its secret
 material — the device identity secret and the passphrase protecting
 the wrapped root key — without the desktop UI alive, in the actual
 OS service context. Authority: this contract owns the
@@ -135,12 +135,20 @@ it.)
   with `WYRD_PROBE_PHASE=store/load`): store through the commit
   boundary in the login session, then first retrieval plus delete
   under a no-terminal LaunchAgent with the material asserted and
-  the post-delete `Missing` asserted; the Linux backend's
-  service-context verification is deferred — no Linux host was
-  available and headless CI has no bus. CI exercises the
-  fail-closed path there instead (the dispatcher test routes a
-  bus-less store to the OS backend, never the file backend, and
-  the taxonomy test pins `PlatformFailure` to `unavailable`).
+  the post-delete `Missing` asserted; the Linux backend is
+  verified the same way (NixOS Wayland session, gnome-keyring
+  50.0 provider with the login collection unlocked, lingering
+  off): store through the commit boundary in the graphical
+  session, then first retrieval plus delete under a transient
+  systemd user unit (`systemd-run --user --wait --pipe`, no TTY)
+  with the material asserted and the post-delete `Missing`
+  asserted, re-run after `loginctl disable-linger` for a
+  caveat-free close. A never-stored account reads `Missing`
+  (fail-closed, never `Unavailable`). Headless CI still has no
+  bus, so it keeps exercising the fail-closed path (the
+  dispatcher test routes a bus-less store to the OS backend,
+  never the file backend, and the taxonomy test pins
+  `PlatformFailure` to `unavailable`).
 
 ## Failure taxonomy
 
@@ -183,8 +191,8 @@ supported configuration proves it.
 | macOS logged in, keychain unlocked | Login keychain readable from the user agent | Owner starts when enabled and the item loads | By hand: two-phase probe (store in session, first retrieval under a no-terminal LaunchAgent, material plus post-delete `Missing` asserted) |
 | macOS screen locked | Login keychain stays unlocked by default | Owner keeps serving; new opens succeed | Not verified: access-control configuration can change this |
 | macOS logged out | Session ends; user agents terminate; login keychain locks | Owners terminated per `desktop-lifecycle.md`; next login re-eligible | Termination behavior tested per supported configuration before it is claimed |
-| Linux graphical login, collection unlocked | Secret Service reachable from the user unit | Owner starts when enabled and the item loads | Deferred: no Linux host; headless CI has no bus |
-| Linux screen locked | Collection stays unlocked by default | Owner keeps serving | Deferred, same as above |
+| Linux graphical login, collection unlocked | Secret Service reachable from the user unit | Owner starts when enabled and the item loads | By hand: two-phase probe (store in session, first retrieval under a transient systemd user unit, material plus post-delete `Missing` asserted; linger-off re-run) |
+| Linux screen locked | Collection stays unlocked by default | Owner keeps serving | Not verified: the test compositor answers no lock signal and no standalone locker is present, so no locked state could be engaged |
 | Linux logged out | User manager stops without lingering; collection locks | Termination requested through session teardown; unresolved stays `Unconfirmed`; next login re-eligible | Termination behavior tested per supported configuration before it is claimed |
 
 Unattended operation — retrieval with no authenticated user
