@@ -46,6 +46,115 @@ pub const PROVISION_TIMEOUT: Duration = Duration::from_secs(120);
 /// everything else.
 const EXIT_HELD_DRIVE: i32 = 78;
 
+/// Where one lifecycle operation reads the drive credential:
+/// credential files on disk, or one OS credential-store item named
+/// by its account label. References only, in either backend —
+/// secret contents never cross IPC or argv.
+///
+/// The file backend is the CLI and operator-provisioned default.
+/// The store backend is the desktop-managed direction
+/// (`docs/contracts/credential-loading.md`): the `os-store`
+/// account the configuration (or a migrated drive) names, resolved
+/// by the CLI through the loader boundary — the adapter never
+/// touches the store itself.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CredentialSource {
+    /// Hardened credential files, read once by the CLI. Each
+    /// operation consumes what it needs and refuses what is
+    /// missing before any process spawns — unlock, for example,
+    /// names no passphrase file (the session passphrase rides the
+    /// stdin pipe), so it carries `None` there honestly instead of
+    /// a dummy path.
+    File {
+        /// Nostr identity secret file (32 raw bytes or 64 hex chars).
+        identity_file: Option<PathBuf>,
+        /// Keystore passphrase file (UTF-8 text).
+        passphrase_file: Option<PathBuf>,
+    },
+    /// One OS credential-store item (`wyrd-drive-credential`
+    /// service, account label naming the drive's item).
+    OsStore {
+        /// Store account naming the drive's item (the reference,
+        /// never a secret).
+        account: String,
+        /// One-time seed files for a fresh store-backed bootstrap:
+        /// the input material the CLI reads, stores under the
+        /// account, and reads back through the production reader.
+        /// `None` past provisioning — converged re-runs and every
+        /// other operation read the item itself, never files.
+        seed: Option<SeedFiles>,
+    },
+}
+
+/// One-time seed inputs for a fresh store-backed bootstrap: the
+/// onboarding-written files the CLI's commit boundary reads before
+/// the drive is recorded as store-backed. Bootstrap input only —
+/// every other operation refuses a seed before any process spawns.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SeedFiles {
+    /// Nostr identity secret file seeding the store item.
+    pub identity_file: PathBuf,
+    /// Keystore passphrase file seeding the store item.
+    pub passphrase_file: PathBuf,
+}
+
+/// Render one credential source into the CLI credential flags.
+/// File paths ride `--identity-file`/`--passphrase-file`; a store
+/// reference rides `--credential-backend os-store` plus
+/// `--credential-account`, with the seed files beside them where
+/// the operation takes seed input. `seeds_allowed` is bootstrap
+/// only: every other operation refuses a seed before any process
+/// spawns, mirroring the CLI's one-backend-per-drive refusal.
+fn push_credential_flags(
+    argv: &mut Vec<OsString>,
+    source: &CredentialSource,
+    seeds_allowed: bool,
+) -> Result<(), String> {
+    match source {
+        CredentialSource::File {
+            identity_file,
+            passphrase_file,
+        } => {
+            let identity = identity_file.as_ref().ok_or_else(|| {
+                "no identity file given: pass the credential path the drive reads".to_string()
+            })?;
+            let passphrase = passphrase_file.as_ref().ok_or_else(|| {
+                "no passphrase file given: pass the credential path the drive reads".to_string()
+            })?;
+            argv.push("--identity-file".into());
+            argv.push(identity.as_os_str().to_owned());
+            argv.push("--passphrase-file".into());
+            argv.push(passphrase.as_os_str().to_owned());
+            Ok(())
+        }
+        CredentialSource::OsStore { account, seed } => {
+            if account.is_empty() {
+                return Err(
+                    "no OS credential-store account: name the drive's store item with --credential-account"
+                        .to_string(),
+                );
+            }
+            if let Some(seed) = seed {
+                if !seeds_allowed {
+                    return Err(
+                        "seed files are bootstrap input only: this operation reads the provisioned store item, never files"
+                            .to_string(),
+                    );
+                }
+                argv.push("--identity-file".into());
+                argv.push(seed.identity_file.as_os_str().to_owned());
+                argv.push("--passphrase-file".into());
+                argv.push(seed.passphrase_file.as_os_str().to_owned());
+            }
+            argv.push("--credential-backend".into());
+            argv.push("os-store".into());
+            argv.push("--credential-account".into());
+            argv.push(account.into());
+            Ok(())
+        }
+    }
+}
+
 /// Create (no invitation) or join (sealed invitation file) one drive.
 #[derive(Debug, Clone)]
 pub struct ProvisionRequest {
@@ -56,10 +165,10 @@ pub struct ProvisionRequest {
     /// Relays for the managed service. Empty is refused for managed
     /// services before anything is created.
     pub relays: Vec<String>,
-    /// Credential *paths*, never contents.
-    pub identity_file: PathBuf,
-    /// Credential *paths*, never contents.
-    pub passphrase_file: PathBuf,
+    /// Where the CLI reads the drive credential: files, or one OS
+    /// credential-store item (fresh store-backed bootstraps carry
+    /// the one-time seed files beside the store reference).
+    pub credentials: CredentialSource,
     /// `None` = create, `Some(path)` = join from that invitation file.
     pub invitation_file: Option<PathBuf>,
     /// Explicit registry path (tests); `None` = platform default.
@@ -91,10 +200,11 @@ pub struct ProvisionRequest {
 pub struct LeaveRequest {
     /// Absolute drive directory, exact string (shared drive-identity rule).
     pub drive_dir: PathBuf,
-    /// Credential *paths*, never contents.
-    pub identity_file: PathBuf,
-    /// Credential *paths*, never contents.
-    pub passphrase_file: PathBuf,
+    /// Where the CLI reads the drive credential: files, or one OS
+    /// credential-store item. Seeds never apply — leave reads the
+    /// provisioned credential, and a seed beside it refuses before
+    /// any process spawns.
+    pub credentials: CredentialSource,
     /// Sole-owner terminal confirmation. The UI explains the
     /// consequences; this flag carries the acknowledgement to the CLI.
     pub acknowledged: bool,
@@ -114,10 +224,11 @@ pub struct ReconfigureRequest {
     pub drive_dir: PathBuf,
     /// Replacement relays when non-empty; empty keeps the registered set.
     pub relays: Vec<String>,
-    /// Credential *paths*, never contents.
-    pub identity_file: PathBuf,
-    /// Credential *paths*, never contents.
-    pub passphrase_file: PathBuf,
+    /// Where the CLI reads the drive credential: files, or one OS
+    /// credential-store item. Seeds never apply — reconfigure reads
+    /// the provisioned credential, and a seed beside it refuses
+    /// before any process spawns.
+    pub credentials: CredentialSource,
     /// Explicit registry path (tests); `None` = platform default.
     pub registry_path: Option<PathBuf>,
     /// Explicit owner/supervise binaries (tests / non-standard layout);
@@ -373,15 +484,12 @@ pub fn bootstrap_argv(request: &ProvisionRequest) -> Result<Vec<OsString>, Strin
             ));
         }
     }
-    let mut argv: Vec<OsString> = vec![
-        "drive".into(),
-        request.drive_dir.as_os_str().to_owned(),
-        "--identity-file".into(),
-        request.identity_file.as_os_str().to_owned(),
-        "--passphrase-file".into(),
-        request.passphrase_file.as_os_str().to_owned(),
-        "bootstrap".into(),
-    ];
+    let mut argv: Vec<OsString> = vec!["drive".into(), request.drive_dir.as_os_str().to_owned()];
+    // Fresh store-backed bootstraps seed the item from the
+    // one-time input files; every other source combination renders
+    // the same flags the CLI's dispatcher routes on.
+    push_credential_flags(&mut argv, &request.credentials, true)?;
+    argv.push("bootstrap".into());
     argv.push("--name".into());
     argv.push(request.name.clone().into());
     argv.push("--mode".into());
@@ -417,24 +525,20 @@ pub fn bootstrap_argv(request: &ProvisionRequest) -> Result<Vec<OsString>, Strin
 }
 
 /// Pure argv builder for `wyrd member <drive> leave [--yes] …`.
-/// Credentials ride as file paths, never contents. `Credentials` is
+/// Credentials ride as file paths or one store reference, never
+/// contents. `Credentials` is
 /// flattened on the parent (`Command::Member`), not global, so the
 /// credential flags must precede the `leave` verb — clap rejects them
-/// after it.
-pub fn leave_argv(request: &LeaveRequest) -> Vec<OsString> {
-    let mut argv: Vec<OsString> = vec![
-        "member".into(),
-        request.drive_dir.as_os_str().to_owned(),
-        "--identity-file".into(),
-        request.identity_file.as_os_str().to_owned(),
-        "--passphrase-file".into(),
-        request.passphrase_file.as_os_str().to_owned(),
-        "leave".into(),
-    ];
+/// after it. A seed beside a store reference refuses: leave reads
+/// the provisioned credential, never bootstrap input.
+pub fn leave_argv(request: &LeaveRequest) -> Result<Vec<OsString>, String> {
+    let mut argv: Vec<OsString> = vec!["member".into(), request.drive_dir.as_os_str().to_owned()];
+    push_credential_flags(&mut argv, &request.credentials, false)?;
+    argv.push("leave".into());
     if request.acknowledged {
         argv.push("--yes".into());
     }
-    argv
+    Ok(argv)
 }
 
 /// Pure argv builder for `wyrd drive <dir> reconfigure …`: every
@@ -466,15 +570,11 @@ pub fn reconfigure_argv(request: &ReconfigureRequest) -> Result<Vec<OsString>, S
             ));
         }
     }
-    let mut argv: Vec<OsString> = vec![
-        "drive".into(),
-        request.drive_dir.as_os_str().to_owned(),
-        "--identity-file".into(),
-        request.identity_file.as_os_str().to_owned(),
-        "--passphrase-file".into(),
-        request.passphrase_file.as_os_str().to_owned(),
-        "reconfigure".into(),
-    ];
+    let mut argv: Vec<OsString> = vec!["drive".into(), request.drive_dir.as_os_str().to_owned()];
+    // Seeds refuse here: reconfigure reads the provisioned
+    // credential (files or the store item), never bootstrap input.
+    push_credential_flags(&mut argv, &request.credentials, false)?;
+    argv.push("reconfigure".into());
     argv.push("--mode".into());
     argv.push(request.mode.clone().into());
     if let Some(mountpoint) = &request.mountpoint {
@@ -888,7 +988,16 @@ pub fn run_leave(cli_bin: &Path, request: &LeaveRequest, timeout: Duration) -> P
             code: None,
         };
     }
-    let argv = leave_argv(request);
+    let argv = match leave_argv(request) {
+        Ok(argv) => argv,
+        Err(reason) => {
+            return ProvisionOutcome {
+                result: ProvisionResult::ExpectedFailure { detail: reason },
+                stderr: String::new(),
+                code: None,
+            };
+        }
+    };
     let output = run_cli(cli_bin, &argv, None, timeout);
     map_exit_output(&output)
 }
@@ -1004,9 +1113,13 @@ pub fn run_service_disable(
 pub struct UnlockRequest {
     /// Absolute drive directory, exact string (shared drive-identity rule).
     pub drive_dir: PathBuf,
-    /// Credential *path*, never contents. The device identity file
-    /// the start-up gate verified.
-    pub identity_file: PathBuf,
+    /// Where the CLI reads the drive identity: the device identity
+    /// file the start-up gate verified, or one OS credential-store
+    /// item. The session passphrase always rides the stdin pipe
+    /// (`--passphrase-stdin`), never a file and never the store —
+    /// unlock borrows the store's identity and proves the keystore
+    /// with what the operator types. Seeds never apply.
+    pub credentials: CredentialSource,
     /// Control-plane relays for the owner session: the registry's
     /// registered set for the drive. Non-empty emits `--relay`
     /// flags, which *replace* the drive config file (CLI precedence:
@@ -1066,19 +1179,45 @@ pub fn validate_unlock_passphrase(passphrase: &[u8]) -> Result<(), String> {
 /// argument is a separate argv element, never shell-constructed.
 /// Mirrors `crates/wyrd-cli/src/args.rs` (`DriveAction::Unlock`).
 /// Credential flags ride the `drive` parent (flattened, not
-/// global), so `--identity-file` and `--passphrase-stdin` precede
-/// the `unlock` verb — clap rejects them after it, like the
-/// `leave` argv above. No `--passphrase-file` ever: unlock
-/// refuses a file-backed start by construction.
-pub fn unlock_argv(request: &UnlockRequest) -> Vec<OsString> {
-    let mut argv: Vec<OsString> = vec![
-        "drive".into(),
-        request.drive_dir.as_os_str().to_owned(),
-        "--identity-file".into(),
-        request.identity_file.as_os_str().to_owned(),
-        "--passphrase-stdin".into(),
-        "unlock".into(),
-    ];
+/// global), so they precede the `unlock` verb — clap rejects them
+/// after it, like the `leave` argv above. The session passphrase
+/// always rides the stdin pipe (`--passphrase-stdin`): no
+/// `--passphrase-file` ever, in either backend. A file-backed
+/// unlock names `--identity-file`; a store-backed unlock names the
+/// store reference and loads the identity from the item. Seeds
+/// refuse: unlock reads the provisioned identity, never bootstrap
+/// input.
+pub fn unlock_argv(request: &UnlockRequest) -> Result<Vec<OsString>, String> {
+    let mut argv: Vec<OsString> = vec!["drive".into(), request.drive_dir.as_os_str().to_owned()];
+    match &request.credentials {
+        CredentialSource::File { identity_file, .. } => {
+            let identity = identity_file.as_ref().ok_or_else(|| {
+                "no identity file given: pass the credential path the drive reads".to_string()
+            })?;
+            argv.push("--identity-file".into());
+            argv.push(identity.as_os_str().to_owned());
+        }
+        CredentialSource::OsStore { account, seed } => {
+            if account.is_empty() {
+                return Err(
+                    "no OS credential-store account: name the drive's store item with --credential-account"
+                        .to_string(),
+                );
+            }
+            if seed.is_some() {
+                return Err(
+                    "seed files are bootstrap input only: unlock reads the provisioned store identity"
+                        .to_string(),
+                );
+            }
+            argv.push("--credential-backend".into());
+            argv.push("os-store".into());
+            argv.push("--credential-account".into());
+            argv.push(account.into());
+        }
+    }
+    argv.push("--passphrase-stdin".into());
+    argv.push("unlock".into());
     for relay in &request.relays {
         argv.push("--relay".into());
         argv.push(relay.into());
@@ -1087,7 +1226,7 @@ pub fn unlock_argv(request: &UnlockRequest) -> Vec<OsString> {
         argv.push("--retained-quota".into());
         argv.push(quota.to_string().into());
     }
-    argv
+    Ok(argv)
 }
 
 /// One spawned unlock owner plus its pipe-drain threads. The child
@@ -1141,7 +1280,12 @@ pub fn spawn_unlock(
         return Err(ProvisionResult::ExpectedFailure { detail: reason });
     }
     check_cli_version(cli_bin, PROVISION_TIMEOUT)?;
-    let argv = unlock_argv(request);
+    let argv = match unlock_argv(request) {
+        Ok(argv) => argv,
+        Err(reason) => {
+            return Err(ProvisionResult::ExpectedFailure { detail: reason });
+        }
+    };
     let mut command = std::process::Command::new(cli_bin);
     command.args(&argv);
     command.stdin(std::process::Stdio::piped());
@@ -1240,8 +1384,10 @@ mod tests {
             name: "alpha".to_string(),
             drive_dir: PathBuf::from("/drives/alpha"),
             relays: vec!["wss://relay.example".to_string()],
-            identity_file: PathBuf::from("/keys/identity"),
-            passphrase_file: PathBuf::from("/keys/passphrase"),
+            credentials: CredentialSource::File {
+                identity_file: Some(PathBuf::from("/keys/identity")),
+                passphrase_file: Some(PathBuf::from("/keys/passphrase")),
+            },
             invitation_file: None,
             registry_path: None,
             owner_bin: None,
@@ -1376,6 +1522,240 @@ mod tests {
         }
     }
 
+    /// A fresh store-backed bootstrap seeds the item from the
+    /// one-time input files and names the store reference: seed
+    /// flags first (the CLI reads them as input), then the backend
+    /// pair the dispatcher routes on. No seed material in the
+    /// reference — only file paths and the account label.
+    #[test]
+    fn store_backed_bootstrap_seeds_then_references() {
+        let mut request = create_request();
+        request.credentials = CredentialSource::OsStore {
+            account: "wyrd-drive-alpha".to_string(),
+            seed: Some(SeedFiles {
+                identity_file: PathBuf::from("/keys/identity"),
+                passphrase_file: PathBuf::from("/keys/passphrase"),
+            }),
+        };
+        let rendered: Vec<String> = bootstrap_argv(&request)
+            .unwrap()
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            rendered,
+            vec![
+                "drive",
+                "/drives/alpha",
+                "--identity-file",
+                "/keys/identity",
+                "--passphrase-file",
+                "/keys/passphrase",
+                "--credential-backend",
+                "os-store",
+                "--credential-account",
+                "wyrd-drive-alpha",
+                "bootstrap",
+                "--name",
+                "alpha",
+                "--mode",
+                "vault",
+                "--relay",
+                "wss://relay.example",
+            ]
+        );
+    }
+
+    /// A converged store-backed re-run names only the reference:
+    /// the item already holds the material, so no seed files ride
+    /// along — the CLI reads the provisioned item itself.
+    #[test]
+    fn store_backed_bootstrap_without_seed_references_only() {
+        let mut request = create_request();
+        request.credentials = CredentialSource::OsStore {
+            account: "wyrd-drive-alpha".to_string(),
+            seed: None,
+        };
+        let rendered: Vec<String> = bootstrap_argv(&request)
+            .unwrap()
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            rendered,
+            vec![
+                "drive",
+                "/drives/alpha",
+                "--credential-backend",
+                "os-store",
+                "--credential-account",
+                "wyrd-drive-alpha",
+                "bootstrap",
+                "--name",
+                "alpha",
+                "--mode",
+                "vault",
+                "--relay",
+                "wss://relay.example",
+            ]
+        );
+        assert!(
+            !rendered.iter().any(|arg| arg == "--identity-file"),
+            "a converged re-run names no files: {rendered:?}"
+        );
+    }
+
+    /// Leave and reconfigure on a store-backed drive name the item,
+    /// never files: the CLI resolves the provisioned material
+    /// through the loader boundary, and file flags beside the
+    /// store backend would refuse as one-backend-per-drive.
+    #[test]
+    fn store_leave_and_reconfigure_reference_the_item() {
+        let store = CredentialSource::OsStore {
+            account: "wyrd-drive-alpha".to_string(),
+            seed: None,
+        };
+        let leave = LeaveRequest {
+            drive_dir: PathBuf::from("/drives/alpha"),
+            credentials: store.clone(),
+            acknowledged: true,
+        };
+        let rendered: Vec<String> = leave_argv(&leave)
+            .unwrap()
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            rendered,
+            vec![
+                "member",
+                "/drives/alpha",
+                "--credential-backend",
+                "os-store",
+                "--credential-account",
+                "wyrd-drive-alpha",
+                "leave",
+                "--yes",
+            ]
+        );
+        let mut reconfigure = reconfigure_request();
+        reconfigure.credentials = store;
+        let rendered: Vec<String> = reconfigure_argv(&reconfigure)
+            .unwrap()
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert!(rendered.contains(&"--credential-account".to_string()));
+        assert!(rendered.contains(&"wyrd-drive-alpha".to_string()));
+        assert!(
+            !rendered.iter().any(|arg| arg == "--passphrase-file"),
+            "a store reconfigure names no files: {rendered:?}"
+        );
+    }
+
+    /// Seeds are bootstrap input only: leave, reconfigure, and
+    /// unlock read the provisioned credential, so a seed anywhere
+    /// else refuses before any process spawns — mirroring the
+    /// CLI's one-backend-per-drive refusal at the adapter.
+    #[test]
+    fn seeds_refuse_outside_bootstrap() {
+        let seeded = CredentialSource::OsStore {
+            account: "wyrd-drive-alpha".to_string(),
+            seed: Some(SeedFiles {
+                identity_file: PathBuf::from("/keys/identity"),
+                passphrase_file: PathBuf::from("/keys/passphrase"),
+            }),
+        };
+        let leave = LeaveRequest {
+            drive_dir: PathBuf::from("/drives/alpha"),
+            credentials: seeded.clone(),
+            acknowledged: false,
+        };
+        let reason = leave_argv(&leave).unwrap_err();
+        assert!(reason.contains("bootstrap input only"), "{reason}");
+        let mut reconfigure = reconfigure_request();
+        reconfigure.credentials = seeded.clone();
+        let reason = reconfigure_argv(&reconfigure).unwrap_err();
+        assert!(reason.contains("bootstrap input only"), "{reason}");
+        let mut unlock = unlock_request();
+        unlock.credentials = seeded;
+        let reason = unlock_argv(&unlock).unwrap_err();
+        assert!(reason.contains("bootstrap input only"), "{reason}");
+    }
+
+    /// A store-backed unlock loads the identity from the item and
+    /// still pipes the session passphrase: the store pair plus
+    /// `--passphrase-stdin`, never `--identity-file` (the CLI
+    /// refuses file flags beside a store unlock) and never
+    /// `--passphrase-file`.
+    #[test]
+    fn store_unlock_reads_the_item_identity() {
+        let mut request = unlock_request();
+        request.credentials = CredentialSource::OsStore {
+            account: "wyrd-drive-alpha".to_string(),
+            seed: None,
+        };
+        let rendered: Vec<String> = unlock_argv(&request)
+            .unwrap()
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            rendered,
+            vec![
+                "drive",
+                "/drives/alpha",
+                "--credential-backend",
+                "os-store",
+                "--credential-account",
+                "wyrd-drive-alpha",
+                "--passphrase-stdin",
+                "unlock",
+                "--relay",
+                "wss://relay.example",
+            ]
+        );
+    }
+
+    /// An empty store account names no item: every operation
+    /// refuses before any process spawns instead of rendering
+    /// flags the CLI would reject without the reference.
+    #[test]
+    fn empty_store_account_refuses_before_spawning() {
+        let empty = CredentialSource::OsStore {
+            account: String::new(),
+            seed: None,
+        };
+        let mut bootstrap = create_request();
+        bootstrap.credentials = empty.clone();
+        let reason = bootstrap_argv(&bootstrap).unwrap_err();
+        assert!(
+            reason.contains("no OS credential-store account"),
+            "{reason}"
+        );
+        let leave = LeaveRequest {
+            drive_dir: PathBuf::from("/drives/alpha"),
+            credentials: empty.clone(),
+            acknowledged: false,
+        };
+        let reason = leave_argv(&leave).unwrap_err();
+        assert!(
+            reason.contains("no OS credential-store account"),
+            "{reason}"
+        );
+        let unlock = UnlockRequest {
+            drive_dir: PathBuf::from("/drives/alpha"),
+            credentials: empty,
+            relays: Vec::new(),
+            retained_quota: None,
+        };
+        let reason = unlock_argv(&unlock).unwrap_err();
+        assert!(
+            reason.contains("no OS credential-store account"),
+            "{reason}"
+        );
+    }
+
     /// Leave argv carries `--yes` only on explicit acknowledgement:
     /// a frontend omitting the dialog cannot bypass the CLI boundary.
     /// Credentials precede the `leave` verb: they are flattened on the
@@ -1384,11 +1764,14 @@ mod tests {
     fn leave_argv_gates_yes_on_acknowledgement() {
         let base = LeaveRequest {
             drive_dir: PathBuf::from("/drives/alpha"),
-            identity_file: PathBuf::from("/keys/identity"),
-            passphrase_file: PathBuf::from("/keys/passphrase"),
+            credentials: CredentialSource::File {
+                identity_file: Some(PathBuf::from("/keys/identity")),
+                passphrase_file: Some(PathBuf::from("/keys/passphrase")),
+            },
             acknowledged: false,
         };
         let plain: Vec<String> = leave_argv(&base)
+            .unwrap()
             .iter()
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect();
@@ -1414,6 +1797,7 @@ mod tests {
             ..base
         };
         let confirmed: Vec<String> = leave_argv(&acked)
+            .unwrap()
             .iter()
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect();
@@ -1789,8 +2173,10 @@ mod tests {
             &cli,
             &LeaveRequest {
                 drive_dir: PathBuf::from("/drives/alpha"),
-                identity_file: PathBuf::from("/keys/identity"),
-                passphrase_file: PathBuf::from("/keys/passphrase"),
+                credentials: CredentialSource::File {
+                    identity_file: Some(PathBuf::from("/keys/identity")),
+                    passphrase_file: Some(PathBuf::from("/keys/passphrase")),
+                },
                 acknowledged: false,
             },
             Duration::from_secs(30),
@@ -1834,8 +2220,10 @@ mod tests {
         ReconfigureRequest {
             drive_dir: PathBuf::from("/drives/alpha"),
             relays: vec!["wss://relay.example".to_string()],
-            identity_file: PathBuf::from("/keys/identity"),
-            passphrase_file: PathBuf::from("/keys/passphrase"),
+            credentials: CredentialSource::File {
+                identity_file: Some(PathBuf::from("/keys/identity")),
+                passphrase_file: Some(PathBuf::from("/keys/passphrase")),
+            },
             registry_path: None,
             owner_bin: None,
             supervise_bin: None,
@@ -2149,7 +2537,10 @@ mod tests {
     fn unlock_request() -> UnlockRequest {
         UnlockRequest {
             drive_dir: PathBuf::from("/drives/alpha"),
-            identity_file: PathBuf::from("/keys/identity"),
+            credentials: CredentialSource::File {
+                identity_file: Some(PathBuf::from("/keys/identity")),
+                passphrase_file: Some(PathBuf::from("/keys/passphrase")),
+            },
             relays: vec!["wss://relay.example".to_string()],
             retained_quota: None,
         }
@@ -2163,7 +2554,7 @@ mod tests {
     /// contents (the passphrase rides the stdin pipe).
     #[test]
     fn unlock_argv_is_structured_with_the_pipe_flag() {
-        let argv = unlock_argv(&unlock_request());
+        let argv = unlock_argv(&unlock_request()).unwrap();
         let rendered: Vec<String> = argv
             .iter()
             .map(|arg| arg.to_string_lossy().into_owned())
@@ -2210,6 +2601,7 @@ mod tests {
             ..unlock_request()
         };
         let rendered: Vec<String> = unlock_argv(&bare)
+            .unwrap()
             .iter()
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect();
@@ -2220,6 +2612,7 @@ mod tests {
         let mut quoted = unlock_request();
         quoted.retained_quota = Some(4096);
         let rendered: Vec<String> = unlock_argv(&quoted)
+            .unwrap()
             .iter()
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect();

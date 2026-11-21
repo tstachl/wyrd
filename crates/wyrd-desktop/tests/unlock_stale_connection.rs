@@ -203,7 +203,9 @@ fn unlock_evicts_the_stale_cached_connection() {
         handle,
         wyrd_desktop::commands::DriveUnlockArgs {
             drive_dir: harness.drive.clone(),
-            identity_file: harness.identity_file.to_string_lossy().into_owned(),
+            identity_file: Some(harness.identity_file.to_string_lossy().into_owned()),
+            credential_backend: None,
+            credential_account: None,
             passphrase: "stale-connection-probe-passphrase".to_string(),
         },
     ));
@@ -239,8 +241,10 @@ fn reconfigure_evicts_the_stale_cached_connection() {
         wyrd_desktop::commands::ProvisionReconfigureArgs {
             drive_dir: harness.drive.clone(),
             relays: Vec::new(),
-            identity_file: harness.identity_file.to_string_lossy().into_owned(),
-            passphrase_file: harness.passphrase_file.to_string_lossy().into_owned(),
+            identity_file: Some(harness.identity_file.to_string_lossy().into_owned()),
+            passphrase_file: Some(harness.passphrase_file.to_string_lossy().into_owned()),
+            credential_backend: None,
+            credential_account: None,
             mode: "vault".to_string(),
             mountpoint: None,
             no_service: true,
@@ -276,8 +280,10 @@ fn leave_keeps_the_cached_connection() {
         handle,
         wyrd_desktop::commands::ProvisionLeaveArgs {
             drive_dir: harness.drive.clone(),
-            identity_file: harness.identity_file.to_string_lossy().into_owned(),
-            passphrase_file: harness.passphrase_file.to_string_lossy().into_owned(),
+            identity_file: Some(harness.identity_file.to_string_lossy().into_owned()),
+            passphrase_file: Some(harness.passphrase_file.to_string_lossy().into_owned()),
+            credential_backend: None,
+            credential_account: None,
             acknowledged: true,
         },
     ));

@@ -144,8 +144,14 @@ export interface ProvisionCreateArgs {
   name: string;
   driveDir: string;
   relays: string[];
-  identityFile: string;
-  passphraseFile: string;
+  /** Credential path, never contents. Required with the file backend; the seed identity beside a store bootstrap. */
+  identityFile?: string;
+  /** Credential path, never contents. Required with the file backend; the seed passphrase beside a store bootstrap. */
+  passphraseFile?: string;
+  /** Credential backend selector: absent or `"file"` reads files; `"os-store"` resolves the drive through the OS credential store. */
+  credentialBackend?: string;
+  /** OS credential-store account naming the drive's item. Required exactly where the backend is `"os-store"`. */
+  credentialAccount?: string;
   mode: string;
   mountpoint?: string;
   noService: boolean;
@@ -157,16 +163,28 @@ export interface ProvisionJoinArgs extends ProvisionCreateArgs {
 
 export interface ProvisionLeaveArgs {
   driveDir: string;
-  identityFile: string;
-  passphraseFile: string;
+  /** Credential path, never contents. Required with the file backend; refused beside a store reference. */
+  identityFile?: string;
+  /** Credential path, never contents. Required with the file backend; refused beside a store reference. */
+  passphraseFile?: string;
+  /** Credential backend selector: absent or `"file"` reads files; `"os-store"` resolves the drive through the OS credential store. */
+  credentialBackend?: string;
+  /** OS credential-store account naming the drive's item. Required exactly where the backend is `"os-store"`. */
+  credentialAccount?: string;
   acknowledged: boolean;
 }
 
 export interface ProvisionReconfigureArgs {
   driveDir: string;
   relays: string[];
-  identityFile: string;
-  passphraseFile: string;
+  /** Credential path, never contents. Required with the file backend; refused beside a store reference. */
+  identityFile?: string;
+  /** Credential path, never contents. Required with the file backend; refused beside a store reference. */
+  passphraseFile?: string;
+  /** Credential backend selector: absent or `"file"` reads files; `"os-store"` resolves the drive through the OS credential store. */
+  credentialBackend?: string;
+  /** OS credential-store account naming the drive's item. Required exactly where the backend is `"os-store"`. */
+  credentialAccount?: string;
   mode: string;
   mountpoint?: string;
   noService: boolean;
@@ -261,7 +279,12 @@ export function provisionServiceDisable(
  */
 export interface DriveUnlockArgs {
   driveDir: string;
-  identityFile: string;
+  /** Credential path, never contents. Absent beside a store reference, which names the identity instead. */
+  identityFile?: string;
+  /** Credential backend selector: absent or `"file"` reads the identity file; `"os-store"` loads the identity from the drive's store item. */
+  credentialBackend?: string;
+  /** OS credential-store account naming the drive's item. Required exactly where the backend is `"os-store"`. */
+  credentialAccount?: string;
   passphrase: string;
 }
 

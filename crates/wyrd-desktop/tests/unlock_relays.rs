@@ -132,7 +132,9 @@ fn drive_unlock_spawns_with_the_registered_relays() {
         app.handle().clone(),
         wyrd_desktop::commands::DriveUnlockArgs {
             drive_dir: drive_dir.to_string_lossy().into_owned(),
-            identity_file: identity_file.to_string_lossy().into_owned(),
+            identity_file: Some(identity_file.to_string_lossy().into_owned()),
+            credential_backend: None,
+            credential_account: None,
             passphrase: secret.to_string(),
         },
     ));
