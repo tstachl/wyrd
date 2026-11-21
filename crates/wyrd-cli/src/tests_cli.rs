@@ -467,7 +467,8 @@ fn orphaned_modules(src: &std::path::Path) -> Vec<String> {
             vec![src.join("lib.rs")]
         } else {
             let dir = parent.file_name().unwrap().to_string_lossy().into_owned();
-            vec![src.join(format!("{dir}.rs")), parent.join("mod.rs")]
+            let sibling_module = parent.parent().unwrap().join(format!("{dir}.rs"));
+            vec![sibling_module, parent.join("mod.rs")]
         };
         let declared_by_mod = declaring.iter().any(|parent| {
             fs::read_to_string(parent).is_ok_and(|text| text.contains(&format!("mod {stem};")))

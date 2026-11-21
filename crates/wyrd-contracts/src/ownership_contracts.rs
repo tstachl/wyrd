@@ -293,6 +293,7 @@ fn workspace_root() -> PathBuf {
 /// here deliberately; otherwise it is scanned (fail closed). Sorted.
 const TEST_FILE_PINS: &[&str] = &[
     "crates/wyrd-cli/src/tests_cli.rs",
+    "crates/wyrd-cli/src/tests_credentials.rs",
     "crates/wyrd-cli/src/tests_device.rs",
     "crates/wyrd-cli/src/tests_drive.rs",
     "crates/wyrd-cli/src/tests_export.rs",
@@ -377,6 +378,7 @@ const TEST_FILE_PINS: &[&str] = &[
     "crates/wyrd-daemon/src/host/tests_teardown.rs",
     "crates/wyrd-daemon/src/host/tests_vault.rs",
     "crates/wyrd-daemon/src/owner/tests_owner.rs",
+    "crates/wyrd-desktop/src/tests_provision.rs",
     "crates/wyrd-format/src/mutation/tests_mutation.rs",
     "crates/wyrd-sync/src/authorization/test_util.rs",
     "crates/wyrd-sync/src/bulk/tests_bulk.rs",
