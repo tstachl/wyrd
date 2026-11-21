@@ -172,6 +172,30 @@ export function baseDirFromIdentity(path: string): string | null {
   return parts.slice(0, -2).join("/") || "/";
 }
 
+/**
+ * Suggested relays pre-filled in the Add-drive form (create and join
+ * tabs share the entry state, so both start with this set — the user
+ * keeps, edits, or clears it, and the drive saves exactly what is
+ * listed). Selection method, decided for this issue: live policy
+ * probes from 2026-11-19, one fresh throwaway keypair per relay,
+ * publishing then reading back a gift wrap shaped like Wyrd's wire
+ * format with NIP-42 auth disabled. Hard gates: no auth on
+ * gift-wrap reads (trust.md T16), no payment, no restricted writes,
+ * write accepted, wrap returned — then 3/3 repeat consistency and
+ * NIP-66 monitor breadth. `relay.primal.net` doubles as the relay
+ * the opt-in interop test already proves. Vantage-dependent
+ * (availability varies by network) and unmeasured on retention, so
+ * re-check periodically — this is a starting suggestion, never a
+ * standing endorsement.
+ */
+export const SUGGESTED_RELAYS: string[] = [
+  "wss://relay.primal.net",
+  "wss://relay.ditto.pub",
+  "wss://purplerelay.com",
+  "wss://relay.snort.social",
+  "wss://offchain.pub",
+];
+
 /** Suggested drive dir `<base>/drives/<name>` (`alpha` where the name is blank), else null. */
 export function suggestedDriveDirFor(nameValue: string, identityPath: string): string | null {
   const base = baseDirFromIdentity(identityPath);

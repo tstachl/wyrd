@@ -137,6 +137,24 @@ test("reinstall and restart name the backend choice", () => {
   expect(unavailable).toContain("Reinstalls the drive service against this drive's store item");
 });
 
+test("new drives start with the suggested relays", () => {
+  // The relay field pre-fills from `SUGGESTED_RELAYS` (the set pins
+  // in `format.test.ts`); the copy promises the suggestion is
+  // editable and that the drive saves exactly what is listed, with a
+  // restore affordance where the list drifts. The old starts-empty
+  // wording retires with the empty default.
+  for (const line of [
+    "The field starts with Wyrd's suggested relays",
+    "The drive saves exactly what is listed",
+    "Suggested relays are pre-filled",
+    "Restore suggested relays",
+  ]) {
+    expect(provisioning).toContain(line);
+  }
+  expect(provisioning).not.toContain("No product default relay set ships in the repo");
+  expect(provisioning).not.toContain("the field starts empty");
+});
+
 test("new drives default to the OS credential store", () => {
 
   for (const line of [
