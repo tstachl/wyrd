@@ -2,7 +2,11 @@
 invitation through the constrained CLI adapter. Every operation
 returns the outcome plus the post-run observation; observed state
 decides the display, the outcome only indicates what the operation
-reported. Leaving a drive lives in that drive's Settings — a
+reported. A provision that both reported no error and is confirmed
+by the observation (the registry names the new drive) resolves
+null — the caller navigates off this form, so no success report
+renders here. Anything else resolves the report, which renders
+below with the entered values kept for fix-and-retry. Leaving a drive lives in that drive's Settings — a
 destructive membership action does not belong in an add flow. New
 drives provision into the OS credential store by default (the
 account derives from the drive name, seeds come from this device's
@@ -53,8 +57,14 @@ by hand elsewhere. Secret contents never travel. -->
     initialIdentityFile: string | null;
     initialPassphraseFile: string | null;
     initialMode: "create" | "join";
-    onCreate: (args: ProvisionCreateArgs) => Promise<ProvisionReport>;
-    onJoin: (args: ProvisionJoinArgs) => Promise<ProvisionReport>;
+    /**
+     * Null where the caller navigated off the form (clean exit plus
+     * an observation confirming the new drive) — no report renders
+     * and `onDone` stays silent because the caller already re-read.
+     * A report otherwise, rendered below with values kept.
+     */
+    onCreate: (args: ProvisionCreateArgs) => Promise<ProvisionReport | null>;
+    onJoin: (args: ProvisionJoinArgs) => Promise<ProvisionReport | null>;
     /** Registry re-read after every operation; observed state decides. */
     onDone: () => void;
     /** Back to the drive list. */
@@ -144,12 +154,14 @@ by hand elsewhere. Secret contents never travel. -->
   // listed, including an explicit clear.
   const relaysEmpty = $derived(relays.length === 0);
 
-  async function run(call: () => Promise<ProvisionReport>): Promise<void> {
+  async function run(call: () => Promise<ProvisionReport | null>): Promise<void> {
     working = true;
     error = null;
     try {
+      // Null means the caller advanced off this form (refresh
+      // already re-read there); only a report re-reads here.
       report = await call();
-      onDone();
+      if (report !== null) onDone();
     } catch (failure: unknown) {
       error = failure instanceof Error ? failure.message : String(failure);
     } finally {

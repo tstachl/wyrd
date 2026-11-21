@@ -283,6 +283,25 @@ export function observedRegistrySummary(report: ProvisionReport): string {
   return `Registry ready: ${observed.drives.length} drive(s)${names.length > 0 ? ` (${names})` : ""}.`;
 }
 
+/**
+ * Whether one provision should leave the form: the CLI reported no
+ * error (`completed`) and the post-run observation names the drive
+ * dir (the registry read ready and lists it). Both halves are
+ * required — a clean exit alone never advances (the registry has
+ * the last word), and a refused or uncertain outcome never
+ * advances even where the observation still names the drive (its
+ * reason stays on the form). An unreadable or missing registry
+ * proves nothing and stays false.
+ */
+export function shouldAdvanceAfterProvision(report: ProvisionReport, driveDir: string): boolean {
+  if (report.result.result !== "completed") return false;
+  const observed = report.observed;
+  return (
+    observed.status === "ready" &&
+    observed.drives.some((drive) => drive.drive_dir === driveDir)
+  );
+}
+
 /** Post-run membership tip for the operated drive; absent owner answer stays unknown. */
 export function membershipSummary(report: ProvisionReport): string {
   const membership = report.membership;

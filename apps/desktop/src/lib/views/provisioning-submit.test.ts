@@ -1,11 +1,12 @@
 // Wiring pin for the Add-drive form (`./ProvisioningView.svelte`):
 // a store-mode create submits the derived account with the seeds,
 // no file choosing — then editing, clearing, and restoring the
-// suggested relays saves exactly what is listed. Exactly one mount
-// in this file (and no other file mounts this view): sibling
-// interactive templates (the file-mode Browse buttons, the relay
-// remove buttons) break the happy-dom re-registration across mounts
-// in this unpinned environment, so payload shapes pin in
+// suggested relays saves exactly what is listed — then a caller
+// advance (null) renders no report and re-reads nothing. Exactly
+// one mount in this file (and no other file mounts this view):
+// sibling interactive templates inline in the form break the
+// happy-dom re-registration across mounts in this unpinned
+// environment, so payload shapes pin in
 // `../ipc/provisioning-args.test.ts` and this file proves the view
 // calls through, sequentially, in a single mount.
 //
@@ -39,7 +40,11 @@ function report(): ProvisionReport {
 
 test("store create submits the derived account with the seeds", async () => {
   const seen: ProvisionCreateArgs[] = [];
-  const { getAllByLabelText, getAllByRole, getByRole, queryAllByText } = render(ProvisioningView, {
+  let doneCalls = 0;
+  // The fourth submit advances: the caller navigated off the form,
+  // so no report renders and no re-read fires here.
+  let advance = false;
+  const { getAllByLabelText, getAllByRole, getByRole, queryAllByText, queryByText } = render(ProvisioningView, {
     props: {
       pending: false,
       initialIdentityFile: "/keys/identity",
@@ -47,10 +52,13 @@ test("store create submits the derived account with the seeds", async () => {
       initialMode: "create",
       onCreate: async (args: ProvisionCreateArgs) => {
         seen.push(args);
+        if (advance) return null;
         return report();
       },
       onJoin: async (_args: ProvisionJoinArgs) => report(),
-      onDone: () => {},
+      onDone: () => {
+        doneCalls += 1;
+      },
       onBack: () => {},
     },
   });
@@ -126,4 +134,15 @@ test("store create submits the derived account with the seeds", async () => {
   await tick();
   expect(seen.length).toBe(3);
   expect(seen[2]).toEqual(fullSuggestion);
+  expect(doneCalls).toBe(3);
+
+  // The caller advancing (null) renders no report and re-reads
+  // nothing here — the refresh already ran before navigation.
+  advance = true;
+  await fireEvent.click(getByRole("button", { name: "Create drive" }));
+  await tick();
+  await tick();
+  expect(seen.length).toBe(4);
+  expect(doneCalls).toBe(3);
+  expect(queryByText("Provisioning report")).toBeNull();
 });
