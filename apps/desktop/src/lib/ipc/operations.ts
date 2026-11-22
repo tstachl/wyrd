@@ -18,6 +18,7 @@
 import { invokeCommand, invokeValue } from "./client.js";
 import type { IpcResult } from "./types.js";
 import type {
+  CredentialReference,
   DriveSettingsState,
   KeyDefaults,
   OnboardingReport,
@@ -117,6 +118,15 @@ export function listDrives(): Promise<RegistryState> {
  */
 export function driveSettings(driveDir: string): Promise<DriveSettingsState> {
   return invokeValue<DriveSettingsState>("drive_settings", { driveDir });
+}
+
+/**
+ * One drive's credential backend, observed from its deployment
+ * config through the installed CLI. A reference only — never secret
+ * contents. Infallible: the unknown state rides inside the payload.
+ */
+export function driveCredentialReference(driveDir: string): Promise<CredentialReference> {
+  return invokeValue<CredentialReference>("drive_credential_reference", { driveDir });
 }
 
 /**

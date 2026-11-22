@@ -618,6 +618,84 @@ pub(crate) fn relay_source_line(source: RelaySource, config_path: Option<&Path>)
     }
 }
 
+/// The observable credential reference: backend kind plus the
+/// reference it uses, never secret material. Emitted as one JSON
+/// line by the shell's read-only query; the unknown case is a first-
+/// class answer, not an error, so the caller keeps the choice.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "backend", rename_all = "kebab-case")]
+pub(crate) enum CredentialReferenceReport {
+    /// Store-backed: the account label, never the stored secret.
+    OsStore {
+        /// The OS credential-store item name.
+        account: String,
+    },
+    /// File-backed: the configured paths, never their contents.
+    File {
+        /// Identity path from the deployment config.
+        #[serde(rename = "identityFile")]
+        identity_file: PathBuf,
+        /// Passphrase path from the deployment config.
+        #[serde(rename = "passphraseFile")]
+        passphrase_file: PathBuf,
+    },
+    /// No usable observation: the reason travels so the shell can
+    /// keep its explicit selector and say why.
+    Unknown {
+        /// Why the backend could not be observed.
+        reason: String,
+    },
+}
+
+/// Read the effective credential reference from the deployment
+/// config and render it as one JSON line. Never opens the keystore,
+/// never resolves credentials, never reads secret contents: paths
+/// and account labels are references. A missing, malformed, or
+/// incomplete configuration is an unknown answer with a reason —
+/// not a CLI error — so observation stays infallible for the shell.
+pub(crate) fn credential_reference_json(drive_dir: &Path, override_path: Option<&Path>) -> String {
+    let config_path = match override_path {
+        Some(path) => path.to_path_buf(),
+        None => drive_dir.join(DEFAULT_CONFIG_NAME),
+    };
+    let reference = match load_drive_config(drive_dir, override_path) {
+        Ok(Some(config)) if config.credential_backend.as_deref() == Some("os-store") => {
+            match config.credential_account {
+                Some(account) => CredentialReferenceReport::OsStore { account },
+                None => CredentialReferenceReport::Unknown {
+                    reason: format!(
+                        "{}: credential_backend is \"os-store\" but no account is set",
+                        config.path.display()
+                    ),
+                },
+            }
+        }
+        Ok(Some(config)) => match (config.identity_file, config.passphrase_file) {
+            (Some(identity_file), Some(passphrase_file)) => CredentialReferenceReport::File {
+                identity_file,
+                passphrase_file,
+            },
+            _ => CredentialReferenceReport::Unknown {
+                reason: format!(
+                    "{}: file backend names no identity/passphrase path",
+                    config.path.display()
+                ),
+            },
+        },
+        Ok(None) => CredentialReferenceReport::Unknown {
+            reason: format!("{}: no drive configuration file", config_path.display()),
+        },
+        Err(error) => CredentialReferenceReport::Unknown {
+            reason: error.to_string(),
+        },
+    };
+    // Serializing this small, fixed-shape enum cannot fail; keep a
+    // stable unknown answer rather than panicking on the impossible.
+    serde_json::to_string(&reference).unwrap_or_else(|_| {
+        r#"{"backend":"unknown","reason":"credential reference could not be rendered"}"#.to_string()
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1077,5 +1155,71 @@ mod tests {
                 .is_symlink(),
             "the link is left in place"
         );
+    }
+
+    #[test]
+    fn credential_reference_reports_a_store_account_without_secret_material() {
+        let (_temp, drive) = drive_with(
+            "[drive]\ncredential_backend = \"os-store\"\ncredential_account = \"wyrd-drive-alpha\"\n",
+        );
+        let json = credential_reference_json(&drive, None);
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["backend"], "os-store");
+        assert_eq!(parsed["account"], "wyrd-drive-alpha");
+        assert!(parsed.get("identityFile").is_none());
+        assert!(parsed.get("passphraseFile").is_none());
+        assert!(
+            !json.contains("secret"),
+            "no secret material in the reference"
+        );
+    }
+
+    #[test]
+    fn credential_reference_reports_configured_file_paths() {
+        let (_temp, drive) = drive_with(
+            "[drive]\nidentity_file = \"/keys/identity\"\npassphrase_file = \"/keys/passphrase\"\n",
+        );
+        let json = credential_reference_json(&drive, None);
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["backend"], "file");
+        assert_eq!(parsed["identityFile"], "/keys/identity");
+        assert_eq!(parsed["passphraseFile"], "/keys/passphrase");
+        assert!(parsed.get("account").is_none());
+    }
+
+    #[test]
+    fn credential_reference_is_unknown_without_a_config() {
+        let temp = TempDir::new();
+        let json = credential_reference_json(&temp.0, None);
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["backend"], "unknown");
+        assert!(parsed["reason"]
+            .as_str()
+            .unwrap()
+            .contains("no drive configuration file"));
+    }
+
+    #[test]
+    fn credential_reference_is_unknown_for_a_malformed_config() {
+        let (_temp, drive) = drive_with("[drive]\ncredential_backend = \"cloud\"\n");
+        let json = credential_reference_json(&drive, None);
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["backend"], "unknown");
+        assert!(parsed["reason"]
+            .as_str()
+            .unwrap()
+            .contains("unknown credential_backend"));
+    }
+
+    #[test]
+    fn credential_reference_is_unknown_when_a_file_backend_names_no_paths() {
+        let (_temp, drive) = drive_with("[drive]\nrelays = []\n");
+        let json = credential_reference_json(&drive, None);
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["backend"], "unknown");
+        assert!(parsed["reason"]
+            .as_str()
+            .unwrap()
+            .contains("no identity/passphrase path"));
     }
 }

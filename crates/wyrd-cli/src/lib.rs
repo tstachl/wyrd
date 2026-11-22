@@ -439,7 +439,8 @@ pub fn command(args: Vec<String>) -> Result<(), CliError> {
         Command::Update { .. }
         | Command::BuildInfo
         | Command::Identity { .. }
-        | Command::Settings { .. } => {
+        | Command::Settings { .. }
+        | Command::CredentialReference { .. } => {
             unreachable!("secretless command reached the credential prelude")
         }
     };
@@ -632,7 +633,8 @@ pub fn command(args: Vec<String>) -> Result<(), CliError> {
         Command::Update { .. }
         | Command::BuildInfo
         | Command::Identity { .. }
-        | Command::Settings { .. } => {
+        | Command::Settings { .. }
+        | Command::CredentialReference { .. } => {
             unreachable!("secretless command reached the credential dispatch")
         }
     }
@@ -665,6 +667,17 @@ fn dispatch_secretless(cli: &Cli) -> Option<Result<(), CliError>> {
         )),
         Command::BuildInfo => {
             println!("{}", update::render_build_info(&update::own_build_info()));
+            Some(Ok(()))
+        }
+        Command::CredentialReference { drive_dir } => {
+            // Read-only observation of the deployment config: no key
+            // load, no store lock, and no capability is granted. The
+            // unknown case carries its reason so the shell can keep
+            // an explicit selector rather than guessing a backend.
+            println!(
+                "{}",
+                crate::drive_config::credential_reference_json(drive_dir, cli.config.as_deref())
+            );
             Some(Ok(()))
         }
         Command::Identity { action } => Some(match action {

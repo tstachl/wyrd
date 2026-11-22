@@ -12,6 +12,7 @@
   import {
     applySettings,
     driveLock,
+    driveCredentialReference,
     driveSettings,
     driveUnlock,
     freshness,
@@ -275,9 +276,20 @@
   }
 
   async function refreshSettings(driveDir: string): Promise<void> {
+    // Both are local observations: the settings bounds from the
+    // per-user file, the credential backend from this drive's
+    // deployment config through the installed CLI. Neither opens a
+    // keystore; a failed credential query is an explicit unknown in
+    // its payload, so the shell keeps the operator choice.
     await readLocal(
-      () => driveSettings(driveDir),
-      (value) => presentation.storeSettings(driveDir, value),
+      async () => ({
+        settings: await driveSettings(driveDir),
+        credentials: await driveCredentialReference(driveDir),
+      }),
+      (value) => {
+        presentation.storeSettings(driveDir, value.settings);
+        presentation.storeCredentialReference(driveDir, value.credentials);
+      },
     );
   }
 
@@ -1194,6 +1206,7 @@
               driveDir={selectedDriveDir}
               driveName={selectedDrive?.name ?? null}
               snapshot={presentation.settingsSnapshotFor(selectedDriveDir)}
+              credentialReference={presentation.credentialReferenceFor(selectedDriveDir)}
               pending={busy}
               transportNotice={presentation.transportNotice}
               identityFile={onboardedIdentityFile}

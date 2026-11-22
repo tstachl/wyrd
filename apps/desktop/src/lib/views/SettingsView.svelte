@@ -11,12 +11,14 @@ One removal action ends this device's membership. Its confirmation
 offers two choices: keep local data (the `member leave` path) or take
 local data too (the installed CLI's `drive delete`). Both are
 alternatives, not a sequence — both author this device's removal, so
-leaving first makes a later local-data cleanup refuse. The action
-reads the drive's OS credential-store item by default (one label per
-drive, never a secret) with the verified identity pair as the
-operator fallback, and stays behind one acknowledgement and one
-confirmation that states both consequences. The CLI stops the drive's
-managed service after acknowledgement and resumes it on a refusal. -->
+leaving first makes a later local-data cleanup refuse. The credential
+backend is observed from this drive's deployment config through the
+installed CLI: a known store account or file pair is pinned, and the
+selector appears only where the backend is missing or explicitly
+unknown. References only — no secret contents. The action stays behind
+one acknowledgement and one confirmation that states both
+consequences. The CLI stops the drive's managed service after
+acknowledgement and resumes it on a refusal. -->
 <script lang="ts">
   import { Button } from "$lib/components/ui/button/index.js";
   import * as Card from "$lib/components/ui/card/index.js";
@@ -33,11 +35,12 @@ managed service after acknowledgement and resumes it on a refusal. -->
   import InfoHint from "$lib/components/info-hint.svelte";
   import CredentialStorageToggle from "./credential-storage-toggle.svelte";
   import type { Stamped } from "$lib/state/presentation.svelte.js";
-  import type { DriveSettingsState, EnablementState, ProvisionReport, ServiceState, SessionState, SettingsWriteReport, SparseUpdateArgs } from "$lib/ipc/results.js";
+  import type { CredentialReference, DriveSettingsState, EnablementState, ProvisionReport, ServiceState, SessionState, SettingsWriteReport, SparseUpdateArgs } from "$lib/ipc/results.js";
   import type { ProvisionDeleteArgs, ProvisionLeaveArgs } from "$lib/ipc/operations.js";
   import { buildDeleteArgs, buildLeaveArgs, type CredentialMode } from "$lib/ipc/provisioning-args.js";
   import {
     boundLabel,
+    credentialModeFor,
     describeProvisionResult,
     membershipSummary,
     observedRegistrySummary,
@@ -63,6 +66,12 @@ managed service after acknowledgement and resumes it on a refusal. -->
     /** Registry entry name for this drive; derives the store account label. */
     driveName: string | null;
     snapshot: Stamped<DriveSettingsState> | null;
+    /**
+     * This drive's credential backend as observed from its deployment
+     * config. `null` until observed; an explicit `unknown` answer
+     * keeps the selector and names why.
+     */
+    credentialReference: CredentialReference | null;
     pending: boolean;
     transportNotice: string | null;
     /** The pair the identity gate verified; paths only, never contents. */
@@ -112,7 +121,7 @@ managed service after acknowledgement and resumes it on a refusal. -->
     onRefreshDrives: () => void;
   }
 
-  let { driveDir, driveName, snapshot, pending, transportNotice, identityFile, passphraseFile, onRefresh, onLeave, onDelete, onApply, session, onRestartService, serviceState = null, enablement = null, onToggleEnablement, onRefreshDrives }: Props = $props();
+  let { driveDir, driveName, snapshot, credentialReference, pending, transportNotice, identityFile, passphraseFile, onRefresh, onLeave, onDelete, onApply, session, onRestartService, serviceState = null, enablement = null, onToggleEnablement, onRefreshDrives }: Props = $props();
 
   const restartKind = $derived(restartKindFor(session));
 
@@ -163,19 +172,45 @@ managed service after acknowledgement and resumes it on a refusal. -->
     }
   }
 
-  // One removal surface: one credential choice, one acknowledgement,
-  // one report. The dialog's two choices select which IPC command
-  // carries the same acknowledgement — they are alternatives, never
-  // a sequence (see the module comment).
+  // One removal surface: one acknowledgement, one report. The
+  // credential backend comes from observation, never from a guess:
+  // a known reference fixes both the mode and the reference it
+  // carries; an unknown answer keeps the operator selector and its
+  // reason. The two dialog choices stay alternatives, not a sequence
+  // (see the module comment).
   let acknowledged = $state(false);
   let confirmRemoval = $state(false);
   let removalWorking = $state(false);
   let removalReport = $state<ProvisionReport | null>(null);
   let removalError = $state<string | null>(null);
-  let credentialMode = $state<CredentialMode>("store");
+  let overrideMode = $state<CredentialMode>("store");
 
-  const storeAccount = $derived(driveName === null ? null : storeAccountFor(driveName));
-  const fileCredentialsReady = $derived(identityFile !== null && passphraseFile !== null);
+  const backendKnown = $derived(
+    credentialReference !== null && credentialReference.backend !== "unknown",
+  );
+  const credentialMode = $derived(credentialModeFor(credentialReference, overrideMode));
+  const storeAccount = $derived(
+    credentialReference?.backend === "os-store"
+      ? credentialReference.account
+      : driveName === null
+        ? null
+        : storeAccountFor(driveName),
+  );
+  // Observed paths are this drive's own reference; the verified pair
+  // from onboarding is only the fallback for an unobserved drive.
+  const effectiveIdentityFile = $derived(
+    credentialReference?.backend === "file"
+      ? credentialReference.identityFile
+      : identityFile,
+  );
+  const effectivePassphraseFile = $derived(
+    credentialReference?.backend === "file"
+      ? credentialReference.passphraseFile
+      : passphraseFile,
+  );
+  const fileCredentialsReady = $derived(
+    effectiveIdentityFile !== null && effectivePassphraseFile !== null,
+  );
   const credentialsReady = $derived(
     credentialMode === "store" ? storeAccount !== null : fileCredentialsReady,
   );
@@ -333,8 +368,8 @@ managed service after acknowledgement and resumes it on a refusal. -->
       driveDir,
       credentialMode,
       storeAccount,
-      identityFile,
-      passphraseFile,
+      identityFile: effectiveIdentityFile,
+      passphraseFile: effectivePassphraseFile,
       acknowledged,
     };
     try {
@@ -753,17 +788,27 @@ managed service after acknowledgement and resumes it on a refusal. -->
     </Card.Description>
   </Card.Header>
   <Card.Content class="flex flex-col gap-4">
-    <!-- Toggle extracted to a child component: sibling interactive
-      templates inline here break the happy-dom re-registration the
-      mounted tests rely on (second mount crashes traversing the
-      cloned template). The toggle flips local display state only, so
-      it never needs the flight gate — the removal submit below stays
-      gated. One selector serves both choices; they differ only in
-      whether local data goes too. -->
-    <CredentialStorageToggle
-      useStore={credentialMode === "store"}
-      onSelect={(next) => (credentialMode = next ? "store" : "file")}
-    />
+    <!-- The backend is observed, not chosen. Show the selector only
+      when the observation is missing or explicitly unknown: a known
+      store account or configured file pair is pinned by the drive's
+      own deployment config. Toggle extracted to a child component:
+      sibling interactive templates inline here break the happy-dom
+      re-registration the mounted tests rely on. -->
+    {#if !backendKnown}
+      <CredentialStorageToggle
+        useStore={overrideMode === "store"}
+        onSelect={(next) => (overrideMode = next ? "store" : "file")}
+      />
+      {#if credentialReference?.backend === "unknown"}
+        <p class="text-xs leading-relaxed text-muted-foreground">
+          This drive's credential backend could not be observed: {credentialReference.reason}. Choose one below.
+        </p>
+      {:else}
+        <p class="text-xs leading-relaxed text-muted-foreground">
+          This drive's credential backend has not been observed yet. Choose one below.
+        </p>
+      {/if}
+    {/if}
     {#if credentialMode === "store"}
       <p class="text-xs leading-relaxed text-muted-foreground">
         Reads this drive's store item
@@ -772,26 +817,30 @@ managed service after acknowledgement and resumes it on a refusal. -->
       </p>
     {:else}
       <p class="text-xs leading-relaxed text-muted-foreground">
-        Operator deployments only: reads the verified identity pair below.
+        {#if backendKnown}
+          This drive uses the credential files its configuration names; only the paths pass to the CLI.
+        {:else}
+          Operator deployments only: reads the verified identity pair below.
+        {/if}
       </p>
     {/if}
     {#if credentialMode === "file"}
       <dl>
         <DetailRow label="Identity file" hint={credentialsHint} hintLabel="About the credential paths">
           <span class="inline-flex min-w-0 items-center gap-1.5">
-            {#if identityFile === null}
+            {#if effectiveIdentityFile === null}
               <span class="text-muted-foreground">Unknown</span>
             {:else}
-              <span class="truncate font-mono text-xs">{identityFile}</span>
+              <span class="truncate font-mono text-xs">{effectiveIdentityFile}</span>
             {/if}
           </span>
         </DetailRow>
         <DetailRow label="Passphrase file" hint={credentialsHint} hintLabel="About the credential paths">
           <span class="inline-flex min-w-0 items-center gap-1.5">
-            {#if passphraseFile === null}
+            {#if effectivePassphraseFile === null}
               <span class="text-muted-foreground">Unknown</span>
             {:else}
-              <span class="truncate font-mono text-xs">{passphraseFile}</span>
+              <span class="truncate font-mono text-xs">{effectivePassphraseFile}</span>
             {/if}
           </span>
         </DetailRow>
