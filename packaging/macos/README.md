@@ -177,8 +177,11 @@ Finder boundary (honest, not a bug): the ad-hoc default logs
 `no-group-container` and stays inert — the App Group container only
 materializes under a team-signed build with provisioning. With the
 signing pair above the app is Finder-capable: the embedded domain
-registrar (`domain-registrar/main.swift`) polls the App Group's
-`Sockets/by-drive/` aliases the owner publishes and reconciles one
+registrar (`domain-registrar/main.swift`) is run by a per-user launch
+agent (`md.enesis.wyrd.domain-registrar`, installed by `install-dev.sh`)
+once at load and every 5 seconds. It needs no running Wyrd.app process.
+It polls the App Group's `Sockets/by-drive/` aliases the owner publishes
+and reconciles one
 `NSFileProviderDomain` per drive, using the 64-char drive id as the
 domain identifier the appex expects. The owner publishes the registry
 name in a `.label` file beside each alias; the Finder domain uses that

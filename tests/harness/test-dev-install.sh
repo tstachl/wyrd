@@ -195,6 +195,32 @@ match '--identifier md.enesis.wyrd' "$REGISTRAR_CODE" \
   || die "registrar: helper does not carry the app's signing identifier"
 pass "install pairs signing and embeds both native artifacts"
 
+# 7c. Domain reconciliation is a per-user launch agent, not a thread
+# inside a running Wyrd.app. The template runs one short-lived pass at
+# load and every 5 seconds; no KeepAlive makes a resident daemon. The
+# installer fills the helper path from the installed bundle and loads
+# the agent, unloading any previous copy first.
+AGENT_TEMPLATE="$ROOT/packaging/macos/launchd/md.enesis.wyrd.domain-registrar.plist"
+[[ -f "$AGENT_TEMPLATE" ]] \
+  || die "registrar agent: launchd template missing"
+# XML comments are prose, not keys: strip them before pinning keys.
+AGENT_CODE="$(sed '/<!--/,/-->/d' "$AGENT_TEMPLATE")"
+for marker in 'md.enesis.wyrd.domain-registrar' '@WYRD_REGISTRAR_PATH@' '<key>RunAtLoad</key>' '<key>StartInterval</key>' '<integer>5</integer>'; do
+  match "$marker" "$AGENT_CODE" \
+    || die "registrar agent: template marker '$marker' missing"
+done
+if match 'KeepAlive' "$AGENT_CODE"; then
+  die "registrar agent: KeepAlive would make a resident daemon"
+fi
+for marker in 'REGISTRAR_AGENT_TEMPLATE' 'LaunchAgents' 'launchctl unload -w' 'launchctl load -w'; do
+  match "$marker" "$INSTALL_CODE" \
+    || die "install: registrar agent marker '$marker' missing"
+done
+if match 'domains::spawn' "$(cat "$ROOT/crates/wyrd-desktop/src/main.rs")"; then
+  die "desktop: registrar still runs inside the app process"
+fi
+pass "install runs the registrar from a launch agent, not the app"
+
 # 8. Prerequisites fail with the fix named: Apple tools, cargo
 # (devenv), bun (desktop build), python3 (config version pin).
 for marker in 'xcode-select' 'cargo is not on PATH' 'bun is not on PATH' 'python3 is required'; do

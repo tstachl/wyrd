@@ -467,9 +467,38 @@ codesign --verify --deep --strict "$DEST" || {
 }
 xattr -dr com.apple.quarantine "$DEST" 2>/dev/null || true
 
+# Domain reconciliation runs from a per-user launch agent, not from a
+# resident Wyrd.app process. Fill the helper path from the installed
+# bundle, unload any previous copy of this agent (a reinstall must not
+# leave the old bundle's path live), then load the new one. The helper
+# itself is idempotent, so one pass every 5 seconds is enough.
+REGISTRAR_AGENT_TEMPLATE="$HERE/launchd/md.enesis.wyrd.domain-registrar.plist"
+REGISTRAR_AGENT="$HOME/Library/LaunchAgents/md.enesis.wyrd.domain-registrar.plist"
+if [ ! -f "$REGISTRAR_AGENT_TEMPLATE" ]; then
+    echo "error: missing registrar launch agent template: $REGISTRAR_AGENT_TEMPLATE." >&2
+    exit 1
+fi
+mkdir -p "$HOME/Library/LaunchAgents"
+REGISTRAR_AGENT_NEW="$REGISTRAR_AGENT.new.$$"
+sed "s|@WYRD_REGISTRAR_PATH@|$DEST/Contents/MacOS/WyrdDomainRegistrar|g" \
+    "$REGISTRAR_AGENT_TEMPLATE" > "$REGISTRAR_AGENT.new.$$"
+if launchctl list md.enesis.wyrd.domain-registrar >/dev/null 2>&1; then
+    launchctl unload -w "$REGISTRAR_AGENT" 2>/dev/null || true
+fi
+if ! mv -- "$REGISTRAR_AGENT_NEW" "$REGISTRAR_AGENT"; then
+    echo "error: cannot install the registrar launch agent at $REGISTRAR_AGENT." >&2
+    rm -f -- "$REGISTRAR_AGENT_NEW"
+    exit 1
+fi
+if ! launchctl load -w "$REGISTRAR_AGENT"; then
+    echo "error: the registrar launch agent was installed but did not load." >&2
+    echo "run: launchctl load -w $REGISTRAR_AGENT" >&2
+    exit 1
+fi
+
 if [ "$FINDER_CAPABLE" -eq 1 ]; then
     echo "installed $DEST (team-signed, Finder-capable, from $APP)"
-    echo "note: a drive appears in Finder once its owner publishes the group socket."
+    echo "note: a drive appears in Finder once its owner publishes the group socket and the registrar agent runs."
 else
     echo "installed $DEST (ad-hoc, from $APP)"
     echo "note: Finder integration stays inert ad-hoc (no-group-container):"

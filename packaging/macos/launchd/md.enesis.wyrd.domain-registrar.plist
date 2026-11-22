@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Per-user File Provider domain registrar. The installer fills
+  @WYRD_REGISTRAR_PATH@ with the helper inside the installed bundle and
+  loads this agent once; `StartInterval` runs one reconciliation pass
+  every 5 seconds. The helper is a short-lived process: it materializes
+  or resolves the App Group container, reads the owner's published
+  aliases and labels, and reconciles NSFileProviderDomain registrations.
+  No Wyrd.app process is needed, and no KeepAlive is wanted — each tick
+  is one idempotent pass, never a resident daemon.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>md.enesis.wyrd.domain-registrar</string>
+    <key>ProgramArguments</key>
+    <array>
+    <string>@WYRD_REGISTRAR_PATH@</string>
+    <string>{"group":"group.md.enesis.wyrd"}</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StartInterval</key>
+    <integer>5</integer>
+</dict>
+</plist>

@@ -70,7 +70,8 @@ accept paths. The daemon half is production: with no dev env vars,
 the owner publishes the alias for the served drive whenever the
 container exists, so registration plus the managed owner service
 (at login) leaves the socket where a registry-registered domain
-resolves it. The domain half is bundled with the desktop app: a
+resolves it. The domain half is bundled with the desktop app and run
+by a per-user launch agent, not a resident app process: a
 signed Swift helper reconciles `NSFileProviderDomain` registrations
 against the published `by-drive` aliases, keyed by the same 64-hex
 drive id the appex parses from the domain identifier. The contract
