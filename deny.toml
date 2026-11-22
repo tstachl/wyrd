@@ -44,9 +44,11 @@ ignore = [
   # 2026-11-18/19, nine advisories, one crate). Two paths, neither
   # reachable: heapless 0.8.0 via faster-hex is compiled out
   # (faster-hex enables `alloc`, and its heapless dep is
-  # `cfg(not(feature = \"alloc\"))` — lockfile-only), and postcard
-  # 1.1.3's compiled heapless use is `Vec<u8>` push/extend/index
-  # only, with its `IndexMap` use under `#[cfg(test)]`.
+  # `cfg(not(feature = "alloc"))` — lockfile-only), and postcard
+  # 1.1.3's compiled heapless use stays on the `Vec`/`String`
+  # surface (the `HVec` flavor over `Vec<u8>` plus `MaxSize`
+  # impls) without reaching any advisory-listed API; its
+  # `IndexMap` use is under `#[cfg(test)]`.
   # Shared removal trigger for all nine: delete the entry when the
   # iroh/nostr trees resolve heapless to >=0.9.4 (patched there), if
   # postcard's heapless use widens beyond `Vec`, or when the entry
