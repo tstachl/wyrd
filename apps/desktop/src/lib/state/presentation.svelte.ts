@@ -36,6 +36,7 @@
 
 import type { IpcResult } from "$lib/ipc/types.js";
 import type {
+  CredentialReference,
   DriveSettingsState,
   RegistryState,
   WireFreshness,
@@ -87,6 +88,8 @@ let lifecycleSnapshot = $state<Stamped<RegistryState> | null>(null);
 let statusSnapshots = $state<Record<string, Stamped<StatusSnapshot>>>({});
 /** Per-drive settings snapshots, keyed by absolute drive directory. */
 let settingsSnapshots = $state<Record<string, Stamped<DriveSettingsState>>>({});
+/** Per-drive credential references, observed through the CLI. Absent means not observed yet. */
+let credentialReferences = $state<Record<string, CredentialReference>>({});
 
 function stamp<T>(data: T): Stamped<T> {
   return { data, observedAtMs: Date.now() };
@@ -135,6 +138,10 @@ export const presentation = {
   settingsSnapshotFor(driveDir: string): Stamped<DriveSettingsState> | null {
     return settingsSnapshots[driveDir] ?? null;
   },
+  /** This drive's last credential reference — null where it was never observed this session. */
+  credentialReferenceFor(driveDir: string): CredentialReference | null {
+    return credentialReferences[driveDir] ?? null;
+  },
   /** This drive's availability: `unknown` where never probed this session. */
   availabilityFor(driveDir: string): OwnerAvailability {
     return availabilityByDrive[driveDir] ?? "unknown";
@@ -167,6 +174,9 @@ export const presentation = {
   },
   storeSettings(driveDir: string, data: DriveSettingsState): void {
     settingsSnapshots[driveDir] = stamp(data);
+  },
+  storeCredentialReference(driveDir: string, data: CredentialReference): void {
+    credentialReferences[driveDir] = data;
   },
   trackRequest(): void {
     pendingRequests += 1;

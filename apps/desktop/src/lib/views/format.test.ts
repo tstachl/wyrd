@@ -9,6 +9,7 @@ import {
   availabilityLabel,
   baseDirFromIdentity,
   boundLabel,
+  credentialModeFor,
   describeProvisionResult,
   formatObservedAt,
   freshnessLabel,
@@ -27,7 +28,28 @@ import {
   validateBoundInput,
   withDevCliHint,
 } from "./format.js";
-import type { DriveView, ProvisionReport, RegistryState } from "$lib/ipc/results.js";
+import type {
+  CredentialReference,
+  DriveView,
+  ProvisionReport,
+  RegistryState,
+} from "$lib/ipc/results.js";
+
+test("credential mode follows observation and keeps the fallback only when unknown", () => {
+  const store: CredentialReference = { backend: "os-store", account: "wyrd-drive-alpha" };
+  const file: CredentialReference = {
+    backend: "file",
+    identityFile: "/keys/id",
+    passphraseFile: "/keys/pass",
+  };
+  const unknown: CredentialReference = { backend: "unknown", reason: "no config" };
+
+  expect(credentialModeFor(store, "file")).toBe("store");
+  expect(credentialModeFor(file, "store")).toBe("file");
+  expect(credentialModeFor(unknown, "store")).toBe("store");
+  expect(credentialModeFor(unknown, "file")).toBe("file");
+  expect(credentialModeFor(null, "store")).toBe("store");
+});
 
 test("observation stamps render as UTC clock times", () => {
   expect(formatObservedAt(Date.UTC(2026, 4, 1, 7, 8, 9))).toBe("07:08:09 UTC");

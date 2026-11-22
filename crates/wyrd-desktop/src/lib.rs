@@ -29,6 +29,7 @@
 
 pub mod backend;
 pub mod commands;
+pub mod credential_ref;
 pub mod onboarding;
 pub mod provision;
 pub mod registry;
@@ -45,6 +46,7 @@ pub mod settings_view;
 mod tests_provision;
 
 pub use backend::{BackendError, DesktopBackend};
+pub use credential_ref::CredentialReference;
 pub use onboarding::{KeyDefaults, OnboardingReport, OnboardingResult};
 pub use provision::{LeaveRequest, ProvisionRequest, ProvisionResult, PROVISION_TIMEOUT};
 pub use registry::{

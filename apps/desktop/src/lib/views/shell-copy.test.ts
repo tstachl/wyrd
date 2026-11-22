@@ -144,6 +144,25 @@ test("invitation carries the protection explanation", () => {
   expect(provisioning).toContain("Only the intended device can open it.");
 });
 
+test("the removal backend is observed before it is chosen", () => {
+  // A known store account or configured file pair pins the mode, so
+  // the selector renders only while the observation is missing or
+  // explicitly unknown. The unknown reason stays visible; no secret
+  // contents are rendered or guessed.
+  for (const line of [
+    "This drive's credential backend could not be observed",
+    "This drive's credential backend has not been observed yet",
+    "This drive uses the credential files its configuration names",
+    "one item per drive, never a secret",
+  ]) {
+    expect(settings).toContain(line);
+  }
+  expect(settings).toContain('{#if !backendKnown}');
+  expect(settings).toContain('useStore={overrideMode === "store"}');
+  expect(settings).not.toContain('useStore={credentialMode === "store"}');
+  expect(settings).not.toContain("always defaulted to the OS credential store");
+});
+
 test("reinstall and restart name the backend choice", () => {
   // The reinstall recovery and the restart-to-apply dialog carry the
   // same store/file choice as the add and leave flows, so a

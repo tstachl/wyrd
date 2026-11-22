@@ -157,9 +157,17 @@ wyrd [--config <path>] materialization <drive_dir> \
 wyrd [--config <path>] snapshot [--identity-file <path>] [--passphrase-file <path>] <drive_dir> \
     (heads | diverged [--budget <N>] | merge [--head <id>...] [--default @N] [--take path=@N]... [--drop path]... [--dry-run] | recover --from <id> [--take path]... [--all] [--content <id>]... [--dry-run])
 wyrd [--config <path>] update [--expect-blake3 <hex>] [--relay <url>...] [--restart] [--identity-file <path>] [--passphrase-file <path>] <drive_dir> <archive>
+wyrd [--config <path>] credential-reference <drive_dir>
   where creds = [--identity-file <path>] [--passphrase-file <path>]: credential flags ride each
   materialization action, never the parent — `materialization role set` alone takes neither
 ```
+
+`credential-reference` is a read-only, secretless query: one JSON line
+naming the backend kind plus the store account or the configured file
+paths. It never opens a keystore, loads credentials, or reads secret
+contents. A missing, malformed, or incomplete configuration answers
+`{"backend":"unknown","reason":…}` rather than failing, so a caller
+keeps its explicit selector and can name why.
 
 `--identity-file` and `--passphrase-file` are optional when the
 drive's configuration file names them (see "Drive configuration

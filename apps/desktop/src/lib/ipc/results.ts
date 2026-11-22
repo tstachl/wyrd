@@ -381,6 +381,18 @@ export type DriveSettingsState =
   | { state: "nosection"; path: string }
   | { state: "unreadable"; reason: string };
 
+/**
+ * One drive's credential backend as observed from its deployment
+ * config by the installed CLI. References only — the store account
+ * label or the configured file paths, never secret contents. An
+ * unknown answer is explicit and carries its reason, so the shell
+ * keeps the operator choice instead of guessing "store".
+ */
+export type CredentialReference =
+  | { backend: "os-store"; account: string }
+  | { backend: "file"; identityFile: string; passphraseFile: string }
+  | { backend: "unknown"; reason: string };
+
 // Provisioning mirrors (constrained CLI adapter surface).
 //
 // Source of truth: `ProvisionResult` in

@@ -10,6 +10,8 @@
 import type { WireFreshnessState } from "$lib/ipc/results.js";
 import type { DriveAvailability, SessionState } from "$lib/ipc/results.js";
 import type { ProvisionReport } from "$lib/ipc/results.js";
+import type { CredentialReference } from "$lib/ipc/results.js";
+import type { CredentialMode } from "$lib/ipc/provisioning-args.js";
 
 /** Clock time of an observation stamp, UTC. The stamp is display metadata, never owner state. */
 export function formatObservedAt(observedAtMs: number): string {
@@ -217,6 +219,21 @@ export function suggestedDriveDirFor(nameValue: string, identityPath: string): s
 export function storeAccountFor(nameValue: string): string {
   const safeName = nameValue.trim() === "" ? "alpha" : nameValue.trim();
   return `wyrd-drive-${safeName}`;
+}
+
+/**
+ * Credential mode from observation: a known store or file reference
+ * fixes the mode; a missing or explicitly unknown observation keeps
+ * the caller's fallback so the operator selector still renders. No
+ * backend is inferred from a registry name.
+ */
+export function credentialModeFor(
+  reference: CredentialReference | null,
+  fallback: CredentialMode,
+): CredentialMode {
+  if (reference?.backend === "os-store") return "store";
+  if (reference?.backend === "file") return "file";
+  return fallback;
 }
 
 /**

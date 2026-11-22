@@ -279,6 +279,17 @@ pub(crate) enum Command {
         #[command(subcommand)]
         action: SettingsAction,
     },
+    /// Report one drive's configured credential backend as a
+    /// reference: the backend kind plus the store account, or the
+    /// credential file paths. Never secret contents, never a store
+    /// open, never a credential load. A missing or unreadable
+    /// configuration reports the unknown backend with its reason so
+    /// callers can keep an explicit choice. One JSON line on stdout.
+    CredentialReference {
+        /// Drive directory whose deployment configuration is read.
+        /// Absolute only, never resolved against the current directory.
+        drive_dir: PathBuf,
+    },
     /// Upgrade this installation from a local release archive:
     /// quiesce, flush, stop, swap the binary atomically, verify the
     /// new build against the actual store, and hand back to the

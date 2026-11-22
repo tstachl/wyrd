@@ -13,6 +13,7 @@ import {
   applySettings,
   captureParent,
   provisionDelete,
+  driveCredentialReference,
   driveLock,
   driveSettings,
   driveUnlock,
@@ -136,6 +137,20 @@ test("driveSettings returns configured bounds verbatim", async () => {
   expect(seen).toEqual([
     { cmd: "drive_settings", args: { driveDir: "/drives/alpha" } },
   ]);
+});
+
+test("the credential reference wrapper sends one drive dir and returns the observation verbatim", async () => {
+  const reference = { backend: "os-store", account: "wyrd-drive-alpha" } as const;
+  let seen: unknown = null;
+  mockIPC((cmd, args) => {
+    seen = { cmd, args };
+    return reference;
+  });
+  expect(await driveCredentialReference("/drives/alpha")).toEqual(reference);
+  expect(seen).toEqual({
+    cmd: "drive_credential_reference",
+    args: { driveDir: "/drives/alpha" },
+  });
 });
 
 test("local-query rejections throw a transport error, never taxonomy", async () => {

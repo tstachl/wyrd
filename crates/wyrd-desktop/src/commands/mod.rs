@@ -37,6 +37,7 @@ use wyrd_owner_client::{
 };
 use wyrd_settings::SparseUpdate;
 
+use crate::credential_ref::CredentialReference;
 use crate::registry::{self, RegistryState, RegistryStatus};
 use crate::settings_apply::{
     self, SettingsApplyRequest, SettingsApplyResult, SETTINGS_APPLY_TIMEOUT,
@@ -328,6 +329,41 @@ pub async fn drive_settings<R: Runtime>(app: AppHandle<R>, drive_dir: String) ->
     .await
 }
 
+/// One drive's credential backend as observed from its deployment
+/// config through the installed CLI: a reference — backend kind,
+/// store account, or credential paths — never secret contents. A
+/// read-only query: no keystore opens, no owner connection is
+/// claimed, and every failure is an explicit `Unknown` with a
+/// reason so the shell keeps its operator choice. The CLI is the
+/// one parser of `default.toml`; this command invents no shape.
+#[tauri::command]
+pub async fn drive_credential_reference<R: Runtime>(
+    app: AppHandle<R>,
+    drive_dir: String,
+) -> CredentialReference {
+    let dir = match super::validate_drive_path(&drive_dir, "drive_dir") {
+        Ok(dir) => dir,
+        Err(reason) => return CredentialReference::Unknown { reason },
+    };
+    let _flight = app.state::<FlightTracker>().enter();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<crate::AppState>();
+        let cli_bin = match state.cli_bin() {
+            Ok(bin) => bin,
+            Err(reason) => return CredentialReference::Unknown { reason },
+        };
+        crate::credential_ref::run_credential_reference(
+            &cli_bin,
+            &dir,
+            crate::credential_ref::CREDENTIAL_REF_TIMEOUT,
+        )
+    })
+    .await
+    .unwrap_or_else(|join| CredentialReference::Unknown {
+        reason: format!("ipc worker failed: {join}"),
+    })
+}
+
 /// One completed settings edit plus the observed settings state
 /// that decides the display. Infallible like the other local
 /// queries: `result` carries the operation outcome (exit codes only
@@ -504,6 +540,7 @@ pub fn handler<R: Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool {
         reconnect,
         list_drives,
         drive_settings,
+        drive_credential_reference,
         drive_settings_write,
         provision::provision_create,
         provision::provision_join,
