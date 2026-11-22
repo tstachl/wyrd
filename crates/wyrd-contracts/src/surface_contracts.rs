@@ -45,7 +45,7 @@ fn check_owner_runs_through_daemon(files: &[(&str, &str)]) -> Vec<String> {
 /// shared service (P2, option A): the mount and the headless runner
 /// each name `OwnerService::bind`, and neither hand-rolls the server
 /// (`OwnerServer::new`, `bind_listener`, `serve_on`) ad hoc. The
-/// service definition itself (`owner/server.rs`) and the interface
+/// service definition itself (`owner/server/`) and the interface
 /// tests own those markers legitimately, so this checker runs only
 /// on the two composer files — the filesystem test below pins the
 /// file set, and the negative tests prove the checker bites.

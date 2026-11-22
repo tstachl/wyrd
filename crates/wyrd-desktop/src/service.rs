@@ -86,7 +86,7 @@ pub enum ServiceState {
 
 /// Where the per-drive service definition lives on this platform.
 /// Mirrors the daemon's `service_definition_path`
-/// (`wyrd-daemon/src/bootstrap.rs`): the launchd agent property list
+/// (`wyrd-daemon/src/bootstrap/service.rs`): the launchd agent property list
 /// on macOS, the systemd user unit elsewhere. Observation only — the
 /// installer and the CLI remain the writers.
 pub fn service_definition_path(service: &str) -> PathBuf {
@@ -197,7 +197,7 @@ fn run_probe_capture(argv: &[&str]) -> Option<String> {
 /// `drive-foo` never matches a `drive-foo-bar` record.
 ///
 /// Mirror: the daemon holds the same parser beside its own probe
-/// (`wyrd-daemon/src/bootstrap.rs`, `parse_print_disabled`) —
+/// (`wyrd-daemon/src/bootstrap/service.rs`, `parse_print_disabled`) —
 /// layering keeps manager reach out of the desktop's dependency
 /// closure, so the two copies evolve together by contract, not by
 /// import. The Unknown-on-absent/garbage rule is the shared
@@ -228,7 +228,7 @@ fn parse_print_disabled_output(output: &str, service: &str) -> EnablementState {
 /// `Unknown`, never `Disabled`.
 ///
 /// Mirror: the daemon holds the same word map beside its own probe
-/// (`wyrd-daemon/src/bootstrap.rs`, `parse_is_enabled`) — same
+/// (`wyrd-daemon/src/bootstrap/service.rs`, `parse_is_enabled`) — same
 /// layering reason as above; the word map is the shared invariant.
 #[cfg(any(test, not(target_os = "macos")))]
 fn parse_is_enabled_output(output: &str) -> EnablementState {
