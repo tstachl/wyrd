@@ -1,6 +1,7 @@
 # Settings ownership, stage 2: UI editor as restricted writer
 
-Status: Frozen. This note resolves OD desktop-settings-ownership
+Status: Frozen, with the app-wide diagnostics amendment in §9 (T20 in
+`docs/contracts/trust.md`). This note resolves OD desktop-settings-ownership
 stage 2 (`settings_view.rs`): the ownership, concurrency, and
 runtime-application contract for UI-driven settings mutation.
 Normative invariants live in the contracts linked below; nothing
@@ -162,10 +163,31 @@ exists.
    that key → restart → applied; clear → key vanishes), then
    merge.
 
+## 9. Amendment: app-wide diagnostics setting (T20)
+
+`docs/contracts/trust.md` T20 introduces one application-wide local
+diagnostics level (`default` / `detailed`). It is an exception to this
+note's per-drive, five-key scope, not a second settings authority.
+
+| Item | Amendment |
+| --- | --- |
+| Scope | `AppSettingsFile` gains an app-wide `diagnostics` section beside, not inside, the per-drive map. The five-key sparse contract for per-drive operational bounds is unchanged. |
+| Authority | The CLI/settings backend remains the only mutation writer; unknown fields are still refused; the frontend gains no filesystem authority. |
+| Ownership | One authoritative user-visible setting. No `diagnostics.json` and no competing process-local source of truth. A `--verbose` launch flag stays a CLI development convenience, never the setting. |
+| Activation | Live for subsequent operations, overriding this note's restart-to-apply rule for this setting only: Rust workers through the owner interface, the File Provider extension through a read-only app-group mirror read at callback boundaries. Desktop surfaces show the persisted state. |
+| Reader authority | The extension reads only; it never writes settings. The app-group mirror distributes the authoritative value rather than creating a second configuration source. |
+| Privacy | The setting widens verbosity under the field-level allowlist in `docs/contracts/trust.md`; it never changes the default-visible warn surface or operational behavior. |
+
+Implementation order puts this amendment first: the extended schema,
+the restricted writer, and the read-only distribution path are the
+prerequisite for any live activation.
+
 ## Acceptance invariants
 
 1. Absence is meaningful. 2. Sparse ownership (five keys, one
    drive). 3. Strict compatibility with the daemon reader.
 4. No silent data loss. 5. Atomic multi-key commits. 6. Save ≠
    applied. 7. Configured display only. 8. No frontend filesystem
-   authority.
+   authority. 9. One app-wide diagnostics setting, written only through
+   the restricted writer, live-applied to workers and the extension,
+   never a second configuration authority.

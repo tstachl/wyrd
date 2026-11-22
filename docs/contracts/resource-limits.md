@@ -40,12 +40,16 @@ identities, 2 MiB per read capture) still opens, the 129th
 concurrent one fails closed instead of retaining gigabytes.
 `ResourceBudgets::default()` is the
 pinned contract for the legacy defaults. Tuning is file-level: the
-per-user application settings file (`settings.json`, one file with
-per-drive sections — see `wyrd-core::settings`) carries the five
-surfaced bounds (the retention ceiling plus `max_admit_per_pass`,
-the fetch pass budget, the mutation wait, and the open timeout),
-with command-line flags winning over the file and the file over
-these defaults. `--retained-quota` on `mount`/`sync now`/`vault` is
+per-user application settings file (`settings.json`, one file with one
+app-wide section plus per-drive sections — see `wyrd-core::settings`)
+carries the five surfaced bounds (the retention ceiling plus
+`max_admit_per_pass`, the fetch pass budget, the mutation wait, and
+the open timeout), with command-line flags winning over the file and
+the file over these defaults. The app-wide section holds the single
+local diagnostics level (`default` / `detailed`, T20 in
+[`trust.md`](trust.md)); it is live-applied and governs verbosity
+only, never operational limits or error reporting.
+`--retained-quota` on `mount`/`sync now`/`vault` is
 the flag half of the quota; relay configuration stays in the drive
 deployment file and renders read-only on the surface.
 
