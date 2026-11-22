@@ -8,7 +8,7 @@
 // Run: `bun run test` from `apps/desktop/`.
 
 import { expect, test } from "bun:test";
-import { buildCreateArgs, buildJoinArgs, buildLeaveArgs, buildReconfigureArgs } from "./provisioning-args.js";
+import { buildCreateArgs, buildDeleteArgs, buildJoinArgs, buildLeaveArgs, buildReconfigureArgs } from "./provisioning-args.js";
 
 test("store create seeds the item and names the reference", () => {
   expect(
@@ -218,4 +218,37 @@ test("file reconfigure refuses before any spawn where the pair is absent", () =>
       noService: false,
     }),
   ).toBeNull();
+});
+
+test("local removal names only the provisioned credential reference", () => {
+  expect(
+    buildDeleteArgs({
+      driveDir: "/drives/alpha",
+      credentialMode: "store",
+      storeAccount: "wyrd-drive-alpha",
+      identityFile: null,
+      passphraseFile: null,
+      acknowledged: true,
+    }),
+  ).toEqual({
+    driveDir: "/drives/alpha",
+    credentialBackend: "os-store",
+    credentialAccount: "wyrd-drive-alpha",
+    acknowledged: true,
+  });
+  expect(
+    buildDeleteArgs({
+      driveDir: "/drives/alpha",
+      credentialMode: "file",
+      storeAccount: "wyrd-drive-alpha",
+      identityFile: "/keys/identity",
+      passphraseFile: "/keys/passphrase",
+      acknowledged: false,
+    }),
+  ).toEqual({
+    driveDir: "/drives/alpha",
+    identityFile: "/keys/identity",
+    passphraseFile: "/keys/passphrase",
+    acknowledged: false,
+  });
 });

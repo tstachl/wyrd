@@ -7,12 +7,13 @@ for this drive only) through the installed CLI and the shared
 transaction; application of the values is the drive's business,
 at its next start.
 
-The one membership action stays as it was: leaving the drive reads
-the drive's OS credential-store item by default (one label per
-drive, never a secret) with the verified identity pair as the
-operator fallback, stays behind an explicit acknowledgement and a
-confirmation dialog, and never deletes local data as a side effect
-of the UI. -->
+Both membership actions read the drive's OS credential-store item
+by default (one label per drive, never a secret) with the verified
+identity pair as the operator fallback, and stay behind an explicit
+acknowledgement and a confirmation dialog. Leaving never deletes
+local data as a side effect; the separate local-data removal runs
+the installed CLI's `drive delete` and states its consequence before
+action. -->
 <script lang="ts">
   import { Button } from "$lib/components/ui/button/index.js";
   import * as Card from "$lib/components/ui/card/index.js";
@@ -30,8 +31,8 @@ of the UI. -->
   import CredentialStorageToggle from "./credential-storage-toggle.svelte";
   import type { Stamped } from "$lib/state/presentation.svelte.js";
   import type { DriveSettingsState, EnablementState, ProvisionReport, ServiceState, SessionState, SettingsWriteReport, SparseUpdateArgs } from "$lib/ipc/results.js";
-  import type { ProvisionLeaveArgs } from "$lib/ipc/operations.js";
-  import { buildLeaveArgs, type CredentialMode } from "$lib/ipc/provisioning-args.js";
+  import type { ProvisionDeleteArgs, ProvisionLeaveArgs } from "$lib/ipc/operations.js";
+  import { buildDeleteArgs, buildLeaveArgs, type CredentialMode } from "$lib/ipc/provisioning-args.js";
   import {
     boundLabel,
     describeProvisionResult,
@@ -67,6 +68,8 @@ of the UI. -->
     passphraseFile: string | null;
     onRefresh: () => void;
     onLeave: (args: ProvisionLeaveArgs) => Promise<ProvisionReport>;
+    /** Remove local data after authoring this device's removal; re-observe the result. */
+    onDelete: (args: ProvisionDeleteArgs) => Promise<ProvisionReport>;
     /** Apply one sparse update; the report carries the outcome plus the post-run observation. */
     onApply: (update: SparseUpdateArgs) => Promise<SettingsWriteReport>;
     /**
@@ -106,7 +109,7 @@ of the UI. -->
     onRefreshDrives: () => void;
   }
 
-  let { driveDir, driveName, snapshot, pending, transportNotice, identityFile, passphraseFile, onRefresh, onLeave, onApply, session, onRestartService, serviceState = null, enablement = null, onToggleEnablement, onRefreshDrives }: Props = $props();
+  let { driveDir, driveName, snapshot, pending, transportNotice, identityFile, passphraseFile, onRefresh, onLeave, onDelete, onApply, session, onRestartService, serviceState = null, enablement = null, onToggleEnablement, onRefreshDrives }: Props = $props();
 
   const restartKind = $derived(restartKindFor(session));
 
@@ -164,10 +167,21 @@ of the UI. -->
   let leaveError = $state<string | null>(null);
   let leaveCredentialMode = $state<CredentialMode>("store");
 
+  let deleteAcknowledged = $state(false);
+  let confirmDelete = $state(false);
+  let deleteWorking = $state(false);
+  let deleteReport = $state<ProvisionReport | null>(null);
+  let deleteError = $state<string | null>(null);
+  let deleteCredentialMode = $state<CredentialMode>("store");
+
   const leaveAccount = $derived(driveName === null ? null : storeAccountFor(driveName));
   const fileCredentialsReady = $derived(identityFile !== null && passphraseFile !== null);
   const credentialsReady = $derived(
     leaveCredentialMode === "store" ? leaveAccount !== null : fileCredentialsReady,
+  );
+  const deleteAccount = $derived(driveName === null ? null : storeAccountFor(driveName));
+  const deleteCredentialsReady = $derived(
+    deleteCredentialMode === "store" ? deleteAccount !== null : fileCredentialsReady,
   );
 
   // Editor draft: one pending sparse update for this drive. `inputs`
@@ -281,7 +295,9 @@ of the UI. -->
   let toggling = $state(false);
   let toggleReport = $state<{ ok: boolean; detail?: string } | null>(null);
 
-  const busy = $derived(pending || leaveWorking || saving || restarting || toggling);
+  const busy = $derived(
+    pending || leaveWorking || deleteWorking || saving || restarting || toggling,
+  );
 
   async function toggleEnablement(enable: boolean): Promise<void> {
     if (onToggleEnablement === undefined) return;
@@ -329,6 +345,29 @@ of the UI. -->
       leaveError = failure instanceof Error ? failure.message : String(failure);
     } finally {
       leaveWorking = false;
+    }
+  }
+
+  async function localDelete(): Promise<void> {
+    if (!deleteCredentialsReady) return;
+    if (deleteCredentialMode === "store" && deleteAccount === null) return;
+    deleteWorking = true;
+    deleteError = null;
+    try {
+      deleteReport = await onDelete(
+        buildDeleteArgs({
+          driveDir,
+          credentialMode: deleteCredentialMode,
+          storeAccount: deleteAccount,
+          identityFile,
+          passphraseFile,
+          acknowledged: deleteAcknowledged,
+        }),
+      );
+    } catch (failure: unknown) {
+      deleteError = failure instanceof Error ? failure.message : String(failure);
+    } finally {
+      deleteWorking = false;
     }
   }
 </script>
@@ -844,6 +883,144 @@ of the UI. -->
     {/if}
   </Card.Footer>
 </Card.Root>
+
+<Card.Root class="mt-6 ring-destructive/25">
+  <Card.Header>
+    <Card.Title class="flex items-center gap-2">
+      <CircleAlertIcon class="size-4 text-destructive" />
+      Remove local drive data
+    </Card.Title>
+    <Card.Description>
+      End this device's membership and remove its local data and references from this device.
+    </Card.Description>
+  </Card.Header>
+  <Card.Content class="flex flex-col gap-4">
+    <CredentialStorageToggle
+      useStore={deleteCredentialMode === "store"}
+      onSelect={(next) => (deleteCredentialMode = next ? "store" : "file")}
+    />
+    {#if deleteCredentialMode === "store"}
+      <p class="text-xs leading-relaxed text-muted-foreground">
+        Reads this drive's store item
+        {#if deleteAccount !== null}<span class="font-mono text-xs">{deleteAccount}</span>{/if} —
+        one item per drive, never a secret.
+      </p>
+    {:else}
+      <p class="text-xs leading-relaxed text-muted-foreground">
+        Operator deployments only: reads the verified identity pair below.
+      </p>
+    {/if}
+    {#if deleteCredentialMode === "file"}
+      <dl>
+        <DetailRow label="Identity file" hint={credentialsHint} hintLabel="About the credential paths">
+          <span class="inline-flex min-w-0 items-center gap-1.5">
+            {#if identityFile === null}
+              <span class="text-muted-foreground">Unknown</span>
+            {:else}
+              <span class="truncate font-mono text-xs">{identityFile}</span>
+            {/if}
+          </span>
+        </DetailRow>
+        <DetailRow label="Passphrase file" hint={credentialsHint} hintLabel="About the credential paths">
+          <span class="inline-flex min-w-0 items-center gap-1.5">
+            {#if passphraseFile === null}
+              <span class="text-muted-foreground">Unknown</span>
+            {:else}
+              <span class="truncate font-mono text-xs">{passphraseFile}</span>
+            {/if}
+          </span>
+        </DetailRow>
+      </dl>
+    {/if}
+
+    {#if deleteReport !== null}
+      <Alert.Root class="border-primary/30 bg-primary/5">
+        <CircleAlertIcon />
+        <Alert.Title>Removal report</Alert.Title>
+        <Alert.Description class="space-y-1 text-foreground/80 [&_p:not(:last-child)]:mb-1">
+          <p>{describeProvisionResult(deleteReport)}</p>
+          <p>{observedRegistrySummary(deleteReport)}</p>
+          <p>{membershipSummary(deleteReport)}</p>
+        </Alert.Description>
+      </Alert.Root>
+    {/if}
+    {#if deleteError !== null}
+      <Alert.Root variant="destructive">
+        <CircleAlertIcon />
+        <Alert.Title>Local removal failed</Alert.Title>
+        <Alert.Description>{deleteError}</Alert.Description>
+      </Alert.Root>
+    {/if}
+
+    {#if deleteReport === null}
+      {#if !deleteCredentialsReady}
+        <p class="text-sm text-destructive">
+          {#if deleteCredentialMode === "store"}
+            This drive has no registry name to derive its store item from, so local removal is disabled.
+          {:else}
+            This device's verified identity pair is unavailable, so local removal is disabled. Fix the
+            identity gate first.
+          {/if}
+        </p>
+      {/if}
+      <Field.Field orientation="horizontal" class="rounded-xl border border-destructive/30 bg-destructive/5 p-3">
+        <Checkbox id="delete-acknowledged" bind:checked={deleteAcknowledged} disabled={busy} />
+        <Field.Content>
+          <Field.Label for="delete-acknowledged" class="leading-relaxed font-normal">
+            I understand: this removes this device from the drive going forward and takes this drive's local data off the device — the directory, registry entry, service definition, credential item and group socket and label. No other member's copy changes, and the removed files' blocks stay recoverable from this device until overwritten, like any removed file. If this device is the drive's only owner, the owner set becomes empty and no future membership or ownership change can be authorized — hand over ownership before the drive should remain manageable. A non-owner or a frozen drive is refused before anything is removed. Stop the drive's service first if it holds the store.
+          </Field.Label>
+        </Field.Content>
+      </Field.Field>
+    {/if}
+  </Card.Content>
+  <Card.Footer class="justify-end">
+    {#if deleteReport !== null}
+      <Button variant="outline" size="sm" disabled={busy} onclick={onRefreshDrives}>
+        <RefreshCwIcon data-icon="inline-start" />
+        Refresh drives
+      </Button>
+    {:else}
+      <Button
+        variant="destructive"
+        size="sm"
+        disabled={busy || !deleteAcknowledged || !deleteCredentialsReady}
+        onclick={() => (confirmDelete = true)}
+      >
+        {#if deleteWorking}
+          <Spinner data-icon="inline-start" />
+          Removing…
+        {:else}
+          <CircleAlertIcon data-icon="inline-start" />
+          Remove local drive data…
+        {/if}
+      </Button>
+    {/if}
+  </Card.Footer>
+</Card.Root>
+
+<AlertDialog.Root bind:open={confirmDelete}>
+  <AlertDialog.Content>
+    <AlertDialog.Header>
+      <AlertDialog.Title>Remove this drive's local data?</AlertDialog.Title>
+      <AlertDialog.Description>
+        This removes this device from the drive going forward and takes this drive's local data off the device — the directory, registry entry, service definition, credential item and group socket and label. No other member's copy changes, and the removed files' blocks stay recoverable from this device until overwritten, like any removed file. If this device is the drive's only owner, the owner set becomes empty and no future membership or ownership change can be authorized — hand over ownership before the drive should remain manageable. A non-owner or a frozen drive is refused before anything is removed. Stop the drive's service first if it holds the store.
+      </AlertDialog.Description>
+    </AlertDialog.Header>
+    <AlertDialog.Footer>
+      <AlertDialog.Cancel>Keep this data</AlertDialog.Cancel>
+      <AlertDialog.Action
+        variant="destructive"
+        disabled={busy}
+        onclick={() => {
+          confirmDelete = false;
+          void localDelete();
+        }}
+      >
+        Remove local data
+      </AlertDialog.Action>
+    </AlertDialog.Footer>
+  </AlertDialog.Content>
+</AlertDialog.Root>
 
 <AlertDialog.Root bind:open={confirmLeave}>
   <AlertDialog.Content>

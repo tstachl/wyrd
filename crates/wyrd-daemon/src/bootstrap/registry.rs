@@ -741,8 +741,8 @@ pub fn write_registry(
 ///   to it) and returns its result; the whole resulting map is then
 ///   validated like `write_registry` validates its candidates;
 /// - it cannot delete: keys the resulting map drops come back from
-///   the carried raws verbatim (a future `forget` needs an explicit
-///   deletion path, not this primitive).
+///   the carried raws verbatim; [`forget_registry_entry`] is the
+///   explicit deletion path, not this primitive.
 ///
 /// Carried entries merge verbatim, and the post-write skipped reasons
 /// return alongside — so the caller surfaces rotten data from the
@@ -752,6 +752,36 @@ pub fn write_registry(
 pub(crate) fn modify_registry<T>(
     path: &Path,
     modify: impl FnOnce(&mut BTreeMap<String, RegistryEntry>) -> Result<T, BootstrapError>,
+) -> Result<(T, Vec<String>), BootstrapError> {
+    modify_locked_registry(path, modify, None)
+}
+
+/// Forget one registry entry by key: the deletion path the
+/// read-modify-write above deliberately lacks. The lock covers the
+/// read, the removal from **both** the validated map and the raw
+/// carry-forward map, validation of everything that remains, and
+/// the crash-safe rewrite — so the forgotten key cannot be revived
+/// by the merge on this pass or by a later `write_registry` on a
+/// stale base. Every other entry, valid or carried, and every other
+/// skip reason is preserved verbatim.
+///
+/// Absence is not an error: forgetting an entry that is already
+/// gone is a no-op write (the file is still re-serialized under the
+/// lock, which keeps the operation idempotent and convergent with
+/// concurrent writers).
+pub fn forget_registry_entry(path: &Path, key: &str) -> Result<(), BootstrapError> {
+    modify_locked_registry(path, |_| Ok(()), Some(key)).map(|_| ())
+}
+
+/// The single locked read-modify-write: `modify_registry` supplies a
+/// transformation with no deletion; `forget_registry_entry` removes
+/// one key from both maps under the same lock hold. Keeping one
+/// writer guarantees the validation, permissions, and rename
+/// discipline cannot drift between the two callers.
+fn modify_locked_registry<T>(
+    path: &Path,
+    modify: impl FnOnce(&mut BTreeMap<String, RegistryEntry>) -> Result<T, BootstrapError>,
+    forget: Option<&str>,
 ) -> Result<(T, Vec<String>), BootstrapError> {
     // One lock hold for the read, the transformation, the merge,
     // and the rename — the same serialization `write_registry`
@@ -802,6 +832,13 @@ pub(crate) fn modify_registry<T>(
         }
     }
     let result = modify(&mut valid)?;
+    if let Some(key) = forget {
+        // Remove from both maps: dropping only the validated copy
+        // would resurrect the key verbatim from `raws` in the merge
+        // below (and from any later rewrite that carries it).
+        valid.remove(key);
+        raws.remove(key);
+    }
     for (key, entry) in &valid {
         validate_entry(key, entry).map_err(|source| BootstrapError::RefusedWrite {
             source: Box::new(source),

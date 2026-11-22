@@ -1518,3 +1518,74 @@ fn spawn_unlock_maps_an_early_exit_that_closed_stdin() {
     );
     std::fs::remove_dir_all(&dir).unwrap_or(());
 }
+
+/// Local deletion rides the `drive delete` verb with credentials
+/// before the verb and acknowledgement as `--yes`. The CLI authors
+/// the self-removal before it removes the directory; the adapter
+/// never passes a seed.
+#[test]
+fn delete_argv_names_the_drive_and_gates_yes() {
+    let base = DeleteRequest {
+        drive_dir: PathBuf::from("/drives/alpha"),
+        credentials: CredentialSource::File {
+            identity_file: Some(PathBuf::from("/keys/identity")),
+            passphrase_file: Some(PathBuf::from("/keys/passphrase")),
+        },
+        acknowledged: false,
+    };
+    let rendered: Vec<String> = delete_argv(&base)
+        .unwrap()
+        .iter()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(
+        rendered,
+        vec![
+            "drive",
+            "/drives/alpha",
+            "--identity-file",
+            "/keys/identity",
+            "--passphrase-file",
+            "/keys/passphrase",
+            "delete",
+        ]
+    );
+
+    let acked = DeleteRequest {
+        acknowledged: true,
+        ..base
+    };
+    let rendered: Vec<String> = delete_argv(&acked)
+        .unwrap()
+        .iter()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(rendered.last().map(String::as_str), Some("--yes"));
+
+    let store = DeleteRequest {
+        drive_dir: PathBuf::from("/drives/alpha"),
+        credentials: CredentialSource::OsStore {
+            account: "wyrd-drive-alpha".to_string(),
+            seed: None,
+        },
+        acknowledged: true,
+    };
+    let rendered: Vec<String> = delete_argv(&store)
+        .unwrap()
+        .iter()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(
+        rendered,
+        vec![
+            "drive",
+            "/drives/alpha",
+            "--credential-backend",
+            "os-store",
+            "--credential-account",
+            "wyrd-drive-alpha",
+            "delete",
+            "--yes",
+        ]
+    );
+}

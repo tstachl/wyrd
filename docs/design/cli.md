@@ -563,12 +563,22 @@ filesystem operation over ciphertext and the keyring file, not a
 cryptographic erasure, and v0 defines no key-erasure primitive.
 
 Like the other offline writers, `drive delete` is a transient owner:
-it opens the keystore and takes the exclusive store lock, so a
+it opens the keystore and takes the exclusive store lock. A
 long-lived owner holding the drive — `wyrd owner`, `wyrd mount`, or a
-desktop service — refuses it with `StoreLocked`. Stop the service
-first and retry. A failed directory removal after the commit reports
-loudly with the removal already standing: remove the directory by
-hand, the membership half is done.
+desktop service — refuses it with `StoreLocked` (exit 78). Stop the
+service first and retry.
+
+After the commit the local forget is complete: the directory, the
+exact-match registry entry (`--registry` selects the file), the
+per-drive service (disabled and its definition cleared), the
+OS credential-store item where the drive is store-backed, and the
+group-container socket, alias, and label are all removed. File-backed
+credential paths are operator files and survive. Each cleanup step
+is independent: a failure warns on stderr but never claims the
+directory removal failed — the membership half is already done and
+the operator finishes the remaining step by hand. A failed directory
+removal after the commit reports loudly with the removal already
+standing: remove the directory by hand.
 
 ### `drive reconfigure` — supervision change in place
 

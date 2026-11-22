@@ -33,8 +33,9 @@ pub use provision::{
     ProvisionState, ReconfigureConfig, StartServiceConfig,
 };
 pub use registry::{
-    default_registry_path, read_registry, registry_lock_path, write_registry, BootstrapError,
-    Registry, RegistryEntry, ServiceMode, REGISTRY_FILENAME, REGISTRY_VERSION,
+    default_registry_path, forget_registry_entry, read_registry, registry_lock_path,
+    write_registry, BootstrapError, Registry, RegistryEntry, ServiceMode, REGISTRY_FILENAME,
+    REGISTRY_VERSION,
 };
 pub use service::{
     disable_service, enable_service, install_service, render_launchd_plist, render_systemd_unit,

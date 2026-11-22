@@ -12,6 +12,7 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import {
   applySettings,
   captureParent,
+  provisionDelete,
   driveLock,
   driveSettings,
   driveUnlock,
@@ -189,6 +190,13 @@ test("provisioning wrappers send one args object per command", async () => {
     acknowledged: true,
   });
   expect(left.result.result).toBe("completed");
+  const removed = await provisionDelete({
+    driveDir: "/drives/alpha",
+    credentialBackend: "os-store",
+    credentialAccount: "wyrd-drive-alpha",
+    acknowledged: true,
+  });
+  expect(removed.result.result).toBe("completed");
   expect(seen).toEqual([
     {
       cmd: "provision_create",
@@ -226,6 +234,17 @@ test("provisioning wrappers send one args object per command", async () => {
           driveDir: "/drives/alpha",
           identityFile: "/keys/identity",
           passphraseFile: "/keys/passphrase",
+          acknowledged: true,
+        },
+      },
+    },
+    {
+      cmd: "provision_delete",
+      args: {
+        args: {
+          driveDir: "/drives/alpha",
+          credentialBackend: "os-store",
+          credentialAccount: "wyrd-drive-alpha",
           acknowledged: true,
         },
       },

@@ -699,6 +699,10 @@ pub(crate) enum DriveAction {
         /// Confirm the terminal removal (the drive freezes permanently).
         #[arg(long)]
         yes: bool,
+        /// Registry file elsewhere than the platform default. The
+        /// matching entry is forgotten after the removal commits.
+        #[arg(long, value_name = "PATH")]
+        registry: Option<PathBuf>,
     },
     /// Reconfigure this registered drive's supervision in place:
     /// stop and clear the old service definition, rewrite the

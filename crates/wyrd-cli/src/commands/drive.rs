@@ -3,14 +3,19 @@
 //! reconfiguring a registered drive's supervision in place, and
 //! starting an installed service without rewriting anything.
 //!
-//! Delete composes two operations that already exist: the owner
-//! authors `Remove(self)` through the engine (which enforces
-//! owner-only, the terminal acknowledgement, and the frozen-drive
-//! refusal), then the runner removes the local directory. The
-//! directory is removed only after the transition commits, so every
-//! refusal — non-owner, unacknowledged terminal, frozen, locked store
-//! — leaves it untouched. A mounted drive fails closed with the
-//! store lock: stop the service first, the same rule `member` states.
+//! Delete composes two operations: the owner authors `Remove(self)`
+//! through the engine (which enforces owner-only, the terminal
+//! acknowledgement, and the frozen-drive refusal), then the runner
+//! removes the local directory and every local artifact that named
+//! it — the registry entry, the service definition, the store-backed
+//! credential item, and the group socket, alias, and label. The
+//! directory and those artifacts are removed only after the
+//! transition commits, so every refusal — non-owner, unacknowledged
+//! terminal, frozen, held store — leaves them untouched. Like the
+//! other offline writers, a live owner holding the store refuses with
+//! exit 78: stop the service first. Each cleanup step is independent:
+//! failures are warned about on stderr, never reported as a failed
+//! directory removal.
 //!
 //! Service-start resolves the registry entry by drive directory
 //! (exact match; zero or duplicate matches refuse without writing),
@@ -47,13 +52,17 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use wyrd_core::lifecycle_surface::{render_deletion_confirmation, render_leave_refusal};
+use wyrd_credential_store::OsStoreBackend;
 use wyrd_daemon::bootstrap::{
-    default_registry_path, read_registry, reconfigure, service_definition_path_for_service,
-    set_service_enabled, start_managed_service, ReconfigureConfig, RegistryEntry,
-    StartServiceConfig,
+    default_registry_path, disable_service, forget_registry_entry, read_registry, reconfigure,
+    service_definition_path_for_service, set_service_enabled, start_managed_service,
+    ReconfigureConfig, RegistryEntry, StartServiceConfig,
 };
-use wyrd_format::{Change, DeviceId, MembershipTransition};
-use wyrd_sync::keys::DeviceIdentitySecret;
+use wyrd_daemon::owner::{
+    group_label_path, group_socket_path, group_symlink_path, production_group_container,
+};
+use wyrd_format::{Change, DeviceId, DriveId, MembershipTransition};
+use wyrd_sync::keys::{CredentialError, CredentialLoader, CredentialRef, DeviceIdentitySecret};
 use wyrd_sync::runtime::Engine;
 
 use crate::args::{Credentials, DriveAction};
@@ -62,14 +71,74 @@ use crate::commands::member::{carry_pending, require_last_owner_confirmation};
 use crate::drive_config::LoadedConfig;
 use crate::CliError;
 
+/// What the post-commit local cleanup managed to remove. Each step
+/// is independent: a failure is warned about on stderr and recorded
+/// here, it never turns the already-committed directory removal
+/// into a claimed failure. Tests assert these facts without needing
+/// a drive directory that no longer exists.
+#[derive(Debug, Default)]
+pub(crate) struct CleanupReport {
+    /// The exact-match registry entry was forgotten.
+    pub(crate) registry_removed: bool,
+    /// The per-drive service was disabled and its definition cleared.
+    pub(crate) service_cleared: bool,
+    /// The store-backed credential item was deleted (or was absent).
+    pub(crate) credential_removed: bool,
+    /// How many of the three group-container artifacts were removed.
+    pub(crate) group_artifacts_removed: usize,
+    /// Loud, non-fatal failures from individual cleanup steps.
+    pub(crate) warnings: Vec<String>,
+}
+
+impl CleanupReport {
+    fn warn(&mut self, step: &str, error: impl std::fmt::Display) {
+        let message = format!("{step}: {error}");
+        eprintln!("warning: {message}");
+        self.warnings.push(message);
+    }
+}
+
 /// What `drive delete` did: the authored self-removal plus the
-/// carried count and the terminal flag, returned so tests assert the
-/// transition shape without reopening a directory that is gone.
+/// carried count, the terminal flag, and the local cleanup outcome,
+/// returned so tests assert the transition shape without reopening
+/// a directory that is gone.
 pub(crate) struct DeleteReport {
     pub(crate) device: DeviceId,
     pub(crate) transition: MembershipTransition,
     pub(crate) carried: usize,
     pub(crate) terminal: bool,
+    pub(crate) cleanup: CleanupReport,
+}
+
+/// Inputs to the post-commit local cleanup. Production fills these
+/// from the resolved registry flag and credential backend; tests
+/// pass hermetic temp paths and a recording credential loader so no
+/// real service manager or OS keychain is touched.
+pub(crate) struct DeleteCleanup<'a> {
+    /// Registry file to forget the exact-match entry from.
+    pub(crate) registry_path: PathBuf,
+    /// Store-backed credential to retire. `None` for a file-backed
+    /// drive: the operator owns those files, not the drive.
+    pub(crate) credential: Option<CredentialRef>,
+    /// Backend used to delete the store item.
+    pub(crate) credential_loader: &'a dyn CredentialLoader,
+    /// Group container holding the File Provider artifacts. `None`
+    /// resolves the production container.
+    pub(crate) group_container: Option<PathBuf>,
+    /// Service definition file override (hermetic tests only).
+    pub(crate) service_definition: Option<PathBuf>,
+}
+
+impl Default for DeleteCleanup<'static> {
+    fn default() -> Self {
+        Self {
+            registry_path: default_registry_path(),
+            credential: None,
+            credential_loader: &OsStoreBackend,
+            group_container: None,
+            service_definition: None,
+        }
+    }
 }
 
 /// Run one `drive` action over the keystore.
@@ -85,8 +154,25 @@ pub(crate) fn drive(
         DriveAction::Init | DriveAction::Bootstrap { .. } => {
             unreachable!("init/bootstrap resolve in the dispatcher before drive()")
         }
-        DriveAction::Delete { yes } => {
-            let report = delete_drive(drive_dir.clone(), passphrase, identity, yes)?;
+        DriveAction::Delete { yes, registry } => {
+            // A store-backed credential belongs to this drive's
+            // account and is retired after the commit. File-backed
+            // paths are operator-owned and deliberately kept: see
+            // the comment in `delete_drive`.
+            let credential = match crate::credentials::effective_backend(credentials, config)? {
+                crate::credentials::EffectiveBackend::OsStore { account } => {
+                    Some(CredentialRef::OsStore { account })
+                }
+                crate::credentials::EffectiveBackend::File => None,
+            };
+            let cleanup = DeleteCleanup {
+                registry_path: registry.unwrap_or_else(default_registry_path),
+                credential,
+                credential_loader: &OsStoreBackend,
+                group_container: None,
+                service_definition: None,
+            };
+            let report = delete_drive(drive_dir.clone(), passphrase, identity, yes, &cleanup)?;
             print!(
                 "{}",
                 render_deletion_confirmation(
@@ -285,21 +371,136 @@ pub(crate) fn service_disable_drive(
     Ok(())
 }
 
+/// Resolve the one registry entry naming this drive directory by
+/// exact match. Zero matches is an unregistered drive (nothing was
+/// ever provisioned here); duplicates are a conflict to resolve by
+/// hand, never a guess about which service or item to retire. A
+/// registry that cannot be read is warned about and skipped — a
+/// rotten config must not block the membership transition.
+fn resolve_delete_target(
+    drive_dir: &Path,
+    cleanup: &DeleteCleanup<'_>,
+    report: &mut CleanupReport,
+) -> Option<RegistryEntry> {
+    let registry = match read_registry(&cleanup.registry_path) {
+        Ok(registry) => registry,
+        Err(error) => {
+            report.warn(
+                &format!("registry {}", cleanup.registry_path.display()),
+                error,
+            );
+            return None;
+        }
+    };
+    let mut matches: Vec<RegistryEntry> = registry
+        .drives
+        .values()
+        .filter(|entry| entry.drive_dir == drive_dir)
+        .cloned()
+        .collect();
+    matches.sort_by(|left, right| left.name.cmp(&right.name));
+    match matches.len() {
+        0 => None,
+        1 => matches.pop(),
+        _ => {
+            let names: Vec<&str> = matches.iter().map(|entry| entry.name.as_str()).collect();
+            report.warn(
+                "registry entry",
+                format!(
+                    "conflicting entries {} — resolve the duplicate by hand before cleanup",
+                    names.join(", ")
+                ),
+            );
+            None
+        }
+    }
+}
+
+/// Remove every local artifact that named the deleted drive. Runs
+/// only after the removal transition commits and the directory is
+/// gone; each step is independent, and a failure is reported loudly
+/// without undoing the directory removal or skipping the rest.
+fn forget_local_artifacts(
+    entry: Option<&RegistryEntry>,
+    drive: &DriveId,
+    cleanup: &DeleteCleanup<'_>,
+    report: &mut CleanupReport,
+) {
+    if let Some(entry) = entry {
+        match forget_registry_entry(&cleanup.registry_path, &entry.name) {
+            Ok(()) => report.registry_removed = true,
+            Err(error) => report.warn("registry entry", error),
+        }
+        // Idempotent when the locked-store path already stopped the
+        // service before the commit: the unit is inactive, so this
+        // only persists the disable and clears the definition file.
+        match disable_service(entry, cleanup.service_definition.as_ref()) {
+            Ok(()) => report.service_cleared = true,
+            Err(error) => report.warn("service definition", error),
+        }
+    }
+    if let Some(reference) = &cleanup.credential {
+        // `Missing` is an already-retired item, not a failed cleanup.
+        match cleanup.credential_loader.delete(reference) {
+            Ok(()) | Err(CredentialError::Missing { .. }) => report.credential_removed = true,
+            Err(error) => report.warn("OS credential item", error),
+        }
+    }
+    // File-backed credentials are operator files: they may be shared
+    // with other drives, rotated by hand, or simply not owned by
+    // this drive, so deletion never touches them. Only the OS-store
+    // item, scoped to this drive's account, is retired above.
+    if let Some(container) = cleanup
+        .group_container
+        .clone()
+        .or_else(production_group_container)
+    {
+        let paths = [
+            group_socket_path(&container, drive),
+            group_symlink_path(&container, drive),
+            group_label_path(&container, drive),
+        ];
+        let mut removed = 0;
+        for path in paths {
+            match std::fs::remove_file(&path) {
+                Ok(()) => removed += 1,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => report.warn(&format!("group artifact {}", path.display()), error),
+            }
+        }
+        report.group_artifacts_removed = removed;
+    }
+}
+
 /// Delete this drive locally: refuse a non-owner before anything is
 /// authored or touched, require acknowledgement of the terminal
 /// consequence, author `Remove(self)` through the owner, then remove
-/// the local directory. The engine owns the frozen-drive refusal
-/// (nothing commits while frozen, so the directory survives); the
-/// directory removal runs only after the commit, and the store is
-/// released first.
+/// the local directory and every local artifact that named it. The
+/// engine owns the frozen-drive refusal (nothing commits while
+/// frozen, so the directory survives); every artifact is removed
+/// only after the commit. A live owner holding the store refuses
+/// with exit 78 before anything changes, so the operator stops the
+/// service first. Each cleanup failure is warned about on stderr
+/// and never reported as a failed directory removal.
 pub(crate) fn delete_drive(
     drive_dir: PathBuf,
     passphrase: &str,
     identity: DeviceIdentitySecret,
     yes: bool,
+    cleanup: &DeleteCleanup<'_>,
 ) -> Result<DeleteReport, CliError> {
+    let mut cleanup_report = CleanupReport::default();
+    let target = resolve_delete_target(&drive_dir, cleanup, &mut cleanup_report);
+
+    // Like every other offline writer, a live owner holding the store
+    // refuses without touching anything. Stopping a service here would
+    // change state on a refusal the engine may still issue (non-owner,
+    // unacknowledged, frozen), so the operator stops it first.
     let mut engine = Engine::open_keystore(drive_dir.clone(), passphrase, identity)?;
     let this = engine.device();
+    // Group artifacts are named by drive id, not by registry name:
+    // capture it while the engine still holds the store.
+    let drive = engine.drive();
     // OD-12-C, option A: a non-owner authors nothing and loses
     // nothing — the refusal names the owner-run command, like the
     // `member leave` refusal, and the directory is never touched.
@@ -344,11 +545,12 @@ pub(crate) fn delete_drive(
         .owners_of(&transition.transition_id())
         .map(|owners| owners.is_empty())
         .unwrap_or(false);
-    let report = DeleteReport {
+    let mut report = DeleteReport {
         device: this,
         transition,
         carried,
         terminal,
+        cleanup: CleanupReport::default(),
     };
     // Release the store before removing its directory: the lock dies
     // with the engine, and the removal is a plain filesystem walk
@@ -364,6 +566,8 @@ pub(crate) fn delete_drive(
             source,
         });
     }
+    forget_local_artifacts(target.as_ref(), &drive, cleanup, &mut cleanup_report);
+    report.cleanup = cleanup_report;
     Ok(report)
 }
 

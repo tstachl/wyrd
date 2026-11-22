@@ -10,6 +10,7 @@
 
 import type {
   ProvisionCreateArgs,
+  ProvisionDeleteArgs,
   ProvisionJoinArgs,
   ProvisionLeaveArgs,
   ProvisionReconfigureArgs,
@@ -138,6 +139,35 @@ export function buildLeaveArgs(input: {
   passphraseFile: string | null;
   acknowledged: boolean;
 }): ProvisionLeaveArgs {
+  if (input.credentialMode === "store" && input.storeAccount !== null) {
+    return {
+      driveDir: input.driveDir,
+      credentialBackend: "os-store",
+      credentialAccount: input.storeAccount,
+      acknowledged: input.acknowledged,
+    };
+  }
+  return {
+    driveDir: input.driveDir,
+    identityFile: input.identityFile ?? undefined,
+    passphraseFile: input.passphraseFile ?? undefined,
+    acknowledged: input.acknowledged,
+  };
+}
+
+/**
+ * One local-data removal payload: the same credential reference
+ * shape as leave, with its own terminal acknowledgement. No seed is
+ * ever sent — the CLI reads the provisioned credential.
+ */
+export function buildDeleteArgs(input: {
+  driveDir: string;
+  credentialMode: CredentialMode;
+  storeAccount: string | null;
+  identityFile: string | null;
+  passphraseFile: string | null;
+  acknowledged: boolean;
+}): ProvisionDeleteArgs {
   if (input.credentialMode === "store" && input.storeAccount !== null) {
     return {
       driveDir: input.driveDir,
