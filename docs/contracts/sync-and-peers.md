@@ -308,7 +308,8 @@ under-claim direction the subset rule already blesses. The union is
 conservative because committed evidence only grows (append-only
 base facts, no GC): installs and held snapshots never un-prove,
 so unioning pages cannot over-claim. A future reclamation change
-that lets evidence shrink must revisit this sentence. No new wire
+that lets evidence shrink must revisit this sentence (GC side of this
+dependency: `docs/design/garbage-collection.md`, open question 2). No new wire
 kind, record tag, or evidence version carries the pages: they reuse
 the statement layout, so an old reader treats each page as an
 ordinary small statement (`upgrade-contract.md`). The fan-out
