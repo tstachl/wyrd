@@ -48,7 +48,9 @@ the open timeout), with command-line flags winning over the file and
 the file over these defaults. The app-wide section holds the single
 local diagnostics level (`default` / `detailed`, T20 in
 [`trust.md`](trust.md)); it is live-applied and governs verbosity
-only, never operational limits or error reporting.
+only, never operational limits or error reporting. The diagnostics
+sink bounds, including owner-log rotation, are owned by that
+section, not duplicated here.
 `--retained-quota` on `mount`/`sync now`/`vault` is
 the flag half of the quota; relay configuration stays in the drive
 deployment file and renders read-only on the surface.

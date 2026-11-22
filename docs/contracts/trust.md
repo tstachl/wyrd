@@ -1187,10 +1187,10 @@ does.
 3. Activation is live for subsequent operations, not restart-to-apply.
    The File Provider extension reads the setting from the shared
    app-group configuration at callback boundaries; Rust workers receive
-   a live update through the owner interface (the operation's shape is
-   owned by `owner-interface.md`). Disabling takes effect on subsequent
-   operations. Desktop surfaces show the persisted state, never an
-   in-flight override.
+   a live update through `diagnostics-set` and read it back with
+   `diagnostics-status` (shapes in `owner-interface.md`). Disabling
+   takes effect on subsequent operations. Desktop surfaces show the
+   persisted state, never an in-flight override.
 4. Detailed mode uses the field-level allowlist below and does not widen
    the default-visible `warn` surface. A field is not public merely
    because diagnostics are on.
@@ -1208,6 +1208,11 @@ does.
    not an implementation framework. A `--verbose` launch flag may remain
    a CLI development convenience, but it is not a source of truth for the
    application-wide setting.
+
+The opt-in debug log row above keeps its own allowlist. Detailed mode
+does not widen that log merely by being enabled, and enabling both does
+not promote a field that the table below keeps hidden onto a
+detailed-mode surface.
 
 | Information | Default | Detailed |
 |---|---|---|

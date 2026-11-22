@@ -40,7 +40,7 @@ owner, version 1, five optional bounds + `notified` records),
 | Unowned supported data | Preserve semantically (not byte-identical) |
 | Shared schema | Extract before writer; new minimal crate |
 | Transaction | Shared lock (incl. daemon `notified` writer) + content-hash defense |
-| Runtime application | Restart-to-apply |
+| Runtime application | Restart-to-apply, except the app-wide `diagnostics` level (§9 / T20), which is live-applied with its shape defined in `docs/contracts/owner-interface.md` |
 | Reset | Per-key clearing only |
 | Permissions | 0600 + private parent dir (new and existing files) |
 | Stopgap | Ship first (path + example empty state) |
@@ -114,8 +114,13 @@ concurrent notification landings during saves.
 
 ## 5. Apply and permissions
 
-Restart-to-apply for v0; live reload is rejected (new runtime
-transition, in-flight-work semantics, owner-interface expansion).
+Restart-to-apply for v0 per-drive settings; live reload of those is
+rejected (new runtime transition, in-flight-work semantics,
+owner-interface expansion). The app-wide `diagnostics` level is the one
+exception (§9 / T20): its live delivery is `diagnostics-set` with a
+`diagnostics-status` read-back in `docs/contracts/owner-interface.md`,
+with no durable fact, mutation or policy entry, and in-flight work
+keeping the level it started under.
 Saving and applying are separate outcomes: saved /
 restart-required / restarting / applied-on-restartup / saved-but-
 restart-failed. Never report application from restart acceptance.
@@ -174,7 +179,8 @@ note's per-drive, five-key scope, not a second settings authority.
 | Scope | `AppSettingsFile` gains an app-wide `diagnostics` section beside, not inside, the per-drive map. The five-key sparse contract for per-drive operational bounds is unchanged. |
 | Authority | The CLI/settings backend remains the only mutation writer; unknown fields are still refused; the frontend gains no filesystem authority. |
 | Ownership | One authoritative user-visible setting. No `diagnostics.json` and no competing process-local source of truth. A `--verbose` launch flag stays a CLI development convenience, never the setting. |
-| Activation | Live for subsequent operations, overriding this note's restart-to-apply rule for this setting only: Rust workers through the owner interface, the File Provider extension through a read-only app-group mirror read at callback boundaries. Desktop surfaces show the persisted state. |
+| Activation | Live for subsequent operations, overriding this note's restart-to-apply rule for this setting only: Rust workers through `diagnostics-set` / `diagnostics-status` in `docs/contracts/owner-interface.md`, the File Provider extension through a read-only app-group mirror read at callback boundaries. Desktop surfaces show the persisted state. |
+| Compatibility | The new top-level section is not an unversioned additive change: `deny_unknown_fields` makes older readers refuse it. Introducing it bumps `APP_SETTINGS_VERSION`; the reader migrates a v1 file to v2 with an absent level meaning `default`, and refuses a newer version as today. |
 | Reader authority | The extension reads only; it never writes settings. The app-group mirror distributes the authoritative value rather than creating a second configuration source. |
 | Privacy | The setting widens verbosity under the field-level allowlist in `docs/contracts/trust.md`; it never changes the default-visible warn surface or operational behavior. |
 
