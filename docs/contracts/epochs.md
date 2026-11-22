@@ -261,6 +261,13 @@ future transition (including conflict resolution) can ever be authorized.
 Membership freezes permanently. Recovery of such a drive requires the root
 custody / guardian mechanism (`trust.md`), which is reserved and post-v0.
 Implementations MUST warn before applying a last-owner removal.
+Enforced (v0.4): CLI `member remove`, `member leave`, and `drive delete`
+refuse without `--yes` via `require_last_owner_confirmation`, authoring
+nothing unacknowledged; desktop gates `acknowledged` → `--yes` with a
+consequence dialog and the CLI backend re-enforces it. The engine
+`remove_device` primitive and the daemon owner socket are intentionally
+out of scope — warning lives in the authoring surface, and the socket
+exposes no membership verb.
 
 ### Drive deletion: local forget plus owner-authored removal (OD-12-A/B/C, decided as recommended)
 

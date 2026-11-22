@@ -425,7 +425,7 @@ must travel, and this contract records the shape of what must
 travel there — but the handoff is not yet in the flow: no join
 entry point accepts or compares an expected owner, drive, or
 genesis today, so validation authenticates the invitation only
-(enforcement: `nevent1qqsfu4n9wja74w02h7ty8tsekc6qhp7pegw5erwgqyv6946rjq4p9sgpz9mhxue69uhkwunpwdczuap49eehg0qssvz`).
+(enforcement: `nostr:nevent1qqsfu4n9wja74w02h7ty8tsekc6qhp7pegw5erwgqyv6946rjq4p9sgpz9mhxue69uhkwunpwdczuap49eehg0qssvz`).
 
 ### Rotation delivery (pinned)
 
