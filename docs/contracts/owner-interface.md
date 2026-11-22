@@ -35,12 +35,15 @@ from the served drive itself, then publishes the alias the domain
 resolves through; it is compiled on every
 platform but binds the group socket only where the container
 exists, so the "macOS" scoping is the consumer plus the container,
-not a platform gate in the framing code. Absent container means
-primary-only; a present-but-unbindable container aborts the run
+not a platform gate in the framing code. Absent container means a
+primary-only bind with a bounded late retry; the containing app
+initializes the container at launch, and if the owner started first
+the retry publishes the alias from the same server without a restart.
+A present-but-unbindable container aborts a startup bind
 all-or-nothing rather than running deaf to the extension (see the
-bind docs). The containing app must run before the service on
-first run: the daemon creates only `Sockets/` inside the
-container, never the container itself. The
+bind docs); the late retry is bounded and ends with a visible error.
+The daemon creates only `Sockets/` inside the container, never the
+container itself. The
 filename derives from the served `DriveId`
 (`DriveId::fileprovider_socket_fingerprint`, 64-bit domain
 separated derivation, hex-encoded); the daemon is the only

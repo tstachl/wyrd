@@ -8,13 +8,15 @@
 //! owner publishes, so the shell needs no drive-id knowledge and the
 //! owner protocol stays unchanged.
 
+use std::io::Read;
 use std::path::PathBuf;
-use std::process::Command;
-use std::time::Duration;
+use std::process::{Child, Command, Stdio};
+use std::time::{Duration, Instant};
 
 const HELPER: &str = "WyrdDomainRegistrar";
 const CONFIG: &str = r#"{"group":"group.md.enesis.wyrd"}"#;
 const POLL_INTERVAL: Duration = Duration::from_secs(5);
+const HELPER_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Bundled helper first, staged worktree copy for `cargo tauri dev`.
 /// A missing helper is an honest error, never a silent skip: without
@@ -36,25 +38,57 @@ fn helper_path() -> Result<PathBuf, String> {
     Err("no WyrdDomainRegistrar in the bundle or staging dir".to_string())
 }
 
+/// Read a finished child's pipes, with a hard deadline. Polling
+/// `try_wait` first keeps the reconciliation thread from blocking on
+/// a wedged helper forever; the helper's own 10-second per-callback
+/// waits are not a bound on the whole process.
+fn wait_bounded(mut child: Child, deadline: Instant) -> Result<(bool, String, String), String> {
+    loop {
+        match child
+            .try_wait()
+            .map_err(|error| format!("wait for registrar: {error}"))?
+        {
+            Some(status) => {
+                let mut stdout = Vec::new();
+                let mut stderr = Vec::new();
+                if let Some(mut pipe) = child.stdout.take() {
+                    let _ = pipe.read_to_end(&mut stdout);
+                }
+                if let Some(mut pipe) = child.stderr.take() {
+                    let _ = pipe.read_to_end(&mut stderr);
+                }
+                return Ok((
+                    status.success(),
+                    String::from_utf8_lossy(&stdout).trim().to_string(),
+                    String::from_utf8_lossy(&stderr).trim().to_string(),
+                ));
+            }
+            None if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("registrar timed out and was killed".to_string());
+            }
+            None => std::thread::sleep(Duration::from_millis(100)),
+        }
+    }
+}
+
 /// One reconciliation call. The helper is idempotent: adding an
 /// already-registered domain is a benign race, and stale domains are
 /// removed by identifier. Its stdout is the added/removed count.
 fn reconcile_once() -> Result<String, String> {
     let path = helper_path()?;
-    let output = Command::new(&path)
+    let child = Command::new(&path)
         .arg(CONFIG)
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .map_err(|error| format!("spawn {}: {error}", path.display()))?;
-    let counts = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if output.status.success() {
+    let (success, counts, stderr) = wait_bounded(child, Instant::now() + HELPER_TIMEOUT)?;
+    if success {
         Ok(counts)
     } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(format!(
-            "registrar exited {}: {}",
-            output.status,
-            stderr.trim()
-        ))
+        Err(format!("registrar exited unsuccessfully: {stderr}"))
     }
 }
 

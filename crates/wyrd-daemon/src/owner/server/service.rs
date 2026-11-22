@@ -301,7 +301,15 @@ impl OwnerService {
         let retry_late = Arc::clone(&late_group);
         let retry_server = Arc::clone(&server);
         let retry_thread = std::thread::spawn(move || {
-            while !retry_stop.load(Ordering::Relaxed) {
+            // Bounded: a present-but-unbindable group path must not
+            // leave the owner looking healthy while permanently deaf.
+            // A minute is ample for the app to create the container at
+            // launch; after that the run stays primary-only with a
+            // terminal, visible verdict.
+            for _ in 0..30 {
+                if retry_stop.load(Ordering::Relaxed) {
+                    return;
+                }
                 if let Some(container) = production_group_container() {
                     match bind_group_endpoints(&container, &drive) {
                         Ok((group_path, link_path, group_listener)) => {
@@ -330,6 +338,9 @@ impl OwnerService {
                     std::thread::sleep(Duration::from_millis(100));
                 }
             }
+            tracing::error!(
+                "App Group container did not become bindable; owner remains primary-only"
+            );
         });
         Ok(OwnerService {
             socket_path,
@@ -382,8 +393,12 @@ impl OwnerService {
                 }
                 // The app is expected to have created the container
                 // first; this path keeps a login-time owner from
-                // staying permanently deaf if it did not.
+                // staying permanently deaf if it did not. Only macOS
+                // has an App Group container to wait for.
+                #[cfg(target_os = "macos")]
                 None => Self::bind_with_group_retry(handles, drive_dir, served),
+                #[cfg(not(target_os = "macos"))]
+                None => Self::bind(handles, drive_dir),
             },
             Some(Ok(config)) => {
                 if config.drive != served {

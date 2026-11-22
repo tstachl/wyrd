@@ -26,6 +26,32 @@ private struct Config: Decodable {
     let group: String
 }
 
+/// One completion per API call. Reusing a single semaphore across
+/// operations lets a late callback from a timed-out call satisfy the
+/// next wait and report a phantom result.
+private final class Completion<T> {
+    private let semaphore = DispatchSemaphore(value: 0)
+    private var value: T?
+    private let lock = NSLock()
+
+    func resolve(_ result: T) {
+        lock.lock()
+        value = result
+        lock.unlock()
+        semaphore.signal()
+    }
+
+    func wait(_ timeout: DispatchTime) -> T? {
+        guard semaphore.wait(timeout: timeout) == .success else { return nil }
+        lock.lock()
+        let result = value
+        lock.unlock()
+        return result
+    }
+}
+
+private let callbackTimeout: DispatchTime = .now() + 10
+
 /// Whether `value` is a Wyrd drive id: 64 lowercase hex characters,
 /// never the all-zero placeholder the appex also refuses.
 private func isDriveId(_ value: String) -> Bool {
@@ -44,20 +70,20 @@ private func displayName(for driveId: String) -> String {
     "Wyrd \(driveId.prefix(8))"
 }
 
-/// Drive ids with a published group socket. The app is entitled for
-/// the same App Group as the extension, so this supported API both
-/// materializes the container on a fresh machine and resolves its
-/// real path. Without an effective entitlement (ad-hoc) it returns
-/// nil and there is nothing to reconcile — the honest empty result.
-private func publishedDriveIds(group: String) -> [String] {
+/// Drive ids with a published group socket, or `nil` when the
+/// container cannot be resolved. `nil` is deliberately distinct from
+/// an empty list: an ad-hoc build or a failed entitlement must never
+/// be read as "no drives", because the removal half would then delete
+/// every domain a team-signed install had registered.
+private func publishedDriveIds(group: String) -> [String]? {
     guard !group.isEmpty, !group.contains("/") else {
-        return []
+        return nil
     }
     guard let container = FileManager.default.containerURL(
         forSecurityApplicationGroupIdentifier: group
     ) else {
         log.notice("no resolved App Group container for \(group, privacy: .public)")
-        return []
+        return nil
     }
     let aliases = container.appendingPathComponent("Sockets/by-drive")
     let names = (try? FileManager.default.contentsOfDirectory(atPath: aliases.path)) ?? []
@@ -70,8 +96,9 @@ private func publishedDriveIds(group: String) -> [String] {
 
 /// Reconcile domains with the published drive aliases. Partial
 /// progress stands: the next invocation retries what is outstanding.
-/// - Returns: 0 on success; 1 for malformed config, 2 for a domain
-///   read failure, 3 for an add/remove failure.
+/// - Returns: 0 on success (including "container unavailable", which
+///   leaves every domain untouched); 1 for malformed config, 2 for a
+///   domain read failure, 3 for an add/remove failure.
 func reconcile(_ raw: String) -> (code: Int32, added: Int, removed: Int) {
     guard let decoded = try? JSONDecoder().decode(
         Config.self,
@@ -80,27 +107,34 @@ func reconcile(_ raw: String) -> (code: Int32, added: Int, removed: Int) {
         log.error("invalid registrar config")
         return (1, 0, 0)
     }
-
-    let desired = Dictionary(
-        uniqueKeysWithValues: publishedDriveIds(group: decoded.group).map {
-            ($0, displayName(for: $0))
-        }
-    )
-    let semaphore = DispatchSemaphore(value: 0)
-    var existing: [NSFileProviderDomain] = []
-    var readError: Error?
-    NSFileProviderManager.getDomainsWithCompletionHandler { domains, error in
-        existing = domains
-        readError = error
-        semaphore.signal()
+    guard let driveIds = publishedDriveIds(group: decoded.group) else {
+        // No container means no evidence about drives. Skip the whole
+        // reconciliation, removals included.
+        return (0, 0, 0)
     }
-    if semaphore.wait(timeout: .now() + 10) == .timedOut {
+    let desired = Dictionary(
+        uniqueKeysWithValues: driveIds.map { ($0, displayName(for: $0)) }
+    )
+
+    let read = Completion<Result<[NSFileProviderDomain], Error>>()
+    NSFileProviderManager.getDomainsWithCompletionHandler { domains, error in
+        if let error {
+            read.resolve(.failure(error))
+        } else {
+            read.resolve(.success(domains))
+        }
+    }
+    guard let readResult = read.wait(callbackTimeout) else {
         log.error("timed out reading File Provider domains")
         return (2, 0, 0)
     }
-    if let readError {
-        log.error("cannot read File Provider domains: \(String(describing: readError), privacy: .public)")
+    let existing: [NSFileProviderDomain]
+    switch readResult {
+    case .failure(let error):
+        log.error("cannot read File Provider domains: \(String(describing: error), privacy: .public)")
         return (2, 0, 0)
+    case .success(let domains):
+        existing = domains
     }
 
     let current = Set(existing.map(\.identifier.rawValue))
@@ -112,26 +146,26 @@ func reconcile(_ raw: String) -> (code: Int32, added: Int, removed: Int) {
             identifier: NSFileProviderDomainIdentifier(id),
             displayName: name
         )
-        var addError: Error?
+        let add = Completion<Result<Void, Error>>()
         NSFileProviderManager.add(domain) { error in
-            addError = error
-            semaphore.signal()
+            add.resolve(error.map { Result.failure($0) } ?? Result.success(()))
         }
-        guard semaphore.wait(timeout: .now() + 10) != .timedOut else {
+        guard let addResult = add.wait(callbackTimeout) else {
             log.error("timed out adding domain \(id, privacy: .public)")
             failed = true
             continue
         }
-        if let addError {
+        switch addResult {
+        case .failure(let error):
             // "already exists" is a benign race with a second caller.
-            let ns = addError as NSError
+            let ns = error as NSError
             if ns.domain == NSCocoaErrorDomain && ns.code == NSFileWriteFileExistsError {
                 log.notice("domain \(id, privacy: .public) already registered")
             } else {
-                log.error("cannot add domain \(id, privacy: .public): \(String(describing: addError), privacy: .public)")
+                log.error("cannot add domain \(id, privacy: .public): \(String(describing: error), privacy: .public)")
                 failed = true
             }
-        } else {
+        case .success:
             added += 1
             log.notice("registered domain \(id, privacy: .public)")
         }
@@ -140,20 +174,20 @@ func reconcile(_ raw: String) -> (code: Int32, added: Int, removed: Int) {
         && !desired.keys.contains(domain.identifier.rawValue)
     {
         let id = domain.identifier.rawValue
-        var removeError: Error?
+        let remove = Completion<Result<Void, Error>>()
         NSFileProviderManager.remove(domain) { error in
-            removeError = error
-            semaphore.signal()
+            remove.resolve(error.map { Result.failure($0) } ?? Result.success(()))
         }
-        guard semaphore.wait(timeout: .now() + 10) != .timedOut else {
+        guard let removeResult = remove.wait(callbackTimeout) else {
             log.error("timed out removing stale domain \(id, privacy: .public)")
             failed = true
             continue
         }
-        if let removeError {
-            log.error("cannot remove stale domain \(id, privacy: .public): \(String(describing: removeError), privacy: .public)")
+        switch removeResult {
+        case .failure(let error):
+            log.error("cannot remove stale domain \(id, privacy: .public): \(String(describing: error), privacy: .public)")
             failed = true
-        } else {
+        case .success:
             removed += 1
             log.notice("removed stale domain \(id, privacy: .public)")
         }
