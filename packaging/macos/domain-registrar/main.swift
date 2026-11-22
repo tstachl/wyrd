@@ -64,17 +64,20 @@ private func isDriveId(_ value: String) -> Bool {
 }
 
 /// The owner publishes the registry name beside the alias as control
-/// metadata. Accept only registry-style names; anything else falls
-/// back to the id prefix rather than trusting a file in a shared
-/// directory. The domain identifier stays the full drive id.
-private func displayName(for driveId: String, label: String?) -> String {
-    if let label, !label.isEmpty, label.count <= 64,
-       label.utf8.allSatisfy({ byte in
-           (byte >= 97 && byte <= 122) || (byte >= 48 && byte <= 57) || byte == 45
-       }) {
-        return label
+/// metadata. Only a live owner publishes a label, so a stale alias (a
+/// locked or stopped drive) never becomes a Finder domain. Accept
+/// only registry-style names; anything else is ignored rather than
+/// trusted from a shared directory. The domain identifier stays the
+/// full drive id.
+private func displayName(for label: String) -> String? {
+    guard !label.isEmpty, label.count <= 64,
+          label.utf8.allSatisfy({ byte in
+              (byte >= 97 && byte <= 122) || (byte >= 48 && byte <= 57) || byte == 45
+          })
+    else {
+        return nil
     }
-    return "Wyrd \(driveId.prefix(8))"
+    return label
 }
 
 /// Drive id to Finder display name for the published aliases, or
@@ -100,9 +103,15 @@ private func publishedDrives(group: String) -> [String: String]? {
         let id = String(name.dropLast(".sock".count))
         guard isDriveId(id) else { continue }
         let labelURL = aliases.appendingPathComponent("\(id).label")
-        let label = try? String(contentsOf: labelURL, encoding: .utf8)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        drives[id] = displayName(for: id, label: label)
+        guard let label = try? String(contentsOf: labelURL, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              let name = displayName(for: label)
+        else {
+            // No label means no live owner published this alias.
+            log.notice("skipping unlabelled alias \(id, privacy: .public)")
+            continue
+        }
+        drives[id] = name
     }
     return drives
 }

@@ -180,10 +180,14 @@ signing pair above the app is Finder-capable: the embedded domain
 registrar (`domain-registrar/main.swift`) polls the App Group's
 `Sockets/by-drive/` aliases the owner publishes and reconciles one
 `NSFileProviderDomain` per drive, using the 64-char drive id as the
-domain identifier the appex expects. The helper is signed with the
-app's bundle identifier so registration associates with the
-containing app; no Cargo dependency or unsafe FFI bridge is added.
-A drive appears within the polling interval after its owner binds.
+domain identifier the appex expects. The owner publishes the registry
+name in a `.label` file beside each alias; the Finder domain uses that
+name verbatim. Only a live owner publishes a label, so a locked or
+stopped drive has no domain: unlock starts an owner and the domain
+appears, lock tears it down and the domain is removed. The helper is
+signed with the app's bundle identifier so registration associates
+with the containing app; no Cargo dependency or unsafe FFI bridge is
+added. A drive appears within the polling interval after its owner binds.
 Distribution signing, notarization, and the release rehearsal stay
 with the signing owner, never this script.
 
