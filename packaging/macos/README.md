@@ -1,6 +1,6 @@
 # macOS packaging (`packaging/macos/`)
 
-Status: Implemented (daemon half production, domain half pending).
+Status: Implemented (daemon socket half and bundled domain registrar; distribution signing owned separately).
 This note
 holds the adapter layout and the sandbox/socket scheme; the
 normative transport (both sockets, the alias, authentication, and
@@ -132,6 +132,22 @@ packaging/macos/install-dev.sh
 
 Prerequisites: Xcode/CLT (`xcode-select --install`), the devenv
 shell (cargo), `bun` (the desktop `beforeBuildCommand`), `python3`.
+For a Finder-capable build, also pass a development identity and an
+App Group provisioning profile kept outside the repository:
+
+```sh
+packaging/macos/install-dev.sh \
+  --sign-identity "Apple Development: …" \
+  --provisioning-profile /path/to/WyrdFileProvider.provisionprofile
+```
+
+`SIGN_IDENTITY`, `APPLE_SIGNING_IDENTITY`, and `PROVISIONING_PROFILE`
+in the environment are equivalent. A real identity without a profile
+is refused before any build: the App Group grant would not be
+effective and the appex would stay inert. The script verifies the
+embedded appex's identifier, team, entitlement, and profile, plus the
+domain registrar, before the app reaches /Applications.
+
 The script builds through `packaging/macos/build-bundle.sh`
 (link-order pin plus no-Nix-links guard; the wrapper's app-only
 default is kept unless `--bundles` is forwarded), verifies
@@ -157,13 +173,19 @@ has no copy of); `mount` mode and Finder stay with the
 team-signed path below, and the release bundle keeps the full
 mount-enabled CLI by leaving the flag unset.
 
-Finder boundary (honest, not a bug): an ad-hoc appex logs
-`no-group-container` and stays inert — the App Group container
-only materializes under a team-signed build with provisioning.
-Finder integration stays the separately team-gated path below
-("Production entitlements and provisioning"); the signed `.dmg` +
-notarization + human-path rehearsal ride the release track with
-the signing owner, never this script.
+Finder boundary (honest, not a bug): the ad-hoc default logs
+`no-group-container` and stays inert — the App Group container only
+materializes under a team-signed build with provisioning. With the
+signing pair above the app is Finder-capable: the embedded domain
+registrar (`domain-registrar/main.swift`) polls the App Group's
+`Sockets/by-drive/` aliases the owner publishes and reconciles one
+`NSFileProviderDomain` per drive, using the 64-char drive id as the
+domain identifier the appex expects. The helper is signed with the
+app's bundle identifier so registration associates with the
+containing app; no Cargo dependency or unsafe FFI bridge is added.
+A drive appears within the polling interval after its owner binds.
+Distribution signing, notarization, and the release rehearsal stay
+with the signing owner, never this script.
 
 ## Protocol (Stage 0 finding)
 
@@ -255,8 +277,8 @@ team-signed containing app plus domain registration. Order
 matters: the container does not exist until the system creates it,
 so the app runs before the listener. Procedure:
 
-1. Build and run the containing app from Xcode (team
-   `JU2RFHWQPH`, development signing), add one domain.
+1. Build and run the containing app from Xcode with development
+   signing on your team, add one domain.
 2. Read the resolved socket path from the probe log
    (`md.enesis.wyrd.fileprovider`, category `domain`): the first
    pass logs `unreachable <path>: …`, and `<path>` is the
@@ -294,8 +316,8 @@ so the app runs before the listener. Procedure:
 6. Record the macOS version and signing identity with the result.
 
 Recorded run 2026-11-11 (this procedure, first live pass): macOS
-15.8.2 (24H232), `Apple Development: Thomas Stachl (XZQVCF66WX)`
-team `JU2RFHWQPH`, development signing. Probe logged `reachable:
+15.8.2 (24H232), an Apple Development identity on a development
+team (identifiers withheld). Probe logged `reachable:
 …/Group Containers/group.md.enesis.wyrd/Sockets/wyrd-probe.sock`
 (persisted, retrievable via `log show`); a later pass with no
 listener logged `unreachable …: Connection refused` at `error`.
@@ -420,9 +442,9 @@ collapsed boolean, never a guess.
   harness and manual development, with the configured drive
   checked against the served drive before anything binds. The
   daemon half is the agreed production design (registration writes
-  the entry; the managed service enables at login); the domain half
-  (production `NSFileProviderDomain` from the registry) stays
-  pending the signing-owner verification.
+  the entry; the managed service enables at login). The domain half
+  is the bundled registrar described above: it derives domains from
+  the published aliases, not from a second registry mapping.
 - **Errors:** `NotFound` → item-not-found; `Conflicted`,
   `TooLarge`, `Timeout` (after one retry), protocol violations →
   deterministic sync failure; `Unavailable` and transport breaks
@@ -511,10 +533,12 @@ registry entry; the managed owner service enables at login
 (`RunAtLoad` in the per-drive launchd agent, `WantedBy` in the
 systemd user unit — vault and mount share the template). The
 container literal is verified for development signing only;
-Developer ID and notarized paths are unverified, and production
-`NSFileProviderDomain` construction from the registry stays a
-manual step pending the app half — the full Finder association is
-pending the signing-owner verification below, not claimed here.
+Developer ID and notarized paths are unverified. The
+`NSFileProviderDomain` half rides the bundled registrar (see
+"Developer install"): it registers a domain for each published
+alias, so the full Finder association is a property of the
+installed app rather than a manual step. Distribution signing and
+the fresh-install denial run remain with the signing owner.
 
 Acceptance (manual, macOS, recorded as release evidence): with the
 env vars unset, a registered drive appears in Finder, survives
@@ -619,6 +643,7 @@ The File Provider extension ships embedded in the app bundle:
 Wyrd.app/
   Contents/
     MacOS/Wyrd
+    MacOS/WyrdDomainRegistrar
     PlugIns/WyrdFileProvider.appex/
       Contents/
         MacOS/WyrdFileProvider
@@ -632,6 +657,12 @@ The version-matched `wyrd` CLI rides in `Contents/Resources`
 `bundled_cli_path`; the `MacOS` sibling is the devenv fallback
 only, never the bundle contract — on case-insensitive APFS a
 `MacOS/wyrd` sibling would collide with the `Wyrd` app binary).
+`MacOS/WyrdDomainRegistrar` is the Swift domain-registration helper
+built by `domain-registrar/build-registrar.sh` and staged by
+`stage-registrar.sh` through the same bundler mapping. It signs as
+`md.enesis.wyrd` (the containing app) and calls
+`NSFileProviderManager.add`/`remove` against the drive aliases.
+
 Beside it rides `wyrd-supervise`, the supervised-owner wrapper
 from `nix/drive/supervise.py` (also the flake's `wyrd-supervise`
 package): the daemon resolves it as the CLI's sibling unless
@@ -709,50 +740,93 @@ persistence (install old, install new, domains and sockets
 survive). The per-section lists below decompose it, not duplicate
 it.
 
-## Production entitlements and provisioning (decided)
+## Production entitlements and provisioning (reopened and amended)
 
-Minimal by default: the appex holds the sandbox plus the one
-shared group, the app holds nothing, and anything broader needs its
-own justification.
+The earlier decision was that the app holds no entitlements. The
+reasoning stands on its own terms and is preserved here:
 
-- **App**: no entitlement file. The shipped desktop is unsandboxed
-  under Developer ID and uses direct paths throughout: the
-  registry defaults to `~/Library/Application Support/Wyrd`
-  (`crates/wyrd-desktop/src/registry.rs`), owner sockets live beside
-  their drive directories with no group-container resolver
-  (`wyrd-owner-client` resolves `drive_dir/owner.sock` only), and
-  provisioning spawns the co-installed CLI — which inherits any
-  sandbox — to write `~/Library/LaunchAgents` and the drive
-  directory itself. Sandboxing the app would break discovery,
-  connection, and provisioning, the desktop's stated authority
-  path. With no sandbox and no constrained capabilities there is
-  nothing to entitle and no app profile to provision — the group
-  container is reached by direct path, the entitled `containerURL`
-  API belongs to the appex alone. Revisit only with a sandboxed
-  redesign (group-container registry, app-side group-socket
-  resolver, sandbox-viable agent install), never by adding keys
-  piecemeal.
+- **Previous app decision (superseded):** the shipped desktop stays
+  unsandboxed under Developer ID and uses direct paths: the registry
+  defaults to `~/Library/Application Support/Wyrd`, owner sockets
+  live beside their drive directories, and provisioning spawns the
+  co-installed CLI to write `~/Library/LaunchAgents`. Sandboxing the
+  app would break discovery, connection, and provisioning. With no
+  sandbox and no constrained capabilities there was nothing to
+  entitle or provision, and the entitled `containerURL` API was
+  thought to belong to the appex alone.
+- **Why it was reopened:** that last premise is false for the
+  Finder lifecycle. The App Group container is created when an
+  entitled, provisioned process calls `containerURL`. The appex has
+  the entitlement but only runs once a domain exists; the app had no
+  entitlement, so on a fresh machine nothing created the container,
+  the owner published no group socket, and no domain could be
+  registered by the bundled reconciler. A one-time manual bootstrap
+  can hide this in development but cannot be a production step.
+
+### Decisions (this PR)
+
+1. **Wyrd.app joins `group.md.enesis.wyrd`.** It stays unsandboxed;
+   the only new key is `com.apple.security.application-groups`. The
+   direct-path registry, socket, and provisioning design is unchanged.
+2. **The app initializes the App Group container at launch.** The
+   bundled registrar calls `containerURL` on its first reconciliation
+   tick, which materializes the container before drive creation
+   starts the owner. This is normal initialization, not a user step.
+3. **The File Provider extension stays independently provisioned**
+   with its own App ID (`md.enesis.wyrd.fileprovider`) and unchanged
+   sandbox boundary.
+4. **The owner remains the only publisher of socket endpoints.** The
+   app and registrar never manufacture aliases or impersonate the
+   owner. When the container appears after the owner already started,
+   the owner's retry path binds the group socket and alias from the
+   same `OwnerServer` (no second primary bind); the registrar only
+   observes and reconciles domains.
+5. **Domain registration is reconciliatory and idempotent.** The
+   registrar compares desired domains (published aliases) with
+   registered domains, adds missing ones, removes stale ones, and
+   treats `NSFileWriteFileExistsError` as a benign race. Repeated
+   runs are harmless.
+6. **A manual development bootstrap is permitted but is not a
+   production dependency.** The acceptance test is a fresh macOS
+   user with no container and no domains reaching a working Finder
+   drive through ordinary launch and drive creation. That test also
+   confirms macOS accepts domain registration from the embedded
+   helper signed as the containing app; if it does not, the bridge
+   must move into the app process (a Tauri plugin or a narrowly
+   scoped FFI allowance) before this shape is called production.
+
+**Security invariant:** the App Group is a **communication boundary**,
+not drive storage. It carries only the owner's IPC socket and its
+alias. No drive contents, manifests, encryption keys, or secrets go
+into the container, and joining the group grants the app no
+authority to author drive state — mutation still flows through the
+owner's single queue.
+
+- **App** (`packaging/macos/Wyrd.app.entitlements`): only the App
+  Group; no sandbox key. Tauri embeds it via
+  `bundle.macOS.entitlements`; the domain registrar signs with the
+  same entitlements and identifier (`md.enesis.wyrd`).
 - **Appex** (`fileprovider/WyrdFileProvider.entitlements`):
-  unchanged, sandbox plus the same literal group. The extension
-  reaches only its container and user-intent paths; the owner
-  socket is reachable exactly because it lives in the group
-  container (see the sandbox scheme above).
+  unchanged, sandbox plus the same literal group.
 
 **Provisioning wiring.** Profiles live outside the repository with
-the release owner (like the signing identity), never in the tree.
-The appex target is wired now: `PROVISIONING_PROFILE` names a
-`.provisionprofile` to embed at `Contents/embedded.provisionprofile`
-before signing, and a missing path refuses instead of signing
-profile-less under a team identity. The app target needs no profile
-and no entitlements: with no sandbox and no constrained
-capabilities there is nothing to provision and nothing for the
-bundler hook to carry. Team signing pairs the hook's
-`SIGN_IDENTITY` with the same Developer ID Tauri signs the app with
-(`bundle.macOS.signingIdentity` / `APPLE_SIGNING_IDENTITY`); the
-manual sequence stays available:
-sign appex first (profile embedded), copy into
-`Contents/PlugIns`, then sign the app — nested-first, one Developer
-ID, `--options runtime`.
+the release owner, never in the tree. `PROVISIONING_PROFILE` names
+the appex profile; `APP_PROVISIONING_PROFILE` names the app profile
+for App ID `md.enesis.wyrd`, embedded at
+`Contents/embedded.provisionprofile` before the outer reseal. A real
+identity without both profiles refuses before any build. Team
+signing pairs `SIGN_IDENTITY` with the same Developer ID Tauri uses
+(`bundle.macOS.signingIdentity` / `APPLE_SIGNING_IDENTITY`); signing
+stays nested-first, one Developer ID, `--options runtime`.
+
+**Free-team development note.** App Groups on macOS are an
+unrestricted entitlement in Apple's docs, and a team-prefixed group
+id (`<TEAM_ID>.…`) can be used without registering the group. That
+may allow a free Personal Team to exercise the real container
+lifecycle for experiments, but Personal Team profiles expire after
+seven days. Wyrd's production group id stays
+`group.md.enesis.wyrd`; it is not changed to accommodate free
+signing. Distribution still needs Developer ID and notarization.
 
 **Ordering is behavior, not documentation.** Owner-first falls out
 of the per-drive launchd agent: `RunAtLoad` starts the owner at

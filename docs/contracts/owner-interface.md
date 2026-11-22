@@ -60,12 +60,14 @@ accept paths. The daemon half is production: with no dev env vars,
 the owner publishes the alias for the served drive whenever the
 container exists, so registration plus the managed owner service
 (at login) leaves the socket where a registry-registered domain
-resolves it. The full registry-to-domain association — production
-`NSFileProviderDomain` construction from the registry and the
-signed-container confirmation beyond development signing (the
-packaging note marks the literal verified for development signing
-only) — stays pending the signing-owner verification; the contract
-here owns the socket half, not the domain-registration half.
+resolves it. The domain half is bundled with the desktop app: a
+signed Swift helper reconciles `NSFileProviderDomain` registrations
+against the published `by-drive` aliases, keyed by the same 64-hex
+drive id the appex parses from the domain identifier. The contract
+here still owns only the socket half; the helper's path-to-domain
+association is proven by the aliases, not by a new protocol field.
+The container literal is verified for development signing only;
+distribution signing and notarization stay with the signing owner.
 
 Frame each message with a u32 big-endian length prefix followed by
 that many JSON bytes. Assemble frames explicitly: an idle

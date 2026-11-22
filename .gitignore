@@ -27,6 +27,9 @@ crates/wyrd-desktop/gen/
 # macOS appex build output (`build-appex.sh`; unsigned, local only)
 packaging/macos/fileprovider/build/
 
+# macOS domain registrar build output (`build-registrar.sh`)
+packaging/macos/domain-registrar/build/
+
 # macOS appex bundler staging (`stage-appex.sh` output, copied into
 # Contents/PlugIns by `bundle.macOS.files`; local only, rebuilt always)
 packaging/macos/stage/

@@ -5,7 +5,8 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use wyrd_core::live::{LiveParts, SharedObservation};
 use wyrd_core::mutation::MutationQueue;
@@ -135,6 +136,17 @@ impl OwnerHandles {
     }
 }
 
+/// Group endpoints bound after the primary listener was already
+/// serving. The app normally creates the App Group container before
+/// starting an owner; this late path is the safety net for the other
+/// ordering (owner at login, app later).
+#[derive(Default)]
+struct LateGroup {
+    socket: Option<PathBuf>,
+    symlink: Option<PathBuf>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
 /// The bound owner interface for one run: the socket path, its stop
 /// flag, and the serving thread. Both owner-mode composers (the
 /// headless runner and the mount) bind through here, so the socket
@@ -150,11 +162,35 @@ pub struct OwnerService {
     group_socket_path: Option<PathBuf>,
     group_thread: Option<std::thread::JoinHandle<()>>,
     group_symlink: Option<PathBuf>,
+    retry_thread: Option<std::thread::JoinHandle<()>>,
+    late_group: Arc<Mutex<LateGroup>>,
     /// Whether the socket file has been removed. Shutdown removes at
     /// most once: after an explicit shutdown the drop is a no-op, so
     /// a late drop can never unlink a successor owner's socket file
     /// bound at the same path.
     removed: bool,
+}
+
+/// Bind the group socket and publish its alias. Creates only
+/// `Sockets/` inside the resolved container, never the container
+/// itself — a hand-created container is a decoy the extension cannot
+/// reach. Shared by the startup bind and the late-retry path.
+fn bind_group_endpoints(
+    group_container: &Path,
+    drive: &DriveId,
+) -> std::io::Result<(PathBuf, PathBuf, std::os::unix::net::UnixListener)> {
+    let group_path = group_socket_path(group_container, drive);
+    let link_path = group_symlink_path(group_container, drive);
+    if let Some(sockets) = group_path.parent() {
+        std::fs::create_dir_all(sockets)?;
+    }
+    let listener = bind_group_listener(&group_path)?;
+    let fingerprint_file_name = format!("{}.sock", drive.fileprovider_socket_fingerprint());
+    if let Err(error) = publish_group_symlink(&link_path, &fingerprint_file_name) {
+        let _ = std::fs::remove_file(&group_path);
+        return Err(error);
+    }
+    Ok((group_path, link_path, listener))
 }
 
 impl OwnerService {
@@ -178,6 +214,8 @@ impl OwnerService {
             group_socket_path: None,
             group_thread: None,
             group_symlink: None,
+            retry_thread: None,
+            late_group: Arc::new(Mutex::new(LateGroup::default())),
             removed: false,
         })
     }
@@ -203,30 +241,15 @@ impl OwnerService {
         let server = Arc::new(OwnerServer::new(handles));
         let socket_path = crate::owner::socket_path_for(drive_dir);
         let listener = bind_listener(&socket_path)?;
-        let group_path = group_socket_path(group_container, drive);
-        let link_path = group_symlink_path(group_container, drive);
-        // Create only `Sockets/` inside the resolved container, never
-        // the container itself (a hand-created container is a decoy).
-        if let Some(sockets) = group_path.parent() {
-            if let Err(error) = std::fs::create_dir_all(sockets) {
-                let _ = std::fs::remove_file(&socket_path);
-                return Err(error);
-            }
-        }
-        let group_listener = match bind_group_listener(&group_path) {
-            Ok(listener) => listener,
-            Err(error) => {
-                let _ = std::fs::remove_file(&socket_path);
-                return Err(error);
-            }
-        };
-        let fingerprint_file_name = format!("{}.sock", drive.fileprovider_socket_fingerprint());
-        if let Err(error) = publish_group_symlink(&link_path, &fingerprint_file_name) {
-            let _ = std::fs::remove_file(&socket_path);
-            let _ = std::fs::remove_file(&group_path);
-            return Err(error);
-        }
         let stop = Arc::new(AtomicBool::new(false));
+        let (group_path, link_path, group_listener) =
+            match bind_group_endpoints(group_container, drive) {
+                Ok(bound) => bound,
+                Err(error) => {
+                    let _ = std::fs::remove_file(&socket_path);
+                    return Err(error);
+                }
+            };
         let thread = {
             let (server, stop, listener) = (Arc::clone(&server), Arc::clone(&stop), listener);
             std::thread::spawn(move || server.serve_on(&listener, &stop))
@@ -248,6 +271,75 @@ impl OwnerService {
             group_socket_path: Some(group_path),
             group_thread: Some(group_thread),
             group_symlink: Some(link_path),
+            retry_thread: None,
+            late_group: Arc::new(Mutex::new(LateGroup::default())),
+            removed: false,
+        })
+    }
+
+    /// Primary-only bind with a late group retry. Used when the App
+    /// Group container is not there yet: the app normally creates it
+    /// before starting the owner, but the owner also starts at login
+    /// where the ordering is not guaranteed. The retry shares the
+    /// already-serving `OwnerServer` — it never rebinds the primary
+    /// socket and never manufactures an alias itself.
+    fn bind_with_group_retry(
+        handles: OwnerHandles,
+        drive_dir: &Path,
+        drive: DriveId,
+    ) -> std::io::Result<Self> {
+        let server = Arc::new(OwnerServer::new(handles));
+        let socket_path = crate::owner::socket_path_for(drive_dir);
+        let listener = bind_listener(&socket_path)?;
+        let stop = Arc::new(AtomicBool::new(false));
+        let thread = {
+            let (server, stop) = (Arc::clone(&server), Arc::clone(&stop));
+            std::thread::spawn(move || server.serve_on(&listener, &stop))
+        };
+        let late_group = Arc::new(Mutex::new(LateGroup::default()));
+        let retry_stop = Arc::clone(&stop);
+        let retry_late = Arc::clone(&late_group);
+        let retry_server = Arc::clone(&server);
+        let retry_thread = std::thread::spawn(move || {
+            while !retry_stop.load(Ordering::Relaxed) {
+                if let Some(container) = production_group_container() {
+                    match bind_group_endpoints(&container, &drive) {
+                        Ok((group_path, link_path, group_listener)) => {
+                            let group_thread = {
+                                let (server, stop) =
+                                    (Arc::clone(&retry_server), Arc::clone(&retry_stop));
+                                std::thread::spawn(move || server.serve_on(&group_listener, &stop))
+                            };
+                            let mut late = retry_late.lock().unwrap_or_else(|p| p.into_inner());
+                            late.socket = Some(group_path);
+                            late.symlink = Some(link_path);
+                            late.thread = Some(group_thread);
+                            return;
+                        }
+                        Err(error) => {
+                            tracing::warn!(%error, "late App Group bind failed; will retry");
+                        }
+                    }
+                }
+                // Sleep in short slices so shutdown never waits out a
+                // long tick before joining this thread.
+                for _ in 0..20 {
+                    if retry_stop.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+            }
+        });
+        Ok(OwnerService {
+            socket_path,
+            stop,
+            thread: Some(thread),
+            group_socket_path: None,
+            group_thread: None,
+            group_symlink: None,
+            retry_thread: Some(retry_thread),
+            late_group,
             removed: false,
         })
     }
@@ -288,7 +380,10 @@ impl OwnerService {
                 Some(container) => {
                     Self::bind_with_group_container(handles, drive_dir, &served, &container)
                 }
-                None => Self::bind(handles, drive_dir),
+                // The app is expected to have created the container
+                // first; this path keeps a login-time owner from
+                // staying permanently deaf if it did not.
+                None => Self::bind_with_group_retry(handles, drive_dir, served),
             },
             Some(Ok(config)) => {
                 if config.drive != served {
@@ -332,6 +427,25 @@ impl OwnerService {
         if let Some(thread) = self.group_thread.take() {
             if thread.join().is_err() {
                 tracing::warn!("owner interface group thread ended unexpectedly");
+            }
+        }
+        if let Some(thread) = self.retry_thread.take() {
+            if thread.join().is_err() {
+                tracing::warn!("owner interface group retry thread ended unexpectedly");
+            }
+        }
+        {
+            let mut late = self.late_group.lock().unwrap_or_else(|p| p.into_inner());
+            if let Some(thread) = late.thread.take() {
+                if thread.join().is_err() {
+                    tracing::warn!("late owner interface group thread ended unexpectedly");
+                }
+            }
+            if let Some(link) = late.symlink.take() {
+                let _ = std::fs::remove_file(&link);
+            }
+            if let Some(path) = late.socket.take() {
+                let _ = std::fs::remove_file(&path);
             }
         }
         if !self.removed {

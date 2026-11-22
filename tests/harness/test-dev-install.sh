@@ -104,6 +104,10 @@ match 'codesign --force --sign' "$WRAPPER_CODE" \
   || die "wrapper: no post-bundle reseal"
 match 'bundle/macos/Wyrd.app' "$WRAPPER_CODE" \
   || die "wrapper: reseal names no bundle path"
+match '--entitlements "$APP_ENTITLEMENTS"' "$WRAPPER_CODE" \
+  || die "wrapper: reseal drops the app App Group entitlement"
+match 'APP_PROVISIONING_PROFILE' "$WRAPPER_CODE" \
+  || die "wrapper: app provisioning profile is not embedded"
 match '--timestamp' "$WRAPPER_CODE" \
   || die "wrapper: real-identity reseal carries no timestamp"
 pass "wrapper reseals the outer app shallowly"
@@ -114,7 +118,7 @@ match 'bundled_cli_path' "$PROVISION_CODE" \
   || die "provision: bundled CLI resolution missing"
 match 'Resources' "$PROVISION_CODE" \
   || die "provision: Resources lookup missing"
-match 'Contents/Resources/wyrd' "$INSTALL_CODE" \
+match 'Contents/Resources/$BUNDLED' "$INSTALL_CODE" \
   || die "install: bundled CLI presence is not verified"
 pass "bundled CLI is staged, mapped, and resolved first"
 
@@ -173,6 +177,23 @@ match 'no-group-container' "$INSTALL_CODE" \
 match 'team-signed' "$INSTALL_CODE" \
   || die "install: team-signed path missing"
 pass "install states the ad-hoc Finder boundary"
+
+# 7b. A Finder-capable install needs the full signing pair, and both
+# native artifacts must be embedded by the bundler, not copied after
+# the outer sign. The pairing refusal and post-build checks keep a
+# team-signed outer app from shipping an inert appex.
+for marker in '--sign-identity' '--provisioning-profile' '--app-provisioning-profile' 'APP_PROVISIONING_PROFILE' 'FINDER_CAPABLE' 'embedded.provisionprofile' 'WyrdDomainRegistrar' 'WyrdFileProvider.appex'; do
+  match "$marker" "$INSTALL_CODE" \
+    || die "install: Finder-capable marker '$marker' missing"
+done
+for marker in 'stage-registrar.sh' 'PlugIns/WyrdFileProvider.appex' 'MacOS/WyrdDomainRegistrar'; do
+  match "$marker" "$CONF_CODE" \
+    || die "config: native artifact mapping '$marker' missing"
+done
+REGISTRAR_CODE="$(grep -v '^[[:space:]]*#' "$ROOT/packaging/macos/domain-registrar/build-registrar.sh")"
+match '--identifier md.enesis.wyrd' "$REGISTRAR_CODE" \
+  || die "registrar: helper does not carry the app's signing identifier"
+pass "install pairs signing and embeds both native artifacts"
 
 # 8. Prerequisites fail with the fix named: Apple tools, cargo
 # (devenv), bun (desktop build), python3 (config version pin).

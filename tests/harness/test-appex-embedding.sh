@@ -56,6 +56,18 @@ grep -Fq '<string>md.enesis.wyrd.fileprovider</string>' \
 grep -Fq -- '--identifier md.enesis.wyrd.fileprovider' \
   "$ROOT/packaging/macos/fileprovider/build-appex.sh" \
   || die "build-appex.sh: codesign identifier drifted"
+grep -Fq '"PlugIns/WyrdFileProvider.appex"' \
+  "$ROOT/crates/wyrd-desktop/tauri.conf.json" \
+  || die "tauri.conf.json: appex bundle mapping missing"
+grep -Fq -- '--identifier md.enesis.wyrd' \
+  "$ROOT/packaging/macos/domain-registrar/build-registrar.sh" \
+  || die "build-registrar.sh: helper must sign as the containing app"
+grep -Fq "<string>$GROUP</string>" \
+  "$ROOT/packaging/macos/Wyrd.app.entitlements" \
+  || die "app entitlements: missing <$GROUP>"
+grep -Fq '"entitlements": "../../packaging/macos/Wyrd.app.entitlements"' \
+  "$ROOT/crates/wyrd-desktop/tauri.conf.json" \
+  || die "tauri.conf.json: app entitlements are not wired into the bundle"
 grep -Fq 'app-id: md.enesis.wyrd' \
   "$ROOT/packaging/linux/md.enesis.wyrd.yaml" \
   || die "linux manifest: app-id drifted"
