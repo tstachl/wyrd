@@ -1,43 +1,71 @@
-<!-- Lifecycle, observational: the registered drives, each verified
-this session. Creation and joining live on the dedicated Add drive
-page; leaving lives in the selected drive's Settings. Selection stays
-internal presentation state: this overview shows the same action for
-every drive and never presents which one is selected. -->
+<!-- Lifecycle, observational: the drives available on this device,
+  each verified this session. Creation and joining live on the Add
+  drive page; leaving lives in the selected drive's Settings. The card
+  answers the user's order of questions: is it running, is it shared,
+  then the relay count. Selection stays internal — every card has the
+  same Open action. -->
 <script lang="ts">
   import { Button } from "$lib/components/ui/button/index.js";
   import * as Card from "$lib/components/ui/card/index.js";
   import * as Alert from "$lib/components/ui/alert/index.js";
-  import { Badge } from "$lib/components/ui/badge/index.js";
   import * as Empty from "$lib/components/ui/empty/index.js";
   import { Spinner } from "$lib/components/ui/spinner/index.js";
   import { Skeleton } from "$lib/components/ui/skeleton/index.js";
   import PageHeader from "$lib/components/page-header.svelte";
   import InfoHint from "$lib/components/info-hint.svelte";
-  import AvailabilityBadge from "$lib/components/availability-badge.svelte";
-  import CopyButton from "$lib/components/copy-button.svelte";
-  import type { Stamped } from "$lib/state/presentation.svelte.js";
-  import type { RegistryState } from "$lib/ipc/results.js";
+  import type { Stamped, StatusSnapshot } from "$lib/state/presentation.svelte.js";
+  import type { DriveView, RegistryState } from "$lib/ipc/results.js";
   import ObservedNote from "./ObservedNote.svelte";
-  import { sessionLabel } from "./format.js";
+  import DriveCard from "./drive-card.svelte";
+  import { sortDrivesByAttention, type OverviewDriveFacts } from "./format.js";
   import HardDriveIcon from "@lucide/svelte/icons/hard-drive";
   import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
-  import ArrowRightIcon from "@lucide/svelte/icons/arrow-right";
   import PlusIcon from "@lucide/svelte/icons/plus";
 
   interface Props {
     snapshot: Stamped<RegistryState> | null;
     pending: boolean;
     transportNotice: string | null;
+    /** Last Status answer per drive; absent means not read this session. */
+    statusFor?: (driveDir: string) => Stamped<StatusSnapshot> | null;
+    /** Best-effort reveal in the platform file manager. */
+    onReveal?: (path: string) => Promise<boolean>;
     onRefresh: () => void;
-    /** Open the dedicated Add drive page. */
     onAdd: () => void;
     onOpen: (driveDir: string) => void;
   }
 
-  let { snapshot, pending, transportNotice, onRefresh, onAdd, onOpen }: Props = $props();
+  let {
+    snapshot,
+    pending,
+    transportNotice,
+    statusFor = () => null,
+    onReveal = async () => false,
+    onRefresh,
+    onAdd,
+    onOpen,
+  }: Props = $props();
 
   const registry = $derived(snapshot?.data ?? null);
   const drives = $derived(registry?.drives ?? []);
+
+  /** Facts come from the last Status answer, never from a guessed default. */
+  function factsFor(drive: DriveView): OverviewDriveFacts | null {
+    const status = statusFor(drive.drive_dir);
+    if (status === null) return null;
+    return {
+      availability: drive.availability.state,
+      paused: status.data.liveness.paused,
+      connectedRelays: status.data.liveness.health.connected_relays,
+      totalRelays: status.data.liveness.health.total_relays,
+      peers: status.data.observe.peers.length,
+      knownMembers: status.data.observe.known_members,
+      stale: typeof status.data.freshness.state === "object",
+    };
+  }
+
+  const orderedDrives = $derived(sortDrivesByAttention(drives, factsFor));
+
 </script>
 
 <PageHeader
@@ -47,11 +75,11 @@ every drive and never presents which one is selected. -->
   {#snippet meta()}
     <InfoHint label="About this view">
       <p>
-        This view verifies what the provisioning and membership flows registered and whether each
-        drive answers. Creation and joining run through the installed CLI; leaving authors
-        membership where the trust contract admits it.
+        This view verifies the drives set up on this device and whether each one answers.
+        Creating and joining run through the installed CLI; leaving authors membership where
+        the trust contract admits it.
       </p>
-      <p>Observed state decides what you see here — never the operation's exit code alone.</p>
+      <p>Observed state decides what you see here — never an operation's exit code alone.</p>
     </InfoHint>
   {/snippet}
   {#snippet actions()}
@@ -115,8 +143,8 @@ every drive and never presents which one is selected. -->
       <Empty.Root class="border border-dashed border-border bg-card/50">
         <Empty.Header>
           <Empty.Media variant="icon"><HardDriveIcon /></Empty.Media>
-          <Empty.Title>No registry read yet</Empty.Title>
-          <Empty.Description>Refresh to list the drives registered on this device.</Empty.Description>
+          <Empty.Title>No drive list read yet</Empty.Title>
+          <Empty.Description>Refresh to list the drives set up on this device.</Empty.Description>
         </Empty.Header>
       </Empty.Root>
     </div>
@@ -129,7 +157,7 @@ every drive and never presents which one is selected. -->
   {#if registry.status === "unreadable"}
     <Alert.Root variant="destructive" class="mt-5">
       <p>
-        Registry unreadable: {registry.reason} — showing nothing rather than guessing.
+        Drive list unreadable: {registry.reason} — showing nothing rather than guessing.
       </p>
     </Alert.Root>
   {:else if registry.status === "nofile" || registry.drives.length === 0}
@@ -137,10 +165,10 @@ every drive and never presents which one is selected. -->
       <Empty.Root class="border border-dashed border-border bg-card/50">
         <Empty.Header>
           <Empty.Media variant="icon"><HardDriveIcon /></Empty.Media>
-          <Empty.Title>No drives registered yet</Empty.Title>
+          <Empty.Title>No drives set up yet</Empty.Title>
           <Empty.Description>
-            Create one or join with an invitation — the drive appears here once the
-            registry names it. One window manages every registered drive.
+            Create one or join with an invitation — the drive appears here once it is ready.
+            One window manages every drive on this device.
           </Empty.Description>
         </Empty.Header>
         <Empty.Content>
@@ -152,68 +180,16 @@ every drive and never presents which one is selected. -->
       </Empty.Root>
     </div>
   {:else}
-    <section aria-label="Registered drives" class="mt-5">
+    <section aria-label="Drives on this device" class="mt-5">
       <div class="grid gap-4 lg:grid-cols-2">
-        {#each drives as drive (drive.drive_dir)}
-          <Card.Root>
-            <Card.Header>
-              <div class="flex min-w-0 items-start justify-between gap-3">
-                <div class="flex min-w-0 flex-1 flex-col gap-1">
-                  <Card.Title class="flex flex-wrap items-center gap-2">
-                    <span class="truncate">{drive.name}</span>
-                  </Card.Title>
-                  <Card.Description class="flex min-w-0 items-center gap-1">
-                    <span class="truncate font-mono text-[0.7rem]">{drive.drive_dir}</span>
-                    <CopyButton text={drive.drive_dir} label="drive path" />
-                  </Card.Description>
-                </div>
-                <AvailabilityBadge
-                  state={drive.availability.state}
-                  detail={drive.availability.state === "available" ? null : drive.availability.detail}
-                />
-              </div>
-            </Card.Header>
-            <Card.Content class="flex flex-col gap-3">
-              <div class="flex flex-wrap gap-1.5">
-                <Badge variant="secondary">{drive.mode}</Badge>
-                <Badge variant="outline" class="font-mono text-[0.7rem]">service {drive.service}</Badge>
-                {#if drive.mountpoint !== null}
-                  <Badge variant="outline" class="font-mono text-[0.7rem]">{drive.mountpoint}</Badge>
-                {/if}
-                {#if sessionLabel(drive.session) !== null}
-                  <Badge
-                    variant={drive.session?.state === "unlocked" ? "outline" : "secondary"}
-                    class={drive.session?.state === "unlocked"
-                      ? "border-ok/30 bg-ok/10 text-ok"
-                      : "border-primary/40 bg-primary/10"}
-                  >
-                    {sessionLabel(drive.session)}
-                  </Badge>
-                {/if}
-              </div>
-              <div class="flex flex-col gap-1.5">
-                <p class="text-xs font-medium tracking-wide text-muted-foreground uppercase">Relays</p>
-                {#if drive.relays.length === 0}
-                  <p class="text-xs text-muted-foreground">None configured</p>
-                {:else}
-                  <div class="flex flex-wrap gap-1.5">
-                    {#each drive.relays as relay (relay)}
-                      <Badge variant="outline" class="max-w-full border-border bg-background font-mono text-[0.7rem] font-normal">
-                        <span class="truncate" title={relay}>{relay}</span>
-                      </Badge>
-                    {/each}
-                  </div>
-                {/if}
-              </div>
-            </Card.Content>
-            <Card.Footer class="mt-auto justify-between">
-              <span class="text-xs text-muted-foreground">Open to inspect this drive.</span>
-              <Button size="sm" onclick={() => onOpen(drive.drive_dir)}>
-                Open
-                <ArrowRightIcon data-icon="inline-end" />
-              </Button>
-            </Card.Footer>
-          </Card.Root>
+        {#each orderedDrives as drive (drive.drive_dir)}
+          {@const facts = factsFor(drive)}
+          <DriveCard
+            {drive}
+            {facts}
+            onOpen={() => onOpen(drive.drive_dir)}
+            onReveal={onReveal}
+          />
         {/each}
       </div>
     </section>

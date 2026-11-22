@@ -11,7 +11,11 @@ import {
   boundLabel,
   credentialModeFor,
   describeProvisionResult,
+  driveFactLine,
   driveNameValid,
+  driveNeedsAttention,
+  driveRunState,
+  folderNameFromPath,
   formatBoundValue,
   formatObservedAge,
   freshnessLabel,
@@ -28,6 +32,7 @@ import {
   settingsSurviveLock,
   SETTING_BOUNDS,
   shortId,
+  sortDrivesByAttention,
   statusAttention,
   statusRunState,
   statusSummaryLine,
@@ -37,7 +42,7 @@ import {
   validateBoundInput,
   withDevCliHint,
 } from "./format.js";
-import type { StatusFacts } from "./format.js";
+import type { OverviewDriveFacts, StatusFacts } from "./format.js";
 import type {
   CredentialReference,
   DriveView,
@@ -71,6 +76,50 @@ test("observation ages are relative, local and never a sync time", () => {
   expect(formatObservedAge(now - 26 * 3_600_000, now)).toBe("Checked 1 day ago");
   // A future stamp is clamped, never rendered as a negative age.
   expect(formatObservedAge(now + 5_000, now)).toBe("Checked just now");
+});
+
+const overviewFacts: OverviewDriveFacts = {
+  availability: "available",
+  paused: false,
+  connectedRelays: 5,
+  totalRelays: 5,
+  peers: 0,
+  knownMembers: 1,
+  stale: false,
+};
+
+test("drive cards name the folder, not a truncated path", () => {
+  expect(folderNameFromPath("/drives/alpha")).toBe("alpha");
+  expect(folderNameFromPath("/Users/t/drives/project-x/")).toBe("project-x");
+  expect(folderNameFromPath("C:\\drives\\beta")).toBe("beta");
+});
+
+test("drive cards state observable run state and separate facts", () => {
+  expect(driveRunState(overviewFacts)).toBe("Running");
+  expect(driveRunState({ ...overviewFacts, paused: true })).toBe("Paused");
+  expect(driveRunState({ ...overviewFacts, availability: "unavailable" })).toBe("Not running");
+  expect(driveRunState(null)).toBe("Not yet observed");
+  expect(driveFactLine(overviewFacts, 5)).toBe(
+    "Connected to 5 of 5 relays · No other devices yet",
+  );
+  expect(driveFactLine(null, 3)).toBe("3 relays configured · Status not read this session");
+  expect(driveFactLine({ ...overviewFacts, totalRelays: 0, connectedRelays: 0 }, 0)).toContain(
+    "No relays connected at the last pass",
+  );
+});
+
+test("only observed problems move a drive into the attention group", () => {
+  expect(driveNeedsAttention(null)).toBe(false);
+  expect(driveNeedsAttention(overviewFacts)).toBe(false);
+  expect(driveNeedsAttention({ ...overviewFacts, paused: true })).toBe(true);
+  expect(driveNeedsAttention({ ...overviewFacts, connectedRelays: 0 })).toBe(true);
+  expect(driveNeedsAttention({ ...overviewFacts, stale: true })).toBe(true);
+  const quiet = { name: "quiet", facts: overviewFacts };
+  const busy = { name: "busy", facts: { ...overviewFacts, paused: true } };
+  const middle = { name: "middle", facts: overviewFacts };
+  expect(
+    sortDrivesByAttention([quiet, busy, middle], (drive) => drive.facts).map((d) => d.name),
+  ).toEqual(["busy", "quiet", "middle"]);
 });
 
 const baseFacts: StatusFacts = {

@@ -1161,6 +1161,8 @@
         snapshot={presentation.lifecycleSnapshot}
         pending={busy}
         transportNotice={presentation.transportNotice}
+        statusFor={(driveDir) => presentation.statusSnapshotFor(driveDir)}
+        onReveal={reveal}
         onRefresh={() => void refreshLifecycle()}
         onAdd={() => openProvisioning("create")}
         onOpen={(driveDir) => openDrive(driveDir)}
