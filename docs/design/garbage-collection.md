@@ -352,6 +352,7 @@ reclamation authority is minted early.
   serving-side enforcement mechanism. UI wording must be: *Expiry prevents
   future acquisition under this capability. It does not revoke plaintext
   or copies already acquired.*
+- **Forget contract / evidence monotonicity (`sync-and-peers.md`, paginated-union section).** The reconciliation paginated union is conservative only because committed evidence grows (append-only base facts, no GC); a reclamation change that lets evidence shrink must revisit that section's soundness sentence before any normative edit. Reachability sets above must treat the forget contract's evidence (installs, held snapshots, stated views, `*Reconciled` facts) as unshrinkable until that redesign lands.
 
 ## Scopes: pre-v1, post-v1 L1, post-v1 L2/L3
 
@@ -366,7 +367,7 @@ reclamation authority is minted early.
 | # | Question | Priority | Why |
 |---|---|---|---|
 | 1 | Quorum membership and authority: configured peer nodes from where? Membership log field vs local config? (`epochs.md` owns membership; no new field without a transition type.) | **Blocking** | Determines who may authorize destructive transitions |
-| 2 | Holder acknowledgement semantics: signed ack vs liveness poll vs reconciliation-view extension (`sync-and-peers.md` 0x18/0x19)? Must survive relay retention expiry like the forget contract. | **Blocking** | Determines which replicas can prevent reclamation |
+| 2 | Holder acknowledgement semantics: signed ack vs liveness poll vs reconciliation-view extension (`sync-and-peers.md` 0x18/0x19)? Must survive relay retention expiry like the forget contract. Carries the evidence-monotonicity requirement: reclamation must not shrink the committed evidence the paginated union relies on (installs, held snapshots, stated views, `*Reconciled` facts) — the union is conservative only because that evidence grows (`sync-and-peers.md`, paginated-union section). Any design that lets evidence shrink must redesign the union first. | **Blocking** | Determines which replicas can prevent reclamation |
 | 3 | Tombstone representation and compaction: new `Fact` tag vs snapshot flag bit vs `DiscardRejectedRepresentation`-style op? Retained deletion frontier after compaction? | L3 blocker | Determines whether no-resurrection is enforceable |
 | 4 | Grace period and reset semantics: does a new snapshot referencing an old candidate reset hold for that slice or the whole set? | **Blocking** | Determines candidate invalidation under concurrent commits |
 | 5 | Marketplace expiry: separate serving-side mechanism (this note recommends independent); state its contract separately. | Independent — do not block GC on it | Avoids coupling expiry to reclamation authority |
