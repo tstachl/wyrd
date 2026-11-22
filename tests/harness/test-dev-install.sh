@@ -21,7 +21,8 @@ die() { echo "  FAIL: $1" >&2; exit 1; }
 INSTALL="$ROOT/packaging/macos/install-dev.sh"
 STAGE_CLI="$ROOT/packaging/macos/stage-cli.sh"
 CONF="$ROOT/crates/wyrd-desktop/tauri.conf.json"
-PROVISION="$ROOT/crates/wyrd-desktop/src/provision.rs"
+# Binary resolution moved into the split adapter's process module.
+PROVISION="$ROOT/crates/wyrd-desktop/src/provision/process.rs"
 
 # Code lines only, captured once: strip full-line comments before
 # matching, so the header prose can never satisfy a pin, and match

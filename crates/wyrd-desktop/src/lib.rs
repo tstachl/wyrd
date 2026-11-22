@@ -37,6 +37,13 @@ pub mod session;
 pub mod settings_apply;
 pub mod settings_view;
 
+// Declared here (not inside `provision/`) so the extracted test file
+// stays a sibling of its subject's parent module for the pinned
+// test-file governance check.
+#[cfg(test)]
+#[path = "tests_provision.rs"]
+mod tests_provision;
+
 pub use backend::{BackendError, DesktopBackend};
 pub use onboarding::{KeyDefaults, OnboardingReport, OnboardingResult};
 pub use provision::{LeaveRequest, ProvisionRequest, ProvisionResult, PROVISION_TIMEOUT};

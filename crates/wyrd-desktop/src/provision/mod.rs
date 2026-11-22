@@ -267,7 +267,3 @@ pub struct ProvisionOutcome {
     /// Observed exit code, absent where no process completed.
     pub code: Option<i32>,
 }
-
-#[cfg(test)]
-#[path = "../tests_provision.rs"]
-mod tests_provision;

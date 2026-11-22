@@ -1,6 +1,7 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
-use super::*;
+use crate::provision::*;
 
 fn create_request() -> ProvisionRequest {
     ProvisionRequest {
@@ -652,12 +653,12 @@ fn chatty_cli_drains_pipes_instead_of_wedging() {
     );
     assert_eq!(output.code, Some(2), "exit code survives: {output:?}");
     assert!(
-        output.stdout.len() <= super::MAX_CLI_CAPTURE_BYTES,
+        output.stdout.len() <= crate::provision::MAX_CLI_CAPTURE_BYTES,
         "stdout capture stays bounded: {} bytes",
         output.stdout.len()
     );
     assert!(
-        output.stderr.len() <= super::MAX_CLI_CAPTURE_BYTES,
+        output.stderr.len() <= crate::provision::MAX_CLI_CAPTURE_BYTES,
         "stderr capture stays bounded: {} bytes",
         output.stderr.len()
     );
