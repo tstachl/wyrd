@@ -169,23 +169,70 @@ private func publishedDrives(group: String) -> [String: String]? {
     return drives
 }
 
+/// Consecutive ticks a domain may be absent from the published aliases
+/// before its domain is removed. A single failed socket probe is a
+/// transient owner restart, an accept backlog, or the gap where a stale
+/// socket was unlinked but not yet rebound — not proof the drive is
+/// gone. Removing a domain can discard its local materialized state,
+/// so wait for a second confirming tick. Two ticks at the 5 s poll
+/// interval is a bounded delay, not a permanent hold.
+private let removalGraceTicks = 2
+
+/// In-memory absence streaks, owned by the resident `--watch` process.
+/// The original reminder assumed a fresh process per tick and therefore
+/// group-container state; the resident helper needs neither. A process
+/// restart simply starts the streaks over, which can only add another
+/// tick of tolerance, never an incorrect removal.
+final class DomainRemovalGrace {
+    private var missing: [String: Int] = [:]
+
+    /// A live drive clears its absence streak: one miss followed by a
+    /// responding owner is a transient outage, not a removal.
+    func observePresent(_ id: String) {
+        missing[id] = 0
+    }
+
+    /// Whether a domain absent from `desired` should be removed now.
+    /// One-shot invocation has no history (`enabled` false), so it
+    /// removes on the first miss.
+    func shouldRemove(_ id: String, enabled: Bool) -> Bool {
+        let streak = (missing[id] ?? 0) + 1
+        missing[id] = streak
+        return !enabled || streak >= removalGraceTicks
+    }
+
+    /// Drop streaks for ids macOS no longer reports so the map cannot
+    /// grow with drives that were removed outside this tick's loop.
+    func prune(keeping ids: Set<String>) {
+        for id in Array(missing.keys) where !ids.contains(id) {
+            missing[id] = nil
+        }
+    }
+}
+
 /// Reconcile domains with the published drive aliases. Partial
 /// progress stands: the next invocation retries what is outstanding.
+/// `grace` holds absence streaks between ticks; `graceEnabled` is false
+/// for a one-shot invocation, which has no prior observation.
 /// - Returns: 0 on success (including "container unavailable", which
 ///   leaves every domain untouched); 1 for malformed config, 2 for a
 ///   domain read failure, 3 for an add/remove failure.
-func reconcile(_ raw: String) -> (code: Int32, added: Int, removed: Int) {
+func reconcile(
+    _ raw: String,
+    grace: DomainRemovalGrace,
+    graceEnabled: Bool
+) -> (code: Int32, added: Int, removed: Int, deferred: Int) {
     guard let decoded = try? JSONDecoder().decode(
         Config.self,
         from: raw.data(using: .utf8) ?? Data()
     ) else {
         log.error("invalid registrar config")
-        return (1, 0, 0)
+        return (1, 0, 0, 0)
     }
     guard let desired = publishedDrives(group: decoded.group) else {
         // No container means no evidence about drives. Skip the whole
-        // reconciliation, removals included.
-        return (0, 0, 0)
+        // reconciliation, removals included — and do not age streaks.
+        return (0, 0, 0, 0)
     }
 
     let read = Completion<Result<[NSFileProviderDomain], Error>>()
@@ -198,13 +245,13 @@ func reconcile(_ raw: String) -> (code: Int32, added: Int, removed: Int) {
     }
     guard let readResult = read.wait(callbackTimeout()) else {
         log.error("timed out reading File Provider domains")
-        return (2, 0, 0)
+        return (2, 0, 0, 0)
     }
     let existing: [NSFileProviderDomain]
     switch readResult {
     case .failure(let error):
         log.error("cannot read File Provider domains: \(String(describing: error), privacy: .public)")
-        return (2, 0, 0)
+        return (2, 0, 0, 0)
     case .success(let domains):
         existing = domains
     }
@@ -213,6 +260,7 @@ func reconcile(_ raw: String) -> (code: Int32, added: Int, removed: Int) {
     var failed = false
     var added = 0
     var removed = 0
+    var deferred = 0
     for (id, name) in desired where !current.contains(id) {
         let domain = NSFileProviderDomain(
             identifier: NSFileProviderDomainIdentifier(id),
@@ -242,10 +290,22 @@ func reconcile(_ raw: String) -> (code: Int32, added: Int, removed: Int) {
             log.notice("registered domain \(id, privacy: .public)")
         }
     }
+    // A live owner clears its streak before the removal pass, so a
+    // single missed probe followed by a responding owner holds the
+    // domain. `desired` still carries only live owners, so a never-live
+    // drive is never added on the strength of a grace hold.
+    for id in desired.keys {
+        grace.observePresent(id)
+    }
     for domain in existing where isDriveId(domain.identifier.rawValue)
         && !desired.keys.contains(domain.identifier.rawValue)
     {
         let id = domain.identifier.rawValue
+        guard grace.shouldRemove(id, enabled: graceEnabled) else {
+            deferred += 1
+            log.notice("deferring removal of domain \(id, privacy: .public): no live owner this tick")
+            continue
+        }
         let remove = Completion<Result<Void, Error>>()
         NSFileProviderManager.remove(domain) { error in
             remove.resolve(error.map { Result.failure($0) } ?? Result.success(()))
@@ -264,28 +324,31 @@ func reconcile(_ raw: String) -> (code: Int32, added: Int, removed: Int) {
             log.notice("removed stale domain \(id, privacy: .public)")
         }
     }
-    return (failed ? 3 : 0, added, removed)
+    grace.prune(keeping: current)
+    return (failed ? 3 : 0, added, removed, deferred)
 }
 
-// Two invocations share the same reconcile pass. The launch agent uses
-// `--watch` and keeps one resident process: calling the File Provider
-// domain API from a fresh process every tick makes macOS re-ask the
-// "access data from other apps" permission on every launch. A resident
-// process asks once and then polls internally.
+// One resident process shares one reconcile pass and one set of absence
+// streaks across ticks. The launch agent uses `--watch`: calling the
+// File Provider domain API from a fresh process every tick makes macOS
+// re-ask the "access data from other apps" permission on every launch.
+// The grace window lives in that resident process, not in group state.
 let args = Array(CommandLine.arguments.dropFirst())
 let watching = args.first == "--watch"
 let config = (watching ? args.dropFirst().first : args.first)
     ?? #"{"group":"group.md.enesis.wyrd"}"#
+let grace = DomainRemovalGrace()
 
 if watching {
     while true {
-        let outcome = reconcile(config)
-        print("added \(outcome.added) removed \(outcome.removed)")
+        let outcome = reconcile(config, grace: grace, graceEnabled: true)
+        print("added \(outcome.added) removed \(outcome.removed) deferred \(outcome.deferred)")
         fflush(stdout)
         sleep(5)
     }
 }
 
-let outcome = reconcile(config)
-print("added \(outcome.added) removed \(outcome.removed)")
+// No history in a one-shot run: remove on the first miss, as before.
+let outcome = reconcile(config, grace: grace, graceEnabled: false)
+print("added \(outcome.added) removed \(outcome.removed) deferred \(outcome.deferred)")
 exit(outcome.code)
