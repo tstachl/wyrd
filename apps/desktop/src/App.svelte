@@ -1187,9 +1187,9 @@
           {:else}
             <!-- Locked drives keep their local surfaces here:
                  configured bounds read from the settings file and
-                 the identity-pair Leave card need no owner. Status
-                 stays gated on unlock; managed-down drives keep the
-                 overlay with its Start/Reinstall recovery. -->
+                 the credential-backed removal card need no owner.
+                 Status stays gated on unlock; managed-down drives
+                 keep the overlay with its Start/Reinstall recovery. -->
             <SettingsView
               driveDir={selectedDriveDir}
               driveName={selectedDrive?.name ?? null}

@@ -81,30 +81,33 @@ test("settings header, tooltip and null bound use the approved explanations", ()
   expect(settings).not.toContain("unknown to the shell");
 });
 
-test("leave states the device-removal consequences before action", () => {
+test("one removal action offers keep-local-data and remove-local-data-too", () => {
+  expect(settings).toContain("Remove this drive");
+  expect(settings).toContain("Keep local data");
+  expect(settings).toContain("Remove local data too");
+  expect(settings).not.toContain("Leave this drive");
+  expect(settings).not.toContain("Remove local drive data");
+  expect(settings).not.toContain("Leave report");
+});
+
+test("removal states the membership, locality and terminal consequences once", () => {
   for (const line of [
-    "leaving removes this device from the drive going forward",
+    "removing this drive ends this device's membership going forward",
     "It does not erase copies this device already obtained",
-    "hand over ownership before leaving if the drive should remain manageable",
+    "takes the drive's local data off the device",
+    "registry entry, service definition, credential item and group socket and label",
+    "the drive's service is stopped for this action and restarted if the removal is refused",
+    "No other member's copy changes",
+    "blocks stay recoverable from this device until overwritten",
+    "the owner set becomes empty",
+    "hand over ownership before removing if the drive should remain manageable",
+    "A non-owner or a frozen drive is refused before anything is removed",
   ]) {
     expect(settings).toContain(line);
   }
   expect(settings).not.toContain("freezes permanently");
   expect(settings).not.toContain("sole owner");
-});
-
-test("local removal states the locality and terminal consequences before action", () => {
-  for (const line of [
-    "takes this drive's local data off the device",
-    "registry entry, service definition, credential item and group socket and label",
-    "No other member's copy changes",
-    "blocks stay recoverable from this device until overwritten",
-    "the owner set becomes empty",
-    "A non-owner or a frozen drive is refused before anything is removed",
-    "Stop the drive's service first if it holds the store",
-  ]) {
-    expect(settings).toContain(line);
-  }
+  expect(settings).not.toContain("Stop the drive's service first if it holds the store");
   expect(settings).not.toContain("Clean up");
 });
 

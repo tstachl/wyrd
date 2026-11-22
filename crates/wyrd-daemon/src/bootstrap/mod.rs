@@ -40,7 +40,7 @@ pub use registry::{
 pub use service::{
     disable_service, enable_service, install_service, render_launchd_plist, render_systemd_unit,
     service_definition_path_for_service, service_enabled, set_service_enabled, start_service,
-    start_service_only, ServiceCredential, ServiceEnabled, SupervisedOwner,
+    start_service_only, stop_service_only, ServiceCredential, ServiceEnabled, SupervisedOwner,
 };
 
 // The registry's crate-visible updater is exercised by the tests but

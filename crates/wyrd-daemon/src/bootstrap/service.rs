@@ -1002,6 +1002,79 @@ pub fn start_service_only(
 ) -> Result<(), BootstrapError> {
     Err(BootstrapError::ServicesUnsupported)
 }
+
+/// Stop one drive's managed service without changing its login-start
+/// preference. Returns whether a running unit was actually stopped, so
+/// the caller can resume exactly what it stopped when the operation is
+/// refused. Unlike [`set_service_enabled`] with `enabled = false`, this
+/// uses a plain unload/stop: no disabled record is persisted, and
+/// [`start_service_only`] restores the running state as found.
+#[cfg(unix)]
+pub fn stop_service_only(
+    entry: &RegistryEntry,
+    #[cfg_attr(not(target_os = "macos"), allow(unused_variables))] definition: &Path,
+) -> Result<bool, BootstrapError> {
+    #[cfg(target_os = "macos")]
+    {
+        let label = format!("md.enesis.wyrd.{}", entry.service);
+        if run("launchctl", &["list", &label]).is_err() {
+            return Ok(false);
+        }
+        run("launchctl", &["unload", &definition.to_string_lossy()]).map_err(|source| {
+            BootstrapError::StopService {
+                name: label.clone(),
+                source: Box::new(source),
+            }
+        })?;
+        if run("launchctl", &["list", &label]).is_ok() {
+            let args = format!("list {label}");
+            return Err(BootstrapError::StopService {
+                name: label,
+                source: Box::new(BootstrapError::CommandFailed {
+                    program: "launchctl".to_string(),
+                    args,
+                    detail: "unit still loaded after stop".to_string(),
+                }),
+            });
+        }
+        Ok(true)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let unit = format!("wyrd-{}.service", entry.service);
+        if run("systemctl", &["--user", "is-active", "--quiet", &unit]).is_err() {
+            return Ok(false);
+        }
+        run("systemctl", &["--user", "stop", &unit]).map_err(|source| {
+            BootstrapError::StopService {
+                name: unit.clone(),
+                source: Box::new(source),
+            }
+        })?;
+        if run("systemctl", &["--user", "is-active", "--quiet", &unit]).is_ok() {
+            let args = format!("--user is-active --quiet {unit}");
+            return Err(BootstrapError::StopService {
+                name: unit,
+                source: Box::new(BootstrapError::CommandFailed {
+                    program: "systemctl".to_string(),
+                    args,
+                    detail: "unit still active after stop".to_string(),
+                }),
+            });
+        }
+        Ok(true)
+    }
+}
+
+/// Stopping needs a Unix manager.
+#[cfg(not(unix))]
+pub fn stop_service_only(
+    _entry: &RegistryEntry,
+    _definition: &Path,
+) -> Result<bool, BootstrapError> {
+    Err(BootstrapError::ServicesUnsupported)
+}
+
 /// Stop and clear the per-drive service definition before a
 /// reconfiguration: disable the manager unit (or unload the agent)
 /// so a restart cannot bring the old definition back over the new

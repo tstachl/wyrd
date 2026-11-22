@@ -563,10 +563,13 @@ filesystem operation over ciphertext and the keyring file, not a
 cryptographic erasure, and v0 defines no key-erasure primitive.
 
 Like the other offline writers, `drive delete` is a transient owner:
-it opens the keystore and takes the exclusive store lock. A
-long-lived owner holding the drive — `wyrd owner`, `wyrd mount`, or a
-desktop service — refuses it with `StoreLocked` (exit 78). Stop the
-service first and retry.
+it opens the keystore and takes the exclusive store lock. With
+`--yes`, the registry-matched managed service is stopped before the
+open and resumed if the engine refuses, so a refusal leaves no
+service state change; the stop does not persist a login-start
+preference. A long-lived owner the CLI did not stop — `wyrd owner` or
+`wyrd mount` — still holds the store and refuses it with `StoreLocked`
+(exit 78); stop that owner first and retry.
 
 After the commit the local forget is complete: the directory, the
 exact-match registry entry (`--registry` selects the file), the
