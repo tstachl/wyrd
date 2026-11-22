@@ -58,6 +58,74 @@ export function availabilityLabel(availability: DriveAvailability): string {
   }
 }
 
+/** The drive folder's own name, not a truncated path. */
+export function folderNameFromPath(path: string): string {
+  const trimmed = path.trim().replace(/[/\\]+$/, "");
+  const leaf = trimmed.split(/[/\\]/).pop() ?? "";
+  return leaf === "" ? (path.trim() === "" ? "Drive folder" : path.trim()) : leaf;
+}
+
+/** Observable facts a drive card can state; null where it never answered this session. */
+export interface OverviewDriveFacts {
+  availability: "available" | "unavailable" | "unknown";
+  paused: boolean;
+  connectedRelays: number;
+  totalRelays: number;
+  peers: number;
+  knownMembers: number;
+  stale: boolean;
+}
+
+/** Observable run state for a card, never a single health verdict. */
+export function driveRunState(facts: OverviewDriveFacts | null): string {
+  if (facts === null) return "Not yet observed";
+  if (facts.availability === "unavailable") return "Not running";
+  if (facts.availability === "unknown") return "Not yet observed";
+  return facts.paused ? "Paused" : "Running";
+}
+
+/** One line of separate facts beneath the card title. */
+export function driveFactLine(facts: OverviewDriveFacts | null, configuredRelays: number): string {
+  if (facts === null) {
+    return `${configuredRelays} relay${configuredRelays === 1 ? "" : "s"} configured · Status not read this session`;
+  }
+  const relays =
+    facts.totalRelays === 0
+      ? "No relays connected at the last pass"
+      : `Connected to ${facts.connectedRelays} of ${facts.totalRelays} relays`;
+  const sharing =
+    facts.knownMembers <= 1 && facts.peers === 0
+      ? "No other devices yet"
+      : facts.peers > 0
+        ? `${facts.peers} other device${facts.peers === 1 ? "" : "s"} connected at the last pass`
+        : `${facts.knownMembers - 1} other device${facts.knownMembers - 1 === 1 ? "" : "s"} in this drive, none connected at the last pass`;
+  return `${relays} · ${sharing}`;
+}
+
+/** Only observed problems put a drive in the attention group. */
+export function driveNeedsAttention(facts: OverviewDriveFacts | null): boolean {
+  if (facts === null) return false;
+  return (
+    facts.availability === "unavailable" ||
+    facts.paused ||
+    facts.totalRelays === 0 ||
+    facts.connectedRelays === 0 ||
+    facts.stale
+  );
+}
+
+/** Stable partition: drives needing attention first, original order within each group. */
+export function sortDrivesByAttention<T>(
+  drives: T[],
+  factsFor: (drive: T) => OverviewDriveFacts | null,
+): T[] {
+  return [...drives].sort((a, b) => {
+    const aNeeds = driveNeedsAttention(factsFor(a)) ? 1 : 0;
+    const bNeeds = driveNeedsAttention(factsFor(b)) ? 1 : 0;
+    return bNeeds - aNeeds;
+  });
+}
+
 /**
  * The separate observable facts the Status screen states in plain
  * language. No field is a verdict: reachability, relay connectivity,
