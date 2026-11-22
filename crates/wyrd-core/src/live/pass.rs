@@ -638,13 +638,11 @@ where
         let scrubbed = self.scrub(admission)?;
         let phase = std::time::Instant::now();
         let fetched = self.fetch(paused, bulk, phase)?;
-        // Clone the queue handle so the batch borrow does not pin `self`
-        // while mutations apply (the engine borrow is mutable). Taking
-        // the batch here — after fetch, never before — keeps the fetch
-        // deadline's nearest-held-mutation read on the pre-drain queue.
+        // A separate queue handle: the batch `apply` takes borrows from
+        // this clone, not from `self`, so the mutable engine borrow and
+        // the batch can coexist through publication.
         let mutations = Arc::clone(&self.mutations);
-        let mut batch = mutations.take_batch().with_wants(Arc::clone(&self.wants));
-        let (completed_runtime, terminal) = self.apply(&mut batch, &fetched)?;
+        let (mut batch, completed_runtime, terminal) = self.apply(&mutations, &fetched)?;
         let mut report = SyncReport {
             drained,
             fetched,
@@ -847,15 +845,19 @@ where
     /// from here: it finishes the batch only after the publication
     /// outcome is known, so a returned success means the state serves.
     ///
-    /// Returns the runtime snapshot from terminal evaluation and that
-    /// terminal verdict map. The caller owns the still-unfinished batch
-    /// and must finish it on every path.
-    fn apply(
+    /// Returns the still-unfinished batch guard, the runtime snapshot
+    /// from terminal evaluation, and that terminal verdict map. The
+    /// caller owns the batch from here and must finish it on every path.
+    /// The batch is taken only after the head read succeeds: a failed
+    /// `live_heads()` leaves the queue intact for the next pass instead
+    /// of completing every queued write with `Engine`.
+    fn apply<'a>(
         &mut self,
-        batch: &mut MutationBatch<'_>,
+        mutations: &'a Arc<MutationQueue>,
         fetched: &ExecuteReport,
     ) -> Result<
         (
+            MutationBatch<'a>,
             wyrd_sync::runtime::RuntimeState,
             BTreeMap<ContentId, TerminalState>,
         ),
@@ -872,12 +874,17 @@ where
             tracing::debug!("parent token captures blocked by a head-set change");
             self.observed_heads = observed_heads;
         }
+        // Clone the queue handle so the batch borrow does not pin `self`
+        // while mutations apply (the engine borrow is mutable). Taken
+        // here, after the head read, so a failed read cannot consume the
+        // queue (see the method doc).
+        let mut batch = mutations.take_batch().with_wants(Arc::clone(&self.wants));
         for index in 0..batch.len() {
             // Total order: a held entry owns the front of the queue,
             // so everything after it in this batch goes back
             // untouched — never executed past the defer. The pass
             // then ends.
-            if let ApplyEntry::Deferred(base) = self.apply_entry(batch, index, true) {
+            if let ApplyEntry::Deferred(base) = self.apply_entry(&mut batch, index, true) {
                 batch.defer_and_release_rest(index, base);
                 break;
             }
@@ -922,7 +929,7 @@ where
                 || terminal.contains_key(content)
                 || waiters == 0
         });
-        Ok((completed_runtime, terminal))
+        Ok((batch, completed_runtime, terminal))
     }
 
     /// Decide and discharge publication, filling the accumulated pass
