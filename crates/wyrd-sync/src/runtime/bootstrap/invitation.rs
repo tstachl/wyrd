@@ -67,8 +67,8 @@ pub(in crate::runtime) fn accept_invitation(
 }
 
 /// The invitee's out-of-band expectation about the drive being
-/// joined: the owner DeviceId (or roster member) the invitee meant to
-/// trust, the drive id, and the genesis transition id. Every field
+/// joined: the owner DeviceId the invitee meant to trust, the drive
+/// id, and the genesis transition id. Every field
 /// is optional — absent fields are not checked, so a caller that
 /// supplies nothing gets exactly today's behavior (invitation
 /// authenticity only, with the residual risk `trust.md` names). Each

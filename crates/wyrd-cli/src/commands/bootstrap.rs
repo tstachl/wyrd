@@ -170,12 +170,14 @@ pub(crate) fn bootstrap_store(
     let init = match &args.invitation_file {
         None => Init::Create,
         Some(path) => {
-            let bytes = read_bounded(path, 1024 * 1024)?;
+            // Pins parse before the invitation is read: a malformed
+            // pin refuses as usage however corrupt the file is.
             let expected = super::device::join_expectation(
                 args.expected_owner.clone(),
                 args.expected_drive.clone(),
                 args.expected_genesis.clone(),
             )?;
+            let bytes = read_bounded(path, 1024 * 1024)?;
             Init::Join {
                 sealed_invitation: bytes,
                 expected,
@@ -341,12 +343,14 @@ pub(crate) fn bootstrap(
     let init = match &args.invitation_file {
         None => Init::Create,
         Some(path) => {
-            let bytes = read_bounded(path, 1024 * 1024)?;
+            // Pins parse before the invitation is read: a malformed
+            // pin refuses as usage however corrupt the file is.
             let expected = super::device::join_expectation(
                 args.expected_owner.clone(),
                 args.expected_drive.clone(),
                 args.expected_genesis.clone(),
             )?;
+            let bytes = read_bounded(path, 1024 * 1024)?;
             Init::Join {
                 sealed_invitation: bytes,
                 expected,

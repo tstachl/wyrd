@@ -331,3 +331,38 @@ fn pairing_request_leaves_an_established_drive_directory_alone() {
         "pairing-request touches no directory mode"
     );
 }
+
+#[test]
+fn join_with_wrong_owner_expectation_is_refused_before_disk() {
+    // The entry path CLI `device join` and daemon `drive bootstrap`
+    // actually use: stage, admit, then join against a stranger pin.
+    let owner_dir = TestDir::new("join-expectation-owner");
+    let newcomer_dir = TestDir::new("join-expectation-newcomer");
+    let owner_identity = DeviceIdentitySecret::generate().unwrap();
+    let newcomer_identity = DeviceIdentitySecret::generate().unwrap();
+    let mut owner = create(owner_dir.path.clone(), "test-pass", owner_identity).unwrap();
+    let pairing = pairing_request(&newcomer_dir.path, "test-pass", &newcomer_identity).unwrap();
+    let invitation = owner
+        .admit_device(pairing.device, pairing.encryption_key)
+        .unwrap()
+        .invitation;
+    let stranger = DeviceIdentitySecret::generate().unwrap();
+    assert!(matches!(
+        join(
+            newcomer_dir.path.clone(),
+            "test-pass",
+            newcomer_identity,
+            &invitation,
+            &JoinExpectation {
+                owner: Some(stranger.device_id()),
+                drive: None,
+                genesis: None,
+            },
+        ),
+        Err(EngineError::ExpectationMismatch { field: "owner", .. })
+    ));
+    assert!(
+        !newcomer_dir.path.join("DRIVE").exists(),
+        "a mismatched expectation never touches disk"
+    );
+}

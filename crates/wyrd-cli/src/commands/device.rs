@@ -64,9 +64,11 @@ pub(crate) fn device(
             expected_drive,
             expected_genesis,
         } => {
+            // Pins parse before the invitation is read: a malformed
+            // pin refuses as usage however corrupt the file is.
+            let expected = join_expectation(expected_owner, expected_drive, expected_genesis)?;
             let bytes = read_bounded(&invitation, MAX_INVITATION_BYTES)?;
             let sealed = SealedBootstrap::decode(&bytes).map_err(|_| CliError::InvitationFormat)?;
-            let expected = join_expectation(expected_owner, expected_drive, expected_genesis)?;
             let engine =
                 Engine::join_with_expectation(drive_dir, passphrase, identity, &sealed, &expected)?;
             print!("{}", join_confirmation_report(&engine));
