@@ -14,7 +14,7 @@ use crate::membership::MembershipLog;
 use crate::membership::TransitionStatus;
 
 use super::super::{author, bootstrap};
-use super::{Engine, EngineError, PairingRequest, PendingQueue};
+use super::{Engine, EngineError, JoinExpectation, PairingRequest, PendingQueue};
 
 impl Engine {
     /// Open (or create) the engine state: the durable store plus the
@@ -160,7 +160,29 @@ impl Engine {
         encryption: DeviceEncryptionSecret,
         sealed: &crate::control::SealedBootstrap,
     ) -> Result<Engine, EngineError> {
-        bootstrap::accept_invitation(dir, passphrase, identity, encryption, sealed)
+        Self::accept_invitation_with_expectation(
+            dir,
+            passphrase,
+            identity,
+            encryption,
+            sealed,
+            &JoinExpectation::none(),
+        )
+    }
+
+    /// Accept an invitation with the invitee's out-of-band
+    /// expectation about the drive: every supplied field must match
+    /// the opened invitation before anything touches disk. See
+    /// [`JoinExpectation`].
+    pub fn accept_invitation_with_expectation(
+        dir: PathBuf,
+        passphrase: &str,
+        identity: DeviceIdentitySecret,
+        encryption: DeviceEncryptionSecret,
+        sealed: &crate::control::SealedBootstrap,
+        expected: &JoinExpectation,
+    ) -> Result<Engine, EngineError> {
+        bootstrap::accept_invitation(dir, passphrase, identity, encryption, sealed, expected)
     }
 
     /// Stage (or reuse) this device's pairing secret and return the
@@ -185,7 +207,20 @@ impl Engine {
         identity: DeviceIdentitySecret,
         sealed: &crate::control::SealedBootstrap,
     ) -> Result<Engine, EngineError> {
-        bootstrap::join(dir, passphrase, identity, sealed)
+        Self::join_with_expectation(dir, passphrase, identity, sealed, &JoinExpectation::none())
+    }
+
+    /// Join with the invitee's out-of-band expectation about the
+    /// drive: every supplied field must match the opened invitation
+    /// before anything touches disk. See [`JoinExpectation`].
+    pub fn join_with_expectation(
+        dir: PathBuf,
+        passphrase: &str,
+        identity: DeviceIdentitySecret,
+        sealed: &crate::control::SealedBootstrap,
+        expected: &JoinExpectation,
+    ) -> Result<Engine, EngineError> {
+        bootstrap::join(dir, passphrase, identity, sealed, expected)
     }
 
     /// Reissue a device's sealed invitation from durable state: the

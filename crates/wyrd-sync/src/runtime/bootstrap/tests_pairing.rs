@@ -44,6 +44,7 @@ fn join_round_trip_reopens_as_member() {
         "test-pass",
         newcomer_identity.clone(),
         &invitation,
+        &JoinExpectation::none(),
     )
     .unwrap();
     assert!(
@@ -82,7 +83,13 @@ fn join_into_owner_directory_refuses_and_preserves_custody() {
         .invitation;
     drop(owner);
     assert!(matches!(
-        join(dir.path.clone(), "test-pass", newcomer, &invitation,),
+        join(
+            dir.path.clone(),
+            "test-pass",
+            newcomer,
+            &invitation,
+            &JoinExpectation::none(),
+        ),
         Err(EngineError::OwnerCustodyExists)
     ));
     assert_eq!(
@@ -106,7 +113,16 @@ fn join_over_other_member_custody_refuses() {
         .admit_device(pairing.device, pairing.encryption_key)
         .unwrap()
         .invitation;
-    drop(join(dir.path.clone(), "test-pass", newcomer.clone(), &admitted).unwrap());
+    drop(
+        join(
+            dir.path.clone(),
+            "test-pass",
+            newcomer.clone(),
+            &admitted,
+            &JoinExpectation::none(),
+        )
+        .unwrap(),
+    );
     // A second device stages over the same pairing file, then
     // attempts to join the occupied directory: the member record
     // names the first device, so the write refuses rather than
@@ -129,7 +145,13 @@ fn join_over_other_member_custody_refuses() {
         EpochSecret::generate().unwrap(),
     );
     assert!(matches!(
-        join(dir.path.clone(), "test-pass", other, &sealed),
+        join(
+            dir.path.clone(),
+            "test-pass",
+            other,
+            &sealed,
+            &JoinExpectation::none(),
+        ),
         Err(EngineError::DeviceMismatch)
     ));
     // The first device still reopens from its intact custody.
@@ -156,7 +178,13 @@ fn join_with_foreign_invitation_refuses_before_writing_custody() {
         EpochSecret::generate().unwrap(),
     );
     assert!(matches!(
-        join(dir.path.clone(), "test-pass", newcomer, &sealed),
+        join(
+            dir.path.clone(),
+            "test-pass",
+            newcomer,
+            &sealed,
+            &JoinExpectation::none(),
+        ),
         Err(EngineError::Invitation(_))
     ));
     assert!(
@@ -214,7 +242,13 @@ fn join_with_member_forged_invitation_refuses_before_writing_custody() {
     )
     .unwrap();
     assert!(matches!(
-        join(dir.path.clone(), "test-pass", newcomer, &sealed),
+        join(
+            dir.path.clone(),
+            "test-pass",
+            newcomer,
+            &sealed,
+            &JoinExpectation::none(),
+        ),
         Err(EngineError::InvitationMismatch)
     ));
     assert!(
@@ -295,5 +329,40 @@ fn pairing_request_leaves_an_established_drive_directory_alone() {
         mode_of(&dir.path) & 0o777,
         0o755,
         "pairing-request touches no directory mode"
+    );
+}
+
+#[test]
+fn join_with_wrong_owner_expectation_is_refused_before_disk() {
+    // The entry path CLI `device join` and daemon `drive bootstrap`
+    // actually use: stage, admit, then join against a stranger pin.
+    let owner_dir = TestDir::new("join-expectation-owner");
+    let newcomer_dir = TestDir::new("join-expectation-newcomer");
+    let owner_identity = DeviceIdentitySecret::generate().unwrap();
+    let newcomer_identity = DeviceIdentitySecret::generate().unwrap();
+    let mut owner = create(owner_dir.path.clone(), "test-pass", owner_identity).unwrap();
+    let pairing = pairing_request(&newcomer_dir.path, "test-pass", &newcomer_identity).unwrap();
+    let invitation = owner
+        .admit_device(pairing.device, pairing.encryption_key)
+        .unwrap()
+        .invitation;
+    let stranger = DeviceIdentitySecret::generate().unwrap();
+    assert!(matches!(
+        join(
+            newcomer_dir.path.clone(),
+            "test-pass",
+            newcomer_identity,
+            &invitation,
+            &JoinExpectation {
+                owner: Some(stranger.device_id()),
+                drive: None,
+                genesis: None,
+            },
+        ),
+        Err(EngineError::ExpectationMismatch { field: "owner", .. })
+    ));
+    assert!(
+        !newcomer_dir.path.join("DRIVE").exists(),
+        "a mismatched expectation never touches disk"
     );
 }

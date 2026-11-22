@@ -548,9 +548,26 @@ pub(crate) enum DeviceAction {
     },
     /// Join a drive from the owner's sealed invitation. Writes member
     /// custody before accepting, so the device reopens afterwards.
+    /// The `--expected-*` flags pin the out-of-band expectation about
+    /// the drive being joined (the owner meant to trust, the drive,
+    /// the genesis); every supplied value must match the opened
+    /// invitation before anything touches disk, and a mismatch
+    /// refuses the join.
     Join {
         /// The sealed invitation file.
         invitation: PathBuf,
+        /// Expected owner: 64 hex characters naming the inviter the
+        /// invitee meant to trust.
+        #[arg(long, value_name = "HEX")]
+        expected_owner: Option<String>,
+        /// Expected drive: 64 hex characters naming the drive being
+        /// joined.
+        #[arg(long, value_name = "HEX")]
+        expected_drive: Option<String>,
+        /// Expected genesis: 64 hex characters naming the genesis
+        /// transition the invitation must carry.
+        #[arg(long, value_name = "HEX")]
+        expected_genesis: Option<String>,
     },
 }
 
@@ -642,6 +659,20 @@ pub(crate) enum DriveAction {
         /// invitation file the inviter's `member invite` wrote.
         #[arg(long, value_name = "PATH")]
         invitation_file: Option<PathBuf>,
+        /// Expected owner: 64 hex characters naming the inviter the
+        /// invitee meant to trust. Refuses the join on mismatch
+        /// before anything touches disk.
+        #[arg(long, value_name = "HEX")]
+        expected_owner: Option<String>,
+        /// Expected drive: 64 hex characters naming the drive being
+        /// joined. Refuses the join on mismatch.
+        #[arg(long, value_name = "HEX")]
+        expected_drive: Option<String>,
+        /// Expected genesis: 64 hex characters naming the genesis
+        /// transition the invitation must carry. Refuses the join on
+        /// mismatch.
+        #[arg(long, value_name = "HEX")]
+        expected_genesis: Option<String>,
         /// Registry file elsewhere than the platform default.
         #[arg(long, value_name = "PATH")]
         registry: Option<PathBuf>,

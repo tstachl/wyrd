@@ -169,6 +169,18 @@ pub fn bootstrap_argv(request: &ProvisionRequest) -> Result<Vec<OsString>, Strin
         argv.push("--invitation-file".into());
         argv.push(invitation.as_os_str().to_owned());
     }
+    if let Some(owner) = &request.expected_owner {
+        argv.push("--expected-owner".into());
+        argv.push(owner.into());
+    }
+    if let Some(drive) = &request.expected_drive {
+        argv.push("--expected-drive".into());
+        argv.push(drive.into());
+    }
+    if let Some(genesis) = &request.expected_genesis {
+        argv.push("--expected-genesis".into());
+        argv.push(genesis.into());
+    }
     if let Some(registry) = &request.registry_path {
         argv.push("--registry".into());
         argv.push(registry.as_os_str().to_owned());

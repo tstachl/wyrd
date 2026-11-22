@@ -27,10 +27,10 @@ pub mod retention;
 pub(crate) mod test_util;
 
 pub use engine::{
-    AdmitOutcome, DrainReport, DurabilityLevel, Engine, EngineError, ExecuteReport, MergePath,
-    MergePlan, MergeSelection, PairingRequest, PublishBudget, RecoveryPath, RecoveryPlan,
-    RecoveryPreview, RecoveryStatus, ResumeOutcome, SnapshotHead, TerminalState, UnqueuedClosure,
-    MAX_PENDING_MESSAGES,
+    AdmitOutcome, DrainReport, DurabilityLevel, Engine, EngineError, ExecuteReport,
+    JoinExpectation, MergePath, MergePlan, MergeSelection, PairingRequest, PublishBudget,
+    RecoveryPath, RecoveryPlan, RecoveryPreview, RecoveryStatus, ResumeOutcome, SnapshotHead,
+    TerminalState, UnqueuedClosure, MAX_PENDING_MESSAGES,
 };
 pub use retention::{RefusalLedger, RetentionGate, RetentionRefusal};
 

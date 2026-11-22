@@ -61,7 +61,7 @@ use std::time::Duration;
 #[cfg(test)]
 use wyrd_sync::keys::DeviceIdentitySecret;
 #[cfg(test)]
-use wyrd_sync::runtime::Engine;
+use wyrd_sync::runtime::{Engine, JoinExpectation};
 
 // Private helpers the extracted test modules reach through `super::*`.
 #[cfg(test)]

@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 use zeroize::Zeroizing;
 
-use wyrd_format::{DeviceId, DriveId, MembershipTransition};
+use wyrd_format::{DeviceId, DriveId, MembershipTransition, TransitionId};
 
 use super::super::engine::{Engine, EngineError};
 use super::keystore::read_drive;
@@ -47,8 +47,9 @@ pub(in crate::runtime) fn accept_invitation(
     identity: DeviceIdentitySecret,
     encryption: DeviceEncryptionSecret,
     sealed: &SealedBootstrap,
+    expected: &JoinExpectation,
 ) -> Result<Engine, EngineError> {
-    let verified = verify_invitation(&identity, &encryption, sealed)?;
+    let verified = verify_invitation(&identity, &encryption, sealed, expected)?;
 
     let store = DurableStore::open(dir.clone(), verified.drive, passphrase)?;
     if read_drive(&dir)? != verified.drive {
@@ -63,6 +64,32 @@ pub(in crate::runtime) fn accept_invitation(
         verified.genesis,
         verified.pending_capability,
     )
+}
+
+/// The invitee's out-of-band expectation about the drive being
+/// joined: the owner DeviceId the invitee meant to trust, the drive
+/// id, and the genesis transition id. Every field
+/// is optional — absent fields are not checked, so a caller that
+/// supplies nothing gets exactly today's behavior (invitation
+/// authenticity only, with the residual risk `trust.md` names). Each
+/// supplied field is compared against the opened invitation before
+/// anything touches disk; a mismatch refuses the join outright.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct JoinExpectation {
+    /// The owner the invitee meant to trust: must equal the
+    /// invitation's inviter (hence the genesis author).
+    pub owner: Option<DeviceId>,
+    /// The drive being joined: must equal the invitation's drive.
+    pub drive: Option<DriveId>,
+    /// The genesis transition: must equal the invitation genesis id.
+    pub genesis: Option<TransitionId>,
+}
+
+impl JoinExpectation {
+    /// No expectations: invitation authenticity only.
+    pub fn none() -> Self {
+        Self::default()
+    }
 }
 
 /// The verified invitation material: the invitee device, the drive,
@@ -81,6 +108,7 @@ pub(super) fn verify_invitation(
     identity: &DeviceIdentitySecret,
     encryption: &DeviceEncryptionSecret,
     sealed: &SealedBootstrap,
+    expected: &JoinExpectation,
 ) -> Result<VerifiedInvitation, EngineError> {
     let device = identity.device_id();
     let invitation = open_bootstrap(encryption, sealed)?;
@@ -139,6 +167,39 @@ pub(super) fn verify_invitation(
         || capability.encryption_key != invitation.encryption_key
     {
         return Err(EngineError::InvitationMismatch);
+    }
+    // Out-of-band expectation: every supplied field must match the
+    // opened invitation before anything touches disk. The owner
+    // expectation names the inviter the invitee meant to trust
+    // (hence the genesis author, checked above); the drive and
+    // genesis expectations pin the anchor itself. Absent fields are
+    // not checked.
+    if let Some(owner) = expected.owner {
+        if owner != invitation.inviter {
+            return Err(EngineError::ExpectationMismatch {
+                field: "owner",
+                expected: owner.to_string(),
+                found: invitation.inviter.to_string(),
+            });
+        }
+    }
+    if let Some(drive) = expected.drive {
+        if drive != invitation.drive {
+            return Err(EngineError::ExpectationMismatch {
+                field: "drive",
+                expected: drive.to_string(),
+                found: invitation.drive.to_string(),
+            });
+        }
+    }
+    if let Some(genesis) = expected.genesis {
+        if genesis != genesis_id {
+            return Err(EngineError::ExpectationMismatch {
+                field: "genesis",
+                expected: genesis.to_string(),
+                found: genesis_id.to_string(),
+            });
+        }
     }
     Ok(VerifiedInvitation {
         device,

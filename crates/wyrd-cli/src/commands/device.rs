@@ -8,10 +8,10 @@ use crate::CliError;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use wyrd_format::{DeviceEncryptionKey, DeviceId, SnapshotId, TransitionId};
+use wyrd_format::{DeviceEncryptionKey, DeviceId, DriveId, SnapshotId, TransitionId};
 use wyrd_sync::control::SealedBootstrap;
 use wyrd_sync::keys::DeviceIdentitySecret;
-use wyrd_sync::runtime::Engine;
+use wyrd_sync::runtime::{Engine, JoinExpectation};
 /// Pair this device with a drive over the keystore: identify it,
 /// stage pairing material, or join from a sealed invitation. Like
 /// `member`, everything here is offline — files in, files out.
@@ -58,10 +58,19 @@ pub(crate) fn device(
             );
             Ok(())
         }
-        DeviceAction::Join { invitation } => {
+        DeviceAction::Join {
+            invitation,
+            expected_owner,
+            expected_drive,
+            expected_genesis,
+        } => {
+            // Pins parse before the invitation is read: a malformed
+            // pin refuses as usage however corrupt the file is.
+            let expected = join_expectation(expected_owner, expected_drive, expected_genesis)?;
             let bytes = read_bounded(&invitation, MAX_INVITATION_BYTES)?;
             let sealed = SealedBootstrap::decode(&bytes).map_err(|_| CliError::InvitationFormat)?;
-            let engine = Engine::join(drive_dir, passphrase, identity, &sealed)?;
+            let engine =
+                Engine::join_with_expectation(drive_dir, passphrase, identity, &sealed, &expected)?;
             print!("{}", join_confirmation_report(&engine));
             Ok(())
         }
@@ -85,6 +94,22 @@ pub(crate) fn join_confirmation_report(engine: &Engine) -> String {
         &engine.drive(),
         epoch,
     )
+}
+
+/// Build the out-of-band join expectation from the optional
+/// `--expected-*` pins. Absent flags are not checked; every supplied
+/// value must parse as 64 hex characters or the join refuses as
+/// usage before reading the invitation.
+pub(crate) fn join_expectation(
+    owner: Option<String>,
+    drive: Option<String>,
+    genesis: Option<String>,
+) -> Result<JoinExpectation, CliError> {
+    Ok(JoinExpectation {
+        owner: owner.map(|hex| parse_device_id(&hex)).transpose()?,
+        drive: drive.map(|hex| parse_drive_id(&hex)).transpose()?,
+        genesis: genesis.map(|hex| parse_transition_id(&hex)).transpose()?,
+    })
 }
 
 /// Read a bounded non-credential input file. Invitation bytes are
@@ -221,6 +246,15 @@ pub(crate) fn parse_transition_id(hex: &str) -> Result<TransitionId, CliError> {
     )?))
 }
 
+/// Parse a drive id from 64 hex characters (the drive being joined,
+/// for the `--expected-drive` pin).
+pub(crate) fn parse_drive_id(hex: &str) -> Result<DriveId, CliError> {
+    Ok(DriveId::from_bytes(parse_32_byte_hex(
+        hex,
+        "drive must be 64 hex characters naming a drive id",
+    )?))
+}
+
 /// Parse a device encryption key from 64 hex characters (x-only
 /// pubkey, from the newcomer's pairing-request output).
 pub(crate) fn parse_encryption_key(hex: &str) -> Result<DeviceEncryptionKey, CliError> {
@@ -228,4 +262,57 @@ pub(crate) fn parse_encryption_key(hex: &str) -> Result<DeviceEncryptionKey, Cli
         hex,
         "encryption key must be 64 hex characters naming an x-only pubkey",
     )?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const OWNER: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const DRIVE: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const GENESIS: &str = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+
+    #[test]
+    fn join_expectation_all_absent_checks_nothing() {
+        let expected = join_expectation(None, None, None).unwrap();
+        assert_eq!(expected, JoinExpectation::none());
+    }
+
+    #[test]
+    fn join_expectation_all_pins_parse() {
+        let expected = join_expectation(
+            Some(OWNER.to_string()),
+            Some(DRIVE.to_string()),
+            Some(GENESIS.to_string()),
+        )
+        .unwrap();
+        assert!(expected.owner.is_some());
+        assert!(expected.drive.is_some());
+        assert!(expected.genesis.is_some());
+    }
+
+    #[test]
+    fn join_expectation_partial_pins_hold_the_rest_unchecked() {
+        let expected = join_expectation(Some(OWNER.to_string()), None, None).unwrap();
+        assert!(expected.owner.is_some());
+        assert!(expected.drive.is_none());
+        assert!(expected.genesis.is_none());
+    }
+
+    #[test]
+    fn join_expectation_bad_hex_refuses_as_usage() {
+        for (owner, drive, genesis) in [
+            (Some("not-hex".to_string()), None, None),
+            (None, Some("zz".to_string()), None),
+            (None, None, Some("abc".to_string())),
+        ] {
+            assert!(
+                matches!(
+                    join_expectation(owner, drive, genesis),
+                    Err(CliError::Usage(_))
+                ),
+                "a malformed pin refuses before reading the invitation"
+            );
+        }
+    }
 }

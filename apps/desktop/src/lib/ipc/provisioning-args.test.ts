@@ -88,6 +88,38 @@ test("store join adds the invitation beside the seeds and reference", () => {
   });
 });
 
+test("join forwards trimmed expectation pins, omitting blank ones", () => {
+  expect(
+    buildJoinArgs({
+      name: "beta",
+      driveDir: "/drives/beta",
+      relays: [],
+      credentialMode: "store",
+      storeAccount: "wyrd-drive-beta",
+      seedIdentityFile: "/keys/identity",
+      seedPassphraseFile: "/keys/passphrase",
+      fileIdentityFile: "/operator/identity",
+      filePassphraseFile: "/operator/passphrase",
+      invitationFile: "/tmp/invite.sealed",
+      expectedOwner: `  ${"a".repeat(64)}  `,
+      expectedDrive: "",
+      expectedGenesis: "   ",
+    }),
+  ).toEqual({
+    name: "beta",
+    driveDir: "/drives/beta",
+    relays: [],
+    identityFile: "/keys/identity",
+    passphraseFile: "/keys/passphrase",
+    credentialBackend: "os-store",
+    credentialAccount: "wyrd-drive-beta",
+    invitationFile: "/tmp/invite.sealed",
+    expectedOwner: "a".repeat(64),
+    mode: "vault",
+    noService: false,
+  });
+});
+
 test("store leave names only the item, never seeds", () => {
   expect(
     buildLeaveArgs({

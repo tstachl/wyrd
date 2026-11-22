@@ -422,10 +422,11 @@ attacker's genesis from the legitimate one. The pairing flow
 (`docs/design/cli.md`, three steps with out-of-band handoffs of
 pairing material and the invitation file) is where the expectation
 must travel, and this contract records the shape of what must
-travel there — but the handoff is not yet in the flow: no join
-entry point accepts or compares an expected owner, drive, or
-genesis today, so validation authenticates the invitation only
-(enforcement: `nostr:nevent1qqsfu4n9wja74w02h7ty8tsekc6qhp7pegw5erwgqyv6946rjq4p9sgpz9mhxue69uhkwunpwdczuap49eehg0qssvz`).
+travel there. Enforced (v0.4): `device join` and `drive bootstrap`
+accept `--expected-owner`, `--expected-drive`, and
+`--expected-genesis`; every supplied pin must match the opened
+invitation before anything touches disk (enforcement follow-up:
+`nostr:nevent1qqsfu4n9wja74w02h7ty8tsekc6qhp7pegw5erwgqyv6946rjq4p9sgpz9mhxue69uhkwunpwdczuap49eehg0qssvz`).
 
 ### Rotation delivery (pinned)
 

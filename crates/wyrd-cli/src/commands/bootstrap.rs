@@ -32,6 +32,9 @@ pub(crate) struct BootstrapArgs {
     pub(crate) relays: RelayArgs,
     pub(crate) credentials: Credentials,
     pub(crate) invitation_file: Option<PathBuf>,
+    pub(crate) expected_owner: Option<String>,
+    pub(crate) expected_drive: Option<String>,
+    pub(crate) expected_genesis: Option<String>,
     pub(crate) registry: Option<PathBuf>,
     pub(crate) owner_bin: Option<PathBuf>,
     pub(crate) supervise_bin: Option<PathBuf>,
@@ -167,9 +170,17 @@ pub(crate) fn bootstrap_store(
     let init = match &args.invitation_file {
         None => Init::Create,
         Some(path) => {
+            // Pins parse before the invitation is read: a malformed
+            // pin refuses as usage however corrupt the file is.
+            let expected = super::device::join_expectation(
+                args.expected_owner.clone(),
+                args.expected_drive.clone(),
+                args.expected_genesis.clone(),
+            )?;
             let bytes = read_bounded(path, 1024 * 1024)?;
             Init::Join {
                 sealed_invitation: bytes,
+                expected,
             }
         }
     };
@@ -332,9 +343,17 @@ pub(crate) fn bootstrap(
     let init = match &args.invitation_file {
         None => Init::Create,
         Some(path) => {
+            // Pins parse before the invitation is read: a malformed
+            // pin refuses as usage however corrupt the file is.
+            let expected = super::device::join_expectation(
+                args.expected_owner.clone(),
+                args.expected_drive.clone(),
+                args.expected_genesis.clone(),
+            )?;
             let bytes = read_bounded(path, 1024 * 1024)?;
             Init::Join {
                 sealed_invitation: bytes,
+                expected,
             }
         }
     };

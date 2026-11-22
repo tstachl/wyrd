@@ -411,3 +411,168 @@ fn resync_refuses_bootstrap_that_disagrees_with_the_keyring() {
         "a conflicting blob installs nothing"
     );
 }
+
+#[test]
+fn accept_invitation_with_matching_expectation_joins() {
+    let dir = TestDir::new("accept-invitation-expectation-match");
+    let owner = DeviceIdentitySecret::generate().unwrap();
+    let owner_encryption = DeviceEncryptionSecret::generate().unwrap();
+    let invitee = DeviceIdentitySecret::generate().unwrap();
+    let invitee_encryption = DeviceEncryptionSecret::generate().unwrap();
+    let drive = drive_id();
+    let sealed = invitation(
+        drive,
+        &owner,
+        &owner_encryption,
+        &invitee,
+        &invitee_encryption,
+        EpochSecret::generate().unwrap(),
+    );
+    let genesis_id = genesis_transition(drive, &owner, &owner_encryption)
+        .unwrap()
+        .transition_id();
+    let expected = JoinExpectation {
+        owner: Some(owner.device_id()),
+        drive: Some(drive),
+        genesis: Some(genesis_id),
+    };
+    let engine = Engine::accept_invitation_with_expectation(
+        dir.path.clone(),
+        "test-pass",
+        invitee,
+        invitee_encryption,
+        &sealed,
+        &expected,
+    )
+    .unwrap();
+    assert_eq!(engine.drive, drive, "a matching expectation joins");
+}
+
+#[test]
+fn accept_invitation_with_wrong_owner_is_refused_before_disk() {
+    let dir = TestDir::new("accept-invitation-expectation-owner");
+    let owner = DeviceIdentitySecret::generate().unwrap();
+    let owner_encryption = DeviceEncryptionSecret::generate().unwrap();
+    let invitee = DeviceIdentitySecret::generate().unwrap();
+    let invitee_encryption = DeviceEncryptionSecret::generate().unwrap();
+    let drive = drive_id();
+    let sealed = invitation(
+        drive,
+        &owner,
+        &owner_encryption,
+        &invitee,
+        &invitee_encryption,
+        EpochSecret::generate().unwrap(),
+    );
+    // An attacker-minted self-sealed genesis names someone else:
+    // the invitee's out-of-band owner pin must refuse it.
+    let attacker = DeviceIdentitySecret::generate().unwrap();
+    let expected = JoinExpectation {
+        owner: Some(attacker.device_id()),
+        drive: None,
+        genesis: None,
+    };
+    assert!(
+        matches!(
+            Engine::accept_invitation_with_expectation(
+                dir.path.clone(),
+                "test-pass",
+                invitee,
+                invitee_encryption,
+                &sealed,
+                &expected,
+            ),
+            Err(EngineError::ExpectationMismatch { field: "owner", .. })
+        ),
+        "a wrong owner pin refuses"
+    );
+    assert!(
+        !dir.path.join("DRIVE").exists(),
+        "a mismatched expectation never touches disk"
+    );
+}
+
+#[test]
+fn accept_invitation_with_wrong_drive_is_refused_before_disk() {
+    let dir = TestDir::new("accept-invitation-expectation-drive");
+    let owner = DeviceIdentitySecret::generate().unwrap();
+    let owner_encryption = DeviceEncryptionSecret::generate().unwrap();
+    let invitee = DeviceIdentitySecret::generate().unwrap();
+    let invitee_encryption = DeviceEncryptionSecret::generate().unwrap();
+    let drive = drive_id();
+    let sealed = invitation(
+        drive,
+        &owner,
+        &owner_encryption,
+        &invitee,
+        &invitee_encryption,
+        EpochSecret::generate().unwrap(),
+    );
+    let expected = JoinExpectation {
+        owner: None,
+        drive: Some(drive_id()),
+        genesis: None,
+    };
+    assert!(
+        matches!(
+            Engine::accept_invitation_with_expectation(
+                dir.path.clone(),
+                "test-pass",
+                invitee,
+                invitee_encryption,
+                &sealed,
+                &expected,
+            ),
+            Err(EngineError::ExpectationMismatch { field: "drive", .. })
+        ),
+        "a wrong drive pin refuses"
+    );
+    assert!(
+        !dir.path.join("DRIVE").exists(),
+        "a mismatched expectation never touches disk"
+    );
+}
+
+#[test]
+fn accept_invitation_with_wrong_genesis_is_refused_before_disk() {
+    let dir = TestDir::new("accept-invitation-expectation-genesis");
+    let owner = DeviceIdentitySecret::generate().unwrap();
+    let owner_encryption = DeviceEncryptionSecret::generate().unwrap();
+    let invitee = DeviceIdentitySecret::generate().unwrap();
+    let invitee_encryption = DeviceEncryptionSecret::generate().unwrap();
+    let drive = drive_id();
+    let sealed = invitation(
+        drive,
+        &owner,
+        &owner_encryption,
+        &invitee,
+        &invitee_encryption,
+        EpochSecret::generate().unwrap(),
+    );
+    let expected = JoinExpectation {
+        owner: None,
+        drive: None,
+        genesis: Some(TransitionId::from_bytes([0x77; 32])),
+    };
+    assert!(
+        matches!(
+            Engine::accept_invitation_with_expectation(
+                dir.path.clone(),
+                "test-pass",
+                invitee,
+                invitee_encryption,
+                &sealed,
+                &expected,
+            ),
+            Err(EngineError::ExpectationMismatch {
+                field: "genesis",
+                ..
+            })
+        ),
+        "a wrong genesis pin refuses"
+    );
+    assert!(
+        !dir.path.join("DRIVE").exists(),
+        "a mismatched expectation never touches disk"
+    );
+}

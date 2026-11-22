@@ -88,7 +88,7 @@ pub use super::author::{
     MergePath, MergePlan, MergeSelection, RecoveryPath, RecoveryPlan, RecoveryPreview,
     RecoveryStatus,
 };
-pub use super::bootstrap::PairingRequest;
+pub use super::bootstrap::{JoinExpectation, PairingRequest};
 pub use publish_budget::PublishBudget;
 
 /// The durability level the drive reached (DG-2, normative in
@@ -421,6 +421,17 @@ pub enum EngineError {
     #[error("bootstrap invitation and its capability disagree on the recipient")]
     /// The bootstrap invitation and its capability disagree on the recipient.
     InvitationMismatch,
+    #[error("invitation {field} does not match the out-of-band expectation (expected {expected}, found {found}): refusing before anything touches disk")]
+    /// The invitation disagrees with the invitee's out-of-band
+    /// expectation about the drive being joined.
+    ExpectationMismatch {
+        /// Which expectation failed: `owner`, `drive`, or `genesis`.
+        field: &'static str,
+        /// The expected value, as hex.
+        expected: String,
+        /// The value the invitation actually carries, as hex.
+        found: String,
+    },
     #[error("invitation genesis is missing, undecodable, or not a valid epoch-1 root")]
     /// The invitation genesis is missing, undecodable, or not a valid epoch-1 root.
     BadGenesis,
