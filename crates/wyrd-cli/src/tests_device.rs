@@ -937,3 +937,23 @@ fn credential_rules_are_not_reimplemented_by_the_surface() {
         );
     }
 }
+
+#[test]
+fn join_with_malformed_pin_refuses_as_usage_before_reading() {
+    let pair = Pair::new();
+    // A malformed pin with a missing invitation file: usage wins
+    // over the unreadable file, pinning the parse-before-read
+    // ordering — pins refuse as usage however corrupt the file is.
+    let missing = pair._temp.0.join("no-such-invitation");
+    let error = command(pair.newcomer_device(vec![
+        "join".into(),
+        missing.display().to_string(),
+        "--expected-owner".into(),
+        "not-hex".into(),
+    ]))
+    .unwrap_err();
+    assert!(
+        matches!(error, CliError::Usage(_)),
+        "a malformed pin refuses as usage, not as a file error: {error:?}"
+    );
+}
