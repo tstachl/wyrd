@@ -41,9 +41,6 @@
 //! launchable artifact (bundle, icons, services) lands with the
 //! installer work.
 
-#[cfg(target_os = "macos")]
-mod domains;
-
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -208,14 +205,9 @@ fn main() {
     let app = tauri::Builder::default()
         .manage(state)
         .manage(FlightTracker::new())
-        .setup(|_app| {
-            // macOS only: reconcile File Provider domains in the
-            // background. Best-effort — a registrar that cannot load
-            // is logged, never fatal; the shell still manages drives.
-            #[cfg(target_os = "macos")]
-            domains::spawn();
-            Ok(())
-        })
+        // File Provider domain reconciliation runs from the per-user
+        // launch agent installed beside the app, so it follows drive
+        // state with no Wyrd.app process alive.
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(invoke_handler())
         .on_window_event(|window, event| {

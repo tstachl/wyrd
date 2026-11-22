@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Per-user File Provider domain registrar. The installer fills
+  @WYRD_REGISTRAR_PATH@ with the helper inside the installed bundle.
+  One resident process reconciles domains every 5 seconds from inside
+  its own loop: a fresh process per tick makes macOS re-ask the
+  "access data from other apps" permission on every launch. KeepAlive
+  restarts the helper if it dies; RunAtLoad starts it at login. No
+  Wyrd.app process is needed.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>md.enesis.wyrd.domain-registrar</string>
+    <key>ProgramArguments</key>
+    <array>
+    <string>@WYRD_REGISTRAR_PATH@</string>
+    <string>--watch</string>
+    <string>{"group":"group.md.enesis.wyrd"}</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+</dict>
+</plist>

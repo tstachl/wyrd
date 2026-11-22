@@ -267,8 +267,25 @@ func reconcile(_ raw: String) -> (code: Int32, added: Int, removed: Int) {
     return (failed ? 3 : 0, added, removed)
 }
 
-let config = CommandLine.arguments.dropFirst().first
+// Two invocations share the same reconcile pass. The launch agent uses
+// `--watch` and keeps one resident process: calling the File Provider
+// domain API from a fresh process every tick makes macOS re-ask the
+// "access data from other apps" permission on every launch. A resident
+// process asks once and then polls internally.
+let args = Array(CommandLine.arguments.dropFirst())
+let watching = args.first == "--watch"
+let config = (watching ? args.dropFirst().first : args.first)
     ?? #"{"group":"group.md.enesis.wyrd"}"#
+
+if watching {
+    while true {
+        let outcome = reconcile(config)
+        print("added \(outcome.added) removed \(outcome.removed)")
+        fflush(stdout)
+        sleep(5)
+    }
+}
+
 let outcome = reconcile(config)
 print("added \(outcome.added) removed \(outcome.removed)")
 exit(outcome.code)
