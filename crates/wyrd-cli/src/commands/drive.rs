@@ -11,11 +11,13 @@
 //! credential item, and the group socket, alias, and label. The
 //! directory and those artifacts are removed only after the
 //! transition commits, so every refusal — non-owner, unacknowledged
-//! terminal, frozen, held store — leaves them untouched. Like the
-//! other offline writers, a live owner holding the store refuses with
-//! exit 78: stop the service first. Each cleanup step is independent:
-//! failures are warned about on stderr, never reported as a failed
-//! directory removal.
+//! terminal, frozen, held store — leaves them untouched. With the
+//! terminal acknowledgement, this drive's managed service is stopped
+//! before the commit and resumed on a refusal, so the person need not
+//! stop it by hand. An unmanaged live owner still holds the store and
+//! refuses with exit 78. Each cleanup step is independent: failures
+//! are warned about on stderr, never reported as a failed directory
+//! removal.
 //!
 //! Service-start resolves the registry entry by drive directory
 //! (exact match; zero or duplicate matches refuse without writing),
@@ -56,7 +58,7 @@ use wyrd_credential_store::OsStoreBackend;
 use wyrd_daemon::bootstrap::{
     default_registry_path, disable_service, forget_registry_entry, read_registry, reconfigure,
     service_definition_path_for_service, set_service_enabled, start_managed_service,
-    ReconfigureConfig, RegistryEntry, StartServiceConfig,
+    start_service_only, stop_service_only, ReconfigureConfig, RegistryEntry, StartServiceConfig,
 };
 use wyrd_daemon::owner::{
     group_label_path, group_socket_path, group_symlink_path, production_group_container,
@@ -110,6 +112,34 @@ pub(crate) struct DeleteReport {
     pub(crate) cleanup: CleanupReport,
 }
 
+/// Temporary service control around a delete. A live managed owner
+/// holds the store lock, so its service must be stopped before the
+/// keystore opens; a refusal must leave it running again. Production
+/// delegates to the daemon's service manager. Tests inject a recorder
+/// so no real launchd or systemd unit is touched.
+pub(crate) trait DeleteServiceControl {
+    /// Stop this drive's managed service without persisting a
+    /// login-start change. Returns whether a running unit was stopped.
+    fn stop(&self, entry: &RegistryEntry, definition: &Path) -> Result<bool, String>;
+    /// Resume a service that `stop` stopped, leaving the login-start
+    /// preference as found.
+    fn resume(&self, entry: &RegistryEntry, definition: &Path) -> Result<(), String>;
+}
+
+/// The production service control: a plain stop and a plain start,
+/// neither of which persists a login-start preference.
+pub(crate) struct ManagedServiceControl;
+
+impl DeleteServiceControl for ManagedServiceControl {
+    fn stop(&self, entry: &RegistryEntry, definition: &Path) -> Result<bool, String> {
+        stop_service_only(entry, definition).map_err(|error| error.to_string())
+    }
+
+    fn resume(&self, entry: &RegistryEntry, definition: &Path) -> Result<(), String> {
+        start_service_only(entry, definition).map_err(|error| error.to_string())
+    }
+}
+
 /// Inputs to the post-commit local cleanup. Production fills these
 /// from the resolved registry flag and credential backend; tests
 /// pass hermetic temp paths and a recording credential loader so no
@@ -127,6 +157,9 @@ pub(crate) struct DeleteCleanup<'a> {
     pub(crate) group_container: Option<PathBuf>,
     /// Service definition file override (hermetic tests only).
     pub(crate) service_definition: Option<PathBuf>,
+    /// Temporary stop/resume of this drive's service around the store
+    /// open. `None` in hermetic tests: no real manager is touched.
+    pub(crate) service_control: Option<&'a dyn DeleteServiceControl>,
 }
 
 impl Default for DeleteCleanup<'static> {
@@ -137,6 +170,7 @@ impl Default for DeleteCleanup<'static> {
             credential_loader: &OsStoreBackend,
             group_container: None,
             service_definition: None,
+            service_control: None,
         }
     }
 }
@@ -171,6 +205,7 @@ pub(crate) fn drive(
                 credential_loader: &OsStoreBackend,
                 group_container: None,
                 service_definition: None,
+                service_control: Some(&ManagedServiceControl),
             };
             let report = delete_drive(drive_dir.clone(), passphrase, identity, yes, &cleanup)?;
             print!(
@@ -431,9 +466,9 @@ fn forget_local_artifacts(
             Ok(()) => report.registry_removed = true,
             Err(error) => report.warn("registry entry", error),
         }
-        // Idempotent when the locked-store path already stopped the
-        // service before the commit: the unit is inactive, so this
-        // only persists the disable and clears the definition file.
+        // Idempotent after the delete's temporary stop: the unit is
+        // already inactive, so this only persists the disable and
+        // clears the definition file.
         match disable_service(entry, cleanup.service_definition.as_ref()) {
             Ok(()) => report.service_cleared = true,
             Err(error) => report.warn("service definition", error),
@@ -478,10 +513,13 @@ fn forget_local_artifacts(
 /// the local directory and every local artifact that named it. The
 /// engine owns the frozen-drive refusal (nothing commits while
 /// frozen, so the directory survives); every artifact is removed
-/// only after the commit. A live owner holding the store refuses
-/// with exit 78 before anything changes, so the operator stops the
-/// service first. Each cleanup failure is warned about on stderr
-/// and never reported as a failed directory removal.
+/// only after the commit. With `--yes`, this drive's managed service
+/// is stopped without persisting a login-start change before the
+/// store opens, and resumed if the engine refuses — so a refusal
+/// leaves no state change. An owner the app did not start still
+/// holds the lock and refuses with exit 78. Each cleanup failure is
+/// warned about on stderr and never reported as a failed directory
+/// removal.
 pub(crate) fn delete_drive(
     drive_dir: PathBuf,
     passphrase: &str,
@@ -492,83 +530,130 @@ pub(crate) fn delete_drive(
     let mut cleanup_report = CleanupReport::default();
     let target = resolve_delete_target(&drive_dir, cleanup, &mut cleanup_report);
 
-    // Like every other offline writer, a live owner holding the store
-    // refuses without touching anything. Stopping a service here would
-    // change state on a refusal the engine may still issue (non-owner,
-    // unacknowledged, frozen), so the operator stops it first.
-    let mut engine = Engine::open_keystore(drive_dir.clone(), passphrase, identity)?;
-    let this = engine.device();
-    // Group artifacts are named by drive id, not by registry name:
-    // capture it while the engine still holds the store.
-    let drive = engine.drive();
-    // OD-12-C, option A: a non-owner authors nothing and loses
-    // nothing — the refusal names the owner-run command, like the
-    // `member leave` refusal, and the directory is never touched.
-    let owners = engine
-        .membership_log()
-        .known_state()
-        .and_then(|tip| engine.membership_log().owners_of(&tip.transition_id))
-        .unwrap_or_default();
-    if !owners.contains(&this) {
-        return Err(CliError::Usage(render_leave_refusal(&this)));
-    }
-    // Terminal acknowledgement first: without `--yes` the refusal
-    // carries the terminal consequence and authors nothing.
-    require_last_owner_confirmation(&engine, &this, yes)?;
-    // Stage the carry, then commit the self-removal. From here the
-    // membership half is durable: every error below leaves a
-    // committed terminal transition behind, so the forget half must
-    // not depend on the drain. The carry is a no-op for a removed
-    // author (it holds no new-epoch material and drains nothing), so
-    // a drain failure is reported loudly and forgotten anyway —
-    // stranding a terminal drive with its directory present and no
-    // retry would be worse than a warning on stderr.
-    engine.stage_carry_heads()?;
-    let transition = engine.remove_device(this)?;
-    let carried = match carry_pending(&mut engine, &drive_dir) {
-        Ok(carried) => carried,
-        Err(error) => {
-            eprintln!("warning: carry drain failed after the removal committed: {error}");
-            0
+    let service = target.as_ref().map(|entry| {
+        (
+            entry,
+            cleanup
+                .service_definition
+                .clone()
+                .unwrap_or_else(|| service_definition_path_for_service(&entry.service)),
+        )
+    });
+
+    // Gate the stop on the terminal acknowledgement: without `--yes`
+    // the engine refuses below and no service state changes. A failed
+    // stop is warned about and ignored — an owner the app did not
+    // start still holds the lock and must still refuse with 78.
+    let stopped = match (yes, service.as_ref(), cleanup.service_control) {
+        (true, Some((entry, definition)), Some(control)) => match control.stop(entry, definition) {
+            Ok(stopped) => stopped,
+            Err(error) => {
+                cleanup_report.warn("service stop", error);
+                false
+            }
+        },
+        _ => false,
+    };
+
+    // Set once the self-removal commits: after that point an error is
+    // a partial success, not a refusal, and there is nothing to put
+    // back — resuming a service against a terminal drive would be
+    // wrong.
+    let mut committed = false;
+    let outcome = (|| -> Result<DeleteReport, CliError> {
+        // A live owner the stop did not release still refuses without
+        // touching anything; every other refusal here does the same.
+        let mut engine = Engine::open_keystore(drive_dir.clone(), passphrase, identity)?;
+        let this = engine.device();
+        // Group artifacts are named by drive id, not by registry name:
+        // capture it while the engine still holds the store.
+        let drive = engine.drive();
+        // OD-12-C, option A: a non-owner authors nothing and loses
+        // nothing — the refusal names the owner-run command, like the
+        // `member leave` refusal, and the directory is never touched.
+        let owners = engine
+            .membership_log()
+            .known_state()
+            .and_then(|tip| engine.membership_log().owners_of(&tip.transition_id))
+            .unwrap_or_default();
+        if !owners.contains(&this) {
+            return Err(CliError::Usage(render_leave_refusal(&this)));
         }
-    };
-    // The deletion transition names exactly one change: this device's
-    // own removal. The engine constructs it literally, and the named
-    // contract test pins the shape; anything else would mean the
-    // surface authored work the person never asked for.
-    debug_assert!(
-        transition.changes() == [Change::Remove(this)],
-        "deletion authors only its own removal"
-    );
-    let terminal = engine
-        .membership_log()
-        .owners_of(&transition.transition_id())
-        .map(|owners| owners.is_empty())
-        .unwrap_or(false);
-    let mut report = DeleteReport {
-        device: this,
-        transition,
-        carried,
-        terminal,
-        cleanup: CleanupReport::default(),
-    };
-    // Release the store before removing its directory: the lock dies
-    // with the engine, and the removal is a plain filesystem walk
-    // afterwards.
-    drop(engine);
-    if let Err(source) = std::fs::remove_dir_all(&drive_dir) {
-        // The removal already committed: the membership half stands
-        // and the directory half is the operator's manual step now.
-        // Report loudly rather than printing a confirmation that
-        // would be a lie.
-        return Err(CliError::Io {
-            path: drive_dir,
-            source,
-        });
+        // Terminal acknowledgement first: without `--yes` the refusal
+        // carries the terminal consequence and authors nothing.
+        require_last_owner_confirmation(&engine, &this, yes)?;
+        // Stage the carry, then commit the self-removal. From here the
+        // membership half is durable: every error below leaves a
+        // committed terminal transition behind, so the forget half must
+        // not depend on the drain. The carry is a no-op for a removed
+        // author (it holds no new-epoch material and drains nothing), so
+        // a drain failure is reported loudly and forgotten anyway —
+        // stranding a terminal drive with its directory present and no
+        // retry would be worse than a warning on stderr.
+        engine.stage_carry_heads()?;
+        let transition = engine.remove_device(this)?;
+        committed = true;
+        let carried = match carry_pending(&mut engine, &drive_dir) {
+            Ok(carried) => carried,
+            Err(error) => {
+                eprintln!("warning: carry drain failed after the removal committed: {error}");
+                0
+            }
+        };
+        // The deletion transition names exactly one change: this device's
+        // own removal. The engine constructs it literally, and the named
+        // contract test pins the shape; anything else would mean the
+        // surface authored work the person never asked for.
+        debug_assert!(
+            transition.changes() == [Change::Remove(this)],
+            "deletion authors only its own removal"
+        );
+        let terminal = engine
+            .membership_log()
+            .owners_of(&transition.transition_id())
+            .map(|owners| owners.is_empty())
+            .unwrap_or(false);
+        let mut report = DeleteReport {
+            device: this,
+            transition,
+            carried,
+            terminal,
+            cleanup: CleanupReport::default(),
+        };
+        // Release the store before removing its directory: the lock dies
+        // with the engine, and the removal is a plain filesystem walk
+        // afterwards.
+        drop(engine);
+        if let Err(source) = std::fs::remove_dir_all(&drive_dir) {
+            // The removal already committed: the membership half stands
+            // and the directory half is the operator's manual step now.
+            // Report loudly rather than printing a confirmation that
+            // would be a lie.
+            return Err(CliError::Io {
+                path: drive_dir.clone(),
+                source,
+            });
+        }
+        forget_local_artifacts(target.as_ref(), &drive, cleanup, &mut cleanup_report);
+        report.cleanup = cleanup_report;
+        Ok(report)
+    })();
+
+    // A refusal authors nothing and removes nothing, so put back only
+    // what this call stopped. Once committed, the definition is
+    // cleared by cleanup (or the operator finishes by hand on a
+    // partial failure) and there is nothing to resume.
+    if outcome.is_err() && stopped && !committed {
+        if let (Some((entry, definition)), Some(control)) =
+            (service.as_ref(), cleanup.service_control)
+        {
+            if let Err(error) = control.resume(entry, definition) {
+                eprintln!("warning: service resume after a refused removal: {error}");
+            }
+        }
     }
-    forget_local_artifacts(target.as_ref(), &drive, cleanup, &mut cleanup_report);
-    report.cleanup = cleanup_report;
-    Ok(report)
+
+    outcome
 }
 
 /// Reconfigure one registered drive in place: resolve the

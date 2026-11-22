@@ -1,9 +1,10 @@
 use super::tests_harness::{write_secret, TempDir};
 use super::*;
-use crate::commands::drive::DeleteCleanup;
+use crate::commands::drive::{DeleteCleanup, DeleteServiceControl};
 use wyrd_core::lifecycle_surface::DELETION_LOCALITY;
 use wyrd_core::member_surface::{HISTORY_NEVER_REENCRYPTED, REMOVAL_BOUNDARY, SOLE_OWNER_TERMINAL};
 use wyrd_credential_store::OsStoreBackend;
+use wyrd_daemon::bootstrap::RegistryEntry;
 use wyrd_daemon::owner::{group_label_path, group_socket_path, group_symlink_path};
 use wyrd_format::{Change, ContentId, Entry, FsObjectStore, ObjectKind, ObjectStore, Tree};
 use wyrd_sync::keys::{CredentialError, CredentialLoader, CredentialRef};
@@ -82,6 +83,7 @@ impl Fixture {
             credential_loader: &OsStoreBackend,
             group_container: Some(self._temp.0.join("group-container")),
             service_definition: None,
+            service_control: None,
         }
     }
 
@@ -491,6 +493,118 @@ fn drive_delete_clears_the_service_definition_after_commit() {
     assert!(!definition.exists(), "the definition file is gone");
     let after: serde_json::Value = serde_json::from_slice(&fs::read(&registry).unwrap()).unwrap();
     assert!(after["drives"].get(&name).is_none());
+}
+
+/// Recording service control: no real launchd or systemd unit is
+/// touched, but the delete path must stop before the store opens and
+/// resume exactly what it stopped when the engine refuses.
+#[derive(Default)]
+struct RecordingServiceControl {
+    stops: std::cell::RefCell<usize>,
+    resumes: std::cell::RefCell<usize>,
+}
+
+impl DeleteServiceControl for RecordingServiceControl {
+    fn stop(&self, _entry: &RegistryEntry, _definition: &Path) -> Result<bool, String> {
+        *self.stops.borrow_mut() += 1;
+        Ok(true)
+    }
+
+    fn resume(&self, _entry: &RegistryEntry, _definition: &Path) -> Result<(), String> {
+        *self.resumes.borrow_mut() += 1;
+        Ok(())
+    }
+}
+
+/// The managed service is stopped after acknowledgement so the
+/// keystore can open. On success the definition is cleared by the
+/// post-commit cleanup, so there is nothing to resume.
+#[test]
+fn drive_delete_stops_the_managed_service_without_resuming_on_success() {
+    let fixture = Fixture::new();
+    let name = unique_reconf_name("delete-stop-ok");
+    let registry = fixture._temp.0.join("drives.json");
+    write_registry_entry(&registry, &name, &fixture.drive, &[]);
+    let control = RecordingServiceControl::default();
+    let mut cleanup = fixture.cleanup();
+    cleanup.service_control = Some(&control);
+
+    let identity = read_identity(&fixture.identity_file).unwrap();
+    delete_drive(fixture.drive.clone(), "test-pass", identity, true, &cleanup).unwrap();
+
+    assert_eq!(
+        *control.stops.borrow(),
+        1,
+        "the managed service was stopped"
+    );
+    assert_eq!(
+        *control.resumes.borrow(),
+        0,
+        "a completed delete resumes nothing"
+    );
+}
+
+/// A refusal authors nothing, so the service this call stopped is put
+/// back. Here a live owner the stop did not release still holds the
+/// store: the exit-78 refusal must leave no service state change.
+#[test]
+fn drive_delete_resumes_the_managed_service_when_the_engine_refuses() {
+    let fixture = Fixture::new();
+    let name = unique_reconf_name("delete-stop-refuse");
+    let registry = fixture._temp.0.join("drives.json");
+    write_registry_entry(&registry, &name, &fixture.drive, &[]);
+    let control = RecordingServiceControl::default();
+    let mut cleanup = fixture.cleanup();
+    cleanup.service_control = Some(&control);
+
+    let held = fixture.open();
+    let identity = read_identity(&fixture.identity_file).unwrap();
+    let error = delete_drive(fixture.drive.clone(), "test-pass", identity, true, &cleanup)
+        .err()
+        .expect("a held store refuses the delete");
+    drop(held);
+
+    assert_eq!(error.exit_code(), EXIT_DRIVE_LOCKED, "{error:?}");
+    assert_eq!(
+        *control.stops.borrow(),
+        1,
+        "the managed service was stopped"
+    );
+    assert_eq!(
+        *control.resumes.borrow(),
+        1,
+        "the refusal resumed the service"
+    );
+}
+
+/// Without `--yes` nothing changes, including service state: the stop
+/// is gated on the terminal acknowledgement.
+#[test]
+fn drive_delete_never_stops_the_service_without_acknowledgement() {
+    let fixture = Fixture::new();
+    let name = unique_reconf_name("delete-stop-no-yes");
+    let registry = fixture._temp.0.join("drives.json");
+    write_registry_entry(&registry, &name, &fixture.drive, &[]);
+    let control = RecordingServiceControl::default();
+    let mut cleanup = fixture.cleanup();
+    cleanup.service_control = Some(&control);
+
+    let identity = read_identity(&fixture.identity_file).unwrap();
+    let error = delete_drive(
+        fixture.drive.clone(),
+        "test-pass",
+        identity,
+        false,
+        &cleanup,
+    )
+    .err()
+    .expect("an unacknowledged delete refuses");
+    assert!(
+        matches!(error, CliError::Usage(_)),
+        "unacknowledged delete is a usage refusal: {error:?}"
+    );
+    assert_eq!(*control.stops.borrow(), 0, "no service was stopped");
+    assert_eq!(*control.resumes.borrow(), 0, "nothing was resumed");
 }
 
 /// A recording loader stands in for the OS credential store: the
