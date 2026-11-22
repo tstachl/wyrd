@@ -235,8 +235,9 @@ are Unavailable, Unconfirmed, Refused, Incompatible (`client.rs:42-77`;
 
 **R-D8 — Navigation.** Destination "Drives"; add "Add drive"; create
 "Create drive"; join "Join drive"; return "Back to drives"; open "Open".
-"Select & open" MUST be removed if it opens the same workspace as "Open"
-(D-8). "Registered on this device" SHOULD become "Drives available on this
+Use "Open" on every drive card (D-8, resolved): "Select & open" opened
+the same workspace as "Open", and selection is internal state that the
+overview does not present. "Registered on this device" SHOULD become "Drives available on this
 device sync independently. Open a drive to see its status and settings."
 
 ## CLI terminology rules
@@ -468,7 +469,7 @@ syntax or identifiers.
 | D-5 | Vault explanation | Two distinct concepts; quota still applies; role is not service mode (`docs/contracts/sync-and-peers.md:555-622`). | Resolved: approved explanations 3–4; no retention-beyond-limit or complete-backup claim; literal `vault` syntax excepted. |
 | D-6 | Status card labels | "Connection" exists in the summary strip (`StatusView.svelte:109`); "Drive status" collides with the screen title; liveness fields do not establish recency. | Partly resolved: Sync activity / Drive activity / Pending work / Local files; freshness deferred to D-11. |
 | D-7 | Error taxonomy | Four kinds only (`client.rs:42-77`); version skew, wrong id, unexpected shape and non-hex are one detail-only Incompatible class, while unparseable frames are Unconfirmed (`client.rs:525-526,548-554`). A local refusal is a local decision (`lib.rs:250-259`). | **Open.** R-D7 sets wording rules; a grounded classification of remote error classes must precede enum changes. Do not force unlike failures into one explanation. |
-| D-8 | Remove "Select & open"? | Confirm whether selection has distinct intermediate semantics. | **Open.** Remove if it opens the same workspace as "Open". |
+| D-8 | Remove "Select & open"? | It opened the same workspace as "Open"; selection has no distinct semantics on the overview. | **Resolved.** Every drive card uses "Open" with the same styling. Selection stays internal for Status/Settings routing. |
 | D-9 | Unit for pending work vs settings label | Pending work is mixed control work (`config.rs:228-242`); `max_admit_per_pass` counts content identities, not files (`live/mod.rs:1153-1182`). | Conceptually resolved: "pieces of work" for pending work; "items of sync work" for the setting. The setting label must not drift into general pending-work vocabulary. |
 | D-10 | `policy` → `materialization` naming | Naming drift in versioned prose (`materialization.rs:1-8` vs `args.rs:239` vs `docs/contracts/sync-and-peers.md:590`); planning files are not authoritative. | **Open.** Resolve against normative contracts, not planning prose. |
 | D-11 | Freshness timestamp and label | `WireFreshness` has only state/revision/generation (`wire.rs:619-626`); "Fresh" can coexist with pending heads (`pass.rs:884-885,1014-1027`); only shell observation time exists (`format.ts:14-17`). | **Open.** Do not invent a timestamp or label an observation time as a sync time. Interim "Drive data" with non-convergence state text. |
@@ -488,7 +489,6 @@ and does not authorize a copy, help or enum change.
 | D-3 | Whether `--retained-quota` should gain an alias; no CLI flag change is proposed now. | Product owner |
 | D-4b | Whether the "Identity key" label should change; no replacement is settled. | Product owner |
 | D-7 | How to classify local refusal, wire skew, unexpected result shape and non-hex responses into distinct remote classes before any enum redesign. | Product owner |
-| D-8 | Whether "Select & open" has distinct intermediate semantics. | Product owner |
 | D-10 | Which versioned contract settles the `policy` / `materialization` naming. | Product owner |
 | D-11 | Whether a real synchronization timestamp will be exposed; the freshness label stays interim until then. | Product owner |
 | D-12 | Whether the UI needs a product term for the public identifier. | Product owner |

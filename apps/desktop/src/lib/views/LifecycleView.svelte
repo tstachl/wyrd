@@ -1,9 +1,8 @@
 <!-- Lifecycle, observational: the registered drives, each verified
-this session, plus the explicitly selected drive. Creation and
-joining live on the dedicated Add drive page; leaving lives in the
-selected drive's Settings. The selection stays presentation state
-only: it never authorizes backend access, and every command carries
-the drive directory explicitly. -->
+this session. Creation and joining live on the dedicated Add drive
+page; leaving lives in the selected drive's Settings. Selection stays
+internal presentation state: this overview shows the same action for
+every drive and never presents which one is selected. -->
 <script lang="ts">
   import { Button } from "$lib/components/ui/button/index.js";
   import * as Card from "$lib/components/ui/card/index.js";
@@ -27,7 +26,6 @@ the drive directory explicitly. -->
 
   interface Props {
     snapshot: Stamped<RegistryState> | null;
-    selectedDriveDir: string | null;
     pending: boolean;
     transportNotice: string | null;
     onRefresh: () => void;
@@ -36,7 +34,7 @@ the drive directory explicitly. -->
     onOpen: (driveDir: string) => void;
   }
 
-  let { snapshot, selectedDriveDir, pending, transportNotice, onRefresh, onAdd, onOpen }: Props = $props();
+  let { snapshot, pending, transportNotice, onRefresh, onAdd, onOpen }: Props = $props();
 
   const registry = $derived(snapshot?.data ?? null);
   const drives = $derived(registry?.drives ?? []);
@@ -104,7 +102,7 @@ the drive directory explicitly. -->
               <Skeleton class="h-3 w-16" />
               <Skeleton class="h-5 w-48 rounded-full" />
             </Card.Content>
-            <Card.Footer class="justify-between">
+            <Card.Footer class="mt-auto justify-between">
               <Skeleton class="h-3 w-48" />
               <Skeleton class="h-7 w-24 rounded-lg" />
             </Card.Footer>
@@ -157,16 +155,12 @@ the drive directory explicitly. -->
     <section aria-label="Registered drives" class="mt-5">
       <div class="grid gap-4 lg:grid-cols-2">
         {#each drives as drive (drive.drive_dir)}
-          {@const selected = selectedDriveDir === drive.drive_dir}
-          <Card.Root class={selected ? "ring-1 ring-primary/50" : ""}>
+          <Card.Root>
             <Card.Header>
               <div class="flex min-w-0 items-start justify-between gap-3">
                 <div class="flex min-w-0 flex-1 flex-col gap-1">
                   <Card.Title class="flex flex-wrap items-center gap-2">
                     <span class="truncate">{drive.name}</span>
-                    {#if selected}
-                      <Badge variant="outline" class="border-primary/40 bg-primary/10">Open</Badge>
-                    {/if}
                   </Card.Title>
                   <Card.Description class="flex min-w-0 items-center gap-1">
                     <span class="truncate font-mono text-[0.7rem]">{drive.drive_dir}</span>
@@ -212,12 +206,10 @@ the drive directory explicitly. -->
                 {/if}
               </div>
             </Card.Content>
-            <Card.Footer class="justify-between">
-              <span class="text-xs text-muted-foreground">
-                {selected ? "Selected for Status and Settings." : "Open to inspect this drive."}
-              </span>
-              <Button size="sm" variant={selected ? "outline" : "default"} onclick={() => onOpen(drive.drive_dir)}>
-                {selected ? "Open" : "Select & open"}
+            <Card.Footer class="mt-auto justify-between">
+              <span class="text-xs text-muted-foreground">Open to inspect this drive.</span>
+              <Button size="sm" onclick={() => onOpen(drive.drive_dir)}>
+                Open
                 <ArrowRightIcon data-icon="inline-end" />
               </Button>
             </Card.Footer>
