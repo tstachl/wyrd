@@ -716,6 +716,7 @@ func debugStub(socketPath: String, op: String, params: [String: Any]) throws {
 
 enum HarnessError: Error {
     case socket(String)
+    case diagnostics(String)
 }
 
 // MARK: - Mutation callbacks (Stage 3 sub-PR 2)
@@ -1856,7 +1857,7 @@ do {
         event: symlinkEvent, level: .detailed, sessionID: "s-1") else {
         print("FAIL: detailed mode builds a line")
         failures += 1
-        throw HarnessError.socket("no detailed line")
+        throw HarnessError.diagnostics("no detailed line")
     }
     func detail(_ key: String) -> DiagnosticDetail? {
         line.details.first { $0.key == key }
@@ -1879,6 +1880,9 @@ do {
                "staged-content presence is captured")
     checkEqual(detail("options")?.value, "mayAlreadyExist,contents",
                "relevant options and changed fields are captured")
+    checkEqual(DiagnosticFields.modifyOptionNames([.mayAlreadyExist]),
+               ["mayAlreadyExist"],
+               "modify options render for the decision-input record")
     checkEqual(detail("session")?.value, "s-1",
                "the ephemeral local session id is attached")
 
@@ -1916,7 +1920,7 @@ do {
         event: success, level: .detailed, sessionID: "s-1") else {
         print("FAIL: detailed success builds a line")
         failures += 1
-        throw HarnessError.socket("no success line")
+        throw HarnessError.diagnostics("no success line")
     }
     checkEqual(successLine.summary, "deleteItem ok stage=completed",
                "a confirmed delete records a success line")

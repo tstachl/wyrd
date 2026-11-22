@@ -27,7 +27,7 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
     /// Ephemeral, local-only correlation id (T20): a random UUID for
     /// this extension instance, never a DriveId, device identity or
     /// protocol identity, and never sent anywhere. Detailed records
-    /// from one domain session carry the same value.
+    /// from one extension instance carry the same value.
     private let sessionID = UUID().uuidString
     private lazy var diagnostics = DiagnosticRecorder(
         log: log, sessionID: sessionID)
@@ -295,11 +295,15 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
                 }
             } catch {
                 gate.fire {
-                    let error = NSFileProviderError(.cannotSynchronize)
+                    // Keep the implicit caught `error` for the
+                    // default-visible line: it is the failure that
+                    // actually happened. The synthesized value is
+                    // only what we return and record at the boundary.
+                    let providerError = NSFileProviderError(.cannotSynchronize)
                     diagnostics.record(level, .createItem, stage,
-                                       item: itemTemplate, error: error)
+                                       item: itemTemplate, error: providerError)
                     log.error("unexpected create failure: \(String(describing: error))")
-                    completionHandler(nil, [], false, error)
+                    completionHandler(nil, [], false, providerError)
                 }
             }
         }
@@ -333,11 +337,12 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
         let log = self.log
         let diagnostics = self.diagnostics
         let level = DiagnosticConfig.currentLevel()
+        let optionNames = DiagnosticFields.modifyOptionNames(options)
         DispatchQueue.global(qos: .userInitiated).async {
             if cancel.isRequested {
                 let error = userCancelledError()
                 diagnostics.record(level, .modifyItem, .cancelled,
-                                   item: item, changedFields: changedFields,
+                                   item: item, options: optionNames, changedFields: changedFields,
                                    error: error)
                 gate.fire {
                     completionHandler(nil, [], false, error)
@@ -357,7 +362,7 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
                     log.error("trash move refused (no trash model)")
                     let error = NSFileProviderError(.cannotSynchronize)
                     diagnostics.record(level, .modifyItem, .trashRefused,
-                                       item: item, changedFields: changedFields,
+                                       item: item, options: optionNames, changedFields: changedFields,
                                        error: error)
                     gate.fire {
                         completionHandler(nil, [], false, error)
@@ -378,7 +383,7 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
                     log.error("base version mismatch, refusing without overwrite")
                     let error = NSFileProviderError(.cannotSynchronize)
                     diagnostics.record(level, .modifyItem, stage,
-                                       item: item, changedFields: changedFields,
+                                       item: item, options: optionNames, changedFields: changedFields,
                                        error: error)
                     gate.fire {
                         completionHandler(nil, [], false, error)
@@ -414,7 +419,7 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
                         log.error("content change on a non-file refused")
                         let error = NSFileProviderError(.cannotSynchronize)
                         diagnostics.record(level, .modifyItem, .contentOnNonFile,
-                                           item: item, changedFields: changedFields,
+                                           item: item, options: optionNames, changedFields: changedFields,
                                            error: error)
                         gate.fire {
                             completionHandler(nil, [], false, error)
@@ -427,7 +432,7 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
                         log.error("content change without staged contents refused")
                         let error = NSFileProviderError(.cannotSynchronize)
                         diagnostics.record(level, .modifyItem, .missingStagedContents,
-                                           item: item, changedFields: changedFields,
+                                           item: item, options: optionNames, changedFields: changedFields,
                                            stagedContents: false, error: error)
                         gate.fire {
                             completionHandler(nil, [], false, error)
@@ -445,7 +450,7 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
                     completionHandler(result, pending, false, nil)
                     diagnostics.record(
                         level, .modifyItem, .completed, item: result,
-                        changedFields: changedFields,
+                        options: optionNames, changedFields: changedFields,
                         stagedContents: newContents != nil, succeeded: true)
                     signalWorkingSet(domain: domain, log: log)
                 }
@@ -455,19 +460,22 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
                         for: error, what: "modify", log: log)
                     diagnostics.record(
                         level, .modifyItem, stage, item: item,
-                        changedFields: changedFields,
+                        options: optionNames, changedFields: changedFields,
                         stagedContents: newContents != nil,
                         error: providerError, storeError: error)
                     completionHandler(nil, [], false, providerError)
                 }
             } catch {
                 gate.fire {
-                    let error = NSFileProviderError(.cannotSynchronize)
+                    // Keep the implicit caught `error` for the
+                    // default-visible line; the synthesized value is
+                    // only what we return and record.
+                    let providerError = NSFileProviderError(.cannotSynchronize)
                     diagnostics.record(level, .modifyItem, stage,
-                                       item: item, changedFields: changedFields,
-                                       error: error)
+                                       item: item, options: optionNames, changedFields: changedFields,
+                                       error: providerError)
                     log.error("unexpected modify failure: \(String(describing: error))")
-                    completionHandler(nil, [], false, error)
+                    completionHandler(nil, [], false, providerError)
                 }
             }
         }
@@ -547,10 +555,14 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
                 }
             } catch {
                 gate.fire {
-                    let error = NSFileProviderError(.cannotSynchronize)
-                    diagnostics.record(level, .deleteItem, .mutation, error: error)
+                    // Keep the implicit caught `error` for the
+                    // default-visible line; the synthesized value is
+                    // only what we return and record.
+                    let providerError = NSFileProviderError(.cannotSynchronize)
+                    diagnostics.record(level, .deleteItem, .mutation,
+                                       error: providerError)
                     log.error("unexpected delete failure: \(String(describing: error))")
-                    completionHandler(error)
+                    completionHandler(providerError)
                 }
             }
         }
