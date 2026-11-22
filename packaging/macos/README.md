@@ -184,7 +184,10 @@ domain identifier the appex expects. The owner publishes the registry
 name in a `.label` file beside each alias; the Finder domain uses that
 name verbatim. Only a live owner publishes a label, so a locked or
 stopped drive has no domain: unlock starts an owner and the domain
-appears, lock tears it down and the domain is removed. The helper is
+appears, lock tears it down and the domain is removed. The desktop's
+lock path uses SIGKILL, so the registrar also probes the socket
+endpoint: a stale alias from a killed owner is ignored and its domain
+removed on the next tick. The helper is
 signed with the app's bundle identifier so registration associates
 with the containing app; no Cargo dependency or unsafe FFI bridge is
 added. A drive appears within the polling interval after its owner binds.

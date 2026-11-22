@@ -13,6 +13,7 @@
 // identifier). No second mapping table, no owner-protocol change, and
 // no extra Cargo edge for the desktop crate.
 
+import Darwin
 import FileProvider
 import Foundation
 import os
@@ -82,6 +83,50 @@ private func displayName(for label: String) -> String? {
     return label
 }
 
+/// A Unix socket file can survive a killed owner: the desktop's lock
+/// path uses SIGKILL, so shutdown cleanup cannot run. Probe the
+/// endpoint instead of trusting the file — a stale alias is not a
+/// live drive and must not hold a Finder domain.
+private func socketResponds(at path: String) -> Bool {
+    let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+    if fd < 0 { return false }
+    defer { close(fd) }
+    var addr = sockaddr_un()
+    addr.sun_family = sa_family_t(AF_UNIX)
+    let pathBytes = Array(path.utf8)
+    guard pathBytes.count < MemoryLayout<sockaddr_un>.size - 2 else { return false }
+    withUnsafeMutablePointer(to: &addr.sun_path) { dest in
+        dest.withMemoryRebound(to: CChar.self, capacity: pathBytes.count + 1) { chars in
+            for (index, byte) in pathBytes.enumerated() {
+                chars[index] = CChar(bitPattern: byte)
+            }
+            chars[pathBytes.count] = 0
+        }
+    }
+    let length = socklen_t(MemoryLayout<sockaddr_un>.offset(of: \.sun_path)! + pathBytes.count + 1)
+    addr.sun_len = UInt8(length)
+    return withUnsafePointer(to: &addr) { pointer in
+        pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPtr in
+            connect(fd, sockaddrPtr, length) == 0
+        }
+    }
+}
+
+/// Resolve the alias to the socket it targets, inside `Sockets/`.
+private func resolvedAliasPath(_ alias: URL, in container: URL) -> String? {
+    guard let target = try? FileManager.default.destinationOfSymbolicLink(atPath: alias.path) else {
+        return nil
+    }
+    let fileName: String
+    if target.hasPrefix("../") {
+        fileName = String(target.dropFirst(3))
+    } else {
+        fileName = target
+    }
+    guard !fileName.contains("/"), !fileName.isEmpty else { return nil }
+    return container.appendingPathComponent("Sockets").appendingPathComponent(fileName).path
+}
+
 /// Drive id to Finder display name for the published aliases, or
 /// `nil` when the container cannot be resolved. `nil` is deliberately
 /// distinct from an empty list: an ad-hoc build or a failed
@@ -104,6 +149,12 @@ private func publishedDrives(group: String) -> [String: String]? {
     for name in names where name.hasSuffix(".sock") {
         let id = String(name.dropLast(".sock".count))
         guard isDriveId(id) else { continue }
+        guard let socketPath = resolvedAliasPath(aliases.appendingPathComponent(name), in: container),
+              socketResponds(at: socketPath)
+        else {
+            log.notice("skipping dead owner for \(id, privacy: .public)")
+            continue
+        }
         let labelURL = aliases.appendingPathComponent("\(id).label")
         guard let label = try? String(contentsOf: labelURL, encoding: .utf8)
             .trimmingCharacters(in: .whitespacesAndNewlines),

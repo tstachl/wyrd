@@ -77,6 +77,9 @@ grep -Fq 'group_label_path' \
 grep -Fq '.label' \
   "$ROOT/packaging/macos/domain-registrar/main.swift" \
   || die "registrar: drive-name label is not read"
+grep -Fq 'socketResponds' \
+  "$ROOT/packaging/macos/domain-registrar/main.swift" \
+  || die "registrar: dead owners are not detected"
 pass "MH_EXECUTE appex and registry-name label are pinned"
 grep -Fq 'app-id: md.enesis.wyrd' \
   "$ROOT/packaging/linux/md.enesis.wyrd.yaml" \
