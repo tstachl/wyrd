@@ -1166,6 +1166,89 @@ records live as local keystore sidecars. The transport that eventually
 moves them must either accept that exposure or re-frame the record;
 until then no vault-visible bytes carry drive identity.
 
+## Local diagnostics mode (opt-in, local-only; T20)
+
+The diagnostic surfaces above keep their default behavior. This section
+owns the additional, deliberately enabled **local diagnostics mode**: a
+verbose observability posture, not an operational or networking
+capability. It changes what is recorded locally, never what the system
+does.
+
+1. Diagnostics are opt-in, local-only, and never transmitted
+   automatically. There is no telemetry endpoint, background upload, or
+   wire field carrying diagnostic state. An exported bundle stays local
+   until the user deliberately shares it.
+2. One application-wide setting is the authoritative user-visible
+   control, persisted in `settings.json` (`resource-limits.md`). Its two
+   levels are `default` and `detailed`; absence means `default`. The
+   setting governs verbosity only. Safe default error reporting keeps
+   working when diagnostics are off, and enabling them never suppresses
+   a default-visible error.
+3. Activation is live for subsequent operations, not restart-to-apply.
+   The File Provider extension reads the setting from the shared
+   app-group configuration at callback boundaries; Rust workers receive
+   a live update through `diagnostics-set` and read it back with
+   `diagnostics-status` (shapes in `owner-interface.md`). Disabling
+   takes effect on subsequent operations. Desktop surfaces show the
+   persisted state, never an in-flight override.
+4. Detailed mode uses the field-level allowlist below and does not widen
+   the default-visible `warn` surface. A field is not public merely
+   because diagnostics are on.
+5. Detailed records are bounded (retention table below) and may be
+   sensitive even though they never leave the device automatically.
+6. Export requires an explicit user action and produces a temporary local
+   artifact. It collects only relevant local diagnostic records, with
+   timestamps and process/session correlation, preserving error context;
+   it never includes file contents, credentials, keys, or unrelated user
+   data. Collection is not sharing.
+7. Correlation uses a random, ephemeral local session id. It is not a
+   DriveId, device identity, or any protocol identity, and never enters a
+   network message.
+8. Rust and Swift share this contract and its configuration semantics,
+   not an implementation framework. A `--verbose` launch flag may remain
+   a CLI development convenience, but it is not a source of truth for the
+   application-wide setting.
+
+The opt-in debug log row above keeps its own allowlist. Detailed mode
+does not widen that log merely by being enabled, and enabling both does
+not promote a field that the table below keeps hidden onto a
+detailed-mode surface.
+
+| Information | Default | Detailed |
+|---|---|---|
+| Operation success/failure | Safe summary | Structured details |
+| Filename | Hidden | Allowed |
+| Content type | Hidden | Allowed |
+| Parent identifier | Hidden | Allowed locally |
+| Content id | Hidden | Only with explicit justification |
+| Identity / membership data | Hidden | Still hidden by default |
+| File contents | Never | Never |
+| Credentials / cryptographic material | Never | Never |
+| Symlink target | Hidden | Allowed locally, subject to explicit policy |
+
+Three separate authorizations apply to every field: whether it is
+emitted, whether it is marked `.public` in unified logging, and whether
+it is included in an exported bundle. Detailed mode authorizes the
+second and third only where the table allows; it never reclassifies a
+default surface. `ContentId`s and identities are not enabled merely
+because diagnostics are on — a provider failure is diagnosable without
+them.
+
+| Sink | Retention |
+|---|---|
+| Mount log | Existing per-mount truncation (one mount, one log) |
+| Owner log | Size-bounded rotation, not indefinite append; initial implementation defaults 5 MiB per file with three retained files, not protocol constants |
+| Desktop bundle | Explicitly generated, temporary local artifact |
+| File Provider | Unified logging retention; no assumption of indefinite availability |
+
+File Provider callback diagnostics record the **decision inputs**, not
+just the operation name: which operation Finder requested, the item and
+parent, the content type and relevant options, whether staged contents
+were present, whether a symlink target was involved, which validation or
+mutation stage failed, and the exact error returned to the provider.
+Stage and error are structured fields, not increasingly elaborate
+free-form messages.
+
 ## Decision record
 
 | # | Decision | Rationale |
@@ -1189,6 +1272,7 @@ until then no vault-visible bytes carry drive identity.
 | T17 | Peer addressing and serving authorization: snapshot announcements carry the sender's current iroh `NodeAddr` (`node_addr`) inside the same authenticated sealed plaintext — authenticated routing metadata, never identity, never snapshot content, never durable snapshot fields; announcement history is append-only with no cryptographic invalidation between announcements (freshness is operational, not validity); the serving member answers object-oriented `StorageId` lookups from its local store with ciphertext only — except the signed snapshot body served by `body_root` per `fetch-on-open.md` (`docs/architecture.md` invariant 4; disclosure matrix) — never paths, keys, or other plaintext; the serving blobs surface accepts no writes that land — pushes issued through the public client never register in the mirror, pinned end to end by `serving_mount_refuses_push_and_leaves_the_mirror_unchanged` (behavioral pin: upstream declares push disabled by default, but that mask field is not consulted on the request path in iroh-blobs 0.103.0, so the test, not the mask, carries the posture across dependency bumps); authorization = membership, object admission = content verification, no per-object ACLs in v0, so a member who can name a `StorageId` can request its ciphertext from any serving member | a dead address is a stale advertisement, not an invalid snapshot; an unauthenticated address would be a redirection surface even against unforgeable announcements; content-addressed verification is the only admission a transfer needs; the availability/enumeration consequence is accepted because a member already holds the epoch material that makes the ciphertext meaningful |
 | T18 | Retention refusal (DG-4): membership implies the right to read, never the duty to retain — a serving member or vault may decline to admit what an authorized member authored (A) or decline to serve, advertise, or hold as residency what it already holds (B), at the enforcement points decided in `storage-growth.md` (A: before durable admission of received content, so refused bytes are never stored; B: after local durability, before announcement on the authoring device, at mirror admission and serving maps on a peer holding received content, so durably accepted bytes are held but never made resident/servable). A refusal creates no provider claim, satisfies no serving request, and advances no announcement; it never invalidates already-durable content and is never reported as loss, transient failure, or success — the device's state says refused-for-residency under local policy, never damage, never absence. No control-plane refusal signal in v0.3: a retention refusal is a local policy outcome, not a peer-visible protocol event, readable by the local operator. What a member may read is unchanged — content a member is entitled to read stays readable from a holder | the pre-GC bound on the author is a refusal right, not eviction (which would fork provider knowledge) and not a rate limit (which would contradict the durability boundary); a signal naming the refuser would be an enumeration and pressure surface |
 | T19 | Vault/client diagnostics boundary (18-privacy-boundary): the 18 disclosure classes are the normative matrix rows with per-position verdicts at guaranteed / best-effort / accepted-exposure confidence; enforcement is projection-level (each trust position reads only what it may observe; renderer filtering is not the boundary); both serving positions are covered (keyless replica and member-hosted composition; vault surfaces follow the keyless column on every composition); unclassified observations default-deny with compile-time classification pressure | privacy must hold by what a projection can observe, not by what a renderer remembers to hide; possessing keys and being permitted to disclose key-derived information are different properties; aggregation does not automatically make derived data safe |
+| T20 | Local diagnostics mode: opt-in, local-only, never transmitted; one app-wide `default`/`detailed` setting with live activation for workers and the File Provider extension; verbosity only, with default error reporting unchanged; field-level allowlist, bounded sink retention, ephemeral local session id, and explicit user-initiated export | Finder failures need decision inputs the default surface must not reveal; one authoritative user setting avoids competing sources of truth; local-only preserves the party and surface matrices; bounded retention and deliberate export keep detailed records from becoming an unbounded or silently shared surface |
 
 ## Open questions
 

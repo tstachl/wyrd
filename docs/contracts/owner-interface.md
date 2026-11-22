@@ -8,8 +8,9 @@ consumer submits operations to the owner and never opens the store.
 The interface forwards mutation requests to the owner's single
 mutation queue, policy requests to the owner's loop-thread policy
 executor (the same engine, the same thread — four engine operations,
-not mutations), and reads to its published read state. It interprets
-nothing.
+not mutations), local verbosity configuration to the owner's
+process-local diagnostics level, and reads to its published read
+state. It interprets nothing.
 
 ## Transport
 
@@ -307,6 +308,34 @@ field arrived in v1 and are unchanged in v2. `paused` defaults to
 `false` on parse, so a pre-pause reader degrades to "running"
 instead of failing; both sides ship together, so the default only
 covers mixed-version skew during rollout.
+
+## Diagnostics level
+
+Set the process-local verbosity level with `diagnostics-set`, read it
+with `diagnostics-status`. `diagnostics-set` takes one closed field,
+`level`, either `default` or `detailed`; an unknown value is a distinct
+refusal, never coerced. `diagnostics-status` takes no parameters. Both
+answer with the level as the owner reads it back, so a consumer never
+infers the applied state from silence. Both are idempotent: setting the
+current level changes nothing.
+
+This is configuration, not a mutation or a policy operation: it enters
+neither the mutation queue nor the policy executor, commits no durable
+fact, changes no snapshot, and touches no store state. It governs how
+much the owner records locally for subsequent operations; work already
+in flight keeps the level it started under. The setting is persisted in
+`settings.json` by the settings backend; the owner applies the
+persisted level in memory on start, and this operation delivers changes
+to a running owner. A restarted owner therefore runs at the persisted
+level, never at a remembered live override. Disabling takes effect on
+subsequent operations.
+
+Only the level crosses this interface. Diagnostics records, file
+contents, file names, identities, content ids and credentials never do
+— the records stay local to the process that produced them (T20 in
+`trust.md`). Each operation uses the crash answers below: an
+unconfirmed answer is re-read with `diagnostics-status` before any
+retry, never recorded as confirmed or failed.
 
 ## Materialization policy
 
