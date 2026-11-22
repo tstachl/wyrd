@@ -6,6 +6,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+#[cfg(target_os = "macos")]
 use std::time::Duration;
 
 use wyrd_core::live::{LiveParts, SharedObservation};

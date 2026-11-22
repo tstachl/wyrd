@@ -25,7 +25,8 @@ BUILD="$ROOT/packaging/macos/fileprovider/build-appex.sh"
 # 1. The config runs the stage script before bundling and copies the
 # staged appex into Contents/PlugIns (destination first, source
 # second — the bundler's mapping direction). The outer app carries
-# no entitlements (decided).
+# the App Group entitlement (earlier "no entitlements" decision was
+# reopened; see packaging/macos/README.md).
 python3 - "$CONF" <<'EOF'
 import json, sys
 conf = json.load(open(sys.argv[1]))
@@ -34,10 +35,11 @@ assert 'stage-appex.sh' in build.get('beforeBundleCommand', ''), build.get('buil
 files = conf.get('bundle', {}).get('macOS', {}).get('files', {})
 assert files.get('PlugIns/WyrdFileProvider.appex') == \
     '../../packaging/macos/stage/WyrdFileProvider.appex', files
-assert 'entitlements' not in conf.get('bundle', {}).get('macOS', {}), \
-    'app holds no entitlements (decided)'
+assert conf.get('bundle', {}).get('macOS', {}).get('entitlements') == \
+    '../../packaging/macos/Wyrd.app.entitlements', \
+    'app must declare the App Group entitlements file'
 EOF
-pass "config stages before bundling, copies to PlugIns, no app entitlements"
+pass "config stages before bundling, copies to PlugIns, wires app entitlements"
 
 # 2. The stage script is macOS-only (skips elsewhere, exit 0), builds
 # through build-appex.sh with the config version stamped in the
