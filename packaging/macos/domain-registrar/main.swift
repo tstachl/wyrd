@@ -50,7 +50,9 @@ private final class Completion<T> {
     }
 }
 
-private let callbackTimeout: DispatchTime = .now() + 10
+/// A fresh deadline per wait: a shared absolute deadline would make
+/// later add/remove calls time out after a slow domain read.
+private func callbackTimeout() -> DispatchTime { .now() + 10 }
 
 /// Whether `value` is a Wyrd drive id: 64 lowercase hex characters,
 /// never the all-zero placeholder the appex also refuses.
@@ -143,7 +145,7 @@ func reconcile(_ raw: String) -> (code: Int32, added: Int, removed: Int) {
             read.resolve(.success(domains))
         }
     }
-    guard let readResult = read.wait(callbackTimeout) else {
+    guard let readResult = read.wait(callbackTimeout()) else {
         log.error("timed out reading File Provider domains")
         return (2, 0, 0)
     }
@@ -169,7 +171,7 @@ func reconcile(_ raw: String) -> (code: Int32, added: Int, removed: Int) {
         NSFileProviderManager.add(domain) { error in
             add.resolve(error.map { Result.failure($0) } ?? Result.success(()))
         }
-        guard let addResult = add.wait(callbackTimeout) else {
+        guard let addResult = add.wait(callbackTimeout()) else {
             log.error("timed out adding domain \(id, privacy: .public)")
             failed = true
             continue
@@ -197,7 +199,7 @@ func reconcile(_ raw: String) -> (code: Int32, added: Int, removed: Int) {
         NSFileProviderManager.remove(domain) { error in
             remove.resolve(error.map { Result.failure($0) } ?? Result.success(()))
         }
-        guard let removeResult = remove.wait(callbackTimeout) else {
+        guard let removeResult = remove.wait(callbackTimeout()) else {
             log.error("timed out removing stale domain \(id, privacy: .public)")
             failed = true
             continue

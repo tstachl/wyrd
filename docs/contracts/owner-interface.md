@@ -23,7 +23,14 @@ Group container for the File Provider extension, which cannot
 reach the drive directory from its sandbox: one socket per drive
 at
 `<container>/Sockets/<fingerprint>.sock` plus a
-`Sockets/by-drive/<drive-hex>.sock` symlink alias beside it. This
+`Sockets/by-drive/<drive-hex>.sock` symlink alias and a
+`Sockets/by-drive/<drive-hex>.label` file beside it. The label holds
+only the validated registry name (a `[a-z0-9-]` token of at most 64
+characters) for the Finder domain display name. It is control
+metadata, never drive content: no bytes, manifests, keys or secrets
+go into the group container. Only a live owner writes the label, so
+a locked or stopped drive has no Finder domain; the domain
+identifier stays the full `DriveId`. This
 second listener is the daemon half of the registry-owned
 production association on
 macOS: with no dev env vars set, the owner derives the container
