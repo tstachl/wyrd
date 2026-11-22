@@ -1,7 +1,7 @@
 //! Settings writes through the installed CLI: the constrained
 //! adapter the stage-2 editor commits through.
 //!
-//! Authority contract (mirroring `provision.rs`): the desktop
+//! Authority contract (mirroring `provision/`): the desktop
 //! launches the operation but never becomes the source of truth. It
 //! invokes the version-matched CLI with structured arguments (argv
 //! arrays, never shell-constructed), waits for process completion,

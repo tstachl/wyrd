@@ -1,4 +1,7 @@
-use super::*;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use crate::provision::*;
 
 fn create_request() -> ProvisionRequest {
     ProvisionRequest {
@@ -650,12 +653,12 @@ fn chatty_cli_drains_pipes_instead_of_wedging() {
     );
     assert_eq!(output.code, Some(2), "exit code survives: {output:?}");
     assert!(
-        output.stdout.len() <= super::MAX_CLI_CAPTURE_BYTES,
+        output.stdout.len() <= crate::provision::MAX_CLI_CAPTURE_BYTES,
         "stdout capture stays bounded: {} bytes",
         output.stdout.len()
     );
     assert!(
-        output.stderr.len() <= super::MAX_CLI_CAPTURE_BYTES,
+        output.stderr.len() <= crate::provision::MAX_CLI_CAPTURE_BYTES,
         "stderr capture stays bounded: {} bytes",
         output.stderr.len()
     );
@@ -1313,7 +1316,7 @@ fn spawn_unlock_pipes_the_passphrase_and_holds_the_child() {
 /// statically in `unlock_argv_is_structured_with_the_pipe_flag`;
 /// `Debug` redaction pins in
 /// `unlock_args_debug_redacts_the_passphrase` and
-/// `debug_redacts_the_secret` in `commands.rs`/`session.rs`.)
+/// `debug_redacts_the_secret` in `commands/unlock.rs`/`session.rs`.)
 #[test]
 fn spawn_unlock_confines_the_secret_to_stdin() {
     let dir = std::env::temp_dir().join(format!(
