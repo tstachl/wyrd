@@ -1090,7 +1090,6 @@
     {:else if presentation.selectedView === "lifecycle" || selectedDriveDir === null}
       <LifecycleView
         snapshot={presentation.lifecycleSnapshot}
-        selectedDriveDir={presentation.selectedDriveDir}
         pending={busy}
         transportNotice={presentation.transportNotice}
         onRefresh={() => void refreshLifecycle()}
