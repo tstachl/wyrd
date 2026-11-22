@@ -1,8 +1,12 @@
 use super::tests_harness::{write_secret, TempDir};
 use super::*;
+use crate::commands::drive::DeleteCleanup;
 use wyrd_core::lifecycle_surface::DELETION_LOCALITY;
 use wyrd_core::member_surface::{HISTORY_NEVER_REENCRYPTED, REMOVAL_BOUNDARY, SOLE_OWNER_TERMINAL};
+use wyrd_credential_store::OsStoreBackend;
+use wyrd_daemon::owner::{group_label_path, group_socket_path, group_symlink_path};
 use wyrd_format::{Change, ContentId, Entry, FsObjectStore, ObjectKind, ObjectStore, Tree};
+use wyrd_sync::keys::{CredentialError, CredentialLoader, CredentialRef};
 
 struct Fixture {
     _temp: TempDir,
@@ -66,6 +70,28 @@ impl Fixture {
     fn open(&self) -> Engine {
         let identity = read_identity(&self.identity_file).unwrap();
         Engine::open_keystore(self.drive.clone(), "test-pass", identity).unwrap()
+    }
+
+    /// Hermetic cleanup inputs: scratch registry and group container
+    /// so a delete test never touches per-user state. There is no
+    /// store-backed credential here, so the loader is never called.
+    fn cleanup(&self) -> DeleteCleanup<'static> {
+        DeleteCleanup {
+            registry_path: self._temp.0.join("drives.json"),
+            credential: None,
+            credential_loader: &OsStoreBackend,
+            group_container: Some(self._temp.0.join("group-container")),
+            service_definition: None,
+        }
+    }
+
+    /// `drive delete` through argv with a scratch registry path.
+    fn delete_args(&self, extra: Vec<String>) -> Vec<String> {
+        let mut args = self.args(vec!["delete".into()]);
+        args.push("--registry".into());
+        args.push(self._temp.0.join("drives.json").display().to_string());
+        args.extend(extra);
+        args
     }
 }
 
@@ -214,7 +240,14 @@ fn drive_deletion_is_local_forget_plus_this_device_removal() {
         .epoch;
 
     let identity = read_identity(&fixture.identity_file).unwrap();
-    let report = delete_drive(fixture.drive.clone(), "test-pass", identity, true).unwrap();
+    let report = delete_drive(
+        fixture.drive.clone(),
+        "test-pass",
+        identity,
+        true,
+        &fixture.cleanup(),
+    )
+    .unwrap();
     assert_eq!(
         report.transition.changes(),
         [Change::Remove(this)],
@@ -234,7 +267,7 @@ fn drive_deletion_is_local_forget_plus_this_device_removal() {
     // The person-facing path reports the same outcome: a second drive
     // deletes clean through `drive delete --yes` and is gone after.
     let second = Fixture::new();
-    command(second.args(vec!["delete".into(), "--yes".into()])).unwrap();
+    command(second.delete_args(vec!["--yes".into()])).unwrap();
     assert!(
         !second.drive.exists(),
         "the CLI path removes the directory too"
@@ -263,7 +296,7 @@ fn drive_deletion_leaves_a_peer_head_set_byte_identical() {
         .transition_id;
     drop(newcomer_engine);
 
-    command(fixture.args(vec!["delete".into(), "--yes".into()])).unwrap();
+    command(fixture.delete_args(vec!["--yes".into()])).unwrap();
     assert!(!fixture.drive.exists(), "the deleter is gone");
 
     let newcomer_identity = read_identity(&newcomer.identity_file).unwrap();
@@ -291,7 +324,10 @@ fn drive_deletion_leaves_a_peer_head_set_byte_identical() {
 #[test]
 fn drive_deletion_warns_before_a_last_owner_removal() {
     let fixture = Fixture::new();
-    let error = command(fixture.args(vec!["delete".into()])).unwrap_err();
+    let registry = fixture._temp.0.join("drives.json");
+    let name = unique_reconf_name("refused");
+    write_registry_entry(&registry, &name, &fixture.drive, &[]);
+    let error = command(fixture.delete_args(vec![])).unwrap_err();
     assert!(
         matches!(error, CliError::Usage(_)),
         "refusal, not an inline warning: {error:?}"
@@ -303,8 +339,13 @@ fn drive_deletion_warns_before_a_last_owner_removal() {
     let tip = fixture.open().membership_log().known_state().expect("tip");
     assert_eq!(tip.epoch, 1, "the refusal authors nothing");
     assert!(fixture.drive.exists(), "the directory is untouched");
+    let after: serde_json::Value = serde_json::from_slice(&fs::read(&registry).unwrap()).unwrap();
+    assert!(
+        after["drives"].get(&name).is_some(),
+        "no cleanup runs before the acknowledgement"
+    );
 
-    command(fixture.args(vec!["delete".into(), "--yes".into()])).unwrap();
+    command(fixture.delete_args(vec!["--yes".into()])).unwrap();
     assert!(!fixture.drive.exists(), "acknowledged deletion proceeds");
 }
 
@@ -322,11 +363,10 @@ fn drive_deletion_is_refused_for_a_non_owner() {
         .expect("tip")
         .transition_id;
 
-    let error = command(newcomer_args(
-        &newcomer,
-        vec!["delete".into(), "--yes".into()],
-    ))
-    .unwrap_err();
+    let mut args = newcomer_args(&newcomer, vec!["delete".into(), "--yes".into()]);
+    args.push("--registry".into());
+    args.push(newcomer._temp.0.join("drives.json").display().to_string());
+    let error = command(args).unwrap_err();
     assert!(
         matches!(error, CliError::Usage(_)),
         "non-owner refused: {error:?}"
@@ -366,7 +406,14 @@ fn drive_deletion_confirmation_renders_boundary_and_locality() {
     let fixture = Fixture::new();
     let this = device_id_of(&[0x22; 32]);
     let identity = read_identity(&fixture.identity_file).unwrap();
-    let report = delete_drive(fixture.drive.clone(), "test-pass", identity, true).unwrap();
+    let report = delete_drive(
+        fixture.drive.clone(),
+        "test-pass",
+        identity,
+        true,
+        &fixture.cleanup(),
+    )
+    .unwrap();
     let confirmation = wyrd_core::lifecycle_surface::render_deletion_confirmation(
         &report.device,
         report.transition.epoch,
@@ -385,6 +432,157 @@ fn drive_deletion_confirmation_renders_boundary_and_locality() {
             "confirmation states {sentence:?}: {confirmation}"
         );
     }
+}
+
+/// Full local cleanup through the CLI path: the exact-match entry is
+/// forgotten while every other entry is carried forward verbatim.
+#[test]
+fn drive_delete_forgets_only_the_matching_registry_entry() {
+    let fixture = Fixture::new();
+    let registry = fixture._temp.0.join("drives.json");
+    write_registry_entry(&registry, "deleted", &fixture.drive, &["relay://kept"]);
+    let other = fixture._temp.0.join("other-drive");
+    let mut raw: serde_json::Value = serde_json::from_slice(&fs::read(&registry).unwrap()).unwrap();
+    let mut kept = raw["drives"]["deleted"].clone();
+    kept["name"] = serde_json::Value::String("kept".into());
+    kept["service"] = serde_json::Value::String("drive-kept".into());
+    kept["drive_dir"] = serde_json::Value::String(other.display().to_string());
+    raw["drives"]["kept"] = kept;
+    fs::write(&registry, serde_json::to_vec(&raw).unwrap()).unwrap();
+
+    command(fixture.delete_args(vec!["--yes".into()])).unwrap();
+
+    let after: serde_json::Value = serde_json::from_slice(&fs::read(&registry).unwrap()).unwrap();
+    assert!(
+        after["drives"].get("deleted").is_none(),
+        "the deleted drive's entry is gone: {after}"
+    );
+    assert_eq!(
+        after["drives"]["kept"]["drive_dir"],
+        serde_json::json!(other.display().to_string()),
+        "an unrelated entry survives"
+    );
+    assert_eq!(
+        after["drives"]["kept"]["relays"],
+        serde_json::json!(["relay://kept"]),
+        "the surviving entry keeps its facts"
+    );
+}
+
+/// The per-drive service is disabled and its definition file removed
+/// only after the transition commits, along with the registry entry.
+#[test]
+fn drive_delete_clears_the_service_definition_after_commit() {
+    let fixture = Fixture::new();
+    let name = unique_reconf_name("delete-svc");
+    let registry = fixture._temp.0.join("drives.json");
+    write_registry_entry(&registry, &name, &fixture.drive, &[]);
+    let definition = fixture._temp.0.join(format!("{name}.plist"));
+    fs::write(&definition, "stub definition").unwrap();
+
+    let mut cleanup = fixture.cleanup();
+    cleanup.service_definition = Some(definition.clone());
+    let identity = read_identity(&fixture.identity_file).unwrap();
+    let report =
+        delete_drive(fixture.drive.clone(), "test-pass", identity, true, &cleanup).unwrap();
+
+    assert!(report.cleanup.registry_removed, "entry was forgotten");
+    assert!(report.cleanup.service_cleared, "service was cleared");
+    assert!(!definition.exists(), "the definition file is gone");
+    let after: serde_json::Value = serde_json::from_slice(&fs::read(&registry).unwrap()).unwrap();
+    assert!(after["drives"].get(&name).is_none());
+}
+
+/// A recording loader stands in for the OS credential store: the
+/// delete path must call `CredentialLoader::delete` with the drive's
+/// store reference, and must leave operator-owned credential files
+/// alone.
+#[derive(Default)]
+struct RecordingLoader {
+    deleted: std::cell::RefCell<Vec<CredentialRef>>,
+}
+
+impl CredentialLoader for RecordingLoader {
+    fn load(
+        &self,
+        _reference: &CredentialRef,
+    ) -> Result<wyrd_sync::keys::LoadedCredential, CredentialError> {
+        unreachable!("delete never loads through the cleanup loader")
+    }
+    fn store(
+        &self,
+        _reference: &CredentialRef,
+        _material: &wyrd_sync::keys::LoadedCredential,
+    ) -> Result<(), CredentialError> {
+        unreachable!("delete never stores through the cleanup loader")
+    }
+    fn replace(
+        &self,
+        _reference: &CredentialRef,
+        _material: &wyrd_sync::keys::LoadedCredential,
+    ) -> Result<(), CredentialError> {
+        unreachable!("delete never replaces through the cleanup loader")
+    }
+    fn delete(&self, reference: &CredentialRef) -> Result<(), CredentialError> {
+        self.deleted.borrow_mut().push(reference.clone());
+        Ok(())
+    }
+}
+
+#[test]
+fn drive_delete_retires_a_store_credential_and_keeps_operator_files() {
+    let fixture = Fixture::new();
+    let loader = RecordingLoader::default();
+    let account = "wyrd-test-delete-account".to_string();
+    let reference = CredentialRef::OsStore {
+        account: account.clone(),
+    };
+    let mut cleanup = fixture.cleanup();
+    cleanup.credential = Some(reference.clone());
+    cleanup.credential_loader = &loader;
+    let identity = read_identity(&fixture.identity_file).unwrap();
+    let report =
+        delete_drive(fixture.drive.clone(), "test-pass", identity, true, &cleanup).unwrap();
+
+    assert!(report.cleanup.credential_removed);
+    assert_eq!(
+        loader.deleted.borrow().as_slice(),
+        [reference],
+        "the drive's store item is the one retired"
+    );
+    assert!(
+        fixture.identity_file.exists() && fixture.passphrase_file.exists(),
+        "file-backed credentials are operator-owned and survive"
+    );
+}
+
+/// Group artifacts are named by drive id (captured from the engine
+/// before the directory is removed), not by registry name.
+#[test]
+fn drive_delete_removes_the_group_container_artifacts() {
+    let fixture = Fixture::new();
+    let drive = fixture.open().drive();
+    let container = fixture._temp.0.join("group-container");
+    let by_drive = container.join("Sockets").join("by-drive");
+    fs::create_dir_all(&by_drive).unwrap();
+    let socket = group_socket_path(&container, &drive);
+    let alias = group_symlink_path(&container, &drive);
+    let label = group_label_path(&container, &drive);
+    fs::write(&socket, b"stale socket").unwrap();
+    let fingerprint = socket.file_name().unwrap().to_string_lossy().into_owned();
+    std::os::unix::fs::symlink(format!("../{fingerprint}"), &alias).unwrap();
+    fs::write(&label, b"fixture").unwrap();
+
+    let mut cleanup = fixture.cleanup();
+    cleanup.group_container = Some(container);
+    let identity = read_identity(&fixture.identity_file).unwrap();
+    let report =
+        delete_drive(fixture.drive.clone(), "test-pass", identity, true, &cleanup).unwrap();
+
+    assert_eq!(report.cleanup.group_artifacts_removed, 3);
+    assert!(!socket.exists(), "the fingerprint socket is gone");
+    assert!(!alias.exists(), "the by-drive alias is gone");
+    assert!(!label.exists(), "the by-drive label is gone");
 }
 
 /// Registry entry names unique to this process run: the daemon

@@ -47,7 +47,10 @@ pub async fn provision_delete<R: Runtime>(
         app,
         "provision_delete",
         args.drive_dir.clone(),
-        false,
+        // The directory is removed: drop any cached owner connection so
+        // the next operation mints a fresh one instead of using a socket
+        // that no longer exists.
+        true,
         move |state, dir| {
             let credentials = match credential_source(
                 args.credential_backend,

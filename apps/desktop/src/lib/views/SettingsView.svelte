@@ -891,7 +891,7 @@ action. -->
       Remove local drive data
     </Card.Title>
     <Card.Description>
-      End this device's membership and remove the drive's directory from this device.
+      End this device's membership and remove its local data and references from this device.
     </Card.Description>
   </Card.Header>
   <Card.Content class="flex flex-col gap-4">
@@ -967,7 +967,7 @@ action. -->
         <Checkbox id="delete-acknowledged" bind:checked={deleteAcknowledged} disabled={busy} />
         <Field.Content>
           <Field.Label for="delete-acknowledged" class="leading-relaxed font-normal">
-            I understand: this removes this device from the drive going forward. The local directory is gone and nothing else changed: no other member's copy changed, and the removed files' blocks stay recoverable from this device until overwritten, like any removed file. If this device is the drive's only owner, the owner set becomes empty and no future membership or ownership change can be authorized — hand over ownership before the drive should remain manageable. Stop the drive's service first if it holds the store.
+            I understand: this removes this device from the drive going forward and takes this drive's local data off the device — the directory, registry entry, service definition, credential item and group socket and label. No other member's copy changes, and the removed files' blocks stay recoverable from this device until overwritten, like any removed file. If this device is the drive's only owner, the owner set becomes empty and no future membership or ownership change can be authorized — hand over ownership before the drive should remain manageable. A non-owner or a frozen drive is refused before anything is removed. Stop the drive's service first if it holds the store.
           </Field.Label>
         </Field.Content>
       </Field.Field>
@@ -1003,7 +1003,7 @@ action. -->
     <AlertDialog.Header>
       <AlertDialog.Title>Remove this drive's local data?</AlertDialog.Title>
       <AlertDialog.Description>
-        This removes this device from the drive going forward. The local directory is gone and nothing else changed: no other member's copy changed, and the removed files' blocks stay recoverable from this device until overwritten, like any removed file. If this device is the drive's only owner, the owner set becomes empty and no future membership or ownership change can be authorized — hand over ownership before the drive should remain manageable. Stop the drive's service first if it holds the store.
+        This removes this device from the drive going forward and takes this drive's local data off the device — the directory, registry entry, service definition, credential item and group socket and label. No other member's copy changes, and the removed files' blocks stay recoverable from this device until overwritten, like any removed file. If this device is the drive's only owner, the owner set becomes empty and no future membership or ownership change can be authorized — hand over ownership before the drive should remain manageable. A non-owner or a frozen drive is refused before anything is removed. Stop the drive's service first if it holds the store.
       </AlertDialog.Description>
     </AlertDialog.Header>
     <AlertDialog.Footer>

@@ -81,6 +81,104 @@ fn registry_skips_invalid_entries_with_reasons_and_keeps_valid_ones() {
     assert_eq!(read.skipped.len(), 2, "{:?}", read.skipped);
 }
 
+/// Forgetting deletes from both the validated map and the raw
+/// carry-forward map. The second half is the point: a skipped entry
+/// would otherwise be carried back verbatim by this write and every
+/// later `write_registry`, and a validated entry would come back
+/// from the raws in the merge below.
+#[test]
+fn registry_forget_removes_the_entry_and_its_carried_raw() {
+    let dir = scratch("forget");
+    let path = dir.join("drives.json");
+    let mut bad = entry("bad-gone", &dir);
+    bad.drive_dir = PathBuf::from("relative/path");
+    let raw = serde_json::json!({
+        "version": 1,
+        "drives": {
+            "good": entry("good", &dir),
+            "gone": entry("gone", &dir),
+            "bad-gone": bad,
+        }
+    });
+    std::fs::write(&path, serde_json::to_vec(&raw).unwrap()).unwrap();
+
+    forget_registry_entry(&path, "gone").unwrap();
+    forget_registry_entry(&path, "bad-gone").unwrap();
+
+    let read = read_registry(&path).unwrap();
+    assert_eq!(read.drives.len(), 1, "{:?}", read.drives.keys());
+    assert!(read.drives.contains_key("good"));
+    assert!(read.skipped.is_empty(), "{:?}", read.skipped);
+    let raw: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert!(raw["drives"].get("gone").is_none());
+    assert!(raw["drives"].get("bad-gone").is_none());
+
+    // A later rewrite from a stale valid map must not resurrect the
+    // forgotten keys from its carry-forward set.
+    write_registry(&path, &read.drives).unwrap();
+    let raw: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(raw["drives"].as_object().unwrap().len(), 1);
+}
+
+/// Forgetting a key that is not there changes nothing else: no
+/// entry, skip reason, or raw value is lost on an idempotent retry.
+#[test]
+fn registry_forget_of_an_absent_key_preserves_everything() {
+    let dir = scratch("forget-absent");
+    let path = dir.join("drives.json");
+    let mut bad = entry("bad", &dir);
+    bad.drive_dir = PathBuf::from("relative/path");
+    let raw = serde_json::json!({
+        "version": 1,
+        "drives": { "good": entry("good", &dir), "bad": bad }
+    });
+    std::fs::write(&path, serde_json::to_vec(&raw).unwrap()).unwrap();
+
+    forget_registry_entry(&path, "never-there").unwrap();
+
+    let read = read_registry(&path).unwrap();
+    assert!(read.drives.contains_key("good"));
+    assert_eq!(read.skipped.len(), 1, "{:?}", read.skipped);
+}
+
+/// Forget and write share the one registry lock: concurrent calls
+/// cannot resurrect a forgotten key or lose a newly written one.
+#[test]
+fn registry_forget_serializes_with_concurrent_writers() {
+    let dir = scratch("forget-concurrent");
+    let path = dir.join("drives.json");
+    let mut initial = BTreeMap::new();
+    for i in 0..4 {
+        let name = format!("old{i}");
+        initial.insert(name.clone(), entry(&name, &dir));
+    }
+    write_registry(&path, &initial).unwrap();
+
+    std::thread::scope(|scope| {
+        for i in 0..4 {
+            let path = &path;
+            let dir = &dir;
+            scope.spawn(move || {
+                forget_registry_entry(path, &format!("old{i}")).unwrap();
+            });
+            scope.spawn(move || {
+                let name = format!("new{i}");
+                let mut drives = BTreeMap::new();
+                drives.insert(name.clone(), entry(&name, dir));
+                write_registry(path, &drives).unwrap();
+            });
+        }
+    });
+
+    let read = read_registry(&path).unwrap();
+    assert!(read.skipped.is_empty(), "{:?}", read.skipped);
+    assert_eq!(read.drives.len(), 4, "{:?}", read.drives.keys());
+    for i in 0..4 {
+        assert!(!read.drives.contains_key(&format!("old{i}")));
+        assert!(read.drives.contains_key(&format!("new{i}")));
+    }
+}
+
 #[test]
 fn registry_write_refuses_invalid_entries_and_never_writes_partial() {
     let dir = scratch("nowrite");

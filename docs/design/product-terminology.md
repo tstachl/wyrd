@@ -187,9 +187,10 @@ approved text; the current strings at `format.ts:123-127` and
 before action. Desktop exposes discard, new identity, leave, local data
 removal and service restart; remove device, set owner, resolve and reissue
 stay CLI-only. Local data removal runs the installed `drive delete`: it
-authors `Remove(self)` before removing the directory, carries the same
-terminal acknowledgement and locality copy as the CLI, and does not touch
-another member's copy. Core copy is strong — `render_deletion_confirmation`
+authors `Remove(self)` before removing the directory and the local
+references (registry entry, service definition, credential item and group
+socket and label), carries the same terminal acknowledgement and locality
+copy as the CLI, and does not touch another member's copy. Core copy is strong — `render_deletion_confirmation`
 bans euphemisms and states locality and terminality
 (`lifecycle_surface.rs:105-137`) — and MUST NOT be softened. Device removal
 MUST follow the approved explanation. "Lock for this session" SHOULD state
