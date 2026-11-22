@@ -57,7 +57,16 @@
     SettingsWriteReport,
   } from "$lib/ipc/results.js";
   import type { SparseUpdateArgs } from "$lib/ipc/results.js";
-  import { settingsSurviveLock, shouldAdvanceAfterProvision, storeAccountFor, withDevCliHint } from "$lib/views/format.js";
+  import {
+    describeProvisionResult,
+    membershipSummary,
+    observedRegistrySummary,
+    settingsSurviveLock,
+    shouldAdvanceAfterProvision,
+    shouldAdvanceAfterRemoval,
+    storeAccountFor,
+    withDevCliHint,
+  } from "$lib/views/format.js";
   import {
     autoOpenTarget,
     headerAffordance,
@@ -403,6 +412,12 @@
   // screen. Shown on the unlock card; the passphrase that produced
   // it is already cleared by the unlock view.
   let unlockRefused: { driveDir: string; detail: string } | null = $state(null);
+  // A confirmed removal navigates back to the overview, but its report
+  // still travels there: a leave that authored nothing also exits 0,
+  // so the observed outcome stays visible instead of being discarded
+  // with the settings view. Cleared at the start of each removal and
+  // dismissible on the overview.
+  let removalNotice = $state<ProvisionReport | null>(null);
 
   const selectedServiceState = $derived(selectedDrive?.service_state ?? null);
   const selectedEnablement = $derived(selectedDrive?.enablement ?? null);
@@ -612,6 +627,31 @@
   ): Promise<ProvisionReport | null> {
     const report = await runProvision(call);
     if (!shouldAdvanceAfterProvision(report, driveDir)) return report;
+    await refreshLifecycle();
+    allDrives();
+    return null;
+  }
+
+  /**
+   * One removal — leave (keep local data) or delete (take it too) —
+   * through the same advance path as create/join. The inverse rule
+   * decides: a confirmed removal leaves the settings view, refreshes
+   * the registry so the drive is gone from the list, and carries its
+   * report to a banner on the overview so a no-op leave is never
+   * silently presented as complete. A refused or uncertain outcome
+   * returns the report for the card to keep inline, with a Back to
+   * drives action beside it. A transport throw propagates to the
+   * caller as before.
+   */
+  async function removalAndAdvance(
+    driveDir: string,
+    keepLocalData: boolean,
+    call: () => Promise<ProvisionReport>,
+  ): Promise<ProvisionReport | null> {
+    removalNotice = null;
+    const report = await runProvision(call);
+    if (!shouldAdvanceAfterRemoval(report, driveDir, keepLocalData)) return report;
+    removalNotice = report;
     await refreshLifecycle();
     allDrives();
     return null;
@@ -1040,6 +1080,21 @@
   </header>
 
   <main class="mx-auto w-full max-w-5xl flex-1 px-6 pt-8 pb-16" aria-live="polite">
+    {#if gate === "done" && removalNotice !== null}
+      <Alert.Root class="mb-6">
+        <Alert.Title>Removal result</Alert.Title>
+        <Alert.Description class="space-y-1 text-foreground/80 [&_p:not(:last-child)]:mb-1">
+          <p>{describeProvisionResult(removalNotice)}</p>
+          <p>{observedRegistrySummary(removalNotice)}</p>
+          <p>{membershipSummary(removalNotice)}</p>
+        </Alert.Description>
+        <div class="mt-3">
+          <Button variant="outline" size="sm" onclick={() => (removalNotice = null)}>
+            Dismiss
+          </Button>
+        </div>
+      </Alert.Root>
+    {/if}
     {#if gate === "loading"}
       <div class="flex min-h-[45vh] flex-col items-center justify-center gap-3 text-center">
         <Spinner class="size-5 text-muted-foreground" />
@@ -1213,8 +1268,12 @@
               passphraseFile={onboardedPassphraseFile}
               session={selectedSession}
               onRefresh={() => void refreshSettings(selectedDriveDir)}
-              onLeave={(args: ProvisionLeaveArgs) => runProvision(() => provisionLeave(args))}
-              onDelete={(args: ProvisionDeleteArgs) => runProvision(() => provisionDelete(args))}
+              onLeave={(args: ProvisionLeaveArgs) =>
+                removalAndAdvance(args.driveDir, true, () => provisionLeave(args))
+              }
+              onDelete={(args: ProvisionDeleteArgs) =>
+                removalAndAdvance(args.driveDir, false, () => provisionDelete(args))
+              }
               onApply={(update: SparseUpdateArgs) =>
                 runSettingsWrite(selectedDriveDir, update)
               }

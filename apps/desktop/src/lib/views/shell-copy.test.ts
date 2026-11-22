@@ -187,6 +187,29 @@ test("successful adds leave the form, failures keep it", () => {
   expect(provisioning).toContain("if (report !== null) onDone();");
 });
 
+test("confirmed removals leave the settings and carry the result to the overview", () => {
+  // Both removal choices route through `removalAndAdvance`, the
+  // inverse of `provisionAndAdvance`: a confirmed delete (registry no
+  // longer names the drive) or leave (tip answered, still local)
+  // navigates away and refreshes the list, while a refusal keeps the
+  // report inline beside a prominent Back to drives action. The
+  // overview banner keeps the report visible on the advance path too,
+  // so a no-op leave is never silently shown as complete.
+  for (const line of [
+    "removalAndAdvance(args.driveDir, true",
+    "removalAndAdvance(args.driveDir, false",
+    "shouldAdvanceAfterRemoval(report, driveDir, keepLocalData)",
+    "removalNotice = report",
+    "Removal result",
+  ]) {
+    expect(app).toContain(line);
+  }
+  expect(app).not.toContain("onLeave={(args: ProvisionLeaveArgs) => runProvision(");
+  expect(app).not.toContain("onDelete={(args: ProvisionDeleteArgs) => runProvision(");
+  expect(settings).toContain("Back to drives");
+  expect(settings).not.toContain("Refresh drives");
+});
+
 test("new drives start with the suggested relays", () => {
   // The relay field pre-fills from `SUGGESTED_RELAYS` (the set pins
   // in `format.test.ts`); the copy promises the suggestion is
