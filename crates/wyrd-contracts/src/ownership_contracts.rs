@@ -355,6 +355,7 @@ const TEST_FILE_PINS: &[&str] = &[
     "crates/wyrd-core/src/tests_settings.rs",
     "crates/wyrd-core/src/tests_status_surface.rs",
     "crates/wyrd-core/src/tests_storage_surface.rs",
+    "crates/wyrd-daemon/src/bootstrap/tests.rs",
     "crates/wyrd-daemon/src/fuse/tests_budget.rs",
     "crates/wyrd-daemon/src/fuse/tests_conflicts.rs",
     "crates/wyrd-daemon/src/fuse/tests_errors.rs",

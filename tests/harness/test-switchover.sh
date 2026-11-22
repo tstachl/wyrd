@@ -15,7 +15,10 @@ PASS=0
 pass() { PASS=$((PASS + 1)); echo "  PASS: $1"; }
 die() { echo "  FAIL: $1" >&2; exit 1; }
 
-SERVER="$ROOT/crates/wyrd-daemon/src/owner/server.rs"
+# Socket binding/derivation lives in `server/socket.rs`; the production
+# auto-bind call sits in `server/service.rs` beside the service lifecycle.
+SERVER="$ROOT/crates/wyrd-daemon/src/owner/server/socket.rs"
+BIND="$ROOT/crates/wyrd-daemon/src/owner/server/service.rs"
 MOD="$ROOT/crates/wyrd-daemon/src/owner/mod.rs"
 SWIFT="$ROOT/packaging/macos/fileprovider/Sources/SocketConfig.swift"
 README="$ROOT/packaging/macos/README.md"
@@ -30,7 +33,7 @@ grep -Fq 'default_group_container_with_home' "$SERVER" \
   || die "server: production container derivation missing"
 grep -Fq 'production_group_container()' "$SERVER" \
   || die "server: production container existence gate missing"
-grep -Fq 'None => match production_group_container()' "$SERVER" \
+grep -Fq 'None => match production_group_container()' "$BIND" \
   || die "server: production auto-bind missing from bind_for_composer"
 pass "server binds the group socket with no env vars in production"
 
