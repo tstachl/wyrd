@@ -15,7 +15,12 @@ problem (old records in, current representation out).
 ## Compatibility levels
 
 - **Level 1 — data-compatible.** A newer Wyrd opens an old local store
-  without migration. Mandatory before 1.0.
+  without migration. Mandatory before 1.0. One-directional: newer
+  opens older. An older build rejecting a newer representation it
+  never wrote — e.g. a pre-identity decoder refusing
+  identity-bearing entries as `UnknownEntryKind` — is fail-closed
+  consistency, not a Level 1 breach; the reverse direction is
+  Level 2/3 (capability negotiation, invariant 5).
 - **Level 2 — peer-compatible.** A newer Wyrd synchronizes with an older
   Wyrd. Requires protocol negotiation and representation compatibility.
 - **Level 3 — rolling-upgrade compatible.** A drive holds devices running
@@ -57,11 +62,22 @@ Releases are not required to write every format they read:
    (`wyrd_format::envelope::VERSION`) is versioned under
    `object-model.md` decision 30 instead: framing-only changes do not
    fork ContentId.
-   Documented exception: durable fact *payloads* are versioned
-   before the v1 freeze (open issue, v0.9.0 milestone), so until
-   then replay normalizes only the envelope layer and the payload
-   clause of this invariant is acceptance-tested as ignored, not
-   as passing.
+   Decided (v0.4): durable fact payloads carry an explicit version
+   as `version (1) ‖ body` under the unchanged tag dispatch — the
+   tag stays the forward-compatibility key (unknown tags skip),
+   and a known tag with an unknown payload version fails closed,
+   poisoning the commit file exactly like an unparsable payload
+   today. Payload evolution after the freeze rides new tags, not
+   version bumps under a live tag, so an old reader skips what it
+   predates instead of choking on it. The v0 layouts freeze as
+   payload version `0x00` per tag; the version byte itself arrives
+   with a `COMMIT_VERSION` bump, so unversioned history and
+   versioned records are never ambiguous. Decoders for the
+   supported window are carried and replay upgrades old payloads
+   into current records. Implementation rides the v0.9.0
+   payload-versioning issue; until it lands replay normalizes
+   only the envelope layer and the payload clause of this
+   invariant is acceptance-tested as ignored, not as passing.
    Second documented exception: the application settings file
    (`settings.json`, schema version 1) is authoritative local state
    that derives from nothing durable — not signed archive state,
@@ -291,7 +307,11 @@ old baseline moving to previous. (The `v0.1.0-alpha.1`
 fixture went out with the reader-set format break: pre-v1 alphas may break
 compatibility, and no legacy transition decoder is carried for
 unshipped software. The v0.2.0-alpha release cut a fresh fixture and
-re-enabled cross-release replay.) Two tests stay deliberately ignored
+re-enabled cross-release replay.) `v0.4` is the first Level-1-promising
+release: starting with its fixture, fixtures are never dropped and
+their decoders are carried — every later release opens every store
+back to v0.4. Pre-v0.4 fixtures may still go out with an announced
+reader-set break. Two tests stay deliberately ignored
 until their blockers land: fact-payload replay (invariant 2's
 payload clause, pending the v0.9.0 payload-versioning issue)
 and the full version matrix
