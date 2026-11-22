@@ -16,10 +16,10 @@ leaving first makes a later local-data cleanup refuse. The credential
 backend is observed from this drive's deployment config through the
 installed CLI: a known store account or file pair is pinned, and the
 selector appears only where the backend is missing or explicitly
-unknown. References only — no secret contents. The action stays behind
-one acknowledgement and one confirmation that states both
-consequences. The CLI stops the drive's managed service after
-acknowledgement and resumes it on a refusal. -->
+unknown. References only — no secret contents. The modal states both
+consequences and takes an explicit choice; the local-data choice adds
+a typed-name confirmation. The CLI stops the drive's managed service
+after the choice and resumes it on a refusal. -->
 <script lang="ts">
   import { Button } from "$lib/components/ui/button/index.js";
   import * as Card from "$lib/components/ui/card/index.js";
@@ -179,14 +179,16 @@ acknowledgement and resumes it on a refusal. -->
     }
   }
 
-  // One removal surface: one acknowledgement, one report. The
+  // One removal surface: a two-choice dialog, a typed confirmation for
+  // the destructive choice, and one report. The
   // credential backend comes from observation, never from a guess:
   // a known reference fixes both the mode and the reference it
   // carries; an unknown answer keeps the operator selector and its
   // reason. The two dialog choices stay alternatives, not a sequence
   // (see the module comment).
-  let acknowledged = $state(false);
   let confirmRemoval = $state(false);
+  let confirmDelete = $state(false);
+  let deleteConfirmName = $state("");
   let removalWorking = $state(false);
   let removalReport = $state<ProvisionReport | null>(null);
   let removalError = $state<string | null>(null);
@@ -387,7 +389,7 @@ acknowledgement and resumes it on a refusal. -->
       storeAccount,
       identityFile: effectiveIdentityFile,
       passphraseFile: effectivePassphraseFile,
-      acknowledged,
+      acknowledged: true,
     };
     try {
       removalReport = keepLocalData
@@ -711,16 +713,15 @@ acknowledgement and resumes it on a refusal. -->
     {/if}
     {#if credentialMode === "store"}
       <p class="text-xs leading-relaxed text-muted-foreground">
-        Reads this drive's store item
-        {#if storeAccount !== null}<span class="font-mono text-xs">{storeAccount}</span>{/if} —
-        one item per drive, never a secret.
+        Wyrd keeps one credential entry for this drive, named from its drive name. No secret is
+        shown here.
       </p>
     {:else}
       <p class="text-xs leading-relaxed text-muted-foreground">
         {#if backendKnown}
           This drive uses the credential files its configuration names; only the paths pass to the CLI.
         {:else}
-          Operator deployments only: reads the verified identity pair below.
+          Operator deployment: use the credential paths below.
         {/if}
       </p>
     {/if}
@@ -766,25 +767,15 @@ acknowledgement and resumes it on a refusal. -->
       </Alert.Root>
     {/if}
 
-    {#if removalReport === null}
-      {#if !credentialsReady}
-        <p class="text-sm text-destructive">
-          {#if credentialMode === "store"}
-            This drive has no registry name to derive its store item from, so removal is disabled.
-          {:else}
-            This device's verified identity pair is unavailable, so removal is disabled. Fix the
-            identity gate first.
-          {/if}
-        </p>
-      {/if}
-      <Field.Field orientation="horizontal" class="rounded-xl border border-destructive/30 bg-destructive/5 p-3">
-        <Checkbox id="removal-acknowledged" bind:checked={acknowledged} disabled={busy} />
-        <Field.Content>
-          <Field.Label for="removal-acknowledged" class="leading-relaxed font-normal">
-            I understand: removing this drive ends this device's membership going forward. It does not erase copies this device already obtained. If this device is the drive's only owner, the owner set becomes empty and no future membership or ownership change can be authorized — hand over ownership before removing if the drive should remain manageable. A non-owner or a frozen drive is refused before anything is removed. The confirmation states what happens to local data.
-          </Field.Label>
-        </Field.Content>
-      </Field.Field>
+    {#if removalReport === null && !credentialsReady}
+      <p class="text-sm text-destructive">
+        {#if credentialMode === "store"}
+          This drive has no name to find its credentials with, so removal is disabled.
+        {:else}
+          This device's verified identity pair is unavailable, so removal is disabled. Fix the
+          identity gate first.
+        {/if}
+      </p>
     {/if}
   </Card.Content>
   <Card.Footer class="justify-end">
@@ -800,7 +791,7 @@ acknowledgement and resumes it on a refusal. -->
       <Button
         variant="destructive"
         size="sm"
-        disabled={busy || !acknowledged || !credentialsReady}
+        disabled={busy || !credentialsReady}
         onclick={() => (confirmRemoval = true)}
       >
         {#if removalWorking}
@@ -820,32 +811,98 @@ acknowledgement and resumes it on a refusal. -->
     <AlertDialog.Header>
       <AlertDialog.Title>Remove this drive?</AlertDialog.Title>
       <AlertDialog.Description>
-        Removing this drive ends this device's membership going forward — it cannot authorize future changes and cannot obtain new drive content through its former membership. It does not erase copies this device already obtained. If you choose to remove local data too, this takes the drive's local data off the device — the directory, registry entry, service definition, credential item and group socket and label; the drive's service is stopped for this action and restarted if the removal is refused. No other member's copy changes, and the removed files' blocks stay recoverable from this device until overwritten, like any removed file. If this device is the drive's only owner, the owner set becomes empty and no future membership or ownership change can be authorized — hand over ownership before removing if the drive should remain manageable. A non-owner or a frozen drive is refused before anything is removed.
+        Choose what happens to this drive's local data. Both choices end this device's membership.
       </AlertDialog.Description>
     </AlertDialog.Header>
-    <AlertDialog.Footer>
-      <AlertDialog.Cancel>Cancel removal</AlertDialog.Cancel>
-      <AlertDialog.Action
-        variant="outline"
+    <!-- Two alternatives, not a sequence: each authors this device's
+      removal. The three lines keep the strong consequence copy; the
+      shared fine print below holds the conditional and terminal facts. -->
+    <div class="grid gap-3 py-2 sm:grid-cols-2">
+      <button
+        type="button"
         disabled={busy}
+        class="flex flex-col rounded-xl border p-3 text-left hover:border-foreground/40 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none disabled:opacity-50"
         onclick={() => {
-          // bits-ui's Action does not close the root; close it so
-          // the report lands in the card, not behind a modal.
           confirmRemoval = false;
           void remove(true);
         }}
       >
-        Keep local data
-      </AlertDialog.Action>
-      <AlertDialog.Action
-        variant="destructive"
-        disabled={busy}
+        <span class="text-base font-medium">Keep local data</span>
+        <span class="mt-2 flex flex-col gap-1 text-sm leading-relaxed text-foreground/90">
+          <span><strong class="text-foreground">On this device.</strong> This drive's files and settings stay here.</span>
+          <span><strong class="text-foreground">For other devices.</strong> No other member's copy changes.</span>
+          <span><strong class="text-foreground">Can it be undone.</strong> Not here: removing this drive ends this device's membership going forward. It does not erase copies this device already obtained. Another device must admit this one again.</span>
+        </span>
+      </button>
+      <button
+        type="button"
+        disabled={busy || driveName === null}
+        class="flex flex-col rounded-xl border border-destructive/40 p-3 text-left hover:border-destructive focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none disabled:opacity-50"
         onclick={() => {
           confirmRemoval = false;
+          deleteConfirmName = "";
+          confirmDelete = true;
+        }}
+      >
+        <span class="text-base font-medium text-destructive">Remove local data too</span>
+        <span class="mt-2 flex flex-col gap-1 text-sm leading-relaxed text-foreground/90">
+          <span><strong class="text-foreground">On this device.</strong> This takes the drive's local data off the device — the directory, registry entry, service definition, credential item and group socket and label. The removed files' blocks stay recoverable from this device until overwritten, like any removed file.</span>
+          <span><strong class="text-foreground">For other devices.</strong> No other member's copy changes.</span>
+          <span><strong class="text-foreground">Can it be undone.</strong> Not here: removing this drive ends this device's membership going forward. It does not erase copies this device already obtained. Local data removed here is not restored by the drive.</span>
+        </span>
+      </button>
+    </div>
+    {#if driveName === null}
+      <p class="mt-1 text-sm text-destructive">
+        This drive has no name to confirm, so removing its local data is unavailable.
+      </p>
+    {/if}
+    <p class="mt-1 text-xs leading-relaxed text-foreground/80">
+      Note that the drive's service is stopped for this action and restarted if the removal is
+      refused.
+      If this device is the drive's only owner, the owner set becomes empty and no future
+      membership or ownership change can be authorized — hand over ownership before removing if
+      the drive should remain manageable. A non-owner or a frozen drive is refused before anything
+      is removed.
+    </p>
+    <AlertDialog.Footer>
+      <AlertDialog.Cancel>Cancel</AlertDialog.Cancel>
+    </AlertDialog.Footer>
+  </AlertDialog.Content>
+</AlertDialog.Root>
+
+<AlertDialog.Root bind:open={confirmDelete}>
+  <AlertDialog.Content>
+    <AlertDialog.Header>
+      <AlertDialog.Title>Type the drive name to confirm</AlertDialog.Title>
+      <AlertDialog.Description>
+        This removes this drive's local data from this device and cannot be undone here. Type
+        <span class="font-mono">{driveName ?? "this drive"}</span> to confirm.
+      </AlertDialog.Description>
+    </AlertDialog.Header>
+    <div class="py-2">
+      <Input
+        id="remove-confirm-name"
+        bind:value={deleteConfirmName}
+        disabled={busy}
+        autocomplete="off"
+        spellcheck={false}
+        aria-label="Drive name to confirm"
+      />
+    </div>
+    <AlertDialog.Footer>
+      <AlertDialog.Cancel>Cancel</AlertDialog.Cancel>
+      <AlertDialog.Action
+        variant="destructive"
+        disabled={busy || driveName === null || deleteConfirmName !== driveName}
+        onclick={() => {
+          // bits-ui's Action does not close the root; close it so
+          // the report lands in the card, not behind a modal.
+          confirmDelete = false;
           void remove(false);
         }}
       >
-        Remove local data too
+        Remove local data
       </AlertDialog.Action>
     </AlertDialog.Footer>
   </AlertDialog.Content>

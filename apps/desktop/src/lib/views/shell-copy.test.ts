@@ -153,7 +153,7 @@ test("the removal backend is observed before it is chosen", () => {
     "This drive's credential backend could not be observed",
     "This drive's credential backend has not been observed yet",
     "This drive uses the credential files its configuration names",
-    "one item per drive, never a secret",
+    "Wyrd keeps one credential entry for this drive, named from its drive name. No secret is shown here.",
   ]) {
     expect(settings).toContain(line);
   }
