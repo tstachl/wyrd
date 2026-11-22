@@ -1,11 +1,12 @@
-<!-- Settings: this drive's configured limits, plus
-the restricted editor that changes them. Absent keys leave the
-compiled defaults in place, and the shell does not know those
-defaults — so absence renders as unknown, never as a filled-in
-number. Edits commit one sparse update (set-list plus clear-list
-for this drive only) through the installed CLI and the shared
-transaction; application of the values is the drive's business,
-at its next start.
+<!-- Settings: this drive's limits as a form, one field per limit.
+Absent keys leave Wyrd's default in place, and the shell does not know
+that value — so a field renders "Using Wyrd's default", never a
+filled-in number. The form is the primary surface for every state;
+the settings-file JSON sits behind an Advanced disclosure with no
+suggested values. Edits commit one sparse update (set-list plus
+clear-list for this drive only) through the installed CLI and the
+shared transaction; the saved limits take effect at the drive's next
+start, never live.
 
 One removal action ends this device's membership. Its confirmation
 offers two choices: keep local data (the `member leave` path) or take
@@ -39,18 +40,17 @@ acknowledgement and resumes it on a refusal. -->
   import type { ProvisionDeleteArgs, ProvisionLeaveArgs } from "$lib/ipc/operations.js";
   import { buildDeleteArgs, buildLeaveArgs, type CredentialMode } from "$lib/ipc/provisioning-args.js";
   import {
-    boundLabel,
     credentialModeFor,
     describeProvisionResult,
+    formatBoundValue,
     membershipSummary,
     observedRegistrySummary,
+    parseBoundInput,
     restartKindFor,
     SETTING_BOUNDS,
     storeAccountFor,
-    validateBoundInput,
   } from "./format.js";
   import {
-    buildDraftInputs,
     buildSparseDraft,
     isDraftDirty,
     keepsDraftAfterVerdict,
@@ -132,29 +132,32 @@ acknowledgement and resumes it on a refusal. -->
   const settings = $derived(snapshot?.data ?? null);
 
   /**
-   * Copy-paste shape for the empty states: a version-1 file naming
-   * this drive with every bound key set. Rendered from the live
-   * drive dir so the key the file needs is the key on screen. The
-   * values are illustrative starting points, not recommendations —
-   * the copy beside the example says to replace them.
+   * The settings-file shape behind the Advanced disclosure. Only
+   * keys this drive actually configured appear, with their real
+   * values — never suggested numbers that could read as defaults.
+   * An unconfigured drive shows an empty section, which is what the
+   * file looks like before anything is saved for it.
    */
-  const emptyExample = $derived(
+  const advancedJson = $derived(
     JSON.stringify(
       {
         version: 1,
         drives: {
-          [driveDir]: {
-            retained_bytes_quota: 1073741824,
-            max_admit_per_pass: 64,
-            fetch_pass_budget_secs: 30,
-            max_mutation_wait_secs: 120,
-            open_timeout_secs: 45,
-          },
+          [driveDir]: Object.fromEntries(
+            SETTING_BOUNDS
+              .map((bound) => [bound.key, configuredValue(bound.key)] as const)
+              .filter(([, value]) => value !== null),
+          ),
         },
       },
       null,
       2,
     ),
+  );
+
+  /** The file path is carried only by the nofile/nosection observations. */
+  const settingsPath = $derived(
+    settings !== null && "path" in settings ? settings.path : null,
   );
 
   /** Configured value by key for the row being rendered, from the latest observation. */
@@ -219,12 +222,11 @@ acknowledgement and resumes it on a refusal. -->
     credentialMode === "store" ? storeAccount !== null : fileCredentialsReady,
   );
 
-  // Editor draft: one pending sparse update for this drive. `inputs`
-  // holds the row text (empty means no change), `cleared` names keys
-  // the operator returned to the compiled default. Validation runs
-  // over the whole draft on save — no partial writes — and cancel
+  // Draft: one pending sparse update for this drive. `inputs` holds
+  // each field's human-unit text (empty means no change), `cleared`
+  // names keys the operator returned to Wyrd's default. Validation
+  // runs over the whole draft on save — no partial writes — and Cancel
   // discards it untouched.
-  let editing = $state(false);
   let inputs = $state<Record<string, string>>({});
   let cleared = $state<string[]>([]);
   let fieldErrors = $state<Record<string, string>>({});
@@ -241,25 +243,36 @@ acknowledgement and resumes it on a refusal. -->
     return record;
   }
 
-  function startEditing(): void {
-    inputs = buildDraftInputs(
-      configuredRecord(),
-      SETTING_BOUNDS.map((bound) => bound.key),
-    );
-    cleared = [];
-    fieldErrors = {};
-    saveReport = null;
-    saveError = null;
-    editing = true;
-  }
-
-  function cancelEditing(): void {
-    editing = false;
+  function resetDraft(): void {
     inputs = {};
     cleared = [];
     fieldErrors = {};
     saveReport = null;
     saveError = null;
+  }
+
+  /** A typed value takes the field off its default and clears its error. */
+  function setInput(key: string, text: string): void {
+    inputs = { ...inputs, [key]: text };
+    if (cleared.includes(key)) cleared = toggleCleared(cleared, key);
+    if (fieldErrors[key] !== undefined) {
+      const next = { ...fieldErrors };
+      delete next[key];
+      fieldErrors = next;
+    }
+  }
+
+  /** Per-field reset: empty text always, plus a clear only for a key that was set. */
+  function resetBound(key: string): void {
+    const next = { ...inputs };
+    delete next[key];
+    inputs = next;
+    const errors = { ...fieldErrors };
+    delete errors[key];
+    fieldErrors = errors;
+    if (configuredValue(key) !== null && !cleared.includes(key)) {
+      cleared = toggleCleared(cleared, key);
+    }
   }
 
   function toggleClear(key: string): void {
@@ -287,7 +300,7 @@ acknowledgement and resumes it on a refusal. -->
       cleared,
       configuredRecord(),
       SETTING_BOUNDS.map((bound) => bound.key),
-      validateBoundInput,
+      parseBoundInput,
     );
     const { set, clear, errors } = draft;
     fieldErrors = errors;
@@ -301,7 +314,7 @@ acknowledgement and resumes it on a refusal. -->
       // discard the draft, uncommitted ones keep it for retry.
       saveReport = await onApply({ set, clear });
       if (!keepsDraftAfterVerdict(saveReport.result.result)) {
-        editing = false;
+        // Keep the report: it carries the apply/restart verdict.
         inputs = {};
         cleared = [];
         fieldErrors = {};
@@ -426,8 +439,7 @@ acknowledgement and resumes it on a refusal. -->
     <Card.Header>
       <Card.Title class="text-sm">Start at login</Card.Title>
       <Card.Description>
-        The per-drive owner service the manager starts at login — a Drive service. Toggling
-        never touches drive data and never implies the owner answered.
+        Start this drive automatically when you log in. Turning this off doesn't delete anything.
       </Card.Description>
     </Card.Header>
     <Card.Content class="flex flex-col gap-3">
@@ -446,14 +458,11 @@ acknowledgement and resumes it on a refusal. -->
             Start drive service at login
           </Field.Label>
         </Field.Field>
-        {#if enablement !== null}
-          <Field.Description>{enablement.detail}</Field.Description>
-        {/if}
       </Field.Group>
       {#if toggleReport !== null}
         {#if toggleReport.ok}
           <p class="text-xs text-muted-foreground">
-            Preference recorded — the fresh probe above decides what holds.
+            Saved — this takes effect after the next check.
           </p>
         {:else}
           <Alert.Root variant="destructive">
@@ -469,7 +478,7 @@ acknowledgement and resumes it on a refusal. -->
 {#if saveReport !== null && saveReport.result.result === "applied"}
   <Alert.Root class="mt-6 border-primary/40 bg-primary/10">
     {#if restartKind === "service"}
-      <Alert.Title>Bounds saved — restart to apply</Alert.Title>
+      <Alert.Title>Limits saved — restart to apply</Alert.Title>
       <Alert.Description>
         <p>The drive service keeps its startup values until it restarts. Restarting briefly interrupts availability.</p>
         <div class="mt-3 flex flex-wrap items-center gap-2">
@@ -491,12 +500,12 @@ acknowledgement and resumes it on a refusal. -->
         {/if}
       </Alert.Description>
     {:else if restartKind === "session"}
-      <Alert.Title>Bounds saved — lock and unlock to apply</Alert.Title>
+      <Alert.Title>Limits saved — lock and unlock to apply</Alert.Title>
       <Alert.Description>
         <p>The drive keeps its startup values until it restarts. Use Lock in the header to end this session, then unlock with the passphrase to start it again with the saved values.</p>
       </Alert.Description>
     {:else}
-      <p>Bounds saved. They apply the next time the drive starts — the current values stay in effect until then.</p>
+      <p>Limits saved. They apply the next time the drive starts — the current values stay in effect until then.</p>
     {/if}
   </Alert.Root>
 {/if}
@@ -554,221 +563,108 @@ acknowledgement and resumes it on a refusal. -->
   <div class="mt-3">
     <ObservedNote observedAtMs={null} />
   </div>
-{:else if editing}
+{:else if settings.state !== "unreadable"}
   {@render saveAlerts()}
   <Card.Root class="mt-6">
     <Card.Header>
       <Card.Title class="flex items-center gap-1.5">
-        Edit bounds
-          <InfoHint label="About these limits">
-            <p>
-              One sparse update for this drive: set the listed bounds, clear the listed ones.
-              Multi-key edits validate fully before writing — no partial saves. Saving writes
-              through the installed CLI; the values apply the next time the drive starts, never live.
-            </p>
-          </InfoHint>
-        </Card.Title>
-        <Card.Description>
-          Empty means no change; Using default restores the compiled default for that key.
-        </Card.Description>
-      </Card.Header>
-      <Card.Content>
-        <dl>
-          {#each SETTING_BOUNDS as bound (bound.key)}
-            {@const hasError = fieldErrors[bound.key] !== undefined}
-            <DetailRow label={bound.label} description={bound.description}>
-              {#if cleared.includes(bound.key)}
-                <span class="inline-flex items-center gap-1">
-                  <Badge variant="outline" class="text-muted-foreground">Using default</Badge>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    disabled={busy}
-                    onclick={() => toggleClear(bound.key)}
-                  >
-                    Restore
-                  </Button>
-                </span>
-              {:else}
-                <Field.Field data-invalid={hasError || undefined}>
-                  <span class="inline-flex items-center gap-1">
-                    <Input
-                      class="w-40 font-mono"
-                      inputmode="numeric"
-                      autocomplete="off"
-                      spellcheck={false}
-                      disabled={busy}
-                      placeholder={configuredValue(bound.key) === null ? "Set value" : ""}
-                      bind:value={inputs[bound.key]}
-                      aria-label={bound.label}
-                      aria-invalid={hasError || undefined}
-                    />
-                    {#if configuredValue(bound.key) !== null}
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        disabled={busy}
-                        onclick={() => toggleClear(bound.key)}
-                      >
-                        Using default
-                      </Button>
-                    {/if}
-                  </span>
-                  {#if fieldErrors[bound.key]}
-                    <Field.Error>{fieldErrors[bound.key]}</Field.Error>
-                  {/if}
-                </Field.Field>
-              {/if}
-            </DetailRow>
-          {/each}
-        </dl>
-      </Card.Content>
-      <Card.Footer class="justify-end gap-2">
-        <Button variant="outline" size="sm" disabled={busy} onclick={cancelEditing}>
-          Cancel
-        </Button>
-        <Button size="sm" disabled={busy || !dirty} onclick={() => void save()}>
-          {#if saving}
-            <Spinner data-icon="inline-start" />
-            Saving…
-          {:else}
-            Save bounds
-          {/if}
-        </Button>
-      </Card.Footer>
-    </Card.Root>
-{:else if settings.state === "configured"}
-  {@render saveAlerts()}
-  <Card.Root class="mt-6">
-    <Card.Header>
-      <Card.Title class="flex items-center gap-1.5">
-        Configured bounds
+        Limits for this drive
         <InfoHint label="About these limits">
           <p>
-            As configured in the per-user settings file — not as applied. The drive reads
-            these values at startup, command-line flags win over the file, and edits
-            save through the installed CLI.
+            Set each limit here, or return it to Wyrd's default. Every change is checked before
+            anything is saved — there are no partial saves. Saved limits take effect the next time
+            this drive starts; they do not change a drive that is already running.
           </p>
         </InfoHint>
       </Card.Title>
-      <Card.Description>One drive's saved limits, as read at the next start.</Card.Description>
+      <Card.Description>
+        Changes take effect the next time this drive starts — they don't change a running drive.
+      </Card.Description>
     </Card.Header>
     <Card.Content>
       <dl>
-        <DetailRow label="Storage limit" description="The most drive data Wyrd will keep on this device. When that limit is reached, Wyrd refuses new data before writing anything. This is not a limit on your disk's free space.">
-          {#if settings.retained_bytes_quota === null}
-            <span class="inline-flex items-center gap-1">
-              <Badge variant="outline" class="text-muted-foreground">Using Wyrd's default</Badge>
-              <InfoHint label="About the storage limit">
-                <p>The app cannot see that default value, so it does not show a number.</p>
-              </InfoHint>
-            </span>
-          {:else}
-            <span class="font-mono tabular-nums">{boundLabel(settings.retained_bytes_quota, "bytes")}</span>
-          {/if}
-        </DetailRow>
-        <DetailRow label="Sync work limit" description="How many items of sync work Wyrd starts in each sync pass. Anything beyond this waits for the next pass; nothing is dropped.">
-          {#if settings.max_admit_per_pass === null}
-            <span class="inline-flex items-center gap-1">
-              <Badge variant="outline" class="text-muted-foreground">Using Wyrd's default</Badge>
-              <InfoHint label="About sync work limit">
-                <p>The app cannot see that default value, so it does not show a number.</p>
-              </InfoHint>
-            </span>
-          {:else}
-            <span class="font-mono tabular-nums">{boundLabel(settings.max_admit_per_pass, "items")}</span>
-          {/if}
-        </DetailRow>
-        <DetailRow label="Download time per sync pass" description="How long Wyrd spends downloading in one sync pass. When that time runs out, unfinished downloads wait for the next pass.">
-          {#if settings.fetch_pass_budget_secs === null}
-            <span class="inline-flex items-center gap-1">
-              <Badge variant="outline" class="text-muted-foreground">Using Wyrd's default</Badge>
-              <InfoHint label="About the download time per sync pass">
-                <p>The app cannot see that default value, so it does not show a number.</p>
-              </InfoHint>
-            </span>
-          {:else}
-            <span class="font-mono tabular-nums">{boundLabel(settings.fetch_pass_budget_secs, "seconds")}</span>
-          {/if}
-        </DetailRow>
-        <DetailRow label="File change wait limit" description="How long a change you make can wait for the content it needs from other devices. If that content does not arrive in time, the change fails and you can retry it; nothing is saved.">
-          {#if settings.max_mutation_wait_secs === null}
-            <span class="inline-flex items-center gap-1">
-              <Badge variant="outline" class="text-muted-foreground">Using Wyrd's default</Badge>
-              <InfoHint label="About the file change wait limit">
-                <p>The app cannot see that default value, so it does not show a number.</p>
-              </InfoHint>
-            </span>
-          {:else}
-            <span class="font-mono tabular-nums">{boundLabel(settings.max_mutation_wait_secs, "seconds")}</span>
-          {/if}
-        </DetailRow>
-        <DetailRow label="File open wait limit" description="How long Wyrd waits for a file's content to become available on this device when you open or read it. If it takes longer, the open or read fails and you can try again while the download continues.">
-          {#if settings.open_timeout_secs === null}
-            <span class="inline-flex items-center gap-1">
-              <Badge variant="outline" class="text-muted-foreground">Using Wyrd's default</Badge>
-              <InfoHint label="About the file open wait limit">
-                <p>The app cannot see that default value, so it does not show a number.</p>
-              </InfoHint>
-            </span>
-          {:else}
-            <span class="font-mono tabular-nums">{boundLabel(settings.open_timeout_secs, "seconds")}</span>
-          {/if}
-        </DetailRow>
+        {#each SETTING_BOUNDS as bound (bound.key)}
+          {@const hasError = fieldErrors[bound.key] !== undefined}
+          {@const current = configuredValue(bound.key)}
+          <DetailRow label={bound.label} description={bound.description}>
+            {#if cleared.includes(bound.key)}
+              <span class="inline-flex items-center justify-end gap-2">
+                <Badge variant="outline" class="text-muted-foreground">Using Wyrd's default</Badge>
+                <Button variant="ghost" size="sm" disabled={busy} onclick={() => toggleClear(bound.key)}>
+                  Change
+                </Button>
+              </span>
+            {:else}
+              <Field.Field data-invalid={hasError || undefined}>
+                <span class="inline-flex items-center justify-end gap-1.5">
+                  <Input
+                    class="w-32 font-mono tabular-nums"
+                    inputmode={bound.inputScale === 1 ? "numeric" : "decimal"}
+                    autocomplete="off"
+                    spellcheck={false}
+                    disabled={busy}
+                    placeholder="Using Wyrd's default"
+                    value={inputs[bound.key] ?? formatBoundValue(bound, current)}
+                    oninput={(event) => setInput(bound.key, event.currentTarget.value)}
+                    aria-label={bound.label}
+                    aria-invalid={hasError || undefined}
+                  />
+                  <span class="shrink-0 text-xs text-muted-foreground">{bound.inputUnit}</span>
+                  {#if current !== null || (inputs[bound.key] ?? "") !== ""}
+                    <Button variant="ghost" size="sm" disabled={busy} onclick={() => resetBound(bound.key)}>
+                      Use Wyrd's default
+                    </Button>
+                  {/if}
+                </span>
+                {#if fieldErrors[bound.key]}
+                  <Field.Error>{fieldErrors[bound.key]}</Field.Error>
+                {/if}
+              </Field.Field>
+            {/if}
+          </DetailRow>
+        {/each}
       </dl>
+      <details class="mt-4 rounded-lg border border-border/60 px-3 py-2">
+        <summary class="cursor-pointer text-sm text-muted-foreground">
+          Advanced: edit the settings file directly
+        </summary>
+        <div class="mt-3 flex flex-col gap-2">
+          {#if settingsPath !== null}
+            <p class="text-xs leading-relaxed text-muted-foreground">
+              Saved limits live at
+              <span class="inline-flex min-w-0 items-center gap-1.5 align-middle">
+                <span class="break-all font-mono text-xs">{settingsPath}</span>
+                <CopyButton text={settingsPath} label="settings file path" />
+              </span>.
+            </p>
+          {:else}
+            <p class="text-xs leading-relaxed text-muted-foreground">
+              Saved limits live in this drive's per-user settings file.
+            </p>
+          {/if}
+          <p class="text-xs leading-relaxed text-muted-foreground">
+            Storage is entered in GB, where 1 GB means 1,073,741,824 bytes; the file stores that
+            byte count. Every key is optional — leave one out to use Wyrd's default.
+          </p>
+          <pre class="w-full overflow-auto rounded-lg border border-border bg-ink px-3 py-2 text-left text-xs break-words whitespace-pre-wrap text-bone">{advancedJson}</pre>
+        </div>
+      </details>
     </Card.Content>
-    <Card.Footer class="justify-end">
-      <Button variant="outline" size="sm" disabled={busy} onclick={startEditing}>
-        Edit bounds
+    <Card.Footer class="justify-end gap-2">
+      <Button variant="outline" size="sm" disabled={busy || !dirty} onclick={resetDraft}>
+        Cancel
+      </Button>
+      <Button size="sm" disabled={busy || !dirty} onclick={() => void save()}>
+        {#if saving}
+          <Spinner data-icon="inline-start" />
+          Saving…
+        {:else}
+          Save limits
+        {/if}
       </Button>
     </Card.Footer>
   </Card.Root>
-{:else if settings.state === "nofile"}
-  <div class="mt-6 flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border bg-card/50 px-6 py-14 text-center">
-    <div class="flex size-10 items-center justify-center rounded-full bg-muted text-muted-foreground">
-      <FileQuestionIcon class="size-5" />
-    </div>
-    <p class="text-sm font-medium">No settings file yet</p>
-    <p class="max-w-md text-sm text-muted-foreground">
-      Nothing is configured, so the drive starts with its compiled defaults. The app cannot see those default values, so it does not show them here. The file would live at:
-    </p>
-    <p class="flex min-w-0 max-w-md items-center gap-1.5">
-      <span class="truncate font-mono text-xs">{settings.path}</span>
-      <CopyButton text={settings.path} label="settings file path" />
-    </p>
-    <p class="max-w-md text-sm text-muted-foreground">
-      A section for this drive looks like this — every key is optional, so keep only the lines
-      you want and put in your own values:
-    </p>
-    <pre class="w-full max-w-md overflow-auto rounded-lg border border-border bg-ink px-3 py-2 text-left text-xs break-words whitespace-pre-wrap text-bone">{emptyExample}</pre>
-    <Button variant="outline" size="sm" disabled={busy} onclick={startEditing}>
-      Set bounds for this drive
-    </Button>
-  </div>
-{:else if settings.state === "nosection"}
-  <div class="mt-6 flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border bg-card/50 px-6 py-14 text-center">
-    <div class="flex size-10 items-center justify-center rounded-full bg-muted text-muted-foreground">
-      <FileQuestionIcon class="size-5" />
-    </div>
-    <p class="text-sm font-medium">No section for this drive</p>
-    <p class="max-w-md text-sm text-muted-foreground">
-      The file configures other drives, but nothing in it names this drive yet — so the drive starts
-      with its compiled defaults here. The app cannot see those default values, so it does not show them here:
-    </p>
-    <p class="flex min-w-0 max-w-md items-center gap-1.5">
-      <span class="truncate font-mono text-xs">{settings.path}</span>
-      <CopyButton text={settings.path} label="settings file path" />
-    </p>
-    <p class="max-w-md text-sm text-muted-foreground">
-      A section for this drive looks like this — every key is optional, so keep only the lines
-      you want and put in your own values:
-    </p>
-    <pre class="w-full max-w-md overflow-auto rounded-lg border border-border bg-ink px-3 py-2 text-left text-xs break-words whitespace-pre-wrap text-bone">{emptyExample}</pre>
-    <Button variant="outline" size="sm" disabled={busy} onclick={startEditing}>
-      Set bounds for this drive
-    </Button>
-  </div>
-{:else}
+{:else if settings.state === "unreadable"}
   <Alert.Root variant="destructive" class="mt-6">
     <p>
       Settings unreadable: {settings.reason} — showing nothing rather than defaults that were never
@@ -960,7 +856,7 @@ acknowledgement and resumes it on a refusal. -->
     <AlertDialog.Header>
       <AlertDialog.Title>Restart the service?</AlertDialog.Title>
       <AlertDialog.Description>
-        Restarting briefly interrupts availability while the drive service stops and starts again. The bounds you saved apply when it comes back.
+        Restarting briefly interrupts availability while the drive service stops and starts again. The limits you saved apply when it comes back.
       </AlertDialog.Description>
       <div class="py-2">
         <CredentialStorageToggle

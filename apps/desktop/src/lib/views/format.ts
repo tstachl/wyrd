@@ -109,13 +109,20 @@ export interface SettingBound {
   label: string;
   /** One line beneath the label: precisely what the implementation enforces. */
   description: string;
-  /** The unit the value carries (display and input hint). */
+  /** The unit the settings file stores (validation messages only). */
   unit: string;
-  /** Smallest acceptable whole number. Zero only where zero is meaningful (the quota: refuse-all). */
+  /** The human unit shown beside the input. Storage is never shown in raw bytes. */
+  inputUnit: string;
+  /** Raw units per human unit. Storage uses 1024³ bytes; the rest are 1:1. */
+  inputScale: number;
+  /** Smallest acceptable whole number of raw units. Zero only where zero is meaningful (the quota: refuse-all). */
   min: number;
-  /** Largest acceptable whole number. */
+  /** Largest acceptable whole number of raw units. */
   max: number;
 }
+
+/** Bytes in one storage unit as entered in the form (1024³, binary GB). */
+const BYTES_PER_STORAGE_UNIT = 1024 * 1024 * 1024;
 
 /**
  * The five bounds the editor owns, in file order. Labels say what
@@ -124,33 +131,70 @@ export interface SettingBound {
  * in the description at most, never in the label. The validation
  * ranges mirror the shared contract (`wyrd-settings`): the backend
  * enforces them again, so this is fast feedback, never authority.
+ *
+ * The form shows storage in GB (1024³ bytes), never as a raw byte
+ * count; the other four bound values already carry a human unit.
+ * The Advanced disclosure states the byte definition so the display
+ * cannot imply a different guarantee.
  */
 export const SETTING_BOUNDS: SettingBound[] = [
-  { key: "retained_bytes_quota", label: "Storage limit", description: "The most drive data Wyrd will keep on this device. When that limit is reached, Wyrd refuses new data before writing anything. This is not a limit on your disk's free space.", unit: "bytes", min: 0, max: Number.MAX_SAFE_INTEGER },
-  { key: "max_admit_per_pass", label: "Sync work limit", description: "How many items of sync work Wyrd starts in each sync pass. Anything beyond this waits for the next pass; nothing is dropped.", unit: "items", min: 1, max: 1000000 },
-  { key: "fetch_pass_budget_secs", label: "Download time per sync pass", description: "How long Wyrd spends downloading in one sync pass. When that time runs out, unfinished downloads wait for the next pass.", unit: "seconds", min: 1, max: 86400 },
-  { key: "max_mutation_wait_secs", label: "File change wait limit", description: "How long a change you make can wait for the content it needs from other devices. If that content does not arrive in time, the change fails and you can retry it; nothing is saved.", unit: "seconds", min: 1, max: 86400 },
-  { key: "open_timeout_secs", label: "File open wait limit", description: "How long Wyrd waits for a file's content to become available on this device when you open or read it. If it takes longer, the open or read fails and you can try again while the download continues.", unit: "seconds", min: 1, max: 86400 },
+  { key: "retained_bytes_quota", label: "Storage limit", description: "The most drive data Wyrd will keep on this device. When that limit is reached, Wyrd refuses new data before writing anything. This is not a limit on your disk's free space.", unit: "bytes", inputUnit: "GB", inputScale: BYTES_PER_STORAGE_UNIT, min: 0, max: Number.MAX_SAFE_INTEGER },
+  { key: "max_admit_per_pass", label: "Sync work limit", description: "How many items of sync work Wyrd starts in each sync pass. Anything beyond this waits for the next pass; nothing is dropped.", unit: "items", inputUnit: "items", inputScale: 1, min: 1, max: 1000000 },
+  { key: "fetch_pass_budget_secs", label: "Download time per sync pass", description: "How long Wyrd spends downloading in one sync pass. When that time runs out, unfinished downloads wait for the next pass.", unit: "seconds", inputUnit: "seconds", inputScale: 1, min: 1, max: 86400 },
+  { key: "max_mutation_wait_secs", label: "File change wait limit", description: "How long a change you make can wait for the content it needs from other devices. If that content does not arrive in time, the change fails and you can retry it; nothing is saved.", unit: "seconds", inputUnit: "seconds", inputScale: 1, min: 1, max: 86400 },
+  { key: "open_timeout_secs", label: "File open wait limit", description: "How long Wyrd waits for a file's content to become available on this device when you open or read it. If it takes longer, the open or read fails and you can try again while the download continues.", unit: "seconds", inputUnit: "seconds", inputScale: 1, min: 1, max: 86400 },
 ];
 
+/** The parsed result of one input: a raw value for the sparse update, or a key-named error. */
+export type ParsedBound = { ok: true; raw: number } | { ok: false; error: string };
+
+/** The bound for a key, or null for an unknown key. */
+export function boundFor(key: string): SettingBound | null {
+  return SETTING_BOUNDS.find((candidate) => candidate.key === key) ?? null;
+}
+
 /**
- * Validate one bound's raw input text: whole numbers in the key's
- * range, naming the key on refusal. Returns the error message, or
- * null when the text is a committable value. Empty text is not an
- * error here — the editor treats it as "no change", never as zero.
+ * Initial text for one input: the configured value in the bound's
+ * human unit, or empty for an absent key (Wyrd's default). Scaled
+ * values drop trailing zeroes so a stored 1024³ bytes reads "1".
+ */
+export function formatBoundValue(bound: SettingBound, raw: number | null | undefined): string {
+  if (raw === null || raw === undefined) return "";
+  const scaled = raw / bound.inputScale;
+  return Number(scaled.toFixed(9)).toString();
+}
+
+/**
+ * Parse one input's text into the raw value the settings file takes.
+ * Storage accepts a decimal number of GB; the other bounds take a
+ * whole number of their unit. Every failure names the key, and the
+ * raw value is always a safe integer so the sparse update is exact.
+ */
+export function parseBoundInput(key: string, text: string): ParsedBound {
+  const bound = boundFor(key);
+  if (bound === null) return { ok: false, error: `Unknown settings key "${key}"` };
+  const trimmed = text.trim();
+  const pattern = bound.inputScale === 1 ? /^[0-9]+$/ : /^[0-9]+(?:\.[0-9]+)?$/;
+  const wholeWord = bound.inputScale === 1 ? "whole number" : "number";
+  if (!pattern.test(trimmed)) {
+    return { ok: false, error: `${key}: enter a ${wholeWord} of ${bound.inputUnit}` };
+  }
+  const raw = Number(trimmed) * bound.inputScale;
+  if (!Number.isSafeInteger(raw) || raw < bound.min || raw > bound.max) {
+    return { ok: false, error: `${key}: enter a ${wholeWord} of ${bound.inputUnit} within the allowed range` };
+  }
+  return { ok: true, raw };
+}
+
+/**
+ * Validate one bound's input text, naming the key on refusal. Kept
+ * as the error-only face of `parseBoundInput` for callers that only
+ * need a message. Empty text is not an error here — the editor
+ * treats it as "no change", never as zero.
  */
 export function validateBoundInput(key: string, text: string): string | null {
-  const bound = SETTING_BOUNDS.find((candidate) => candidate.key === key) ?? null;
-  if (bound === null) return `Unknown settings key "${key}"`;
-  const trimmed = text.trim();
-  if (!/^[0-9]+$/.test(trimmed)) {
-    return `${key}: enter a whole number of ${bound.unit}`;
-  }
-  const value = Number(trimmed);
-  if (!Number.isSafeInteger(value) || value < bound.min || value > bound.max) {
-    return `${key}: enter ${bound.min}–${bound.max} ${bound.unit}`;
-  }
-  return null;
+  const parsed = parseBoundInput(key, text);
+  return parsed.ok ? null : parsed.error;
 }
 
 /**

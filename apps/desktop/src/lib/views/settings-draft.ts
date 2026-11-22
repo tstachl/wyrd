@@ -1,28 +1,36 @@
-// Pure settings-draft logic for the bounds editor. No runes, no
+// Pure settings-draft logic for the limits editor. No runes, no
 // IPC, no owner facts — `SettingsView.svelte` calls these so the
 // draft rules pin in `settings-draft.test.ts` instead of drifting
 // per component.
 //
-// The draft is one pending sparse update: `inputs` holds the row
-// text (empty means no change), `cleared` names keys the operator
-// returned to the compiled default. Validation runs over the whole
-// draft on save — no partial writes — and cancel discards it
-// untouched.
+// The draft is one pending sparse update: `inputs` holds each field's
+// human-unit text (empty means no change), `cleared` names keys the
+// operator returned to Wyrd's default. The text is converted to the
+// file's raw units on build, so a storage field showing "1 GB" writes
+// the byte count the CLI takes. Validation runs over the whole draft
+// on save — no partial writes — and cancel discards it untouched.
+
+import {
+  boundFor,
+  formatBoundValue,
+  parseBoundInput,
+  type ParsedBound,
+} from "./format.js";
 
 /** One pending sparse update plus its validation errors. */
 export interface SparseDraft {
-  /** Bound values to set (validated whole numbers). */
+  /** Raw bound values to set (converted from the input units). */
   set: Record<string, number>;
-  /** Bound names to clear back to the compiled default. */
+  /** Bound names to clear back to Wyrd's default. */
   clear: string[];
   /** Key-named validation problems; empty means committable. */
   errors: Record<string, string>;
 }
 
 /**
- * Fresh row text from the latest observation: configured values
- * render as numbers, absent keys render empty (unknown, never a
- * filled-in default).
+ * Fresh input text from the latest observation: configured values
+ * render in the bound's human unit, absent keys render empty (a
+ * default, never a filled-in number).
  */
 export function buildDraftInputs(
   configured: Record<string, number | null>,
@@ -30,8 +38,8 @@ export function buildDraftInputs(
 ): Record<string, string> {
   const next: Record<string, string> = {};
   for (const key of keys) {
-    const current = configured[key] ?? null;
-    next[key] = current === null ? "" : String(current);
+    const bound = boundFor(key);
+    next[key] = bound === null ? "" : formatBoundValue(bound, configured[key]);
   }
   return next;
 }
@@ -45,9 +53,10 @@ export function toggleCleared(cleared: string[], key: string): string[] {
 }
 
 /**
- * Whether the draft differs from the observation: a clear always
- * counts, otherwise a non-empty row counts when its text differs
- * from the configured value.
+ * Whether the draft differs from the observation. A clear always
+ * counts. A non-empty row counts when it cannot be parsed (so the
+ * error is reachable) or when its parsed raw value differs from the
+ * configured one; empty rows are untouched.
  */
 export function isDraftDirty(
   inputs: Record<string, string>,
@@ -59,7 +68,9 @@ export function isDraftDirty(
   return keys.some((key) => {
     const text = (inputs[key] ?? "").trim();
     if (text === "") return false;
-    return text !== String(configured[key] ?? "");
+    const parsed = parseBoundInput(key, text);
+    if (!parsed.ok) return true;
+    return parsed.raw !== configured[key];
   });
 }
 
@@ -80,16 +91,16 @@ export function keepsDraftAfterVerdict(verdict: SaveVerdict): boolean {
 /**
  * Build one committable sparse update from the draft: unchanged
  * rows are skipped, cleared keys skip validation (they carry no
- * value), and every other changed row validates — errors keyed by
- * name, no partial writes. `validate` is the key-named validator
- * (`validateBoundInput` in the view).
+ * value), and every other changed row parses — errors keyed by
+ * name, no partial writes. `parse` is injected (`parseBoundInput`
+ * in the view) so the rule pins without importing the view.
  */
 export function buildSparseDraft(
   inputs: Record<string, string>,
   cleared: string[],
   configured: Record<string, number | null>,
   keys: string[],
-  validate: (key: string, text: string) => string | null,
+  parse: (key: string, text: string) => ParsedBound,
 ): SparseDraft {
   const set: Record<string, number> = {};
   const clear: string[] = [...cleared];
@@ -98,13 +109,13 @@ export function buildSparseDraft(
     if (cleared.includes(key)) continue;
     const text = (inputs[key] ?? "").trim();
     if (text === "") continue;
-    if (text === String(configured[key] ?? "")) continue;
-    const problem = validate(key, text);
-    if (problem !== null) {
-      errors[key] = problem;
+    const parsed = parse(key, text);
+    if (!parsed.ok) {
+      errors[key] = parsed.error;
       continue;
     }
-    set[key] = Number(text);
+    if (parsed.raw === configured[key]) continue;
+    set[key] = parsed.raw;
   }
   return { set, clear, errors };
 }
