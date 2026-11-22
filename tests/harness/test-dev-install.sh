@@ -214,8 +214,17 @@ done
 if match 'StartInterval' "$AGENT_CODE"; then
   die "registrar agent: StartInterval relaunches the helper and re-prompts"
 fi
-match 'while true' "$(cat "$ROOT/packaging/macos/domain-registrar/main.swift")" \
+REGISTRAR_SOURCE="$(cat "$ROOT/packaging/macos/domain-registrar/main.swift")"
+match 'while true' "$REGISTRAR_SOURCE" \
   || die "registrar: --watch has no internal reconciliation loop"
+# A transient failed socket probe must not drop a Finder domain: the
+# resident helper keeps one in-memory absence streak per domain and
+# removes only after two consecutive missed ticks. One-shot has no
+# history and still removes on the first miss.
+for marker in 'removalGraceTicks = 2' 'DomainRemovalGrace' 'observePresent' 'shouldRemove' 'graceEnabled' 'deferring removal of domain'; do
+  match "$marker" "$REGISTRAR_SOURCE" \
+    || die "registrar: removal grace marker '$marker' missing"
+done
 for marker in 'REGISTRAR_AGENT_TEMPLATE' 'LaunchAgents' 'launchctl unload -w' 'launchctl load -w'; do
   match "$marker" "$INSTALL_CODE" \
     || die "install: registrar agent marker '$marker' missing"
