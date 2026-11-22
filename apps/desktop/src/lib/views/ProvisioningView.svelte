@@ -7,18 +7,20 @@ by the observation (the registry names the new drive) resolves
 null — the caller navigates off this form, so no success report
 renders here. Anything else resolves the report, which renders
 below with the entered values kept for fix-and-retry. Leaving a drive lives in that drive's Settings — a
-destructive membership action does not belong in an add flow. New
-drives provision into the OS credential store by default (the
-account derives from the drive name, seeds come from this device's
-verified identity — no file choosing); credential files stay for
-operator-provisioned deployments. Invitation inputs are paths only,
-picked natively where the dialog capability answers and entered
-by hand elsewhere. Secret contents never travel. -->
+destructive membership action does not belong in an add flow.
+The decision (create or join) is the first surface; the default
+path is name plus relays, and every operator setting — directory,
+credential backend, store entry, credential files and join pins —
+sits behind one Advanced disclosure. New drives use the OS
+credential store by default, its entry derived from the name and
+initialized from this device's verified identity; credential files
+stay for operator deployments. Invitation and folder inputs are
+paths only, picked natively where the dialog capability answers
+and entered by hand elsewhere. Secret contents never travel. -->
 <script lang="ts">
   import { Button } from "$lib/components/ui/button/index.js";
   import * as Card from "$lib/components/ui/card/index.js";
   import * as Field from "$lib/components/ui/field/index.js";
-  import * as Tabs from "$lib/components/ui/tabs/index.js";
   import * as Alert from "$lib/components/ui/alert/index.js";
   import * as InputGroup from "$lib/components/ui/input-group/index.js";
   import { Input } from "$lib/components/ui/input/index.js";
@@ -28,7 +30,7 @@ by hand elsewhere. Secret contents never travel. -->
   import InfoHint from "$lib/components/info-hint.svelte";
   import CredentialStorageToggle from "./credential-storage-toggle.svelte";
   import type { ProvisionReport } from "$lib/ipc/results.js";
-  import { pickExistingFile } from "$lib/ipc/files.js";
+  import { pickExistingDirectory, pickExistingFile } from "$lib/ipc/files.js";
   import type { ProvisionCreateArgs, ProvisionJoinArgs } from "$lib/ipc/operations.js";
   import {
     buildCreateArgs,
@@ -37,8 +39,10 @@ by hand elsewhere. Secret contents never travel. -->
   } from "$lib/ipc/provisioning-args.js";
   import {
     describeProvisionResult,
+    driveNameValid,
     membershipSummary,
     nextDriveDir,
+    normalizeDriveName,
     observedRegistrySummary,
     storeAccountFor,
     SUGGESTED_RELAYS,
@@ -187,6 +191,36 @@ by hand elsewhere. Secret contents never travel. -->
     if (picked !== null) set(picked);
   }
 
+  async function browseDirectory(set: (path: string) => void): Promise<void> {
+    const picked = await pickExistingDirectory("Drive directory");
+    if (picked !== null) set(picked);
+  }
+
+  /** Format as the user types; the rule is enforced, never explained. */
+  function onNameInput(event: Event): void {
+    name = normalizeDriveName((event.currentTarget as HTMLInputElement).value);
+  }
+
+  /** Why the primary action is unavailable, in the order the person fixes it. */
+  const createBlockers = $derived(
+    [
+      name.trim() === "" ? "Enter a drive name" : null,
+      !driveNameValid(name) ? "Use a name of up to 58 lowercase letters, digits or dashes" : null,
+      relaysEmpty ? "Add at least one relay" : null,
+      driveDir.trim() === "" ? "Choose a drive directory under Advanced" : null,
+      !credentialsReady
+        ? credentialMode === "store"
+          ? "This device's identity is unavailable — finish the identity check first"
+          : "Add the identity and passphrase file paths"
+        : null,
+    ].filter((reason): reason is string => reason !== null),
+  );
+  const joinBlockers = $derived([
+    ...createBlockers,
+    invitationFile.trim() === "" ? "Choose an invitation file" : null,
+    !expectationsValid ? "Check the optional expected values — each is 64 hex characters" : null,
+  ]);
+
   function switchMode(next: Mode): void {
     mode = next;
     modeTouched = true;
@@ -197,7 +231,7 @@ by hand elsewhere. Secret contents never travel. -->
 
 <PageHeader
   title="Add drive"
-  description="Create a drive on this device, or join one with an invitation. The drive appears in the list once the registry names it."
+  description="Create a drive on this device, or join one with an invitation. It appears in your drives once setup finishes."
 >
   {#snippet actions()}
     <Button variant="outline" size="sm" onclick={onBack}>
@@ -208,104 +242,64 @@ by hand elsewhere. Secret contents never travel. -->
 </PageHeader>
 
 <Card.Root class="mt-6">
-  <Card.Content>
-    <!-- Toggle extracted to a child component: sibling interactive
-      templates inline here break the happy-dom re-registration the
-      mounted tests rely on (second mount crashes traversing the
-      cloned template). The toggle flips local display state only, so
-      it never needs the flight gate — the create/join submits below
-      stay gated. -->
-    <CredentialStorageToggle
-      useStore={credentialMode === "store"}
-      onSelect={(next) => (credentialMode = next ? "store" : "file")}
-      storeLabel="OS credential store (recommended)"
-    />
-    {#if credentialMode === "store"}
-      <p class="mb-5 text-xs leading-relaxed text-muted-foreground">
-        New drives keep their credentials in the OS credential store under
-        <span class="font-mono text-xs">{storeAccount}</span>. The drive starts at
-        login without typing anything, and no passphrase file is created for the
-        drive service. Seeded from this device's verified identity; no file
-        choosing needed.
-      </p>
-    {:else}
-      <p class="mb-5 text-xs leading-relaxed text-muted-foreground">
-        Operator deployments only: pick the credential files the drive reads. The
-        drive service will name these paths.
-      </p>
-    {/if}
-    <Tabs.Root value={mode} onValueChange={(value) => switchMode(value as Mode)}>
-      <Tabs.List>
-        <Tabs.Trigger value="create">
-          <PlusIcon data-icon="inline-start" />
-          Create
-        </Tabs.Trigger>
-        <Tabs.Trigger value="join">
-          <DownloadIcon data-icon="inline-start" />
-          Join
-        </Tabs.Trigger>
-      </Tabs.List>
+  <Card.Content class="space-y-5">
+    <!-- The decision comes first. These two cards only choose a path;
+      every operator setting sits in Advanced below. aria-pressed
+      names the active choice without relying on colour alone. -->
+    <div class="grid gap-3 sm:grid-cols-2" role="group" aria-label="Choose what to do">
+      <button
+        type="button"
+        aria-pressed={mode === "create"}
+        onclick={() => switchMode("create")}
+        class="flex flex-col rounded-xl border p-4 text-left transition-colors aria-pressed:border-primary aria-pressed:bg-primary/5 hover:border-foreground/40 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+      >
+        <span class="flex items-center gap-2 text-base font-medium">
+          <PlusIcon data-icon="inline-start" class="size-5" />
+          Create a new drive
+        </span>
+        <span class="mt-1 block text-xs leading-relaxed text-muted-foreground">
+          Start a fresh drive on this device and choose its relays.
+        </span>
+      </button>
+      <button
+        type="button"
+        aria-pressed={mode === "join"}
+        onclick={() => switchMode("join")}
+        class="flex flex-col rounded-xl border p-4 text-left transition-colors aria-pressed:border-primary aria-pressed:bg-primary/5 hover:border-foreground/40 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+      >
+        <span class="flex items-center gap-2 text-base font-medium">
+          <DownloadIcon data-icon="inline-start" class="size-5" />
+          Join with an invitation
+        </span>
+        <span class="mt-1 block text-xs leading-relaxed text-muted-foreground">
+          Use an invitation from someone who already shares a drive.
+        </span>
+      </button>
+    </div>
 
-      <Tabs.Content value="create" class="pt-5">
-        <Field.FieldGroup>
+    {#if mode === "create"}
+      <div class="space-y-4">
           <Field.Field>
             <Field.Label for="create-name">Drive name</Field.Label>
-            <Input id="create-name" bind:value={name} disabled={busy} placeholder="alpha" autocomplete="off" spellcheck={false} />
-            <Field.Description>1–58 characters: lowercase letters, digits, and dashes.</Field.Description>
+            <Input id="create-name" value={name} oninput={onNameInput} disabled={busy} placeholder="alpha" autocomplete="off" spellcheck={false} />
           </Field.Field>
 
           <Field.Field>
-            <Field.Label for="create-dir">Drive directory</Field.Label>
-            <Input
-              id="create-dir"
-              bind:value={driveDir}
-              oninput={() => (driveDirTouched = true)}
-              disabled={busy}
-              placeholder={suggestedDriveDir ?? "/drives/alpha"}
-              autocomplete="off"
-              spellcheck={false}
-              class="font-mono text-xs"
-            />
-            <Field.Description>Absolute path. The keystore lives here.</Field.Description>
-            {#if suggestedDriveDir !== null && driveDir !== suggestedDriveDir}
-              <div class="flex flex-wrap items-center gap-2">
-                <span class="min-w-0 truncate font-mono text-xs text-muted-foreground">
-                  Suggested: {suggestedDriveDir}
-                </span>
-                <Button
-                  variant="link"
-                  size="xs"
-                  disabled={busy}
-                  onclick={() => {
-                    driveDir = suggestedDriveDir;
-                    driveDirTouched = false;
-                  }}
-                >
-                  <SparklesIcon data-icon="inline-start" />
-                  Use suggested path
-                </Button>
-              </div>
-            {/if}
-          </Field.Field>
-
-          <Field.Field>
-            <Field.Label for="relays" class="flex items-center gap-1.5">
+            <Field.Label for="create-relays" class="flex items-center gap-1.5">
               Relays
               <InfoHint label="About relays">
                 <p>
-                  Relays sync beyond this device. This form always runs managed, in vault service
-                  mode: the drive's background process runs without a desktop file mount. At least
-                  one relay is required, and an empty set is refused before anything is created —
-                  that refusal reports verbatim below.
-                </p>
-                <p>
                   The field starts with Wyrd's suggested relays — keep them, edit the list, or
-                  clear it entirely. The drive saves exactly what is listed.
+                  clear it entirely. At least one relay is needed.
                 </p>
               </InfoHint>
             </Field.Label>
-            <RelayEditor bind:relays disabled={busy} />
-            <Field.Description>Suggested relays are pre-filled — edit or clear the list. Add at least one relay for a managed drive.</Field.Description>
+            <RelayEditor id="create-relays" bind:relays disabled={busy} />
+            <Field.Description>
+              Relays carry sync messages between devices. Wyrd saves the relays you list here;
+              a relay accepting a message does not mean another device received it. Suggested
+              relays are pre-filled — edit or clear the list. The drive saves exactly what is listed.
+            </Field.Description>
             {#if relaysDiffer}
               <div class="flex flex-wrap items-center gap-2">
                 <span class="min-w-0 truncate font-mono text-xs text-muted-foreground">
@@ -325,87 +319,16 @@ by hand elsewhere. Secret contents never travel. -->
               </div>
             {/if}
           </Field.Field>
+        </div>
 
-          {#if credentialMode === "store"}
-            <Field.Field>
-              <Field.Label>Store item</Field.Label>
-              <p class="font-mono text-xs">{storeAccount}</p>
-              <Field.Description>
-                {#if seedsReady}
-                  Seeded from this device's verified identity files. Converged re-runs
-                  name only this item.
-                {:else}
-                  This device's verified identity is unavailable, so a store-backed
-                  drive cannot be seeded yet. Fix the identity check first, or use
-                  credential files.
-                {/if}
-              </Field.Description>
-            </Field.Field>
-          {:else}
-            <Field.Field>
-              <Field.Label for="create-identity" class="flex items-center gap-1.5">
-                Identity file
-                <InfoHint label="About the identity file">
-                  <p>Path only — the file's contents never travel through this form.</p>
-                </InfoHint>
-              </Field.Label>
-              <InputGroup.Root>
-                <InputGroup.Input
-                  id="create-identity"
-                  bind:value={identityFile}
-                  disabled={busy}
-                  placeholder="/keys/identity"
-                  autocomplete="off"
-                  spellcheck={false}
-                  class="font-mono text-xs"
-                />
-                <InputGroup.Addon align="inline-end">
-                  <InputGroup.Button variant="secondary" size="xs" disabled={busy} onclick={() => void browse((p) => (identityFile = p), "Identity file")}>
-                    <FolderOpenIcon data-icon="inline-start" />
-                    Browse…
-                  </InputGroup.Button>
-                </InputGroup.Addon>
-              </InputGroup.Root>
-            </Field.Field>
-
-            <Field.Field>
-              <Field.Label for="create-passphrase" class="flex items-center gap-1.5">
-                Passphrase file
-                <InfoHint label="About the passphrase file">
-                  <p>Path only — the file's contents never travel through this form.</p>
-                </InfoHint>
-              </Field.Label>
-              <InputGroup.Root>
-                <InputGroup.Input
-                  id="create-passphrase"
-                  bind:value={passphraseFile}
-                  disabled={busy}
-                  placeholder="/keys/passphrase"
-                  autocomplete="off"
-                  spellcheck={false}
-                  class="font-mono text-xs"
-                />
-                <InputGroup.Addon align="inline-end">
-                  <InputGroup.Button variant="secondary" size="xs" disabled={busy} onclick={() => void browse((p) => (passphraseFile = p), "Passphrase file")}>
-                    <FolderOpenIcon data-icon="inline-start" />
-                    Browse…
-                  </InputGroup.Button>
-                </InputGroup.Addon>
-              </InputGroup.Root>
-            </Field.Field>
+        <div class="flex flex-wrap items-center justify-between gap-3 border-t border-border/60 pt-4">
+          {#if createBlockers.length > 0}
+            <p class="text-xs leading-relaxed text-muted-foreground">
+              To create a drive: {createBlockers.join(" · ")}.
+            </p>
           {/if}
-        </Field.FieldGroup>
-
-        <div class="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-border/60 pt-4">
-          <p class="text-xs text-muted-foreground">
-            {#if relaysEmpty}
-              No relays — this managed form will refuse before creating anything.
-            {:else}
-              Vault service mode (platform default). Mount mode travels with the installer follow-up.
-            {/if}
-          </p>
           <Button
-            disabled={busy || name.trim() === "" || driveDir.trim() === "" || !credentialsReady}
+            disabled={busy || createBlockers.length > 0}
             onclick={() =>
               void run(() =>
                 onCreate(
@@ -433,48 +356,11 @@ by hand elsewhere. Secret contents never travel. -->
             {/if}
           </Button>
         </div>
-      </Tabs.Content>
-
-      <Tabs.Content value="join" class="pt-5">
-        <Field.FieldGroup>
+    {:else}
+      <div class="space-y-4">
           <Field.Field>
             <Field.Label for="join-name">Drive name</Field.Label>
-            <Input id="join-name" bind:value={name} disabled={busy} placeholder="alpha" autocomplete="off" spellcheck={false} />
-            <Field.Description>1–58 characters: lowercase letters, digits, and dashes.</Field.Description>
-          </Field.Field>
-
-          <Field.Field>
-            <Field.Label for="join-dir">Drive directory</Field.Label>
-            <Input
-              id="join-dir"
-              bind:value={driveDir}
-              oninput={() => (driveDirTouched = true)}
-              disabled={busy}
-              placeholder={suggestedDriveDir ?? "/drives/alpha"}
-              autocomplete="off"
-              spellcheck={false}
-              class="font-mono text-xs"
-            />
-            <Field.Description>Absolute path. The keystore lives here.</Field.Description>
-            {#if suggestedDriveDir !== null && driveDir !== suggestedDriveDir}
-              <div class="flex flex-wrap items-center gap-2">
-                <span class="min-w-0 truncate font-mono text-xs text-muted-foreground">
-                  Suggested: {suggestedDriveDir}
-                </span>
-                <Button
-                  variant="link"
-                  size="xs"
-                  disabled={busy}
-                  onclick={() => {
-                    driveDir = suggestedDriveDir;
-                    driveDirTouched = false;
-                  }}
-                >
-                  <SparklesIcon data-icon="inline-start" />
-                  Use suggested path
-                </Button>
-              </div>
-            {/if}
+            <Input id="join-name" value={name} oninput={onNameInput} disabled={busy} placeholder="alpha" autocomplete="off" spellcheck={false} />
           </Field.Field>
 
           <Field.Field>
@@ -482,19 +368,17 @@ by hand elsewhere. Secret contents never travel. -->
               Relays
               <InfoHint label="About relays">
                 <p>
-                  Relays sync beyond this device. This form always runs managed, in vault service
-                  mode: the drive's background process runs without a desktop file mount. At least
-                  one relay is required, and an empty set is refused before anything is joined —
-                  that refusal reports verbatim below.
-                </p>
-                <p>
                   The field starts with Wyrd's suggested relays — keep them, edit the list, or
-                  clear it entirely. The drive saves exactly what is listed.
+                  clear it entirely. At least one relay is needed.
                 </p>
               </InfoHint>
             </Field.Label>
             <RelayEditor id="join-relays" bind:relays disabled={busy} />
-            <Field.Description>Suggested relays are pre-filled — edit or clear the list. Add at least one relay for a managed drive.</Field.Description>
+            <Field.Description>
+              Relays carry sync messages between devices. Wyrd saves the relays you list here;
+              a relay accepting a message does not mean another device received it. Suggested
+              relays are pre-filled — edit or clear the list. The drive saves exactly what is listed.
+            </Field.Description>
             {#if relaysDiffer}
               <div class="flex flex-wrap items-center gap-2">
                 <span class="min-w-0 truncate font-mono text-xs text-muted-foreground">
@@ -540,6 +424,186 @@ by hand elsewhere. Secret contents never travel. -->
             </InputGroup.Root>
           </Field.Field>
 
+        </div>
+
+        <div class="flex flex-wrap items-center justify-between gap-3 border-t border-border/60 pt-4">
+          {#if joinBlockers.length > 0}
+            <p class="text-xs leading-relaxed text-muted-foreground">
+              To join a drive: {joinBlockers.join(" · ")}.
+            </p>
+          {/if}
+          <Button
+            disabled={busy || joinBlockers.length > 0}
+            onclick={() =>
+              void run(() =>
+                onJoin(
+                  buildJoinArgs({
+                    name,
+                    driveDir,
+                    relays,
+                    credentialMode,
+                    storeAccount,
+                    seedIdentityFile: initialIdentityFile ?? "",
+                    seedPassphraseFile: initialPassphraseFile ?? "",
+                    fileIdentityFile: identityFile,
+                    filePassphraseFile: passphraseFile,
+                    invitationFile,
+                    expectedOwner,
+                    expectedDrive,
+                    expectedGenesis,
+                  }),
+                ),
+              )
+            }
+          >
+            {#if working}
+              <Spinner data-icon="inline-start" />
+              Joining…
+            {:else}
+              <DownloadIcon data-icon="inline-start" />
+              Join drive
+            {/if}
+          </Button>
+        </div>
+    {/if}
+
+    <!-- Operator settings sit behind one disclosure. The default
+      path is name plus relays; nothing here is needed for either
+      action to work. -->
+    <details class="rounded-lg border border-border/60 px-3 py-2">
+      <summary class="cursor-pointer text-sm font-medium">Advanced</summary>
+      <div class="mt-4 space-y-4">
+        <Field.Field>
+          <Field.Label for="advanced-dir">Drive directory</Field.Label>
+          <InputGroup.Root>
+            <InputGroup.Input
+              id="advanced-dir"
+              value={driveDir}
+              oninput={(event) => {
+                driveDir = event.currentTarget.value;
+                driveDirTouched = true;
+              }}
+              disabled={busy}
+              placeholder={suggestedDriveDir ?? "/drives/alpha"}
+              autocomplete="off"
+              spellcheck={false}
+              class="font-mono text-xs"
+            />
+            <InputGroup.Addon align="inline-end">
+              <InputGroup.Button variant="secondary" size="xs" disabled={busy} onclick={() => void browseDirectory((picked) => { driveDir = picked; driveDirTouched = true; })}>
+                <FolderOpenIcon data-icon="inline-start" />
+                Choose folder…
+              </InputGroup.Button>
+            </InputGroup.Addon>
+          </InputGroup.Root>
+          <Field.Description>Where Wyrd keeps this drive's local data on this device.</Field.Description>
+          {#if suggestedDriveDir !== null && driveDir !== suggestedDriveDir}
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="min-w-0 truncate font-mono text-xs text-muted-foreground">
+                Suggested: {suggestedDriveDir}
+              </span>
+              <Button
+                variant="link"
+                size="xs"
+                disabled={busy}
+                onclick={() => {
+                  driveDir = suggestedDriveDir;
+                  driveDirTouched = false;
+                }}
+              >
+                <SparklesIcon data-icon="inline-start" />
+                Use suggested path
+              </Button>
+            </div>
+          {/if}
+        </Field.Field>
+
+        <!-- Extracted child: sibling interactive templates inline here
+          break happy-dom's re-registration across mounts. -->
+        <CredentialStorageToggle
+          useStore={credentialMode === "store"}
+          onSelect={(next) => (credentialMode = next ? "store" : "file")}
+          storeLabel="OS credential store (recommended)"
+        />
+        {#if credentialMode === "store"}
+          <p class="text-xs leading-relaxed text-muted-foreground">
+            New drives keep their credentials in the OS credential store under
+            <span class="font-mono text-xs">{storeAccount}</span>. The drive starts at
+            login without typing anything, and no passphrase file is created for the
+            drive service. It uses this device's verified identity — no file choosing needed.
+          </p>
+          <Field.Field>
+            <Field.Label>Credential entry</Field.Label>
+            <p class="font-mono text-xs">{storeAccount}</p>
+            <Field.Description>
+              {#if seedsReady}
+                Wyrd creates one entry per drive from this device's verified identity.
+              {:else}
+                This device's verified identity is unavailable, so a store-backed
+                drive cannot be set up yet. Fix the identity check first, or use
+                credential files.
+              {/if}
+            </Field.Description>
+          </Field.Field>
+        {:else}
+          <p class="text-xs leading-relaxed text-muted-foreground">
+            Operator deployments only: pick the credential files the drive reads. The
+            drive service will name these paths.
+          </p>
+          <Field.Field>
+            <Field.Label for="advanced-identity" class="flex items-center gap-1.5">
+              Identity file
+              <InfoHint label="About the identity file">
+                <p>Path only — the file's contents never travel through this form.</p>
+              </InfoHint>
+            </Field.Label>
+            <InputGroup.Root>
+              <InputGroup.Input
+                id="advanced-identity"
+                bind:value={identityFile}
+                disabled={busy}
+                placeholder="/keys/identity"
+                autocomplete="off"
+                spellcheck={false}
+                class="font-mono text-xs"
+              />
+              <InputGroup.Addon align="inline-end">
+                <InputGroup.Button variant="secondary" size="xs" disabled={busy} onclick={() => void browse((p) => (identityFile = p), "Identity file")}>
+                  <FolderOpenIcon data-icon="inline-start" />
+                  Browse…
+                </InputGroup.Button>
+              </InputGroup.Addon>
+            </InputGroup.Root>
+          </Field.Field>
+
+          <Field.Field>
+            <Field.Label for="advanced-passphrase" class="flex items-center gap-1.5">
+              Passphrase file
+              <InfoHint label="About the passphrase file">
+                <p>Path only — the file's contents never travel through this form.</p>
+              </InfoHint>
+            </Field.Label>
+            <InputGroup.Root>
+              <InputGroup.Input
+                id="advanced-passphrase"
+                bind:value={passphraseFile}
+                disabled={busy}
+                placeholder="/keys/passphrase"
+                autocomplete="off"
+                spellcheck={false}
+                class="font-mono text-xs"
+              />
+              <InputGroup.Addon align="inline-end">
+                <InputGroup.Button variant="secondary" size="xs" disabled={busy} onclick={() => void browse((p) => (passphraseFile = p), "Passphrase file")}>
+                  <FolderOpenIcon data-icon="inline-start" />
+                  Browse…
+                </InputGroup.Button>
+              </InputGroup.Addon>
+            </InputGroup.Root>
+          </Field.Field>
+        {/if}
+
+        {#if mode === "join"}
           <Field.Field>
             <Field.Label for="join-expected-owner">Expected owner (optional)</Field.Label>
             <Field.Description>
@@ -595,120 +659,9 @@ by hand elsewhere. Secret contents never travel. -->
               />
             </InputGroup.Root>
           </Field.Field>
-
-          {#if credentialMode === "store"}
-            <Field.Field>
-              <Field.Label>Store item</Field.Label>
-              <p class="font-mono text-xs">{storeAccount}</p>
-              <Field.Description>
-                {#if seedsReady}
-                  Seeded from this device's verified identity files. Converged re-runs
-                  name only this item.
-                {:else}
-                  This device's verified identity is unavailable, so a store-backed
-                  drive cannot be seeded yet. Fix the identity check first, or use
-                  credential files.
-                {/if}
-              </Field.Description>
-            </Field.Field>
-          {:else}
-            <Field.Field>
-              <Field.Label for="join-identity" class="flex items-center gap-1.5">
-                Identity file
-                <InfoHint label="About the identity file">
-                  <p>Path only — the file's contents never travel through this form.</p>
-                </InfoHint>
-              </Field.Label>
-              <InputGroup.Root>
-                <InputGroup.Input
-                  id="join-identity"
-                  bind:value={identityFile}
-                  disabled={busy}
-                  placeholder="/keys/identity"
-                  autocomplete="off"
-                  spellcheck={false}
-                  class="font-mono text-xs"
-                />
-                <InputGroup.Addon align="inline-end">
-                  <InputGroup.Button variant="secondary" size="xs" disabled={busy} onclick={() => void browse((p) => (identityFile = p), "Identity file")}>
-                    <FolderOpenIcon data-icon="inline-start" />
-                    Browse…
-                  </InputGroup.Button>
-                </InputGroup.Addon>
-              </InputGroup.Root>
-            </Field.Field>
-
-            <Field.Field>
-              <Field.Label for="join-passphrase" class="flex items-center gap-1.5">
-                Passphrase file
-                <InfoHint label="About the passphrase file">
-                  <p>Path only — the file's contents never travel through this form.</p>
-                </InfoHint>
-              </Field.Label>
-              <InputGroup.Root>
-                <InputGroup.Input
-                  id="join-passphrase"
-                  bind:value={passphraseFile}
-                  disabled={busy}
-                  placeholder="/keys/passphrase"
-                  autocomplete="off"
-                  spellcheck={false}
-                  class="font-mono text-xs"
-                />
-                <InputGroup.Addon align="inline-end">
-                  <InputGroup.Button variant="secondary" size="xs" disabled={busy} onclick={() => void browse((p) => (passphraseFile = p), "Passphrase file")}>
-                    <FolderOpenIcon data-icon="inline-start" />
-                    Browse…
-                  </InputGroup.Button>
-                </InputGroup.Addon>
-              </InputGroup.Root>
-            </Field.Field>
-          {/if}
-        </Field.FieldGroup>
-
-        <div class="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-border/60 pt-4">
-          <p class="text-xs text-muted-foreground">
-            {#if relaysEmpty}
-              No relays — this managed form will refuse before joining anything.
-            {:else}
-              Vault service mode (platform default). Mount mode travels with the installer follow-up.
-            {/if}
-          </p>
-          <Button
-            disabled={busy || name.trim() === "" || driveDir.trim() === "" || invitationFile.trim() === "" || !credentialsReady || !expectationsValid}
-            onclick={() =>
-              void run(() =>
-                onJoin(
-                  buildJoinArgs({
-                    name,
-                    driveDir,
-                    relays,
-                    credentialMode,
-                    storeAccount,
-                    seedIdentityFile: initialIdentityFile ?? "",
-                    seedPassphraseFile: initialPassphraseFile ?? "",
-                    fileIdentityFile: identityFile,
-                    filePassphraseFile: passphraseFile,
-                    invitationFile,
-                    expectedOwner,
-                    expectedDrive,
-                    expectedGenesis,
-                  }),
-                ),
-              )
-            }
-          >
-            {#if working}
-              <Spinner data-icon="inline-start" />
-              Joining…
-            {:else}
-              <DownloadIcon data-icon="inline-start" />
-              Join drive
-            {/if}
-          </Button>
-        </div>
-      </Tabs.Content>
-    </Tabs.Root>
+        {/if}
+      </div>
+    </details>
 
     {#if error !== null}
       <Alert.Root variant="destructive" class="mt-4">
@@ -730,12 +683,4 @@ by hand elsewhere. Secret contents never travel. -->
       </Alert.Root>
     {/if}
   </Card.Content>
-  {#if report !== null}
-    <Card.Footer class="justify-end">
-      <Button variant="outline" size="sm" disabled={busy} onclick={onBack}>
-        <ArrowLeftIcon data-icon="inline-start" />
-        Back to drives
-      </Button>
-    </Card.Footer>
-  {/if}
 </Card.Root>

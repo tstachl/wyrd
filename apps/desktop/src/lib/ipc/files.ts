@@ -5,6 +5,25 @@
 // module load. Only path strings travel — secret contents never
 // cross IPC or argv, and the picker itself never reads files.
 
+/** Pick an existing folder, or `null` where the user cancels or the native picker is unavailable. */
+export async function pickExistingDirectory(title: string): Promise<string | null> {
+  try {
+    const dialog = await import("@tauri-apps/plugin-dialog");
+    const picked: unknown = await dialog.open({
+      title,
+      multiple: false,
+      directory: true,
+    });
+    if (typeof picked === "string") return picked;
+    if (typeof picked === "object" && picked !== null && "path" in picked && typeof picked.path === "string") {
+      return picked.path;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 /** Pick one existing file, or `null` where the user cancels or the native picker is unavailable. */
 export async function pickExistingFile(title: string): Promise<string | null> {
   try {
