@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use super::*;
 
 fn create_request() -> ProvisionRequest {
@@ -1313,7 +1315,7 @@ fn spawn_unlock_pipes_the_passphrase_and_holds_the_child() {
 /// statically in `unlock_argv_is_structured_with_the_pipe_flag`;
 /// `Debug` redaction pins in
 /// `unlock_args_debug_redacts_the_passphrase` and
-/// `debug_redacts_the_secret` in `commands.rs`/`session.rs`.)
+/// `debug_redacts_the_secret` in `commands/unlock.rs`/`session.rs`.)
 #[test]
 fn spawn_unlock_confines_the_secret_to_stdin() {
     let dir = std::env::temp_dir().join(format!(

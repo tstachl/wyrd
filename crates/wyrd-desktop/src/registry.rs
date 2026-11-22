@@ -876,7 +876,7 @@ pub fn write_registry_at(
     // This primitive blocks on the lock. Like every other blocking
     // call in this crate, future commands must run it on the
     // `spawn_blocking` pool, never on a Tauri async executor thread
-    // (see the command-surface rule in `commands.rs`).
+    // (see the command-surface rule in `commands/mod.rs`).
     let _lock = lock_registry(path)?;
     let mut merged: std::collections::BTreeMap<String, serde_json::Value> = drives
         .iter()

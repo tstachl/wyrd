@@ -400,8 +400,9 @@ pub fn validate_drive_path(value: &str, noun: &str) -> Result<PathBuf, String> {
 }
 
 /// The registered command handler: the authoritative application
-/// IPC surface. Exactly one `generate_handler!` call, covering the
-/// [`commands`] surface — never several `invoke_handler` calls.
+/// IPC surface. [`commands::handler`] holds the one `generate_handler!`
+/// call covering the whole [`commands`] surface; this is its thin
+/// public entry point — never several `invoke_handler` calls.
 /// Generic over the runtime so the mock runtime drives the same
 /// handler in tests.
 ///
@@ -412,37 +413,7 @@ pub fn validate_drive_path(value: &str, noun: &str) -> Result<PathBuf, String> {
 /// other rejection of those commands is a transport failure, never
 /// an owner answer.
 pub fn invoke_handler<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool {
-    tauri::generate_handler![
-        commands::lookup,
-        commands::stat,
-        commands::readdir,
-        commands::read,
-        commands::observe,
-        commands::liveness,
-        commands::freshness,
-        commands::capture_parent,
-        commands::submit,
-        commands::reconcile_lookup,
-        commands::reconnect,
-        commands::list_drives,
-        commands::drive_settings,
-        commands::drive_settings_write,
-        commands::provision_create,
-        commands::provision_join,
-        commands::provision_leave,
-        commands::provision_reconfigure,
-        commands::provision_service_start,
-        commands::provision_service_enable,
-        commands::provision_service_disable,
-        commands::drive_unlock,
-        commands::drive_lock,
-        commands::onboarding_defaults,
-        commands::onboarding_new_passphrase,
-        commands::onboarding_commit,
-        commands::onboarding_verify,
-        commands::onboarding_adopt,
-        commands::reveal_in_folder,
-    ]
+    commands::handler()
 }
 
 #[cfg(test)]
