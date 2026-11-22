@@ -240,7 +240,7 @@ test("new drives default to the OS credential store", () => {
   // The store item derives from the drive name; the label is a
   // reference, never a secret (the derivation itself pins in
   // `format.test.ts`).
-  expect(provisioning).toContain("Store item");
+  expect(provisioning).toContain("Credential entry");
 });
 
 test("onboarding follows the approved key explanation", () => {

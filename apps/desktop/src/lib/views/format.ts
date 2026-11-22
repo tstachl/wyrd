@@ -251,6 +251,29 @@ export function suggestedDriveDirFor(nameValue: string, identityPath: string): s
 }
 
 /**
+ * Auto-format a typed drive name into the shape the registry
+ * accepts: lowercase letters, digits and dashes, at most 58
+ * characters (the registry reserves six for the service prefix).
+ * Runs of other characters become one dash so "My Drive!" reads
+ * "my-drive" as the user types. Pure over the input so the form
+ * pins without a component.
+ */
+export function normalizeDriveName(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 58)
+    .replace(/-$/g, "");
+}
+
+/** Whether a name is a committable registry token after formatting. */
+export function driveNameValid(value: string): boolean {
+  return value.length > 0 && value.length <= 58 && /^[a-z0-9-]+$/.test(value);
+}
+
+/**
  * OS credential-store account for one drive (`wyrd-drive-<name>`,
  * `alpha` where the name is blank so the label stays stable while
  * typing). One account per drive; the label is a reference, never a
@@ -336,12 +359,12 @@ export function describeProvisionResult(report: ProvisionReport): string {
   }
 }
 
-/** Post-run registry summary. Never a claim about the operated drive's membership. */
+/** Post-run drive-list summary. Never a claim about the operated drive's membership. */
 export function observedRegistrySummary(report: ProvisionReport): string {
   const observed = report.observed;
-  if (observed.status !== "ready") return `Registry: ${observed.status}.`;
+  if (observed.status !== "ready") return `The drive list is not ready (${observed.status}).`;
   const names = observed.drives.map((drive) => drive.name).join(", ");
-  return `Registry ready: ${observed.drives.length} drive(s)${names.length > 0 ? ` (${names})` : ""}.`;
+  return `Drives on this device: ${observed.drives.length}${names.length > 0 ? ` (${names})` : ""}.`;
 }
 
 /**

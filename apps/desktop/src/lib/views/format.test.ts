@@ -11,11 +11,13 @@ import {
   boundLabel,
   credentialModeFor,
   describeProvisionResult,
+  driveNameValid,
   formatBoundValue,
   formatObservedAt,
   freshnessLabel,
   membershipSummary,
   nextDriveDir,
+  normalizeDriveName,
   observedRegistrySummary,
   parseBoundInput,
   shouldAdvanceAfterProvision,
@@ -139,6 +141,19 @@ test("drive suggestions derive from the credential base, never guesses", () => {
     suggestedDriveDirFor("beta", "/a/keys/identity"),
   ).toBe("/a/drives/beta");
   expect(suggestedDriveDirFor("beta", "")).toBeNull();
+});
+
+test("drive names format themselves into the registry token shape", () => {
+  expect(normalizeDriveName("My Drive!")).toBe("my-drive");
+  expect(normalizeDriveName("  Alpha--Beta  ")).toBe("alpha-beta");
+  expect(normalizeDriveName("Éclair")).toBe("clair");
+  expect(driveNameValid(normalizeDriveName("My Drive!"))).toBe(true);
+  expect(driveNameValid("")).toBe(false);
+  expect(driveNameValid("has space")).toBe(false);
+  expect(driveNameValid("has_underscore")).toBe(false);
+  // The registry reserves six characters for the service prefix.
+  expect(normalizeDriveName("a".repeat(70)).length).toBe(58);
+  expect(driveNameValid(normalizeDriveName("a".repeat(70)))).toBe(true);
 });
 
 test("store accounts derive one label per drive name", () => {
@@ -289,7 +304,7 @@ test("provisioning outcomes name the exit code without claiming state", () => {
 
 test("post-run observation names the registry and the membership tip", () => {
   expect(observedRegistrySummary(report({ result: "completed", detail: "" }))).toBe(
-    "Registry ready: 0 drive(s).",
+    "Drives on this device: 0.",
   );
   expect(membershipSummary(report({ result: "completed", detail: "" }))).toBe(
     "Membership: unknown (the owner did not answer).",
