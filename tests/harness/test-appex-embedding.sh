@@ -68,6 +68,16 @@ grep -Fq "<string>$GROUP</string>" \
 grep -Fq '"entitlements": "../../packaging/macos/Wyrd.app.entitlements"' \
   "$ROOT/crates/wyrd-desktop/tauri.conf.json" \
   || die "tauri.conf.json: app entitlements are not wired into the bundle"
+grep -Fq -- '-emit-executable' \
+  "$ROOT/packaging/macos/fileprovider/build-appex.sh" \
+  || die "build-appex.sh: a Mach-O bundle would silently drop the App Group entitlement"
+grep -Fq 'group_label_path' \
+  "$ROOT/crates/wyrd-daemon/src/owner/server/socket.rs" \
+  || die "socket.rs: no published drive-name label"
+grep -Fq '.label' \
+  "$ROOT/packaging/macos/domain-registrar/main.swift" \
+  || die "registrar: drive-name label is not read"
+pass "MH_EXECUTE appex and registry-name label are pinned"
 grep -Fq 'app-id: md.enesis.wyrd' \
   "$ROOT/packaging/linux/md.enesis.wyrd.yaml" \
   || die "linux manifest: app-id drifted"

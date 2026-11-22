@@ -179,6 +179,18 @@ pub fn group_symlink_path(group_container: &Path, drive: &DriveId) -> PathBuf {
         .join(format!("{drive}.sock"))
 }
 
+/// Control metadata beside the alias:
+/// `<container>/Sockets/by-drive/<drive-hex>.label`, holding the
+/// registry name of the served drive. The registrar uses it for the
+/// Finder domain display name; the domain identifier stays the full
+/// drive id. No drive bytes, keys, or manifests go in this file.
+pub fn group_label_path(group_container: &Path, drive: &DriveId) -> PathBuf {
+    group_container
+        .join("Sockets")
+        .join("by-drive")
+        .join(format!("{drive}.label"))
+}
+
 /// Bind the group socket with a live-endpoint check: an existing
 /// entry that still connects is a live owner — never unlink it, fail
 /// closed (`AddrInUse`) instead. A dead entry unlinks like the

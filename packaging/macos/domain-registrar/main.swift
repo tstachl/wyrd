@@ -63,19 +63,27 @@ private func isDriveId(_ value: String) -> Bool {
     return value != String(repeating: "0", count: 64)
 }
 
-/// Display name for a domain. The registry has no drive id and the
-/// owner protocol carries none, so the stable id prefix is the label;
-/// the identifier itself stays the full drive id.
-private func displayName(for driveId: String) -> String {
-    "Wyrd \(driveId.prefix(8))"
+/// The owner publishes the registry name beside the alias as control
+/// metadata. Accept only registry-style names; anything else falls
+/// back to the id prefix rather than trusting a file in a shared
+/// directory. The domain identifier stays the full drive id.
+private func displayName(for driveId: String, label: String?) -> String {
+    if let label, !label.isEmpty, label.count <= 64,
+       label.utf8.allSatisfy({ byte in
+           (byte >= 97 && byte <= 122) || (byte >= 48 && byte <= 57) || byte == 45
+       }) {
+        return label
+    }
+    return "Wyrd \(driveId.prefix(8))"
 }
 
-/// Drive ids with a published group socket, or `nil` when the
-/// container cannot be resolved. `nil` is deliberately distinct from
-/// an empty list: an ad-hoc build or a failed entitlement must never
-/// be read as "no drives", because the removal half would then delete
-/// every domain a team-signed install had registered.
-private func publishedDriveIds(group: String) -> [String]? {
+/// Drive id to Finder display name for the published aliases, or
+/// `nil` when the container cannot be resolved. `nil` is deliberately
+/// distinct from an empty list: an ad-hoc build or a failed
+/// entitlement must never be read as "no drives", because the removal
+/// half would then delete every domain a team-signed install had
+/// registered.
+private func publishedDrives(group: String) -> [String: String]? {
     guard !group.isEmpty, !group.contains("/") else {
         return nil
     }
@@ -87,11 +95,16 @@ private func publishedDriveIds(group: String) -> [String]? {
     }
     let aliases = container.appendingPathComponent("Sockets/by-drive")
     let names = (try? FileManager.default.contentsOfDirectory(atPath: aliases.path)) ?? []
-    return names.compactMap { name in
-        guard name.hasSuffix(".sock") else { return nil }
+    var drives: [String: String] = [:]
+    for name in names where name.hasSuffix(".sock") {
         let id = String(name.dropLast(".sock".count))
-        return isDriveId(id) ? id : nil
-    }.sorted()
+        guard isDriveId(id) else { continue }
+        let labelURL = aliases.appendingPathComponent("\(id).label")
+        let label = try? String(contentsOf: labelURL, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        drives[id] = displayName(for: id, label: label)
+    }
+    return drives
 }
 
 /// Reconcile domains with the published drive aliases. Partial
@@ -107,14 +120,11 @@ func reconcile(_ raw: String) -> (code: Int32, added: Int, removed: Int) {
         log.error("invalid registrar config")
         return (1, 0, 0)
     }
-    guard let driveIds = publishedDriveIds(group: decoded.group) else {
+    guard let desired = publishedDrives(group: decoded.group) else {
         // No container means no evidence about drives. Skip the whole
         // reconciliation, removals included.
         return (0, 0, 0)
     }
-    let desired = Dictionary(
-        uniqueKeysWithValues: driveIds.map { ($0, displayName(for: $0)) }
-    )
 
     let read = Completion<Result<[NSFileProviderDomain], Error>>()
     NSFileProviderManager.getDomainsWithCompletionHandler { domains, error in

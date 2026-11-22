@@ -24,7 +24,9 @@ use super::socket::{
     bind_group_listener, bind_listener, group_container_from_env, publish_group_symlink,
     DEFAULT_MAX_READ_BYTES,
 };
-use super::socket::{group_socket_path, group_symlink_path, production_group_container};
+use super::socket::{
+    group_label_path, group_socket_path, group_symlink_path, production_group_container,
+};
 use super::OwnerServer;
 use crate::owner::FILEPROVIDER_DRIVE_ID_ENV;
 /// The serving handles the owner interface forwards through. Built
@@ -144,6 +146,7 @@ impl OwnerHandles {
 struct LateGroup {
     socket: Option<PathBuf>,
     symlink: Option<PathBuf>,
+    label: Option<PathBuf>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -162,6 +165,7 @@ pub struct OwnerService {
     group_socket_path: Option<PathBuf>,
     group_thread: Option<std::thread::JoinHandle<()>>,
     group_symlink: Option<PathBuf>,
+    group_label: Option<PathBuf>,
     retry_thread: Option<std::thread::JoinHandle<()>>,
     late_group: Arc<Mutex<LateGroup>>,
     /// Whether the socket file has been removed. Shutdown removes at
@@ -171,16 +175,19 @@ pub struct OwnerService {
     removed: bool,
 }
 
-/// Bind the group socket and publish its alias. Creates only
-/// `Sockets/` inside the resolved container, never the container
-/// itself — a hand-created container is a decoy the extension cannot
-/// reach. Shared by the startup bind and the late-retry path.
+/// Bind the group socket and publish its alias plus a label file.
+/// Creates only `Sockets/` inside the resolved container, never the
+/// container itself — a hand-created container is a decoy the
+/// extension cannot reach. Shared by the startup bind and the late
+/// retry path.
 fn bind_group_endpoints(
     group_container: &Path,
     drive: &DriveId,
-) -> std::io::Result<(PathBuf, PathBuf, std::os::unix::net::UnixListener)> {
+    drive_dir: &Path,
+) -> std::io::Result<(PathBuf, PathBuf, PathBuf, std::os::unix::net::UnixListener)> {
     let group_path = group_socket_path(group_container, drive);
     let link_path = group_symlink_path(group_container, drive);
+    let label_path = group_label_path(group_container, drive);
     if let Some(sockets) = group_path.parent() {
         std::fs::create_dir_all(sockets)?;
     }
@@ -190,7 +197,17 @@ fn bind_group_endpoints(
         let _ = std::fs::remove_file(&group_path);
         return Err(error);
     }
-    Ok((group_path, link_path, listener))
+    // The drive directory's basename is the registry name. Only a
+    // single path component is ever published as control metadata.
+    let name = drive_dir.file_name().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "drive dir has no name")
+    })?;
+    if let Err(error) = std::fs::write(&label_path, name.as_encoded_bytes()) {
+        let _ = std::fs::remove_file(&link_path);
+        let _ = std::fs::remove_file(&group_path);
+        return Err(error);
+    }
+    Ok((group_path, link_path, label_path, listener))
 }
 
 impl OwnerService {
@@ -214,6 +231,7 @@ impl OwnerService {
             group_socket_path: None,
             group_thread: None,
             group_symlink: None,
+            group_label: None,
             retry_thread: None,
             late_group: Arc::new(Mutex::new(LateGroup::default())),
             removed: false,
@@ -242,8 +260,8 @@ impl OwnerService {
         let socket_path = crate::owner::socket_path_for(drive_dir);
         let listener = bind_listener(&socket_path)?;
         let stop = Arc::new(AtomicBool::new(false));
-        let (group_path, link_path, group_listener) =
-            match bind_group_endpoints(group_container, drive) {
+        let (group_path, link_path, label_path, group_listener) =
+            match bind_group_endpoints(group_container, drive, drive_dir) {
                 Ok(bound) => bound,
                 Err(error) => {
                     let _ = std::fs::remove_file(&socket_path);
@@ -271,6 +289,7 @@ impl OwnerService {
             group_socket_path: Some(group_path),
             group_thread: Some(group_thread),
             group_symlink: Some(link_path),
+            group_label: Some(label_path),
             retry_thread: None,
             late_group: Arc::new(Mutex::new(LateGroup::default())),
             removed: false,
@@ -283,6 +302,7 @@ impl OwnerService {
     /// where the ordering is not guaranteed. The retry shares the
     /// already-serving `OwnerServer` — it never rebinds the primary
     /// socket and never manufactures an alias itself.
+    #[cfg(target_os = "macos")]
     fn bind_with_group_retry(
         handles: OwnerHandles,
         drive_dir: &Path,
@@ -300,6 +320,7 @@ impl OwnerService {
         let retry_stop = Arc::clone(&stop);
         let retry_late = Arc::clone(&late_group);
         let retry_server = Arc::clone(&server);
+        let retry_drive_dir = drive_dir.to_path_buf();
         let retry_thread = std::thread::spawn(move || {
             // Bounded: a present-but-unbindable group path must not
             // leave the owner looking healthy while permanently deaf.
@@ -311,8 +332,8 @@ impl OwnerService {
                     return;
                 }
                 if let Some(container) = production_group_container() {
-                    match bind_group_endpoints(&container, &drive) {
-                        Ok((group_path, link_path, group_listener)) => {
+                    match bind_group_endpoints(&container, &drive, &retry_drive_dir) {
+                        Ok((group_path, link_path, label_path, group_listener)) => {
                             let group_thread = {
                                 let (server, stop) =
                                     (Arc::clone(&retry_server), Arc::clone(&retry_stop));
@@ -321,6 +342,7 @@ impl OwnerService {
                             let mut late = retry_late.lock().unwrap_or_else(|p| p.into_inner());
                             late.socket = Some(group_path);
                             late.symlink = Some(link_path);
+                            late.label = Some(label_path);
                             late.thread = Some(group_thread);
                             return;
                         }
@@ -349,6 +371,7 @@ impl OwnerService {
             group_socket_path: None,
             group_thread: None,
             group_symlink: None,
+            group_label: None,
             retry_thread: Some(retry_thread),
             late_group,
             removed: false,
@@ -462,9 +485,15 @@ impl OwnerService {
             if let Some(path) = late.socket.take() {
                 let _ = std::fs::remove_file(&path);
             }
+            if let Some(label) = late.label.take() {
+                let _ = std::fs::remove_file(&label);
+            }
         }
         if !self.removed {
             self.removed = true;
+            if let Some(label) = self.group_label.take() {
+                let _ = std::fs::remove_file(&label);
+            }
             if let Some(link) = self.group_symlink.take() {
                 let _ = std::fs::remove_file(&link);
             }

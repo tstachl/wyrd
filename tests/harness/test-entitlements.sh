@@ -20,17 +20,24 @@ die() { echo "  FAIL: $1" >&2; exit 1; }
 APPEX="$ROOT/packaging/macos/fileprovider/WyrdFileProvider.entitlements"
 GROUP='group.md.enesis.wyrd'
 
-# 1. The decision is recorded and the app side is explicit: no
-# entitlement file, because the unsandboxed desktop uses direct
-# paths throughout (see the README evidence).
-grep -Fq 'Production entitlements and provisioning (decided)' \
+# 1. The reopened decision is recorded: the unsandboxed app keeps its
+# direct paths but joins the one App Group so it can materialize the
+# container at launch. The previous reasoning is preserved in prose.
+grep -Fq 'Production entitlements and provisioning (reopened and amended)' \
   "$ROOT/packaging/macos/README.md" \
-  || die "README: decision section missing"
-grep -Fq 'no entitlement file' "$ROOT/packaging/macos/README.md" \
-  || die "README: app-side absence not recorded"
-[[ ! -e "$ROOT/packaging/macos/Wyrd.entitlements" ]] \
-  || die "packaging/macos/Wyrd.entitlements exists — the app holds nothing"
-pass "README pins the decision, app holds nothing"
+  || die "README: reopened decision section missing"
+grep -Fq 'Previous app decision (superseded)' \
+  "$ROOT/packaging/macos/README.md" \
+  || die "README: previous reasoning not preserved"
+python3 - "$ROOT/packaging/macos/Wyrd.app.entitlements" <<EOF
+import plistlib, sys
+group = "$GROUP"
+with open(sys.argv[1], 'rb') as f:
+    app = plistlib.load(f)
+assert set(app) == {'com.apple.security.application-groups'}, app
+assert app['com.apple.security.application-groups'] == [group], app
+EOF
+pass "README pins the reopened decision; app holds only the App Group"
 
 # 2. The appex plist parses and stays sandboxed on the group.
 python3 - "$APPEX" <<EOF

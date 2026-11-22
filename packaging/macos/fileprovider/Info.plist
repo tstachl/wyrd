@@ -24,6 +24,10 @@
 	<dict>
 		<key>NSExtensionPointIdentifier</key>
 		<string>com.apple.fileprovider-nonui</string>
+		<key>NSExtensionFileProviderSupportsEnumeration</key>
+		<true/>
+		<key>NSExtensionFileProviderDocumentGroup</key>
+		<string>group.md.enesis.wyrd</string>
 		<key>NSExtensionPrincipalClass</key>
 		<string>WyrdFileProvider.FileProviderExtension</string>
 	</dict>

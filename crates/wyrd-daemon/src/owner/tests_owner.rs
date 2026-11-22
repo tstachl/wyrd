@@ -3751,7 +3751,13 @@ fn group_bind_serves_primary_and_symlink() {
             .expect("the group bind serves");
     let group_path = super::server::group_socket_path(&container, &drive);
     let link_path = super::server::group_symlink_path(&container, &drive);
+    let label_path = super::server::group_label_path(&container, &drive);
     assert!(group_path.exists(), "the group socket is bound");
+    assert_eq!(
+        std::fs::read(&label_path).expect("the drive name is published"),
+        dir.file_name().unwrap().as_encoded_bytes(),
+        "the label carries the registry name, not the drive id"
+    );
     assert!(
         std::fs::symlink_metadata(&link_path)
             .expect("the alias exists")
@@ -3783,6 +3789,7 @@ fn group_bind_serves_primary_and_symlink() {
     );
     assert!(!group_path.exists(), "shutdown removes the group socket");
     assert!(!link_path.exists(), "shutdown removes the alias");
+    assert!(!label_path.exists(), "shutdown removes the label");
     std::fs::remove_dir_all(dir).unwrap();
     std::fs::remove_dir_all(container).unwrap();
 }
