@@ -7,10 +7,12 @@ description = "Wyrd's per-user application settings file schema: version, per-dr
 
 [dependencies]
 serde.workspace = true
+# Version dispatch and the v1→v2 migration are schema rules. Both
+# readers call `parse_settings` so neither can migrate differently;
+# the consumers still own file I/O, locking and atomic writes.
+serde_json.workspace = true
 
 [dev-dependencies]
-# Wire-form tests only: the crate itself encodes nothing, consumers do.
-serde_json.workspace = true
 
 [lints]
 workspace = true

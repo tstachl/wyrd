@@ -24,9 +24,7 @@
 
 use std::path::{Path, PathBuf};
 
-use wyrd_settings::{
-    settings_key_for, validate_drive_key, AppSettingsFile, APP_SETTINGS_VERSION, SETTINGS_FILENAME,
-};
+use wyrd_settings::{parse_settings, settings_key_for, validate_drive_key, SETTINGS_FILENAME};
 
 /// One drive's configured bounds, as configured — not as applied.
 /// Every field is optional because absent keys leave the compiled
@@ -141,20 +139,15 @@ pub fn drive_settings_at(settings_path: &Path, drive_dir: &Path) -> DriveSetting
             return unreadable(format!("read {}: {error}", settings_path.display()));
         }
     };
-    let file: AppSettingsFile = match serde_json::from_slice(&bytes) {
+    // Same parse-and-migrate function the daemon uses: a v1 file
+    // reads as v2 with no diagnostics section, and neither reader
+    // can disagree about a version or an unknown key.
+    let file = match parse_settings(&bytes) {
         Ok(file) => file,
         Err(error) => {
             return unreadable(format!("parse {}: {error}", settings_path.display()));
         }
     };
-    if file.version != APP_SETTINGS_VERSION {
-        return unreadable(format!(
-            "settings {} is version {}, this shell reads {}",
-            settings_path.display(),
-            file.version,
-            APP_SETTINGS_VERSION
-        ));
-    }
     for key in file.drives.keys() {
         if let Err(reason) = validate_drive_key(key) {
             return unreadable(reason);
@@ -231,8 +224,8 @@ mod tests {
                 state => panic!("{name} must be unreadable: {state:?}"),
             }
         };
-        let reason = case("newer.json", r#"{"version": 2, "drives": {}}"#);
-        assert!(reason.contains("version 2"), "reason: {reason}");
+        let reason = case("newer.json", r#"{"version": 999, "drives": {}}"#);
+        assert!(reason.contains("version 999"), "reason: {reason}");
         let reason = case("broken.json", r#"{"version": 1, "drives": {"#);
         assert!(reason.contains("parse"), "reason: {reason}");
         let reason = case(

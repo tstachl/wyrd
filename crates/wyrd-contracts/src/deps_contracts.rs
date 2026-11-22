@@ -118,10 +118,13 @@ fn policy_for(member: &str) -> Option<MemberPolicy> {
         // and strict validation. Serialization and rules only — no
         // filesystem, no domain edge — so the daemon (applier) and
         // the desktop (reader) share one contract instead of two
-        // implementations that can drift.
+        // implementations that can drift. `serde_json` is here for
+        // version dispatch and the v1→v2 migration: both readers
+        // call the same `parse_settings`, so they cannot disagree
+        // about what an old file means. File I/O stays in consumers.
         "wyrd-settings" => Some(MemberPolicy {
             workspace_allow: &[],
-            external_allow: &["serde"],
+            external_allow: &["serde", "serde_json"],
         }),
         // The drive-owner client: owned protocol types and the
         // non-owning socket client. Domain-free by construction —
@@ -390,9 +393,9 @@ fn dev_dep_policy(member: &str) -> Option<&'static [&'static str]> {
             "wyrd-sync",
         ]),
         "wyrd-owner-client" => Some(&[]),
-        // Wire-form tests encode through serde_json; production
-        // stays serde-only — the crate itself encodes nothing.
-        "wyrd-settings" => Some(&["serde_json"]),
+        // serde_json moved to a normal dependency for the shared
+        // parser; no separate dev-dependency set remains.
+        "wyrd-settings" => Some(&[]),
         _ => None,
     }
 }
@@ -713,12 +716,13 @@ fn feature_pins(member: &str) -> Option<&'static [FeaturePin]> {
             ("dependencies", "serde", &["derive"], true),
             ("dependencies", "serde_json", &[], true),
         ]),
-        // Settings schema only: serde with the workspace derive
-        // feature, nothing else in any table. Wire-form tests encode
-        // through serde_json (dev only); production encodes nothing.
+        // Settings schema: serde with the workspace derive feature,
+        // plus serde_json for the shared `parse_settings` dispatch and
+        // v1→v2 migration. Both readers call it, so this is a schema
+        // rule rather than consumer I/O. No other edge in any table.
         "wyrd-settings" => Some(&[
             ("dependencies", "serde", &["derive"], true),
-            ("dev-dependencies", "serde_json", &[], true),
+            ("dependencies", "serde_json", &[], true),
         ]),
         _ => None,
     }
