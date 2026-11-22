@@ -7,7 +7,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 
 use super::{
-    LeaveRequest, ProvisionRequest, ReconfigureRequest, ServiceDisableRequest,
+    DeleteRequest, LeaveRequest, ProvisionRequest, ReconfigureRequest, ServiceDisableRequest,
     ServiceEnableRequest, ServiceStartRequest, UnlockRequest,
 };
 
@@ -210,6 +210,22 @@ pub fn leave_argv(request: &LeaveRequest) -> Result<Vec<OsString>, String> {
     let mut argv: Vec<OsString> = vec!["member".into(), request.drive_dir.as_os_str().to_owned()];
     push_credential_flags(&mut argv, &request.credentials, false)?;
     argv.push("leave".into());
+    if request.acknowledged {
+        argv.push("--yes".into());
+    }
+    Ok(argv)
+}
+
+/// Pure argv builder for `wyrd drive <dir> delete --yes`.
+/// Credentials are flattened on `Command::Drive`, so the flags precede
+/// the `delete` verb. Seeds never apply: deletion reads the
+/// provisioned credential. The CLI authors `Remove(self)` before it
+/// removes the directory, and refuses unacknowledged, non-owner and
+/// frozen drives without touching anything.
+pub fn delete_argv(request: &DeleteRequest) -> Result<Vec<OsString>, String> {
+    let mut argv: Vec<OsString> = vec!["drive".into(), request.drive_dir.as_os_str().to_owned()];
+    push_credential_flags(&mut argv, &request.credentials, false)?;
+    argv.push("delete".into());
     if request.acknowledged {
         argv.push("--yes".into());
     }

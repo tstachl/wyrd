@@ -184,10 +184,13 @@ approved text; the current strings at `format.ts:123-127` and
 `SettingsView.svelte:481-540` are not sufficiently precise.
 
 **R-D5 — Consequential actions.** Confirmations MUST state consequences
-before action. Desktop exposes only discard, new identity, leave and service
-restart; delete drive, remove device, set owner, resolve and reissue are
-CLI-only. Core copy is strong — `render_deletion_confirmation` bans
-euphemisms and states locality and terminality
+before action. Desktop exposes discard, new identity, leave, local data
+removal and service restart; remove device, set owner, resolve and reissue
+stay CLI-only. Local data removal runs the installed `drive delete`: it
+authors `Remove(self)` before removing the directory, carries the same
+terminal acknowledgement and locality copy as the CLI, and does not touch
+another member's copy. Core copy is strong — `render_deletion_confirmation`
+bans euphemisms and states locality and terminality
 (`lifecycle_surface.rs:105-137`) — and MUST NOT be softened. Device removal
 MUST follow the approved explanation. "Lock for this session" SHOULD state
 that it ends the session until unlocked again, and that reboot or locking

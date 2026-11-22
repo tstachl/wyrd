@@ -44,11 +44,13 @@ use crate::settings_apply::{
 use crate::settings_view::{self, DriveSettings};
 use crate::{AppState, BackendError, DesktopBackend, FlightTracker};
 
+mod delete;
 mod membership;
 mod onboarding;
 mod provision;
 mod unlock;
 
+pub use delete::{provision_delete, ProvisionDeleteArgs};
 pub use membership::{provision_leave, MembershipObservation, ProvisionLeaveArgs};
 pub use onboarding::{
     onboarding_adopt, onboarding_commit, onboarding_defaults, onboarding_new_passphrase,
@@ -505,6 +507,7 @@ pub fn handler<R: Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool {
         drive_settings_write,
         provision::provision_create,
         provision::provision_join,
+        delete::provision_delete,
         membership::provision_leave,
         provision::provision_reconfigure,
         provision::provision_service_start,

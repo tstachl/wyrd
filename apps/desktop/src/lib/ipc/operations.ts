@@ -180,6 +180,21 @@ export interface ProvisionLeaveArgs {
   acknowledged: boolean;
 }
 
+/** Remove one drive's local data through the installed CLI. */
+export interface ProvisionDeleteArgs {
+  driveDir: string;
+  /** Credential path, never contents. Required with the file backend; refused beside a store reference. */
+  identityFile?: string;
+  /** Credential path, never contents. Required with the file backend; refused beside a store reference. */
+  passphraseFile?: string;
+  /** Credential backend selector: absent or `"file"` reads files; `"os-store"` resolves the drive through the OS credential store. */
+  credentialBackend?: string;
+  /** OS credential-store account naming the drive's item. Required exactly where the backend is `"os-store"`. */
+  credentialAccount?: string;
+  /** Terminal confirmation carried to the CLI's `--yes`. */
+  acknowledged: boolean;
+}
+
 export interface ProvisionReconfigureArgs {
   driveDir: string;
   relays: string[];
@@ -230,6 +245,15 @@ export function provisionJoin(args: ProvisionJoinArgs): Promise<ProvisionReport>
  */
 export function provisionLeave(args: ProvisionLeaveArgs): Promise<ProvisionReport> {
   return invokeValue<ProvisionReport>("provision_leave", { args });
+}
+
+/**
+ * Remove one drive's local data through the installed CLI, then
+ * re-read and re-observe. `acknowledged` carries the terminal
+ * confirmation to `--yes`.
+ */
+export function provisionDelete(args: ProvisionDeleteArgs): Promise<ProvisionReport> {
+  return invokeValue<ProvisionReport>("provision_delete", { args });
 }
 
 /**

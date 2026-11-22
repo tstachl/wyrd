@@ -7,13 +7,13 @@ use std::path::Path;
 use std::time::Duration;
 
 use super::argv::{
-    bootstrap_argv, leave_argv, reconfigure_argv, service_disable_argv, service_enable_argv,
-    service_start_argv,
+    bootstrap_argv, delete_argv, leave_argv, reconfigure_argv, service_disable_argv,
+    service_enable_argv, service_start_argv,
 };
 use super::process::{check_cli_version, map_exit_output, run_cli};
 use super::{
-    LeaveRequest, ProvisionOutcome, ProvisionRequest, ProvisionResult, ReconfigureRequest,
-    ServiceDisableRequest, ServiceEnableRequest, ServiceStartRequest,
+    DeleteRequest, LeaveRequest, ProvisionOutcome, ProvisionRequest, ProvisionResult,
+    ReconfigureRequest, ServiceDisableRequest, ServiceEnableRequest, ServiceStartRequest,
 };
 
 /// Run one `bootstrap` provisioning through the version-matched CLI:
@@ -60,6 +60,33 @@ pub fn run_leave(cli_bin: &Path, request: &LeaveRequest, timeout: Duration) -> P
         };
     }
     let argv = match leave_argv(request) {
+        Ok(argv) => argv,
+        Err(reason) => {
+            return ProvisionOutcome {
+                result: ProvisionResult::ExpectedFailure { detail: reason },
+                stderr: String::new(),
+                code: None,
+            };
+        }
+    };
+    let output = run_cli(cli_bin, &argv, None, timeout);
+    map_exit_output(&output)
+}
+
+/// Run one `drive delete` through the version-matched CLI, with the
+/// same version-first, observation-after contract as
+/// [`run_bootstrap`]. No implicit retry: the CLI may have committed
+/// before a timeout, so only the paired observation decides the
+/// display.
+pub fn run_delete(cli_bin: &Path, request: &DeleteRequest, timeout: Duration) -> ProvisionOutcome {
+    if let Err(mismatch) = check_cli_version(cli_bin, timeout) {
+        return ProvisionOutcome {
+            result: mismatch,
+            stderr: String::new(),
+            code: None,
+        };
+    }
+    let argv = match delete_argv(request) {
         Ok(argv) => argv,
         Err(reason) => {
             return ProvisionOutcome {

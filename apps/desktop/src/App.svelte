@@ -24,6 +24,7 @@
     onboardingNewPassphrase,
     onboardingVerify,
     provisionCreate,
+    provisionDelete,
     provisionJoin,
     provisionLeave,
     provisionReconfigure,
@@ -39,6 +40,7 @@
     OnboardingCommitArgs,
     OnboardingVerifyArgs,
     ProvisionCreateArgs,
+    ProvisionDeleteArgs,
     ProvisionJoinArgs,
     ProvisionLeaveArgs,
     ProvisionServiceDisableArgs,
@@ -1199,6 +1201,7 @@
               session={selectedSession}
               onRefresh={() => void refreshSettings(selectedDriveDir)}
               onLeave={(args: ProvisionLeaveArgs) => runProvision(() => provisionLeave(args))}
+              onDelete={(args: ProvisionDeleteArgs) => runProvision(() => provisionDelete(args))}
               onApply={(update: SparseUpdateArgs) =>
                 runSettingsWrite(selectedDriveDir, update)
               }

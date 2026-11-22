@@ -38,11 +38,11 @@ mod process;
 mod unlock;
 
 pub use argv::{
-    bootstrap_argv, leave_argv, reconfigure_argv, service_disable_argv, service_enable_argv,
-    service_start_argv, unlock_argv, CredentialSource, SeedFiles,
+    bootstrap_argv, delete_argv, leave_argv, reconfigure_argv, service_disable_argv,
+    service_enable_argv, service_start_argv, unlock_argv, CredentialSource, SeedFiles,
 };
 pub use lifecycle::{
-    run_bootstrap, run_leave, run_reconfigure, run_service_disable, run_service_enable,
+    run_bootstrap, run_delete, run_leave, run_reconfigure, run_service_disable, run_service_enable,
     run_service_start,
 };
 pub use process::{
@@ -129,6 +129,22 @@ pub struct LeaveRequest {
     pub credentials: CredentialSource,
     /// Sole-owner terminal confirmation. The UI explains the
     /// consequences; this flag carries the acknowledgement to the CLI.
+    pub acknowledged: bool,
+}
+
+/// Remove this drive's local data: author `Remove(self)` through the
+/// CLI and then remove the local directory. Same authority and
+/// acknowledgement boundary as [`LeaveRequest`], plus the local
+/// directory removal the CLI performs after the transition commits.
+#[derive(Debug, Clone)]
+pub struct DeleteRequest {
+    /// Absolute drive directory, exact string (shared drive-identity rule).
+    pub drive_dir: PathBuf,
+    /// Where the CLI reads the drive credential: files, or one OS
+    /// credential-store item. Seeds never apply.
+    pub credentials: CredentialSource,
+    /// Terminal confirmation. The UI explains the consequences; this
+    /// flag carries the acknowledgement to the CLI's `--yes`.
     pub acknowledged: bool,
 }
 

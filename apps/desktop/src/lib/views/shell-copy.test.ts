@@ -93,6 +93,19 @@ test("leave states the device-removal consequences before action", () => {
   expect(settings).not.toContain("sole owner");
 });
 
+test("local removal states the locality and terminal consequences before action", () => {
+  for (const line of [
+    "The local directory is gone and nothing else changed",
+    "no other member's copy changed",
+    "blocks stay recoverable from this device until overwritten",
+    "the owner set becomes empty",
+    "Stop the drive's service first if it holds the store",
+  ]) {
+    expect(settings).toContain(line);
+  }
+  expect(settings).not.toContain("Clean up");
+});
+
 test("lock names the session consequence", () => {
   expect(app).toContain("unlocking needs the passphrase to open it again");
   expect(app).toContain("Quitting the app leaves the drive running");
