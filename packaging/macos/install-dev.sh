@@ -1,14 +1,32 @@
 #!/bin/sh
 # Developer install for v0.4 (ad-hoc, no fee).
 #
-# Usage: packaging/macos/install-dev.sh [--dest <path>] [--no-open] [-- <build args>]
-#   --dest <path>   install location (default: /Applications/Wyrd.app when
-#                   writable, else ~/Applications/Wyrd.app; DEST env overrides)
-#   --no-open       build and install without launching the app
-#   -- <args>       forwarded verbatim to packaging/macos/build-bundle.sh
-#                   (e.g. -- --target aarch64-apple-darwin). The wrapper's
-#                   app-only default is kept unless the caller forwards
-#                   --bundles explicitly.
+# Usage: packaging/macos/install-dev.sh [options] [-- <build args>]
+#   --dest <path>                install location (default: /Applications/Wyrd.app
+#                                when writable, else ~/Applications/Wyrd.app;
+#                                DEST env overrides)
+#   --no-open                    build and install without launching the app
+#   --sign-identity <identity>   Developer identity for the app, appex, CLI
+#                                and domain registrar. With this option a
+#                                provisioning profile is required: an ad-hoc
+#                                appex cannot load in fileproviderd. The same
+#                                value signs the outer app (SIGN_IDENTITY and
+#                                APPLE_SIGNING_IDENTITY are both set).
+#   --provisioning-profile <p>   .provisionprofile for the appex, carrying
+#                                group.md.enesis.wyrd. Kept outside the repo;
+#                                the absolute path is passed to the stage hook.
+#   --app-provisioning-profile <p>  .provisionprofile for the app (bundle id
+#                                md.enesis.wyrd), also carrying the App Group.
+#                                The entitled app materializes the container
+#                                at launch.
+#   -- <args>                    forwarded verbatim to build-bundle.sh
+#                                (e.g. -- --target aarch64-apple-darwin). The
+#                                wrapper's app-only default is kept unless the
+#                                caller forwards --bundles explicitly.
+#
+# SIGN_IDENTITY / APPLE_SIGNING_IDENTITY / PROVISIONING_PROFILE /
+# APP_PROVISIONING_PROFILE in the environment are equivalent to the
+# options above.
 #
 # What it does: ensures the frontend dependencies, builds Wyrd.app
 # ad-hoc through build-bundle.sh (the
@@ -19,28 +37,34 @@
 # launch. No signing assets required: Xcode/CLT plus the Rust and web
 # toolchains only.
 #
-# Finder boundary (honest, not a bug): an ad-hoc appex logs
-# no-group-container and stays inert — the App Group container only
-# materializes under a team-signed build with provisioning. The UI,
-# owner, registry, and managed service reinstall work ad-hoc; Finder
-# integration stays a separately team-gated path (packaging/macos/README.md, "Developer
-# install" plus "Production entitlements and provisioning").
+# Finder boundary (honest, not a bug): without --sign-identity and
+# --provisioning-profile the appex is ad-hoc, logs no-group-container
+# and stays inert — the App Group container only materializes under a
+# team-signed build with provisioning. The UI, owner, registry, and
+# managed service reinstall work ad-hoc. Pass both options to get a
+# Finder-capable build; the domain registrar shipped in the bundle
+# registers one File Provider domain per drive that publishes its
+# group socket. See packaging/macos/README.md ("Developer install"
+# and "Production entitlements and provisioning").
 set -eu
 set -o pipefail 2>/dev/null || true
 
 usage() {
-    echo "usage: packaging/macos/install-dev.sh [--dest <path>] [--no-open] [-- <build args>]"
+    echo "usage: packaging/macos/install-dev.sh [options] [-- <build args>]"
     echo ""
-    echo "Builds Wyrd.app ad-hoc and installs it to /Applications"
-    echo "(or ~/Applications) ready to launch. The bundler hook stages"
-    echo "the appex plus the version-matched wyrd CLI into"
-    echo "Contents/Resources/wyrd; the desktop resolves the bundled copy"
-    echo "first and the target-dir sibling only in dev. The ad-hoc CLI"
-    echo "is vault-only (WYRD_NO_MOUNT=1): mount needs macFUSE and a"
-    echo "mount-enabled build."
+    echo "options: --dest <path>, --no-open, --sign-identity <identity>,"
+    echo "         --provisioning-profile <path>, --app-provisioning-profile <path>,"
+    echo "         --help"
     echo ""
-    echo "Finder stays inert ad-hoc (no-group-container); the team-signed"
-    echo "path is in packaging/macos/README.md."
+    echo "Builds Wyrd.app from this worktree and installs it to /Applications"
+    echo "(or ~/Applications) ready to launch. The bundler hook stages the"
+    echo "appex, the domain registrar, and the version-matched wyrd CLI;"
+    echo "the desktop resolves the bundled CLI first. The CLI is vault-only"
+    echo "(WYRD_NO_MOUNT=1): mount needs macFUSE and a mount-enabled build."
+    echo ""
+    echo "Ad-hoc builds leave Finder inert (no App Group container). Pass"
+    echo "--sign-identity and --provisioning-profile for a Finder-capable"
+    echo "build; see packaging/macos/README.md."
 }
 
 # --help before anything that can fail: a machine without cargo can
@@ -89,8 +113,42 @@ command -v python3 >/dev/null 2>&1 || {
 # `install-dev.sh --dest … --no-open -- --target <triple>`.
 DEST="${DEST:-}"
 OPEN_APP=1
+# Signing inputs: either the options below or the inherited environment.
+# Both must be set together for a Finder-capable build, and an outer
+# identity can be inferred from the shared inner identity.
+SIGN_IDENTITY="${SIGN_IDENTITY:-}"
+APPLE_SIGNING_IDENTITY="${APPLE_SIGNING_IDENTITY:-}"
+PROVISIONING_PROFILE="${PROVISIONING_PROFILE:-}"
+APP_PROVISIONING_PROFILE="${APP_PROVISIONING_PROFILE:-}"
 while [ "$#" -gt 0 ]; do
     case "$1" in
+        --sign-identity)
+            [ -n "${2:-}" ] || { echo "error: --sign-identity needs a value." >&2; exit 1; }
+            SIGN_IDENTITY="$2"
+            shift 2
+            ;;
+        --sign-identity=*)
+            SIGN_IDENTITY="${1#--sign-identity=}"
+            shift
+            ;;
+        --provisioning-profile)
+            [ -n "${2:-}" ] || { echo "error: --provisioning-profile needs a path." >&2; exit 1; }
+            PROVISIONING_PROFILE="$2"
+            shift 2
+            ;;
+        --provisioning-profile=*)
+            PROVISIONING_PROFILE="${1#--provisioning-profile=}"
+            shift
+            ;;
+        --app-provisioning-profile)
+            [ -n "${2:-}" ] || { echo "error: --app-provisioning-profile needs a path." >&2; exit 1; }
+            APP_PROVISIONING_PROFILE="$2"
+            shift 2
+            ;;
+        --app-provisioning-profile=*)
+            APP_PROVISIONING_PROFILE="${1#--app-provisioning-profile=}"
+            shift
+            ;;
         --dest)
             [ -n "${2:-}" ] || { echo "error: --dest needs a path." >&2; exit 1; }
             DEST="$2"
@@ -109,7 +167,7 @@ while [ "$#" -gt 0 ]; do
             break
             ;;
         -*)
-            echo "error: unknown install flag: $1 (usage: --dest, --no-open, --, --help)." >&2
+            echo "error: unknown install flag: $1 (usage: --dest, --no-open, --sign-identity, --provisioning-profile, --app-provisioning-profile, --, --help)." >&2
             exit 1
             ;;
         *)
@@ -117,6 +175,54 @@ while [ "$#" -gt 0 ]; do
             ;;
     esac
 done
+
+# Signing pair: a team identity without a profile produces an appex
+# whose App Group entitlement is not effective, so the container
+# never materializes and Finder integration cannot work. Fail before
+# any build rather than shipping a silently inert app. Ad-hoc needs
+# neither, and stays the default for machines without a team.
+case "$SIGN_IDENTITY" in
+    ""|-)
+        if [ -n "$PROVISIONING_PROFILE" ] || [ -n "$APP_PROVISIONING_PROFILE" ]; then
+            echo "error: a provisioning profile needs --sign-identity (ad-hoc cannot use a profile)." >&2
+            exit 1
+        fi
+        FINDER_CAPABLE=0
+        # Unset, never empty: an empty APPLE_SIGNING_IDENTITY is an
+        # explicit identity to Tauri and breaks its ad-hoc default.
+        unset APPLE_SIGNING_IDENTITY || true
+        ;;
+    *)
+        if [ -z "$PROVISIONING_PROFILE" ]; then
+            echo "error: --sign-identity needs --provisioning-profile carrying group.md.enesis.wyrd." >&2
+            exit 1
+        fi
+        [ -f "$PROVISIONING_PROFILE" ] || {
+            echo "error: provisioning profile not found: $PROVISIONING_PROFILE" >&2
+            exit 1
+        }
+        PROFILE_DIR=$(CDPATH= cd -- "$(dirname -- "$PROVISIONING_PROFILE")" && pwd)
+        PROVISIONING_PROFILE="$PROFILE_DIR/$(basename -- "$PROVISIONING_PROFILE")"
+        if [ -z "$APP_PROVISIONING_PROFILE" ]; then
+            echo "error: --sign-identity also needs --app-provisioning-profile: the app must be provisioned for group.md.enesis.wyrd." >&2
+            exit 1
+        fi
+        [ -f "$APP_PROVISIONING_PROFILE" ] || {
+            echo "error: app provisioning profile not found: $APP_PROVISIONING_PROFILE" >&2
+            exit 1
+        }
+        APP_PROFILE_DIR=$(CDPATH= cd -- "$(dirname -- "$APP_PROVISIONING_PROFILE")" && pwd)
+        APP_PROVISIONING_PROFILE="$APP_PROFILE_DIR/$(basename -- "$APP_PROVISIONING_PROFILE")"
+        [ -z "$APPLE_SIGNING_IDENTITY" ] && APPLE_SIGNING_IDENTITY="$SIGN_IDENTITY"
+        if [ "$APPLE_SIGNING_IDENTITY" != "$SIGN_IDENTITY" ]; then
+            echo "error: APPLE_SIGNING_IDENTITY ($APPLE_SIGNING_IDENTITY) differs from SIGN_IDENTITY ($SIGN_IDENTITY); the bundle must sign as one identity." >&2
+            exit 1
+        fi
+        export APPLE_SIGNING_IDENTITY
+        FINDER_CAPABLE=1
+        ;;
+esac
+export SIGN_IDENTITY PROVISIONING_PROFILE APP_PROVISIONING_PROFILE
 
 # Default destination: system Applications when writable, else the
 # user's Applications (no sudo is ever attempted here).
@@ -231,6 +337,77 @@ codesign --verify --deep --strict "$APP" || {
     echo "error: built bundle fails codesign verification." >&2
     exit 1
 }
+
+# The extension and the domain registrar are part of the bundle
+# contract, not optional staging. A dropped bundler mapping used to
+# install silently: check them here so the app never ships without
+# the pieces Finder depends on.
+APPEX="$APP/Contents/PlugIns/WyrdFileProvider.appex"
+REGISTRAR="$APP/Contents/MacOS/WyrdDomainRegistrar"
+for BUNDLED_FILE in \
+    "$APPEX/Contents/Info.plist" \
+    "$APPEX/Contents/MacOS/WyrdFileProvider" \
+    "$REGISTRAR"
+do
+    if [ ! -f "$BUNDLED_FILE" ]; then
+        echo "error: built bundle is missing $BUNDLED_FILE." >&2
+        echo "The bundler mapping in tauri.conf.json must stage the appex and domain registrar before the outer sign." >&2
+        exit 1
+    fi
+done
+if [ ! -x "$REGISTRAR" ]; then
+    echo "error: bundled domain registrar is not executable: $REGISTRAR" >&2
+    exit 1
+fi
+if [ "$FINDER_CAPABLE" -eq 1 ]; then
+    if [ ! -f "$APPEX/Contents/embedded.provisionprofile" ]; then
+        echo "error: team-signed appex has no embedded.provisionprofile." >&2
+        exit 1
+    fi
+    APPEX_INFO=$(codesign -dv --entitlements - "$APPEX" 2>&1) || {
+        echo "error: cannot read the embedded appex signature." >&2
+        exit 1
+    }
+    case "$APPEX_INFO" in
+        *"Identifier=md.enesis.wyrd.fileprovider"*) ;;
+        *) echo "error: embedded appex has the wrong signing identifier." >&2; exit 1 ;;
+    esac
+    case "$APPEX_INFO" in
+        *"TeamIdentifier="*"not set"*)
+            echo "error: team-signed appex reports no TeamIdentifier." >&2
+            exit 1
+            ;;
+    esac
+    case "$APPEX_INFO" in
+        *"group.md.enesis.wyrd"*) ;;
+        *) echo "error: embedded appex does not carry the App Group entitlement." >&2; exit 1 ;;
+    esac
+    REGISTRAR_INFO=$(codesign -dv --entitlements - "$REGISTRAR" 2>&1) || {
+        echo "error: cannot read the domain registrar signature." >&2
+        exit 1
+    }
+    case "$REGISTRAR_INFO" in
+        *"Identifier=md.enesis.wyrd"*) ;;
+        *) echo "error: domain registrar must carry the app's signing identifier." >&2; exit 1 ;;
+    esac
+    case "$REGISTRAR_INFO" in
+        *"group.md.enesis.wyrd"*) ;;
+        *) echo "error: domain registrar does not carry the App Group entitlement." >&2; exit 1 ;;
+    esac
+    if [ ! -f "$APP/Contents/embedded.provisionprofile" ]; then
+        echo "error: team-signed app has no embedded.provisionprofile." >&2
+        exit 1
+    fi
+    APP_INFO=$(codesign -dv --entitlements - "$APP" 2>&1) || {
+        echo "error: cannot read the app signature." >&2
+        exit 1
+    }
+    case "$APP_INFO" in
+        *"group.md.enesis.wyrd"*) ;;
+        *) echo "error: the app does not carry the App Group entitlement." >&2; exit 1 ;;
+    esac
+fi
+
 # The co-installed CLI the desktop resolves first, plus the
 # supervised-owner wrapper the daemon resolves as its sibling:
 # the fixed pair the acceptance case (create a drive, show it
@@ -290,10 +467,15 @@ codesign --verify --deep --strict "$DEST" || {
 }
 xattr -dr com.apple.quarantine "$DEST" 2>/dev/null || true
 
-echo "installed $DEST (ad-hoc, from $APP)"
-echo "note: Finder integration stays inert ad-hoc (no-group-container):"
-echo "create, status, settings, and managed service reinstall work; Finder needs the"
-echo "team-signed path in packaging/macos/README.md."
+if [ "$FINDER_CAPABLE" -eq 1 ]; then
+    echo "installed $DEST (team-signed, Finder-capable, from $APP)"
+    echo "note: a drive appears in Finder once its owner publishes the group socket."
+else
+    echo "installed $DEST (ad-hoc, from $APP)"
+    echo "note: Finder integration stays inert ad-hoc (no-group-container):"
+    echo "create, status, settings, and managed service reinstall work; pass"
+    echo "--sign-identity and --provisioning-profile for a Finder-capable build."
+fi
 if [ "$OPEN_APP" -eq 1 ]; then
     open "$DEST"
 else

@@ -112,6 +112,10 @@ mkdir -p "$MACOS"
 # the same set, so a nested file is never checked-but-omitted.
 # Capture first: an unquoted $(find …) would split on whitespace
 # and discard find's status, silently compiling a partial list.
+# main.swift is the entry point, compiled as top-level code alongside
+# the declaration-only Sources. An MH_EXECUTE appex is required: a
+# Mach-O bundle silently drops the App Group entitlement at sign time
+# and the extension can never resolve its container.
 sources=$(find "$HERE/Sources" -name '*.swift' -print) || {
     echo "error: cannot enumerate $HERE/Sources" >&2
     exit 1
@@ -131,10 +135,10 @@ fi
     -target "$ARCH-apple-macos$MIN_MACOS" \
     -sdk "$SDK" \
     -O \
-    -emit-library \
+    -emit-executable \
     -module-name WyrdFileProvider \
-    -Xlinker -bundle \
     -o "$MACOS/WyrdFileProvider" \
+    "$HERE/main.swift" \
     "$@"
 
 cp "$HERE/Info.plist" "$CONTENTS/Info.plist"

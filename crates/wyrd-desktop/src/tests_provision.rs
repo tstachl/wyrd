@@ -1335,7 +1335,16 @@ fn spawn_unlock_pipes_the_passphrase_and_holds_the_child() {
     // The fake drains stdin before sleeping, so the bytes land
     // promptly; the child must still be alive (persistent owner).
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
-    while !captured.exists() && std::time::Instant::now() < deadline {
+    // Wait for the bytes, not just the file: `cat > file` creates the
+    // file before the write completes, and reading at that instant
+    // saw an empty capture on a loaded CI runner.
+    let expected = b"hunter2-hunter2";
+    while std::fs::read(&captured)
+        .map(|bytes| bytes.len())
+        .unwrap_or(0)
+        < expected.len()
+        && std::time::Instant::now() < deadline
+    {
         std::thread::sleep(Duration::from_millis(50));
     }
     assert_eq!(

@@ -58,16 +58,14 @@ pub fn default_group_container_with_home(home: Option<PathBuf>) -> Option<PathBu
 /// The production container when it exists on disk: the daemon
 /// creates only `Sockets/` (and `by-drive/`) inside it, never the
 /// container itself — a hand-created container is a decoy the
-/// sandboxed extension cannot reach, so a missing directory means
-/// primary-only, never a created decoy. Evaluated once per bind:
-/// if the App Group container is materialized after the owner
-/// starts (the containing app has never run), the alias is not
-/// published until the service restarts — the app must run before
-/// the service for the first-run Finder observable. A present but
-/// unbindable container (a file at `Sockets/`, permissions) aborts
-/// the whole owner all-or-nothing rather than running primary-only
-/// deaf to the extension: the failure is intentional, so a broken
-/// group path never reads as healthy primary-only.
+/// sandboxed extension cannot reach, so a missing directory means a
+/// primary-only bind with a bounded late retry, never a created decoy.
+/// The app is expected to initialize the container at launch; if the
+/// owner starts first, the retry publishes the alias without a
+/// restart. A present but unbindable container (a file at `Sockets/`,
+/// permissions) still aborts a startup bind all-or-nothing; the late
+/// retry is bounded and ends with a visible error rather than
+/// leaving an owner that looks healthy while permanently deaf.
 pub fn production_group_container() -> Option<PathBuf> {
     #[cfg(target_os = "macos")]
     {
@@ -179,6 +177,18 @@ pub fn group_symlink_path(group_container: &Path, drive: &DriveId) -> PathBuf {
         .join("Sockets")
         .join("by-drive")
         .join(format!("{drive}.sock"))
+}
+
+/// Control metadata beside the alias:
+/// `<container>/Sockets/by-drive/<drive-hex>.label`, holding the
+/// registry name of the served drive. The registrar uses it for the
+/// Finder domain display name; the domain identifier stays the full
+/// drive id. No drive bytes, keys, or manifests go in this file.
+pub fn group_label_path(group_container: &Path, drive: &DriveId) -> PathBuf {
+    group_container
+        .join("Sockets")
+        .join("by-drive")
+        .join(format!("{drive}.label"))
 }
 
 /// Bind the group socket with a live-endpoint check: an existing

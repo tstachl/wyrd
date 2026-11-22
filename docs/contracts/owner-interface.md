@@ -23,7 +23,14 @@ Group container for the File Provider extension, which cannot
 reach the drive directory from its sandbox: one socket per drive
 at
 `<container>/Sockets/<fingerprint>.sock` plus a
-`Sockets/by-drive/<drive-hex>.sock` symlink alias beside it. This
+`Sockets/by-drive/<drive-hex>.sock` symlink alias and a
+`Sockets/by-drive/<drive-hex>.label` file beside it. The label holds
+only the validated registry name (a `[a-z0-9-]` token of at most 64
+characters) for the Finder domain display name. It is control
+metadata, never drive content: no bytes, manifests, keys or secrets
+go into the group container. Only a live owner writes the label, so
+a locked or stopped drive has no Finder domain; the domain
+identifier stays the full `DriveId`. This
 second listener is the daemon half of the registry-owned
 production association on
 macOS: with no dev env vars set, the owner derives the container
@@ -35,12 +42,15 @@ from the served drive itself, then publishes the alias the domain
 resolves through; it is compiled on every
 platform but binds the group socket only where the container
 exists, so the "macOS" scoping is the consumer plus the container,
-not a platform gate in the framing code. Absent container means
-primary-only; a present-but-unbindable container aborts the run
+not a platform gate in the framing code. Absent container means a
+primary-only bind with a bounded late retry; the containing app
+initializes the container at launch, and if the owner started first
+the retry publishes the alias from the same server without a restart.
+A present-but-unbindable container aborts a startup bind
 all-or-nothing rather than running deaf to the extension (see the
-bind docs). The containing app must run before the service on
-first run: the daemon creates only `Sockets/` inside the
-container, never the container itself. The
+bind docs); the late retry is bounded and ends with a visible error.
+The daemon creates only `Sockets/` inside the container, never the
+container itself. The
 filename derives from the served `DriveId`
 (`DriveId::fileprovider_socket_fingerprint`, 64-bit domain
 separated derivation, hex-encoded); the daemon is the only
@@ -60,12 +70,14 @@ accept paths. The daemon half is production: with no dev env vars,
 the owner publishes the alias for the served drive whenever the
 container exists, so registration plus the managed owner service
 (at login) leaves the socket where a registry-registered domain
-resolves it. The full registry-to-domain association — production
-`NSFileProviderDomain` construction from the registry and the
-signed-container confirmation beyond development signing (the
-packaging note marks the literal verified for development signing
-only) — stays pending the signing-owner verification; the contract
-here owns the socket half, not the domain-registration half.
+resolves it. The domain half is bundled with the desktop app: a
+signed Swift helper reconciles `NSFileProviderDomain` registrations
+against the published `by-drive` aliases, keyed by the same 64-hex
+drive id the appex parses from the domain identifier. The contract
+here still owns only the socket half; the helper's path-to-domain
+association is proven by the aliases, not by a new protocol field.
+The container literal is verified for development signing only;
+distribution signing and notarization stay with the signing owner.
 
 Frame each message with a u32 big-endian length prefix followed by
 that many JSON bytes. Assemble frames explicitly: an idle

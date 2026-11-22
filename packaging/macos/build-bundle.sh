@@ -7,8 +7,9 @@
 #
 # Usage: packaging/macos/build-bundle.sh [--bundles app ...]
 # Environment passthrough to the bundler hook and build-appex.sh:
-# SIGN_IDENTITY, PROVISIONING_PROFILE, ARCH, MIN_MACOS, TOOLCHAIN,
-# SWIFTC, SDK, APPEX_BUNDLE_VERSION. With no arguments the wrapper
+# SIGN_IDENTITY, PROVISIONING_PROFILE (the appex), APP_PROVISIONING_PROFILE
+# (the app), ARCH, MIN_MACOS, TOOLCHAIN, SWIFTC, SDK, APPEX_BUNDLE_VERSION.
+# With no arguments the wrapper
 # builds `--bundles app` (the release runbook shape); any arguments
 # replace the default and forward to `cargo tauri build` verbatim,
 # with a `--target <triple>` argument (or CARGO_BUILD_TARGET) moving
@@ -144,6 +145,19 @@ if [ "$(uname -s)" = "Darwin" ]; then
     else
         RELEASE_DIR="$RELEASE_BASE/release"
     fi
+    # The app's provisioning profile is embedded before the reseal:
+    # Tauri has no config field for it, and a post-sign copy would
+    # invalidate the outer signature. The profile authorizes the App
+    # Group entitlement Wyrd.app needs to materialize its container.
+    if [ -d "$RELEASE_DIR/bundle/macos/Wyrd.app" ] \
+        && [ -n "${APP_PROVISIONING_PROFILE:-}" ]; then
+        [ -f "$APP_PROVISIONING_PROFILE" ] || {
+            echo "error: APP_PROVISIONING_PROFILE names no file: $APP_PROVISIONING_PROFILE" >&2
+            exit 1
+        }
+        cp "$APP_PROVISIONING_PROFILE" \
+            "$RELEASE_DIR/bundle/macos/Wyrd.app/Contents/embedded.provisionprofile"
+    fi
     # Reseal: the bundler leaves the outer app with a linker-only
     # signature, so the staged files it copied
     # (`Contents/Resources/wyrd` beside the appex) are unsealed and
@@ -158,11 +172,20 @@ if [ "$(uname -s)" = "Darwin" ]; then
     # identity seals with a secure timestamp (notarization
     # requires it); ad-hoc has no timestamp authority to reach.
     if [ -d "$RELEASE_DIR/bundle/macos/Wyrd.app" ]; then
+        # Carry the app entitlements explicitly: a resign without
+        # them silently drops the App Group grant Tauri embedded.
+        APP_ENTITLEMENTS="$ROOT/packaging/macos/Wyrd.app.entitlements"
+        [ -f "$APP_ENTITLEMENTS" ] || {
+            echo "error: app entitlements not found: $APP_ENTITLEMENTS" >&2
+            exit 1
+        }
         if [ -n "${SIGN_IDENTITY:-}" ] && [ "$SIGN_IDENTITY" != "-" ]; then
             codesign --force --sign "$SIGN_IDENTITY" --options runtime --timestamp \
+                --entitlements "$APP_ENTITLEMENTS" \
                 "$RELEASE_DIR/bundle/macos/Wyrd.app"
         else
             codesign --force --sign "${SIGN_IDENTITY:--}" --options runtime \
+                --entitlements "$APP_ENTITLEMENTS" \
                 "$RELEASE_DIR/bundle/macos/Wyrd.app"
         fi
     fi

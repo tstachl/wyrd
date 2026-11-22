@@ -7,7 +7,7 @@
     "frontendDist": "../../apps/desktop/dist",
     "beforeDevCommand": "cd \"$(dirname \"$(cargo locate-project --workspace --message-format plain)\")/apps/desktop\" && bun run dev",
     "beforeBuildCommand": "cd \"$(dirname \"$(cargo locate-project --workspace --message-format plain)\")/apps/desktop\" && bun run build",
-    "beforeBundleCommand": "cd \"$(dirname \"$(cargo locate-project --workspace --message-format plain)\")\" && packaging/macos/stage-appex.sh && packaging/macos/stage-cli.sh"
+    "beforeBundleCommand": "cd \"$(dirname \"$(cargo locate-project --workspace --message-format plain)\")\" && packaging/macos/stage-appex.sh && packaging/macos/stage-registrar.sh && packaging/macos/stage-cli.sh"
   },
   "app": {
     "windows": [
@@ -49,10 +49,12 @@
       "icons/icon.ico"
     ],
     "macOS": {
+      "entitlements": "../../packaging/macos/Wyrd.app.entitlements",
       "files": {
         "PlugIns/WyrdFileProvider.appex": "../../packaging/macos/stage/WyrdFileProvider.appex",
         "Resources/wyrd": "../../packaging/macos/stage/wyrd",
-        "Resources/wyrd-supervise": "../../packaging/macos/stage/wyrd-supervise"
+        "Resources/wyrd-supervise": "../../packaging/macos/stage/wyrd-supervise",
+        "MacOS/WyrdDomainRegistrar": "../../packaging/macos/stage/WyrdDomainRegistrar"
       }
     }
   }

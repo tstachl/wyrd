@@ -68,14 +68,14 @@ grep -Fq 'no env-var fallback' "$SWIFT" \
 pass "Swift domain resolves from the registry with no env fallback"
 
 # 5. The normative transport documents the daemon-half production
-# bind plus the pending domain half and the dev-only override.
+# bind plus the shipped domain half and the dev-only override.
 grep -Fq 'daemon half of the registry-owned' "$CONTRACT" \
   || die "contract: daemon-half production missing"
-grep -Fq 'full registry-to-domain association' "$CONTRACT" \
-  || die "contract: pending domain half not stated"
+grep -Fq 'The domain half is bundled with the desktop app' "$CONTRACT" \
+  || die "contract: domain half not stated"
 grep -Fqi 'dev-only env pair' "$CONTRACT" \
   || die "contract: dev-only override not stated"
-pass "contract documents daemon-half production plus pending domain half"
+pass "contract documents daemon-half production and the shipped domain half"
 
 # 6. The packaging note records the switchover acceptance: registered
 # drive in Finder with env unset, reboot survival, main-window Available —

@@ -56,6 +56,31 @@ grep -Fq '<string>md.enesis.wyrd.fileprovider</string>' \
 grep -Fq -- '--identifier md.enesis.wyrd.fileprovider' \
   "$ROOT/packaging/macos/fileprovider/build-appex.sh" \
   || die "build-appex.sh: codesign identifier drifted"
+grep -Fq '"PlugIns/WyrdFileProvider.appex"' \
+  "$ROOT/crates/wyrd-desktop/tauri.conf.json" \
+  || die "tauri.conf.json: appex bundle mapping missing"
+grep -Fq -- '--identifier md.enesis.wyrd' \
+  "$ROOT/packaging/macos/domain-registrar/build-registrar.sh" \
+  || die "build-registrar.sh: helper must sign as the containing app"
+grep -Fq "<string>$GROUP</string>" \
+  "$ROOT/packaging/macos/Wyrd.app.entitlements" \
+  || die "app entitlements: missing <$GROUP>"
+grep -Fq '"entitlements": "../../packaging/macos/Wyrd.app.entitlements"' \
+  "$ROOT/crates/wyrd-desktop/tauri.conf.json" \
+  || die "tauri.conf.json: app entitlements are not wired into the bundle"
+grep -Fq -- '-emit-executable' \
+  "$ROOT/packaging/macos/fileprovider/build-appex.sh" \
+  || die "build-appex.sh: a Mach-O bundle would silently drop the App Group entitlement"
+grep -Fq 'group_label_path' \
+  "$ROOT/crates/wyrd-daemon/src/owner/server/socket.rs" \
+  || die "socket.rs: no published drive-name label"
+grep -Fq '.label' \
+  "$ROOT/packaging/macos/domain-registrar/main.swift" \
+  || die "registrar: drive-name label is not read"
+grep -Fq 'socketResponds' \
+  "$ROOT/packaging/macos/domain-registrar/main.swift" \
+  || die "registrar: dead owners are not detected"
+pass "MH_EXECUTE appex and registry-name label are pinned"
 grep -Fq 'app-id: md.enesis.wyrd' \
   "$ROOT/packaging/linux/md.enesis.wyrd.yaml" \
   || die "linux manifest: app-id drifted"

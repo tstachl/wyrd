@@ -3751,7 +3751,13 @@ fn group_bind_serves_primary_and_symlink() {
             .expect("the group bind serves");
     let group_path = super::server::group_socket_path(&container, &drive);
     let link_path = super::server::group_symlink_path(&container, &drive);
+    let label_path = super::server::group_label_path(&container, &drive);
     assert!(group_path.exists(), "the group socket is bound");
+    assert_eq!(
+        std::fs::read(&label_path).expect("the drive name is published"),
+        dir.file_name().unwrap().as_encoded_bytes(),
+        "the label carries the registry name, not the drive id"
+    );
     assert!(
         std::fs::symlink_metadata(&link_path)
             .expect("the alias exists")
@@ -3783,6 +3789,7 @@ fn group_bind_serves_primary_and_symlink() {
     );
     assert!(!group_path.exists(), "shutdown removes the group socket");
     assert!(!link_path.exists(), "shutdown removes the alias");
+    assert!(!label_path.exists(), "shutdown removes the label");
     std::fs::remove_dir_all(dir).unwrap();
     std::fs::remove_dir_all(container).unwrap();
 }
@@ -4003,6 +4010,62 @@ fn production_auto_bind_publishes_alias_without_env() {
         "the by-drive alias publishes"
     );
     drop(service);
+    match previous {
+        Some(home) => std::env::set_var("HOME", home),
+        None => std::env::remove_var("HOME"),
+    }
+    std::fs::remove_dir_all(&base).unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// The app normally creates the container first, but an owner that
+/// started at login can beat it. The retry safety net must publish
+/// the same group socket and alias once the container appears, from
+/// the already-serving owner — without a second primary bind.
+#[cfg(target_os = "macos")]
+#[test]
+fn late_container_publishes_alias_without_restarting_the_owner() {
+    let _lock = GROUP_ENV_LOCK.lock().unwrap();
+    std::env::remove_var(super::server::FILEPROVIDER_GROUP_CONTAINER_ENV);
+    std::env::remove_var(super::server::FILEPROVIDER_DRIVE_ID_ENV);
+    let base = std::path::PathBuf::from(format!(
+        "/tmp/late-h-{}-{}",
+        std::process::id(),
+        SCRATCH_N.fetch_add(1, Ordering::Relaxed)
+    ));
+    let home = base.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let previous = std::env::var_os("HOME");
+    std::env::set_var("HOME", &home);
+
+    let (parts, dir, drive) = composed_parts_with_drive();
+    let service =
+        super::OwnerService::bind_for_composer(OwnerHandles::from_parts(&parts), &dir, drive)
+            .expect("missing container starts primary-only");
+    assert!(service.group_socket_path().is_none());
+    let container =
+        super::server::default_group_container_with_home(Some(home.clone())).expect("home set");
+    std::fs::create_dir_all(&container).unwrap();
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let link = super::server::group_symlink_path(&container, &drive);
+    while std::time::Instant::now() < deadline && std::fs::symlink_metadata(&link).is_err() {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(
+        std::fs::symlink_metadata(&link).is_ok(),
+        "the late retry published the by-drive alias"
+    );
+    assert!(
+        super::server::group_socket_path(&container, &drive).exists(),
+        "the late retry bound the group socket"
+    );
+
+    drop(service);
+    assert!(
+        std::fs::symlink_metadata(&link).is_err(),
+        "shutdown removes the late alias"
+    );
     match previous {
         Some(home) => std::env::set_var("HOME", home),
         None => std::env::remove_var("HOME"),
