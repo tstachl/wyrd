@@ -93,6 +93,12 @@ by hand elsewhere. Secret contents never travel. -->
   let identityFile = $state("");
   let passphraseFile = $state("");
   let invitationFile = $state("");
+  // Out-of-band expectation pins (optional 64-hex): the owner meant
+  // to trust, the drive, the genesis. Blank means unchecked — the
+  // backend enforces every supplied pin before touching disk.
+  let expectedOwner = $state("");
+  let expectedDrive = $state("");
+  let expectedGenesis = $state("");
   // Pre-fill from onboarding (the first create or join goes through the
   // unchanged constrained CLI adapter with the committed credentials).
   // Only fills empty fields, never clobbers user edits; the mode
@@ -112,6 +118,13 @@ by hand elsewhere. Secret contents never travel. -->
   let error: string | null = $state(null);
 
   const busy = $derived(pending || working);
+  // Expectation pins are blank (unchecked) or exactly 64 hex
+  // characters; anything else blocks the join before any submit.
+  // The backend re-validates, so this gate is typo-catching only.
+  const pinOk = (pin: string): boolean => pin.trim() === "" || /^[0-9a-fA-F]{64}$/.test(pin.trim());
+  const expectationsValid = $derived(
+    pinOk(expectedOwner) && pinOk(expectedDrive) && pinOk(expectedGenesis),
+  );
   // Store mode seeds the item from this device's verified identity
   // (no file choosing); file mode reads the picked credential paths.
   const seedsReady = $derived(
@@ -527,6 +540,62 @@ by hand elsewhere. Secret contents never travel. -->
             </InputGroup.Root>
           </Field.Field>
 
+          <Field.Field>
+            <Field.Label for="join-expected-owner">Expected owner (optional)</Field.Label>
+            <Field.Description>
+              64 hex characters naming the inviter you meant to trust. When set, the
+              join refuses before touching anything if the invitation names someone else.
+            </Field.Description>
+            <InputGroup.Root>
+              <InputGroup.Input
+                id="join-expected-owner"
+                bind:value={expectedOwner}
+                disabled={busy}
+                placeholder="64 hex characters, blank means unchecked"
+                autocomplete="off"
+                spellcheck={false}
+                class="font-mono text-xs"
+              />
+            </InputGroup.Root>
+          </Field.Field>
+
+          <Field.Field>
+            <Field.Label for="join-expected-drive">Expected drive (optional)</Field.Label>
+            <Field.Description>
+              64 hex characters naming the drive being joined. Refuses on mismatch.
+            </Field.Description>
+            <InputGroup.Root>
+              <InputGroup.Input
+                id="join-expected-drive"
+                bind:value={expectedDrive}
+                disabled={busy}
+                placeholder="64 hex characters, blank means unchecked"
+                autocomplete="off"
+                spellcheck={false}
+                class="font-mono text-xs"
+              />
+            </InputGroup.Root>
+          </Field.Field>
+
+          <Field.Field>
+            <Field.Label for="join-expected-genesis">Expected genesis (optional)</Field.Label>
+            <Field.Description>
+              64 hex characters naming the genesis transition the invitation must
+              carry. Refuses on mismatch.
+            </Field.Description>
+            <InputGroup.Root>
+              <InputGroup.Input
+                id="join-expected-genesis"
+                bind:value={expectedGenesis}
+                disabled={busy}
+                placeholder="64 hex characters, blank means unchecked"
+                autocomplete="off"
+                spellcheck={false}
+                class="font-mono text-xs"
+              />
+            </InputGroup.Root>
+          </Field.Field>
+
           {#if credentialMode === "store"}
             <Field.Field>
               <Field.Label>Store item</Field.Label>
@@ -606,7 +675,7 @@ by hand elsewhere. Secret contents never travel. -->
             {/if}
           </p>
           <Button
-            disabled={busy || name.trim() === "" || driveDir.trim() === "" || invitationFile.trim() === "" || !credentialsReady}
+            disabled={busy || name.trim() === "" || driveDir.trim() === "" || invitationFile.trim() === "" || !credentialsReady || !expectationsValid}
             onclick={() =>
               void run(() =>
                 onJoin(
@@ -621,6 +690,9 @@ by hand elsewhere. Secret contents never travel. -->
                     fileIdentityFile: identityFile,
                     filePassphraseFile: passphraseFile,
                     invitationFile,
+                    expectedOwner,
+                    expectedDrive,
+                    expectedGenesis,
                   }),
                 ),
               )

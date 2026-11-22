@@ -16,6 +16,7 @@ mod invitation;
 mod keystore;
 mod pairing;
 
+pub use invitation::JoinExpectation;
 pub(super) use invitation::{accept_invitation, install_invitation_keys};
 pub(super) use keystore::{create, open_keystore};
 pub use pairing::PairingRequest;

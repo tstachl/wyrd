@@ -44,6 +44,7 @@ fn join_round_trip_reopens_as_member() {
         "test-pass",
         newcomer_identity.clone(),
         &invitation,
+        &JoinExpectation::none(),
     )
     .unwrap();
     assert!(
@@ -82,7 +83,13 @@ fn join_into_owner_directory_refuses_and_preserves_custody() {
         .invitation;
     drop(owner);
     assert!(matches!(
-        join(dir.path.clone(), "test-pass", newcomer, &invitation,),
+        join(
+            dir.path.clone(),
+            "test-pass",
+            newcomer,
+            &invitation,
+            &JoinExpectation::none(),
+        ),
         Err(EngineError::OwnerCustodyExists)
     ));
     assert_eq!(
@@ -106,7 +113,16 @@ fn join_over_other_member_custody_refuses() {
         .admit_device(pairing.device, pairing.encryption_key)
         .unwrap()
         .invitation;
-    drop(join(dir.path.clone(), "test-pass", newcomer.clone(), &admitted).unwrap());
+    drop(
+        join(
+            dir.path.clone(),
+            "test-pass",
+            newcomer.clone(),
+            &admitted,
+            &JoinExpectation::none(),
+        )
+        .unwrap(),
+    );
     // A second device stages over the same pairing file, then
     // attempts to join the occupied directory: the member record
     // names the first device, so the write refuses rather than
@@ -129,7 +145,13 @@ fn join_over_other_member_custody_refuses() {
         EpochSecret::generate().unwrap(),
     );
     assert!(matches!(
-        join(dir.path.clone(), "test-pass", other, &sealed),
+        join(
+            dir.path.clone(),
+            "test-pass",
+            other,
+            &sealed,
+            &JoinExpectation::none(),
+        ),
         Err(EngineError::DeviceMismatch)
     ));
     // The first device still reopens from its intact custody.
@@ -156,7 +178,13 @@ fn join_with_foreign_invitation_refuses_before_writing_custody() {
         EpochSecret::generate().unwrap(),
     );
     assert!(matches!(
-        join(dir.path.clone(), "test-pass", newcomer, &sealed),
+        join(
+            dir.path.clone(),
+            "test-pass",
+            newcomer,
+            &sealed,
+            &JoinExpectation::none(),
+        ),
         Err(EngineError::Invitation(_))
     ));
     assert!(
@@ -214,7 +242,13 @@ fn join_with_member_forged_invitation_refuses_before_writing_custody() {
     )
     .unwrap();
     assert!(matches!(
-        join(dir.path.clone(), "test-pass", newcomer, &sealed),
+        join(
+            dir.path.clone(),
+            "test-pass",
+            newcomer,
+            &sealed,
+            &JoinExpectation::none(),
+        ),
         Err(EngineError::InvitationMismatch)
     ));
     assert!(

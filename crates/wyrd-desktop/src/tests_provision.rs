@@ -13,6 +13,9 @@ fn create_request() -> ProvisionRequest {
             passphrase_file: Some(PathBuf::from("/keys/passphrase")),
         },
         invitation_file: None,
+        expected_owner: None,
+        expected_drive: None,
+        expected_genesis: None,
         registry_path: None,
         owner_bin: None,
         supervise_bin: None,
@@ -95,6 +98,47 @@ fn join_argv_adds_the_invitation_pair() {
     assert!(rendered.contains(&"/tmp/invite.sealed".to_string()));
     assert!(rendered.contains(&"--no-service".to_string()));
     assert!(rendered.contains(&"--registry".to_string()));
+}
+
+/// Join forwards the expectation pins as `--expected-*` pairs; an
+/// absent pin sends no flag, so the CLI leaves that field unchecked.
+#[test]
+fn join_argv_forwards_the_expectation_pins() {
+    let mut request = create_request();
+    request.invitation_file = Some(PathBuf::from("/tmp/invite.sealed"));
+    request.expected_owner = Some("a".repeat(64));
+    request.expected_drive = Some("b".repeat(64));
+    request.expected_genesis = Some("c".repeat(64));
+    let argv = bootstrap_argv(&request).unwrap();
+    let rendered: Vec<String> = argv
+        .iter()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    for pair in [
+        ("--expected-owner", "a".repeat(64)),
+        ("--expected-drive", "b".repeat(64)),
+        ("--expected-genesis", "c".repeat(64)),
+    ] {
+        let at = rendered.iter().position(|arg| arg == pair.0).unwrap();
+        assert_eq!(rendered[at + 1], pair.1);
+    }
+}
+
+/// Join without pins sends no `--expected-*` flag: checking nothing
+/// is the default, not an explicit empty pin.
+#[test]
+fn join_argv_without_pins_sends_no_expectation_flag() {
+    let mut request = create_request();
+    request.invitation_file = Some(PathBuf::from("/tmp/invite.sealed"));
+    let argv = bootstrap_argv(&request).unwrap();
+    let rendered: Vec<String> = argv
+        .iter()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        !rendered.iter().any(|arg| arg.starts_with("--expected-")),
+        "no pin, no flag: {rendered:?}"
+    );
 }
 
 /// Mount argv carries `--mode mount` plus the mountpoint pair:

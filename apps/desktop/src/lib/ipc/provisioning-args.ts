@@ -57,12 +57,30 @@ export function buildCreateArgs(input: {
   };
 }
 
-/** One join payload: as create, plus the sealed invitation file. */
+/** One join payload: as create, plus the sealed invitation file and
+ * the optional out-of-band expectation pins (absent or blank pins
+ * are not sent, so the backend leaves those fields unchecked). */
 export function buildJoinArgs(
-  input: Parameters<typeof buildCreateArgs>[0] & { invitationFile: string },
+  input: Parameters<typeof buildCreateArgs>[0] & {
+    invitationFile: string;
+    expectedOwner?: string;
+    expectedDrive?: string;
+    expectedGenesis?: string;
+  },
 ): ProvisionJoinArgs {
-  const { invitationFile, ...rest } = input;
-  return { ...buildCreateArgs(rest), invitationFile };
+  const { invitationFile, expectedOwner, expectedDrive, expectedGenesis, ...rest } = input;
+  const trimmed = {
+    expectedOwner: expectedOwner?.trim() || undefined,
+    expectedDrive: expectedDrive?.trim() || undefined,
+    expectedGenesis: expectedGenesis?.trim() || undefined,
+  };
+  return {
+    ...buildCreateArgs(rest),
+    invitationFile,
+    ...(trimmed.expectedOwner ? { expectedOwner: trimmed.expectedOwner } : {}),
+    ...(trimmed.expectedDrive ? { expectedDrive: trimmed.expectedDrive } : {}),
+    ...(trimmed.expectedGenesis ? { expectedGenesis: trimmed.expectedGenesis } : {}),
+  };
 }
 
 /**

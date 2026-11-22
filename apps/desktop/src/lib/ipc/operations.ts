@@ -159,6 +159,12 @@ export interface ProvisionCreateArgs {
 
 export interface ProvisionJoinArgs extends ProvisionCreateArgs {
   invitationFile: string;
+  /** Expected owner pin (64 hex): the inviter the invitee meant to trust. */
+  expectedOwner?: string;
+  /** Expected drive pin (64 hex): the drive being joined. */
+  expectedDrive?: string;
+  /** Expected genesis pin (64 hex): the genesis transition the invitation must carry. */
+  expectedGenesis?: string;
 }
 
 export interface ProvisionLeaveArgs {

@@ -209,6 +209,7 @@ fn provision_failures_carry_their_machine_readable_kind() {
     let mut config = provision_no_service(&dir, &registry, "demo");
     config.init = Init::Join {
         sealed_invitation: b"not a sealed invitation".to_vec(),
+        expected: JoinExpectation::none(),
     };
     match provision(config) {
         ProvisionState::ProvisioningIncomplete { kind, stage, .. } => {

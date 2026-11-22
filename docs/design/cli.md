@@ -501,9 +501,14 @@ next mounted sync, not here.
   write the public pairing material (device plus encryption key, no
   secrets) to `<out>` for the owner. Re-running returns the same
   key: the owner may already have admitted it.
-- `join <invitation>`: join from the owner's sealed invitation.
+- `join <invitation> [--expected-owner HEX] [--expected-drive HEX]
+  [--expected-genesis HEX]`: join from the owner's sealed invitation.
   Member custody persists before the accept commits, so the device
-  reopens afterwards. A pairing for another key, a truncated or
+  reopens afterwards. The `--expected-*` pins carry the invitee's
+  out-of-band expectation about the drive (the owner meant to
+  trust, the drive, the genesis): every supplied pin must match
+  the opened invitation before anything touches disk, and a
+  mismatch refuses the join outright. A pairing for another key, a truncated or
   forged invitation, or a join without pairing all fail closed, and
   a refused join writes nothing. Join never targets an owner's
   drive home or another device's member directory: an owner record
@@ -532,8 +537,10 @@ wyrd device --identity-file ... --passphrase-file ... <newcomer-dir> pairing-req
 #    the invitation for out-of-band delivery -> invitation
 wyrd member --identity-file ... --passphrase-file ... <owner-dir> invite <device> <encryption-key> invitation
 # 3. newcomer, with the invitation file: join the drive from the
-#    owner's sealed invitation
-wyrd device --identity-file ... --passphrase-file ... <newcomer-dir> join invitation
+#    owner's sealed invitation, pinning the out-of-band expectation
+#    (the owner meant to trust, the drive, the genesis — every
+#    supplied pin must match before anything touches disk)
+wyrd device --identity-file ... --passphrase-file ... <newcomer-dir> join invitation [--expected-owner HEX] [--expected-drive HEX] [--expected-genesis HEX]
 ```
 
 ### `drive` — local drive lifecycle: create, provision, delete, reconfigure

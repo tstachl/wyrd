@@ -85,6 +85,14 @@ pub struct ProvisionRequest {
     pub credentials: CredentialSource,
     /// `None` = create, `Some(path)` = join from that invitation file.
     pub invitation_file: Option<PathBuf>,
+    /// Out-of-band join expectations (64-hex pins, join only):
+    /// every `Some` value must match the opened invitation before
+    /// anything touches disk. `None` per field = unchecked.
+    pub expected_owner: Option<String>,
+    /// Expected drive id pin (join only).
+    pub expected_drive: Option<String>,
+    /// Expected genesis transition pin (join only).
+    pub expected_genesis: Option<String>,
     /// Explicit registry path (tests); `None` = platform default.
     pub registry_path: Option<PathBuf>,
     /// Explicit owner/supervise binaries (tests / non-standard layout);

@@ -84,6 +84,14 @@ pub struct ProvisionJoinArgs {
     pub credential_account: Option<String>,
     /// Sealed invitation file path, selected out-of-band.
     pub invitation_file: String,
+    /// Expected owner pin (64 hex): the inviter the invitee meant
+    /// to trust. Refuses the join on mismatch.
+    pub expected_owner: Option<String>,
+    /// Expected drive pin (64 hex): the drive being joined.
+    pub expected_drive: Option<String>,
+    /// Expected genesis pin (64 hex): the genesis transition the
+    /// invitation must carry.
+    pub expected_genesis: Option<String>,
     /// Service mode display string: `vault` or `mount`.
     pub mode: String,
     /// FUSE mountpoint: required in `mount` mode, refused in `vault` mode.
@@ -208,6 +216,9 @@ pub async fn provision_create<R: Runtime>(
                 relays: args.relays,
                 credentials,
                 invitation_file: None,
+                expected_owner: None,
+                expected_drive: None,
+                expected_genesis: None,
                 registry_path: None,
                 owner_bin: None,
                 supervise_bin: None,
@@ -273,6 +284,9 @@ pub async fn provision_join<R: Runtime>(
                 relays: args.relays,
                 credentials,
                 invitation_file: Some(PathBuf::from(args.invitation_file)),
+                expected_owner: args.expected_owner,
+                expected_drive: args.expected_drive,
+                expected_genesis: args.expected_genesis,
                 registry_path: None,
                 owner_bin: None,
                 supervise_bin: None,

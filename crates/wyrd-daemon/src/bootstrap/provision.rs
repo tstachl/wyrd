@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use wyrd_sync::keys::DeviceIdentitySecret;
-use wyrd_sync::runtime::{Engine, EngineError};
+use wyrd_sync::runtime::{Engine, EngineError, JoinExpectation};
 
 use crate::owner::client::{ClientError, OwnerClient};
 use crate::owner::wire::WireErrorCode;
@@ -27,10 +27,15 @@ pub enum Init {
     Create,
     /// `Engine::join`: join as an invited device from a sealed
     /// invitation file. The invitation exchange that produced the
-    /// file stays out of band; joining consumes it.
+    /// file stays out of band; joining consumes it. The optional
+    /// out-of-band expectation pins the drive being joined: every
+    /// supplied field must match the opened invitation before
+    /// anything touches disk.
     Join {
         /// Sealed invitation bytes consumed by the join.
         sealed_invitation: Vec<u8>,
+        /// The invitee's out-of-band expectation about the drive.
+        expected: JoinExpectation,
     },
 }
 
@@ -271,7 +276,10 @@ pub fn provision(config: ProvisionConfig) -> ProvisionState {
                 };
             }
         },
-        Init::Join { sealed_invitation } => {
+        Init::Join {
+            sealed_invitation,
+            expected,
+        } => {
             let sealed = match wyrd_sync::control::SealedBootstrap::decode(sealed_invitation) {
                 Ok(sealed) => sealed,
                 Err(error) => {
@@ -282,11 +290,12 @@ pub fn provision(config: ProvisionConfig) -> ProvisionState {
                     };
                 }
             };
-            match Engine::join(
+            match Engine::join_with_expectation(
                 config.drive_dir.clone(),
                 &config.passphrase,
                 config.identity.clone(),
                 &sealed,
+                expected,
             ) {
                 Ok(_) | Err(EngineError::DriveExists) => {}
                 Err(error) => {

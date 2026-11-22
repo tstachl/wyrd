@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use wyrd_format::{DeviceEncryptionKey, DeviceId};
 
 use super::super::engine::{Engine, EngineError};
-use super::invitation::{accept_with_store, verify_invitation};
+use super::invitation::{accept_with_store, verify_invitation, JoinExpectation};
 use super::keystore::{read_custody_opt, write_member_custody, Custody};
 use crate::control::bootstrap::SealedBootstrap;
 use crate::durable::{
@@ -117,9 +117,10 @@ pub(in crate::runtime) fn join(
     passphrase: &str,
     identity: DeviceIdentitySecret,
     sealed: &SealedBootstrap,
+    expected: &JoinExpectation,
 ) -> Result<Engine, EngineError> {
     let staged = read_pairing_secret(&dir, passphrase)?;
-    let verified = verify_invitation(&identity, &staged, sealed)?;
+    let verified = verify_invitation(&identity, &staged, sealed, expected)?;
     let device = verified.device;
     // The store open binds the directory to the invitation's drive
     // and takes the lock every later step holds; a directory bound
