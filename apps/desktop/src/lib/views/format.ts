@@ -319,6 +319,34 @@ export function shouldAdvanceAfterProvision(report: ProvisionReport, driveDir: s
   );
 }
 
+/**
+ * Whether one removal has been confirmed by its post-run observation.
+ * The inverse of the add rule: a clean exit alone never advances; the
+ * observed state has the last word. A full delete is confirmed only
+ * when a ready registry no longer names the drive dir. A keep-local
+ * leave keeps the drive registered on purpose, so its confirmation is
+ * the owner's terminal membership tip answering *alongside* the still
+ * listed drive. An unreadable registry, an absent tip, or any refusal
+ * or held outcome proves nothing and keeps the report on screen with
+ * a way back.
+ *
+ * Known limit: a non-owner leave authors nothing yet also exits 0 with
+ * the tip still answering — the shell cannot tell it from a real leave
+ * through this observation. The overview banner carries the full
+ * report on the advance path so that refusal text stays visible and a
+ * no-op is never presented as a finished removal.
+ */
+export function shouldAdvanceAfterRemoval(
+  report: ProvisionReport,
+  driveDir: string,
+  keepLocalData: boolean,
+): boolean {
+  if (report.result.result !== "completed") return false;
+  if (report.observed.status !== "ready") return false;
+  const listed = report.observed.drives.some((drive) => drive.drive_dir === driveDir);
+  return keepLocalData ? listed && report.membership !== null : !listed;
+}
+
 /** Post-run membership tip for the operated drive; absent owner answer stays unknown. */
 export function membershipSummary(report: ProvisionReport): string {
   const membership = report.membership;

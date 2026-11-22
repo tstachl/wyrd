@@ -78,10 +78,14 @@ acknowledgement and resumes it on a refusal. -->
     identityFile: string | null;
     passphraseFile: string | null;
     onRefresh: () => void;
-    /** End membership and keep local data — the dialog's "Keep local data" choice. */
-    onLeave: (args: ProvisionLeaveArgs) => Promise<ProvisionReport>;
-    /** End membership and remove local data — the dialog's other choice. */
-    onDelete: (args: ProvisionDeleteArgs) => Promise<ProvisionReport>;
+    /**
+     * End membership and keep local data — the dialog's "Keep local
+     * data" choice. Null on a confirmed removal: navigation took
+     * over and the card unmounts, so no inline report renders.
+     */
+    onLeave: (args: ProvisionLeaveArgs) => Promise<ProvisionReport | null>;
+    /** End membership and remove local data — the dialog's other choice. Same null-on-advance contract. */
+    onDelete: (args: ProvisionDeleteArgs) => Promise<ProvisionReport | null>;
     /** Apply one sparse update; the report carries the outcome plus the post-run observation. */
     onApply: (update: SparseUpdateArgs) => Promise<SettingsWriteReport>;
     /**
@@ -889,9 +893,12 @@ acknowledgement and resumes it on a refusal. -->
   </Card.Content>
   <Card.Footer class="justify-end">
     {#if removalReport !== null}
+      <!-- A confirmed removal already navigated away; this card keeps
+        the report only for a refusal or uncertain outcome, with a
+        prominent way back that never discards the text above. -->
       <Button variant="outline" size="sm" disabled={busy} onclick={onRefreshDrives}>
         <RefreshCwIcon data-icon="inline-start" />
-        Refresh drives
+        Back to drives
       </Button>
     {:else}
       <Button

@@ -17,6 +17,7 @@ import {
   nextDriveDir,
   observedRegistrySummary,
   shouldAdvanceAfterProvision,
+  shouldAdvanceAfterRemoval,
   restartKindFor,
   sessionLabel,
   settingsSurviveLock,
@@ -214,6 +215,57 @@ const emptyRegistry: RegistryState = { status: "ready", drives: [], skipped: [] 
 function report(result: ProvisionReport["result"], membership: ProvisionReport["membership"] = null): ProvisionReport {
   return { result, observed: emptyRegistry, membership };
 }
+
+test("the removal decision is the observation, never the exit code alone", () => {
+  const drive = { name: "beta", drive_dir: "/drives/beta" } as DriveView;
+  const listed: RegistryState = { status: "ready", drives: [drive], skipped: [] };
+  const tip = { epoch: 4, known_members: 2 };
+  const completed: ProvisionReport["result"] = { result: "completed", detail: "removed" };
+
+  // Full delete: the ready registry must no longer name the drive dir.
+  expect(
+    shouldAdvanceAfterRemoval({ result: completed, observed: emptyRegistry, membership: null }, "/drives/beta", false),
+  ).toBe(true);
+  expect(
+    shouldAdvanceAfterRemoval({ result: completed, observed: listed, membership: null }, "/drives/beta", false),
+  ).toBe(false);
+  // A still-listed drive with no tip is not a confirmed leave.
+  expect(
+    shouldAdvanceAfterRemoval({ result: completed, observed: listed, membership: null }, "/drives/beta", true),
+  ).toBe(false);
+  // Keep-local leave: local data stays registered; the owner's tip
+  // answering alongside the still-listed drive is the confirmation.
+  expect(
+    shouldAdvanceAfterRemoval({ result: completed, observed: listed, membership: tip }, "/drives/beta", true),
+  ).toBe(true);
+  // A leave that removed the registry entry is not this path.
+  expect(
+    shouldAdvanceAfterRemoval({ result: completed, observed: emptyRegistry, membership: tip }, "/drives/beta", true),
+  ).toBe(false);
+
+  // An unreadable registry proves nothing either way.
+  const unreadable: RegistryState = { status: "unreadable", reason: "denied", drives: [], skipped: [] };
+  expect(shouldAdvanceAfterRemoval({ result: completed, observed: unreadable, membership: tip }, "/drives/beta", false)).toBe(false);
+  expect(shouldAdvanceAfterRemoval({ result: completed, observed: unreadable, membership: tip }, "/drives/beta", true)).toBe(false);
+
+  // A refusal, held drive, or uncertain outcome never advances even
+  // where the observation would otherwise allow it. The report stays
+  // visible with a way back; a no-op is never a finished removal.
+  for (const result of [
+    { result: "expectedfailure", detail: "refused" },
+    { result: "helddrive", detail: "held" },
+    { result: "versionmismatch", detail: "mismatch" },
+    { result: "busy", drive_dir: "/drives/beta" },
+    { result: "unknown", detail: "torn" },
+  ] as ProvisionReport["result"][]) {
+    expect(
+      shouldAdvanceAfterRemoval({ result, observed: emptyRegistry, membership: tip }, "/drives/beta", false),
+    ).toBe(false);
+    expect(
+      shouldAdvanceAfterRemoval({ result, observed: listed, membership: tip }, "/drives/beta", true),
+    ).toBe(false);
+  }
+});
 
 test("provisioning outcomes name the exit code without claiming state", () => {
   expect(describeProvisionResult(report({ result: "completed", detail: "wrote" }))).toContain(
