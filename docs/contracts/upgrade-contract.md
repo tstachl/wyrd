@@ -130,7 +130,9 @@ Releases are not required to write every format they read:
     rule (skip, never reinterpret — unknown bytes are never silently
      read as something else). (This is also the pre-v1 contract: until
      the format freezes, every alpha may break compatibility, and the
-     breakage announces itself.)
+     breakage announces itself — bounded by the v0.4 promise floor
+     below: from v0.4 on, an announced break may drop pre-v0.4
+     readers only.)
 
    The rotation delivery is versioned in its header byte and moved
    `0x01 -> 0x02` when the owner proof was added (`ROTATION_VERSION`).
