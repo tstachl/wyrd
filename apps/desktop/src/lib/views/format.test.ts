@@ -13,8 +13,9 @@ import {
   describeProvisionResult,
   driveNameValid,
   formatBoundValue,
-  formatObservedAt,
+  formatObservedAge,
   freshnessLabel,
+  isFirstRun,
   membershipSummary,
   nextDriveDir,
   normalizeDriveName,
@@ -27,12 +28,16 @@ import {
   settingsSurviveLock,
   SETTING_BOUNDS,
   shortId,
+  statusAttention,
+  statusRunState,
+  statusSummaryLine,
   storeAccountFor,
   SUGGESTED_RELAYS,
   suggestedDriveDirFor,
   validateBoundInput,
   withDevCliHint,
 } from "./format.js";
+import type { StatusFacts } from "./format.js";
 import type {
   CredentialReference,
   DriveView,
@@ -56,8 +61,66 @@ test("credential mode follows observation and keeps the fallback only when unkno
   expect(credentialModeFor(null, "store")).toBe("store");
 });
 
-test("observation stamps render as UTC clock times", () => {
-  expect(formatObservedAt(Date.UTC(2026, 4, 1, 7, 8, 9))).toBe("07:08:09 UTC");
+test("observation ages are relative, local and never a sync time", () => {
+  const now = Date.UTC(2026, 4, 1, 7, 8, 9);
+  expect(formatObservedAge(now, now)).toBe("Checked just now");
+  expect(formatObservedAge(now - 12_000, now)).toBe("Checked 12 seconds ago");
+  expect(formatObservedAge(now - 90_000, now)).toBe("Checked 1 minute ago");
+  expect(formatObservedAge(now - 3 * 60_000, now)).toBe("Checked 3 minutes ago");
+  expect(formatObservedAge(now - 2 * 3_600_000, now)).toBe("Checked 2 hours ago");
+  expect(formatObservedAge(now - 26 * 3_600_000, now)).toBe("Checked 1 day ago");
+  // A future stamp is clamped, never rendered as a negative age.
+  expect(formatObservedAge(now + 5_000, now)).toBe("Checked just now");
+});
+
+const baseFacts: StatusFacts = {
+  availability: "available",
+  paused: false,
+  connectedRelays: 5,
+  totalRelays: 5,
+  knownMembers: 1,
+  peers: 0,
+  staleDetail: null,
+  freshEmpty: true,
+  localObjects: 0,
+};
+
+test("the status summary is separate facts, never a green verdict", () => {
+  expect(statusSummaryLine(baseFacts)).toBe(
+    "Running · 5 of 5 relays connected · not shared with another device yet",
+  );
+  expect(statusRunState({ ...baseFacts, paused: true })).toBe("Paused");
+  expect(statusRunState({ ...baseFacts, availability: "unavailable" })).toBe("Not running");
+  expect(statusRunState({ ...baseFacts, availability: "unknown" })).toBe("State not yet observed");
+  expect(
+    statusSummaryLine({ ...baseFacts, knownMembers: 3, peers: 2 }),
+  ).toBe("Running · 5 of 5 relays connected · 2 other devices connected at the last pass");
+  expect(
+    statusSummaryLine({ ...baseFacts, totalRelays: 0, connectedRelays: 0 }),
+  ).toContain("no relays connected at the last pass");
+});
+
+test("attention appears only for observed problems", () => {
+  expect(statusAttention(baseFacts)).toEqual([]);
+  expect(statusAttention({ ...baseFacts, paused: true })).toContain(
+    "Synchronization is paused. The drive is still running and can answer requests.",
+  );
+  expect(statusAttention({ ...baseFacts, connectedRelays: 0 })).toContain(
+    "No relays connected at the last pass. Nothing can be exchanged with other devices until a relay is reachable.",
+  );
+  expect(statusAttention({ ...baseFacts, staleDetail: "relay quiet" })).toContain(
+    "The served data is stale: relay quiet.",
+  );
+  expect(statusAttention({ ...baseFacts, availability: "unavailable" })).toContain(
+    "The drive is not answering. Its last reported state is still shown below.",
+  );
+});
+
+test("a drive with one member, no peers and no data is a first run", () => {
+  expect(isFirstRun(baseFacts)).toBe(true);
+  expect(isFirstRun({ ...baseFacts, knownMembers: 2 })).toBe(false);
+  expect(isFirstRun({ ...baseFacts, peers: 1 })).toBe(false);
+  expect(isFirstRun({ ...baseFacts, freshEmpty: false })).toBe(false);
 });
 
 test("short ids keep short values whole", () => {

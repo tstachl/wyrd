@@ -13,9 +13,22 @@ import type { ProvisionReport } from "$lib/ipc/results.js";
 import type { CredentialReference } from "$lib/ipc/results.js";
 import type { CredentialMode } from "$lib/ipc/provisioning-args.js";
 
-/** Clock time of an observation stamp, UTC. The stamp is display metadata, never owner state. */
-export function formatObservedAt(observedAtMs: number): string {
-  return `${new Date(observedAtMs).toISOString().slice(11, 19)} UTC`;
+/**
+ * Relative age of the shell's own observation stamp. It uses the local
+ * clock, never UTC, and is explicitly "Checked …" — the shell's
+ * observation, never a synchronization time. `nowMs` is injected so the
+ * wording pins without waiting, and the view refreshes it on a timer.
+ */
+export function formatObservedAge(observedAtMs: number, nowMs: number): string {
+  const seconds = Math.max(0, Math.floor((nowMs - observedAtMs) / 1000));
+  if (seconds < 5) return "Checked just now";
+  if (seconds < 60) return `Checked ${seconds} seconds ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `Checked ${minutes} minute${minutes === 1 ? "" : "s"} ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `Checked ${hours} hour${hours === 1 ? "" : "s"} ago`;
+  const days = Math.floor(hours / 24);
+  return `Checked ${days} day${days === 1 ? "" : "s"} ago`;
 }
 
 /** Shorten a content id for display. The full value stays in the snapshot; this is presentation only. */
@@ -43,6 +56,76 @@ export function availabilityLabel(availability: DriveAvailability): string {
     case "unknown":
       return `Unknown — ${availability.detail}`;
   }
+}
+
+/**
+ * The separate observable facts the Status screen states in plain
+ * language. No field is a verdict: reachability, relay connectivity,
+ * membership, freshness and convergence stay distinct. Every value
+ * comes from the last terminal answer plus the shell's observation,
+ * never from a fabricated default.
+ */
+export interface StatusFacts {
+  availability: "available" | "unavailable" | "unknown";
+  paused: boolean;
+  connectedRelays: number;
+  totalRelays: number;
+  knownMembers: number;
+  peers: number;
+  /** Present only for a retained last-good copy; never a sync timestamp. */
+  staleDetail: string | null;
+  freshEmpty: boolean;
+  localObjects: number;
+}
+
+/** Observable run state. Paused still answers; unavailable never claims the drive is gone. */
+export function statusRunState(facts: StatusFacts): string {
+  if (facts.availability === "unavailable") return "Not running";
+  if (facts.availability === "unknown") return "State not yet observed";
+  return facts.paused ? "Paused" : "Running";
+}
+
+/** One plain sentence of separate facts — not a single green verdict. */
+export function statusSummaryLine(facts: StatusFacts): string {
+  const relays =
+    facts.totalRelays === 0
+      ? "no relays connected at the last pass"
+      : `${facts.connectedRelays} of ${facts.totalRelays} relays connected`;
+  const sharing =
+    facts.knownMembers <= 1
+      ? "not shared with another device yet"
+      : facts.peers === 0
+        ? `${facts.knownMembers - 1} other device${facts.knownMembers - 1 === 1 ? "" : "s"} in this drive, none connected at the last pass`
+        : `${facts.peers} other device${facts.peers === 1 ? "" : "s"} connected at the last pass`;
+  return `${statusRunState(facts)} · ${relays} · ${sharing}`;
+}
+
+/**
+ * Only conditions the shell actually observed. An empty list renders
+ * no attention area at all — there is no "all good" state to show.
+ */
+export function statusAttention(facts: StatusFacts): string[] {
+  const items: string[] = [];
+  if (facts.availability === "unavailable") {
+    items.push("The drive is not answering. Its last reported state is still shown below.");
+  }
+  if (facts.paused) {
+    items.push("Synchronization is paused. The drive is still running and can answer requests.");
+  }
+  if (facts.totalRelays === 0 || facts.connectedRelays === 0) {
+    items.push(
+      "No relays connected at the last pass. Nothing can be exchanged with other devices until a relay is reachable.",
+    );
+  }
+  if (facts.staleDetail !== null) {
+    items.push(`The served data is stale: ${facts.staleDetail}.`);
+  }
+  return items;
+}
+
+/** One member, no peers and an empty served projection is a new drive, not a grid of zeros. */
+export function isFirstRun(facts: StatusFacts): boolean {
+  return facts.knownMembers === 1 && facts.peers === 0 && facts.freshEmpty;
 }
 
 /**
