@@ -617,10 +617,12 @@ where
         Ok(admission)
     }
 
-    /// One pass body: intake, fetch, conditional republication, then
-    /// outbound publish. Republication clears the dirty backlog; every
+    /// One pass body: drain, trigger, admit, scrub, fetch, apply, then
+    /// publication. Republication clears the dirty backlog; every
     /// failure path leaves it set (via the [`LiveNode::sync_once`]
-    /// wrapper).
+    /// wrapper). The phase order is load-bearing: each phase's result
+    /// feeds the next, and the named methods below keep that order
+    /// visible instead of burying it in one body.
     fn sync_pass<M: Mailbox, B: RoutePublishing>(
         &mut self,
         mailbox: &mut M,
@@ -631,53 +633,130 @@ where
         <V::Store as DiscardRejectedRepresentation>::Error: std::fmt::Debug,
     {
         let (paused, drained) = self.drain_intake(mailbox)?;
-        // One pass, one publish deadline: the reconciliation
-        // trigger ahead of the publish phase shares the budget
-        // object with the publish phase itself, so a large
-        // request fan-out (or a hanging relay inside it) trips
-        // the same clip the publish legs report — unattempted
-        // sends stay pending for the next pass, never retired.
-        // The clock starts here, at the trigger; the publish
-        // phase rebases to its own window before sending (see
-        // `rebase_for_publish`), so fetch and mutation time in
-        // between is never charged to publish.
+        let (mut budget, budget_start, trigger_spent) = self.trigger(mailbox, paused)?;
+        let (quarantined, admission) = self.admit()?;
+        let scrubbed = self.scrub(admission)?;
+        let phase = std::time::Instant::now();
+        let fetched = self.fetch(paused, bulk, phase)?;
+        // Clone the queue handle so the batch borrow does not pin `self`
+        // while mutations apply (the engine borrow is mutable). Taking
+        // the batch here — after fetch, never before — keeps the fetch
+        // deadline's nearest-held-mutation read on the pre-drain queue.
+        let mutations = Arc::clone(&self.mutations);
+        let mut batch = mutations.take_batch().with_wants(Arc::clone(&self.wants));
+        let (completed_runtime, terminal) = self.apply(&mut batch, &fetched)?;
+        let mut report = SyncReport {
+            drained,
+            fetched,
+            quarantined,
+            scrubbed,
+            ..Default::default()
+        };
+        self.publish_pass(
+            mailbox,
+            paused,
+            &mut budget,
+            budget_start,
+            trigger_spent,
+            phase,
+            &mut batch,
+            completed_runtime,
+            terminal,
+            &mut report,
+        )?;
+        Ok(report)
+    }
+
+    /// Set up the pass's shared publish budget and fire the
+    /// reconciliation trigger against it. One pass, one deadline: the
+    /// trigger ahead of the publish phase shares the budget object with
+    /// the publish phase itself, so a large request fan-out (or a
+    /// hanging relay inside it) trips the same clip the publish legs
+    /// report — unattempted sends stay pending for the next pass, never
+    /// retired. The clock starts here, at the trigger; the publish
+    /// phase rebases to its own window before sending (see
+    /// `rebase_for_publish`), so fetch and mutation time in between is
+    /// never charged to publish.
+    ///
+    /// Returns the shared budget, its clock origin, and the trigger's
+    /// spend — the publish phase needs all three for its rebase and its
+    /// clipped-elapsed reporting.
+    fn trigger<M: Mailbox>(
+        &mut self,
+        mailbox: &mut M,
+        paused: bool,
+    ) -> Result<(PublishBudget, std::time::Instant, std::time::Duration), LiveError> {
         let mut budget = PublishBudget::new(self.publish_deadline());
         let budget_start = std::time::Instant::now();
         self.fire_reconciliation_trigger(mailbox, paused, &mut budget)?;
         let trigger_spent = budget_start.elapsed();
-        // Generation rotation on observed demand (OD-11-2): every
-        // identity noted since the last pass whose generation
-        // completed terminal reopens as a new one. Notes arrive from
-        // terminal reads — first touch and mid-wait observation —
-        // and outlive the waiter that carried them, which is what
-        // makes a retrying reader re-demandable: a waiter never
-        // blocks on a verdict that already exists, so pending alone
-        // could never carry its demand to the next pass. Reopen is a
-        // no-op for anything not terminal, so the sweep never
-        // disturbs live fetches. Admission below then carries the new
-        // generation's demand into the engine.
+        Ok((budget, budget_start, trigger_spent))
+    }
+
+    /// Generation reopen plus quarantine and demand admission, in that
+    /// order. Generation rotation on observed demand (OD-11-2): every
+    /// identity noted since the last pass whose generation completed
+    /// terminal reopens as a new one. Notes arrive from terminal reads —
+    /// first touch and mid-wait observation — and outlive the waiter
+    /// that carried them, which is what makes a retrying reader
+    /// re-demandable: a waiter never blocks on a verdict that already
+    /// exists, so pending alone could never carry its demand to the
+    /// next pass. Reopen is a no-op for anything not terminal, so the
+    /// sweep never disturbs live fetches. Admission below then carries
+    /// the new generation's demand into the engine.
+    ///
+    /// Returns the quarantine repair report and the runtime snapshot
+    /// taken for admission (if any), which the scrub phase reuses
+    /// instead of rebuilding.
+    fn admit(
+        &mut self,
+    ) -> Result<
+        (
+            crate::quarantine::QuarantineReport,
+            Option<wyrd_sync::runtime::RuntimeState>,
+        ),
+        LiveError,
+    >
+    where
+        V::Store: DiscardRejectedRepresentation,
+        <V::Store as DiscardRejectedRepresentation>::Error: std::fmt::Debug,
+    {
         for id in self.wants.take_reopen_notes() {
             self.engine.reopen_generation(&id);
         }
         let quarantined = self.drain_rejected()?;
         let admission = self.admit_pending_demand()?;
-        // Local scrub, walk half (child 13): re-stat locally
-        // claimed identities against the store from the rotating
-        // cursor, submitting misses for the drain below. The
-        // snapshot is admission's when it took one (passes with
-        // pending wants pay no second rebuild); otherwise one
-        // rebuild serves the walk. Either way the scan is
-        // O(claims), never O(history) — and the walk runs even
-        // when the queue is empty, because out-of-band loss has
-        // no other signal. Slightly stale either way (commits
-        // landed since): the drain re-verifies before clearing,
-        // so staleness only re-stats, never wrongly unclaims.
-        // Coupling note: the reused snapshot is the one
-        // `admit_wants` just mutated in place through
-        // `set_materialization_from` — safe because admission
-        // commits only `Fact::Materialization`, which never
-        // moves a local claim. If admission ever commits a
-        // claim-moving fact, the walk needs its own snapshot.
+        Ok((quarantined, admission))
+    }
+
+    /// Local scrub: walk, then drain. The walk half (child 13) re-stats
+    /// locally claimed identities against the store from the rotating
+    /// cursor, submitting misses for the drain. The snapshot is
+    /// admission's when it took one (passes with pending wants pay no
+    /// second rebuild); otherwise one rebuild serves the walk. Either
+    /// way the scan is O(claims), never O(history) — and the walk runs
+    /// even when the queue is empty, because out-of-band loss has no
+    /// other signal. Slightly stale either way (commits landed since):
+    /// the drain re-verifies before clearing, so staleness only re-stats,
+    /// never wrongly unclaims. Coupling note: the reused snapshot is the
+    /// one `admit_wants` just mutated in place through
+    /// `set_materialization_from` — safe because admission commits only
+    /// `Fact::Materialization`, which never moves a local claim. If
+    /// admission ever commits a claim-moving fact, the walk needs its
+    /// own snapshot.
+    ///
+    /// The drain half clears the claims the walk and the readers found
+    /// missing — after the walk, so walk-found losses clear on the same
+    /// pass they are observed, and ahead of fetching, so the same pass
+    /// reconciles each cleared claim back to pending and the plan
+    /// re-drives the fetch without waiting another pass. The residency
+    /// policy is untouched, no waiter is synthesized, and no bytes are
+    /// unlinked: loss is unclaimed, never deleted. Capped like
+    /// quarantine: leftovers wait for the next pass.
+    fn scrub(
+        &mut self,
+        admission: Option<wyrd_sync::runtime::RuntimeState>,
+    ) -> Result<crate::scrub::ScrubReport, LiveError> {
         let walk_snapshot = match admission {
             Some(snapshot) => snapshot,
             None => self.engine.runtime_state()?,
@@ -691,16 +770,6 @@ where
         for loss in losses {
             self.scrub.submit(loss);
         }
-        // Local scrub, drain half (child 13): clear the claims
-        // the walk and the readers found missing — after the
-        // walk, so walk-found losses clear on the same pass they
-        // are observed, and ahead of fetching, so the same pass
-        // reconciles each cleared claim back to pending and the
-        // plan re-drives the fetch without waiting another pass.
-        // The residency policy is untouched, no waiter is
-        // synthesized, and no bytes are unlinked: loss is
-        // unclaimed, never deleted. Capped like quarantine:
-        // leftovers wait for the next pass.
         let mut scrubbed = drain_scrub(
             &self.scrub,
             &self.store,
@@ -716,32 +785,39 @@ where
             },
         )?;
         scrubbed.failures += probe_failures;
-        let phase = std::time::Instant::now();
-        // Pause gate (OD-19-A): no fetch while paused. Local demand
-        // (wants, quarantine, scrub, admission above) still runs;
-        // the bulk plane simply does not execute this pass.
+        Ok(scrubbed)
+    }
+
+    /// Run the bounded fetch plan when a bulk source is present and the
+    /// pass is not paused. Pause gate (OD-19-A): local demand (wants,
+    /// quarantine, scrub, admission above) still runs; the bulk plane
+    /// simply does not execute this pass. Route publication precedes
+    /// every pass: routes come from durable announcements and manifest
+    /// records, so each pass refreshes the address maps before fetching
+    /// (a route update from this pass's intake lands next pass; the
+    /// plan's own convergence passes cover the cascade body -> manifest
+    /// -> objects). The count is informational for now; surfacing it in
+    /// the report is observability work, separately tracked.
+    ///
+    /// The fetch is always bounded. A held mutation's deadline takes
+    /// precedence and clips this: its `TimedOut` decision lands on time
+    /// even when a provider stalls. With nothing held the config's
+    /// per-pass budget still applies — one unreachable route costs at
+    /// most this per pass instead of wedging the loop behind a dial per
+    /// pending item.
+    fn fetch<B: RoutePublishing>(
+        &mut self,
+        paused: bool,
+        bulk: Option<&mut B>,
+        phase: std::time::Instant,
+    ) -> Result<ExecuteReport, LiveError> {
         let fetched = if paused {
             ExecuteReport::default()
         } else {
             match bulk {
                 Some(bulk) => {
-                    // Route publication precedes every pass: routes come
-                    // from durable announcements and manifest records, so
-                    // each pass refreshes the address maps before fetching
-                    // (a route update from this pass's intake lands next
-                    // pass; the plan's own convergence passes cover the
-                    // cascade body -> manifest -> objects). The count is
-                    // informational for now; surfacing it in the report is
-                    // observability work, separately tracked.
                     let state = self.engine.runtime_state()?;
                     let _routes = bulk.publish_routes(&state).map_err(LiveError::Engine)?;
-                    // The fetch phase is always bounded. A held mutation's
-                    // deadline takes precedence and clips this: its
-                    // `TimedOut` decision lands on time even when a
-                    // provider stalls. With nothing held the config's
-                    // per-pass budget still applies — one unreachable route
-                    // costs at most this per pass instead of wedging the
-                    // loop behind a dial per pending item.
                     let pass_cap = std::time::Instant::now() + self.fetch_pass_budget;
                     let deadline = Some(
                         self.mutations
@@ -759,13 +835,32 @@ where
             elapsed_ms = phase.elapsed().as_millis(),
             "pass phase fetch done"
         );
-        // Apply mounted mutations in admission order (the queue's total
-        // order): each is evaluated against the state its predecessor
-        // committed, never against what the syscall saw. Submitters block
-        // until the guard completes them; the batch completes on scope
-        // exit, so no later failure can strand a blocked caller. In the
-        // success path completion is deferred past publication below so a
-        // returned success means the state serves.
+        Ok(fetched)
+    }
+
+    /// Apply mounted mutations in admission order (the queue's total
+    /// order) and settle admission state. Each mutation is evaluated
+    /// against the state its predecessor committed, never against what
+    /// the syscall saw. Submitters block until the guard completes them;
+    /// the batch completes on scope exit, so no later failure can strand
+    /// a blocked caller. The publication phase owns the batch lifecycle
+    /// from here: it finishes the batch only after the publication
+    /// outcome is known, so a returned success means the state serves.
+    ///
+    /// Returns the runtime snapshot from terminal evaluation and that
+    /// terminal verdict map. The caller owns the still-unfinished batch
+    /// and must finish it on every path.
+    fn apply(
+        &mut self,
+        batch: &mut MutationBatch<'_>,
+        fetched: &ExecuteReport,
+    ) -> Result<
+        (
+            wyrd_sync::runtime::RuntimeState,
+            BTreeMap<ContentId, TerminalState>,
+        ),
+        LiveError,
+    > {
         let observed_heads = self
             .engine
             .live_heads()?
@@ -777,16 +872,12 @@ where
             tracing::debug!("parent token captures blocked by a head-set change");
             self.observed_heads = observed_heads;
         }
-        // Clone the queue handle so the batch borrow does not pin `self`
-        // while mutations apply (the engine borrow is mutable).
-        let mutations = Arc::clone(&self.mutations);
-        let mut batch = mutations.take_batch().with_wants(Arc::clone(&self.wants));
         for index in 0..batch.len() {
             // Total order: a held entry owns the front of the queue,
             // so everything after it in this batch goes back
             // untouched — never executed past the defer. The pass
             // then ends.
-            if let ApplyEntry::Deferred(base) = self.apply_entry(&mut batch, index, true) {
+            if let ApplyEntry::Deferred(base) = self.apply_entry(batch, index, true) {
                 batch.defer_and_release_rest(index, base);
                 break;
             }
@@ -831,6 +922,46 @@ where
                 || terminal.contains_key(content)
                 || waiters == 0
         });
+        Ok((completed_runtime, terminal))
+    }
+
+    /// Decide and discharge publication, filling the accumulated pass
+    /// report. Three terminal states, in order:
+    ///
+    /// - idle — no durable change, no outbox, no terminal change: no
+    ///   generation and no sends, but the shared budget's clip still
+    ///   reports an armed reconciliation probe.
+    /// - closure deferred — every eligible head is still mid-fetch:
+    ///   keep the current generation, still run the outbox.
+    /// - published — install a new generation, then run the outbox so a
+    ///   write's success means the state serves.
+    ///
+    /// The per-class projection is the gate between idle and the other
+    /// two: verified heads publish, pending ones wait, damaged heads
+    /// fail the pass with the previous generation still serving (see
+    /// `partition_heads`). The [`LiveNode::sync_once`] wrapper records
+    /// the retaining judgment for every failure, including partition
+    /// damage.
+    ///
+    /// The wide signature is the phase boundary made explicit: the
+    /// shared publish budget and its three clock marks, the apply
+    /// results, and the accumulated report all cross it. Bundling them
+    /// in a carrier type would hide the same data behind an abstraction
+    /// this decomposition deliberately avoids.
+    #[allow(clippy::too_many_arguments)]
+    fn publish_pass<M: Mailbox>(
+        &mut self,
+        mailbox: &mut M,
+        paused: bool,
+        budget: &mut PublishBudget,
+        budget_start: std::time::Instant,
+        trigger_spent: std::time::Duration,
+        phase: std::time::Instant,
+        batch: &mut MutationBatch<'_>,
+        completed_runtime: wyrd_sync::runtime::RuntimeState,
+        terminal: BTreeMap<ContentId, TerminalState>,
+        report: &mut SyncReport,
+    ) -> Result<(), LiveError> {
         // The publication gate is the durable commit sequence plus the
         // outbound outbox, not the pass reports: every fact commit this
         // pass (intake, want admission, fetch, mutation) advanced the
@@ -883,11 +1014,11 @@ where
                 }
             };
             tracing::debug!(
-                accepted = drained.accepted,
-                duplicates = drained.duplicates,
-                deferred = drained.deferred,
-                skipped = drained.skipped,
-                discarded = drained.discarded,
+                accepted = report.drained.accepted,
+                duplicates = report.drained.duplicates,
+                deferred = report.drained.deferred,
+                skipped = report.drained.skipped,
+                discarded = report.drained.discarded,
                 revision = revision,
                 eligible_heads = self.published_heads,
                 pending_heads = pending_heads,
@@ -903,51 +1034,41 @@ where
                 // idle-pass total that disagrees with the sum of
                 // these fields is itself a counting bug worth
                 // catching.
-                unfulfilled = fetched.unfulfilled,
-                transport_errors = fetched.transport_errors,
-                deadlines = fetched.deadlines,
-                missing = fetched.missing,
-                invalid = fetched.invalid,
-                unavailable_keys = fetched.unavailable_keys,
-                local_failures = fetched.local_failures,
-                manifests = fetched.manifests,
-                snapshot_bodies = fetched.snapshot_bodies,
-                objects = fetched.objects,
+                unfulfilled = report.fetched.unfulfilled,
+                transport_errors = report.fetched.transport_errors,
+                deadlines = report.fetched.deadlines,
+                missing = report.fetched.missing,
+                invalid = report.fetched.invalid,
+                unavailable_keys = report.fetched.unavailable_keys,
+                local_failures = report.fetched.local_failures,
+                manifests = report.fetched.manifests,
+                snapshot_bodies = report.fetched.snapshot_bodies,
+                objects = report.fetched.objects,
                 "sync pass idle: revision unchanged, outbox empty"
             );
-            return Ok(SyncReport {
-                drained,
-                fetched,
-                quarantined,
-                scrubbed,
-                published: false,
-                sent: 0,
-                // Idle passes never reach the publish phase, but the
-                // reconciliation trigger ahead of it shares the pass
-                // budget — an armed probe on an otherwise idle pass
-                // can trip the clip, so report the budget's state,
-                // not a constant. The elapsed value is the shared
-                // budget's age at the idle decision when it clipped
-                // (the "after N ms" half of the clip line), and zero
-                // otherwise: the publish phase never ran, so there
-                // is no publish wall time to report.
-                publish_clipped: budget.clipped(),
-                publish_deferred: budget.deferred(),
-                publish_elapsed_ms: if budget.clipped() {
-                    budget_start.elapsed().as_millis() as u64
-                } else {
-                    0
-                },
-                generation,
-                pending_heads,
-                poison: self.poison_counts(),
-            });
+            report.published = false;
+            report.sent = 0;
+            // Idle passes never reach the publish phase, but the
+            // reconciliation trigger ahead of it shares the pass
+            // budget — an armed probe on an otherwise idle pass
+            // can trip the clip, so report the budget's state,
+            // not a constant. The elapsed value is the shared
+            // budget's age at the idle decision when it clipped
+            // (the "after N ms" half of the clip line), and zero
+            // otherwise: the publish phase never ran, so there
+            // is no publish wall time to report.
+            report.publish_clipped = budget.clipped();
+            report.publish_deferred = budget.deferred();
+            report.publish_elapsed_ms = if budget.clipped() {
+                budget_start.elapsed().as_millis() as u64
+            } else {
+                0
+            };
+            report.generation = generation;
+            report.pending_heads = pending_heads;
+            report.poison = self.poison_counts();
+            return Ok(());
         }
-        // Per-class projection: verified heads publish, pending ones
-        // wait for their closure, and a damaged head fails the pass
-        // with the previous generation still serving (see
-        // `partition_heads`). The `sync_once` wrapper records the
-        // retaining judgment for every failure, including these.
         let heads = self.engine.live_heads()?;
         let partition = {
             let store = self.store.read().map_err(|_| LiveError::Lock)?;
@@ -976,8 +1097,8 @@ where
             let outcome = if paused {
                 PublishOutcome::default()
             } else {
-                self.rebase_for_publish(&mut budget, trigger_spent);
-                self.publish(mailbox, &mut budget)?
+                self.rebase_for_publish(budget, trigger_spent);
+                self.publish(mailbox, budget)?
             };
             tracing::debug!(
                 pending_heads,
@@ -988,20 +1109,15 @@ where
             // generation: the deferred view keeps serving its heads,
             // and `published_terminal` stays behind so the verdict
             // still publishes once a head installs.
-            return Ok(SyncReport {
-                drained,
-                fetched,
-                quarantined,
-                scrubbed,
-                published: false,
-                sent: outcome.sent,
-                publish_clipped: outcome.clipped,
-                publish_deferred: outcome.deferred,
-                publish_elapsed_ms: outcome.elapsed_ms,
-                generation,
-                pending_heads,
-                poison: self.poison_counts(),
-            });
+            report.published = false;
+            report.sent = outcome.sent;
+            report.publish_clipped = outcome.clipped;
+            report.publish_deferred = outcome.deferred;
+            report.publish_elapsed_ms = outcome.elapsed_ms;
+            report.generation = generation;
+            report.pending_heads = pending_heads;
+            report.poison = self.poison_counts();
+            return Ok(());
         }
         let installed_heads = heads.len();
         let observed_head_ids = self
@@ -1053,29 +1169,29 @@ where
         let outcome = if paused {
             PublishOutcome::default()
         } else {
-            self.rebase_for_publish(&mut budget, trigger_spent);
-            self.publish(mailbox, &mut budget)?
+            self.rebase_for_publish(budget, trigger_spent);
+            self.publish(mailbox, budget)?
         };
         tracing::debug!(
             elapsed_ms = phase.elapsed().as_millis(),
             "pass phase publish done"
         );
         tracing::debug!(
-            accepted = drained.accepted,
-            duplicates = drained.duplicates,
-            deferred = drained.deferred,
-            skipped = drained.skipped,
-            discarded = drained.discarded,
-            manifests = fetched.manifests,
-            snapshot_bodies = fetched.snapshot_bodies,
-            objects = fetched.objects,
-            unfulfilled = fetched.unfulfilled,
-            transport_errors = fetched.transport_errors,
-            deadlines = fetched.deadlines,
-            missing = fetched.missing,
-            invalid = fetched.invalid,
-            unavailable_keys = fetched.unavailable_keys,
-            local_failures = fetched.local_failures,
+            accepted = report.drained.accepted,
+            duplicates = report.drained.duplicates,
+            deferred = report.drained.deferred,
+            skipped = report.drained.skipped,
+            discarded = report.drained.discarded,
+            manifests = report.fetched.manifests,
+            snapshot_bodies = report.fetched.snapshot_bodies,
+            objects = report.fetched.objects,
+            unfulfilled = report.fetched.unfulfilled,
+            transport_errors = report.fetched.transport_errors,
+            deadlines = report.fetched.deadlines,
+            missing = report.fetched.missing,
+            invalid = report.fetched.invalid,
+            unavailable_keys = report.fetched.unavailable_keys,
+            local_failures = report.fetched.local_failures,
             sent = outcome.sent,
             publish_clipped = outcome.clipped,
             publish_deferred = outcome.deferred,
@@ -1085,20 +1201,15 @@ where
             pending_heads = pending_heads,
             "sync pass published"
         );
-        Ok(SyncReport {
-            drained,
-            fetched,
-            quarantined,
-            scrubbed,
-            published: true,
-            sent: outcome.sent,
-            publish_clipped: outcome.clipped,
-            publish_deferred: outcome.deferred,
-            publish_elapsed_ms: outcome.elapsed_ms,
-            generation: generation + 1,
-            pending_heads,
-            poison: self.poison_counts(),
-        })
+        report.published = true;
+        report.sent = outcome.sent;
+        report.publish_clipped = outcome.clipped;
+        report.publish_deferred = outcome.deferred;
+        report.publish_elapsed_ms = outcome.elapsed_ms;
+        report.generation = generation + 1;
+        report.pending_heads = pending_heads;
+        report.poison = self.poison_counts();
+        Ok(())
     }
     /// Drive sync passes until `stop` is set. The idle wait is
     /// event-driven: a mutation submission, a mailbox-queue producer,
