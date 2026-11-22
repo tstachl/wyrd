@@ -24,6 +24,13 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
         subsystem: "md.enesis.wyrd.fileprovider",
         category: "domain"
     )
+    /// Ephemeral, local-only correlation id (T20): a random UUID for
+    /// this extension instance, never a DriveId, device identity or
+    /// protocol identity, and never sent anywhere. Detailed records
+    /// from one domain session carry the same value.
+    private let sessionID = UUID().uuidString
+    private lazy var diagnostics = DiagnosticRecorder(
+        log: log, sessionID: sessionID)
     private let liveStore: LiveStore?
 
     required init(domain: NSFileProviderDomain) {
@@ -179,33 +186,53 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
         }
         let domain = self.domain
         let log = self.log
+        let diagnostics = self.diagnostics
+        // Read at the callback boundary (T20): the level applies to
+        // this operation; work already in flight keeps its own.
+        let level = DiagnosticConfig.currentLevel()
         DispatchQueue.global(qos: .userInitiated).async {
             if cancel.isRequested {
+                let error = userCancelledError()
+                diagnostics.record(level, .createItem, .cancelled,
+                                   item: itemTemplate, error: error)
                 gate.fire {
-                    completionHandler(nil, [], false, userCancelledError())
+                    completionHandler(nil, [], false, error)
                 }
                 return
             }
+            // Which stage the owner-backed path reached; the catch
+            // blocks below report it instead of a guessed operation.
+            var stage: DiagnosticStage = .mutation
             do {
                 // `.DS_Store` is excluded where the platform
                 // supports it (macOS 13+, our floor) instead of
                 // authoring a junk entry; anything else the owner
                 // refuses fails per item, never the extension.
                 if itemTemplate.filename == ".DS_Store" {
+                    let error = NSFileProviderError(.excludedFromSync)
+                    diagnostics.record(level, .createItem, .excluded,
+                                       item: itemTemplate, error: error)
                     gate.fire {
-                        completionHandler(
-                            nil, [], false,
-                            NSFileProviderError(.excludedFromSync))
+                        completionHandler(nil, [], false, error)
                     }
                     return
                 }
                 // Symlink authoring does not exist: refuse closed.
-                if itemTemplate.symlinkTargetPath != nil {
+                // The existing constant error line stays the default
+                // surface; detailed mode adds the decision inputs —
+                // target, type, options and staged-presence — as
+                // structured fields. This is the -2005 path.
+                if let target = itemTemplate.symlinkTargetPath {
                     log.error("symlink creation refused (no symlink authoring)")
+                    let error = NSFileProviderError(.cannotSynchronize)
+                    diagnostics.record(
+                        level, .createItem, .symlinkTemplate,
+                        item: itemTemplate,
+                        options: DiagnosticFields.createOptionNames(options),
+                        stagedContents: url != nil,
+                        symlinkTarget: target, error: error)
                     gate.fire {
-                        completionHandler(
-                            nil, [], false,
-                            NSFileProviderError(.cannotSynchronize))
+                        completionHandler(nil, [], false, error)
                     }
                     return
                 }
@@ -214,10 +241,11 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
                 // recovery model), never a synthesized entry.
                 if itemTemplate.parentItemIdentifier == .trashContainer {
                     log.error("creation under trash refused (no trash model)")
+                    let error = NSFileProviderError(.cannotSynchronize)
+                    diagnostics.record(level, .createItem, .trashRefused,
+                                       item: itemTemplate, error: error)
                     gate.fire {
-                        completionHandler(
-                            nil, [], false,
-                            NSFileProviderError(.cannotSynchronize))
+                        completionHandler(nil, [], false, error)
                     }
                     return
                 }
@@ -237,7 +265,9 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
                     // CreateFile alone, never a fabricated byte. The
                     // staged size is checked before loading, so an
                     // oversize file refuses without materializing.
+                    stage = .stagedContentsRead
                     let data = try Self.stagedOptionalContents(at: url, log: log)
+                    stage = .mutation
                     created = try liveStore.createFile(
                         parent: itemTemplate.parentItemIdentifier,
                         name: itemTemplate.filename,
@@ -246,19 +276,30 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
                 }
                 gate.fire {
                     completionHandler(created, [], false, nil)
+                    diagnostics.record(
+                        level, .createItem, .completed, item: created,
+                        options: DiagnosticFields.createOptionNames(options),
+                        stagedContents: url != nil, succeeded: true)
                     signalWorkingSet(domain: domain, log: log)
                 }
             } catch let error as LiveStoreError {
                 gate.fire {
-                    completionHandler(
-                        nil, [], false,
-                        Self.mutationError(for: error, what: "create", log: log))
+                    let providerError = Self.mutationError(
+                        for: error, what: "create", log: log)
+                    diagnostics.record(
+                        level, .createItem, stage, item: itemTemplate,
+                        options: DiagnosticFields.createOptionNames(options),
+                        stagedContents: url != nil,
+                        error: providerError, storeError: error)
+                    completionHandler(nil, [], false, providerError)
                 }
             } catch {
-                log.error("unexpected create failure: \(String(describing: error))")
                 gate.fire {
-                    completionHandler(
-                        nil, [], false, NSFileProviderError(.cannotSynchronize))
+                    let error = NSFileProviderError(.cannotSynchronize)
+                    diagnostics.record(level, .createItem, stage,
+                                       item: itemTemplate, error: error)
+                    log.error("unexpected create failure: \(String(describing: error))")
+                    completionHandler(nil, [], false, error)
                 }
             }
         }
@@ -290,13 +331,20 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
         }
         let domain = self.domain
         let log = self.log
+        let diagnostics = self.diagnostics
+        let level = DiagnosticConfig.currentLevel()
         DispatchQueue.global(qos: .userInitiated).async {
             if cancel.isRequested {
+                let error = userCancelledError()
+                diagnostics.record(level, .modifyItem, .cancelled,
+                                   item: item, changedFields: changedFields,
+                                   error: error)
                 gate.fire {
-                    completionHandler(nil, [], false, userCancelledError())
+                    completionHandler(nil, [], false, error)
                 }
                 return
             }
+            var stage: DiagnosticStage = .itemLookup
             do {
                 // Trash has no namespace here: reparenting into
                 // trash is permanent-delete semantics the owner does
@@ -307,10 +355,12 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
                     item.parentItemIdentifier == .trashContainer
                 {
                     log.error("trash move refused (no trash model)")
+                    let error = NSFileProviderError(.cannotSynchronize)
+                    diagnostics.record(level, .modifyItem, .trashRefused,
+                                       item: item, changedFields: changedFields,
+                                       error: error)
                     gate.fire {
-                        completionHandler(
-                            nil, [], false,
-                            NSFileProviderError(.cannotSynchronize))
+                        completionHandler(nil, [], false, error)
                     }
                     return
                 }
@@ -323,12 +373,15 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
                 // on a newer base: fail closed and let the system
                 // re-drive the change.
                 let checked = try liveStore.mutationItem(for: item.itemIdentifier)
+                stage = .baseVersionMismatch
                 if !Self.baseVersionMatches(baseVersion, current: checked.item) {
                     log.error("base version mismatch, refusing without overwrite")
+                    let error = NSFileProviderError(.cannotSynchronize)
+                    diagnostics.record(level, .modifyItem, stage,
+                                       item: item, changedFields: changedFields,
+                                       error: error)
                     gate.fire {
-                        completionHandler(
-                            nil, [], false,
-                            NSFileProviderError(.cannotSynchronize))
+                        completionHandler(nil, [], false, error)
                     }
                     return
                 }
@@ -342,6 +395,7 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
                 var resultPath = checked.path
                 var resultParent = checked.parent
                 if changedFields.contains(.filename) || changedFields.contains(.parentItemIdentifier) {
+                    stage = .rename
                     result = try liveStore.rename(
                         identifier: item.itemIdentifier,
                         newParent: item.parentItemIdentifier,
@@ -358,10 +412,12 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
                         // and legacy rows, so this is a directory
                         // with a contents flag — fail closed.
                         log.error("content change on a non-file refused")
+                        let error = NSFileProviderError(.cannotSynchronize)
+                        diagnostics.record(level, .modifyItem, .contentOnNonFile,
+                                           item: item, changedFields: changedFields,
+                                           error: error)
                         gate.fire {
-                            completionHandler(
-                                nil, [], false,
-                                NSFileProviderError(.cannotSynchronize))
+                            completionHandler(nil, [], false, error)
                         }
                         return
                     }
@@ -369,33 +425,49 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
                         // A content change with no staged bytes is
                         // not fabricable: fail the item closed.
                         log.error("content change without staged contents refused")
+                        let error = NSFileProviderError(.cannotSynchronize)
+                        diagnostics.record(level, .modifyItem, .missingStagedContents,
+                                           item: item, changedFields: changedFields,
+                                           stagedContents: false, error: error)
                         gate.fire {
-                            completionHandler(
-                                nil, [], false,
-                                NSFileProviderError(.cannotSynchronize))
+                            completionHandler(nil, [], false, error)
                         }
                         return
                     }
+                    stage = .stagedContentsRead
                     let data = try Self.stagedContents(at: stagedURL, log: log)
+                    stage = .contentWrite
                     result = try liveStore.writeContent(
                         path: resultPath, parent: resultParent, data: data,
                         base: base, token: checked.token, cancel: cancel)
                 }
                 gate.fire {
                     completionHandler(result, pending, false, nil)
+                    diagnostics.record(
+                        level, .modifyItem, .completed, item: result,
+                        changedFields: changedFields,
+                        stagedContents: newContents != nil, succeeded: true)
                     signalWorkingSet(domain: domain, log: log)
                 }
             } catch let error as LiveStoreError {
                 gate.fire {
-                    completionHandler(
-                        nil, [], false,
-                        Self.mutationError(for: error, what: "modify", log: log))
+                    let providerError = Self.mutationError(
+                        for: error, what: "modify", log: log)
+                    diagnostics.record(
+                        level, .modifyItem, stage, item: item,
+                        changedFields: changedFields,
+                        stagedContents: newContents != nil,
+                        error: providerError, storeError: error)
+                    completionHandler(nil, [], false, providerError)
                 }
             } catch {
-                log.error("unexpected modify failure: \(String(describing: error))")
                 gate.fire {
-                    completionHandler(
-                        nil, [], false, NSFileProviderError(.cannotSynchronize))
+                    let error = NSFileProviderError(.cannotSynchronize)
+                    diagnostics.record(level, .modifyItem, stage,
+                                       item: item, changedFields: changedFields,
+                                       error: error)
+                    log.error("unexpected modify failure: \(String(describing: error))")
+                    completionHandler(nil, [], false, error)
                 }
             }
         }
@@ -423,9 +495,13 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
         }
         let domain = self.domain
         let log = self.log
+        let diagnostics = self.diagnostics
+        let level = DiagnosticConfig.currentLevel()
         DispatchQueue.global(qos: .userInitiated).async {
             if cancel.isRequested {
-                gate.fire { completionHandler(userCancelledError()) }
+                let error = userCancelledError()
+                diagnostics.record(level, .deleteItem, .cancelled, error: error)
+                gate.fire { completionHandler(error) }
                 return
             }
             do {
@@ -436,24 +512,45 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
                 // same-path replacement safe. No baseVersion check:
                 // a content change on the same entry does not
                 // invalidate the user's delete of that entry.
+                // The callback exposes no item or parent, so the
+                // structured record carries operation, stage,
+                // options and error; a content id is not emitted
+                // without the explicit justification T20 requires.
                 try liveStore.delete(identifier: identifier, cancel: cancel)
                 gate.fire {
                     completionHandler(nil)
+                    diagnostics.record(
+                        level, .deleteItem, .completed,
+                        options: DiagnosticFields.deleteOptionNames(options),
+                        succeeded: true)
                     signalWorkingSet(domain: domain, log: log)
                 }
             } catch let error as LiveStoreError {
                 if case .notFound = error {
-                    gate.fire { completionHandler(nil) }
+                    gate.fire {
+                        completionHandler(nil)
+                        diagnostics.record(
+                            level, .deleteItem, .completed,
+                            options: DiagnosticFields.deleteOptionNames(options),
+                            storeError: error, succeeded: true)
+                    }
                     return
                 }
                 gate.fire {
-                    completionHandler(
-                        Self.mutationError(for: error, what: "delete", log: log))
+                    let providerError = Self.mutationError(
+                        for: error, what: "delete", log: log)
+                    diagnostics.record(
+                        level, .deleteItem, .mutation,
+                        options: DiagnosticFields.deleteOptionNames(options),
+                        error: providerError, storeError: error)
+                    completionHandler(providerError)
                 }
             } catch {
-                log.error("unexpected delete failure: \(String(describing: error))")
                 gate.fire {
-                    completionHandler(NSFileProviderError(.cannotSynchronize))
+                    let error = NSFileProviderError(.cannotSynchronize)
+                    diagnostics.record(level, .deleteItem, .mutation, error: error)
+                    log.error("unexpected delete failure: \(String(describing: error))")
+                    completionHandler(error)
                 }
             }
         }

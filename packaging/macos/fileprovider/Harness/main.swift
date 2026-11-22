@@ -1809,6 +1809,133 @@ do {
     failures += 1
 }
 
+// MARK: - Local diagnostics mode (T20)
+
+do {
+    // The read-only mirror fails closed for every shape except a v1
+    // document with a known level. It never writes and never guesses.
+    func parsed(_ json: String) -> DiagnosticLevel {
+        DiagnosticConfig.level(from: Data(json.utf8))
+    }
+    checkEqual(parsed(#"{"version":1,"level":"detailed"}"#), .detailed,
+               "v1 detailed mirror reads")
+    checkEqual(parsed(#"{"version":1,"level":"default"}"#), .default,
+               "v1 default mirror reads")
+    checkEqual(parsed(#"{"version":1,"level":"verbose","extra":1}"#), .default,
+               "an unknown level fails closed despite extra keys")
+    checkEqual(parsed(#"{"version":2,"level":"detailed"}"#), .default,
+               "a newer version fails closed")
+    checkEqual(parsed(#"{"level":"detailed"}"#), .default,
+               "a missing version fails closed")
+    checkEqual(parsed("not-json"), .default,
+               "malformed mirror fails closed")
+
+    // The -2005 shape: macOS hands the extension a symlink-shaped
+    // template for a regular PDF. These are the decision inputs the
+    // old constant log line could not carry.
+    let symlinkEvent = DiagnosticEvent(
+        operation: .createItem, stage: .symlinkTemplate, succeeded: false,
+        filename: "Info Pack 2024 - (El Mundo Magico - PERU).pdf",
+        contentType: "com.adobe.pdf",
+        parentIdentifier: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        symlinkTarget: "/Users/me/iCloud Drive/Documents/Info Pack.pdf",
+        options: ["mayAlreadyExist", "contents"],
+        hadStagedContents: true,
+        error: DiagnosticErrorInfo(
+            domain: "NSFileProviderErrorDomain", code: -2005,
+            detail: "Cannot synchronize."),
+        storeError: nil)
+
+    // Default mode emits nothing new: the existing safe-summary lines
+    // remain the default surface, byte-for-byte.
+    check(DiagnosticLineBuilder.buildLine(
+        event: symlinkEvent, level: .default, sessionID: "s-1") == nil,
+        "default mode adds no diagnostic line")
+
+    guard let line = DiagnosticLineBuilder.buildLine(
+        event: symlinkEvent, level: .detailed, sessionID: "s-1") else {
+        print("FAIL: detailed mode builds a line")
+        failures += 1
+        throw HarnessError.socket("no detailed line")
+    }
+    func detail(_ key: String) -> DiagnosticDetail? {
+        line.details.first { $0.key == key }
+    }
+    checkEqual(line.summary, "createItem failed stage=symlinkTemplate",
+               "the summary is a safe operation/stage summary")
+    checkEqual(detail("filename")?.value,
+               "Info Pack 2024 - (El Mundo Magico - PERU).pdf",
+               "the filename is a structured field")
+    checkEqual(detail("content-type")?.value, "com.adobe.pdf",
+               "the content type is a structured field")
+    checkEqual(detail("symlink-target")?.value,
+               "/Users/me/iCloud Drive/Documents/Info Pack.pdf",
+               "the symlink target is captured")
+    checkEqual(detail("error-code")?.value, "-2005",
+               "the exact returned error code is captured")
+    checkEqual(detail("error-domain")?.value, "NSFileProviderErrorDomain",
+               "the exact returned error domain is captured")
+    checkEqual(detail("staged-contents")?.value, "present",
+               "staged-content presence is captured")
+    checkEqual(detail("options")?.value, "mayAlreadyExist,contents",
+               "relevant options and changed fields are captured")
+    checkEqual(detail("session")?.value, "s-1",
+               "the ephemeral local session id is attached")
+
+    // Three separate authorizations. Detailed mode never reclassifies
+    // a field that stays hidden, and "allowed locally" is not public.
+    checkEqual(detail("filename")?.visibility, .public,
+               "the filename is public in detailed mode")
+    checkEqual(detail("filename")?.exportable, true,
+               "the filename is exportable in detailed mode")
+    checkEqual(detail("parent")?.visibility, .private,
+               "the parent identifier is local-only, not public")
+    checkEqual(detail("parent")?.exportable, true,
+               "the parent identifier is exportable on request")
+    checkEqual(detail("symlink-target")?.visibility, .private,
+               "the symlink target is local-only, not public")
+    checkEqual(detail("symlink-target")?.exportable, true,
+               "the symlink target is exportable on request")
+    checkEqual(detail("error-code")?.visibility, .public,
+               "the error code is public")
+    checkEqual(detail("error-detail")?.visibility, .private,
+               "free-form error text stays private")
+    let keys = Set(line.details.map(\.key))
+    check(!keys.contains("content-id") && !keys.contains("identity")
+        && !keys.contains("file-contents") && !keys.contains("credentials"),
+        "never-emitted fields do not appear in detailed mode")
+
+    // Successes are visible under diagnostics only; none of the three
+    // callbacks recorded one before this phase.
+    let success = DiagnosticEvent(
+        operation: .deleteItem, stage: .completed, succeeded: true,
+        filename: nil, contentType: nil, parentIdentifier: nil,
+        symlinkTarget: nil, options: [], hadStagedContents: nil,
+        error: nil, storeError: nil)
+    guard let successLine = DiagnosticLineBuilder.buildLine(
+        event: success, level: .detailed, sessionID: "s-1") else {
+        print("FAIL: detailed success builds a line")
+        failures += 1
+        throw HarnessError.socket("no success line")
+    }
+    checkEqual(successLine.summary, "deleteItem ok stage=completed",
+               "a confirmed delete records a success line")
+    check(DiagnosticLineBuilder.buildLine(
+        event: success, level: .default, sessionID: "s-1") == nil,
+        "successes add nothing in default mode")
+
+    // Option and changed-field rendering: named bits plus a hex tag
+    // for unknown ones, never a guess at an SDK flag's meaning.
+    let names = DiagnosticFields.fieldNames([
+        .filename, .contents, NSFileProviderItemFields(rawValue: 1 << 20)])
+    check(names.contains("filename") && names.contains("contents")
+        && names.contains("other:0x100000"),
+        "known and unknown changed fields are both rendered")
+} catch {
+    print("FAIL: local diagnostics checks: \(error)")
+    failures += 1
+}
+
 if failures == 0 {
     print("harness: all checks passed")
 } else {
