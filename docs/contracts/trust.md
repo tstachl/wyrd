@@ -418,11 +418,14 @@ scope: the expected owner
 DeviceId (or roster), the expected drive id, and, where the pairing
 flow provides one, the expected genesis TransitionId, compared before
 join. Without that expectation the invitee cannot distinguish the
-attacker's genesis from the legitimate one. No validation change is
-proposed: the pairing flow (`docs/design/cli.md`, three steps with
-out-of-band handoffs of pairing material and the invitation file) is
-where the expectation travels, and this contract records the shape of
-what must travel there.
+attacker's genesis from the legitimate one. The pairing flow
+(`docs/design/cli.md`, three steps with out-of-band handoffs of
+pairing material and the invitation file) is where the expectation
+must travel, and this contract records the shape of what must
+travel there — but the handoff is not yet in the flow: no join
+entry point accepts or compares an expected owner, drive, or
+genesis today, so validation authenticates the invitation only
+(enforcement: `nostr:nevent1qqsfu4n9wja74w02h7ty8tsekc6qhp7pegw5erwgqyv6946rjq4p9sgpz9mhxue69uhkwunpwdczuap49eehg0qssvz`).
 
 ### Rotation delivery (pinned)
 
