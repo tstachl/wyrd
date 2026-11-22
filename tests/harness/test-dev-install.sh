@@ -196,22 +196,26 @@ match '--identifier md.enesis.wyrd' "$REGISTRAR_CODE" \
 pass "install pairs signing and embeds both native artifacts"
 
 # 7c. Domain reconciliation is a per-user launch agent, not a thread
-# inside a running Wyrd.app. The template runs one short-lived pass at
-# load and every 5 seconds; no KeepAlive makes a resident daemon. The
-# installer fills the helper path from the installed bundle and loads
-# the agent, unloading any previous copy first.
+# inside a running Wyrd.app. One resident helper loops internally every
+# 5 seconds: a fresh process per tick makes macOS re-ask the
+# "access data from other apps" permission on every launch. KeepAlive
+# restarts that one process if it dies; RunAtLoad starts it at login.
+# The installer fills the helper path from the installed bundle and
+# loads the agent, unloading any previous copy first.
 AGENT_TEMPLATE="$ROOT/packaging/macos/launchd/md.enesis.wyrd.domain-registrar.plist"
 [[ -f "$AGENT_TEMPLATE" ]] \
   || die "registrar agent: launchd template missing"
 # XML comments are prose, not keys: strip them before pinning keys.
 AGENT_CODE="$(sed '/<!--/,/-->/d' "$AGENT_TEMPLATE")"
-for marker in 'md.enesis.wyrd.domain-registrar' '@WYRD_REGISTRAR_PATH@' '<key>RunAtLoad</key>' '<key>StartInterval</key>' '<integer>5</integer>'; do
+for marker in 'md.enesis.wyrd.domain-registrar' '@WYRD_REGISTRAR_PATH@' '<key>RunAtLoad</key>' '<key>KeepAlive</key>' '<string>--watch</string>'; do
   match "$marker" "$AGENT_CODE" \
     || die "registrar agent: template marker '$marker' missing"
 done
-if match 'KeepAlive' "$AGENT_CODE"; then
-  die "registrar agent: KeepAlive would make a resident daemon"
+if match 'StartInterval' "$AGENT_CODE"; then
+  die "registrar agent: StartInterval relaunches the helper and re-prompts"
 fi
+match 'while true' "$(cat "$ROOT/packaging/macos/domain-registrar/main.swift")" \
+  || die "registrar: --watch has no internal reconciliation loop"
 for marker in 'REGISTRAR_AGENT_TEMPLATE' 'LaunchAgents' 'launchctl unload -w' 'launchctl load -w'; do
   match "$marker" "$INSTALL_CODE" \
     || die "install: registrar agent marker '$marker' missing"
