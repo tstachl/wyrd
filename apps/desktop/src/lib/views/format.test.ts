@@ -11,11 +11,13 @@ import {
   boundLabel,
   credentialModeFor,
   describeProvisionResult,
+  formatBoundValue,
   formatObservedAt,
   freshnessLabel,
   membershipSummary,
   nextDriveDir,
   observedRegistrySummary,
+  parseBoundInput,
   shouldAdvanceAfterProvision,
   shouldAdvanceAfterRemoval,
   restartKindFor,
@@ -345,13 +347,37 @@ test("bound inputs validate per key, naming the key", () => {
   expect(validateBoundInput("admit_all", "1")).toContain("admit_all");
 });
 
-test("display card mirrors the bounds table, never its own wording", async () => {
-  // The configured-values card hardcodes its rows instead of
-  // iterating the table, so this pins the lockstep: every label
-  // and description renders verbatim in `SettingsView.svelte`.
+test("storage is entered and shown in GB, never as a raw byte count", () => {
+  const storage = SETTING_BOUNDS[0]!;
+  expect([storage.inputUnit, storage.inputScale]).toEqual(["GB", 1073741824]);
+  expect(formatBoundValue(storage, null)).toBe("");
+  expect(formatBoundValue(storage, 1073741824)).toBe("1");
+  expect(formatBoundValue(storage, 1610612736)).toBe("1.5");
+  // Whole-number bounds stay 1:1 with the file value.
+  const work = SETTING_BOUNDS[1]!;
+  expect([work.inputUnit, work.inputScale]).toEqual(["items", 1]);
+  expect(formatBoundValue(work, 64)).toBe("64");
+
+  expect(parseBoundInput("retained_bytes_quota", "1")).toEqual({ ok: true, raw: 1073741824 });
+  expect(parseBoundInput("retained_bytes_quota", " 1.5 ")).toEqual({ ok: true, raw: 1610612736 });
+  // A fraction that would not land on a whole number of bytes is refused,
+  // and every refusal names the key rather than a remote component.
+  expect(parseBoundInput("retained_bytes_quota", "0.0000000001").ok).toBe(false);
+  expect(parseBoundInput("retained_bytes_quota", "abc")).toHaveProperty("error");
+});
+
+test("the limits form mirrors the bounds table, never its own wording", async () => {
+  // One form now serves every observation state and iterates the
+  // table, so labels and descriptions cannot drift per row. This
+  // pins the iteration and that the table's descriptions render
+  // verbatim in `SettingsView.svelte`.
   const view = await Bun.file(`${import.meta.dir}/SettingsView.svelte`).text();
+  const source = await Bun.file(`${import.meta.dir}/format.ts`).text();
+  expect(view).toContain("{#each SETTING_BOUNDS as bound (bound.key)}");
+  expect(view).toContain("<DetailRow label={bound.label} description={bound.description}>");
+  // The form renders the table's fields, so the approved descriptions
+  // now live once in `format.ts` rather than duplicated in the view.
   for (const bound of SETTING_BOUNDS) {
-    expect(view).toContain(`label="${bound.label}"`);
-    expect(view).toContain(bound.description);
+    expect(source).toContain(bound.description);
   }
 });

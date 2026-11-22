@@ -2,7 +2,10 @@
 // (`./UnavailableView.svelte`, `./SettingsView.svelte`). The toggle
 // records a login-start preference and never implies the owner
 // answered; the managed stop states keep their explicit Start.
-// Terminology is frozen: "Start drive service at login" (R-D1).
+// Terminology is frozen: both surfaces use "Start drive service at
+// login" for a drive with a definition (desktop-lifecycle.md, R-D1).
+// The Settings card additionally describes the outcome; the label
+// itself may not drift.
 //
 // Run: `bun run test` from `apps/desktop/`.
 
@@ -15,6 +18,17 @@ test("both toggle surfaces use the frozen label", () => {
   for (const view of [unavailable, settings]) {
     expect(view).toContain("Start drive service at login");
   }
+});
+
+test("the Settings card describes the outcome, not the mechanism", () => {
+  // The issue asked to rewrite the description carrying bare
+  // owner/manager and the login-start record detail. The label above
+  // stays frozen; only the prose beneath it changes.
+  expect(settings).toContain(
+    "Start this drive automatically when you log in. Turning this off doesn't delete anything.",
+  );
+  expect(settings).not.toContain("The per-drive owner service the manager starts at login");
+  expect(settings).not.toContain("login-start record for this drive reads");
 });
 
 test("the toggle never claims to start anything", () => {

@@ -1,10 +1,12 @@
 // Copy and shape pins for the settings empty states
-// (`SettingsView.svelte`). Both `nofile` and `nosection` name the
-// resolved file path (with a copy button) and show the section
-// shape to create — rendered from the live drive dir with every
-// key optional — while keeping the editor entry point. The Rust
-// payload (`DriveSettings::{Nofile,Nosection} { path }`) is the
-// source of truth; these pins only hold the display end of it.
+// (`SettingsView.svelte`). Every observation state now renders the
+// same five-field form: an unconfigured drive shows "Using Wyrd's
+// default" per field rather than an edit-this-JSON prompt. The file
+// shape and path live behind an Advanced disclosure and carry real
+// configured values only — never sample numbers that look like a
+// recommended default. The Rust payload
+// (`DriveSettings::{Configured,Nofile,Nosection}`) is the source of
+// truth; these pins only hold the display end of it.
 //
 // Run: `bun run test` from `apps/desktop/`.
 
@@ -12,45 +14,47 @@ import { expect, test } from "bun:test";
 
 const view = await Bun.file(`${import.meta.dir}/SettingsView.svelte`).text();
 
-test("both empty states name the resolved file path with a copy button", () => {
-  // One pin per block: the path must render inside each branch,
-  // not just somewhere in the file.
-  const nofile = view.slice(
-    view.indexOf('settings.state === "nofile"'),
-    view.indexOf('settings.state === "nosection"'),
+test("one form serves every observation state", () => {
+  // No per-state editor toggles: configured, nofile and nosection
+  // all fall through the same fields, and the old JSON prompt is gone.
+  expect(view).toContain("{#each SETTING_BOUNDS as bound (bound.key)}");
+  expect(view).not.toContain("No settings file yet");
+  expect(view).not.toContain("No section for this drive");
+  expect(view).not.toContain("Set bounds for this drive");
+  expect(view).not.toContain("Edit bounds");
+});
+
+test("absent values read as Wyrd's default with a per-field reset", () => {
+  expect(view).toContain('placeholder="Using Wyrd\'s default"');
+  expect(view).toContain("Using Wyrd's default</Badge>");
+  expect(view).toContain("Use Wyrd's default");
+  expect(view).not.toContain("Using default</Badge>");
+  expect(view).not.toContain("compiled defaults");
+});
+
+test("when changes take effect is stated on the form", () => {
+  expect(view).toContain(
+    "Changes take effect the next time this drive starts — they don't change a running drive.",
   );
-  expect(nofile).toContain("{settings.path}");
-  expect(nofile).toContain('label="settings file path"');
-  const nosection = view.slice(view.indexOf('settings.state === "nosection"'));
-  expect(nosection).toContain("{settings.path}");
-  expect(nosection).toContain('label="settings file path"');
 });
 
-test("both empty states show the section shape with the live drive dir", () => {
-  // The example is derived from the drive on screen, so the key
-  // the file needs is the key shown — never a hardcoded drive.
-  // (Quoted `"version"` only exists at runtime via JSON.stringify;
-  // the source holds the object literal.) All five bound keys are
-  // present: the issue scope asks for the schema, not one key.
-  expect(view).toContain("[driveDir]");
-  expect(view).toContain("version: 1");
-  for (const key of [
-    "retained_bytes_quota",
-    "max_admit_per_pass",
-    "fetch_pass_budget_secs",
-    "max_mutation_wait_secs",
-    "open_timeout_secs",
-  ]) {
-    expect(view).toContain(key);
-  }
-  expect(view).toContain("{emptyExample}");
-  expect(view.match(/\{emptyExample\}/g)?.length).toBe(2);
+test("the file JSON is behind an Advanced disclosure with no sample values", () => {
+  expect(view).toContain("Advanced: edit the settings file directly");
+  expect(view).toContain("<details");
+  expect(view).toContain("{advancedJson}");
+  // The disclosure shows only keys this drive actually configured,
+  // filtered from the live observation — the old literal sample
+  // object (and its 64/30/120/45 values) is gone.
+  expect(view).not.toContain("emptyExample");
+  expect(view).not.toContain("1073741824");
+  expect(view).not.toContain("120,");
+  expect(view).toContain(".filter(([, value]) => value !== null)");
+  expect(view).toContain("Every key is optional — leave one out to use Wyrd's default.");
 });
 
-test("the shape is honest about optionality and keeps the editor entry", () => {
-  // Values read as starting points, never recommendations: the copy
-  // says to keep only wanted lines with the operator's own values.
-  expect(view).toContain("every key is optional");
-  expect(view).toContain("put in your own values");
-  expect(view).toContain("Set bounds for this drive");
+test("the resolved file path stays visible where the observation carries it", () => {
+  expect(view).toContain('const settingsPath = $derived(');
+  expect(view).toContain('"path" in settings ? settings.path : null');
+  expect(view).toContain("{settingsPath}");
+  expect(view).toContain('label="settings file path"');
 });

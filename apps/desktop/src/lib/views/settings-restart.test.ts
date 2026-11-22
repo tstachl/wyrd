@@ -13,9 +13,9 @@ const view = await Bun.file(`${import.meta.dir}/SettingsView.svelte`).text();
 
 test("saved banner separates saving from applying", () => {
   for (const line of [
-    "Bounds saved — restart to apply",
-    "Bounds saved — lock and unlock to apply",
-    "Bounds saved. They apply the next time the drive starts",
+    "Limits saved — restart to apply",
+    "Limits saved — lock and unlock to apply",
+    "Limits saved. They apply the next time the drive starts",
   ]) {
     expect(view).toContain(line);
   }
@@ -26,7 +26,7 @@ test("managed restart confirms the interruption first", () => {
   for (const line of [
     "Restart the service?",
     "briefly interrupts availability",
-    "The bounds you saved apply when it comes back",
+    "The limits you saved apply when it comes back",
   ]) {
     expect(view).toContain(line);
   }
