@@ -15,7 +15,7 @@ to change it without creating a second source of truth.
 | Sync protocol, peer roles, materialization, forget contract | `docs/contracts/sync-and-peers.md` |
 | Mounted write path, commit pipeline, durability ordering | `docs/contracts/write-path.md` |
 | Drive-owner interface (cross-process boundary) | `docs/contracts/owner-interface.md` |
-| Desktop application lifecycle (window close, quit, reopen, lock) | `docs/contracts/desktop-lifecycle.md` |
+| Desktop application lifecycle (window close, quit, launch, lock) | `docs/contracts/desktop-lifecycle.md` |
 | Crash windows per subsystem | `docs/contracts/crash-consistency.md` |
 | Error taxonomy, fail-closed classification | `docs/contracts/error-conventions.md` |
 | Live-operation bounds | `docs/contracts/resource-limits.md` |
