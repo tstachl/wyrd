@@ -512,6 +512,95 @@ consequently narrows to its backoff half — "retries until evidence
 arrives" — and the peer-repair loop consumes this contract's
 vocabulary to distinguish "unavailable" from "never received".
 
+## Peer-state reports (advisory)
+
+Status: normative for the claim and its limits. The wire kind, its
+identity name and its implementation are separately authorized; nothing
+here allocates a kind or asserts shipped behaviour.
+
+A peer-state report is a signed, member-authored statement of the
+reporting device's eligible head set and a monotonically increasing
+report sequence, bound to that device's identity. It describes the
+reporting device's durable history state at authorship. It does not
+attest to message receipt, content availability, backup completeness, or
+the state of any other device, and carries no timestamp.
+
+The eligible head set is the classified eligible-head projection of the
+reporting device's durable state at authorship — the same authorization
+classification that governs local writes. It is derived independently of
+reconciliation evidence, announcement sets and received snapshot bodies.
+
+> **No reconciliation fact, retirement fact, announced-snapshot set or
+> received statement contributes to a peer-state report's eligible head
+> set.**
+
+A legitimately empty eligible head set is a valid report and must be
+distinguishable both from a head set exceeding the protocol's resource
+limits and from a failure to derive the eligible head set reliably. A
+report that cannot state a bounded, reliably derived eligible head set
+is not published; no value is inferred to fill the set.
+
+A reporting device must preserve sequence monotonicity across ordinary
+restarts. If restoration or rollback makes the previous sequence
+position uncertain, it must not publish another report under that
+sequence domain until continuity is re-established or the device
+identity is replaced. Identity replacement is removal of the old
+membership and admission of the new key; the old key's sequence domain
+is retired with it. At the receiver, the conflict rule is deterministic:
+the same sequence with the same report content is an idempotent
+duplicate; a lower sequence is stale and rejected; the same sequence
+with different content is a conflicting observation, rejected without
+replacing the previously accepted observation; a higher sequence is
+eligible for acceptance, subject to all other validation.
+
+Reports are published when the author's eligible head set changes and
+when its relay connection is re-established, coalesced into one report,
+never periodically and never per sync pass. A quiet device emits no
+report to maintain freshness. Reconnect publishes current durable
+state, not a replay of an old serialized report.
+
+The receiver derives the comparative state against its own verified
+eligible DAG; the peer does not assert it. Let `L` be the local eligible
+head set, `P` the reported eligible head set, and `A(L)` and `A(P)` their
+ancestry closures over verified snapshot ancestry, including the heads
+themselves. The comparison is defined over those closures:
+
+| State | Definition |
+| --- | --- |
+| Same history | `A(L) = A(P)` |
+| Peer behind | `A(P) ⊂ A(L)` |
+| Peer has history we lack | `A(L) ⊂ A(P)` |
+| Diverged | neither closure is a subset of the other |
+| No report | no currently acceptable report exists |
+
+The state is named for history, not snapshot identity: equal ancestry
+closures do not by themselves assert equal snapshot ids. An ancestry
+relationship is asserted only when the receiver has sufficient verified
+DAG information to establish that relationship. Missing or unverifiable
+ancestry information produces an unclassifiable observation, not an
+inferred subset relationship. These definitions are mutually exclusive
+and do not assume a single linear history. An unclassifiable observation
+asserts no comparative relationship, must not be forced into one of the
+states above and is distinct from no report, which means no currently
+acceptable report exists. No report is absence of evidence, never
+evidence of failure.
+
+Reports are accepted only from current members after membership-log and
+identity-key verification. A report accepted from a device later removed
+may remain as a historical observation, but must not appear as current
+member state, must not establish current membership, must not influence
+retention or obligation retirement, and historical visibility confers no
+continuing authority. Re-admission does not promote reports from a
+previous membership period to current observations: a newly accepted
+report is required before the device has current peer-state status.
+
+Reports are advisory. They are never evidence for retention, reclamation,
+eviction, removal, obligation retirement or backup claims. Snapshot
+agreement does not establish byte availability or fetchability. The
+`Explicitly not evidence` list applies in full. A set of matching reports
+does not establish global convergence; devices may be unreported, stale
+or divergent without a visible report.
+
 ## What is exchanged
 
 - **Snapshot announcements** (small, fanned out to every admitted device): "my head set now
@@ -787,6 +876,10 @@ to be inferred:
   `docs/releases/release-process.md`. Only the cross-host run
   evidences role-addressed partition, serving restart, and the fetch
   plane; the per-merge leg never claims them.
+- **Peer-state reports are not an evidence gate:** the advisory
+  observations defined in "Peer-state reports (advisory)" above never
+  satisfy, retire or gate any claim; no workflow silence is inferred
+  from an absent report.
 
 ## Operational patterns
 
