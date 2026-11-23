@@ -214,12 +214,18 @@ pub(super) fn bind_group_listener(socket_path: &Path) -> std::io::Result<UnixLis
     }
     bind_listener(socket_path).map_err(|error| {
         // The team-prefixed group id leaves little headroom under the
-        // platform's sun_path ceiling. Name the two things an operator
-        // can change instead of surfacing a bare InvalidInput.
+        // platform's sun_path ceiling. Only that case gets the knob
+        // hint; permission and other failures keep their own cause.
+        let detail = if error.kind() == std::io::ErrorKind::InvalidInput {
+            "path too long for the platform: shorten WYRD_APP_GROUP or use a shorter account name"
+                .to_string()
+        } else {
+            error.to_string()
+        };
         std::io::Error::new(
             error.kind(),
             format!(
-                "cannot bind group socket at {}: {error} (shorten WYRD_APP_GROUP or use a shorter account name)",
+                "cannot bind group socket at {}: {detail}",
                 socket_path.display()
             ),
         )

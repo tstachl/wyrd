@@ -497,7 +497,10 @@ stop_running_wyrd() {
     fi
 
     # A PID can be recycled between SIGTERM and the escalation. Recheck
-    # the command line, not just liveness, before sending SIGKILL.
+    # the command line, not just liveness, before sending SIGKILL. This
+    # is best-effort: a freshly restarted Wyrd agent can reuse the same
+    # pattern and still be caught; a start-time token would be needed
+    # for a stronger guarantee.
     is_wyrd_pid() {
         cmdline=$(ps -p "$1" -o command= 2>/dev/null) || return 1
         case "$cmdline" in

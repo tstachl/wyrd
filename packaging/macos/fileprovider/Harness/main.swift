@@ -1986,6 +1986,12 @@ checkEqual(AppGroup.identifier(from: [:], info: nil),
 checkEqual(AppGroup.identifier(from: [AppGroup.environmentKey: "custom.group"], info: nil),
            "custom.group",
            "the env override reaches the unsandboxed consumer")
+checkEqual(AppGroup.identifier(from: [AppGroup.environmentKey: "  custom.group  "], info: nil),
+           "custom.group",
+           "a padded env override is trimmed like the shell and Rust accessors")
+checkEqual(AppGroup.identifier(from: [AppGroup.environmentKey: "   "], info: nil),
+           AppGroup.defaultIdentifier,
+           "a whitespace-only env override falls back to the default")
 checkEqual(AppGroup.identifier(from: [:], info: [
     "NSExtension": ["NSExtensionFileProviderDocumentGroup": "rendered.group"],
 ]), "rendered.group",

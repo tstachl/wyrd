@@ -23,13 +23,18 @@ enum AppGroup {
         // The unsandboxed registrar can read the override directly;
         // the sandboxed appex cannot, so its build-rendered Info.plist
         // is the authoritative source there.
-        if let fromEnv = environment[environmentKey], !fromEnv.isEmpty {
+        let fromEnv = environment[environmentKey]?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !fromEnv.isEmpty {
             return fromEnv
         }
         guard let extensionInfo = info?["NSExtension"] as? [String: Any],
-            let value = extensionInfo["NSExtensionFileProviderDocumentGroup"] as? String,
-            !value.isEmpty, !value.hasPrefix("@")
+            let raw = extensionInfo["NSExtensionFileProviderDocumentGroup"] as? String
         else {
+            return defaultIdentifier
+        }
+        let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty, !value.hasPrefix("@") else {
             return defaultIdentifier
         }
         return value

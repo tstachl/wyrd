@@ -3972,6 +3972,16 @@ fn production_container_derives_from_home() {
         crate::settings::DEFAULT_APP_GROUP_IDENTIFIER,
         "an empty override falls back to the default"
     );
+    assert_eq!(
+        crate::settings::app_group_identifier_from(Some(" custom.group ")),
+        "custom.group",
+        "a padded override is trimmed like the shell and Swift helpers"
+    );
+    assert_eq!(
+        crate::settings::app_group_identifier_from(Some("   ")),
+        crate::settings::DEFAULT_APP_GROUP_IDENTIFIER,
+        "a whitespace-only override falls back to the default"
+    );
     assert!(
         super::server::default_group_container_with_home(None).is_none(),
         "no home means no container"

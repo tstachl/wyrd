@@ -53,10 +53,12 @@ pub const DEFAULT_APP_GROUP_IDENTIFIER: &str = "JU2RFHWQPH.group.md.enesis.wyrd"
 /// Resolve the group id from an explicit override, for pure tests.
 /// An unset or empty override means the built-in default.
 pub fn app_group_identifier_from(override_value: Option<&str>) -> String {
-    override_value
-        .filter(|value| !value.is_empty())
-        .unwrap_or(DEFAULT_APP_GROUP_IDENTIFIER)
-        .to_string()
+    let trimmed = override_value.unwrap_or("").trim();
+    if trimmed.is_empty() {
+        DEFAULT_APP_GROUP_IDENTIFIER.to_string()
+    } else {
+        trimmed.to_string()
+    }
 }
 
 /// The effective group id for this process.

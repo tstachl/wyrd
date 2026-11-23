@@ -20,7 +20,8 @@ ROOT=$(cd "$HERE/../../.." && pwd)
 . "$ROOT/packaging/macos/app-group.sh"
 # Validate before the minutes-long swiftc: a bad override must fail
 # here, as it does in build-appex.sh, not after a full compile.
-GROUP=$(wyrd_app_group)
+APP_GROUP=$(wyrd_app_group)
+echo "app group: $APP_GROUP" >&2
 OUT=${1:-"$HERE/build"}
 ARCH=${ARCH:-$(uname -m)}
 SIGN_IDENTITY=${SIGN_IDENTITY:--}
