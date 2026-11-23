@@ -6,6 +6,9 @@
 #                                when writable, else ~/Applications/Wyrd.app;
 #                                DEST env overrides)
 #   --no-open                    build and install without launching the app
+#   --no-stop                    do not stop already-running Wyrd processes
+#                                around the install (default: stop them, so
+#                                no process keeps an old binary mapped)
 #   --sign-identity <identity>   Developer identity for the app, appex, CLI
 #                                and domain registrar. With this option a
 #                                provisioning profile is required: an ad-hoc
@@ -13,8 +16,8 @@
 #                                value signs the outer app (SIGN_IDENTITY and
 #                                APPLE_SIGNING_IDENTITY are both set).
 #   --provisioning-profile <p>   .provisionprofile for the appex, carrying
-#                                group.md.enesis.wyrd. Kept outside the repo;
-#                                the absolute path is passed to the stage hook.
+#                                the configured App Group. Kept outside the
+#                                repo; the absolute path is passed to the hook.
 #   --app-provisioning-profile <p>  .provisionprofile for the app (bundle id
 #                                md.enesis.wyrd), also carrying the App Group.
 #                                The entitled app materializes the container
@@ -26,7 +29,9 @@
 #
 # SIGN_IDENTITY / APPLE_SIGNING_IDENTITY / PROVISIONING_PROFILE /
 # APP_PROVISIONING_PROFILE in the environment are equivalent to the
-# options above.
+# options above. WYRD_APP_GROUP (default: the team-prefixed id in
+# packaging/macos/app-group.sh) selects the App Group rendered into
+# the entitlements, Info.plist, registrar agent and Rust runtime.
 #
 # What it does: ensures the frontend dependencies, builds Wyrd.app
 # ad-hoc through build-bundle.sh (the
@@ -52,7 +57,7 @@ set -o pipefail 2>/dev/null || true
 usage() {
     echo "usage: packaging/macos/install-dev.sh [options] [-- <build args>]"
     echo ""
-    echo "options: --dest <path>, --no-open, --sign-identity <identity>,"
+    echo "options: --dest <path>, --no-open, --no-stop, --sign-identity <identity>,"
     echo "         --provisioning-profile <path>, --app-provisioning-profile <path>,"
     echo "         --help"
     echo ""
@@ -64,7 +69,8 @@ usage() {
     echo ""
     echo "Ad-hoc builds leave Finder inert (no App Group container). Pass"
     echo "--sign-identity and --provisioning-profile for a Finder-capable"
-    echo "build; see packaging/macos/README.md."
+    echo "build; see packaging/macos/README.md. Running Wyrd processes are"
+    echo "stopped around the install unless --no-stop is given."
 }
 
 # --help before anything that can fail: a machine without cargo can
@@ -81,6 +87,8 @@ done
 
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
+. "$HERE/app-group.sh"
+GROUP=$(wyrd_app_group)
 
 # macOS only: the .app bundle never ships on other targets.
 if [ "$(uname -s)" != "Darwin" ]; then
@@ -113,6 +121,7 @@ command -v python3 >/dev/null 2>&1 || {
 # `install-dev.sh --dest … --no-open -- --target <triple>`.
 DEST="${DEST:-}"
 OPEN_APP=1
+STOP_RUNNING=1
 # Signing inputs: either the options below or the inherited environment.
 # Both must be set together for a Finder-capable build, and an outer
 # identity can be inferred from the shared inner identity.
@@ -162,12 +171,16 @@ while [ "$#" -gt 0 ]; do
             OPEN_APP=0
             shift
             ;;
+        --no-stop)
+            STOP_RUNNING=0
+            shift
+            ;;
         --)
             shift
             break
             ;;
         -*)
-            echo "error: unknown install flag: $1 (usage: --dest, --no-open, --sign-identity, --provisioning-profile, --app-provisioning-profile, --, --help)." >&2
+            echo "error: unknown install flag: $1 (usage: --dest, --no-open, --no-stop, --sign-identity, --provisioning-profile, --app-provisioning-profile, --, --help)." >&2
             exit 1
             ;;
         *)
@@ -194,7 +207,7 @@ case "$SIGN_IDENTITY" in
         ;;
     *)
         if [ -z "$PROVISIONING_PROFILE" ]; then
-            echo "error: --sign-identity needs --provisioning-profile carrying group.md.enesis.wyrd." >&2
+            echo "error: --sign-identity needs --provisioning-profile carrying $GROUP." >&2
             exit 1
         fi
         [ -f "$PROVISIONING_PROFILE" ] || {
@@ -204,7 +217,7 @@ case "$SIGN_IDENTITY" in
         PROFILE_DIR=$(CDPATH= cd -- "$(dirname -- "$PROVISIONING_PROFILE")" && pwd)
         PROVISIONING_PROFILE="$PROFILE_DIR/$(basename -- "$PROVISIONING_PROFILE")"
         if [ -z "$APP_PROVISIONING_PROFILE" ]; then
-            echo "error: --sign-identity also needs --app-provisioning-profile: the app must be provisioned for group.md.enesis.wyrd." >&2
+            echo "error: --sign-identity also needs --app-provisioning-profile: the app must be provisioned for $GROUP." >&2
             exit 1
         fi
         [ -f "$APP_PROVISIONING_PROFILE" ] || {
@@ -379,7 +392,7 @@ if [ "$FINDER_CAPABLE" -eq 1 ]; then
             ;;
     esac
     case "$APPEX_INFO" in
-        *"group.md.enesis.wyrd"*) ;;
+        *"$GROUP"*) ;;
         *) echo "error: embedded appex does not carry the App Group entitlement." >&2; exit 1 ;;
     esac
     REGISTRAR_INFO=$(codesign -dv --entitlements - "$REGISTRAR" 2>&1) || {
@@ -391,7 +404,7 @@ if [ "$FINDER_CAPABLE" -eq 1 ]; then
         *) echo "error: domain registrar must carry the app's signing identifier." >&2; exit 1 ;;
     esac
     case "$REGISTRAR_INFO" in
-        *"group.md.enesis.wyrd"*) ;;
+        *"$GROUP"*) ;;
         *) echo "error: domain registrar does not carry the App Group entitlement." >&2; exit 1 ;;
     esac
     if [ ! -f "$APP/Contents/embedded.provisionprofile" ]; then
@@ -403,7 +416,7 @@ if [ "$FINDER_CAPABLE" -eq 1 ]; then
         exit 1
     }
     case "$APP_INFO" in
-        *"group.md.enesis.wyrd"*) ;;
+        *"$GROUP"*) ;;
         *) echo "error: the app does not carry the App Group entitlement." >&2; exit 1 ;;
     esac
 fi
@@ -467,6 +480,60 @@ codesign --verify --deep --strict "$DEST" || {
 }
 xattr -dr com.apple.quarantine "$DEST" 2>/dev/null || true
 
+# Clean slate: no process may keep the pre-install binary mapped.
+# This runs after the install swap, so launchd restarts its managed
+# owner and registrar agents from the NEW bundle. Supervise goes
+# first (while it lives it restarts its owner), then the owner so
+# its drive lock is released, then the GUI app, registrar and
+# extension. SIGTERM first; only those exact PIDs that ignore it
+# get SIGKILL after a bounded wait, so a freshly restarted agent is
+# never caught by the escalation.
+stop_running_wyrd() {
+    [ "$STOP_RUNNING" -eq 1 ] || return 0
+
+    if command -v osascript >/dev/null 2>&1; then
+        osascript -e 'tell application id "md.enesis.wyrd" to quit' \
+            >/dev/null 2>&1 || true
+    fi
+
+    STOP_PIDS=""
+    stop_matching() {
+        matched=$(pgrep -f "$1" 2>/dev/null | tr '\n' ' ') || matched=""
+        for pid in $matched; do
+            [ "$pid" = "$$" ] && continue
+            case " $STOP_PIDS " in
+                *" $pid "*) continue ;;
+            esac
+            STOP_PIDS="$STOP_PIDS $pid"
+            desc=$(ps -p "$pid" -o command= 2>/dev/null | cut -c1-100) || desc=""
+            echo "  stopping pid $pid: $desc"
+            kill -TERM "$pid" 2>/dev/null || true
+        done
+    }
+
+    echo "note: stopping running Wyrd processes for a clean slate"
+    stop_matching '/wyrd-supervise '
+    stop_matching '/wyrd owner '
+    stop_matching 'Wyrd\.app/Contents/|WyrdDomainRegistrar|WyrdFileProvider\.appex'
+
+    tick=0
+    while [ "$tick" -lt 10 ]; do
+        survivors=""
+        for pid in $STOP_PIDS; do
+            if kill -0 "$pid" 2>/dev/null; then survivors="survivor"; fi
+        done
+        [ -z "$survivors" ] && break
+        sleep 0.2
+        tick=$((tick + 1))
+    done
+    for pid in $STOP_PIDS; do
+        if kill -0 "$pid" 2>/dev/null; then
+            echo "  force-stopping pid $pid"
+            kill -KILL "$pid" 2>/dev/null || true
+        fi
+    done
+}
+
 # Domain reconciliation runs from a per-user launch agent, not from a
 # resident Wyrd.app process. Fill the helper path from the installed
 # bundle, unload any previous copy of this agent (a reinstall must not
@@ -480,7 +547,8 @@ if [ ! -f "$REGISTRAR_AGENT_TEMPLATE" ]; then
 fi
 mkdir -p "$HOME/Library/LaunchAgents"
 REGISTRAR_AGENT_NEW="$REGISTRAR_AGENT.new.$$"
-sed "s|@WYRD_REGISTRAR_PATH@|$DEST/Contents/MacOS/WyrdDomainRegistrar|g" \
+sed -e "s|@WYRD_REGISTRAR_PATH@|$DEST/Contents/MacOS/WyrdDomainRegistrar|g" \
+    -e "s|@WYRD_APP_GROUP@|$GROUP|g" \
     "$REGISTRAR_AGENT_TEMPLATE" > "$REGISTRAR_AGENT.new.$$"
 if launchctl list md.enesis.wyrd.domain-registrar >/dev/null 2>&1; then
     launchctl unload -w "$REGISTRAR_AGENT" 2>/dev/null || true
@@ -495,6 +563,10 @@ if ! launchctl load -w "$REGISTRAR_AGENT"; then
     echo "run: launchctl load -w $REGISTRAR_AGENT" >&2
     exit 1
 fi
+
+# Old binaries are gone from disk now; stop anything still mapping
+# them so launchd restarts the managed agents against the new bundle.
+stop_running_wyrd
 
 if [ "$FINDER_CAPABLE" -eq 1 ]; then
     echo "installed $DEST (team-signed, Finder-capable, from $APP)"

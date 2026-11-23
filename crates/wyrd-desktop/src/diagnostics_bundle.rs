@@ -19,11 +19,12 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::diagnostics_view::{self, Diagnostics};
+use wyrd_settings::app_group_identifier;
 
 /// The extension writes this file inside its app-group `Diagnostics/`
-/// leaf. The group id is a contract constant shared with the Swift
-/// reader; it is never taken from front-end input.
-const GROUP_IDENTIFIER: &str = "group.md.enesis.wyrd";
+/// leaf. The group id comes from the one shared accessor (env override
+/// with the team-prefixed default); it is never taken from front-end
+/// input.
 const RECORD_RELATIVE_PATH: &str = "Diagnostics/records.jsonl";
 
 /// The two gates every field must pass: the Swift builder marked it
@@ -265,7 +266,7 @@ fn default_container() -> Option<PathBuf> {
     Some(
         Path::new(&*home)
             .join("Library/Group Containers")
-            .join(GROUP_IDENTIFIER),
+            .join(app_group_identifier()),
     )
 }
 

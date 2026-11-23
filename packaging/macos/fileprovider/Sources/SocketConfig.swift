@@ -17,9 +17,9 @@ import Foundation
 
 /// How the extension reaches its drive's owner.
 struct SocketConfig {
-    /// The App Group granted literally as written — the system does
-    /// not team-prefix group ids, so no substitution happens here.
-    static let groupIdentifier = "group.md.enesis.wyrd"
+    /// The effective App Group, rendered into the appex Info.plist at
+    /// build time from WYRD_APP_GROUP and read through `AppGroup`.
+    static let groupIdentifier = AppGroup.identifier
 
     /// The configured drive, lowercase hex, from the domain.
     var driveHex: String

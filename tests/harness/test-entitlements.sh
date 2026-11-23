@@ -18,7 +18,8 @@ pass() { PASS=$((PASS + 1)); echo "  PASS: $1"; }
 die() { echo "  FAIL: $1" >&2; exit 1; }
 
 APPEX="$ROOT/packaging/macos/fileprovider/WyrdFileProvider.entitlements"
-GROUP='group.md.enesis.wyrd'
+GROUP='JU2RFHWQPH.group.md.enesis.wyrd'
+TOKEN='@WYRD_APP_GROUP@'
 
 # 1. The reopened decision is recorded: the unsandboxed app keeps its
 # direct paths but joins the one App Group so it can materialize the
@@ -46,9 +47,16 @@ group = "$GROUP"
 with open(sys.argv[1], 'rb') as f:
     appex = plistlib.load(f)
 assert appex.get('com.apple.security.app-sandbox') is True, appex
-assert group in appex.get('com.apple.security.application-groups', []), appex
+assert appex.get('com.apple.security.application-groups', []) == ['$TOKEN'], appex
 EOF
-pass "appex sandboxed on the group"
+pass "appex sandboxed on the render token"
+grep -F >/dev/null 'wyrd_render_app_group "$HERE/WyrdFileProvider.entitlements"' \
+  "$ROOT/packaging/macos/fileprovider/build-appex.sh" \
+  || die "build-appex.sh: appex entitlements are not rendered"
+grep -F >/dev/null "WYRD_APP_GROUP_DEFAULT='$GROUP'" \
+  "$ROOT/packaging/macos/app-group.sh" \
+  || die "app-group.sh: default drifted"
+pass "build renders WYRD_APP_GROUP into the appex entitlements"
 
 # 3. Minimal by default: no other com.apple.* key on the appex.
 # Adding a capability must update this guard with its rationale,

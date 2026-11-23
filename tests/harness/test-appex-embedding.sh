@@ -25,19 +25,40 @@ grep -F >/dev/null 'PlugIns/WyrdFileProvider.appex/' "$ROOT/packaging/macos/READ
   || die "README: tree block missing PlugIns/WyrdFileProvider.appex/"
 pass "README pins the accepted embedded layout"
 
-# 2. One App Group everywhere, literal, on the declaration lines —
-# a comment mentioning the group must not satisfy the check.
-GROUP='group.md.enesis.wyrd'
-grep -F >/dev/null "<string>$GROUP</string>" \
+# 2. One App Group default, declared once per language; every other
+# consumer reads it. A comment mentioning the group must not satisfy
+# the check. Build-time files carry a token that the build renders.
+GROUP='JU2RFHWQPH.group.md.enesis.wyrd'
+HELPER="$ROOT/packaging/macos/app-group.sh"
+grep -F >/dev/null "WYRD_APP_GROUP_DEFAULT='$GROUP'" "$HELPER" \
+  || die "app-group.sh: default drifted"
+grep -F >/dev/null 'wyrd_app_group()' "$HELPER" \
+  || die "app-group.sh: no env override"
+grep -F >/dev/null "static let defaultIdentifier = \"$GROUP\"" \
+  "$ROOT/packaging/macos/fileprovider/Sources/AppGroup.swift" \
+  || die "AppGroup.swift: default drifted"
+for FILE in DiagnosticConfig SocketConfig SocketProbe; do
+  case "$FILE" in
+    DiagnosticConfig) SWIFT=Diagnostics.swift ;;
+    *) SWIFT="$FILE.swift" ;;
+  esac
+  grep -F >/dev/null 'groupIdentifier = AppGroup.identifier' \
+    "$ROOT/packaging/macos/fileprovider/Sources/$SWIFT" \
+    || die "$SWIFT: declaration drifted"
+done
+grep -F >/dev/null '<string>@WYRD_APP_GROUP@</string>' \
   "$ROOT/packaging/macos/fileprovider/WyrdFileProvider.entitlements" \
-  || die "entitlements: missing <$GROUP>"
-grep -F >/dev/null "groupIdentifier = \"$GROUP\"" \
-  "$ROOT/packaging/macos/fileprovider/Sources/SocketConfig.swift" \
-  || die "SocketConfig.swift: declaration drifted"
-grep -F >/dev/null "groupIdentifier = \"$GROUP\"" \
-  "$ROOT/packaging/macos/fileprovider/Sources/SocketProbe.swift" \
-  || die "SocketProbe.swift: declaration drifted"
-pass "app group agrees on its declaration lines"
+  || die "entitlements: no render token"
+grep -F >/dev/null '<string>@WYRD_APP_GROUP@</string>' \
+  "$ROOT/packaging/macos/fileprovider/Info.plist" \
+  || die "Info.plist: no render token"
+grep -F >/dev/null 'wyrd_render_app_group "$HERE/Info.plist"' \
+  "$ROOT/packaging/macos/fileprovider/build-appex.sh" \
+  || die "build-appex.sh: Info.plist is not rendered"
+grep -F >/dev/null 'wyrd_render_app_group "$HERE/WyrdFileProvider.entitlements"' \
+  "$ROOT/packaging/macos/fileprovider/build-appex.sh" \
+  || die "build-appex.sh: entitlements are not rendered"
+pass "app group agrees on its declaration and render lines"
 
 # 3. Bundle identifiers nest: app md.enesis.wyrd, appex appends —
 # and the build script signs the same appex identifier it ships.

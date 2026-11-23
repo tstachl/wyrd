@@ -15,7 +15,11 @@
 # APPEX_BUNDLE_VERSION (default: unset — the checked-in Info.plist
 # stands; when set, it rewrites CFBundleVersion and
 # CFBundleShortVersionString before signing so the staged appex
-# reports the app version in both keys).
+# reports the app version in both keys),
+# WYRD_APP_GROUP (default: the team-prefixed default in
+# packaging/macos/app-group.sh — rendered into the Info.plist and
+# entitlements copies before signing; the sandboxed appex cannot
+# read a runtime env var).
 # Works in the default devenv shell and under
 # `devenv --profile native-apple shell` alike.
 set -eu
@@ -25,6 +29,12 @@ HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 OUT=${1:-"$HERE/build"}
 ARCH=${ARCH:-$(uname -m)}
 SIGN_IDENTITY=${SIGN_IDENTITY:--}
+
+# Render the App Group before the minutes-long swiftc: a bad override
+# must fail here, not in a signed bundle that silently cannot reach
+# its container. The checked-in templates stay untouched.
+. "$HERE/../app-group.sh"
+APP_GROUP=$(wyrd_app_group)
 
 # Fail fast on a misconfigured profile: the embed below runs after a
 # minutes-long swiftc, so a missing path must refuse here, not there.
@@ -141,7 +151,10 @@ fi
     "$HERE/main.swift" \
     "$@"
 
-cp "$HERE/Info.plist" "$CONTENTS/Info.plist"
+# NSExtensionFileProviderDocumentGroup is both the Apple-facing group
+# grant and the value the Swift helper reads at runtime. Render the
+# same WYRD_APP_GROUP into this copy; never edit the checked-in plist.
+wyrd_render_app_group "$HERE/Info.plist" '@WYRD_APP_GROUP@' "$CONTENTS/Info.plist"
 
 # Version lockstep (bundler hook): the checked-in plist pins
 # placeholders; the hook passes the app version through
@@ -157,15 +170,16 @@ fi
 # The development entitlements travel with every build, including
 # ad-hoc ones: embedding is harmless, but the App Group container
 # only materializes under a team-signed build with provisioning.
-# Value and container directory are the literal group id — no team
-# prefix, verified live 2026-11-11 — so no substitution happens here.
-# Stage 1 probes the team-signed form and records it.
-# TEAM_ID is ignored and always has been: warn rather than let an
-# old caller believe the group id was rewritten.
+# WYRD_APP_GROUP is rendered into a build-local copy (below), so the
+# signed group id and the Info.plist value cannot drift apart.
+# TEAM_ID is ignored: warn rather than let an old caller believe it
+# rewrote the group id.
 if [ -n "${TEAM_ID:-}" ]; then
-    echo "warning: TEAM_ID is ignored; the group id signs as written." >&2
+    echo "warning: TEAM_ID is ignored; set WYRD_APP_GROUP to change the group id." >&2
 fi
-ENTITLEMENTS="$HERE/WyrdFileProvider.entitlements"
+ENTITLEMENTS="$OUT/WyrdFileProvider.entitlements"
+wyrd_render_app_group "$HERE/WyrdFileProvider.entitlements" '@WYRD_APP_GROUP@' "$ENTITLEMENTS"
+echo "app group: $APP_GROUP" >&2
 
 # Provisioning wiring (appex target): profiles live outside the
 # repository with the release owner. When PROVISIONING_PROFILE names

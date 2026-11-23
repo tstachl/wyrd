@@ -94,10 +94,10 @@ grep -F >/dev/null -- '--options runtime' "$BUILD" \
   || die "build-appex.sh: appex signature lacks hardened runtime"
 pass "appex signature carries hardened runtime"
 
-# 7. Both version keys land between the Info.plist copy and the
+# 7. Both version keys land between the Info.plist render and the
 # signing, so the signature covers the shipped versions; unset keeps
 # the checked-in values for manual builds.
-copy_line=$(grep -n 'cp "\$HERE/Info.plist"' "$BUILD" | head -1 | cut -d: -f1)
+copy_line=$(grep -n 'wyrd_render_app_group "\$HERE/Info.plist"' "$BUILD" | head -1 | cut -d: -f1)
 rewrite_line=$(grep -n 'Set :CFBundleShortVersionString' "$BUILD" | head -1 | cut -d: -f1)
 sign_line=$(grep -n '^codesign ' "$BUILD" | head -1 | cut -d: -f1)
 [[ -n "$copy_line" && -n "$rewrite_line" && -n "$sign_line" ]] \

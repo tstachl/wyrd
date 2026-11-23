@@ -8,6 +8,8 @@ use std::time::Duration;
 
 use wyrd_format::DriveId;
 
+use crate::settings::app_group_identifier;
+
 /// Bind the drive-directory socket: reclaim a stale entry from an
 /// unclean shutdown, then bind. The caller holds the store lock
 /// (single owner by kernel enforcement), so no competing binder
@@ -38,20 +40,16 @@ pub const FILEPROVIDER_GROUP_CONTAINER_ENV: &str = "WYRD_FILEPROVIDER_GROUP_CONT
 /// outside this dev bootstrap.
 pub const FILEPROVIDER_DRIVE_ID_ENV: &str = "WYRD_FILEPROVIDER_DRIVE_ID";
 
-/// The App Group shared by the desktop app and the File Provider
-/// extension, granted literally (no team prefix). One constant for
-/// the daemon-side production derivation and the Swift declaration
-/// (`SocketConfig.groupIdentifier`); the harness pins the agreement.
-pub const FILEPROVIDER_GROUP_ID: &str = "group.md.enesis.wyrd";
-
 /// The production App Group container path for a home directory:
-/// `~/Library/Group Containers/<group>`. Pure path math so the
-/// derivation pins on every platform; only macOS binds through it.
+/// `~/Library/Group Containers/<group>`. The group id is the same
+/// effective value the extension and mirror writer use; pure path
+/// math so the derivation pins on every platform; only macOS binds
+/// through it.
 pub fn default_group_container_with_home(home: Option<PathBuf>) -> Option<PathBuf> {
     let home = home?;
     Some(
         home.join("Library/Group Containers")
-            .join(FILEPROVIDER_GROUP_ID),
+            .join(app_group_identifier()),
     )
 }
 

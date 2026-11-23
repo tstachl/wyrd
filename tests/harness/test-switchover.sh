@@ -27,8 +27,8 @@ CONTRACT="$ROOT/docs/contracts/owner-interface.md"
 # 1. Production bind exists: platform container derivation plus the
 # served-drive auto-bind in bind_for_composer, with no env fallback
 # in the production path.
-grep -F >/dev/null 'FILEPROVIDER_GROUP_ID' "$SERVER" \
-  || die "server: production group id missing"
+grep -F >/dev/null 'app_group_identifier()' "$SERVER" \
+  || die "server: production group id accessor missing"
 grep -F >/dev/null 'default_group_container_with_home' "$SERVER" \
   || die "server: production container derivation missing"
 grep -F >/dev/null 'production_group_container()' "$SERVER" \
@@ -49,15 +49,30 @@ grep -F >/dev/null 'never consults this' "$SERVER" \
   || die "server: production path must not consult the dev env"
 pass "dev env bootstrap stays dev-only"
 
-# 3. The group id agrees across the daemon and Swift declaration lines.
-GROUP='group.md.enesis.wyrd'
-grep -F >/dev/null "\"$GROUP\"" "$SERVER" \
-  || die "server: group id drifted"
-grep -F >/dev/null "groupIdentifier = \"$GROUP\"" "$SWIFT" \
+# 3. One default per language; every consumer reads it rather than
+# carrying its own literal.
+GROUP='JU2RFHWQPH.group.md.enesis.wyrd'
+grep -F >/dev/null "pub const DEFAULT_APP_GROUP_IDENTIFIER: &str = \"$GROUP\"" \
+  "$ROOT/crates/wyrd-settings/src/lib.rs" \
+  || die "wyrd-settings: default drifted"
+grep -F >/dev/null 'pub const APP_GROUP_ENV: &str = "WYRD_APP_GROUP"' \
+  "$ROOT/crates/wyrd-settings/src/lib.rs" \
+  || die "wyrd-settings: env override missing"
+grep -F >/dev/null "static let defaultIdentifier = \"$GROUP\"" \
+  "$ROOT/packaging/macos/fileprovider/Sources/AppGroup.swift" \
+  || die "AppGroup.swift: default drifted"
+grep -F >/dev/null 'groupIdentifier = AppGroup.identifier' "$SWIFT" \
   || die "SocketConfig.swift: group identifier drifted"
-grep -F >/dev/null 'FILEPROVIDER_GROUP_ID' "$MOD" \
-  || die "owner mod: group id not re-exported"
-pass "group id agrees daemon-side and Swift-side"
+grep -F >/dev/null 'app_group_identifier()' \
+  "$ROOT/crates/wyrd-desktop/src/diagnostics_bundle.rs" \
+  || die "diagnostics_bundle.rs: export path does not use the accessor"
+grep -F >/dev/null 'wyrd_app_group()' \
+  "$ROOT/packaging/macos/app-group.sh" \
+  || die "app-group.sh: env override missing"
+if grep -F >/dev/null 'FILEPROVIDER_GROUP_ID' "$MOD"; then
+  die "owner mod: stale group id re-export remains"
+fi
+pass "group id agrees daemon-side, Swift-side and in the build"
 
 # 4. The Swift domain parser stays registry-owned: drive hex only, no
 # env-var fallback, dev override stays harness-only.

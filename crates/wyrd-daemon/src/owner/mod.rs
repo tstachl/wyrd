@@ -52,8 +52,8 @@ pub use server::{
     group_socket_path, group_symlink_path, production_group_container,
     production_group_container_with_home, GroupContainerConfig, OwnerHandles, OwnerServer,
     OwnerService, DEFAULT_MAX_READ_BYTES, FILEPROVIDER_DRIVE_ID_ENV,
-    FILEPROVIDER_GROUP_CONTAINER_ENV, FILEPROVIDER_GROUP_ID, MAX_OWNER_CONNECTIONS,
-    MAX_SUBMIT_CONTENT_BYTES, READ_DEMAND_TIMEOUT,
+    FILEPROVIDER_GROUP_CONTAINER_ENV, MAX_OWNER_CONNECTIONS, MAX_SUBMIT_CONTENT_BYTES,
+    READ_DEMAND_TIMEOUT,
 };
 pub use wyrd_owner_client::{socket_path_for, MAX_FRAME_BYTES, OWNER_SOCKET_NAME};
 
