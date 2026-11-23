@@ -31,6 +31,32 @@ export function formatObservedAge(observedAtMs: number, nowMs: number): string {
   return `Checked ${days} day${days === 1 ? "" : "s"} ago`;
 }
 
+/**
+ * Age of the last local projection publication (D-11). The value is a
+ * unix-seconds stamp from the owner, not the shell's observation stamp:
+ * never a sync time, never a heartbeat, never UTC. Zero or absent means
+ * unknown and reads as such — never as a 1970 date. `nowMs` is injected
+ * so the wording pins without waiting; the view refreshes it on a timer.
+ */
+export function formatPublicationAge(publishedUnixSecs: number | undefined, nowMs: number): string {
+  if (
+    publishedUnixSecs === undefined ||
+    !Number.isFinite(publishedUnixSecs) ||
+    publishedUnixSecs <= 0
+  ) {
+    return "not yet updated on this device";
+  }
+  const seconds = Math.max(0, Math.floor((nowMs - publishedUnixSecs * 1000) / 1000));
+  if (seconds < 5) return "Updated just now";
+  if (seconds < 60) return `Updated ${seconds} seconds ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `Updated ${minutes} minute${minutes === 1 ? "" : "s"} ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `Updated ${hours} hour${hours === 1 ? "" : "s"} ago`;
+  const days = Math.floor(hours / 24);
+  return `Updated ${days} day${days === 1 ? "" : "s"} ago`;
+}
+
 /** Shorten a content id for display. The full value stays in the snapshot; this is presentation only. */
 export function shortId(id: string): string {
   return id.length <= 12 ? id : `${id.slice(0, 8)}…`;

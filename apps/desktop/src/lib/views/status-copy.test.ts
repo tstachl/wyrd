@@ -100,3 +100,14 @@ test("observation ages are local, relative and auto-refreshing", () => {
   expect(view + observed).not.toContain("UTC");
   expect(formatSrc).not.toContain("toISOString");
 });
+
+test("the Drive data publication row is local, relative and unknown at zero", () => {
+  expect(view).toContain('label="Drive data last updated on this device"');
+  expect(view).toContain("formatPublicationAge(status.freshness.published_unix_secs, nowMs)");
+  expect(view).toContain("setInterval");
+  expect(view).toContain("clearInterval");
+  expect(view).not.toContain("Last synced");
+  expect(view).not.toContain("UTC");
+  expect(formatSrc).toContain("not yet updated on this device");
+  expect(formatSrc).not.toContain("toISOString");
+});

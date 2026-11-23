@@ -36,7 +36,7 @@ after the choice and resumes it on a refusal. -->
   import InfoHint from "$lib/components/info-hint.svelte";
   import CredentialStorageToggle from "./credential-storage-toggle.svelte";
   import type { Stamped } from "$lib/state/presentation.svelte.js";
-  import type { CredentialReference, DriveSettingsState, EnablementState, ProvisionReport, ServiceState, SessionState, SettingsWriteReport, SparseUpdateArgs } from "$lib/ipc/results.js";
+  import type { CredentialReference, DriveSettingsState, EnablementState, ProvisionReport, ServiceState, SessionState, SettingsWriteReport, SparseUpdateArgs, WireSoleOwnerState } from "$lib/ipc/results.js";
   import type { ProvisionDeleteArgs, ProvisionLeaveArgs } from "$lib/ipc/operations.js";
   import { buildDeleteArgs, buildLeaveArgs, type CredentialMode } from "$lib/ipc/provisioning-args.js";
   import {
@@ -66,6 +66,12 @@ after the choice and resumes it on a refusal. -->
     /** Registry entry name for this drive; derives the store account label. */
     driveName: string | null;
     snapshot: Stamped<DriveSettingsState> | null;
+    /**
+     * Advisory owner standing from the last status observation. Null
+     * or `Unknown` keeps the conditional explanation; `Sole` carries
+     * the warning; `NotSole` gets the short report. Never a gate.
+     */
+    soleOwner?: WireSoleOwnerState | null;
     /**
      * This drive's credential backend as observed from its deployment
      * config. `null` until observed; an explicit `unknown` answer
@@ -125,7 +131,7 @@ after the choice and resumes it on a refusal. -->
     onRefreshDrives: () => void;
   }
 
-  let { driveDir, driveName, snapshot, credentialReference, pending, transportNotice, identityFile, passphraseFile, onRefresh, onLeave, onDelete, onApply, session, onRestartService, serviceState = null, enablement = null, onToggleEnablement, onRefreshDrives }: Props = $props();
+  let { driveDir, driveName, snapshot, credentialReference, pending, transportNotice, identityFile, passphraseFile, onRefresh, onLeave, onDelete, onApply, session, onRestartService, serviceState = null, enablement = null, onToggleEnablement, onRefreshDrives, soleOwner = null }: Props = $props();
 
   const restartKind = $derived(restartKindFor(session));
 
@@ -859,12 +865,27 @@ after the choice and resumes it on a refusal. -->
     {/if}
     <p class="mt-1 text-xs leading-relaxed text-foreground/80">
       Note that the drive's service is stopped for this action and restarted if the removal is
-      refused.
-      If this device is the drive's only owner, the owner set becomes empty and no future
-      membership or ownership change can be authorized — hand over ownership before removing if
-      the drive should remain manageable. A non-owner or a frozen drive is refused before anything
-      is removed.
+      refused. A non-owner or a frozen drive is refused before anything is removed.
     </p>
+    {#if soleOwner === "Sole"}
+      <Alert.Root variant="destructive" class="mt-3">
+        <Alert.Title>As last reported, this device is the drive's only owner</Alert.Title>
+        <Alert.Description>
+          Removing it empties the owner set and no future membership or ownership change can be
+          authorized — hand over ownership before removing if the drive should remain manageable.
+        </Alert.Description>
+      </Alert.Root>
+    {:else if soleOwner === "NotSole"}
+      <p class="mt-1 text-xs leading-relaxed text-foreground/80">
+        As last reported, other devices also own this drive.
+      </p>
+    {:else}
+      <p class="mt-1 text-xs leading-relaxed text-foreground/80">
+        If this device is the drive's only owner, the owner set becomes empty and no future
+        membership or ownership change can be authorized — hand over ownership before removing if
+        the drive should remain manageable.
+      </p>
+    {/if}
     <AlertDialog.Footer>
       <AlertDialog.Cancel>Cancel</AlertDialog.Cancel>
     </AlertDialog.Footer>

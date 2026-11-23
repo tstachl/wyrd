@@ -1263,6 +1263,7 @@
               driveDir={selectedDriveDir}
               driveName={selectedDrive?.name ?? null}
               snapshot={presentation.settingsSnapshotFor(selectedDriveDir)}
+              soleOwner={presentation.statusSnapshotFor(selectedDriveDir)?.data.observe.sole_owner ?? null}
               credentialReference={presentation.credentialReferenceFor(selectedDriveDir)}
               pending={busy}
               transportNotice={presentation.transportNotice}
