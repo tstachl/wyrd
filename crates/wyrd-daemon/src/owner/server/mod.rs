@@ -54,9 +54,9 @@ use std::time::Duration;
 
 use super::wire::{
     RawRequest, WireError, WireErrorCode, WireResponse, WireResult, OP_CAPTURE_PARENT,
-    OP_FRESHNESS, OP_LIVENESS, OP_LOOKUP, OP_OBSERVE, OP_PAUSE, OP_POLICY_EVICT, OP_POLICY_PIN,
-    OP_POLICY_STATUS, OP_POLICY_UNPIN, OP_READ, OP_READDIR, OP_RESUME, OP_STAT, OP_SUBMIT,
-    WIRE_VERSION,
+    OP_DIAGNOSTICS_SET, OP_DIAGNOSTICS_STATUS, OP_FRESHNESS, OP_LIVENESS, OP_LOOKUP, OP_OBSERVE,
+    OP_PAUSE, OP_POLICY_EVICT, OP_POLICY_PIN, OP_POLICY_STATUS, OP_POLICY_UNPIN, OP_READ,
+    OP_READDIR, OP_RESUME, OP_STAT, OP_SUBMIT, WIRE_VERSION,
 };
 
 /// How long a connection read waits before re-checking the stop
@@ -342,6 +342,8 @@ impl OwnerServer {
             OP_OBSERVE => self.op_observe(),
             OP_LIVENESS => self.op_liveness(),
             OP_FRESHNESS => self.op_freshness(),
+            OP_DIAGNOSTICS_SET => self.op_diagnostics_set(params),
+            OP_DIAGNOSTICS_STATUS => self.op_diagnostics_status(),
             OP_SUBMIT => self.op_submit(params),
             OP_CAPTURE_PARENT => self.op_capture_parent(params),
             OP_PAUSE => self.op_pause(),

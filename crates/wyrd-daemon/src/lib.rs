@@ -15,6 +15,7 @@
 //! composition tests; [`lifecycle`] owns supervision.
 
 pub mod bootstrap;
+pub mod diagnostics;
 #[cfg(feature = "mount")]
 pub mod fuse;
 pub mod host;
@@ -25,6 +26,10 @@ pub mod process;
 pub mod settings;
 pub mod vault;
 
+pub use diagnostics::{
+    install_diagnostics_sink, DiagnosticsController, DiagnosticsSetError,
+    DiagnosticsSinkAlreadyInstalled,
+};
 pub use host::{
     apply_budget_settings, render_settings_surface, AppliedSettings, BudgetOverrides, FailureClass,
     LiveConfig, LiveError, LiveNode, LiveParts, LiveSummary, NodeError, PendingObligations,

@@ -19,6 +19,7 @@ use wyrd_core::wake::WakeSignal;
 use wyrd_core::want::WantRegistry;
 use wyrd_format::DriveId;
 
+use crate::diagnostics::DiagnosticsController;
 use crate::vault::OwnerView;
 
 use super::socket::{
@@ -71,6 +72,11 @@ pub struct OwnerHandles {
     pub waker: Option<Arc<WakeSignal>>,
     /// Largest whole-file read served in one request.
     pub max_read_bytes: u64,
+    /// The owner's process-local diagnostics state. `diagnostics-set`
+    /// and `diagnostics-status` read and change this handle; the
+    /// settings path and mirror are owned by the controller, never
+    /// by the wire.
+    pub diagnostics: Arc<DiagnosticsController>,
 }
 
 impl OwnerHandles {
@@ -90,7 +96,17 @@ impl OwnerHandles {
             paused: Arc::clone(&parts.paused),
             waker: None,
             max_read_bytes: DEFAULT_MAX_READ_BYTES,
+            diagnostics: Arc::new(DiagnosticsController::inert()),
         }
+    }
+
+    /// Wire a real diagnostics controller. Production composers pass
+    /// one built from the platform's settings path and app-group
+    /// container; fixtures that never persist settings keep the
+    /// inert default.
+    pub fn with_diagnostics(mut self, diagnostics: Arc<DiagnosticsController>) -> Self {
+        self.diagnostics = diagnostics;
+        self
     }
 
     /// Wire the loop's pacing signal, like the mount composer wires

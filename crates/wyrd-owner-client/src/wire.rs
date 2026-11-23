@@ -45,6 +45,14 @@ pub const OP_LIVENESS: &str = "liveness";
 /// The name of the `freshness` projection-freshness operation on the wire.
 pub const OP_FRESHNESS: &str = "freshness";
 
+/// Diagnostics configuration operations: the process-local verbosity
+/// level, not a mutation or a policy operation. Names are plain
+/// strings like every other operation; an unknown name refuses with
+/// the name echoed back.
+pub const OP_DIAGNOSTICS_SET: &str = "diagnostics-set";
+/// The name of the `diagnostics-status` read-back on the wire.
+pub const OP_DIAGNOSTICS_STATUS: &str = "diagnostics-status";
+
 /// Policy operations: the four engine operations the interface
 /// forwards to the loop-thread policy executor (not the mutation
 /// queue). Names are plain strings like the read operations above:
@@ -736,6 +744,39 @@ pub enum WireResult {
     Err(WireError),
 }
 
+/// The closed application-wide diagnostics level on the wire. Only
+/// these two values exist; an unknown value is a distinct refusal,
+/// never coerced to either one (T20 in `docs/contracts/trust.md`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WireDiagnosticLevel {
+    /// Default error reporting: the verbosity surface stays quiet.
+    #[serde(rename = "default")]
+    Default,
+    /// Detailed local records under the field-level allowlist.
+    #[serde(rename = "detailed")]
+    Detailed,
+}
+
+/// The closed string spelling of a diagnostics level, used by both
+/// the client's request and the server's refusal message.
+pub fn diagnostic_level_name(level: WireDiagnosticLevel) -> &'static str {
+    match level {
+        WireDiagnosticLevel::Default => "default",
+        WireDiagnosticLevel::Detailed => "detailed",
+    }
+}
+
+/// Parameters for `diagnostics-set`: exactly one closed field. `level`
+/// stays a string so an unknown value can be refused by name instead
+/// of becoming a parse error the caller cannot distinguish from a
+/// broken frame. Extra fields are refused, never ignored.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DiagnosticsSetParams {
+    /// The requested level, either `default` or `detailed`.
+    pub level: String,
+}
+
 /// Per-operation results. Every read result carries the serving
 /// generation and durable revision it was served from, so the
 /// consumer correlates answers with the freshness judgment instead
@@ -850,6 +891,13 @@ pub enum WireOk {
         /// The durable revision the walk ran on.
         revision: u64,
     },
+    /// Answer to `diagnostics-set` and `diagnostics-status`: the
+    /// level as the owner reads it back, never an inference from
+    /// silence.
+    Diagnostics {
+        /// The applied level.
+        level: WireDiagnosticLevel,
+    },
 }
 
 /// An explicit refusal: a machine-readable code plus a human message.
@@ -941,6 +989,19 @@ pub enum WireErrorCode {
     PinnedPresent,
     /// The namespace path exceeds the format's depth bound.
     TooDeep,
+    /// `diagnostics-set` named a level outside the closed pair.
+    /// Distinct from a malformed frame: the frame parsed, the value
+    /// did not.
+    InvalidDiagnosticLevel,
+    /// The settings file refused a diagnostics edit. The level stays
+    /// unchanged in memory and the mirror is not published.
+    DiagnosticsSettings,
+    /// The settings edit committed but its app-group mirror could
+    /// not be published. The level is not reported as applied.
+    DiagnosticsMirror,
+    /// The setting committed but the owner's local log filter could
+    /// not be reloaded. The level is not reported as applied.
+    DiagnosticsFilter,
 }
 
 // ---------------------------------------------------------------------------

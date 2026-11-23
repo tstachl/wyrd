@@ -1,10 +1,20 @@
 use std::fs;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
 use crate::{CliError, SHUTDOWN};
 use tracing_subscriber::layer::SubscriberExt as _;
+use tracing_subscriber::reload;
+use tracing_subscriber::EnvFilter;
+use wyrd_daemon::DiagnosticLevel;
+
+/// One owner-log file at 5 MiB, three files retained. These are
+/// local operator defaults, not protocol constants (T20 retention
+/// table in `docs/contracts/trust.md`).
+pub(crate) const OWNER_LOG_MAX_BYTES: u64 = 5 * 1024 * 1024;
+pub(crate) const OWNER_LOG_RETAINED: usize = 3;
 
 /// Cloneable file sink for the mount-log layer: the `fmt` layer needs
 /// a `MakeWriter`, and a shared `Arc<Mutex<File>>` is the simplest one
@@ -60,20 +70,24 @@ impl<'a> tracing_subscriber::fmt::writer::MakeWriter<'a> for SharedWriter {
 /// post-loop shutdown sequence does for both endpoints. The gate
 /// swallows only that one event, and only once [`SHUTDOWN`] is
 /// tripped, so a mid-operation relay death still fails visibly.
-pub(crate) fn build_mount_subscriber(
-    file: Option<fs::File>,
-    verbose: bool,
-) -> impl tracing::Subscriber {
-    let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+fn mount_filter(verbose: bool) -> EnvFilter {
+    EnvFilter::try_from_default_env().unwrap_or_else(|_| {
         // Both crates: the binary (`wyrd`, this file) and the library
         // (`wyrd_daemon`, the FUSE backend) emit request and stage
         // events under their own target roots.
-        tracing_subscriber::EnvFilter::new(if verbose {
+        EnvFilter::new(if verbose {
             "info,wyrd=debug,wyrd_daemon=debug"
         } else {
             "info"
         })
-    });
+    })
+}
+
+pub(crate) fn build_mount_subscriber(
+    file: Option<fs::File>,
+    verbose: bool,
+) -> impl tracing::Subscriber {
+    let filter = mount_filter(verbose);
     let stderr_layer = tracing_subscriber::fmt::layer()
         .with_writer(std::io::stderr)
         .with_ansi(false);
@@ -92,6 +106,38 @@ pub(crate) fn build_mount_subscriber(
             inner: stderr_layer,
         })
         .with(file_layer)
+}
+
+/// The mount's reloadable twin of [`build_mount_subscriber`]. The
+/// mount exposes the owner interface too, so `diagnostics-set` must
+/// be able to widen its filter live. The initial filter still honours
+/// `--verbose`; the installed sink replaces it with the app-wide
+/// level on the first live set.
+#[cfg(any(test, feature = "mount"))]
+pub(crate) fn build_reloadable_mount_subscriber(
+    file: Option<fs::File>,
+    verbose: bool,
+) -> (
+    impl tracing::Subscriber,
+    reload::Handle<EnvFilter, tracing_subscriber::registry::Registry>,
+) {
+    let (filter, handle) = reload::Layer::new(mount_filter(verbose));
+    let stderr_layer = tracing_subscriber::fmt::layer()
+        .with_writer(io::stderr)
+        .with_ansi(false);
+    let file_layer = file.map(|file| {
+        let layer = tracing_subscriber::fmt::layer()
+            .with_writer(SharedWriter::new(file))
+            .with_ansi(false);
+        ShutdownNoiseGate { inner: layer }
+    });
+    let subscriber = tracing_subscriber::registry()
+        .with(filter)
+        .with(ShutdownNoiseGate {
+            inner: stderr_layer,
+        })
+        .with(file_layer);
+    (subscriber, handle)
 }
 
 /// Suppression wrapper for one output layer: forwards every span and
@@ -254,7 +300,7 @@ pub(crate) fn init_mount_diagnostics(drive_dir: &Path, verbose: bool) -> Result<
     // crate; without this bridge those records vanish because no
     // logger is ever initialized.
     let _ = tracing_log::LogTracer::init();
-    let subscriber = build_mount_subscriber(Some(file), verbose);
+    let (subscriber, handle) = build_reloadable_mount_subscriber(Some(file), verbose);
     if tracing_subscriber::util::SubscriberInitExt::try_init(subscriber).is_err() {
         tracing::warn!(
             stage = "start",
@@ -262,36 +308,201 @@ pub(crate) fn init_mount_diagnostics(drive_dir: &Path, verbose: bool) -> Result<
             "diagnostics already initialized; reusing the installed subscriber",
         );
     }
+    install_filter_sink(handle);
     Ok(log_path)
 }
 
-/// Owner diagnostics: structured events to stderr always, plus an
-/// appended operator-chosen file when `--log-file` is given (OD-22-D
-/// option A+C). Never a drive-resident default, and never truncated:
-/// a vault runs for months under a supervisor that already captures
-/// stderr, and a restart must not destroy the previous run's record.
+/// The filter directives for one diagnostics level. Default keeps
+/// the long-standing verbosity unchanged; detailed adds debug for
+/// this binary and the daemon, where local decision records are
+/// emitted. `RUST_LOG` still wins when an operator set it, exactly
+/// as it does for mount and sync diagnostics.
+pub(crate) fn log_filter(level: DiagnosticLevel) -> EnvFilter {
+    let base = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    match level {
+        DiagnosticLevel::Default => base,
+        // Detailed adds the local decision records on top of any
+        // operator-set RUST_LOG instead of replacing it. The two
+        // directives are constants, so parsing them cannot fail.
+        DiagnosticLevel::Detailed => base
+            .add_directive("wyrd=debug".parse().expect("constant directive"))
+            .add_directive("wyrd_daemon=debug".parse().expect("constant directive")),
+    }
+}
+
+/// Install the process-wide sink that swaps a subscriber's filter on
+/// a live level change. Both owner presentations use it: the mount's
+/// `--verbose` filter is the starting point, and the app-wide level
+/// replaces it after the first `diagnostics-set`. A reload failure is
+/// returned to the controller so the caller never sees "applied"
+/// when verbosity did not change.
+fn install_filter_sink(handle: reload::Handle<EnvFilter, tracing_subscriber::registry::Registry>) {
+    let sink = Arc::new(move |level: DiagnosticLevel| {
+        handle
+            .modify(|current| *current = log_filter(level))
+            .map_err(|error| format!("cannot reload log filter: {error}"))
+    });
+    if wyrd_daemon::install_diagnostics_sink(sink).is_err() {
+        tracing::warn!(
+            stage = "start",
+            "diagnostics sink already installed; live level changes will not change this filter",
+        );
+    }
+}
+
+fn rotated_log_path(path: &Path, generation: usize) -> PathBuf {
+    let mut name = path.as_os_str().to_os_string();
+    name.push(format!(".{generation}"));
+    PathBuf::from(name)
+}
+
+/// Size-bounded owner log. `fmt` asks for a writer per event; the
+/// rotation check lives inside the shared writer so every event sees
+/// the same bound. One event larger than the bound is never split or
+/// dropped — the next event rotates, so the file may exceed the
+/// bound by at most one record.
+#[derive(Clone, Debug)]
+struct OwnerLogWriter {
+    inner: Arc<Mutex<OwnerLogState>>,
+}
+
+#[derive(Debug)]
+struct OwnerLogState {
+    path: PathBuf,
+    file: fs::File,
+}
+
+impl OwnerLogWriter {
+    fn new(path: &Path) -> io::Result<Self> {
+        let file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)?;
+        Ok(Self {
+            inner: Arc::new(Mutex::new(OwnerLogState {
+                path: path.to_path_buf(),
+                file,
+            })),
+        })
+    }
+
+    fn rotate(state: &mut OwnerLogState) -> io::Result<()> {
+        state.file.flush()?;
+        if OWNER_LOG_RETAINED > 1 {
+            for generation in (2..OWNER_LOG_RETAINED).rev() {
+                let from = rotated_log_path(&state.path, generation - 1);
+                let to = rotated_log_path(&state.path, generation);
+                if from.exists() {
+                    if to.exists() {
+                        fs::remove_file(&to)?;
+                    }
+                    fs::rename(&from, &to)?;
+                }
+            }
+            let first = rotated_log_path(&state.path, 1);
+            if first.exists() {
+                fs::remove_file(&first)?;
+            }
+            fs::rename(&state.path, &first)?;
+        }
+        state.file = fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&state.path)?;
+        Ok(())
+    }
+}
+
+impl Write for OwnerLogWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let mut state = self
+            .inner
+            .lock()
+            .map_err(|_| io::Error::other("owner log lock poisoned"))?;
+        let length = state.file.metadata().map(|meta| meta.len()).unwrap_or(0);
+        if length.saturating_add(buf.len() as u64) > OWNER_LOG_MAX_BYTES {
+            Self::rotate(&mut state)?;
+        }
+        state.file.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner
+            .lock()
+            .map_err(|_| io::Error::other("owner log lock poisoned"))?
+            .file
+            .flush()
+    }
+}
+
+impl<'a> tracing_subscriber::fmt::writer::MakeWriter<'a> for OwnerLogWriter {
+    type Writer = Self;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        self.clone()
+    }
+}
+
+/// Owner subscriber with a reloadable filter. The handle is held by
+/// the diagnostics sink so `diagnostics-set` can widen verbosity for
+/// subsequent events without a restart. Default verbosity matches
+/// the mount and sync subscribers exactly.
+fn build_owner_subscriber(
+    initial: DiagnosticLevel,
+    writer: Option<OwnerLogWriter>,
+) -> (
+    impl tracing::Subscriber,
+    reload::Handle<EnvFilter, tracing_subscriber::registry::Registry>,
+) {
+    let (filter, handle) = reload::Layer::new(log_filter(initial));
+    let stderr_layer = tracing_subscriber::fmt::layer()
+        .with_writer(io::stderr)
+        .with_ansi(false);
+    let file_layer = writer.map(|writer| {
+        tracing_subscriber::fmt::layer()
+            .with_writer(writer)
+            .with_ansi(false)
+    });
+    let subscriber = tracing_subscriber::registry()
+        .with(filter)
+        .with(ShutdownNoiseGate {
+            inner: stderr_layer,
+        })
+        .with(file_layer);
+    (subscriber, handle)
+}
+
+/// Owner diagnostics: structured events to stderr always, plus a
+/// size-bounded operator-chosen file when `--log-file` is given
+/// (OD-22-D option A+C, T20 retention table). Never a drive-resident
+/// default: a vault runs for months under a supervisor that captures
+/// stderr, and a restart must not silently discard earlier runs —
+/// rotation keeps three files instead of appending without bound.
 /// Logs never contain secret bytes (same rule as CLI errors).
 ///
 /// Call first in the owner runner, before the serving endpoint
 /// or the loop thread exists. Same first-install-wins rule as the
 /// mount: one owner per process by construction.
 pub(crate) fn init_owner_diagnostics(log_file: Option<&Path>) -> Result<Option<PathBuf>, CliError> {
-    let file = match log_file {
-        Some(path) => Some(
-            fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(path)
-                .map_err(|source| CliError::Io {
-                    path: path.to_path_buf(),
-                    source,
-                })?,
-        ),
+    let writer = match log_file {
+        Some(path) => Some(OwnerLogWriter::new(path).map_err(|source| CliError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?),
         None => None,
     };
     let log_path = log_file.map(Path::to_path_buf);
+    // Start at the persisted level; the controller reads the same
+    // file and is authoritative for what operations apply. A read
+    // failure here only affects this process's filter, never the
+    // settings file or the level the controller reports.
+    let initial = wyrd_daemon::settings::default_settings_path()
+        .ok()
+        .and_then(|path| wyrd_daemon::diagnostics_level_at(&path).ok())
+        .unwrap_or_default();
+    let (subscriber, handle) = build_owner_subscriber(initial, writer);
     let _ = tracing_log::LogTracer::init();
-    let subscriber = build_mount_subscriber(file, false);
     if tracing_subscriber::util::SubscriberInitExt::try_init(subscriber).is_err() {
         tracing::warn!(
             stage = "start",
@@ -299,6 +510,7 @@ pub(crate) fn init_owner_diagnostics(log_file: Option<&Path>) -> Result<Option<P
             "diagnostics already initialized; reusing the installed subscriber",
         );
     }
+    install_filter_sink(handle);
     Ok(log_path)
 }
 
@@ -319,5 +531,69 @@ pub(crate) fn init_sync_diagnostics() {
             stage = "start",
             "diagnostics already initialized; reusing the installed subscriber",
         );
+    }
+}
+
+#[cfg(test)]
+mod owner_diagnostics_tests {
+    use super::*;
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("wyrd-owner-log-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("scratch dir");
+        dir
+    }
+
+    #[test]
+    fn owner_log_rotates_at_the_bound_and_keeps_three_files() {
+        let dir = scratch("rotation");
+        let path = dir.join("owner.log");
+        let mut writer = OwnerLogWriter::new(&path).expect("writer");
+        let chunk = vec![b'x'; 1024];
+        for _ in 0..(3 * (OWNER_LOG_MAX_BYTES / 1024) + 4) {
+            writer.write_all(&chunk).expect("write");
+        }
+        writer.flush().expect("flush");
+        assert!(path.exists(), "the current file survives");
+        assert!(rotated_log_path(&path, 1).exists(), "one rotation survives");
+        assert!(rotated_log_path(&path, 2).exists(), "two rotations survive");
+        assert!(
+            !rotated_log_path(&path, 3).exists(),
+            "the oldest generation is dropped"
+        );
+        for generation in 1..=OWNER_LOG_RETAINED {
+            let rotated = if generation == 1 {
+                path.clone()
+            } else {
+                rotated_log_path(&path, generation - 1)
+            };
+            assert!(
+                fs::metadata(rotated).expect("generation exists").len() <= OWNER_LOG_MAX_BYTES,
+                "one record past the bound at most"
+            );
+        }
+    }
+
+    #[test]
+    fn the_owner_filter_is_reloadable_without_a_new_subscriber() {
+        let dir = scratch("reload");
+        let log = dir.join("owner.log");
+        let writer = OwnerLogWriter::new(&log).expect("writer");
+        let (subscriber, handle) = build_owner_subscriber(DiagnosticLevel::Default, Some(writer));
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::debug!(target: "wyrd", "hidden before detailed mode");
+            handle
+                .modify(|filter| *filter = log_filter(DiagnosticLevel::Detailed))
+                .expect("reload");
+            tracing::debug!(target: "wyrd", "visible after detailed mode");
+        });
+        let content = fs::read_to_string(&log).expect("log content");
+        assert!(
+            !content.contains("hidden before detailed mode"),
+            "{content}"
+        );
+        assert!(content.contains("visible after detailed mode"), "{content}");
     }
 }

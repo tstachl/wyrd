@@ -360,6 +360,27 @@ contents, file names, identities, content ids and credentials never do
 unconfirmed answer is re-read with `diagnostics-status` before any
 retry, never recorded as confirmed or failed.
 
+On the wire, `diagnostics-set` takes exactly one field, `level`, with
+the closed string value `default` or `detailed`. `diagnostics-status`
+takes no parameters. Both answer with `{"level": "..."}` naming the
+level as the owner reads it back, never an inference from silence.
+The owner writes the setting through the restricted settings writer,
+publishes the read-only app-group mirror, then applies the value to
+subsequent operations and reloads its local log filter. A restarted
+owner starts at the persisted level, never at a remembered live
+override.
+
+Four refusals stay distinct. `InvalidDiagnosticLevel` names an
+unknown level value without coercing it; `Malformed` covers a bad
+params shape, including an extra field. `DiagnosticsSettings` means
+the settings transaction refused and the level is unchanged.
+`DiagnosticsMirror` means the setting committed but the mirror could
+not be published: the level is not reported as applied.
+`DiagnosticsFilter` means the setting committed but the local log
+filter could not be reloaded, so the applied level is unchanged. A
+server without a configured diagnostics controller answers
+`Unavailable` rather than pretending a memory-only change was saved.
+
 ## Materialization policy
 
 Forward `policy-pin`, `policy-unpin`, `policy-evict`, and
