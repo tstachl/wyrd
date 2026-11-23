@@ -208,25 +208,30 @@ fn valid_timestamp(value: &str) -> bool {
             .all(|c| c.is_ascii_digit() || matches!(c, '-' | ':' | '.' | 'T' | 'Z' | '+' | ' '))
 }
 
+/// Closed operation names mirrored from the Swift `DiagnosticOperation`
+/// enum. The compile-time parity test keeps the two in step.
+const OPERATIONS: &[&str] = &["createItem", "modifyItem", "deleteItem"];
+
+/// Closed stage names mirrored from the Swift `DiagnosticStage` enum.
+const STAGES: &[&str] = &[
+    "cancelled",
+    "excluded",
+    "symlinkTemplate",
+    "trashRefused",
+    "stagedContentsRead",
+    "mutation",
+    "itemLookup",
+    "baseVersionMismatch",
+    "rename",
+    "contentOnNonFile",
+    "missingStagedContents",
+    "contentWrite",
+    "completed",
+];
+
 /// The builder emits exactly `operation outcome stage=<closed stage>`.
 /// A closed shape keeps this field from carrying unrelated user text.
 fn valid_summary(value: &str) -> bool {
-    const OPERATIONS: &[&str] = &["createItem", "modifyItem", "deleteItem"];
-    const STAGES: &[&str] = &[
-        "cancelled",
-        "excluded",
-        "symlinkTemplate",
-        "trashRefused",
-        "stagedContentsRead",
-        "mutation",
-        "itemLookup",
-        "baseVersionMismatch",
-        "rename",
-        "contentOnNonFile",
-        "missingStagedContents",
-        "contentWrite",
-        "completed",
-    ];
     let mut parts = value.split(' ');
     match (parts.next(), parts.next(), parts.next(), parts.next()) {
         (Some(op), Some(outcome), Some(stage), None) => {
@@ -518,11 +523,41 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// The closed Swift enums and the export allowlists are duplicated
-    /// across the two languages by design. This pin reads the Swift
-    /// sources at compile time so adding a stage, operation, or field
-    /// without updating this module fails the build instead of
-    /// silently dropping records from every bundle.
+    /// The `case` lines of one Swift enum, read at compile time.
+    fn swift_cases(source: &str, name: &str) -> Vec<String> {
+        let start = source
+            .find(&format!("enum {name}"))
+            .unwrap_or_else(|| panic!("Swift enum {name} is missing"));
+        let body = &source[start..];
+        let end = body.find('}').expect("enum body closes");
+        body[..end]
+            .lines()
+            .filter_map(|line| {
+                line.trim()
+                    .strip_prefix("case ")
+                    .map(|case| case.trim().trim_end_matches(',').to_string())
+            })
+            .collect()
+    }
+
+    /// Quoted keys in the Swift sink's `allowedKeys` array.
+    fn swift_allowed_keys(source: &str) -> Vec<String> {
+        let start = source
+            .find("static let allowedKeys")
+            .expect("the Swift sink allowlist exists");
+        let body = &source[start..];
+        let end = body.find(']').expect("allowlist array closes");
+        body[..end]
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix('"'))
+            .filter_map(|line| line.split_once('"').map(|(key, _)| key.to_string()))
+            .collect()
+    }
+
+    /// The closed enums and allowlists are duplicated across languages
+    /// by design. Both directions are pinned: a Rust name missing in
+    /// Swift would break collection, and a new Swift case or field
+    /// missing here would silently drop every record that used it.
     #[test]
     fn cross_language_closed_lists_stay_in_step() {
         let swift_diagnostics =
@@ -530,37 +565,28 @@ mod tests {
         let swift_sink = include_str!(
             "../../../packaging/macos/fileprovider/Sources/DiagnosticsRecordSink.swift"
         );
-        for operation in ["createItem", "modifyItem", "deleteItem"] {
-            assert!(
-                swift_diagnostics.contains(&format!("case {operation}")),
-                "Swift operation {operation} is missing"
-            );
-        }
-        for stage in [
-            "cancelled",
-            "excluded",
-            "symlinkTemplate",
-            "trashRefused",
-            "stagedContentsRead",
-            "mutation",
-            "itemLookup",
-            "baseVersionMismatch",
-            "rename",
-            "contentOnNonFile",
-            "missingStagedContents",
-            "contentWrite",
-            "completed",
+
+        let swift_operations = swift_cases(swift_diagnostics, "DiagnosticOperation");
+        let swift_stages = swift_cases(swift_diagnostics, "DiagnosticStage");
+        let swift_fields = swift_allowed_keys(swift_sink);
+
+        for (rust, swift) in [
+            (OPERATIONS, &swift_operations),
+            (STAGES, &swift_stages),
+            (ALLOWED_FIELDS, &swift_fields),
         ] {
-            assert!(
-                swift_diagnostics.contains(&format!("case {stage}")),
-                "Swift stage {stage} is missing"
-            );
-        }
-        for field in ALLOWED_FIELDS {
-            assert!(
-                swift_sink.contains(&format!("\"{field}\"")),
-                "Swift sink allowlist is missing {field}"
-            );
+            for name in rust {
+                assert!(
+                    swift.iter().any(|case| case == name),
+                    "Rust name {name} is missing in the Swift source"
+                );
+            }
+            for name in swift {
+                assert!(
+                    rust.contains(&name.as_str()),
+                    "Swift added {name} without updating the Rust list"
+                );
+            }
         }
     }
 
