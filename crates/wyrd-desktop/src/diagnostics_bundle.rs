@@ -14,6 +14,7 @@
 //! temporary directory until the user copies or sends it themselves.
 
 use std::collections::BTreeMap;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -163,6 +164,12 @@ fn records_from_jsonl(bytes: &[u8], export_session: &str) -> Vec<BundleRecord> {
         let Some(summary) = object.get("summary").and_then(|v| v.as_str()) else {
             continue;
         };
+        // These two are the only fields outside `fields`, and the
+        // trusted builder controls their shape. Validate it anyway:
+        // a hand-edited sink must not become a free-text surface.
+        if !valid_timestamp(timestamp) || !valid_summary(summary) {
+            continue;
+        }
         let Some(source_fields) = object.get("fields").and_then(|v| v.as_object()) else {
             continue;
         };
@@ -190,6 +197,47 @@ fn records_from_jsonl(bytes: &[u8], export_session: &str) -> Vec<BundleRecord> {
     // correlated without borrowing a protocol identity.
     debug_assert!(!export_session.is_empty());
     records
+}
+
+/// RFC 3339 timestamp from `ISO8601DateFormatter`, with no free text.
+fn valid_timestamp(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value
+            .chars()
+            .all(|c| c.is_ascii_digit() || matches!(c, '-' | ':' | '.' | 'T' | 'Z' | '+' | ' '))
+}
+
+/// The builder emits exactly `operation outcome stage=<closed stage>`.
+/// A closed shape keeps this field from carrying unrelated user text.
+fn valid_summary(value: &str) -> bool {
+    const OPERATIONS: &[&str] = &["createItem", "modifyItem", "deleteItem"];
+    const STAGES: &[&str] = &[
+        "cancelled",
+        "excluded",
+        "symlinkTemplate",
+        "trashRefused",
+        "stagedContentsRead",
+        "mutation",
+        "itemLookup",
+        "baseVersionMismatch",
+        "rename",
+        "contentOnNonFile",
+        "missingStagedContents",
+        "contentWrite",
+        "completed",
+    ];
+    let mut parts = value.split(' ');
+    match (parts.next(), parts.next(), parts.next(), parts.next()) {
+        (Some(op), Some(outcome), Some(stage), None) => {
+            OPERATIONS.contains(&op)
+                && matches!(outcome, "ok" | "failed")
+                && stage
+                    .strip_prefix("stage=")
+                    .is_some_and(|name| STAGES.contains(&name))
+        }
+        _ => false,
+    }
 }
 
 fn truncate(value: &str) -> String {
@@ -226,13 +274,18 @@ pub fn build_bundle_at(container: Option<&Path>, settings_path: Option<&Path>) -
 
     if let Some(container) = container {
         let sink = container.join(RECORD_RELATIVE_PATH);
-        if let Ok(bytes) = std::fs::read(&sink) {
-            records.extend(records_from_jsonl(
-                bytes
-                    .get(..MAX_SOURCE_BYTES.min(bytes.len()))
-                    .unwrap_or(&bytes),
-                &export_session,
-            ));
+        if let Ok(mut file) = std::fs::File::open(&sink) {
+            // Bound the read itself, not just the parse: a hand-edited
+            // sink must never drive an unbounded allocation.
+            let mut bytes = Vec::new();
+            if file
+                .by_ref()
+                .take(MAX_SOURCE_BYTES as u64)
+                .read_to_end(&mut bytes)
+                .is_ok()
+            {
+                records.extend(records_from_jsonl(&bytes, &export_session));
+            }
         }
     }
 
@@ -273,16 +326,25 @@ pub fn export_bundle_at(
 ) -> DiagnosticsExport {
     let bundle = build_bundle_at(container, settings_path);
     let path = out_dir.join(format!("wyrd-diagnostics-{}.json", bundle.export_session));
-    match std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&path)
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
     {
+        // Set the mode at creation: a umask-derived 0644 window would
+        // briefly expose the artifact to other local users.
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    match options.open(&path) {
         Ok(file) => {
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                let _ = file.set_permissions(std::fs::Permissions::from_mode(0o600));
+                if let Err(error) = file.set_permissions(std::fs::Permissions::from_mode(0o600)) {
+                    return DiagnosticsExport::Failed {
+                        reason: format!("secure bundle: {error}"),
+                    };
+                }
             }
             match serde_json::to_writer_pretty(file, &bundle) {
                 Ok(()) => DiagnosticsExport::Written {
@@ -366,14 +428,17 @@ mod tests {
         let mut lines = Vec::new();
         for version in [1, 2] {
             lines.push(format!(
-                r#"{{"version":{version},"timestamp":"t","summary":"s","fields":{{"session":"x"}}}}"#
+                r#"{{"version":{version},"timestamp":"2026-01-01T00:00:00Z","summary":"createItem failed stage=symlinkTemplate","fields":{{"session":"x"}}}}"#
             ));
         }
         lines.push("not json".to_string());
-        lines.push(r#"{"version":1,"timestamp":"t","summary":"s","fields":{}}"#.to_string());
+        lines.push(
+            r#"{"version":1,"timestamp":"2026-01-01T00:00:00Z","summary":"createItem failed stage=symlinkTemplate","fields":{}}"#
+                .to_string(),
+        );
         for index in 0..(MAX_RECORDS + 10) {
             lines.push(format!(
-                r#"{{"version":1,"timestamp":"t","summary":"s","fields":{{"session":"s{index}"}}}}"#
+                r#"{{"version":1,"timestamp":"2026-01-01T00:00:00Z","summary":"createItem failed stage=symlinkTemplate","fields":{{"session":"s{index}"}}}}"#
             ));
         }
         let joined = lines.join("\n");
@@ -440,10 +505,33 @@ mod tests {
         };
         assert!(count >= 1, "the desktop record is always present");
         assert!(Path::new(&path).exists());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "the artifact is owner-only from creation");
+        }
         assert!(
             matches!(second, DiagnosticsExport::Written { .. }),
             "a second export mints a new file"
         );
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A hand-edited sink cannot turn the two source-controlled fields
+    /// into a free-text surface. Their closed shapes are validated.
+    #[test]
+    fn free_text_timestamp_and_summary_are_dropped() {
+        let valid =
+            r#"{"version":1,"timestamp":"2026-01-01T00:00:00Z","summary":"createItem failed stage=symlinkTemplate","fields":{"session":"x"}}"#
+                .to_string();
+        let bad_stamp = valid.replace("2026-01-01T00:00:00Z", "private meeting notes");
+        let bad_summary = valid.replace(
+            "createItem failed stage=symlinkTemplate",
+            "someone's unrelated document",
+        );
+        assert_eq!(records_from_jsonl(valid.as_bytes(), "export").len(), 1);
+        assert!(records_from_jsonl(bad_stamp.as_bytes(), "export").is_empty());
+        assert!(records_from_jsonl(bad_summary.as_bytes(), "export").is_empty());
     }
 }

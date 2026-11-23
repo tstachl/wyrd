@@ -1970,6 +1970,8 @@ do {
           "a non-exportable detail never reaches the record")
     check(widerFields["content-id"] == nil,
           "the sink allowlist gates even an exportable detail")
+    checkEqual(DiagnosticsRecordSink.maxBytes, 512 * 1024,
+               "the local record sink is bounded at 512 KiB")
 } catch {
     print("FAIL: local diagnostics checks: \(error)")
     failures += 1

@@ -102,6 +102,8 @@ struct DiagnosticsRecordSink {
         guard let json = try? JSONSerialization.data(withJSONObject: record) else { return }
         var payload = json
         payload.append(0x0A)
+        // One oversized record must not defeat the bound on its own.
+        guard payload.count <= Self.maxBytes else { return }
 
         let manager = FileManager.default
         guard (try? manager.createDirectory(
@@ -111,7 +113,7 @@ struct DiagnosticsRecordSink {
         else { return }
 
         let existing = (try? Data(contentsOf: file))?.count ?? 0
-        if existing > 0 && existing + payload.count > Self.maxBytes {
+        if existing + payload.count > Self.maxBytes {
             let rotated = directory.appendingPathComponent(Self.rotatedFileName)
             try? manager.removeItem(at: rotated)
             try? manager.moveItem(at: file, to: rotated)
