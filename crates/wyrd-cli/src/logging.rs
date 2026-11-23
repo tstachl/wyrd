@@ -70,20 +70,24 @@ impl<'a> tracing_subscriber::fmt::writer::MakeWriter<'a> for SharedWriter {
 /// post-loop shutdown sequence does for both endpoints. The gate
 /// swallows only that one event, and only once [`SHUTDOWN`] is
 /// tripped, so a mid-operation relay death still fails visibly.
-pub(crate) fn build_mount_subscriber(
-    file: Option<fs::File>,
-    verbose: bool,
-) -> impl tracing::Subscriber {
-    let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+fn mount_filter(verbose: bool) -> EnvFilter {
+    EnvFilter::try_from_default_env().unwrap_or_else(|_| {
         // Both crates: the binary (`wyrd`, this file) and the library
         // (`wyrd_daemon`, the FUSE backend) emit request and stage
         // events under their own target roots.
-        tracing_subscriber::EnvFilter::new(if verbose {
+        EnvFilter::new(if verbose {
             "info,wyrd=debug,wyrd_daemon=debug"
         } else {
             "info"
         })
-    });
+    })
+}
+
+pub(crate) fn build_mount_subscriber(
+    file: Option<fs::File>,
+    verbose: bool,
+) -> impl tracing::Subscriber {
+    let filter = mount_filter(verbose);
     let stderr_layer = tracing_subscriber::fmt::layer()
         .with_writer(std::io::stderr)
         .with_ansi(false);
@@ -102,6 +106,38 @@ pub(crate) fn build_mount_subscriber(
             inner: stderr_layer,
         })
         .with(file_layer)
+}
+
+/// The mount's reloadable twin of [`build_mount_subscriber`]. The
+/// mount exposes the owner interface too, so `diagnostics-set` must
+/// be able to widen its filter live. The initial filter still honours
+/// `--verbose`; the installed sink replaces it with the app-wide
+/// level on the first live set.
+#[cfg(any(test, feature = "mount"))]
+pub(crate) fn build_reloadable_mount_subscriber(
+    file: Option<fs::File>,
+    verbose: bool,
+) -> (
+    impl tracing::Subscriber,
+    reload::Handle<EnvFilter, tracing_subscriber::registry::Registry>,
+) {
+    let (filter, handle) = reload::Layer::new(mount_filter(verbose));
+    let stderr_layer = tracing_subscriber::fmt::layer()
+        .with_writer(io::stderr)
+        .with_ansi(false);
+    let file_layer = file.map(|file| {
+        let layer = tracing_subscriber::fmt::layer()
+            .with_writer(SharedWriter::new(file))
+            .with_ansi(false);
+        ShutdownNoiseGate { inner: layer }
+    });
+    let subscriber = tracing_subscriber::registry()
+        .with(filter)
+        .with(ShutdownNoiseGate {
+            inner: stderr_layer,
+        })
+        .with(file_layer);
+    (subscriber, handle)
 }
 
 /// Suppression wrapper for one output layer: forwards every span and
@@ -264,7 +300,7 @@ pub(crate) fn init_mount_diagnostics(drive_dir: &Path, verbose: bool) -> Result<
     // crate; without this bridge those records vanish because no
     // logger is ever initialized.
     let _ = tracing_log::LogTracer::init();
-    let subscriber = build_mount_subscriber(Some(file), verbose);
+    let (subscriber, handle) = build_reloadable_mount_subscriber(Some(file), verbose);
     if tracing_subscriber::util::SubscriberInitExt::try_init(subscriber).is_err() {
         tracing::warn!(
             stage = "start",
@@ -272,6 +308,7 @@ pub(crate) fn init_mount_diagnostics(drive_dir: &Path, verbose: bool) -> Result<
             "diagnostics already initialized; reusing the installed subscriber",
         );
     }
+    install_filter_sink(handle);
     Ok(log_path)
 }
 
@@ -280,7 +317,7 @@ pub(crate) fn init_mount_diagnostics(drive_dir: &Path, verbose: bool) -> Result<
 /// this binary and the daemon, where local decision records are
 /// emitted. `RUST_LOG` still wins when an operator set it, exactly
 /// as it does for mount and sync diagnostics.
-fn log_filter(level: DiagnosticLevel) -> EnvFilter {
+pub(crate) fn log_filter(level: DiagnosticLevel) -> EnvFilter {
     let base = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     match level {
         DiagnosticLevel::Default => base,
@@ -290,6 +327,26 @@ fn log_filter(level: DiagnosticLevel) -> EnvFilter {
         DiagnosticLevel::Detailed => base
             .add_directive("wyrd=debug".parse().expect("constant directive"))
             .add_directive("wyrd_daemon=debug".parse().expect("constant directive")),
+    }
+}
+
+/// Install the process-wide sink that swaps a subscriber's filter on
+/// a live level change. Both owner presentations use it: the mount's
+/// `--verbose` filter is the starting point, and the app-wide level
+/// replaces it after the first `diagnostics-set`. A reload failure is
+/// returned to the controller so the caller never sees "applied"
+/// when verbosity did not change.
+fn install_filter_sink(handle: reload::Handle<EnvFilter, tracing_subscriber::registry::Registry>) {
+    let sink = Arc::new(move |level: DiagnosticLevel| {
+        handle
+            .modify(|current| *current = log_filter(level))
+            .map_err(|error| format!("cannot reload log filter: {error}"))
+    });
+    if wyrd_daemon::install_diagnostics_sink(sink).is_err() {
+        tracing::warn!(
+            stage = "start",
+            "diagnostics sink already installed; live level changes will not change this filter",
+        );
     }
 }
 
@@ -453,18 +510,7 @@ pub(crate) fn init_owner_diagnostics(log_file: Option<&Path>) -> Result<Option<P
             "diagnostics already initialized; reusing the installed subscriber",
         );
     }
-    let sink = Arc::new(move |level: DiagnosticLevel| {
-        let filter = log_filter(level);
-        if let Err(error) = handle.modify(|current| *current = filter) {
-            tracing::warn!(stage = "diagnostics", "cannot reload log filter: {error}");
-        }
-    });
-    if wyrd_daemon::install_diagnostics_sink(sink).is_err() {
-        tracing::warn!(
-            stage = "start",
-            "diagnostics sink already installed; live level changes will not change this filter",
-        );
-    }
+    install_filter_sink(handle);
     Ok(log_path)
 }
 

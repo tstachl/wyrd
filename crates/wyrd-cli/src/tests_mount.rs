@@ -1,8 +1,9 @@
-use super::logging::build_mount_subscriber;
+use super::logging::{build_mount_subscriber, build_reloadable_mount_subscriber, log_filter};
 #[cfg(feature = "mount")]
 use super::tests_harness::{reclaim, JOIN_TIMEOUT};
 use super::tests_harness::{write_secret, TempDir, WithoutRustLog};
 use super::*;
+use wyrd_daemon::DiagnosticLevel;
 
 use wyrd_view::DriveView;
 
@@ -580,4 +581,31 @@ impl Drop for MountGuard {
             let _ = reclaim(server, JOIN_TIMEOUT);
         }
     }
+}
+
+/// The mount serves the owner interface too, so its filter must be
+/// reloadable by `diagnostics-set`. The `--verbose` flag still picks
+/// the starting filter; the app-wide level replaces it live.
+#[test]
+fn mount_filter_is_reloadable_for_the_owner_level() {
+    let temp = TempDir::new();
+    let log = temp.0.join("reloadable.log");
+    let file = fs::File::create(&log).unwrap();
+    let (subscriber, handle) = build_reloadable_mount_subscriber(Some(file), false);
+    tracing::subscriber::with_default(subscriber, || {
+        tracing::debug!(target: "wyrd", "hidden before the owner sets detailed");
+        handle
+            .modify(|filter| *filter = log_filter(DiagnosticLevel::Detailed))
+            .expect("mount filter reloads");
+        tracing::debug!(target: "wyrd", "visible after the owner sets detailed");
+    });
+    let content = fs::read_to_string(&log).unwrap();
+    assert!(
+        !content.contains("hidden before the owner sets detailed"),
+        "{content}"
+    );
+    assert!(
+        content.contains("visible after the owner sets detailed"),
+        "{content}"
+    );
 }

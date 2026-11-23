@@ -27,7 +27,7 @@ use wyrd_settings::DiagnosticLevel;
 /// installs one that swaps its tracing filter; a host without a
 /// reloadable filter installs none and still persists and reports
 /// the level correctly.
-type Sink = dyn Fn(DiagnosticLevel) + Send + Sync;
+type Sink = dyn Fn(DiagnosticLevel) -> Result<(), String> + Send + Sync;
 
 static DIAGNOSTICS_SINK: OnceLock<Arc<Sink>> = OnceLock::new();
 
@@ -80,6 +80,11 @@ pub enum DiagnosticsSetError {
     /// No settings path was configured for this controller.
     #[error("no settings path configured for live diagnostics")]
     Unconfigured,
+    /// The setting committed but the local log filter could not be
+    /// reloaded. The in-memory level is unchanged so a status read
+    /// does not claim an applied level the filter never adopted.
+    #[error("diagnostics level committed but log filter not reloaded: {0}")]
+    Filter(String),
 }
 
 /// The owner's live diagnostics state.
@@ -156,6 +161,11 @@ impl DiagnosticsController {
         let update = DiagnosticsUpdate { level: Some(level) };
         match apply_diagnostics_update(settings, mirror, &update) {
             Ok(applied) => {
+                if let Some(sink) = current_sink() {
+                    sink(applied).map_err(DiagnosticsSetError::Filter)?;
+                }
+                // Store only after the sink accepted the change: a
+                // failed reload must not read back as applied.
                 self.level.store(as_u8(applied), Ordering::Release);
                 // Safe summary plus the ephemeral local correlation
                 // id: no filename, identity, content id, or file
@@ -166,9 +176,6 @@ impl DiagnosticsController {
                     session = self.session_id(),
                     "diagnostics level applied"
                 );
-                if let Some(sink) = current_sink() {
-                    sink(applied);
-                }
                 Ok(applied)
             }
             Err(DiagnosticsUpdateError::Settings(error)) => {

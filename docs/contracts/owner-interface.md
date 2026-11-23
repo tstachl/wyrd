@@ -375,9 +375,11 @@ unknown level value without coercing it; `Malformed` covers a bad
 params shape, including an extra field. `DiagnosticsSettings` means
 the settings transaction refused and the level is unchanged.
 `DiagnosticsMirror` means the setting committed but the mirror could
-not be published: the level is not reported as applied. A server
-without a configured diagnostics controller answers `Unavailable`
-rather than pretending a memory-only change was saved.
+not be published: the level is not reported as applied.
+`DiagnosticsFilter` means the setting committed but the local log
+filter could not be reloaded, so the applied level is unchanged. A
+server without a configured diagnostics controller answers
+`Unavailable` rather than pretending a memory-only change was saved.
 
 ## Materialization policy
 

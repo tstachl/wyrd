@@ -999,6 +999,9 @@ pub enum WireErrorCode {
     /// The settings edit committed but its app-group mirror could
     /// not be published. The level is not reported as applied.
     DiagnosticsMirror,
+    /// The setting committed but the owner's local log filter could
+    /// not be reloaded. The level is not reported as applied.
+    DiagnosticsFilter,
 }
 
 // ---------------------------------------------------------------------------

@@ -332,6 +332,7 @@ impl super::OwnerServer {
                     (WireErrorCode::DiagnosticsSettings, detail)
                 }
                 DiagnosticsSetError::Mirror(detail) => (WireErrorCode::DiagnosticsMirror, detail),
+                DiagnosticsSetError::Filter(detail) => (WireErrorCode::DiagnosticsFilter, detail),
                 other => (WireErrorCode::Unavailable, other.to_string()),
             })?;
         Ok(WireOk::Diagnostics {
