@@ -232,6 +232,18 @@ left it in place. No trustworthy projection has no slot value. A
 failed composition never publishes, so the consumer observes it as
 an absent owner.
 
+A timestamp may be added to this judgment only as the local time of the
+last projection publication. It is not a peer delivery time, a
+synchronization-completion time, or a liveness heartbeat, and a consumer
+MUST NOT label it as any of those. Absent or zero means unknown, never a
+wall-clock date; a mixed-version reader that ignores the field degrades to
+the state/revision/generation judgment above. The shell label is "Drive
+data last updated on this device" and the value belongs in the Drive data
+card, not in the status summary or beside the run state. A last completed
+pass is a liveness measurement and is not carried by this operation. The
+field is pending implementation; until it exists, consumers use the
+judgment above and no timestamp.
+
 ## Mutation submission
 
 Forward `submit` to the single mutation queue. Decode the wire
