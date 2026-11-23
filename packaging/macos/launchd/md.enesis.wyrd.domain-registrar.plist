@@ -17,7 +17,7 @@
     <array>
     <string>@WYRD_REGISTRAR_PATH@</string>
     <string>--watch</string>
-    <string>{"group":"group.md.enesis.wyrd"}</string>
+    <string>{"group":"@WYRD_APP_GROUP@"}</string>
     </array>
     <key>RunAtLoad</key>
     <true/>

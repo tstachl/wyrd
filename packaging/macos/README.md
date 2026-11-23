@@ -99,20 +99,29 @@ SDK for the cargo invocations below. Signing env (`SIGN_IDENTITY`,
 `PROVISIONING_PROFILE`) passes through to the `stage-appex.sh` hook.
 
 Bundle identities: app `md.enesis.wyrd` (from `tauri.conf.json`),
-extension `md.enesis.wyrd.fileprovider`, group
-`group.md.enesis.wyrd`. Observed 2026-11-11 under development
-signing on macOS 15.8.2: the system materialised the container at
-the literal group id,
+extension `md.enesis.wyrd.fileprovider`, group default
+`JU2RFHWQPH.group.md.enesis.wyrd`. The group id is one
+environment-configurable value: `WYRD_APP_GROUP` overrides the
+default at build time (rendered into the entitlements, the appex
+`Info.plist` and the registrar launch agent) and at runtime (Rust
+path derivation). The default is team-prefixed so a free Personal
+Team can resolve the container without registering a group, and
+distribution with the same team needs no change; a future signing
+team sets the one variable. Historical observation, 2026-11-11
+under development signing on macOS 15.8.2: with the then-current
+unprefixed id the system materialised the container at
 `~/Library/Group Containers/group.md.enesis.wyrd/`, with no team
 prefix — confirmed by the probe log and `fileproviderd`'s own
-dump. Treat that as this build's resolved path, not a platform
-law: it is verified for development signing only, and other
-signing types (Developer ID, notarised distribution) are
-unverified. (Prefixed directories on this machine, e.g.
-`W5364U7YZB.group.io.tailscale.ipn.macsys`, read most plausibly
-as groups whose ids literally contain the team prefix — an old
-naming convention — but that reading is inferred, not verified.)
-Accordingly: the extension resolves through `containerURL` and
+dump. Treat that as the resolved path of that build, not a
+platform law: it was verified for development signing only, and
+other signing types (Developer ID, notarised distribution) are
+unverified. The group id is part of every group-socket path:
+`<account home>/Library/Group Containers/<group>/Sockets/<16 hex>.sock`.
+With the team-prefixed default this is 94 bytes plus the short account
+name, against 103 usable bytes of `sun_path`, so accounts of ten
+characters or more exceed the ceiling. The bind fails closed with an
+error naming `WYRD_APP_GROUP`; choose a shorter override for such an
+account. Accordingly: the extension resolves through `containerURL` and
 never hardcodes, and Stage 2 must confirm the daemon-side bind
 lands where the extension resolves before the scheme settles —
 an unsandboxed daemon without the group entitlement cannot call
@@ -147,6 +156,20 @@ is refused before any build: the App Group grant would not be
 effective and the appex would stay inert. The script verifies the
 embedded appex's identifier, team, entitlement, and profile, plus the
 domain registrar, before the app reaches /Applications.
+
+`WYRD_APP_GROUP` selects the App Group id for the whole build; the
+default is the team-prefixed `JU2RFHWQPH.group.md.enesis.wyrd`. The
+build renders it into the entitlements, the appex `Info.plist` and
+the registrar launch agent, and Rust reads the same variable at
+runtime, so one setting moves every consumer. A future signing team
+changes one value, not 37 literals.
+
+After the bundle swap the installer stops every running Wyrd
+process — supervisors first, then owners, then the app, registrar
+and extension — so no process keeps the previous binary mapped.
+launchd then restarts its managed agents against the new bundle;
+this avoids the stale-binary dispatch the diagnostics rollout hit.
+`--no-stop` opts out when an in-place rebuild is preferred.
 
 The script builds through `packaging/macos/build-bundle.sh`
 (link-order pin plus no-Nix-links guard; the wrapper's app-only
@@ -254,9 +277,10 @@ The scheme, therefore:
   login (`RunAtLoad`); the full Finder observable (domain
   registered from the registry, clean machine shows drives) stays
   pending the signing-owner verification below, not claimed here.
-  `<group>` is the literal `group.md.enesis.wyrd` as observed on
-  the development build (see Bundle identities above for the
-  qualification). Stage 1 probed the container directory form
+  `<group>` is the `WYRD_APP_GROUP` value (default
+  `JU2RFHWQPH.group.md.enesis.wyrd`; the historical observation
+  used the then-current unprefixed id — see Bundle identities above
+  for the qualification). Stage 1 probed the container directory form
   with the stub name `wyrd-probe.sock` under a team-signed build
   and recorded the team and build type; the per-drive filename
   form is decided in the Stage 2 design contract below, which
@@ -301,7 +325,7 @@ so the app runs before the listener. Procedure:
    (`md.enesis.wyrd.fileprovider`, category `domain`): the first
    pass logs `unreachable <path>: …`, and `<path>` is the
    resolved location to listen on. If the log says `no group
-   container for group.md.enesis.wyrd` instead, the entitlement is
+   container for <group>` instead, the entitlement is
    not effective in the running build (ad-hoc signing, missing
    provisioning) — fix signing and rerun; there is no path to
    listen on yet.
@@ -333,9 +357,10 @@ so the app runs before the listener. Procedure:
    the connection — restart the listener, not the theory.)
 6. Record the macOS version and signing identity with the result.
 
-Recorded run 2026-11-11 (this procedure, first live pass): macOS
-15.8.2 (24H232), an Apple Development identity on a development
-team (identifiers withheld). Probe logged `reachable:
+Recorded run 2026-11-11 (this procedure, first live pass, with the
+then-current unprefixed group id): macOS 15.8.2 (24H232), an Apple
+Development identity on a development team (identifiers withheld).
+Probe logged `reachable:
 …/Group Containers/group.md.enesis.wyrd/Sockets/wyrd-probe.sock`
 (persisted, retrievable via `log show`); a later pass with no
 listener logged `unreachable …: Connection refused` at `error`.
@@ -491,7 +516,7 @@ identity line as Stage 1): a fresh `wyrd drive … init` drive served by
 
 - The daemon logged the triple it bound:
   `primary=…/owner.sock`,
-  `group=…/Group Containers/group.md.enesis.wyrd/Sockets/add3245c6d69f1dd.sock`,
+  `group=…/Group Containers/<group>/Sockets/add3245c6d69f1dd.sock`,
   `link=…/Sockets/by-drive/<drive-hex>.sock`.
 - A client through the readlinked alias served `readdir ""`
   (empty fresh drive, generation 0, revision 2), `stat ""`
@@ -533,7 +558,8 @@ machine to add a domain, and per the Stage 1 rule an ad-hoc build
 has no effective group-container entitlement, so there is no path
 to listen on. Team-signed deltas for the distribution run: a
 Developer ID identity for Gatekeeper trust, a provisioning
-profile carrying the App Group (`group.md.enesis.wyrd`), a
+profile carrying the App Group (`WYRD_APP_GROUP`, default
+`JU2RFHWQPH.group.md.enesis.wyrd`), a
 containing app to register the domain, and notarization — then
 the Stage 1 procedure above applies. The notarized
 `fileproviderd` load check itself stays with the signing owner.
@@ -717,10 +743,11 @@ Trade-offs, in the issue's terms:
   updates by stable drive-derived domain identity; `fileproviderd`
   re-registers the new appex on first launch.
 - **Sandbox sharing:** the App Group is the only shared surface.
-  Both app and appex will hold `group.md.enesis.wyrd` (literal, no
-  team prefix); both resolve through `containerURL`, never
-  hardcoded. The literal form is verified for development signing
-  only; Developer ID distribution is unverified and covered by the
+  Both app and appex hold the same `WYRD_APP_GROUP` value (team-prefixed
+  default), rendered into their entitlements at build time; both
+  resolve through `containerURL`, never a hardcoded path. The
+  container naming is verified for development signing only;
+  Developer ID distribution is unverified and covered by the
   planned `fileproviderd` load check below. The owner server
   publishes `Sockets/<fingerprint>.sock` plus the
   `Sockets/by-drive/<drive-hex>.sock` symlink alias; the daemon is
@@ -783,7 +810,8 @@ reasoning stands on its own terms and is preserved here:
 
 ### Decisions (this PR)
 
-1. **Wyrd.app joins `group.md.enesis.wyrd`.** It stays unsandboxed;
+1. **Wyrd.app joins the configured App Group** (default
+   `JU2RFHWQPH.group.md.enesis.wyrd`). It stays unsandboxed;
    the only new key is `com.apple.security.application-groups`. The
    direct-path registry, socket, and provisioning design is unchanged.
 2. **The app initializes the App Group container at launch.** The
@@ -840,11 +868,13 @@ stays nested-first, one Developer ID, `--options runtime`.
 **Free-team development note.** App Groups on macOS are an
 unrestricted entitlement in Apple's docs, and a team-prefixed group
 id (`<TEAM_ID>.…`) can be used without registering the group. That
-may allow a free Personal Team to exercise the real container
-lifecycle for experiments, but Personal Team profiles expire after
-seven days. Wyrd's production group id stays
-`group.md.enesis.wyrd`; it is not changed to accommodate free
-signing. Distribution still needs Developer ID and notarization.
+allows a free Personal Team to exercise the real container
+lifecycle, which is why the default is now team-prefixed
+(`JU2RFHWQPH.group.md.enesis.wyrd`). Personal Team profiles expire
+after seven days. `WYRD_APP_GROUP` changes the id in one setting
+(the build renders the entitlements, Info.plist and registrar
+agent; Rust reads it at runtime) if a different team signs a
+build. Distribution still needs Developer ID and notarization.
 
 **Ordering is behavior, not documentation.** Owner-first falls out
 of the per-drive launchd agent: `RunAtLoad` starts the owner at

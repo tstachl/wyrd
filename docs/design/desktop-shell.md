@@ -945,7 +945,8 @@ this note wins for architecture.
    desktop id: the host Flatpak manifest
    (`packaging/linux/md.enesis.wyrd.yaml`) shares the same app-id,
    the appex nests as `md.enesis.wyrd.fileprovider`, and the group
-   is `group.md.enesis.wyrd`. The existing app-id marker check
+   is the team-prefixed default `JU2RFHWQPH.group.md.enesis.wyrd`,
+   overridable with `WYRD_APP_GROUP`. The existing app-id marker check
    (`tests/harness/test-appex-embedding.sh`, bundle-identifiers
    check) covers the chosen id plus the product metadata, and the
    appex stage hook takes the version from the same config (single

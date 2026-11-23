@@ -336,7 +336,10 @@ func reconcile(
 let args = Array(CommandLine.arguments.dropFirst())
 let watching = args.first == "--watch"
 let config = (watching ? args.dropFirst().first : args.first)
-    ?? #"{"group":"group.md.enesis.wyrd"}"#
+    // The launch agent passes the group rendered from WYRD_APP_GROUP;
+    // this fallback serves one-shot manual runs through the same
+    // helper (env override, then the built-in default).
+    ?? #"{"group":"\#(AppGroup.identifier)"}"#
 let grace = DomainRemovalGrace()
 
 if watching {

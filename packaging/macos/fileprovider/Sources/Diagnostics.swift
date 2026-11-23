@@ -37,7 +37,7 @@ enum DiagnosticLevel: String, Equatable {
 }
 
 enum DiagnosticConfig {
-    static let groupIdentifier = "group.md.enesis.wyrd"
+    static let groupIdentifier = AppGroup.identifier
     static let relativePath = "Diagnostics/level.json"
 
     /// Read at a callback boundary. No container, no file or any

@@ -36,12 +36,13 @@ pub use host::{
     PoisonCounts, ResourceBudgets, RunningSettings, RuntimeMaterialization, SyncReport, WyrdNode,
 };
 pub use settings::{
-    apply_diagnostics_update, apply_sparse_update, default_diagnostics_mirror_container,
-    default_settings_path, diagnostics_level_at, diagnostics_mirror_container_for,
-    diagnostics_mirror_path_in, overrides_for, overrides_for_path, publish_diagnostics_mirror,
-    read_settings, settings_key_for, split_file_overrides, write_settings, AppSettingsFile,
-    DiagnosticLevel, DiagnosticSettingsSection, DiagnosticsUpdate, DiagnosticsUpdateError,
-    DriveSettingsSection, SettingsWriteError, APP_GROUP_IDENTIFIER, APP_SETTINGS_VERSION,
+    app_group_identifier, app_group_identifier_from, apply_diagnostics_update, apply_sparse_update,
+    default_diagnostics_mirror_container, default_settings_path, diagnostics_level_at,
+    diagnostics_mirror_container_for, diagnostics_mirror_path_in, overrides_for,
+    overrides_for_path, publish_diagnostics_mirror, read_settings, settings_key_for,
+    split_file_overrides, write_settings, AppSettingsFile, DiagnosticLevel,
+    DiagnosticSettingsSection, DiagnosticsUpdate, DiagnosticsUpdateError, DriveSettingsSection,
+    SettingsWriteError, APP_GROUP_ENV, APP_SETTINGS_VERSION, DEFAULT_APP_GROUP_IDENTIFIER,
     DEFAULT_OPEN_TIMEOUT, DIAGNOSTICS_MIRROR_RELATIVE_PATH, SETTINGS_FILENAME,
 };
 /// The sparse edit the transaction commits: re-exported from the

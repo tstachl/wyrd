@@ -8,7 +8,8 @@
 # Usage: packaging/macos/build-bundle.sh [--bundles app ...]
 # Environment passthrough to the bundler hook and build-appex.sh:
 # SIGN_IDENTITY, PROVISIONING_PROFILE (the appex), APP_PROVISIONING_PROFILE
-# (the app), ARCH, MIN_MACOS, TOOLCHAIN, SWIFTC, SDK, APPEX_BUNDLE_VERSION.
+# (the app), ARCH, MIN_MACOS, TOOLCHAIN, SWIFTC, SDK, APPEX_BUNDLE_VERSION,
+# WYRD_APP_GROUP (default: the value in packaging/macos/app-group.sh).
 # With no arguments the wrapper
 # builds `--bundles app` (the release runbook shape); any arguments
 # replace the default and forward to `cargo tauri build` verbatim,
@@ -32,6 +33,7 @@ set -o pipefail 2>/dev/null || true
 
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
+. "$HERE/app-group.sh"
 
 # Link-order pin (Darwin only). Discovery mirrors
 # fileprovider/build-appex.sh: system tools by absolute path, the
@@ -174,11 +176,16 @@ if [ "$(uname -s)" = "Darwin" ]; then
     if [ -d "$RELEASE_DIR/bundle/macos/Wyrd.app" ]; then
         # Carry the app entitlements explicitly: a resign without
         # them silently drops the App Group grant Tauri embedded.
-        APP_ENTITLEMENTS="$ROOT/packaging/macos/Wyrd.app.entitlements"
-        [ -f "$APP_ENTITLEMENTS" ] || {
-            echo "error: app entitlements not found: $APP_ENTITLEMENTS" >&2
+        # Render WYRD_APP_GROUP into a build-local copy — the
+        # checked-in file holds the default so Tauri's own sign stays
+        # valid, and this re-sign makes the override effective.
+        APP_ENTITLEMENTS_SRC="$ROOT/packaging/macos/Wyrd.app.entitlements"
+        [ -f "$APP_ENTITLEMENTS_SRC" ] || {
+            echo "error: app entitlements not found: $APP_ENTITLEMENTS_SRC" >&2
             exit 1
         }
+        APP_ENTITLEMENTS="$RELEASE_DIR/wyrd-app.entitlements"
+        wyrd_render_app_group "$APP_ENTITLEMENTS_SRC" "$WYRD_APP_GROUP_DEFAULT" "$APP_ENTITLEMENTS"
         if [ -n "${SIGN_IDENTITY:-}" ] && [ "$SIGN_IDENTITY" != "-" ]; then
             codesign --force --sign "$SIGN_IDENTITY" --options runtime --timestamp \
                 --entitlements "$APP_ENTITLEMENTS" \

@@ -10,12 +10,18 @@
 #
 # Usage: packaging/macos/domain-registrar/build-registrar.sh [out-dir]
 # Environment: ARCH (default host arch), SIGN_IDENTITY (default `-`),
-# MIN_MACOS (default 13.0), TOOLCHAIN, SWIFTC, SDK.
+# MIN_MACOS (default 13.0), TOOLCHAIN, SWIFTC, SDK, WYRD_APP_GROUP
+# (default: the value in packaging/macos/app-group.sh).
 set -eu
 set -o pipefail 2>/dev/null || true
 
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 ROOT=$(cd "$HERE/../../.." && pwd)
+. "$ROOT/packaging/macos/app-group.sh"
+# Validate before the minutes-long swiftc: a bad override must fail
+# here, as it does in build-appex.sh, not after a full compile.
+APP_GROUP=$(wyrd_app_group)
+echo "app group: $APP_GROUP" >&2
 OUT=${1:-"$HERE/build"}
 ARCH=${ARCH:-$(uname -m)}
 SIGN_IDENTITY=${SIGN_IDENTITY:--}
@@ -69,13 +75,16 @@ rm -f "$HELPER"
     -sdk "$SDK" \
     -O \
     -o "$HELPER" \
-    "$HERE/main.swift"
+    "$HERE/main.swift" \
+    "$ROOT/packaging/macos/fileprovider/Sources/AppGroup.swift"
 
 # The helper must present the containing app's identity: File Provider
 # domain registration is associated with the calling app, and a
 # different signing identifier would register against a different
 # app. An ad-hoc install signs ad-hoc with the same identifier.
-ENTITLEMENTS="$ROOT/packaging/macos/Wyrd.app.entitlements"
+ENTITLEMENTS="$OUT/WyrdDomainRegistrar.entitlements"
+wyrd_render_app_group "$ROOT/packaging/macos/Wyrd.app.entitlements" \
+    "$WYRD_APP_GROUP_DEFAULT" "$ENTITLEMENTS"
 codesign --force --sign "$SIGN_IDENTITY" \
     --identifier md.enesis.wyrd \
     --entitlements "$ENTITLEMENTS" \

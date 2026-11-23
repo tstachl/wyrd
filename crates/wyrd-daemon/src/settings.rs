@@ -584,10 +584,9 @@ fn apply_update_to_file(
     Ok(())
 }
 
-/// The App Group shared by the app and the File Provider
-/// extension. Literal, with no team prefix: the system does not
-/// rewrite group ids (verified in the appex build).
-pub const APP_GROUP_IDENTIFIER: &str = "group.md.enesis.wyrd";
+pub use wyrd_settings::{
+    app_group_identifier, app_group_identifier_from, APP_GROUP_ENV, DEFAULT_APP_GROUP_IDENTIFIER,
+};
 /// Mirror location inside the App Group container, relative to its
 /// root. The extension reads exactly this path
 /// (`Sources/Diagnostics.swift`), so the two spellings must agree.
@@ -605,7 +604,7 @@ pub fn diagnostics_mirror_container_for(home: Option<&str>) -> Result<PathBuf, S
         .ok_or_else(|| "no home directory: cannot locate the App Group container".to_string())?;
     Ok(PathBuf::from(home)
         .join("Library/Group Containers")
-        .join(APP_GROUP_IDENTIFIER))
+        .join(app_group_identifier()))
 }
 
 /// The container for the running user.
@@ -1764,8 +1763,8 @@ mod tests {
         assert!(read.diagnostics.is_none());
     }
 
-    /// The container is derived from the App Group identifier,
-    /// literally and without a team prefix, matching the extension.
+    /// The container is derived from the effective App Group id,
+    /// matching the extension's rendered value.
     #[test]
     fn mirror_path_uses_the_app_group_literally() {
         let container = diagnostics_mirror_container_for(Some("/home/op")).unwrap();
@@ -1773,7 +1772,7 @@ mod tests {
             container,
             PathBuf::from("/home/op")
                 .join("Library/Group Containers")
-                .join("group.md.enesis.wyrd")
+                .join(app_group_identifier())
         );
         assert_eq!(
             diagnostics_mirror_path_in(&container),
@@ -1791,7 +1790,7 @@ mod tests {
     fn a_missing_container_is_never_created() {
         let dir = scratch("mirror-decoy");
         let path = dir.join("settings.json");
-        let missing = dir.join("Group Containers").join("group.md.enesis.wyrd");
+        let missing = dir.join("Group Containers").join(app_group_identifier());
         let detailed = DiagnosticsUpdate {
             level: Some(DiagnosticLevel::Detailed),
         };

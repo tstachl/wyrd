@@ -234,6 +234,33 @@ if match 'domains::spawn' "$(cat "$ROOT/crates/wyrd-desktop/src/main.rs")"; then
 fi
 pass "install runs the registrar from a launch agent, not the app"
 
+# 7d. One env-configurable App Group: the installer sources the shared
+# helper, validates the signed artifacts against the effective id, and
+# renders that id into the launch agent template. Nothing writes a
+# checked-in file.
+for marker in '. "$HERE/app-group.sh"' 'GROUP=$(wyrd_app_group)' '"$GROUP"*)' '@WYRD_APP_GROUP@' 's|@WYRD_APP_GROUP@|$GROUP|g'; do
+  match "$marker" "$INSTALL_CODE" \
+    || die "install: App Group marker '$marker' missing"
+done
+grep -F >/dev/null 'wyrd_render_app_group' "$ROOT/packaging/macos/app-group.sh" \
+  || die "helper: no render function"
+pass "install renders one WYRD_APP_GROUP into every native artifact"
+
+# 7e. Clean slate: every running Wyrd process is stopped around the
+# install so none keeps an old binary mapped. The stop runs after the
+# swap and registrar load (so launchd restarts agents on the new
+# bundle), supervise precedes owner, and escalation is bounded to the
+# PIDs that ignored SIGTERM. --no-stop is the explicit opt-out.
+for marker in '--no-stop' 'STOP_RUNNING=1' 'stop_running_wyrd()' 'pgrep -f' "'/wyrd-supervise '" "'/wyrd owner '" 'kill -TERM' 'kill -KILL'; do
+  match "$marker" "$INSTALL_CODE" \
+    || die "install: clean-slate marker '$marker' missing"
+done
+STOP_LINE="$(grep -n -F -- 'stop_running_wyrd' <<<"$INSTALL_CODE" | tail -1 | cut -d: -f1)"
+LOAD_LINE="$(grep -n -F -- 'launchctl load -w "$REGISTRAR_AGENT"' <<<"$INSTALL_CODE" | cut -d: -f1)"
+[ -n "$STOP_LINE" ] && [ -n "$LOAD_LINE" ] && [ "$LOAD_LINE" -lt "$STOP_LINE" ] \
+  || die "install: clean-slate stop must follow the registrar reload"
+pass "install stops running Wyrd processes after the swap"
+
 # 8. Prerequisites fail with the fix named: Apple tools, cargo
 # (devenv), bun (desktop build), python3 (config version pin).
 for marker in 'xcode-select' 'cargo is not on PATH' 'bun is not on PATH' 'python3 is required'; do

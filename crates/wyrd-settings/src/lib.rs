@@ -20,6 +20,11 @@
 //! untrustworthy), and a newer schema version refuses loudly
 //! rather than guessing. Absent keys leave the compiled defaults
 //! in place — the schema never materializes defaults.
+//!
+//! This crate also owns the macOS App Group id default and its
+//! `WYRD_APP_GROUP` override: one value the daemon, the desktop
+//! export and the build-time rendering all read. It is a string
+//! setting, not path resolution or filesystem access.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -34,6 +39,32 @@ pub const APP_SETTINGS_VERSION: u32 = 2;
 /// Filename of the application settings file inside the per-user
 /// state directory.
 pub const SETTINGS_FILENAME: &str = "settings.json";
+
+/// Environment override for the macOS App Group id. One setting
+/// changes every consumer; the macOS build scripts bake the same
+/// value into the entitlements, Info.plist and launch agent.
+pub const APP_GROUP_ENV: &str = "WYRD_APP_GROUP";
+/// Built-in default App Group id. Team-prefixed so it works with a
+/// free Personal Team and needs no portal registration for
+/// distribution. Keep in step with the Swift and shell helpers; the
+/// Harness pins the cross-language agreement.
+pub const DEFAULT_APP_GROUP_IDENTIFIER: &str = "JU2RFHWQPH.group.md.enesis.wyrd";
+
+/// Resolve the group id from an explicit override, for pure tests.
+/// An unset or empty override means the built-in default.
+pub fn app_group_identifier_from(override_value: Option<&str>) -> String {
+    let trimmed = override_value.unwrap_or("").trim();
+    if trimmed.is_empty() {
+        DEFAULT_APP_GROUP_IDENTIFIER.to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// The effective group id for this process.
+pub fn app_group_identifier() -> String {
+    app_group_identifier_from(std::env::var(APP_GROUP_ENV).ok().as_deref())
+}
 
 /// Ceiling on notification records per drive section. Dedup needs
 /// recent keys, not history: a drive notifies a handful of

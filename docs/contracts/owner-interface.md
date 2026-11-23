@@ -36,9 +36,11 @@ second listener is the daemon half of the registry-owned
 production association on
 macOS: with no dev env vars set, the owner derives the container
 from the platform convention
-(`~/Library/Group Containers/group.md.enesis.wyrd`, verified for
-development signing only — Developer ID and notarized paths are
-unverified, see the packaging note) and the drive
+(`~/Library/Group Containers/<group>`, where `<group>` is the
+`WYRD_APP_GROUP` value with the team-prefixed default
+`JU2RFHWQPH.group.md.enesis.wyrd`; verified for development signing
+only — Developer ID and notarized paths are unverified, see the
+packaging note) and the drive
 from the served drive itself, then publishes the alias the domain
 resolves through; it is compiled on every
 platform but binds the group socket only where the container

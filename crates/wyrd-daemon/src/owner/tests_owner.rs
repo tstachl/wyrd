@@ -3747,7 +3747,8 @@ fn resolve_group_alias(link: &std::path::Path) -> std::path::PathBuf {
 #[test]
 fn group_socket_paths_derive_from_drive() {
     let drive = group_drive();
-    let container = std::path::PathBuf::from("/tmp/group.md.enesis.wyrd");
+    let container =
+        std::path::PathBuf::from("/tmp").join(crate::settings::DEFAULT_APP_GROUP_IDENTIFIER);
     let socket = super::server::group_socket_path(&container, &drive);
     let file_name = socket
         .file_name()
@@ -3942,7 +3943,7 @@ fn group_bootstrap_env_parsing() {
 }
 
 /// The production container derives from the home directory plus
-/// the literal group id: pure path math, no filesystem, so a
+/// the effective group id: pure path math, no filesystem, so a
 /// layout change fails here before any bind. `None` home means no
 /// container — never a guessed path.
 #[test]
@@ -3953,13 +3954,33 @@ fn production_container_derives_from_home() {
     assert_eq!(
         container,
         home.join("Library/Group Containers")
-            .join(super::server::FILEPROVIDER_GROUP_ID),
+            .join(crate::settings::app_group_identifier()),
         "the production container is the platform convention"
     );
     assert_eq!(
-        super::server::FILEPROVIDER_GROUP_ID,
-        "group.md.enesis.wyrd",
-        "the daemon-side group id is the entitled literal"
+        crate::settings::app_group_identifier_from(None),
+        crate::settings::DEFAULT_APP_GROUP_IDENTIFIER,
+        "the default group id is the team-prefixed constant"
+    );
+    assert_eq!(
+        crate::settings::app_group_identifier_from(Some("custom.group")),
+        "custom.group",
+        "an explicit override wins"
+    );
+    assert_eq!(
+        crate::settings::app_group_identifier_from(Some("")),
+        crate::settings::DEFAULT_APP_GROUP_IDENTIFIER,
+        "an empty override falls back to the default"
+    );
+    assert_eq!(
+        crate::settings::app_group_identifier_from(Some(" custom.group ")),
+        "custom.group",
+        "a padded override is trimmed like the shell and Swift helpers"
+    );
+    assert_eq!(
+        crate::settings::app_group_identifier_from(Some("   ")),
+        crate::settings::DEFAULT_APP_GROUP_IDENTIFIER,
+        "a whitespace-only override falls back to the default"
     );
     assert!(
         super::server::default_group_container_with_home(None).is_none(),
@@ -4002,15 +4023,19 @@ fn production_container_gates_on_is_dir() {
 /// a present container publishes the alias for the served drive,
 /// a missing one stays primary-only. macOS-only: elsewhere the
 /// production container is always `None`, so the branch never runs.
-/// Short `/tmp` fixture home keeps the derived socket path under
-/// the `sun_path` ceiling. Serialized with `GROUP_ENV_LOCK`:
-/// `HOME` and the dev env pair are process-global.
+/// Short `/tmp` fixture home and a short WYRD_APP_GROUP keep the
+/// derived socket path under the `sun_path` ceiling (the team-prefixed
+/// default alone leaves little headroom). Serialized with
+/// `GROUP_ENV_LOCK`: `HOME`, the group override and the dev env pair
+/// are process-global.
 #[cfg(target_os = "macos")]
 #[test]
 fn production_auto_bind_publishes_alias_without_env() {
     let _lock = GROUP_ENV_LOCK.lock().unwrap();
     std::env::remove_var(super::server::FILEPROVIDER_GROUP_CONTAINER_ENV);
     std::env::remove_var(super::server::FILEPROVIDER_DRIVE_ID_ENV);
+    let previous_group = std::env::var_os("WYRD_APP_GROUP");
+    std::env::set_var("WYRD_APP_GROUP", "testgroup");
     let base = std::path::PathBuf::from(format!(
         "/tmp/h-{}-{}",
         std::process::id(),
@@ -4055,6 +4080,10 @@ fn production_auto_bind_publishes_alias_without_env() {
     }
     std::fs::remove_dir_all(&base).unwrap();
     std::fs::remove_dir_all(&dir).unwrap();
+    match previous_group {
+        Some(group) => std::env::set_var("WYRD_APP_GROUP", group),
+        None => std::env::remove_var("WYRD_APP_GROUP"),
+    }
 }
 
 /// The app normally creates the container first, but an owner that
@@ -4067,6 +4096,8 @@ fn late_container_publishes_alias_without_restarting_the_owner() {
     let _lock = GROUP_ENV_LOCK.lock().unwrap();
     std::env::remove_var(super::server::FILEPROVIDER_GROUP_CONTAINER_ENV);
     std::env::remove_var(super::server::FILEPROVIDER_DRIVE_ID_ENV);
+    let previous_group = std::env::var_os("WYRD_APP_GROUP");
+    std::env::set_var("WYRD_APP_GROUP", "testgroup");
     let base = std::path::PathBuf::from(format!(
         "/tmp/late-h-{}-{}",
         std::process::id(),
@@ -4111,6 +4142,10 @@ fn late_container_publishes_alias_without_restarting_the_owner() {
     }
     std::fs::remove_dir_all(&base).unwrap();
     std::fs::remove_dir_all(&dir).unwrap();
+    match previous_group {
+        Some(group) => std::env::set_var("WYRD_APP_GROUP", group),
+        None => std::env::remove_var("WYRD_APP_GROUP"),
+    }
 }
 
 /// A bootstrap naming a drive this owner does not serve refuses

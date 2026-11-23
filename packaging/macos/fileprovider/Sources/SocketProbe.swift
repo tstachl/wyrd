@@ -9,10 +9,12 @@
 //
 // Naming rule (observed, development signing, macOS 15.8.2 —
 // not a platform law): the App Group container directory is the
-// literal group id (`group.md.enesis.wyrd`), confirmed by the
-// probe log and fileproviderd on the 2026-11-11 live run.
-// Other signing types are unverified; Stage 2 live-confirms the
-// daemon's computed bind path against the resolved one.
+// effective group id (`AppGroup.identifier`, rendered from
+// WYRD_APP_GROUP at build time), confirmed by the probe log and
+// fileproviderd on the 2026-11-11 live run with the then-current
+// unprefixed id. Other signing types are unverified; Stage 2
+// live-confirms the daemon's computed bind path against the
+// resolved one.
 // Paths resolve through `containerURL`, never from a hardcoded
 // path — the Stage 1 listener recipe below does the same by reading
 // the resolved path back out of the probe log.
@@ -71,7 +73,7 @@ enum ProbeOutcome {
 }
 
 enum SocketProbe {
-    static let groupIdentifier = "group.md.enesis.wyrd"
+    static let groupIdentifier = AppGroup.identifier
 
     /// The Stage 1 stub name, kept for canned domains only: the
     /// sandboxed extension, running under its real entitlements,
