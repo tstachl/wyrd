@@ -1,9 +1,9 @@
 # Desktop application lifecycle (v0.4)
 
 Status: Normative. Scope: the desktop shell process's window-close and
-quit behavior, what survives them, and how the application reopens on
-each platform. Authority: this contract owns the UI lifecycle; the
-cross-process owner boundary stays with
+quit behavior, what survives them, and how a launch starts a fresh
+process on each platform. Authority: this contract owns the UI
+lifecycle; the cross-process owner boundary stays with
 `docs/contracts/owner-interface.md`, and `docs/design/desktop-shell.md`
 is the design and implementation document subordinate to this contract.
 Where the two disagree, this contract wins.
@@ -13,41 +13,31 @@ This contract supersedes the landed tray decision recorded in
 there is no tray (menu-bar extra) in the v0.4 desktop. Status is
 available through the main window only.
 
-## Window close and application quit are distinct events
+## Closing the last window quits the application
 
-Closing the last window and quitting the application are different
-events with different outcomes. No close path implies a quit, and no
-quit path implies a lock (see "Quit never locks" below).
-
-- **Window close** is a per-window event. What happens next is
-  platform-defined (see "Process state after the last window closes").
-- **Application quit** is process termination: Cmd+Q, a Quit menu
-  action, any code-less exit request, or the last-window close on
-  platforms where close means quit (Linux). Quit always runs the
-  dirty-quit discipline below before the process exits.
-
-## Process state after the last window closes
+Closing the last window is an application quit on macOS and Linux.
+There is no hidden-window state and no running indicator left behind.
+A close request follows the same dirty-quit drain as Cmd+Q or any
+other exit request before the process exits, and quitting never
+implies a lock (see "Quit never locks" below). Window close is not a
+distinct lifecycle event with its own outcome.
 
 | Platform | After the last window closes |
 |---|---|
-| macOS | The process stays alive with the window hidden. The Dock icon and Spotlight re-activation return to the running process (see "Reopening"). |
-| Linux | The process quits: last-window close is quit, and quit runs the drain below, then exits. |
+| macOS | The process quits: the drain runs, then the process exits. |
+| Linux | The process quits: the drain runs, then the process exits. |
 | Windows | Deferred: Windows is out of v0.4 entirely (`docs/architecture.md`, "Fixed scope"). No lifecycle semantics are defined for Windows here. |
 
-## Reopening
+## Launching starts a fresh process
 
-- **macOS:** the Dock icon and a Spotlight launch while the process
-  runs activate the existing process — macOS bundle activation never
-  starts a second process while one runs — and the activation arrives
-  as a reopen event the shell answers by showing the main window. No
-  new single-instance mechanism exists or is required: the reopen
-  handler is the whole mechanism, and the hidden window is always
-  reachable while the process lives.
-- **Linux:** quit-on-close means there is no hidden running process
-  to re-activate; the launcher starts a new process, which re-reads
-  the registry and re-probes each drive's socket. Fresh process,
-  verified state, never assumed continuity.
-- **Windows:** deferred with the platform.
+Every launch — a Dock icon click or Spotlight launch on macOS, a
+launcher start on Linux — starts a fresh process. No launch returns to
+an existing hidden process, and no single-instance mechanism or reopen
+handler is required. The new process re-reads the registry and
+re-probes each drive's socket, showing verified current state without
+assuming continuity from the previous process. Only presentation
+state — the selected drive, open dialogs and form input — is lost,
+and that state is deliberately ephemeral.
 
 ## Effects of clean termination on owners
 

@@ -6,7 +6,7 @@ discipline between them, the Nix GUI-dependency boundary, and the
 staging into implementable pieces. Normative invariants live in the
 contracts linked below — including the desktop lifecycle contract
 (`../contracts/desktop-lifecycle.md`), which owns window close,
-application quit, reopening, and explicit lock. Nothing here authorizes a contract change; the
+application quit, launching, and explicit lock. Nothing here authorizes a contract change; the
 drive-owner interface (`../contracts/owner-interface.md`) wins every
 conflict with this note.
 
@@ -487,10 +487,12 @@ verdict.
 - Menu-bar extra (not shipping in v0.4): a tray presence was staged during development and withdrawn before release by the desktop
   lifecycle decision (`../contracts/desktop-lifecycle.md`), which
   supersedes the landed tray shape. There is no second UI surface:
-  status lives in the main window only, closing the window hides it
-  on macOS (the Dock reopens it) and quits on Linux (the launcher
-  reopens it), and Quit — Cmd+Q or any exit request — drains
-  in-flight work through the graceful-shutdown rule.
+  status lives in the main window only, and closing the window quits
+  on macOS and Linux alike, leaving no running indicator. Quit —
+  Cmd+Q, a close request or any exit request — drains in-flight work
+  through the graceful-shutdown rule. A Dock, Spotlight or launcher
+  start is always a fresh process that re-reads the registry and
+  re-probes each drive's socket.
 - Frontend state is a presentation cache, never a second drive
   model. Transient presentation state is fine and expected: selected
   view, open dialogs, form input, pending-request indicators, last
