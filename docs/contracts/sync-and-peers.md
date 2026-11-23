@@ -554,10 +554,12 @@ replacing the previously accepted observation; a higher sequence is
 eligible for acceptance, subject to all other validation.
 
 Reports are published when the author's eligible head set changes and
-when its relay connection is re-established, coalesced into one report,
-never periodically and never per sync pass. A quiet device emits no
-report to maintain freshness. Reconnect publishes current durable
-state, not a replay of an old serialized report.
+when its relay connection is re-established, coalesced into one report
+and fanned out to all currently admitted members following the existing
+announcement distribution model, never periodically and never per sync
+pass. A quiet device emits no report to maintain freshness. Reconnect
+publishes current durable state, not a replay of an old serialized
+report.
 
 The receiver derives the comparative state against its own verified
 eligible DAG; the peer does not assert it. Let `L` be the local eligible
