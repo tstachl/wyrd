@@ -40,52 +40,52 @@ pass "wrapper and guard exist and are executable"
 # 2. Darwin-only pin: SDK discovery through the system xcrun (never
 # a bare PATH lookup the Nix shadow can hijack), the link-arg that
 # makes the SDK libiconv.tbd win, guarded by the tbd's presence.
-code "$WRAPPER" | grep -Fq '/usr/bin/xcrun' \
+code "$WRAPPER" | grep -F >/dev/null '/usr/bin/xcrun' \
   || die "wrapper: SDK discovery bypasses the /usr/bin xcrun"
-code "$WRAPPER" | grep -Fq 'link-arg=-L' \
+code "$WRAPPER" | grep -F >/dev/null 'link-arg=-L' \
   || die "wrapper: no link-arg SDK /usr/lib pin"
-code "$WRAPPER" | grep -Fq 'libiconv.tbd' \
+code "$WRAPPER" | grep -F >/dev/null 'libiconv.tbd' \
   || die "wrapper: pin is not tied to the SDK libiconv.tbd"
-code "$WRAPPER" | grep -Fq 'SDKROOT="$DISCOVERED_SDK"' \
+code "$WRAPPER" | grep -F >/dev/null 'SDKROOT="$DISCOVERED_SDK"' \
   || die "wrapper: discovered SDK is not exported as SDKROOT"
 pass "wrapper pins the SDK /usr/lib link-arg on Darwin"
 
 # 3. The pin appends to (never replaces) caller RUSTFLAGS, refuses a
 # whitespace-bearing SDK path RUSTFLAGS cannot carry, and gates on
 # Darwin only; elsewhere the build forwards untouched.
-code "$WRAPPER" | grep -Fq 'RUSTFLAGS="${RUSTFLAGS:-}' \
+code "$WRAPPER" | grep -F >/dev/null 'RUSTFLAGS="${RUSTFLAGS:-}' \
   || die "wrapper: RUSTFLAGS is replaced instead of appended"
-code "$WRAPPER" | grep -Fq '[[:space:]]' \
+code "$WRAPPER" | grep -F >/dev/null '[[:space:]]' \
   || die "wrapper: whitespace SDK path is not refused"
-code "$WRAPPER" | grep -Fq 'uname -s' \
+code "$WRAPPER" | grep -F >/dev/null 'uname -s' \
   || die "wrapper: no Darwin gate for the pin"
 pass "wrapper appends RUSTFLAGS, refuses whitespace, gates on Darwin"
 
 # 4. The wrapper builds through the Tauri hook path from the desktop
 # crate (the hook paths assume that CWD) and defaults to the
 # runbook shape `--bundles app`.
-code "$WRAPPER" | grep -Fq 'cargo tauri build' \
+code "$WRAPPER" | grep -F >/dev/null 'cargo tauri build' \
   || die "wrapper: no cargo tauri build invocation"
-code "$WRAPPER" | grep -Fq 'crates/wyrd-desktop' \
+code "$WRAPPER" | grep -F >/dev/null 'crates/wyrd-desktop' \
   || die "wrapper: build does not run from crates/wyrd-desktop"
-code "$WRAPPER" | grep -Fq -- '--bundles app' \
+code "$WRAPPER" | grep -F >/dev/null -- '--bundles app' \
   || die "wrapper: default is not --bundles app"
 pass "wrapper builds through cargo tauri from the desktop crate"
 
 # 5. The wrapper delegates the guard to the check script with a
 # release dir that follows CARGO_TARGET_DIR instead of inlining
 # its own linkage walk.
-code "$WRAPPER" | grep -Fq 'check-no-nix-links.sh' \
+code "$WRAPPER" | grep -F >/dev/null 'check-no-nix-links.sh' \
   || die "wrapper: guard is not delegated to check-no-nix-links.sh"
-code "$WRAPPER" | grep -Fq 'CARGO_TARGET_DIR' \
+code "$WRAPPER" | grep -F >/dev/null 'CARGO_TARGET_DIR' \
   || die "wrapper: release dir does not follow CARGO_TARGET_DIR"
-code "$WRAPPER" | grep -Fq -- '--target=' \
+code "$WRAPPER" | grep -F >/dev/null -- '--target=' \
   || die "wrapper: forwarded --target does not move the release dir"
-code "$WRAPPER" | grep -Fq 'CARGO_BUILD_TARGET' \
+code "$WRAPPER" | grep -F >/dev/null 'CARGO_BUILD_TARGET' \
   || die "wrapper: no CARGO_BUILD_TARGET fallback for the release dir"
-code "$WRAPPER" | grep -Fq -- '--target-dir' \
+code "$WRAPPER" | grep -F >/dev/null -- '--target-dir' \
   || die "wrapper: --target-dir is not refused"
-code "$WRAPPER" | grep -Fq -- '--debug' \
+code "$WRAPPER" | grep -F >/dev/null -- '--debug' \
   || die "wrapper: --debug is not refused"
 pass "wrapper delegates the guard with a relocatable release dir"
 
@@ -95,17 +95,17 @@ pass "wrapper delegates the guard with a relocatable release dir"
 # honors a CARGO_TARGET_DIR relocation plus an explicit release
 # dir, captures each otool run once, and fails closed when it
 # inspects nothing.
-code "$CHECK" | grep -Fq 'Contents/MacOS' \
+code "$CHECK" | grep -F >/dev/null 'Contents/MacOS' \
   || die "check: no bundle MacOS glob"
-code "$CHECK" | grep -Fq 'WyrdFileProvider.appex' \
+code "$CHECK" | grep -F >/dev/null 'WyrdFileProvider.appex' \
   || die "check: appex binary not covered"
-code "$CHECK" | grep -Fq 'CARGO_TARGET_DIR' \
+code "$CHECK" | grep -F >/dev/null 'CARGO_TARGET_DIR' \
   || die "check: no target-dir relocation"
-code "$CHECK" | grep -Fq 'CARGO_BUILD_TARGET' \
+code "$CHECK" | grep -F >/dev/null 'CARGO_BUILD_TARGET' \
   || die "check: no CARGO_BUILD_TARGET fallback"
-code "$CHECK" | grep -Fq "case \"\$LINKED\" in" \
+code "$CHECK" | grep -F >/dev/null "case \"\$LINKED\" in" \
   || die "check: linkage is not classified from a single capture"
-code "$CHECK" | grep -Fq 'inspected nothing' \
+code "$CHECK" | grep -F >/dev/null 'inspected nothing' \
   || die "check: empty inspection is not a failure"
 pass "check resolves binaries, covers the appex, fails closed"
 
@@ -122,7 +122,7 @@ trap 'rm -rf "$TMP"' EXIT
 unset CARGO_TARGET_DIR CARGO_BUILD_TARGET
 sed '/^[[:space:]]*set -- --bundles app$/d' "$WRAPPER" > "$TMP/wrapper-comment-only.sh"
 printf '# the default shape stays --bundles app; see the runbook\n' >> "$TMP/wrapper-comment-only.sh"
-code "$TMP/wrapper-comment-only.sh" | grep -Fq -- '--bundles app' \
+code "$TMP/wrapper-comment-only.sh" | grep -F >/dev/null -- '--bundles app' \
   && die "negative control: comment-only mention satisfied the pin"
 pass "comment-only mentions cannot satisfy pins"
 
@@ -243,9 +243,9 @@ wrap_run() { env CARGO_TARGET_DIR="$TMP/wbase" TOOLCHAIN="$TMP/wtoolchain" SDK="
 # the guarded dir.
 wrap_run --target aarch64-apple-darwin >/dev/null 2>&1 \
   || die "wrapper: --target triple was not followed"
-grep -Fq -- '--target' "$WRAP_CARGO_ARGS" \
+grep -F >/dev/null -- '--target' "$WRAP_CARGO_ARGS" \
   || die "wrapper: --target flag was not forwarded to cargo"
-grep -Fq -- 'aarch64-apple-darwin' "$WRAP_CARGO_ARGS" \
+grep -F >/dev/null -- 'aarch64-apple-darwin' "$WRAP_CARGO_ARGS" \
   || die "wrapper: --target triple was not forwarded to cargo"
 # The stub cargo also captures SDKROOT: the wrapper exports the
 # discovered SDK (here the SDK fixture) into the cargo environment,
@@ -266,15 +266,15 @@ pass "wrapper follows CARGO_BUILD_TARGET to the guarded dir"
 # dir: --debug, --profile, and --target-dir each fail with a reason.
 wrap_run --debug >"$TMP/debug.out" 2>&1 \
   && die "wrapper: --debug passed"
-grep -Fq 'does not track' "$TMP/debug.out" \
+grep -F >/dev/null 'does not track' "$TMP/debug.out" \
   || die "wrapper: --debug refusal names no reason"
 wrap_run --profile testing >"$TMP/profile.out" 2>&1 \
   && die "wrapper: --profile passed"
-grep -Fq 'does not track' "$TMP/profile.out" \
+grep -F >/dev/null 'does not track' "$TMP/profile.out" \
   || die "wrapper: --profile refusal names no reason"
 wrap_run --target-dir "$TMP/elsewhere" >"$TMP/targetdir.out" 2>&1 \
   && die "wrapper: --target-dir passed"
-grep -Fq 'does not track' "$TMP/targetdir.out" \
+grep -F >/dev/null 'does not track' "$TMP/targetdir.out" \
   || die "wrapper: --target-dir refusal names no reason"
 pass "wrapper refuses non-release build shapes"
 # Stale-only triple dir: guarding nothing must fail, never pass.
@@ -285,7 +285,7 @@ pass "wrapper fails closed on an uninspectable triple dir"
 # Dangling --target is refused with a message.
 wrap_run --target >"$TMP/dangling.out" 2>&1 \
   && die "wrapper: dangling --target passed"
-grep -Fq 'without a triple' "$TMP/dangling.out" \
+grep -F >/dev/null 'without a triple' "$TMP/dangling.out" \
   || die "wrapper: dangling --target refusal names no reason"
 pass "wrapper refuses a dangling --target"
 unset OTOOL_STALE_DIR

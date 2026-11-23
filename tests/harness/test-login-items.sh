@@ -24,13 +24,13 @@ UNIT="$ROOT/packaging/linux/systemd/wyrd-desktop.service"
 # whole XML comment block before matching, so the header prose can
 # neither satisfy a pin (a token left only in a comment would still
 # pass) nor trip one (a key name mentioned in prose would still
-# fail) — and match with a here-string (a `code | grep -q` pipeline
-# under pipefail would report 141 once grep exits early and the
-# script grows past the pipe buffer).
+# fail) — and match with a here-string. Do not put a quiet grep
+# (`-q`) in a pipeline: under `pipefail` it can exit before its
+# producer finishes and report 141 even when the match was found.
 PLIST_CODE="$(grep -v '^[[:space:]]*#' "$PLIST" | sed '/^[[:space:]]*<!--/,/-->/d')"
 UNIT_CODE="$(grep -v '^[[:space:]]*#' "$UNIT")"
-match() { grep -F -q -- "$1" <<<"$2"; }
-nomatch() { ! grep -F -q -- "$1" <<<"$2"; }
+match() { grep -F >/dev/null -- "$1" <<<"$2"; }
+nomatch() { ! grep -F >/dev/null -- "$1" <<<"$2"; }
 count_is() { [ "$(grep -F -c -- "$1" <<<"$2")" = "$3" ]; }
 
 # 1. The templates exist where the installer consumes them.
@@ -130,7 +130,7 @@ pass "both templates share the one app identity"
 # names the decided login-item shape and rejects SMAppService plus
 # manager ordering in the same place.
 for marker in 'md.enesis.wyrd.desktop' 'wyrd-desktop.service' 'SMAppService'; do
-  grep -Fq "$marker" "$ROOT/docs/design/desktop-shell.md" \
+  grep -F >/dev/null "$marker" "$ROOT/docs/design/desktop-shell.md" \
     || die "desktop-shell.md: '$marker' not recorded"
 done
 pass "design note records the login-item decision"
@@ -139,13 +139,13 @@ pass "design note records the login-item decision"
 # the macOS packaging README carries install, stop/start, and the
 # per-cause recovery for both platforms.
 for marker in 'md.enesis.wyrd.desktop' 'wyrd-desktop.service' 'launchctl load -w' 'systemctl --user'; do
-  grep -Fq "$marker" "$ROOT/packaging/macos/README.md" \
+  grep -F >/dev/null "$marker" "$ROOT/packaging/macos/README.md" \
     || die "packaging README: '$marker' not recorded"
 done
 pass "packaging README carries install and recovery"
 
 # 10. The suite itself is wired into the native CI shell job.
-grep -Fq 'test-login-items.sh' "$ROOT/.ngit/nix/workflows/default.nix" \
+grep -F >/dev/null 'test-login-items.sh' "$ROOT/.ngit/nix/workflows/default.nix" \
   || die "CI: login-items suite not wired into shell.suites"
 pass "CI wires the login-items suite"
 

@@ -59,11 +59,11 @@ fresh="$ROOT/.supervise-test-fresh"
 touch "$fresh"
 out=$(code=0; run_wrap 1 "$fresh" 30 python3 -c 'import sys; sys.exit(0)' 2>&1) || code=$?
 [ "$code" = "1" ] || die "readiness must not change the mapped exit"
-echo "$out" | grep -q "ready (posture fresh" || die "a fresh sidecar logs ready, got: $out"
+echo "$out" | grep >/dev/null "ready (posture fresh" || die "a fresh sidecar logs ready, got: $out"
 rm -f "$fresh"
 out=$(code=0; run_wrap 1 "$ROOT/no-such-posture" 1 python3 -c 'import time; time.sleep(3)' 2>&1) || code=$?
 [ "$code" = "1" ] || die "a missing sidecar must not change the mapped exit"
-echo "$out" | grep -q "supervising without a readiness line" \
+echo "$out" | grep >/dev/null "supervising without a readiness line" \
     || die "a missing sidecar warns after the bound, got: $out"
 pass "readiness logs without touching the exit contract"
 

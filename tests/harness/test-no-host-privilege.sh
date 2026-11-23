@@ -142,28 +142,28 @@ pass "every helper invocation is quoted"
 [[ "$(grep -h -E "$INVOC_PAT" "${CLOSURE[@]}" | wc -l)" -ge 5 ]] \
   || die "elevation scans are vacuous (no invocations in the closure)"
 printf '%s\n' 'sudo rm -rf / # GUEST_BIN' | grep -w 'sudo' | grep -v "$SUDO_SCAN_V" \
-  | grep -q . || die "sudo scan misses hostile sudo with a capability mention"
+  | grep >/dev/null . || die "sudo scan misses hostile sudo with a capability mention"
 printf '%s\n' '  if [ -x /run/wrappers/bin/sudo ]; then printf x; fi # sudo_bin fallback' \
-  | grep -w 'sudo' | grep -v "$SUDO_SCAN_V" | grep -q . \
+  | grep -w 'sudo' | grep -v "$SUDO_SCAN_V" | grep >/dev/null . \
   && die "sudo scan flags the wrapper resolution"
 printf '%s\n' '  run on_o "sudo mkfs.ext4" # guest payload' \
-  | grep -w 'sudo' | grep -v "$SUDO_SCAN_V" | grep -q . \
+  | grep -w 'sudo' | grep -v "$SUDO_SCAN_V" | grep >/dev/null . \
   && die "sudo scan flags an in-guest payload"
 cap_ok 'timeout 5 "$(e2e_sudo_bin)" -n /bin/true' \
   && die "capability check passes an elevation without a target"
 cap_ok 'timeout 120 "$(entry_sudo_bin)" -n "$GUEST_BIN" exec x' \
   || die "capability check flags a legitimate elevated call"
 printf '%s\n' 'timeout 5 "$(e2e_sudo_bin)" "$GATE_GUEST_BIN" exec tail -n 3' \
-  | grep -E "$INVOC_PAT" | grep -v -F "$NONFLAG_OK" | grep -q . \
+  | grep -E "$INVOC_PAT" | grep -v -F "$NONFLAG_OK" | grep >/dev/null . \
   || die "fail-fast scan misses a payload-masked missing -n"
 printf '%s\n' 'x=$(e2e_sudo_bin)' \
-  | grep -E "$UNQ_PAT" | grep -q . \
+  | grep -E "$UNQ_PAT" | grep >/dev/null . \
   || die "quote scan misses a bare end-of-line assignment"
 printf '%s\n' 'bin="$(e2e_sudo_bin)"' \
-  | grep -E "$UNQ_PAT" | grep -q . \
+  | grep -E "$UNQ_PAT" | grep >/dev/null . \
   || die "quote scan misses a quoted assignment (the \\? regression)"
 printf '%s\n' 'timeout 120 "$(entry_sudo_bin)" -n "$GUEST_BIN" exec x' \
-  | grep -E "$UNQ_PAT" | grep -q . \
+  | grep -E "$UNQ_PAT" | grep >/dev/null . \
   && die "quote scan flags a legitimate quoted call"
 pass "the scans flag hostile shapes and spare legitimate ones"
 
@@ -185,11 +185,11 @@ pass "task closure kills nothing on the host (kill -0 liveness only)"
 # GATE_GUEST_BIN / GATE_PARTITION_BIN, published by the gate entry
 # and consumed through e2e-helpers.bash (on_o/on_n, host_partition,
 # wait_guest_file) and the gate-owned bats helpers the phases load.
-grep -q 'GATE_GUEST_BIN' "$ROOT/tests/harness/e2e-helpers.bash" \
+grep >/dev/null 'GATE_GUEST_BIN' "$ROOT/tests/harness/e2e-helpers.bash" \
   || die "guest transport capability (GATE_GUEST_BIN) missing from the shims"
-grep -q 'GATE_GUEST_BIN' "$ROOT/tests/gate/gate-entry.sh" \
+grep >/dev/null 'GATE_GUEST_BIN' "$ROOT/tests/gate/gate-entry.sh" \
   || die "guest transport capability (GATE_GUEST_BIN) not published by the entry"
-grep -q 'GATE_PARTITION_BIN' "$ROOT/tests/harness/e2e-helpers.bash" \
+grep >/dev/null 'GATE_PARTITION_BIN' "$ROOT/tests/harness/e2e-helpers.bash" \
   || die "partition capability (GATE_PARTITION_BIN) missing from the shims"
 pass "capability surface (guest transport, partition) is defined"
 

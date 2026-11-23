@@ -24,7 +24,7 @@ trap 'rm -rf "$FIXTURE"' EXIT
 
 # The retired qemu backend's declaration must be gone: a
 # [tasks.*.topology] section refuses at parse time on the host.
-grep -qE '^\[tasks\.[^]]*\.topology' "$ROOT/gate.toml" \
+grep -E >/dev/null '^\[tasks\.[^]]*\.topology' "$ROOT/gate.toml" \
   && die "gate.toml still declares a task topology section (refused by the Incus backend)"
 pass "no task topology section in gate.toml"
 
@@ -33,10 +33,10 @@ BUILDS="$(sed -n '/^\[tasks\.wyrd-gate-e2e\.builds\]/,/^\[/p' "$ROOT/gate.toml" 
 [[ "$(printf '%s\n' "$BUILDS" | sort | tr '\n' ' ')" == 'img-peer-n = "images.peer-n" img-peer-o = "images.peer-o" img-relay = "images.relay" ' ]] \
   || die "task builds are not exactly the three images:$BUILDS"
 pass "task builds are exactly the three images"
-grep -q '^relayRole = "relay"$' "$ROOT/gate.toml" \
+grep >/dev/null '^relayRole = "relay"$' "$ROOT/gate.toml" \
   || die "relayRole does not name the relay manifest role"
 pass "relayRole names the relay manifest role"
-grep -q '"jq"' "$ROOT/gate.toml" \
+grep >/dev/null '"jq"' "$ROOT/gate.toml" \
   || die "requires does not include jq (the entry parses manifests with it)"
 pass "jq in task requires"
 
@@ -70,23 +70,23 @@ unset _b NIX ROLE VCPU MEM MAC IP
 pass "every role carries typed gate.box facts"
 # The declared facts are the suite's addressing: peer pair plus relay
 # on the test bridge.
-grep -q 'ip = "10.0.7.11"' "$ROOT/nix/microvm/peer-o.nix" || die "peer-o is not .11"
-grep -q 'ip = "10.0.7.12"' "$ROOT/nix/microvm/peer-n.nix" || die "peer-n is not .12"
-grep -q 'ip = "10.0.7.10"' "$ROOT/nix/microvm/relay.nix" || die "relay is not .10"
+grep >/dev/null 'ip = "10.0.7.11"' "$ROOT/nix/microvm/peer-o.nix" || die "peer-o is not .11"
+grep >/dev/null 'ip = "10.0.7.12"' "$ROOT/nix/microvm/peer-n.nix" || die "peer-n is not .12"
+grep >/dev/null 'ip = "10.0.7.10"' "$ROOT/nix/microvm/relay.nix" || die "relay is not .10"
 pass "declared facts match the test bridge addressing"
 
 # The flake exposes one output per role whose dir holds exactly the
 # manifest and the tarball, and no microvm input remains. (The
 # nix/microvm/ directory path and the empty-src placeholder stay by
 # design; only the flake input and its module wiring go.)
-grep -qE 'microvm\.(url|inputs)|microvm\.nixosModules|microvmGuest' "$ROOT/flake.nix" \
+grep -E >/dev/null 'microvm\.(url|inputs)|microvm\.nixosModules|microvmGuest' "$ROOT/flake.nix" \
   && die "flake.nix still references the retired microvm input"
 pass "no microvm input in flake.nix"
-grep -q "config\.system\.build\.gateImage" "$ROOT/flake.nix" \
+grep >/dev/null "config\.system\.build\.gateImage" "$ROOT/flake.nix" \
   || die "flake.nix exposes no gateImage outputs"
-grep -q 'incus-virtual-machine.nix' "$ROOT/flake.nix" \
+grep >/dev/null 'incus-virtual-machine.nix' "$ROOT/flake.nix" \
   || die "guests are not built on the incus virtual-machine module"
-grep -q 'gate\.nixosModules\.guest' "$ROOT/flake.nix" \
+grep >/dev/null 'gate\.nixosModules\.guest' "$ROOT/flake.nix" \
   || die "guests are not built on the gate-owned guest module"
 pass "flake exposes gateImage outputs on the incus and gate modules"
 
@@ -132,7 +132,7 @@ if command -v nix >/dev/null 2>&1; then
       die "gate.box for $_b does not evaluate"
     fi
     [[ -n "$role_json" ]] || die "gate.box for $_b evaluated empty"
-    echo "$role_json" | grep -q "\"role\":\"$_b\"" || die "evaluated role for $_b mismatches"
+    echo "$role_json" | grep >/dev/null "\"role\":\"$_b\"" || die "evaluated role for $_b mismatches"
   done
   unset _b role_json
   pass "evaluated gate.box matches the declared roles"

@@ -60,8 +60,8 @@ pass "no init/vault/policy through with_creds/guest_wyrd/WYRD_BIN"
 # 3. The Nix drive module maps the vault mode to the owner argv:
 # parent flags precede `start`; nothing emits the removed subcommand.
 for nix in "$ROOT/nix/drive/nixos.nix" "$ROOT/nix/drive/darwin.nix"; do
-  grep -q '"owner"' "$nix" || die "$nix: no owner argv"
-  grep -q '"start"' "$nix" || die "$nix: no start action"
+  grep >/dev/null '"owner"' "$nix" || die "$nix: no owner argv"
+  grep >/dev/null '"start"' "$nix" || die "$nix: no start action"
   rest=$(tail -n +"$(grep -n '"owner"' "$nix" | head -1 | cut -d: -f1)" "$nix")
   i=$(printf '%s\n' "$rest" | grep -n '"--identity-file"' | head -1 | cut -d: -f1)
   st=$(printf '%s\n' "$rest" | grep -n '"start"' | head -1 | cut -d: -f1)
@@ -72,7 +72,7 @@ pass "nix drive modules emit owner … start in order"
 
 # 4. The shared lima helper nests drive/owner actions under parent
 # credentials (`wyrd drive <dir> --identity-file … init`).
-grep -q 'drive|owner)' "$ROOT/tests/lima/alpha-common.sh" \
+grep >/dev/null 'drive|owner)' "$ROOT/tests/lima/alpha-common.sh" \
   || die "alpha-common.sh: with_creds has no drive/owner branch"
 pass "with_creds nests drive/owner actions"
 

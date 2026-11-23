@@ -47,9 +47,9 @@ holder=$!
 sleep 1
 code=0; out=$(python3 "$PROBE" "$D/drive" 0 2>&1) || code=$?
 [ "$code" = "1" ] || die "a foreign holder refuses, got $code: $out"
-echo "$out" | grep -q "refusing switch" || die "the refusal says so: $out"
-echo "$out" | grep -q "$D/drive" || die "the refusal names the drive: $out"
-echo "$out" | grep -q "never published" || die "an unpublished holder says so: $out"
+echo "$out" | grep >/dev/null "refusing switch" || die "the refusal says so: $out"
+echo "$out" | grep >/dev/null "$D/drive" || die "the refusal names the drive: $out"
+echo "$out" | grep >/dev/null "never published" || die "an unpublished holder says so: $out"
 pass "a foreign holder refuses with the drive path"
 kill "$holder" 2>/dev/null || true
 wait 2>/dev/null || true
@@ -81,7 +81,7 @@ open(sys.argv[1] + "/vault.posture", "w").write(json.dumps(file))
 EOF
 code=0; out=$(python3 "$PROBE" "$D/drive" 0 2>&1) || code=$?
 [ "$code" = "1" ] || die "a publishing holder still refuses, got $code"
-echo "$out" | grep -q "0123456789abcdef0123456789abcdef" \
+echo "$out" | grep >/dev/null "0123456789abcdef0123456789abcdef" \
     || die "the refusal names the holder instance: $out"
 pass "a publishing holder is named by instance"
 kill "$holder" 2>/dev/null || true
@@ -93,7 +93,7 @@ holder=$!
 sleep 1
 code=0; out=$(python3 "$PROBE" "$D/drive" "$holder" 2>&1) || code=$?
 [ "$code" = "0" ] || die "its own previous generation rolls, got $code: $out"
-echo "$out" | grep -q "previous generation" || die "the roll says so: $out"
+echo "$out" | grep >/dev/null "previous generation" || die "the roll says so: $out"
 pass "its own previous generation rolls the switch"
 kill "$holder" 2>/dev/null || true
 wait 2>/dev/null || true

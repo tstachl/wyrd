@@ -56,11 +56,11 @@ echo "  PASS: broken file rejected after clean ones"
 # Without this pin, the fixed regression could silently return via
 # a one-line hook edit.
 HOOK_BLOCK="$(sed -n '/bash-syntax = {/,/};/p' "$SCRIPT_DIR/../../devenv.nix")"
-printf '%s\n' "$HOOK_BLOCK" | grep -q 'entry = "bash tests/harness/check-bash-syntax.sh"' \
+printf '%s\n' "$HOOK_BLOCK" | grep >/dev/null 'entry = "bash tests/harness/check-bash-syntax.sh"' \
   || { echo "FAIL: bash-syntax hook entry does not point at the sweep wrapper" >&2; exit 1; }
 PASS=$((PASS + 1))
 echo "  PASS: hook entry points at the sweep wrapper"
-printf '%s\n' "$HOOK_BLOCK" | grep -q 'pass_filenames = true' \
+printf '%s\n' "$HOOK_BLOCK" | grep >/dev/null 'pass_filenames = true' \
   || { echo "FAIL: bash-syntax hook does not pass filenames" >&2; exit 1; }
 PASS=$((PASS + 1))
 echo "  PASS: hook passes filenames"
