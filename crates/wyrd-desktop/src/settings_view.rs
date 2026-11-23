@@ -78,7 +78,7 @@ pub enum DriveSettings {
 /// as the daemon. Fails loudly when no per-user directory resolves
 /// — a cwd-relative guess could place settings inside a drive
 /// directory, which the upgrade contract forbids.
-fn default_settings_path() -> Result<PathBuf, String> {
+pub(crate) fn default_settings_path() -> Result<PathBuf, String> {
     resolve_settings_path(
         std::env::var_os("HOME")
             .map(|home| home.to_string_lossy().into_owned())

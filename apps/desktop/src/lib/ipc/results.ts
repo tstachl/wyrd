@@ -496,3 +496,28 @@ export interface SparseUpdateArgs {
   set: Record<string, number>;
   clear: string[];
 }
+
+// App-wide diagnostics mirrors (T20).
+//
+// Source of truth: `WireDiagnosticLevel` in
+// `crates/wyrd-owner-client/src/wire.rs` and `Diagnostics` in
+// `crates/wyrd-desktop/src/diagnostics_view.rs`. The level is a
+// closed pair of bare lowercase strings; the persisted view is
+// internally tagged like the other local-query shapes. The shell
+// shows the persisted level from `settings.json`, never an owner's
+// in-memory override. Fixtures live in `results.test.ts`.
+
+/** The closed application-wide diagnostics level. */
+export type WireDiagnosticLevel = "default" | "detailed";
+
+/** The level persisted in `settings.json`, as the shell can observe it. */
+export type Diagnostics =
+  | {
+      state: "configured";
+      level: WireDiagnosticLevel;
+      /** False when the file carries no level — the genuine default state. */
+      explicit: boolean;
+      path: string;
+    }
+  | { state: "nofile"; path: string }
+  | { state: "unreadable"; reason: string };

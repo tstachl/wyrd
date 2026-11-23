@@ -21,6 +21,7 @@
 use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use wyrd_core::live::{LiveConfig, LiveParts};
@@ -101,9 +102,27 @@ struct RunningOwner {
         std::thread::JoinHandle<Result<wyrd_core::live::LiveSummary, wyrd_core::live::LiveError>>,
     >,
     serve_thread: Option<std::thread::JoinHandle<()>>,
+    /// The diagnostics controller carried by every server instance,
+    /// so a diagnostics proof can persist and read back a level.
+    diagnostics: Option<Arc<wyrd_daemon::DiagnosticsController>>,
 }
 
 fn running_owner() -> RunningOwner {
+    running_owner_inner(None)
+}
+
+/// The same owner with a real diagnostics controller, so the
+/// `diagnostics-set` command can be proven against a live server
+/// that persists the setting and publishes the mirror.
+fn running_owner_with_diagnostics(
+    controller: Arc<wyrd_daemon::DiagnosticsController>,
+) -> RunningOwner {
+    running_owner_inner(Some(controller))
+}
+
+fn running_owner_inner(
+    diagnostics: Option<Arc<wyrd_daemon::DiagnosticsController>>,
+) -> RunningOwner {
     let (engine, dir) = scratch_drive();
     let store = wyrd_format::FsObjectStore::open(dir.clone()).unwrap();
     let mut daemon = wyrd_core::node::WyrdNode::new(engine, store).unwrap();
@@ -141,7 +160,11 @@ fn running_owner() -> RunningOwner {
         );
         std::thread::sleep(Duration::from_millis(10));
     }
-    let server = OwnerServer::new(OwnerHandles::from_parts(&parts));
+    let mut handles = OwnerHandles::from_parts(&parts);
+    if let Some(controller) = diagnostics.clone() {
+        handles = handles.with_diagnostics(controller);
+    }
+    let server = OwnerServer::new(handles);
     let socket_path = socket_path_for(&dir);
     let _ = std::fs::remove_file(&socket_path);
     let listener = UnixListener::bind(&socket_path).unwrap();
@@ -155,6 +178,7 @@ fn running_owner() -> RunningOwner {
         serve_stop,
         loop_thread: Some(loop_thread),
         serve_thread: Some(serve_thread),
+        diagnostics,
     }
 }
 
@@ -173,7 +197,11 @@ impl RunningOwner {
     /// server instance, as after a restart: parent tokens from the
     /// previous instance refuse stale).
     fn serve_again(&mut self) {
-        let server = OwnerServer::new(OwnerHandles::from_parts(&self.parts));
+        let mut handles = OwnerHandles::from_parts(&self.parts);
+        if let Some(controller) = self.diagnostics.clone() {
+            handles = handles.with_diagnostics(controller);
+        }
+        let server = OwnerServer::new(handles);
         let socket_path = socket_path_for(&self.dir);
         let _ = std::fs::remove_file(&socket_path);
         let listener = UnixListener::bind(&socket_path).unwrap();
@@ -530,6 +558,65 @@ fn commands_preserve_refusal_codes() {
     }
 
     std::fs::remove_dir_all(&data_dir).expect("the webview data dir cleans up");
+    owner.shutdown();
+}
+
+/// The app-wide diagnostics command forwards to a live owner,
+/// persists through the restricted writer, publishes the File
+/// Provider mirror, and reads the applied level back over the same
+/// exchange. The shell re-reads the persisted file to decide what
+/// it shows; this answer only confirms delivery.
+#[test]
+fn diagnostics_set_command_persists_and_reads_back() {
+    let dir = std::env::temp_dir().join(format!(
+        "wyrd-desktop-diagnostics-ipc-{}",
+        std::process::id()
+    ));
+    let container = dir.join("container");
+    std::fs::create_dir_all(&container).unwrap();
+    let settings_path = dir.join("settings.json");
+    std::fs::write(&settings_path, r#"{"version":2,"drives":{}}"#).unwrap();
+    let controller =
+        wyrd_daemon::DiagnosticsController::for_paths(settings_path.clone(), container.clone())
+            .expect("the controller starts at the persisted default");
+
+    let owner = running_owner_with_diagnostics(Arc::new(controller));
+    let backend = backend_for(&owner);
+    let (_app, webview, data_dir) = mock_app_with(backend, "diagnostics");
+    let drive = owner.dir.to_string_lossy().into_owned();
+
+    let answer = invoke(
+        &webview,
+        "diagnostics_set",
+        serde_json::json!({"driveDir": drive, "level": "detailed"}),
+    )
+    .expect("the owner applies and reads back the level");
+    assert_eq!(answer, serde_json::json!("detailed"));
+
+    // Both surfaces carry what the command reported: the persisted
+    // file the shell displays, and the mirror the extension reads.
+    let file = wyrd_settings::parse_settings(&std::fs::read(&settings_path).unwrap()).unwrap();
+    assert_eq!(
+        file.diagnostics_level(),
+        wyrd_settings::DiagnosticLevel::Detailed
+    );
+    let mirror = std::fs::read_to_string(wyrd_daemon::settings::diagnostics_mirror_path_in(
+        &container,
+    ))
+    .unwrap();
+    assert!(mirror.contains("detailed"), "mirror: {mirror}");
+
+    // Switching back is the same forward-and-confirm path.
+    let answer = invoke(
+        &webview,
+        "diagnostics_set",
+        serde_json::json!({"driveDir": drive, "level": "default"}),
+    )
+    .expect("the owner applies default");
+    assert_eq!(answer, serde_json::json!("default"));
+
+    std::fs::remove_dir_all(&data_dir).expect("webview data dir cleans up");
+    std::fs::remove_dir_all(&dir).expect("diagnostics scratch dir cleans up");
     owner.shutdown();
 }
 

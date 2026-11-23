@@ -12,6 +12,8 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import {
   applySettings,
   captureParent,
+  diagnosticsLevel,
+  diagnosticsSet,
   provisionDelete,
   driveCredentialReference,
   driveLock,
@@ -484,6 +486,48 @@ test("applySettings sends one drive plus one sparse update", async () => {
         driveDir: "/drives/alpha",
         update: { set: { max_admit_per_pass: 64 }, clear: ["open_timeout_secs"] },
       },
+    },
+  ]);
+});
+
+test("diagnosticsLevel reads the persisted level with no drive identity", async () => {
+  const seen: Array<{ cmd: string; args: unknown }> = [];
+  const persisted = {
+    state: "configured",
+    level: "detailed",
+    explicit: true,
+    path: "/x/settings.json",
+  } as const;
+  mockIPC((cmd, args) => {
+    seen.push({ cmd, args });
+    return persisted;
+  });
+  expect(await diagnosticsLevel()).toEqual(persisted);
+  expect(seen).toEqual([{ cmd: "diagnostics_level", args: {} }]);
+});
+
+test("diagnosticsSet forwards the level and drive, keeping refusals typed", async () => {
+  const seen: Array<{ cmd: string; args: unknown }> = [];
+  mockIPC((cmd, args) => {
+    seen.push({ cmd, args });
+    if (cmd === "diagnostics_set") {
+      throw { kind: "refused", code: "DiagnosticsMirror", message: "no app-group container" };
+    }
+    return "detailed";
+  });
+  const result = await diagnosticsSet("/drives/alpha", "detailed");
+  expect(result).toEqual({
+    ok: false,
+    error: {
+      kind: "refused",
+      code: "DiagnosticsMirror",
+      message: "no app-group container",
+    },
+  });
+  expect(seen).toEqual([
+    {
+      cmd: "diagnostics_set",
+      args: { driveDir: "/drives/alpha", level: "detailed" },
     },
   ]);
 });

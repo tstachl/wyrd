@@ -29,8 +29,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use wyrd_owner_client::{
-    ClientError, OwnerClient, WireAttr, WireDirEntry, WireError, WireFreshness, WireLiveness,
-    WireMutationKind, WireMutationOutcome, WireNode, WireParentToken, WireSyncStatus,
+    ClientError, OwnerClient, WireAttr, WireDiagnosticLevel, WireDirEntry, WireError,
+    WireFreshness, WireLiveness, WireMutationKind, WireMutationOutcome, WireNode, WireParentToken,
+    WireSyncStatus,
 };
 
 /// The backend-side answer to one IPC request. The client's four-way
@@ -236,6 +237,23 @@ impl DesktopBackend {
     /// committed write — only the terminal answer says what happened.
     pub fn submit(&self, kind: WireMutationKind) -> Result<WireMutationOutcome, BackendError> {
         self.with_client(|client| client.submit(kind))
+    }
+
+    /// Set the application-wide diagnostics level on this owner and
+    /// read it back over the same connection. The owner persists the
+    /// setting, publishes the File Provider mirror, and applies the
+    /// level to subsequent operations; the read-back confirms the
+    /// value the owner actually applied before the shell reports
+    /// success. This is configuration, not a mutation — it enters
+    /// neither the mutation queue nor the policy executor.
+    pub fn diagnostics_set(
+        &self,
+        level: WireDiagnosticLevel,
+    ) -> Result<WireDiagnosticLevel, BackendError> {
+        self.with_client(|client| {
+            client.diagnostics_set(level)?;
+            client.diagnostics_status()
+        })
     }
 
     /// Backend-owned recovery, not an ordinary frontend command: the

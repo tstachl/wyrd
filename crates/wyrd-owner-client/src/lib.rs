@@ -32,8 +32,8 @@ pub use client::{
 pub use transport::{socket_path_for, MAX_FRAME_BYTES, OWNER_SOCKET_NAME};
 pub use wire::{
     PathParams, RawRequest, SubmitParams, WireAttr, WireConflictVersion, WireConvergenceState,
-    WireDirEntry, WireDrainReport, WireDurabilityLevel, WireError, WireErrorCode,
-    WireExecuteReport, WireFileIdentity, WireFoldDisposition, WireFoldForcerOutcome,
+    WireDiagnosticLevel, WireDirEntry, WireDrainReport, WireDurabilityLevel, WireError,
+    WireErrorCode, WireExecuteReport, WireFileIdentity, WireFoldDisposition, WireFoldForcerOutcome,
     WireFoldMember, WireFreshness, WireFreshnessState, WireHeadClasses, WireHeadSummary, WireKind,
     WireLiveness, WireMailboxHealth, WireMailboxView, WireMaterializationSummary,
     WireMutationError, WireMutationKind, WireMutationOutcome, WireNode, WireObservation, WireOk,

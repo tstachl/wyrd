@@ -19,6 +19,7 @@ import { invokeCommand, invokeValue } from "./client.js";
 import type { IpcResult } from "./types.js";
 import type {
   CredentialReference,
+  Diagnostics,
   DriveSettingsState,
   KeyDefaults,
   OnboardingReport,
@@ -28,6 +29,7 @@ import type {
   SettingsWriteReport,
   SparseUpdateArgs,
   WireAttr,
+  WireDiagnosticLevel,
   WireDirEntry,
   WireFreshness,
   WireLiveness,
@@ -141,6 +143,30 @@ export function applySettings(
   update: SparseUpdateArgs,
 ): Promise<SettingsWriteReport> {
   return invokeValue<SettingsWriteReport>("drive_settings_write", { driveDir, update });
+}
+
+/**
+ * The persisted application-wide diagnostics level. A local query:
+ * no owner connection, no drive identity — the level is read from
+ * `settings.json`, so it is visible even while every drive is
+ * locked. Infallible: unreadable states ride inside the payload.
+ */
+export function diagnosticsLevel(): Promise<Diagnostics> {
+  return invokeValue<Diagnostics>("diagnostics_level");
+}
+
+/**
+ * Set the application-wide diagnostics level on one drive's running
+ * owner and read it back over the same exchange. The owner persists
+ * the setting and publishes the File Provider mirror; this answer
+ * only confirms delivery. The shell re-reads `diagnosticsLevel` to
+ * decide what the UI shows — never this optimistic answer.
+ */
+export function diagnosticsSet(
+  driveDir: string,
+  level: WireDiagnosticLevel,
+): Promise<IpcResult<WireDiagnosticLevel>> {
+  return invokeCommand<WireDiagnosticLevel>("diagnostics_set", { driveDir, level });
 }
 
 // Provisioning operations (constrained CLI adapter surface). One

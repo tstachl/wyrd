@@ -32,12 +32,13 @@
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager, Runtime};
 use wyrd_owner_client::{
-    WireAttr, WireDirEntry, WireFreshness, WireLiveness, WireMutationKind, WireMutationOutcome,
-    WireNode, WireParentToken, WireSyncStatus,
+    WireAttr, WireDiagnosticLevel, WireDirEntry, WireFreshness, WireLiveness, WireMutationKind,
+    WireMutationOutcome, WireNode, WireParentToken, WireSyncStatus,
 };
 use wyrd_settings::SparseUpdate;
 
 use crate::credential_ref::CredentialReference;
+use crate::diagnostics_view::{self, Diagnostics};
 use crate::registry::{self, RegistryState, RegistryStatus};
 use crate::settings_apply::{
     self, SettingsApplyRequest, SettingsApplyResult, SETTINGS_APPLY_TIMEOUT,
@@ -281,6 +282,43 @@ pub async fn reconnect<R: Runtime>(
     })
     .await
     .unwrap_or_else(|join| Err(worker_failed("reconnect", join)))
+}
+
+/// The persisted application-wide diagnostics level. A local query
+/// like [`drive_settings`]: it reads `settings.json` through the
+/// shared parser and never opens an owner connection, so the shell
+/// shows the saved state even while every drive is locked. Absence
+/// reads as `default` but stays distinguishable from an explicit
+/// choice; malformed files are an explicit unreadable state.
+#[tauri::command]
+pub async fn diagnostics_level<R: Runtime>(app: AppHandle<R>) -> Diagnostics {
+    query(
+        app,
+        "diagnostics_level",
+        |reason| Diagnostics::Unreadable { reason },
+        diagnostics_view::diagnostics,
+    )
+    .await
+}
+
+/// Set the application-wide diagnostics level on one drive's running
+/// owner and read it back over the same connection. `drive_dir` is
+/// explicit — the setting is app-wide, but delivery is an owner
+/// exchange and the shell keeps no implicit active drive. A dead
+/// worker is unconfirmed by definition; a refusal keeps its code.
+/// The level is configuration only: no queue, no policy, no store
+/// state. The shell re-reads the persisted level to decide what the
+/// UI shows, never this answer.
+#[tauri::command]
+pub async fn diagnostics_set<R: Runtime>(
+    app: AppHandle<R>,
+    drive_dir: String,
+    level: WireDiagnosticLevel,
+) -> Result<WireDiagnosticLevel, BackendError> {
+    exchange(app, "diagnostics_set", drive_dir, move |backend| {
+        backend.diagnostics_set(level)
+    })
+    .await
 }
 
 /// Every registered drive plus per-drive reachability, verified
@@ -538,6 +576,8 @@ pub fn handler<R: Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool {
         submit,
         reconcile_lookup,
         reconnect,
+        diagnostics_level,
+        diagnostics_set,
         list_drives,
         drive_settings,
         drive_credential_reference,
@@ -688,6 +728,58 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&refusal).unwrap(),
             serde_json::json!({"code": "NotFound", "message": "no such path"})
+        );
+    }
+
+    /// The diagnostics shapes serialize verbatim for the shell. The
+    /// level uses the same closed lowercase spelling on both sides
+    /// of the interface; the persisted view is internally tagged,
+    /// and absence is reported as `explicit: false` rather than a
+    /// guessed value. The JSON below is copied into `results.test.ts`.
+    #[test]
+    fn diagnostics_shapes_serialize_verbatim() {
+        use wyrd_settings::DiagnosticLevel;
+
+        assert_eq!(
+            serde_json::to_value(WireDiagnosticLevel::Default).unwrap(),
+            serde_json::json!("default")
+        );
+        assert_eq!(
+            serde_json::to_value(WireDiagnosticLevel::Detailed).unwrap(),
+            serde_json::json!("detailed")
+        );
+        assert_eq!(
+            serde_json::to_value(Diagnostics::Configured {
+                level: DiagnosticLevel::Detailed,
+                explicit: true,
+                path: "/x/settings.json".to_string(),
+            })
+            .unwrap(),
+            serde_json::json!({"state": "configured", "level": "detailed", "explicit": true, "path": "/x/settings.json"})
+        );
+        assert_eq!(
+            serde_json::to_value(Diagnostics::Nofile {
+                path: "/x/settings.json".to_string(),
+            })
+            .unwrap(),
+            serde_json::json!({"state": "nofile", "path": "/x/settings.json"})
+        );
+        assert_eq!(
+            serde_json::to_value(Diagnostics::Unreadable {
+                reason: "parse settings.json".to_string(),
+            })
+            .unwrap(),
+            serde_json::json!({"state": "unreadable", "reason": "parse settings.json"})
+        );
+        // The `level` argument arrives as the closed spelling; a
+        // value outside the pair is a parse error at the command
+        // boundary, which the typed error surface reports.
+        assert_eq!(
+            serde_json::from_value::<WireDiagnosticLevel>(serde_json::json!("detailed")).unwrap(),
+            WireDiagnosticLevel::Detailed
+        );
+        assert!(
+            serde_json::from_value::<WireDiagnosticLevel>(serde_json::json!("verbose")).is_err()
         );
     }
 
