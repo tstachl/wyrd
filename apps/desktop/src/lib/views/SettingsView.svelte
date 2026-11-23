@@ -133,8 +133,8 @@ after the choice and resumes it on a refusal. -->
     onRefreshDrives: () => void;
     /** The persisted app-wide diagnostics level, stamped at the last read. */
     diagnosticsSnapshot: Stamped<Diagnostics> | null;
-    /** Re-read the persisted diagnostics level after a committed change. */
-    onRefreshDiagnostics: () => void | Promise<void>;
+    /** Re-read the persisted level; null when the read failed. */
+    onRefreshDiagnostics: () => Promise<Diagnostics | null>;
     /** Set the app-wide level on this drive's owner and read it back. */
     onDiagnosticsSet: (level: WireDiagnosticLevel) => Promise<IpcResult<WireDiagnosticLevel>>;
   }

@@ -29,8 +29,10 @@ test("the card states subsequent-operations scope and keeps default errors", () 
 
 test("the card never claims an optimistic applied state", () => {
   expect(card).toContain("if (!result.ok) {");
-  expect(card).toContain("await onRefresh();");
-  expect(card).not.toContain("result.value");
+  expect(card).toContain("if (result.value !== next) {");
+  expect(card).toContain("if (savedLevel(observed) !== next) {");
+  expect(card).toContain("const observed = await onRefresh();");
+  expect(card).not.toContain('controlChecked = next === "detailed"');
 });
 
 test("the level comes from the persisted observation, not a live answer", () => {

@@ -107,9 +107,13 @@ mod tests {
     /// The observed (level, explicit) pair from a file body, or the
     /// state itself when the file is missing or unreadable. The path
     /// is asserted separately so the fixtures stay readable.
-    fn at(body: &str) -> (DiagnosticLevel, bool, String) {
-        let dir =
-            std::env::temp_dir().join(format!("wyrd-desktop-diagnostics-{}", std::process::id()));
+    fn at(tag: &str, body: &str) -> (DiagnosticLevel, bool, String) {
+        // Per-test tag: nextest isolates processes, but threaded
+        // `cargo test` runs these cases in one process.
+        let dir = std::env::temp_dir().join(format!(
+            "wyrd-desktop-diagnostics-{}-{tag}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("settings.json");
         std::fs::write(&path, body).unwrap();
@@ -135,7 +139,7 @@ mod tests {
             r#"{"version":2,"drives":{},"diagnostics":{}}"#,
             r#"{"version":1,"drives":{}}"#,
         ] {
-            let (level, explicit, _) = at(body);
+            let (level, explicit, _) = at("absence", body);
             assert_eq!(level, DiagnosticLevel::Default, "{body}");
             assert!(!explicit, "absence is not a choice: {body}");
         }
@@ -145,8 +149,10 @@ mod tests {
     /// path carried in the answer names the file that was read.
     #[test]
     fn explicit_detailed_is_reported_as_chosen() {
-        let (level, explicit, path) =
-            at(r#"{"version":2,"drives":{},"diagnostics":{"level":"detailed"}}"#);
+        let (level, explicit, path) = at(
+            "detailed",
+            r#"{"version":2,"drives":{},"diagnostics":{"level":"detailed"}}"#,
+        );
         assert_eq!(level, DiagnosticLevel::Detailed);
         assert!(explicit);
         assert!(path.ends_with("settings.json"), "path: {path}");

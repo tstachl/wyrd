@@ -52,6 +52,7 @@
   } from "$lib/ipc/operations.js";
   import type { IpcResult } from "$lib/ipc/types.js";
   import type {
+    Diagnostics,
     DriveView,
     KeyDefaults,
     OnboardingReport,
@@ -305,12 +306,22 @@
     );
   }
 
-  /** The persisted app-wide diagnostics level, read locally without an owner. */
-  async function refreshDiagnostics(): Promise<void> {
+  /**
+   * The persisted app-wide diagnostics level, read locally without an
+   * owner. Returns the fresh observation, or null when the read failed:
+   * the card must not report an applied level from the write answer
+   * when the persisted file did not confirm it.
+   */
+  async function refreshDiagnostics(): Promise<Diagnostics | null> {
+    let observed: Diagnostics | null = null;
     await readLocal(
       () => diagnosticsLevel(),
-      (value) => presentation.storeDiagnostics(value),
+      (value) => {
+        observed = value;
+        presentation.storeDiagnostics(value);
+      },
     );
+    return observed;
   }
 
   /**

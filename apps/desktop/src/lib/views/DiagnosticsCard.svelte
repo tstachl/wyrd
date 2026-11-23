@@ -24,8 +24,8 @@ them never suppresses a default-visible error. -->
     /** The drive whose owner receives the live update. Null until one is selected. */
     driveDir: string | null;
     pending: boolean;
-    /** Re-read the persisted level after a committed change. */
-    onRefresh: () => void | Promise<void>;
+    /** Re-read the persisted level; null when the read failed. */
+    onRefresh: () => Promise<Diagnostics | null>;
     /** Set the level on this drive's owner and read it back. */
     onSet: (level: WireDiagnosticLevel) => Promise<IpcResult<WireDiagnosticLevel>>;
   }
@@ -58,6 +58,12 @@ them never suppresses a default-visible error. -->
   // drive is selected to carry the live owner update.
   const canToggle = $derived(readable && driveDir !== null && !pending && !working);
 
+  /** The level saved in settings.json, or null when it was unreadable. */
+  function savedLevel(observed: Diagnostics | null): WireDiagnosticLevel | null {
+    if (observed === null || observed.state === "unreadable") return null;
+    return observed.state === "configured" ? observed.level : "default";
+  }
+
   async function changeLevel(next: WireDiagnosticLevel): Promise<void> {
     if (!canToggle) return;
     working = true;
@@ -71,8 +77,27 @@ them never suppresses a default-visible error. -->
         outcome = { ok: false, detail: describe(result.error) };
         return;
       }
-      await onRefresh();
-      controlChecked = next === "detailed";
+      // The owner's read-back confirms delivery; the persisted
+      // re-read is the only authority for what this view shows.
+      if (result.value !== next) {
+        controlChecked = level === "detailed";
+        outcome = {
+          ok: false,
+          detail: `The owner read back "${result.value}" after being asked for "${next}" — the level was not applied as requested.`,
+        };
+        return;
+      }
+      const observed = await onRefresh();
+      if (savedLevel(observed) !== next) {
+        controlChecked = level === "detailed";
+        outcome = {
+          ok: false,
+          detail: "The owner accepted the change, but the saved level does not show it — refresh to re-check.",
+        };
+        return;
+      }
+      // No optimistic assignment here: the bound control and the
+      // snapshot now agree on the level the file actually holds.
       outcome = {
         ok: true,
         detail:
