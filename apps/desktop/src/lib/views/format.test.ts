@@ -18,6 +18,7 @@ import {
   folderNameFromPath,
   formatBoundValue,
   formatObservedAge,
+  formatPublicationAge,
   freshnessLabel,
   isFirstRun,
   membershipSummary,
@@ -76,6 +77,22 @@ test("observation ages are relative, local and never a sync time", () => {
   expect(formatObservedAge(now - 26 * 3_600_000, now)).toBe("Checked 1 day ago");
   // A future stamp is clamped, never rendered as a negative age.
   expect(formatObservedAge(now + 5_000, now)).toBe("Checked just now");
+});
+
+test("publication ages are relative, local and unknown at zero", () => {
+  const now = Date.UTC(2026, 4, 1, 7, 8, 9);
+  const at = now / 1000;
+  expect(formatPublicationAge(undefined, now)).toBe("not yet updated on this device");
+  expect(formatPublicationAge(0, now)).toBe("not yet updated on this device");
+  expect(formatPublicationAge(Number.NaN, now)).toBe("not yet updated on this device");
+  expect(formatPublicationAge(at, now)).toBe("Updated just now");
+  expect(formatPublicationAge(at - 12, now)).toBe("Updated 12 seconds ago");
+  expect(formatPublicationAge(at - 90, now)).toBe("Updated 1 minute ago");
+  expect(formatPublicationAge(at - 3 * 60, now)).toBe("Updated 3 minutes ago");
+  expect(formatPublicationAge(at - 2 * 3_600, now)).toBe("Updated 2 hours ago");
+  expect(formatPublicationAge(at - 26 * 3_600, now)).toBe("Updated 1 day ago");
+  // A future publication is clamped, never a negative age.
+  expect(formatPublicationAge(at + 5, now)).toBe("Updated just now");
 });
 
 const overviewFacts: OverviewDriveFacts = {

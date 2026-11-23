@@ -2,7 +2,8 @@
 // (`SettingsView.svelte`). The strong consequence copy stays verbatim;
 // it is reorganised into two alternatives with three short lines each,
 // and the destructive alternative adds type-the-name confirmation.
-// No sole-owner claim is shown as a warning: that fact is not observed.
+// The owner warning follows the observed fact: only `Sole` warns,
+// `NotSole` gets a short report, and unknown keeps the conditional.
 //
 // Run: `bun run test` from `apps/desktop/`.
 
@@ -49,13 +50,16 @@ test("internal store wording is gone from the removal card", () => {
   expect(view).not.toContain("Operator deployments only: reads the verified identity pair below.");
 });
 
-test("the sole-owner consequence stays conditional, not a warning claim", () => {
+test("the owner warning follows the observed fact, never the member count", () => {
+  // Unknown keeps the conditional explanation.
   expect(view).toContain("If this device is the drive's only owner, the owner set becomes empty");
-  const titles =
-    view.match(/<(?:Alert|AlertDialog)\.Title>[\s\S]*?<\/(?:Alert|AlertDialog)\.Title>/g) ?? [];
-  for (const title of titles) {
-    expect(title).not.toContain("only owner");
-  }
+  // Sole is the only branch that warns, and it is labelled as a report.
+  expect(view).toContain('{#if soleOwner === "Sole"}');
+  expect(view).toContain("As last reported, this device is the drive's only owner");
+  expect(view).toContain('{:else if soleOwner === "NotSole"}');
+  // NotSole stays short and never claims a green verdict.
+  expect(view).toContain("As last reported, other devices also own this drive.");
+  expect(view).not.toContain("sole owner");
 });
 
 test("the strong consequence clauses survive the restructure", () => {

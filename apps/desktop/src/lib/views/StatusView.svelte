@@ -5,6 +5,7 @@
   value is the last terminal answer plus the shell's observation stamp;
   the stamp is never presented as a synchronization time. -->
 <script lang="ts">
+  import { onDestroy, onMount } from "svelte";
   import { Button } from "$lib/components/ui/button/index.js";
   import * as Card from "$lib/components/ui/card/index.js";
   import * as Alert from "$lib/components/ui/alert/index.js";
@@ -16,6 +17,7 @@
   import InfoHint from "$lib/components/info-hint.svelte";
   import type { OwnerAvailability, Stamped, StatusSnapshot } from "$lib/state/presentation.svelte.js";
   import {
+    formatPublicationAge,
     freshnessLabel,
     isFirstRun,
     shortId,
@@ -44,6 +46,20 @@
 
   /** Technical detail (R-D6): protocol terms live behind this. Closed by default. */
   let showTechnical = $state(false);
+
+  // The publication age is relative and ages in place; the owner's
+  // stamp is a local publication time, not a sync time. The shell's
+  // own clock is used only to compute the age.
+  let nowMs = $state(Date.now());
+  let ageTimer: ReturnType<typeof setInterval> | undefined;
+  onMount(() => {
+    ageTimer = setInterval(() => {
+      nowMs = Date.now();
+    }, 10_000);
+  });
+  onDestroy(() => {
+    if (ageTimer !== undefined) clearInterval(ageTimer);
+  });
 
   const status = $derived(snapshot?.data ?? null);
   const freshStale = $derived(
@@ -245,6 +261,11 @@
             <dl>
               <DetailRow label="State">
                 <Badge variant="outline" class={freshnessTone}>{freshnessLabel(status.freshness.state)}</Badge>
+              </DetailRow>
+              <DetailRow label="Drive data last updated on this device">
+                <span class="text-sm text-foreground/90">
+                  {formatPublicationAge(status.freshness.published_unix_secs, nowMs)}
+                </span>
               </DetailRow>
             </dl>
           </Card.Content>
