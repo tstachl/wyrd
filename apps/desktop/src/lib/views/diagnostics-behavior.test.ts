@@ -14,7 +14,7 @@ import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { cleanup, fireEvent, render } from "@testing-library/svelte";
 import { tick } from "svelte";
 import DiagnosticsCard from "./DiagnosticsCard.svelte";
-import type { Diagnostics, WireDiagnosticLevel } from "$lib/ipc/results.js";
+import type { Diagnostics, DiagnosticsExport, WireDiagnosticLevel } from "$lib/ipc/results.js";
 import type { IpcResult } from "$lib/ipc/types.js";
 import type { Stamped } from "$lib/state/presentation.svelte.js";
 
@@ -50,6 +50,12 @@ function props(overrides: Record<string, unknown> = {}) {
     onSet: async (_level: WireDiagnosticLevel): Promise<IpcResult<WireDiagnosticLevel>> => ({
       ok: true,
       value: "detailed",
+    }),
+    onExport: async (): Promise<DiagnosticsExport> => ({
+      state: "written",
+      path: "/tmp/wyrd-diagnostics-ab.json",
+      records: 3,
+      generated_at: 1_700_000_000,
     }),
     ...overrides,
   };
@@ -191,6 +197,29 @@ test("a read-back that disagrees with the request is not success", async () => {
   await tick();
   expect(checkbox.getAttribute("aria-checked")).toBe("false");
   expect(rendered.getByText(/read back "default"/)).toBeTruthy();
+});
+
+test("export is explicit and reports the temporary file without sharing it", async () => {
+  let calls = 0;
+  const rendered = render(DiagnosticsCard, {
+    props: props({
+      onExport: async () => {
+        calls += 1;
+        return {
+          state: "written",
+          path: "/tmp/wyrd-diagnostics-ab.json",
+          records: 3,
+          generated_at: 1_700_000_000,
+        };
+      },
+    }),
+  });
+  expect(calls).toBe(0);
+  await fireEvent.click(rendered.getByRole("button", { name: "Export bundle" }));
+  await tick();
+  expect(calls).toBe(1);
+  expect(rendered.getByText(/Temporary bundle written with 3 records/)).toBeTruthy();
+  expect(rendered.getByText("/tmp/wyrd-diagnostics-ab.json")).toBeTruthy();
 });
 
 test("no drive selected disables the toggle with an explicit hint", async () => {

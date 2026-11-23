@@ -38,7 +38,7 @@ after the choice and resumes it on a refusal. -->
   import DiagnosticsCard from "./DiagnosticsCard.svelte";
   import type { Stamped } from "$lib/state/presentation.svelte.js";
   import type { IpcResult } from "$lib/ipc/types.js";
-  import type { CredentialReference, Diagnostics, DriveSettingsState, EnablementState, ProvisionReport, ServiceState, SessionState, SettingsWriteReport, SparseUpdateArgs, WireDiagnosticLevel, WireSoleOwnerState } from "$lib/ipc/results.js";
+  import type { CredentialReference, Diagnostics, DiagnosticsExport, DriveSettingsState, EnablementState, ProvisionReport, ServiceState, SessionState, SettingsWriteReport, SparseUpdateArgs, WireDiagnosticLevel, WireSoleOwnerState } from "$lib/ipc/results.js";
   import type { ProvisionDeleteArgs, ProvisionLeaveArgs } from "$lib/ipc/operations.js";
   import { buildDeleteArgs, buildLeaveArgs, type CredentialMode } from "$lib/ipc/provisioning-args.js";
   import {
@@ -137,9 +137,11 @@ after the choice and resumes it on a refusal. -->
     onRefreshDiagnostics: () => Promise<Diagnostics | null>;
     /** Set the app-wide level on this drive's owner and read it back. */
     onDiagnosticsSet: (level: WireDiagnosticLevel) => Promise<IpcResult<WireDiagnosticLevel>>;
+    /** Explicitly collect a temporary local diagnostics bundle. */
+    onExport: () => Promise<DiagnosticsExport>;
   }
 
-  let { driveDir, driveName, snapshot, credentialReference, pending, transportNotice, identityFile, passphraseFile, onRefresh, onLeave, onDelete, onApply, session, onRestartService, serviceState = null, enablement = null, onToggleEnablement, onRefreshDrives, soleOwner = null, diagnosticsSnapshot, onRefreshDiagnostics, onDiagnosticsSet }: Props = $props();
+  let { driveDir, driveName, snapshot, credentialReference, pending, transportNotice, identityFile, passphraseFile, onRefresh, onLeave, onDelete, onApply, session, onRestartService, serviceState = null, enablement = null, onToggleEnablement, onRefreshDrives, soleOwner = null, diagnosticsSnapshot, onRefreshDiagnostics, onDiagnosticsSet, onExport }: Props = $props();
 
   const restartKind = $derived(restartKindFor(session));
 
@@ -456,6 +458,7 @@ after the choice and resumes it on a refusal. -->
   {pending}
   onRefresh={onRefreshDiagnostics}
   onSet={onDiagnosticsSet}
+  {onExport}
 />
 
 {#if session === null && onToggleEnablement !== undefined && serviceState !== null && serviceState.state !== "notinstalled" && serviceState.state !== "unsupported"}

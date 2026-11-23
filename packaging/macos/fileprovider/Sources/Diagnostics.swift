@@ -308,6 +308,16 @@ enum DiagnosticFields {
 struct DiagnosticRecorder {
     let log: Logger
     let sessionID: String
+    /// Optional local sink for the user-requested bundle. `nil` in
+    /// fixtures and ad-hoc builds: unified logging still works, and
+    /// no local record file is created.
+    let sink: DiagnosticsRecordSink?
+
+    init(log: Logger, sessionID: String, sink: DiagnosticsRecordSink? = nil) {
+        self.log = log
+        self.sessionID = sessionID
+        self.sink = sink
+    }
 
     func record(
         _ level: DiagnosticLevel,
@@ -343,6 +353,7 @@ struct DiagnosticRecorder {
         ) else {
             return
         }
+        sink?.append(line, sessionID: sessionID)
         log.notice("\(line.summary, privacy: .public)")
         for detail in line.details {
             switch detail.visibility {

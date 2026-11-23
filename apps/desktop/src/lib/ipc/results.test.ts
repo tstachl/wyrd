@@ -11,6 +11,7 @@
 import { expect, test } from "bun:test";
 import type {
   Diagnostics,
+  DiagnosticsExport,
   ProvisionReport,
   ProvisionResult,
   Served,
@@ -36,6 +37,18 @@ function singleKey(value: object): string {
 test("diagnostics level is a closed bare lowercase string", () => {
   const level: WireDiagnosticLevel = "detailed";
   expect(level).toBe("detailed");
+});
+
+test("local bundle export result is internally tagged", () => {
+  const written: DiagnosticsExport = {
+    state: "written",
+    path: "/tmp/wyrd-diagnostics-ab.json",
+    records: 3,
+    generated_at: 1_700_000_000,
+  };
+  const failed: DiagnosticsExport = { state: "failed", reason: "no temp dir" };
+  expect(written.state).toBe("written");
+  expect(failed.state).toBe("failed");
 });
 
 test("persisted diagnostics view is internally tagged", () => {

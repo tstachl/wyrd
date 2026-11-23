@@ -30,7 +30,8 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
     /// from one extension instance carry the same value.
     private let sessionID = UUID().uuidString
     private lazy var diagnostics = DiagnosticRecorder(
-        log: log, sessionID: sessionID)
+        log: log, sessionID: sessionID,
+        sink: DiagnosticsRecordSink.defaultSink())
     private let liveStore: LiveStore?
 
     required init(domain: NSFileProviderDomain) {

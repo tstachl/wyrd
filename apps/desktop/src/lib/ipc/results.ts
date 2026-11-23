@@ -531,3 +531,8 @@ export type Diagnostics =
     }
   | { state: "nofile"; path: string }
   | { state: "unreadable"; reason: string };
+
+/** Result of an explicit local bundle export. Internally tagged. */
+export type DiagnosticsExport =
+  | { state: "written"; path: string; records: number; generated_at: number }
+  | { state: "failed"; reason: string };

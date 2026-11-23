@@ -8,6 +8,7 @@ them never suppresses a default-visible error. -->
 <script lang="ts">
   import * as Card from "$lib/components/ui/card/index.js";
   import * as Alert from "$lib/components/ui/alert/index.js";
+  import { Button } from "$lib/components/ui/button/index.js";
   import * as Field from "$lib/components/ui/field/index.js";
   import { Checkbox } from "$lib/components/ui/checkbox/index.js";
   import { Spinner } from "$lib/components/ui/spinner/index.js";
@@ -15,7 +16,7 @@ them never suppresses a default-visible error. -->
   import ObservedNote from "./ObservedNote.svelte";
   import { describe } from "$lib/ipc/errors.js";
   import type { IpcResult } from "$lib/ipc/types.js";
-  import type { Diagnostics, WireDiagnosticLevel } from "$lib/ipc/results.js";
+  import type { Diagnostics, DiagnosticsExport, WireDiagnosticLevel } from "$lib/ipc/results.js";
   import type { Stamped } from "$lib/state/presentation.svelte.js";
 
   interface Props {
@@ -28,9 +29,11 @@ them never suppresses a default-visible error. -->
     onRefresh: () => Promise<Diagnostics | null>;
     /** Set the level on this drive's owner and read it back. */
     onSet: (level: WireDiagnosticLevel) => Promise<IpcResult<WireDiagnosticLevel>>;
+    /** Explicitly collect a temporary local bundle. */
+    onExport: () => Promise<DiagnosticsExport>;
   }
 
-  let { snapshot, driveDir, pending, onRefresh, onSet }: Props = $props();
+  let { snapshot, driveDir, pending, onRefresh, onSet, onExport }: Props = $props();
 
   const persisted = $derived(snapshot?.data ?? null);
   const level = $derived<WireDiagnosticLevel | null>(
@@ -47,6 +50,18 @@ them never suppresses a default-visible error. -->
 
   let working = $state(false);
   let outcome = $state<{ ok: boolean; detail: string } | null>(null);
+  let exporting = $state(false);
+  let exported = $state<DiagnosticsExport | null>(null);
+
+  async function exportBundle(): Promise<void> {
+    exporting = true;
+    exported = null;
+    try {
+      exported = await onExport();
+    } finally {
+      exporting = false;
+    }
+  }
   // The checkbox is bound to local state so an unconfirmed click can
   // be rolled back. The persisted observation is the only authority
   // for what it shows; bits-ui otherwise keeps its own checked state.
@@ -189,5 +204,40 @@ them never suppresses a default-visible error. -->
         Saving…
       </p>
     {/if}
+
   </Card.Content>
+</Card.Root>
+
+<Card.Root class="mt-4">
+  <Card.Header>
+    <Card.Title class="text-sm">Export a local bundle</Card.Title>
+    <Card.Description>
+      Collect the current local diagnostic records into one temporary file. Wyrd does not send it
+      anywhere. Sharing the file is a separate action you take yourself.
+    </Card.Description>
+  </Card.Header>
+  <Card.Content>
+    {#if exported !== null}
+      {#if exported.state === "written"}
+        <Alert.Root class="border-primary/40 bg-primary/10">
+          <p>Temporary bundle written with {exported.records} records.</p>
+          <p class="break-all font-mono text-xs">{exported.path}</p>
+        </Alert.Root>
+      {:else}
+        <Alert.Root variant="destructive">
+          <p>{exported.reason}</p>
+        </Alert.Root>
+      {/if}
+    {/if}
+  </Card.Content>
+  <Card.Footer class="justify-end">
+    <Button variant="outline" size="sm" disabled={exporting} onclick={() => void exportBundle()}>
+      {#if exporting}
+        <Spinner data-icon="inline-start" />
+        Collecting…
+      {:else}
+        Export bundle
+      {/if}
+    </Button>
+  </Card.Footer>
 </Card.Root>

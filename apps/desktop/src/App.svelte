@@ -13,6 +13,7 @@
     applySettings,
     driveLock,
     driveCredentialReference,
+    diagnosticsExport,
     diagnosticsLevel,
     diagnosticsSet,
     driveSettings,
@@ -53,6 +54,7 @@
   import type { IpcResult } from "$lib/ipc/types.js";
   import type {
     Diagnostics,
+    DiagnosticsExport,
     DriveView,
     KeyDefaults,
     OnboardingReport,
@@ -349,6 +351,27 @@
           : `Unexpected diagnostics failure: ${String(error)}`,
       );
       throw error;
+    } finally {
+      presentation.finishRequest();
+    }
+  }
+
+  /**
+   * Explicitly collect a temporary local bundle. A backend transport
+   * failure is a local failure state, never an owner answer and never
+   * a partial bundle. No upload path exists on this route.
+   */
+  async function runDiagnosticsExport(): Promise<DiagnosticsExport> {
+    presentation.trackRequest();
+    try {
+      const result = await diagnosticsExport();
+      presentation.clearTransportNotice();
+      return result;
+    } catch (error: unknown) {
+      const reason =
+        error instanceof Error ? error.message : `Unexpected export failure: ${String(error)}`;
+      presentation.noteTransportFailure(reason);
+      return { state: "failed", reason };
     } finally {
       presentation.finishRequest();
     }
@@ -1345,6 +1368,7 @@
               diagnosticsSnapshot={presentation.diagnosticsSnapshot}
               onRefreshDiagnostics={() => refreshDiagnostics()}
               onDiagnosticsSet={(level: WireDiagnosticLevel) => runDiagnosticsSet(level)}
+              onExport={() => runDiagnosticsExport()}
             />
           {/if}
         </Tabs.Content>

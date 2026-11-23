@@ -43,6 +43,14 @@ test("the level comes from the persisted observation, not a live answer", () => 
   expect(settings).toContain("onSet={onDiagnosticsSet}");
 });
 
+test("export is local, temporary, and distinct from sharing", () => {
+  expect(card).toContain("Export a local bundle");
+  expect(card).toContain("Collect the current local diagnostic records into one temporary file.");
+  expect(card).toContain("Collect the current local diagnostic records into one temporary file. Wyrd does not send it");
+  expect(card).toContain("anywhere. Sharing the file is a separate action you take yourself.");
+  expect(card).toContain("onExport: () => Promise<DiagnosticsExport>");
+});
+
 test("the four diagnostics refusals stay in the typed code set", () => {
   for (const code of [
     "InvalidDiagnosticLevel",

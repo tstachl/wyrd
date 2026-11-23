@@ -963,6 +963,7 @@ party table already allows — the matrix adds nothing to either.
 | warn log (`tracing`, default-visible), outbox-refusal lines only | cause and kind (an all-relay refusal names its control kind) | paths; `ContentId`s; identities — recipient keys, transition and snapshot hashes, membership data of any kind. Other existing warn lines predate this row and are grandfathered, not conformant: reconciling them is a separate issue. | the invoking operator: this process connected and the operator holds the keys |
 | durable drive metadata | protocol-required identities only: member `DeviceId`s in the encrypted membership log, possession-commit `ContentId`s in the local fact log | diagnostic identities: `VerificationFailure` never persists (OD-17-1 B); no diagnostic ring, no identity-bearing sidecar | key holders, locally |
 | the wire | nothing diagnostic | — | relay and vault positions unchanged (party table) |
+| local diagnostics bundle (explicit export) | allowlisted structured records only: timestamps, ephemeral local session ids, operation/stage summaries, and the T20 allowlist fields marked exportable | file contents, credentials, keys, DriveIds, device identities, ContentIds, identities, and any unrelated user data; no transmission path of any kind | the user who requested the export, on that device only |
 
 Two consequences are pinned. First, **more classification never
 widens a surface**: a new `VerificationCause` or a new shed-wait
@@ -1239,7 +1240,7 @@ them.
 | Mount log | Existing per-mount truncation (one mount, one log) |
 | Owner log | Size-bounded rotation, not indefinite append; initial implementation defaults 5 MiB per file with three retained files, not protocol constants |
 | Desktop bundle | Explicitly generated, temporary local artifact |
-| File Provider | Unified logging retention; no assumption of indefinite availability |
+| File Provider | Unified logging retention; no assumption of indefinite availability. A bounded local record sink for explicit export keeps only exportable fields, two files at most, 512 KiB each |
 
 File Provider callback diagnostics record the **decision inputs**, not
 just the operation name: which operation Finder requested, the item and

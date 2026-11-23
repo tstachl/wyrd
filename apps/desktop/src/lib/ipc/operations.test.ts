@@ -12,6 +12,7 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import {
   applySettings,
   captureParent,
+  diagnosticsExport,
   diagnosticsLevel,
   diagnosticsSet,
   provisionDelete,
@@ -530,6 +531,22 @@ test("diagnosticsSet forwards the level and drive, keeping refusals typed", asyn
       args: { driveDir: "/drives/alpha", level: "detailed" },
     },
   ]);
+});
+
+test("diagnosticsExport sends no arguments and returns the local state", async () => {
+  const seen: Array<{ cmd: string; args: unknown }> = [];
+  const report = {
+    state: "written",
+    path: "/tmp/wyrd-diagnostics-ab.json",
+    records: 3,
+    generated_at: 1_700_000_000,
+  } as const;
+  mockIPC((cmd, args) => {
+    seen.push({ cmd, args });
+    return report;
+  });
+  expect(await diagnosticsExport()).toEqual(report);
+  expect(seen).toEqual([{ cmd: "diagnostics_export", args: {} }]);
 });
 
 test("driveUnlock sends the passphrase in args, driveLock names the drive", async () => {

@@ -29,6 +29,10 @@ tauri-plugin-dialog.workspace = true
 # CLI and sync halves already use — no new crypto, no new edge
 # shape, just the same leaf.
 zeroize.workspace = true
+# Random ephemeral correlation id for an exported bundle. The same
+# audited leaf the owner uses for its session id; never a protocol
+# identity and never sent on the wire.
+getrandom.workspace = true
 
 [build-dependencies]
 # Embeds `tauri.conf.json` plus `capabilities/` at compile time for
