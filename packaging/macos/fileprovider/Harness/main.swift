@@ -1935,6 +1935,41 @@ do {
     check(names.contains("filename") && names.contains("contents")
         && names.contains("other:0x100000"),
         "known and unknown changed fields are both rendered")
+
+    // The local export sink applies a second allowlist on top of the
+    // builder's `exportable` flag. A field that is emitted but not
+    // exportable, or marked exportable but outside the sink's keys,
+    // never reaches a bundle record.
+    let record = DiagnosticsRecordSink.record(
+        from: line, timestamp: "2026-01-01T00:00:00Z", sessionID: "s-1")
+    let exported = record["fields"] as? [String: String] ?? [:]
+    checkEqual(exported["filename"],
+               "Info Pack 2024 - (El Mundo Magico - PERU).pdf",
+               "an allowed filename reaches the record")
+    checkEqual(exported["symlink-target"],
+               "/Users/me/iCloud Drive/Documents/Info Pack.pdf",
+               "the -2005 decision input reaches the record")
+    checkEqual(exported["session"], "s-1",
+               "the ephemeral session id correlates the record")
+    for key in ["content-id", "identity", "file-contents", "credentials"] {
+        check(exported[key] == nil, "export excludes \(key)")
+    }
+    let wider = DiagnosticLine(
+        summary: line.summary,
+        details: line.details + [
+            DiagnosticDetail(
+                key: "secret", value: "do-not-export",
+                visibility: .private, exportable: false),
+            DiagnosticDetail(
+                key: "content-id", value: "abcd",
+                visibility: .private, exportable: true),
+        ])
+    let widerFields = (DiagnosticsRecordSink.record(
+        from: wider, timestamp: "t", sessionID: "s-2")["fields"] as? [String: String]) ?? [:]
+    check(widerFields["secret"] == nil,
+          "a non-exportable detail never reaches the record")
+    check(widerFields["content-id"] == nil,
+          "the sink allowlist gates even an exportable detail")
 } catch {
     print("FAIL: local diagnostics checks: \(error)")
     failures += 1

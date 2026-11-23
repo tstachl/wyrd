@@ -8263,6 +8263,7 @@ dependencies = [
 name = "wyrd-desktop"
 version = "0.3.0-alpha"
 dependencies = [
+ "getrandom 0.2.17",
  "serde",
  "serde_json",
  "tauri",

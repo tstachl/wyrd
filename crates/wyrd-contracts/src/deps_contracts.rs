@@ -298,6 +298,9 @@ fn policy_for(member: &str) -> Option<MemberPolicy> {
                 // persisted, never logged): the scrub-on-drop leaf
                 // the CLI and sync halves already use.
                 "zeroize",
+                // Random bytes for the bundle's ephemeral local
+                // correlation id only — never a protocol identity.
+                "getrandom",
             ],
         }),
         _ => None,
@@ -691,6 +694,9 @@ fn feature_pins(member: &str) -> Option<&'static [FeaturePin]> {
             ),
         ]),
         "wyrd-desktop" => Some(&[
+            // Random bytes for the bundle's ephemeral local
+            // correlation id; no features, never a protocol identity.
+            ("dependencies", "getrandom", &[], true),
             ("dependencies", "serde", &["derive"], true),
             ("dependencies", "serde_json", &[], true),
             ("dependencies", "tauri", &[], true),

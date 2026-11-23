@@ -38,6 +38,7 @@ use wyrd_owner_client::{
 use wyrd_settings::SparseUpdate;
 
 use crate::credential_ref::CredentialReference;
+use crate::diagnostics_bundle::{self, DiagnosticsExport};
 use crate::diagnostics_view::{self, Diagnostics};
 use crate::registry::{self, RegistryState, RegistryStatus};
 use crate::settings_apply::{
@@ -321,6 +322,21 @@ pub async fn diagnostics_set<R: Runtime>(
     .await
 }
 
+/// Build one temporary local diagnostics bundle. A local query like
+/// [`diagnostics_level`]: no owner connection, no drive identity, and
+/// no network path. The user asked for this artifact explicitly; the
+/// shell never collects or sends one on its own.
+#[tauri::command]
+pub async fn diagnostics_export<R: Runtime>(app: AppHandle<R>) -> DiagnosticsExport {
+    query(
+        app,
+        "diagnostics_export",
+        |reason| DiagnosticsExport::Failed { reason },
+        diagnostics_bundle::export_bundle,
+    )
+    .await
+}
+
 /// Every registered drive plus per-drive reachability, verified
 /// this session. A local query, not an owner operation: the answer
 /// is a state struct (never the taxonomy), unreadable states ride
@@ -578,6 +594,7 @@ pub fn handler<R: Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool {
         reconnect,
         diagnostics_level,
         diagnostics_set,
+        diagnostics_export,
         list_drives,
         drive_settings,
         drive_credential_reference,
@@ -780,6 +797,25 @@ mod tests {
         );
         assert!(
             serde_json::from_value::<WireDiagnosticLevel>(serde_json::json!("verbose")).is_err()
+        );
+
+        // The export result is an internally tagged local state, not
+        // an owner answer. Mirrored verbatim in `results.test.ts`.
+        assert_eq!(
+            serde_json::to_value(DiagnosticsExport::Written {
+                path: "/tmp/wyrd-diagnostics-ab.json".to_string(),
+                records: 3,
+                generated_at: 1_700_000_000,
+            })
+            .unwrap(),
+            serde_json::json!({"state": "written", "path": "/tmp/wyrd-diagnostics-ab.json", "records": 3, "generated_at": 1700000000})
+        );
+        assert_eq!(
+            serde_json::to_value(DiagnosticsExport::Failed {
+                reason: "no temp dir".to_string()
+            })
+            .unwrap(),
+            serde_json::json!({"state": "failed", "reason": "no temp dir"})
         );
     }
 

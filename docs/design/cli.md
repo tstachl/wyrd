@@ -1276,9 +1276,11 @@ passphrase_file = "/etc/wyrd/passphrase"
   interval. The sidecar lets a supervisor read liveness-adjacent
   facts without opening the store, the way `owner … status` reads the
   vault's.
-  `vault` logs to stderr always, plus an appended operator-chosen
-  file under `--log-file` — never a drive-resident default, never
-  truncated: a restart must not destroy the previous run's record.
+  `vault` logs to stderr always, plus an operator-chosen file under
+  `--log-file` — never a drive-resident default. The owner log is
+  size-bounded: 5 MiB per file with three files retained, so a restart
+  keeps earlier runs without growing without bound (T20 in
+  `docs/contracts/trust.md`).
   Separately, the running vault publishes `<drive_dir>/vault.posture`
   (schema v1, temp write plus file and directory fsync plus atomic
   rename, best-effort): instance id, serving id,

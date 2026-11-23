@@ -20,6 +20,7 @@ import type { IpcResult } from "./types.js";
 import type {
   CredentialReference,
   Diagnostics,
+  DiagnosticsExport,
   DriveSettingsState,
   KeyDefaults,
   OnboardingReport,
@@ -167,6 +168,15 @@ export function diagnosticsSet(
   level: WireDiagnosticLevel,
 ): Promise<IpcResult<WireDiagnosticLevel>> {
   return invokeCommand<WireDiagnosticLevel>("diagnostics_set", { driveDir, level });
+}
+
+/**
+ * Explicitly build a temporary local diagnostics bundle. No drive,
+ * no owner, no network: the backend writes one private file and
+ * returns its path. The user takes any further step themselves.
+ */
+export function diagnosticsExport(): Promise<DiagnosticsExport> {
+  return invokeValue<DiagnosticsExport>("diagnostics_export");
 }
 
 // Provisioning operations (constrained CLI adapter surface). One
