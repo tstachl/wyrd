@@ -358,6 +358,19 @@ pub struct WireKnownState {
     pub readers_root: String,
 }
 
+/// Drive data kept on this device and the ceiling in force, read
+/// live off the accountant at observation. The count is the same
+/// figure the retention gates compare against; it is not a disk
+/// figure, a sync time, or a liveness signal. `ceiling: None` means
+/// no limit is set, not an unknown value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WireRetention {
+    /// Bytes of drive data currently kept on this device.
+    pub retained_bytes: u64,
+    /// The effective ceiling in bytes, if one is configured.
+    pub ceiling: Option<u64>,
+}
+
 /// The wire form of `SyncStatus`: the full durable observation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WireSyncStatus {
@@ -393,6 +406,11 @@ pub struct WireSyncStatus {
     pub materialization: WireMaterializationSummary,
     /// The durability level of the observation.
     pub durability: WireDurabilityLevel,
+    /// Drive data kept here and its ceiling, if one is set. Absent on
+    /// older writers and on unheld reads with no accountant: never
+    /// rendered as zero bytes or as a fabricated limit.
+    #[serde(default)]
+    pub retention: Option<WireRetention>,
 }
 
 // ---------------------------------------------------------------------------

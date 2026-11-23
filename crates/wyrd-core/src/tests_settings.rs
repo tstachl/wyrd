@@ -13,6 +13,7 @@ use wyrd_sync::runtime::Engine;
 use super::{apply_budget_settings, render_settings_surface, BudgetOverrides, RunningSettings};
 use crate::budgets::ResourceBudgets;
 use crate::live::{LiveConfig, LiveNode};
+use crate::status::RetentionView;
 use crate::view::{
     Attr, DirEntry, Head, NamespaceView, Node, OpenFile, RuntimeMaterialization, ViewError,
     ViewLockError,
@@ -140,6 +141,50 @@ fn running_of(
         node.max_mutation_wait(),
         node.configured_relay_count(),
     )
+}
+
+/// The accountant is attached even with no ceiling: the status
+/// surface reports drive data kept on this device regardless of a
+/// storage limit. Applying an empty override keeps the same tally —
+/// it must not drop it on the unlimited path.
+#[test]
+fn retained_accountant_is_always_wired_even_without_a_ceiling() {
+    let (config, retained) = LiveConfig::with_retained(None);
+    assert!(config.retained_bytes.is_some(), "no ceiling, still counted");
+    assert_eq!(config.budgets.retained_bytes_quota, None);
+    retained.add(64);
+
+    let applied = apply_budget_settings(
+        &config,
+        Duration::from_secs(30),
+        &BudgetOverrides::default(),
+    )
+    .expect("empty overrides apply");
+    let carried = applied
+        .config
+        .retained_bytes
+        .expect("the accountant survives the settings path");
+    assert_eq!(carried.get(), 64, "the same tally, not a fresh zero");
+    assert_eq!(applied.config.budgets.retained_bytes_quota, None);
+}
+
+/// The live observation surfaces the accountant's real count and the
+/// configured ceiling — `None` here, so no limit is set. An unheld
+/// read would carry `None` instead; neither case fabricates bytes.
+#[test]
+fn live_observation_reports_retained_bytes_even_without_a_ceiling() {
+    let (config, retained) = LiveConfig::with_retained(None);
+    retained.add(2048);
+    let (node, _parts, dir) = scratch_composed(&config, Duration::from_secs(30));
+    let status = node.observe_status().expect("status reads durable state");
+    assert_eq!(
+        status.retention,
+        Some(RetentionView {
+            retained_bytes: 2048,
+            ceiling: None,
+        })
+    );
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 /// The issue's load-bearing test: two nodes composed with different

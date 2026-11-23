@@ -224,29 +224,40 @@ fn mount_defaults_and_accepts_a_live_interval() {
     );
 }
 
-/// The quota flag reaches the loop with its accountant: the store and
-/// the config share the same tally, so the ceiling compares against a
-/// maintained number — a quota without a tally would compare against
-/// nothing. Unset stays unlimited with no accountant, exactly stock.
+/// The accountant is attached whether or not a ceiling is set: the
+/// shell reports drive data kept on this device in both cases. The
+/// store and config share the same tally, so a configured ceiling
+/// compares against a maintained number — a quota without a tally
+/// would compare against nothing. Only the ceiling differs between
+/// the two paths.
 #[test]
 fn open_store_with_quota_wires_the_accountant_with_the_ceiling() {
     use wyrd_format::{ObjectKind, ObjectStore};
     let temp = TempDir::new();
     let drive = temp.0.join("drive");
-    // Unlimited: stock config, no accountant, interval untouched.
-    let (_store, config, retained, open_timeout) =
+    // Unlimited: no ceiling, but the accountant is attached and real.
+    let (mut store, config, retained, open_timeout) =
         crate::composer::open_store_with_quota(&drive, None).unwrap();
     assert_eq!(config.budgets.retained_bytes_quota, None);
-    assert!(retained.is_none());
+    let retained = retained.expect("the accountant is always attached");
+    assert!(config.retained_bytes.is_some());
+    store.insert(ObjectKind::Chunk, b"charged").unwrap();
+    assert_eq!(
+        retained.get(),
+        b"charged".len() as u64,
+        "the unlimited count is a real byte tally"
+    );
     assert_eq!(open_timeout, std::time::Duration::from_secs(30));
     assert_eq!(
         config.interval,
         LiveConfig::for_local_sync().interval,
         "no flag means the stock config"
     );
-    // Set: the same tally the store charges, under the same ceiling.
+    // Set: a fresh drive, the same tally the store charges, under the
+    // same ceiling.
+    let quota_drive = temp.0.join("quota-drive");
     let (mut store, config, retained, _open_timeout) =
-        crate::composer::open_store_with_quota(&drive, Some(1024)).unwrap();
+        crate::composer::open_store_with_quota(&quota_drive, Some(1024)).unwrap();
     assert_eq!(config.budgets.retained_bytes_quota, Some(1024));
     let retained = retained.expect("a quota wires an accountant");
     assert!(config.retained_bytes.is_some());

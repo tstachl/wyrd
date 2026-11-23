@@ -13,9 +13,9 @@ use wyrd_daemon::process::TRANSPORT_SHUTDOWN_DEADLINE;
 use wyrd_daemon::LiveConfig;
 
 /// What opening the store for a live composer returns: the store,
-/// the config to compose with, the tally the store charges when a
-/// ceiling is configured, and the open timeout the settings file
-/// configures (the historical 30s when it names none).
+/// the config to compose with, the tally the store always charges,
+/// and the open timeout the settings file configures (the historical
+/// 30s when it names none).
 type OpenedStore = (
     wyrd_format::FsObjectStore,
     LiveConfig,
@@ -23,13 +23,14 @@ type OpenedStore = (
     Duration,
 );
 
-/// Open the object store for a live composer, wiring the retention
-/// accountant when a ceiling is configured: the ceiling is a
-/// comparison against a number the store keeps, so the store and the
-/// config must share the same tally. Returns the store plus the config
-/// to compose with (the config's `retained_bytes` is the tally the
-/// store charges), plus the open timeout the settings file configures
-/// (the historical 30s when it names none).
+/// Open the object store for a live composer. The retention accountant
+/// is always attached, ceiling or no ceiling: the status surface
+/// reports drive data kept on this device even when no storage limit
+/// is set, and the ceiling is a comparison against that same tally.
+/// Returns the store plus the config to compose with (the config's
+/// `retained_bytes` is the tally the store charges), plus the open
+/// timeout the settings file configures (the historical 30s when it
+/// names none).
 ///
 /// Precedence for every setting is flags, then the application
 /// settings file, then compiled defaults: the flag quota wins, the
@@ -45,25 +46,15 @@ pub(crate) fn open_store_with_quota(
         crate::CliError::Usage(format!("application settings refused: {reason}"))
     })?;
     let effective_quota = quota.or(file_quota);
-    let (store, quota_config) = match effective_quota {
-        Some(limit) => {
-            let (config, retained) = LiveConfig::with_retained_quota(limit);
-            let store = wyrd_format::FsObjectStore::open_with(
-                drive_dir.to_path_buf(),
-                Some(std::sync::Arc::clone(&retained)),
-            )
-            .map_err(|error| crate::CliError::Store(error.to_string()))?;
-            (store, config)
-        }
-        None => {
-            let store = wyrd_format::FsObjectStore::open(drive_dir.to_path_buf())
-                .map_err(|error| crate::CliError::Store(error.to_string()))?;
-            (store, LiveConfig::for_local_sync())
-        }
-    };
-    // The quota above already wired its accountant; `rest` carries
-    // no quota by construction, so this cannot rebuild the
-    // mismatch the composition refuses.
+    let (quota_config, retained) = LiveConfig::with_retained(effective_quota);
+    let store = wyrd_format::FsObjectStore::open_with(
+        drive_dir.to_path_buf(),
+        Some(std::sync::Arc::clone(&retained)),
+    )
+    .map_err(|error| crate::CliError::Store(error.to_string()))?;
+    // The accountant above is always wired; `rest` carries no quota
+    // by construction, so this cannot rebuild the mismatch the
+    // composition refuses.
     let applied =
         wyrd_daemon::apply_budget_settings(&quota_config, wyrd_daemon::DEFAULT_OPEN_TIMEOUT, &rest)
             .map_err(|reason| {

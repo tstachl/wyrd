@@ -100,6 +100,7 @@ fn wire_field_names_are_pinned() {
             local_objects: 0,
         },
         durability: WireDurabilityLevel::Working,
+        retention: None,
     })
     .unwrap();
     assert_eq!(
@@ -119,7 +120,8 @@ fn wire_field_names_are_pinned() {
             "reconciliation",
             "convergence",
             "materialization",
-            "durability"
+            "durability",
+            "retention"
         ])
     );
 

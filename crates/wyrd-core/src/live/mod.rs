@@ -41,7 +41,7 @@ use crate::projection::{
 use crate::quarantine::{drain_quarantine, QuarantineQueue};
 use crate::role::{Role, RoleState, Transition};
 use crate::scrub::{drain_scrub, probe_presence, ScrubQueue};
-use crate::status::{observe, SyncStatus};
+use crate::status::{observe_with_retention, RetentionView, SyncStatus};
 use crate::view::{Head, NamespaceView, Node, RuntimeMaterialization, ViewError};
 use crate::wake::{Wake, WakeSignal};
 use crate::want::{WantError, WantRegistry};
@@ -964,9 +964,16 @@ where
     /// The durable sync observation over the live engine: the same
     /// `status::observe` the CLI runs against an unheld drive,
     /// through the owner that holds it. Pure observation over
-    /// committed facts; connects to nothing, commits nothing.
+    /// committed facts; connects to nothing, commits nothing. The
+    /// one exception is the retention row: it reads the accountant
+    /// this composer attached and the ceiling it configured, so the
+    /// shell states real local bytes rather than a fabricated zero.
     pub fn observe_status(&self) -> Result<SyncStatus, EngineError> {
-        observe(&self.engine, self.configured_relays)
+        let retention = self.retained_bytes.as_ref().map(|retained| RetentionView {
+            retained_bytes: retained.get(),
+            ceiling: self.budgets.retained_bytes_quota,
+        });
+        observe_with_retention(&self.engine, self.configured_relays, retention)
     }
 
     /// The mutation channel the backend submits through: the supervisor

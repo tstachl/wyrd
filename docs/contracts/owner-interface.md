@@ -217,6 +217,20 @@ it must never render as "other owners present". Consumers phrase a
 known state "as last reported" and never use the fact to gate
 retention, eviction, removal or any other decision.
 
+The observation also carries local retention figures: the bytes of
+drive data kept on this device, and the effective ceiling if one is
+set. Read the count from the byte accountant the store maintains —
+the same figure the commit and receive gates compare against — never
+from the disk's free space, a residency census, or a peer's claim.
+The ceiling is a refusal boundary over retained content, not a cap
+on the device. A `None` ceiling means no limit was set, not an
+unknown value; an absent field means this observer held no
+accountant (an unheld read or an older writer), so a mixed-version
+reader must render neither a zero-byte claim nor a fabricated limit.
+These figures are advisory facts about local retention, never a sync
+time, a liveness signal, or a gate on any decision. The shell label
+is "Drive data kept on this device".
+
 ## Liveness
 
 Answer `liveness` from the same slot with a separate result

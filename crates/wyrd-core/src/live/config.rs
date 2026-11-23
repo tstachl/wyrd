@@ -393,9 +393,20 @@ impl LiveConfig {
     /// let store = FsObjectStore::open_with(dir, Some(Arc::clone(&retained)))?;
     /// ```
     pub fn with_retained_quota(limit: u64) -> (Self, Arc<RetainedBytes>) {
+        Self::with_retained(Some(limit))
+    }
+
+    /// A config with an always-on byte accountant and an optional
+    /// ceiling. The accountant is attached whether or not a ceiling is
+    /// configured: the status surface reports drive data kept on this
+    /// device even when no storage limit is set. The caller must hand
+    /// the returned tally to the store that maintains it — sharing one
+    /// `RetainedBytes` between config and store is what keeps the
+    /// ceiling a comparison against a real count.
+    pub fn with_retained(ceiling: Option<u64>) -> (Self, Arc<RetainedBytes>) {
         let retained = RetainedBytes::new();
         let mut config = LiveConfig::default();
-        config.budgets.retained_bytes_quota = Some(limit);
+        config.budgets.retained_bytes_quota = ceiling;
         config.retained_bytes = Some(Arc::clone(&retained));
         (config, retained)
     }
