@@ -111,3 +111,15 @@ test("the Drive data publication row is local, relative and unknown at zero", ()
   expect(formatSrc).toContain("not yet updated on this device");
   expect(formatSrc).not.toContain("toISOString");
 });
+
+test("the Drive data retention row names drive data, never a disk figure", () => {
+  expect(view).toContain('label="Drive data kept on this device"');
+  expect(view).toContain("formatRetentionLine(status.observe.retention)");
+  expect(view).toContain("Finder may show");
+  expect(formatSrc).toContain("Using ${used} · no limit set");
+  expect(formatSrc).toContain("Using ${used} of ${formatByteSize(retention.ceiling)}");
+  expect(formatSrc).toContain('return "Not yet observed"');
+  expect(view + formatSrc).not.toContain("disk usage");
+  expect(view + formatSrc).not.toContain("disk space");
+  expect(view).not.toContain("Last synced");
+});

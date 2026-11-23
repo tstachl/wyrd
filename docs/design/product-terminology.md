@@ -459,6 +459,15 @@ syntax or identifiers.
     summary, beside the run state, or as a sign that the drive is healthy. A
     quiet drive shows an old time. The last completed pass is a separate
     measurement and is not authorized by this explanation.
+16. **Drive data kept on this device.** "This is how much drive data Wyrd keeps
+    here. With a storage limit set, the line reads 'Using X of Y'; with no limit
+    it reads 'Using X · no limit set'. No limit is a real answer, not an unknown
+    one." The count comes from the byte accountant behind the storage-limit
+    gate — it is not a disk figure, a sync time, or a liveness signal. Finder
+    may show a different size because this counts only the drive data Wyrd keeps
+    here, not the whole drive folder. An absent reading means it was not
+    observed, never zero bytes. A count close to a set limit belongs in the
+    attention area, phrased as a refusal that will happen, not a verdict.
 
 ### Preferred and rejected wording
 
@@ -469,6 +478,7 @@ syntax or identifiers.
 | Status row | Published on last pass | Last publish | Boolean, not a time (`StatusView.svelte:260-266`) |
 | Status card | Drive data | Freshness / Last synchronization / "Up to date" | Freshness is not convergence; no sync time is implied (`wire.rs:639-651`; `pass.rs:884-885,1014-1027`) |
 | Status row (D-11) | Drive data last updated on this device | "Last synced" / "Updated just now" as a heartbeat / a 1970 date | Last local publication, not peer delivery or liveness; moves only on change; zero means unknown |
+| Status row | Drive data kept on this device · Using X of Y / Using X · no limit set | Disk usage / free space / "Using X of Y disk" | Refusal boundary over retained content, not a disk cap; no limit is a real answer |
 | Owner fact | Warning carrying explanation 12 when this device is the sole owner; short "as last reported" line when other owners are present; the conditional explanation when unknown | A bare ownership claim, a verdict badge, or any inference from the member count | Advisory only; never a gate, a health claim, or a count-based guess (`docs/contracts/epochs.md:96`; explanation 12) |
 | Status row | Pending work | Queue / obligations / items | Implementation detail, mixed work |
 | Status row | Local files | Materialized | Internal term |

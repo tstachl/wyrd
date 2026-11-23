@@ -18,6 +18,7 @@
   import type { OwnerAvailability, Stamped, StatusSnapshot } from "$lib/state/presentation.svelte.js";
   import {
     formatPublicationAge,
+    formatRetentionLine,
     freshnessLabel,
     isFirstRun,
     shortId,
@@ -75,6 +76,7 @@
     staleDetail: freshStale?.RetainedLastGood.detail ?? null,
     freshEmpty: status?.freshness.state === "FreshEmpty",
     localObjects: status?.observe.materialization.local_objects ?? 0,
+    retention: status?.observe.retention,
   });
   const summary = $derived(statusSummaryLine(facts));
   const attention = $derived(statusAttention(facts));
@@ -267,7 +269,16 @@
                   {formatPublicationAge(status.freshness.published_unix_secs, nowMs)}
                 </span>
               </DetailRow>
+              <DetailRow label="Drive data kept on this device">
+                <span class="text-sm text-foreground/90">
+                  {formatRetentionLine(status.observe.retention)}
+                </span>
+              </DetailRow>
             </dl>
+            <p class="mt-3 text-xs leading-relaxed text-muted-foreground">
+              This counts the drive data Wyrd keeps here, not the whole drive folder. Finder may show
+              a different size.
+            </p>
           </Card.Content>
         </Card.Root>
       </div>
