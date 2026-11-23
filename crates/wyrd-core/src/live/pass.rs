@@ -295,6 +295,7 @@ where
             },
             revision,
             generation,
+            published_unix_secs: crate::storage_surface::unix_now(),
         };
         if self
             .freshness
@@ -321,12 +322,21 @@ where
         let Ok((revision, generation)) = served else {
             return;
         };
+        // A retaining failure is not a publication: the previous stamp
+        // stays. A poisoned slot yields zero, which reads as unknown
+        // rather than as a fresh publication.
+        let published_unix_secs = self
+            .freshness
+            .read()
+            .map(|slot| slot.published_unix_secs)
+            .unwrap_or(0);
         let judgment = ProjectionFreshness {
             state: FreshnessState::RetainedLastGood {
                 detail: error.to_string(),
             },
             revision,
             generation,
+            published_unix_secs,
         };
         if self
             .freshness

@@ -80,9 +80,10 @@ impl StorageReading {
     }
 }
 
-/// Seconds since the Unix epoch: the observation-time stamp. std-only;
-/// no calendar crate for a boundary marker.
-fn unix_now() -> u64 {
+/// Seconds since the Unix epoch: the local wall clock for observation
+/// and publication stamps. std-only; no calendar crate for a boundary
+/// marker.
+pub(crate) fn unix_now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|elapsed| elapsed.as_secs())

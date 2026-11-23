@@ -72,6 +72,7 @@ fn wire_field_names_are_pinned() {
             configured_relays: 0,
         },
         known_members: 0,
+        sole_owner: WireSoleOwnerState::Unknown,
         peers: vec![WirePeerHandle {
             handle: 1,
             peer: "peer-1".to_string(),
@@ -112,6 +113,7 @@ fn wire_field_names_are_pinned() {
             "head_classes",
             "mailbox",
             "known_members",
+            "sole_owner",
             "peers",
             "queue",
             "reconciliation",
@@ -151,9 +153,13 @@ fn wire_field_names_are_pinned() {
         state: WireFreshnessState::FreshEmpty,
         revision: 0,
         generation: 0,
+        published_unix_secs: 0,
     })
     .unwrap();
-    assert_eq!(keys(&freshness), set(&["state", "revision", "generation"]));
+    assert_eq!(
+        keys(&freshness),
+        set(&["state", "revision", "generation", "published_unix_secs"])
+    );
 
     let response = serde_json::to_value(&WireResponse {
         v: WIRE_VERSION,
@@ -264,6 +270,53 @@ fn liveness_without_paused_parses_as_running() {
     assert!(
         !liveness.paused,
         "a pre-pause liveness payload reads back running"
+    );
+}
+
+#[test]
+fn new_observation_fields_default_on_legacy_payloads() {
+    let freshness: WireFreshness = serde_json::from_value(serde_json::json!({
+        "state": "FreshNonEmpty",
+        "revision": 3,
+        "generation": 1
+    }))
+    .expect("a pre-timestamp freshness answer still parses");
+    assert_eq!(
+        freshness.published_unix_secs, 0,
+        "unknown, never a 1970 date"
+    );
+
+    let status: WireSyncStatus = serde_json::from_value(serde_json::json!({
+        "tip": null,
+        "held_epochs": [],
+        "obligations": { "announcements": [], "transitions": [], "capabilities": [] },
+        "totals": {
+            "announcements_queued": 0, "announcements_delivered": 0,
+            "transitions_queued": 0, "transitions_delivered": 0,
+            "capabilities_queued": 0, "capabilities_delivered": 0
+        },
+        "live_heads": [],
+        "head_classes": {
+            "eligible": 0, "canonical_history": 0, "superseded": 0, "stranded": 0,
+            "voided": 0, "pending": 0, "rejected": 0
+        },
+        "mailbox": { "configured_relays": 0 },
+        "known_members": 1,
+        "peers": [],
+        "queue": { "outbox": 0, "carries": 0, "fetch": 0 },
+        "reconciliation": {
+            "statements_received": 0, "transitions_reconciled": 0,
+            "capabilities_reconciled": 0, "announcements_reconciled": 0
+        },
+        "convergence": { "converged": true, "pending_heads": 0, "unfetchable_heads": 0 },
+        "materialization": { "pinned": 0, "cached": 0, "local_objects": 0 },
+        "durability": "Working"
+    }))
+    .expect("a pre-sole-owner observation still parses");
+    assert_eq!(
+        status.sole_owner,
+        WireSoleOwnerState::Unknown,
+        "a member count is never a substitute for the owner fact"
     );
 }
 

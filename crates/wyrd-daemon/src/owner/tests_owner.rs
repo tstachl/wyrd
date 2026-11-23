@@ -657,6 +657,10 @@ fn freshness_starts_fresh_from_composition() {
             WireOk::Freshness { freshness } => {
                 assert!(matches!(freshness.state, WireFreshnessState::FreshNonEmpty));
                 assert_eq!(freshness.generation, 0);
+                assert_eq!(
+                    freshness.published_unix_secs, 0,
+                    "an adopted baseline is not a regeneration"
+                );
             }
             other => panic!("unexpected freshness result: {other:?}"),
         },
@@ -2341,6 +2345,18 @@ fn retained_freshness_resets_on_publication() {
         wyrd_core::projection::FreshnessState::FreshNonEmpty
     ));
     assert_eq!(freshness.generation, 1);
+    let published = freshness.published_unix_secs;
+    assert!(published > 0, "a publication stamps the local regeneration");
+
+    // A later retaining failure carries the stamp forward: no new
+    // regeneration happened, so the shell must not show a new time.
+    let mut failing = FailingMailbox;
+    let _ = live.sync_once(&mut failing, None::<&mut wyrd_sync::bulk::MemoryBulkSource>);
+    assert_eq!(
+        parts.freshness.read().unwrap().published_unix_secs,
+        published,
+        "a retaining failure is not a publication"
+    );
 
     std::fs::remove_dir_all(dir).unwrap();
 }

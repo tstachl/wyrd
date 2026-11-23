@@ -113,7 +113,7 @@ primary status, action or error copy.
 |---|---|---|
 | Durable observation | Sync activity | What has Wyrd recorded or completed? |
 | Liveness | Drive activity | What was the drive's last reported loop state? |
-| Freshness | Drive data (timestamp field pending) | Is the served data current for this device? |
+| Freshness | Drive data | Is the served data current for this device? |
 | Queue | Pending work | Is anything waiting to happen? |
 | Materialized | Local files | What is the file residency state here? |
 | Paused — reachable and quiet, not down. | Synchronization is paused. The drive is still running and can answer requests. | Reachability is not progress. |
@@ -136,14 +136,14 @@ grouping and layout are implementation concerns outside this document.
 - The "Last publish" row MUST be relabelled so it cannot read as a time —
   e.g. "Published on last pass" with Yes / No / "No pass reported"
   (`StatusView.svelte:260-266`).
-- Freshness (D-11 resolved; field pending implementation). `WireFreshness`
-  exposes only state, revision and generation (`wire.rs:619-626`;
-  `results.ts:218-227`). "Fresh" means the served projection was regenerated
+- Freshness (D-11 resolved; wire field landed). `WireFreshness` exposes state,
+  revision, generation and `published_unix_secs` (`wire.rs:639-651`;
+  `results.ts:228-234`). "Fresh" means the served projection was regenerated
   from the engine's latest durable revision; it MUST NOT imply convergence
   with peers and can coexist with pending heads
   (`pass.rs:884-885,933-962,1014-1027`; convergence is a separate field at
   `wire.rs:275-284`).
-  - Until the resolved timestamp is exposed, keep the interim state text
+  - Until the Drive data row lands in the shell, keep the interim state text
     "Current" / "Current (empty)" / "Last good copy — stale: {reason}", with
     the explicit note that freshness is not a convergence claim. No
     synchronization time is invented from the shell's own observation stamp.
@@ -467,8 +467,9 @@ syntax or identifiers.
 | Status card | Sync activity | Durable observation | Mechanism vs outcome |
 | Status card | Drive activity (defined as last reported loop state) | Service health / Drive status / "recently active" | No service ambiguity, no unsupported recency claim (`StatusView.svelte:228-266`) |
 | Status row | Published on last pass | Last publish | Boolean, not a time (`StatusView.svelte:260-266`) |
-| Status card | Drive data | Freshness / Last synchronization / "Up to date" | Freshness is not convergence; no sync time is implied (`wire.rs:619-626`; `pass.rs:884-885,1014-1027`) |
-| Status row (D-11, field pending) | Drive data last updated on this device | "Last synced" / "Updated just now" as a heartbeat / a 1970 date | Last local publication, not peer delivery or liveness; moves only on change; zero means unknown |
+| Status card | Drive data | Freshness / Last synchronization / "Up to date" | Freshness is not convergence; no sync time is implied (`wire.rs:639-651`; `pass.rs:884-885,1014-1027`) |
+| Status row (D-11) | Drive data last updated on this device | "Last synced" / "Updated just now" as a heartbeat / a 1970 date | Last local publication, not peer delivery or liveness; moves only on change; zero means unknown |
+| Owner fact | Warning carrying explanation 12 when this device is the sole owner; short "as last reported" line when other owners are present; the conditional explanation when unknown | A bare ownership claim, a verdict badge, or any inference from the member count | Advisory only; never a gate, a health claim, or a count-based guess (`docs/contracts/epochs.md:96`; explanation 12) |
 | Status row | Pending work | Queue / obligations / items | Implementation detail, mixed work |
 | Status row | Local files | Materialized | Internal term |
 | Local files | Kept on this device / Stored on this device / Not stored on this device | Pinned / Cached / Remote-only / "Available from other devices" | Residency is not fetchability (`docs/contracts/retention-constraints.md:103-105`) |
@@ -501,7 +502,7 @@ syntax or identifiers.
 | D-8 | Remove "Select & open"? | It opened the same workspace as "Open"; selection has no distinct semantics on the overview. | **Resolved.** Every drive card uses "Open" with the same styling. Selection stays internal for Status/Settings routing. |
 | D-9 | Unit for pending work vs settings label | Pending work is mixed control work (`config.rs:228-242`); `max_admit_per_pass` counts content identities, not files (`live/mod.rs:1153-1182`). | Conceptually resolved: "pieces of work" for pending work; "items of sync work" for the setting. The setting label must not drift into general pending-work vocabulary. |
 | D-10 | `policy` → `materialization` naming | Naming drift in versioned prose (`materialization.rs:1-8` vs `args.rs:239` vs `docs/contracts/sync-and-peers.md:590`); planning files are not authoritative. | **Open.** Resolve against normative contracts, not planning prose. |
-| D-11 | Freshness timestamp and label | `WireFreshness` has only state/revision/generation (`wire.rs:619-626`); "Fresh" can coexist with pending heads (`pass.rs:884-885,1014-1027`); the shell's observation stamp is not a sync time (`format.ts:14-17`). Relay acceptance is not recipient receipt (`docs/contracts/sync-and-peers.md:82-99`). | **Resolved (2026-11-23).** Expose the time of the last local projection publication, labelled "Drive data last updated on this device" in the Drive data card only. Not "last synced", not a heartbeat, never beside the run state or in the summary; zero or absent means unknown. Last completed pass is a separate decision. Wire field and UI are pending implementation; interim state text stays until then. |
+| D-11 | Freshness timestamp and label | `WireFreshness` had only state/revision/generation when this was decided (`wire.rs:639-651`); "Fresh" can coexist with pending heads (`pass.rs:884-885,1014-1027`); the shell's observation stamp is not a sync time (`format.ts:14-17`). Relay acceptance is not recipient receipt (`docs/contracts/sync-and-peers.md:82-99`). | **Resolved (2026-11-23).** Expose the time of the last local projection publication, labelled "Drive data last updated on this device" in the Drive data card only. Not "last synced", not a heartbeat, never beside the run state or in the summary; zero or absent means unknown. Last completed pass is a separate decision. Wire field landed; the UI row is pending, so the interim state text stays until it lands. |
 | D-12 | Public identifier product term | Immutable public key (workspace AGENTS.md); no product-facing name exists. | **Open.** No new term unless the UI actually needs one. Public identifier and private proof stay distinct. |
 | D-13 | Sole-owner freeze wording | Accurate only when the owner set empties (`remove_device.rs:63-70`); scoped to future transitions (`docs/contracts/epochs.md:255-263`); snapshot authoring is member-based (`:417`), so a stronger claim is unverified. | Resolved: approved explanation 12 states the conditional, transition-scoped guarantee and the handover path; no "no writes of any kind" claim. |
 
@@ -542,9 +543,9 @@ and does not authorize a copy, help or enum change.
    of the terminology's approval.
 4. D-11 was resolved on 2026-11-23 through change control. The product decision
    is last local projection publication, labelled "Drive data last updated on
-   this device" in the Drive data card only. The resolution changes no shipped
-   behavior: the wire field and the UI row are still pending, so the interim
-   freshness text remains authoritative until both land together.
+   this device" in the Drive data card only. The wire field has landed; the UI
+   row is still pending, so the interim freshness text remains authoritative in
+   the shell until that row lands.
 
 Copy changes may begin only after the freeze is recorded. Open decisions do
 not themselves authorize changes; the rules above remain in force until

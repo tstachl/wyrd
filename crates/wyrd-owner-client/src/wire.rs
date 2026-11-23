@@ -318,6 +318,21 @@ pub enum WireDurabilityLevel {
     Published,
 }
 
+/// The wire form of `SoleOwnerState`. Advisory only: a consumer must
+/// render it "as last reported" and never use it to gate anything.
+/// `Unknown` is the default so a reader from before this field parses
+/// an older answer without inventing a claim.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum WireSoleOwnerState {
+    /// The tip or its derived owner set was not available.
+    #[default]
+    Unknown,
+    /// This device was the only owner at the tip.
+    Sole,
+    /// At least one other owner was present at the tip.
+    NotSole,
+}
+
 /// The wire form of `KnownState`: the membership tip with its roots
 /// as hex. Roots are membership-tree content, member-visible like the
 /// tip they anchor.
@@ -354,6 +369,10 @@ pub struct WireSyncStatus {
     pub mailbox: WireMailboxView,
     /// The number of known member devices.
     pub known_members: usize,
+    /// Advisory standing in the owner set. Absent on older writers;
+    /// `Unknown` then, never a claim inferred from `known_members`.
+    #[serde(default)]
+    pub sole_owner: WireSoleOwnerState,
     /// The opaque peer handles.
     pub peers: Vec<WirePeerHandle>,
     /// The queue depths.
@@ -624,6 +643,11 @@ pub struct WireFreshness {
     pub revision: u64,
     /// The serving generation the judgment was served from.
     pub generation: u64,
+    /// Unix seconds of the last local projection publication. Zero or
+    /// absent means unknown, never a 1970 date. Not a peer delivery,
+    /// sync completion or liveness time. Absent on older writers.
+    #[serde(default)]
+    pub published_unix_secs: u64,
 }
 
 /// The wire form of `OwnerObservation`: the durable status plus

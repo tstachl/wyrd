@@ -73,6 +73,7 @@ test("freshness state stays externally tagged", () => {
     state: { RetainedLastGood: { detail: "relay quiet" } },
     revision: 9,
     generation: 4,
+    published_unix_secs: 1_700_000_000,
   };
   expect(singleKey(freshness.state as object)).toBe("RetainedLastGood");
 });

@@ -373,6 +373,7 @@ fn every_status_field_is_accounted() {
         head_classes: _,
         mailbox: _,
         known_members: _,
+        sole_owner: _,
         peers: _,
         queue: _,
         reconciliation: _,
@@ -414,6 +415,12 @@ fn every_status_field_is_accounted() {
     assert!(
         detail.contains(&status.known_members.to_string()),
         "member denominator:\n{detail}"
+    );
+    // sole_owner: advisory, reported as such, never a gate.
+    assert!(detail.contains("sole owner:"), "owner row:\n{detail}");
+    assert!(
+        detail.contains("(as last reported)"),
+        "advisory phrasing:\n{detail}"
     );
     // queue + convergence + reconciliation + materialization +
     // durability: every durable projection has its row.

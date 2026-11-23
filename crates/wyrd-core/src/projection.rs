@@ -157,6 +157,11 @@ pub struct ProjectionFreshness {
     pub revision: u64,
     /// The serving generation the judgment applies to.
     pub generation: u64,
+    /// Unix seconds of the last local projection publication, or zero
+    /// when no projection has been published yet. A retaining failure
+    /// carries the previous value forward: it is not a publication.
+    /// This is never a peer delivery, sync completion or liveness time.
+    pub published_unix_secs: u64,
 }
 
 /// The shared freshness slot: one alias so the loop, the split

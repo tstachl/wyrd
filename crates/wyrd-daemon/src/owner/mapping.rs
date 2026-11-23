@@ -19,7 +19,8 @@ use wyrd_core::projection::{FreshnessState, ProjectionFreshness};
 use wyrd_core::quarantine::QuarantineReport;
 use wyrd_core::scrub::ScrubReport;
 use wyrd_core::status::{
-    ConvergenceState, HeadClasses, HeadSummary, MailboxView, PeerHandle, QueueDepth, SyncStatus,
+    ConvergenceState, HeadClasses, HeadSummary, MailboxView, PeerHandle, QueueDepth,
+    SoleOwnerState, SyncStatus,
 };
 use wyrd_core::view::{Attr, ConflictVersion, DirEntry, Kind, Node};
 use wyrd_format::{ContentId, EntryIdentity, SnapshotId};
@@ -458,6 +459,16 @@ pub fn wire_known_state(known: &KnownState) -> WireKnownState {
     }
 }
 
+/// Map `SoleOwnerState` to its wire form. The fact stays advisory:
+/// the mapping carries it verbatim and adds no judgment.
+pub fn wire_sole_owner_state(state: &SoleOwnerState) -> WireSoleOwnerState {
+    match state {
+        SoleOwnerState::Unknown => WireSoleOwnerState::Unknown,
+        SoleOwnerState::Sole => WireSoleOwnerState::Sole,
+        SoleOwnerState::NotSole => WireSoleOwnerState::NotSole,
+    }
+}
+
 /// Map `SyncStatus` to its wire form. Exhaustive destructure:
 /// a new source field fails the build here, not on the wire.
 pub fn wire_sync_status(status: &SyncStatus) -> WireSyncStatus {
@@ -473,6 +484,7 @@ pub fn wire_sync_status(status: &SyncStatus) -> WireSyncStatus {
         head_classes,
         mailbox,
         known_members,
+        sole_owner,
         peers,
         queue,
         reconciliation,
@@ -489,6 +501,7 @@ pub fn wire_sync_status(status: &SyncStatus) -> WireSyncStatus {
         head_classes: wire_head_classes(head_classes),
         mailbox: wire_mailbox_view(mailbox),
         known_members: *known_members,
+        sole_owner: wire_sole_owner_state(sole_owner),
         peers: peers.iter().map(wire_peer_handle).collect(),
         queue: wire_queue_depth(queue),
         reconciliation: wire_reconciliation_counters(reconciliation),
@@ -544,11 +557,13 @@ pub fn wire_freshness(freshness: &ProjectionFreshness) -> WireFreshness {
         state,
         revision,
         generation,
+        published_unix_secs,
     } = freshness;
     WireFreshness {
         state: wire_freshness_state(state),
         revision: *revision,
         generation: *generation,
+        published_unix_secs: *published_unix_secs,
     }
 }
 

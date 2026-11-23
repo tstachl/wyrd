@@ -330,6 +330,7 @@ mod conformance {
                 ("head_classes", H5),
                 ("mailbox", H9),
                 ("known_members", H8),
+                ("sole_owner", H8),
                 ("peers", H8),
                 ("queue", O4),
                 ("reconciliation", O4),
