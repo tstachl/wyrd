@@ -10,10 +10,12 @@
 
 import { expect, test } from "bun:test";
 import type {
+  Diagnostics,
   ProvisionReport,
   ProvisionResult,
   Served,
   WireAttr,
+  WireDiagnosticLevel,
   WireDirEntry,
   WireFreshness,
   WireMutationError,
@@ -28,6 +30,28 @@ function singleKey(value: object): string {
   if (keys.length !== 1) throw new Error("expected a singly-tagged enum");
   return keys[0] as string;
 }
+
+// App-wide diagnostics fixtures, copied from the Rust test
+// `diagnostics_shapes_serialize_verbatim` in `commands/mod.rs`.
+test("diagnostics level is a closed bare lowercase string", () => {
+  const level: WireDiagnosticLevel = "detailed";
+  expect(level).toBe("detailed");
+});
+
+test("persisted diagnostics view is internally tagged", () => {
+  const configured: Diagnostics = {
+    state: "configured",
+    level: "detailed",
+    explicit: true,
+    path: "/x/settings.json",
+  };
+  expect(configured.state).toBe("configured");
+  expect(configured.explicit).toBe(true);
+  const nofile: Diagnostics = { state: "nofile", path: "/x/settings.json" };
+  const unreadable: Diagnostics = { state: "unreadable", reason: "parse settings.json" };
+  expect(nofile.state).toBe("nofile");
+  expect(unreadable.state).toBe("unreadable");
+});
 
 test("served node: tuple array with an externally tagged node", () => {
   const served: Served<WireNode> = [

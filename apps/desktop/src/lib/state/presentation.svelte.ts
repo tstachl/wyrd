@@ -37,6 +37,7 @@
 import type { IpcResult } from "$lib/ipc/types.js";
 import type {
   CredentialReference,
+  Diagnostics,
   DriveSettingsState,
   RegistryState,
   WireFreshness,
@@ -90,6 +91,8 @@ let statusSnapshots = $state<Record<string, Stamped<StatusSnapshot>>>({});
 let settingsSnapshots = $state<Record<string, Stamped<DriveSettingsState>>>({});
 /** Per-drive credential references, observed through the CLI. Absent means not observed yet. */
 let credentialReferences = $state<Record<string, CredentialReference>>({});
+/** The persisted app-wide diagnostics level. Not drive-scoped. */
+let diagnosticsSnapshot = $state<Stamped<Diagnostics> | null>(null);
 
 function stamp<T>(data: T): Stamped<T> {
   return { data, observedAtMs: Date.now() };
@@ -142,6 +145,10 @@ export const presentation = {
   credentialReferenceFor(driveDir: string): CredentialReference | null {
     return credentialReferences[driveDir] ?? null;
   },
+  /** The last persisted diagnostics read, stamped. App-wide, not drive-scoped. */
+  get diagnosticsSnapshot(): Stamped<Diagnostics> | null {
+    return diagnosticsSnapshot;
+  },
   /** This drive's availability: `unknown` where never probed this session. */
   availabilityFor(driveDir: string): OwnerAvailability {
     return availabilityByDrive[driveDir] ?? "unknown";
@@ -177,6 +184,9 @@ export const presentation = {
   },
   storeCredentialReference(driveDir: string, data: CredentialReference): void {
     credentialReferences[driveDir] = data;
+  },
+  storeDiagnostics(data: Diagnostics): void {
+    diagnosticsSnapshot = stamp(data);
   },
   trackRequest(): void {
     pendingRequests += 1;

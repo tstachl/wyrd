@@ -13,6 +13,8 @@
     applySettings,
     driveLock,
     driveCredentialReference,
+    diagnosticsLevel,
+    diagnosticsSet,
     driveSettings,
     driveUnlock,
     freshness,
@@ -50,11 +52,13 @@
   } from "$lib/ipc/operations.js";
   import type { IpcResult } from "$lib/ipc/types.js";
   import type {
+    Diagnostics,
     DriveView,
     KeyDefaults,
     OnboardingReport,
     ProvisionReport,
     SettingsWriteReport,
+    WireDiagnosticLevel,
   } from "$lib/ipc/results.js";
   import type { SparseUpdateArgs } from "$lib/ipc/results.js";
   import {
@@ -300,6 +304,54 @@
         presentation.storeCredentialReference(driveDir, value.credentials);
       },
     );
+  }
+
+  /**
+   * The persisted app-wide diagnostics level, read locally without an
+   * owner. Returns the fresh observation, or null when the read failed:
+   * the card must not report an applied level from the write answer
+   * when the persisted file did not confirm it.
+   */
+  async function refreshDiagnostics(): Promise<Diagnostics | null> {
+    let observed: Diagnostics | null = null;
+    await readLocal(
+      () => diagnosticsLevel(),
+      (value) => {
+        observed = value;
+        presentation.storeDiagnostics(value);
+      },
+    );
+    return observed;
+  }
+
+  /**
+   * Deliver one app-wide level change to the selected drive's running
+   * owner and read it back there. The result is returned to the card,
+   * which re-reads the persisted file before showing a change. A
+   * transport throw is reported here and rethrown for the card's
+   * inline detail; it is never an applied level.
+   */
+  async function runDiagnosticsSet(
+    level: WireDiagnosticLevel,
+  ): Promise<IpcResult<WireDiagnosticLevel>> {
+    if (selectedDriveDir === null) {
+      return { ok: false, error: { kind: "unavailable", detail: "Select a drive first." } };
+    }
+    presentation.trackRequest();
+    try {
+      const result = await diagnosticsSet(selectedDriveDir, level);
+      presentation.clearTransportNotice();
+      return result;
+    } catch (error: unknown) {
+      presentation.noteTransportFailure(
+        error instanceof IpcTransportError
+          ? "The shell backend did not answer (transport failure, not an owner answer)."
+          : `Unexpected diagnostics failure: ${String(error)}`,
+      );
+      throw error;
+    } finally {
+      presentation.finishRequest();
+    }
   }
 
   /**
@@ -564,9 +616,12 @@
       case "lifecycle":
         return refreshLifecycle();
       case "settings":
-        return selectedDriveDir === null
-          ? Promise.resolve()
-          : refreshSettings(selectedDriveDir);
+        // The diagnostics level is app-wide: read it alongside the
+        // drive's bounds, independent of any owner connection.
+        return Promise.all([
+          selectedDriveDir === null ? Promise.resolve() : refreshSettings(selectedDriveDir),
+          refreshDiagnostics(),
+        ]).then(() => undefined);
     }
   }
 
@@ -1287,6 +1342,9 @@
                 toggleEnablementFromSettings(selectedDriveDir, enable)
               }
               onRefreshDrives={allDrives}
+              diagnosticsSnapshot={presentation.diagnosticsSnapshot}
+              onRefreshDiagnostics={() => refreshDiagnostics()}
+              onDiagnosticsSet={(level: WireDiagnosticLevel) => runDiagnosticsSet(level)}
             />
           {/if}
         </Tabs.Content>

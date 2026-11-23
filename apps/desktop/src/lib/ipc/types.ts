@@ -47,6 +47,12 @@ export const WIRE_ERROR_CODES = [
   "Io",
   "PinnedPresent",
   "TooDeep",
+  // T20 diagnostics-set refusals. Distinct terminal outcomes, never
+  // collapsed into a generic settings or transport error.
+  "InvalidDiagnosticLevel",
+  "DiagnosticsSettings",
+  "DiagnosticsMirror",
+  "DiagnosticsFilter",
 ] as const;
 
 export type WireErrorCode = (typeof WIRE_ERROR_CODES)[number];

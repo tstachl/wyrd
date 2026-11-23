@@ -35,8 +35,10 @@ after the choice and resumes it on a refusal. -->
   import CopyButton from "$lib/components/copy-button.svelte";
   import InfoHint from "$lib/components/info-hint.svelte";
   import CredentialStorageToggle from "./credential-storage-toggle.svelte";
+  import DiagnosticsCard from "./DiagnosticsCard.svelte";
   import type { Stamped } from "$lib/state/presentation.svelte.js";
-  import type { CredentialReference, DriveSettingsState, EnablementState, ProvisionReport, ServiceState, SessionState, SettingsWriteReport, SparseUpdateArgs, WireSoleOwnerState } from "$lib/ipc/results.js";
+  import type { IpcResult } from "$lib/ipc/types.js";
+  import type { CredentialReference, Diagnostics, DriveSettingsState, EnablementState, ProvisionReport, ServiceState, SessionState, SettingsWriteReport, SparseUpdateArgs, WireDiagnosticLevel, WireSoleOwnerState } from "$lib/ipc/results.js";
   import type { ProvisionDeleteArgs, ProvisionLeaveArgs } from "$lib/ipc/operations.js";
   import { buildDeleteArgs, buildLeaveArgs, type CredentialMode } from "$lib/ipc/provisioning-args.js";
   import {
@@ -129,9 +131,15 @@ after the choice and resumes it on a refusal. -->
     onToggleEnablement?: (enable: boolean) => Promise<string | null>;
     /** Re-read the registry and return to the drive list. */
     onRefreshDrives: () => void;
+    /** The persisted app-wide diagnostics level, stamped at the last read. */
+    diagnosticsSnapshot: Stamped<Diagnostics> | null;
+    /** Re-read the persisted level; null when the read failed. */
+    onRefreshDiagnostics: () => Promise<Diagnostics | null>;
+    /** Set the app-wide level on this drive's owner and read it back. */
+    onDiagnosticsSet: (level: WireDiagnosticLevel) => Promise<IpcResult<WireDiagnosticLevel>>;
   }
 
-  let { driveDir, driveName, snapshot, credentialReference, pending, transportNotice, identityFile, passphraseFile, onRefresh, onLeave, onDelete, onApply, session, onRestartService, serviceState = null, enablement = null, onToggleEnablement, onRefreshDrives, soleOwner = null }: Props = $props();
+  let { driveDir, driveName, snapshot, credentialReference, pending, transportNotice, identityFile, passphraseFile, onRefresh, onLeave, onDelete, onApply, session, onRestartService, serviceState = null, enablement = null, onToggleEnablement, onRefreshDrives, soleOwner = null, diagnosticsSnapshot, onRefreshDiagnostics, onDiagnosticsSet }: Props = $props();
 
   const restartKind = $derived(restartKindFor(session));
 
@@ -439,6 +447,16 @@ after the choice and resumes it on a refusal. -->
     <p>{transportNotice}</p>
   </Alert.Root>
 {/if}
+
+<!-- App-wide, so it sits above the per-drive cards. The card shows
+     the persisted level only; the toggle targets this drive's owner. -->
+<DiagnosticsCard
+  snapshot={diagnosticsSnapshot}
+  {driveDir}
+  {pending}
+  onRefresh={onRefreshDiagnostics}
+  onSet={onDiagnosticsSet}
+/>
 
 {#if session === null && onToggleEnablement !== undefined && serviceState !== null && serviceState.state !== "notinstalled" && serviceState.state !== "unsupported"}
   {@const toggleChecked = enablement !== null && enablement.enablement === "enabled"}
