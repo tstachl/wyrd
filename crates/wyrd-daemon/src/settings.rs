@@ -593,25 +593,31 @@ pub const APP_GROUP_IDENTIFIER: &str = "group.md.enesis.wyrd";
 /// (`Sources/Diagnostics.swift`), so the two spellings must agree.
 pub const DIAGNOSTICS_MIRROR_RELATIVE_PATH: &str = "Diagnostics/level.json";
 
-/// Resolve the mirror path from HOME for tests and non-standard
-/// layouts. The App Group container is
+/// Resolve the App Group container from HOME for tests and
+/// non-standard layouts. The container is
 /// `~/Library/Group Containers/<group>` on macOS; the extension
 /// resolves the same directory through `containerURL(forSecurity-
 /// ApplicationGroupIdentifier:)`. No HOME is a loud refusal — no
 /// cwd-relative guess, like the settings path itself.
-pub fn diagnostics_mirror_path_for(home: Option<&str>) -> Result<PathBuf, String> {
+pub fn diagnostics_mirror_container_for(home: Option<&str>) -> Result<PathBuf, String> {
     let home = home
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| "no home directory: cannot locate the App Group mirror".to_string())?;
+        .ok_or_else(|| "no home directory: cannot locate the App Group container".to_string())?;
     Ok(PathBuf::from(home)
         .join("Library/Group Containers")
-        .join(APP_GROUP_IDENTIFIER)
-        .join(DIAGNOSTICS_MIRROR_RELATIVE_PATH))
+        .join(APP_GROUP_IDENTIFIER))
 }
 
-/// The mirror path for the running user.
-pub fn default_diagnostics_mirror_path() -> Result<PathBuf, String> {
-    diagnostics_mirror_path_for(std::env::var("HOME").ok().as_deref())
+/// The container for the running user.
+pub fn default_diagnostics_mirror_container() -> Result<PathBuf, String> {
+    diagnostics_mirror_container_for(std::env::var("HOME").ok().as_deref())
+}
+
+/// Mirror path inside a resolved container, for readers such as the
+/// local bundle export. Publishing uses the container itself so it
+/// can refuse to create a decoy.
+pub fn diagnostics_mirror_path_in(container: &Path) -> PathBuf {
+    container.join(DIAGNOSTICS_MIRROR_RELATIVE_PATH)
 }
 
 /// The exact document the extension parses: a version tag it
@@ -623,26 +629,74 @@ struct DiagnosticsMirrorDocument<'a> {
     level: &'a str,
 }
 
-/// Publish the authoritative level to the read-only mirror. This
-/// is distribution, not a second source of truth: the app never
-/// reads the mirror, and a stale or hand-edited one never changes
-/// the persisted setting. The file is owner-only like settings;
-/// the extension runs as the same user and only reads it.
-pub fn publish_diagnostics_mirror(path: &Path, level: DiagnosticLevel) -> Result<(), String> {
+/// Create or tighten the `Diagnostics/` leaf inside an existing
+/// container. Only the leaf is created: the container itself belongs
+/// to the app's launch-time initialization, never to this writer.
+fn ensure_private_mirror_dir(leaf: &Path) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+        if !leaf.is_dir() {
+            std::fs::DirBuilder::new()
+                .mode(0o700)
+                .create(leaf)
+                .map_err(|error| format!("create {}: {error}", leaf.display()))?;
+            return Ok(());
+        }
+        let mode = std::fs::metadata(leaf)
+            .map_err(|error| format!("stat {}: {error}", leaf.display()))?
+            .mode()
+            & 0o777;
+        if mode & 0o077 != 0 {
+            std::fs::set_permissions(leaf, std::fs::Permissions::from_mode(0o700))
+                .map_err(|error| format!("chmod {}: {error}", leaf.display()))?;
+        }
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::create_dir_all(leaf).map_err(|error| format!("create {}: {error}", leaf.display()))
+    }
+}
+
+/// Publish the authoritative level to the read-only mirror inside
+/// an existing App Group container. This is distribution, not a
+/// second source of truth: the app never reads the mirror, and a
+/// stale or hand-edited one never changes the persisted setting.
+///
+/// The container must already exist — the same rule the owner's
+/// socket bind follows. A hand-created container is a decoy the
+/// sandboxed extension cannot reach, so creating one here would
+/// report a false success. Only the `Diagnostics/` leaf is made,
+/// owner-only, and the file is owner-only like settings. Returns
+/// the path written for callers that need it.
+pub fn publish_diagnostics_mirror(
+    container: &Path,
+    level: DiagnosticLevel,
+) -> Result<PathBuf, String> {
+    if !container.is_dir() {
+        return Err(format!(
+            "App Group container {} is absent; a hand-created container is a decoy the extension cannot reach",
+            container.display()
+        ));
+    }
+    let path = diagnostics_mirror_path_in(container);
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("mirror path {} has no parent", path.display()))?;
+    ensure_private_mirror_dir(parent)?;
     let document = DiagnosticsMirrorDocument {
         version: 1,
         level: level.as_str(),
     };
     let bytes = serde_json::to_vec_pretty(&document)
         .map_err(|error| format!("encode diagnostics mirror: {error}"))?;
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    std::fs::create_dir_all(parent)
-        .map_err(|error| format!("create {}: {error}", parent.display()))?;
     let file_name = path
         .file_name()
         .ok_or_else(|| format!("mirror path {} has no file name", path.display()))?;
     wyrd_sync::durable::atomic_write_mode(parent, &file_name.to_string_lossy(), &bytes, 0o600)
-        .map_err(|error| format!("write {}: {error}", path.display()))
+        .map_err(|error| format!("write {}: {error}", path.display()))?;
+    Ok(path)
 }
 
 /// Why an app-wide diagnostics edit did not reach both the file and
@@ -668,7 +722,7 @@ pub enum DiagnosticsUpdateError {
 /// before the lock.
 pub fn apply_diagnostics_update(
     settings_path: &Path,
-    mirror_path: &Path,
+    container: &Path,
     update: &DiagnosticsUpdate,
 ) -> Result<DiagnosticLevel, DiagnosticsUpdateError> {
     let _lock = lock_settings(settings_path)?;
@@ -676,7 +730,7 @@ pub fn apply_diagnostics_update(
     apply_diagnostics_to_file(&mut staged.file, update);
     let committed = commit_staged(settings_path, staged)?;
     let level = committed.diagnostics_level();
-    publish_diagnostics_mirror(mirror_path, level).map_err(DiagnosticsUpdateError::Mirror)?;
+    publish_diagnostics_mirror(container, level).map_err(DiagnosticsUpdateError::Mirror)?;
     Ok(level)
 }
 
@@ -841,6 +895,15 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// A scratch stand-in for the App Group container. Publish must
+    /// refuse a container it did not find, so tests create this one
+    /// the way the app's launch-time initialization would.
+    fn scratch_container(dir: &Path) -> PathBuf {
+        let container = dir.join("group");
+        std::fs::create_dir_all(&container).unwrap();
+        container
     }
 
     fn drive_key(dir: &Path) -> String {
@@ -1533,10 +1596,10 @@ mod tests {
             DiagnosticLevel::Default
         );
 
-        let mirror = dir.join("mirror").join("level.json");
+        let container = scratch_container(&dir);
         apply_diagnostics_update(
             &path,
-            &mirror,
+            &container,
             &DiagnosticsUpdate {
                 level: Some(DiagnosticLevel::Detailed),
             },
@@ -1558,11 +1621,12 @@ mod tests {
         let path = dir.join("settings.json");
         let other = dir.join("other");
         apply_sparse_update(&path, &other, &sparse(&[("open_timeout_secs", 31)], &[])).unwrap();
-        let mirror = dir.join("group").join("Diagnostics").join("level.json");
+        let container = scratch_container(&dir);
+        let mirror = diagnostics_mirror_path_in(&container);
 
         let level = apply_diagnostics_update(
             &path,
-            &mirror,
+            &container,
             &DiagnosticsUpdate {
                 level: Some(DiagnosticLevel::Detailed),
             },
@@ -1595,7 +1659,7 @@ mod tests {
 
         // Clearing returns to genuine absence; the section vanishes.
         let level =
-            apply_diagnostics_update(&path, &mirror, &DiagnosticsUpdate::default()).unwrap();
+            apply_diagnostics_update(&path, &container, &DiagnosticsUpdate::default()).unwrap();
         assert_eq!(level, DiagnosticLevel::Default);
         let file = read_settings(&path).unwrap();
         assert!(file.diagnostics.is_none());
@@ -1614,7 +1678,8 @@ mod tests {
     fn diagnostics_refusals_and_mirror_failure_are_distinct() {
         let dir = scratch("diagnostics-refuse");
         let path = dir.join("settings.json");
-        let mirror = dir.join("mirror").join("level.json");
+        let container = scratch_container(&dir);
+        let mirror = diagnostics_mirror_path_in(&container);
         let detailed = DiagnosticsUpdate {
             level: Some(DiagnosticLevel::Detailed),
         };
@@ -1624,7 +1689,7 @@ mod tests {
             r#"{"version":999,"drives":{}}"#.to_string(),
         ] {
             std::fs::write(&path, &contents).unwrap();
-            let refused = apply_diagnostics_update(&path, &mirror, &detailed).unwrap_err();
+            let refused = apply_diagnostics_update(&path, &container, &detailed).unwrap_err();
             assert!(
                 matches!(refused, DiagnosticsUpdateError::Settings(_)),
                 "refusal is a settings failure, not a mirror failure: {refused}"
@@ -1637,9 +1702,8 @@ mod tests {
         // outcome with the value still authoritative in settings.
         std::fs::write(&path, r#"{"version":2,"drives":{}}"#).unwrap();
         let blocked = dir.join("blocked");
-        std::fs::write(&blocked, b"a file, not a directory").unwrap();
-        let bad_mirror = blocked.join("level.json");
-        let failed = apply_diagnostics_update(&path, &bad_mirror, &detailed).unwrap_err();
+        std::fs::write(&blocked, b"a file, not a container directory").unwrap();
+        let failed = apply_diagnostics_update(&path, &blocked, &detailed).unwrap_err();
         assert!(
             matches!(failed, DiagnosticsUpdateError::Mirror(_)),
             "mirror failure is distinct: {failed}"
@@ -1658,14 +1722,15 @@ mod tests {
     fn explicit_default_collapses_to_absence() {
         let dir = scratch("diagnostics-explicit-default");
         let path = dir.join("settings.json");
-        let mirror = dir.join("mirror").join("level.json");
+        let container = scratch_container(&dir);
+        let mirror = diagnostics_mirror_path_in(&container);
         let set = DiagnosticsUpdate {
             level: Some(DiagnosticLevel::Detailed),
         };
-        apply_diagnostics_update(&path, &mirror, &set).unwrap();
+        apply_diagnostics_update(&path, &container, &set).unwrap();
         let level = apply_diagnostics_update(
             &path,
-            &mirror,
+            &container,
             &DiagnosticsUpdate {
                 level: Some(DiagnosticLevel::Default),
             },
@@ -1687,9 +1752,9 @@ mod tests {
     fn the_mirror_is_never_consulted_as_a_second_authority() {
         let dir = scratch("mirror-not-authority");
         let path = dir.join("settings.json");
-        let mirror = dir.join("mirror").join("level.json");
+        let container = scratch_container(&dir);
         std::fs::write(&path, r#"{"version":2,"drives":{}}"#).unwrap();
-        publish_diagnostics_mirror(&mirror, DiagnosticLevel::Detailed).unwrap();
+        publish_diagnostics_mirror(&container, DiagnosticLevel::Detailed).unwrap();
         assert_eq!(
             diagnostics_level_at(&path).unwrap(),
             DiagnosticLevel::Default,
@@ -1699,19 +1764,71 @@ mod tests {
         assert!(read.diagnostics.is_none());
     }
 
-    /// The mirror path is derived from the App Group identifier,
+    /// The container is derived from the App Group identifier,
     /// literally and without a team prefix, matching the extension.
     #[test]
     fn mirror_path_uses_the_app_group_literally() {
-        let path = diagnostics_mirror_path_for(Some("/home/op")).unwrap();
+        let container = diagnostics_mirror_container_for(Some("/home/op")).unwrap();
         assert_eq!(
-            path,
+            container,
             PathBuf::from("/home/op")
                 .join("Library/Group Containers")
                 .join("group.md.enesis.wyrd")
-                .join("Diagnostics/level.json")
         );
-        assert!(diagnostics_mirror_path_for(None).is_err());
-        assert!(diagnostics_mirror_path_for(Some("")).is_err());
+        assert_eq!(
+            diagnostics_mirror_path_in(&container),
+            container.join("Diagnostics/level.json")
+        );
+        assert!(diagnostics_mirror_container_for(None).is_err());
+        assert!(diagnostics_mirror_container_for(Some("")).is_err());
+    }
+
+    /// A missing container is never created: a hand-made container
+    /// is a decoy the sandboxed extension cannot reach, so the
+    /// publish fails as committed-but-unpublished and leaves no
+    /// directory behind.
+    #[test]
+    fn a_missing_container_is_never_created() {
+        let dir = scratch("mirror-decoy");
+        let path = dir.join("settings.json");
+        let missing = dir.join("Group Containers").join("group.md.enesis.wyrd");
+        let detailed = DiagnosticsUpdate {
+            level: Some(DiagnosticLevel::Detailed),
+        };
+        let failed = apply_diagnostics_update(&path, &missing, &detailed).unwrap_err();
+        assert!(
+            matches!(failed, DiagnosticsUpdateError::Mirror(_)),
+            "missing container is a mirror failure: {failed}"
+        );
+        assert!(failed.to_string().contains("decoy"), "{failed}");
+        assert!(!missing.exists(), "no decoy container was created");
+        assert_eq!(
+            diagnostics_level_at(&path).unwrap(),
+            DiagnosticLevel::Detailed,
+            "the committed setting stands"
+        );
+    }
+
+    /// The mirror's own leaf is private: created 0700, tightened when
+    /// it predates the rule, with the file itself 0600.
+    #[cfg(unix)]
+    #[test]
+    fn mirror_leaf_is_private() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let dir = scratch("mirror-leaf");
+        let container = scratch_container(&dir);
+        let leaf = container.join("Diagnostics");
+        std::fs::create_dir_all(&leaf).unwrap();
+        std::fs::set_permissions(&leaf, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        publish_diagnostics_mirror(&container, DiagnosticLevel::Detailed).unwrap();
+        let mode = std::fs::metadata(&leaf).unwrap().mode() & 0o777;
+        assert_eq!(mode, 0o700, "the mirror leaf is private, got {mode:o}");
+        let mirror = diagnostics_mirror_path_in(&container);
+        let file_mode = std::fs::metadata(&mirror).unwrap().mode() & 0o777;
+        assert_eq!(
+            file_mode, 0o600,
+            "the mirror file is owner-only, got {file_mode:o}"
+        );
     }
 }
