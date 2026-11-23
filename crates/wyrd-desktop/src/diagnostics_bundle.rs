@@ -518,6 +518,52 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    /// The closed Swift enums and the export allowlists are duplicated
+    /// across the two languages by design. This pin reads the Swift
+    /// sources at compile time so adding a stage, operation, or field
+    /// without updating this module fails the build instead of
+    /// silently dropping records from every bundle.
+    #[test]
+    fn cross_language_closed_lists_stay_in_step() {
+        let swift_diagnostics =
+            include_str!("../../../packaging/macos/fileprovider/Sources/Diagnostics.swift");
+        let swift_sink = include_str!(
+            "../../../packaging/macos/fileprovider/Sources/DiagnosticsRecordSink.swift"
+        );
+        for operation in ["createItem", "modifyItem", "deleteItem"] {
+            assert!(
+                swift_diagnostics.contains(&format!("case {operation}")),
+                "Swift operation {operation} is missing"
+            );
+        }
+        for stage in [
+            "cancelled",
+            "excluded",
+            "symlinkTemplate",
+            "trashRefused",
+            "stagedContentsRead",
+            "mutation",
+            "itemLookup",
+            "baseVersionMismatch",
+            "rename",
+            "contentOnNonFile",
+            "missingStagedContents",
+            "contentWrite",
+            "completed",
+        ] {
+            assert!(
+                swift_diagnostics.contains(&format!("case {stage}")),
+                "Swift stage {stage} is missing"
+            );
+        }
+        for field in ALLOWED_FIELDS {
+            assert!(
+                swift_sink.contains(&format!("\"{field}\"")),
+                "Swift sink allowlist is missing {field}"
+            );
+        }
+    }
+
     /// A hand-edited sink cannot turn the two source-controlled fields
     /// into a free-text surface. Their closed shapes are validated.
     #[test]
