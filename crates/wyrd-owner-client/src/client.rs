@@ -23,12 +23,13 @@ use std::time::Duration;
 
 use super::transport::{socket_path_for, MAX_FRAME_BYTES};
 use super::wire::{
-    PathParams, RawRequest, SubmitParams, WireAttr, WireDirEntry, WireError, WireErrorCode,
-    WireFreshness, WireLiveness, WireMutationKind, WireMutationOutcome, WireNode, WireOk,
-    WireParentToken, WirePolicyStatus, WireResponse, WireResult, WireSyncStatus, OP_CAPTURE_PARENT,
-    OP_FRESHNESS, OP_LIVENESS, OP_LOOKUP, OP_OBSERVE, OP_PAUSE, OP_POLICY_EVICT, OP_POLICY_PIN,
-    OP_POLICY_STATUS, OP_POLICY_UNPIN, OP_READ, OP_READDIR, OP_RESUME, OP_STAT, OP_SUBMIT,
-    WIRE_VERSION,
+    diagnostic_level_name, DiagnosticsSetParams, PathParams, RawRequest, SubmitParams, WireAttr,
+    WireDiagnosticLevel, WireDirEntry, WireError, WireErrorCode, WireFreshness, WireLiveness,
+    WireMutationKind, WireMutationOutcome, WireNode, WireOk, WireParentToken, WirePolicyStatus,
+    WireResponse, WireResult, WireSyncStatus, OP_CAPTURE_PARENT, OP_DIAGNOSTICS_SET,
+    OP_DIAGNOSTICS_STATUS, OP_FRESHNESS, OP_LIVENESS, OP_LOOKUP, OP_OBSERVE, OP_PAUSE,
+    OP_POLICY_EVICT, OP_POLICY_PIN, OP_POLICY_STATUS, OP_POLICY_UNPIN, OP_READ, OP_READDIR,
+    OP_RESUME, OP_STAT, OP_SUBMIT, WIRE_VERSION,
 };
 
 /// How long one request waits for the owner's terminal answer. The
@@ -287,6 +288,36 @@ impl OwnerClient {
         match self.transact(OP_FRESHNESS, serde_json::Value::Null)? {
             WireOk::Freshness { freshness } => Ok(freshness),
             other => Err(unexpected(OP_FRESHNESS, other)),
+        }
+    }
+
+    /// Set the owner's process-local diagnostics level and read it
+    /// back from the same answer. A refusal is terminal and names
+    /// its own cause: an unknown level, a settings refusal, or a
+    /// committed setting whose app-group mirror could not be
+    /// published. The last one is never reported as applied.
+    pub fn diagnostics_set(
+        &mut self,
+        level: WireDiagnosticLevel,
+    ) -> Result<WireDiagnosticLevel, ClientError> {
+        match self.transact(
+            OP_DIAGNOSTICS_SET,
+            DiagnosticsSetParams {
+                level: diagnostic_level_name(level).to_string(),
+            },
+        )? {
+            WireOk::Diagnostics { level } => Ok(level),
+            other => Err(unexpected(OP_DIAGNOSTICS_SET, other)),
+        }
+    }
+
+    /// Read back the level the owner currently applies. No
+    /// parameters. An unconfirmed answer must be re-read here before
+    /// any retry; silence never means applied or failed.
+    pub fn diagnostics_status(&mut self) -> Result<WireDiagnosticLevel, ClientError> {
+        match self.transact(OP_DIAGNOSTICS_STATUS, serde_json::Value::Null)? {
+            WireOk::Diagnostics { level } => Ok(level),
+            other => Err(unexpected(OP_DIAGNOSTICS_STATUS, other)),
         }
     }
 

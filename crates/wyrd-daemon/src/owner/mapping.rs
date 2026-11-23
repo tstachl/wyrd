@@ -24,6 +24,7 @@ use wyrd_core::status::{
 };
 use wyrd_core::view::{Attr, ConflictVersion, DirEntry, Kind, Node};
 use wyrd_format::{ContentId, EntryIdentity, SnapshotId};
+use wyrd_settings::DiagnosticLevel;
 use wyrd_sync::membership::KnownState;
 use wyrd_sync::runtime::{
     DrainReport, DurabilityLevel, ExecuteReport, MaterializationSummary, OutboxTotals,
@@ -54,6 +55,24 @@ pub fn wire_kind(kind: Kind) -> WireKind {
         Kind::Dir => WireKind::Dir,
         Kind::Symlink => WireKind::Symlink,
         Kind::Conflict => WireKind::Conflict,
+    }
+}
+
+/// Map the closed diagnostics level to its wire form. The enum is
+/// closed on both sides, so this conversion is total: no level can
+/// be silently coerced to another one.
+pub fn wire_diagnostic_level(level: DiagnosticLevel) -> WireDiagnosticLevel {
+    match level {
+        DiagnosticLevel::Default => WireDiagnosticLevel::Default,
+        DiagnosticLevel::Detailed => WireDiagnosticLevel::Detailed,
+    }
+}
+
+/// Map the wire diagnostics level back to the settings type.
+pub fn diagnostic_level_from_wire(level: WireDiagnosticLevel) -> DiagnosticLevel {
+    match level {
+        WireDiagnosticLevel::Default => DiagnosticLevel::Default,
+        WireDiagnosticLevel::Detailed => DiagnosticLevel::Detailed,
     }
 }
 

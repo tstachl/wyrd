@@ -13,10 +13,11 @@ use super::mapping::{
 };
 use super::server::bound_read_refusal;
 use super::wire::{
-    PathParams, RawRequest, SubmitParams, WireAttr, WireDirEntry, WireDurabilityLevel, WireError,
-    WireErrorCode, WireFileIdentity, WireFreshnessState, WireKind, WireLiveness, WireMutationKind,
-    WireMutationOutcome, WireNode, WireOk, WireParentToken, WirePresence, WireResponse, WireResult,
-    WireRetentionPolicy, OP_CAPTURE_PARENT, OP_FRESHNESS, OP_LIVENESS, OP_LOOKUP, OP_OBSERVE,
+    PathParams, RawRequest, SubmitParams, WireAttr, WireDiagnosticLevel, WireDirEntry,
+    WireDurabilityLevel, WireError, WireErrorCode, WireFileIdentity, WireFreshnessState, WireKind,
+    WireLiveness, WireMutationKind, WireMutationOutcome, WireNode, WireOk, WireParentToken,
+    WirePresence, WireResponse, WireResult, WireRetentionPolicy, OP_CAPTURE_PARENT,
+    OP_DIAGNOSTICS_SET, OP_DIAGNOSTICS_STATUS, OP_FRESHNESS, OP_LIVENESS, OP_LOOKUP, OP_OBSERVE,
     OP_PAUSE, OP_POLICY_EVICT, OP_POLICY_PIN, OP_POLICY_STATUS, OP_POLICY_UNPIN, OP_READ,
     OP_READDIR, OP_RESUME, OP_STAT, OP_SUBMIT, WIRE_VERSION,
 };
@@ -4303,5 +4304,182 @@ fn submit_enforces_the_expected_identity() {
     );
     stop.store(true, Ordering::Relaxed);
     spawn_loop_done(loop_thread);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// Local diagnostics configuration (T20)
+// ---------------------------------------------------------------------------
+
+fn diagnostics_paths(name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+    let root = std::env::temp_dir().join(format!("wyrd-owner-diag-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let container = root.join("container");
+    std::fs::create_dir_all(&container).unwrap();
+    let settings = root.join("settings.json");
+    std::fs::write(&settings, r#"{"version":2,"drives":{}}"#).unwrap();
+    (settings, container)
+}
+
+fn diagnostics_server(
+    parts: &LiveParts<OwnerView>,
+    settings: std::path::PathBuf,
+    container: std::path::PathBuf,
+) -> OwnerServer {
+    let controller = crate::diagnostics::DiagnosticsController::for_paths(settings, container)
+        .expect("diagnostics controller");
+    OwnerServer::new(OwnerHandles::from_parts(parts).with_diagnostics(Arc::new(controller)))
+}
+
+/// Status reads the level the controller loaded from the settings
+/// file on start, not the mirror and not a remembered live override.
+#[test]
+fn diagnostics_status_reads_the_startup_level() {
+    let (parts, dir) = composed_parts();
+    let (settings, container) = diagnostics_paths("startup");
+    std::fs::write(
+        &settings,
+        r#"{"version":2,"drives":{},"diagnostics":{"level":"detailed"}}"#,
+    )
+    .unwrap();
+    let server = diagnostics_server(&parts, settings, container);
+    match dispatch_ok(&server, OP_DIAGNOSTICS_STATUS, "") {
+        WireOk::Diagnostics { level } => {
+            assert_eq!(level, WireDiagnosticLevel::Detailed)
+        }
+        other => panic!("status answers with a level: {other:?}"),
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// A set answer reads back the applied level, persists it, publishes
+/// the app-group mirror, and is idempotent when repeated.
+#[test]
+fn diagnostics_set_applies_and_reads_back() {
+    let (parts, dir) = composed_parts();
+    let (settings, container) = diagnostics_paths("set");
+    let server = diagnostics_server(&parts, settings.clone(), container.clone());
+    for op in [OP_DIAGNOSTICS_SET, OP_DIAGNOSTICS_STATUS] {
+        let params = if op == OP_DIAGNOSTICS_SET {
+            serde_json::json!({ "level": "detailed" })
+        } else {
+            serde_json::Value::Null
+        };
+        let response = server.dispatch(RawRequest {
+            v: WIRE_VERSION,
+            id: 11,
+            op: op.to_string(),
+            params,
+        });
+        match response.result {
+            WireResult::Ok(ok) => match *ok {
+                WireOk::Diagnostics { level } => {
+                    assert_eq!(level, WireDiagnosticLevel::Detailed, "{op}")
+                }
+                other => panic!("{op} answers with a level: {other:?}"),
+            },
+            WireResult::Err(error) => panic!("{op} refused: {:?} {}", error.code, error.message),
+        }
+    }
+    let persisted: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&settings).unwrap()).unwrap();
+    assert_eq!(persisted["diagnostics"]["level"], "detailed");
+    let mirror: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(container.join("Diagnostics/level.json")).unwrap())
+            .unwrap();
+    assert_eq!(mirror["level"], "detailed");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// An unknown value and an extra field are two distinct refusals.
+/// Neither is coerced into a level and neither touches the file.
+#[test]
+fn diagnostics_set_refuses_unknown_values_and_extra_fields_distinctly() {
+    let (parts, dir) = composed_parts();
+    let (settings, container) = diagnostics_paths("refuse");
+    let server = diagnostics_server(&parts, settings.clone(), container);
+    for (params, code, detail) in [
+        (
+            serde_json::json!({ "level": "verbose" }),
+            WireErrorCode::InvalidDiagnosticLevel,
+            "verbose",
+        ),
+        (
+            serde_json::json!({ "level": "detailed", "extra": true }),
+            WireErrorCode::Malformed,
+            "extra",
+        ),
+    ] {
+        let response = server.dispatch(RawRequest {
+            v: WIRE_VERSION,
+            id: 12,
+            op: OP_DIAGNOSTICS_SET.to_string(),
+            params,
+        });
+        match response.result {
+            WireResult::Err(error) => {
+                assert_eq!(error.code, code);
+                assert!(error.message.contains(detail), "{}", error.message);
+            }
+            other => panic!("a bad level refuses: {other:?}"),
+        }
+    }
+    let persisted = std::fs::read_to_string(&settings).unwrap();
+    assert!(!persisted.contains("diagnostics"), "{persisted}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// A committed setting with an unpublished mirror is its own
+/// refusal, and the applied level is unchanged.
+#[test]
+fn diagnostics_mirror_failure_is_distinct_from_a_level_refusal() {
+    let (parts, dir) = composed_parts();
+    let (settings, root) = diagnostics_paths("mirror");
+    let missing = root.join("absent-container");
+    let server = diagnostics_server(&parts, settings.clone(), missing);
+    let response = server.dispatch(RawRequest {
+        v: WIRE_VERSION,
+        id: 13,
+        op: OP_DIAGNOSTICS_SET.to_string(),
+        params: serde_json::json!({ "level": "detailed" }),
+    });
+    match response.result {
+        WireResult::Err(error) => assert_eq!(error.code, WireErrorCode::DiagnosticsMirror),
+        other => panic!("a failed mirror refuses: {other:?}"),
+    }
+    match dispatch_ok(&server, OP_DIAGNOSTICS_STATUS, "") {
+        WireOk::Diagnostics { level } => assert_eq!(level, WireDiagnosticLevel::Default),
+        other => panic!("status reads back the unchanged level: {other:?}"),
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// The typed client's set and status methods carry the same answer
+/// and refusal semantics over real framing.
+#[test]
+fn client_sets_and_reads_back_the_diagnostics_level() {
+    let (parts, dir) = composed_parts();
+    let (settings, container) = diagnostics_paths("client");
+    let server = diagnostics_server(&parts, settings, container);
+    let stop: &'static AtomicBool = Box::leak(Box::new(AtomicBool::new(false)));
+    let (socket_path, serve_thread) = serve_parts(server, "diagnostics.sock", &dir, stop);
+    let mut client = OwnerClient::connect(&socket_path).expect("the owner answers");
+    assert_eq!(
+        client.diagnostics_status().expect("status serves"),
+        WireDiagnosticLevel::Default
+    );
+    assert_eq!(
+        client
+            .diagnostics_set(WireDiagnosticLevel::Detailed)
+            .expect("set serves"),
+        WireDiagnosticLevel::Detailed
+    );
+    assert_eq!(
+        client.diagnostics_status().expect("status reads back"),
+        WireDiagnosticLevel::Detailed
+    );
+    stop.store(true, Ordering::Relaxed);
+    drop(client);
+    serve_thread.join().unwrap();
     std::fs::remove_dir_all(dir).unwrap();
 }

@@ -715,13 +715,23 @@ where
     // its interface refuses instead of running deaf. The store lock
     // is held throughout the run, so no competing owner can race
     // the stale-socket reclaim.
+    // The owner applies the persisted diagnostics level on start,
+    // before any pass runs. A settings file it cannot read refuses
+    // the run: guessing a verbosity would make early records
+    // untrustworthy. The controller owns the path and the app-group
+    // mirror; the interface only sees the level.
+    let diagnostics = Arc::new(
+        crate::diagnostics::DiagnosticsController::from_environment()
+            .map_err(OwnerError::Settings)?,
+    );
     let owner_service = crate::owner::OwnerService::bind_for_composer(
         crate::owner::OwnerHandles::for_live(
             &parts,
             Arc::clone(live.quarantine_queue()),
             Arc::clone(live.scrub_queue()),
             Arc::clone(live.waker()),
-        ),
+        )
+        .with_diagnostics(diagnostics),
         &drive_dir,
         drive,
     )

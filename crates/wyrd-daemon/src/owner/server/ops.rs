@@ -13,15 +13,17 @@ use wyrd_core::view::{NamespaceView, Node};
 
 use crate::vault::OwnerView;
 
+use crate::diagnostics::DiagnosticsSetError;
 use crate::owner::mapping::{
-    map_policy_error, mutation_kind_from_wire, wire_attr, wire_dir_entry, wire_freshness,
-    wire_identity, wire_mailbox_health, wire_mutation_error, wire_mutation_outcome, wire_node,
-    wire_policy_row, wire_sync_report, wire_sync_status,
+    map_policy_error, mutation_kind_from_wire, wire_attr, wire_diagnostic_level, wire_dir_entry,
+    wire_freshness, wire_identity, wire_mailbox_health, wire_mutation_error, wire_mutation_outcome,
+    wire_node, wire_policy_row, wire_sync_report, wire_sync_status,
 };
 use crate::owner::wire::{
-    PathParams, SubmitParams, WireErrorCode, WireLiveness, WireMailboxHealth, WireOk,
-    WireParentToken, WirePolicyStatus,
+    DiagnosticsSetParams, PathParams, SubmitParams, WireErrorCode, WireLiveness, WireMailboxHealth,
+    WireOk, WireParentToken, WirePolicyStatus,
 };
+use wyrd_settings::DiagnosticLevel;
 
 use super::framing::{
     bound_read_refusal, map_read_error, map_view_error, reject_bound_non_read, submit_content_bytes,
@@ -294,6 +296,57 @@ impl super::OwnerServer {
     /// tokens, never bare. Refusal means the table is blocked or
     /// saturated, reported as `StaleParent` (retry the capture), never
     /// as a missing parent.
+    /// Set the process-local diagnostics level. This is configuration,
+    /// not a mutation or a policy operation: it touches neither queue,
+    /// commits no drive fact, and changes no store state. The settings
+    /// backend owns persistence and the app-group mirror; a mirror
+    /// failure is a distinct refusal, never a reported success.
+    pub(super) fn op_diagnostics_set(
+        &self,
+        params: serde_json::Value,
+    ) -> Result<WireOk, (WireErrorCode, String)> {
+        let params: DiagnosticsSetParams = serde_json::from_value(params).map_err(|error| {
+            (
+                WireErrorCode::Malformed,
+                format!("bad diagnostics-set params: {error}"),
+            )
+        })?;
+        let level = match params.level.as_str() {
+            "default" => DiagnosticLevel::Default,
+            "detailed" => DiagnosticLevel::Detailed,
+            other => {
+                return Err((
+                    WireErrorCode::InvalidDiagnosticLevel,
+                    format!(
+                        "unknown diagnostics level {other:?}: want \"default\" or \"detailed\""
+                    ),
+                ))
+            }
+        };
+        let applied = self
+            .handles
+            .diagnostics
+            .set(level)
+            .map_err(|error| match error {
+                DiagnosticsSetError::Settings(detail) => {
+                    (WireErrorCode::DiagnosticsSettings, detail)
+                }
+                DiagnosticsSetError::Mirror(detail) => (WireErrorCode::DiagnosticsMirror, detail),
+                other => (WireErrorCode::Unavailable, other.to_string()),
+            })?;
+        Ok(WireOk::Diagnostics {
+            level: wire_diagnostic_level(applied),
+        })
+    }
+
+    /// Read the applied level back. No parameters, no inference from
+    /// silence: the answer is the same value a set operation reports.
+    pub(super) fn op_diagnostics_status(&self) -> Result<WireOk, (WireErrorCode, String)> {
+        Ok(WireOk::Diagnostics {
+            level: wire_diagnostic_level(self.handles.diagnostics.level()),
+        })
+    }
+
     pub(super) fn op_capture_parent(
         &self,
         params: serde_json::Value,

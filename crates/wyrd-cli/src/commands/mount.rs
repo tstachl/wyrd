@@ -260,13 +260,18 @@ pub(crate) fn mount(
     // removal must precede the lock release, or a successor owner
     // binding the same path races this unlink; its drop is then a
     // no-op.
+    let diagnostics = Arc::new(
+        wyrd_daemon::DiagnosticsController::from_environment()
+            .map_err(|reason| CliError::Usage(format!("application settings refused: {reason}")))?,
+    );
     let mut owner_service = OwnerService::bind_for_composer(
         OwnerHandles::for_live(
             &parts,
             Arc::clone(live.quarantine_queue()),
             Arc::clone(live.scrub_queue()),
             Arc::clone(live.waker()),
-        ),
+        )
+        .with_diagnostics(diagnostics),
         &drive_dir,
         drive,
     )
