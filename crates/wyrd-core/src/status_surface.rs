@@ -270,15 +270,15 @@ pub fn render_status_detail(status: &SyncStatus, intake: IntakeDeferral) -> Stri
     ));
     // Advisory only: phrased as a report, never as a verdict or a
     // gate. The owner set is the source; the member count above is a
-    // different set and cannot answer this.
-    out.push_str(&format!(
-        "sole owner: {} (as last reported)\n",
-        match status.sole_owner {
-            SoleOwnerState::Unknown => "not reported",
-            SoleOwnerState::Sole => "this device",
-            SoleOwnerState::NotSole => "other owners present",
+    // different set and cannot answer this. An empty set reads as
+    // unknown, never as "other owners present".
+    match status.sole_owner {
+        SoleOwnerState::Unknown => out.push_str("sole owner: not established\n"),
+        SoleOwnerState::Sole => out.push_str("sole owner: this device (as last reported)\n"),
+        SoleOwnerState::NotSole => {
+            out.push_str("sole owner: other owners present (as last reported)\n")
         }
-    ));
+    }
     for entry in &status.peers {
         out.push_str(&format!(
             "  peer-{}: {} pending\n",

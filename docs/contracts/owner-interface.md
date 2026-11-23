@@ -212,8 +212,10 @@ states: unknown, this device is the sole owner, or another owner is
 present. Read it from the derived owner set at the membership tip,
 never from the member count — a reader is a member but not an owner.
 An absent field means unknown, so a mixed-version reader must not
-invent a claim. Consumers phrase it "as last reported" and never use
-it to gate retention, eviction, removal or any other decision.
+invent a claim. An empty owner set is terminal and also means unknown:
+it must never render as "other owners present". Consumers phrase a
+known state "as last reported" and never use the fact to gate
+retention, eviction, removal or any other decision.
 
 ## Liveness
 

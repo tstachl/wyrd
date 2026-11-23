@@ -136,7 +136,9 @@ export interface WireSyncStatus {
   head_classes: WireHeadClasses;
   mailbox: WireMailboxView;
   known_members: number;
-  sole_owner: WireSoleOwnerState;
+  // Absent from an older owner. Treat missing as "Unknown", never as
+  // a fact inferred from known_members.
+  sole_owner?: WireSoleOwnerState;
   peers: WirePeerHandle[];
   queue: WireQueueDepth;
   reconciliation: WireReconciliationCounters;
@@ -229,8 +231,9 @@ export interface WireFreshness {
   state: WireFreshnessState;
   revision: number;
   generation: number;
-  // Zero means unknown. Never render it as a 1970 date.
-  published_unix_secs: number;
+  // Absent from an older owner. Zero or missing means unknown; never
+  // render it as a 1970 date.
+  published_unix_secs?: number;
 }
 
 export interface WireFileIdentity {

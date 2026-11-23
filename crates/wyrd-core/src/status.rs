@@ -246,7 +246,9 @@ impl QueueDepth {
 /// last reported": it never gates retention, eviction or removal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SoleOwnerState {
-    /// No tip, or no derived owner set for it: nothing to report.
+    /// No tip, no derived owner set, or an empty owner set: there is
+    /// no owner standing to report. An empty set is the terminal
+    /// state after the last owner removes itself.
     Unknown,
     /// This device is the only owner at the tip.
     Sole,
@@ -530,11 +532,13 @@ pub fn observe(engine: &Engine, configured_relays: usize) -> Result<SyncStatus, 
         None => 0,
     };
     // Same predicate the CLI's sole-owner confirmation uses, but as an
-    // advisory observation: no tip and no derived owner set both read
-    // as unknown. The owner set is queried directly — the member count
-    // is a different set and cannot answer this question.
+    // advisory observation: no tip, no derived owner set and an empty
+    // owner set all read as unknown. An empty set is terminal — saying
+    // "another owner is present" there would invent a fact. The owner
+    // set is queried directly; the member count cannot answer this.
     let sole_owner = match &tip {
         Some(known) => match engine.membership_log().owners_of(&known.transition_id) {
+            Some(owners) if owners.is_empty() => SoleOwnerState::Unknown,
             Some(owners) if owners.len() == 1 && owners.contains(&engine.device()) => {
                 SoleOwnerState::Sole
             }
@@ -706,6 +710,32 @@ mod tests {
             handed_over.sole_owner,
             SoleOwnerState::NotSole,
             "the owner set moved even though the member count did not"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// The terminal state after the last owner removes itself has an
+    /// empty owner set. Reporting "other owners present" there would
+    /// invent a fact, so it reads as unknown and falls back to the
+    /// conditional removal explanation.
+    #[test]
+    fn terminal_empty_owner_set_reports_unknown() {
+        let dir = scratch_dir("terminal-owner");
+        std::fs::create_dir_all(&dir).unwrap();
+        let identity = DeviceIdentitySecret::generate().unwrap();
+        let mut engine = Engine::create(dir.clone(), "core-test-pass", identity).unwrap();
+        engine.remove_device(engine.device()).unwrap();
+        let status = observe(&engine, 0).unwrap();
+        let tip = status.tip.as_ref().expect("tip survives the removal");
+        let owners = engine
+            .membership_log()
+            .owners_of(&tip.transition_id)
+            .expect("owners");
+        assert!(owners.is_empty(), "the terminal state is reachable");
+        assert_eq!(
+            status.sole_owner,
+            SoleOwnerState::Unknown,
+            "no owners is not 'another owner present'"
         );
         std::fs::remove_dir_all(dir).unwrap();
     }
