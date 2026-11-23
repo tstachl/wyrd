@@ -27,6 +27,7 @@ after the choice and resumes it on a refusal. -->
   import * as Field from "$lib/components/ui/field/index.js";
   import { Input } from "$lib/components/ui/input/index.js";
   import * as AlertDialog from "$lib/components/ui/alert-dialog/index.js";
+  import * as Empty from "$lib/components/ui/empty/index.js";
   import { Badge } from "$lib/components/ui/badge/index.js";
   import { Checkbox } from "$lib/components/ui/checkbox/index.js";
   import { Spinner } from "$lib/components/ui/spinner/index.js";
@@ -577,15 +578,15 @@ after the choice and resumes it on a refusal. -->
 {/snippet}
 
 {#if snapshot === null || settings === null}
-  <div class="mt-6 flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border bg-card/50 px-6 py-14 text-center">
-    <div class="flex size-10 items-center justify-center rounded-full bg-muted text-muted-foreground">
-      <FileQuestionIcon class="size-5" />
-    </div>
-    <p class="text-sm font-medium">No settings read yet</p>
-    <p class="max-w-sm text-sm text-muted-foreground">
-      Refresh to read this drive's limits. Nothing is filled in from memory.
-    </p>
-  </div>
+  <Empty.Root class="mt-6 border border-dashed border-border bg-card/50">
+    <Empty.Header>
+      <Empty.Media variant="icon"><FileQuestionIcon /></Empty.Media>
+      <Empty.Title>No settings read yet</Empty.Title>
+      <Empty.Description>
+        Refresh to read this drive's limits. Nothing is filled in from memory.
+      </Empty.Description>
+    </Empty.Header>
+  </Empty.Root>
   <div class="mt-3">
     <ObservedNote observedAtMs={null} />
   </div>
@@ -776,7 +777,7 @@ after the choice and resumes it on a refusal. -->
       <Alert.Root class="border-primary/30 bg-primary/5">
         <CircleAlertIcon />
         <Alert.Title>Removal report</Alert.Title>
-        <Alert.Description class="space-y-1 text-foreground/80 [&_p:not(:last-child)]:mb-1">
+        <Alert.Description class="flex flex-col gap-1 text-foreground/80">
           <p>{describeProvisionResult(removalReport)}</p>
           <p>{observedRegistrySummary(removalReport)}</p>
           <p>{membershipSummary(removalReport)}</p>

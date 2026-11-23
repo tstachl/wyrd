@@ -23,7 +23,9 @@ and entered by hand elsewhere. Secret contents never travel. -->
   import * as Field from "$lib/components/ui/field/index.js";
   import * as Alert from "$lib/components/ui/alert/index.js";
   import * as InputGroup from "$lib/components/ui/input-group/index.js";
+  import * as ToggleGroup from "$lib/components/ui/toggle-group/index.js";
   import { Input } from "$lib/components/ui/input/index.js";
+  import { Separator } from "$lib/components/ui/separator/index.js";
   import { Spinner } from "$lib/components/ui/spinner/index.js";
   import PageHeader from "$lib/components/page-header.svelte";
   import RelayEditor from "$lib/components/relay-editor.svelte";
@@ -80,6 +82,14 @@ and entered by hand elsewhere. Secret contents never travel. -->
   type Mode = "create" | "join";
 
   let mode = $state<Mode>("create");
+  // The toggle group clears a single selection when the active card is
+  // clicked again. Pin its value to the form mode so a second click
+  // re-affirms the choice instead of leaving neither card pressed.
+  // svelte-ignore state_referenced_locally
+  let selectedMode = $state<Mode | "">(mode);
+  $effect(() => {
+    selectedMode = mode;
+  });
   let credentialMode = $state<CredentialMode>("store");
   let name = $state("");
   let driveDir = $state("");
@@ -227,6 +237,15 @@ and entered by hand elsewhere. Secret contents never travel. -->
     report = null;
     error = null;
   }
+
+  function onModeChange(next: string): void {
+    if (next === "create" || next === "join") {
+      switchMode(next);
+    } else {
+      // Second click on the active card: the group cleared itself.
+      selectedMode = mode;
+    }
+  }
 </script>
 
 <PageHeader
@@ -242,43 +261,46 @@ and entered by hand elsewhere. Secret contents never travel. -->
 </PageHeader>
 
 <Card.Root class="mt-6">
-  <Card.Content class="space-y-5">
+  <Card.Content class="flex flex-col gap-5">
     <!-- The decision comes first. These two cards only choose a path;
-      every operator setting sits in Advanced below. aria-pressed
-      names the active choice without relying on colour alone. -->
-    <div class="grid gap-3 sm:grid-cols-2" role="group" aria-label="Choose what to do">
-      <button
-        type="button"
-        aria-pressed={mode === "create"}
-        onclick={() => switchMode("create")}
-        class="flex flex-col rounded-xl border p-4 text-left transition-colors aria-pressed:border-primary aria-pressed:bg-primary/5 hover:border-foreground/40 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+      every operator setting sits in Advanced below. ToggleGroup names
+      the active choice without relying on colour alone. -->
+    <ToggleGroup.Root
+      type="single"
+      bind:value={selectedMode}
+      variant="outline"
+      aria-label="Choose what to do"
+      class="grid w-full grid-cols-1 gap-3 sm:grid-cols-2"
+      onValueChange={onModeChange}
+    >
+      <ToggleGroup.Item
+        value="create"
+        class="h-auto w-full flex-col items-start gap-1 rounded-xl p-4 text-left whitespace-normal"
       >
         <span class="flex items-center gap-2 text-base font-medium">
-          <PlusIcon data-icon="inline-start" class="size-5" />
+          <PlusIcon data-icon="inline-start" />
           Create a new drive
         </span>
         <span class="mt-1 block text-xs leading-relaxed text-muted-foreground">
           Start a fresh drive on this device and choose its relays.
         </span>
-      </button>
-      <button
-        type="button"
-        aria-pressed={mode === "join"}
-        onclick={() => switchMode("join")}
-        class="flex flex-col rounded-xl border p-4 text-left transition-colors aria-pressed:border-primary aria-pressed:bg-primary/5 hover:border-foreground/40 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+      </ToggleGroup.Item>
+      <ToggleGroup.Item
+        value="join"
+        class="h-auto w-full flex-col items-start gap-1 rounded-xl p-4 text-left whitespace-normal"
       >
         <span class="flex items-center gap-2 text-base font-medium">
-          <DownloadIcon data-icon="inline-start" class="size-5" />
+          <DownloadIcon data-icon="inline-start" />
           Join with an invitation
         </span>
         <span class="mt-1 block text-xs leading-relaxed text-muted-foreground">
           Use an invitation from someone who already shares a drive.
         </span>
-      </button>
-    </div>
+      </ToggleGroup.Item>
+    </ToggleGroup.Root>
 
     {#if mode === "create"}
-      <div class="space-y-4">
+      <Field.FieldGroup class="gap-4">
           <Field.Field>
             <Field.Label for="create-name">Drive name</Field.Label>
             <Input id="create-name" value={name} oninput={onNameInput} disabled={busy} placeholder="alpha" autocomplete="off" spellcheck={false} />
@@ -319,9 +341,10 @@ and entered by hand elsewhere. Secret contents never travel. -->
               </div>
             {/if}
           </Field.Field>
-        </div>
+      </Field.FieldGroup>
 
-        <div class="flex flex-wrap items-center justify-between gap-3 border-t border-border/60 pt-4">
+        <Separator class="my-4" />
+        <div class="flex flex-wrap items-center justify-between gap-3">
           {#if createBlockers.length > 0}
             <p class="text-xs leading-relaxed text-muted-foreground">
               To create a drive: {createBlockers.join(" · ")}.
@@ -357,7 +380,7 @@ and entered by hand elsewhere. Secret contents never travel. -->
           </Button>
         </div>
     {:else}
-      <div class="space-y-4">
+      <Field.FieldGroup class="gap-4">
           <Field.Field>
             <Field.Label for="join-name">Drive name</Field.Label>
             <Input id="join-name" value={name} oninput={onNameInput} disabled={busy} placeholder="alpha" autocomplete="off" spellcheck={false} />
@@ -423,10 +446,10 @@ and entered by hand elsewhere. Secret contents never travel. -->
               </InputGroup.Addon>
             </InputGroup.Root>
           </Field.Field>
+      </Field.FieldGroup>
 
-        </div>
-
-        <div class="flex flex-wrap items-center justify-between gap-3 border-t border-border/60 pt-4">
+        <Separator class="my-4" />
+        <div class="flex flex-wrap items-center justify-between gap-3">
           {#if joinBlockers.length > 0}
             <p class="text-xs leading-relaxed text-muted-foreground">
               To join a drive: {joinBlockers.join(" · ")}.
@@ -472,7 +495,7 @@ and entered by hand elsewhere. Secret contents never travel. -->
       action to work. -->
     <details class="rounded-lg border border-border/60 px-3 py-2">
       <summary class="cursor-pointer text-sm font-medium">Advanced</summary>
-      <div class="mt-4 space-y-4">
+      <Field.FieldGroup class="mt-4 gap-4">
         <Field.Field>
           <Field.Label for="advanced-dir">Drive directory</Field.Label>
           <InputGroup.Root>
@@ -660,7 +683,7 @@ and entered by hand elsewhere. Secret contents never travel. -->
             </InputGroup.Root>
           </Field.Field>
         {/if}
-      </div>
+      </Field.FieldGroup>
     </details>
 
     {#if error !== null}
@@ -675,7 +698,7 @@ and entered by hand elsewhere. Secret contents never travel. -->
       <Alert.Root class="mt-4 border-primary/30 bg-primary/5">
         <TerminalIcon />
         <Alert.Title>Provisioning report</Alert.Title>
-        <Alert.Description class="space-y-1 text-foreground/80 [&_p:not(:last-child)]:mb-1">
+        <Alert.Description class="flex flex-col gap-1 text-foreground/80">
           <p>{describeProvisionResult(report)}</p>
           <p>{observedRegistrySummary(report)}</p>
           <p>{membershipSummary(report)}</p>

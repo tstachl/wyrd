@@ -10,8 +10,10 @@
   import * as Card from "$lib/components/ui/card/index.js";
   import * as Alert from "$lib/components/ui/alert/index.js";
   import * as Collapsible from "$lib/components/ui/collapsible/index.js";
+  import * as Empty from "$lib/components/ui/empty/index.js";
   import { Badge } from "$lib/components/ui/badge/index.js";
   import { Spinner } from "$lib/components/ui/spinner/index.js";
+  import { cn } from "$lib/utils.js";
   import DetailRow from "$lib/components/detail-row.svelte";
   import PageHeader from "$lib/components/page-header.svelte";
   import InfoHint from "$lib/components/info-hint.svelte";
@@ -82,11 +84,13 @@
   const attention = $derived(statusAttention(facts));
   const firstRun = $derived(isFirstRun(facts));
   const freshnessTone = $derived(
-    status === null
-      ? ""
-      : freshStale !== null
-        ? "border-primary/40 bg-primary/10 text-foreground"
-        : "border-ok/30 bg-ok/10 text-ok",
+    cn(
+      status === null
+        ? undefined
+        : freshStale !== null
+          ? "border-primary/40 bg-primary/10 text-foreground"
+          : "border-ok/30 bg-ok/10 text-ok",
+    ),
   );
   const relayPercent = $derived(
     facts.totalRelays === 0 ? 0 : Math.round((facts.connectedRelays / facts.totalRelays) * 100),
@@ -141,15 +145,15 @@
 {/if}
 
 {#if snapshot === null || status === null}
-  <div class="mt-6 flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border bg-card/50 px-6 py-14 text-center">
-    <div class="flex size-10 items-center justify-center rounded-full bg-muted text-muted-foreground">
-      <ActivityIcon class="size-5" />
-    </div>
-    <p class="text-sm font-medium">No observation yet</p>
-    <p class="max-w-sm text-sm text-muted-foreground">
-      Refresh to read this drive's latest reported state. Nothing is filled in from memory.
-    </p>
-  </div>
+  <Empty.Root class="mt-6 border border-dashed border-border bg-card/50">
+    <Empty.Header>
+      <Empty.Media variant="icon"><ActivityIcon /></Empty.Media>
+      <Empty.Title>No observation yet</Empty.Title>
+      <Empty.Description>
+        Refresh to read this drive's latest reported state. Nothing is filled in from memory.
+      </Empty.Description>
+    </Empty.Header>
+  </Empty.Root>
   <div class="mt-3">
     <ObservedNote observedAtMs={null} />
   </div>
@@ -298,7 +302,7 @@
           {showTechnical ? "Hide technical detail" : "Show technical detail"}
           <ChevronDownIcon
             data-icon="inline-end"
-            class={showTechnical ? "rotate-180 transition-transform" : "transition-transform"}
+            class={cn("transition-transform", showTechnical && "rotate-180")}
           />
         </Button>
       {/snippet}

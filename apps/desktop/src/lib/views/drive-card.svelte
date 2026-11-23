@@ -7,6 +7,7 @@
   import * as Card from "$lib/components/ui/card/index.js";
   import * as Alert from "$lib/components/ui/alert/index.js";
   import { Badge } from "$lib/components/ui/badge/index.js";
+  import { cn } from "$lib/utils.js";
   import type { DriveView } from "$lib/ipc/results.js";
   import {
     driveFactLine,
@@ -75,9 +76,11 @@
       </div>
       <Badge
         variant="outline"
-        class={driveNeedsAttention(facts)
-          ? "border-primary/40 bg-primary/10"
-          : "border-ok/30 bg-ok/10 text-ok"}
+        class={cn(
+          driveNeedsAttention(facts)
+            ? "border-primary/40 bg-primary/10"
+            : "border-ok/30 bg-ok/10 text-ok",
+        )}
       >
         {driveRunState(facts)}
       </Badge>
@@ -94,9 +97,11 @@
       {#if sessionLabel(drive.session) !== null}
         <Badge
           variant={drive.session?.state === "unlocked" ? "outline" : "secondary"}
-          class={drive.session?.state === "unlocked"
-            ? "border-ok/30 bg-ok/10 text-ok"
-            : "border-primary/40 bg-primary/10"}
+          class={cn(
+            drive.session?.state === "unlocked"
+              ? "border-ok/30 bg-ok/10 text-ok"
+              : "border-primary/40 bg-primary/10",
+          )}
         >
           {sessionLabel(drive.session)}
         </Badge>

@@ -1138,7 +1138,7 @@
     {#if gate === "done" && removalNotice !== null}
       <Alert.Root class="mb-6">
         <Alert.Title>Removal result</Alert.Title>
-        <Alert.Description class="space-y-1 text-foreground/80 [&_p:not(:last-child)]:mb-1">
+        <Alert.Description class="flex flex-col gap-1 text-foreground/80">
           <p>{describeProvisionResult(removalNotice)}</p>
           <p>{observedRegistrySummary(removalNotice)}</p>
           <p>{membershipSummary(removalNotice)}</p>
