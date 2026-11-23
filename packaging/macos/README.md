@@ -115,11 +115,13 @@ prefix — confirmed by the probe log and `fileproviderd`'s own
 dump. Treat that as the resolved path of that build, not a
 platform law: it was verified for development signing only, and
 other signing types (Developer ID, notarised distribution) are
-unverified. The group id is part of every group-socket path; the
-team-prefixed default leaves less headroom under the 104-byte
-`sun_path` ceiling, so a long account name or a long override can
-make the bind fail closed. Choose a shorter `WYRD_APP_GROUP` in
-that case. Accordingly: the extension resolves through `containerURL` and
+unverified. The group id is part of every group-socket path:
+`<account home>/Library/Group Containers/<group>/Sockets/<16 hex>.sock`.
+With the team-prefixed default this is 94 bytes plus the short account
+name, against 103 usable bytes of `sun_path`, so accounts of ten
+characters or more exceed the ceiling. The bind fails closed with an
+error naming `WYRD_APP_GROUP`; choose a shorter override for such an
+account. Accordingly: the extension resolves through `containerURL` and
 never hardcodes, and Stage 2 must confirm the daemon-side bind
 lands where the extension resolves before the scheme settles —
 an unsandboxed daemon without the group entitlement cannot call

@@ -1977,6 +1977,24 @@ do {
     failures += 1
 }
 
+// One Swift source of truth: the override, the build-rendered
+// Info.plist value and the fail-closed fallbacks are exercised here
+// without needing a signed appex.
+checkEqual(AppGroup.identifier(from: [:], info: nil),
+           AppGroup.defaultIdentifier,
+           "no env and no Info.plist falls back to the default")
+checkEqual(AppGroup.identifier(from: [AppGroup.environmentKey: "custom.group"], info: nil),
+           "custom.group",
+           "the env override reaches the unsandboxed consumer")
+checkEqual(AppGroup.identifier(from: [:], info: [
+    "NSExtension": ["NSExtensionFileProviderDocumentGroup": "rendered.group"],
+]), "rendered.group",
+           "the build-rendered Info.plist value reaches the appex")
+checkEqual(AppGroup.identifier(from: [:], info: [
+    "NSExtension": ["NSExtensionFileProviderDocumentGroup": "@WYRD_APP_GROUP@"],
+]), AppGroup.defaultIdentifier,
+           "an unrendered template falls closed to the default")
+
 if failures == 0 {
     print("harness: all checks passed")
 } else {

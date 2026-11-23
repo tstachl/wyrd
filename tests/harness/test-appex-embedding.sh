@@ -60,6 +60,44 @@ grep -F >/dev/null 'wyrd_render_app_group "$HERE/WyrdFileProvider.entitlements"'
   || die "build-appex.sh: entitlements are not rendered"
 pass "app group agrees on its declaration and render lines"
 
+# 2b. Execute the override through the helper, not just grep for it:
+# render all four checked-in templates into a scratch dir and assert
+# the effective id replaces the token/default literal everywhere,
+# with no template marker surviving.
+SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/wyrd-app-group.XXXXXX")
+trap 'rm -rf "$SCRATCH"' EXIT
+(
+    . "$HELPER"
+    WYRD_APP_GROUP='custom.group'
+    export WYRD_APP_GROUP
+    [ "$(wyrd_app_group)" = 'custom.group' ] || exit 1
+    wyrd_render_app_group "$ROOT/packaging/macos/fileprovider/Info.plist" \
+        '@WYRD_APP_GROUP@' "$SCRATCH/appex.plist"
+    wyrd_render_app_group "$ROOT/packaging/macos/fileprovider/WyrdFileProvider.entitlements" \
+        '@WYRD_APP_GROUP@' "$SCRATCH/appex.entitlements"
+    wyrd_render_app_group "$ROOT/packaging/macos/Wyrd.app.entitlements" \
+        "$GROUP" "$SCRATCH/app.entitlements"
+    sed -e "s|@WYRD_APP_GROUP@|$(wyrd_app_group)|g" \
+        "$ROOT/packaging/macos/launchd/md.enesis.wyrd.domain-registrar.plist" \
+        > "$SCRATCH/registrar.plist"
+)
+for ARTIFACT in appex.plist appex.entitlements app.entitlements registrar.plist; do
+    grep -F >/dev/null 'custom.group' "$SCRATCH/$ARTIFACT" \
+      || die "override did not reach $ARTIFACT"
+    if grep -F >/dev/null '@WYRD_APP_GROUP@' "$SCRATCH/$ARTIFACT" \
+        || grep -F >/dev/null "$GROUP" "$SCRATCH/$ARTIFACT"; then
+        die "unrendered id survived in $ARTIFACT"
+    fi
+done
+# Whitespace-only is the same as unset, matching the Rust accessor.
+(
+    . "$HELPER"
+    WYRD_APP_GROUP='   '
+    export WYRD_APP_GROUP
+    [ "$(wyrd_app_group)" = "$GROUP" ] || exit 1
+)
+pass "executed override renders into every artifact"
+
 # 3. Bundle identifiers nest: app md.enesis.wyrd, appex appends —
 # and the build script signs the same appex identifier it ships.
 # Product metadata rides the same config: the product name matches

@@ -212,7 +212,18 @@ pub(super) fn bind_group_listener(socket_path: &Path) -> std::io::Result<UnixLis
             }
         }
     }
-    bind_listener(socket_path)
+    bind_listener(socket_path).map_err(|error| {
+        // The team-prefixed group id leaves little headroom under the
+        // platform's sun_path ceiling. Name the two things an operator
+        // can change instead of surfacing a bare InvalidInput.
+        std::io::Error::new(
+            error.kind(),
+            format!(
+                "cannot bind group socket at {}: {error} (shorten WYRD_APP_GROUP or use a shorter account name)",
+                socket_path.display()
+            ),
+        )
+    })
 }
 
 /// Publish (or republish) the `by-drive` symlink beside the group

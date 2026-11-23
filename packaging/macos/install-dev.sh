@@ -496,6 +496,20 @@ stop_running_wyrd() {
             >/dev/null 2>&1 || true
     fi
 
+    # A PID can be recycled between SIGTERM and the escalation. Recheck
+    # the command line, not just liveness, before sending SIGKILL.
+    is_wyrd_pid() {
+        cmdline=$(ps -p "$1" -o command= 2>/dev/null) || return 1
+        case "$cmdline" in
+            *"/wyrd-supervise "*|*"/wyrd owner "*|*"Wyrd.app/Contents/"*|*"WyrdDomainRegistrar"*|*"WyrdFileProvider.appex"*)
+                return 0
+                ;;
+            *)
+                return 1
+                ;;
+        esac
+    }
+
     STOP_PIDS=""
     stop_matching() {
         matched=$(pgrep -f "$1" 2>/dev/null | tr '\n' ' ') || matched=""
@@ -527,7 +541,7 @@ stop_running_wyrd() {
         tick=$((tick + 1))
     done
     for pid in $STOP_PIDS; do
-        if kill -0 "$pid" 2>/dev/null; then
+        if kill -0 "$pid" 2>/dev/null && is_wyrd_pid "$pid"; then
             echo "  force-stopping pid $pid"
             kill -KILL "$pid" 2>/dev/null || true
         fi

@@ -13,19 +13,19 @@ private final class AppGroupBundleFinder {}
 
 enum AppGroup {
     /// The built-in default. Keep in step with the Rust accessor and
-    /// the shell helper; the parity pin lives in the Harness.
+    /// the shell helper; the Harness pins the cross-language agreement.
     static let defaultIdentifier = "JU2RFHWQPH.group.md.enesis.wyrd"
+    static let environmentKey = "WYRD_APP_GROUP"
 
-    static let identifier: String = {
+    /// Pure resolution so the Harness can exercise the override and
+    /// the fail-closed fallbacks without a signed appex.
+    static func identifier(from environment: [String: String], info: [String: Any]?) -> String {
         // The unsandboxed registrar can read the override directly;
         // the sandboxed appex cannot, so its build-rendered Info.plist
         // is the authoritative source there.
-        if let fromEnv = ProcessInfo.processInfo.environment["WYRD_APP_GROUP"],
-            !fromEnv.isEmpty
-        {
+        if let fromEnv = environment[environmentKey], !fromEnv.isEmpty {
             return fromEnv
         }
-        let info = Bundle(for: AppGroupBundleFinder.self).infoDictionary
         guard let extensionInfo = info?["NSExtension"] as? [String: Any],
             let value = extensionInfo["NSExtensionFileProviderDocumentGroup"] as? String,
             !value.isEmpty, !value.hasPrefix("@")
@@ -33,5 +33,10 @@ enum AppGroup {
             return defaultIdentifier
         }
         return value
+    }
+
+    static let identifier: String = {
+        let info = Bundle(for: AppGroupBundleFinder.self).infoDictionary
+        return identifier(from: ProcessInfo.processInfo.environment, info: info)
     }()
 }

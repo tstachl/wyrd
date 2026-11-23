@@ -14,11 +14,15 @@
 WYRD_APP_GROUP_DEFAULT='JU2RFHWQPH.group.md.enesis.wyrd'
 
 # Print the effective group id. An empty or whitespace-only override
-# means the default; anything outside the App Group charset is a
+# means the default; anything else outside the App Group charset is a
 # misconfiguration and refuses rather than producing an unusable
 # signed bundle.
 wyrd_app_group() {
     group=${WYRD_APP_GROUP:-$WYRD_APP_GROUP_DEFAULT}
+    # Trim surrounding whitespace so a whitespace-only value is the
+    # same as unset, matching the Rust accessor's empty-override rule.
+    group=$(printf '%s' "$group" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+    [ -n "$group" ] || group=$WYRD_APP_GROUP_DEFAULT
     case "$group" in
         *[!A-Za-z0-9._-]*)
             echo "error: WYRD_APP_GROUP has invalid characters: $group" >&2
