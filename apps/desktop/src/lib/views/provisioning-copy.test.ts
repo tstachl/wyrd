@@ -14,8 +14,18 @@ const view = await Bun.file(`${import.meta.dir}/ProvisioningView.svelte`).text()
 test("the decision is two large cards before any setting", () => {
   expect(view).toContain("Create a new drive");
   expect(view).toContain("Join with an invitation");
-  expect(view).toContain('aria-pressed={mode === "create"}');
-  expect(view).toContain('aria-pressed={mode === "join"}');
+  expect(view).toContain("<ToggleGroup.Root");
+  expect(view).toContain('value="create"');
+  expect(view).toContain('value="join"');
+  // A second click must restore the active card, not clear both, and
+  // must clear a stale report/error as the old button did.
+  expect(view).toContain("bind:value={selectedMode}");
+  expect(view).toContain("onValueChange={onModeChange}");
+  expect(view).toContain("switchMode(mode);");
+  // Preserve the old active-card colour and icon size through the
+  // ToggleGroup adoption.
+  expect(view).toContain("data-[state=on]:border-primary data-[state=on]:bg-primary/5");
+  expect(view).toContain('<PlusIcon data-icon="inline-start" class="size-5" />');
   // The credential selector is no longer the first surface.
   const decision = view.indexOf("Create a new drive");
   const selector = view.indexOf("<CredentialStorageToggle");
