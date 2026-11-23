@@ -480,6 +480,8 @@ syntax or identifiers.
 | Status row (D-11) | Drive data last updated on this device | "Last synced" / "Updated just now" as a heartbeat / a 1970 date | Last local publication, not peer delivery or liveness; moves only on change; zero means unknown |
 | Status row | Drive data kept on this device · Using X of Y / Using X · no limit set | Disk usage / free space / "Using X of Y disk" | Refusal boundary over retained content, not a disk cap; no limit is a real answer |
 | Owner fact | Warning carrying explanation 12 when this device is the sole owner; short "as last reported" line when other owners are present; the conditional explanation when unknown | A bare ownership claim, a verdict badge, or any inference from the member count | Advisory only; never a gate, a health claim, or a count-based guess (`docs/contracts/epochs.md:96`; explanation 12) |
+| Peer-state row | Device identity · truncated public key · "as last reported" · owner-derived comparative state | A human device name, "In sync", "backup", "last synced", "available from other devices" | Advisory only; no availability or convergence claim (`docs/contracts/sync-and-peers.md`, "Peer-state reports (advisory)") |
+| Comparative state | Same history / Peer behind / Peer has history we lack / Diverged / No report / Unclassifiable | "Up to date" / "Healthy" / a green verdict | Derived by the owner over eligible DAG ancestry; absence and unclassifiable are not failures |
 | Status row | Pending work | Queue / obligations / items | Implementation detail, mixed work |
 | Status row | Local files | Materialized | Internal term |
 | Local files | Kept on this device / Stored on this device / Not stored on this device | Pinned / Cached / Remote-only / "Available from other devices" | Residency is not fetchability (`docs/contracts/retention-constraints.md:103-105`) |
@@ -513,7 +515,7 @@ syntax or identifiers.
 | D-9 | Unit for pending work vs settings label | Pending work is mixed control work (`config.rs:228-242`); `max_admit_per_pass` counts content identities, not files (`live/mod.rs:1153-1182`). | Conceptually resolved: "pieces of work" for pending work; "items of sync work" for the setting. The setting label must not drift into general pending-work vocabulary. |
 | D-10 | `policy` → `materialization` naming | Naming drift in versioned prose (`materialization.rs:1-8` vs `args.rs:239` vs `docs/contracts/sync-and-peers.md:590`); planning files are not authoritative. | **Open.** Resolve against normative contracts, not planning prose. |
 | D-11 | Freshness timestamp and label | At decision time `WireFreshness` carried only state/revision/generation; the resolved field now lives at `wire.rs:639-651`; "Fresh" can coexist with pending heads (`pass.rs:884-885,1014-1027`); the shell's observation stamp is not a sync time (`format.ts:14-17`). Relay acceptance is not recipient receipt (`docs/contracts/sync-and-peers.md:82-99`). | **Resolved (2026-11-23).** Expose the time of the last local projection publication, labelled "Drive data last updated on this device" in the Drive data card only. Not "last synced", not a heartbeat, never beside the run state or in the summary; zero or absent means unknown. Last completed pass is a separate decision. Wire field and UI row landed; the interim state text stays on the State row. |
-| D-12 | Public identifier product term | Immutable public key (workspace AGENTS.md); no product-facing name exists. | **Open.** No new term unless the UI actually needs one. Public identifier and private proof stay distinct. |
+| D-12 | Public identifier product term | Immutable public key (workspace AGENTS.md); peer-state rows can name a device by that key in truncated form without a new stored term (PSR-5). | **Resolved (2026-11-23).** No new product term: "Device identity" with the immutable public key in truncated display form. Public identifier and private proof stay distinct; identity replacement remains removal of the old membership and admission of the new key. |
 | D-13 | Sole-owner freeze wording | Accurate only when the owner set empties (`remove_device.rs:63-70`); scoped to future transitions (`docs/contracts/epochs.md:255-263`); snapshot authoring is member-based (`:417`), so a stronger claim is unverified. | Resolved: approved explanation 12 states the conditional, transition-scoped guarantee and the handover path; no "no writes of any kind" claim. |
 
 ## Deferred decisions
@@ -530,7 +532,6 @@ and does not authorize a copy, help or enum change.
 | D-4b | Whether the "Identity key" label should change; no replacement is settled. | Product owner |
 | D-7 | How to classify local refusal, wire skew, unexpected result shape and non-hex responses into distinct remote classes before any enum redesign. | Product owner |
 | D-10 | Which versioned contract settles the `policy` / `materialization` naming. | Product owner |
-| D-12 | Whether the UI needs a product term for the public identifier. | Product owner |
 
 ## Change control
 

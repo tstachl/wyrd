@@ -231,6 +231,24 @@ These figures are advisory facts about local retention, never a sync
 time, a liveness signal, or a gate on any decision. The shell label
 is "Drive data kept on this device".
 
+The observation may carry per-device peer-state observations. The owner
+derives each comparative state from the verified DAG, determines whether
+a device is a current member, and determines whether an observation is
+current or historical. Each row carries the reporting device's identity,
+its truncated display form, the report sequence, the supplied comparative
+state (including unclassifiable and no report), and the supplied
+current-or-historical status. The shell renders those supplied values;
+it does not independently compare DAGs, validate report sequences or
+infer membership. The shell presents rows as advisory facts, phrased
+"as last reported", and must not interpret service mode, infer
+availability from head agreement, or turn absence into a failure claim.
+Rows use separate per-device states; no aggregate verdict, "In sync"
+badge or global-convergence claim. Historical rows from removed members
+are labelled historical and never presented as current member state. The
+shell does not use these rows to gate retention, eviction, removal or any
+other decision. The claim and its limits are normative in
+[sync-and-peers.md](sync-and-peers.md), "Peer-state reports (advisory)".
+
 ## Liveness
 
 Answer `liveness` from the same slot with a separate result

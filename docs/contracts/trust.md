@@ -324,6 +324,22 @@ without a held epoch key.
 | `SnapshotAnnouncement` | 0x03 | snapshot id, author, epoch, membership transition id — enough to fetch and classify |
 | `ReconciliationRequest` | 0x04 | requester device id plus the canonical reconciliation-evidence bytes (opaque here, decoded at intake) — the recipient-originated pull statement; pure content, no nonce, so redelivery, reseal, and re-request converge by set membership |
 
+Peer-state reporting is a distinct sealed control kind with its own
+protocol identity domain, separate from the reconciliation statement
+identity. It reuses NIP-59 gift wrapping, current-member verification
+against the membership log and the identity key, and the existing
+duplicate-delivery idempotence rules. Its body carries the reporting
+DeviceId, a bounded eligible head set and a sequence, and no timestamp.
+Peer-state reports introduce no new disclosure classification. Their
+contents remain subject to the existing H6 and H5 classifications. Their
+distribution and publication timing must remain within the existing
+metadata disclosure constraints. In particular, the reporting mechanism
+must not introduce new relay-visible routing fields or a periodic
+activity cadence. Unknown kinds are dropped safely at intake with no
+durable fact and no poisoned state. The claim, its eligible-head
+derivation and its non-evidence status are normative in
+[sync-and-peers.md](sync-and-peers.md), "Peer-state reports (advisory)".
+
 `KeyRotation` is envelope-defined but unhandled in v0: the runtime has
 no rotation handler, so rotation messages are terminal no-ops —
 acknowledged and discarded with a memory-only suppression verdict,
@@ -849,6 +865,13 @@ a boundary restated wrong:
   warn — as a refusal without acknowledgement, never an inline note —
   before applying it.
 <!-- REMOVAL-COPY-END -->
+
+Reports already accepted from a removed device are historical
+observations only: they carry no continuing authority and must not be
+presented as current member state. Re-admission does not promote them to
+current observations; a newly accepted report is required. The normative
+home is [sync-and-peers.md](sync-and-peers.md), "Peer-state reports
+(advisory)".
 
 ## Recovery (reserved design, post-v0 implementation)
 
