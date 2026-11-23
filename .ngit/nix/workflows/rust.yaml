@@ -110,15 +110,7 @@ jobs:
           build: checks.x86_64-linux.rust-deps
       - tests:
           build: checks.x86_64-linux.rust-tests
-  # Desktop test gate: the wyrd-desktop tests the core gate excludes.
-  # Carries the Tauri GUI closure in its own job and at the default
-  # memory floor, so it schedules beside the core gate and cannot eat
-  # the core gate's 30 minutes. The 3377.8 MiB peak is from the logged
-  # aaa4d0b9 gates-tests run (guest RAM, including the guest OS); the
-  # first ready-run must confirm the smaller desktop set fits 4096 MiB.
-  gates-tests-desktop:
-    steps:
-      - deps:
-          build: checks.x86_64-linux.rust-deps
-      - tests:
-          build: checks.x86_64-linux.rust-tests-desktop
+  # DIAGNOSTIC: gates-tests-desktop is disabled for this run. Its
+  # rust-tests-desktop step links the full Tauri GTK/WebKit closure and
+  # is the suspected poisoner of the ngit-ci provider cache. Restore the
+  # job unchanged after the clean first-run / retry comparison.
