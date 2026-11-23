@@ -115,6 +115,10 @@ export interface WireMaterializationSummary {
 
 export type WireDurabilityLevel = "Working" | "Committed" | "Published";
 
+// Advisory owner standing. "Unknown" is the default when an older
+// owner writes an observation without this field.
+export type WireSoleOwnerState = "Unknown" | "Sole" | "NotSole";
+
 export interface WireKnownState {
   epoch: number;
   transition_id: string;
@@ -132,6 +136,9 @@ export interface WireSyncStatus {
   head_classes: WireHeadClasses;
   mailbox: WireMailboxView;
   known_members: number;
+  // Absent from an older owner. Treat missing as "Unknown", never as
+  // a fact inferred from known_members.
+  sole_owner?: WireSoleOwnerState;
   peers: WirePeerHandle[];
   queue: WireQueueDepth;
   reconciliation: WireReconciliationCounters;
@@ -224,6 +231,9 @@ export interface WireFreshness {
   state: WireFreshnessState;
   revision: number;
   generation: number;
+  // Absent from an older owner. Zero or missing means unknown; never
+  // render it as a 1970 date.
+  published_unix_secs?: number;
 }
 
 export interface WireFileIdentity {

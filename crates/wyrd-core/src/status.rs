@@ -239,6 +239,23 @@ impl QueueDepth {
     }
 }
 
+/// Advisory fact about this device's standing in the owner set at the
+/// membership tip. Derived from the owner set alone — never from the
+/// member count, which is a different set. `Unknown` means the tip or
+/// its derived owner set is not available. This fact is reported "as
+/// last reported": it never gates retention, eviction or removal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SoleOwnerState {
+    /// No tip, no derived owner set, or an empty owner set: there is
+    /// no owner standing to report. An empty set is the terminal
+    /// state after the last owner removes itself.
+    Unknown,
+    /// This device is the only owner at the tip.
+    Sole,
+    /// At least one other owner is present at the tip.
+    NotSole,
+}
+
 /// Convergence from durable facts: whether the node has anything
 /// left it could do, plus the heads that keep it from saying so.
 /// Pending heads may still resolve (bytes, routes, or capabilities
@@ -311,6 +328,11 @@ pub struct SyncStatus {
     /// Known members at the tip, by count only: the denominator the
     /// peer handles divide. Zero when there is no tip.
     pub known_members: usize,
+    /// This device's standing in the owner set, read from the owner
+    /// set itself and never inferred from `known_members`. Advisory:
+    /// consumers render it "as last reported" and never use it to
+    /// refuse, evict or remove anything.
+    pub sole_owner: SoleOwnerState,
     /// Opaque per-peer handles over obligation recipients and head
     /// authors, in deterministic order. Each entry's stored `handle`
     /// is the rendered `peer-N`.
@@ -365,6 +387,7 @@ impl SyncStatus {
             head_classes: _,
             mailbox: _,
             known_members: _,
+            sole_owner: _,
             peers: _,
             queue: _,
             reconciliation: _,
@@ -382,6 +405,7 @@ impl SyncStatus {
             ("head_classes", H5),
             ("mailbox", H9),
             ("known_members", H8),
+            ("sole_owner", H8),
             ("peers", H8),
             ("queue", O4),
             ("reconciliation", O4),
@@ -507,6 +531,22 @@ pub fn observe(engine: &Engine, configured_relays: usize) -> Result<SyncStatus, 
             .unwrap_or(0),
         None => 0,
     };
+    // Same predicate the CLI's sole-owner confirmation uses, but as an
+    // advisory observation: no tip, no derived owner set and an empty
+    // owner set all read as unknown. An empty set is terminal — saying
+    // "another owner is present" there would invent a fact. The owner
+    // set is queried directly; the member count cannot answer this.
+    let sole_owner = match &tip {
+        Some(known) => match engine.membership_log().owners_of(&known.transition_id) {
+            Some(owners) if owners.is_empty() => SoleOwnerState::Unknown,
+            Some(owners) if owners.len() == 1 && owners.contains(&engine.device()) => {
+                SoleOwnerState::Sole
+            }
+            Some(_) => SoleOwnerState::NotSole,
+            None => SoleOwnerState::Unknown,
+        },
+        None => SoleOwnerState::Unknown,
+    };
     // The durable backlog (OD-17-3 option C): owed obligations
     // including the carry queue the itemized lists do not cover,
     // plus the reconciliation gaps. Committed facts on both sides.
@@ -539,6 +579,7 @@ pub fn observe(engine: &Engine, configured_relays: usize) -> Result<SyncStatus, 
         head_classes,
         mailbox: MailboxView { configured_relays },
         known_members,
+        sole_owner,
         peers,
         queue,
         reconciliation,
@@ -631,6 +672,71 @@ mod tests {
         assert_eq!(status.known_members, 1);
         assert!(status.queue.is_empty());
         assert!(status.convergence.converged);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// The owner fact comes from the owner set, not the member count.
+    /// Admitting a member doubles the count but leaves this device the
+    /// sole owner; handing ownership over flips the fact to `NotSole`
+    /// with the same count.
+    #[test]
+    fn sole_owner_comes_from_the_owner_set_not_the_member_count() {
+        let dir = scratch_dir("owner");
+        std::fs::create_dir_all(&dir).unwrap();
+        let identity = DeviceIdentitySecret::generate().unwrap();
+        let mut engine = Engine::create(dir.clone(), "core-test-pass", identity).unwrap();
+        assert_eq!(
+            observe(&engine, 0).unwrap().sole_owner,
+            SoleOwnerState::Sole
+        );
+
+        let peer = DeviceIdentitySecret::generate().unwrap();
+        let encryption = wyrd_sync::keys::DeviceEncryptionSecret::generate().unwrap();
+        engine
+            .admit_device(peer.device_id(), encryption.encryption_key())
+            .unwrap();
+        let with_member = observe(&engine, 0).unwrap();
+        assert_eq!(with_member.known_members, 2);
+        assert_eq!(
+            with_member.sole_owner,
+            SoleOwnerState::Sole,
+            "a member is not an owner"
+        );
+
+        engine.set_owners(peer.device_id()).unwrap();
+        let handed_over = observe(&engine, 0).unwrap();
+        assert_eq!(handed_over.known_members, 2);
+        assert_eq!(
+            handed_over.sole_owner,
+            SoleOwnerState::NotSole,
+            "the owner set moved even though the member count did not"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// The terminal state after the last owner removes itself has an
+    /// empty owner set. Reporting "other owners present" there would
+    /// invent a fact, so it reads as unknown and falls back to the
+    /// conditional removal explanation.
+    #[test]
+    fn terminal_empty_owner_set_reports_unknown() {
+        let dir = scratch_dir("terminal-owner");
+        std::fs::create_dir_all(&dir).unwrap();
+        let identity = DeviceIdentitySecret::generate().unwrap();
+        let mut engine = Engine::create(dir.clone(), "core-test-pass", identity).unwrap();
+        engine.remove_device(engine.device()).unwrap();
+        let status = observe(&engine, 0).unwrap();
+        let tip = status.tip.as_ref().expect("tip survives the removal");
+        let owners = engine
+            .membership_log()
+            .owners_of(&tip.transition_id)
+            .expect("owners");
+        assert!(owners.is_empty(), "the terminal state is reachable");
+        assert_eq!(
+            status.sole_owner,
+            SoleOwnerState::Unknown,
+            "no owners is not 'another owner present'"
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 

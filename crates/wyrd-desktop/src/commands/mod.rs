@@ -621,10 +621,11 @@ mod tests {
             },
             revision: 9,
             generation: 4,
+            published_unix_secs: 1_700_000_000,
         };
         assert_eq!(
             serde_json::to_value(&freshness).unwrap(),
-            serde_json::json!({"state": {"RetainedLastGood": {"detail": "relay quiet"}}, "revision": 9, "generation": 4})
+            serde_json::json!({"state": {"RetainedLastGood": {"detail": "relay quiet"}}, "revision": 9, "generation": 4, "published_unix_secs": 1700000000})
         );
 
         let token = WireParentToken {

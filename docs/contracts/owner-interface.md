@@ -207,6 +207,16 @@ healthy-looking default. Repeat the same observation byte for byte
 while the state stands still. Construct no mailbox on the read
 side. Connect to nothing. Change no durable state.
 
+The observation also carries an advisory sole-owner fact with three
+states: unknown, this device is the sole owner, or another owner is
+present. Read it from the derived owner set at the membership tip,
+never from the member count — a reader is a member but not an owner.
+An absent field means unknown, so a mixed-version reader must not
+invent a claim. An empty owner set is terminal and also means unknown:
+it must never render as "other owners present". Consumers phrase a
+known state "as last reported" and never use the fact to gate
+retention, eviction, removal or any other decision.
+
 ## Liveness
 
 Answer `liveness` from the same slot with a separate result
@@ -232,17 +242,18 @@ left it in place. No trustworthy projection has no slot value. A
 failed composition never publishes, so the consumer observes it as
 an absent owner.
 
-A timestamp may be added to this judgment only as the local time of the
-last projection publication. It is not a peer delivery time, a
+The judgment carries `published_unix_secs`, the local time of the last
+projection publication. It is not a peer delivery time, a
 synchronization-completion time, or a liveness heartbeat, and a consumer
-MUST NOT label it as any of those. Absent or zero means unknown, never a
-wall-clock date; a mixed-version reader that ignores the field degrades to
-the state/revision/generation judgment above. The shell label is "Drive
-data last updated on this device" and the value belongs in the Drive data
-card, not in the status summary or beside the run state. A last completed
-pass is a liveness measurement and is not carried by this operation. The
-field is pending implementation; until it exists, consumers use the
-judgment above and no timestamp.
+MUST NOT label it as any of those. A retaining failure carries the
+previous value forward, since it is not a publication. Absent or zero
+means unknown, never a wall-clock date; a mixed-version reader that
+ignores the field degrades to the state/revision/generation judgment
+above. The shell label is "Drive data last updated on this device" and
+the value belongs in the Drive data card, not in the status summary or
+beside the run state. A last completed pass is a liveness measurement and
+is not carried by this operation. Zero renders as "not yet updated on
+this device" until the first projection publication.
 
 ## Mutation submission
 

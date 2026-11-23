@@ -473,6 +473,9 @@ where
             },
             revision,
             generation: 0,
+            // The adopted baseline is not a regeneration: an untouched
+            // drive reads as not yet updated on this device.
+            published_unix_secs: 0,
         }));
         let observation = Arc::new(RwLock::new(None));
         let paused = Arc::new(AtomicBool::new(false));

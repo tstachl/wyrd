@@ -37,7 +37,7 @@
 use wyrd_sync::runtime::DrainReport;
 
 use super::relay_posture::RELAY_IDLE_LINE;
-use super::status::SyncStatus;
+use super::status::{SoleOwnerState, SyncStatus};
 
 /// Standing sentence one (OD-18-A): delivery is relay acceptance,
 /// never recipient receipt. Permanent: renders on success, on an
@@ -268,6 +268,17 @@ pub fn render_status_detail(status: &SyncStatus, intake: IntakeDeferral) -> Stri
         status.peers.len(),
         status.known_members,
     ));
+    // Advisory only: phrased as a report, never as a verdict or a
+    // gate. The owner set is the source; the member count above is a
+    // different set and cannot answer this. An empty set reads as
+    // unknown, never as "other owners present".
+    match status.sole_owner {
+        SoleOwnerState::Unknown => out.push_str("sole owner: not established\n"),
+        SoleOwnerState::Sole => out.push_str("sole owner: this device (as last reported)\n"),
+        SoleOwnerState::NotSole => {
+            out.push_str("sole owner: other owners present (as last reported)\n")
+        }
+    }
     for entry in &status.peers {
         out.push_str(&format!(
             "  peer-{}: {} pending\n",
