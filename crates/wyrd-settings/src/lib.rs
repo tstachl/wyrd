@@ -1,15 +1,19 @@
 //! Per-user application settings file schema: the budgets a
 //! person configures outside any drive directory, one JSON file
-//! with per-drive sections keyed by absolute drive directory:
-//! `{"version": 1, "drives": {"<abs path>": {budget keys...}}}`.
+//! with one app-wide diagnostics section beside per-drive sections
+//! keyed by absolute drive directory:
+//! `{"version": 2, "diagnostics": {"level": "default"},
+//! "drives": {"<abs path>": {budget keys...}}}`.
 //!
 //! Serialization and validation rules only — no filesystem
 //! access, no locking, no atomic writes, no path resolution, no
-//! daemon runtime application. The daemon (`wyrd-daemon`) remains
-//! the runtime consumer (reading, writing, applying); the desktop
-//! (`wyrd-desktop`) is the second consumer of the same contract
-//! (reading for display; writing only through the stage-2 sparse
-//! writer). One implementation so the two readers can never drift.
+//! daemon runtime application. `parse_settings` owns version
+//! dispatch and the v1→v2 migration so the daemon (reading for its
+//! transaction) and the desktop (reading for display) call the same
+//! parser and can never disagree about an old file. The daemon
+//! remains the runtime consumer (writing, applying); the desktop
+//! is the second consumer of the same contract (reading for
+//! display; writing only through the stage-2 sparse writer).
 //!
 //! Unknown keys are refused with their name (a typo'd key silently
 //! discarded is the failure mode that makes configuration files
@@ -25,7 +29,7 @@ use serde::{Deserialize, Serialize};
 /// Schema version of the application settings file. Bump only with
 /// a migration that reads the previous version; readers refuse
 /// newer versions loudly rather than guessing.
-pub const APP_SETTINGS_VERSION: u32 = 1;
+pub const APP_SETTINGS_VERSION: u32 = 2;
 
 /// Filename of the application settings file inside the per-user
 /// state directory.
@@ -70,12 +74,52 @@ pub struct DriveSettingsSection {
     pub notified: BTreeMap<String, u64>,
 }
 
-/// The whole file: one version plus per-drive sections keyed by
-/// absolute drive directory. Unknown top-level keys are refused
-/// with their name, like unknown section keys. Sections for drives
-/// that do not exist are inert data, never an error — a setting
-/// outlives a deleted drive the way a preference outlives an
-/// uninstalled drive.
+/// The closed application-wide diagnostics level (T20 in
+/// `docs/contracts/trust.md`). Serde refuses an unknown spelling
+/// with its name — never coerced to a default. Absence of the key
+/// or the whole section also means `default`; see
+/// [`AppSettingsFile::diagnostics_level`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DiagnosticLevel {
+    /// The genuine absence state: safe default reporting only.
+    #[default]
+    Default,
+    /// Verbose local records under the T20 field-level allowlist.
+    Detailed,
+}
+
+impl DiagnosticLevel {
+    /// The wire spelling, shared by the JSON mirror so the schema
+    /// and the File Provider reader cannot drift.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DiagnosticLevel::Default => "default",
+            DiagnosticLevel::Detailed => "detailed",
+        }
+    }
+}
+
+/// The app-wide diagnostics section: one closed level, absent
+/// rather than materialized when `default`. Kept beside the
+/// per-drive map, never inside it — one application-wide setting,
+/// not one per drive.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DiagnosticSettingsSection {
+    /// An explicit level, or absent for `default`. Clearing the key
+    /// drops the whole section where nothing else survives.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub level: Option<DiagnosticLevel>,
+}
+
+/// The whole file: one version, one optional app-wide diagnostics
+/// section, and per-drive sections keyed by absolute drive
+/// directory. Unknown top-level keys are refused with their name,
+/// like unknown section keys. Sections for drives that do not
+/// exist are inert data, never an error — a setting outlives a
+/// deleted drive the way a preference outlives an uninstalled
+/// drive.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AppSettingsFile {
@@ -83,6 +127,23 @@ pub struct AppSettingsFile {
     pub version: u32,
     /// Per-drive sections keyed by absolute drive directory.
     pub drives: BTreeMap<String, DriveSettingsSection>,
+    /// The application-wide local diagnostics level. Absent means
+    /// `default`; the schema never materializes the default state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diagnostics: Option<DiagnosticSettingsSection>,
+}
+
+impl AppSettingsFile {
+    /// The effective level: an explicit detailed level, or
+    /// `default` for an absent section, an absent level, or an
+    /// explicit default. One accessor so every consumer reads the
+    /// same absence semantics.
+    pub fn diagnostics_level(&self) -> DiagnosticLevel {
+        self.diagnostics
+            .as_ref()
+            .and_then(|section| section.level)
+            .unwrap_or_default()
+    }
 }
 
 impl Default for AppSettingsFile {
@@ -90,7 +151,58 @@ impl Default for AppSettingsFile {
         AppSettingsFile {
             version: APP_SETTINGS_VERSION,
             drives: BTreeMap::new(),
+            diagnostics: None,
         }
+    }
+}
+
+/// The v1 wire shape: one version plus per-drive sections, with no
+/// app-wide section. Strict on unknown keys, so a v1-tagged file
+/// carrying a diagnostics key is a contradiction, never data this
+/// build guesses at.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct V1SettingsFile {
+    version: u32,
+    drives: BTreeMap<String, DriveSettingsSection>,
+}
+
+/// Parse one settings document, migrating v1 to v2 in memory. A v1
+/// file with no diagnostics section reads as the `default` level;
+/// the migration is not a silent rewrite — callers keep the original
+/// bytes as their transaction baseline, and the next write persists
+/// v2. A newer version refuses with its number before any strict
+/// parse, and an unknown top-level key refuses with its name.
+///
+/// Both readers call this one function: the daemon for its
+/// transaction and the desktop shell for display, so they can never
+/// disagree about what a v1 file means.
+pub fn parse_settings(bytes: &[u8]) -> Result<AppSettingsFile, String> {
+    let value: serde_json::Value =
+        serde_json::from_slice(bytes).map_err(|error| format!("parse: {error}"))?;
+    let Some(version) = value.get("version").and_then(serde_json::Value::as_u64) else {
+        return Err("missing or non-integer settings version".to_string());
+    };
+    match version {
+        1 => {
+            let old: V1SettingsFile =
+                serde_json::from_slice(bytes).map_err(|error| format!("parse v1: {error}"))?;
+            if old.version != 1 {
+                return Err(format!(
+                    "v1 parse accepted version {} instead of 1",
+                    old.version
+                ));
+            }
+            Ok(AppSettingsFile {
+                version: APP_SETTINGS_VERSION,
+                drives: old.drives,
+                diagnostics: None,
+            })
+        }
+        2 => serde_json::from_slice(bytes).map_err(|error| format!("parse: {error}")),
+        other => Err(format!(
+            "settings version {other}, this build reads {APP_SETTINGS_VERSION}"
+        )),
     }
 }
 
@@ -222,6 +334,19 @@ pub struct SparseUpdate {
     pub clear: Vec<String>,
 }
 
+/// One sparse, app-wide edit to the diagnostics level. The closed
+/// enum makes an unknown level unrepresentable, so this update
+/// needs no range check: validation is the type. `None` clears the
+/// key back to genuine absence (`default`); `Some(Default)` writes
+/// it explicitly, which the writer collapses to absence on save.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DiagnosticsUpdate {
+    /// The level to set, or absent to clear it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub level: Option<DiagnosticLevel>,
+}
+
 /// Shared validation for one sparse edit: every named key is one of
 /// [`EDITABLE_KEYS`], no key is both set and cleared, and every set
 /// value passes that key's range rule. Runs before the lock, like
@@ -307,12 +432,65 @@ mod tests {
         assert_eq!(legacy.max_admit_per_pass, None);
     }
 
-    /// The default file carries the current version and no drives.
+    /// The default file carries the current version, no drives and
+    /// no diagnostics section — absence is the genuine default.
     #[test]
     fn default_file_is_current_and_empty() {
         let file = AppSettingsFile::default();
         assert_eq!(file.version, APP_SETTINGS_VERSION);
+        assert_eq!(APP_SETTINGS_VERSION, 2);
         assert!(file.drives.is_empty());
+        assert!(file.diagnostics.is_none());
+        assert_eq!(file.diagnostics_level(), DiagnosticLevel::Default);
+    }
+
+    /// Absence of the section, absence of the key and an explicit
+    /// default all read as `default`; an explicit detailed level
+    /// round-trips. The schema never materializes a default on its
+    /// own — only an input that already spelled it keeps the key;
+    /// the writer is what collapses an explicit default to absence.
+    #[test]
+    fn diagnostics_absence_and_explicit_level() {
+        for json in [
+            r#"{"version":2,"drives":{}}"#,
+            r#"{"version":2,"drives":{},"diagnostics":{}}"#,
+        ] {
+            let file: AppSettingsFile = serde_json::from_str(json).unwrap();
+            assert_eq!(file.diagnostics_level(), DiagnosticLevel::Default, "{json}");
+            let rendered = serde_json::to_value(&file).unwrap();
+            assert!(!rendered.to_string().contains("\"level\""), "{rendered}");
+        }
+        let explicit: AppSettingsFile =
+            serde_json::from_str(r#"{"version":2,"drives":{},"diagnostics":{"level":"default"}}"#)
+                .unwrap();
+        assert_eq!(explicit.diagnostics_level(), DiagnosticLevel::Default);
+        assert_eq!(
+            serde_json::to_value(&explicit).unwrap()["diagnostics"]["level"],
+            "default"
+        );
+        let detailed: AppSettingsFile =
+            serde_json::from_str(r#"{"version":2,"drives":{},"diagnostics":{"level":"detailed"}}"#)
+                .unwrap();
+        assert_eq!(detailed.diagnostics_level(), DiagnosticLevel::Detailed);
+        assert_eq!(
+            serde_json::to_value(&detailed).unwrap()["diagnostics"]["level"],
+            "detailed"
+        );
+    }
+
+    /// An unknown level and an unknown field in the section refuse
+    /// with their names; the closed enum is never coerced.
+    #[test]
+    fn diagnostics_refuses_unknown_shapes_with_their_names() {
+        let level = serde_json::from_str::<DiagnosticSettingsSection>(r#"{"level":"verbose"}"#)
+            .unwrap_err()
+            .to_string();
+        assert!(level.contains("verbose"), "{level}");
+        let field =
+            serde_json::from_str::<DiagnosticSettingsSection>(r#"{"level":"detailed","extra":1}"#)
+                .unwrap_err()
+                .to_string();
+        assert!(field.contains("extra"), "{field}");
     }
 
     /// The sparse edit pins its refusals: unknown set/clear keys

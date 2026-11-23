@@ -753,6 +753,7 @@ fn settings_mirror_agrees_with_the_daemon_writer() {
         &AppSettingsFile {
             version: APP_SETTINGS_VERSION,
             drives,
+            diagnostics: None,
         },
     )
     .expect("the daemon writer stores");

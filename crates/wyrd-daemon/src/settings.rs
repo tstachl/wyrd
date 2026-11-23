@@ -1,12 +1,15 @@
 //! Application settings file: the per-user budgets a person configures
 //! outside any drive directory (OD-25-A, recommendation A).
 //!
-//! One JSON file per user holds per-drive sections keyed by absolute
-//! drive directory: `{"version": 1, "drives": {"<abs path>":
-//! {budget keys...}}}`. It is authoritative local state that derives
-//! from nothing durable — not signed archive state, not a format a
-//! peer reads — so it lives outside the drive directory (which is
-//! Wyrd-owned state under `docs/contracts/upgrade-contract.md`) and
+//! One JSON file per user holds one app-wide diagnostics section
+//! beside per-drive sections keyed by absolute drive directory:
+//! `{"version": 2, "diagnostics": {"level": "detailed"}, "drives":
+//! {"<abs path>": {budget keys...}}}`. The diagnostics section is
+//! absent until detailed mode is set. It is authoritative local
+//! state that derives from nothing durable — not signed archive
+//! state, not a format a peer reads — so it lives outside the drive
+//! directory (Wyrd-owned state under
+//! `docs/contracts/upgrade-contract.md`) and
 //! outside invariant 2's format list; the contract note names the
 //! fourth category. Unknown keys are refused with their name (a
 //! typo'd key silently discarded is the failure mode that makes
@@ -28,10 +31,12 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use serde::Serialize;
+
 use wyrd_core::settings::BudgetOverrides;
 use wyrd_settings::{
-    check_duration_secs, check_max_admit_per_pass, check_notified_key, validate_drive_key,
-    validate_sparse_update, SparseUpdate,
+    check_duration_secs, check_max_admit_per_pass, check_notified_key, parse_settings,
+    validate_drive_key, validate_sparse_update, SparseUpdate,
 };
 
 /// Schema version of the application settings file. Re-exported
@@ -49,7 +54,10 @@ pub use wyrd_settings::MAX_NOTIFIED_PER_DRIVE;
 /// One drive's settings section: the five surfaced bounds plus the
 /// notification records. Re-exported from the shared contract —
 /// the single definition both readers enforce.
-pub use wyrd_settings::{AppSettingsFile, DriveSettingsSection};
+pub use wyrd_settings::{
+    AppSettingsFile, DiagnosticLevel, DiagnosticSettingsSection, DiagnosticsUpdate,
+    DriveSettingsSection,
+};
 
 /// Where the settings file lives when no explicit path is given:
 /// per-user state, resolved through the same platform conventions
@@ -130,8 +138,9 @@ pub use wyrd_settings::settings_key_for;
 
 /// Read and validate the settings file. A missing file is empty
 /// settings, not an error — a fresh installation has configured
-/// nothing yet. A newer schema version refuses loudly. Stored keys
-/// that are not absolute fail closed with their name.
+/// nothing yet. A v1 file migrates in memory to v2; a newer schema
+/// version refuses loudly. Stored keys that are not absolute fail
+/// closed with their name.
 pub fn read_settings(path: &Path) -> Result<AppSettingsFile, String> {
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,
@@ -140,16 +149,8 @@ pub fn read_settings(path: &Path) -> Result<AppSettingsFile, String> {
         }
         Err(error) => return Err(format!("read {}: {error}", path.display())),
     };
-    let file: AppSettingsFile = serde_json::from_slice(&bytes)
-        .map_err(|error| format!("parse {}: {error}", path.display()))?;
-    if file.version != APP_SETTINGS_VERSION {
-        return Err(format!(
-            "settings {} is version {}, this build reads {}",
-            path.display(),
-            file.version,
-            APP_SETTINGS_VERSION
-        ));
-    }
+    let file =
+        parse_settings(&bytes).map_err(|error| format!("parse {}: {error}", path.display()))?;
     for key in file.drives.keys() {
         validate_drive_key(key)?;
     }
@@ -402,23 +403,12 @@ fn stage_file(settings_path: &Path) -> Result<StagedFile, SettingsWriteError> {
     let file = match &bytes {
         None => AppSettingsFile::default(),
         Some(bytes) => {
-            let file: AppSettingsFile = serde_json::from_slice(bytes).map_err(|error| {
+            let file = parse_settings(bytes).map_err(|error| {
                 refused(
                     settings_path,
                     format!("parse {}: {error}", settings_path.display()),
                 )
             })?;
-            if file.version != APP_SETTINGS_VERSION {
-                return Err(refused(
-                    settings_path,
-                    format!(
-                        "settings {} is version {}, this build reads {}",
-                        settings_path.display(),
-                        file.version,
-                        APP_SETTINGS_VERSION
-                    ),
-                ));
-            }
             for key in file.drives.keys() {
                 validate_drive_key(key).map_err(|reason| refused(settings_path, reason))?;
             }
@@ -594,6 +584,187 @@ fn apply_update_to_file(
     Ok(())
 }
 
+/// The App Group shared by the app and the File Provider
+/// extension. Literal, with no team prefix: the system does not
+/// rewrite group ids (verified in the appex build).
+pub const APP_GROUP_IDENTIFIER: &str = "group.md.enesis.wyrd";
+/// Mirror location inside the App Group container, relative to its
+/// root. The extension reads exactly this path
+/// (`Sources/Diagnostics.swift`), so the two spellings must agree.
+pub const DIAGNOSTICS_MIRROR_RELATIVE_PATH: &str = "Diagnostics/level.json";
+
+/// Resolve the App Group container from HOME for tests and
+/// non-standard layouts. The container is
+/// `~/Library/Group Containers/<group>` on macOS; the extension
+/// resolves the same directory through `containerURL(forSecurity-
+/// ApplicationGroupIdentifier:)`. No HOME is a loud refusal — no
+/// cwd-relative guess, like the settings path itself.
+pub fn diagnostics_mirror_container_for(home: Option<&str>) -> Result<PathBuf, String> {
+    let home = home
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "no home directory: cannot locate the App Group container".to_string())?;
+    Ok(PathBuf::from(home)
+        .join("Library/Group Containers")
+        .join(APP_GROUP_IDENTIFIER))
+}
+
+/// The container for the running user.
+pub fn default_diagnostics_mirror_container() -> Result<PathBuf, String> {
+    diagnostics_mirror_container_for(std::env::var("HOME").ok().as_deref())
+}
+
+/// Mirror path inside a resolved container, for readers such as the
+/// local bundle export. Publishing uses the container itself so it
+/// can refuse to create a decoy.
+pub fn diagnostics_mirror_path_in(container: &Path) -> PathBuf {
+    container.join(DIAGNOSTICS_MIRROR_RELATIVE_PATH)
+}
+
+/// The exact document the extension parses: a version tag it
+/// understands and the closed level. No extra fields, no settings
+/// bytes and nothing from any other surface.
+#[derive(Serialize)]
+struct DiagnosticsMirrorDocument<'a> {
+    version: u32,
+    level: &'a str,
+}
+
+/// Create or tighten the `Diagnostics/` leaf inside an existing
+/// container. Only the leaf is created: the container itself belongs
+/// to the app's launch-time initialization, never to this writer.
+fn ensure_private_mirror_dir(leaf: &Path) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+        if !leaf.is_dir() {
+            std::fs::DirBuilder::new()
+                .mode(0o700)
+                .create(leaf)
+                .map_err(|error| format!("create {}: {error}", leaf.display()))?;
+            return Ok(());
+        }
+        let mode = std::fs::metadata(leaf)
+            .map_err(|error| format!("stat {}: {error}", leaf.display()))?
+            .mode()
+            & 0o777;
+        if mode & 0o077 != 0 {
+            std::fs::set_permissions(leaf, std::fs::Permissions::from_mode(0o700))
+                .map_err(|error| format!("chmod {}: {error}", leaf.display()))?;
+        }
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::create_dir_all(leaf).map_err(|error| format!("create {}: {error}", leaf.display()))
+    }
+}
+
+/// Publish the authoritative level to the read-only mirror inside
+/// an existing App Group container. This is distribution, not a
+/// second source of truth: the app never reads the mirror, and a
+/// stale or hand-edited one never changes the persisted setting.
+///
+/// The container must already exist — the same rule the owner's
+/// socket bind follows. A hand-created container is a decoy the
+/// sandboxed extension cannot reach, so creating one here would
+/// report a false success. Only the `Diagnostics/` leaf is made,
+/// owner-only, and the file is owner-only like settings. Returns
+/// the path written for callers that need it.
+pub fn publish_diagnostics_mirror(
+    container: &Path,
+    level: DiagnosticLevel,
+) -> Result<PathBuf, String> {
+    if !container.is_dir() {
+        return Err(format!(
+            "App Group container {} is absent; a hand-created container is a decoy the extension cannot reach",
+            container.display()
+        ));
+    }
+    let path = diagnostics_mirror_path_in(container);
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("mirror path {} has no parent", path.display()))?;
+    ensure_private_mirror_dir(parent)?;
+    let document = DiagnosticsMirrorDocument {
+        version: 1,
+        level: level.as_str(),
+    };
+    let bytes = serde_json::to_vec_pretty(&document)
+        .map_err(|error| format!("encode diagnostics mirror: {error}"))?;
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| format!("mirror path {} has no file name", path.display()))?;
+    wyrd_sync::durable::atomic_write_mode(parent, &file_name.to_string_lossy(), &bytes, 0o600)
+        .map_err(|error| format!("write {}: {error}", path.display()))?;
+    Ok(path)
+}
+
+/// Why an app-wide diagnostics edit did not reach both the file and
+/// the mirror. The two outcomes are distinct: a committed setting
+/// with a failed mirror is never reported as a clean refusal.
+#[derive(Debug, thiserror::Error)]
+pub enum DiagnosticsUpdateError {
+    /// The settings transaction refused, conflicted, or committed
+    /// unverified — nothing here touched the mirror.
+    #[error(transparent)]
+    Settings(#[from] SettingsWriteError),
+    /// The setting committed, but the read-only mirror could not be
+    /// published. The authoritative value stands; the extension
+    /// keeps its last level until the mirror is refreshed.
+    #[error("diagnostics setting committed but mirror not published: {0}")]
+    Mirror(String),
+}
+
+/// Apply one app-wide diagnostics edit through the same transaction
+/// as a per-drive sparse update, then publish the read-only mirror.
+/// The closed enum is the whole validation surface: an unknown
+/// level is unrepresentable here, so there is nothing to check
+/// before the lock.
+pub fn apply_diagnostics_update(
+    settings_path: &Path,
+    container: &Path,
+    update: &DiagnosticsUpdate,
+) -> Result<DiagnosticLevel, DiagnosticsUpdateError> {
+    let _lock = lock_settings(settings_path)?;
+    let mut staged = stage_file(settings_path)?;
+    apply_diagnostics_to_file(&mut staged.file, update);
+    let committed = commit_staged(settings_path, staged)?;
+    let level = committed.diagnostics_level();
+    publish_diagnostics_mirror(container, level).map_err(DiagnosticsUpdateError::Mirror)?;
+    Ok(level)
+}
+
+/// Fold one validated diagnostics edit into the staged file. An
+/// absent level and an explicit `default` both mean the genuine
+/// absence state: the key is cleared and the section removed where
+/// nothing else survives, the same rule the per-drive sections use.
+/// Only `detailed` is ever materialized.
+fn apply_diagnostics_to_file(file: &mut AppSettingsFile, update: &DiagnosticsUpdate) {
+    match update.level {
+        Some(DiagnosticLevel::Detailed) => {
+            file.diagnostics
+                .get_or_insert_with(DiagnosticSettingsSection::default)
+                .level = Some(DiagnosticLevel::Detailed);
+        }
+        Some(DiagnosticLevel::Default) | None => {
+            if let Some(section) = file.diagnostics.as_mut() {
+                section.level = None;
+                if *section == DiagnosticSettingsSection::default() {
+                    file.diagnostics = None;
+                }
+            }
+        }
+    }
+}
+
+/// Read the persisted level for an owner starting up. This is the
+/// authoritative value; `diagnostics-set` / `diagnostics-status`
+/// only deliver live changes to a running owner, never replace the
+/// persisted level. The mirror is deliberately not consulted.
+pub fn diagnostics_level_at(settings_path: &Path) -> Result<DiagnosticLevel, String> {
+    Ok(read_settings(settings_path)?.diagnostics_level())
+}
+
 /// Convert one drive's section into overrides. The file never
 /// constructs a config: quotas become quota overrides and the core
 /// applier wires the accountant, so the mismatch is
@@ -724,6 +895,15 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// A scratch stand-in for the App Group container. Publish must
+    /// refuse a container it did not find, so tests create this one
+    /// the way the app's launch-time initialization would.
+    fn scratch_container(dir: &Path) -> PathBuf {
+        let container = dir.join("group");
+        std::fs::create_dir_all(&container).unwrap();
+        container
     }
 
     fn drive_key(dir: &Path) -> String {
@@ -964,6 +1144,7 @@ mod tests {
                 drives.insert(drive_key(&dir), DriveSettingsSection::default());
                 drives
             },
+            diagnostics: None,
         };
         std::fs::write(&path, serde_json::to_vec_pretty(&external).unwrap()).unwrap();
 
@@ -1091,6 +1272,7 @@ mod tests {
         AppSettingsFile {
             version: APP_SETTINGS_VERSION,
             drives,
+            diagnostics: None,
         }
     }
 
@@ -1385,5 +1567,268 @@ mod tests {
 
         assert_eq!(snapshot(&drive), before);
         assert!(settings_path.exists());
+    }
+
+    /// A v1 file reads as v2 with no diagnostics section: absent
+    /// means `default`, the original bytes are not silently
+    /// rewritten on read, and the next write persists v2.
+    #[test]
+    fn v1_file_migrates_in_memory_and_reports_default() {
+        let dir = scratch("v1-migrate");
+        let path = dir.join("settings.json");
+        let mut drives = serde_json::Map::new();
+        drives.insert(
+            drive_key(&dir),
+            serde_json::json!({"open_timeout_secs": 30}),
+        );
+        let v1 = serde_json::json!({"version": 1, "drives": drives});
+        let bytes = serde_json::to_vec_pretty(&v1).unwrap();
+        std::fs::write(&path, &bytes).unwrap();
+
+        let read = read_settings(&path).unwrap();
+        assert_eq!(read.version, 2);
+        assert!(read.diagnostics.is_none());
+        assert_eq!(read.diagnostics_level(), DiagnosticLevel::Default);
+        assert_eq!(read.drives[&drive_key(&dir)].open_timeout_secs, Some(30));
+        assert_eq!(std::fs::read(&path).unwrap(), bytes, "read never rewrites");
+        assert_eq!(
+            diagnostics_level_at(&path).unwrap(),
+            DiagnosticLevel::Default
+        );
+
+        let container = scratch_container(&dir);
+        apply_diagnostics_update(
+            &path,
+            &container,
+            &DiagnosticsUpdate {
+                level: Some(DiagnosticLevel::Detailed),
+            },
+        )
+        .unwrap();
+        let read = read_settings(&path).unwrap();
+        assert_eq!(read.version, 2, "the next write persists v2");
+        assert_eq!(read.diagnostics_level(), DiagnosticLevel::Detailed);
+        assert_eq!(read.drives[&drive_key(&dir)].open_timeout_secs, Some(30));
+    }
+
+    /// The restricted writer sets, publishes and clears the level
+    /// through the same transaction: other drives survive, the
+    /// mirror is exact and owner-only, and clearing removes the
+    /// section rather than materializing a default.
+    #[test]
+    fn diagnostics_update_sets_publishes_and_clears() {
+        let dir = scratch("diagnostics-set");
+        let path = dir.join("settings.json");
+        let other = dir.join("other");
+        apply_sparse_update(&path, &other, &sparse(&[("open_timeout_secs", 31)], &[])).unwrap();
+        let container = scratch_container(&dir);
+        let mirror = diagnostics_mirror_path_in(&container);
+
+        let level = apply_diagnostics_update(
+            &path,
+            &container,
+            &DiagnosticsUpdate {
+                level: Some(DiagnosticLevel::Detailed),
+            },
+        )
+        .unwrap();
+        assert_eq!(level, DiagnosticLevel::Detailed);
+        let raw: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&mirror).unwrap()).unwrap();
+        assert_eq!(raw["version"], 1);
+        assert_eq!(raw["level"], "detailed");
+        assert_eq!(
+            raw.as_object().unwrap().len(),
+            2,
+            "the mirror carries only two keys"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt as _;
+            let mode = std::fs::metadata(&mirror).unwrap().mode() & 0o777;
+            assert_eq!(mode, 0o600, "the mirror is owner-only, got {mode:o}");
+        }
+
+        let file = read_settings(&path).unwrap();
+        assert_eq!(file.diagnostics_level(), DiagnosticLevel::Detailed);
+        assert_eq!(
+            file.drives[&settings_key_for(&other)].open_timeout_secs,
+            Some(31),
+            "unrelated drives pass through"
+        );
+
+        // Clearing returns to genuine absence; the section vanishes.
+        let level =
+            apply_diagnostics_update(&path, &container, &DiagnosticsUpdate::default()).unwrap();
+        assert_eq!(level, DiagnosticLevel::Default);
+        let file = read_settings(&path).unwrap();
+        assert!(file.diagnostics.is_none());
+        let raw: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&mirror).unwrap()).unwrap();
+        assert_eq!(raw["level"], "default");
+        let persisted: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert!(!persisted.as_object().unwrap().contains_key("diagnostics"));
+    }
+
+    /// Refusals touch nothing, and a mirror failure is distinct
+    /// from a settings refusal: the authoritative value has already
+    /// committed in that case.
+    #[test]
+    fn diagnostics_refusals_and_mirror_failure_are_distinct() {
+        let dir = scratch("diagnostics-refuse");
+        let path = dir.join("settings.json");
+        let container = scratch_container(&dir);
+        let mirror = diagnostics_mirror_path_in(&container);
+        let detailed = DiagnosticsUpdate {
+            level: Some(DiagnosticLevel::Detailed),
+        };
+        for contents in [
+            r#"{"version":2,"drives":{},"unknown":1}"#.to_string(),
+            r#"{"version":2,"drives":{},"diagnostics":{"level":"verbose"}}"#.to_string(),
+            r#"{"version":999,"drives":{}}"#.to_string(),
+        ] {
+            std::fs::write(&path, &contents).unwrap();
+            let refused = apply_diagnostics_update(&path, &container, &detailed).unwrap_err();
+            assert!(
+                matches!(refused, DiagnosticsUpdateError::Settings(_)),
+                "refusal is a settings failure, not a mirror failure: {refused}"
+            );
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), contents);
+            assert!(!mirror.exists(), "a refused edit never writes the mirror");
+        }
+
+        // An unwritable mirror reports the committed-but-unpublished
+        // outcome with the value still authoritative in settings.
+        std::fs::write(&path, r#"{"version":2,"drives":{}}"#).unwrap();
+        let blocked = dir.join("blocked");
+        std::fs::write(&blocked, b"a file, not a container directory").unwrap();
+        let failed = apply_diagnostics_update(&path, &blocked, &detailed).unwrap_err();
+        assert!(
+            matches!(failed, DiagnosticsUpdateError::Mirror(_)),
+            "mirror failure is distinct: {failed}"
+        );
+        assert_eq!(
+            diagnostics_level_at(&path).unwrap(),
+            DiagnosticLevel::Detailed,
+            "the committed setting stands"
+        );
+    }
+
+    /// Writing the explicit `default` level collapses to genuine
+    /// absence: no diagnostics key survives, while the mirror
+    /// still publishes the level the extension should read.
+    #[test]
+    fn explicit_default_collapses_to_absence() {
+        let dir = scratch("diagnostics-explicit-default");
+        let path = dir.join("settings.json");
+        let container = scratch_container(&dir);
+        let mirror = diagnostics_mirror_path_in(&container);
+        let set = DiagnosticsUpdate {
+            level: Some(DiagnosticLevel::Detailed),
+        };
+        apply_diagnostics_update(&path, &container, &set).unwrap();
+        let level = apply_diagnostics_update(
+            &path,
+            &container,
+            &DiagnosticsUpdate {
+                level: Some(DiagnosticLevel::Default),
+            },
+        )
+        .unwrap();
+        assert_eq!(level, DiagnosticLevel::Default);
+        let persisted: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert!(!persisted.as_object().unwrap().contains_key("diagnostics"));
+        let raw: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&mirror).unwrap()).unwrap();
+        assert_eq!(raw["level"], "default");
+    }
+
+    /// The mirror distributes; it is never a second authority. A
+    /// stale or hand-edited detailed mirror cannot change what the
+    /// persisted file says.
+    #[test]
+    fn the_mirror_is_never_consulted_as_a_second_authority() {
+        let dir = scratch("mirror-not-authority");
+        let path = dir.join("settings.json");
+        let container = scratch_container(&dir);
+        std::fs::write(&path, r#"{"version":2,"drives":{}}"#).unwrap();
+        publish_diagnostics_mirror(&container, DiagnosticLevel::Detailed).unwrap();
+        assert_eq!(
+            diagnostics_level_at(&path).unwrap(),
+            DiagnosticLevel::Default,
+            "the persisted file wins over the mirror"
+        );
+        let read = read_settings(&path).unwrap();
+        assert!(read.diagnostics.is_none());
+    }
+
+    /// The container is derived from the App Group identifier,
+    /// literally and without a team prefix, matching the extension.
+    #[test]
+    fn mirror_path_uses_the_app_group_literally() {
+        let container = diagnostics_mirror_container_for(Some("/home/op")).unwrap();
+        assert_eq!(
+            container,
+            PathBuf::from("/home/op")
+                .join("Library/Group Containers")
+                .join("group.md.enesis.wyrd")
+        );
+        assert_eq!(
+            diagnostics_mirror_path_in(&container),
+            container.join("Diagnostics/level.json")
+        );
+        assert!(diagnostics_mirror_container_for(None).is_err());
+        assert!(diagnostics_mirror_container_for(Some("")).is_err());
+    }
+
+    /// A missing container is never created: a hand-made container
+    /// is a decoy the sandboxed extension cannot reach, so the
+    /// publish fails as committed-but-unpublished and leaves no
+    /// directory behind.
+    #[test]
+    fn a_missing_container_is_never_created() {
+        let dir = scratch("mirror-decoy");
+        let path = dir.join("settings.json");
+        let missing = dir.join("Group Containers").join("group.md.enesis.wyrd");
+        let detailed = DiagnosticsUpdate {
+            level: Some(DiagnosticLevel::Detailed),
+        };
+        let failed = apply_diagnostics_update(&path, &missing, &detailed).unwrap_err();
+        assert!(
+            matches!(failed, DiagnosticsUpdateError::Mirror(_)),
+            "missing container is a mirror failure: {failed}"
+        );
+        assert!(failed.to_string().contains("decoy"), "{failed}");
+        assert!(!missing.exists(), "no decoy container was created");
+        assert_eq!(
+            diagnostics_level_at(&path).unwrap(),
+            DiagnosticLevel::Detailed,
+            "the committed setting stands"
+        );
+    }
+
+    /// The mirror's own leaf is private: created 0700, tightened when
+    /// it predates the rule, with the file itself 0600.
+    #[cfg(unix)]
+    #[test]
+    fn mirror_leaf_is_private() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let dir = scratch("mirror-leaf");
+        let container = scratch_container(&dir);
+        let leaf = container.join("Diagnostics");
+        std::fs::create_dir_all(&leaf).unwrap();
+        std::fs::set_permissions(&leaf, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        publish_diagnostics_mirror(&container, DiagnosticLevel::Detailed).unwrap();
+        let mode = std::fs::metadata(&leaf).unwrap().mode() & 0o777;
+        assert_eq!(mode, 0o700, "the mirror leaf is private, got {mode:o}");
+        let mirror = diagnostics_mirror_path_in(&container);
+        let file_mode = std::fs::metadata(&mirror).unwrap().mode() & 0o777;
+        assert_eq!(
+            file_mode, 0o600,
+            "the mirror file is owner-only, got {file_mode:o}"
+        );
     }
 }
