@@ -19,7 +19,7 @@ use wyrd_core::projection::{FreshnessState, ProjectionFreshness};
 use wyrd_core::quarantine::QuarantineReport;
 use wyrd_core::scrub::ScrubReport;
 use wyrd_core::status::{
-    ConvergenceState, HeadClasses, HeadSummary, MailboxView, PeerHandle, QueueDepth,
+    ConvergenceState, HeadClasses, HeadSummary, MailboxView, PeerHandle, QueueDepth, RetentionView,
     SoleOwnerState, SyncStatus,
 };
 use wyrd_core::view::{Attr, ConflictVersion, DirEntry, Kind, Node};
@@ -510,6 +510,7 @@ pub fn wire_sync_status(status: &SyncStatus) -> WireSyncStatus {
         convergence,
         materialization,
         durability,
+        retention,
     } = status;
     WireSyncStatus {
         tip: tip.as_ref().map(wire_known_state),
@@ -527,6 +528,21 @@ pub fn wire_sync_status(status: &SyncStatus) -> WireSyncStatus {
         convergence: wire_convergence_state(convergence),
         materialization: wire_materialization_summary(materialization),
         durability: wire_durability_level(durability),
+        retention: retention.as_ref().map(wire_retention),
+    }
+}
+
+/// Map the optional retention figures to their wire form. `None`
+/// stays absent — an unheld read or older writer must not become a
+/// zero-byte claim on the wire. Exhaustive on the inner fields.
+pub fn wire_retention(retention: &RetentionView) -> WireRetention {
+    let RetentionView {
+        retained_bytes,
+        ceiling,
+    } = retention;
+    WireRetention {
+        retained_bytes: *retained_bytes,
+        ceiling: *ceiling,
     }
 }
 

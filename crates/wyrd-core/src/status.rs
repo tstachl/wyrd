@@ -4,10 +4,15 @@
 //! or API surfaces later). Renderers consume these structs; they
 //! never parse rendered output.
 //!
-//! The observation is side-effect free by construction: every source
-//! (`runtime_state`, the membership log, head classification) reads
-//! committed facts. Status never connects a mailbox, never drains,
-//! never sends, and never touches the seen log.
+//! The observation is side-effect free by construction: every durable
+//! source (`runtime_state`, the membership log, head classification)
+//! reads committed facts. Status never connects a mailbox, never
+//! drains, never sends, and never touches the seen log. The one
+//! non-fact row is [`RetentionView`]: a live read of the byte
+//! accountant and the configured ceiling, folded in at observation
+//! so the shell can state how much drive data is kept here. It moves
+//! only as local bytes are retained or removed; it is never a sync
+//! time, a peer delivery, or a liveness signal.
 
 use std::collections::BTreeSet;
 
@@ -303,6 +308,21 @@ impl ConvergenceState {
     }
 }
 
+/// Drive-data retention at observation time: a live read of the byte
+/// accountant and the configured ceiling, not a committed fact.
+/// `None` on the status field means the observer held no accountant
+/// (an unheld read or an older writer), never "zero bytes kept".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RetentionView {
+    /// Bytes of drive data currently kept on this device. Read off
+    /// the accountant the store maintains; the same figure the
+    /// receive and commit gates compare against a ceiling.
+    pub retained_bytes: u64,
+    /// The effective ceiling in bytes, if one is configured. `None`
+    /// means no limit is set (unlimited), not an unknown value.
+    pub ceiling: Option<u64>,
+}
+
 /// Structured sync status: outbox obligations with their
 /// queued/delivered/pending split, the membership tip against held
 /// secrets, live heads with classification, and mailbox posture.
@@ -362,6 +382,11 @@ pub struct SyncStatus {
     /// and read off the already-rebuilt state, so status adds no
     /// store rebuild for it.
     pub durability: DurabilityLevel,
+    /// Drive data kept on this device and its ceiling, if one is set.
+    /// The only row not derived from committed facts: a live read of
+    /// the accountant at observation, present only where the observer
+    /// holds one. Never a disk figure, sync time, or liveness signal.
+    pub retention: Option<RetentionView>,
 }
 
 impl SyncStatus {
@@ -394,6 +419,7 @@ impl SyncStatus {
             convergence: _,
             materialization: _,
             durability: _,
+            retention: _,
         } = self;
         use DisclosureRow::{H5, H8, H9, O4};
         &[
@@ -412,6 +438,7 @@ impl SyncStatus {
             ("convergence", H5),
             ("materialization", O4),
             ("durability", H5),
+            ("retention", O4),
         ]
     }
 
@@ -429,8 +456,24 @@ impl SyncStatus {
 }
 
 /// Observe sync status from durable state. Reads committed facts
-/// only; commits nothing, connects to nothing.
+/// only; commits nothing, connects to nothing. The retention row is
+/// absent here: callers that hold the byte accountant use
+/// [`observe_with_retention`] so the figure is real, never a
+/// fabricated zero.
 pub fn observe(engine: &Engine, configured_relays: usize) -> Result<SyncStatus, EngineError> {
+    observe_with_retention(engine, configured_relays, None)
+}
+
+/// Observe sync status with the local retention figures folded in.
+/// The accountant and ceiling come from the composition that opened
+/// the store: the same tally the commit and receive gates compare
+/// against, and the ceiling those gates enforce. Nothing here infers
+/// residency, sync progress or liveness from the byte count.
+pub fn observe_with_retention(
+    engine: &Engine,
+    configured_relays: usize,
+    retention: Option<RetentionView>,
+) -> Result<SyncStatus, EngineError> {
     let tip = engine.membership_log().known_state();
     let held_epochs = match &tip {
         Some(_) => engine.held_epochs()?,
@@ -586,6 +629,7 @@ pub fn observe(engine: &Engine, configured_relays: usize) -> Result<SyncStatus, 
         convergence,
         materialization,
         durability,
+        retention,
     })
 }
 
@@ -672,6 +716,56 @@ mod tests {
         assert_eq!(status.known_members, 1);
         assert!(status.queue.is_empty());
         assert!(status.convergence.converged);
+        // An unheld read has no accountant: absent, never a fabricated
+        // zero-byte claim or a synthesized ceiling.
+        assert_eq!(status.retention, None);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// The retention row carries the accountant's count and the
+    /// configured ceiling verbatim. A `None` ceiling means no limit
+    /// was set, not an unknown value, and the count reaches zero
+    /// honestly on a fresh store — it is not synthesized by observe.
+    #[test]
+    fn observe_with_retention_carries_count_and_ceiling() {
+        let dir = scratch_dir("retention");
+        std::fs::create_dir_all(&dir).unwrap();
+        let identity = DeviceIdentitySecret::generate().unwrap();
+        let engine = Engine::create(dir.clone(), "core-test-pass", identity).unwrap();
+
+        let with_limit = observe_with_retention(
+            &engine,
+            0,
+            Some(RetentionView {
+                retained_bytes: 4096,
+                ceiling: Some(8192),
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            with_limit.retention,
+            Some(RetentionView {
+                retained_bytes: 4096,
+                ceiling: Some(8192),
+            })
+        );
+
+        let unlimited = observe_with_retention(
+            &engine,
+            0,
+            Some(RetentionView {
+                retained_bytes: 0,
+                ceiling: None,
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            unlimited.retention,
+            Some(RetentionView {
+                retained_bytes: 0,
+                ceiling: None,
+            })
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 

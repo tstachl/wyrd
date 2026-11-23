@@ -380,7 +380,15 @@ fn every_status_field_is_accounted() {
         convergence: _,
         materialization: _,
         durability: _,
+        // Retention is a live accountant read, not a committed fact.
+        // The desktop shell surfaces it; this CLI-shaped renderer
+        // has no row, and must never invent a zero-byte claim.
+        retention: _,
     } = &status;
+    assert!(
+        !detail.contains("kept on this device"),
+        "no fabricated retention row:\n{detail}"
+    );
 
     // tip + held_epochs: membership rows.
     assert!(detail.contains("tip"), "tip row:\n{detail}");

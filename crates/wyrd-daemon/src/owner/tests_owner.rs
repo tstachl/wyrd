@@ -8,8 +8,8 @@ use super::client::{ClientError, OwnerClient};
 use super::mapping::{
     attr_from_wire, file_identity_from_wire, kind_from_wire, map_policy_error,
     mutation_kind_from_wire, node_from_wire, node_token, wire_attr, wire_dir_entry,
-    wire_mutation_error, wire_mutation_outcome, wire_node, wire_presence, wire_retention_policy,
-    wire_sync_report,
+    wire_mutation_error, wire_mutation_outcome, wire_node, wire_presence, wire_retention,
+    wire_retention_policy, wire_sync_report,
 };
 use super::server::bound_read_refusal;
 use super::wire::{
@@ -33,6 +33,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use wyrd_core::live::{LiveParts, PoisonCounts, SyncReport};
+use wyrd_core::status::RetentionView;
 use wyrd_core::view::{Attr, ConflictVersion, DirEntry, Kind, Node};
 use wyrd_format::{ContentId, DriveId, EntryIdentity, SnapshotId};
 use wyrd_sync::keys::DeviceIdentitySecret;
@@ -1720,6 +1721,27 @@ fn wire_sync_report_carries_all_poison_counters() {
     );
     assert_eq!(wire.poison.scrub, 5, "scrub poison crosses the wire");
     assert_eq!(wire.poison.parents, 7, "parents poison crosses the wire");
+}
+
+/// The retention figures cross the wire verbatim: the byte count and
+/// the ceiling are separate, and a `None` ceiling means no limit was
+/// set (not an unknown value). The mapping stays a plain conversion —
+/// it never turns bytes into a disk figure or a sync claim.
+#[test]
+fn wire_retention_keeps_count_and_ceiling_separate() {
+    let limited = wire_retention(&RetentionView {
+        retained_bytes: 4096,
+        ceiling: Some(8192),
+    });
+    assert_eq!(limited.retained_bytes, 4096);
+    assert_eq!(limited.ceiling, Some(8192));
+
+    let unlimited = wire_retention(&RetentionView {
+        retained_bytes: 0,
+        ceiling: None,
+    });
+    assert_eq!(unlimited.retained_bytes, 0);
+    assert_eq!(unlimited.ceiling, None, "no set limit, not a zero ceiling");
 }
 
 /// All nine mutation kinds encode to JSON and decode back to an

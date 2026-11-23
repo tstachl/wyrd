@@ -603,7 +603,9 @@ pub fn compose_headless_owner(
 /// ceiling: the same number gates the authoring path and
 /// receive-path admission (DG-4 A), with the store accountant wired
 /// so the comparison is against a maintained tally. `None` is
-/// unlimited (the dogfood default).
+/// unlimited (the dogfood default). The accountant is attached even
+/// with no ceiling: the status surface reports drive data kept on
+/// this device regardless of whether a storage limit is set.
 ///
 /// The application settings file supplies what the flag does not:
 /// its quota fills a `None` here (the flag wins), and its other
@@ -618,24 +620,13 @@ pub fn compose_headless_owner_with_quota(
     let (file_quota, rest) =
         crate::settings::split_file_overrides(&drive_dir).map_err(OwnerError::Settings)?;
     let quota = retained_quota.or(file_quota);
-    let (store, quota_config) = match quota {
-        Some(limit) => {
-            let (config, retained) = LiveConfig::with_retained_quota(limit);
-            let store =
-                FsObjectStore::open_with(drive_dir.clone(), Some(std::sync::Arc::clone(&retained)))
-                    .map_err(|error| OwnerError::Store(error.to_string()))?;
-            (store, config)
-        }
-        None => {
-            let store = FsObjectStore::open(drive_dir.clone())
-                .map_err(|error| OwnerError::Store(error.to_string()))?;
-            (store, LiveConfig::for_local_sync())
-        }
-    };
-    // The quota above already wired its accountant; the remaining
-    // file bounds (admission, pass budgets, open timeout) apply
-    // here. `split_file_overrides` strips the quota from `rest`,
-    // so this cannot rebuild the mismatch.
+    let (quota_config, retained) = LiveConfig::with_retained(quota);
+    let store = FsObjectStore::open_with(drive_dir.clone(), Some(std::sync::Arc::clone(&retained)))
+        .map_err(|error| OwnerError::Store(error.to_string()))?;
+    // The accountant above is always wired; the remaining file bounds
+    // (admission, pass budgets, open timeout) apply here.
+    // `split_file_overrides` strips the quota from `rest`, so this
+    // cannot rebuild the mismatch.
     let applied = crate::host::apply_budget_settings(
         &quota_config,
         crate::settings::DEFAULT_OPEN_TIMEOUT,

@@ -337,6 +337,7 @@ mod conformance {
                 ("convergence", H5),
                 ("materialization", O4),
                 ("durability", H5),
+                ("retention", O4),
             ]
         );
         std::fs::remove_dir_all(dir).unwrap();
