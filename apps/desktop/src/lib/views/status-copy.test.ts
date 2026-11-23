@@ -123,3 +123,9 @@ test("the Drive data retention row names drive data, never a disk figure", () =>
   expect(view + formatSrc).not.toContain("disk space");
   expect(view).not.toContain("Last synced");
 });
+
+test("the empty state keeps the original visual rhythm", () => {
+  expect(view).toContain("<Empty.Root");
+  expect(view).toContain("bg-card/50 px-6 py-14");
+  expect(view).toContain('<Empty.Media variant="icon" class="size-10">');
+});

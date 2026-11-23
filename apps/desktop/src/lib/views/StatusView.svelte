@@ -145,9 +145,9 @@
 {/if}
 
 {#if snapshot === null || status === null}
-  <Empty.Root class="mt-6 border border-dashed border-border bg-card/50">
+  <Empty.Root class="mt-6 border border-dashed border-border bg-card/50 px-6 py-14">
     <Empty.Header>
-      <Empty.Media variant="icon"><ActivityIcon /></Empty.Media>
+      <Empty.Media variant="icon" class="size-10"><ActivityIcon class="size-5" /></Empty.Media>
       <Empty.Title>No observation yet</Empty.Title>
       <Empty.Description>
         Refresh to read this drive's latest reported state. Nothing is filled in from memory.

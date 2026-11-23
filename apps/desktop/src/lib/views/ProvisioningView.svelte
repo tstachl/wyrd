@@ -243,7 +243,10 @@ and entered by hand elsewhere. Secret contents never travel. -->
       switchMode(next);
     } else {
       // Second click on the active card: the group cleared itself.
+      // Re-affirm the choice and clear a stale report/error, exactly
+      // as the old button's click did.
       selectedMode = mode;
+      switchMode(mode);
     }
   }
 </script>
@@ -275,10 +278,10 @@ and entered by hand elsewhere. Secret contents never travel. -->
     >
       <ToggleGroup.Item
         value="create"
-        class="h-auto w-full flex-col items-start gap-1 rounded-xl p-4 text-left whitespace-normal"
+        class="h-auto w-full flex-col items-start gap-1 rounded-xl p-4 text-left whitespace-normal data-[state=on]:border-primary data-[state=on]:bg-primary/5"
       >
         <span class="flex items-center gap-2 text-base font-medium">
-          <PlusIcon data-icon="inline-start" />
+          <PlusIcon data-icon="inline-start" class="size-5" />
           Create a new drive
         </span>
         <span class="mt-1 block text-xs leading-relaxed text-muted-foreground">
@@ -287,10 +290,10 @@ and entered by hand elsewhere. Secret contents never travel. -->
       </ToggleGroup.Item>
       <ToggleGroup.Item
         value="join"
-        class="h-auto w-full flex-col items-start gap-1 rounded-xl p-4 text-left whitespace-normal"
+        class="h-auto w-full flex-col items-start gap-1 rounded-xl p-4 text-left whitespace-normal data-[state=on]:border-primary data-[state=on]:bg-primary/5"
       >
         <span class="flex items-center gap-2 text-base font-medium">
-          <DownloadIcon data-icon="inline-start" />
+          <DownloadIcon data-icon="inline-start" class="size-5" />
           Join with an invitation
         </span>
         <span class="mt-1 block text-xs leading-relaxed text-muted-foreground">

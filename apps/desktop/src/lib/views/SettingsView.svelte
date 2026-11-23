@@ -578,9 +578,9 @@ after the choice and resumes it on a refusal. -->
 {/snippet}
 
 {#if snapshot === null || settings === null}
-  <Empty.Root class="mt-6 border border-dashed border-border bg-card/50">
+  <Empty.Root class="mt-6 border border-dashed border-border bg-card/50 px-6 py-14">
     <Empty.Header>
-      <Empty.Media variant="icon"><FileQuestionIcon /></Empty.Media>
+      <Empty.Media variant="icon" class="size-10"><FileQuestionIcon class="size-5" /></Empty.Media>
       <Empty.Title>No settings read yet</Empty.Title>
       <Empty.Description>
         Refresh to read this drive's limits. Nothing is filled in from memory.

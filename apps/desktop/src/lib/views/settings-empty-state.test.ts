@@ -14,6 +14,12 @@ import { expect, test } from "bun:test";
 
 const view = await Bun.file(`${import.meta.dir}/SettingsView.svelte`).text();
 
+test("the unread empty state keeps the original visual rhythm", () => {
+  expect(view).toContain("<Empty.Root");
+  expect(view).toContain("bg-card/50 px-6 py-14");
+  expect(view).toContain('<Empty.Media variant="icon" class="size-10">');
+});
+
 test("one form serves every observation state", () => {
   // No per-state editor toggles: configured, nofile and nosection
   // all fall through the same fields, and the old JSON prompt is gone.
