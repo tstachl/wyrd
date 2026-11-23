@@ -83,9 +83,9 @@ EOF
   rc=0
   E2E_SUDO_BIN="$SUDO_STUB" GATE_GUEST_BIN="$STUB" CALLS="$CALLS" STUB_RC=7 guest_timeout 10 peer-o -- test -x /run/current-system/sw/bin/wyrd || rc=$?
   [[ "$rc" == 7 ]] || die "guest status did not propagate (got $rc)"
-  grep -q "^stub exec peer-o -- test -x /run/current-system/sw/bin/wyrd$" "$CALLS" \
+  grep >/dev/null "^stub exec peer-o -- test -x /run/current-system/sw/bin/wyrd$" "$CALLS" \
     || die "guest_timeout argv is not the transport invocation: $(cat "$CALLS")"
-  grep -q "^elevation -n " "$CALLS" \
+  grep >/dev/null "^elevation -n " "$CALLS" \
     || die "guest_timeout does not elevate the transport: $(cat "$CALLS")"
   pass "guest_timeout sends the elevated transport invocation and propagates status"
   cat >"$STUB" <<'EOF'
@@ -137,7 +137,7 @@ EOF
   # Call-site pin: the phase-03 leak check must route its status
   # through the helper — a future edit that drops the call would
   # pass this file while reopening the silent-pass gap.
-  grep -q 'check_query_status "\$nak_status" "9501 query" "logs/nak-9501.err"' "$ROOT/tests/gate/gate-phase-03.bats" \
+  grep >/dev/null 'check_query_status "\$nak_status" "9501 query" "logs/nak-9501.err"' "$ROOT/tests/gate/gate-phase-03.bats" \
     || die "phase-03 does not route the leak status through check_query_status"
   pass "phase-03 routes the leak status through check_query_status"
   # Missing elevation grant: a sudo that refuses must surface as the
@@ -154,7 +154,7 @@ EOF
   rc=0
   E2E_SUDO_BIN="$SUDO_STUB" GATE_GUEST_BIN="$STUB" CALLS="$CALLS" guest_timeout 2 peer-o -- true || rc=$?
   [[ "$rc" == 1 ]] || die "refused elevation did not fail (got $rc)"
-  grep -q "^refused -n " "$CALLS" || die "refused elevation never reached sudo: $(cat "$CALLS")"
+  grep >/dev/null "^refused -n " "$CALLS" || die "refused elevation never reached sudo: $(cat "$CALLS")"
   [ -z "$(grep "^stub " "$CALLS" || true)" ] || die "refused elevation still ran the guest binary"
   pass "missing elevation grant fails fast without touching the guest"
   # Handover order: the pushed file is handed to the suite user
@@ -170,7 +170,7 @@ EOF
   rc=0
   PUSH_RC=3 guest_push_e2e peer-n /tmp/invitation /var/lib/wyrd-e2e/invitation || rc=$?
   [[ "$rc" == 3 ]] || die "failed push status did not propagate (got $rc)"
-  grep -q "^push " "$CALLS" || die "failed push recorded nothing"
+  grep >/dev/null "^push " "$CALLS" || die "failed push recorded nothing"
   [ -z "$(grep "^exec " "$CALLS" || true)" ] || die "failed push still ran the chown"
   pass "failed push skips the handover and propagates status"
   # Directory pull: the guest dir rides a plain (uncompressed, no

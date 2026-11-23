@@ -36,7 +36,7 @@ MANIFEST="$(SHAPE_MANIFEST_CARGO="$FIXTURE" bash "$ROOT/nix/microvm/shape-manife
 UNPINNED=""
 while IFS= read -r _f; do
   [ -n "$_f" ] || continue
-  printf '%s\n' "$MANIFEST" | grep -qxF "$_f" || UNPINNED="$UNPINNED $_f"
+  printf '%s\n' "$MANIFEST" | grep -xF >/dev/null "$_f" || UNPINNED="$UNPINNED $_f"
 done <<< "$FIXTURE"
 if [ -z "$UNPINNED" ]; then
   ok "fixture entries round-trip verbatim"

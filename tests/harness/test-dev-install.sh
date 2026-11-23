@@ -26,14 +26,14 @@ PROVISION="$ROOT/crates/wyrd-desktop/src/provision/process.rs"
 
 # Code lines only, captured once: strip full-line comments before
 # matching, so the header prose can never satisfy a pin, and match
-# with a here-string (a `code | grep -q` pipeline under pipefail
-# would report 141 once grep exits early and the script grows past
-# the pipe buffer).
+# with a here-string. Do not put a quiet grep (`-q`) in a pipeline:
+# under `pipefail` it can exit before its producer finishes and
+# report 141 even when the match was found.
 INSTALL_CODE="$(grep -v '^[[:space:]]*#' "$INSTALL")"
 STAGE_CODE="$(grep -v '^[[:space:]]*#' "$STAGE_CLI")"
 CONF_CODE="$(cat "$CONF")"
 PROVISION_CODE="$(cat "$PROVISION")"
-match() { grep -F -q -- "$1" <<<"$2"; }
+match() { grep -F >/dev/null -- "$1" <<<"$2"; }
 
 # 1. The scripts exist and are executable.
 [[ -x "$INSTALL" ]] \
@@ -302,13 +302,13 @@ pass "linkage is covered on both sides of the stage boundary"
 # README names the command, the bundled CLI, the boundary, and the
 # team-signed pointer together.
 for marker in 'install-dev.sh' 'Resources/wyrd' 'no-group-container' 'team-signed' 'SDKROOT'; do
-  grep -Fq "$marker" "$ROOT/packaging/macos/README.md" \
+  grep -F >/dev/null "$marker" "$ROOT/packaging/macos/README.md" \
     || die "README: '$marker' not recorded"
 done
 pass "README records the command, the CLI, and the Finder boundary"
 
 # 11. The suite itself is wired into the native CI shell job.
-grep -Fq 'test-dev-install.sh' "$ROOT/.ngit/nix/workflows/default.nix" \
+grep -F >/dev/null 'test-dev-install.sh' "$ROOT/.ngit/nix/workflows/default.nix" \
   || die "CI: dev-install suite not wired into shell.suites"
 pass "CI wires the dev-install suite"
 
@@ -329,7 +329,7 @@ for marker in 'for BUNDLED in wyrd wyrd-supervise' 'Contents/Resources/$BUNDLED'
   match "$marker" "$INSTALL_CODE" \
     || die "install: supervise guard '$marker' missing"
 done
-grep -Fq 'wyrd-supervise' "$ROOT/packaging/macos/README.md" \
+grep -F >/dev/null 'wyrd-supervise' "$ROOT/packaging/macos/README.md" \
   || die "README: wyrd-supervise not recorded"
 pass "supervise wrapper is staged, mapped, guarded, and recorded"
 

@@ -68,7 +68,7 @@ check_leg() { # <func> <step> <marks>
   local leg="$1" want_step="$2" want_marks="$3" body n
   body="$(awk "/^$leg\(\) \{/{f=1} f{print} /^\}$/{if (f) exit}" "$LEGS")"
   [[ -n "$body" ]] || die "leg body not found: $leg"
-  grep -q "PROBE_STEP=$want_step" <<<"$body" \
+  grep >/dev/null "PROBE_STEP=$want_step" <<<"$body" \
     || die "$leg lost its PROBE_STEP=$want_step override"
   n="$(grep -c 'probe_mark ' <<<"$body")"
   [[ "$n" -eq "$want_marks" ]] \

@@ -27,7 +27,7 @@ die() { echo "  FAIL: $1" >&2; exit 1; }
 # noticing (no live read remains to catch it).
 # shellcheck disable=SC2016
 # (pattern is intentionally literal)
-grep -qxF '  CARGO="$(git -C "$ROOT" ls-tree -r HEAD --name-only -- Cargo.toml Cargo.lock rust-toolchain.toml crates)"' "$ROOT/nix/microvm/shape-manifest.sh" || die "emitter sourcing is not the committed tree"
+grep -xF >/dev/null '  CARGO="$(git -C "$ROOT" ls-tree -r HEAD --name-only -- Cargo.toml Cargo.lock rust-toolchain.toml crates)"' "$ROOT/nix/microvm/shape-manifest.sh" || die "emitter sourcing is not the committed tree"
 MANIFEST="$(bash "$ROOT/nix/microvm/shape-manifest.sh")"
 [[ -n "$MANIFEST" ]] || die "manifest emitter produced no output"
 
@@ -65,7 +65,7 @@ BAKED="$(grep -hoE '"wyrd-tests/[^"]+"' "$ROOT/nix/microvm/common.nix" \
   | sed -E 's#"wyrd-tests/##; s#"$##' | sort -u)"
 UNCOVERED=""
 for _f in $(printf '%s\n%s\n' "$REQUIRED" "$BAKED" | grep -E '.' | sort -u); do
-  printf '%s\n' "$MANIFEST" | grep -qE "(^|/)${_f}\$" || UNCOVERED="$UNCOVERED $_f"
+  printf '%s\n' "$MANIFEST" | grep -E >/dev/null "(^|/)${_f}\$" || UNCOVERED="$UNCOVERED $_f"
 done
 [[ -z "$UNCOVERED" ]] || die "manifest omits required files:$UNCOVERED"
 pass "manifest covers every required and baked file"
@@ -76,8 +76,8 @@ pass "manifest covers every required and baked file"
 # preserves every entry verbatim, including glob-hostile names.
 
 # Subject slot declared.
-printf '%s\n' "$MANIFEST" | grep -q '^\[subject-slots\]$' || die "manifest lacks a [subject-slots] section"
-printf '%s\n' "$MANIFEST" | grep -q '^wyrdSrc:' || die "manifest lacks the wyrdSrc slot declaration"
+printf '%s\n' "$MANIFEST" | grep >/dev/null '^\[subject-slots\]$' || die "manifest lacks a [subject-slots] section"
+printf '%s\n' "$MANIFEST" | grep >/dev/null '^wyrdSrc:' || die "manifest lacks the wyrdSrc slot declaration"
 pass "subject slot declared"
 
 # Strict mode, pinned literally and live: a nixpkgs-fmt-style
@@ -86,7 +86,7 @@ pass "subject slot declared"
 # catches the rewrite; the live probe proves an unguarded input
 # failure (here: git) fails the emitter instead of emitting a
 # manifest with silently empty inputs.
-grep -q '^set -euo pipefail$' "$ROOT/nix/microvm/shape-manifest.sh" \
+grep >/dev/null '^set -euo pipefail$' "$ROOT/nix/microvm/shape-manifest.sh" \
   || die "emitter does not run under strict mode (set -euo pipefail)"
 pass "emitter runs under strict mode"
 FAILBIN="$(mktemp -d)"

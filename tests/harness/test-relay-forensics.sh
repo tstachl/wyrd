@@ -26,11 +26,11 @@ COMMON_NIX="$SCRIPT_DIR/../../nix/microvm/common.nix"
 PASS=0
 
 # The relay serves the control plane as a VM service.
-grep -q 'systemd.services.nostr-relay' "$RELAY_NIX" \
+grep >/dev/null 'systemd.services.nostr-relay' "$RELAY_NIX" \
   || { echo "FAIL: relay.nix has no relay service" >&2; exit 1; }
 PASS=$((PASS + 1))
 echo "  PASS: relay service declared"
-grep -q 'Restart.*on-failure' "$RELAY_NIX" \
+grep >/dev/null 'Restart.*on-failure' "$RELAY_NIX" \
   || { echo "FAIL: relay service does not restart on failure" >&2; exit 1; }
 PASS=$((PASS + 1))
 echo "  PASS: relay service restarts on failure"
@@ -43,11 +43,11 @@ grep -rn '/mnt/wyrd-state' "$SCRIPT_DIR/../../nix/microvm/" \
   && { echo "FAIL: nix/microvm still references the retired state share" >&2; exit 1; }
 PASS=$((PASS + 1))
 echo "  PASS: no state-share references in nix/microvm"
-grep -q 'wyrd-ssh-key' "$RELAY_NIX" \
+grep >/dev/null 'wyrd-ssh-key' "$RELAY_NIX" \
   && { echo "FAIL: relay.nix still mentions the retired ssh-key unit" >&2; exit 1; }
 PASS=$((PASS + 1))
 echo "  PASS: no ssh-key unit in relay.nix"
-grep -q 'wyrd-ssh-key\|services.openssh' "$COMMON_NIX" \
+grep >/dev/null 'wyrd-ssh-key\|services.openssh' "$COMMON_NIX" \
   && { echo "FAIL: common.nix still carries ssh infrastructure" >&2; exit 1; }
 PASS=$((PASS + 1))
 echo "  PASS: no ssh infrastructure in common.nix"

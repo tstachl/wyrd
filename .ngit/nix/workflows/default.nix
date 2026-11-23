@@ -52,6 +52,29 @@ in
     text = ''
       set -euo pipefail
       say() { printf '===== %s =====\n' "$1"; }
+      # Mechanical guardrail: a quiet grep at the end of a pipeline can
+      # exit on its first match and SIGPIPE its producer. Under pipefail
+      # that reports 141 even when the assertion held. Harness scripts
+      # must read all input and redirect to /dev/null instead.
+      say "harness quiet-grep guard"
+      quiet_grep() {
+        grep -rnE 'grep[[:space:]]+(-+quiet|(-[A-Za-z]+[[:space:]]+)*-[A-Za-z]*q[A-Za-z]*([^[:alnum:]]|$))' "$1"
+      }
+      # Positive control: the guard must catch a planted quiet grep,
+      # including separated flag groups and the long form.
+      GUARD_FIXTURE="$(mktemp -d)"
+      trap 'rm -rf "$GUARD_FIXTURE"' EXIT
+      printf 'grep -F -q needle\n' > "$GUARD_FIXTURE/positive.sh"
+      if ! quiet_grep "$GUARD_FIXTURE" >/dev/null; then
+        echo "quiet-grep guard does not detect a planted quiet grep" >&2
+        exit 1
+      fi
+      rm -rf "$GUARD_FIXTURE"
+      trap - EXIT
+      if quiet_grep tests/harness; then
+        echo "quiet grep found in tests/harness; read all input instead" >&2
+        exit 1
+      fi
       say "e2e harness stubs (native)"
       bash tests/harness/test-step-grammar.sh
       bash tests/harness/test-baked-set.sh

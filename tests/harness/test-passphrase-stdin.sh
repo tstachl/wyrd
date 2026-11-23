@@ -26,16 +26,16 @@ SHELL_NOTE="$ROOT/docs/design/desktop-shell.md"
 
 # Code lines only, captured once: strip full-line comments before
 # matching, so prose can neither satisfy a pin nor trip one — and
-# match with a here-string (a `code | grep -q` pipeline under
-# pipefail would report 141 once grep exits early and the script
-# grows past the pipe buffer).
+# match with a here-string. Do not put a quiet grep (`-q`) in a
+# pipeline: under `pipefail` it can exit before its producer finishes
+# and report 141 even when the match was found.
 ARGS_ALL="$(cat "$ARGS")"
 ARGS_CODE="$(grep -v '^[[:space:]]*//' "$ARGS")"
 CREDS_CODE="$(grep -v '^[[:space:]]*//' "$CREDS")"
 MAIN_CODE="$(grep -v '^[[:space:]]*//' "$MAIN")"
 MAT_CODE="$(grep -v '^[[:space:]]*//' "$MATERIALIZATION")"
-match() { grep -F -q -- "$1" <<<"$2"; }
-nomatch() { ! grep -F -q -- "$1" <<<"$2"; }
+match() { grep -F >/dev/null -- "$1" <<<"$2"; }
+nomatch() { ! grep -F >/dev/null -- "$1" <<<"$2"; }
 
 # 1. The flag exists on the shared Credentials surface, conflicts
 # with the file flag, and every credential-bearing command inherits
@@ -96,7 +96,7 @@ pass "stdin mode keeps the identity file"
 # 8. The decision is recorded: R1/R2 have a repo home in the shell
 # note, and the onboarding mandate is posture-scoped.
 for marker in 'R1' 'R2' '--passphrase-stdin'; do
-  grep -Fq -- "$marker" "$SHELL_NOTE" \
+  grep -F >/dev/null -- "$marker" "$SHELL_NOTE" \
     || die "desktop-shell.md: '$marker' not recorded"
 done
 pass "design note defines R1/R2 and names the transport"
@@ -120,9 +120,9 @@ pass "provenance reports stdin, not a flag"
 
 # 11. The paths-only rule names both bounded pipes: no surviving
 # claim that onboarding "applies nowhere else".
-grep -Fq -- 'applies nowhere else' "$SHELL_NOTE" \
+grep -F >/dev/null -- 'applies nowhere else' "$SHELL_NOTE" \
   && die "desktop-shell.md: stale single-exception claim survives"
-grep -Fq -- 'per-session unlock handoff' "$SHELL_NOTE" \
+grep -F >/dev/null -- 'per-session unlock handoff' "$SHELL_NOTE" \
   || die "desktop-shell.md: unlock pipe not named as second exception"
 pass "paths-only rule names both bounded pipes"
 

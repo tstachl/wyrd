@@ -44,20 +44,20 @@ pass "config stages before bundling, copies to PlugIns, wires app entitlements"
 # 2. The stage script is macOS-only (skips elsewhere, exit 0), builds
 # through build-appex.sh with the config version stamped in the
 # environment — the exact assignment, not a comment mention.
-grep -Fq 'if [ "$(uname -s)" != "Darwin" ]' "$STAGE" \
+grep -F >/dev/null 'if [ "$(uname -s)" != "Darwin" ]' "$STAGE" \
   || die "stage: no macOS platform guard"
-grep -Fq 'APPEX_BUNDLE_VERSION="$APP_VERSION" "$HERE/fileprovider/build-appex.sh"' "$STAGE" \
+grep -F >/dev/null 'APPEX_BUNDLE_VERSION="$APP_VERSION" "$HERE/fileprovider/build-appex.sh"' "$STAGE" \
   || die "stage: version is not passed to build-appex.sh in the environment"
 pass "stage script builds macOS-only at the config version"
 
 # 3. The stage script maps Tauri's target triple to the appex arch
 # and refuses targets it cannot satisfy (no silent host-arch embed,
 # no universal appex).
-grep -Fq 'TAURI_ENV_TARGET_TRIPLE' "$STAGE" \
+grep -F >/dev/null 'TAURI_ENV_TARGET_TRIPLE' "$STAGE" \
   || die "stage: no target-triple mapping"
-grep -Fq 'aarch64-apple-darwin) ARCH=arm64' "$STAGE" \
+grep -F >/dev/null 'aarch64-apple-darwin) ARCH=arm64' "$STAGE" \
   || die "stage: no aarch64 mapping"
-grep -Fq 'x86_64-apple-darwin) ARCH=x86_64' "$STAGE" \
+grep -F >/dev/null 'x86_64-apple-darwin) ARCH=x86_64' "$STAGE" \
   || die "stage: no x86_64 mapping"
 pass "stage script pins the appex arch to the bundle target"
 
@@ -66,31 +66,31 @@ pass "stage script pins the appex arch to the bundle target"
 # bundle.macOS.signingIdentity in the config — with an ad-hoc or
 # different appex identity is refused with the fix named. `-`
 # (Tauri's ad-hoc pseudo-identity) and unset both mean ad-hoc.
-grep -Fq 'APPLE_SIGNING_IDENTITY' "$STAGE" \
+grep -F >/dev/null 'APPLE_SIGNING_IDENTITY' "$STAGE" \
   || die "stage: no outer-identity pairing"
-grep -Fq 'signingIdentity' "$STAGE" \
+grep -F >/dev/null 'signingIdentity' "$STAGE" \
   || die "stage: config signing identity is not read"
-grep -Fq '""|-)' "$STAGE" \
+grep -F >/dev/null '""|-)' "$STAGE" \
   || die "stage: ad-hoc - is not treated as ad-hoc"
-grep -Fq 'set SIGN_IDENTITY to the same identity' "$STAGE" \
+grep -F >/dev/null 'set SIGN_IDENTITY to the same identity' "$STAGE" \
   || die "stage: pairing refusal names no fix"
 pass "stage script refuses a mismatched appex identity"
 
 # 5. The stage script carries nothing app-side: it never names an app
 # entitlements file, an app profile, or the outer bundle — Tauri owns
 # all three. The appex profile flows only through build-appex.sh env.
-grep -q 'Wyrd.entitlements' "$STAGE" \
+grep >/dev/null 'Wyrd.entitlements' "$STAGE" \
   && die "stage: app entitlements have no hook role"
-grep -q '\.app/' "$STAGE" \
+grep >/dev/null '\.app/' "$STAGE" \
   && die "stage: hook must not touch the outer bundle"
-grep -q 'embedded.provisionprofile' "$STAGE" \
+grep >/dev/null 'embedded.provisionprofile' "$STAGE" \
   && die "stage: profile embed belongs to build-appex.sh only"
 pass "stage script carries nothing app-side"
 
 # 6. Hardened runtime is on the appex signature: Tauri's shallow
 # outer sign cannot repair a nested signature that lacks it, and a
 # Developer ID build without it is not notarizable.
-grep -Fq -- '--options runtime' "$BUILD" \
+grep -F >/dev/null -- '--options runtime' "$BUILD" \
   || die "build-appex.sh: appex signature lacks hardened runtime"
 pass "appex signature carries hardened runtime"
 
@@ -104,20 +104,20 @@ sign_line=$(grep -n '^codesign ' "$BUILD" | head -1 | cut -d: -f1)
   || die "build-appex.sh: version flow incomplete"
 [[ "$copy_line" -lt "$rewrite_line" && "$rewrite_line" -lt "$sign_line" ]] \
   || die "build-appex.sh: rewrite must sit between copy and sign"
-grep -Fq 'Set :CFBundleVersion' "$BUILD" \
+grep -F >/dev/null 'Set :CFBundleVersion' "$BUILD" \
   || die "build-appex.sh: CFBundleVersion is not rewritten"
-grep -Fq 'if [ -n "${APPEX_BUNDLE_VERSION:-}" ]' "$BUILD" \
+grep -F >/dev/null 'if [ -n "${APPEX_BUNDLE_VERSION:-}" ]' "$BUILD" \
   || die "build-appex.sh: rewrite is not opt-in"
 pass "both version keys move between copy and sign"
 
 # 8. The decision is recorded in hook-specific prose (not the
 # pre-existing tree block): the hook script, the
 # `beforeBundleCommand` wiring, and the shallow-signing order.
-grep -Fq 'stage-appex.sh' "$ROOT/packaging/macos/README.md" \
+grep -F >/dev/null 'stage-appex.sh' "$ROOT/packaging/macos/README.md" \
   || die "README: hook script not recorded"
-grep -Fq 'beforeBundleCommand' "$ROOT/packaging/macos/README.md" \
+grep -F >/dev/null 'beforeBundleCommand' "$ROOT/packaging/macos/README.md" \
   || die "README: hook wiring not recorded"
-grep -Fq 'never `--deep`' "$ROOT/packaging/macos/README.md" \
+grep -F >/dev/null 'never `--deep`' "$ROOT/packaging/macos/README.md" \
   || die "README: shallow outer sign not recorded"
 pass "README records the hook"
 
@@ -126,11 +126,11 @@ pass "README records the hook"
 # `--deep` left is the verification line (signing with it would
 # re-sign the nested appex without its entitlements).
 RUNBOOK="$ROOT/.ngit/release.yaml"
-grep -Fq 'never `--deep`' "$RUNBOOK" \
+grep -F >/dev/null 'never `--deep`' "$RUNBOOK" \
   || die "runbook: shallow-signing prohibition missing"
 [ "$(grep -c -- '--deep' "$RUNBOOK")" = "2" ] \
   || die "runbook: --deep appears outside the prohibition and verify lines"
-grep -- '--deep' "$RUNBOOK" | grep -Fq 'codesign --verify --deep' \
+grep -- '--deep' "$RUNBOOK" | grep -F >/dev/null 'codesign --verify --deep' \
   || die "runbook: the --deep line is not the verify line"
 pass "runbook signs nested-first and shallowly"
 

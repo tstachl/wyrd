@@ -23,10 +23,10 @@ GROUP='group.md.enesis.wyrd'
 # 1. The reopened decision is recorded: the unsandboxed app keeps its
 # direct paths but joins the one App Group so it can materialize the
 # container at launch. The previous reasoning is preserved in prose.
-grep -Fq 'Production entitlements and provisioning (reopened and amended)' \
+grep -F >/dev/null 'Production entitlements and provisioning (reopened and amended)' \
   "$ROOT/packaging/macos/README.md" \
   || die "README: reopened decision section missing"
-grep -Fq 'Previous app decision (superseded)' \
+grep -F >/dev/null 'Previous app decision (superseded)' \
   "$ROOT/packaging/macos/README.md" \
   || die "README: previous reasoning not preserved"
 python3 - "$ROOT/packaging/macos/Wyrd.app.entitlements" <<EOF
@@ -63,7 +63,7 @@ pass "appex entitlement set stays minimal"
 # embedded before signing. The `cp` command pins the order, not a
 # header-comment match.
 SCRIPT="$ROOT/packaging/macos/fileprovider/build-appex.sh"
-grep -Fq 'PROVISIONING_PROFILE' "$SCRIPT" \
+grep -F >/dev/null 'PROVISIONING_PROFILE' "$SCRIPT" \
   || die "build-appex.sh: no PROVISIONING_PROFILE wiring"
 cp_line=$(grep -n 'cp "\$PROVISIONING_PROFILE"' "$SCRIPT" | head -1 | cut -d: -f1)
 sign_line=$(grep -n '^codesign ' "$SCRIPT" | head -1 | cut -d: -f1)

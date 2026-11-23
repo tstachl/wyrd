@@ -29,7 +29,7 @@ YAML_CODE="$(grep -v '^[[:space:]]*#' "$YAML")"
 COMMANDS_CODE="$(grep -v '^[[:space:]]*#' "$COMMANDS")"
 DEVENV_CODE="$(grep -v '^[[:space:]]*#' "$DEVENV")"
 FLAKE_CODE="$(grep -v '^[[:space:]]*#' "$ROOT/flake.nix")"
-match() { grep -F -q -- "$1" <<<"$2"; }
+match() { grep -F >/dev/null -- "$1" <<<"$2"; }
 
 # 1. The workflow names the desktop gate with one frontend job on
 # the desktop.frontend command, ready-gated like the other PR
@@ -65,7 +65,7 @@ pass "trigger paths cover the frontend, the shell identity, the bun pins, and th
 
 # 4. The package scripts the gate calls exist.
 for script in '"test":' '"typecheck":' '"build":'; do
-  grep -F -q -- "$script" "$PACKAGE" \
+  grep -F >/dev/null -- "$script" "$PACKAGE" \
     || die "package.json: script $script missing"
 done
 pass "package scripts test, typecheck, and build exist"
