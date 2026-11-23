@@ -17,8 +17,10 @@ import {
   driveRunState,
   folderNameFromPath,
   formatBoundValue,
+  formatByteSize,
   formatObservedAge,
   formatPublicationAge,
+  formatRetentionLine,
   freshnessLabel,
   isFirstRun,
   membershipSummary,
@@ -95,6 +97,20 @@ test("publication ages are relative, local and unknown at zero", () => {
   expect(formatPublicationAge(at + 5, now)).toBe("Updated just now");
 });
 
+test("retention lines name drive data, a limit or no limit, never a disk figure", () => {
+  expect(formatRetentionLine(undefined)).toBe("Not yet observed");
+  expect(formatRetentionLine(null)).toBe("Not yet observed");
+  expect(
+    formatRetentionLine({ retained_bytes: 2 * 1024 ** 3, ceiling: 5 * 1024 ** 3 }),
+  ).toBe("Using 2 GB of 5 GB");
+  expect(formatRetentionLine({ retained_bytes: 1024 ** 3, ceiling: null })).toBe(
+    "Using 1 GB · no limit set",
+  );
+  expect(formatByteSize(1536)).toBe("1.5 KB");
+  expect(formatByteSize(2 * 1024 ** 3)).toBe("2 GB");
+  expect(formatByteSize(Number.NaN)).toBe("unknown");
+});
+
 const overviewFacts: OverviewDriveFacts = {
   availability: "available",
   paused: false,
@@ -149,6 +165,7 @@ const baseFacts: StatusFacts = {
   staleDetail: null,
   freshEmpty: true,
   localObjects: 0,
+  retention: undefined,
 };
 
 test("the status summary is separate facts, never a green verdict", () => {
@@ -180,6 +197,25 @@ test("attention appears only for observed problems", () => {
   expect(statusAttention({ ...baseFacts, availability: "unavailable" })).toContain(
     "The drive is not answering. Its last reported state is still shown below.",
   );
+  // Near-limit is observed: a set ceiling and a count that reaches it.
+  const near = "This drive is close to its storage limit. Wyrd will refuse new drive data when the limit is reached.";
+  expect(
+    statusAttention({
+      ...baseFacts,
+      retention: { retained_bytes: 950, ceiling: 1000 },
+    }),
+  ).toContain(near);
+  // No limit, no count, or an old writer with no accountant adds nothing.
+  expect(
+    statusAttention({ ...baseFacts, retention: { retained_bytes: 950, ceiling: null } }),
+  ).toEqual([]);
+  expect(statusAttention({ ...baseFacts, retention: null })).toEqual([]);
+  expect(
+    statusAttention({
+      ...baseFacts,
+      retention: { retained_bytes: 100, ceiling: 1000 },
+    }),
+  ).toEqual([]);
 });
 
 test("a drive with one member, no peers and no data is a first run", () => {

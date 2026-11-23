@@ -7,7 +7,7 @@
 // historical ("last observed …"), and every unknown state must read
 // as unknown — never as a negative, never as a default.
 
-import type { WireFreshnessState } from "$lib/ipc/results.js";
+import type { WireFreshnessState, WireRetention } from "$lib/ipc/results.js";
 import type { DriveAvailability, SessionState } from "$lib/ipc/results.js";
 import type { ProvisionReport } from "$lib/ipc/results.js";
 import type { CredentialReference } from "$lib/ipc/results.js";
@@ -55,6 +55,29 @@ export function formatPublicationAge(publishedUnixSecs: number | undefined, nowM
   if (hours < 24) return `Updated ${hours} hour${hours === 1 ? "" : "s"} ago`;
   const days = Math.floor(hours / 24);
   return `Updated ${days} day${days === 1 ? "" : "s"} ago`;
+}
+
+/** A byte count in the units the settings use (1024-based). Never "disk". */
+export function formatByteSize(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return "unknown";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
+  return `${Number((bytes / 1024 ** 3).toFixed(2))} GB`;
+}
+
+/**
+ * Drive data kept on this device. A configured limit reads "Using X of Y";
+ * no limit reads "Using X · no limit set" — no limit is a real answer,
+ * not an unknown value. An absent field means the observer held no
+ * accountant, so it reads as unknown, never as zero bytes kept.
+ */
+export function formatRetentionLine(retention: WireRetention | null | undefined): string {
+  if (retention === null || retention === undefined) return "Not yet observed";
+  const used = formatByteSize(retention.retained_bytes);
+  return retention.ceiling === null
+    ? `Using ${used} · no limit set`
+    : `Using ${used} of ${formatByteSize(retention.ceiling)}`;
 }
 
 /** Shorten a content id for display. The full value stays in the snapshot; this is presentation only. */
@@ -170,7 +193,12 @@ export interface StatusFacts {
   staleDetail: string | null;
   freshEmpty: boolean;
   localObjects: number;
+  /** Local retention figures, absent when the observer held no accountant. */
+  retention: WireRetention | null | undefined;
 }
+
+/** How close to the configured storage limit counts as near the limit. */
+const NEAR_LIMIT_RATIO = 0.9;
 
 /** Observable run state. Paused still answers; unavailable never claims the drive is gone. */
 export function statusRunState(facts: StatusFacts): string {
@@ -213,6 +241,20 @@ export function statusAttention(facts: StatusFacts): string[] {
   }
   if (facts.staleDetail !== null) {
     items.push(`The served data is stale: ${facts.staleDetail}.`);
+  }
+  // Near-limit is a real observed condition only when a limit is set
+  // and the byte count reaches it. No limit, no count, or an old
+  // writer with no accountant adds nothing to the attention area.
+  const retention = facts.retention;
+  if (
+    retention != null &&
+    retention.ceiling !== null &&
+    retention.ceiling > 0 &&
+    retention.retained_bytes >= retention.ceiling * NEAR_LIMIT_RATIO
+  ) {
+    items.push(
+      "This drive is close to its storage limit. Wyrd will refuse new drive data when the limit is reached.",
+    );
   }
   return items;
 }

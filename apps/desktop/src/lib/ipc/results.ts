@@ -127,6 +127,15 @@ export interface WireKnownState {
   readers_root: string;
 }
 
+// Drive data kept here and the ceiling in force. The count is the
+// byte accountant's figure, not a disk or sync figure. `ceiling: null`
+// means no limit is set; an absent field means an older owner or an
+// unheld read, never zero bytes kept.
+export interface WireRetention {
+  retained_bytes: number;
+  ceiling: number | null;
+}
+
 export interface WireSyncStatus {
   tip: WireKnownState | null;
   held_epochs: number[];
@@ -145,6 +154,7 @@ export interface WireSyncStatus {
   convergence: WireConvergenceState;
   materialization: WireMaterializationSummary;
   durability: WireDurabilityLevel;
+  retention?: WireRetention | null;
 }
 
 export interface WireMailboxHealth {
