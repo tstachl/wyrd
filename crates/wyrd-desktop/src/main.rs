@@ -144,11 +144,11 @@ fn drain_and_exit<R: Runtime>(app: AppHandle<R>) {
     });
 }
 
-/// Whether an exit request must drain before the process exits. A
-/// code-less request is Cmd+Q, any other exit request, or the
-/// code-less `ExitRequested` Tauri emits after the last window
-/// closes; all three drain. A request carrying a code is our own
-/// post-drain `app.exit(0)`, allowed through.
+/// Whether an `ExitRequested` must drain before the process exits.
+/// Tauri emits a code-less request after the last window closes and
+/// for ordinary exit requests; both drain. A request carrying a code
+/// is our own post-drain `app.exit(0)`, allowed through. An exit that
+/// skips `ExitRequested` is drained by the `Exit` handler instead.
 fn must_drain(code: Option<i32>) -> bool {
     code.is_none()
 }
