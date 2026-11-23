@@ -327,10 +327,15 @@ fn owner_sigterm_after_ready_exits_zero() {
 /// failure: where no platform store answers (`Unavailable`,
 /// e.g. headless Linux with no bus) the test returns without
 /// asserting. A locked or denied store fails instead of
-/// skipping — and running this test on macOS CI requires an
-/// unlocked login keychain (explicit prerequisite, not an
-/// assumption).
+/// skipping.
+///
+/// Ignored in every lane. On macOS this needs an unlocked login
+/// keychain and an interactive password prompt, so it must never
+/// run in an automated gate. Run it explicitly only when a live
+/// keychain has to be tested:
+/// `cargo nextest run -p wyrd-cli --run-ignored all -E 'test(owner_store_sigterm_after_ready_exits_zero)'`
 #[test]
+#[ignore = "requires an unlocked macOS login keychain and an interactive password prompt; run manually only"]
 fn owner_store_sigterm_after_ready_exits_zero() {
     use wyrd_credential_store::OsStoreBackend;
     use wyrd_sync::keys::{CredentialError, CredentialLoader, CredentialRef, LoadedCredential};
