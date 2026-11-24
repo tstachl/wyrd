@@ -52,14 +52,13 @@ test("export is local, temporary, and distinct from sharing", () => {
 });
 
 test("the card names the signing cause instead of Finder's generic banner", () => {
-  expect(card).toContain("Finder integration needs a team identity on the extension");
+  expect(card).toContain("Finder integration needs an App Group container");
   expect(card).toContain('finderIntegration === "unprovisioned"');
   expect(card).toContain("This build has no appex provisioning profile");
-  expect(card).toContain("An ad-hoc extension has no App Group");
-  expect(card).toContain("container, so Finder can show a server or network error for a drive whose owner is");
-  expect(card).toContain("running; the drive still works in Wyrd. To give the extension a team identity, re-run");
-  expect(card).toContain("install-dev.sh with --sign-appex added to --stable-identity (no profile), or use");
-  expect(card).toContain("--sign-identity with both provisioning profiles. That install also restarts the drive");
+  expect(card).toContain("An ad-hoc extension cannot resolve the");
+  expect(card).toContain("group container, so Finder can show a server or network error for a drive whose owner");
+  expect(card).toContain("is running; the drive still works in Wyrd. The packaging README lists the signed-build");
+  expect(card).toContain("options, with and without a profile. Reinstalling also restarts the drive agents for");
   expect(settings).toContain("{finderIntegration}");
 });
 

@@ -263,6 +263,12 @@ if [ -n "$STABLE_SIGN_IDENTITY" ]; then
         echo "error: --stable-identity takes no provisioning profile; the team-prefixed group is unprovisioned (use --sign-identity for the profile-backed path)." >&2
         exit 1
     fi
+    case "$GROUP" in
+        group.*)
+            echo "error: --stable-identity needs the unprovisioned <team-id>.<group> form; $GROUP needs a profile." >&2
+            exit 1
+            ;;
+    esac
     SIGN_IDENTITY="$STABLE_SIGN_IDENTITY"
     APPLE_SIGNING_IDENTITY="$STABLE_SIGN_IDENTITY"
     APPEX_SIGNED="$WYRD_SIGN_APPEX"
@@ -529,6 +535,15 @@ if [ "$STABLE_MODE" -eq 1 ]; then
                 exit 1
                 ;;
         esac
+        # An unprovisioned group only resolves when the signing team is
+        # its prefix. A different-team identity would pass the Authority
+        # check yet leave the appex without a container.
+        TEAM_PREFIX=${GROUP%%.*}
+        SIGNING_TEAM=$(printf '%s\n' "$INFO" | sed -n 's/^TeamIdentifier=//p' | head -1)
+        if [ -z "$TEAM_PREFIX" ] || [ "$SIGNING_TEAM" != "$TEAM_PREFIX" ]; then
+            echo "error: $LABEL signs as team ${SIGNING_TEAM:-<none>}, but $GROUP is prefixed with ${TEAM_PREFIX:-<none>}." >&2
+            exit 1
+        fi
         case "$INFO" in
             *"Authority=$STABLE_SIGN_IDENTITY"*) ;;
             *)

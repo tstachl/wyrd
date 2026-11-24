@@ -232,16 +232,16 @@ test("an unprovisioned build states the signing cause and the recovery", async (
   const rendered = render(DiagnosticsCard, {
     props: props({ finderIntegration: "unprovisioned" as FinderIntegration }),
   });
-  expect(rendered.getByText("Finder integration needs a team identity on the extension")).toBeTruthy();
-  expect(rendered.getByText(/An ad-hoc extension has no App Group/)).toBeTruthy();
-  expect(rendered.getByText(/--sign-appex added to --stable-identity/)).toBeTruthy();
+  expect(rendered.getByText("Finder integration needs an App Group container")).toBeTruthy();
+  expect(rendered.getByText(/An ad-hoc extension cannot resolve the/)).toBeTruthy();
+  expect(rendered.getByText(/The packaging README lists the signed-build/)).toBeTruthy();
 });
 
 test("a provisioned build shows no signing warning", async () => {
   const rendered = render(DiagnosticsCard, {
     props: props({ finderIntegration: "provisioned" as FinderIntegration }),
   });
-  expect(rendered.queryByText("Finder integration needs a team identity on the extension")).toBeNull();
+  expect(rendered.queryByText("Finder integration needs an App Group container")).toBeNull();
 });
 
 test("no drive selected disables the toggle with an explicit hint", async () => {

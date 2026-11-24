@@ -158,14 +158,13 @@ them never suppresses a default-visible error. -->
   <Card.Content class="flex flex-col gap-3">
     {#if finderIntegration === "unprovisioned"}
       <Alert.Root>
-        <p class="font-medium">Finder integration needs a team identity on the extension</p>
+        <p class="font-medium">Finder integration needs an App Group container</p>
         <p class="text-xs leading-relaxed">
-          This build has no appex provisioning profile. An ad-hoc extension has no App Group
-          container, so Finder can show a server or network error for a drive whose owner is
-          running; the drive still works in Wyrd. To give the extension a team identity, re-run
-          install-dev.sh with --sign-appex added to --stable-identity (no profile), or use
-          --sign-identity with both provisioning profiles. That install also restarts the drive
-          agents for you.
+          This build has no appex provisioning profile. An ad-hoc extension cannot resolve the
+          group container, so Finder can show a server or network error for a drive whose owner
+          is running; the drive still works in Wyrd. The packaging README lists the signed-build
+          options, with and without a profile. Reinstalling also restarts the drive agents for
+          you.
         </p>
       </Alert.Root>
     {/if}

@@ -281,7 +281,7 @@ pass "install restarts loaded drive agents after the clean-slate stop"
 # --sign-identity before any build. The post-build checks fail closed if
 # a real signature silently falls back to ad-hoc, or if the appex is
 # signed/embedded in a way Finder might mistake for capability.
-for marker in '--stable-identity' 'STABLE_SIGN_IDENTITY' '. "$HERE/sign-identity.sh"' 'STABLE_MODE=1' 'WYRD_ADHOC_IDENTITY' 'APPEX_SIGN_IDENTITY="$WYRD_ADHOC_IDENTITY"' 'WYRD_ALLOW_ADHOC_APPEX=1' 'FINDER_CAPABLE=0' '--stable-identity takes no provisioning profile' 'assert_stable_signed' 'Signature=adhoc' 'TeamIdentifier=not set' 'Authority=$STABLE_SIGN_IDENTITY' 'different identity than $STABLE_SIGN_IDENTITY' 'appex must stay ad-hoc' 'stable identity for app, CLI and registrar'; do
+for marker in '--stable-identity' 'STABLE_SIGN_IDENTITY' '. "$HERE/sign-identity.sh"' 'STABLE_MODE=1' 'WYRD_ADHOC_IDENTITY' 'APPEX_SIGN_IDENTITY="$WYRD_ADHOC_IDENTITY"' 'WYRD_ALLOW_ADHOC_APPEX=1' 'FINDER_CAPABLE=0' '--stable-identity takes no provisioning profile' 'assert_stable_signed' 'Signature=adhoc' 'TeamIdentifier=not set' 'Authority=$STABLE_SIGN_IDENTITY' 'different identity than $STABLE_SIGN_IDENTITY' 'appex must stay ad-hoc' '--stable-identity needs the unprovisioned' 'TEAM_PREFIX=${GROUP%%.*}' 'SIGNING_TEAM=' 'stable identity for app, CLI and registrar'; do
   match "$marker" "$INSTALL_CODE" \
     || die "install: stable-identity marker '$marker' missing"
 done
