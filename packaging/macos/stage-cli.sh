@@ -12,9 +12,10 @@
 #
 # Exits 0 on non-macOS platforms so Linux bundles are unaffected.
 # No app entitlements, no profile here — the CLI signs with the
-# same SIGN_IDENTITY the appex uses (default ad-hoc `-`), paired
-# with the outer identity by stage-appex.sh, which runs first and
-# refuses a mixed pair fail-closed.
+# shared SIGN_IDENTITY used for the app reseal (default ad-hoc `-`).
+# The appex normally uses the same identity, but the stable-identity
+# dev mode pins the appex to ad-hoc with an explicit opt-out in
+# stage-appex.sh; the CLI stays stable as the keychain client.
 #
 # Environment passthrough: SIGN_IDENTITY (default: ad-hoc `-`),
 # TOOLCHAIN, SDK, ARCH, CARGO_TARGET_DIR, CARGO_BUILD_TARGET,
@@ -180,8 +181,8 @@ else
     echo "note: otool absent, skipping staged-CLI linkage check." >&2
 fi
 
-# Sign with the same identity the appex uses (default ad-hoc `-`),
-# but WITHOUT hardened runtime: a mount-enabled CLI loads the
+# Sign with the shared SIGN_IDENTITY (default ad-hoc `-`), but
+# WITHOUT hardened runtime: a mount-enabled CLI loads the
 # third-party macFUSE library at runtime, and a hardened-runtime
 # signature fails library validation against the differently-signed
 # macFUSE dylib (dead in dyld before main — observed 2026-11-15).

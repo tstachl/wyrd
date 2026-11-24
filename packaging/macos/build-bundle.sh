@@ -168,9 +168,10 @@ if [ "$(uname -s)" = "Darwin" ]; then
     # nested appex signature (never `--deep`, which would re-sign
     # the appex without its entitlements) — the nested-first order
     # the runbook documents. Identity pairs with the hook:
-    # stage-appex.sh already refused a mixed pair, so the default
-    # ad-hoc `-` here means an ad-hoc outer app, and a set
-    # SIGN_IDENTITY is the same Developer ID Tauri used. A real
+    # stage-appex.sh refuses a mixed pair except in the narrow
+    # stable-identity dev mode, so the default ad-hoc `-` here means
+    # an ad-hoc outer app, and a set SIGN_IDENTITY is the same
+    # Developer ID Tauri used. A real
     # identity seals with a secure timestamp (notarization
     # requires it); ad-hoc has no timestamp authority to reach.
     if [ -d "$RELEASE_DIR/bundle/macos/Wyrd.app" ]; then

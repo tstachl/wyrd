@@ -230,8 +230,11 @@ registered-but-unavailable; it never invents a weaker path.
   probe). The posture is fixed here, not in settings: per-app ACL
   calls would need a contract amendment (the facade owns the
   store — see Placement), and biometric-gated reads would
-  contradict non-interactive service-context retrieval. A locked
-  keychain reads as `denied` through the mapped statuses
+  contradict non-interactive service-context retrieval. Keeping the
+  build's signing identity stable across developer installs is a
+  build-time choice, not an ACL change: it preserves one recognised
+  keychain client without adding a trust entry or a biometric gate.
+  A locked keychain reads as `denied` through the mapped statuses
   (unit-pinned; the locked state itself is not hand-triggered —
   locking the operator's login keychain is not part of the probe).
   Account for the session-vs-service distinction: an item the GUI

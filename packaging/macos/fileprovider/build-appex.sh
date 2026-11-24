@@ -6,9 +6,11 @@
 #
 # Usage: packaging/macos/fileprovider/build-appex.sh [out-dir]
 # Environment: ARCH (default: host arch), SIGN_IDENTITY (default:
-# ad-hoc `-`), MIN_MACOS (default: 13.0), TOOLCHAIN (default: the
-# active developer directory), SWIFTC (default: resolved from the
-# developer directory), SDK (default: the resolved macOS SDK),
+# ad-hoc `-`), APPEX_SIGN_IDENTITY (default: SIGN_IDENTITY, then ad-hoc —
+# the stable-identity dev mode pins it to ad-hoc), MIN_MACOS (default:
+# 13.0), TOOLCHAIN (default: the active developer directory), SWIFTC
+# (default: resolved from the developer directory), SDK (default: the
+# resolved macOS SDK),
 # PROVISIONING_PROFILE (default: unset — no profile embedded; when
 # set to a .provisionprofile path, it is copied to
 # Contents/embedded.provisionprofile before signing),
@@ -28,7 +30,13 @@ set -o pipefail 2>/dev/null || true
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 OUT=${1:-"$HERE/build"}
 ARCH=${ARCH:-$(uname -m)}
-SIGN_IDENTITY=${SIGN_IDENTITY:--}
+
+# Identity resolution lives in the shared helper: the appex may be kept
+# ad-hoc while the rest of the bundle uses a stable identity. Everything
+# below (including the final codesign) uses this script's effective
+# SIGN_IDENTITY, so no other line needs to know about the split.
+. "$HERE/../sign-identity.sh"
+SIGN_IDENTITY=$(wyrd_appex_identity)
 
 # Render the App Group before the minutes-long swiftc: a bad override
 # must fail here, not in a signed bundle that silently cannot reach

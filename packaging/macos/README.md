@@ -164,6 +164,42 @@ the registrar launch agent, and Rust reads the same variable at
 runtime, so one setting moves every consumer. A future signing team
 changes one value, not 37 literals.
 
+### Stable identity for repeat installs (no fee, Finder stays inert)
+
+An ad-hoc rebuild changes the code signature each time. macOS then
+treats the rebuilt binary as a new keychain client and asks again for
+access to the `wyrd-drive-*` items. A free Personal Team can issue an
+Apple Development certificate at no cost. Supplying it keeps one signer
+across rebuilds, so an "Always Allow" grant survives a reinstall:
+
+```sh
+packaging/macos/install-dev.sh \
+  --stable-identity "Apple Development: …"
+```
+
+`STABLE_SIGN_IDENTITY` in the environment is equivalent. The mode signs
+the app, the bundled `wyrd` CLI, the `wyrd-supervise` wrapper and the
+domain registrar with that identity. The File Provider appex stays
+ad-hoc and no provisioning profile is embedded. Finder stays inert
+(`no-group-container`), as with the ad-hoc default; use
+`--sign-identity` with both profiles when a Finder-capable build is
+needed. The two modes cannot be combined, and a profile passed with
+`--stable-identity` is refused before any build. The installed app, CLI
+and registrar are checked for a real signature, and a silent fallback
+to ad-hoc fails the install.
+
+Nothing here changes the keychain item ACL. Items keep default (NULL)
+access: no per-application trust list and no biometric flags, so the
+non-interactive owner can still read them from its launchd agent. The
+stable signer only keeps macOS recognising the same client. A Personal
+Team certificate expires; `codesign` refuses an expired identity with
+the toolchain message, so renew it in Xcode and install again.
+
+The shared helper `packaging/macos/sign-identity.sh` owns the ad-hoc
+default and the appex identity split. `install-dev.sh` is its first
+consumer; `stage-appex.sh` and `build-appex.sh` read the same values so
+the signed artifact and the pairing check cannot drift.
+
 After the bundle swap the installer stops every running Wyrd
 process — supervisors first, then owners, then the app, registrar
 and extension — so no process keeps the previous binary mapped.
