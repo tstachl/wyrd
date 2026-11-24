@@ -544,6 +544,87 @@ fn converge_swapped_without_prev_names_manual_recovery() {
 }
 
 #[test]
+fn converge_finishes_an_interrupted_rollback_after_the_restore() {
+    // Rollback renamed the state aside and restored the old binary
+    // before crashing. No prev remains by design; the restored
+    // binary is healthy and must not be reported as unverified.
+    let temp = TempDir::new();
+    let exe = fake_exe(&temp.0);
+    fs::write(rollback_marker_path(&exe), b"marker").unwrap();
+    fs::write(next_path(&exe), b"staged").unwrap();
+    fs::create_dir_all(stage_dir(&exe)).unwrap();
+    match converge(&exe).unwrap() {
+        Converged::RolledBack(reason) => {
+            assert!(reason.contains("interrupted rollback"), "{reason}")
+        }
+        other => panic!("interrupted rollback must converge, got: {other:?}"),
+    }
+    assert_eq!(fs::read(&exe).unwrap(), b"old-binary");
+    assert!(!rollback_marker_path(&exe).exists());
+    assert!(!next_path(&exe).exists());
+    assert!(!stage_dir(&exe).exists());
+}
+
+#[test]
+fn converge_restores_prev_when_crash_precedes_the_rollback_rename() {
+    let temp = TempDir::new();
+    let exe = fake_exe(&temp.0);
+    fs::write(&exe, b"new-binary").unwrap();
+    fs::write(prev_path(&exe), b"old-binary").unwrap();
+    fs::write(rollback_marker_path(&exe), b"marker").unwrap();
+    match converge(&exe).unwrap() {
+        Converged::RolledBack(reason) => {
+            assert!(reason.contains("interrupted rollback"), "{reason}")
+        }
+        other => panic!("interrupted rollback must converge, got: {other:?}"),
+    }
+    assert_eq!(fs::read(&exe).unwrap(), b"old-binary");
+    assert!(!prev_path(&exe).exists());
+    assert!(!rollback_marker_path(&exe).exists());
+}
+
+#[test]
+fn rollback_crash_after_restore_converges_to_the_restored_binary() {
+    // A real rollback interrupted after the restore: cleanup of
+    // `.next` fails deterministically because it is a directory.
+    let temp = TempDir::new();
+    let exe = fake_exe(&temp.0);
+    fs::write(&exe, b"new-binary").unwrap();
+    fs::write(prev_path(&exe), b"old-binary").unwrap();
+    record(&exe, Phase::Swapped);
+    fs::create_dir_all(next_path(&exe)).unwrap();
+
+    let error = rollback(&exe, "wyrd-0.4.0-alpha").unwrap_err();
+    assert!(matches!(error, CliError::Io { .. }), "{error}");
+    assert_eq!(fs::read(&exe).unwrap(), b"old-binary");
+    assert!(!state_path(&exe).exists());
+    assert!(rollback_marker_path(&exe).is_file());
+
+    fs::remove_dir_all(next_path(&exe)).unwrap();
+    match converge(&exe).unwrap() {
+        Converged::RolledBack(reason) => {
+            assert!(reason.contains("interrupted rollback"), "{reason}")
+        }
+        other => panic!("interrupted rollback must converge, got: {other:?}"),
+    }
+    assert_eq!(fs::read(&exe).unwrap(), b"old-binary");
+    assert!(!rollback_marker_path(&exe).exists());
+}
+
+#[test]
+fn rollback_replaces_the_state_with_a_marker_and_cleans_both() {
+    let temp = TempDir::new();
+    let exe = fake_exe(&temp.0);
+    fs::write(&exe, b"new-binary").unwrap();
+    fs::write(prev_path(&exe), b"old-binary").unwrap();
+    record(&exe, Phase::Swapped);
+    rollback(&exe, "wyrd-0.4.0-alpha").unwrap();
+    assert_eq!(fs::read(&exe).unwrap(), b"old-binary");
+    assert!(!state_path(&exe).exists());
+    assert!(!rollback_marker_path(&exe).exists());
+}
+
+#[test]
 fn converge_verified_completes_the_commit() {
     let temp = TempDir::new();
     let exe = fake_exe(&temp.0);

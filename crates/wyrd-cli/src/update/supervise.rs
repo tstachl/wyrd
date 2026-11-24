@@ -163,10 +163,18 @@ pub(crate) fn rollback(exe: &Path, archive_name: &str) -> Result<(), CliError> {
             state_path(exe).display(),
         )));
     }
+    // Rename the record aside BEFORE the restore. A crash after
+    // the restore used to leave `Swapped` + exe present + no prev,
+    // which `converge` could not distinguish from an operator
+    // removing the rollback copy — it reported a healthy restored
+    // binary as unverified. The marker is that distinction, and
+    // it is removed last: while it exists, converge finishes the
+    // rollback from the pre-update binary.
+    rename_durable(&state_path(exe), &rollback_marker_path(exe), exe)?;
     rename_durable(&prev, exe, exe)?;
     remove_if_present(&next_path(exe))?;
     remove_dir_if_present(&stage_dir(exe))?;
-    remove_if_present(&state_path(exe))?;
+    remove_if_present(&rollback_marker_path(exe))?;
     Ok(())
 }
 
