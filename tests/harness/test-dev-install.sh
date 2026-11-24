@@ -566,26 +566,33 @@ MAPPING=$(sed -n '/^SIGN_IDENTITY=/,/^# Signing posture:/p' "$INSTALL" | sed '$d
 [ -n "$MAPPING" ] || die "install: cannot extract the signing mapping block"
 MAPFILE=$(mktemp)
 printf '%s\n' "$MAPPING" \
-  'printf "%s|%s|%s|%s\n" "$STABLE_SIGN_IDENTITY" "$WYRD_SIGN_APPEX" "$SIGN_IDENTITY" "$PROVISIONING_PROFILE"' \
+  'printf "%s|%s|%s|%s|%s\n" "$STABLE_SIGN_IDENTITY" "$WYRD_SIGN_APPEX" "$SIGN_IDENTITY" "$APPLE_SIGNING_IDENTITY" "$PROVISIONING_PROFILE"' \
   > "$MAPFILE"
 UNSET_SIGNING='-u SIGN_IDENTITY -u APPLE_SIGNING_IDENTITY -u STABLE_SIGN_IDENTITY -u WYRD_SIGN_APPEX -u PROVISIONING_PROFILE -u APP_PROVISIONING_PROFILE'
 R=$(env $UNSET_SIGNING APPLE_IDENTITY='Profile Identity' APPLE_SIGN_APEX=1 \
   /bin/sh -eu "$MAPFILE") || { rm -f "$MAPFILE"; die "mapping: profile-free path failed"; }
-[ "$R" = 'Profile Identity|1||' ] \
+[ "$R" = 'Profile Identity|1|||' ] \
   || { rm -f "$MAPFILE"; die "mapping: profile-free result '$R'"; }
 R=$(env $UNSET_SIGNING APPLE_IDENTITY='Profile Identity' APPLE_SIGN_APEX=1 \
   APPLE_PROVISIONING_PROFILE=/tmp/a.provisionprofile \
   APPLE_APP_PROVISIONING_PROFILE=/tmp/b.provisionprofile \
   /bin/sh -eu "$MAPFILE") || { rm -f "$MAPFILE"; die "mapping: profile-backed path failed"; }
-[ "$R" = '|0|Profile Identity|/tmp/a.provisionprofile' ] \
+[ "$R" = '|0|Profile Identity|Profile Identity|/tmp/a.provisionprofile' ] \
   || { rm -f "$MAPFILE"; die "mapping: profile-backed result '$R'"; }
 R=$(env $UNSET_SIGNING APPLE_IDENTITY='Profile Identity' APPLE_SIGN_APEX=1 \
   APPLE_PROVISIONING_PROFILE=/tmp/a.provisionprofile \
   APPLE_APP_PROVISIONING_PROFILE=/tmp/b.provisionprofile \
   /bin/sh -eu "$MAPFILE" --stable-identity 'Explicit Identity') \
-  || { rm -f "$MAPFILE"; die "mapping: explicit flag path failed"; }
-[ "$R" = 'Explicit Identity|1||' ] \
-  || { rm -f "$MAPFILE"; die "mapping: explicit flag result '$R'"; }
+  || { rm -f "$MAPFILE"; die "mapping: explicit stable path failed"; }
+[ "$R" = 'Explicit Identity|1|||' ] \
+  || { rm -f "$MAPFILE"; die "mapping: explicit stable result '$R'"; }
+R=$(env $UNSET_SIGNING APPLE_IDENTITY='Profile Identity' APPLE_SIGN_APEX=1 \
+  APPLE_PROVISIONING_PROFILE=/tmp/a.provisionprofile \
+  APPLE_APP_PROVISIONING_PROFILE=/tmp/b.provisionprofile \
+  /bin/sh -eu "$MAPFILE" --sign-identity 'Explicit Identity') \
+  || { rm -f "$MAPFILE"; die "mapping: explicit sign path failed"; }
+[ "$R" = '|0|Explicit Identity||/tmp/a.provisionprofile' ] \
+  || { rm -f "$MAPFILE"; die "mapping: explicit sign result '$R'"; }
 rm -f "$MAPFILE"
 match 'require_reason = false' "$SPEC_MANIFEST" \
   || die "secretspec.toml: reason policy would break non-interactive devenv shell"

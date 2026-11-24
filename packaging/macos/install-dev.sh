@@ -263,6 +263,10 @@ if [ "$FLAG_STABLE" -eq 1 ]; then
     [ "$FLAG_PROFILE" -eq 1 ] || APP_PROVISIONING_PROFILE=""
 elif [ "$FLAG_SIGN" -eq 1 ] || [ "$FLAG_PROFILE" -eq 1 ]; then
     STABLE_SIGN_IDENTITY=""
+    # The profile-backed branch re-infers the outer identity from the
+    # explicit SIGN_IDENTITY; a SecretSpec-seeded value here would lose
+    # to that check and reject the explicit flag.
+    APPLE_SIGNING_IDENTITY=""
 fi
 # The appex flag is only meaningful in the profile-free stable posture.
 # Resolve it after the posture above, so a SecretSpec profile set cannot
