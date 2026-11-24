@@ -264,12 +264,12 @@ pass "install stops running Wyrd processes after the swap"
 # supervisor is deliberately not restarted by launchd. The installer
 # must kickstart each loaded drive job after stopping it; jobs that are
 # not loaded (login-start disabled) are left alone.
-for marker in 'launchctl list' "grep '^md\\.enesis\\.wyrd\\.drive-'" 'launchctl kickstart -k' 'gui/$(id -u)/$label'; do
+for marker in 'launchctl list' "grep '^md\\.enesis\\.wyrd\\.drive-'" 'launchctl kickstart -k' 'gui/$(id -u)/$label' 'RESTART_FAILURES' 'recover: launchctl kickstart -k' 'return 1'; do
   match "$marker" "$INSTALL_CODE" \
     || die "install: drive restart marker '$marker' missing"
 done
 KILL_LINE="$(grep -n -F -- 'kill -KILL' <<<"$INSTALL_CODE" | tail -1 | cut -d: -f1)"
-KICK_LINE="$(grep -n -F -- 'launchctl kickstart -k' <<<"$INSTALL_CODE" | cut -d: -f1)"
+KICK_LINE="$(grep -n -F -- 'launchctl kickstart -k' <<<"$INSTALL_CODE" | head -1 | cut -d: -f1)"
 [ -n "$KILL_LINE" ] && [ -n "$KICK_LINE" ] && [ "$KILL_LINE" -lt "$KICK_LINE" ] \
   || die "install: drive agents must be restarted after the stops"
 pass "install restarts loaded drive agents after the clean-slate stop"
