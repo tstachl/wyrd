@@ -479,6 +479,7 @@ fn golden_vectors_pin_the_wire() {
             | "unknown-version"
             | "pinned-present"
             | "role-forbids-eviction"
+            | "role-unreadable"
             | "too-large"
             | "timeout"
             | "conflicted"
@@ -492,6 +493,7 @@ fn golden_vectors_pin_the_wire() {
                     "not-found" => WireErrorCode::NotFound,
                     "pinned-present" => WireErrorCode::PinnedPresent,
                     "role-forbids-eviction" => WireErrorCode::RoleForbidsEviction,
+                    "role-unreadable" => WireErrorCode::RoleUnreadable,
                     "too-large" => WireErrorCode::TooLarge,
                     "timeout" => WireErrorCode::Timeout,
                     "conflicted" => WireErrorCode::Conflicted,

@@ -203,6 +203,24 @@ pub(super) fn scratch_file_drive(
     ContentId,
     AuthorizedSnapshot,
 ) {
+    let (engine, dir, store, chunk, root, head, _identity) = scratch_file_drive_with_identity(tag);
+    (engine, dir, store, chunk, root, head)
+}
+
+/// The same scratch drive, keeping the identity so a test can reopen
+/// the engine after a live node releases the store lock and compare
+/// its durable state against the pre-operation baseline.
+pub(super) fn scratch_file_drive_with_identity(
+    tag: &str,
+) -> (
+    Engine,
+    std::path::PathBuf,
+    MemoryObjectStore,
+    ContentId,
+    ContentId,
+    AuthorizedSnapshot,
+    DeviceIdentitySecret,
+) {
     let dir = std::env::temp_dir().join(format!(
         "wyrd-core-prereq-{tag}-{}",
         std::time::SystemTime::now()
@@ -212,7 +230,7 @@ pub(super) fn scratch_file_drive(
     ));
     std::fs::create_dir_all(&dir).unwrap();
     let identity = DeviceIdentitySecret::generate().unwrap();
-    let mut engine = Engine::create(dir.clone(), "core-test-pass", identity).unwrap();
+    let mut engine = Engine::create(dir.clone(), "core-test-pass", identity.clone()).unwrap();
     let mut store = MemoryObjectStore::default();
     let chunk = store.insert(ObjectKind::Chunk, b"remote-base").unwrap();
     let root = Tree::from_entries(vec![Entry::file("f", 11, false, vec![chunk]).unwrap()])
@@ -220,7 +238,7 @@ pub(super) fn scratch_file_drive(
         .insert_into(&mut store)
         .unwrap();
     let head = engine.author_snapshot(&store, root).unwrap();
-    (engine, dir, store, chunk, root, head)
+    (engine, dir, store, chunk, root, head, identity)
 }
 
 /// A live node over the fake view: the heads cross as `Head`s like

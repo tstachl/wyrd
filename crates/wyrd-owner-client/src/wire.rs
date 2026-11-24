@@ -1010,6 +1010,11 @@ pub enum WireErrorCode {
     /// walked or committed. Distinct from `PinnedPresent` and from a
     /// local engine failure.
     RoleForbidsEviction,
+    /// A present role file could not be read, so the effective
+    /// posture is unknown. Role-dependent policy failed closed;
+    /// repair the file. Distinct from `Engine` so a client can name
+    /// a repairable configuration fault.
+    RoleUnreadable,
     /// The namespace path exceeds the format's depth bound.
     TooDeep,
     /// `diagnostics-set` named a level outside the closed pair.

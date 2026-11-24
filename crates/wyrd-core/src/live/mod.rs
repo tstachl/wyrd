@@ -1049,10 +1049,10 @@ where
                     Ok(state) => Ok(state.effective()),
                     Err(error) => {
                         tracing::warn!(path = ?dir, %error, "unreadable role file: refusing role-dependent policy until repaired");
-                        Err(PolicyError::Engine(wyrd_sync::runtime::EngineError::ObjectStore(
-                            "unreadable role file: refusing role-dependent policy until repaired"
-                                .to_string(),
-                        )))
+                        Err(PolicyError::RoleUnreadable {
+                            path: dir.display().to_string(),
+                            detail: error.to_string(),
+                        })
                     }
                 },
                 None => Ok(Role::Mirror),

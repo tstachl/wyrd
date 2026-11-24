@@ -379,30 +379,67 @@ fn narrowing_requires_explicit_acknowledgement() {
 }
 
 #[test]
-fn evict_refuses_under_vault() {
-    let (temp, creds) = authored_drive();
-    let drive = drive_of(&temp);
-    command(vec![
-        "materialization".into(),
-        drive.clone(),
-        "role".into(),
-        "set".into(),
-        "vault".into(),
-    ])
-    .unwrap();
-    let mut evict = vec![
-        "materialization".into(),
-        drive.clone(),
-        "evict".into(),
-        "a.txt".into(),
+fn evict_refuses_under_every_vault_state_without_commit() {
+    use wyrd_core::role::{Role, RoleState, Transition};
+    let states = [
+        (
+            "settled-vault",
+            RoleState {
+                role: Role::Vault,
+                transition: Transition::Settled,
+            },
+        ),
+        (
+            "narrowing-acknowledged",
+            RoleState {
+                role: Role::Mirror,
+                transition: Transition::NarrowingAcknowledged,
+            },
+        ),
+        (
+            "withdrawal-pending",
+            RoleState {
+                role: Role::Mirror,
+                transition: Transition::WithdrawalPending,
+            },
+        ),
     ];
-    evict.extend(creds);
-    let error = command(evict).unwrap_err();
-    assert!(
-        matches!(error, CliError::Usage(_)),
-        "evict under vault must refuse naming the role, got {error:?}"
-    );
-    drop(temp);
+    for (tag, state) in states {
+        let (temp, creds) = authored_drive();
+        let drive = drive_of(&temp);
+        let drive_path = std::path::PathBuf::from(&drive);
+        let identity = read_identity(&temp.0.join("identity")).unwrap();
+        // Write the role file directly: all three vault-effective
+        // states are reachable on disk even where `role set` admits
+        // only the narrowing transitions.
+        wyrd_core::role::store(&drive_path, state).unwrap();
+        let before =
+            Engine::open_keystore(drive_path.clone(), "test-pass", identity.clone()).unwrap();
+        let before_state = before.runtime_state().unwrap();
+        drop(before);
+
+        let mut evict = vec![
+            "materialization".into(),
+            drive,
+            "evict".into(),
+            "a.txt".into(),
+        ];
+        evict.extend(creds);
+        let error = command(evict).unwrap_err();
+        assert!(
+            matches!(error, CliError::Usage(_)),
+            "{tag}: evict under {tag} must refuse naming the role, got {error:?}"
+        );
+
+        let after = Engine::open_keystore(drive_path, "test-pass", identity).unwrap();
+        assert_eq!(
+            after.runtime_state().unwrap(),
+            before_state,
+            "{tag}: a refused eviction commits no policy fact"
+        );
+        drop(after);
+        drop(temp);
+    }
 }
 
 /// DG-5 acceptance test, first half: every figure the closed

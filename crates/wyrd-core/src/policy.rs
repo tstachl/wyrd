@@ -130,6 +130,20 @@ pub enum PolicyError {
         /// Drive path the eviction was refused for.
         path: String,
     },
+    /// A present role file could not be read, so the effective
+    /// posture is unknown. Role-dependent operations (eviction and
+    /// status) fail closed instead of assuming `mirror`; repair the
+    /// file. Distinct from an engine failure so an operator can tell
+    /// a configuration fault from storage corruption.
+    #[error(
+        "role file unreadable at {path}: {detail}; refusing role-dependent policy until repaired"
+    )]
+    RoleUnreadable {
+        /// Role file path that failed to load.
+        path: String,
+        /// Loader's detail, preserved for the operator.
+        detail: String,
+    },
     /// Namespace deeper than the format path-depth limit.
     #[error("namespace deeper than the 256-component limit at {0}")]
     TooDeep(String),

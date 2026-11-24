@@ -314,6 +314,7 @@ const TEST_FILE_PINS: &[&str] = &[
     "crates/wyrd-core/src/live/tests_mirror_diagnostics.rs",
     "crates/wyrd-core/src/live/tests_parent_mutation.rs",
     "crates/wyrd-core/src/live/tests_pause.rs",
+    "crates/wyrd-core/src/live/tests_policy_role.rs",
     "crates/wyrd-core/src/live/tests_post_corruption.rs",
     "crates/wyrd-core/src/live/tests_prereq.rs",
     "crates/wyrd-core/src/live/tests_publish_budget.rs",

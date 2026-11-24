@@ -556,5 +556,18 @@
         }
       }
     }
+  },
+  {
+    "name": "refused/role-unreadable",
+    "json": {
+      "v": 2,
+      "id": 9,
+      "result": {
+        "err": {
+          "code": "RoleUnreadable",
+          "message": "role file unreadable at drive/role: malformed role file; refusing role-dependent policy until repaired"
+        }
+      }
+    }
   }
 ]
