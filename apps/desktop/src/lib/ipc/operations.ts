@@ -22,6 +22,7 @@ import type {
   Diagnostics,
   DiagnosticsExport,
   DriveSettingsState,
+  FinderIntegration,
   KeyDefaults,
   OnboardingReport,
   ProvisionReport,
@@ -177,6 +178,17 @@ export function diagnosticsSet(
  */
 export function diagnosticsExport(): Promise<DiagnosticsExport> {
   return invokeValue<DiagnosticsExport>("diagnostics_export");
+}
+
+/**
+ * Finder integration state of this installed build. A local query:
+ * no drive, no owner, no network. The backend inspects the bundled
+ * appex's provisioning profile, so an ad-hoc or stable-identity dev
+ * install is reported honestly instead of through Finder's generic
+ * server/network banner.
+ */
+export function finderIntegration(): Promise<FinderIntegration> {
+  return invokeValue<FinderIntegration>("finder_integration");
 }
 
 // Provisioning operations (constrained CLI adapter surface). One

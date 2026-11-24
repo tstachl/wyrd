@@ -1249,6 +1249,7 @@ detailed-mode surface.
 | File contents | Never | Never |
 | Credentials / cryptographic material | Never | Never |
 | Symlink target | Hidden | Allowed locally, subject to explicit policy |
+| Finder integration state | Hidden | Allowed locally (build fact, no drive data) |
 
 Three separate authorizations apply to every field: whether it is
 emitted, whether it is marked `.public` in unified logging, and whether
@@ -1272,6 +1273,15 @@ were present, whether a symlink target was involved, which validation or
 mutation stage failed, and the exact error returned to the provider.
 Stage and error are structured fields, not increasingly elaborate
 free-form messages.
+
+The export also carries a build-level `finder-state` from the desktop
+record. It is the App Group container cause, not a drive answer: an
+ad-hoc or stable-identity dev install reports `unprovisioned`, while a
+signed build with an appex provisioning profile reports `provisioned`.
+That value stays distinct from an extension record's
+`store-error = temporary`, which is an unreachable owner socket. The
+shell states the signing cause to the user rather than leaving Finder's
+generic server/network banner as the only explanation.
 
 ## Decision record
 

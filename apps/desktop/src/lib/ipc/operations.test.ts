@@ -15,6 +15,7 @@ import {
   diagnosticsExport,
   diagnosticsLevel,
   diagnosticsSet,
+  finderIntegration,
   provisionDelete,
   driveCredentialReference,
   driveLock,
@@ -547,6 +548,16 @@ test("diagnosticsExport sends no arguments and returns the local state", async (
   });
   expect(await diagnosticsExport()).toEqual(report);
   expect(seen).toEqual([{ cmd: "diagnostics_export", args: {} }]);
+});
+
+test("finderIntegration is a local query with no drive identity", async () => {
+  const seen: Array<{ cmd: string; args: unknown }> = [];
+  mockIPC((cmd, args) => {
+    seen.push({ cmd, args });
+    return "unprovisioned";
+  });
+  expect(await finderIntegration()).toBe("unprovisioned");
+  expect(seen).toEqual([{ cmd: "finder_integration", args: {} }]);
 });
 
 test("driveUnlock sends the passphrase in args, driveLock names the drive", async () => {

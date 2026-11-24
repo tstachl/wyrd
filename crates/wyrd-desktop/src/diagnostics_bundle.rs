@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::diagnostics_view::{self, Diagnostics};
+use crate::finder_integration::FinderIntegration;
 use wyrd_settings::app_group_identifier;
 
 /// The extension writes this file inside its app-group `Diagnostics/`
@@ -40,10 +41,15 @@ pub const ALLOWED_FIELDS: &[&str] = &[
     "options",
     "staged-contents",
     "store-error",
+    "finder-state",
     "error-domain",
     "error-code",
     "error-detail",
 ];
+
+// `finder-state` is written only by the desktop record. It records the
+// build-level no-group-container cause, distinct from an extension
+// record's `store-error = temporary` (an unreachable owner socket).
 
 /// Bounds on what one export may read and emit. A hand-edited or
 /// oversized sink cannot turn a small local artifact into an
@@ -272,8 +278,13 @@ fn default_container() -> Option<PathBuf> {
 
 /// Build one bundle from explicit local paths. Kept pure over its
 /// inputs so the exclusion tests can stage fixtures without touching
-/// the user's home.
-pub fn build_bundle_at(container: Option<&Path>, settings_path: Option<&Path>) -> Bundle {
+/// the user's home. `finder` is the build-level state, supplied by the
+/// caller so a fixture never has to install an app.
+pub fn build_bundle_at(
+    container: Option<&Path>,
+    settings_path: Option<&Path>,
+    finder: FinderIntegration,
+) -> Bundle {
     let export_session = new_session_id();
     let generated_at = now_secs();
     let mut records = Vec::new();
@@ -299,12 +310,14 @@ pub fn build_bundle_at(container: Option<&Path>, settings_path: Option<&Path>) -
         Some(path) => diagnostics_view::diagnostics_at(path),
         None => diagnostics_view::diagnostics(),
     };
+    let mut desktop_fields = BTreeMap::new();
+    desktop_fields.insert("finder-state".to_owned(), finder.as_str().to_owned());
     records.push(BundleRecord {
         timestamp: generated_at.to_string(),
         source: "desktop",
         session: export_session.clone(),
         summary: format!("bundle exported at level {}", level_name(&persisted)),
-        fields: BTreeMap::new(),
+        fields: desktop_fields,
     });
 
     Bundle {
@@ -321,7 +334,12 @@ pub fn build_bundle_at(container: Option<&Path>, settings_path: Option<&Path>) -
 /// overwritten. No network call exists on this path.
 pub fn export_bundle() -> DiagnosticsExport {
     let out_dir = std::env::temp_dir();
-    export_bundle_at(default_container().as_deref(), None, &out_dir)
+    export_bundle_at(
+        default_container().as_deref(),
+        None,
+        &out_dir,
+        crate::finder_integration::finder_integration(),
+    )
 }
 
 /// Testable half of [`export_bundle`] with explicit local paths.
@@ -329,8 +347,9 @@ pub fn export_bundle_at(
     container: Option<&Path>,
     settings_path: Option<&Path>,
     out_dir: &Path,
+    finder: FinderIntegration,
 ) -> DiagnosticsExport {
-    let bundle = build_bundle_at(container, settings_path);
+    let bundle = build_bundle_at(container, settings_path, finder);
     let path = out_dir.join(format!("wyrd-diagnostics-{}.json", bundle.export_session));
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create_new(true);
@@ -372,9 +391,18 @@ pub fn export_bundle_at(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
 
     fn fixture() -> Bundle {
-        let dir = std::env::temp_dir().join(format!("wyrd-bundle-fixture-{}", std::process::id()));
+        // Several tests use this fixture in parallel; a shared path
+        // lets one remove the tree another is still reading.
+        let dir = std::env::temp_dir().join(format!(
+            "wyrd-bundle-fixture-{}-{}",
+            std::process::id(),
+            NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed)
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         let container = dir.join("container");
         let sink = container.join(RECORD_RELATIVE_PATH);
@@ -396,7 +424,11 @@ mod tests {
             }
         });
         std::fs::write(&sink, format!("{line}\n")).unwrap();
-        let bundle = build_bundle_at(Some(&container), Some(&settings));
+        let bundle = build_bundle_at(
+            Some(&container),
+            Some(&settings),
+            FinderIntegration::Unprovisioned,
+        );
         std::fs::remove_dir_all(&dir).unwrap();
         bundle
     }
@@ -420,6 +452,54 @@ mod tests {
                 "{forbidden} must not appear in the artifact"
             );
         }
+    }
+
+    /// The build-level no-group-container cause and the extension's
+    /// temporary socket failure are distinct allowlisted fields, so a
+    /// reader can tell "needs a signed build" from "owner unreachable".
+    #[test]
+    fn finder_state_and_store_error_stay_distinct() {
+        let bundle = fixture();
+        let desktop = bundle
+            .records
+            .iter()
+            .find(|record| record.source == "desktop")
+            .expect("the desktop record is always present");
+        assert_eq!(desktop.fields.get("finder-state").unwrap(), "unprovisioned");
+
+        let dir = std::env::temp_dir().join(format!("wyrd-finder-state-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sink = dir.join(RECORD_RELATIVE_PATH);
+        std::fs::create_dir_all(sink.parent().unwrap()).unwrap();
+        std::fs::write(
+            &sink,
+            serde_json::json!({
+                "version": 1,
+                "timestamp": "2026-01-01T00:00:00Z",
+                "summary": "createItem failed stage=mutation",
+                "fields": {
+                    "session": "ext-session",
+                    "store-error": "temporary"
+                }
+            })
+            .to_string()
+                + "\n",
+        )
+        .unwrap();
+        let with_socket = build_bundle_at(Some(&dir), None, FinderIntegration::Provisioned);
+        std::fs::remove_dir_all(&dir).unwrap();
+        let extension = with_socket
+            .records
+            .iter()
+            .find(|record| record.source == "fileprovider")
+            .expect("the extension record was collected");
+        assert_eq!(extension.fields.get("store-error").unwrap(), "temporary");
+        let desktop = with_socket
+            .records
+            .iter()
+            .find(|record| record.source == "desktop")
+            .unwrap();
+        assert_eq!(desktop.fields.get("finder-state").unwrap(), "provisioned");
     }
 
     fn bundle_json(bundle: &Bundle) -> String {
@@ -499,8 +579,8 @@ mod tests {
     fn export_writes_a_temporary_private_artifact() {
         let dir = std::env::temp_dir().join(format!("wyrd-bundle-export-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let first = export_bundle_at(None, None, &dir);
-        let second = export_bundle_at(None, None, &dir);
+        let first = export_bundle_at(None, None, &dir, FinderIntegration::Unprovisioned);
+        let second = export_bundle_at(None, None, &dir, FinderIntegration::Unprovisioned);
         let (path, count) = match first {
             DiagnosticsExport::Written {
                 path,

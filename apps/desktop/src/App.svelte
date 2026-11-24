@@ -16,6 +16,7 @@
     diagnosticsExport,
     diagnosticsLevel,
     diagnosticsSet,
+    finderIntegration,
     driveSettings,
     driveUnlock,
     freshness,
@@ -56,6 +57,7 @@
     Diagnostics,
     DiagnosticsExport,
     DriveView,
+    FinderIntegration,
     KeyDefaults,
     OnboardingReport,
     ProvisionReport,
@@ -321,6 +323,19 @@
       (value) => {
         observed = value;
         presentation.storeDiagnostics(value);
+      },
+    );
+    return observed;
+  }
+
+  /** Read this build's Finder capability from the bundled appex. */
+  async function refreshFinderIntegration(): Promise<FinderIntegration | null> {
+    let observed: FinderIntegration | null = null;
+    await readLocal(
+      () => finderIntegration(),
+      (value) => {
+        observed = value;
+        presentation.storeFinderIntegration(value);
       },
     );
     return observed;
@@ -644,6 +659,7 @@
         return Promise.all([
           selectedDriveDir === null ? Promise.resolve() : refreshSettings(selectedDriveDir),
           refreshDiagnostics(),
+          refreshFinderIntegration(),
         ]).then(() => undefined);
     }
   }
@@ -1366,6 +1382,7 @@
               }
               onRefreshDrives={allDrives}
               diagnosticsSnapshot={presentation.diagnosticsSnapshot}
+              finderIntegration={presentation.finderIntegration}
               onRefreshDiagnostics={() => refreshDiagnostics()}
               onDiagnosticsSet={(level: WireDiagnosticLevel) => runDiagnosticsSet(level)}
               onExport={() => runDiagnosticsExport()}

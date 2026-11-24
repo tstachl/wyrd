@@ -36,6 +36,9 @@ struct DiagnosticsRecordSink {
         "options",
         "staged-contents",
         "store-error",
+        // Written by the desktop's build-capability record, never by
+        // this extension; kept in step with the Rust export allowlist.
+        "finder-state",
         "error-domain",
         "error-code",
         "error-detail",

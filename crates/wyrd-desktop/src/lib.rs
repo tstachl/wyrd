@@ -32,6 +32,7 @@ pub mod commands;
 pub mod credential_ref;
 pub mod diagnostics_bundle;
 pub mod diagnostics_view;
+pub mod finder_integration;
 pub mod onboarding;
 pub mod provision;
 pub mod registry;
