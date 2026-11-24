@@ -70,6 +70,19 @@ pub(crate) fn state_path(exe: &Path) -> PathBuf {
     sibling(exe, ".update-state")
 }
 
+/// Rollback marker: the state record renamed aside before the
+/// restore, and removed last. Its presence means a rollback has
+/// started, so the binary in place is either the not-yet-restored
+/// new one or the already-restored old one — never an unverified
+/// binary whose rollback copy an operator deleted. Exactly this
+/// distinction lets `converge` finish an interrupted rollback
+/// without treating the shape as the catastrophic manual-recovery
+/// case. The `UpdateState` record itself keeps version 1 and all
+/// three `Phase` values.
+pub(crate) fn rollback_marker_path(exe: &Path) -> PathBuf {
+    sibling(exe, ".update-rollback")
+}
+
 pub(crate) fn stage_dir(exe: &Path) -> PathBuf {
     sibling(exe, ".stage")
 }
@@ -211,13 +224,44 @@ pub(crate) fn rename_durable(from: &Path, to: &Path, exe: &Path) -> Result<(), C
 /// that window for every phase; rename atomicity covers the rest.
 pub(crate) fn converge(exe: &Path) -> Result<Converged, CliError> {
     let Some(state) = read_state(exe)? else {
+        let prev = prev_path(exe);
+        let marker = rollback_marker_path(exe);
+        if marker.is_file() {
+            // Rollback is in progress. It renamed the state record
+            // here before touching the executable and removes this
+            // marker last, so every shape below is a crash inside
+            // a rollback of a previously verified binary — never
+            // the catastrophic "operator removed prev" case that
+            // still has a live `Swapped` record.
+            if !exe.is_file() && !prev.is_file() {
+                return Err(CliError::Usage(format!(
+                    "interrupted rollback left no binary and no {} to restore; \
+                     reinstall and remove {}",
+                    prev.display(),
+                    marker.display(),
+                )));
+            }
+            // Prev present means the restore had not landed yet
+            // (a new binary may still be in place), so it wins.
+            // Prev absent with an executable present means the
+            // restore already landed: leave that binary alone.
+            if prev.is_file() {
+                rename_durable(&prev, exe, exe)?;
+            }
+            remove_if_present(&next_path(exe))?;
+            remove_dir_if_present(&stage_dir(exe))?;
+            remove_if_present(&marker)?;
+            return Ok(Converged::RolledBack(
+                "completed interrupted rollback to the pre-update binary".into(),
+            ));
+        }
         // No record — but an executable missing beside a
         // rollback copy is still an unwinding: the live
         // transaction crashes between its first rename and its
         // record write with exactly this shape, and leaving it
         // means the next update swaps onto nothing.
-        if !exe.is_file() && prev_path(exe).is_file() {
-            rename_durable(&prev_path(exe), exe, exe)?;
+        if !exe.is_file() && prev.is_file() {
+            rename_durable(&prev, exe, exe)?;
             return Ok(Converged::RolledBack(
                 "restored pre-update binary with no record".into(),
             ));

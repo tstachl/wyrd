@@ -115,6 +115,12 @@ means same filesystem, so every swap step is one atomic rename.
   `{version: 1, drive, archive_name, archive_version,
   archive_blake3, phase}` (`version` guards forward reads:
   anything but 1 refuses rather than reinterprets).
+- `<exe>.update-rollback` — the state record renamed aside
+  before a rollback restores `<exe>.prev`, and removed last. Its
+  presence means a rollback is in progress, so `converge` can
+  finish it after a crash at any later step. It adds no record
+  shape: the state record stays version 1 with the same three
+  phases, and the verdict still decides nothing.
 - `<exe>.stage/` — extraction scratch, removed after staging.
 - `<exe>.update-state.tmp` — the record's atomic-write temp,
   synced before rename like the store's own `atomic_write`.
@@ -189,7 +195,10 @@ Phases, in order:
    restores `<exe>.prev` over `<exe>` and hands back per §6
    (supervised: exit nonzero; `--restart`: supervise the
    restored binary). The old binary is never deleted before
-   this verdict.
+   this verdict. The rollback renames `<exe>.update-state` to
+   `<exe>.update-rollback` before the restore and removes that
+   marker last, so a crash after the restore is converged as a
+   rollback in progress rather than as an unverified binary.
 8. **Commit / hand back.** Record `{phase: verified}`, remove
    `<exe>.prev` and the state file — only now is rollback
    impossible. Supervised: print the binary in place and exit 0.
@@ -204,10 +213,23 @@ present `<exe>.prev` still unwinds (the crash between the first
 rename and the record write has exactly that shape). There is no
 separate recovery command and no recovery migration (upgrade
 invariant 9): the protocol is complete-the-rename or
-undo-the-rename, decided by the recorded phase plus file
-presence — the archived digest rides the record as identity for
-reports, never as a convergence input. A drive that never saw a
-verified new binary is byte-identical to before.
+undo-the-rename, decided by the recorded phase, the rollback
+marker and file presence — the archived digest rides the record
+as identity for reports, never as a convergence input. A drive
+that never saw a verified new binary is byte-identical to before.
+
+With no record but `<exe>.update-rollback` present, a rollback
+was in progress and is finished from the marker. If
+`<exe>.prev` is present it is restored over whatever is in place
+— the restore had not landed yet — and if it is absent while an
+executable is present, the restore already landed and that
+binary is left untouched. Residue is dropped and the marker
+removed last. Neither shape is the catastrophic manual-recovery
+case: that still requires a live `Swapped` record with no
+`<exe>.prev` and no marker. A crash before the marker rename
+leaves the record intact and converges through the phase rule
+above. Installations stranded before this marker existed keep
+the manual-recovery path; the fix does not reinterpret them.
 
 A trust note, because "we execute a binary we just unpacked"
 reads as alarming without it: the archive is operator-supplied
