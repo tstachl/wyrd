@@ -323,7 +323,11 @@ done
   [ "$(wyrd_finder_capability)" = 'adhoc' ] || exit 1
   APPEX_SIGN_IDENTITY='Apple Development: stable'
   [ "$(wyrd_finder_capability)" = 'identity' ] || exit 1
+  # Without an explicit appex identity, build-appex.sh signs with the
+  # shared SIGN_IDENTITY; the capability must follow that same fallback.
+  unset APPEX_SIGN_IDENTITY
   SIGN_IDENTITY='Apple Development: stable'
+  [ "$(wyrd_finder_capability)" = 'identity' ] || exit 1
   APP_PROVISIONING_PROFILE='/tmp/app.provisionprofile'
   [ "$(wyrd_finder_capability)" = 'profile' ] || exit 1
   WYRD_FINDER_CAPABILITY=adhoc

@@ -59,7 +59,9 @@ wyrd_finder_capability() {
     if [ -n "${APP_PROVISIONING_PROFILE:-}" ] \
         && wyrd_is_real_identity "${SIGN_IDENTITY:-}"; then
         printf 'profile'
-    elif wyrd_is_real_identity "${APPEX_SIGN_IDENTITY:-}"; then
+    elif wyrd_is_real_identity "$(wyrd_appex_identity)"; then
+        # build-appex.sh signs with wyrd_appex_identity(), which falls
+        # back to SIGN_IDENTITY. Match that resolution exactly.
         printf 'identity'
     else
         printf 'adhoc'
