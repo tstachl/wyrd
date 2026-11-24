@@ -150,6 +150,7 @@ while [ "$#" -gt 0 ]; do
             ;;
         --stable-identity=*)
             STABLE_SIGN_IDENTITY="${1#--stable-identity=}"
+            [ -n "$STABLE_SIGN_IDENTITY" ] || { echo "error: --stable-identity needs a value." >&2; exit 1; }
             shift
             ;;
         --sign-identity)
@@ -475,21 +476,32 @@ fi
 
 # Stable-identity mode: the keychain client is the bundled CLI the
 # desktop and daemon launch, with the app and registrar alongside it.
-# A silent fallback to ad-hoc would bring the repeat prompt straight
-# back, so confirm the three Mach-O artifacts carry a real signature
-# and that the appex stayed ad-hoc with no profile. The deep-strict
-# verify above still covers every artifact in the bundle.
+# A silent fallback to ad-hoc or to a different real identity would
+# bring the repeat prompt back, so confirm these three Mach-O artifacts
+# carry the requested identity and that the appex stayed ad-hoc with no
+# profile. The supervise wrapper is staged-signed, but Tauri's file
+# copy drops its signature; it is a Python launcher, not a keychain
+# client, so it is excluded here and covered by the presence checks
+# below. The deep-strict verify above still covers every artifact.
 if [ "$STABLE_MODE" -eq 1 ]; then
     assert_stable_signed() {
         LABEL=$1
         TARGET=$2
-        INFO=$(codesign -dv "$TARGET" 2>&1) || {
+        INFO=$(codesign -dvv "$TARGET" 2>&1) || {
             echo "error: cannot read $LABEL signature: $TARGET" >&2
             exit 1
         }
         case "$INFO" in
             *"Signature=adhoc"*|*"TeamIdentifier=not set"*)
                 echo "error: $LABEL is ad-hoc; stable identity did not apply: $TARGET" >&2
+                exit 1
+                ;;
+        esac
+        case "$INFO" in
+            *"Authority=$STABLE_SIGN_IDENTITY"*) ;;
+            *)
+                echo "error: $LABEL is signed as a different identity than $STABLE_SIGN_IDENTITY: $TARGET" >&2
+                echo "Pass the certificate name, as 'Apple Development: …', not a hash." >&2
                 exit 1
                 ;;
         esac

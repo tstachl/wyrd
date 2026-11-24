@@ -34,6 +34,7 @@ set -o pipefail 2>/dev/null || true
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
 . "$HERE/app-group.sh"
+. "$HERE/sign-identity.sh"
 
 # Link-order pin (Darwin only). Discovery mirrors
 # fileprovider/build-appex.sh: system tools by absolute path, the
@@ -187,7 +188,7 @@ if [ "$(uname -s)" = "Darwin" ]; then
         }
         APP_ENTITLEMENTS="$RELEASE_DIR/wyrd-app.entitlements"
         wyrd_render_app_group "$APP_ENTITLEMENTS_SRC" "$WYRD_APP_GROUP_DEFAULT" "$APP_ENTITLEMENTS"
-        if [ -n "${SIGN_IDENTITY:-}" ] && [ "$SIGN_IDENTITY" != "-" ]; then
+        if wyrd_is_real_identity "${SIGN_IDENTITY:-}"; then
             codesign --force --sign "$SIGN_IDENTITY" --options runtime --timestamp \
                 --entitlements "$APP_ENTITLEMENTS" \
                 "$RELEASE_DIR/bundle/macos/Wyrd.app"

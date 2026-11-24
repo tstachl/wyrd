@@ -29,6 +29,7 @@ set -o pipefail 2>/dev/null || true
 
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
+. "$HERE/sign-identity.sh"
 
 # macOS only: the CLI ships inside the .app bundle, which never
 # builds on other targets.
@@ -190,7 +191,7 @@ fi
 # demands it; a helper that must stay loadable does not take it.
 # The bundler seals the outer app over the staged tree, and the
 # install guard verifies the sealed copy deep-strict.
-SIGN_IDENTITY=${SIGN_IDENTITY:--}
+SIGN_IDENTITY=${SIGN_IDENTITY:-$WYRD_ADHOC_IDENTITY}
 codesign --force --sign "$SIGN_IDENTITY" "$STAGED"
 
 echo "staged $STAGED"
