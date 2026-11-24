@@ -111,28 +111,42 @@ default at build time (rendered into the entitlements, the appex
 path derivation). The default is team-prefixed so a free Personal
 Team can resolve the container without registering a group, and
 distribution with the same team needs no change; a future signing
-team sets the one variable. Historical observation, 2026-11-11
-under development signing on macOS 15.8.2: with the then-current
-unprefixed id the system materialised the container at
-`~/Library/Group Containers/group.md.enesis.wyrd/`, with no team
-prefix — confirmed by the probe log and `fileproviderd`'s own
-dump. Treat that as the resolved path of that build, not a
-platform law: it was verified for development signing only, and
-other signing types (Developer ID, notarised distribution) are
-unverified. The group id is part of every group-socket path:
+team sets the one variable. The resolved container is
+`~/Library/Group Containers/<group-id>` with the id spelled verbatim,
+team prefix included. A signed probe on macOS 15.8.3 (24H241) confirmed
+this for both an ad-hoc and an Apple Development identity, sandboxed and
+unsandboxed, with and without the
+`NSExtensionFileProviderDocumentGroup` key: `containerURL` did not strip
+the team prefix. The 2026-11-11 observation of an unprefixed container
+was that build's id, not a prefix-stripping rule. Developer ID and
+notarised distribution remain unverified. The group id is part of every
+group-socket path:
 `<account home>/Library/Group Containers/<group>/Sockets/<16 hex>.sock`.
 With the team-prefixed default this is 94 bytes plus the short account
 name, against 103 usable bytes of `sun_path`, so accounts of ten
 characters or more exceed the ceiling. The bind fails closed with an
 error naming `WYRD_APP_GROUP`; choose a shorter override for such an
 account. Accordingly: the extension resolves through `containerURL` and
-never hardcodes, and Stage 2 must confirm the daemon-side bind
-lands where the extension resolves before the scheme settles —
-an unsandboxed daemon without the group entitlement cannot call
-`containerURL`, so whatever rule it uses to compute the directory
-needs the same live confirmation this build gave the extension
-side. The container materializes only under a team-signed build
-with provisioning. Deployment target macOS 13.0.
+never hardcodes; the unsandboxed daemon derives the same directory
+from the configured id. A socket-path disagreement is therefore
+not explained by the group id alone. Check plugin registration
+first. Finder binds a domain to the `md.enesis.wyrd.fileprovider`
+bundle identifier, so two registered plugins with that id — for
+example an old Xcode DerivedData build and `/Applications/Wyrd.app`
+— collide: macOS serves the domain through the most recently
+registered one, and a plugin built with a different group id probes
+a different container. The 2026-11-24 mismatch had exactly that
+cause, confirmed by the running appex path; it was not a path
+derivation defect. `install-dev.sh` warns about shadowing. Inspect
+and remove stale registrations with:
+
+```sh
+/usr/bin/pluginkit -mAv -i md.enesis.wyrd.fileprovider
+/usr/bin/pluginkit -r <stale-plugin-path>
+```
+
+After removing them, remove and re-add the domains so they bind
+to the installed plugin. Deployment target macOS 13.0.
 
 ## Developer install (ad-hoc, no fee)
 

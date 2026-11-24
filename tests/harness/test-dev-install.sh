@@ -476,4 +476,18 @@ grep -F >/dev/null 'wyrd-supervise' "$ROOT/packaging/macos/README.md" \
   || die "README: wyrd-supervise not recorded"
 pass "supervise wrapper is staged, mapped, guarded, and recorded"
 
+# 13. Finder binds a domain to the appex bundle id, not to a path. A
+# stale plugin with the same id can serve the domains with a different
+# group id, so socket paths disagree for a reason unrelated to path
+# derivation. The installer must report it and the README must say so.
+for marker in '/usr/bin/pluginkit -mAv -i md.enesis.wyrd.fileprovider' 'SHADOWED=' '/usr/bin/pluginkit -r <path>'; do
+  match "$marker" "$INSTALL_CODE" \
+    || die "install: plugin shadowing guard '$marker' missing"
+done
+for marker in 'pluginkit -mAv' 'most recently' 'derivation defect'; do
+  grep -F -- "$marker" "$ROOT/packaging/macos/README.md" >/dev/null \
+    || die "README: plugin shadowing note '$marker' missing"
+done
+pass "stale plugin shadowing is detected and documented"
+
 echo "dev-install: $PASS checks passed"
