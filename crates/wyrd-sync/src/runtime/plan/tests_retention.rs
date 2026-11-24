@@ -24,6 +24,7 @@ use crate::bulk::MemoryBulkSource;
 use crate::keys::EpochSecret;
 use crate::membership::test_util::Builder;
 use crate::runtime::fetch::FetchOutcome;
+use crate::runtime::retention::{MAX_REFUSAL_UNITS, REFUSAL_FILE};
 use crate::runtime::test_util::{
     admit_engine, fixture, intake_body, intake_published, publish_into, reopen, AnnouncedRoots,
 };
@@ -174,6 +175,72 @@ fn a_refusal_is_durable_across_restart() {
         facts.manifests.is_empty(),
         "restart turns no refusal into a claim"
     );
+    assert!(facts.local_objects.is_empty());
+}
+
+/// An oversized sidecar left by the old unbounded build is compacted
+/// on disk at load, and the reopened engine still refuses over-quota
+/// bytes on the real fetch path. The sidecar is metadata beside the
+/// facts: bounding it never changes what the quota accountant sees.
+#[test]
+fn an_oversized_ledger_is_bounded_on_disk_and_fetch_still_refuses() {
+    let (mut fixture, mut bulk, _content) = overdue_harness();
+    let _retained = arm_one_byte_gate(&mut fixture);
+    let mut objects = MemoryObjectStore::default();
+    let first = fixture
+        .engine
+        .execute_plan(&mut bulk, &mut objects)
+        .unwrap();
+    assert!(first.refused > 0, "first pass refuses: {first:?}");
+
+    // Simulate a sidecar written by the unbounded build: more units
+    // than the live cap, on disk, before the next open.
+    let path = fixture.dir.path.join(REFUSAL_FILE);
+    let mut text = String::from("v1\n");
+    for index in 0..MAX_REFUSAL_UNITS + 10 {
+        text.push_str(&format!("object:{index:064x} 100\n"));
+    }
+    std::fs::write(&path, text).unwrap();
+    let before = std::fs::metadata(&path).unwrap().len();
+
+    // Hold the reopened engine's accountant so the assertion observes
+    // the fresh gate, not the pre-reopen one: sidecar bytes are
+    // metadata and must never be charged to it.
+    let reopened_retained = std::sync::Arc::new(RetainedBytes::new());
+    let mut reopened = reopen(&mut fixture);
+    reopened.set_retention_gate(Some(1), Some(std::sync::Arc::clone(&reopened_retained)));
+    assert_eq!(
+        reopened_retained.get(),
+        0,
+        "sidecar bytes are metadata, never charged to the quota accountant"
+    );
+    let after = std::fs::metadata(&path).unwrap().len();
+    assert!(
+        after < before,
+        "load compacts the oversized sidecar on disk"
+    );
+    assert!(
+        after <= MAX_REFUSAL_UNITS as u64 * 96,
+        "the sidecar is bounded on reopen, saw {after}"
+    );
+
+    // Fail-closed on the real path: a reopened engine with the same
+    // ceiling still refuses, and no refused bytes are claimed.
+    let mut objects = MemoryObjectStore::default();
+    let second = reopened.execute_plan(&mut bulk, &mut objects).unwrap();
+    assert!(
+        second.refused > 0,
+        "reopened engine still refuses: {second:?}"
+    );
+    assert_eq!(second.manifests, 0);
+    assert_eq!(second.objects, 0);
+    assert_eq!(
+        reopened_retained.get(),
+        0,
+        "refused bytes never charge the reopened gate"
+    );
+    let facts = reopened.store.load().expect("loads");
+    assert!(facts.manifests.is_empty());
     assert!(facts.local_objects.is_empty());
 }
 
