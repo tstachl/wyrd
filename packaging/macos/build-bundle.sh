@@ -34,6 +34,7 @@ set -o pipefail 2>/dev/null || true
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
 . "$HERE/app-group.sh"
+. "$HERE/sign-identity.sh"
 
 # Link-order pin (Darwin only). Discovery mirrors
 # fileprovider/build-appex.sh: system tools by absolute path, the
@@ -168,9 +169,10 @@ if [ "$(uname -s)" = "Darwin" ]; then
     # nested appex signature (never `--deep`, which would re-sign
     # the appex without its entitlements) — the nested-first order
     # the runbook documents. Identity pairs with the hook:
-    # stage-appex.sh already refused a mixed pair, so the default
-    # ad-hoc `-` here means an ad-hoc outer app, and a set
-    # SIGN_IDENTITY is the same Developer ID Tauri used. A real
+    # stage-appex.sh refuses a mixed pair except in the narrow
+    # stable-identity dev mode, so the default ad-hoc `-` here means
+    # an ad-hoc outer app, and a set SIGN_IDENTITY is the same
+    # Developer ID Tauri used. A real
     # identity seals with a secure timestamp (notarization
     # requires it); ad-hoc has no timestamp authority to reach.
     if [ -d "$RELEASE_DIR/bundle/macos/Wyrd.app" ]; then
@@ -186,12 +188,12 @@ if [ "$(uname -s)" = "Darwin" ]; then
         }
         APP_ENTITLEMENTS="$RELEASE_DIR/wyrd-app.entitlements"
         wyrd_render_app_group "$APP_ENTITLEMENTS_SRC" "$WYRD_APP_GROUP_DEFAULT" "$APP_ENTITLEMENTS"
-        if [ -n "${SIGN_IDENTITY:-}" ] && [ "$SIGN_IDENTITY" != "-" ]; then
+        if wyrd_is_real_identity "${SIGN_IDENTITY:-}"; then
             codesign --force --sign "$SIGN_IDENTITY" --options runtime --timestamp \
                 --entitlements "$APP_ENTITLEMENTS" \
                 "$RELEASE_DIR/bundle/macos/Wyrd.app"
         else
-            codesign --force --sign "${SIGN_IDENTITY:--}" --options runtime \
+            codesign --force --sign "${SIGN_IDENTITY:-$WYRD_ADHOC_IDENTITY}" --options runtime \
                 --entitlements "$APP_ENTITLEMENTS" \
                 "$RELEASE_DIR/bundle/macos/Wyrd.app"
         fi

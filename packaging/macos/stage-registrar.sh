@@ -7,8 +7,9 @@
 # outer sign, so no post-sign copy is needed.
 #
 # Identity pairing is owned by stage-appex.sh, which runs first and
-# refuses a mixed inner/outer pair; this script uses the same
-# SIGN_IDENTITY (default ad-hoc `-`) for the registrar.
+# refuses a mixed inner/outer pair unless the stable-identity dev mode
+# opts out; this script uses the shared SIGN_IDENTITY (default ad-hoc
+# `-`) for the registrar, so a stable keychain client stays stable.
 set -eu
 set -o pipefail 2>/dev/null || true
 

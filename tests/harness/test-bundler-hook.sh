@@ -76,6 +76,22 @@ grep -F >/dev/null 'set SIGN_IDENTITY to the same identity' "$STAGE" \
   || die "stage: pairing refusal names no fix"
 pass "stage script refuses a mismatched appex identity"
 
+# 4b. The one intentional mixed pair — a real outer app with an ad-hoc
+# appex in the stable-identity dev mode — is an explicit, narrow opt-out.
+# The appex identity comes from the shared helper, and an opt-out with a
+# real appex identity still hits the fail-closed check above.
+for marker in '. "$HERE/sign-identity.sh"' 'APPEX_IDENTITY=$(wyrd_appex_identity)' 'WYRD_ALLOW_ADHOC_APPEX' 'wyrd_is_real_identity "$APPEX_IDENTITY"'; do
+  grep -F >/dev/null "$marker" "$STAGE" \
+    || die "stage: mixed-pair opt-out marker '$marker' missing"
+done
+# The appex build resolves its identity through the same helper, so the
+# signed artifact matches the identity the pairing check inspected.
+grep -F >/dev/null '. "$HERE/../sign-identity.sh"' "$BUILD" \
+  || die "build-appex.sh: no shared signing helper"
+grep -F >/dev/null 'SIGN_IDENTITY=$(wyrd_appex_identity)' "$BUILD" \
+  || die "build-appex.sh: appex identity does not come from the helper"
+pass "stage and build share the appex identity and narrow mixed-pair opt-out"
+
 # 5. The stage script carries nothing app-side: it never names an app
 # entitlements file, an app profile, or the outer bundle — Tauri owns
 # all three. The appex profile flows only through build-appex.sh env.

@@ -14,16 +14,20 @@
 # no touch of Wyrd.app here — Tauri owns the outer bundle.
 #
 # Environment passthrough to build-appex.sh: SIGN_IDENTITY (default
-# ad-hoc `-`), PROVISIONING_PROFILE (default unset), ARCH, MIN_MACOS,
-# TOOLCHAIN, SWIFTC, SDK. The signing owner pairs SIGN_IDENTITY with
-# the same Developer ID Tauri signs the app with
+# ad-hoc `-`), APPEX_SIGN_IDENTITY (default: SIGN_IDENTITY),
+# PROVISIONING_PROFILE (default unset), ARCH, MIN_MACOS, TOOLCHAIN,
+# SWIFTC, SDK. The signing owner pairs the appex identity with the
+# same Developer ID Tauri signs the app with
 # (`bundle.macOS.signingIdentity` / APPLE_SIGNING_IDENTITY); a
-# team-signed outer app with an ad-hoc appex is refused below.
+# team-signed outer app with an ad-hoc appex is refused below unless
+# WYRD_ALLOW_ADHOC_APPEX=1 marks the intentional stable-identity dev
+# mode, where Finder stays inert and no profile is used.
 set -eu
 set -o pipefail 2>/dev/null || true
 
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
+. "$HERE/sign-identity.sh"
 
 # macOS only: the appex never ships on other targets, and the
 # bundler must not fail a Linux build for a macOS-only stage.
@@ -64,16 +68,26 @@ command -v python3 >/dev/null 2>&1 || {
 # with an ad-hoc or different appex identity is the mixed state the
 # release runbook forbids — fail closed and name the fix. `-`
 # (Tauri's ad-hoc pseudo-identity) and unset both mean ad-hoc, so
-# the dev flow (neither set) and explicit ad-hoc pairs pass.
+# the dev flow (neither set) and explicit ad-hoc pairs pass. The one
+# exception is the stable-identity dev mode: WYRD_ALLOW_ADHOC_APPEX=1
+# with an ad-hoc appex is the intentional inert-Finder split, which
+# needs no profile and cannot be loaded by fileproviderd by design.
 OUTER_IDENTITY="${APPLE_SIGNING_IDENTITY:-}"
 if [ -z "$OUTER_IDENTITY" ]; then
     OUTER_IDENTITY=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("bundle",{}).get("macOS",{}).get("signingIdentity",""))' "$TAURI_CONF")
 fi
+APPEX_IDENTITY=$(wyrd_appex_identity)
 case "$OUTER_IDENTITY" in
     ""|-) ;;
     *)
-        if [ "${SIGN_IDENTITY:--}" != "$OUTER_IDENTITY" ]; then
-            echo "error: outer app signs as $OUTER_IDENTITY but the appex would sign as ${SIGN_IDENTITY:--}; set SIGN_IDENTITY to the same identity." >&2
+        # A stable outer identity with an ad-hoc appex is allowed only
+        # by the explicit dev-mode opt-out. Any other mismatch still
+        # fails closed with the original fix named.
+        if [ "${WYRD_ALLOW_ADHOC_APPEX:-0}" = "1" ] \
+            && ! wyrd_is_real_identity "$APPEX_IDENTITY"; then
+            :
+        elif [ "$APPEX_IDENTITY" != "$OUTER_IDENTITY" ]; then
+            echo "error: outer app signs as $OUTER_IDENTITY but the appex would sign as $APPEX_IDENTITY; set SIGN_IDENTITY to the same identity (or use --stable-identity in install-dev.sh for an inert-Finder dev build)." >&2
             exit 1
         fi
         ;;

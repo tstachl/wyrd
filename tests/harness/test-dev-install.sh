@@ -274,6 +274,52 @@ KICK_LINE="$(grep -n -F -- 'launchctl kickstart -k' <<<"$INSTALL_CODE" | head -1
   || die "install: drive agents must be restarted after the stops"
 pass "install restarts loaded drive agents after the clean-slate stop"
 
+# 7g. Narrow stable-identity mode: sign the app, bundled CLI and domain
+# registrar with one stable identity so the keychain client survives a
+# rebuild, while the appex stays ad-hoc and Finder stays inert. No
+# profile is involved, and the mode refuses a profile or a conflicting
+# --sign-identity before any build. The post-build checks fail closed if
+# a real signature silently falls back to ad-hoc, or if the appex is
+# signed/embedded in a way Finder might mistake for capability.
+for marker in '--stable-identity' 'STABLE_SIGN_IDENTITY' '. "$HERE/sign-identity.sh"' 'STABLE_MODE=1' 'WYRD_ADHOC_IDENTITY' 'APPEX_SIGN_IDENTITY="$WYRD_ADHOC_IDENTITY"' 'WYRD_ALLOW_ADHOC_APPEX=1' 'FINDER_CAPABLE=0' '--stable-identity takes no provisioning profile' 'assert_stable_signed' 'Signature=adhoc' 'TeamIdentifier=not set' 'Authority=$STABLE_SIGN_IDENTITY' 'different identity than $STABLE_SIGN_IDENTITY' 'appex must stay ad-hoc' 'stable identity for app, CLI and registrar'; do
+  match "$marker" "$INSTALL_CODE" \
+    || die "install: stable-identity marker '$marker' missing"
+done
+# The stable branch must not demand a profile: the refusal belongs to
+# --sign-identity only, and the appex identity must be pinned to ad-hoc
+# rather than inherited from the stable SIGN_IDENTITY.
+STABLE_LINE="$(grep -n -F -- 'if [ -n "$STABLE_SIGN_IDENTITY" ]; then' <<<"$INSTALL_CODE" | cut -d: -f1)"
+PROFILE_LINE="$(grep -n -F -- '--sign-identity needs --provisioning-profile' <<<"$INSTALL_CODE" | cut -d: -f1)"
+[ -n "$STABLE_LINE" ] && [ -n "$PROFILE_LINE" ] && [ "$STABLE_LINE" -lt "$PROFILE_LINE" ] \
+  || die "install: stable branch must precede the --sign-identity profile demand"
+# Both flag forms refuse an empty value: a silent fall-through to ad-hoc
+# would rebuild the very client identity this mode is meant to stabilise.
+[ "$(grep -c -F -- '--stable-identity needs a value.' <<<"$INSTALL_CODE")" -ge 2 ] \
+  || die "install: an empty --stable-identity= would silently select ad-hoc"
+pass "install offers a profile-free stable-identity dev mode"
+
+# The identity helper owns both defaults and the appex split. Execute it,
+# not just grep for it: an env-typed typo here would silently break the
+# stable mode without any script failing to parse.
+HELPER="$ROOT/packaging/macos/sign-identity.sh"
+for marker in "WYRD_ADHOC_IDENTITY='-'" 'wyrd_appex_identity()' 'wyrd_is_real_identity()'; do
+  grep -F >/dev/null "$marker" "$HELPER" \
+    || die "sign-identity.sh: marker '$marker' missing"
+done
+(
+  . "$HELPER"
+  unset SIGN_IDENTITY APPEX_SIGN_IDENTITY
+  [ "$(wyrd_appex_identity)" = '-' ] || exit 1
+  SIGN_IDENTITY='Apple Development: stable'
+  [ "$(wyrd_appex_identity)" = 'Apple Development: stable' ] || exit 1
+  APPEX_SIGN_IDENTITY='-'
+  [ "$(wyrd_appex_identity)" = '-' ] || exit 1
+  wyrd_is_real_identity 'Apple Development: stable' || exit 1
+  ! wyrd_is_real_identity '-' || exit 1
+  ! wyrd_is_real_identity '' || exit 1
+) || die "sign-identity.sh: appex fallback or identity predicate drifted"
+pass "signing helper resolves the appex identity and real-identity test"
+
 # 8. Prerequisites fail with the fix named: Apple tools, cargo
 # (devenv), bun (desktop build), python3 (config version pin).
 for marker in 'xcode-select' 'cargo is not on PATH' 'bun is not on PATH' 'python3 is required'; do
@@ -310,11 +356,27 @@ match '--no-default-features' "$STAGE_CODE" \
 # omits it.
 match '[Ff][Uu][Ss][Ee]' "$STAGE_CODE" \
   || die "stage-cli: no fuse-free guard for the vault-only CLI"
-match 'SIGN_IDENTITY:-}' "$WRAPPER_CODE" \
-  || die "wrapper: reseal names no signing identity"
+# One ad-hoc sentinel lives in the shared helper: the wrapper and the
+# CLI stage source it and use the predicate/constant instead of spelling
+# `-` again. A literal here would let the two defaults drift apart.
+match '. "$HERE/sign-identity.sh"' "$WRAPPER_CODE" \
+  || die "wrapper: does not source the shared signing helper"
+match 'wyrd_is_real_identity "${SIGN_IDENTITY:-}"' "$WRAPPER_CODE" \
+  || die "wrapper: reseal does not use the real-identity predicate"
+if match '"$SIGN_IDENTITY" != "-"' "$WRAPPER_CODE" \
+    || match '${SIGN_IDENTITY:--}' "$WRAPPER_CODE"; then
+  die "wrapper: ad-hoc sentinel is duplicated outside the helper"
+fi
+if match '${SIGN_IDENTITY:--}' "$STAGE_CODE"; then
+  die "stage-cli: ad-hoc sentinel is duplicated outside the helper"
+fi
+match '. "$HERE/sign-identity.sh"' "$STAGE_CODE" \
+  || die "stage-cli: does not source the shared signing helper"
+match 'SIGN_IDENTITY=${SIGN_IDENTITY:-$WYRD_ADHOC_IDENTITY}' "$STAGE_CODE" \
+  || die "stage-cli: ad-hoc fallback is not the helper constant"
 match 'SDKROOT="$DISCOVERED_SDK"' "$WRAPPER_CODE" \
   || die "wrapper: discovered SDK is not exported as SDKROOT"
-match '!= "-"' "$WRAPPER_CODE" \
+match 'wyrd_is_real_identity "${SIGN_IDENTITY:-}"' "$WRAPPER_CODE" \
   || die "wrapper: timestamp is not conditioned on a real identity"
 match '--timestamp' "$WRAPPER_CODE" \
   || die "wrapper: real-identity reseal carries no timestamp"
