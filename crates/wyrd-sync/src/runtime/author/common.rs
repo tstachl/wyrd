@@ -65,8 +65,9 @@ pub(super) fn escrow_fresh_secret(
 /// success. Every transition-authoring path stages its log before
 /// the batch — `commit_new_epoch` and admission's own tail alike —
 /// so every path calls this before building the batch. A valid
-/// resolution unfreezes by construction, so the refusal only ever
-/// stops contradictions, third contenders, and admissions onto a
+/// resolution unfreezes by construction, including a second-level
+/// resolution that ends a contradictory re-freeze, so the refusal only
+/// ever stops contradictions, third contenders, and admissions onto a
 /// frozen log — never legitimate work.
 pub(super) fn refuse_frozen_transition(staged: &MembershipLog) -> Result<(), EngineError> {
     if staged.frozen_at().is_some() {

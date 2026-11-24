@@ -307,13 +307,23 @@ fn non_designed_valid_child_of_the_winner_is_voided() {
     );
 }
 
-#[test]
-fn contradictory_resolutions_refreeze() {
+/// The r1/r2 contradiction fixture: an epoch-2 fork and two epoch-3
+/// resolutions naming opposite winners. Their declared roots match their
+/// parents' states (Rotate), so both links are valid and only the
+/// resolution rule decides. Returned with the builder so tests can add
+/// the recovery transition.
+#[allow(clippy::type_complexity)]
+fn contradictory_resolutions() -> (
+    Builder,
+    MembershipTransition,
+    MembershipTransition,
+    MembershipTransition,
+    DeviceId,
+    MembershipTransition,
+    MembershipTransition,
+) {
     let (b, genesis, a, fork, second) = forked_chain();
     let owner = *b.owners.iter().next().unwrap();
-    // Two resolutions, each naming the other branch as the loser. Their
-    // declared roots match their parents' states (Rotate), so both links
-    // are valid and only the resolution rule decides.
     let r1 = signed(
         &b,
         3,
@@ -332,6 +342,12 @@ fn contradictory_resolutions_refreeze() {
         &[owner, second],
         &[owner],
     );
+    (b, genesis, a, fork, second, r1, r2)
+}
+
+#[test]
+fn contradictory_resolutions_refreeze() {
+    let (_b, genesis, a, fork, _second, r1, r2) = contradictory_resolutions();
     let mut log = MembershipLog::new(drive());
     observe_all(
         &mut log,
@@ -359,6 +375,274 @@ fn contradictory_resolutions_refreeze() {
     assert_eq!(
         log.status(&fork.transition_id()),
         Some(TransitionStatus::Contested)
+    );
+}
+
+/// R3 at F+1 ends the re-freeze and restores one canonical chain. Every
+/// earlier contested transition is given its final fate: the winner and
+/// its ancestors canonical, the loser and its branch voided.
+#[test]
+fn second_level_resolution_ends_a_contradictory_refreeze() {
+    let (b, genesis, a, fork, _second, r1, r2) = contradictory_resolutions();
+    let owner = *b.owners.iter().next().unwrap();
+    let r3 = signed(
+        &b,
+        4,
+        Some(r1.transition_id()),
+        vec![r2.transition_id()],
+        vec![Change::Rotate],
+        &[owner],
+        &[owner],
+    );
+    let mut log = MembershipLog::new(drive());
+    observe_all(
+        &mut log,
+        &[
+            &genesis,
+            &a.clone(),
+            &fork.clone(),
+            &r1.clone(),
+            &r2.clone(),
+            &r3.clone(),
+        ],
+    );
+    assert_eq!(log.frozen_at(), None, "the re-freeze is ended");
+    for (id, expected) in [
+        (a.transition_id(), TransitionStatus::Canonical),
+        (fork.transition_id(), TransitionStatus::Voided),
+        (r1.transition_id(), TransitionStatus::Canonical),
+        (r2.transition_id(), TransitionStatus::Voided),
+        (r3.transition_id(), TransitionStatus::Canonical),
+    ] {
+        assert_eq!(log.status(&id), Some(expected), "status of {id:?}");
+    }
+    let tip = log.known_state().expect("a canonical tip exists again");
+    assert_eq!(tip.transition_id, r3.transition_id());
+    assert_eq!(tip.epoch, 4);
+
+    // The chain continues from R3.
+    let after = signed(
+        &b,
+        5,
+        Some(r3.transition_id()),
+        Vec::new(),
+        vec![Change::Rotate],
+        &[owner],
+        &[owner],
+    );
+    let mut log2 = MembershipLog::new(drive());
+    observe_all(&mut log2, &[&genesis, &a, &fork, &r1, &r2, &r3, &after]);
+    assert_eq!(
+        log2.status(&after.transition_id()),
+        Some(TransitionStatus::Canonical)
+    );
+    assert_eq!(log2.known_state().unwrap().epoch, 5);
+    assert_eq!(log2.frozen_at(), None);
+}
+
+/// A transition at the recovery epoch does not unfreeze merely by
+/// existing. Each case names a different rule that must hold.
+#[test]
+fn refreeze_holds_unless_the_second_level_resolution_satisfies_every_rule() {
+    let (b, genesis, a, fork, second, r1, r2) = contradictory_resolutions();
+    let owner = *b.owners.iter().next().unwrap();
+    let (other_sk, other_device) = key(2);
+
+    let mut bad_signature = MembershipTransition::new(
+        4,
+        Some(r1.transition_id()),
+        vec![r2.transition_id()],
+        vec![Change::Rotate],
+        set_root(MEMBER_SET_CONTEXT, &[owner]).unwrap(),
+        set_root(OWNER_SET_CONTEXT, &[owner]).unwrap(),
+        set_root(READER_SET_CONTEXT, &[]).unwrap(),
+        owner,
+    )
+    .unwrap();
+    sign(&mut bad_signature, &other_sk, &b.drive);
+
+    let mut unauthorized = MembershipTransition::new(
+        4,
+        Some(r1.transition_id()),
+        vec![r2.transition_id()],
+        vec![Change::Rotate],
+        set_root(MEMBER_SET_CONTEXT, &[owner]).unwrap(),
+        set_root(OWNER_SET_CONTEXT, &[owner]).unwrap(),
+        set_root(READER_SET_CONTEXT, &[]).unwrap(),
+        other_device,
+    )
+    .unwrap();
+    sign(&mut unauthorized, &other_sk, &b.drive);
+
+    // `prev` names the loser, not the winner the resolution voids.
+    let wrong_prev = signed(
+        &b,
+        4,
+        Some(r2.transition_id()),
+        vec![r2.transition_id()],
+        vec![Change::Rotate],
+        &[owner, second],
+        &[owner],
+    );
+    // No `resolves`: the recovery rule requires naming the other.
+    let empty_resolves = signed(
+        &b,
+        4,
+        Some(r1.transition_id()),
+        Vec::new(),
+        vec![Change::Rotate],
+        &[owner],
+        &[owner],
+    );
+    // Epoch 5 skips the epoch immediately above the freeze.
+    let wrong_epoch = signed(
+        &b,
+        5,
+        Some(r1.transition_id()),
+        vec![r2.transition_id()],
+        vec![Change::Rotate],
+        &[owner],
+        &[owner],
+    );
+    // An unrelated valid transition at the freeze epoch makes `resolves`
+    // over-broad.
+    let unrelated = signed(
+        &b,
+        3,
+        Some(a.transition_id()),
+        Vec::new(),
+        vec![Change::Rotate],
+        &[owner],
+        &[owner],
+    );
+    let over_broad = signed(
+        &b,
+        4,
+        Some(r1.transition_id()),
+        vec![r2.transition_id(), unrelated.transition_id()],
+        vec![Change::Rotate],
+        &[owner],
+        &[owner],
+    );
+
+    for (label, candidate, expected) in [
+        (
+            "bad signature",
+            &bad_signature,
+            Some(TransitionStatus::Invalid(InvalidReason::BadSignature)),
+        ),
+        (
+            "unauthorized author",
+            &unauthorized,
+            Some(TransitionStatus::Invalid(InvalidReason::AuthorNotOwner)),
+        ),
+        (
+            "wrong epoch",
+            &wrong_epoch,
+            Some(TransitionStatus::Invalid(InvalidReason::PrevWrongEpoch)),
+        ),
+        ("wrong prev", &wrong_prev, Some(TransitionStatus::Voided)),
+        (
+            "empty resolves",
+            &empty_resolves,
+            Some(TransitionStatus::Voided),
+        ),
+        (
+            "over-broad resolves",
+            &over_broad,
+            Some(TransitionStatus::Voided),
+        ),
+    ] {
+        let mut log = MembershipLog::new(drive());
+        observe_all(
+            &mut log,
+            &[
+                &genesis,
+                &a.clone(),
+                &fork.clone(),
+                &r1.clone(),
+                &r2.clone(),
+                candidate,
+                &unrelated,
+            ],
+        );
+        assert_eq!(log.frozen_at(), Some(3), "{label}: freeze must hold");
+        assert_eq!(log.status(&candidate.transition_id()), expected, "{label}");
+        assert_eq!(
+            log.known_state().unwrap().epoch,
+            1,
+            "{label}: canonical chain stays below the freeze"
+        );
+    }
+}
+
+/// Two contradictory second-level resolutions re-freeze one epoch
+/// higher, and a single one of them then ends it.
+#[test]
+fn contradictory_second_level_resolutions_refreeze_again() {
+    let (b, genesis, a, fork, second, r1, r2) = contradictory_resolutions();
+    let owner = *b.owners.iter().next().unwrap();
+    let s1 = signed(
+        &b,
+        4,
+        Some(r1.transition_id()),
+        vec![r2.transition_id()],
+        vec![Change::Rotate],
+        &[owner],
+        &[owner],
+    );
+    // r2 won on the fork branch, which admitted `second`: its Rotate
+    // must declare that member too, or the link is invalid and cannot
+    // be a contradictory candidate.
+    let s2 = signed(
+        &b,
+        4,
+        Some(r2.transition_id()),
+        vec![r1.transition_id()],
+        vec![Change::Rotate],
+        &[owner, second],
+        &[owner],
+    );
+    let mut log = MembershipLog::new(drive());
+    observe_all(
+        &mut log,
+        &[
+            &genesis,
+            &a.clone(),
+            &fork.clone(),
+            &r1.clone(),
+            &r2.clone(),
+            &s1.clone(),
+            &s2.clone(),
+        ],
+    );
+    assert_eq!(log.frozen_at(), Some(4));
+    assert_eq!(
+        log.status(&s1.transition_id()),
+        Some(TransitionStatus::Contested)
+    );
+    assert_eq!(
+        log.status(&s2.transition_id()),
+        Some(TransitionStatus::Contested)
+    );
+
+    // A further resolution at F+1 (epoch 5) ends the second re-freeze.
+    let t3 = signed(
+        &b,
+        5,
+        Some(s1.transition_id()),
+        vec![s2.transition_id()],
+        vec![Change::Rotate],
+        &[owner],
+        &[owner],
+    );
+    let mut log2 = MembershipLog::new(drive());
+    observe_all(&mut log2, &[&genesis, &a, &fork, &r1, &r2, &s1, &s2, &t3]);
+    assert_eq!(log2.frozen_at(), None);
+    assert_eq!(log2.known_state().unwrap().epoch, 5);
+    assert_eq!(
+        log2.status(&t3.transition_id()),
+        Some(TransitionStatus::Canonical)
     );
 }
 
