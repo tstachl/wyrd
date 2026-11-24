@@ -1002,7 +1002,9 @@ where
     /// the mutation batch, before the revision gate, so a pin and its
     /// publication never straddle passes.
     pub fn drain_policy(&mut self) {
-        use crate::policy::{residency_census_bounded, POLICY_STATUS_TRAVERSAL_BUDGET};
+        use crate::policy::{
+            residency_census_bounded, PolicyError, POLICY_STATUS_TRAVERSAL_BUDGET,
+        };
         use crate::policy_channel::{PolicyRequest, PolicyResponse};
 
         let queued = self.policy.take_queued();
@@ -1034,14 +1036,37 @@ where
         };
         let generation = projection.generation();
         let revision = projection.revision();
-        // The effective role, loaded lazily once per drain and only
-        // when a status request needs it: pin, unpin, and evict act on
-        // stored facts and never consult the role, so a torn role file
-        // fails status alone instead of refusing a pin. `None` means
-        // no status request has needed it yet; the first status loads
-        // it and every later status in the drain reuses the same
-        // posture, so one drain never measures two postures.
-        let mut role: Option<crate::role::Role> = None;
+        // The effective role, loaded lazily once per drain and reused
+        // by eviction and status: one drain never measures two
+        // postures. Eviction is a retention decision, so it must see
+        // the same effective posture status reports. A torn role file
+        // fails those requests closed instead of assuming `mirror`;
+        // pin and unpin act on stored facts and need no role.
+        let role_dir = self.role_dir.clone();
+        let load_role = || -> Result<Role, PolicyError> {
+            match &role_dir {
+                Some(dir) => match crate::role::load(dir) {
+                    Ok(state) => Ok(state.effective()),
+                    Err(error) => {
+                        tracing::warn!(path = ?dir, %error, "unreadable role file: refusing role-dependent policy until repaired");
+                        Err(PolicyError::RoleUnreadable {
+                            path: dir.display().to_string(),
+                            detail: error.to_string(),
+                        })
+                    }
+                },
+                None => Ok(Role::Mirror),
+            }
+        };
+        let mut cached_role: Option<Role> = None;
+        let mut effective_role = || -> Result<Role, PolicyError> {
+            if let Some(posture) = cached_role {
+                return Ok(posture);
+            }
+            let posture = load_role()?;
+            cached_role = Some(posture);
+            Ok(posture)
+        };
         for (request, reply) in &queued {
             let result = match request {
                 PolicyRequest::Pin { path } => {
@@ -1053,34 +1078,22 @@ where
                         .map(PolicyResponse::Unpinned)
                 }
                 PolicyRequest::Evict { path } => {
-                    crate::policy::evict_subtree(&mut self.engine, projection.view(), path)
+                    let posture = match effective_role() {
+                        Ok(posture) => posture,
+                        Err(error) => {
+                            crate::policy_channel::PolicyChannel::complete(reply, Err(error));
+                            continue;
+                        }
+                    };
+                    crate::policy::evict_subtree(&mut self.engine, projection.view(), path, posture)
                         .map(PolicyResponse::Evicted)
                 }
                 PolicyRequest::Status { path } => {
-                    let posture = match role {
-                        Some(posture) => posture,
-                        None => {
-                            let loaded = match self.role_dir.clone() {
-                                Some(dir) => match crate::role::load(&dir) {
-                                    Ok(state) => state.effective(),
-                                    Err(_) => {
-                                        let failure = crate::policy::PolicyError::Engine(
-                                            wyrd_sync::runtime::EngineError::ObjectStore(
-                                                "unreadable role file: retaining as mirror until repaired"
-                                                    .to_string(),
-                                            ),
-                                        );
-                                        crate::policy_channel::PolicyChannel::complete(
-                                            reply,
-                                            Err(failure),
-                                        );
-                                        continue;
-                                    }
-                                },
-                                None => crate::role::Role::Mirror,
-                            };
-                            role = Some(loaded);
-                            loaded
+                    let posture = match effective_role() {
+                        Ok(posture) => posture,
+                        Err(error) => {
+                            crate::policy_channel::PolicyChannel::complete(reply, Err(error));
+                            continue;
                         }
                     };
                     residency_census_bounded(
@@ -1241,6 +1254,10 @@ mod publish_budget_tests;
 #[cfg(test)]
 #[path = "tests_pause.rs"]
 mod pause_tests;
+
+#[cfg(test)]
+#[path = "tests_policy_role.rs"]
+mod policy_role_tests;
 
 #[cfg(test)]
 #[path = "tests_entry_identity.rs"]

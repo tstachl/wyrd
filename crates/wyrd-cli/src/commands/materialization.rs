@@ -293,16 +293,21 @@ pub(crate) fn evict(
     passphrase: &str,
     identity: DeviceIdentitySecret,
 ) -> Result<(), CliError> {
-    let state = wyrd_core::role::load(&drive_dir).map_err(role_err)?;
-    if state.effective() == wyrd_core::role::Role::Vault {
-        return Err(CliError::Usage(
-            "The Vault role forbids eviction: the role promises no pruning. Narrow the role first (materialization role set mirror --yes), or pin explicitly what must stay.".into(),
-        ));
-    }
+    // The role is the core policy owner's input, not a CLI gate: pass
+    // the effective posture into the same guarded operation every
+    // surface uses, and render its typed refusal for this surface.
+    let posture = wyrd_core::role::load(&drive_dir)
+        .map_err(role_err)?
+        .effective();
     let mut node = open_policy_node(drive_dir, passphrase, identity)?;
     let report = {
         let (engine, view) = node.parts_mut();
-        evict_subtree(engine, view, path)?
+        evict_subtree(engine, view, path, posture).map_err(|error| match error {
+            wyrd_core::policy::PolicyError::RoleForbidsEviction { .. } => CliError::Usage(
+                "The Vault role forbids eviction: the role promises no pruning. Narrow the role first (materialization role set mirror --yes), or pin explicitly what must stay.".into(),
+            ),
+            other => CliError::Policy(other),
+        })?
     };
     print!("{}", evict_render(path, &report));
     Ok(())

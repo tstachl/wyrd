@@ -68,19 +68,23 @@ static SCRATCH_N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::n
 /// A scratch single-member drive: the engine can author from the
 /// start. The caller removes the directory after the owner drops.
 fn scratch_drive() -> (Engine, std::path::PathBuf) {
+    let (engine, dir, _) = scratch_drive_with_identity();
+    (engine, dir)
+}
+
+/// The same scratch drive, keeping the identity so a test can reopen
+/// the engine after the loop releases the store lock and compare its
+/// durable state against the pre-operation baseline.
+fn scratch_drive_with_identity() -> (Engine, std::path::PathBuf, DeviceIdentitySecret) {
     let dir = std::env::temp_dir().join(format!(
         "wyrd-owner-test-{}-{}",
         std::process::id(),
         SCRATCH_N.fetch_add(1, Ordering::Relaxed)
     ));
     std::fs::create_dir_all(&dir).unwrap();
-    let engine = Engine::create(
-        dir.clone(),
-        "owner-test-pass",
-        DeviceIdentitySecret::generate().unwrap(),
-    )
-    .unwrap();
-    (engine, dir)
+    let identity = DeviceIdentitySecret::generate().unwrap();
+    let engine = Engine::create(dir.clone(), "owner-test-pass", identity.clone()).unwrap();
+    (engine, dir, identity)
 }
 
 /// A composed owner view with seeded content, split for serving but
@@ -3436,8 +3440,10 @@ fn policy_words_match_surface_copy() {
 }
 
 /// Policy refusals map to distinct codes: evict-against-pinned is
-/// `PinnedPresent` (never missing, never invalid), and a path past
-/// the depth bound is `TooDeep`.
+/// `PinnedPresent`, evict under a vault role is
+/// `RoleForbidsEviction` (never missing, never invalid, never a
+/// local engine failure), and a path past the depth bound is
+/// `TooDeep`.
 #[test]
 fn policy_refusals_map_to_distinct_codes() {
     let (code, _) = map_policy_error(wyrd_core::policy::PolicyError::PinnedPresent {
@@ -3445,8 +3451,244 @@ fn policy_refusals_map_to_distinct_codes() {
         pinned: 2,
     });
     assert_eq!(code, WireErrorCode::PinnedPresent);
+    let (code, _) = map_policy_error(wyrd_core::policy::PolicyError::RoleForbidsEviction {
+        path: "docs".to_string(),
+    });
+    assert_eq!(code, WireErrorCode::RoleForbidsEviction);
+    let (code, _) = map_policy_error(wyrd_core::policy::PolicyError::RoleUnreadable {
+        path: "drive/role".to_string(),
+        detail: "malformed".to_string(),
+    });
+    assert_eq!(code, WireErrorCode::RoleUnreadable);
     let (code, _) = map_policy_error(wyrd_core::policy::PolicyError::TooDeep("d".to_string()));
     assert_eq!(code, WireErrorCode::TooDeep);
+}
+
+/// A composed owner with a configured role state and a running loop.
+fn running_parts_with_role(state: wyrd_core::role::RoleState) -> RunningOwner {
+    let (engine, dir) = scratch_drive();
+    let role_dir = dir.join("role");
+    std::fs::create_dir_all(&role_dir).unwrap();
+    wyrd_core::role::store(&role_dir, state).unwrap();
+    let store = wyrd_format::FsObjectStore::open(dir.clone()).unwrap();
+    let mut daemon = wyrd_core::node::WyrdNode::new(engine, store).unwrap();
+    daemon.put_file("seed.txt", b"seed").unwrap();
+    daemon.refresh_live_heads().unwrap();
+    let (mut live, parts) = daemon
+        .into_live(
+            Duration::from_secs(5),
+            &wyrd_core::live::LiveConfig::default(),
+        )
+        .unwrap();
+    live.set_role_dir(role_dir);
+    let server = OwnerServer::new(OwnerHandles::from_parts(&parts));
+    let stop: &'static AtomicBool = Box::leak(Box::new(AtomicBool::new(false)));
+    let loop_thread = spawn_loop(live, stop);
+    (server, parts, dir, stop, loop_thread)
+}
+
+/// One owner-socket case: configure a vault-effective role, submit
+/// evict over the wire, assert the typed refusal, then reopen the
+/// engine from custody to prove no policy fact committed. The guard
+/// is the core one — the socket cannot bypass it.
+///
+/// The pass's withdrawal driver is deliberately not run here: with no
+/// outstanding withdrawal it would complete a narrowing before the
+/// evict drained, so the two narrowing states would never reach the
+/// guard. Driving the loop's policy executor directly exercises the
+/// same `drain_policy` the running loop calls through the socket, with
+/// the configured state held in flight.
+fn owner_evict_refusal_keeps_durable_state(state: wyrd_core::role::RoleState, tag: &str) {
+    let (engine, dir, identity) = scratch_drive_with_identity();
+    let role_dir = dir.join("role");
+    std::fs::create_dir_all(&role_dir).unwrap();
+    wyrd_core::role::store(&role_dir, state).unwrap();
+    let store = wyrd_format::FsObjectStore::open(dir.clone()).unwrap();
+    let mut daemon = wyrd_core::node::WyrdNode::new(engine, store).unwrap();
+    daemon.put_file("seed.txt", b"seed").unwrap();
+    daemon.refresh_live_heads().unwrap();
+    let before = daemon.engine().runtime_state().unwrap();
+    let (mut live, parts) = daemon
+        .into_live(
+            Duration::from_secs(5),
+            &wyrd_core::live::LiveConfig::default(),
+        )
+        .unwrap();
+    live.set_role_dir(role_dir);
+    let server = OwnerServer::new(OwnerHandles::from_parts(&parts));
+
+    let channel = Arc::clone(&parts.policy);
+    let drainer = std::thread::spawn(move || {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !channel.has_queued() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the eviction request was never queued"
+            );
+            std::thread::yield_now();
+        }
+        live.drain_policy();
+    });
+
+    let response = server.dispatch(RawRequest {
+        v: WIRE_VERSION,
+        id: 47,
+        op: OP_POLICY_EVICT.to_string(),
+        params: serde_json::to_value(PathParams {
+            path: "seed.txt".to_string(),
+            identity: None,
+        })
+        .unwrap(),
+    });
+    match response.result {
+        WireResult::Err(error) => assert_eq!(
+            error.code,
+            WireErrorCode::RoleForbidsEviction,
+            "{tag}: {error:?}"
+        ),
+        WireResult::Ok(ok) => panic!("{tag}: vault role eviction must refuse, got {ok:?}"),
+    }
+    drainer.join().expect("drain wakes the submitter");
+    drop(parts);
+    drop(server);
+
+    let reopened = Engine::open_keystore(dir.clone(), "owner-test-pass", identity).unwrap();
+    assert_eq!(
+        reopened.runtime_state().unwrap(),
+        before,
+        "{tag}: a refused eviction commits no policy fact"
+    );
+    drop(reopened);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn owner_interface_evict_refuses_in_every_vault_state_without_commit() {
+    use wyrd_core::role::{Role, RoleState, Transition};
+    for (tag, state) in [
+        (
+            "settled-vault",
+            RoleState {
+                role: Role::Vault,
+                transition: Transition::Settled,
+            },
+        ),
+        (
+            "narrowing-acknowledged",
+            RoleState {
+                role: Role::Mirror,
+                transition: Transition::NarrowingAcknowledged,
+            },
+        ),
+        (
+            "withdrawal-pending",
+            RoleState {
+                role: Role::Mirror,
+                transition: Transition::WithdrawalPending,
+            },
+        ),
+    ] {
+        owner_evict_refusal_keeps_durable_state(state, tag);
+    }
+}
+
+/// A torn role file is a repairable configuration fault, not an
+/// engine failure: the socket returns `RoleUnreadable` rather than
+/// the generic `Engine` code, and the eviction commits nothing.
+#[test]
+fn owner_interface_role_file_failure_has_its_own_code() {
+    let (engine, dir, identity) = scratch_drive_with_identity();
+    let role_dir = dir.join("role");
+    std::fs::create_dir_all(&role_dir).unwrap();
+    std::fs::write(role_dir.join("role"), b"not a role\n").unwrap();
+    let store = wyrd_format::FsObjectStore::open(dir.clone()).unwrap();
+    let mut daemon = wyrd_core::node::WyrdNode::new(engine, store).unwrap();
+    daemon.put_file("seed.txt", b"seed").unwrap();
+    daemon.refresh_live_heads().unwrap();
+    let before = daemon.engine().runtime_state().unwrap();
+    let (mut live, parts) = daemon
+        .into_live(
+            Duration::from_secs(5),
+            &wyrd_core::live::LiveConfig::default(),
+        )
+        .unwrap();
+    live.set_role_dir(role_dir);
+    let server = OwnerServer::new(OwnerHandles::from_parts(&parts));
+
+    let channel = Arc::clone(&parts.policy);
+    let drainer = std::thread::spawn(move || {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !channel.has_queued() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the eviction request was never queued"
+            );
+            std::thread::yield_now();
+        }
+        live.drain_policy();
+    });
+
+    let response = server.dispatch(RawRequest {
+        v: WIRE_VERSION,
+        id: 48,
+        op: OP_POLICY_EVICT.to_string(),
+        params: serde_json::to_value(PathParams {
+            path: "seed.txt".to_string(),
+            identity: None,
+        })
+        .unwrap(),
+    });
+    match response.result {
+        WireResult::Err(error) => {
+            assert_eq!(error.code, WireErrorCode::RoleUnreadable, "{error:?}")
+        }
+        WireResult::Ok(ok) => panic!("torn role file must refuse eviction, got {ok:?}"),
+    }
+    drainer.join().expect("drain wakes the submitter");
+    drop(parts);
+    drop(server);
+
+    let reopened = Engine::open_keystore(dir.clone(), "owner-test-pass", identity).unwrap();
+    assert_eq!(
+        reopened.runtime_state().unwrap(),
+        before,
+        "a torn role file commits no policy fact"
+    );
+    drop(reopened);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// The fully running loop also refuses a settled vault eviction with
+/// the dedicated wire code: production wiring installs the role
+/// directory before the loop starts, and no surface-local check is
+/// needed. Complements the parametrized matrix above, which holds the
+/// narrowing states in flight.
+#[test]
+fn owner_interface_evict_refuses_under_running_vault_loop() {
+    let (server, _parts, dir, stop, loop_thread) =
+        running_parts_with_role(wyrd_core::role::RoleState {
+            role: wyrd_core::role::Role::Vault,
+            transition: wyrd_core::role::Transition::Settled,
+        });
+    let response = server.dispatch(RawRequest {
+        v: WIRE_VERSION,
+        id: 47,
+        op: OP_POLICY_EVICT.to_string(),
+        params: serde_json::to_value(PathParams {
+            path: "seed.txt".to_string(),
+            identity: None,
+        })
+        .unwrap(),
+    });
+    match response.result {
+        WireResult::Err(error) => {
+            assert_eq!(error.code, WireErrorCode::RoleForbidsEviction, "{error:?}");
+        }
+        WireResult::Ok(ok) => panic!("vault role eviction must refuse, got {ok:?}"),
+    }
+    stop.store(true, Ordering::Relaxed);
+    loop_thread.join().expect("loop exits").expect("loop ok");
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 /// Pin, status, unpin, and evict round-trip through the interface

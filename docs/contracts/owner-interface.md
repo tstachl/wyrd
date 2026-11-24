@@ -436,11 +436,14 @@ unpinned content to `REMOTE_ONLY` policy. Evict changes intent only:
 no bytes are deleted, no store is compacted, heads are untouched. A
 pinned subtree refuses evict with `PinnedPresent` before committing
 anything — narrowing an explicit promise piecemeal never happens
-silently. Unpin never refuses. Every write is idempotent: re-pinning
-commits nothing, and a repeated write is observably a no-op. Policy
-facts are device-local: never published, never authorize anything,
-never alter a snapshot. A success means exactly what an in-process
-policy call's success means.
+silently. An effective `vault` role refuses evict with
+`RoleForbidsEviction` before any walk or commit; a present but unreadable
+role file fails role-dependent policy closed with `RoleUnreadable`
+rather than assuming mirror. Unpin never refuses. Every write is
+idempotent: re-pinning commits nothing, and a repeated write is
+observably a no-op. Policy facts are device-local: never published,
+never authorize anything, never alter a snapshot. A success means
+exactly what an in-process policy call's success means.
 
 Answer `policy-status` on demand only. The loop runs no periodic
 census; every status is a bounded walk at request time against the
@@ -483,13 +486,15 @@ operator-size caveat belongs here rather than in a refusal, because
 the walk's cost is time on the loop thread, not a correctness bound.
 
 Carry refusals through as distinct codes. Map each policy error to
-its own code: `PinnedPresent` for the evict refusal, `TooDeep` for
+its own code: `PinnedPresent` for a pinned-subtree evict refusal,
+`RoleForbidsEviction` for an evict refused by the effective vault role,
+`RoleUnreadable` for a present but unreadable role file, `TooDeep` for
 paths past the format depth bound, `Conflicted` for conflicted paths,
 the view codes for view failures, `Engine` for engine failures
-(including channel shutdown and lock poison). Never collapse two
-refusals into one. A status read builds no mailbox, connects to
-nothing, and changes no durable state; a policy write commits a
-durable policy fact and nothing else.
+(including channel shutdown and lock poison; a role-file fault is not
+one of these). Never collapse two refusals into one. A status read
+builds no mailbox, connects to nothing, and changes no durable state;
+a policy write commits a durable policy fact and nothing else.
 
 ## Crash answers
 

@@ -543,5 +543,31 @@
         }
       }
     }
+  },
+  {
+    "name": "refused/role-forbids-eviction",
+    "json": {
+      "v": 2,
+      "id": 8,
+      "result": {
+        "err": {
+          "code": "RoleForbidsEviction",
+          "message": "evict refused at docs: the vault role forbids eviction; narrow the role first"
+        }
+      }
+    }
+  },
+  {
+    "name": "refused/role-unreadable",
+    "json": {
+      "v": 2,
+      "id": 9,
+      "result": {
+        "err": {
+          "code": "RoleUnreadable",
+          "message": "role file unreadable at drive/role: malformed role file; refusing role-dependent policy until repaired"
+        }
+      }
+    }
   }
 ]

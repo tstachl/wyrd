@@ -1048,6 +1048,8 @@ pub fn map_policy_error(error: PolicyError) -> (WireErrorCode, String) {
         },
         PolicyError::Conflict { .. } => WireErrorCode::Conflicted,
         PolicyError::PinnedPresent { .. } => WireErrorCode::PinnedPresent,
+        PolicyError::RoleForbidsEviction { .. } => WireErrorCode::RoleForbidsEviction,
+        PolicyError::RoleUnreadable { .. } => WireErrorCode::RoleUnreadable,
         PolicyError::TooDeep(_) => WireErrorCode::TooDeep,
         PolicyError::Engine(_) => WireErrorCode::Engine,
     };
