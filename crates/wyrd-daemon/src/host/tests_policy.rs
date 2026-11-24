@@ -11,6 +11,7 @@ use wyrd_core::policy::{
     evict_subtree, pin_subtree, residency_census, unpin_subtree, LocalPresence, ResidencyCensus,
     RetentionPolicy,
 };
+use wyrd_core::role::Role;
 use wyrd_format::{EntryContent, FsObjectStore, ObjectKind, ObjectStore, Tree};
 use wyrd_sync::runtime::Engine;
 use wyrd_view::DriveView;
@@ -82,7 +83,7 @@ fn policy_commits_leave_heads_byte_identical() {
     // so narrow the promise by evicting nothing and re-check heads.
     let refused = {
         let (engine, view) = daemon.parts_mut();
-        evict_subtree(engine, view, "docs")
+        evict_subtree(engine, view, "docs", Role::Mirror)
     };
     assert!(refused.is_err(), "parent evict must refuse the child pin");
     let after = daemon.engine().live_heads().unwrap();
@@ -102,7 +103,7 @@ fn policy_commits_leave_heads_byte_identical() {
     .unwrap();
     let released = {
         let (engine, view) = daemon.parts_mut();
-        evict_subtree(engine, view, "docs/b.txt")
+        evict_subtree(engine, view, "docs/b.txt", Role::Mirror)
     }
     .unwrap();
     assert!(released.released > 0);
@@ -133,7 +134,7 @@ fn pin_parent_after_child_then_evict_overlap() {
     // disjoint fresh path is a no-op-shaped success.
     assert!({
         let (engine, view) = daemon.parts_mut();
-        evict_subtree(engine, view, "docs")
+        evict_subtree(engine, view, "docs", Role::Mirror)
     }
     .is_err());
     let census = census_of(&daemon, "docs");
@@ -176,7 +177,7 @@ fn pin_survives_restart_and_evict_keeps_bytes() {
     assert!(unpinned.released > 0);
     let evicted = {
         let (engine, view) = daemon.parts_mut();
-        evict_subtree(engine, view, "docs")
+        evict_subtree(engine, view, "docs", Role::Mirror)
     }
     .unwrap();
     assert!(evicted.released > 0);
@@ -221,7 +222,7 @@ fn export_against_policy_proves_pin_needs_bytes() {
     }
     {
         let (engine, view) = daemon.parts_mut();
-        evict_subtree(engine, view, "docs").unwrap();
+        evict_subtree(engine, view, "docs", Role::Mirror).unwrap();
     }
     let out = dir.join("export-evicted");
     let report = export_tree(daemon.view(), &out).unwrap();

@@ -475,8 +475,15 @@ fn golden_vectors_pin_the_wire() {
                     other => panic!("unexpected ok sample: {other:?}"),
                 }
             }
-            "not-found" | "unknown-version" | "pinned-present" | "too-large" | "timeout"
-            | "conflicted" | "unavailable" | "stale-entry" => {
+            "not-found"
+            | "unknown-version"
+            | "pinned-present"
+            | "role-forbids-eviction"
+            | "too-large"
+            | "timeout"
+            | "conflicted"
+            | "unavailable"
+            | "stale-entry" => {
                 let response: WireResponse = serde_json::from_value(vector.json.clone())
                     .unwrap_or_else(|error| {
                         panic!("{} parses as a response: {error}", vector.name)
@@ -484,6 +491,7 @@ fn golden_vectors_pin_the_wire() {
                 let expected = match shape {
                     "not-found" => WireErrorCode::NotFound,
                     "pinned-present" => WireErrorCode::PinnedPresent,
+                    "role-forbids-eviction" => WireErrorCode::RoleForbidsEviction,
                     "too-large" => WireErrorCode::TooLarge,
                     "timeout" => WireErrorCode::Timeout,
                     "conflicted" => WireErrorCode::Conflicted,

@@ -1005,6 +1005,11 @@ pub enum WireErrorCode {
     /// Nothing was committed. Distinct from every other refusal —
     /// refused is not missing, invalid, or a local failure.
     PinnedPresent,
+    /// Evict refused: this device's effective role is `vault`, which
+    /// promises never to prune. Narrow the role first. Nothing was
+    /// walked or committed. Distinct from `PinnedPresent` and from a
+    /// local engine failure.
+    RoleForbidsEviction,
     /// The namespace path exceeds the format's depth bound.
     TooDeep,
     /// `diagnostics-set` named a level outside the closed pair.

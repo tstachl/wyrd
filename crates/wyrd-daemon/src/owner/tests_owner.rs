@@ -3436,8 +3436,10 @@ fn policy_words_match_surface_copy() {
 }
 
 /// Policy refusals map to distinct codes: evict-against-pinned is
-/// `PinnedPresent` (never missing, never invalid), and a path past
-/// the depth bound is `TooDeep`.
+/// `PinnedPresent`, evict under a vault role is
+/// `RoleForbidsEviction` (never missing, never invalid, never a
+/// local engine failure), and a path past the depth bound is
+/// `TooDeep`.
 #[test]
 fn policy_refusals_map_to_distinct_codes() {
     let (code, _) = map_policy_error(wyrd_core::policy::PolicyError::PinnedPresent {
@@ -3445,8 +3447,67 @@ fn policy_refusals_map_to_distinct_codes() {
         pinned: 2,
     });
     assert_eq!(code, WireErrorCode::PinnedPresent);
+    let (code, _) = map_policy_error(wyrd_core::policy::PolicyError::RoleForbidsEviction {
+        path: "docs".to_string(),
+    });
+    assert_eq!(code, WireErrorCode::RoleForbidsEviction);
     let (code, _) = map_policy_error(wyrd_core::policy::PolicyError::TooDeep("d".to_string()));
     assert_eq!(code, WireErrorCode::TooDeep);
+}
+
+/// A composed owner with a configured role state, used to prove the
+/// owner socket cannot bypass the core role guard.
+fn running_parts_with_role(state: wyrd_core::role::RoleState) -> RunningOwner {
+    let (engine, dir) = scratch_drive();
+    let role_dir = dir.join("role");
+    std::fs::create_dir_all(&role_dir).unwrap();
+    wyrd_core::role::store(&role_dir, state).unwrap();
+    let store = wyrd_format::FsObjectStore::open(dir.clone()).unwrap();
+    let mut daemon = wyrd_core::node::WyrdNode::new(engine, store).unwrap();
+    daemon.put_file("seed.txt", b"seed").unwrap();
+    daemon.refresh_live_heads().unwrap();
+    let (mut live, parts) = daemon
+        .into_live(
+            Duration::from_secs(5),
+            &wyrd_core::live::LiveConfig::default(),
+        )
+        .unwrap();
+    live.set_role_dir(role_dir);
+    let server = OwnerServer::new(OwnerHandles::from_parts(&parts));
+    let stop: &'static AtomicBool = Box::leak(Box::new(AtomicBool::new(false)));
+    let loop_thread = spawn_loop(live, stop);
+    (server, parts, dir, stop, loop_thread)
+}
+
+/// The owner socket refuses eviction under a settled vault role with
+/// the dedicated wire code — the same core guard the CLI and direct
+/// in-process callers use, not a second surface-local check.
+#[test]
+fn owner_interface_evict_refuses_under_vault_role() {
+    let (server, _parts, dir, stop, loop_thread) =
+        running_parts_with_role(wyrd_core::role::RoleState {
+            role: wyrd_core::role::Role::Vault,
+            transition: wyrd_core::role::Transition::Settled,
+        });
+    let response = server.dispatch(RawRequest {
+        v: WIRE_VERSION,
+        id: 47,
+        op: OP_POLICY_EVICT.to_string(),
+        params: serde_json::to_value(PathParams {
+            path: "seed.txt".to_string(),
+            identity: None,
+        })
+        .unwrap(),
+    });
+    match response.result {
+        WireResult::Err(error) => {
+            assert_eq!(error.code, WireErrorCode::RoleForbidsEviction, "{error:?}");
+        }
+        WireResult::Ok(ok) => panic!("vault role eviction must refuse, got {ok:?}"),
+    }
+    stop.store(true, Ordering::Relaxed);
+    loop_thread.join().expect("loop exits").expect("loop ok");
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 /// Pin, status, unpin, and evict round-trip through the interface

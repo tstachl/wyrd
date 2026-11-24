@@ -35,6 +35,7 @@ use std::collections::BTreeSet;
 use wyrd_format::{ContentId, MAX_PATH_DEPTH};
 use wyrd_sync::runtime::{Engine, EngineError, MaterializationState};
 
+use crate::role::Role;
 use crate::view::{NamespaceView, Node, ViewError};
 
 /// What this device intends to retain for one content object. Two
@@ -120,6 +121,14 @@ pub enum PolicyError {
         path: String,
         /// Pinned objects requiring retention.
         pinned: usize,
+    },
+    /// Evict refused: this device's effective role is `vault`, whose
+    /// promise is never to prune. Narrow the role first. Nothing was
+    /// walked, submitted, or committed.
+    #[error("evict refused at {path}: the vault role forbids eviction; narrow the role first")]
+    RoleForbidsEviction {
+        /// Drive path the eviction was refused for.
+        path: String,
     },
     /// Namespace deeper than the format path-depth limit.
     #[error("namespace deeper than the 256-component limit at {0}")]
@@ -649,7 +658,17 @@ pub struct EvictReport {
 /// returning each to `REMOTE_ONLY` policy. Refuses the whole subtree
 /// when any of it is pinned ([`PolicyError::PinnedPresent`]) before
 /// committing anything — narrowing an explicit promise piecemeal
-/// would let an overlapping evict silently undo a pin.
+/// would let an overlapping evict silently undo a pin. An effective
+/// `vault` role refuses before the walk
+/// ([`PolicyError::RoleForbidsEviction`]): the role promises no
+/// pruning, so no surface may turn that promise into a policy fact.
+///
+/// `effective` is the caller's device-local posture
+/// ([`crate::role::RoleState::effective`]), not a replicated fact. Every surface —
+/// in-process, CLI, and owner socket — must pass the same value so
+/// the refusal cannot be bypassed by choosing a different entry
+/// point. An unreadable role file must be resolved by the caller
+/// as a refusal, never defaulted to `mirror` here.
 ///
 /// This changes intent only: no bytes are deleted, no store is
 /// compacted, heads are untouched. A file that stays fully local
@@ -658,7 +677,13 @@ pub fn evict_subtree<V: NamespaceView>(
     engine: &mut Engine,
     view: &V,
     path: &str,
+    effective: Role,
 ) -> Result<EvictReport, PolicyError> {
+    if effective == Role::Vault {
+        return Err(PolicyError::RoleForbidsEviction {
+            path: path.to_string(),
+        });
+    }
     let content = collect_subtree_content(view, path)?;
     let runtime = engine.runtime_state()?;
     // Decide before committing: a partial evict that stops at the
@@ -1378,7 +1403,7 @@ mod tests {
         let (mut engine, dir) = scratch_engine();
         let view = tree_view();
         pin_subtree(&mut engine, &view, "docs").unwrap();
-        let error = evict_subtree(&mut engine, &view, "docs").unwrap_err();
+        let error = evict_subtree(&mut engine, &view, "docs", Role::Mirror).unwrap_err();
         let PolicyError::PinnedPresent { pinned, .. } = error else {
             panic!("evict must refuse pinned content, got {error:?}");
         };
@@ -1396,13 +1421,32 @@ mod tests {
     }
 
     #[test]
+    fn evict_refuses_the_vault_role_before_walking_or_committing() {
+        let (mut engine, dir) = scratch_engine();
+        let view = tree_view();
+        let before = engine.current();
+        let error = evict_subtree(&mut engine, &view, "docs", Role::Vault).unwrap_err();
+        assert!(
+            matches!(error, PolicyError::RoleForbidsEviction { .. }),
+            "the vault role must produce a typed refusal, got {error:?}"
+        );
+        assert_eq!(
+            engine.current(),
+            before,
+            "a refused eviction commits no policy fact"
+        );
+        drop(engine);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn evict_releases_cached_policy_and_keeps_remote_only() {
         let (mut engine, dir) = scratch_engine();
         let view = tree_view();
         engine
             .set_materialization(id(0xA1), MaterializationState::Cached)
             .unwrap();
-        let report = evict_subtree(&mut engine, &view, "docs/a.txt").unwrap();
+        let report = evict_subtree(&mut engine, &view, "docs/a.txt", Role::Mirror).unwrap();
         assert_eq!(report.released, 1);
         assert_eq!(report.already_remote, 1);
         let runtime = engine.runtime_state().unwrap();

@@ -8,6 +8,7 @@
 
 use wyrd_core::node::WyrdNode;
 use wyrd_core::policy::{evict_subtree, pin_subtree, unpin_subtree};
+use wyrd_core::role::Role;
 use wyrd_core::status::observe;
 use wyrd_core::view::RuntimeMaterialization;
 use wyrd_format::{Entry, FsObjectStore, ObjectKind, ObjectStore, Tree};
@@ -64,7 +65,7 @@ fn policy_commits_change_no_replicated_state() {
     let (engine, view) = node.parts_mut();
     unpin_subtree(engine, view, "").unwrap();
     let (engine, view) = node.parts_mut();
-    evict_subtree(engine, view, "").unwrap();
+    evict_subtree(engine, view, "", Role::Mirror).unwrap();
     assert_eq!(node.engine().live_heads().unwrap(), heads_before);
     assert!(observe(node.engine(), 0).unwrap().obligations.is_empty());
 
