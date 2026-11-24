@@ -38,7 +38,7 @@ use crate::serving::VaultSeen;
 
 /// File holding the durable refusal record, beside the drive's
 /// commits and vault — alongside committed facts, never in them.
-const REFUSAL_FILE: &str = "retention-refusals";
+pub(crate) const REFUSAL_FILE: &str = "retention-refusals";
 
 /// Version line for the refusal file. Bumped if the unit encoding
 /// ever changes; unknown versions fail closed on load.
@@ -52,7 +52,7 @@ const REFUSAL_VERSION: &str = "v1";
 /// re-admitted and re-refused — never silently accepted. 4,096 entries
 /// keep the file around a few hundred KiB, bounded in both size and
 /// rewrite work per refusal.
-const MAX_REFUSAL_UNITS: usize = 4096;
+pub(crate) const MAX_REFUSAL_UNITS: usize = 4096;
 
 /// Why one representation was refused: the ceiling and the numbers it
 /// was compared against. Rendered in the trace log and the operator
@@ -223,15 +223,23 @@ impl RefusalLedger {
             Ok(text) => parse_ledger(&text)?,
         };
         // A ledger written by an older, unbounded build may exceed the
-        // cap. Compact deterministically (the file is sorted) rather
-        // than refusing to open the drive. Dropped units are still
-        // fail-closed: re-admission refetches and refuses them again.
+        // cap. Compact deterministically (the file is sorted) and
+        // persist the compaction, so an oversized sidecar is bounded
+        // on disk as well as in memory rather than slowing every
+        // reopen. Dropped units are still fail-closed: re-admission
+        // refetches and refuses them again.
         if refused.len() > cap {
             let mut entries: Vec<(String, u64)> = refused.into_iter().collect();
             entries.sort();
             entries.truncate(cap);
+            write_ledger(&path, &entries)?;
             refused = entries.into_iter().collect();
         }
+        // The file is sorted, so the rebuilt order is by unit id, not
+        // by recording time: after a restart eviction is deterministic
+        // but not recency-based. Refusal semantics do not depend on
+        // which unit is dropped — a dropped unit is re-fetched and
+        // re-refused if it returns.
         let mut sorted: Vec<&String> = refused.keys().collect();
         sorted.sort();
         let order = sorted.into_iter().cloned().collect();
@@ -296,7 +304,10 @@ impl RefusalLedger {
             return Ok(false);
         }
         // A changed ceiling is a fresh decision: drop its old order
-        // position so it cannot be evicted as "oldest" immediately.
+        // position so it cannot be evicted as "oldest" immediately
+        // within this process lifetime. Across restarts the file's
+        // sorted order governs, which is deterministic but not
+        // recency-based.
         state.order.retain(|known| known != unit);
         state.refused.insert(unit.to_string(), quota);
         state.order.push_back(unit.to_string());
@@ -613,8 +624,15 @@ mod tests {
             .map(|index| (format!("object:{index:064x}"), 100))
             .collect();
         write_ledger(ledger.path(), &older).unwrap();
+        let before = std::fs::metadata(ledger.path()).unwrap().len();
         let compacted = RefusalLedger::load_with_cap(&dir, CAP).unwrap();
         assert_eq!(compacted.len(), CAP);
+        let after = std::fs::metadata(ledger.path()).unwrap().len();
+        assert!(after < before, "load compaction reaches disk");
+        assert!(
+            after <= CAP as u64 * 96,
+            "an oversized legacy sidecar is bounded on reopen, saw {after}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
