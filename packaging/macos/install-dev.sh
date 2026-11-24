@@ -140,57 +140,85 @@ command -v python3 >/dev/null 2>&1 || {
 DEST="${DEST:-}"
 OPEN_APP=1
 STOP_RUNNING=1
-# Signing inputs: either the options below or the inherited environment.
+# Signing inputs: explicit flags first, then the script's own environment,
+# then the SecretSpec values exported by the devenv shell (keyring). The
+# SecretSpec names are stable across shells; these script names remain the
+# interface every downstream build hook reads.
 # --stable-identity is the narrow keychain-stability mode; --sign-identity
 # plus profiles is the all-or-nothing Finder-capable mode. They cannot be
 # combined. An outer identity can be inferred from the shared identity.
 SIGN_IDENTITY="${SIGN_IDENTITY:-}"
 APPLE_SIGNING_IDENTITY="${APPLE_SIGNING_IDENTITY:-}"
 STABLE_SIGN_IDENTITY="${STABLE_SIGN_IDENTITY:-}"
-WYRD_SIGN_APPEX="${WYRD_SIGN_APPEX:-0}"
-PROVISIONING_PROFILE="${PROVISIONING_PROFILE:-}"
-APP_PROVISIONING_PROFILE="${APP_PROVISIONING_PROFILE:-}"
+PROVISIONING_PROFILE="${PROVISIONING_PROFILE:-${APPLE_PROVISIONING_PROFILE:-}}"
+APP_PROVISIONING_PROFILE="${APP_PROVISIONING_PROFILE:-${APPLE_APP_PROVISIONING_PROFILE:-}}"
+if [ -n "${APPLE_IDENTITY:-}" ]; then
+    if [ -n "$PROVISIONING_PROFILE" ] && [ -n "$APP_PROVISIONING_PROFILE" ]; then
+        # Profile-backed: one identity signs the whole bundle.
+        SIGN_IDENTITY="${SIGN_IDENTITY:-$APPLE_IDENTITY}"
+        APPLE_SIGNING_IDENTITY="${APPLE_SIGNING_IDENTITY:-$APPLE_IDENTITY}"
+    else
+        # Profile-free: stable identity for app, CLI and registrar.
+        STABLE_SIGN_IDENTITY="${STABLE_SIGN_IDENTITY:-$APPLE_IDENTITY}"
+    fi
+fi
+# Which signing flags were given explicitly. SecretSpec and the script's
+# own environment are defaults; an explicit flag must win even when the
+# shell exported a whole different posture.
+FLAG_STABLE=0
+FLAG_SIGN=0
+FLAG_PROFILE=0
+FLAG_APPEX=0
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --stable-identity)
             [ -n "${2:-}" ] || { echo "error: --stable-identity needs a value." >&2; exit 1; }
             STABLE_SIGN_IDENTITY="$2"
+            FLAG_STABLE=1
             shift 2
             ;;
         --stable-identity=*)
             STABLE_SIGN_IDENTITY="${1#--stable-identity=}"
             [ -n "$STABLE_SIGN_IDENTITY" ] || { echo "error: --stable-identity needs a value." >&2; exit 1; }
+            FLAG_STABLE=1
             shift
             ;;
         --sign-appex)
             WYRD_SIGN_APPEX=1
+            FLAG_APPEX=1
             shift
             ;;
         --sign-identity)
             [ -n "${2:-}" ] || { echo "error: --sign-identity needs a value." >&2; exit 1; }
             SIGN_IDENTITY="$2"
+            FLAG_SIGN=1
             shift 2
             ;;
         --sign-identity=*)
             SIGN_IDENTITY="${1#--sign-identity=}"
+            FLAG_SIGN=1
             shift
             ;;
         --provisioning-profile)
             [ -n "${2:-}" ] || { echo "error: --provisioning-profile needs a path." >&2; exit 1; }
             PROVISIONING_PROFILE="$2"
+            FLAG_PROFILE=1
             shift 2
             ;;
         --provisioning-profile=*)
             PROVISIONING_PROFILE="${1#--provisioning-profile=}"
+            FLAG_PROFILE=1
             shift
             ;;
         --app-provisioning-profile)
             [ -n "${2:-}" ] || { echo "error: --app-provisioning-profile needs a path." >&2; exit 1; }
             APP_PROVISIONING_PROFILE="$2"
+            FLAG_PROFILE=1
             shift 2
             ;;
         --app-provisioning-profile=*)
             APP_PROVISIONING_PROFILE="${1#--app-provisioning-profile=}"
+            FLAG_PROFILE=1
             shift
             ;;
         --dest)
@@ -223,6 +251,34 @@ while [ "$#" -gt 0 ]; do
             ;;
     esac
 done
+
+# Explicit flags outrank environment-derived signing inputs. Clearing the
+# losing side here, after the flag parse, keeps the mode checks below from
+# rejecting a valid flag because SecretSpec exported a full profile-backed
+# set into the shell.
+if [ "$FLAG_STABLE" -eq 1 ]; then
+    [ "$FLAG_SIGN" -eq 1 ] || SIGN_IDENTITY=""
+    [ "$FLAG_SIGN" -eq 1 ] || APPLE_SIGNING_IDENTITY=""
+    [ "$FLAG_PROFILE" -eq 1 ] || PROVISIONING_PROFILE=""
+    [ "$FLAG_PROFILE" -eq 1 ] || APP_PROVISIONING_PROFILE=""
+elif [ "$FLAG_SIGN" -eq 1 ] || [ "$FLAG_PROFILE" -eq 1 ]; then
+    STABLE_SIGN_IDENTITY=""
+    # The profile-backed branch re-infers the outer identity from the
+    # explicit SIGN_IDENTITY; a SecretSpec-seeded value here would lose
+    # to that check and reject the explicit flag.
+    APPLE_SIGNING_IDENTITY=""
+fi
+# The appex flag is only meaningful in the profile-free stable posture.
+# Resolve it after the posture above, so a SecretSpec profile set cannot
+# make an otherwise valid --stable-identity invocation fail the guard
+# below, and an explicit --sign-appex always survives.
+if [ "$FLAG_APPEX" -ne 1 ]; then
+    if [ -n "$PROVISIONING_PROFILE" ] && [ -n "$APP_PROVISIONING_PROFILE" ]; then
+        WYRD_SIGN_APPEX=0
+    else
+        WYRD_SIGN_APPEX="${WYRD_SIGN_APPEX:-${APPLE_SIGN_APEX:-0}}"
+    fi
+fi
 
 # Signing posture: three modes, decided here and exported to every
 # staging hook. Default ad-hoc needs no signing assets.

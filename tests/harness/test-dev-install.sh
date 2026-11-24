@@ -528,4 +528,78 @@ for marker in '.join(app_group_identifier())' 'Library/Group Containers'; do
 done
 pass "appex and owner derive the container from one group id"
 
+# 15. SecretSpec (devenv keyring) signs the dev install without putting
+# values in the repo or on the command line. The manifest declares four
+# stable names, devenv exports them, and the installer maps them onto the
+# script-local signing variables that every build hook reads.
+SPEC_MANIFEST="$(cat "$ROOT/secretspec.toml")"
+DEVENV_YAML="$(cat "$ROOT/devenv.yaml")"
+DEVENV_NIX="$(cat "$ROOT/devenv.nix")"
+for marker in APPLE_IDENTITY APPLE_SIGN_APEX APPLE_PROVISIONING_PROFILE APPLE_APP_PROVISIONING_PROFILE; do
+  match "$marker" "$SPEC_MANIFEST" \
+    || die "secretspec.toml: '$marker' is not declared"
+  match "env.$marker" "$DEVENV_NIX" \
+    || die "devenv.nix: '$marker' is not exported"
+  match "$marker" "$INSTALL_CODE" \
+    || die "install-dev.sh: '$marker' is not consumed"
+done
+for marker in 'enable: true' 'provider: keyring' 'profile: default'; do
+  match "$marker" "$DEVENV_YAML" \
+    || die "devenv.yaml: SecretSpec setting '$marker' missing"
+done
+match 'config.secretspec.secrets.APPLE_IDENTITY' "$DEVENV_NIX" \
+  || die "devenv.nix: secrets are not read from the SecretSpec integration"
+# Explicit flags and script-local variables still win over SecretSpec:
+# the mapping is a default, never an override.
+match 'APPLE_SIGNING_IDENTITY:-$APPLE_IDENTITY' "$INSTALL_CODE" \
+  || die "install: profile-backed identity mapping missing"
+match 'STABLE_SIGN_IDENTITY:-$APPLE_IDENTITY' "$INSTALL_CODE" \
+  || die "install: profile-free identity mapping missing"
+match 'PROVISIONING_PROFILE:-${APPLE_PROVISIONING_PROFILE:-}}' "$INSTALL_CODE" \
+  || die "install: appex profile mapping missing"
+match 'APP_PROVISIONING_PROFILE:-${APPLE_APP_PROVISIONING_PROFILE:-}}' "$INSTALL_CODE" \
+  || die "install: app profile mapping missing"
+# Static strings cannot catch an unbound variable or a wrong precedence,
+# so execute the real mapping and flag-parse block with controlled inputs.
+# It runs under `sh -eu`, matching the installer's own shell settings.
+MAPPING=$(sed -n '/^SIGN_IDENTITY=/,/^# Signing posture:/p' "$INSTALL" | sed '$d')
+[ -n "$MAPPING" ] || die "install: cannot extract the signing mapping block"
+MAPFILE=$(mktemp)
+printf '%s\n' "$MAPPING" \
+  'printf "%s|%s|%s|%s|%s\n" "$STABLE_SIGN_IDENTITY" "$WYRD_SIGN_APPEX" "$SIGN_IDENTITY" "$APPLE_SIGNING_IDENTITY" "$PROVISIONING_PROFILE"' \
+  > "$MAPFILE"
+UNSET_SIGNING='-u SIGN_IDENTITY -u APPLE_SIGNING_IDENTITY -u STABLE_SIGN_IDENTITY -u WYRD_SIGN_APPEX -u PROVISIONING_PROFILE -u APP_PROVISIONING_PROFILE'
+R=$(env $UNSET_SIGNING APPLE_IDENTITY='Profile Identity' APPLE_SIGN_APEX=1 \
+  /bin/sh -eu "$MAPFILE") || { rm -f "$MAPFILE"; die "mapping: profile-free path failed"; }
+[ "$R" = 'Profile Identity|1|||' ] \
+  || { rm -f "$MAPFILE"; die "mapping: profile-free result '$R'"; }
+R=$(env $UNSET_SIGNING APPLE_IDENTITY='Profile Identity' APPLE_SIGN_APEX=1 \
+  APPLE_PROVISIONING_PROFILE=/tmp/a.provisionprofile \
+  APPLE_APP_PROVISIONING_PROFILE=/tmp/b.provisionprofile \
+  /bin/sh -eu "$MAPFILE") || { rm -f "$MAPFILE"; die "mapping: profile-backed path failed"; }
+[ "$R" = '|0|Profile Identity|Profile Identity|/tmp/a.provisionprofile' ] \
+  || { rm -f "$MAPFILE"; die "mapping: profile-backed result '$R'"; }
+R=$(env $UNSET_SIGNING APPLE_IDENTITY='Profile Identity' APPLE_SIGN_APEX=1 \
+  APPLE_PROVISIONING_PROFILE=/tmp/a.provisionprofile \
+  APPLE_APP_PROVISIONING_PROFILE=/tmp/b.provisionprofile \
+  /bin/sh -eu "$MAPFILE" --stable-identity 'Explicit Identity') \
+  || { rm -f "$MAPFILE"; die "mapping: explicit stable path failed"; }
+[ "$R" = 'Explicit Identity|1|||' ] \
+  || { rm -f "$MAPFILE"; die "mapping: explicit stable result '$R'"; }
+R=$(env $UNSET_SIGNING APPLE_IDENTITY='Profile Identity' APPLE_SIGN_APEX=1 \
+  APPLE_PROVISIONING_PROFILE=/tmp/a.provisionprofile \
+  APPLE_APP_PROVISIONING_PROFILE=/tmp/b.provisionprofile \
+  /bin/sh -eu "$MAPFILE" --sign-identity 'Explicit Identity') \
+  || { rm -f "$MAPFILE"; die "mapping: explicit sign path failed"; }
+[ "$R" = '|0|Explicit Identity||/tmp/a.provisionprofile' ] \
+  || { rm -f "$MAPFILE"; die "mapping: explicit sign result '$R'"; }
+rm -f "$MAPFILE"
+match 'require_reason = false' "$SPEC_MANIFEST" \
+  || die "secretspec.toml: reason policy would break non-interactive devenv shell"
+for marker in 'APPLE_IDENTITY' 'APPLE_SIGN_APEX' 'APPLE_PROVISIONING_PROFILE' 'APPLE_APP_PROVISIONING_PROFILE'; do
+  grep -F -- "$marker" "$ROOT/packaging/macos/README.md" >/dev/null \
+    || die "README: SecretSpec variable '$marker' not documented"
+done
+pass "SecretSpec signing inputs are declared, exported and consumed"
+
 echo "dev-install: $PASS checks passed"
