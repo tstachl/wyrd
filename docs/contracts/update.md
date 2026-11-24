@@ -166,7 +166,13 @@ Phases, in order:
    incompatible drive stops here with staging rolled back;
    the post-swap verify below stays authoritative for the race
    window, but the common failure never mutates the
-   installation.
+   installation. An operational failure of the early child
+   (spawn, wait, timeout) takes this same arm: staging is
+   rolled back, a `refused` verdict is recorded, the non-`--restart`
+   cause is returned unchanged rather than relabelled as
+   incompatibility, and `--restart` supervises the unchanged
+   binary instead of leaving the drive unserved with staging
+   residue and `in_progress` still on disk.
 6. **Swap.** Rename `<exe>` to `<exe>.prev`, record
    `{phase: swapped}`, rename `<exe>.next` to `<exe>` — two
    atomic renames with the record between them. Crash anywhere

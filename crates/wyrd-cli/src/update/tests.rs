@@ -969,6 +969,94 @@ fn update_run_early_refusal_under_restart_supervises_unchanged() {
 
 #[test]
 #[cfg(unix)]
+fn early_verify_operational_failure_under_restart_supervises_unchanged() {
+    // An operational failure before the swap (spawn, wait, timeout)
+    // used to propagate with `?`: staging residue and an
+    // `in_progress` verdict were left behind and `--restart` never
+    // handed the unchanged binary to supervision. The cause is
+    // injected directly into the decision the transaction calls.
+    let temp = TempDir::new();
+    let exe = fake_exe(&temp.0);
+    let drive = fake_drive(&temp.0);
+    let creds = forward_creds(&temp.0);
+    let script = script_binary(&temp.0, 0);
+    let archive = script_archive(&temp.0, &script);
+    let identity = resolve_archive(&archive, None).unwrap();
+    let relays = vec!["ws://localhost:9".to_owned()];
+    let request = update_request(&drive, &archive, &creds, &relays, true, &exe, None);
+    fs::write(next_path(&exe), b"staged").unwrap();
+    fs::create_dir_all(stage_dir(&exe)).unwrap();
+    fs::write(state_path(&exe), b"staged-record").unwrap();
+
+    let outcome = early_verify_decision(
+        &request,
+        &identity,
+        &own_build_info().app,
+        Err(CliError::Usage(
+            "verification child failed to start (boom)".into(),
+        )),
+    )
+    .unwrap()
+    .expect("restart under an operational early failure must supervise");
+    match outcome {
+        UpdateOutcome::Supervise {
+            exe: supervised,
+            drive: supervised_drive,
+            relays: supervised_relays,
+            ..
+        } => {
+            assert_eq!(supervised, exe);
+            assert_eq!(supervised_drive, drive);
+            assert_eq!(supervised_relays, relays);
+        }
+        UpdateOutcome::Done => panic!("early operational failure must not complete the update"),
+    }
+    assert_eq!(fs::read(&exe).unwrap(), b"old-binary");
+    assert!(!next_path(&exe).exists());
+    assert!(!stage_dir(&exe).exists());
+    assert!(!state_path(&exe).exists());
+    let verdict = read_verdict(&exe).unwrap().expect("verdict recorded");
+    assert_eq!(verdict.outcome, "refused");
+    assert_eq!(verdict.in_place, own_build_info().app);
+}
+
+#[test]
+#[cfg(unix)]
+fn early_verify_operational_failure_without_restart_returns_the_cause() {
+    // Without `--restart` there is no handoff, but staging still
+    // rolls back and a verdict is still recorded. The operational
+    // cause travels unchanged — never relabelled as incompatibility.
+    let temp = TempDir::new();
+    let exe = fake_exe(&temp.0);
+    let drive = fake_drive(&temp.0);
+    let creds = forward_creds(&temp.0);
+    let script = script_binary(&temp.0, 0);
+    let archive = script_archive(&temp.0, &script);
+    let identity = resolve_archive(&archive, None).unwrap();
+    let request = update_request(&drive, &archive, &creds, &[], false, &exe, None);
+    fs::write(next_path(&exe), b"staged").unwrap();
+    fs::write(state_path(&exe), b"staged-record").unwrap();
+
+    let error = early_verify_decision(
+        &request,
+        &identity,
+        &own_build_info().app,
+        Err(CliError::Usage(
+            "verification child failed to start (boom)".into(),
+        )),
+    )
+    .unwrap_err();
+    let message = error.to_string();
+    assert!(message.contains("failed to start"), "{message}");
+    assert!(!message.contains("did not verify"), "{message}");
+    assert!(!next_path(&exe).exists());
+    assert!(!state_path(&exe).exists());
+    let verdict = read_verdict(&exe).unwrap().expect("verdict recorded");
+    assert_eq!(verdict.outcome, "refused");
+}
+
+#[test]
+#[cfg(unix)]
 fn update_run_rolls_back_a_post_swap_rejection() {
     // The counting double passes early and fails authoritative:
     // the swap happened, so rollback restores the old binary.

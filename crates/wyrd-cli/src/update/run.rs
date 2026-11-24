@@ -142,57 +142,24 @@ pub(crate) fn update_run(request: &UpdateRequest<'_>) -> Result<UpdateOutcome, C
     // authoritative for the race window (something may start
     // serving between the two checks), but the common failure
     // never mutates the installation.
-    match run_verify_child(
-        &next_path(exe),
-        drive_dir,
-        identity_file,
-        passphrase_file,
-        VERIFY_TIMEOUT,
+    // The pre-swap arm takes the child's `Result` rather than
+    // propagating with `?`: an operational failure (spawn, wait,
+    // timeout) must get the same rollback-and-continuity treatment
+    // as a rejection, or a `--restart` run leaves the drive
+    // unserved with staging residue and `in_progress` still on disk.
+    if let Some(outcome) = early_verify_decision(
+        request,
+        &identity,
+        &own,
+        run_verify_child(
+            &next_path(exe),
+            drive_dir,
+            identity_file,
+            passphrase_file,
+            VERIFY_TIMEOUT,
+        ),
     )? {
-        VerifyOutcome::Verified => {
-            println!("update early-verify: staged build reads the drive; swap proceeds");
-        }
-        VerifyOutcome::Rejected => {
-            // "Did not verify", not "rejected": the child reports
-            // exit status only, so an operational failure (held
-            // lock, wrong passphrase) lands in the same arm as a
-            // genuine incompatibility — and the child's own lines
-            // just above already name the cause.
-            rollback_staging(exe)?;
-            record_verdict(
-                exe,
-                &UpdateVerdict {
-                    version: 1,
-                    outcome: "refused".into(),
-                    drive: drive_dir.to_path_buf(),
-                    new_version: identity.version.clone(),
-                    in_place: own.clone(),
-                    at: now_unix(),
-                },
-            );
-            if *restart {
-                // Same continuity as the post-swap path: the
-                // binary is unchanged, the vault is stopped, and
-                // the drive must not sit unserved. The refusal
-                // is carried by the `update refused:` line (exit
-                // status reports the supervised run, §6).
-                println!(
-                    "update refused: staged build {} did not verify the drive before any swap; supervising unchanged {own}",
-                    identity.version
-                );
-                return Ok(supervise_outcome(
-                    exe,
-                    drive_dir,
-                    relays,
-                    identity_file,
-                    passphrase_file,
-                ));
-            }
-            return Err(CliError::Verification(format!(
-                "staged build {} did not verify the drive before any swap; nothing replaced",
-                identity.version
-            )));
-        }
+        return Ok(outcome);
     }
     swap_first(exe)?;
     set_phase(exe, drive_dir, &identity, Phase::Swapped)?;
@@ -270,6 +237,93 @@ fn rollback_staging(exe: &Path) -> Result<(), CliError> {
     remove_dir_if_present(&stage_dir(exe))?;
     remove_if_present(&state_path(exe))?;
     Ok(())
+}
+
+/// Decide the pre-swap verification arm. `Ok(None)` means verified
+/// and the swap proceeds; `Ok(Some(_))` is the handoff under
+/// `--restart`. Taking the child's `Result` here is what lets an
+/// operational failure — spawn, wait, timeout — be routed through
+/// the same staging rollback and continuity as a rejection, instead
+/// of returning with `<exe>.next`, the `staged` record, and an
+/// `in_progress` verdict left behind.
+pub(crate) fn early_verify_decision(
+    request: &UpdateRequest<'_>,
+    identity: &ArchiveIdentity,
+    own: &str,
+    outcome: Result<VerifyOutcome, CliError>,
+) -> Result<Option<UpdateOutcome>, CliError> {
+    match outcome {
+        Ok(VerifyOutcome::Verified) => {
+            println!("update early-verify: staged build reads the drive; swap proceeds");
+            Ok(None)
+        }
+        Ok(VerifyOutcome::Rejected) => {
+            // "Did not verify", not "rejected": the child reports
+            // exit status only, so an operational failure (held
+            // lock, wrong passphrase) lands in the same arm as a
+            // genuine incompatibility — and the child's own lines
+            // just above already name the cause.
+            if request.restart {
+                println!(
+                    "update refused: staged build {} did not verify the drive before any swap; supervising unchanged {own}",
+                    identity.version
+                );
+            }
+            finish_early_refusal(
+                request,
+                identity,
+                own,
+                CliError::Verification(format!(
+                    "staged build {} did not verify the drive before any swap; nothing replaced",
+                    identity.version
+                )),
+            )
+        }
+        Err(operational) => {
+            if request.restart {
+                eprintln!(
+                    "update early-verify failed operationally: {operational}; supervising unchanged {own}"
+                );
+            }
+            finish_early_refusal(request, identity, own, operational)
+        }
+    }
+}
+
+fn finish_early_refusal(
+    request: &UpdateRequest<'_>,
+    identity: &ArchiveIdentity,
+    own: &str,
+    failure: CliError,
+) -> Result<Option<UpdateOutcome>, CliError> {
+    rollback_staging(request.exe)?;
+    record_verdict(
+        request.exe,
+        &UpdateVerdict {
+            version: 1,
+            outcome: "refused".into(),
+            drive: request.drive_dir.to_path_buf(),
+            new_version: identity.version.clone(),
+            in_place: own.to_owned(),
+            at: now_unix(),
+        },
+    );
+    if request.restart {
+        // Same continuity as the post-swap path: the binary is
+        // unchanged, the vault is stopped, and the drive must not
+        // sit unserved. The cause is carried by the printed line
+        // (exit status reports the supervised run, §6).
+        println!("update continuity: supervising unchanged {own} as the owner child");
+        Ok(Some(supervise_outcome(
+            request.exe,
+            request.drive_dir,
+            request.relays,
+            request.identity_file,
+            request.passphrase_file,
+        )))
+    } else {
+        Err(failure)
+    }
 }
 
 /// Restore after every unsuccessful post-swap outcome — rejection
