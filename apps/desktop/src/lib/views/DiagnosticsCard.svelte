@@ -16,12 +16,19 @@ them never suppresses a default-visible error. -->
   import ObservedNote from "./ObservedNote.svelte";
   import { describe } from "$lib/ipc/errors.js";
   import type { IpcResult } from "$lib/ipc/types.js";
-  import type { Diagnostics, DiagnosticsExport, WireDiagnosticLevel } from "$lib/ipc/results.js";
+  import type {
+    Diagnostics,
+    DiagnosticsExport,
+    FinderIntegration,
+    WireDiagnosticLevel,
+  } from "$lib/ipc/results.js";
   import type { Stamped } from "$lib/state/presentation.svelte.js";
 
   interface Props {
     /** The persisted level, stamped at the last read. Null before the first read. */
     snapshot: Stamped<Diagnostics> | null;
+    /** This build's Finder capability. Null until first observed. */
+    finderIntegration: FinderIntegration | null;
     /** The drive whose owner receives the live update. Null until one is selected. */
     driveDir: string | null;
     pending: boolean;
@@ -33,7 +40,7 @@ them never suppresses a default-visible error. -->
     onExport: () => Promise<DiagnosticsExport>;
   }
 
-  let { snapshot, driveDir, pending, onRefresh, onSet, onExport }: Props = $props();
+  let { snapshot, finderIntegration, driveDir, pending, onRefresh, onSet, onExport }: Props = $props();
 
   const persisted = $derived(snapshot?.data ?? null);
   const level = $derived<WireDiagnosticLevel | null>(
@@ -149,6 +156,18 @@ them never suppresses a default-visible error. -->
     </Card.Description>
   </Card.Header>
   <Card.Content class="flex flex-col gap-3">
+    {#if finderIntegration === "unprovisioned"}
+      <Alert.Root>
+        <p class="font-medium">Finder integration requires a signed build</p>
+        <p class="text-xs leading-relaxed">
+          This dev install leaves the File Provider extension ad-hoc, so it has no App Group
+          container. Finder can show a server or network error for a drive whose owner is running;
+          the drive still works in Wyrd. To enable Finder, re-run install-dev.sh with
+          --sign-identity and both provisioning profiles. That install also restarts the drive
+          agents for you.
+        </p>
+      </Alert.Root>
+    {/if}
     {#if persisted === null}
       <p class="text-sm text-muted-foreground">No persisted level read yet — refresh to read it.</p>
     {:else if persisted.state === "unreadable"}

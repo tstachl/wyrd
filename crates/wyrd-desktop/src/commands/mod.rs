@@ -40,6 +40,7 @@ use wyrd_settings::SparseUpdate;
 use crate::credential_ref::CredentialReference;
 use crate::diagnostics_bundle::{self, DiagnosticsExport};
 use crate::diagnostics_view::{self, Diagnostics};
+use crate::finder_integration::{self, FinderIntegration};
 use crate::registry::{self, RegistryState, RegistryStatus};
 use crate::settings_apply::{
     self, SettingsApplyRequest, SettingsApplyResult, SETTINGS_APPLY_TIMEOUT,
@@ -337,6 +338,17 @@ pub async fn diagnostics_export<R: Runtime>(app: AppHandle<R>) -> DiagnosticsExp
     .await
 }
 
+/// Finder integration state of this installed build. A local query
+/// like [`diagnostics_level`]: it inspects the bundled appex's
+/// provisioning profile, not a drive, an owner or a domain. An ad-hoc
+/// or stable-identity dev build reports `unprovisioned`; Finder then
+/// shows a generic server/network error even though the cause is the
+/// missing App Group container. A dev-server run is `not-applicable`.
+#[tauri::command]
+pub fn finder_integration() -> FinderIntegration {
+    finder_integration::finder_integration()
+}
+
 /// Every registered drive plus per-drive reachability, verified
 /// this session. A local query, not an owner operation: the answer
 /// is a state struct (never the taxonomy), unreadable states ride
@@ -595,6 +607,7 @@ pub fn handler<R: Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool {
         diagnostics_level,
         diagnostics_set,
         diagnostics_export,
+        finder_integration,
         list_drives,
         drive_settings,
         drive_credential_reference,

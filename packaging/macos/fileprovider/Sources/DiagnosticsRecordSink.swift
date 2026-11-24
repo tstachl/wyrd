@@ -40,6 +40,9 @@ struct DiagnosticsRecordSink {
         "error-code",
         "error-detail",
     ]
+    /// The exporter's desktop-only `finder-state` build fact is not a
+    /// source field: this sink never writes it and the allowlist above
+    /// never accepts it from a hand-edited record.
 
     /// Rotation bound. Two files at most; a hand-edited or oversized
     /// file is rotated away rather than growing without limit.

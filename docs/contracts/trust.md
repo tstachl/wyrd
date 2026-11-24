@@ -986,7 +986,7 @@ party table already allows — the matrix adds nothing to either.
 | warn log (`tracing`, default-visible), outbox-refusal lines only | cause and kind (an all-relay refusal names its control kind) | paths; `ContentId`s; identities — recipient keys, transition and snapshot hashes, membership data of any kind. Other existing warn lines predate this row and are grandfathered, not conformant: reconciling them is a separate issue. | the invoking operator: this process connected and the operator holds the keys |
 | durable drive metadata | protocol-required identities only: member `DeviceId`s in the encrypted membership log, possession-commit `ContentId`s in the local fact log | diagnostic identities: `VerificationFailure` never persists (OD-17-1 B); no diagnostic ring, no identity-bearing sidecar | key holders, locally |
 | the wire | nothing diagnostic | — | relay and vault positions unchanged (party table) |
-| local diagnostics bundle (explicit export) | allowlisted structured records only: timestamps, ephemeral local session ids, operation/stage summaries, and the T20 allowlist fields marked exportable | file contents, credentials, keys, DriveIds, device identities, ContentIds, identities, and any unrelated user data; no transmission path of any kind | the user who requested the export, on that device only |
+| local diagnostics bundle (explicit export) | allowlisted structured records only: timestamps, ephemeral local session ids, operation/stage summaries, and the T20 allowlist fields marked exportable; plus the exporter's own `finder-state` build fact in the desktop record (fixed in code, never accepted from a source record) | file contents, credentials, keys, DriveIds, device identities, ContentIds, identities, and any unrelated user data; no transmission path of any kind | the user who requested the export, on that device only |
 
 Two consequences are pinned. First, **more classification never
 widens a surface**: a new `VerificationCause` or a new shed-wait
@@ -1249,6 +1249,7 @@ detailed-mode surface.
 | File contents | Never | Never |
 | Credentials / cryptographic material | Never | Never |
 | Symlink target | Hidden | Allowed locally, subject to explicit policy |
+| Finder integration state | Hidden | Allowed locally (build fact, no drive data) |
 
 Three separate authorizations apply to every field: whether it is
 emitted, whether it is marked `.public` in unified logging, and whether
@@ -1272,6 +1273,16 @@ were present, whether a symlink target was involved, which validation or
 mutation stage failed, and the exact error returned to the provider.
 Stage and error are structured fields, not increasingly elaborate
 free-form messages.
+
+The export also carries a build-level `finder-state` from the desktop
+record — a field the exporter fixes in code, not one a source record
+can set. It is the App Group container cause, not a drive answer: an
+ad-hoc or stable-identity dev install reports `unprovisioned`, while a
+signed build with an appex provisioning profile reports `provisioned`.
+That value stays distinct from an extension record's
+`store-error = temporary`, which is an unreachable owner socket. The
+shell states the signing cause to the user rather than leaving Finder's
+generic server/network banner as the only explanation.
 
 ## Decision record
 

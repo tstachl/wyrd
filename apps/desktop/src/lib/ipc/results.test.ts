@@ -12,6 +12,7 @@ import { expect, test } from "bun:test";
 import type {
   Diagnostics,
   DiagnosticsExport,
+  FinderIntegration,
   ProvisionReport,
   ProvisionResult,
   Served,
@@ -37,6 +38,11 @@ function singleKey(value: object): string {
 test("diagnostics level is a closed bare lowercase string", () => {
   const level: WireDiagnosticLevel = "detailed";
   expect(level).toBe("detailed");
+});
+
+test("finder integration is a closed bare lowercase string", () => {
+  const states: FinderIntegration[] = ["provisioned", "unprovisioned", "not-applicable"];
+  expect(states).toEqual(["provisioned", "unprovisioned", "not-applicable"]);
 });
 
 test("local bundle export result is internally tagged", () => {

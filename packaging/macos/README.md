@@ -238,7 +238,14 @@ mount-enabled CLI by leaving the flag unset.
 
 Finder boundary (honest, not a bug): the ad-hoc default logs
 `no-group-container` and stays inert — the App Group container only
-materializes under a team-signed build with provisioning. With the
+materializes under a team-signed build with provisioning. Finder can
+show "Your device couldn't connect to the server" for a drive whose
+owner is running. The shell names the real cause in Settings →
+Diagnostics: "Finder integration requires a signed build", with the
+signed-install recovery and the fact that a reinstall restarts the
+drive agents. The same build fact travels in an explicit diagnostics
+export as `finder-state`, distinct from an extension record's
+`store-error = temporary` (an unreachable owner socket). With the
 signing pair above the app is Finder-capable: the embedded domain
 registrar (`domain-registrar/main.swift`) is run by a per-user launch
 agent (`md.enesis.wyrd.domain-registrar`, installed by `install-dev.sh`)

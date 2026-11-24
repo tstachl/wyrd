@@ -39,6 +39,7 @@ import type {
   CredentialReference,
   Diagnostics,
   DriveSettingsState,
+  FinderIntegration,
   RegistryState,
   WireFreshness,
   WireLiveness,
@@ -93,6 +94,8 @@ let settingsSnapshots = $state<Record<string, Stamped<DriveSettingsState>>>({});
 let credentialReferences = $state<Record<string, CredentialReference>>({});
 /** The persisted app-wide diagnostics level. Not drive-scoped. */
 let diagnosticsSnapshot = $state<Stamped<Diagnostics> | null>(null);
+/** Finder capability of this build. Null until first observed. */
+let finderIntegration = $state<FinderIntegration | null>(null);
 
 function stamp<T>(data: T): Stamped<T> {
   return { data, observedAtMs: Date.now() };
@@ -149,6 +152,10 @@ export const presentation = {
   get diagnosticsSnapshot(): Stamped<Diagnostics> | null {
     return diagnosticsSnapshot;
   },
+  /** The last observed Finder state, or null before the first read. */
+  get finderIntegration(): FinderIntegration | null {
+    return finderIntegration;
+  },
   /** This drive's availability: `unknown` where never probed this session. */
   availabilityFor(driveDir: string): OwnerAvailability {
     return availabilityByDrive[driveDir] ?? "unknown";
@@ -187,6 +194,9 @@ export const presentation = {
   },
   storeDiagnostics(data: Diagnostics): void {
     diagnosticsSnapshot = stamp(data);
+  },
+  storeFinderIntegration(data: FinderIntegration): void {
+    finderIntegration = data;
   },
   trackRequest(): void {
     pendingRequests += 1;

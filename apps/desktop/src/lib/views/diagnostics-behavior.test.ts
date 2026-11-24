@@ -14,7 +14,12 @@ import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { cleanup, fireEvent, render } from "@testing-library/svelte";
 import { tick } from "svelte";
 import DiagnosticsCard from "./DiagnosticsCard.svelte";
-import type { Diagnostics, DiagnosticsExport, WireDiagnosticLevel } from "$lib/ipc/results.js";
+import type {
+  Diagnostics,
+  DiagnosticsExport,
+  FinderIntegration,
+  WireDiagnosticLevel,
+} from "$lib/ipc/results.js";
 import type { IpcResult } from "$lib/ipc/types.js";
 import type { Stamped } from "$lib/state/presentation.svelte.js";
 
@@ -44,6 +49,7 @@ function observed(level: WireDiagnosticLevel): Diagnostics {
 function props(overrides: Record<string, unknown> = {}) {
   return {
     snapshot: snapshot("default"),
+    finderIntegration: "provisioned" as FinderIntegration,
     driveDir: "/drives/alpha",
     pending: false,
     onRefresh: async () => observed("detailed"),
@@ -220,6 +226,22 @@ test("export is explicit and reports the temporary file without sharing it", asy
   expect(calls).toBe(1);
   expect(rendered.getByText(/Temporary bundle written with 3 records/)).toBeTruthy();
   expect(rendered.getByText("/tmp/wyrd-diagnostics-ab.json")).toBeTruthy();
+});
+
+test("an unprovisioned build states the signing cause and the recovery", async () => {
+  const rendered = render(DiagnosticsCard, {
+    props: props({ finderIntegration: "unprovisioned" as FinderIntegration }),
+  });
+  expect(rendered.getByText("Finder integration requires a signed build")).toBeTruthy();
+  expect(rendered.getByText(/File Provider extension ad-hoc/)).toBeTruthy();
+  expect(rendered.getByText(/re-run install-dev.sh with/)).toBeTruthy();
+});
+
+test("a provisioned build shows no signing warning", async () => {
+  const rendered = render(DiagnosticsCard, {
+    props: props({ finderIntegration: "provisioned" as FinderIntegration }),
+  });
+  expect(rendered.queryByText("Finder integration requires a signed build")).toBeNull();
 });
 
 test("no drive selected disables the toggle with an explicit hint", async () => {
