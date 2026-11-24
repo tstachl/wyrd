@@ -1766,6 +1766,13 @@ fn failed_forcing_take_restores_other_taken_handles() {
     assert!(write.image.is_some(), "b's overlay was restored");
     drop(write);
 
+    // The restored overlay is readable immediately, before any retry.
+    assert_eq!(
+        backend.read_handle(fb, 0, 3).unwrap(),
+        b"bYb".to_vec(),
+        "reads see the buffered bytes restored after the failed fold"
+    );
+
     // Restored means usable: b can be written and committed afterwards.
     backend.write_handle(fb, 2, b"Z").unwrap();
     let seen = Arc::new(Mutex::new(Vec::new()));
