@@ -363,8 +363,12 @@ match '. "$HERE/sign-identity.sh"' "$WRAPPER_CODE" \
   || die "wrapper: does not source the shared signing helper"
 match 'wyrd_is_real_identity "${SIGN_IDENTITY:-}"' "$WRAPPER_CODE" \
   || die "wrapper: reseal does not use the real-identity predicate"
-if match '"$SIGN_IDENTITY" != "-"' "$WRAPPER_CODE"; then
+if match '"$SIGN_IDENTITY" != "-"' "$WRAPPER_CODE" \
+    || match '${SIGN_IDENTITY:--}' "$WRAPPER_CODE"; then
   die "wrapper: ad-hoc sentinel is duplicated outside the helper"
+fi
+if match '${SIGN_IDENTITY:--}' "$STAGE_CODE"; then
+  die "stage-cli: ad-hoc sentinel is duplicated outside the helper"
 fi
 match '. "$HERE/sign-identity.sh"' "$STAGE_CODE" \
   || die "stage-cli: does not source the shared signing helper"

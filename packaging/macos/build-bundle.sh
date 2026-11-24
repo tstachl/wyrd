@@ -193,7 +193,7 @@ if [ "$(uname -s)" = "Darwin" ]; then
                 --entitlements "$APP_ENTITLEMENTS" \
                 "$RELEASE_DIR/bundle/macos/Wyrd.app"
         else
-            codesign --force --sign "${SIGN_IDENTITY:--}" --options runtime \
+            codesign --force --sign "${SIGN_IDENTITY:-$WYRD_ADHOC_IDENTITY}" --options runtime \
                 --entitlements "$APP_ENTITLEMENTS" \
                 "$RELEASE_DIR/bundle/macos/Wyrd.app"
         fi

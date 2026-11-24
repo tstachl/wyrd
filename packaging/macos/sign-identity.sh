@@ -1,7 +1,8 @@
 #!/bin/sh
 # One source of truth for macOS code-signing identities in shell build
 # tooling. Sourced (never executed directly) by install-dev.sh,
-# stage-appex.sh and fileprovider/build-appex.sh.
+# stage-appex.sh, fileprovider/build-appex.sh, build-bundle.sh and
+# stage-cli.sh.
 #
 # Normally the outer app and every staged artifact share one identity:
 # SIGN_IDENTITY, defaulting to ad-hoc `-`. A narrow developer mode
