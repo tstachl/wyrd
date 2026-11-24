@@ -425,6 +425,19 @@ done
 if [ "$HAS_BUNDLES" -eq 0 ]; then
     set -- --bundles app "$@"
 fi
+# The shell cannot tell an ad-hoc appex from a team-signed one by
+# profile presence alone: --sign-appex deliberately embeds none. Stage a
+# build fact in the bundle so its Finder note matches the install mode.
+# The bundler copies it into Contents/Resources before the outer sign.
+mkdir -p "$HERE/stage"
+if [ "$FINDER_CAPABLE" -eq 1 ]; then
+    FINDER_CAPABILITY=profile
+elif [ "$APPEX_SIGNED" -eq 1 ]; then
+    FINDER_CAPABILITY=identity
+else
+    FINDER_CAPABILITY=adhoc
+fi
+printf '%s\n' "$FINDER_CAPABILITY" > "$HERE/stage/finder-capability.txt"
 WYRD_NO_MOUNT=1
 export WYRD_NO_MOUNT
 "$HERE/build-bundle.sh" "$@"

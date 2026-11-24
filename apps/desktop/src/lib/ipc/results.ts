@@ -539,7 +539,11 @@ export type Diagnostics =
  * means a dev install left the appex ad-hoc, so Finder's server/network
  * error has a signing cause; `not-applicable` is a dev-server run.
  */
-export type FinderIntegration = "provisioned" | "unprovisioned" | "not-applicable";
+export type FinderIntegration =
+  | "provisioned"
+  | "team-signed"
+  | "unprovisioned"
+  | "not-applicable";
 
 /** Result of an explicit local bundle export. Internally tagged. */
 export type DiagnosticsExport =

@@ -41,8 +41,13 @@ test("diagnostics level is a closed bare lowercase string", () => {
 });
 
 test("finder integration is a closed bare lowercase string", () => {
-  const states: FinderIntegration[] = ["provisioned", "unprovisioned", "not-applicable"];
-  expect(states).toEqual(["provisioned", "unprovisioned", "not-applicable"]);
+  const states: FinderIntegration[] = [
+    "provisioned",
+    "team-signed",
+    "unprovisioned",
+    "not-applicable",
+  ];
+  expect(states).toEqual(["provisioned", "team-signed", "unprovisioned", "not-applicable"]);
 });
 
 test("local bundle export result is internally tagged", () => {

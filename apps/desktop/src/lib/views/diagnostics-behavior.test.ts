@@ -237,6 +237,14 @@ test("an unprovisioned build states the signing cause and the recovery", async (
   expect(rendered.getByText(/The packaging README lists the signed-build/)).toBeTruthy();
 });
 
+test("a team-signed appex is not labelled ad-hoc", async () => {
+  const rendered = render(DiagnosticsCard, {
+    props: props({ finderIntegration: "team-signed" as FinderIntegration }),
+  });
+  expect(rendered.queryByText("Finder integration needs an App Group container")).toBeNull();
+  expect(rendered.getByText(/team-signed without a provisioning profile/)).toBeTruthy();
+});
+
 test("a provisioned build shows no signing warning", async () => {
   const rendered = render(DiagnosticsCard, {
     props: props({ finderIntegration: "provisioned" as FinderIntegration }),

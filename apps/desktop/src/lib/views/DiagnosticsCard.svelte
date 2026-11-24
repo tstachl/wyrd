@@ -167,6 +167,11 @@ them never suppresses a default-visible error. -->
           you.
         </p>
       </Alert.Root>
+    {:else if finderIntegration === "team-signed"}
+      <p class="text-xs leading-relaxed text-muted-foreground">
+        The File Provider extension is team-signed without a provisioning profile. It can resolve
+        its App Group container; the packaging README records the current Finder status.
+      </p>
     {/if}
     {#if persisted === null}
       <p class="text-sm text-muted-foreground">No persisted level read yet — refresh to read it.</p>

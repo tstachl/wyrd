@@ -59,6 +59,8 @@ test("the card names the signing cause instead of Finder's generic banner", () =
   expect(card).toContain("group container, so Finder can show a server or network error for a drive whose owner");
   expect(card).toContain("is running; the drive still works in Wyrd. The packaging README lists the signed-build");
   expect(card).toContain("options, with and without a profile. Reinstalling also restarts the drive agents for");
+  expect(card).toContain('finderIntegration === "team-signed"');
+  expect(card).toContain("The File Provider extension is team-signed without a provisioning profile");
   expect(settings).toContain("{finderIntegration}");
 });
 
