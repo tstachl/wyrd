@@ -40,6 +40,21 @@ wyrd_is_real_identity() {
     [ -n "${1:-}" ] && [ "${1:-}" != "$WYRD_ADHOC_IDENTITY" ]
 }
 
+# Paths of registered plugins that are not the installed appex. Pure so
+# the harness can feed it a fixture and exercise the real parser: match
+# any whitespace-delimited field that is an absolute `.appex` path, so
+# `pluginkit` tab and space separators and its trailing summary line do not
+# change the result. $1 is the installed appex path.
+wyrd_shadowed_plugins() {
+    awk -v installed="$1" '
+        {
+            for (i = 1; i <= NF; i++) {
+                if ($i ~ /^\// && $i ~ /\.appex$/ && index($i, installed) != 1)
+                    print $i
+            }
+        }'
+}
+
 # Local Finder capability fact staged in the bundle. An explicit
 # WYRD_FINDER_CAPABILITY wins; otherwise infer from the signing inputs so
 # a direct build-bundle.sh run matches the signature it actually made.

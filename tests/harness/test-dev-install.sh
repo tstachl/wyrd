@@ -488,6 +488,44 @@ for marker in 'pluginkit -mAv' 'most recently' 'derivation defect'; do
   grep -F -- "$marker" "$ROOT/packaging/macos/README.md" >/dev/null \
     || die "README: plugin shadowing note '$marker' missing"
 done
+# The parser is a pure shared function: feed it real-shaped fixtures with
+# both tab and space separators, a stale plugin, the installed plugin,
+# and pluginkit's trailing summary line. Format drift must not hide a
+# stale path or invent one.
+match 'wyrd_shadowed_plugins()' "$(cat "$ROOT/packaging/macos/sign-identity.sh")" \
+  || die "sign-identity.sh: plugin path parser missing"
+match 'wyrd_shadowed_plugins "$INSTALLED_APPEX"' "$INSTALL_CODE" \
+  || die "install: shadowing guard does not use the shared parser"
+. "$ROOT/packaging/macos/sign-identity.sh"
+INSTALLED_APPEX='/Applications/Wyrd.app/Contents/PlugIns/WyrdFileProvider.appex'
+STALE_APPEX='/Users/thomas/Library/Developer/Xcode/DerivedData/wyrd/Build/Products/Debug/wyrd.app/Contents/PlugIns/fileprovider.appex'
+for SEP in "$(printf '\t')" ' '; do
+  FIXTURE=$(printf '!    md.enesis.wyrd.fileprovider(0.4.0)%sUUID%s2026-11-24%s%s\n!    md.enesis.wyrd.fileprovider(1.0)%sUUID2%s2026-11-22%s%s\n (1 plug-in)\n' \
+    "$SEP" "$SEP" "$SEP" "$INSTALLED_APPEX" \
+    "$SEP" "$SEP" "$SEP" "$STALE_APPEX")
+  RESULT=$(printf '%s' "$FIXTURE" | wyrd_shadowed_plugins "$INSTALLED_APPEX")
+  match "$STALE_APPEX" "$RESULT" \
+    || die "parser: stale plugin path missed with separator '$SEP'"
+  match "$INSTALLED_APPEX" "$RESULT" \
+    && die "parser: installed plugin reported as shadowing"
+  match 'plug-in' "$RESULT" \
+    && die "parser: pluginkit summary line reported as a plugin"
+done
 pass "stale plugin shadowing is detected and documented"
+
+# 14. The appex passes the configured group id to containerURL and the
+# owner joins the same accessor into Group Containers. Neither strips a
+# team prefix, so both name the same directory.
+SWIFT_SOCKET="$(cat "$ROOT/packaging/macos/fileprovider/Sources/SocketConfig.swift")"
+RUST_SOCKET="$(cat "$ROOT/crates/wyrd-daemon/src/owner/server/socket.rs")"
+for marker in 'forSecurityApplicationGroupIdentifier: Self.groupIdentifier' 'Sockets'; do
+  match "$marker" "$SWIFT_SOCKET" \
+    || die "SocketConfig.swift: container derivation marker '$marker' missing"
+done
+for marker in '.join(app_group_identifier())' 'Library/Group Containers'; do
+  match "$marker" "$RUST_SOCKET" \
+    || die "socket.rs: container derivation marker '$marker' missing"
+done
+pass "appex and owner derive the container from one group id"
 
 echo "dev-install: $PASS checks passed"

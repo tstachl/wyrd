@@ -786,8 +786,7 @@ stop_running_wyrd
 if [ "$(uname -s)" = "Darwin" ] && [ -x /usr/bin/pluginkit ]; then
     INSTALLED_APPEX="$DEST/Contents/PlugIns/WyrdFileProvider.appex"
     SHADOWED=$(/usr/bin/pluginkit -mAv -i md.enesis.wyrd.fileprovider 2>/dev/null \
-        | awk -F'\t' -v installed="$INSTALLED_APPEX" \
-          'substr($NF, 1, 1) == "/" && index($NF, installed) != 1 { print $NF }') \
+        | wyrd_shadowed_plugins "$INSTALLED_APPEX") \
         || SHADOWED=""
     if [ -n "$SHADOWED" ]; then
         echo "warning: other plugins share the File Provider bundle id and may shadow this install:" >&2
