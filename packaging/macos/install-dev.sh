@@ -481,13 +481,13 @@ codesign --verify --deep --strict "$DEST" || {
 xattr -dr com.apple.quarantine "$DEST" 2>/dev/null || true
 
 # Clean slate: no process may keep the pre-install binary mapped.
-# This runs after the install swap, so launchd restarts its managed
-# owner and registrar agents from the NEW bundle. Supervise goes
-# first (while it lives it restarts its owner), then the owner so
-# its drive lock is released, then the GUI app, registrar and
-# extension. SIGTERM first; only those exact PIDs that ignore it
-# get SIGKILL after a bounded wait, so a freshly restarted agent is
-# never caught by the escalation.
+# This runs after the install swap. Supervise goes first (while it
+# lives it restarts its owner), then the owner so its drive lock is
+# released, then the GUI app, registrar and extension. SIGTERM first;
+# only those exact PIDs that ignore it get SIGKILL after a bounded
+# wait, so a freshly restarted agent is never caught by the
+# escalation. The per-drive jobs are kickstarted explicitly below:
+# their KeepAlive restarts only exit 0, not our SIGTERM.
 stop_running_wyrd() {
     [ "$STOP_RUNNING" -eq 1 ] || return 0
 
@@ -549,6 +549,29 @@ stop_running_wyrd() {
             kill -KILL "$pid" 2>/dev/null || true
         fi
     done
+
+    # The per-drive launch agents use KeepAlive with SuccessfulExit, so
+    # launchd restarts only exit 0 — not our SIGTERM/SIGKILL. Bring each
+    # loaded drive back explicitly, against the newly installed bundle.
+    # Jobs that are not loaded (login-start disabled) are left alone.
+    DRIVE_LABELS=$(launchctl list 2>/dev/null | awk '{print $3}' \
+        | grep '^md\.enesis\.wyrd\.drive-' || true)
+    RESTART_FAILURES=""
+    for label in $DRIVE_LABELS; do
+        echo "  restarting $label"
+        if ! launchctl kickstart -k "gui/$(id -u)/$label" 2>/dev/null; then
+            RESTART_FAILURES="$RESTART_FAILURES $label"
+        fi
+    done
+    if [ -n "$RESTART_FAILURES" ]; then
+        # Fail closed: a refused kickstart leaves exactly the stopped
+        # state this fix is meant to prevent. Name the recovery command.
+        echo "error: could not restart drive agent(s):$RESTART_FAILURES" >&2
+        for label in $RESTART_FAILURES; do
+            echo "  recover: launchctl kickstart -k gui/$(id -u)/$label" >&2
+        done
+        return 1
+    fi
 }
 
 # Domain reconciliation runs from a per-user launch agent, not from a
@@ -582,7 +605,7 @@ if ! launchctl load -w "$REGISTRAR_AGENT"; then
 fi
 
 # Old binaries are gone from disk now; stop anything still mapping
-# them so launchd restarts the managed agents against the new bundle.
+# them, then kickstart the loaded drive agents against the new bundle.
 stop_running_wyrd
 
 if [ "$FINDER_CAPABLE" -eq 1 ]; then
