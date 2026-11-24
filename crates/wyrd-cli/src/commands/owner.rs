@@ -248,6 +248,7 @@ pub(crate) fn owner(
     combine_status(TeardownStatus {
         loop_result,
         session_result: Ok(()),
+        unmount_result: Ok(()),
         serving_result: outcome.transport.serving.map_err(CliError::Serving),
     })
 }

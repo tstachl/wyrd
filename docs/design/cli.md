@@ -188,12 +188,15 @@ first (`destroy` commits still-dirty handles against the still-open
 mutation queue), then admission close and the loop join, then
 transport (mailbox, bulk source, serving) under bounded deadlines.
 Bulk closes graceful-or-abort (always success; a wedged drain warns
-and aborts), so only loop, session, and serving outcomes fold into
-the exit status. Close is quit only: it stops the process in this
-order and promises nothing about the directory — local content,
-membership records, credentials, and drive metadata stay exactly as
-they stand. A failed shutdown step fails the run loudly; close never
-reports a failed teardown as clean.
+and aborts), so loop, session, unmount, and serving outcomes fold
+into the exit status: a failed unmount is a teardown failure, never
+a discarded warning, because an empty mountpoint is otherwise
+satisfied by process-exit detachment rather than a clean unmount.
+Close is quit only: it stops the process in this order and promises
+nothing about the directory — local content, membership records,
+credentials, and drive metadata stay exactly as they stand. A failed
+shutdown step fails the run loudly; close never reports a failed
+teardown as clean.
 A process holding a file open on the mount delays the session join
 until it closes — unmount refuses a busy mount — so SIGINT waits
 for the last descriptor; the stop budgets bind the unmount itself,

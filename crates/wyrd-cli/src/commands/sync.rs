@@ -1358,6 +1358,7 @@ pub(crate) fn sync_now(
             return combine_status(TeardownStatus {
                 loop_result: Err(error.into()),
                 session_result: Ok(()),
+                unmount_result: Ok(()),
                 serving_result,
             });
         }
@@ -1382,6 +1383,7 @@ pub(crate) fn sync_now(
     combine_status(TeardownStatus {
         loop_result: outcome,
         session_result: Ok(()),
+        unmount_result: Ok(()),
         serving_result,
     })
 }

@@ -419,7 +419,12 @@ pub(crate) fn mount(
     // Stage latencies below are measured from here, so a slow
     // shutdown names its stage instead of just its total.
     let teardown_start = std::time::Instant::now();
-    if let Err(error) = unmounter.unmount() {
+    // An unmount failure is a teardown outcome, not a warning to
+    // discard: folding it into the exit status is what makes the
+    // empty-mountpoint assertion evidence of a clean unmount rather
+    // than of process-exit detachment.
+    let unmount_result = unmounter.unmount().map_err(CliError::Mount);
+    if let Err(error) = &unmount_result {
         eprintln!("warning: unmount failed: {error}");
         tracing::warn!(stage = "session", error = %error, "unmount failed");
     } else {
@@ -533,6 +538,7 @@ pub(crate) fn mount(
     combine_status(TeardownStatus {
         loop_result: loop_result.map(|_| ()),
         session_result,
+        unmount_result,
         serving_result: serving_status,
     })
 }

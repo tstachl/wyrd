@@ -222,6 +222,7 @@ fn combine_status_fails_dead_sessions() {
     let clean = || TeardownStatus {
         loop_result: Ok(()),
         session_result: Ok(()),
+        unmount_result: Ok(()),
         serving_result: Ok(()),
     };
     assert!(
@@ -252,6 +253,7 @@ fn combine_status_fails_dead_sessions() {
         combine_status(TeardownStatus {
             loop_result: Err(CliError::Live(LiveError::Lock)),
             session_result: Err(CliError::Mount(std::io::Error::other("dead"))),
+            unmount_result: Ok(()),
             serving_result: Err(CliError::Serving(std::io::Error::other("serving"))),
         })
         .is_err(),
@@ -268,6 +270,7 @@ fn combine_status_reports_transport_shutdown_failures() {
     let clean = || TeardownStatus {
         loop_result: Ok(()),
         session_result: Ok(()),
+        unmount_result: Ok(()),
         serving_result: Ok(()),
     };
     assert!(
@@ -290,6 +293,40 @@ fn combine_status_reports_transport_shutdown_failures() {
             Err(CliError::Live(_))
         ),
         "the loop failure still dominates a serving failure"
+    );
+}
+
+/// A failed unmount is a teardown outcome, not a discarded warning:
+/// folding it into the exit status is what makes an empty mountpoint
+/// evidence of a clean unmount rather than of process-exit detachment.
+#[test]
+fn combine_status_reports_unmount_failures() {
+    let clean = || TeardownStatus {
+        loop_result: Ok(()),
+        session_result: Ok(()),
+        unmount_result: Ok(()),
+        serving_result: Ok(()),
+    };
+    assert!(
+        matches!(
+            combine_status(TeardownStatus {
+                unmount_result: Err(CliError::Mount(std::io::Error::other("resource busy"))),
+                ..clean()
+            }),
+            Err(CliError::Mount(_))
+        ),
+        "an unmount failure fails the mount"
+    );
+    assert!(
+        matches!(
+            combine_status(TeardownStatus {
+                loop_result: Err(CliError::Live(LiveError::Lock)),
+                unmount_result: Err(CliError::Mount(std::io::Error::other("resource busy"))),
+                ..clean()
+            }),
+            Err(CliError::Live(_))
+        ),
+        "the loop failure still dominates an unmount failure"
     );
 }
 
