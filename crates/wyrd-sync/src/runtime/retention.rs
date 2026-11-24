@@ -28,7 +28,7 @@
 //! drive directory, alongside committed facts, never in the commit log
 //! (retention-constraints.md forbids a refusal `Fact` in v0.3).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -43,6 +43,16 @@ const REFUSAL_FILE: &str = "retention-refusals";
 /// Version line for the refusal file. Bumped if the unit encoding
 /// ever changes; unknown versions fail closed on load.
 const REFUSAL_VERSION: &str = "v1";
+
+/// Bound on distinct refused units kept on disk. A remote member can
+/// publish an unbounded number of distinct over-quota objects; without
+/// a ceiling the sidecar grew forever and each new unit rewrote all
+/// prior ones (quadratic write amplification). Eviction is oldest-first
+/// by recording order, so a refused unit that matters again is simply
+/// re-admitted and re-refused — never silently accepted. 4,096 entries
+/// keep the file around a few hundred KiB, bounded in both size and
+/// rewrite work per refusal.
+const MAX_REFUSAL_UNITS: usize = 4096;
 
 /// Why one representation was refused: the ceiling and the numbers it
 /// was compared against. Rendered in the trace log and the operator
@@ -161,7 +171,16 @@ impl RetentionGate {
 /// pins a permanent ban.
 pub struct RefusalLedger {
     path: PathBuf,
-    refused: Mutex<HashMap<String, u64>>,
+    cap: usize,
+    state: Mutex<LedgerState>,
+}
+
+/// The in-memory ledger state: refusal decisions plus the order in
+/// which they were recorded, so eviction is deterministic.
+#[derive(Default)]
+struct LedgerState {
+    refused: HashMap<String, u64>,
+    order: VecDeque<String>,
 }
 
 impl std::fmt::Debug for RefusalLedger {
@@ -170,7 +189,11 @@ impl std::fmt::Debug for RefusalLedger {
             .field("path", &self.path)
             .field(
                 "refused",
-                &self.refused.lock().map(|set| set.len()).unwrap_or(0),
+                &self
+                    .state
+                    .lock()
+                    .map(|state| state.refused.len())
+                    .unwrap_or(0),
             )
             .finish()
     }
@@ -181,8 +204,15 @@ impl RefusalLedger {
     /// empty ledger; a torn file fails closed — refusing to run on an
     /// unreadable refusal record is safer than forgetting refusals.
     pub fn load(drive_dir: &Path) -> Result<Self, String> {
+        Self::load_with_cap(drive_dir, MAX_REFUSAL_UNITS)
+    }
+
+    /// Same loader with an explicit bound, so the flood regression can
+    /// exercise eviction without thousands of fsyncs. Production
+    /// always goes through [`Self::load`] and [`MAX_REFUSAL_UNITS`].
+    fn load_with_cap(drive_dir: &Path, cap: usize) -> Result<Self, String> {
         let path = drive_dir.join(REFUSAL_FILE);
-        let refused = match std::fs::read_to_string(&path) {
+        let mut refused = match std::fs::read_to_string(&path) {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => HashMap::new(),
             Err(error) => {
                 return Err(format!(
@@ -192,9 +222,23 @@ impl RefusalLedger {
             }
             Ok(text) => parse_ledger(&text)?,
         };
+        // A ledger written by an older, unbounded build may exceed the
+        // cap. Compact deterministically (the file is sorted) rather
+        // than refusing to open the drive. Dropped units are still
+        // fail-closed: re-admission refetches and refuses them again.
+        if refused.len() > cap {
+            let mut entries: Vec<(String, u64)> = refused.into_iter().collect();
+            entries.sort();
+            entries.truncate(cap);
+            refused = entries.into_iter().collect();
+        }
+        let mut sorted: Vec<&String> = refused.keys().collect();
+        sorted.sort();
+        let order = sorted.into_iter().cloned().collect();
         Ok(RefusalLedger {
             path,
-            refused: Mutex::new(refused),
+            cap,
+            state: Mutex::new(LedgerState { refused, order }),
         })
     }
 
@@ -206,15 +250,18 @@ impl RefusalLedger {
     /// Whether `unit` was refused. Lock-poisoned reads fail closed
     /// (report refused rather than forgetting a refusal).
     pub fn contains(&self, unit: &str) -> bool {
-        self.refused
+        self.state
             .lock()
-            .map(|map| map.contains_key(unit))
+            .map(|state| state.refused.contains_key(unit))
             .unwrap_or(true)
     }
 
     /// How many distinct units were refused.
     pub fn len(&self) -> usize {
-        self.refused.lock().map(|map| map.len()).unwrap_or(0)
+        self.state
+            .lock()
+            .map(|state| state.refused.len())
+            .unwrap_or(0)
     }
 
     /// Whether any refusal is recorded.
@@ -224,34 +271,52 @@ impl RefusalLedger {
 
     /// Record a refusal durably under the ceiling that caused it.
     /// Idempotent per ceiling: re-recording a known unit under the
-    /// same ceiling returns `false` and rewrites nothing; a new unit
+    /// same ceiling returns `false` and rewrites nothing. A new unit
     /// — or a known unit refused under a different ceiling — rewrites
     /// the file atomically (temp + fsync + rename + dir fsync), so a
     /// crash leaves the previous ledger or the full new one — never a
     /// torn half. Lock poisoning or I/O failure returns an error and
     /// the in-memory map keeps the entry for this lifetime regardless.
-    /// Cost: one whole-file rewrite per newly refused unit — O(N)
-    /// fsyncs on a first wave of many distinct over-quota
-    /// representations. Retries under the same ceiling are free, and
-    /// single-writer (store lock) ordering makes the rewrite correct;
-    /// batch per-pass writes only if dogfood ever shows this biting.
+    ///
+    /// The ledger is bounded (see the `MAX_REFUSAL_UNITS` constant):
+    /// the oldest recorded unit is evicted when a new one arrives at
+    /// capacity.
+    /// Both the sidecar and each rewrite are therefore bounded, so a
+    /// flood of distinct valid-but-over-quota objects cannot turn a
+    /// quota into unbounded disk writes. Eviction is fail-closed — the
+    /// dropped unit is re-fetched and refused again if it returns.
+    /// Retries under the same ceiling are free, and single-writer
+    /// (store lock) ordering makes the rewrite correct.
     pub fn record(&self, unit: &str, quota: u64) -> Result<bool, String> {
-        let mut map = self
-            .refused
+        let mut state = self
+            .state
             .lock()
             .map_err(|_| "refusal ledger lock poisoned".to_string())?;
-        if map.get(unit) == Some(&quota) {
+        if state.refused.get(unit) == Some(&quota) {
             return Ok(false);
         }
-        map.insert(unit.to_string(), quota);
-        let snapshot: Vec<(String, u64)> = map
+        // A changed ceiling is a fresh decision: drop its old order
+        // position so it cannot be evicted as "oldest" immediately.
+        state.order.retain(|known| known != unit);
+        state.refused.insert(unit.to_string(), quota);
+        state.order.push_back(unit.to_string());
+        while state.refused.len() > self.cap {
+            match state.order.pop_front() {
+                Some(oldest) => {
+                    state.refused.remove(&oldest);
+                }
+                None => break,
+            }
+        }
+        let snapshot: Vec<(String, u64)> = state
+            .refused
             .iter()
             .map(|(unit, quota)| (unit.clone(), *quota))
             .collect();
-        drop(map);
-        // The in-memory map already holds the entry, so this lifetime
-        // still refuses it when durability fails below; the error
-        // tells the caller durability did not follow.
+        drop(state);
+        // The in-memory state already holds the entry, so this
+        // lifetime still refuses it when durability fails below; the
+        // error tells the caller durability did not follow.
         write_ledger(&self.path, &snapshot)?;
         Ok(true)
     }
@@ -260,9 +325,9 @@ impl RefusalLedger {
     /// reads report nothing rather than blocking the surface.
     pub fn units(&self) -> Vec<String> {
         let mut units: Vec<String> = self
-            .refused
+            .state
             .lock()
-            .map(|map| map.keys().cloned().collect())
+            .map(|state| state.refused.keys().cloned().collect())
             .unwrap_or_default();
         units.sort();
         units
@@ -273,10 +338,10 @@ impl RefusalLedger {
     /// its refusal counts). Empty when nothing was refused.
     pub fn ceilings(&self) -> Vec<u64> {
         let mut ceilings: Vec<u64> = self
-            .refused
+            .state
             .lock()
-            .map(|map| {
-                let mut ceilings: Vec<u64> = map.values().copied().collect();
+            .map(|state| {
+                let mut ceilings: Vec<u64> = state.refused.values().copied().collect();
                 ceilings.sort_unstable();
                 ceilings.dedup();
                 ceilings
@@ -291,10 +356,12 @@ impl RefusalLedger {
     /// unit, for the operator surface.
     pub fn entries(&self) -> Vec<(String, u64)> {
         let mut entries: Vec<(String, u64)> = self
-            .refused
+            .state
             .lock()
-            .map(|map| {
-                map.iter()
+            .map(|state| {
+                state
+                    .refused
+                    .iter()
                     .map(|(unit, quota)| (unit.clone(), *quota))
                     .collect()
             })
@@ -491,6 +558,63 @@ mod tests {
             "v1\nobject:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n"
         )
         .is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn distinct_refusal_flood_keeps_the_sidecar_and_rewrites_bounded() {
+        let dir = std::env::temp_dir().join(format!(
+            "wyrd-refusals-flood-{}-{}",
+            std::process::id(),
+            std::sync::atomic::AtomicU64::new(0).fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // A small cap keeps this regression fast: the production bound
+        // only changes the constant, not the eviction rule.
+        const CAP: usize = 24;
+        let ledger = RefusalLedger::load_with_cap(&dir, CAP).unwrap();
+        assert_eq!(
+            RefusalLedger::load(&dir).unwrap().cap,
+            MAX_REFUSAL_UNITS,
+            "production always uses the full bound"
+        );
+        let flood = CAP * 2 + 7;
+        for index in 0..flood {
+            assert!(ledger.record(&format!("object:{index:064x}"), 100).unwrap());
+        }
+        assert_eq!(
+            ledger.len(),
+            CAP,
+            "distinct refusals cannot grow the ledger without bound"
+        );
+        let bytes = std::fs::metadata(ledger.path()).unwrap().len();
+        assert!(
+            bytes <= CAP as u64 * 96,
+            "each rewrite writes a bounded file, saw {bytes} bytes"
+        );
+        let reloaded = RefusalLedger::load_with_cap(&dir, CAP).unwrap();
+        assert_eq!(reloaded.len(), CAP);
+        assert_eq!(reloaded.entries().len(), CAP);
+
+        // An evicted unit is still fail-closed: it re-accrues on retry,
+        // evicting the next oldest, never exceeding the cap.
+        assert!(ledger
+            .record(
+                "object:0000000000000000000000000000000000000000000000000000000000000000",
+                100
+            )
+            .unwrap());
+        assert_eq!(ledger.len(), CAP);
+
+        // An older, unbounded ledger is compacted deterministically on
+        // load instead of bricking the drive.
+        let older: Vec<(String, u64)> = (0..CAP + 10)
+            .map(|index| (format!("object:{index:064x}"), 100))
+            .collect();
+        write_ledger(ledger.path(), &older).unwrap();
+        let compacted = RefusalLedger::load_with_cap(&dir, CAP).unwrap();
+        assert_eq!(compacted.len(), CAP);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
