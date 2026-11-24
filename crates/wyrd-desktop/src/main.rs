@@ -25,17 +25,21 @@
 //! shows the same per-drive unavailable view instead, and coming
 //! back resumes without restart.
 //!
-//! Window close and application quit are distinct events
-//! (`docs/contracts/desktop-lifecycle.md`): on macOS closing the
-//! window hides it and the Dock reopens it; on Linux closing the
-//! last window quits. Quit — Cmd+Q or any exit request — still
-//! drains outstanding work first: the shell waits until every
-//! dispatched exchange has its terminal answer or the drain bound
-//! fires, then exits — nothing is reported successful without the
-//! owner's authoritative answer, and exchanges still outstanding past
-//! the bound stay unconfirmed: the next launch reconciles them through
-//! the owner before any retry. New work may still dispatch during the
-//! drain; the bound keeps a wedged owner from wedging quit.
+//! Closing the last window quits the application
+//! (`docs/contracts/desktop-lifecycle.md`) on macOS and Linux alike:
+//! there is no hidden-window state and no running indicator left
+//! behind. Tauri emits a code-less `ExitRequested` when the last
+//! window closes, so a close request runs the same drain as Cmd+Q;
+//! a Dock, Spotlight or launcher start is a fresh process that
+//! re-reads the registry and re-probes each drive's socket. Quit —
+//! close, Cmd+Q or any exit request — still drains outstanding work
+//! first: the shell waits until every dispatched exchange has its
+//! terminal answer or the drain bound fires, then exits — nothing is
+//! reported successful without the owner's authoritative answer, and
+//! exchanges still outstanding past the bound stay unconfirmed: the
+//! next launch reconciles them through the owner before any retry.
+//! New work may still dispatch during the drain; the bound keeps a
+//! wedged owner from wedging quit.
 //!
 //! The binary exists so `cargo tauri dev` has a target to run; the
 //! launchable artifact (bundle, icons, services) lands with the
@@ -140,39 +144,13 @@ fn drain_and_exit<R: Runtime>(app: AppHandle<R>) {
     });
 }
 
-/// Whether closing the window has a way back: on macOS the Dock's
-/// `Reopen` path always exists, so close hides. Everywhere else
-/// close is quit: the process exits through the drain below, and the
-/// launcher starts a new process next time.
-#[cfg(target_os = "macos")]
-fn close_hides<R: Runtime>(_window: &tauri::Window<R>) -> bool {
-    true
-}
-
-#[cfg(not(target_os = "macos"))]
-fn close_hides<R: Runtime>(_window: &tauri::Window<R>) -> bool {
-    false
-}
-
-/// Show and focus the main window. Best-effort: a missing window is
-/// logged and ignored. macOS-only: the only caller is the `Reopen`
-/// event (Dock / Spotlight re-activation of the hidden window);
-/// other platforms quit on last-window close instead of hiding.
-#[cfg(target_os = "macos")]
-fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
-    let Some(window) = app.get_webview_window("main") else {
-        eprintln!("wyrd-desktop: no main window to show");
-        return;
-    };
-    if let Err(error) = window.unminimize() {
-        eprintln!("wyrd-desktop: unminimize failed: {error}");
-    }
-    if let Err(error) = window.show() {
-        eprintln!("wyrd-desktop: show failed: {error}");
-    }
-    if let Err(error) = window.set_focus() {
-        eprintln!("wyrd-desktop: focus failed: {error}");
-    }
+/// Whether an `ExitRequested` must drain before the process exits.
+/// Tauri emits a code-less request after the last window closes and
+/// for ordinary exit requests; both drain. A request carrying a code
+/// is our own post-drain `app.exit(0)`, allowed through. An exit that
+/// skips `ExitRequested` is drained by the `Exit` handler instead.
+fn must_drain(code: Option<i32>) -> bool {
+    code.is_none()
 }
 
 fn main() {
@@ -210,46 +188,29 @@ fn main() {
         // state with no Wyrd.app process alive.
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(invoke_handler())
-        .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                // Close and quit are distinct
-                // (`docs/contracts/desktop-lifecycle.md`): on macOS
-                // close hides the window and the Dock reopens it;
-                // everywhere else close is quit and runs the drain
-                // below through the exit path.
-                if close_hides(window) {
-                    api.prevent_close();
-                    if let Err(error) = window.hide() {
-                        eprintln!("wyrd-desktop: hide on close failed: {error}");
-                    }
-                }
-            }
-        })
         .build(tauri::generate_context!())
         .expect("wyrd-desktop: failed to build the Tauri application");
 
     app.run(|app, event| match event {
         tauri::RunEvent::ExitRequested { api, code, .. } => {
-            // Cmd+Q and any other code-less exit request drain
-            // before exiting. A code is our own post-drain exit and
-            // is allowed through.
-            if code.is_none() {
+            // The last-window close reaches here as a code-less
+            // `ExitRequested`, as does Cmd+Q. Both drain before exit;
+            // a code is our own post-drain exit and is allowed
+            // through.
+            if must_drain(code) {
                 api.prevent_exit();
                 drain_and_exit(app.clone());
             }
         }
         tauri::RunEvent::Exit => {
-            // macOS Cmd+Q terminates the event loop without an
-            // `ExitRequested`; make the same graceful-drain guarantee
-            // here. The async runtime is still alive until this
-            // callback returns, so outstanding exchanges can still
-            // reach their terminal answers.
+            // A termination that skips `ExitRequested` still gets
+            // the graceful-drain guarantee. The async runtime is
+            // alive until this callback returns, so outstanding
+            // exchanges can still reach their terminal answers.
             if !DRAINING.swap(true, Ordering::SeqCst) {
                 drain_until_settled(app);
             }
         }
-        #[cfg(target_os = "macos")]
-        tauri::RunEvent::Reopen { .. } => show_main_window(app),
         _ => {}
     });
 }
@@ -264,6 +225,16 @@ mod tests {
     /// with their reasons — before any socket is touched.
     fn args(words: Vec<&str>) -> Vec<String> {
         words.into_iter().map(str::to_owned).collect()
+    }
+
+    /// A code-less request covers the last-window close, Cmd+Q and
+    /// any other exit request; all must drain. A coded request is
+    /// our own post-drain exit and must be allowed through.
+    #[test]
+    fn only_post_drain_exits_skip_the_drain() {
+        assert!(must_drain(None), "close and Cmd+Q drain");
+        assert!(!must_drain(Some(0)), "our post-drain exit passes");
+        assert!(!must_drain(Some(2)), "a coded exit passes");
     }
 
     #[test]

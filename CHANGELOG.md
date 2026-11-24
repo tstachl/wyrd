@@ -80,9 +80,10 @@ is transient — no drive data is affected.
 - Desktop application lifecycle contract
   (`docs/contracts/desktop-lifecycle.md`, supersedes
   `nostr:nevent1qqs2v8cey0fgkyyqfnyeg66qckky5887n7p43k6mahvr3q66typg65spz9mhxue69uhkwunpwdczuap49eehg870au2`):
-  window close and application quit are distinct events (macOS close
-  hides, Dock reopens; Linux last-window close quits; Windows
-  deferred with the platform). Clean termination affects no owner:
+  closing the last window quits on macOS and Linux (Windows deferred
+  with the platform); a Dock, Spotlight or launcher start is a fresh
+  process that re-reads the registry and re-probes each drive's socket.
+  Clean termination affects no owner:
   service-backed owners keep their OS-manager parent, session-backed
   owners keep running, and relaunch reattaches without a passphrase —
   quit never locks. Only an explicit lock kills an app-spawned
@@ -278,10 +279,11 @@ is transient — no drive data is affected.
 - Window lifecycle follows the desktop lifecycle contract
   (`docs/contracts/desktop-lifecycle.md`): the macOS title bar
   is an overlay on the ink header with the native traffic lights, and
-  closing the window hides it instead of quitting on macOS, while
-  closing the last window quits on Linux. Quit — Cmd+Q or any exit
-  request — still drains in-flight operations before exit, and the
-  macOS Dock reopens the hidden window. Session-backed owners keep
+  closing the window quits on macOS and Linux alike, leaving no
+  running indicator. Quit — close, Cmd+Q or any exit request — still
+  drains in-flight operations before exit, and a Dock, Spotlight or
+  launcher start is a fresh process that re-reads the registry and
+  re-probes each drive's socket. Session-backed owners keep
   running across quit; only an explicit lock ends them.
 
 - Bundle icons follow the Bone Held mark: `apps/shared/brand/held.svg`
