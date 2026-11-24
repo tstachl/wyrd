@@ -775,6 +775,27 @@ fi
 # them, then kickstart the loaded drive agents against the new bundle.
 stop_running_wyrd
 
+# Finder binds a domain to the plugin's bundle identifier, not to its
+# path. A stale Xcode DerivedData build with the same identifier can
+# remain registered and, when registered later than this install, serve
+# the domains with its own baked-in App Group. The owner then publishes
+# sockets in one container while the extension probes another — the
+# observed 2026-11-24 "container path mismatch" was a shadowed plugin,
+# not a path-derivation defect. Detect and report it; never remove
+# another build's registration without the developer's say-so.
+if [ "$(uname -s)" = "Darwin" ] && [ -x /usr/bin/pluginkit ]; then
+    INSTALLED_APPEX="$DEST/Contents/PlugIns/WyrdFileProvider.appex"
+    SHADOWED=$(/usr/bin/pluginkit -mAv -i md.enesis.wyrd.fileprovider 2>/dev/null \
+        | wyrd_shadowed_plugins "$INSTALLED_APPEX") \
+        || SHADOWED=""
+    if [ -n "$SHADOWED" ]; then
+        echo "warning: other plugins share the File Provider bundle id and may shadow this install:" >&2
+        printf '%s\n' "$SHADOWED" | sed 's/^/  /' >&2
+        echo "remove each with: /usr/bin/pluginkit -r <path>" >&2
+        echo "Finder serves a domain through the most recently registered plugin with that id." >&2
+    fi
+fi
+
 if [ "$FINDER_CAPABLE" -eq 1 ]; then
     echo "installed $DEST (team-signed, Finder-capable, from $APP)"
     echo "note: a drive appears in Finder once its owner publishes the group socket and the registrar agent runs."
