@@ -12,7 +12,7 @@ use wyrd_core::mutation::{
     MutationQueue,
 };
 use wyrd_core::session::WriteBudget;
-use wyrd_format::{Entry, MemoryObjectStore, ObjectKind, ObjectStore, Tree};
+use wyrd_format::{ContentId, Entry, MemoryObjectStore, ObjectKind, ObjectStore, Tree};
 use wyrd_view::{DriveView, Node};
 
 /// The `O_TRUNC` half of an open is bound to the identity that open
@@ -1703,6 +1703,88 @@ fn two_positioned_handles_on_distinct_paths_fold_together() {
         0,
         "the joint fold releases both handles"
     );
+}
+
+/// When the forcing handle's base cannot be materialized, the gather
+/// fails that handle closed but returns the other taken handles. The
+/// absent-forcer branch must restore those handles instead of dropping
+/// them parked: otherwise they stay `inflight` forever and their
+/// buffered bytes are lost at unmount.
+#[test]
+fn failed_forcing_take_restores_other_taken_handles() {
+    let mut store = MemoryObjectStore::default();
+    // a.txt references a chunk that was never inserted, so its
+    // open-time base cannot be materialized at take time. b.txt is
+    // healthy and is gathered alongside it.
+    let missing = ContentId::from_bytes([0xAA; 32]);
+    let b = store.insert(ObjectKind::Chunk, b"bbb").unwrap();
+    let root = Tree::from_entries(vec![
+        Entry::file("a.txt", 3, false, vec![missing]).unwrap(),
+        Entry::file("b.txt", 3, false, vec![b]).unwrap(),
+    ])
+    .unwrap()
+    .insert_into(&mut store)
+    .unwrap();
+    let mut backend = FuseBackend::new(DriveView::new(
+        store,
+        NoMaterialization,
+        heads(vec![snapshot_of(root)]),
+    ));
+    let queue = Arc::new(MutationQueue::default());
+    backend.mutations = Some(Arc::clone(&queue));
+    let backend = Arc::new(backend);
+    let fa = backend.open_write("a.txt", libc::O_RDWR).unwrap();
+    let fb = backend.open_write("b.txt", libc::O_RDWR).unwrap();
+    backend.write_handle(fa, 1, b"X").unwrap();
+    backend.write_handle(fb, 1, b"Y").unwrap();
+
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let done = Arc::new(AtomicBool::new(false));
+    let drainer = spawn_drainer(&queue, &seen, &done);
+    assert_eq!(
+        backend.commit_handle(fa),
+        Err(fuser::Errno::EIO),
+        "an unreadable base fails the forcing handle closed"
+    );
+    done.store(true, Ordering::Relaxed);
+    drainer.join().expect("drainer exits");
+    assert!(
+        seen.lock().unwrap().is_empty(),
+        "a failed forcing take submits no fold"
+    );
+
+    // The other taken handle must be back in its pre-fold state.
+    let files = backend.files.lock().unwrap();
+    let handle = match files.by_handle.get(&fb.0) {
+        Some(Handle::Write(handle)) => Arc::clone(handle),
+        _ => panic!("b.txt is a writable handle"),
+    };
+    drop(files);
+    let write = handle.lock().unwrap();
+    assert_eq!(write.inflight, None, "b is no longer parked in a fold");
+    assert!(write.dirty, "b stays dirty after the aborted fold");
+    assert!(write.image.is_some(), "b's overlay was restored");
+    drop(write);
+
+    // The restored overlay is readable immediately, before any retry.
+    assert_eq!(
+        backend.read_handle(fb, 0, 3).unwrap(),
+        b"bYb".to_vec(),
+        "reads see the buffered bytes restored after the failed fold"
+    );
+
+    // Restored means usable: b can be written and committed afterwards.
+    backend.write_handle(fb, 2, b"Z").unwrap();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let done = Arc::new(AtomicBool::new(false));
+    let drainer = spawn_drainer(&queue, &seen, &done);
+    assert_eq!(
+        backend.commit_handle(fb),
+        Ok(()),
+        "the restored handle commits after the failed fold"
+    );
+    done.store(true, Ordering::Relaxed);
+    drainer.join().expect("drainer exits");
 }
 
 /// Logical lengths past the ingest ceiling can never publish, so the
