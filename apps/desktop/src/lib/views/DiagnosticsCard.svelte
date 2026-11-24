@@ -158,15 +158,20 @@ them never suppresses a default-visible error. -->
   <Card.Content class="flex flex-col gap-3">
     {#if finderIntegration === "unprovisioned"}
       <Alert.Root>
-        <p class="font-medium">Finder integration requires a signed build</p>
+        <p class="font-medium">Finder integration needs an App Group container</p>
         <p class="text-xs leading-relaxed">
-          This dev install leaves the File Provider extension ad-hoc, so it has no App Group
-          container. Finder can show a server or network error for a drive whose owner is running;
-          the drive still works in Wyrd. To enable Finder, re-run install-dev.sh with
-          --sign-identity and both provisioning profiles. That install also restarts the drive
-          agents for you.
+          This build has no appex provisioning profile. An ad-hoc extension cannot resolve the
+          group container, so Finder can show a server or network error for a drive whose owner
+          is running; the drive still works in Wyrd. The packaging README lists the signed-build
+          options, with and without a profile. Reinstalling also restarts the drive agents for
+          you.
         </p>
       </Alert.Root>
+    {:else if finderIntegration === "team-signed"}
+      <p class="text-xs leading-relaxed text-muted-foreground">
+        The File Provider extension is team-signed without a provisioning profile. It can resolve
+        its App Group container; the packaging README records the current Finder status.
+      </p>
     {/if}
     {#if persisted === null}
       <p class="text-sm text-muted-foreground">No persisted level read yet — refresh to read it.</p>

@@ -15,6 +15,13 @@
 #                                no provisioning profile is needed. Keeps the
 #                                keychain client stable across rebuilds so
 #                                "Always Allow" survives a reinstall.
+#   --sign-appex                  With --stable-identity, sign the File
+#                                Provider appex with the same identity too.
+#                                Still no profile: the team-prefixed App Group
+#                                is the unprovisioned macOS form, so the
+#                                system checks the team prefix, not a profile.
+#                                This gives the appex a container for local
+#                                diagnostics records.
 #   --sign-identity <identity>   Developer identity for the app, appex, CLI
 #                                and domain registrar. With this option a
 #                                provisioning profile is required: an ad-hoc
@@ -34,8 +41,8 @@
 #                                caller forwards --bundles explicitly.
 #
 # SIGN_IDENTITY / APPLE_SIGNING_IDENTITY / PROVISIONING_PROFILE /
-# APP_PROVISIONING_PROFILE / STABLE_SIGN_IDENTITY in the environment
-# are equivalent to the options above. WYRD_APP_GROUP (default: the
+# APP_PROVISIONING_PROFILE / STABLE_SIGN_IDENTITY / WYRD_SIGN_APPEX in
+# the environment are equivalent to the options above. WYRD_APP_GROUP (default: the
 # team-prefixed id in
 # packaging/macos/app-group.sh) selects the App Group rendered into
 # the entitlements, Info.plist, registrar agent and Rust runtime.
@@ -65,7 +72,7 @@ usage() {
     echo "usage: packaging/macos/install-dev.sh [options] [-- <build args>]"
     echo ""
     echo "options: --dest <path>, --no-open, --no-stop, --stable-identity <identity>,"
-    echo "         --sign-identity <identity>, --provisioning-profile <path>,"
+    echo "         --sign-appex, --sign-identity <identity>, --provisioning-profile <path>,"
     echo "         --app-provisioning-profile <path>, --help"
     echo ""
     echo "Builds Wyrd.app from this worktree and installs it to /Applications"
@@ -76,8 +83,9 @@ usage() {
     echo ""
     echo "Ad-hoc builds leave Finder inert (no App Group container). Pass"
     echo "--stable-identity to keep the keychain client stable across rebuilds"
-    echo "(still inert in Finder, no profile). Pass --sign-identity and"
-    echo "--provisioning-profile for a Finder-capable build; see"
+    echo "(still inert in Finder, no profile). Add --sign-appex to give the"
+    echo "extension the same identity and a local diagnostics container. Pass"
+    echo "--sign-identity and --provisioning-profile for a Finder-capable build; see"
     echo "packaging/macos/README.md. Running Wyrd processes are stopped"
     echo "around the install unless --no-stop is given."
 }
@@ -139,6 +147,7 @@ STOP_RUNNING=1
 SIGN_IDENTITY="${SIGN_IDENTITY:-}"
 APPLE_SIGNING_IDENTITY="${APPLE_SIGNING_IDENTITY:-}"
 STABLE_SIGN_IDENTITY="${STABLE_SIGN_IDENTITY:-}"
+WYRD_SIGN_APPEX="${WYRD_SIGN_APPEX:-0}"
 PROVISIONING_PROFILE="${PROVISIONING_PROFILE:-}"
 APP_PROVISIONING_PROFILE="${APP_PROVISIONING_PROFILE:-}"
 while [ "$#" -gt 0 ]; do
@@ -151,6 +160,10 @@ while [ "$#" -gt 0 ]; do
         --stable-identity=*)
             STABLE_SIGN_IDENTITY="${1#--stable-identity=}"
             [ -n "$STABLE_SIGN_IDENTITY" ] || { echo "error: --stable-identity needs a value." >&2; exit 1; }
+            shift
+            ;;
+        --sign-appex)
+            WYRD_SIGN_APPEX=1
             shift
             ;;
         --sign-identity)
@@ -202,7 +215,7 @@ while [ "$#" -gt 0 ]; do
             break
             ;;
         -*)
-            echo "error: unknown install flag: $1 (usage: --dest, --no-open, --no-stop, --stable-identity, --sign-identity, --provisioning-profile, --app-provisioning-profile, --, --help)." >&2
+            echo "error: unknown install flag: $1 (usage: --dest, --no-open, --no-stop, --stable-identity, --sign-appex, --sign-identity, --provisioning-profile, --app-provisioning-profile, --, --help)." >&2
             exit 1
             ;;
         *)
@@ -215,12 +228,24 @@ done
 # staging hook. Default ad-hoc needs no signing assets.
 # --stable-identity signs the app, bundled CLI, supervise wrapper and
 # domain registrar with one stable Apple Development identity while
-# forcing the appex ad-hoc: macOS keeps recognising the keychain client
-# across rebuilds, Finder stays inert, and no profile is involved.
+# leaving the appex ad-hoc: macOS keeps recognising the keychain client
+# across rebuilds, and no profile is involved.
+# --sign-appex adds the appex to that stable identity set. Still no
+# profile: a team-prefixed App Group is the unprovisioned macOS form, so
+# the system checks the team prefix on the signature instead. That gives
+# the extension a container for local diagnostics records.
 # --sign-identity is the all-or-nothing Finder-capable path and still
-# requires both profiles; a team identity without them would leave the
-# App Group grant ineffective. Refuse that pairing before any build.
+# requires both profiles. Refuse any other pairing before any build.
 STABLE_MODE=0
+APPEX_SIGNED=0
+if [ "$WYRD_SIGN_APPEX" != "0" ] && [ "$WYRD_SIGN_APPEX" != "1" ]; then
+    echo "error: WYRD_SIGN_APPEX must be 0 or 1." >&2
+    exit 1
+fi
+if [ "$WYRD_SIGN_APPEX" = "1" ] && [ -z "$STABLE_SIGN_IDENTITY" ]; then
+    echo "error: --sign-appex needs --stable-identity; it signs the appex with that same identity." >&2
+    exit 1
+fi
 if [ -n "$STABLE_SIGN_IDENTITY" ]; then
     if ! wyrd_is_real_identity "$STABLE_SIGN_IDENTITY"; then
         echo "error: --stable-identity needs a real identity, not $WYRD_ADHOC_IDENTITY." >&2
@@ -235,13 +260,25 @@ if [ -n "$STABLE_SIGN_IDENTITY" ]; then
         exit 1
     fi
     if [ -n "$PROVISIONING_PROFILE" ] || [ -n "$APP_PROVISIONING_PROFILE" ]; then
-        echo "error: --stable-identity takes no provisioning profile (Finder stays inert); use --sign-identity for a Finder-capable build." >&2
+        echo "error: --stable-identity takes no provisioning profile; the team-prefixed group is unprovisioned (use --sign-identity for the profile-backed path)." >&2
         exit 1
     fi
+    case "$GROUP" in
+        group.*)
+            echo "error: --stable-identity needs the unprovisioned <team-id>.<group> form; $GROUP needs a profile." >&2
+            exit 1
+            ;;
+    esac
     SIGN_IDENTITY="$STABLE_SIGN_IDENTITY"
     APPLE_SIGNING_IDENTITY="$STABLE_SIGN_IDENTITY"
-    APPEX_SIGN_IDENTITY="$WYRD_ADHOC_IDENTITY"
-    WYRD_ALLOW_ADHOC_APPEX=1
+    APPEX_SIGNED="$WYRD_SIGN_APPEX"
+    if [ "$APPEX_SIGNED" -eq 1 ]; then
+        APPEX_SIGN_IDENTITY="$SIGN_IDENTITY"
+        WYRD_ALLOW_ADHOC_APPEX=0
+    else
+        APPEX_SIGN_IDENTITY="$WYRD_ADHOC_IDENTITY"
+        WYRD_ALLOW_ADHOC_APPEX=1
+    fi
     FINDER_CAPABLE=0
     STABLE_MODE=1
     export APPLE_SIGNING_IDENTITY APPEX_SIGN_IDENTITY WYRD_ALLOW_ADHOC_APPEX
@@ -388,6 +425,18 @@ done
 if [ "$HAS_BUNDLES" -eq 0 ]; then
     set -- --bundles app "$@"
 fi
+# The shell cannot tell an ad-hoc appex from a team-signed one by
+# profile presence alone: --sign-appex deliberately embeds none. Pass a
+# build fact to the wrapper, which stages it for every build path so a
+# direct build-bundle.sh run cannot inherit a stale marker.
+if [ "$FINDER_CAPABLE" -eq 1 ]; then
+    WYRD_FINDER_CAPABILITY=profile
+elif [ "$APPEX_SIGNED" -eq 1 ]; then
+    WYRD_FINDER_CAPABILITY=identity
+else
+    WYRD_FINDER_CAPABILITY=adhoc
+fi
+export WYRD_FINDER_CAPABILITY
 WYRD_NO_MOUNT=1
 export WYRD_NO_MOUNT
 "$HERE/build-bundle.sh" "$@"
@@ -474,12 +523,13 @@ if [ "$FINDER_CAPABLE" -eq 1 ]; then
     esac
 fi
 
-# Stable-identity mode: the keychain client is the bundled CLI the
+# Stable-identity modes: the keychain client is the bundled CLI the
 # desktop and daemon launch, with the app and registrar alongside it.
 # A silent fallback to ad-hoc or to a different real identity would
 # bring the repeat prompt back, so confirm these three Mach-O artifacts
-# carry the requested identity and that the appex stayed ad-hoc with no
-# profile. The supervise wrapper is staged-signed, but Tauri's file
+# carry the requested identity. The appex either stays ad-hoc or takes
+# that same identity under --sign-appex; either way no profile is
+# embedded. The supervise wrapper is staged-signed, but Tauri's file
 # copy drops its signature; it is a Python launcher, not a keychain
 # client, so it is excluded here and covered by the presence checks
 # below. The deep-strict verify above still covers every artifact.
@@ -497,6 +547,15 @@ if [ "$STABLE_MODE" -eq 1 ]; then
                 exit 1
                 ;;
         esac
+        # An unprovisioned group only resolves when the signing team is
+        # its prefix. A different-team identity would pass the Authority
+        # check yet leave the appex without a container.
+        TEAM_PREFIX=${GROUP%%.*}
+        SIGNING_TEAM=$(printf '%s\n' "$INFO" | sed -n 's/^TeamIdentifier=//p' | head -1)
+        if [ -z "$TEAM_PREFIX" ] || [ "$SIGNING_TEAM" != "$TEAM_PREFIX" ]; then
+            echo "error: $LABEL signs as team ${SIGNING_TEAM:-<none>}, but $GROUP is prefixed with ${TEAM_PREFIX:-<none>}." >&2
+            exit 1
+        fi
         case "$INFO" in
             *"Authority=$STABLE_SIGN_IDENTITY"*) ;;
             *)
@@ -510,14 +569,18 @@ if [ "$STABLE_MODE" -eq 1 ]; then
     assert_stable_signed "bundled CLI" "$APP/Contents/Resources/wyrd"
     assert_stable_signed "domain registrar" "$REGISTRAR"
 
-    APPEX_INFO=$(codesign -dv "$APPEX" 2>&1) || {
-        echo "error: cannot read appex signature: $APPEX" >&2
-        exit 1
-    }
-    case "$APPEX_INFO" in
-        *"Signature=adhoc"*) ;;
-        *) echo "error: appex must stay ad-hoc in stable-identity mode." >&2; exit 1 ;;
-    esac
+    if [ "$APPEX_SIGNED" -eq 1 ]; then
+        assert_stable_signed "appex" "$APPEX"
+    else
+        APPEX_INFO=$(codesign -dv "$APPEX" 2>&1) || {
+            echo "error: cannot read appex signature: $APPEX" >&2
+            exit 1
+        }
+        case "$APPEX_INFO" in
+            *"Signature=adhoc"*) ;;
+            *) echo "error: appex must stay ad-hoc unless --sign-appex is given." >&2; exit 1 ;;
+        esac
+    fi
     if [ -f "$APPEX/Contents/embedded.provisionprofile" ] \
         || [ -f "$APP/Contents/embedded.provisionprofile" ]; then
         echo "error: stable-identity mode embeds no provisioning profile." >&2
@@ -715,6 +778,10 @@ stop_running_wyrd
 if [ "$FINDER_CAPABLE" -eq 1 ]; then
     echo "installed $DEST (team-signed, Finder-capable, from $APP)"
     echo "note: a drive appears in Finder once its owner publishes the group socket and the registrar agent runs."
+elif [ "$APPEX_SIGNED" -eq 1 ]; then
+    echo "installed $DEST (stable identity for app, CLI, registrar and appex: $STABLE_SIGN_IDENTITY; no profile, from $APP)"
+    echo "note: the team-prefixed group is unprovisioned, so the appex can resolve its container and keep local diagnostics records."
+    echo "Finder may now work without a profile; free-team assets expire after seven days — renew and reinstall then."
 elif [ "$STABLE_MODE" -eq 1 ]; then
     echo "installed $DEST (stable identity for app, CLI and registrar: $STABLE_SIGN_IDENTITY; appex ad-hoc, from $APP)"
     echo "note: the keychain client stays the same across rebuilds; Finder stays inert (no-group-container):"

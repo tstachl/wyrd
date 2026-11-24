@@ -281,7 +281,7 @@ pass "install restarts loaded drive agents after the clean-slate stop"
 # --sign-identity before any build. The post-build checks fail closed if
 # a real signature silently falls back to ad-hoc, or if the appex is
 # signed/embedded in a way Finder might mistake for capability.
-for marker in '--stable-identity' 'STABLE_SIGN_IDENTITY' '. "$HERE/sign-identity.sh"' 'STABLE_MODE=1' 'WYRD_ADHOC_IDENTITY' 'APPEX_SIGN_IDENTITY="$WYRD_ADHOC_IDENTITY"' 'WYRD_ALLOW_ADHOC_APPEX=1' 'FINDER_CAPABLE=0' '--stable-identity takes no provisioning profile' 'assert_stable_signed' 'Signature=adhoc' 'TeamIdentifier=not set' 'Authority=$STABLE_SIGN_IDENTITY' 'different identity than $STABLE_SIGN_IDENTITY' 'appex must stay ad-hoc' 'stable identity for app, CLI and registrar'; do
+for marker in '--stable-identity' 'STABLE_SIGN_IDENTITY' '. "$HERE/sign-identity.sh"' 'STABLE_MODE=1' 'WYRD_ADHOC_IDENTITY' 'APPEX_SIGN_IDENTITY="$WYRD_ADHOC_IDENTITY"' 'WYRD_ALLOW_ADHOC_APPEX=1' 'FINDER_CAPABLE=0' '--stable-identity takes no provisioning profile' 'assert_stable_signed' 'Signature=adhoc' 'TeamIdentifier=not set' 'Authority=$STABLE_SIGN_IDENTITY' 'different identity than $STABLE_SIGN_IDENTITY' 'appex must stay ad-hoc' '--stable-identity needs the unprovisioned' 'TEAM_PREFIX=${GROUP%%.*}' 'SIGNING_TEAM=' 'stable identity for app, CLI and registrar'; do
   match "$marker" "$INSTALL_CODE" \
     || die "install: stable-identity marker '$marker' missing"
 done
@@ -302,7 +302,7 @@ pass "install offers a profile-free stable-identity dev mode"
 # not just grep for it: an env-typed typo here would silently break the
 # stable mode without any script failing to parse.
 HELPER="$ROOT/packaging/macos/sign-identity.sh"
-for marker in "WYRD_ADHOC_IDENTITY='-'" 'wyrd_appex_identity()' 'wyrd_is_real_identity()'; do
+for marker in "WYRD_ADHOC_IDENTITY='-'" 'wyrd_appex_identity()' 'wyrd_is_real_identity()' 'wyrd_finder_capability()'; do
   grep -F >/dev/null "$marker" "$HELPER" \
     || die "sign-identity.sh: marker '$marker' missing"
 done
@@ -317,8 +317,41 @@ done
   wyrd_is_real_identity 'Apple Development: stable' || exit 1
   ! wyrd_is_real_identity '-' || exit 1
   ! wyrd_is_real_identity '' || exit 1
-) || die "sign-identity.sh: appex fallback or identity predicate drifted"
+  # The capability fact is inferred from the signing inputs so a
+  # direct wrapper build cannot inherit a stale marker.
+  unset WYRD_FINDER_CAPABILITY APP_PROVISIONING_PROFILE SIGN_IDENTITY APPEX_SIGN_IDENTITY
+  [ "$(wyrd_finder_capability)" = 'adhoc' ] || exit 1
+  APPEX_SIGN_IDENTITY='Apple Development: stable'
+  [ "$(wyrd_finder_capability)" = 'identity' ] || exit 1
+  # Without an explicit appex identity, build-appex.sh signs with the
+  # shared SIGN_IDENTITY; the capability must follow that same fallback.
+  unset APPEX_SIGN_IDENTITY
+  SIGN_IDENTITY='Apple Development: stable'
+  [ "$(wyrd_finder_capability)" = 'identity' ] || exit 1
+  APP_PROVISIONING_PROFILE='/tmp/app.provisionprofile'
+  [ "$(wyrd_finder_capability)" = 'profile' ] || exit 1
+  WYRD_FINDER_CAPABILITY=adhoc
+  [ "$(wyrd_finder_capability)" = 'adhoc' ] || exit 1
+  WYRD_FINDER_CAPABILITY=bogus
+  if wyrd_finder_capability >/dev/null 2>&1; then exit 1; fi
+) || die "sign-identity.sh: appex fallback, identity predicate or capability inference drifted"
 pass "signing helper resolves the appex identity and real-identity test"
+
+# 7h. Profile-free identity-signed appex for the local diagnostics
+# capture. It is an additive flag on stable-identity mode: the appex
+# takes that identity, still with no profile, because the team-prefixed
+# group is the unprovisioned macOS form. The refusal for a flag without
+# a stable identity must run before any mode is selected.
+for marker in '--sign-appex' 'WYRD_SIGN_APPEX' 'APPEX_SIGNED=0' 'APPEX_SIGNED="$WYRD_SIGN_APPEX"' 'APPEX_SIGN_IDENTITY="$SIGN_IDENTITY"' '--sign-appex needs --stable-identity' 'assert_stable_signed "appex" "$APPEX"' 'unless --sign-appex is given' 'stable identity for app, CLI, registrar and appex' 'unprovisioned' 'WYRD_FINDER_CAPABILITY=identity' 'export WYRD_FINDER_CAPABILITY'; do
+  match "$marker" "$INSTALL_CODE" \
+    || die "install: sign-appex marker '$marker' missing"
+done
+SIGN_APPEX_REFUSAL_LINE="$(grep -n -F -- '--sign-appex needs --stable-identity' <<<"$INSTALL_CODE" | cut -d: -f1)"
+STABLE_BRANCH_LINE="$(grep -n -F -- 'if [ -n "$STABLE_SIGN_IDENTITY" ]; then' <<<"$INSTALL_CODE" | tail -1 | cut -d: -f1)"
+[ -n "$SIGN_APPEX_REFUSAL_LINE" ] && [ -n "$STABLE_BRANCH_LINE" ] \
+  && [ "$SIGN_APPEX_REFUSAL_LINE" -lt "$STABLE_BRANCH_LINE" ] \
+  || die "install: --sign-appex without a stable identity must refuse first"
+pass "install signs the appex with the stable identity on request"
 
 # 8. Prerequisites fail with the fix named: Apple tools, cargo
 # (devenv), bun (desktop build), python3 (config version pin).
@@ -403,8 +436,8 @@ pass "linkage is covered on both sides of the stage boundary"
 # 10. The decision is recorded in hook-adjacent prose: the packaging
 # README names the command, the bundled CLI, the boundary, and the
 # team-signed pointer together.
-for marker in 'install-dev.sh' 'Resources/wyrd' 'no-group-container' 'team-signed' 'SDKROOT'; do
-  grep -F >/dev/null "$marker" "$ROOT/packaging/macos/README.md" \
+for marker in 'install-dev.sh' 'Resources/wyrd' 'no-group-container' 'team-signed' 'SDKROOT' '--sign-appex' 'unprovisioned'; do
+  grep -F -- "$marker" "$ROOT/packaging/macos/README.md" >/dev/null \
     || die "README: '$marker' not recorded"
 done
 pass "README records the command, the CLI, and the Finder boundary"
@@ -427,6 +460,14 @@ for marker in 'wyrd-supervise' 'nix/drive/supervise.py' 'chmod +x'; do
 done
 match "Resources/wyrd-supervise" "$CONF_CODE" \
   || die "config: bundled supervise mapping missing"
+match "Resources/wyrd-finder-capability.txt" "$CONF_CODE" \
+  || die "config: Finder capability marker is not bundled"
+# The wrapper writes the marker on every build path; an absent value
+# means ad-hoc, so a stale marker from another install mode cannot leak.
+match 'finder-capability.txt' "$WRAPPER_CODE" \
+  || die "wrapper: Finder capability marker is not staged"
+match 'CAPABILITY=$(wyrd_finder_capability)' "$WRAPPER_CODE" \
+  || die "wrapper: Finder capability does not use the shared inference"
 for marker in 'for BUNDLED in wyrd wyrd-supervise' 'Contents/Resources/$BUNDLED' 'is not executable'; do
   match "$marker" "$INSTALL_CODE" \
     || die "install: supervise guard '$marker' missing"

@@ -96,7 +96,11 @@ forwards untouched. Under `devenv --profile native-apple` the
 inherited-value note may print while `SDKROOT` itself is unset at
 entry — stderr noise only, the export still pins the discovered
 SDK for the cargo invocations below. Signing env (`SIGN_IDENTITY`,
-`PROVISIONING_PROFILE`) passes through to the `stage-appex.sh` hook.
+`PROVISIONING_PROFILE`) passes through to the `stage-appex.sh` hook. The
+wrapper stages `wyrd-finder-capability.txt` in `Contents/Resources`: set
+`WYRD_FINDER_CAPABILITY` to `adhoc`, `identity` or `profile` to declare the
+mode, or leave it unset and the wrapper infers it from the signing inputs
+so a direct build matches the signature it made.
 
 Bundle identities: app `md.enesis.wyrd` (from `tauri.conf.json`),
 extension `md.enesis.wyrd.fileprovider`, group default
@@ -199,6 +203,38 @@ The shared helper `packaging/macos/sign-identity.sh` owns the ad-hoc
 default and the appex identity split. `install-dev.sh` is its first
 consumer; `stage-appex.sh` and `build-appex.sh` read the same values so
 the signed artifact and the pairing check cannot drift.
+
+### Capturing File Provider diagnostics without a profile
+
+To capture local diagnostics from the extension, add `--sign-appex` to a
+stable-identity install:
+
+```sh
+packaging/macos/install-dev.sh \
+  --stable-identity "Apple Development: …" --sign-appex
+```
+
+`WYRD_SIGN_APPEX=1` in the environment is equivalent. This signs the appex
+with the same identity as the app, CLI and registrar. No provisioning
+profile is involved: the default group id is the unprovisioned macOS
+form. Apple distinguishes two macOS App Group forms: a
+`group.`-prefixed id needs a profile and portal registration, while a
+`<team-id>.`-prefixed id needs neither — the system checks that the team
+prefix matches the signing team. The default
+`JU2RFHWQPH.group.md.enesis.wyrd` is the second form, so a team-signed
+appex can resolve its container. The extension then writes detailed
+records to `<container>/Diagnostics/records.jsonl` and a user-requested
+export can carry them.
+
+This mode may make Finder functional, unlike the plain stable-identity
+mode. It is not a production signing path: the free-team identity expires
+after seven days, and Developer ID distribution, notarization and
+provisioned `group.` ids remain owner-gated work. The installer verifies
+that all four Mach-O artifacts carry the requested identity and that no
+profile is embedded. Nothing here changes entitlement content or keychain
+ACLs. The shell's Finder note keys off profile presence, so it can still
+appear in this mode; it is advisory, not a claim that the extension
+cannot work.
 
 After the bundle swap the installer stops every running Wyrd
 process — supervisors first, then owners, then the app, registrar
