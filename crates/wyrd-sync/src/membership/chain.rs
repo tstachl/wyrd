@@ -492,22 +492,30 @@ fn handle_conflict(
             mark_canonical(log, link, result, r);
             // A second-level resolution ends the re-freeze it resolves.
             result.frozen_at = None;
-            // Named siblings are voided permanently, together with the
-            // losing branch's ancestors; unnamed ones stay contested
-            // (a partial resolution leaves them open).
-            let named: HashSet<TransitionId> = rt.resolves().iter().copied().collect();
+            // Every sibling the resolution did not choose is voided,
+            // together with its branch, at whichever level the conflict
+            // sat. A resolution that names only some siblings is never a
+            // candidate, so there is no partial resolution to preserve.
             for c in contenders {
-                if *c == winner {
-                    continue;
-                }
-                if named.contains(c) {
+                if *c != winner {
                     void_branch(log, link, result, *c);
-                } else {
-                    result.status.insert(*c, TransitionStatus::Contested);
-                    if let Some(Link::Valid { state, .. }) = link.get(c) {
-                        result.states.insert(*c, state.clone());
-                    }
                 }
+            }
+            // A recognized resolution ends every conflict the walk had
+            // to pass through to reach it. A rival named by an earlier
+            // level's winner need not be an ancestor of a current
+            // contender (it may have no child at that level), so the
+            // loop above cannot reach it. Clear every remaining Contested
+            // status: leaving one would report a rival on an unfrozen
+            // drive and keep its snapshots PENDING.
+            let remaining: Vec<TransitionId> = result
+                .status
+                .iter()
+                .filter(|(_, status)| **status == TransitionStatus::Contested)
+                .map(|(id, _)| *id)
+                .collect();
+            for id in remaining {
+                void_branch(log, link, result, id);
             }
             ConflictOutcome::Resolved { resolution: r }
         }

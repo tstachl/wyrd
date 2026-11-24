@@ -440,6 +440,95 @@ fn second_level_resolution_ends_a_contradictory_refreeze() {
     assert_eq!(log2.frozen_at(), None);
 }
 
+/// A first-level fork with three contenders where only two are
+/// contradicted. The rival with no resolution child is not an ancestor
+/// of a second-level contender, so recovery must still void it: no
+/// Contested status may survive on an unfrozen drive.
+#[test]
+fn recovery_voids_rivals_with_no_resolution_child() {
+    let (b, genesis) = Builder::genesis(1);
+    let owner = *b.owners.iter().next().unwrap();
+    let (_sk2, second) = key(2);
+    let (_sk3, third) = key(3);
+    let a = signed(
+        &b,
+        2,
+        Some(genesis.transition_id()),
+        Vec::new(),
+        vec![Change::Rotate],
+        &[owner],
+        &[owner],
+    );
+    let b2 = signed(
+        &b,
+        2,
+        Some(genesis.transition_id()),
+        Vec::new(),
+        vec![admit(second)],
+        &[owner, second],
+        &[owner],
+    );
+    // A sibling of `a` and `b2`, not a child of `b2`: its pre-state is
+    // genesis, so it admits only `third`.
+    let c = signed(
+        &b,
+        2,
+        Some(genesis.transition_id()),
+        Vec::new(),
+        vec![admit(third)],
+        &[owner, third],
+        &[owner],
+    );
+    let r1 = signed(
+        &b,
+        3,
+        Some(a.transition_id()),
+        vec![b2.transition_id(), c.transition_id()],
+        vec![Change::Rotate],
+        &[owner],
+        &[owner],
+    );
+    let r2 = signed(
+        &b,
+        3,
+        Some(b2.transition_id()),
+        vec![a.transition_id(), c.transition_id()],
+        vec![Change::Rotate],
+        &[owner, second],
+        &[owner],
+    );
+    let r3 = signed(
+        &b,
+        4,
+        Some(r1.transition_id()),
+        vec![r2.transition_id()],
+        vec![Change::Rotate],
+        &[owner],
+        &[owner],
+    );
+
+    let mut log = MembershipLog::new(drive());
+    observe_all(&mut log, &[&genesis, &a, &b2, &c, &r1, &r2, &r3]);
+    assert_eq!(log.frozen_at(), None);
+    for (id, expected) in [
+        (a.transition_id(), TransitionStatus::Canonical),
+        (b2.transition_id(), TransitionStatus::Voided),
+        (c.transition_id(), TransitionStatus::Voided),
+        (r1.transition_id(), TransitionStatus::Canonical),
+        (r2.transition_id(), TransitionStatus::Voided),
+        (r3.transition_id(), TransitionStatus::Canonical),
+    ] {
+        assert_eq!(log.status(&id), Some(expected), "status of {id:?}");
+    }
+    assert!(
+        log.statuses()
+            .iter()
+            .all(|(_, status)| !matches!(status, TransitionStatus::Contested)),
+        "no contested status survives recovery"
+    );
+    assert_eq!(log.known_state().unwrap().epoch, 4);
+}
+
 /// A transition at the recovery epoch does not unfreeze merely by
 /// existing. Each case names a different rule that must hold.
 #[test]
@@ -524,6 +613,19 @@ fn refreeze_holds_unless_the_second_level_resolution_satisfies_every_rule() {
         &[owner],
         &[owner],
     );
+    // Declared roots that do not match the winner's derived state.
+    let mut wrong_roots = MembershipTransition::new(
+        4,
+        Some(r1.transition_id()),
+        vec![r2.transition_id()],
+        vec![Change::Rotate],
+        set_root(MEMBER_SET_CONTEXT, &[owner, second]).unwrap(),
+        set_root(OWNER_SET_CONTEXT, &[owner]).unwrap(),
+        set_root(READER_SET_CONTEXT, &[]).unwrap(),
+        owner,
+    )
+    .unwrap();
+    sign(&mut wrong_roots, &b.sk, &b.drive);
 
     for (label, candidate, expected) in [
         (
@@ -542,6 +644,11 @@ fn refreeze_holds_unless_the_second_level_resolution_satisfies_every_rule() {
             Some(TransitionStatus::Invalid(InvalidReason::PrevWrongEpoch)),
         ),
         ("wrong prev", &wrong_prev, Some(TransitionStatus::Voided)),
+        (
+            "wrong roots",
+            &wrong_roots,
+            Some(TransitionStatus::Invalid(InvalidReason::RootMismatch)),
+        ),
         (
             "empty resolves",
             &empty_resolves,
