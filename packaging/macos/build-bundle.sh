@@ -9,7 +9,9 @@
 # Environment passthrough to the bundler hook and build-appex.sh:
 # SIGN_IDENTITY, PROVISIONING_PROFILE (the appex), APP_PROVISIONING_PROFILE
 # (the app), ARCH, MIN_MACOS, TOOLCHAIN, SWIFTC, SDK, APPEX_BUNDLE_VERSION,
-# WYRD_APP_GROUP (default: the value in packaging/macos/app-group.sh).
+# WYRD_APP_GROUP (default: the value in packaging/macos/app-group.sh),
+# WYRD_FINDER_CAPABILITY (adhoc | identity | profile; when unset, inferred
+# from the signing inputs so a direct build matches its own signature).
 # With no arguments the wrapper
 # builds `--bundles app` (the release runbook shape); any arguments
 # replace the default and forward to `cargo tauri build` verbatim,
@@ -39,17 +41,14 @@ ROOT=$(cd "$HERE/../.." && pwd)
 # Stage the Finder capability fact for every build path. The bundler
 # copies it into Contents/Resources before the outer sign, so a direct
 # wrapper run cannot inherit a marker left by a different install mode.
-# Absent means ad-hoc: a caller that does not declare a capability does
-# not get one. Refuse unknown values rather than guessing.
-case "${WYRD_FINDER_CAPABILITY:-adhoc}" in
-    adhoc|identity|profile) ;;
-    *)
-        echo "error: WYRD_FINDER_CAPABILITY must be adhoc, identity or profile." >&2
-        exit 1
-        ;;
-esac
+# The shared helper resolves it from the caller's declaration or, when
+# none is given, from the signing inputs of this very build.
+CAPABILITY=$(wyrd_finder_capability) || {
+    echo "error: WYRD_FINDER_CAPABILITY must be adhoc, identity or profile." >&2
+    exit 1
+}
 mkdir -p "$HERE/stage"
-printf '%s\n' "${WYRD_FINDER_CAPABILITY:-adhoc}" > "$HERE/stage/finder-capability.txt"
+printf '%s\n' "$CAPABILITY" > "$HERE/stage/finder-capability.txt"
 
 # Link-order pin (Darwin only). Discovery mirrors
 # fileprovider/build-appex.sh: system tools by absolute path, the

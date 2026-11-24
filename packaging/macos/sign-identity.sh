@@ -39,3 +39,29 @@ wyrd_appex_identity() {
 wyrd_is_real_identity() {
     [ -n "${1:-}" ] && [ "${1:-}" != "$WYRD_ADHOC_IDENTITY" ]
 }
+
+# Local Finder capability fact staged in the bundle. An explicit
+# WYRD_FINDER_CAPABILITY wins; otherwise infer from the signing inputs so
+# a direct build-bundle.sh run matches the signature it actually made.
+# Invalid explicit values fail closed rather than guessing a capability.
+wyrd_finder_capability() {
+    if [ -n "${WYRD_FINDER_CAPABILITY:-}" ]; then
+        case "$WYRD_FINDER_CAPABILITY" in
+            adhoc|identity|profile)
+                printf '%s' "$WYRD_FINDER_CAPABILITY"
+                return 0
+                ;;
+            *)
+                return 1
+                ;;
+        esac
+    fi
+    if [ -n "${APP_PROVISIONING_PROFILE:-}" ] \
+        && wyrd_is_real_identity "${SIGN_IDENTITY:-}"; then
+        printf 'profile'
+    elif wyrd_is_real_identity "${APPEX_SIGN_IDENTITY:-}"; then
+        printf 'identity'
+    else
+        printf 'adhoc'
+    fi
+}

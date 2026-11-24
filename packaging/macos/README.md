@@ -96,7 +96,11 @@ forwards untouched. Under `devenv --profile native-apple` the
 inherited-value note may print while `SDKROOT` itself is unset at
 entry — stderr noise only, the export still pins the discovered
 SDK for the cargo invocations below. Signing env (`SIGN_IDENTITY`,
-`PROVISIONING_PROFILE`) passes through to the `stage-appex.sh` hook.
+`PROVISIONING_PROFILE`) passes through to the `stage-appex.sh` hook. The
+wrapper stages `wyrd-finder-capability.txt` in `Contents/Resources`: set
+`WYRD_FINDER_CAPABILITY` to `adhoc`, `identity` or `profile` to declare the
+mode, or leave it unset and the wrapper infers it from the signing inputs
+so a direct build matches the signature it made.
 
 Bundle identities: app `md.enesis.wyrd` (from `tauri.conf.json`),
 extension `md.enesis.wyrd.fileprovider`, group default

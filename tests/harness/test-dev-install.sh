@@ -302,7 +302,7 @@ pass "install offers a profile-free stable-identity dev mode"
 # not just grep for it: an env-typed typo here would silently break the
 # stable mode without any script failing to parse.
 HELPER="$ROOT/packaging/macos/sign-identity.sh"
-for marker in "WYRD_ADHOC_IDENTITY='-'" 'wyrd_appex_identity()' 'wyrd_is_real_identity()'; do
+for marker in "WYRD_ADHOC_IDENTITY='-'" 'wyrd_appex_identity()' 'wyrd_is_real_identity()' 'wyrd_finder_capability()'; do
   grep -F >/dev/null "$marker" "$HELPER" \
     || die "sign-identity.sh: marker '$marker' missing"
 done
@@ -317,7 +317,20 @@ done
   wyrd_is_real_identity 'Apple Development: stable' || exit 1
   ! wyrd_is_real_identity '-' || exit 1
   ! wyrd_is_real_identity '' || exit 1
-) || die "sign-identity.sh: appex fallback or identity predicate drifted"
+  # The capability fact is inferred from the signing inputs so a
+  # direct wrapper build cannot inherit a stale marker.
+  unset WYRD_FINDER_CAPABILITY APP_PROVISIONING_PROFILE SIGN_IDENTITY APPEX_SIGN_IDENTITY
+  [ "$(wyrd_finder_capability)" = 'adhoc' ] || exit 1
+  APPEX_SIGN_IDENTITY='Apple Development: stable'
+  [ "$(wyrd_finder_capability)" = 'identity' ] || exit 1
+  SIGN_IDENTITY='Apple Development: stable'
+  APP_PROVISIONING_PROFILE='/tmp/app.provisionprofile'
+  [ "$(wyrd_finder_capability)" = 'profile' ] || exit 1
+  WYRD_FINDER_CAPABILITY=adhoc
+  [ "$(wyrd_finder_capability)" = 'adhoc' ] || exit 1
+  WYRD_FINDER_CAPABILITY=bogus
+  if wyrd_finder_capability >/dev/null 2>&1; then exit 1; fi
+) || die "sign-identity.sh: appex fallback, identity predicate or capability inference drifted"
 pass "signing helper resolves the appex identity and real-identity test"
 
 # 7h. Profile-free identity-signed appex for the local diagnostics
@@ -449,8 +462,8 @@ match "Resources/wyrd-finder-capability.txt" "$CONF_CODE" \
 # means ad-hoc, so a stale marker from another install mode cannot leak.
 match 'finder-capability.txt' "$WRAPPER_CODE" \
   || die "wrapper: Finder capability marker is not staged"
-match 'WYRD_FINDER_CAPABILITY:-adhoc' "$WRAPPER_CODE" \
-  || die "wrapper: Finder capability has no ad-hoc default"
+match 'CAPABILITY=$(wyrd_finder_capability)' "$WRAPPER_CODE" \
+  || die "wrapper: Finder capability does not use the shared inference"
 for marker in 'for BUNDLED in wyrd wyrd-supervise' 'Contents/Resources/$BUNDLED' 'is not executable'; do
   match "$marker" "$INSTALL_CODE" \
     || die "install: supervise guard '$marker' missing"
