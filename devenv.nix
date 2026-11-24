@@ -1,4 +1,4 @@
-{ pkgs, inputs, ... }:
+{ pkgs, inputs, config, ... }:
 let
   inherit (pkgs.lib) optionals optionalString makeSearchPath;
   inherit (pkgs.stdenv.hostPlatform) isLinux isDarwin;
@@ -7,6 +7,16 @@ in
 {
   env.NGIT_RELAY_TIMEOUT_SECS = 5;
   env.NGIT_RELAY_CONNECT_TIMEOUT_SECS = 5;
+
+  # macOS developer-signing inputs from SecretSpec (keyring). Values are
+  # resolved from the developer's keyring, never committed. `or ""` keeps
+  # evaluation usable when an optional value is absent: no identity means
+  # the dev installer stays ad-hoc, not a broken shell. The installer maps
+  # these names onto its own signing posture (see install-dev.sh).
+  env.APPLE_IDENTITY = config.secretspec.secrets.APPLE_IDENTITY or "";
+  env.APPLE_SIGN_APEX = config.secretspec.secrets.APPLE_SIGN_APEX or "";
+  env.APPLE_PROVISIONING_PROFILE = config.secretspec.secrets.APPLE_PROVISIONING_PROFILE or "";
+  env.APPLE_APP_PROVISIONING_PROFILE = config.secretspec.secrets.APPLE_APP_PROVISIONING_PROFILE or "";
 
   # Tauri on Linux discovers GIO modules (libgiognutls.so for HTTPS)
   # and GSettings schemas only through these vars; nothing sets them

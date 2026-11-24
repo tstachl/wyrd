@@ -218,6 +218,42 @@ default and the appex identity split. `install-dev.sh` is its first
 consumer; `stage-appex.sh` and `build-appex.sh` read the same values so
 the signed artifact and the pairing check cannot drift.
 
+### Signing inputs from SecretSpec (devenv keyring)
+
+The devenv shell resolves four macOS signing inputs from SecretSpec's
+keyring provider and exports them as environment variables, so an
+identity or profile path never needs to appear in shell history, a
+command line, or the repository:
+
+| Variable | Meaning |
+|---|---|
+| `APPLE_IDENTITY` | Apple Development identity for the bundle |
+| `APPLE_SIGN_APEX` | `1` signs the File Provider appex with that identity |
+| `APPLE_PROVISIONING_PROFILE` | appex profile (profile-backed mode) |
+| `APPLE_APP_PROVISIONING_PROFILE` | containing-app profile (profile-backed mode) |
+
+`secretspec.toml` declares the names, `devenv.yaml` selects the keyring
+provider and the `default` profile, and `devenv.nix` maps
+`config.secretspec.secrets.*` onto the four variables. Each developer
+stores values once in their own keyring:
+
+```sh
+secretspec set APPLE_IDENTITY
+secretspec set APPLE_SIGN_APEX
+secretspec set APPLE_PROVISIONING_PROFILE
+secretspec set APPLE_APP_PROVISIONING_PROFILE
+```
+
+`install-dev.sh` reads them as defaults: explicit flags and the older
+script variables (`STABLE_SIGN_IDENTITY`, `SIGN_IDENTITY`,
+`PROVISIONING_PROFILE`, `APP_PROVISIONING_PROFILE`) still win. With both
+profile variables set, one identity signs the whole bundle in the
+profile-backed mode; otherwise it drives the profile-free stable mode,
+and `APPLE_SIGN_APEX=1` adds the appex to that signer. An empty value is
+allowed — it leaves that mode unconfigured rather than inventing a
+profile path. Downstream build hooks keep reading the script-local
+names, so the signing posture stays decided in one place.
+
 ### Capturing File Provider diagnostics without a profile
 
 To capture local diagnostics from the extension, add `--sign-appex` to a

@@ -528,4 +528,41 @@ for marker in '.join(app_group_identifier())' 'Library/Group Containers'; do
 done
 pass "appex and owner derive the container from one group id"
 
+# 15. SecretSpec (devenv keyring) signs the dev install without putting
+# values in the repo or on the command line. The manifest declares four
+# stable names, devenv exports them, and the installer maps them onto the
+# script-local signing variables that every build hook reads.
+SPEC_MANIFEST="$(cat "$ROOT/secretspec.toml")"
+DEVENV_YAML="$(cat "$ROOT/devenv.yaml")"
+DEVENV_NIX="$(cat "$ROOT/devenv.nix")"
+for marker in APPLE_IDENTITY APPLE_SIGN_APEX APPLE_PROVISIONING_PROFILE APPLE_APP_PROVISIONING_PROFILE; do
+  match "$marker" "$SPEC_MANIFEST" \
+    || die "secretspec.toml: '$marker' is not declared"
+  match "env.$marker" "$DEVENV_NIX" \
+    || die "devenv.nix: '$marker' is not exported"
+  match "$marker" "$INSTALL_CODE" \
+    || die "install-dev.sh: '$marker' is not consumed"
+done
+for marker in 'enable: true' 'provider: keyring' 'profile: default'; do
+  match "$marker" "$DEVENV_YAML" \
+    || die "devenv.yaml: SecretSpec setting '$marker' missing"
+done
+match 'config.secretspec.secrets.APPLE_IDENTITY' "$DEVENV_NIX" \
+  || die "devenv.nix: secrets are not read from the SecretSpec integration"
+# Explicit flags and script-local variables still win over SecretSpec:
+# the mapping is a default, never an override.
+match 'APPLE_SIGNING_IDENTITY:-$APPLE_IDENTITY' "$INSTALL_CODE" \
+  || die "install: profile-backed identity mapping missing"
+match 'STABLE_SIGN_IDENTITY:-$APPLE_IDENTITY' "$INSTALL_CODE" \
+  || die "install: profile-free identity mapping missing"
+match 'PROVISIONING_PROFILE:-${APPLE_PROVISIONING_PROFILE:-}}' "$INSTALL_CODE" \
+  || die "install: appex profile mapping missing"
+match 'APP_PROVISIONING_PROFILE:-${APPLE_APP_PROVISIONING_PROFILE:-}}' "$INSTALL_CODE" \
+  || die "install: app profile mapping missing"
+for marker in 'APPLE_IDENTITY' 'APPLE_SIGN_APEX' 'APPLE_PROVISIONING_PROFILE' 'APPLE_APP_PROVISIONING_PROFILE'; do
+  grep -F -- "$marker" "$ROOT/packaging/macos/README.md" >/dev/null \
+    || die "README: SecretSpec variable '$marker' not documented"
+done
+pass "SecretSpec signing inputs are declared, exported and consumed"
+
 echo "dev-install: $PASS checks passed"

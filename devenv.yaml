@@ -1,4 +1,8 @@
 allowUnfree: true
+secretspec:
+  enable: true
+  provider: keyring
+  profile: default
 inputs:
   git-hooks:
     url: github:cachix/git-hooks.nix

@@ -140,16 +140,31 @@ command -v python3 >/dev/null 2>&1 || {
 DEST="${DEST:-}"
 OPEN_APP=1
 STOP_RUNNING=1
-# Signing inputs: either the options below or the inherited environment.
+# Signing inputs: explicit flags first, then the script's own environment,
+# then the SecretSpec values exported by the devenv shell (keyring). The
+# SecretSpec names are stable across shells; these script names remain the
+# interface every downstream build hook reads.
 # --stable-identity is the narrow keychain-stability mode; --sign-identity
 # plus profiles is the all-or-nothing Finder-capable mode. They cannot be
 # combined. An outer identity can be inferred from the shared identity.
 SIGN_IDENTITY="${SIGN_IDENTITY:-}"
 APPLE_SIGNING_IDENTITY="${APPLE_SIGNING_IDENTITY:-}"
 STABLE_SIGN_IDENTITY="${STABLE_SIGN_IDENTITY:-}"
-WYRD_SIGN_APPEX="${WYRD_SIGN_APPEX:-0}"
-PROVISIONING_PROFILE="${PROVISIONING_PROFILE:-}"
-APP_PROVISIONING_PROFILE="${APP_PROVISIONING_PROFILE:-}"
+PROVISIONING_PROFILE="${PROVISIONING_PROFILE:-${APPLE_PROVISIONING_PROFILE:-}}"
+APP_PROVISIONING_PROFILE="${APP_PROVISIONING_PROFILE:-${APPLE_APP_PROVISIONING_PROFILE:-}}"
+if [ -n "${APPLE_IDENTITY:-}" ]; then
+    if [ -n "$PROVISIONING_PROFILE" ] && [ -n "$APP_PROVISIONING_PROFILE" ]; then
+        # Profile-backed: one identity signs the whole bundle.
+        SIGN_IDENTITY="${SIGN_IDENTITY:-$APPLE_IDENTITY}"
+        APPLE_SIGNING_IDENTITY="${APPLE_SIGNING_IDENTITY:-$APPLE_IDENTITY}"
+    else
+        # Profile-free: stable identity for app, CLI and registrar; the
+        # appex flag decides whether it joins them.
+        STABLE_SIGN_IDENTITY="${STABLE_SIGN_IDENTITY:-$APPLE_IDENTITY}"
+        WYRD_SIGN_APEX="${WYRD_SIGN_APEX:-${APPLE_SIGN_APEX:-0}}"
+    fi
+fi
+WYRD_SIGN_APEX="${WYRD_SIGN_APEX:-0}"
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --stable-identity)
