@@ -320,6 +320,22 @@ done
 ) || die "sign-identity.sh: appex fallback or identity predicate drifted"
 pass "signing helper resolves the appex identity and real-identity test"
 
+# 7h. Profile-free identity-signed appex for the local diagnostics
+# capture. It is an additive flag on stable-identity mode: the appex
+# takes that identity, still with no profile, because the team-prefixed
+# group is the unprovisioned macOS form. The refusal for a flag without
+# a stable identity must run before any mode is selected.
+for marker in '--sign-appex' 'WYRD_SIGN_APPEX' 'APPEX_SIGNED=0' 'APPEX_SIGNED="$WYRD_SIGN_APPEX"' 'APPEX_SIGN_IDENTITY="$SIGN_IDENTITY"' '--sign-appex needs --stable-identity' 'assert_stable_signed "appex" "$APPEX"' 'unless --sign-appex is given' 'stable identity for app, CLI, registrar and appex' 'unprovisioned'; do
+  match "$marker" "$INSTALL_CODE" \
+    || die "install: sign-appex marker '$marker' missing"
+done
+SIGN_APPEX_REFUSAL_LINE="$(grep -n -F -- '--sign-appex needs --stable-identity' <<<"$INSTALL_CODE" | cut -d: -f1)"
+STABLE_BRANCH_LINE="$(grep -n -F -- 'if [ -n "$STABLE_SIGN_IDENTITY" ]; then' <<<"$INSTALL_CODE" | tail -1 | cut -d: -f1)"
+[ -n "$SIGN_APPEX_REFUSAL_LINE" ] && [ -n "$STABLE_BRANCH_LINE" ] \
+  && [ "$SIGN_APPEX_REFUSAL_LINE" -lt "$STABLE_BRANCH_LINE" ] \
+  || die "install: --sign-appex without a stable identity must refuse first"
+pass "install signs the appex with the stable identity on request"
+
 # 8. Prerequisites fail with the fix named: Apple tools, cargo
 # (devenv), bun (desktop build), python3 (config version pin).
 for marker in 'xcode-select' 'cargo is not on PATH' 'bun is not on PATH' 'python3 is required'; do
@@ -403,8 +419,8 @@ pass "linkage is covered on both sides of the stage boundary"
 # 10. The decision is recorded in hook-adjacent prose: the packaging
 # README names the command, the bundled CLI, the boundary, and the
 # team-signed pointer together.
-for marker in 'install-dev.sh' 'Resources/wyrd' 'no-group-container' 'team-signed' 'SDKROOT'; do
-  grep -F >/dev/null "$marker" "$ROOT/packaging/macos/README.md" \
+for marker in 'install-dev.sh' 'Resources/wyrd' 'no-group-container' 'team-signed' 'SDKROOT' '--sign-appex' 'unprovisioned'; do
+  grep -F -- "$marker" "$ROOT/packaging/macos/README.md" >/dev/null \
     || die "README: '$marker' not recorded"
 done
 pass "README records the command, the CLI, and the Finder boundary"
