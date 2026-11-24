@@ -185,7 +185,7 @@ fn a_refusal_is_durable_across_restart() {
 #[test]
 fn an_oversized_ledger_is_bounded_on_disk_and_fetch_still_refuses() {
     let (mut fixture, mut bulk, _content) = overdue_harness();
-    let retained = arm_one_byte_gate(&mut fixture);
+    let _retained = arm_one_byte_gate(&mut fixture);
     let mut objects = MemoryObjectStore::default();
     let first = fixture
         .engine
@@ -202,13 +202,16 @@ fn an_oversized_ledger_is_bounded_on_disk_and_fetch_still_refuses() {
     }
     std::fs::write(&path, text).unwrap();
     let before = std::fs::metadata(&path).unwrap().len();
-    let accounted = retained.get();
 
+    // Hold the reopened engine's accountant so the assertion observes
+    // the fresh gate, not the pre-reopen one: sidecar bytes are
+    // metadata and must never be charged to it.
+    let reopened_retained = std::sync::Arc::new(RetainedBytes::new());
     let mut reopened = reopen(&mut fixture);
-    reopened.set_retention_gate(Some(1), Some(RetainedBytes::new()));
+    reopened.set_retention_gate(Some(1), Some(std::sync::Arc::clone(&reopened_retained)));
     assert_eq!(
-        retained.get(),
-        accounted,
+        reopened_retained.get(),
+        0,
         "sidecar bytes are metadata, never charged to the quota accountant"
     );
     let after = std::fs::metadata(&path).unwrap().len();
@@ -231,6 +234,11 @@ fn an_oversized_ledger_is_bounded_on_disk_and_fetch_still_refuses() {
     );
     assert_eq!(second.manifests, 0);
     assert_eq!(second.objects, 0);
+    assert_eq!(
+        reopened_retained.get(),
+        0,
+        "refused bytes never charge the reopened gate"
+    );
     let facts = reopened.store.load().expect("loads");
     assert!(facts.manifests.is_empty());
     assert!(facts.local_objects.is_empty());

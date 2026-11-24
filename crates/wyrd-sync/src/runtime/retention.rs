@@ -48,8 +48,10 @@ const REFUSAL_VERSION: &str = "v1";
 /// publish an unbounded number of distinct over-quota objects; without
 /// a ceiling the sidecar grew forever and each new unit rewrote all
 /// prior ones (quadratic write amplification). Eviction is oldest-first
-/// by recording order, so a refused unit that matters again is simply
-/// re-admitted and re-refused — never silently accepted. 4,096 entries
+/// by recording order within a process; across restarts the sorted file
+/// governs, so it is deterministic but not recency-based. A dropped unit
+/// that matters again is simply re-admitted and re-refused — never
+/// silently accepted. 4,096 entries
 /// keep the file around a few hundred KiB, bounded in both size and
 /// rewrite work per refusal.
 pub(crate) const MAX_REFUSAL_UNITS: usize = 4096;
