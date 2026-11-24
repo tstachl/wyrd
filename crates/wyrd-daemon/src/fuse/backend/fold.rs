@@ -632,8 +632,16 @@ where
                 },
             )?;
             if !taken.iter().any(|taken| Arc::ptr_eq(&taken.handle, handle)) {
-                // A concurrent fold took our image between the check
-                // and the gather; loop back to await it.
+                // Our handle is absent either because a concurrent
+                // fold took it, or because this gather failed its own
+                // materialization. Either way the other members were
+                // detached and parked under this gather's fold id.
+                // Restoring them keeps them dirty and retryable;
+                // dropping them would strand `inflight` forever and
+                // lose their bytes at unmount.
+                for member in &taken {
+                    settle_restored(self, member);
+                }
                 continue;
             }
             let forcer = FoldSubmitForcer::Handle(Arc::clone(handle));
