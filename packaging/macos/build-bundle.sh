@@ -36,6 +36,21 @@ ROOT=$(cd "$HERE/../.." && pwd)
 . "$HERE/app-group.sh"
 . "$HERE/sign-identity.sh"
 
+# Stage the Finder capability fact for every build path. The bundler
+# copies it into Contents/Resources before the outer sign, so a direct
+# wrapper run cannot inherit a marker left by a different install mode.
+# Absent means ad-hoc: a caller that does not declare a capability does
+# not get one. Refuse unknown values rather than guessing.
+case "${WYRD_FINDER_CAPABILITY:-adhoc}" in
+    adhoc|identity|profile) ;;
+    *)
+        echo "error: WYRD_FINDER_CAPABILITY must be adhoc, identity or profile." >&2
+        exit 1
+        ;;
+esac
+mkdir -p "$HERE/stage"
+printf '%s\n' "${WYRD_FINDER_CAPABILITY:-adhoc}" > "$HERE/stage/finder-capability.txt"
+
 # Link-order pin (Darwin only). Discovery mirrors
 # fileprovider/build-appex.sh: system tools by absolute path, the
 # Nix-injected values unset process-locally so the /usr/bin shims

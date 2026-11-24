@@ -47,9 +47,9 @@ impl FinderIntegration {
     }
 }
 
-/// Build fact staged by `install-dev.sh` and mapped into `Resources`.
-/// An absent or unknown value is the ad-hoc default, so a hand-built
-/// bundle never claims a capability it did not declare.
+/// Build fact staged by `build-bundle.sh` from the caller's capability
+/// and mapped into `Resources`. An absent or unknown value falls back
+/// to the ad-hoc state.
 const CAPABILITY_PATH: &str = "Resources/wyrd-finder-capability.txt";
 
 /// Resolve the state from a bundle's `Contents` directory. Kept pure

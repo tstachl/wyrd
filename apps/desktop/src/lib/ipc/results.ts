@@ -534,8 +534,8 @@ export type Diagnostics =
 
 /**
  * Finder integration state of this installed build, from
- * `crates/wyrd-desktop/src/finder_integration.rs`. A closed triple of
- * bare lowercase strings, like the diagnostics level. `unprovisioned`
+ * `crates/wyrd-desktop/src/finder_integration.rs`. A closed set of bare
+ * lowercase strings, like the diagnostics level. `unprovisioned`
  * means a dev install left the appex ad-hoc, so Finder's server/network
  * error has a signing cause; `not-applicable` is a dev-server run.
  */

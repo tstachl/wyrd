@@ -339,11 +339,12 @@ pub async fn diagnostics_export<R: Runtime>(app: AppHandle<R>) -> DiagnosticsExp
 }
 
 /// Finder integration state of this installed build. A local query
-/// like [`diagnostics_level`]: it inspects the bundled appex's
-/// provisioning profile, not a drive, an owner or a domain. An ad-hoc
-/// or stable-identity dev build reports `unprovisioned`; Finder then
-/// shows a generic server/network error even though the cause is the
-/// missing App Group container. A dev-server run is `not-applicable`.
+/// like [`diagnostics_level`]: it reads the bundled appex's profile and
+/// the installer's staged capability fact, not a drive, an owner or a
+/// domain. An ad-hoc dev build reports `unprovisioned` and Finder shows
+/// a generic server/network error. A profile-free install that signs
+/// the appex reports `team-signed`; a profile-backed one reports
+/// `provisioned`. A dev-server run is `not-applicable`.
 #[tauri::command]
 pub fn finder_integration() -> FinderIntegration {
     finder_integration::finder_integration()
