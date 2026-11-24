@@ -28,10 +28,12 @@ use wyrd_settings::app_group_identifier;
 /// input.
 const RECORD_RELATIVE_PATH: &str = "Diagnostics/records.jsonl";
 
-/// The two gates every field must pass: the Swift builder marked it
-/// `exportable`, and this allowlist names it explicitly. Anything
-/// else — file contents, credentials, keys, identities, content ids,
-/// the wire — is dropped even if it appeared in a source record.
+/// The two gates every *source* field must pass: the Swift builder
+/// marked it `exportable`, and this allowlist names it explicitly.
+/// The exporter's own desktop record is not a source record; its
+/// build-level field is fixed in code below. Anything else — file
+/// contents, credentials, keys, identities, content ids, the wire —
+/// is dropped even if it appeared in a source record.
 pub const ALLOWED_FIELDS: &[&str] = &[
     "session",
     "filename",
@@ -41,15 +43,17 @@ pub const ALLOWED_FIELDS: &[&str] = &[
     "options",
     "staged-contents",
     "store-error",
-    "finder-state",
     "error-domain",
     "error-code",
     "error-detail",
 ];
 
-// `finder-state` is written only by the desktop record. It records the
-// build-level no-group-container cause, distinct from an extension
+// The desktop record is produced here, not read from a source sink, so
+// its build-level field is fixed in code and deliberately absent from
+// the source allowlist: a hand-edited extension record cannot set it.
+// It records the no-group-container cause, distinct from an extension
 // record's `store-error = temporary` (an unreachable owner socket).
+const DESKTOP_FINDER_STATE_FIELD: &str = "finder-state";
 
 /// Bounds on what one export may read and emit. A hand-edited or
 /// oversized sink cannot turn a small local artifact into an
@@ -311,7 +315,10 @@ pub fn build_bundle_at(
         None => diagnostics_view::diagnostics(),
     };
     let mut desktop_fields = BTreeMap::new();
-    desktop_fields.insert("finder-state".to_owned(), finder.as_str().to_owned());
+    desktop_fields.insert(
+        DESKTOP_FINDER_STATE_FIELD.to_owned(),
+        finder.as_str().to_owned(),
+    );
     records.push(BundleRecord {
         timestamp: generated_at.to_string(),
         source: "desktop",
@@ -479,7 +486,8 @@ mod tests {
                 "summary": "createItem failed stage=mutation",
                 "fields": {
                     "session": "ext-session",
-                    "store-error": "temporary"
+                    "store-error": "temporary",
+                    "finder-state": "smuggled"
                 }
             })
             .to_string()
@@ -494,6 +502,10 @@ mod tests {
             .find(|record| record.source == "fileprovider")
             .expect("the extension record was collected");
         assert_eq!(extension.fields.get("store-error").unwrap(), "temporary");
+        assert!(
+            !extension.fields.contains_key(DESKTOP_FINDER_STATE_FIELD),
+            "a source record must never set the desktop-only field"
+        );
         let desktop = with_socket
             .records
             .iter()

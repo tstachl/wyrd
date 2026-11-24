@@ -36,13 +36,13 @@ struct DiagnosticsRecordSink {
         "options",
         "staged-contents",
         "store-error",
-        // Written by the desktop's build-capability record, never by
-        // this extension; kept in step with the Rust export allowlist.
-        "finder-state",
         "error-domain",
         "error-code",
         "error-detail",
     ]
+    /// The exporter's desktop-only `finder-state` build fact is not a
+    /// source field: this sink never writes it and the allowlist above
+    /// never accepts it from a hand-edited record.
 
     /// Rotation bound. Two files at most; a hand-edited or oversized
     /// file is rotated away rather than growing without limit.
