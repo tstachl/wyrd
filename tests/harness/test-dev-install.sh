@@ -248,9 +248,8 @@ pass "install renders one WYRD_APP_GROUP into every native artifact"
 
 # 7e. Clean slate: every running Wyrd process is stopped around the
 # install so none keeps an old binary mapped. The stop runs after the
-# swap and registrar load (so launchd restarts agents on the new
-# bundle), supervise precedes owner, and escalation is bounded to the
-# PIDs that ignored SIGTERM. --no-stop is the explicit opt-out.
+# swap and registrar load; supervise precedes owner, and escalation is
+# bounded to the PIDs that ignored SIGTERM. --no-stop is the opt-out.
 for marker in '--no-stop' 'STOP_RUNNING=1' 'stop_running_wyrd()' 'pgrep -f' "'/wyrd-supervise '" "'/wyrd owner '" 'kill -TERM' 'kill -KILL'; do
   match "$marker" "$INSTALL_CODE" \
     || die "install: clean-slate marker '$marker' missing"
@@ -260,6 +259,20 @@ LOAD_LINE="$(grep -n -F -- 'launchctl load -w "$REGISTRAR_AGENT"' <<<"$INSTALL_C
 [ -n "$STOP_LINE" ] && [ -n "$LOAD_LINE" ] && [ "$LOAD_LINE" -lt "$STOP_LINE" ] \
   || die "install: clean-slate stop must follow the registrar reload"
 pass "install stops running Wyrd processes after the swap"
+
+# 7f. The per-drive agents keep alive only on exit 0, so a SIGTERM'd
+# supervisor is deliberately not restarted by launchd. The installer
+# must kickstart each loaded drive job after stopping it; jobs that are
+# not loaded (login-start disabled) are left alone.
+for marker in 'launchctl list' "grep '^md\\.enesis\\.wyrd\\.drive-'" 'launchctl kickstart -k' 'gui/$(id -u)/$label'; do
+  match "$marker" "$INSTALL_CODE" \
+    || die "install: drive restart marker '$marker' missing"
+done
+KILL_LINE="$(grep -n -F -- 'kill -KILL' <<<"$INSTALL_CODE" | tail -1 | cut -d: -f1)"
+KICK_LINE="$(grep -n -F -- 'launchctl kickstart -k' <<<"$INSTALL_CODE" | cut -d: -f1)"
+[ -n "$KILL_LINE" ] && [ -n "$KICK_LINE" ] && [ "$KILL_LINE" -lt "$KICK_LINE" ] \
+  || die "install: drive agents must be restarted after the stops"
+pass "install restarts loaded drive agents after the clean-slate stop"
 
 # 8. Prerequisites fail with the fix named: Apple tools, cargo
 # (devenv), bun (desktop build), python3 (config version pin).

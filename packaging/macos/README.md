@@ -167,9 +167,13 @@ changes one value, not 37 literals.
 After the bundle swap the installer stops every running Wyrd
 process — supervisors first, then owners, then the app, registrar
 and extension — so no process keeps the previous binary mapped.
-launchd then restarts its managed agents against the new bundle;
-this avoids the stale-binary dispatch the diagnostics rollout hit.
-`--no-stop` opts out when an in-place rebuild is preferred.
+The per-drive launch agents keep alive only on exit 0, so a SIGTERM'd
+supervisor is not restarted by launchd: the installer explicitly
+kickstarts each loaded `md.enesis.wyrd.drive-*` job afterwards.
+Drives with login-start disabled are not loaded and stay stopped.
+This avoids the stale-binary dispatch the diagnostics rollout hit
+without leaving the machine without owners. `--no-stop` opts out
+when an in-place rebuild is preferred.
 
 The script builds through `packaging/macos/build-bundle.sh`
 (link-order pin plus no-Nix-links guard; the wrapper's app-only

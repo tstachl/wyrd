@@ -549,6 +549,18 @@ stop_running_wyrd() {
             kill -KILL "$pid" 2>/dev/null || true
         fi
     done
+
+    # The per-drive launch agents use KeepAlive with SuccessfulExit, so
+    # launchd restarts only exit 0 — not our SIGTERM/SIGKILL. Bring each
+    # loaded drive back explicitly, against the newly installed bundle.
+    # Jobs that are not loaded (login-start disabled) are left alone.
+    DRIVE_LABELS=$(launchctl list 2>/dev/null | awk '{print $3}' \
+        | grep '^md\.enesis\.wyrd\.drive-' || true)
+    for label in $DRIVE_LABELS; do
+        echo "  restarting $label"
+        launchctl kickstart -k "gui/$(id -u)/$label" 2>/dev/null \
+            || echo "warning: could not restart $label" >&2
+    done
 }
 
 # Domain reconciliation runs from a per-user launch agent, not from a
