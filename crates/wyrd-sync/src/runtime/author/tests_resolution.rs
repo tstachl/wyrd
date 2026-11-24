@@ -145,13 +145,12 @@ fn frozen_contenders_names_the_sorted_rivals() {
     assert_eq!(engine.frozen_contenders(), expected);
 }
 
-/// A resolution over an already-contradicted conflict fails closed
-/// instead of printing success: two disagreeing resolutions re-freeze
-/// one epoch up, and a third resolution names contenders the
-/// canonicality walk never examines — so it would commit, print
-/// "resolved", and leave the freeze standing.
+/// A second-level resolution ends a contradictory re-freeze. Two
+/// disagreeing resolutions re-freeze one epoch up; the owner then names
+/// one of them as `prev` and the other as voided, and the engine commits
+/// a canonical tip instead of failing closed.
 #[test]
-fn resolve_over_a_contradicted_conflict_fails_closed() {
+fn resolve_over_a_contradicted_conflict_recovers() {
     let (_dir, mut engine, owner, _genesis, winner, rival) = frozen_engine("resolve-refreeze");
     // The first resolution commits: the only candidate, so it
     // unfreezes by construction.
@@ -188,15 +187,25 @@ fn resolve_over_a_contradicted_conflict_fails_closed() {
     );
 
     let seq = engine.current();
-    let error = engine
+    let third = engine
         .resolve_conflict(first_id, vec![second_id])
-        .unwrap_err();
-    assert!(
-        matches!(error, EngineError::FrozenConflictRemains),
-        "unexpected: {error:?}"
+        .expect("a valid second-level resolution is accepted");
+    assert_eq!(third.epoch, 4, "one epoch above the re-freeze");
+    assert_eq!(third.prev, Some(first_id));
+    assert_eq!(third.resolves(), &[second_id]);
+    assert_eq!(engine.log.frozen_at(), None, "the re-freeze is ended");
+    assert_eq!(
+        engine.log.status(&first_id),
+        Some(TransitionStatus::Canonical)
     );
-    assert_eq!(engine.log.frozen_at(), Some(3), "still frozen");
-    assert_eq!(engine.current(), seq, "nothing committed");
+    assert_eq!(
+        engine.log.status(&second_id),
+        Some(TransitionStatus::Voided)
+    );
+    let tip = engine.log.known_state().expect("canonical tip restored");
+    assert_eq!(tip.transition_id, third.transition_id());
+    assert_eq!(tip.epoch, 4);
+    assert_ne!(engine.current(), seq, "the resolution committed");
 }
 
 /// Every management control refuses on a frozen drive: the surface

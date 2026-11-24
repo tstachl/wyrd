@@ -219,3 +219,67 @@ fn contradictory_genesis_resolutions_refreeze() {
         Some(TransitionStatus::Contested)
     );
 }
+
+/// The same second-level exit applies when the contradictory resolutions
+/// sit one epoch above a genesis conflict: R3 restores one canonical tip
+/// from the winning genesis and voids the losing genesis and resolution.
+#[test]
+fn second_level_resolution_ends_a_contradictory_genesis_refreeze() {
+    let (b1, g1) = Builder::genesis(1);
+    let (b2, g2) = Builder::genesis(2);
+    let owner1 = *b1.owners.iter().next().unwrap();
+    let owner2 = *b2.owners.iter().next().unwrap();
+
+    let mut r1 = MembershipTransition::new(
+        2,
+        Some(g1.transition_id()),
+        vec![g2.transition_id()],
+        vec![Change::Rotate],
+        set_root(MEMBER_SET_CONTEXT, &[owner1]).unwrap(),
+        set_root(OWNER_SET_CONTEXT, &[owner1]).unwrap(),
+        set_root(READER_SET_CONTEXT, &[]).unwrap(),
+        owner1,
+    )
+    .unwrap();
+    sign(&mut r1, &b1.sk, &b1.drive);
+    let mut r2 = MembershipTransition::new(
+        2,
+        Some(g2.transition_id()),
+        vec![g1.transition_id()],
+        vec![Change::Rotate],
+        set_root(MEMBER_SET_CONTEXT, &[owner2]).unwrap(),
+        set_root(OWNER_SET_CONTEXT, &[owner2]).unwrap(),
+        set_root(READER_SET_CONTEXT, &[]).unwrap(),
+        owner2,
+    )
+    .unwrap();
+    sign(&mut r2, &b2.sk, &b2.drive);
+
+    let mut r3 = MembershipTransition::new(
+        3,
+        Some(r1.transition_id()),
+        vec![r2.transition_id()],
+        vec![Change::Rotate],
+        set_root(MEMBER_SET_CONTEXT, &[owner1]).unwrap(),
+        set_root(OWNER_SET_CONTEXT, &[owner1]).unwrap(),
+        set_root(READER_SET_CONTEXT, &[]).unwrap(),
+        owner1,
+    )
+    .unwrap();
+    sign(&mut r3, &b1.sk, &b1.drive);
+
+    let mut log = MembershipLog::new(drive());
+    observe_all(&mut log, &[&g1, &g2, &r1, &r2, &r3]);
+    assert_eq!(log.frozen_at(), None);
+    for (id, expected) in [
+        (g1.transition_id(), TransitionStatus::Canonical),
+        (g2.transition_id(), TransitionStatus::Voided),
+        (r1.transition_id(), TransitionStatus::Canonical),
+        (r2.transition_id(), TransitionStatus::Voided),
+        (r3.transition_id(), TransitionStatus::Canonical),
+    ] {
+        assert_eq!(log.status(&id), Some(expected), "status of {id:?}");
+    }
+    assert_eq!(log.known_state().unwrap().transition_id, r3.transition_id());
+    assert_eq!(log.known_state().unwrap().epoch, 3);
+}

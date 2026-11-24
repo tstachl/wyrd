@@ -98,11 +98,27 @@ pub(crate) fn analyse(log: &MembershipLog) -> Analysis {
             // like any other (epochs.md: "conflict at epoch 1 like any
             // other"). A unique resolution heals the chain; without one
             // the drive is frozen with no canonical chain at all.
-            match handle_conflict(log, &link, &children, &mut result, &geneses, 1) {
-                ConflictOutcome::Resolved { resolution } => {
-                    walk(log, &link, &children, &mut result, resolution);
+            // A contradictory re-freeze is a conflict among the
+            // resolutions themselves one epoch up. Re-enter with those
+            // as contenders until a unique resolution ends it or no
+            // candidate exists (the freeze stands).
+            let mut contenders = geneses;
+            let mut epoch = 1;
+            loop {
+                match handle_conflict(log, &link, &children, &mut result, &contenders, epoch) {
+                    ConflictOutcome::Resolved { resolution } => {
+                        walk(log, &link, &children, &mut result, resolution);
+                        break;
+                    }
+                    ConflictOutcome::Unresolved => break,
+                    ConflictOutcome::Contradictory {
+                        candidates,
+                        freeze_epoch,
+                    } => {
+                        contenders = candidates;
+                        epoch = freeze_epoch;
+                    }
                 }
-                ConflictOutcome::Unresolved | ConflictOutcome::Contradictory => {}
             }
         }
     }
@@ -360,11 +376,28 @@ fn walk(
             // records that are not there.
             None => break,
         };
-        match handle_conflict(log, link, children, result, &kids, conflict_epoch) {
-            ConflictOutcome::Resolved { resolution } => {
-                current = resolution;
+        // A contradiction re-freezes at the resolution epoch; its
+        // contenders are the contradictory resolutions. Re-enter with
+        // those as contenders so a further owner-signed resolution can
+        // end the freeze. Each round either recognizes one resolution,
+        // stalls with no candidate, or re-freezes one epoch higher.
+        let mut contenders = kids;
+        let mut epoch = conflict_epoch;
+        loop {
+            match handle_conflict(log, link, children, result, &contenders, epoch) {
+                ConflictOutcome::Resolved { resolution } => {
+                    current = resolution;
+                    break;
+                }
+                ConflictOutcome::Unresolved => return,
+                ConflictOutcome::Contradictory {
+                    candidates,
+                    freeze_epoch,
+                } => {
+                    contenders = candidates;
+                    epoch = freeze_epoch;
+                }
             }
-            ConflictOutcome::Unresolved | ConflictOutcome::Contradictory => break,
         }
     }
 }
@@ -377,8 +410,13 @@ enum ConflictOutcome {
     /// transition continues the chain.
     Resolved { resolution: TransitionId },
     /// Contradictory resolutions: a conflict at the resolution epoch;
-    /// evaluation re-freezes there.
-    Contradictory,
+    /// evaluation re-freezes there. The contradictory resolutions become
+    /// the contenders of that re-freeze, so a further resolution can end
+    /// it (epochs.md, second-level resolution).
+    Contradictory {
+        candidates: Vec<TransitionId>,
+        freeze_epoch: u64,
+    },
 }
 
 /// Detect resolutions among the children of `contenders` and record the
@@ -444,32 +482,40 @@ fn handle_conflict(
             let Some(winner) = rt.prev else {
                 return ConflictOutcome::Unresolved;
             };
-            result.status.insert(winner, TransitionStatus::Canonical);
-            if let Some(Link::Valid { state, .. }) = link.get(&winner) {
-                result.states.insert(winner, state.clone());
-            }
-            result.canonical.push(winner);
-            result.status.insert(r, TransitionStatus::Canonical);
-            if let Some(Link::Valid { state, .. }) = link.get(&r) {
-                result.states.insert(r, state.clone());
-            }
-            result.canonical.push(r);
-            // Named siblings are voided permanently; unnamed ones stay
-            // contested (a partial resolution leaves them open).
-            let named: HashSet<TransitionId> = rt.resolves().iter().copied().collect();
+            // A re-freeze left the winner's ancestors Contested and the
+            // walk never reached them. Restore them from the fork point
+            // so the canonical chain is whole again. For a first-level
+            // resolution this is a no-op: the winner already descends
+            // from the canonical tip.
+            canonicalize_ancestors(log, link, result, winner);
+            mark_canonical(log, link, result, winner);
+            mark_canonical(log, link, result, r);
+            // A second-level resolution ends the re-freeze it resolves.
+            result.frozen_at = None;
+            // Every sibling the resolution did not choose is voided,
+            // together with its branch, at whichever level the conflict
+            // sat. A resolution that names only some siblings is never a
+            // candidate, so there is no partial resolution to preserve.
             for c in contenders {
-                if *c == winner {
-                    continue;
+                if *c != winner {
+                    void_branch(log, link, result, *c);
                 }
-                let status = if named.contains(c) {
-                    TransitionStatus::Voided
-                } else {
-                    TransitionStatus::Contested
-                };
-                result.status.insert(*c, status);
-                if let Some(Link::Valid { state, .. }) = link.get(c) {
-                    result.states.insert(*c, state.clone());
-                }
+            }
+            // A recognized resolution ends every conflict the walk had
+            // to pass through to reach it. A rival named by an earlier
+            // level's winner need not be an ancestor of a current
+            // contender (it may have no child at that level), so the
+            // loop above cannot reach it. Clear every remaining Contested
+            // status: leaving one would report a rival on an unfrozen
+            // drive and keep its snapshots PENDING.
+            let remaining: Vec<TransitionId> = result
+                .status
+                .iter()
+                .filter(|(_, status)| **status == TransitionStatus::Contested)
+                .map(|(id, _)| *id)
+                .collect();
+            for id in remaining {
+                void_branch(log, link, result, id);
             }
             ConflictOutcome::Resolved { resolution: r }
         }
@@ -477,10 +523,14 @@ fn handle_conflict(
             // Contradictory resolutions freeze evaluation at the
             // resolution epoch. Saturating (not panicking) at u64::MAX:
             // freezing at the max epoch is the same stall.
-            result.frozen_at = Some(conflict_epoch.saturating_add(1));
+            let freeze_epoch = conflict_epoch.saturating_add(1);
+            result.frozen_at = Some(freeze_epoch);
             mark_contested(link, result, contenders);
             mark_contested(link, result, &candidates);
-            ConflictOutcome::Contradictory
+            ConflictOutcome::Contradictory {
+                candidates,
+                freeze_epoch,
+            }
         }
     }
 }
@@ -491,6 +541,89 @@ fn mark_contested(link: &HashMap<TransitionId, Link>, result: &mut Analysis, ids
         if let Some(Link::Valid { state, .. }) = link.get(id) {
             result.states.insert(*id, state.clone());
         }
+    }
+}
+
+/// Mark a transition canonical and keep the canonical chain ordered by
+/// epoch. A resolution restores ancestors the walk skipped while a
+/// re-freeze stood, so plain `push` is not enough.
+fn mark_canonical(
+    log: &MembershipLog,
+    link: &HashMap<TransitionId, Link>,
+    result: &mut Analysis,
+    id: TransitionId,
+) {
+    result.status.insert(id, TransitionStatus::Canonical);
+    if let Some(Link::Valid { state, .. }) = link.get(&id) {
+        result.states.insert(id, state.clone());
+    }
+    let epoch = log.transition(&id).map_or(0, |t| t.epoch);
+    let pos = result
+        .canonical
+        .iter()
+        .position(|other| log.transition(other).is_some_and(|t| t.epoch > epoch))
+        .unwrap_or(result.canonical.len());
+    result.canonical.insert(pos, id);
+}
+
+/// Canonicalize the ancestors of a resolution's winner, stopping at the
+/// first transition already canonical. The winner itself is left to the
+/// caller: in a first-level resolution it is already a child of the tip,
+/// in a re-freeze it sits above the contested ancestors restored here.
+fn canonicalize_ancestors(
+    log: &MembershipLog,
+    link: &HashMap<TransitionId, Link>,
+    result: &mut Analysis,
+    winner: TransitionId,
+) {
+    let Some(mut current) = log.transition(&winner).and_then(|t| t.prev) else {
+        return;
+    };
+    let mut ancestors = Vec::new();
+    loop {
+        if result.status.get(&current) == Some(&TransitionStatus::Canonical) {
+            break;
+        }
+        ancestors.push(current);
+        let Some(t) = log.transition(&current) else {
+            break;
+        };
+        let Some(prev) = t.prev else {
+            break;
+        };
+        current = prev;
+    }
+    for id in ancestors.into_iter().rev() {
+        mark_canonical(log, link, result, id);
+    }
+}
+
+/// Void a losing resolution and every non-canonical ancestor it descends
+/// from. A first-level resolution voids just the named sibling (its
+/// parent is already canonical); a second-level resolution also voids the
+/// branch the losing resolution won on the first round.
+fn void_branch(
+    log: &MembershipLog,
+    link: &HashMap<TransitionId, Link>,
+    result: &mut Analysis,
+    loser: TransitionId,
+) {
+    let mut current = loser;
+    loop {
+        if let Some(Link::Valid { state, .. }) = link.get(&current) {
+            result.status.insert(current, TransitionStatus::Voided);
+            result.states.insert(current, state.clone());
+        }
+        let Some(t) = log.transition(&current) else {
+            break;
+        };
+        let Some(prev) = t.prev else {
+            break;
+        };
+        if result.status.get(&prev) == Some(&TransitionStatus::Canonical) {
+            break;
+        }
+        current = prev;
     }
 }
 
