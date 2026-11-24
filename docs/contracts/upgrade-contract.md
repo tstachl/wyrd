@@ -287,6 +287,29 @@ Releases are not required to write every format they read:
     construction the replacement supersedes toward is pinned the
     same way (`owner_proof_*` in `wyrd-contracts`).
 
+    **Announced authorization-semantics change (v0.4, no wire change):
+    second-level resolution of a contradictory membership re-freeze.**
+    Recognition now accepts a further owner-signed resolution at the epoch
+    above the freeze, `prev` naming one contradicted resolution and
+    `resolves` naming exactly the other(s), and yields one canonical tip.
+    The transition document, BIP-340 preimage, signature, `resolves` field,
+    set-root derivation, and durable record tags are all unchanged; this is
+    a missing state transition, not a new format, wire kind, tag, or
+    authorization mechanism. Because recognition decides which transitions
+    authorize the drive, it is an announced semantics amendment under the
+    pre-v1 rule above, not an implementation-only correction. The
+    compatibility direction is one-way and safe: an old node keeps the
+    freeze and fails closed, while a new node recognizes a complete R3 and
+    advances; old nodes never authorize something they would have refused.
+    A drive that has entered a contradictory re-freeze must be operated by
+    recognizing builds for the recovery to take effect across peers — until
+    the active devices are upgraded, the owner cannot rely on R3 being
+    observed by them. This is the v0.4 promise floor's allowed break: it may
+    drop pre-v0.4 readers only. Invariant 6 still holds: no software upgrade
+    emits a membership transition — R3 is a separate owner-signed document
+    that satisfies every resolution rule, and a transition that fails any
+    of them leaves the drive frozen.
+
 ## What this forbids
 
 - In-place object rewrites (`old object -> rewrite -> new object`).

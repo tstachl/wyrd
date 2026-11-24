@@ -214,7 +214,32 @@ and never by snapshot DAG state:
   voided permanently. R must be the unique valid child of the winning tip
   claiming the next epoch — a *second, contradictory* resolution (naming
   the other sibling) is itself a conflict at the resolution epoch and
-  re-freezes evaluation there, pending a further resolution.
+  re-freezes evaluation there.
+- **A contradictory re-freeze is recoverable by a second-level resolution.**
+  Neither contradictory resolution is recognized, so resolution finality
+  (below) does not attach to either. The re-freeze is a conflict at the
+  resolution epoch F whose contenders are the contradictory resolutions;
+  the original contenders and both resolutions stay Contested, and no
+  canonical tip exists past the fork. Evaluation leaves the re-freeze only
+  on a further owner-signed resolution R3 at epoch F+1 that satisfies
+  **every** resolution rule already stated: `prev` names exactly one of
+  the contradicted resolutions (a contender in the conflict at F);
+  `resolves` names exactly the other(s) — no fewer, no more, no duplicates,
+  no unrelated transitions; R3 is the unique valid child of that tip
+  claiming F+1; it is authorized by the pre-transition owner set; and its
+  set roots derive from the winner's resulting state. On recognition the
+  winner's branch becomes canonical from the fork point, the named
+  contradictory resolution is voided permanently, the freeze clears, and
+  the canonical walk continues from R3. A transition at F+1 that exists
+  but fails any of these rules does **not** end the freeze: a wrong or
+  missing `prev`, incomplete or over-broad `resolves`, a wrong epoch, an
+  unauthorized signature, or roots that do not match the winner all leave
+  the drive frozen and fail closed. The rule composes: if a second-level
+  resolution is itself contradicted, evaluation re-freezes at its own
+  epoch and the same rule applies one level up. At `u64::MAX` no further
+  epoch exists, and the freeze is terminal there. R3 uses the existing
+  resolution document form; it is a missing state transition, not a new
+  wire object or authorization mechanism.
 - Transitions with a non-empty `resolves` are valid only if `prev` was a
   contender in a conflict at `prev`'s own epoch and this transition resolves
   exactly that conflict. A `resolves` with no such conflict behind it is
@@ -231,7 +256,10 @@ and never by snapshot DAG state:
   conflict (its `resolves` entries sit at the conflict epoch). Once a valid
   resolution is recognized, it is the designated successor of the winning
   tip, the named siblings are voided permanently, and nothing that arrives
-  later reopens that conflict.
+  later reopens that conflict. Finality attaches only to a recognized
+  resolution: in a contradictory re-freeze neither candidate was
+  recognized, so a second-level resolution supersedes them without
+  reopening any conflict that had already reached a canonical tip.
 - **What "does not reopen" means, per side.** Later valid work on a voided
   branch is voided by ancestry, like any other child of a void branch. A
   valid child of the winning tip that is not the designated resolution is
@@ -638,7 +666,10 @@ single sanctioned remedy.
 2. Conflicts freeze evaluation and are resolved **only** by an explicit
    owner-signed resolution transition naming winner (`prev`) and voided
    siblings (`resolves`); contradictory resolutions re-freeze at the next
-   epoch.
+   epoch, and that re-freeze is ended only by a further owner-signed
+   resolution one epoch above the freeze that names one contradicted
+   resolution as `prev` and exactly the other(s) as `resolves`, satisfying
+   every resolution rule. No transition ends a re-freeze merely by existing.
 3. Transitions are authorized by the **pre-transition** owner set; their
    resulting member/owner state is deterministically derived from
    `prev` + `changes` and committed via roots that verifiers recompute. v0
@@ -686,7 +717,10 @@ mismatch (invalid); empty changes; valid
 with no active conflict (invalid); conflicting transitions with same
 predecessor (conflict); conflicting transitions with different predecessors
 (voided-by-ancestry, not a conflict); conflict resolution by explicit
-resolution transition; contradictory resolutions (re-freeze); unrooted
+resolution transition; contradictory resolutions (re-freeze); second-level
+resolution ending a re-freeze with one canonical tip; a transition at the
+recovery epoch that fails signature, `prev`, `resolves`, or epoch rules
+(does not end the freeze); unrooted
 transition (orphan); resolution delivery order independence (winner named
 by the resolution, not by arrival); valid work on a branch the resolution
 voided (conflict does not reopen, chain stays live, work is voided by
