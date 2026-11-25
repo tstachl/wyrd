@@ -101,6 +101,7 @@ in
       bash tests/harness/test-switchover.sh
       bash tests/harness/test-macos-link-order.sh
       bash tests/harness/test-dev-install.sh
+      python3 tests/harness/test-domain-grace.py
       bash tests/harness/test-desktop-frontend-gate.sh
       bash tests/harness/test-login-items.sh
       bash tests/harness/test-passphrase-stdin.sh

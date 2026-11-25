@@ -378,15 +378,21 @@ domain identifier the appex expects. The owner publishes the registry
 name in a `.label` file beside each alias; the Finder domain uses that
 name verbatim. Only a live owner publishes a label, so a locked or
 stopped drive has no domain: unlock starts an owner and the domain
-appears, lock tears it down and the domain is removed within two poll
-ticks. The desktop's lock path uses SIGKILL, so the registrar also
-probes the socket endpoint: a stale alias from a killed owner is
-ignored. One failed probe is held for a tick — a daemon restart, a full
-accept backlog, or the gap between unbinding a stale socket and
-rebinding is not proof the drive is gone, and removing a domain can
-discard its local materialized state. The domain is removed only after
-two consecutive ticks with no live owner; the streak lives in the
-resident helper, not in the group container. The helper is
+appears, lock tears it down and the domain is removed after six poll
+ticks (30 s). The desktop's lock path uses SIGKILL, so the registrar
+also probes the socket endpoint: a stale alias from a killed owner is
+ignored. A domain is a removal candidate only after the helper has
+seen a live owner for it at least once; absence before that first
+observation is startup — at cold boot the registrar starts before the
+owner agents publish their sockets, and removing a domain in that gap
+invalidates the File Provider extension and leaves the domains
+unmounted. After a first live observation, one failed probe is held —
+a daemon restart, a full accept backlog, or the gap between unbinding
+a stale socket and rebinding is not proof the drive is gone, and
+removing a domain can discard its local materialized state. The domain
+is removed only after six consecutive ticks with no live owner; the
+observation history and streak live in the resident helper, not in
+the group container. The helper is
 signed with the app's bundle identifier so registration associates
 with the containing app; no Cargo dependency or unsafe FFI bridge is
 added. A drive appears within the polling interval after its owner binds.
