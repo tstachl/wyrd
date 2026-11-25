@@ -50,17 +50,37 @@ grep -F >/dev/null 'never consults this' "$SERVER" \
 pass "dev env bootstrap stays dev-only"
 
 # 3. One default per language; every consumer reads it rather than
-# carrying its own literal.
+# carrying its own literal. The Rust default is baked at build time
+# (build.rs) so a launchd-spawned owner agrees with the appex; its
+# source holds the fallback literal inside the option_env match.
 GROUP='JU2RFHWQPH.group.md.enesis.wyrd'
-grep -F >/dev/null "pub const DEFAULT_APP_GROUP_IDENTIFIER: &str = \"$GROUP\"" \
+grep -F >/dev/null "\"$GROUP\"" \
   "$ROOT/crates/wyrd-settings/src/lib.rs" \
-  || die "wyrd-settings: default drifted"
+  || die "wyrd-settings: fallback default drifted"
+grep -F >/dev/null 'option_env!("WYRD_EFFECTIVE_APP_GROUP")' \
+  "$ROOT/crates/wyrd-settings/src/lib.rs" \
+  || die "wyrd-settings: baked default missing"
+grep -F >/dev/null "const DEFAULT_GROUP: &str = \"$GROUP\"" \
+  "$ROOT/crates/wyrd-settings/build.rs" \
+  || die "wyrd-settings/build.rs: default drifted"
+grep -F >/dev/null 'cargo:rustc-env=WYRD_EFFECTIVE_APP_GROUP' \
+  "$ROOT/crates/wyrd-settings/build.rs" \
+  || die "wyrd-settings/build.rs: does not bake the effective group"
+grep -F >/dev/null 'cargo:rerun-if-env-changed=APPLE_TEAM_ID' \
+  "$ROOT/crates/wyrd-settings/build.rs" \
+  || die "wyrd-settings/build.rs: team knob not a rebuild input"
 grep -F >/dev/null 'pub const APP_GROUP_ENV: &str = "WYRD_APP_GROUP"' \
   "$ROOT/crates/wyrd-settings/src/lib.rs" \
   || die "wyrd-settings: env override missing"
+grep -F >/dev/null 'pub const APP_TEAM_ENV: &str = "APPLE_TEAM_ID"' \
+  "$ROOT/crates/wyrd-settings/src/lib.rs" \
+  || die "wyrd-settings: team override missing"
 grep -F >/dev/null "static let defaultIdentifier = \"$GROUP\"" \
   "$ROOT/packaging/macos/fileprovider/Sources/AppGroup.swift" \
   || die "AppGroup.swift: default drifted"
+grep -F >/dev/null 'no runtime team read' \
+  "$ROOT/packaging/macos/fileprovider/Sources/AppGroup.swift" \
+  || die "AppGroup.swift: team id not pinned as build-time-only"
 grep -F >/dev/null 'groupIdentifier = AppGroup.identifier' "$SWIFT" \
   || die "SocketConfig.swift: group identifier drifted"
 grep -F >/dev/null 'app_group_identifier()' \

@@ -46,6 +46,8 @@
 # team-prefixed id in
 # packaging/macos/app-group.sh) selects the App Group rendered into
 # the entitlements, Info.plist, registrar agent and Rust runtime.
+# APPLE_TEAM_ID is read by that sourced helper: a third party sets their
+# ten-character team id and the group id is derived from it.
 #
 # What it does: ensures the frontend dependencies, builds Wyrd.app
 # ad-hoc through build-bundle.sh (the

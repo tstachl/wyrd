@@ -19,6 +19,15 @@ enum AppGroup {
 
     /// Pure resolution so the Harness can exercise the override and
     /// the fail-closed fallbacks without a signed appex.
+    ///
+    /// The developer's team id is a build-time input, not a runtime
+    /// one (no runtime team read): the sandboxed appex cannot read an
+    /// arbitrary env var, and
+    /// a runtime-only team id would make the registrar, appex and
+    /// owner disagree. The shell helper and the Rust build script
+    /// consume it and render the resulting id into the Info.plist,
+    /// the entitlements and the launchd argv. Swift reads that
+    /// rendered value as authoritative.
     static func identifier(from environment: [String: String], info: [String: Any]?) -> String {
         // The unsandboxed registrar can read the override directly;
         // the sandboxed appex cannot, so its build-rendered Info.plist

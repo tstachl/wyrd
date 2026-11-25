@@ -37,7 +37,9 @@ production association on
 macOS: with no dev env vars set, the owner derives the container
 from the platform convention
 (`~/Library/Group Containers/<group>`, where `<group>` is the
-`WYRD_APP_GROUP` value with the team-prefixed default
+effective `WYRD_APP_GROUP`: a runtime override wins, otherwise the
+value baked at build time from `WYRD_APP_GROUP` or a derived
+`APPLE_TEAM_ID`, otherwise the team-prefixed default
 `JU2RFHWQPH.group.md.enesis.wyrd`; verified for development signing
 only — Developer ID and notarized paths are unverified, see the
 packaging note) and the drive

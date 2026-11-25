@@ -92,11 +92,41 @@ done
 # Whitespace-only is the same as unset, matching the Rust accessor.
 (
     . "$HELPER"
+    unset APPLE_TEAM_ID
     WYRD_APP_GROUP='   '
     export WYRD_APP_GROUP
     [ "$(wyrd_app_group)" = "$GROUP" ] || exit 1
 )
 pass "executed override renders into every artifact"
+
+# 2c. A developer's Apple Team ID derives the full group id at build
+# time, so a third party sets one short value instead of knowing the
+# suffix. Swift is a pure consumer of the rendered id: a runtime team
+# branch there would disagree with the owner's baked value. Test the
+# shell helper, the Rust bake, and that Swift has no runtime team read.
+(
+    . "$HELPER"
+    unset WYRD_APP_GROUP
+    APPLE_TEAM_ID='ABCDE12345'
+    export APPLE_TEAM_ID
+    [ "$(wyrd_app_group)" = 'ABCDE12345.group.md.enesis.wyrd' ] || exit 1
+    # Invalid team ids refuse rather than emit an unusable container.
+    APPLE_TEAM_ID='abc'
+    if wyrd_app_group >/dev/null 2>&1; then exit 1; fi
+    APPLE_TEAM_ID='AB!DE12345'
+    if wyrd_app_group >/dev/null 2>&1; then exit 1; fi
+)
+if grep -F >/dev/null 'APPLE_TEAM_ID' \
+    "$ROOT/packaging/macos/fileprovider/Sources/AppGroup.swift"; then
+    die "AppGroup.swift: team id must not be a runtime input"
+fi
+grep -F >/dev/null 'const GROUP_SUFFIX: &str = "group.md.enesis.wyrd"' \
+  "$ROOT/crates/wyrd-settings/build.rs" \
+  || die "build.rs: group suffix missing"
+grep -F >/dev/null 'EnvironmentVariables = appGroupEnv;' \
+  "$ROOT/nix/drive/darwin.nix" \
+  || die "darwin.nix: owner daemon does not receive the group env"
+pass "team id derives the group at build time across shell, Rust and nix"
 
 # 3. Bundle identifiers nest: app md.enesis.wyrd, appex appends —
 # and the build script signs the same appex identifier it ships.

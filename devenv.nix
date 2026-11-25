@@ -14,6 +14,7 @@ in
   # the dev installer stays ad-hoc, not a broken shell. The installer maps
   # these names onto its own signing posture (see install-dev.sh).
   env.APPLE_IDENTITY = config.secretspec.secrets.APPLE_IDENTITY or "";
+  env.APPLE_TEAM_ID = config.secretspec.secrets.APPLE_TEAM_ID or "";
   env.APPLE_SIGN_APEX = config.secretspec.secrets.APPLE_SIGN_APEX or "";
   env.APPLE_PROVISIONING_PROFILE = config.secretspec.secrets.APPLE_PROVISIONING_PROFILE or "";
   env.APPLE_APP_PROVISIONING_PROFILE = config.secretspec.secrets.APPLE_APP_PROVISIONING_PROFILE or "";

@@ -44,11 +44,19 @@ pub const SETTINGS_FILENAME: &str = "settings.json";
 /// changes every consumer; the macOS build scripts bake the same
 /// value into the entitlements, Info.plist and launch agent.
 pub const APP_GROUP_ENV: &str = "WYRD_APP_GROUP";
-/// Built-in default App Group id. Team-prefixed so it works with a
-/// free Personal Team and needs no portal registration for
-/// distribution. Keep in step with the Swift and shell helpers; the
-/// Harness pins the cross-language agreement.
-pub const DEFAULT_APP_GROUP_IDENTIFIER: &str = "JU2RFHWQPH.group.md.enesis.wyrd";
+/// Environment input for a developer's Apple Team ID. `build.rs`
+/// derives `<team>.group.md.enesis.wyrd` when `WYRD_APP_GROUP` is
+/// unset, so a third party sets their team id once and every
+/// process agrees. Mirrors `APPLE_TEAM_ID` in the shell helper.
+pub const APP_TEAM_ENV: &str = "APPLE_TEAM_ID";
+/// Effective App Group id baked at build time by `build.rs`: the
+/// runtime default a launchd-spawned owner and the desktop export
+/// use when no runtime override is set. Keep in step with the Swift
+/// and shell helpers; the Harness pins the cross-language agreement.
+pub const DEFAULT_APP_GROUP_IDENTIFIER: &str = match option_env!("WYRD_EFFECTIVE_APP_GROUP") {
+    Some(value) if !value.is_empty() => value,
+    _ => "JU2RFHWQPH.group.md.enesis.wyrd",
+};
 
 /// Resolve the group id from an explicit override, for pure tests.
 /// An unset or empty override means the built-in default.
@@ -587,5 +595,37 @@ mod tests {
             clear: Vec::new(),
         })
         .is_ok());
+    }
+
+    /// The baked default comes from `build.rs`, which mirrors the
+    /// shell helper. In a plain build (no identity env) it equals the
+    /// historical team-prefixed constant; the constant is never an
+    /// empty string even if a toolchain fails to pass the env.
+    #[test]
+    fn app_group_default_is_baked_and_nonempty() {
+        // build.rs trims and filters empty identity inputs, so a
+        // baked value always carries the group suffix.
+        assert!(
+            DEFAULT_APP_GROUP_IDENTIFIER.ends_with(".group.md.enesis.wyrd"),
+            "the baked default carries the group suffix"
+        );
+        assert_eq!(
+            DEFAULT_APP_GROUP_IDENTIFIER,
+            option_env!("WYRD_EFFECTIVE_APP_GROUP").unwrap_or("JU2RFHWQPH.group.md.enesis.wyrd"),
+            "the runtime default equals what build.rs baked"
+        );
+        assert_eq!(
+            APP_GROUP_ENV, "WYRD_APP_GROUP",
+            "runtime override name is a contract"
+        );
+        assert_eq!(
+            APP_TEAM_ENV, "APPLE_TEAM_ID",
+            "team knob name is a contract shared with the shell helper"
+        );
+        assert_eq!(
+            app_group_identifier_from(None),
+            DEFAULT_APP_GROUP_IDENTIFIER,
+            "no override resolves to the baked default"
+        );
     }
 }

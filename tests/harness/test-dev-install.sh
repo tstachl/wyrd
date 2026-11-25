@@ -528,13 +528,16 @@ for marker in '.join(app_group_identifier())' 'Library/Group Containers'; do
 done
 pass "appex and owner derive the container from one group id"
 
-# 15. SecretSpec (devenv keyring) signs the dev install without putting
-# values in the repo or on the command line. The manifest declares four
-# stable names, devenv exports them, and the installer maps them onto the
-# script-local signing variables that every build hook reads.
+# 15. SecretSpec (devenv keyring) supplies the developer identity inputs
+# without putting values in the repo or on the command line. The manifest
+# declares five stable names and devenv exports all five. Four signing
+# names are mapped onto script-local variables by the installer; the
+# team id is consumed by the sourced app-group helper instead, so its
+# consumption is checked there.
 SPEC_MANIFEST="$(cat "$ROOT/secretspec.toml")"
 DEVENV_YAML="$(cat "$ROOT/devenv.yaml")"
 DEVENV_NIX="$(cat "$ROOT/devenv.nix")"
+GROUP_HELPER="$(cat "$ROOT/packaging/macos/app-group.sh")"
 for marker in APPLE_IDENTITY APPLE_SIGN_APEX APPLE_PROVISIONING_PROFILE APPLE_APP_PROVISIONING_PROFILE; do
   match "$marker" "$SPEC_MANIFEST" \
     || die "secretspec.toml: '$marker' is not declared"
@@ -543,6 +546,12 @@ for marker in APPLE_IDENTITY APPLE_SIGN_APEX APPLE_PROVISIONING_PROFILE APPLE_AP
   match "$marker" "$INSTALL_CODE" \
     || die "install-dev.sh: '$marker' is not consumed"
 done
+match 'APPLE_TEAM_ID' "$SPEC_MANIFEST" \
+  || die "secretspec.toml: 'APPLE_TEAM_ID' is not declared"
+match 'env.APPLE_TEAM_ID' "$DEVENV_NIX" \
+  || die "devenv.nix: 'APPLE_TEAM_ID' is not exported"
+match 'APPLE_TEAM_ID' "$GROUP_HELPER" \
+  || die "app-group.sh: 'APPLE_TEAM_ID' is not consumed"
 for marker in 'enable: true' 'provider: keyring' 'profile: default'; do
   match "$marker" "$DEVENV_YAML" \
     || die "devenv.yaml: SecretSpec setting '$marker' missing"

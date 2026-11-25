@@ -14,6 +14,31 @@ let
   enabled = lib.filterAttrs (_: drive: drive.enable) cfg.drives;
 in
 {
+  options.services.wyrd.appGroup = lib.mkOption {
+    type = lib.types.nullOr lib.types.str;
+    default = null;
+    description = ''
+      macOS App Group id (``<team>.group.md.enesis.wyrd``) passed to
+      the owner daemon as ``WYRD_APP_GROUP``. A third-party builder
+      sets this to their own team-prefixed id so the owner, the File
+      Provider extension and the registrar resolve the same
+      container. When null the build-time baked default is used.
+      No effect on NixOS, which has no App Groups.
+    '';
+  };
+
+  options.services.wyrd.appleTeamId = lib.mkOption {
+    type = lib.types.nullOr lib.types.str;
+    default = null;
+    description = ''
+      Apple Team ID (ten uppercase alphanumeric characters) used to
+      derive the App Group id. Mutually exclusive with
+      ``services.wyrd.appGroup``: set exactly one, or neither for the
+      build-time default. Convenience for a third party who does not
+      want to spell the whole group string.
+    '';
+  };
+
   options.services.wyrd.drives = lib.mkOption {
     type = lib.types.attrsOf (lib.types.submodule (
       { name, ... }:
@@ -84,6 +109,15 @@ in
         );
       in
       [
+        {
+          assertion = cfg.appGroup == null || cfg.appleTeamId == null;
+          message = "services.wyrd sets both appGroup and appleTeamId; these are mutually exclusive. Set exactly one of appGroup or appleTeamId, or neither for the build-time default.";
+        }
+        {
+          assertion = cfg.appleTeamId == null
+          || (builtins.match "[A-Z0-9]{10}" cfg.appleTeamId != null);
+          message = "services.wyrd.appleTeamId must be ten uppercase alphanumeric characters.";
+        }
         {
           assertion = duplicateDirs == [ ];
           message = "services.wyrd.drives declares one drive twice: ${lib.concatStringsSep ", " duplicateDirs}. One owner process per drive directory.";
