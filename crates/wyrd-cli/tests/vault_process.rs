@@ -96,6 +96,16 @@ impl Fixture {
     fn wyrd(&self, args: &[&str]) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_wyrd"));
         command.args(args);
+        // Owner-bearing tests must not publish `by-drive` aliases
+        // into the developer's real App Group container: on macOS
+        // the registrar would register a transient Finder domain for
+        // each spawned owner, and removing it wedges FPFS. A unique,
+        // absent group makes the production bind refuse to publish;
+        // these tests assert on the fixture's drive-directory socket.
+        command.env(
+            "WYRD_APP_GROUP",
+            format!("wyrd-cli-test-{}", std::process::id()),
+        );
         command
     }
 

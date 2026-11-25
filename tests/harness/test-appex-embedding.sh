@@ -187,6 +187,16 @@ if [ -e "$ROOT/packaging/macos/fileprovider/main.swift" ]; then
   die "fileprovider: dead main.swift entry is still present"
 fi
 pass "MH_EXECUTE appex uses NSExtensionMain; registry-name label is pinned"
+# Owner-bearing CLI tests must isolate their App Group. On macOS a
+# spawned owner with the baked group id publishes a live by-drive
+# alias into the developer's shared container; the registrar makes
+# it a transient Finder domain and removing it wedges FPFS.
+for TEST_FILE in bootstrap.rs vault_process.rs; do
+  grep -F >/dev/null 'WYRD_APP_GROUP' \
+    "$ROOT/crates/wyrd-cli/tests/$TEST_FILE" \
+    || die "cli tests: $TEST_FILE spawns owners without an isolated group"
+done
+pass "owner-bearing CLI tests isolate the App Group"
 grep -F >/dev/null 'app-id: md.enesis.wyrd' \
   "$ROOT/packaging/linux/md.enesis.wyrd.yaml" \
   || die "linux manifest: app-id drifted"
