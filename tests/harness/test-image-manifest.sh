@@ -8,8 +8,8 @@
 # declaration side (what the host builds and what the suite dials),
 # while the derivation re-validates the manifest fail-closed at
 # build time and the gateManifest eval below asserts the exact wire
-# bytes. Pure bash + grep, with optional nix eval cross-checks when
-# nix is available.
+# bytes. Pure bash + grep, with nix eval cross-checks that fail closed
+# when nix or jq is missing (CI supplies both).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -18,6 +18,20 @@ ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 PASS=0
 pass() { PASS=$((PASS + 1)); echo "  PASS: $1"; }
 die() { echo "  FAIL: $1" >&2; exit 1; }
+
+# Fail closed: these eval cross-checks silently skipped in CI when the
+# shell-suites job had no nix, which is how a stale assertion could sit
+# on master while the suites job stayed green. CI provides nix and jq
+# in runtimeInputs; the opt-out is for a shell that deliberately cannot
+# evaluate Nix.
+if ! command -v nix >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1; then
+  if [ -n "${WYRD_SKIP_NIX_EVAL:-}" ]; then
+    echo "SKIP: nix and jq are required (WYRD_SKIP_NIX_EVAL is set)"
+    exit 0
+  fi
+  echo "FAIL: nix and jq are required for the manifest eval checks; set WYRD_SKIP_NIX_EVAL=1 only for a deliberate skip" >&2
+  exit 1
+fi
 
 FIXTURE="$(mktemp -d)"
 trap 'rm -rf "$FIXTURE"' EXIT
@@ -93,51 +107,44 @@ pass "flake exposes gateImage outputs on the incus and gate modules"
 # Manifest content, evaluated without building: system.build.gateManifest
 # is the pure passthrough of the manifest the image carries, so this
 # asserts the exact wire bytes (kind, key set, typed fields) at eval
-# time. jq enforces the v1 shape the host enforces at launch.
-if command -v nix >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
-  for _b in peer-o peer-n relay; do
-    if ! manifest_json="$(nix eval --json ".#nixosConfigurations.wyrd-${_b}.config.system.build.gateManifest" 2>"$FIXTURE/nix-err-$_b.txt")"; then
-      echo "gateManifest eval failed for $_b:" >&2
-      cat "$FIXTURE/nix-err-$_b.txt" >&2
-      die "gateManifest for $_b does not evaluate"
-    fi
-    echo "$manifest_json" | jq -e '.kind == "gate.image/v1"' >/dev/null       || die "manifest kind is not gate.image/v1 for $_b"
-    echo "$manifest_json" | jq -e '([keys_unsorted[]] | sort) == ["ip","kind","mac","memMb","role","shares","vcpu"]' >/dev/null       || die "manifest key set is wrong for $_b"
-    echo "$manifest_json" | jq -e --arg role "$_b" '.role == $role and (.vcpu | type) == "number" and (.memMb | type) == "number"' >/dev/null       || die "manifest role/vcpu/memMb mistyped for $_b"
-    echo "$manifest_json" | jq -e '.shares == []' >/dev/null       || die "manifest shares are not empty for $_b"
-    # Addressing and sizing must equal the declared gate.box facts:
-    # the derivation passes them through, so any drift between the
-    # manifest the host imports and the values the suite dials fails
-    # here, not on the guest. (Manifest ips carry the /24 the entry
-    # parses; the declared facts are bare.)
-    IFS='|' read -r _role _vcpu _mem _mac _ip <"$FIXTURE/declared-$_b"
-    echo "$manifest_json" | jq -e --arg ip "${_ip}/24" --arg mac "$_mac" --argjson vcpu "$_vcpu" --argjson memMb "$_mem" \
-      '.ip == $ip and .mac == $mac and .vcpu == $vcpu and .memMb == $memMb' >/dev/null \
-      || die "manifest addressing/values drift from gate.box for $_b (manifest: $(echo "$manifest_json" | jq -c '{ip,mac,vcpu,memMb}'))"
-  done
-  unset _b manifest_json _role _vcpu _mem _mac _ip
-  pass "evaluated gateManifest carries the exact v1 wire bytes"
-else
-  echo "  SKIP: nix or jq unavailable, manifest content check omitted"
-fi
+# time. jq enforces the v1 shape the host enforces at launch. Both
+# tools are guaranteed by the fail-closed preflight above.
+for _b in peer-o peer-n relay; do
+  if ! manifest_json="$(nix eval --json ".#nixosConfigurations.wyrd-${_b}.config.system.build.gateManifest" 2>"$FIXTURE/nix-err-$_b.txt")"; then
+    echo "gateManifest eval failed for $_b:" >&2
+    cat "$FIXTURE/nix-err-$_b.txt" >&2
+    die "gateManifest for $_b does not evaluate"
+  fi
+  echo "$manifest_json" | jq -e '.kind == "gate.image/v1"' >/dev/null       || die "manifest kind is not gate.image/v1 for $_b"
+  echo "$manifest_json" | jq -e '([keys_unsorted[]] | sort) == ["ip","kind","mac","memMb","role","shares","vcpu"]' >/dev/null       || die "manifest key set is wrong for $_b"
+  echo "$manifest_json" | jq -e --arg role "$_b" '.role == $role and (.vcpu | type) == "number" and (.memMb | type) == "number"' >/dev/null       || die "manifest role/vcpu/memMb mistyped for $_b"
+  echo "$manifest_json" | jq -e '.shares == []' >/dev/null       || die "manifest shares are not empty for $_b"
+  # Addressing and sizing must equal the declared gate.box facts:
+  # the derivation passes them through, so any drift between the
+  # manifest the host imports and the values the suite dials fails
+  # here, not on the guest. (Manifest ips carry the /24 the entry
+  # parses; the declared facts are bare.)
+  IFS='|' read -r _role _vcpu _mem _mac _ip <"$FIXTURE/declared-$_b"
+  echo "$manifest_json" | jq -e --arg ip "${_ip}/24" --arg mac "$_mac" --argjson vcpu "$_vcpu" --argjson memMb "$_mem" \
+    '.ip == $ip and .mac == $mac and .vcpu == $vcpu and .memMb == $memMb' >/dev/null \
+    || die "manifest addressing/values drift from gate.box for $_b (manifest: $(echo "$manifest_json" | jq -c '{ip,mac,vcpu,memMb}'))"
+done
+unset _b manifest_json _role _vcpu _mem _mac _ip
+pass "evaluated gateManifest carries the exact v1 wire bytes"
 
 # Eval cross-check: the evaluated gate.box must equal what the entry
 # would read. Eval failures surface with the nix error, not a bare
-# refusal.
-if command -v nix >/dev/null 2>&1; then
-  for _b in peer-o peer-n relay; do
-    if ! role_json="$(nix eval --json ".#nixosConfigurations.wyrd-${_b}.config.gate.box" 2>"$FIXTURE/nix-err-$_b.txt")"; then
-      echo "gate.box eval failed for $_b:" >&2
-      cat "$FIXTURE/nix-err-$_b.txt" >&2
-      die "gate.box for $_b does not evaluate"
-    fi
-    [[ -n "$role_json" ]] || die "gate.box for $_b evaluated empty"
-    echo "$role_json" | grep >/dev/null "\"role\":\"$_b\"" || die "evaluated role for $_b mismatches"
-  done
-  unset _b role_json
-  pass "evaluated gate.box matches the declared roles"
-else
-  echo "  SKIP: nix unavailable, eval cross-check omitted"
-fi
+# refusal. nix is guaranteed by the fail-closed preflight above.
+for _b in peer-o peer-n relay; do
+  if ! role_json="$(nix eval --json ".#nixosConfigurations.wyrd-${_b}.config.gate.box" 2>"$FIXTURE/nix-err-$_b.txt")"; then
+    echo "gate.box eval failed for $_b:" >&2
+    cat "$FIXTURE/nix-err-$_b.txt" >&2
+    die "gate.box for $_b does not evaluate"
+  fi
+  [[ -n "$role_json" ]] || die "gate.box for $_b evaluated empty"
+  echo "$role_json" | grep >/dev/null "\"role\":\"$_b\"" || die "evaluated role for $_b mismatches"
+done
+unset _b role_json
+pass "evaluated gate.box matches the declared roles"
 
 echo "image-manifest: $PASS checks passed"
