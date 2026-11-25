@@ -130,10 +130,13 @@ mkdir -p "$MACOS"
 # the same set, so a nested file is never checked-but-omitted.
 # Capture first: an unquoted $(find …) would split on whitespace
 # and discard find's status, silently compiling a partial list.
-# main.swift is the entry point, compiled as top-level code alongside
-# the declaration-only Sources. An MH_EXECUTE appex is required: a
-# Mach-O bundle silently drops the App Group entitlement at sign time
-# and the extension can never resolve its container.
+# Sources are declaration-only: ExtensionKit enters the appex through
+# Foundation's NSExtensionMain, which instantiates the Info.plist
+# principal class. A Swift main.swift entry would run top-level code
+# instead and never start the extension lifecycle. An MH_EXECUTE appex
+# is still required: a Mach-O bundle silently drops the App Group
+# entitlement at sign time and the extension cannot resolve its
+# container.
 sources=$(find "$HERE/Sources" -name '*.swift' -print) || {
     echo "error: cannot enumerate $HERE/Sources" >&2
     exit 1
@@ -154,9 +157,10 @@ fi
     -sdk "$SDK" \
     -O \
     -emit-executable \
+    -parse-as-library \
     -module-name WyrdFileProvider \
+    -Xlinker -e -Xlinker _NSExtensionMain \
     -o "$MACOS/WyrdFileProvider" \
-    "$HERE/main.swift" \
     "$@"
 
 # NSExtensionFileProviderDocumentGroup is both the Apple-facing group
