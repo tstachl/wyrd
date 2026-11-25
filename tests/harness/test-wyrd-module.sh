@@ -16,7 +16,18 @@ PASS=0
 pass() { PASS=$((PASS + 1)); echo "  PASS: $1"; }
 die() { echo "  FAIL: $1" >&2; exit 1; }
 
-command -v nix >/dev/null || { echo "SKIP: nix is required"; exit 0; }
+# Fail closed: a silent SKIP here let a stale assertion sit on master
+# while CI stayed green. The explicit opt-out is for a shell that
+# deliberately cannot evaluate Nix; CI provides nix in runtimeInputs
+# and must never take it.
+if ! command -v nix >/dev/null; then
+  if [ -n "${WYRD_SKIP_NIX_EVAL:-}" ]; then
+    echo "SKIP: nix is required (WYRD_SKIP_NIX_EVAL is set)"
+    exit 0
+  fi
+  echo "FAIL: nix is required for the module evaluation checks; set WYRD_SKIP_NIX_EVAL=1 only for a deliberate skip" >&2
+  exit 1
+fi
 command -v python3 >/dev/null || { echo "SKIP: python3 is required"; exit 0; }
 
 # Client/daemon version skew on a dev machine can surface a
@@ -66,9 +77,9 @@ assert $predicate, '''$label'''
 }
 
 # --- NixOS: vault unit supervises the wrapper -----------------------
-check "the vault unit supervises the wrapper with the systemd restart status" \
+check "the vault-mode owner unit supervises the wrapper with the systemd restart status" \
     "$NIXOS.config.systemd.services.wyrd-vault-demo.serviceConfig" \
-    "'--restart-status=1' in v['ExecStart'] and ' vault /var/lib/wyrd/demo ' in v['ExecStart']"
+    "'--restart-status=1' in v['ExecStart'] and ' owner /var/lib/wyrd/demo ' in v['ExecStart']"
 check "the vault unit wires the posture path and the declared log" \
     "$NIXOS.config.systemd.services.wyrd-vault-demo.serviceConfig" \
     "'--posture-path=/var/lib/wyrd/demo/vault.posture' in v['ExecStart'] and '--log-file /var/log/wyrd-demo.log' in v['ExecStart']"

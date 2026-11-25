@@ -22,13 +22,19 @@ let
       (src + "/rust-toolchain.toml");
 in
 {
-  # Phase 1: hermetic harness suites. Deliberately no `nix`: the two
-  # suites that can use it skip cleanly without it, and phase 1 stays
-  # network-free (flake input fetches would need guest egress; the
-  # nix evaluation phase covers that ground instead).
+  # Phase 1: hermetic harness suites. `nix` is included so the two
+  # evaluation-only checks actually run: test-wyrd-module and the
+  # manifest cross-checks in test-image-manifest both use `nix eval`.
+  # Without it they exited 0 with SKIP, so a stale assertion could
+  # sit on master while CI stayed green. Neither check builds; each
+  # run job is a fresh VM with a cold store, so the eval fetches the
+  # flake's locked inputs over guest egress (nix and git are both in
+  # runtimeInputs), the way the audit job fetches its advisory DB.
+  # Cold-eval cost is expected; no phase shares this VM's store.
   shell.suites = pkgs.writeShellApplication {
     name = "shell-suites";
     runtimeInputs = with pkgs; [
+      nix
       bash
       coreutils
       findutils
@@ -91,6 +97,7 @@ in
       bash tests/harness/test-timeout-discipline.sh
       bash tests/harness/test-image-manifest.sh
       bash tests/harness/test-gate-entry.sh
+      bash tests/harness/test-nix-harness.sh
       bash tests/harness/test-live-mount-decl.sh
       bash -n tests/harness/e2e-helpers.bash
       bash tests/harness/test-no-host-privilege.sh
