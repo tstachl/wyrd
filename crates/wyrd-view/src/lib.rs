@@ -12,5 +12,6 @@ pub mod view;
 
 pub use view::{
     confine_symlink_target, Attr, ConfinementError, ConflictVersion, DirEntry, DriveView, Kind,
-    Materialization, Node, OpenFile, VerifiedSnapshot, ViewError, ViewHead,
+    Materialization, Node, OpenFile, ReaddirResult, VerifiedSnapshot, ViewError, ViewHead,
+    MAX_READDIR_WORK,
 };

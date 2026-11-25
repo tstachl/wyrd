@@ -112,9 +112,25 @@ impl super::OwnerServer {
             .view()
             .lookup(&params.path)
             .map_err(map_view_error)?;
-        let entries = projection.view().readdir(&node).map_err(map_view_error)?;
+        // Bound the listing before collecting or mapping it. A lawful
+        // tree can hold a million entries; a single owner response is
+        // a live operation with its own ceiling. The refused result is
+        // empty, so no partial listing reaches the wire.
+        let listing = projection
+            .view()
+            .readdir_budgeted(&node, self.handles.max_readdir_work)
+            .map_err(map_view_error)?;
+        if listing.limit_exceeded {
+            return Err((
+                WireErrorCode::TooLarge,
+                format!(
+                    "directory listing exceeds the interface work bound ({} estimated bytes, max {}); list a smaller subdirectory",
+                    listing.work, self.handles.max_readdir_work
+                ),
+            ));
+        }
         Ok(WireOk::Readdir {
-            entries: entries.iter().map(wire_dir_entry).collect(),
+            entries: listing.entries.iter().map(wire_dir_entry).collect(),
             generation: projection.generation(),
             revision: projection.revision(),
         })

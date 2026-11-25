@@ -116,6 +116,28 @@ fn composed_parts_with_drive() -> (LiveParts<OwnerView>, std::path::PathBuf, Dri
     (parts, dir, drive)
 }
 
+/// A composed owner view with `count` small files at the root. Seeded
+/// through the authoring path so the listing comes from a real published
+/// head, not a test-only view.
+fn composed_parts_with_files(count: usize) -> (LiveParts<OwnerView>, std::path::PathBuf) {
+    let (engine, dir) = scratch_drive();
+    let store = wyrd_format::FsObjectStore::open(dir.clone()).unwrap();
+    let mut daemon = wyrd_core::node::WyrdNode::new(engine, store).unwrap();
+    for index in 0..count {
+        daemon
+            .put_file(&format!("file-{index:04}.txt"), b"x")
+            .unwrap();
+    }
+    daemon.refresh_live_heads().unwrap();
+    let (_live, parts) = daemon
+        .into_live(
+            Duration::from_secs(5),
+            &wyrd_core::live::LiveConfig::default(),
+        )
+        .unwrap();
+    (parts, dir)
+}
+
 /// Dispatch one operation against `server` and unwrap the success.
 fn dispatch_ok(server: &OwnerServer, op: &str, path: &str) -> WireOk {
     let response = server.dispatch(RawRequest {
@@ -461,6 +483,29 @@ fn dispatch_serves_reads_from_a_composed_view() {
         other => panic!("unexpected nested read result: {other:?}"),
     }
 
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// A directory past the serving bound refuses with a typed `TooLarge`
+/// before its entries are mapped to the wire. The same directory serves
+/// under the default bound, so the refusal is the budget and nothing
+/// else. The test uses a small per-server bound to exercise the guard
+/// cheaply; the production bound is `MAX_READDIR_WORK`, far below the
+/// frame ceiling and the protocol's million-entry tree ceiling.
+#[test]
+fn readdir_past_the_work_bound_refuses_before_wire_mapping() {
+    let (parts, dir) = composed_parts_with_files(12);
+    let generous = OwnerServer::new(OwnerHandles::from_parts(&parts));
+    match dispatch_ok(&generous, OP_READDIR, "") {
+        WireOk::Readdir { entries, .. } => assert_eq!(entries.len(), 12),
+        other => panic!("unexpected readdir result: {other:?}"),
+    }
+    let mut handles = OwnerHandles::from_parts(&parts);
+    handles.max_readdir_work = 2048;
+    let bounded = OwnerServer::new(handles);
+    let error = dispatch_err(&bounded, OP_READDIR, "");
+    assert_eq!(error.code, WireErrorCode::TooLarge);
+    assert!(error.message.contains("work bound"), "{}", error.message);
     std::fs::remove_dir_all(dir).unwrap();
 }
 

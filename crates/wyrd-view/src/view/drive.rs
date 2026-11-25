@@ -13,8 +13,51 @@ use wyrd_format::{
 use super::grammar;
 use super::head::ViewHead;
 use super::merge::merge;
-use super::{Attr, DirEntry, Kind, Materialization, Node, OpenFile, ViewError};
+use super::{
+    dir_entry_work, Attr, DirEntry, Kind, Materialization, Node, OpenFile, ReaddirResult, ViewError,
+};
 use wyrd_namespace::view::{Head, LookupResult, NamespaceView, ViewLockError};
+
+/// Weighted work meter for one listing. Charging is saturating, so an
+/// over-limit directory cannot wrap the counter; a refused listing is
+/// always empty, never a partial answer a caller might mistake for the
+/// whole directory.
+struct WorkMeter {
+    max: u64,
+    used: u64,
+}
+
+impl WorkMeter {
+    fn new(max: u64) -> Self {
+        WorkMeter { max, used: 0 }
+    }
+
+    fn remaining(&self) -> u64 {
+        self.max.saturating_sub(self.used)
+    }
+
+    /// Charge `cost` and report whether the ceiling was exceeded.
+    fn charge(&mut self, cost: u64) -> bool {
+        self.used = self.used.saturating_add(cost);
+        self.used > self.max
+    }
+
+    fn refused(&self) -> ReaddirResult {
+        ReaddirResult {
+            entries: Vec::new(),
+            work: self.used,
+            limit_exceeded: true,
+        }
+    }
+
+    fn accepted(&self, entries: Vec<DirEntry>) -> ReaddirResult {
+        ReaddirResult {
+            entries,
+            work: self.used,
+            limit_exceeded: false,
+        }
+    }
+}
 
 /// A mounted drive's read-only view: the head set plus the stores that
 /// serve it. Heads are whole snapshots; the walked root is always the
@@ -194,20 +237,42 @@ where
     /// agree everywhere serve normally, and only genuine per-child
     /// divergence conflicts.
     pub fn readdir(&self, node: &Node) -> Result<Vec<DirEntry>, ViewError> {
+        Ok(self.listing(node, u64::MAX)?.entries)
+    }
+
+    /// List a directory's children under a served-work budget. Each
+    /// tree load and each collected entry is charged before the next
+    /// one, so an over-limit directory is refused before the full
+    /// listing exists — and before a caller maps it to a response.
+    pub fn readdir_budgeted(&self, node: &Node, max_work: u64) -> Result<ReaddirResult, ViewError> {
+        self.listing(node, max_work)
+    }
+
+    fn listing(&self, node: &Node, max_work: u64) -> Result<ReaddirResult, ViewError> {
+        let mut meter = WorkMeter::new(max_work);
         match node {
             Node::Dir { subtree, .. } => {
-                let tree = self.load_tree(subtree)?;
-                tree.entries()
-                    .iter()
-                    .map(|entry| {
-                        Ok(DirEntry {
-                            name: entry.name.as_str().to_string(),
-                            node: leaf(entry),
-                        })
-                    })
-                    .collect()
+                let (tree, cost) = self.load_tree_for_resolution(subtree, meter.remaining())?;
+                if meter.charge(cost) {
+                    return Ok(meter.refused());
+                }
+                let Some(tree) = tree else {
+                    return Ok(meter.refused());
+                };
+                let mut entries = Vec::new();
+                for entry in tree.entries() {
+                    let child = leaf(entry);
+                    if meter.charge(dir_entry_work(entry.name.as_str(), &child)) {
+                        return Ok(meter.refused());
+                    }
+                    entries.push(DirEntry {
+                        name: entry.name.as_str().to_string(),
+                        node: child,
+                    });
+                }
+                Ok(meter.accepted(entries))
             }
-            Node::MergedDir { subtrees, .. } => self.readdir_union(subtrees.clone()),
+            Node::MergedDir { subtrees, .. } => self.union_listing(subtrees.clone(), meter),
             Node::Conflict { versions } => {
                 let mut subtrees = Vec::with_capacity(versions.len());
                 for version in versions {
@@ -220,7 +285,7 @@ where
                         Node::MergedDir { .. } | Node::Conflict { .. } => {}
                     }
                 }
-                self.readdir_union(subtrees)
+                self.union_listing(subtrees, meter)
             }
             Node::File { .. } | Node::Symlink { .. } => Err(ViewError::NotADirectory),
         }
@@ -232,10 +297,11 @@ where
     /// Timestamps re-resolve from heads: subtree pairs carry head ids
     /// by construction, so nested conflicts label exactly like literal
     /// ones.
-    fn readdir_union(
+    fn union_listing(
         &self,
         subtrees: Vec<(wyrd_format::SnapshotId, ContentId)>,
-    ) -> Result<Vec<DirEntry>, ViewError> {
+        mut meter: WorkMeter,
+    ) -> Result<ReaddirResult, ViewError> {
         // Hold only one decoded tree at a time. The prior form kept a
         // whole `Tree` per head until every union name was resolved, so
         // a fan-out of heads over one wide directory cost heads × tree
@@ -247,39 +313,52 @@ where
         // (name, head): resolving a conflict needs every version of a
         // name, and the alternative — reloading a tree per name — is
         // exactly the per-name store amplification the union exists to
-        // avoid. What is bounded here is the decoded-tree payload the
-        // reported issue measured (heads × whole trees), not the
-        // resolution set required to produce the union itself.
+        // avoid. Both the tree loads and the per-(name, head) nodes are
+        // charged to the listing budget, so that resolution set is
+        // itself bounded before it grows.
         let mut present: BTreeMap<Component, BTreeMap<wyrd_format::SnapshotId, Node>> =
             BTreeMap::new();
         for (snapshot, subtree) in &subtrees {
-            let tree = self.load_tree(subtree)?;
+            let (tree, cost) = self.load_tree_for_resolution(subtree, meter.remaining())?;
+            if meter.charge(cost) {
+                return Ok(meter.refused());
+            }
+            let Some(tree) = tree else {
+                return Ok(meter.refused());
+            };
             for entry in tree.entries() {
+                let child = leaf(entry);
+                if meter.charge(dir_entry_work(entry.name.as_str(), &child)) {
+                    return Ok(meter.refused());
+                }
                 present
                     .entry(entry.name.clone())
                     .or_default()
-                    .insert(*snapshot, leaf(entry));
+                    .insert(*snapshot, child);
             }
         }
         let versions: Vec<(wyrd_format::SnapshotId, u64)> = subtrees
             .iter()
             .map(|(snapshot, _)| (*snapshot, self.timestamp_of(snapshot)))
             .collect();
-        present
-            .into_iter()
-            .map(|(name, per_head)| {
-                let resolutions = versions
-                    .iter()
-                    .map(|(snapshot, timestamp)| {
-                        (*snapshot, *timestamp, per_head.get(snapshot).cloned())
-                    })
-                    .collect();
-                Ok(DirEntry {
-                    name: name.as_str().to_string(),
-                    node: merge(resolutions)?,
+        let mut entries = Vec::new();
+        for (name, per_head) in present {
+            let resolutions = versions
+                .iter()
+                .map(|(snapshot, timestamp)| {
+                    (*snapshot, *timestamp, per_head.get(snapshot).cloned())
                 })
-            })
-            .collect()
+                .collect();
+            let node = merge(resolutions)?;
+            if meter.charge(dir_entry_work(name.as_str(), &node)) {
+                return Ok(meter.refused());
+            }
+            entries.push(DirEntry {
+                name: name.as_str().to_string(),
+                node,
+            });
+        }
+        Ok(meter.accepted(entries))
     }
 
     /// Open a file for reading. Directory, symlink, and conflict
@@ -803,6 +882,10 @@ where
 
     fn readdir(&self, node: &Node) -> Result<Vec<DirEntry>, ViewError> {
         self.readdir(node)
+    }
+
+    fn readdir_budgeted(&self, node: &Node, max_work: u64) -> Result<ReaddirResult, ViewError> {
+        self.readdir_budgeted(node, max_work)
     }
 
     fn open_file(&self, node: &Node) -> Result<OpenFile, ViewError> {

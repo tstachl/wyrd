@@ -72,6 +72,10 @@ pub struct OwnerHandles {
     pub waker: Option<Arc<WakeSignal>>,
     /// Largest whole-file read served in one request.
     pub max_read_bytes: u64,
+    /// Largest estimated served-work load of one directory listing.
+    /// A listing past this bound refuses with `TooLarge` before its
+    /// entries are mapped to the wire.
+    pub max_readdir_work: u64,
     /// The owner's process-local diagnostics state. `diagnostics-set`
     /// and `diagnostics-status` read and change this handle; the
     /// settings path and mirror are owned by the controller, never
@@ -96,6 +100,7 @@ impl OwnerHandles {
             paused: Arc::clone(&parts.paused),
             waker: None,
             max_read_bytes: DEFAULT_MAX_READ_BYTES,
+            max_readdir_work: wyrd_core::view::MAX_READDIR_WORK,
             diagnostics: Arc::new(DiagnosticsController::inert()),
         }
     }
