@@ -2356,7 +2356,6 @@ fn retained_freshness_resets_on_publication() {
         seed_fork_bytes(&mut *store, b"withheld", "withheld.txt");
     }
     let mut mailbox = NoopMailbox;
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
     std::thread::scope(|scope| {
         scope.spawn(|| {
             parts
@@ -2370,14 +2369,18 @@ fn retained_freshness_resets_on_publication() {
         // batch is invisible to that pass, and `submit` waits without a
         // deadline, so the scope would never exit. Wait for admission,
         // then keep driving passes until the reply is completed — an
-        // evaluation that defers for content must not strand it.
+        // evaluation that defers for content must not strand it. The
+        // two waits get separate budgets: a slow scheduler must not
+        // eat the time allowed for the pass itself.
+        let admission_deadline = std::time::Instant::now() + Duration::from_secs(10);
         while parts.mutations.outstanding() == 0 {
             assert!(
-                std::time::Instant::now() < deadline,
+                std::time::Instant::now() < admission_deadline,
                 "the trigger mutation is admitted"
             );
             std::thread::yield_now();
         }
+        let completion_deadline = std::time::Instant::now() + Duration::from_secs(10);
         loop {
             live.sync_once(&mut mailbox, None::<&mut wyrd_sync::bulk::MemoryBulkSource>)
                 .expect("the completing pass runs");
@@ -2385,7 +2388,7 @@ fn retained_freshness_resets_on_publication() {
                 break;
             }
             assert!(
-                std::time::Instant::now() < deadline,
+                std::time::Instant::now() < completion_deadline,
                 "the trigger mutation completes"
             );
         }
