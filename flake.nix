@@ -244,7 +244,7 @@
         };
         # E2E-only libtest harness; never distributed, never installed on
         # a user machine. Built for the peer-o gate guest by the
-        # wyrd-live-mount-e2e task.
+        # live-mount task.
         wyrd-live-mount-tests = liveMountTestsFor system ./.;
         wyrd-dist = distFor system;
         # Pinned relay-query tool for the gate opacity probe
@@ -417,7 +417,7 @@
                 ({ pkgs, ... }: {
                   # peer-o also carries the libtest harness for the two
                   # #[ignore]d live-mount tests. The dedicated
-                  # wyrd-live-mount-e2e task runs it in-guest; adding it
+                  # live-mount task runs it in-guest; adding it
                   # to this image needs no second role, address or host
                   # policy change. No toolchain is needed in-guest.
                   environment.systemPackages =

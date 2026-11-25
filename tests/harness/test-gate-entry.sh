@@ -12,6 +12,12 @@
 # The smoke suite itself (tests/gate/gate-entry-smoke.bats) is Odin-only:
 # it dials real peers over the agent. This file pins everything up to
 # exec bats.
+#
+# The live-mount leg has its own task and entry (tests/gate/live-mount-entry.sh),
+# so its declaration pin lives in test-live-mount-decl.sh, not here. The
+# cross-check below keeps that split visible from this file; the harness
+# issue names this file as the pin site, so a reader who looks here must
+# be pointed at the dedicated pin rather than conclude it is missing.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -21,6 +27,13 @@ ENTRY="$ROOT/tests/gate/gate-entry.sh"
 PASS=0
 pass() { PASS=$((PASS + 1)); echo "  PASS: $1"; }
 die() { echo "  FAIL: $1" >&2; exit 1; }
+
+# Cross-check: the live-mount task's declaration pin has its own file,
+# and that file must stay wired into the shell suites.
+LIVE_MOUNT_PIN="$SCRIPT_DIR/test-live-mount-decl.sh"
+[ -f "$LIVE_MOUNT_PIN" ] || die "live-mount declaration pin is missing"
+grep >/dev/null 'test-live-mount-decl.sh' "$ROOT/.ngit/nix/workflows/default.nix" \
+  || die "live-mount declaration pin is not wired into the shell suites"
 
 FIXTURE="$(mktemp -d)"
 trap 'rm -f "$FIXTURE/stderr"; rm -rf "$FIXTURE"' EXIT

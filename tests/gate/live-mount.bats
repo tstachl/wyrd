@@ -38,6 +38,18 @@ setup() {
   run on_o "test -r /dev/fuse && command -v fusermount3 && test -x '$LIVE_MOUNT_TEST_BIN'"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
 
+  # Both tests also need local networking for their serving endpoint.
+  # A broken loopback must be named as an environment failure, never
+  # reported as a product regression. Bind and connect on 127.0.0.1 in
+  # the guest itself: this proves the address and TCP loopback work
+  # without depending on any external listener.
+  run on_o "ip -o addr show lo | grep >/dev/null '127.0.0.1' && python3 -c 'import socket; s=socket.socket(); s.bind((\"127.0.0.1\",0)); s.listen(1); p=s.getsockname()[1]; c=socket.create_connection((\"127.0.0.1\",p),1); c.close(); s.close()'"
+  [ "$status" -eq 0 ] || {
+    echo "live-mount: guest loopback networking is unavailable (environment, not product)"
+    echo "$output"
+    false
+  }
+
   # Hard-bound the transport call itself (timeout cannot wrap a shell
   # function). The libtest runs both ignored tests in one process;
   # redirect its output into the guest log tree so the task's

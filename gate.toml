@@ -134,10 +134,10 @@ img-drive = "images.drive"
 # guest only through the agent transport. No relay: this is a mount
 # evidence leg, not a convergence run. A new task shape needs host
 # approver sign-off before launch; this declaration grants none.
-[tasks.wyrd-live-mount-e2e]
+[tasks.live-mount]
 entryPoint = "tests/gate/live-mount-entry.sh"
 requires = ["bats", "jq"]
 guest_log_dir = "wyrd-e2e-live-mount"
 
-[tasks.wyrd-live-mount-e2e.builds]
+[tasks.live-mount.builds]
 img-peer-o = "images.peer-o"

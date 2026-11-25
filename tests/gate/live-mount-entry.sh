@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # tests/gate/live-mount-entry.sh — entryPoint for
-# [tasks.wyrd-live-mount-e2e]. The host built the peer-o image from this
+# [tasks.live-mount]. The host built the peer-o image from this
 # revision (the image carries the wyrd-live-mount-tests libtest
 # harness), provisioned and booted the guest, and waited for the agent.
 # This entry reads the provision datum and validated manifest (never
