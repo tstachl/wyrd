@@ -36,24 +36,32 @@ command -v python3 >/dev/null || { echo "SKIP: python3 is required"; exit 0; }
 # three attempts; any other failure fails fast so a real regression
 # never hides behind a retry.
 nix_eval() {
-    attempt=1
+    local attempt=1 out err_file
+    err_file="$(mktemp)"
     while [ "$attempt" -le 3 ]; do
-        if out=$(nix eval --json "$@" 2>&1); then
+        # Keep stderr off stdout. A successful eval in a cold guest can
+        # still write a warning to stderr (a dirty checkout, an input
+        # fetch); merging 2>&1 into $out corrupts the JSON this function
+        # pipes to python3. That exact failure was seen in CI.
+        if out=$(nix eval --json "$@" 2>"$err_file"); then
             printf '%s' "$out"
+            rm -f "$err_file"
             return 0
         fi
-        case "$out" in
+        case "$(cat "$err_file")" in
         "error: experimental Nix feature 'dynamic-derivations' is disabled"*)
             attempt=$((attempt + 1))
             sleep 2
             ;;
         *)
-            printf '%s' "$out" >&2
+            cat "$err_file" >&2
+            rm -f "$err_file"
             return 1
             ;;
         esac
     done
-    printf '%s' "$out" >&2
+    cat "$err_file" >&2
+    rm -f "$err_file"
     return 1
 }
 
