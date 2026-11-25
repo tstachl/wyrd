@@ -124,7 +124,7 @@ impl super::OwnerServer {
             return Err((
                 WireErrorCode::TooLarge,
                 format!(
-                    "directory listing exceeds the interface work bound ({} estimated bytes, max {}); list a smaller subdirectory",
+                    "directory listing exceeds the interface work bound ({} estimated bytes, max {}); the interface has no paging, so address a smaller subdirectory",
                     listing.work, self.handles.max_readdir_work
                 ),
             ));

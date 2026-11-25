@@ -493,10 +493,14 @@ pub trait NamespaceView: Sized {
         for entry in &entries {
             work = work.saturating_add(dir_entry_work(&entry.name, &entry.node));
         }
+        let limit_exceeded = work > max_work;
         Ok(ReaddirResult {
-            entries,
+            // A refused listing is empty on every implementation, not
+            // just on the production view: a caller that forgets the
+            // flag must never see a partial directory.
+            entries: if limit_exceeded { Vec::new() } else { entries },
             work,
-            limit_exceeded: work > max_work,
+            limit_exceeded,
         })
     }
 

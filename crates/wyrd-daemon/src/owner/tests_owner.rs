@@ -33,9 +33,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use wyrd_core::live::{LiveParts, PoisonCounts, SyncReport};
+use wyrd_core::projection::Projection;
 use wyrd_core::status::RetentionView;
-use wyrd_core::view::{Attr, ConflictVersion, DirEntry, Kind, Node};
-use wyrd_format::{ContentId, DriveId, EntryIdentity, SnapshotId};
+use wyrd_core::view::{Attr, ConflictVersion, DirEntry, Kind, Node, RuntimeMaterialization};
+use wyrd_format::{
+    ContentId, DeviceId, DriveId, Entry, EntryIdentity, Snapshot, SnapshotId, TransitionId, Tree,
+};
 use wyrd_sync::keys::DeviceIdentitySecret;
 use wyrd_sync::runtime::Engine;
 
@@ -43,6 +46,7 @@ use crate::vault::{run_composed_owner, OwnerView};
 use wyrd_sync::transport::mailbox::{
     Delivery, DeliveryId, Disposition, Mailbox, MailboxEnvelope, MailboxError, SendReport,
 };
+use wyrd_view::{VerifiedSnapshot, ViewHead};
 
 /// A mailbox that never delivers and always accepts sends: intake
 /// stays empty, the pass still publishes. Same shape as the core
@@ -135,6 +139,80 @@ fn composed_parts_with_files(count: usize) -> (LiveParts<OwnerView>, std::path::
             &wyrd_core::live::LiveConfig::default(),
         )
         .unwrap();
+    (parts, dir)
+}
+
+/// A test-local verification capability for a fixture head: these
+/// tests exercise serving mechanics, not the upstream verification
+/// boundary (the daemon adapter and contract suite cover that path).
+struct FixtureHead(Snapshot);
+
+// SAFETY: a deliberately forged capability for serving fixtures — it
+// asserts nothing real and must never escape test code.
+#[allow(unsafe_code)]
+unsafe impl VerifiedSnapshot for FixtureHead {
+    fn into_snapshot(self) -> Snapshot {
+        self.0
+    }
+}
+
+/// A composed owner view serving a lawful flat tree far above the
+/// serving bound, installed as the published generation. The tree is
+/// authored directly into the shared object store so the guardrail can
+/// run at the production ceiling without committing a million heads.
+fn composed_parts_with_wide_tree(entries: usize) -> (LiveParts<OwnerView>, std::path::PathBuf) {
+    let (engine, dir) = scratch_drive();
+    let revision = engine.current();
+    let materialization = RuntimeMaterialization {
+        runtime: engine.runtime_state().unwrap(),
+        terminal: engine.terminal_snapshot(),
+    };
+    let mut daemon: wyrd_core::node::WyrdNode<OwnerView> = wyrd_core::node::WyrdNode::new(
+        engine,
+        wyrd_format::FsObjectStore::open(dir.clone()).unwrap(),
+    )
+    .unwrap();
+    let store = daemon.view().store_handle();
+    let root = {
+        let mut guard = store.write().unwrap();
+        let child = Tree::from_entries(vec![
+            Entry::dir("child", ContentId::from_bytes([1; 32])).unwrap()
+        ])
+        .unwrap()
+        .insert_into(&mut *guard)
+        .unwrap();
+        let entries: Vec<_> = (0..entries)
+            .map(|index| Entry::dir(format!("name-{index:05}-{}", "x".repeat(200)), child).unwrap())
+            .collect();
+        Tree::from_entries(entries)
+            .unwrap()
+            .insert_into(&mut *guard)
+            .unwrap()
+    };
+    let head = ViewHead::new(FixtureHead(
+        Snapshot::new(
+            Vec::new(),
+            root,
+            DeviceId::from_bytes([0xD0; 32]),
+            TransitionId::from_bytes([0x71; 32]),
+            1,
+            0,
+            1,
+        )
+        .unwrap(),
+    ));
+    let projection = Projection::initial(
+        OwnerView::shared(store, materialization, vec![head]),
+        revision,
+    );
+    daemon.refresh_live_heads().unwrap();
+    let (_live, parts) = daemon
+        .into_live(
+            Duration::from_secs(5),
+            &wyrd_core::live::LiveConfig::default(),
+        )
+        .unwrap();
+    *parts.projection.write().unwrap() = Arc::new(projection);
     (parts, dir)
 }
 
@@ -506,6 +584,37 @@ fn readdir_past_the_work_bound_refuses_before_wire_mapping() {
     let error = dispatch_err(&bounded, OP_READDIR, "");
     assert_eq!(error.code, WireErrorCode::TooLarge);
     assert!(error.message.contains("work bound"), "{}", error.message);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// The A1 guardrail at the owner surface: a lawful flat tree far above
+/// the serving bound is refused at the production ceiling, and every
+/// concurrently dispatched request refuses the same way — none maps a
+/// listing to a wire response. Exact RSS is not a deterministic in-tree
+/// assertion, so the bound is stated in `resource-limits.md` and each
+/// request's allocation is capped by the same meter (one tree buffer,
+/// no collected entries).
+#[test]
+fn owner_readdir_refuses_wide_tree_under_concurrent_requests() {
+    let (parts, dir) = composed_parts_with_wide_tree(12_000);
+    let server = Arc::new(OwnerServer::new(OwnerHandles::from_parts(&parts)));
+    let refused = dispatch_err(&server, OP_READDIR, "");
+    assert_eq!(refused.code, WireErrorCode::TooLarge);
+    assert!(
+        refused.message.contains("estimated bytes"),
+        "{}",
+        refused.message
+    );
+    let mut threads = Vec::new();
+    for _ in 0..MAX_OWNER_CONNECTIONS {
+        let server = Arc::clone(&server);
+        threads.push(std::thread::spawn(move || {
+            dispatch_err(&server, OP_READDIR, "")
+        }));
+    }
+    for thread in threads {
+        assert_eq!(thread.join().unwrap().code, WireErrorCode::TooLarge);
+    }
     std::fs::remove_dir_all(dir).unwrap();
 }
 

@@ -4,7 +4,7 @@
 
 use super::*;
 
-use wyrd_format::{ContentId, Entry, MemoryObjectStore};
+use wyrd_format::{ContentId, Entry, MemoryObjectStore, ObjectStore};
 
 use crate::view::tests_harness::{
     chunk, heads, small_drive, snapshot, snapshot_at, tree_of, view as make_view, CountingStore,
@@ -97,6 +97,10 @@ fn bounded_listing_charges_tree_bytes_before_decoding() {
         &mut store,
         vec![Entry::symlink("s", "t".repeat(1024)).unwrap()],
     );
+    // The charge is the whole encoded buffer plus one byte: the store
+    // exposes bytes, not a length hint, so this allocation precedes the
+    // verdict and is documented as the residual per-request spike.
+    let encoded = store.get(&root).unwrap().unwrap().len() as u64;
     let view = DriveView::new(
         store,
         FakeMaterialization::empty(),
@@ -105,7 +109,7 @@ fn bounded_listing_charges_tree_bytes_before_decoding() {
     let node = view.lookup("").unwrap();
     let listing = view.readdir_budgeted(&node, 16).unwrap();
     assert!(listing.limit_exceeded);
-    assert!(listing.work > 16);
+    assert_eq!(listing.work, encoded + 1);
     assert!(listing.entries.is_empty());
 }
 
