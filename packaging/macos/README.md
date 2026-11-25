@@ -372,32 +372,26 @@ per tick would make macOS re-ask the "access data from other apps"
 permission on every launch, so the agent keeps one helper alive and
 restarts it only if it dies. It needs no running Wyrd.app process.
 It polls the App Group's `Sockets/by-drive/` aliases the owner publishes
-and reconciles one
-`NSFileProviderDomain` per drive, using the 64-char drive id as the
-domain identifier the appex expects. The owner publishes the registry
-name in a `.label` file beside each alias; the Finder domain uses that
-name verbatim. Only a live owner publishes a label, so a locked or
-stopped drive has no domain: unlock starts an owner and the domain
-appears, lock tears it down and the domain is removed after six poll
-ticks (30 s). The desktop's lock path uses SIGKILL, so the registrar
-also probes the socket endpoint: a stale alias from a killed owner is
-ignored. A domain is a removal candidate only after the helper has
-seen a live owner for it at least once; absence before that first
-observation is startup — at cold boot the registrar starts before the
-owner agents publish their sockets, and removing a domain in that gap
-invalidates the File Provider extension and leaves the domains
-unmounted. After a first live observation, one failed probe is held —
-a daemon restart, a full accept backlog, or the gap between unbinding
-a stale socket and rebinding is not proof the drive is gone, and
-removing a domain can discard its local materialized state. The domain
-is removed only after six consecutive ticks with no live owner; the
-observation history and streak live in the resident helper, not in
-the group container. The helper is
-signed with the app's bundle identifier so registration associates
-with the containing app; no Cargo dependency or unsafe FFI bridge is
-added. A drive appears within the polling interval after its owner binds.
-Distribution signing, notarization, and the release rehearsal stay
-with the signing owner, never this script.
+and adds one `NSFileProviderDomain` per live drive, using the 64-char
+drive id as the domain identifier the appex expects. The owner publishes
+the registry name in a `.label` file beside each alias; the Finder domain
+uses that name verbatim. Only a live owner publishes a label, so a new
+domain appears within the polling interval after its owner binds. The
+helper also probes the socket endpoint: a stale alias left by a killed
+owner is ignored, so no domain is added for a dead drive.
+
+The registrar never removes domains. On this replicated provider,
+`NSFileProviderManager.remove` makes fileproviderd discard the provider's
+FPFS data and then fall back to the default domain, which this provider
+cannot use; the remaining domains stay disconnected and Finder never
+recovers. A drive whose owner dies keeps its domain — the extension
+reports it unavailable and Finder shows an empty folder instead of a
+permanently wedged one. Removing a domain is a deliberate, manually
+supervised operation, not a polling result. The helper is signed with
+the app's bundle identifier so registration associates with the
+containing app; no Cargo dependency or unsafe FFI bridge is added.
+Distribution signing, notarization, and the release rehearsal stay with
+the signing owner, never this script.
 
 ## Protocol (Stage 0 finding)
 

@@ -217,17 +217,15 @@ fi
 REGISTRAR_SOURCE="$(cat "$ROOT/packaging/macos/domain-registrar/main.swift")"
 match 'while true' "$REGISTRAR_SOURCE" \
   || die "registrar: --watch has no internal reconciliation loop"
-# A transient failed socket probe must not drop a Finder domain: the
-# resident helper keeps one in-memory absence streak per domain and
-# removes only after six missed ticks (30 s, outlasting an owner
-# restart). It also records a live observation first: at cold boot the
-# registrar starts before the owner sockets appear, and removing a
-# domain in that gap wedges FPFS. One-shot has no history and still
-# removes on the first miss.
-for marker in 'removalGraceTicks = 6' 'DomainRemovalGrace' 'observePresent' 'shouldRemove' 'graceEnabled' 'seenLive' 'guard seenLive.contains(id) else' 'deferring removal of domain'; do
-  match "$marker" "$REGISTRAR_SOURCE" \
-    || die "registrar: removal grace marker '$marker' missing"
-done
+# The registrar must only add domains. Removing one makes fileproviderd
+# discard FPFS data and fall back to the default domain, which this
+# replicated provider cannot use; Finder then stays wedged. A dead
+# drive keeps its domain and the extension reports it unavailable.
+if match 'NSFileProviderManager.remove(' "$REGISTRAR_SOURCE"; then
+  die "registrar: automatic domain removal would wedge FPFS"
+fi
+match 'Domains are only added' "$REGISTRAR_SOURCE" \
+  || die "registrar: add-only reconciliation is not documented"
 for marker in 'REGISTRAR_AGENT_TEMPLATE' 'LaunchAgents' 'launchctl unload -w' 'launchctl load -w'; do
   match "$marker" "$INSTALL_CODE" \
     || die "install: registrar agent marker '$marker' missing"
@@ -448,11 +446,7 @@ pass "README records the command, the CLI, and the Finder boundary"
 # 11. The suite itself is wired into the native CI shell job.
 grep -F >/dev/null 'test-dev-install.sh' "$ROOT/.ngit/nix/workflows/default.nix" \
   || die "CI: dev-install suite not wired into shell.suites"
-grep -F >/dev/null 'test-domain-grace.py' "$ROOT/.ngit/nix/workflows/default.nix" \
-  || die "CI: domain grace model not wired into shell.suites"
-match 'grace.prune(keeping: current.union(desired.keys))' "$REGISTRAR_SOURCE" \
-  || die "registrar: same-tick add loses its live observation at prune"
-pass "CI wires the dev-install suite and the domain grace model"
+pass "CI wires the dev-install suite"
 
 # 12. The supervised-owner wrapper ships as the CLI's sibling: the
 # daemon resolves `wyrd-supervise` beside the running `wyrd`, so a
