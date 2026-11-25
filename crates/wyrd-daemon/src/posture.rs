@@ -763,9 +763,13 @@ mod tests {
     #[test]
     fn future_posture_saturates_instead_of_wrapping() {
         let dir = TempDir::new();
-        forge(&dir, now_unix() + 3600, serde_json::json!({}));
+        // Sample the wall clock once: `forge` and the assertion must
+        // use the same value, or a second boundary between them makes
+        // this test fail while the code under test is correct.
+        let future = now_unix() + 3600;
+        forge(&dir, future, serde_json::json!({}));
         match read_posture(&sidecar(&dir)) {
-            ProcessPosture::Fresh(view) => assert_eq!(view.posture_unix, now_unix() + 3600),
+            ProcessPosture::Fresh(view) => assert_eq!(view.posture_unix, future),
             other => panic!("clock skew must not wrap the age math, got: {other:?}"),
         }
         let rendered = render_process_section(&read_posture(&sidecar(&dir)), false);
