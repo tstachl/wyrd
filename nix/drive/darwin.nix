@@ -12,6 +12,19 @@
 let
   enabled = lib.filterAttrs (_: drive: drive.enable) config.services.wyrd.drives;
 
+  # The launchd-spawned owner inherits no shell environment. Pass the
+  # effective App Group id explicitly so it resolves the same
+  # container as the build-rendered appex and registrar (a third
+  # party's team override otherwise leaves the owner on the baked
+  # default — the split-container defect).
+  appGroupEnv =
+    if config.services.wyrd.appGroup != null then
+      { WYRD_APP_GROUP = config.services.wyrd.appGroup; }
+    else if config.services.wyrd.appleTeamId != null then
+      { WYRD_APP_GROUP = "${config.services.wyrd.appleTeamId}.group.md.enesis.wyrd"; }
+    else
+      { };
+
   supervise = pkgs.writers.writePython3Bin "wyrd-supervise" { } (
     builtins.readFile ./supervise.py
   );
@@ -65,6 +78,7 @@ in
           serviceConfig = {
             Label = "md.enesis.wyrd.${name}";
             ProgramArguments = wrapperArgv drive;
+            EnvironmentVariables = appGroupEnv;
             RunAtLoad = true;
             # Restart on the wrapper's exit 0 (signal death, runtime
             # error), never on its exit 78 (terminal: held drive).

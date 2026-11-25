@@ -585,7 +585,8 @@ fn apply_update_to_file(
 }
 
 pub use wyrd_settings::{
-    app_group_identifier, app_group_identifier_from, APP_GROUP_ENV, DEFAULT_APP_GROUP_IDENTIFIER,
+    app_group_identifier, app_group_identifier_from, APP_GROUP_ENV, APP_TEAM_ENV,
+    DEFAULT_APP_GROUP_IDENTIFIER,
 };
 /// Mirror location inside the App Group container, relative to its
 /// root. The extension reads exactly this path

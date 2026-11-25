@@ -178,9 +178,39 @@ domain registrar, before the app reaches /Applications.
 `WYRD_APP_GROUP` selects the App Group id for the whole build; the
 default is the team-prefixed `JU2RFHWQPH.group.md.enesis.wyrd`. The
 build renders it into the entitlements, the appex `Info.plist` and
-the registrar launch agent, and Rust reads the same variable at
-runtime, so one setting moves every consumer. A future signing team
-changes one value, not 37 literals.
+the registrar launch agent. A future signing team changes one value,
+not 37 literals.
+
+#### Building with your own Apple Team ID
+
+You do not need to know the group-id format. Set your ten-character
+Apple Team ID once and the group is derived as
+`<TEAM>.group.md.enesis.wyrd`:
+
+```sh
+export APPLE_TEAM_ID=YOURTEAMID      # 10 chars, A-Z and 0-9
+export APPLE_IDENTITY="Apple Development: Your Name (YOURTEAMID)"
+export APPLE_SIGN_APEX=1
+devenv shell -- packaging/macos/install-dev.sh
+```
+
+Resolution order, shared by the shell helper, the Swift extension
+and the Rust build: `WYRD_APP_GROUP` (full id) wins; otherwise a
+valid `APPLE_TEAM_ID` derives the id; otherwise the built-in
+default stands. An invalid team id is refused, never silently used.
+
+The id is baked into every Rust binary at compile time by
+`crates/wyrd-settings/build.rs`. This matters: the File Provider
+extension reads a build-rendered `Info.plist` and the registrar reads
+a build-rendered launchd argv, but a launchd-spawned owner daemon
+inherits no environment. Baking the effective value into the binary
+makes the owner and the desktop diagnostics export resolve the same
+container as the extension without any runtime env. A runtime
+`WYRD_APP_GROUP` still overrides the baked value for manual runs.
+
+For nix-darwin drive services, set `services.wyrd.appleTeamId` (or
+`services.wyrd.appGroup` for a full id); the module passes the
+effective value to each owner daemon as `WYRD_APP_GROUP`.
 
 ### Stable identity for repeat installs (no fee, Finder stays inert)
 
@@ -220,7 +250,7 @@ the signed artifact and the pairing check cannot drift.
 
 ### Signing inputs from SecretSpec (devenv keyring)
 
-The devenv shell resolves four macOS signing inputs from SecretSpec's
+The devenv shell resolves five macOS developer inputs from SecretSpec's
 keyring provider and exports them as environment variables, so an
 identity or profile path never needs to appear in shell history, a
 command line, or the repository:
@@ -228,17 +258,19 @@ command line, or the repository:
 | Variable | Meaning |
 |---|---|
 | `APPLE_IDENTITY` | Apple Development identity for the bundle |
+| `APPLE_TEAM_ID` | ten-character Apple Team ID; derives the App Group id |
 | `APPLE_SIGN_APEX` | `1` signs the File Provider appex with that identity |
 | `APPLE_PROVISIONING_PROFILE` | appex profile (profile-backed mode) |
 | `APPLE_APP_PROVISIONING_PROFILE` | containing-app profile (profile-backed mode) |
 
 `secretspec.toml` declares the names, `devenv.yaml` selects the keyring
 provider and the `default` profile, and `devenv.nix` maps
-`config.secretspec.secrets.*` onto the four variables. Each developer
+`config.secretspec.secrets.*` onto the five variables. Each developer
 stores values once in their own keyring:
 
 ```sh
 secretspec set APPLE_IDENTITY
+secretspec set APPLE_TEAM_ID
 secretspec set APPLE_SIGN_APEX
 secretspec set APPLE_PROVISIONING_PROFILE
 secretspec set APPLE_APP_PROVISIONING_PROFILE
