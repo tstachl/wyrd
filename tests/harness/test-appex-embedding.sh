@@ -169,7 +169,24 @@ grep -F >/dev/null '.label' \
 grep -F >/dev/null 'socketResponds' \
   "$ROOT/packaging/macos/domain-registrar/main.swift" \
   || die "registrar: dead owners are not detected"
-pass "MH_EXECUTE appex and registry-name label are pinned"
+# ExtensionKit enters a File Provider appex through Foundation's
+# NSExtensionMain, which instantiates the Info.plist principal class.
+# A Swift main.swift top-level entry would run a run loop instead and
+# never start the lifecycle: init(domain:) would never be called.
+grep -F >/dev/null -- '-Xlinker -e -Xlinker _NSExtensionMain' \
+  "$ROOT/packaging/macos/fileprovider/build-appex.sh" \
+  || die "build-appex.sh: appex has no NSExtensionMain entry point"
+grep -F >/dev/null -- '-parse-as-library' \
+  "$ROOT/packaging/macos/fileprovider/build-appex.sh" \
+  || die "build-appex.sh: sources must be compiled without a Swift main"
+if grep -F >/dev/null '"$HERE/main.swift"' \
+  "$ROOT/packaging/macos/fileprovider/build-appex.sh"; then
+  die "build-appex.sh: a Swift main entry would bypass the extension lifecycle"
+fi
+if [ -e "$ROOT/packaging/macos/fileprovider/main.swift" ]; then
+  die "fileprovider: dead main.swift entry is still present"
+fi
+pass "MH_EXECUTE appex uses NSExtensionMain; registry-name label is pinned"
 grep -F >/dev/null 'app-id: md.enesis.wyrd' \
   "$ROOT/packaging/linux/md.enesis.wyrd.yaml" \
   || die "linux manifest: app-id drifted"
