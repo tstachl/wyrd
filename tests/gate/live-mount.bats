@@ -51,10 +51,15 @@ setup() {
   }
 
   # Hard-bound the transport call itself (timeout cannot wrap a shell
-  # function). The libtest runs both ignored tests in one process;
-  # redirect its output into the guest log tree so the task's
-  # guest_log_dir fetch carries the evidence.
-  run guest_timeout 300 peer-o runuser -u e2e -g users -G wheel -- \
+  # function). guest_timeout invokes the transport binary directly, so
+  # unlike on_o/guest_exec it does not insert the `--` that separates
+  # the role from the remote argv — pass it explicitly. A missing `--`
+  # makes gate-guest refuse the command with status 2 before the
+  # libtest starts (and before its log file is created).
+  # The libtest runs both ignored tests in one process; redirect its
+  # output into the guest log tree so the task's guest_log_dir fetch
+  # carries the evidence.
+  run guest_timeout 300 peer-o -- runuser -u e2e -g users -G wheel -- \
     /usr/bin/env PATH=/run/wrappers/bin:/run/current-system/sw/bin:/usr/bin:/bin \
     bash -c "set -o pipefail; '$LIVE_MOUNT_TEST_BIN' --ignored live_mount_ >'$GUEST_RUN/logs/live-mount.out' 2>&1"
   if [ "$status" -ne 0 ]; then

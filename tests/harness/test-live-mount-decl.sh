@@ -58,6 +58,8 @@ grep >/dev/null 'test result: ok. 2 passed' "$LEG" \
   || die "live-mount leg does not assert two passes"
 grep >/dev/null 'guest_timeout 300' "$LEG" \
   || die "libtest call is not bounded"
+grep >/dev/null 'guest_timeout 300 peer-o -- runuser' "$LEG" \
+  || die "libtest call omits the -- that separates the guest role from its argv"
 grep >/dev/null '127.0.0.1' "$LEG" \
   || die "live-mount leg does not preflight loopback networking"
 grep >/dev/null 'environment, not product' "$LEG" \
