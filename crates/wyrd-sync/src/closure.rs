@@ -366,13 +366,16 @@ pub struct HeadGateBudget {
 }
 
 impl HeadGateBudget {
-    /// Production bound: far above legitimate use (one `Limits::V0`
-    /// tree may be 64 MiB / 1M entries), finite against a hostile
-    /// fan-out of distinct large closures.
+    /// Production bound: generous enough that one lawful head at the
+    /// `Limits::V0` ceiling (a 64 MiB tree, 1M tree entries, 580k
+    /// manifest entries) and a large multi-head fan-out still verify,
+    /// while a hostile fan-out of thousands of distinct large closures
+    /// is stopped. Reuse means shared trees cost their bytes and
+    /// entries only once, so these caps measure distinct work.
     pub const DEFAULT: Self = Self {
-        max_bytes: 512 * 1024 * 1024,
-        max_entries: 8 * 1024 * 1024,
-        max_work: 65_536,
+        max_bytes: 4 * 1024 * 1024 * 1024,
+        max_entries: 512 * 1024 * 1024,
+        max_work: 16 * 1024 * 1024,
     };
     /// No bound: a single self-check at authoring time, where there is
     /// no cross-head fan-out to cap and existing behavior must hold.
@@ -400,11 +403,12 @@ struct CachedTree {
 /// work is charged against one [`HeadGateBudget`], so distinct large
 /// closures cannot exhaust CPU and the store read lock by fanning out.
 ///
-/// A verifier must be used with one [`Limits`] table throughout: the
-/// cached check already applied that table to the tree. The gate uses
-/// [`Limits::V0`] for every head in a batch, so the invariant holds.
+/// The [`Limits`] table is fixed at construction: a cached tree has
+/// already passed `check_tree` under that table, so no later call can
+/// silently skip a stricter check. The gate uses [`Limits::V0`].
 pub struct ClosureVerifier {
     trees: HashMap<ContentId, CachedTree>,
+    limits: Limits,
     budget: HeadGateBudget,
     bytes: u64,
     entries: u64,
@@ -412,10 +416,13 @@ pub struct ClosureVerifier {
 }
 
 impl ClosureVerifier {
-    /// A verifier with a fresh cache and the given aggregate budget.
-    pub fn new(budget: HeadGateBudget) -> Self {
+    /// A verifier with a fresh cache, one fixed limits table, and the
+    /// given aggregate budget. The limits live here so a cached tree
+    /// can never skip a stricter check on a later call.
+    pub fn new(budget: HeadGateBudget, limits: Limits) -> Self {
         ClosureVerifier {
             trees: HashMap::new(),
+            limits,
             budget,
             bytes: 0,
             entries: 0,
@@ -463,7 +470,6 @@ impl ClosureVerifier {
         root_id: &ContentId,
         root: &Manifest,
         children: &M,
-        limits: &Limits,
     ) -> Result<(), ClosureError>
     where
         S: ObjectStore,
@@ -485,7 +491,7 @@ impl ClosureVerifier {
                 derived,
             });
         }
-        check_manifest(limits, root)?;
+        check_manifest(&self.limits, root)?;
 
         // Pair every reachable tree with the one manifest that declares it,
         // so a second, different claimant is a detected contradiction.
@@ -516,7 +522,7 @@ impl ClosureVerifier {
                 // cannot spend unbounded CPU before the budget stops it.
                 self.charge_bytes(bytes.len() as u64)?;
                 let tree = Tree::decode(&bytes).map_err(|_| ClosureError::InvalidTree(tree_id))?;
-                check_tree(limits, &tree)?;
+                check_tree(&self.limits, &tree)?;
                 let mut tree_chunks = Vec::new();
                 let mut directories = Vec::new();
                 for entry in tree.entries() {
@@ -630,7 +636,7 @@ impl ClosureVerifier {
                         manifest: link.manifest,
                     });
                 }
-                check_manifest(limits, child)?;
+                check_manifest(&self.limits, child)?;
                 stack.push((*subtree, child));
             }
         }
@@ -717,8 +723,8 @@ where
     // The single-head entry point (authoring self-checks and unit
     // tests) uses an unbounded verifier: there is no cross-head
     // fan-out to cap here, and behavior is unchanged.
-    ClosureVerifier::new(HeadGateBudget::UNLIMITED)
-        .verify_snapshot(snapshot, objects, root_id, root, children, limits)
+    ClosureVerifier::new(HeadGateBudget::UNLIMITED, *limits)
+        .verify_snapshot(snapshot, objects, root_id, root, children)
 }
 
 /// Verify one classified head's closure against the local store: resolve the
@@ -751,14 +757,14 @@ where
 /// The batch form of [`verify_head_closure`]. One verifier is shared by
 /// every head in a gate run, so a tree referenced by several heads is
 /// read, decoded, checked, and scanned once, and all work is charged to
-/// one [`HeadGateBudget`]. `WorkBudgetExhausted` means the whole batch
-/// must be deferred — it is not a verdict on this head.
+/// one [`HeadGateBudget`] and one [`Limits`] table (both fixed at
+/// construction). `WorkBudgetExhausted` means the whole batch must be
+/// deferred — it is not a verdict on this head.
 pub fn verify_head_closure_with<S: ObjectStore>(
     verifier: &mut ClosureVerifier,
     runtime: &crate::runtime::RuntimeState,
     snapshot: &Snapshot,
     objects: &S,
-    limits: &Limits,
 ) -> Result<(), ClosureError>
 where
     S::Error: std::fmt::Debug,
@@ -772,7 +778,6 @@ where
         &root.manifest_id,
         &root.manifest,
         runtime,
-        limits,
     )
 }
 
@@ -967,10 +972,10 @@ mod tests {
             max_entries: WIDE as u64 * (HEADS as u64 + 1),
             max_work: HEADS as u64,
         };
-        let mut verifier = ClosureVerifier::new(budget);
+        let mut verifier = ClosureVerifier::new(budget, Limits::V0);
         for (snapshot, root_id, root, children) in &heads {
             verifier
-                .verify_snapshot(snapshot, &store, root_id, root, children, &Limits::V0)
+                .verify_snapshot(snapshot, &store, root_id, root, children)
                 .expect("shared batch stays within a one-tree budget");
         }
         assert_eq!(
@@ -993,14 +998,39 @@ mod tests {
             reads: RefCell::new(HashMap::new()),
         };
         for (snapshot, root_id, root, children) in &heads {
-            let mut once = ClosureVerifier::new(HeadGateBudget::UNLIMITED);
-            once.verify_snapshot(snapshot, &fresh, root_id, root, children, &Limits::V0)
+            let mut once = ClosureVerifier::new(HeadGateBudget::UNLIMITED, Limits::V0);
+            once.verify_snapshot(snapshot, &fresh, root_id, root, children)
                 .expect("a single head still verifies");
         }
         assert_eq!(
             fresh.reads.borrow().get(&tree_id).copied().unwrap_or(0),
             HEADS,
             "without reuse the shared tree is read once per head"
+        );
+    }
+
+    /// The shipped default must never defer a lawful drive: one head
+    /// may legally declare `max_manifest_children` subtrees (each a
+    /// verification step) and carry `max_tree_entries` plus
+    /// `max_manifest_entries` scanned entries, and several max-size
+    /// trees must fit in the byte cap. Pin those relationships so a
+    /// future tightening cannot turn a valid head into an unpublishable
+    /// one on every pass.
+    #[test]
+    fn default_budget_covers_the_lawful_envelope() {
+        let default = HeadGateBudget::DEFAULT;
+        assert!(
+            default.max_work > Limits::V0.max_manifest_children as u64,
+            "one lawful head's subtree fan-out must fit the step cap"
+        );
+        assert!(
+            default.max_entries
+                > (Limits::V0.max_tree_entries + Limits::V0.max_manifest_entries) as u64,
+            "one lawful head's tree plus manifest entries must fit the entry cap"
+        );
+        assert!(
+            default.max_bytes >= Limits::V0.max_object_bytes as u64 * 8,
+            "several max-size trees must fit the byte cap"
         );
     }
 
@@ -1021,10 +1051,10 @@ mod tests {
             max_entries: WIDE as u64 * (HEADS as u64 + 1),
             max_work: HEADS as u64 - 1,
         };
-        let mut verifier = ClosureVerifier::new(budget);
+        let mut verifier = ClosureVerifier::new(budget, Limits::V0);
         let mut exhausted = false;
         for (snapshot, root_id, root, children) in &heads {
-            match verifier.verify_snapshot(snapshot, &store, root_id, root, children, &Limits::V0) {
+            match verifier.verify_snapshot(snapshot, &store, root_id, root, children) {
                 Ok(()) => {}
                 Err(ClosureError::WorkBudgetExhausted) => {
                     exhausted = true;

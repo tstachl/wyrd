@@ -1511,14 +1511,14 @@ where
         first_damage: None,
         budget_exhausted: false,
     };
-    let mut verifier = wyrd_sync::closure::ClosureVerifier::new(budget);
+    let mut verifier =
+        wyrd_sync::closure::ClosureVerifier::new(budget, wyrd_sync::ingest::Limits::V0);
     for head in heads {
         match wyrd_sync::closure::verify_head_closure_with(
             &mut verifier,
             runtime,
             head.snapshot(),
             store,
-            &wyrd_sync::ingest::Limits::V0,
         ) {
             Ok(()) => partition.publishable.push(head),
             Err(error) if error.is_pending() => partition.pending += 1,

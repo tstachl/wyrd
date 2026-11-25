@@ -243,6 +243,13 @@ where
         // `Node` per present child and dropped before the next load;
         // absence is reconstructed per name from this presence map, so
         // presence-vs-absence conflicts behave exactly as before.
+        // The reduced presence map still holds one resolved node per
+        // (name, head): resolving a conflict needs every version of a
+        // name, and the alternative — reloading a tree per name — is
+        // exactly the per-name store amplification the union exists to
+        // avoid. What is bounded here is the decoded-tree payload the
+        // reported issue measured (heads × whole trees), not the
+        // resolution set required to produce the union itself.
         let mut present: BTreeMap<Component, BTreeMap<wyrd_format::SnapshotId, Node>> =
             BTreeMap::new();
         for (snapshot, subtree) in &subtrees {

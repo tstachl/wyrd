@@ -582,6 +582,65 @@ fn head_gate_budget_exhaustion_defers_without_damage() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// End-to-end proof of the guardrail: with a healthy generation
+/// already installed, a later pass whose gate cannot finish within
+/// its budget keeps that generation serving. No partially verified
+/// head installs and `published_revision` does not advance.
+#[test]
+fn exhausted_gate_keeps_the_previous_generation() {
+    let (engine, dir, store, _chunk, _root, _head) = scratch_file_drive("gate-exhaust-projection");
+    let heads = engine.live_heads().unwrap();
+    let mut node = live_over_configured(engine, store, &heads, &LiveConfig::default());
+    let baseline_revision = node.published_revision;
+    let baseline_heads = node.published_heads;
+    assert!(
+        baseline_heads > 0,
+        "composition installed the first generation"
+    );
+
+    // Tighten the bound only after composition, so the healthy
+    // generation is genuinely already in place.
+    node.budgets.head_gate_budget = wyrd_sync::closure::HeadGateBudget {
+        max_work: 0,
+        ..wyrd_sync::closure::HeadGateBudget::DEFAULT
+    };
+    // Author a new snapshot so the pass is no longer idle and would
+    // otherwise publish a fresh generation.
+    {
+        let mut guard = node.store.write().unwrap();
+        let chunk = guard
+            .insert(wyrd_format::ObjectKind::Chunk, b"post")
+            .unwrap();
+        let root = wyrd_format::Tree::from_entries(vec![wyrd_format::Entry::file(
+            "post",
+            4,
+            false,
+            vec![chunk],
+        )
+        .unwrap()])
+        .unwrap()
+        .insert_into(&mut *guard)
+        .unwrap();
+        node.engine.author_snapshot(&*guard, root).unwrap();
+    }
+
+    let mut mailbox = NoopMailbox;
+    let report = node
+        .sync_once(&mut mailbox, None::<&mut wyrd_sync::serving::VaultSource>)
+        .unwrap();
+    assert!(!report.published, "an exhausted gate publishes nothing");
+    assert_eq!(
+        node.published_revision, baseline_revision,
+        "the previous generation stays published"
+    );
+    assert_eq!(
+        node.published_heads, baseline_heads,
+        "no partially verified head installs"
+    );
+    drop(node);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// A second head authored into the same store, for multi-head
 /// gate batches: the batch order is the caller's `Vec` order, so
 /// tests place damage and pending exactly where they probe.
