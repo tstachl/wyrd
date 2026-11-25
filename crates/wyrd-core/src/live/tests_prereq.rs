@@ -400,8 +400,13 @@ fn a_store_read_failure_keeps_its_store_class() {
     // verification reads the store — and cannot.
     let runtime = engine.runtime_state().unwrap();
     let heads = engine.live_heads().unwrap();
-    let error = partition_heads(&runtime, heads, &UnreadableStore(StoreFailure::StorageFull))
-        .expect_err("an unreadable store fails the pass");
+    let error = partition_heads(
+        &runtime,
+        heads,
+        &UnreadableStore(StoreFailure::StorageFull),
+        wyrd_sync::closure::HeadGateBudget::DEFAULT,
+    )
+    .expect_err("an unreadable store fails the pass");
     assert!(
         matches!(error, EngineError::Store(StoreFailure::StorageFull)),
         "the store class survives the closure boundary: {error:?}"
@@ -466,7 +471,13 @@ fn head_gate_counts_rejections_by_class() {
     let runtime = engine.runtime_state().unwrap();
     // Baseline: the authored closure verifies against its own
     // store — one installable head, zero rejections.
-    let partition = partition_heads(&runtime, engine.live_heads().unwrap(), &store).unwrap();
+    let partition = partition_heads(
+        &runtime,
+        engine.live_heads().unwrap(),
+        &store,
+        wyrd_sync::closure::HeadGateBudget::DEFAULT,
+    )
+    .unwrap();
     assert_eq!(partition.publishable.len(), 1);
     assert_eq!(
         (partition.pending, partition.mismatch, partition.other),
@@ -479,6 +490,7 @@ fn head_gate_counts_rejections_by_class() {
         &runtime,
         engine.live_heads().unwrap(),
         &MemoryObjectStore::default(),
+        wyrd_sync::closure::HeadGateBudget::DEFAULT,
     )
     .unwrap();
     assert!(partition.publishable.is_empty());
@@ -498,7 +510,13 @@ fn head_gate_counts_rejections_by_class() {
         hidden: Vec::new(),
         unreadable: Vec::new(),
     };
-    let partition = partition_heads(&runtime, engine.live_heads().unwrap(), &swapped).unwrap();
+    let partition = partition_heads(
+        &runtime,
+        engine.live_heads().unwrap(),
+        &swapped,
+        wyrd_sync::closure::HeadGateBudget::DEFAULT,
+    )
+    .unwrap();
     assert_eq!(
         (partition.pending, partition.mismatch, partition.other),
         (0, 1, 0),
@@ -514,6 +532,53 @@ fn head_gate_counts_rejections_by_class() {
         ),
         "the mismatch error survives the count: {error:?}"
     );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Budget exhaustion is a batch-level deferral, not a per-head
+/// verdict: it stops the scan, installs nothing, and is never counted
+/// as pending damage. Both callers take the same deferral branch they
+/// use for an all-pending batch, which keeps the previous generation
+/// serving.
+#[test]
+fn head_gate_budget_exhaustion_defers_without_damage() {
+    let (engine, dir, store, _chunk, _root, head) = scratch_file_drive("gate-budget");
+    let runtime = engine.runtime_state().unwrap();
+    for (tag, budget) in [
+        (
+            "steps",
+            wyrd_sync::closure::HeadGateBudget {
+                max_work: 0,
+                ..wyrd_sync::closure::HeadGateBudget::DEFAULT
+            },
+        ),
+        (
+            "bytes",
+            wyrd_sync::closure::HeadGateBudget {
+                max_bytes: 1,
+                ..wyrd_sync::closure::HeadGateBudget::DEFAULT
+            },
+        ),
+    ] {
+        let partition = partition_heads(&runtime, vec![head.clone()], &store, budget).unwrap();
+        assert!(
+            partition.budget_exhausted,
+            "{tag}: budget must stop the batch"
+        );
+        assert!(
+            partition.publishable.is_empty(),
+            "{tag}: exhaustion installs nothing"
+        );
+        assert_eq!(
+            (partition.pending, partition.mismatch, partition.other),
+            (0, 0, 0),
+            "{tag}: exhaustion is not a rejection class"
+        );
+        assert!(
+            partition.into_publishable().unwrap().is_empty(),
+            "{tag}: exhaustion is a deferral, not damage"
+        );
+    }
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -557,7 +622,13 @@ fn head_gate_classifies_past_the_first_damage() {
         unreadable: Vec::new(),
     };
     let runtime = engine.runtime_state().unwrap();
-    let partition = partition_heads(&runtime, vec![head, head2], &probe).unwrap();
+    let partition = partition_heads(
+        &runtime,
+        vec![head, head2],
+        &probe,
+        wyrd_sync::closure::HeadGateBudget::DEFAULT,
+    )
+    .unwrap();
     assert!(partition.publishable.is_empty());
     assert_eq!(
         (partition.pending, partition.mismatch, partition.other),
@@ -591,8 +662,13 @@ fn head_gate_reports_earlier_damage_over_later_store_failure() {
         unreadable: vec![root2],
     };
     let runtime = engine.runtime_state().unwrap();
-    let error = partition_heads(&runtime, vec![head, head2], &probe)
-        .expect_err("a damaged batch with an unreadable store still fails");
+    let error = partition_heads(
+        &runtime,
+        vec![head, head2],
+        &probe,
+        wyrd_sync::closure::HeadGateBudget::DEFAULT,
+    )
+    .expect_err("a damaged batch with an unreadable store still fails");
     assert!(
         matches!(error, EngineError::Closure(_)),
         "earlier damage wins over later store failure: {error:?}"

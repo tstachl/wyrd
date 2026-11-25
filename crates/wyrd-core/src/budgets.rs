@@ -164,6 +164,13 @@ pub struct ResourceBudgets {
     /// without a wired accountant is refused at composition rather
     /// than silently ignored; see [`crate::live::LiveConfig`].
     pub retained_bytes_quota: Option<u64>,
+    /// Aggregate work allowed to the head-closure gate over one whole
+    /// batch of heads. Bounds bytes read, entries scanned, and
+    /// verification steps across the batch — not per head — so a
+    /// fan-out of distinct large closures cannot starve the store read
+    /// lock. Exhaustion defers the whole publication; see
+    /// [`wyrd_sync::closure::HeadGateBudget`].
+    pub head_gate_budget: wyrd_sync::closure::HeadGateBudget,
 }
 
 impl Default for ResourceBudgets {
@@ -181,6 +188,7 @@ impl Default for ResourceBudgets {
             max_open_handles: DEFAULT_MAX_OPEN_HANDLES,
             max_open_capture_bytes: DEFAULT_MAX_OPEN_CAPTURE_BYTES,
             retained_bytes_quota: DEFAULT_RETAINED_BYTES_QUOTA,
+            head_gate_budget: wyrd_sync::closure::HeadGateBudget::DEFAULT,
         }
     }
 }

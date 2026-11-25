@@ -2,7 +2,7 @@
 //! set plus content stores. Resolves paths and opens files without
 //! ever authoring — writes flow through the mutation queue elsewhere.
 //!
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use wyrd_format::{
@@ -236,25 +236,37 @@ where
         &self,
         subtrees: Vec<(wyrd_format::SnapshotId, ContentId)>,
     ) -> Result<Vec<DirEntry>, ViewError> {
-        // Component order is the canonical byte order, so the union
-        // order is unchanged from the old String set.
-        let mut names = BTreeSet::new();
-        let mut trees = BTreeMap::new();
+        // Hold only one decoded tree at a time. The prior form kept a
+        // whole `Tree` per head until every union name was resolved, so
+        // a fan-out of heads over one wide directory cost heads × tree
+        // size in peak memory. Each tree is reduced to one resolved
+        // `Node` per present child and dropped before the next load;
+        // absence is reconstructed per name from this presence map, so
+        // presence-vs-absence conflicts behave exactly as before.
+        let mut present: BTreeMap<Component, BTreeMap<wyrd_format::SnapshotId, Node>> =
+            BTreeMap::new();
         for (snapshot, subtree) in &subtrees {
             let tree = self.load_tree(subtree)?;
             for entry in tree.entries() {
-                names.insert(entry.name.clone());
+                present
+                    .entry(entry.name.clone())
+                    .or_default()
+                    .insert(*snapshot, leaf(entry));
             }
-            trees.insert(*snapshot, tree);
         }
-        names
+        let versions: Vec<(wyrd_format::SnapshotId, u64)> = subtrees
+            .iter()
+            .map(|(snapshot, _)| (*snapshot, self.timestamp_of(snapshot)))
+            .collect();
+        present
             .into_iter()
-            .map(|name| {
-                let mut resolutions = Vec::with_capacity(trees.len());
-                for (snapshot, tree) in &trees {
-                    let node = tree.get(&name).map(leaf);
-                    resolutions.push((*snapshot, self.timestamp_of(snapshot), node));
-                }
+            .map(|(name, per_head)| {
+                let resolutions = versions
+                    .iter()
+                    .map(|(snapshot, timestamp)| {
+                        (*snapshot, *timestamp, per_head.get(snapshot).cloned())
+                    })
+                    .collect();
                 Ok(DirEntry {
                     name: name.as_str().to_string(),
                     node: merge(resolutions)?,

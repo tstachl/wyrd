@@ -38,9 +38,18 @@
 //!   store before installing it, and a head whose closure is incomplete or
 //!   does not correspond is never mounted (see `wyrd-daemon`).
 //!
-//! [`verify_head_closure`] is the head-level entry point for the second.
+//! [`verify_head_closure`] is the single-head entry point for the
+//! second; [`verify_head_closure_with`] is its batch form.
+//!
+//! A gate run over several heads shares one [`ClosureVerifier`]: it
+//! reads, decodes, checks, and scans each distinct tree once and reuses
+//! the result for every head that reaches the same tree, instead of
+//! paying that cost per head. [`HeadGateBudget`] caps the whole batch's
+//! bytes read, entries scanned, and verification steps. Exhaustion is
+//! reported as [`ClosureError::WorkBudgetExhausted`] — a scheduling
+//! deferral of the entire publication, not a verdict on any head.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use thiserror::Error;
 use wyrd_format::{
@@ -192,6 +201,14 @@ pub enum ClosureError {
         /// The store error rendered as text.
         detail: String,
     },
+    #[error("head-gate work budget exhausted")]
+    /// The aggregate budget for the whole gate run is spent. This is
+    /// neither pending progress nor damage on this head — it says the
+    /// batch cannot be judged within its bound, so the caller must
+    /// defer the entire publication and keep the previous complete
+    /// generation serving. It carries no `RejectionClass` for the
+    /// same reason `ObjectStore` does not.
+    WorkBudgetExhausted,
 }
 
 /// Operator-facing class of a head-closure rejection: what the
@@ -263,6 +280,9 @@ impl ClosureError {
             | ClosureError::TreeUnavailable(_)
             | ClosureError::MissingChildManifestRecord { .. } => Some(RejectionClass::Incomplete),
             ClosureError::ObjectStore { .. } => None,
+            // Neither a per-head rejection nor damage: the whole batch
+            // is deferred by the caller, so it is not counted on this head.
+            ClosureError::WorkBudgetExhausted => None,
         }
     }
 }
@@ -326,6 +346,339 @@ fn check_canonical(manifest: &Manifest) -> Result<(), ClosureError> {
     Ok(())
 }
 
+/// Aggregate work budget for one gate run over a batch of heads.
+///
+/// [`Limits`] bounds one tree or manifest; this bounds the *sum* across the
+/// whole batch, so many heads with large closures cannot multiply CPU and
+/// read-lock time at a fixed per-object cost. Exhaustion is a scheduling
+/// deferral, not closure damage: the caller holds back the entire
+/// publication and keeps the previous complete generation serving.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HeadGateBudget {
+    /// Maximum plaintext tree bytes read and decoded in the batch.
+    pub max_bytes: u64,
+    /// Maximum tree entries scanned in the batch.
+    pub max_entries: u64,
+    /// Maximum (tree, manifest) verification steps in the batch — a
+    /// deterministic proxy for elapsed work, since bytes and entries
+    /// are already charged separately for actual I/O.
+    pub max_work: u64,
+}
+
+impl HeadGateBudget {
+    /// Production bound: far above legitimate use (one `Limits::V0`
+    /// tree may be 64 MiB / 1M entries), finite against a hostile
+    /// fan-out of distinct large closures.
+    pub const DEFAULT: Self = Self {
+        max_bytes: 512 * 1024 * 1024,
+        max_entries: 8 * 1024 * 1024,
+        max_work: 65_536,
+    };
+    /// No bound: a single self-check at authoring time, where there is
+    /// no cross-head fan-out to cap and existing behavior must hold.
+    pub const UNLIMITED: Self = Self {
+        max_bytes: u64::MAX,
+        max_entries: u64::MAX,
+        max_work: u64::MAX,
+    };
+}
+
+/// The derived, immutable result of verifying one tree's bytes. The
+/// decoded `Tree` itself is dropped; only what the closure check needs
+/// is retained, so a wide tree costs its references once per pass
+/// rather than once per head.
+#[derive(Debug)]
+struct CachedTree {
+    byte_len: u64,
+    chunks: Vec<ContentId>,
+    directories: Vec<ContentId>,
+}
+
+/// One verifier for a whole gate run. Tree bytes are read, decoded,
+/// checked, and scanned at most once per distinct tree id; the derived
+/// result is reused by every head that reaches the same tree. All
+/// work is charged against one [`HeadGateBudget`], so distinct large
+/// closures cannot exhaust CPU and the store read lock by fanning out.
+///
+/// A verifier must be used with one [`Limits`] table throughout: the
+/// cached check already applied that table to the tree. The gate uses
+/// [`Limits::V0`] for every head in a batch, so the invariant holds.
+pub struct ClosureVerifier {
+    trees: HashMap<ContentId, CachedTree>,
+    budget: HeadGateBudget,
+    bytes: u64,
+    entries: u64,
+    work: u64,
+}
+
+impl ClosureVerifier {
+    /// A verifier with a fresh cache and the given aggregate budget.
+    pub fn new(budget: HeadGateBudget) -> Self {
+        ClosureVerifier {
+            trees: HashMap::new(),
+            budget,
+            bytes: 0,
+            entries: 0,
+            work: 0,
+        }
+    }
+
+    /// Work actually performed: bytes read, entries scanned, and steps.
+    /// Exposed for operator logging and the aggregate-cost regression.
+    pub fn work(&self) -> (u64, u64, u64) {
+        (self.bytes, self.entries, self.work)
+    }
+
+    fn charge_bytes(&mut self, bytes: u64) -> Result<(), ClosureError> {
+        self.bytes = self.bytes.saturating_add(bytes);
+        if self.bytes > self.budget.max_bytes {
+            return Err(ClosureError::WorkBudgetExhausted);
+        }
+        Ok(())
+    }
+
+    fn charge_entries(&mut self, entries: u64) -> Result<(), ClosureError> {
+        self.entries = self.entries.saturating_add(entries);
+        if self.entries > self.budget.max_entries {
+            return Err(ClosureError::WorkBudgetExhausted);
+        }
+        Ok(())
+    }
+
+    fn charge_work(&mut self) -> Result<(), ClosureError> {
+        self.work = self.work.saturating_add(1);
+        if self.work > self.budget.max_work {
+            return Err(ClosureError::WorkBudgetExhausted);
+        }
+        Ok(())
+    }
+
+    /// Verify one snapshot's manifest/tree correspondence using this
+    /// verifier's cache and budget. The full check is spelled out here;
+    /// [`verify_snapshot_manifest`] is the single-head wrapper over it.
+    fn verify_snapshot<S, M>(
+        &mut self,
+        snapshot: &Snapshot,
+        objects: &S,
+        root_id: &ContentId,
+        root: &Manifest,
+        children: &M,
+        limits: &Limits,
+    ) -> Result<(), ClosureError>
+    where
+        S: ObjectStore,
+        S::Error: std::fmt::Debug,
+        M: ManifestSource,
+    {
+        let snapshot_id = snapshot.snapshot_id();
+        if root.snapshot() != snapshot_id {
+            return Err(ClosureError::RootSnapshotMismatch {
+                expected: snapshot_id,
+                found: root.snapshot(),
+            });
+        }
+        check_canonical(root)?;
+        let derived = ContentId::derive(ObjectKind::Manifest, &root.canonical_bytes());
+        if &derived != root_id {
+            return Err(ClosureError::RootIdentityMismatch {
+                found: *root_id,
+                derived,
+            });
+        }
+        check_manifest(limits, root)?;
+
+        // Pair every reachable tree with the one manifest that declares it,
+        // so a second, different claimant is a detected contradiction.
+        let mut mapping: BTreeMap<ContentId, ContentId> = BTreeMap::new();
+        mapping.insert(snapshot.tree, *root_id);
+        let mut stack: Vec<(ContentId, &Manifest)> = vec![(snapshot.tree, root)];
+        let mut tree_sizes: BTreeMap<ContentId, u64> = BTreeMap::new();
+        let mut chunks: BTreeSet<ContentId> = BTreeSet::new();
+        let mut visited_manifests: Vec<&Manifest> = Vec::new();
+
+        while let Some((tree_id, manifest)) = stack.pop() {
+            // One verification step for this (tree, manifest) pair,
+            // charged even on a cache hit: the correspondence work is
+            // real per head, only byte I/O and decode are reused.
+            self.charge_work()?;
+            if !self.trees.contains_key(&tree_id) {
+                let bytes = objects
+                    .get(&tree_id)
+                    .map_err(|error| ClosureError::ObjectStore {
+                        failure: error.failure(),
+                        detail: format!("{error:?}"),
+                    })?
+                    .ok_or(ClosureError::TreeUnavailable(tree_id))?;
+                if ContentId::derive(ObjectKind::Tree, &bytes) != tree_id {
+                    return Err(ClosureError::TreeIdentityMismatch(tree_id));
+                }
+                // Charge before decoding so a hostile byte string
+                // cannot spend unbounded CPU before the budget stops it.
+                self.charge_bytes(bytes.len() as u64)?;
+                let tree = Tree::decode(&bytes).map_err(|_| ClosureError::InvalidTree(tree_id))?;
+                check_tree(limits, &tree)?;
+                let mut tree_chunks = Vec::new();
+                let mut directories = Vec::new();
+                for entry in tree.entries() {
+                    match &entry.content {
+                        EntryContent::File { chunks: ids, .. } => {
+                            tree_chunks.extend(ids.iter().copied())
+                        }
+                        EntryContent::Dir { subtree } => directories.push(*subtree),
+                        EntryContent::Symlink { .. } => {}
+                    }
+                }
+                self.charge_entries(tree.entries().len() as u64)?;
+                self.trees.insert(
+                    tree_id,
+                    CachedTree {
+                        byte_len: bytes.len() as u64,
+                        chunks: tree_chunks,
+                        directories,
+                    },
+                );
+            }
+            let cached = &self.trees[&tree_id];
+            tree_sizes.insert(tree_id, cached.byte_len);
+            visited_manifests.push(manifest);
+
+            // Per-manifest lookups: a tree of a million files against a
+            // manifest of a million entries must stay O(n log n).
+            let entry_lookup: BTreeMap<ContentId, &ManifestEntry> = manifest
+                .entries()
+                .iter()
+                .map(|entry| (entry.content_id, entry))
+                .collect();
+            let link_lookup: BTreeMap<ContentId, &ChildManifest> = manifest
+                .children()
+                .iter()
+                .map(|link| (link.tree, link))
+                .collect();
+            let mut directories: BTreeSet<ContentId> = BTreeSet::new();
+            for chunk in &cached.chunks {
+                let declared =
+                    entry_lookup
+                        .get(chunk)
+                        .copied()
+                        .ok_or(ClosureError::MissingChunkEntry {
+                            tree: tree_id,
+                            chunk: *chunk,
+                        })?;
+                if declared.kind != ObjectKind::Chunk {
+                    return Err(ClosureError::KindMismatch {
+                        content: *chunk,
+                        expected: ObjectKind::Chunk,
+                        found: declared.kind,
+                    });
+                }
+                chunks.insert(*chunk);
+            }
+            for subtree in &cached.directories {
+                directories.insert(*subtree);
+            }
+            // A child link the tree does not name is an unrelated declaration.
+            for link in manifest.children() {
+                if !directories.contains(&link.tree) {
+                    return Err(ClosureError::UnexpectedChildManifest {
+                        tree: tree_id,
+                        child: link.tree,
+                    });
+                }
+            }
+            // Every directory names exactly one child manifest, and the
+            // tree's manifest claimant must be unique.
+            for subtree in &directories {
+                let link = link_lookup.get(subtree).copied().ok_or(
+                    ClosureError::MissingChildManifest {
+                        tree: tree_id,
+                        child: *subtree,
+                    },
+                )?;
+                match mapping.get(subtree) {
+                    Some(existing) if existing != &link.manifest => {
+                        return Err(ClosureError::AmbiguousTreeMapping {
+                            tree: *subtree,
+                            first: *existing,
+                            second: link.manifest,
+                        });
+                    }
+                    Some(_) => continue,
+                    None => {
+                        mapping.insert(*subtree, link.manifest);
+                    }
+                }
+                let child = children.manifest(&link.manifest).ok_or(
+                    ClosureError::MissingChildManifestRecord {
+                        child: *subtree,
+                        manifest: link.manifest,
+                    },
+                )?;
+                // The source is indexed by the claimed id, but a generic
+                // source may hand back bytes that derive to a different
+                // one. Bind the child's canonical identity to the id its
+                // parent named, exactly as the root identity is bound.
+                check_canonical(child)?;
+                let derived = ContentId::derive(ObjectKind::Manifest, &child.canonical_bytes());
+                if derived != link.manifest {
+                    return Err(ClosureError::ChildIdentityMismatch {
+                        expected: link.manifest,
+                        derived,
+                    });
+                }
+                if child.snapshot() != snapshot_id {
+                    return Err(ClosureError::ChildSnapshotMismatch {
+                        manifest: link.manifest,
+                    });
+                }
+                check_manifest(limits, child)?;
+                stack.push((*subtree, child));
+            }
+        }
+
+        // With both closures resolved, every entry must land in one of them.
+        // Manifest entries are already in memory, but scanning them is
+        // still per-head work, so they count against the entry ceiling.
+        let trees: BTreeSet<ContentId> = tree_sizes.keys().copied().collect();
+        for manifest in visited_manifests {
+            self.charge_entries(manifest.entries().len() as u64)?;
+            for entry in manifest.entries() {
+                let is_chunk = chunks.contains(&entry.content_id);
+                let is_tree = trees.contains(&entry.content_id);
+                if !is_chunk && !is_tree {
+                    return Err(ClosureError::UnrelatedEntry {
+                        content: entry.content_id,
+                    });
+                }
+                if is_chunk && entry.kind != ObjectKind::Chunk {
+                    return Err(ClosureError::KindMismatch {
+                        content: entry.content_id,
+                        expected: ObjectKind::Chunk,
+                        found: entry.kind,
+                    });
+                }
+                if is_tree {
+                    if entry.kind != ObjectKind::Tree {
+                        return Err(ClosureError::KindMismatch {
+                            content: entry.content_id,
+                            expected: ObjectKind::Tree,
+                            found: entry.kind,
+                        });
+                    }
+                    let actual = tree_sizes.get(&entry.content_id).copied().unwrap_or(0);
+                    if entry.size != actual {
+                        return Err(ClosureError::TreeEntrySizeMismatch {
+                            content: entry.content_id,
+                            expected: actual,
+                            found: entry.size,
+                        });
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Verify that the manifest hierarchy rooted at `root` corresponds to the
 /// tree closure rooted at `snapshot.tree`.
 ///
@@ -361,189 +714,11 @@ where
     S::Error: std::fmt::Debug,
     M: ManifestSource,
 {
-    let snapshot_id = snapshot.snapshot_id();
-    if root.snapshot() != snapshot_id {
-        return Err(ClosureError::RootSnapshotMismatch {
-            expected: snapshot_id,
-            found: root.snapshot(),
-        });
-    }
-    check_canonical(root)?;
-    let derived = ContentId::derive(ObjectKind::Manifest, &root.canonical_bytes());
-    if &derived != root_id {
-        return Err(ClosureError::RootIdentityMismatch {
-            found: *root_id,
-            derived,
-        });
-    }
-    check_manifest(limits, root)?;
-
-    // Pair every reachable tree with the one manifest that declares it, so a
-    // second, different claimant is a detected contradiction rather than an
-    // ignored edge.
-    let mut mapping: BTreeMap<ContentId, ContentId> = BTreeMap::new();
-    mapping.insert(snapshot.tree, *root_id);
-    let mut stack: Vec<(ContentId, &Manifest)> = vec![(snapshot.tree, root)];
-    // Every tree's plaintext length, for the optional `Tree`-entry size check.
-    let mut tree_sizes: BTreeMap<ContentId, u64> = BTreeMap::new();
-    // Chunks reachable from some file, and every manifest visited.
-    let mut chunks: BTreeSet<ContentId> = BTreeSet::new();
-    let mut visited_manifests: Vec<&Manifest> = Vec::new();
-
-    while let Some((tree_id, manifest)) = stack.pop() {
-        let bytes = objects
-            .get(&tree_id)
-            .map_err(|error| ClosureError::ObjectStore {
-                failure: error.failure(),
-                detail: format!("{error:?}"),
-            })?
-            .ok_or(ClosureError::TreeUnavailable(tree_id))?;
-        if ContentId::derive(ObjectKind::Tree, &bytes) != tree_id {
-            return Err(ClosureError::TreeIdentityMismatch(tree_id));
-        }
-        let tree = Tree::decode(&bytes).map_err(|_| ClosureError::InvalidTree(tree_id))?;
-        check_tree(limits, &tree)?;
-        tree_sizes.insert(tree_id, bytes.len() as u64);
-        visited_manifests.push(manifest);
-
-        // Per-manifest lookups: a tree of a million files against a manifest
-        // of a million entries must stay O(n log n), not O(n²).
-        let entry_lookup: BTreeMap<ContentId, &ManifestEntry> = manifest
-            .entries()
-            .iter()
-            .map(|entry| (entry.content_id, entry))
-            .collect();
-        let link_lookup: BTreeMap<ContentId, &ChildManifest> = manifest
-            .children()
-            .iter()
-            .map(|link| (link.tree, link))
-            .collect();
-        let mut directories: BTreeSet<ContentId> = BTreeSet::new();
-        for entry in tree.entries() {
-            match &entry.content {
-                EntryContent::File { chunks: ids, .. } => {
-                    for chunk in ids {
-                        let declared = entry_lookup.get(chunk).copied().ok_or(
-                            ClosureError::MissingChunkEntry {
-                                tree: tree_id,
-                                chunk: *chunk,
-                            },
-                        )?;
-                        if declared.kind != ObjectKind::Chunk {
-                            return Err(ClosureError::KindMismatch {
-                                content: *chunk,
-                                expected: ObjectKind::Chunk,
-                                found: declared.kind,
-                            });
-                        }
-                    }
-                    chunks.extend(ids.iter().copied());
-                }
-                EntryContent::Dir { subtree } => {
-                    directories.insert(*subtree);
-                }
-                EntryContent::Symlink { .. } => {}
-            }
-        }
-        // A child link the tree does not name is an unrelated declaration.
-        for link in manifest.children() {
-            if !directories.contains(&link.tree) {
-                return Err(ClosureError::UnexpectedChildManifest {
-                    tree: tree_id,
-                    child: link.tree,
-                });
-            }
-        }
-        // Every directory names exactly one child manifest, and the tree's
-        // manifest claimant must be unique.
-        for subtree in &directories {
-            let link =
-                link_lookup
-                    .get(subtree)
-                    .copied()
-                    .ok_or(ClosureError::MissingChildManifest {
-                        tree: tree_id,
-                        child: *subtree,
-                    })?;
-            match mapping.get(subtree) {
-                Some(existing) if existing != &link.manifest => {
-                    return Err(ClosureError::AmbiguousTreeMapping {
-                        tree: *subtree,
-                        first: *existing,
-                        second: link.manifest,
-                    });
-                }
-                Some(_) => continue,
-                None => {
-                    mapping.insert(*subtree, link.manifest);
-                }
-            }
-            let child = children.manifest(&link.manifest).ok_or(
-                ClosureError::MissingChildManifestRecord {
-                    child: *subtree,
-                    manifest: link.manifest,
-                },
-            )?;
-            // The source is indexed by the claimed id, but a generic source
-            // may hand back bytes that derive to a different one. Bind the
-            // child's canonical identity to the id its parent named, exactly
-            // as the root identity is bound.
-            check_canonical(child)?;
-            let derived = ContentId::derive(ObjectKind::Manifest, &child.canonical_bytes());
-            if derived != link.manifest {
-                return Err(ClosureError::ChildIdentityMismatch {
-                    expected: link.manifest,
-                    derived,
-                });
-            }
-            if child.snapshot() != snapshot_id {
-                return Err(ClosureError::ChildSnapshotMismatch {
-                    manifest: link.manifest,
-                });
-            }
-            check_manifest(limits, child)?;
-            stack.push((*subtree, child));
-        }
-    }
-
-    // With both closures resolved, every entry must land in one of them.
-    let trees: BTreeSet<ContentId> = tree_sizes.keys().copied().collect();
-    for manifest in visited_manifests {
-        for entry in manifest.entries() {
-            let is_chunk = chunks.contains(&entry.content_id);
-            let is_tree = trees.contains(&entry.content_id);
-            if !is_chunk && !is_tree {
-                return Err(ClosureError::UnrelatedEntry {
-                    content: entry.content_id,
-                });
-            }
-            if is_chunk && entry.kind != ObjectKind::Chunk {
-                return Err(ClosureError::KindMismatch {
-                    content: entry.content_id,
-                    expected: ObjectKind::Chunk,
-                    found: entry.kind,
-                });
-            }
-            if is_tree {
-                if entry.kind != ObjectKind::Tree {
-                    return Err(ClosureError::KindMismatch {
-                        content: entry.content_id,
-                        expected: ObjectKind::Tree,
-                        found: entry.kind,
-                    });
-                }
-                let actual = tree_sizes.get(&entry.content_id).copied().unwrap_or(0);
-                if entry.size != actual {
-                    return Err(ClosureError::TreeEntrySizeMismatch {
-                        content: entry.content_id,
-                        expected: actual,
-                        found: entry.size,
-                    });
-                }
-            }
-        }
-    }
-    Ok(())
+    // The single-head entry point (authoring self-checks and unit
+    // tests) uses an unbounded verifier: there is no cross-head
+    // fan-out to cap here, and behavior is unchanged.
+    ClosureVerifier::new(HeadGateBudget::UNLIMITED)
+        .verify_snapshot(snapshot, objects, root_id, root, children, limits)
 }
 
 /// Verify one classified head's closure against the local store: resolve the
@@ -573,13 +748,76 @@ where
     )
 }
 
+/// The batch form of [`verify_head_closure`]. One verifier is shared by
+/// every head in a gate run, so a tree referenced by several heads is
+/// read, decoded, checked, and scanned once, and all work is charged to
+/// one [`HeadGateBudget`]. `WorkBudgetExhausted` means the whole batch
+/// must be deferred — it is not a verdict on this head.
+pub fn verify_head_closure_with<S: ObjectStore>(
+    verifier: &mut ClosureVerifier,
+    runtime: &crate::runtime::RuntimeState,
+    snapshot: &Snapshot,
+    objects: &S,
+    limits: &Limits,
+) -> Result<(), ClosureError>
+where
+    S::Error: std::fmt::Debug,
+{
+    let root = runtime
+        .root_manifest_record(&snapshot.snapshot_id())
+        .ok_or(ClosureError::RootManifestMissing(snapshot.snapshot_id()))?;
+    verifier.verify_snapshot(
+        snapshot,
+        objects,
+        &root.manifest_id,
+        &root.manifest,
+        runtime,
+        limits,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
     use wyrd_format::{
         BaoRoot, ChildManifest, DeviceId, Entry, ManifestEntry, MemoryObjectStore, StorageId,
         TransitionId,
     };
+
+    /// A store that counts reads per content id, so the reuse guardrail
+    /// can assert a shared tree is read exactly once per gate run.
+    #[derive(Default)]
+    struct CountingStore {
+        inner: MemoryObjectStore,
+        reads: RefCell<HashMap<ContentId, usize>>,
+    }
+    #[derive(Debug)]
+    struct CountingError;
+    impl StoreError for CountingError {}
+    impl ObjectStore for CountingStore {
+        type Error = CountingError;
+        fn insert(&mut self, kind: ObjectKind, data: &[u8]) -> Result<ContentId, Self::Error> {
+            self.inner.insert(kind, data).map_err(|_| CountingError)
+        }
+        fn insert_verified(
+            &mut self,
+            kind: ObjectKind,
+            expected: &ContentId,
+            data: &[u8],
+        ) -> Result<(), Self::Error> {
+            self.inner
+                .insert_verified(kind, expected, data)
+                .map_err(|_| CountingError)
+        }
+        fn get(&self, id: &ContentId) -> Result<Option<Vec<u8>>, Self::Error> {
+            *self.reads.borrow_mut().entry(*id).or_default() += 1;
+            self.inner.get(id).map_err(|_| CountingError)
+        }
+        fn has(&self, id: &ContentId) -> Result<bool, Self::Error> {
+            self.inner.has(id).map_err(|_| CountingError)
+        }
+    }
 
     fn chunk(data: &[u8]) -> (ContentId, ManifestEntry) {
         let id = ContentId::derive(ObjectKind::Chunk, data);
@@ -656,6 +894,151 @@ mod tests {
             &Limits::V0,
         )
         .unwrap();
+    }
+
+    /// A wide flat tree shared by several distinct heads, plus the
+    /// per-head manifest that maps it. Heads differ only in authoring
+    /// device so their snapshot ids (and root manifests) differ while
+    /// the tree identity is common.
+    /// (snapshot, root id, root manifest, manifest-by-id source)
+    type SharedHead = (Snapshot, ContentId, Manifest, BTreeMap<ContentId, Manifest>);
+
+    fn wide_shared_heads(
+        wide: usize,
+        heads: usize,
+    ) -> (MemoryObjectStore, ContentId, u64, Vec<SharedHead>) {
+        let mut store = MemoryObjectStore::default();
+        let mut tree_entries = Vec::with_capacity(wide);
+        let mut manifest_entries = Vec::with_capacity(wide);
+        for i in 0..wide {
+            let data = format!("payload-{i:04}");
+            let (chunk, entry) = chunk(data.as_bytes());
+            tree_entries.push(
+                Entry::file(format!("f-{i:04}"), data.len() as u64, false, vec![chunk]).unwrap(),
+            );
+            manifest_entries.push(entry);
+        }
+        manifest_entries.sort_by_key(|entry| entry.content_id);
+        let tree = Tree::from_entries(tree_entries).unwrap();
+        let bytes = tree.encode();
+        let tree_len = bytes.len() as u64;
+        let tree_id = store.insert(ObjectKind::Tree, &bytes).unwrap();
+
+        let mut result = Vec::with_capacity(heads);
+        for i in 0..heads {
+            let snapshot = Snapshot::new(
+                Vec::new(),
+                tree_id,
+                DeviceId::from_bytes([i as u8 + 1; 32]),
+                TransitionId::from_bytes([0x02; 32]),
+                1,
+                0,
+                7,
+            )
+            .unwrap();
+            let root = Manifest::new(snapshot.snapshot_id(), manifest_entries.clone(), Vec::new())
+                .unwrap();
+            let root_id = manifest_id(&root);
+            let mut children = BTreeMap::new();
+            children.insert(root_id, root.clone());
+            result.push((snapshot, root_id, root, children));
+        }
+        (store, tree_id, tree_len, result)
+    }
+
+    /// The aggregate-cost guardrail: eight heads over one wide tree
+    /// decode it once, not eight times. The budget is sized to fit one
+    /// tree's worth of work exactly, so reuse is what keeps the batch
+    /// under budget; a fresh verifier per head would exhaust it.
+    #[test]
+    fn shared_wide_tree_is_read_and_scanned_once_per_gate_run() {
+        const WIDE: usize = 128;
+        const HEADS: usize = 8;
+        let (inner, tree_id, tree_len, heads) = wide_shared_heads(WIDE, HEADS);
+        let tree_bytes = inner.get(&tree_id).unwrap().unwrap();
+        let store = CountingStore {
+            inner,
+            reads: RefCell::new(HashMap::new()),
+        };
+        // Exactly one tree's worth of bytes/entries, and one step per
+        // head: sharing is the only reason this fits.
+        let budget = HeadGateBudget {
+            max_bytes: tree_len,
+            max_entries: WIDE as u64 * (HEADS as u64 + 1),
+            max_work: HEADS as u64,
+        };
+        let mut verifier = ClosureVerifier::new(budget);
+        for (snapshot, root_id, root, children) in &heads {
+            verifier
+                .verify_snapshot(snapshot, &store, root_id, root, children, &Limits::V0)
+                .expect("shared batch stays within a one-tree budget");
+        }
+        assert_eq!(
+            store.reads.borrow().get(&tree_id).copied().unwrap_or(0),
+            1,
+            "the shared tree is read once per gate run, not once per head"
+        );
+        assert_eq!(
+            verifier.work(),
+            (tree_len, WIDE as u64 * (HEADS as u64 + 1), HEADS as u64),
+            "tree bytes and entries are charged once; manifest entries and steps per head"
+        );
+
+        // The same heads through a fresh verifier each time read the
+        // tree once per head — precisely the behavior this fix replaces.
+        let mut fresh_inner = MemoryObjectStore::default();
+        fresh_inner.insert(ObjectKind::Tree, &tree_bytes).unwrap();
+        let fresh = CountingStore {
+            inner: fresh_inner,
+            reads: RefCell::new(HashMap::new()),
+        };
+        for (snapshot, root_id, root, children) in &heads {
+            let mut once = ClosureVerifier::new(HeadGateBudget::UNLIMITED);
+            once.verify_snapshot(snapshot, &fresh, root_id, root, children, &Limits::V0)
+                .expect("a single head still verifies");
+        }
+        assert_eq!(
+            fresh.reads.borrow().get(&tree_id).copied().unwrap_or(0),
+            HEADS,
+            "without reuse the shared tree is read once per head"
+        );
+    }
+
+    /// Distinct large trees are charged separately, so a fan-out of
+    /// heads that do not share content exhausts the aggregate budget
+    /// even though every individual tree is within `Limits::V0`.
+    #[test]
+    fn aggregate_work_budget_exhausts_on_distinct_trees() {
+        const WIDE: usize = 64;
+        const HEADS: usize = 4;
+        let (inner, _tree_id, tree_len, heads) = wide_shared_heads(WIDE, HEADS);
+        let store = CountingStore {
+            inner,
+            reads: RefCell::new(HashMap::new()),
+        };
+        let budget = HeadGateBudget {
+            max_bytes: tree_len,
+            max_entries: WIDE as u64 * (HEADS as u64 + 1),
+            max_work: HEADS as u64 - 1,
+        };
+        let mut verifier = ClosureVerifier::new(budget);
+        let mut exhausted = false;
+        for (snapshot, root_id, root, children) in &heads {
+            match verifier.verify_snapshot(snapshot, &store, root_id, root, children, &Limits::V0) {
+                Ok(()) => {}
+                Err(ClosureError::WorkBudgetExhausted) => {
+                    exhausted = true;
+                    break;
+                }
+                Err(other) => panic!("unexpected closure verdict: {other:?}"),
+            }
+        }
+        assert!(exhausted, "the aggregate step budget stops the batch");
+        assert_eq!(
+            verifier.work().2,
+            HEADS as u64,
+            "the last allowed step is charged before exhaustion"
+        );
     }
 
     #[test]
@@ -1041,10 +1424,11 @@ mod tests {
                 },
                 None,
             ),
+            (ClosureError::WorkBudgetExhausted, None),
         ];
         assert_eq!(
             cases.len(),
-            19,
+            20,
             "one case per ClosureError variant, mirroring the exhaustive match in rejection_class"
         );
         for (error, expected) in cases {
