@@ -779,9 +779,12 @@ fn shutdown_completes_with_a_client_connected() {
             .bind_and_serve(&socket_path, stop)
             .expect("the interface serves");
     });
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
     while !dir.join("shutdown.sock").exists() {
-        assert!(std::time::Instant::now() < deadline, "the socket binds");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the socket binds within the load-tolerant deadline"
+        );
         std::thread::sleep(Duration::from_millis(10));
     }
 
@@ -811,22 +814,21 @@ fn shutdown_completes_with_a_client_connected() {
 
     stop.store(true, Ordering::Relaxed);
     // Join with a deadline: a hung join fails the test instead of
-    // hanging the suite. The flag avoids channel calls, which the
-    // mailbox-construction contract scan would flag.
-    let joined = Arc::new(AtomicBool::new(false));
-    let joined_flag = Arc::clone(&joined);
-    std::thread::spawn(move || {
-        serve_thread.join().unwrap();
-        joined_flag.store(true, Ordering::Relaxed);
-    });
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
-    while !joined.load(Ordering::Relaxed) {
+    // hanging the suite. `is_finished` is polled directly rather than
+    // from a second join thread — that thread added its own scheduling
+    // dependency to an already timing-sensitive assertion. The budget
+    // is generous relative to the server's 250 ms connection poll, so
+    // a loaded CI worker cannot trip it, but it stays far below the
+    // suite's 600 s test timeout.
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while !serve_thread.is_finished() {
         assert!(
             std::time::Instant::now() < deadline,
             "shutdown completes with clients connected"
         );
         std::thread::sleep(Duration::from_millis(10));
     }
+    serve_thread.join().expect("the serve thread ends cleanly");
     drop(idle);
     drop(partial);
 
@@ -2354,6 +2356,7 @@ fn retained_freshness_resets_on_publication() {
         seed_fork_bytes(&mut *store, b"withheld", "withheld.txt");
     }
     let mut mailbox = NoopMailbox;
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
     std::thread::scope(|scope| {
         scope.spawn(|| {
             parts
@@ -2363,8 +2366,29 @@ fn retained_freshness_resets_on_publication() {
                 })
                 .expect("the trigger mutation commits");
         });
-        live.sync_once(&mut mailbox, None::<&mut wyrd_sync::bulk::MemoryBulkSource>)
-            .expect("the completing pass runs");
+        // Barrier: a submitter scheduled after the pass has taken its
+        // batch is invisible to that pass, and `submit` waits without a
+        // deadline, so the scope would never exit. Wait for admission,
+        // then keep driving passes until the reply is completed — an
+        // evaluation that defers for content must not strand it.
+        while parts.mutations.outstanding() == 0 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the trigger mutation is admitted"
+            );
+            std::thread::yield_now();
+        }
+        loop {
+            live.sync_once(&mut mailbox, None::<&mut wyrd_sync::bulk::MemoryBulkSource>)
+                .expect("the completing pass runs");
+            if parts.mutations.outstanding() == 0 {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the trigger mutation completes"
+            );
+        }
     });
     let freshness = parts.freshness.read().unwrap().clone();
     assert!(matches!(
