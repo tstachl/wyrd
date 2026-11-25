@@ -165,6 +165,69 @@
               --numeric-owner -I '${pkgs.gzip}/bin/gzip -n' -cf $out \
               -C staging ${dirname}
           '';
+      # Libtest binary for the two #[ignore]d live-mount tests. Baked
+      # into the peer-o gate guest so the Odin leg can run them without
+      # a Rust toolchain in-guest; no tests run here, this only builds
+      # and installs the harness that runs them. Dev profile matches the
+      # local invocation; the single executable is the lib target's
+      # harness (`wyrd_cli-<hash>`), not any integration-test target.
+      liveMountTestsFor = system: src:
+        let
+          pkgs = pkgsFor system;
+          inherit (pkgs) lib stdenv;
+          toolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
+          craneLib = (crane.mkLib pkgs).overrideToolchain toolchain;
+          manifest = builtins.fromTOML (builtins.readFile (src + "/Cargo.toml"));
+          version = manifest.workspace.package.version or manifest.package.version
+            or (throw "wyrdSrc Cargo.toml has no package version: ${toString src}");
+        in
+        craneLib.mkCargoDerivation {
+          pname = "wyrd-live-mount-tests";
+          inherit version;
+          # Not cleanCargoSource: wyrd-cli's lib tests include_str!
+          # docs/architecture.md, which that filter drops. The flake
+          # source already excludes VCS state and ignored target/.
+          src = src;
+          strictDeps = true;
+          # This is a one-off harness, not a shared CI gate: compile
+          # its dev-dependencies here instead of paying for crane's
+          # all-workspace deps step (which would pull the desktop GUI
+          # closure into an E2E-only derivation).
+          cargoArtifacts = null;
+          # No downstream crate consumes these artifacts, and leaving
+          # the hook on archives target/ twice during install.
+          doInstallCargoArtifacts = false;
+          doCheck = false;
+          nativeBuildInputs = [ pkgs.pkg-config ];
+          buildInputs = lib.optionals stdenv.isLinux [ pkgs.fuse ]
+            ++ lib.optionals stdenv.isDarwin [
+            pkgs.macfuse-stubs
+            (pkgs.callPackage ./nix/macfuse3-stubs.nix { })
+          ];
+          env = { CARGO_PROFILE = ""; };
+          buildPhaseCargoCommand = ''
+            cargo test -p wyrd-cli --lib --no-run --color never
+          '';
+          installPhaseCommand = ''
+            runHook preInstall
+            mkdir -p "$out/bin"
+            test_dir="''${CARGO_TARGET_DIR:-target}/debug/deps"
+            mapfile -t harnesses < <(
+              find "$test_dir" -maxdepth 1 -type f -perm -u+x -name 'wyrd_cli-*'
+            )
+            [[ "''${#harnesses[@]}" -eq 1 ]] || {
+              echo "expected exactly one wyrd-cli libtest harness in $test_dir" >&2
+              exit 1
+            }
+            install -m 0755 "''${harnesses[0]}" "$out/bin/wyrd-live-mount-tests"
+            runHook postInstall
+          '';
+          meta = with lib; {
+            description = "Libtest harness for the ignored live-mount tests (E2E only)";
+            platforms = systems;
+            mainProgram = "wyrd-live-mount-tests";
+          };
+        };
     in
     {
       packages = forAllSystems (system: {
@@ -179,6 +242,10 @@
           cargoExtraArgs = "-p wyrd-host";
           description = "Desktop host owner process (developer-run, headless)";
         };
+        # E2E-only libtest harness; never distributed, never installed on
+        # a user machine. Built for the peer-o gate guest by the
+        # wyrd-live-mount-e2e task.
+        wyrd-live-mount-tests = liveMountTestsFor system ./.;
         wyrd-dist = distFor system;
         # Pinned relay-query tool for the gate opacity probe
         # (gate-phase-03): reproducibility is the reason — the suite
@@ -348,8 +415,15 @@
                 # (/run/current-system/sw/bin/...) serve both sides,
                 # no handoff rewriting needed.
                 ({ pkgs, ... }: {
+                  # peer-o also carries the libtest harness for the two
+                  # #[ignore]d live-mount tests. The dedicated
+                  # wyrd-live-mount-e2e task runs it in-guest; adding it
+                  # to this image needs no second role, address or host
+                  # policy change. No toolchain is needed in-guest.
                   environment.systemPackages =
-                    [ wyrdPkg pkgs.nak ];
+                    [ wyrdPkg pkgs.nak ]
+                      ++ nixpkgs.lib.optionals (role == "peer-o")
+                      [ self.packages.x86_64-linux.wyrd-live-mount-tests ];
                 })
               ] ++ extraModules;
             };
