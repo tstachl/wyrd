@@ -1027,7 +1027,22 @@ where
                     0
                 } else {
                     let store = self.store.read().map_err(|_| LiveError::Lock)?;
-                    partition_heads(&completed_runtime, heads, &*store)?.pending
+                    let partition = partition_heads(
+                        &completed_runtime,
+                        heads,
+                        &*store,
+                        self.budgets.head_gate_budget,
+                    )?;
+                    if partition.budget_exhausted {
+                        // The batch could not be classified within the
+                        // bound, so this is not a trustworthy pending
+                        // count. Keep the convergence verdict
+                        // conservative rather than reporting a head
+                        // count the gate never finished measuring.
+                        partition.pending.max(1)
+                    } else {
+                        partition.pending
+                    }
                 }
             };
             tracing::debug!(
@@ -1089,16 +1104,25 @@ where
         let heads = self.engine.live_heads()?;
         let partition = {
             let store = self.store.read().map_err(|_| LiveError::Lock)?;
-            partition_heads(&completed_runtime, heads, &*store)?
+            partition_heads(
+                &completed_runtime,
+                heads,
+                &*store,
+                self.budgets.head_gate_budget,
+            )?
         };
+        let budget_exhausted = partition.budget_exhausted;
         let pending_heads = partition.pending;
+        // Damage still fails the batch closed; exhaustion is handled
+        // below as a deferral, never as a per-head verdict.
         let heads = partition.into_publishable()?;
-        if heads.is_empty() && pending_heads > 0 {
-            // Every eligible head is still mid-fetch: keep the current
-            // generation serving and try again next pass. This is
-            // ordinary progress, not a failure — a committed mutation
-            // always authors a verified head, so no recorded reply
-            // waits on this publication. The durable outbox still
+        if budget_exhausted || (heads.is_empty() && pending_heads > 0) {
+            // Either every eligible head is still mid-fetch, or the
+            // aggregate gate budget ran out before the batch could be
+            // judged: keep the current generation serving and try
+            // again next pass. This is not a failure — a committed
+            // mutation always authors a verified head, so no recorded
+            // reply waits on this publication. The durable outbox still
             // runs: control-plane obligations (transitions,
             // capabilities, announcements) are independent of head
             // publication, and starving them here would stall
@@ -1119,8 +1143,9 @@ where
             };
             tracing::debug!(
                 pending_heads,
+                budget_exhausted,
                 sent = outcome.sent,
-                "publication deferred: closure still fetching"
+                "publication deferred: closure still fetching or gate budget spent"
             );
             // Terminal verdicts publish with the next installable
             // generation: the deferred view keeps serving its heads,
@@ -1431,6 +1456,11 @@ pub(crate) struct HeadPartition {
     /// scan would have returned. Carried separately so the counts
     /// stay observable even when the batch fails closed.
     first_damage: Option<ClosureError>,
+    /// The aggregate gate budget was spent mid-batch. This is a
+    /// scheduling deferral, not a verdict on any head: the whole
+    /// publication waits and the previous complete generation keeps
+    /// serving. Callers must check this before installing anything.
+    pub budget_exhausted: bool,
 }
 
 impl HeadPartition {
@@ -1455,15 +1485,19 @@ impl HeadPartition {
 /// heads are never damage and must not consume the fatal
 /// engine-error budget: they install once their closure lands.
 ///
-/// Batch bound: one [`verify_head_closure`](wyrd_sync::closure::verify_head_closure)
-/// per classified head, each bounded by [`Limits::V0`](wyrd_sync::ingest::Limits);
-/// verification is read-only, so scanning past damage costs CPU plus
-/// the store read-guard hold (see `docs/contracts/resource-limits.md`), never
-/// acceptance.
+/// Batch bound: one verification per classified head, each bounded by
+/// [`Limits::V0`](wyrd_sync::ingest::Limits), *and* one aggregate
+/// [`HeadGateBudget`](wyrd_sync::closure::HeadGateBudget) for the whole
+/// batch. A single shared verifier decodes each distinct tree once and
+/// reuses it across heads, so many heads over one wide tree cost one
+/// read. Verification is read-only; exhaustion holds back the entire
+/// publication (never damage, never pending) so the previous complete
+/// generation keeps serving. See `docs/contracts/resource-limits.md`.
 pub(crate) fn partition_heads<S>(
     runtime: &wyrd_sync::runtime::RuntimeState,
     heads: Vec<AuthorizedSnapshot>,
     store: &S,
+    budget: wyrd_sync::closure::HeadGateBudget,
 ) -> Result<HeadPartition, EngineError>
 where
     S: ObjectStore,
@@ -1475,16 +1509,27 @@ where
         mismatch: 0,
         other: 0,
         first_damage: None,
+        budget_exhausted: false,
     };
+    let mut verifier =
+        wyrd_sync::closure::ClosureVerifier::new(budget, wyrd_sync::ingest::Limits::V0);
     for head in heads {
-        match wyrd_sync::closure::verify_head_closure(
+        match wyrd_sync::closure::verify_head_closure_with(
+            &mut verifier,
             runtime,
             head.snapshot(),
             store,
-            &wyrd_sync::ingest::Limits::V0,
         ) {
             Ok(()) => partition.publishable.push(head),
             Err(error) if error.is_pending() => partition.pending += 1,
+            // The aggregate budget is spent: stop scanning and mark the
+            // whole batch for deferral. This is not a verdict on this
+            // head, so it never enters the pending/damage counts — a
+            // reader of `pending` must not think the gate converged.
+            Err(ClosureError::WorkBudgetExhausted) => {
+                partition.budget_exhausted = true;
+                break;
+            }
             // A store that cannot be read is not closure damage: it
             // carries the store's own classification so the failure
             // policy spends the store budget, not the fatal engine
@@ -1545,6 +1590,22 @@ where
         tracing::debug!(
             pending = partition.pending,
             "head closure gate waits for fetching closures"
+        );
+    }
+    let (bytes, entries, steps) = verifier.work();
+    tracing::debug!(
+        bytes,
+        entries,
+        steps,
+        exhausted = partition.budget_exhausted,
+        "head closure gate aggregate work"
+    );
+    if partition.budget_exhausted {
+        tracing::warn!(
+            bytes,
+            entries,
+            steps,
+            "head closure gate deferred publication: work budget exhausted"
         );
     }
     Ok(partition)

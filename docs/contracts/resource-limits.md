@@ -23,15 +23,17 @@ owner-gated and grows per transition, not an amplification path.)
 All bounds live in one struct, [`ResourceBudgets`](../../crates/wyrd-core/src/budgets.rs),
 threaded from `LiveConfig` into the loop, the registries, and the
 backend at composition time. Defaults are the historical hardcoded
-bounds — with five intentional new ones: the per-pass admission cap
+bounds — with six intentional new ones: the per-pass admission cap
 (admission was previously uncapped per pass), the open-handle cap
 (the table previously relied on the kernel descriptor limit alone),
 the open-capture byte ceiling (the count cap could not bound
 retained chunk-list bytes), the parent-token retention cap for
-the create-parent registry, and the per-pass quarantine-repair cap
+the create-parent registry, the per-pass quarantine-repair cap
 (the claim-clear is one batched commit per pass, but every repair
 still pays its own verify-read and store write lock, so unbounded
-repair would stretch a single pass).
+repair would stretch a single pass), and the aggregate head-gate
+work budget (per-object ingest ceilings bounded one tree, not the
+fan-out of heads verifying trees every pass).
 4096 handles is far above plausible interactive use (tens of open
 descriptors) while bounding handle count, so it does not
 regress supported workloads. Retained capture bytes have their own
@@ -84,7 +86,7 @@ deployment file and renders read-only on the surface.
 | Engine committed-capability projection (in-memory) | unbounded: one hydrated `Capability` per (device, authorizing transition) | no bound and no pruning — transitively bounded by the durable capability fact log, itself unbounded pre-GC (see `storage-growth.md`). Holds plaintext epoch secrets for the process lifetime, like the durable facts it mirrors; consistent with the announcement projection, likewise unbounded and likewise a hydrated copy of durable state |
 | Retained object bytes, at the mounted commit boundary | `retained_bytes_quota` (unset — unlimited) | commit refused before its first write; `ENOSPC` at `flush`/`fsync`. Enforced on the mounted write path (plaintext dimension, as pinned) and on the receive path: fetched bytes pass the same ceiling through the DG-4 A gate before durable storage — refused unless retained plus vault-seen plus incoming fits — so a remote author can no longer spend a peer's local-write headroom past a configured ceiling. The fact log and the node's `test-fixtures`-gated `put_file`/`remove` fixtures still raise the count without a refusal, so the device's total is not bounded by this number — only the two live admission paths are. A refusal also costs the open handle its buffered image (`EIO` thereafter, and a silent loss on the `close` path) — master treats a genuinely full disk the same way. Opt-in by flag (`--retained-quota` on `mount`/`sync now`/`vault`), wiring an accountant like every other budget here — without the flag the binary runs unlimited. Derivation and the full set of limits are in `storage-growth.md` |
 | Receive-path refusal sidecar (distinct refused units) | `MAX_REFUSAL_UNITS` (4096, const) | oldest recorded unit evicted, so the sidecar and every rewrite stay bounded; a dropped unit stays fail-closed — if it returns it is re-fetched and re-refused, never silently admitted. A legacy oversized file is compacted deterministically and persisted at load. Eviction order is deterministic but not recency-based across restarts (the file is sorted). The sidecar is device-local metadata beside the facts, never charged to the quota accountant and never a wire signal |
-| Head-closure verification per gate run (sync pass and direct refresh) | one `Limits::V0`-bounded verification per classified head | read-only, so a damaged batch costs CPU and the store read-guard hold, then fails closed (nothing installs, previous generation serves); per-class counts logged |
+| Head-closure verification per gate run (sync pass and direct refresh) | `head_gate_budget` (`ResourceBudgets`): 4 GiB tree bytes read, 512M entries scanned, 16,777,216 verification steps across the whole batch; each tree/manifest still bounded by `Limits::V0` | One verifier per batch reads, decodes, checks, and scans each distinct tree at most once, so heads sharing a tree pay once. Reaching any aggregate bound stops the scan and marks the batch `budget_exhausted`; the whole publication is deferred (never a per-head rejection and never pending damage) and the previous complete generation keeps serving. Verification is read-only, so damage still fails closed with per-class counts logged. The bound is wired from `ResourceBudgets` for both the live pass and direct refresh. |
 
 The mailbox and engine-intake bounds stay constants: they are
 protocol-adjacent, already bounded and backpressure-tested, and not

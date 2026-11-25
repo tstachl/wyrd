@@ -512,3 +512,61 @@ fn readdir_union_resolves_large_conflict_through_binary_lookup() {
         );
     }
 }
+
+/// A fan-out of heads over a wide conflicted directory must not retain
+/// a decoded tree per head. The union now loads one tree, reduces it to
+/// per-name presence, and drops it before the next load, so peak
+/// resident trees is one regardless of head count. This pins the
+/// observable shape: exactly one store read per subtree, never per
+/// name, and a complete union whose conflicts still resolve.
+#[test]
+fn readdir_union_over_many_heads_loads_one_tree_each() {
+    const NAMES: usize = 2_000;
+    const HEADS: usize = 8;
+    let mut store = MemoryObjectStore::default();
+    let shared = chunk(&mut store, b"x");
+    let divergent = chunk(&mut store, b"a");
+    let mut roots = Vec::with_capacity(HEADS);
+    for head in 0..HEADS {
+        let mut entries = Vec::with_capacity(NAMES);
+        for i in 0..NAMES {
+            // Head 0 disagrees on every fifth child; the rest agree,
+            // so the union is both large and genuinely conflicted.
+            let content = if head == 0 && i % 5 == 0 {
+                divergent
+            } else {
+                shared
+            };
+            entries.push(Entry::file(format!("n-{i:05}"), 1, false, vec![content]).unwrap());
+        }
+        let root = tree_of(&mut store, entries);
+        roots.push(snapshot_at(root, head as u64 + 1));
+    }
+    let view = DriveView::new(
+        CountingStore {
+            inner: store,
+            gets: std::cell::Cell::new(0),
+        },
+        FakeMaterialization::empty(),
+        heads(roots),
+    );
+
+    let root = view.lookup("").unwrap();
+    assert!(matches!(root, Node::MergedDir { .. }));
+    view.store_read().unwrap().gets.set(0);
+    let listed = view.readdir(&root).unwrap();
+    assert_eq!(
+        view.store_read().unwrap().gets.get(),
+        HEADS,
+        "readdir_union loads one tree per subtree, not per name or per head-per-name"
+    );
+    assert_eq!(listed.len(), NAMES, "the whole union is still listed");
+    assert!(
+        matches!(view.lookup("n-00000").unwrap(), Node::Conflict { .. }),
+        "a divergent child still conflicts"
+    );
+    assert!(
+        matches!(view.lookup("n-00001").unwrap(), Node::File { .. }),
+        "an agreeing child still serves"
+    );
+}

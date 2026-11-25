@@ -77,6 +77,10 @@ pub struct WyrdNode<V: NamespaceView> {
     /// over known-but-uninstalled heads is withheld pending
     /// projection, never a fresh empty drive.
     installed_heads: usize,
+    /// Aggregate work bound for one head-closure gate run. Wired from
+    /// `LiveConfig::budgets` at composition; the direct refresh uses
+    /// the production default until then.
+    head_gate_budget: wyrd_sync::closure::HeadGateBudget,
 }
 
 /// Failure while composing the engine with a namespace view.
@@ -113,6 +117,7 @@ where
             engine,
             view,
             installed_heads: 0,
+            head_gate_budget: wyrd_sync::closure::HeadGateBudget::DEFAULT,
         })
     }
 
@@ -208,19 +213,22 @@ where
                 .view
                 .store_read()
                 .map_err(|error| wyrd_sync::runtime::EngineError::ObjectStore(error.to_string()))?;
-            partition_heads(&runtime, heads, &*store)?
+            partition_heads(&runtime, heads, &*store, self.head_gate_budget)?
         };
+        let budget_exhausted = partition.budget_exhausted;
         let pending = partition.pending;
         let heads = partition.into_publishable()?;
-        // All-pending keeps the last-known-good projection: a head
-        // still fetching must never blank the view a healthy head is
-        // serving. (The live loop defers publication for the same
-        // reason.) The installed count stays as it was: withheld
-        // heads are not installed heads.
-        if heads.is_empty() && pending > 0 {
+        // All-pending, or an exhausted aggregate gate budget, keeps the
+        // last-known-good projection: a head still fetching, or a batch
+        // the budget could not finish judging, must never blank the
+        // view a healthy head is serving. (The live loop defers
+        // publication the same way.) The installed count stays as it
+        // was: withheld heads are not installed heads.
+        if budget_exhausted || (heads.is_empty() && pending > 0) {
             tracing::debug!(
                 pending,
-                "refresh kept the installed heads: closure still fetching"
+                budget_exhausted,
+                "refresh kept the installed heads: closure still fetching or gate budget spent"
             );
             return Ok(());
         }
@@ -459,6 +467,10 @@ where
         // half-refreshed baseline ever escapes for a consumer to
         // observe.
         self.refresh_materialization()?;
+        // Use the composed gate budget for the composition refresh too,
+        // not just later passes: a configured bound must hold from the
+        // first install onward.
+        self.head_gate_budget = config.budgets.head_gate_budget;
         self.refresh_live_heads()?;
         let revision = self.engine.current();
         let installed_heads = self.installed_heads;
