@@ -18,6 +18,17 @@ fn wyrd() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_wyrd"))
 }
 
+/// Keep owner-bearing tests off the developer's real App Group
+/// container. On macOS a spawned owner derives the baked group id and
+/// publishes a live `by-drive` alias there; the File Provider
+/// registrar turns that alias into a transient Finder domain, and
+/// removing it later wedges FPFS. A unique, absent group makes the
+/// production bind refuse to publish. The drive-directory socket
+/// this test asserts on lives in the fixture and is unaffected.
+fn isolated_app_group() -> String {
+    format!("wyrd-cli-test-{}", std::process::id())
+}
+
 struct Fixture {
     dir: PathBuf,
     drive: PathBuf,
@@ -140,6 +151,7 @@ fn bootstrap_then_owner_serves_a_non_owner_client() {
             fixture.passphrase.to_str().unwrap(),
             "start",
         ])
+        .env("WYRD_APP_GROUP", isolated_app_group())
         .stderr(Stdio::piped())
         .spawn()
         .expect("wyrd owner spawns");
