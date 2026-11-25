@@ -67,6 +67,8 @@ mod tests_merge;
 #[cfg(test)]
 mod tests_read;
 #[cfg(test)]
+mod tests_readdir_budget;
+#[cfg(test)]
 mod tests_symlink;
 
 pub use drive::DriveView;
@@ -79,6 +81,7 @@ pub use head::{VerifiedSnapshot, ViewHead};
 // (EOPNOTSUPP) lives at the backend's `readlink` boundary in
 // `wyrd-daemon`.
 pub use wyrd_namespace::view::{
-    confine_symlink_target, Attr, ConfinementError, ConflictVersion, DirEntry, Kind,
-    MaterializationPolicy as Materialization, Node, OpenFile, ViewError,
+    confine_symlink_target, dir_entry_work, Attr, ConfinementError, ConflictVersion, DirEntry,
+    Kind, MaterializationPolicy as Materialization, Node, OpenFile, ReaddirResult, ViewError,
+    MAX_READDIR_WORK,
 };

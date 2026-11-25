@@ -248,6 +248,22 @@ pub struct LookupResult {
     pub limit_exceeded: bool,
 }
 
+/// Bounded-enumeration outcome for one directory listing.
+///
+/// A listing is charged as it is collected, so a caller can stop before
+/// an over-limit directory is fully materialized or mapped to a
+/// response. `entries` is only meaningful when `limit_exceeded` is
+/// false; a refused listing is empty, never a silent truncation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReaddirResult {
+    /// The collected entries, empty when the budget was exceeded.
+    pub entries: Vec<DirEntry>,
+    /// Conservative estimate of the served bytes charged so far.
+    pub work: u64,
+    /// Whether the listing exceeded its caller-supplied work budget.
+    pub limit_exceeded: bool,
+}
+
 /// An opened file: the chunk list plus the declared size reads verify
 /// against. Constructed by the view on open; backends carry it
 /// opaquely and hand it back to `read`.
@@ -461,6 +477,33 @@ pub trait NamespaceView: Sized {
     /// List a directory's children.
     fn readdir(&self, node: &Node) -> Result<Vec<DirEntry>, ViewError>;
 
+    /// List a directory's children under a bounded-work budget.
+    ///
+    /// `max_work` is a conservative estimate of the served bytes the
+    /// listing may occupy. Implementations should charge each entry as
+    /// it is collected and return `limit_exceeded` rather than
+    /// materializing the remainder: a lawful protocol tree may hold a
+    /// million entries, while a single listing is a live operation with
+    /// its own ceiling. The default implementation charges after
+    /// collection for views that cannot stop mid-enumeration; the
+    /// production view overrides it to fail closed before mapping.
+    fn readdir_budgeted(&self, node: &Node, max_work: u64) -> Result<ReaddirResult, ViewError> {
+        let entries = self.readdir(node)?;
+        let mut work = 0u64;
+        for entry in &entries {
+            work = work.saturating_add(dir_entry_work(&entry.name, &entry.node));
+        }
+        let limit_exceeded = work > max_work;
+        Ok(ReaddirResult {
+            // A refused listing is empty on every implementation, not
+            // just on the production view: a caller that forgets the
+            // flag must never see a partial directory.
+            entries: if limit_exceeded { Vec::new() } else { entries },
+            work,
+            limit_exceeded,
+        })
+    }
+
     /// Open a file for reading. Directory, symlink, and conflict nodes
     /// fail; symlinks resolve at the presentation boundary, never here.
     fn open_file(&self, node: &Node) -> Result<OpenFile, ViewError>;
@@ -528,6 +571,80 @@ pub const MAX_SYMLINK_HOPS: usize = 40;
 pub const MAX_SYMLINK_COMPONENTS: usize = 256;
 /// Maximum weighted resolution work charged during one confinement check.
 pub const MAX_SYMLINK_WORK: u64 = 64 * 1024 * 1024;
+
+/// Ceiling on the estimated served bytes of one directory listing.
+///
+/// Kept well below the 96 MiB owner-frame ceiling: the estimator below
+/// deliberately overestimates JSON framing, so an accepted listing
+/// still leaves room for the envelope and serialization overhead. With
+/// the bounded owner connection pool, the aggregate estimated work of
+/// concurrent listings stays bounded at pool size x this ceiling.
+pub const MAX_READDIR_WORK: u64 = 16 * 1024 * 1024;
+
+// Conservative served-size charges: a 32-byte identity hex-encodes to
+// 64 characters, and every byte of a JSON string can expand to a
+// six-byte `\uXXXX` escape. Overestimating only refuses earlier, which
+// is the safe direction for a live serving bound.
+const SERVED_ID_BYTES: u64 = 80;
+const SERVED_NODE_OVERHEAD: u64 = 192;
+const SERVED_ENTRY_OVERHEAD: u64 = 128;
+const SERVED_ESCAPE_FACTOR: u64 = 6;
+
+fn served_string_bytes(value: &str) -> u64 {
+    u64::try_from(value.len())
+        .unwrap_or(u64::MAX)
+        .saturating_mul(SERVED_ESCAPE_FACTOR)
+        .saturating_add(4)
+}
+
+fn served_node_bytes(node: &Node) -> u64 {
+    let identity = |id: Option<wyrd_format::EntryIdentity>| {
+        if id.is_some() {
+            SERVED_ID_BYTES
+        } else {
+            0
+        }
+    };
+    let body = match node {
+        Node::File {
+            chunks,
+            identity: id,
+            ..
+        } => u64::try_from(chunks.len())
+            .unwrap_or(u64::MAX)
+            .saturating_mul(SERVED_ID_BYTES)
+            .saturating_add(identity(*id)),
+        Node::Dir { identity: id, .. } => SERVED_ID_BYTES.saturating_add(identity(*id)),
+        Node::Symlink {
+            target,
+            identity: id,
+        } => served_string_bytes(target).saturating_add(identity(*id)),
+        Node::MergedDir {
+            subtrees,
+            identity: id,
+        } => u64::try_from(subtrees.len())
+            .unwrap_or(u64::MAX)
+            .saturating_mul(2)
+            .saturating_mul(SERVED_ID_BYTES)
+            .saturating_add(identity(*id)),
+        Node::Conflict { versions } => versions.iter().fold(0u64, |sum, version| {
+            sum.saturating_add(SERVED_ID_BYTES)
+                .saturating_add(32)
+                .saturating_add(served_node_bytes(&version.node))
+        }),
+    };
+    SERVED_NODE_OVERHEAD.saturating_add(body)
+}
+
+/// Conservative estimate of the bytes one directory entry occupies in
+/// a served listing. Bounded enumeration charges this per entry before
+/// a backend maps or serializes it, so an over-limit directory is
+/// refused instead of allocating a response past the frame ceiling.
+pub fn dir_entry_work(name: &str, node: &Node) -> u64 {
+    SERVED_ENTRY_OVERHEAD
+        .saturating_add(served_string_bytes(name))
+        .saturating_add(served_node_bytes(node))
+}
 
 /// Weighted resolution budget amortized across a multi-link confinement walk.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

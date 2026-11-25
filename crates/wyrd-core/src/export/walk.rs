@@ -204,6 +204,12 @@ fn export_node<V: NamespaceView>(
                 })?;
             }
             state.report.dirs += 1;
+            // Static export is an offline one-shot walk under the
+            // operator's own hand, outside the live-bound table
+            // (`docs/contracts/resource-limits.md`): it intentionally
+            // keeps unbounded readdir so a large tree exports whole.
+            // D-2's serving bound applies to the live owner and mount
+            // surfaces, which call `readdir_budgeted` instead.
             let entries = view.readdir(node).map_err(|source| ExportError::View {
                 path: vpath.to_owned(),
                 source,

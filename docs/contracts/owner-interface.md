@@ -151,6 +151,12 @@ Map expiry to `Timeout`. Tell the consumer to retry. The hex
 encoding doubles the bytes on the wire, so the 32 MiB bound keeps
 every accepted response under the 96 MiB frame ceiling.
 
+Bound one `readdir` listing the same way, by conservative estimated
+served bytes (`MAX_READDIR_WORK`). Refuse an over-limit directory with
+`TooLarge` before its entries are collected and mapped to the wire.
+Never return a partial listing: the consumer addresses a smaller
+subtree instead.
+
 Every read answer that names an entry carries its stable identity
 (`object-model.md`, "Entry identity"): `lookup`, `stat`, and
 `readdir` expose the token as lowercase hex in an optional

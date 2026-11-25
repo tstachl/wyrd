@@ -466,6 +466,7 @@ const TEST_FILE_PINS: &[&str] = &[
     "crates/wyrd-view/src/view/tests_harness.rs",
     "crates/wyrd-view/src/view/tests_merge.rs",
     "crates/wyrd-view/src/view/tests_read.rs",
+    "crates/wyrd-view/src/view/tests_readdir_budget.rs",
     "crates/wyrd-view/src/view/tests_symlink.rs",
 ];
 

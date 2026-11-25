@@ -15,9 +15,10 @@ use std::collections::BTreeMap;
 use wyrd_format::{ContentId, FetchStatus};
 
 pub use wyrd_namespace::view::{
-    confine_symlink_target, Attr, ConfinementError, ConflictVersion, DirEntry, Head, Kind,
-    LookupResult, MaterializationPolicy, NamespaceView, Node, OpenFile, ViewError, ViewLockError,
-    MAX_SYMLINK_COMPONENTS, MAX_SYMLINK_HOPS, MAX_SYMLINK_WORK,
+    confine_symlink_target, dir_entry_work, Attr, ConfinementError, ConflictVersion, DirEntry,
+    Head, Kind, LookupResult, MaterializationPolicy, NamespaceView, Node, OpenFile, ReaddirResult,
+    ViewError, ViewLockError, MAX_READDIR_WORK, MAX_SYMLINK_COMPONENTS, MAX_SYMLINK_HOPS,
+    MAX_SYMLINK_WORK,
 };
 
 /// How the node reports fetch status for content the local store

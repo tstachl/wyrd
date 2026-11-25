@@ -7,7 +7,7 @@ use fuser::FileHandle;
 use wyrd_core::mutation::MutationKind;
 
 use wyrd_format::ObjectStore;
-use wyrd_view::{Materialization, Node, ViewError};
+use wyrd_view::{Materialization, Node, ViewError, MAX_READDIR_WORK};
 
 use super::super::inode::{
     DirectoryEntries, Handle, OpenDir, SparseOverlay, WriteHandle, WriteImage,
@@ -180,10 +180,25 @@ where
             }
         };
         self.validate_inode(ino, path, &node, projection.generation())?;
-        let entries = projection
+        // Bound the listing before it is collected and interned into
+        // the inode table. A lawful tree can be far larger than one
+        // opendir should hold in memory; refuse with `EFBIG` instead of
+        // materializing a million entries into handles.
+        let listing = projection
             .view()
-            .readdir(&node)
+            .readdir_budgeted(&node, MAX_READDIR_WORK)
             .map_err(|error| errno_of(&error))?;
+        if listing.limit_exceeded {
+            tracing::debug!(
+                stage = "opendir",
+                layer = "readdir-budget",
+                work = listing.work,
+                max = MAX_READDIR_WORK,
+                "directory listing refused; EFBIG at the boundary"
+            );
+            return Err(fuser::Errno::EFBIG);
+        }
+        let entries = listing.entries;
         let mut all = vec![
             (ino, fuser::FileType::Directory, ".".into()),
             (ino, fuser::FileType::Directory, "..".into()),
