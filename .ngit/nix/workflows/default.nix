@@ -91,6 +91,7 @@ in
       bash tests/harness/test-timeout-discipline.sh
       bash tests/harness/test-image-manifest.sh
       bash tests/harness/test-gate-entry.sh
+      bash tests/harness/test-live-mount-decl.sh
       bash -n tests/harness/e2e-helpers.bash
       bash tests/harness/test-no-host-privilege.sh
       bash tests/harness/test-cli-vocabulary.sh

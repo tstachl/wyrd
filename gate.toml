@@ -128,3 +128,16 @@ requires = ["bats", "jq"]
 
 [tasks.wyrd-drive-e2e.builds]
 img-drive = "images.drive"
+# The ignored live-mount libtests need kernel FUSE and local networking,
+# which the peer-o gate guest provides. Its image carries the libtest
+# harness (flake package wyrd-live-mount-tests); the entry reaches the
+# guest only through the agent transport. No relay: this is a mount
+# evidence leg, not a convergence run. A new task shape needs host
+# approver sign-off before launch; this declaration grants none.
+[tasks.live-mount]
+entryPoint = "tests/gate/live-mount-entry.sh"
+requires = ["bats", "jq"]
+guest_log_dir = "wyrd-e2e-live-mount"
+
+[tasks.live-mount.builds]
+img-peer-o = "images.peer-o"

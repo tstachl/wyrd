@@ -334,8 +334,11 @@ fn mount_preamble_projects_authorized_heads_without_fuse() {
 /// networking for the serving endpoint. Run it where both hold, in
 /// one process so the pair shares the shutdown latch (libtest runs
 /// threads in one process; nextest isolates each test in its own):
-/// `cargo test -p wyrd-cli --bin wyrd -- --ignored`, or
-/// `cargo nextest run -p wyrd-cli --bin wyrd --run-ignored all`
+/// `cargo test -p wyrd-cli --lib -- --ignored live_mount_`. These are
+/// library tests; naming the binary target instead would run zero
+/// tests and report a vacuous green. The Odin leg
+/// (`tests/gate/live-mount.bats`) runs the
+/// same libtest harness inside a Linux FUSE guest.
 #[cfg(feature = "mount")]
 #[test]
 #[ignore = "needs kernel FUSE and local networking"]
@@ -440,8 +443,7 @@ fn live_mount_serves_read_write_until_shutdown() {
 /// is load-bearing, not incidental.
 ///
 /// Ignored by default like the live mount above — same runner
-/// contract: `cargo test -p wyrd-cli --bin wyrd -- --ignored`, or
-/// `cargo nextest run -p wyrd-cli --bin wyrd --run-ignored all`.
+/// contract: `cargo test -p wyrd-cli --lib -- --ignored live_mount_`.
 /// The pair must share one process (the libtest form) for the
 /// shutdown-latch serialization above to mean anything.
 #[cfg(feature = "mount")]
