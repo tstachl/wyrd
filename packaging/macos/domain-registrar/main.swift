@@ -169,99 +169,34 @@ private func publishedDrives(group: String) -> [String: String]? {
     return drives
 }
 
-/// Consecutive ticks a domain may be absent from the published aliases
-/// before its domain is removed. A single failed socket probe is a
-/// transient owner restart, an accept backlog, or the gap where a stale
-/// socket was unlinked but not yet rebound — not proof the drive is
-/// gone. Removing a domain invalidates the File Provider extension and
-/// can discard materialized state, so the window must outlast a real
-/// owner restart: cold-start owners have been observed publishing
-/// their sockets ~14 s after launch. Six ticks at the 5 s poll interval
-/// is 30 s — a bounded delay with margin, not a permanent hold.
-private let removalGraceTicks = 6
-
-/// In-memory absence streaks and live-observation history, owned by
-/// the resident `--watch` process. The original reminder assumed a
-/// fresh process per tick and therefore group-container state; the
-/// resident helper needs neither.
-///
-/// A domain is a removal candidate only after this process has seen a
-/// live owner for it. At cold boot the registrar starts before the
-/// owner agents publish their sockets (observed: sockets appeared
-/// ~13 s after launchd started the registrar). Treating that gap as a
-/// deleted drive removes the domain, which makes fileproviderd
-/// invalidate the extension, fall back to the default domain, and
-/// leave FPFS unmounted — the domains never recover. Absence before a
-/// first live observation is startup, not deletion.
-final class DomainRemovalGrace {
-    private var missing: [String: Int] = [:]
-    private var seenLive: Set<String> = []
-
-    /// A live drive clears its absence streak and marks the domain as
-    /// observed: one miss followed by a responding owner is a
-    /// transient outage, not a removal.
-    func observePresent(_ id: String) {
-        seenLive.insert(id)
-        missing[id] = 0
-    }
-
-    /// Whether a domain absent from `desired` should be removed now.
-    /// A resident watcher (`enabled` true) first requires a prior live
-    /// observation, then the normal grace streak. A one-shot run has
-    /// no history (`enabled` false) and keeps its legacy first-miss
-    /// removal for manual reconciliation.
-    func shouldRemove(_ id: String, enabled: Bool) -> Bool {
-        if !enabled {
-            return true
-        }
-        guard seenLive.contains(id) else {
-            // No live owner has ever answered for this domain in this
-            // process: this is boot/startup, not a deleted drive.
-            missing[id] = nil
-            return false
-        }
-        let streak = (missing[id] ?? 0) + 1
-        missing[id] = streak
-        return streak >= removalGraceTicks
-    }
-
-    /// Drop streaks for ids macOS no longer reports so the maps cannot
-    /// grow with drives that were removed outside this tick's loop.
-    func prune(keeping ids: Set<String>) {
-        for id in Array(missing.keys) where !ids.contains(id) {
-            missing[id] = nil
-            seenLive.remove(id)
-        }
-        for id in Array(seenLive) where !ids.contains(id) {
-            seenLive.remove(id)
-        }
-    }
-}
+// The registrar never removes domains. On this File Provider shape,
+// `NSFileProviderManager.remove` makes fileproviderd tear down FPFS
+// data for the provider, then fall back to the default domain — which
+// this replicated provider cannot use — and leaves the remaining
+// domains disconnected with no CloudStorage mount. It does not
+// recover. A domain whose owner dies therefore stays registered; the
+// extension already reports it as unavailable, and Finder shows an
+// empty folder instead of a permanently wedged one. Domain removal is
+// a deliberate, manually supervised operation, not a polling result.
 
 /// Reconcile domains with the published drive aliases. Partial
 /// progress stands: the next invocation retries what is outstanding.
-/// `grace` holds absence streaks and live observations between ticks;
-/// `graceEnabled` is false for a one-shot invocation, which has no
-/// prior observation and so keeps first-miss removal.
+/// Domains are only added: a drive that stops publishing keeps its
+/// domain, because removing one wedges FPFS.
 /// - Returns: 0 on success (including "container unavailable", which
 ///   leaves every domain untouched); 1 for malformed config, 2 for a
-///   domain read failure, 3 for an add/remove failure.
-func reconcile(
-    _ raw: String,
-    grace: DomainRemovalGrace,
-    graceEnabled: Bool
-) -> (code: Int32, added: Int, removed: Int, deferred: Int) {
+///   domain read failure, 3 for an add failure.
+func reconcile(_ raw: String) -> (code: Int32, added: Int) {
     guard let decoded = try? JSONDecoder().decode(
         Config.self,
         from: raw.data(using: .utf8) ?? Data()
     ) else {
         log.error("invalid registrar config")
-        return (1, 0, 0, 0)
+        return (1, 0)
     }
     guard let desired = publishedDrives(group: decoded.group) else {
-        // No container means no evidence about drives. Skip the whole
-        // reconciliation, removals included — and do not age streaks.
-        return (0, 0, 0, 0)
+        // No container means no evidence about drives, so add nothing.
+        return (0, 0)
     }
 
     let read = Completion<Result<[NSFileProviderDomain], Error>>()
@@ -274,13 +209,13 @@ func reconcile(
     }
     guard let readResult = read.wait(callbackTimeout()) else {
         log.error("timed out reading File Provider domains")
-        return (2, 0, 0, 0)
+        return (2, 0)
     }
     let existing: [NSFileProviderDomain]
     switch readResult {
     case .failure(let error):
         log.error("cannot read File Provider domains: \(String(describing: error), privacy: .public)")
-        return (2, 0, 0, 0)
+        return (2, 0)
     case .success(let domains):
         existing = domains
     }
@@ -288,8 +223,6 @@ func reconcile(
     let current = Set(existing.map(\.identifier.rawValue))
     var failed = false
     var added = 0
-    var removed = 0
-    var deferred = 0
     for (id, name) in desired where !current.contains(id) {
         let domain = NSFileProviderDomain(
             identifier: NSFileProviderDomainIdentifier(id),
@@ -319,54 +252,13 @@ func reconcile(
             log.notice("registered domain \(id, privacy: .public)")
         }
     }
-    // A live owner clears its streak before the removal pass, so a
-    // single missed probe followed by a responding owner holds the
-    // domain. `desired` still carries only live owners, so a never-live
-    // drive is never added on the strength of a grace hold.
-    for id in desired.keys {
-        grace.observePresent(id)
-    }
-    for domain in existing where isDriveId(domain.identifier.rawValue)
-        && !desired.keys.contains(domain.identifier.rawValue)
-    {
-        let id = domain.identifier.rawValue
-        guard grace.shouldRemove(id, enabled: graceEnabled) else {
-            deferred += 1
-            log.notice("deferring removal of domain \(id, privacy: .public): no live owner this tick")
-            continue
-        }
-        let remove = Completion<Result<Void, Error>>()
-        NSFileProviderManager.remove(domain) { error in
-            remove.resolve(error.map { Result.failure($0) } ?? Result.success(()))
-        }
-        guard let removeResult = remove.wait(callbackTimeout()) else {
-            log.error("timed out removing stale domain \(id, privacy: .public)")
-            failed = true
-            continue
-        }
-        switch removeResult {
-        case .failure(let error):
-            log.error("cannot remove stale domain \(id, privacy: .public): \(String(describing: error), privacy: .public)")
-            failed = true
-        case .success:
-            removed += 1
-            log.notice("removed stale domain \(id, privacy: .public)")
-        }
-    }
-    // Keep ids added this tick too: `current` was snapshotted before
-    // the add loop, so a newly registered domain would otherwise be
-    // pruned in the same tick that marked it live. That would erase
-    // its live observation and hold a stale domain forever if its
-    // owner then died.
-    grace.prune(keeping: current.union(desired.keys))
-    return (failed ? 3 : 0, added, removed, deferred)
+    return (failed ? 3 : 0, added)
 }
 
-// One resident process shares one reconcile pass and one set of absence
-// streaks across ticks. The launch agent uses `--watch`: calling the
-// File Provider domain API from a fresh process every tick makes macOS
-// re-ask the "access data from other apps" permission on every launch.
-// The grace window lives in that resident process, not in group state.
+// One resident process shares one reconcile pass across ticks. The
+// launch agent uses `--watch`: calling the File Provider domain API
+// from a fresh process every tick makes macOS re-ask the "access data
+// from other apps" permission on every launch.
 let args = Array(CommandLine.arguments.dropFirst())
 let watching = args.first == "--watch"
 let config = (watching ? args.dropFirst().first : args.first)
@@ -374,18 +266,16 @@ let config = (watching ? args.dropFirst().first : args.first)
     // this fallback serves one-shot manual runs through the same
     // helper (env override, then the built-in default).
     ?? #"{"group":"\#(AppGroup.identifier)"}"#
-let grace = DomainRemovalGrace()
 
 if watching {
     while true {
-        let outcome = reconcile(config, grace: grace, graceEnabled: true)
-        print("added \(outcome.added) removed \(outcome.removed) deferred \(outcome.deferred)")
+        let outcome = reconcile(config)
+        print("added \(outcome.added)")
         fflush(stdout)
         sleep(5)
     }
 }
 
-// No history in a one-shot run: remove on the first miss, as before.
-let outcome = reconcile(config, grace: grace, graceEnabled: false)
-print("added \(outcome.added) removed \(outcome.removed) deferred \(outcome.deferred)")
+let outcome = reconcile(config)
+print("added \(outcome.added)")
 exit(outcome.code)
