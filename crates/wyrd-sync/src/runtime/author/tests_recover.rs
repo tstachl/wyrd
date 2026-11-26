@@ -821,26 +821,33 @@ fn recovery_ignores_absent_subtrees_outside_the_graft() {
     );
 }
 
-/// A live subtree shared under two parents preserves under both:
-/// the comparison walks each graft path independently, so sharing
-/// never hides the second path's token.
+/// A live subtree under each parent preserves under both: the
+/// comparison walks each graft path independently, so the graft never
+/// hides the second path's token. The two subtrees carry distinct
+/// tokens — closure-wide uniqueness forbids one subtree under two
+/// paths, because both would expose one item identity.
 #[test]
-fn recovery_preserves_through_a_shared_live_subtree() {
-    let (_dir, mut engine, _) = owner_engine("recover-shared-subtree");
+fn recovery_preserves_through_two_live_subtrees() {
+    let (_dir, mut engine, _) = owner_engine("recover-distinct-subtrees");
     let mut objects = MemoryObjectStore::default();
     let dir_a = wyrd_format::EntryIdentity::from_bytes([0x64; 32]);
     let dir_b = wyrd_format::EntryIdentity::from_bytes([0x65; 32]);
-    let file = wyrd_format::EntryIdentity::from_bytes([0x66; 32]);
-    // One subtree, two parents: `a` sorts first, so a
-    // visit-once walk would consume the share under `a` and mint
+    let file_a = wyrd_format::EntryIdentity::from_bytes([0x66; 32]);
+    let file_b = wyrd_format::EntryIdentity::from_bytes([0x67; 32]);
+    // Two subtrees, two parents: `a` sorts first, so a
+    // visit-once walk would consume the token under `a` and mint
     // under `b`.
-    let shared = Tree::from_entries(vec![identified_file(&mut objects, "f", b"f", file)])
+    let sub_a = Tree::from_entries(vec![identified_file(&mut objects, "f", b"f", file_a)])
+        .unwrap()
+        .insert_into(&mut objects)
+        .unwrap();
+    let sub_b = Tree::from_entries(vec![identified_file(&mut objects, "f", b"f", file_b)])
         .unwrap()
         .insert_into(&mut objects)
         .unwrap();
     let base = Tree::from_entries(vec![
-        Entry::dir("a", shared).unwrap().with_identity(dir_a),
-        Entry::dir("b", shared).unwrap().with_identity(dir_b),
+        Entry::dir("a", sub_a).unwrap().with_identity(dir_a),
+        Entry::dir("b", sub_b).unwrap().with_identity(dir_b),
     ])
     .unwrap()
     .insert_into(&mut objects)
@@ -861,7 +868,7 @@ fn recovery_preserves_through_a_shared_live_subtree() {
     );
     assert_eq!(
         nested_identity(&objects, &grafted, &["b", "f"]),
-        Some(file),
-        "the token shared under the second parent preserves too"
+        Some(file_b),
+        "the token under the second parent preserves too"
     );
 }

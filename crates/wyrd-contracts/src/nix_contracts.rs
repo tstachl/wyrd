@@ -286,6 +286,42 @@ fn fileprovider_swift_stays_within_the_owner_boundary() {
     );
 }
 
+/// A stable File Provider item identifier is `DriveId + EntryIdentity`,
+/// so two paths carrying one token would collapse into one item. The
+/// enumeration surface sees a whole directory at once and must refuse
+/// a repeated identifier before it writes any resolver row: a late
+/// check would still leave a sibling rebound. Swift cannot be
+/// compiled in CI, so this pins the fail-closed marker in source
+/// text; the Harness exercises the callback against a stub owner.
+#[test]
+fn fileprovider_enumeration_refuses_duplicate_identifiers() {
+    let root = workspace_root();
+    let text =
+        std::fs::read_to_string(root.join("packaging/macos/fileprovider/Sources/LiveStore.swift"))
+            .expect("the live store source is present");
+    for required in [
+        "var seenIdentifiers = Set<String>()",
+        "seenIdentifiers.insert(identifier.rawValue).inserted",
+        "throw LiveStoreError.sync(",
+        "duplicate stable identifier \\(identifier.rawValue) while enumerating",
+    ] {
+        assert!(
+            text.contains(required),
+            "the enumeration guard must name {required}"
+        );
+    }
+    let guard = text
+        .find("seenIdentifiers.insert(identifier.rawValue).inserted")
+        .expect("the guard is present");
+    let first_record = text
+        .find("resolver.record(identifier:")
+        .expect("enumeration records its rows");
+    assert!(
+        guard < first_record,
+        "duplicate detection must precede the first resolver record"
+    );
+}
+
 /// Stage 3 sub-PR 2 wires the Swift adapter's mutation vocabulary
 /// to live callbacks: create/modify/delete run capture-parent +
 /// submit with identity preconditions through the owner's single

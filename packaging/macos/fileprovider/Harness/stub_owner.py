@@ -49,6 +49,15 @@ for entry in READDIR_OK["result"]["ok"]["Readdir"]["entries"]:
             if "File" in inner:
                 inner["File"]["identity"] = CONFLICT_TOKEN
 
+# The shared wire vector predates closure-wide identity uniqueness:
+# its `agreed` merged dir repeats `hello.txt`'s token. Enumeration now
+# fails closed on a repeated token, so this stub retargets that one
+# row. The vector stays byte-for-byte for the wire-format tests.
+MERGED_DIR_TOKEN = "cd12ab34" * 8
+for entry in READDIR_OK["result"]["ok"]["Readdir"]["entries"]:
+    if entry["name"] == "agreed" and "MergedDir" in entry["node"]:
+        entry["node"]["MergedDir"]["identity"] = MERGED_DIR_TOKEN
+
 
 def result_ok(op_body):
     return {"ok": op_body}
@@ -225,6 +234,16 @@ def answer(op, params):
             return result_err("AlreadyExists", "the path already carries an identity")
         STATE[mint_path]["identity"] = mint_token()
         return result_ok({"DebugMinted": {"path": mint_path}})
+    if op == "debug-copy-identity":
+        # Test-only: give one path another path's token, modelling a
+        # copied EntryIdentity. Two paths sharing one token must never
+        # collapse into one File Provider item identifier.
+        dst = (params or {}).get("path", "")
+        src = (params or {}).get("from", "")
+        if dst not in STATE or src not in STATE:
+            return result_err("NotFound", "both paths must exist")
+        STATE[dst]["identity"] = STATE[src]["identity"]
+        return result_ok({"DebugCopied": {"path": dst}})
     if op == "debug-replace-on-read":
         # Test-only: arm the verify-then-read race for one path. The
         # next `read` of the armed path performs the racing peer's

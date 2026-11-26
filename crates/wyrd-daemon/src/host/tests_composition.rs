@@ -298,6 +298,10 @@ fn recovery_grafts_historical_bytes_onto_the_live_view() {
     {
         let mut daemon: WyrdNode<DriveView<_, RuntimeMaterialization>> =
             WyrdNode::new(engine, FsObjectStore::open(dir.clone()).unwrap()).unwrap();
+        // The closed node minted `precious.txt` as token 1. Continue
+        // the fixture stream across the reopen: two creations in one
+        // closure must not carry the same identity.
+        daemon.set_fixture_mint_counter(1);
         daemon.put_file("current.txt", b"new work").unwrap();
         daemon.remove("precious.txt").unwrap();
         assert_eq!(
