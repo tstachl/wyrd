@@ -239,6 +239,16 @@ drive by contract — a File Provider item identifier derives from
 never derived from content, path, or any Nostr identity. Two entries
 with identical content hold distinct identities.
 
+**Closure-wide uniqueness (normative).** `EntryIdentity` values are
+unique within one installed snapshot closure: no two paths reachable
+from a snapshot body may carry the same token, including paths that
+reach the same subtree object. Snapshot authoring and closure
+verification refuse a closure that repeats a token. This is a
+namespace rule, not a content rule: sharing content or common descent
+in the Merkle DAG remains allowed, but a second path never reuses the
+first path's identity — a copy mints a new token. Entries that predate
+identity support carry no token and are outside this rule.
+
 **Lifecycle (normative).** This table is the contract; readers
 (`stat`/`readdir` answers at minimum) expose the token, and every
 backend observes the same token for the same entry:

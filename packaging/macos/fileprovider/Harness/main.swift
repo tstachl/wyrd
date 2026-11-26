@@ -2001,6 +2001,33 @@ checkEqual(AppGroup.identifier(from: [:], info: [
 ]), AppGroup.defaultIdentifier,
            "an unrendered template falls closed to the default")
 
+// Two paths carrying one token must fail enumeration closed. The
+// stub copies a token onto a second file, then a fresh store walks
+// the root: no rows may be served and the enumerator must report a
+// sync failure, never bind one identifier to the last row.
+do {
+    try debugStub(socketPath: socketPath, op: "debug-seed-legacy",
+                  params: ["path": "dup-a.txt", "content_hex": "61"])
+    try debugStub(socketPath: socketPath, op: "debug-seed-legacy",
+                  params: ["path": "dup-b.txt", "content_hex": "62"])
+    try debugStub(socketPath: socketPath, op: "debug-mint",
+                  params: ["path": "dup-a.txt"])
+    try debugStub(socketPath: socketPath, op: "debug-copy-identity",
+                  params: ["path": "dup-b.txt", "from": "dup-a.txt"])
+    let dupStore = LiveStore(driveHex: driveHex, log: log,
+                             socketPathOverride: socketPath)
+    let dupObserver = RecordingEnumerationObserver()
+    LiveEnumerator(container: .rootContainer, store: dupStore, log: log)
+        .enumerateItems(for: dupObserver, startingAt: NSFileProviderPage(Data()))
+    check(dupObserver.finishError != nil,
+          "duplicate identifiers fail enumeration")
+    check(dupObserver.enumerated.isEmpty,
+          "duplicate identifiers serve no rows")
+} catch {
+    print("FAIL: duplicate identifier fixture: \(error)")
+    failures += 1
+}
+
 if failures == 0 {
     print("harness: all checks passed")
 } else {

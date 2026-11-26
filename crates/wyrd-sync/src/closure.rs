@@ -53,8 +53,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use thiserror::Error;
 use wyrd_format::{
-    ChildManifest, ContentId, EntryContent, Manifest, ManifestEntry, ObjectKind, ObjectStore,
-    Snapshot, SnapshotId, StoreError, StoreFailure, Tree,
+    ChildManifest, ContentId, EntryContent, EntryIdentity, Manifest, ManifestEntry, ObjectKind,
+    ObjectStore, Snapshot, SnapshotId, StoreError, StoreFailure, Tree,
 };
 
 use crate::ingest::{check_manifest, check_tree, IngestError, Limits};
@@ -114,6 +114,22 @@ pub enum ClosureError {
     #[error("tree {0} failed to decode")]
     /// Stored tree bytes fail to decode.
     InvalidTree(ContentId),
+    #[error("entry identity {identity} repeats in tree {tree}")]
+    /// Two entries in one tree carry the same identity.
+    DuplicateEntryIdentity {
+        /// The tree holding the repeated token.
+        tree: ContentId,
+        /// The repeated token.
+        identity: EntryIdentity,
+    },
+    #[error("entry identity {identity} repeats across the snapshot closure at tree {tree}")]
+    /// One identity is reachable from two paths in this snapshot closure.
+    AmbiguousEntryIdentity {
+        /// The tree where the repeat was detected.
+        tree: ContentId,
+        /// The repeated token.
+        identity: EntryIdentity,
+    },
     #[error("tree {tree} is mapped by both manifest {first} and manifest {second}")]
     /// One tree is claimed by two different manifests.
     AmbiguousTreeMapping {
@@ -264,6 +280,8 @@ impl ClosureError {
             ClosureError::RootSnapshotMismatch { .. }
             | ClosureError::NonCanonicalManifest
             | ClosureError::InvalidTree(_)
+            | ClosureError::DuplicateEntryIdentity { .. }
+            | ClosureError::AmbiguousEntryIdentity { .. }
             | ClosureError::AmbiguousTreeMapping { .. }
             | ClosureError::MissingChildManifest { .. }
             | ClosureError::ChildSnapshotMismatch { .. }
@@ -395,6 +413,16 @@ struct CachedTree {
     byte_len: u64,
     chunks: Vec<ContentId>,
     directories: Vec<ContentId>,
+    /// Entry identities carried by this tree, one per identity-bearing
+    /// entry. Retained so a head can check closure-wide uniqueness
+    /// without decoding the tree again; the set is per head, never
+    /// cached here, because divergent heads may share tokens.
+    identities: Vec<EntryIdentity>,
+    /// Subtrees named by more than one directory entry in this tree.
+    /// The manifest walk deduplicates those references, so a second
+    /// path must be charged here or its subtree's tokens would count
+    /// only once.
+    aliased_subtrees: Vec<ContentId>,
 }
 
 /// One verifier for a whole gate run. Tree bytes are read, decoded,
@@ -501,6 +529,11 @@ impl ClosureVerifier {
         let mut tree_sizes: BTreeMap<ContentId, u64> = BTreeMap::new();
         let mut chunks: BTreeSet<ContentId> = BTreeSet::new();
         let mut visited_manifests: Vec<&Manifest> = Vec::new();
+        // Identity uniqueness is a per-head property: divergent heads may
+        // share a token through common descent, so the counts live here
+        // and never in the shared tree cache.
+        let mut identity_counts: BTreeMap<EntryIdentity, usize> = BTreeMap::new();
+        let mut ambiguous: Option<(ContentId, EntryIdentity)> = None;
 
         while let Some((tree_id, manifest)) = stack.pop() {
             // One verification step for this (tree, manifest) pair,
@@ -525,13 +558,31 @@ impl ClosureVerifier {
                 check_tree(&self.limits, &tree)?;
                 let mut tree_chunks = Vec::new();
                 let mut directories = Vec::new();
+                let mut local_identities = BTreeSet::new();
+                let mut identities = Vec::new();
                 for entry in tree.entries() {
+                    if let Some(identity) = entry.identity {
+                        if !local_identities.insert(identity) {
+                            return Err(ClosureError::DuplicateEntryIdentity {
+                                tree: tree_id,
+                                identity,
+                            });
+                        }
+                        identities.push(identity);
+                    }
                     match &entry.content {
                         EntryContent::File { chunks: ids, .. } => {
                             tree_chunks.extend(ids.iter().copied())
                         }
                         EntryContent::Dir { subtree } => directories.push(*subtree),
                         EntryContent::Symlink { .. } => {}
+                    }
+                }
+                let mut seen_subtrees = BTreeSet::new();
+                let mut aliased_subtrees = Vec::new();
+                for subtree in &directories {
+                    if !seen_subtrees.insert(*subtree) {
+                        aliased_subtrees.push(*subtree);
                     }
                 }
                 self.charge_entries(tree.entries().len() as u64)?;
@@ -541,10 +592,19 @@ impl ClosureVerifier {
                         byte_len: bytes.len() as u64,
                         chunks: tree_chunks,
                         directories,
+                        identities,
+                        aliased_subtrees,
                     },
                 );
             }
             let cached = &self.trees[&tree_id];
+            for identity in &cached.identities {
+                let count = identity_counts.entry(*identity).or_default();
+                *count += 1;
+                if *count == 2 && ambiguous.is_none() {
+                    ambiguous = Some((tree_id, *identity));
+                }
+            }
             tree_sizes.insert(tree_id, cached.byte_len);
             visited_manifests.push(manifest);
 
@@ -639,6 +699,34 @@ impl ClosureVerifier {
                 check_manifest(&self.limits, child)?;
                 stack.push((*subtree, child));
             }
+        }
+
+        // A subtree named by two directory entries in one parent is
+        // walked once (the manifest correspondence deduplicates it), yet
+        // its tokens still land at two paths. Charge the alias so those
+        // tokens are counted twice.
+        // Only this head's trees may contribute. `self.trees` is the
+        // batch-wide cache: an earlier head that failed on an alias
+        // must not poison a later, lawful head carrying the same token
+        // through common descent.
+        for tree in tree_sizes.keys() {
+            let Some(cached) = self.trees.get(tree) else {
+                continue;
+            };
+            for subtree in &cached.aliased_subtrees {
+                if let Some(child) = self.trees.get(subtree) {
+                    for identity in &child.identities {
+                        let count = identity_counts.entry(*identity).or_default();
+                        *count += 1;
+                        if *count == 2 && ambiguous.is_none() {
+                            ambiguous = Some((*subtree, *identity));
+                        }
+                    }
+                }
+            }
+        }
+        if let Some((tree, identity)) = ambiguous {
+            return Err(ClosureError::AmbiguousEntryIdentity { tree, identity });
         }
 
         // With both closures resolved, every entry must land in one of them.
@@ -899,6 +987,279 @@ mod tests {
             &Limits::V0,
         )
         .unwrap();
+    }
+
+    /// One token on two entries of one tree is a namespace ambiguity:
+    /// the File Provider maps both paths to one item identifier. The
+    /// closure gate must refuse it even though both names and chunks
+    /// are canonical.
+    #[test]
+    fn duplicate_identity_within_a_tree_is_rejected() {
+        let mut store = MemoryObjectStore::default();
+        let (c1, e1) = chunk(b"one");
+        let (c2, e2) = chunk(b"two");
+        let token = EntryIdentity::from_bytes([0x91; 32]);
+        let tree = Tree::from_entries(vec![
+            Entry::file("a", 3, false, vec![c1])
+                .unwrap()
+                .with_identity(token),
+            Entry::file("b", 3, false, vec![c2])
+                .unwrap()
+                .with_identity(token),
+        ])
+        .unwrap();
+        let tree_id = store_tree(&mut store, &tree);
+        let snapshot = snapshot(tree_id);
+        let root = manifest(&snapshot, vec![e1, e2]);
+        let err = verify_snapshot_manifest(
+            &snapshot,
+            &store,
+            &manifest_id(&root),
+            &root,
+            &BTreeMap::<ContentId, Manifest>::new(),
+            &Limits::V0,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, ClosureError::DuplicateEntryIdentity { identity, .. } if identity == token),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    /// A copied token is rejected even when the two paths live in
+    /// different subtrees: the closure, not the individual tree, is
+    /// the namespace in which an item identifier must be unique.
+    #[test]
+    fn duplicate_identity_across_subtrees_is_rejected() {
+        let mut store = MemoryObjectStore::default();
+        let (c1, e1) = chunk(b"one");
+        let (c2, e2) = chunk(b"two");
+        let token = EntryIdentity::from_bytes([0x92; 32]);
+        let leaf = |chunk_id| {
+            Tree::from_entries(vec![Entry::file("f", 3, false, vec![chunk_id])
+                .unwrap()
+                .with_identity(token)])
+            .unwrap()
+        };
+        let left = store_tree(&mut store, &leaf(c1));
+        let right = store_tree(&mut store, &leaf(c2));
+        let root_tree = Tree::from_entries(vec![
+            Entry::dir("a", left).unwrap(),
+            Entry::dir("b", right).unwrap(),
+        ])
+        .unwrap();
+        let root_tree_id = store_tree(&mut store, &root_tree);
+        let snapshot = snapshot(root_tree_id);
+        let left_manifest = manifest(&snapshot, vec![e1]);
+        let right_manifest = manifest(&snapshot, vec![e2]);
+        let left_id = manifest_id(&left_manifest);
+        let right_id = manifest_id(&right_manifest);
+        let link = |tree, id| ChildManifest {
+            tree,
+            manifest: id,
+            storage: StorageId::from_bytes([0xE0; 32]),
+            transport: BaoRoot::from_bytes([0xF0; 32]),
+        };
+        let root = manifest_with_children(
+            &snapshot,
+            Vec::new(),
+            vec![link(left, left_id), link(right, right_id)],
+        );
+        let children = BTreeMap::from([(left_id, left_manifest), (right_id, right_manifest)]);
+        let err = verify_snapshot_manifest(
+            &snapshot,
+            &store,
+            &manifest_id(&root),
+            &root,
+            &children,
+            &Limits::V0,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, ClosureError::AmbiguousEntryIdentity { identity, .. } if identity == token),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    /// Reaching one subtree through two directory names puts its
+    /// tokens at two paths. The manifest walk deduplicates the tree,
+    /// so the alias must be charged explicitly or the repeat hides.
+    #[test]
+    fn aliased_subtree_with_identity_is_rejected() {
+        let mut store = MemoryObjectStore::default();
+        let (c, e) = chunk(b"leaf");
+        let token = EntryIdentity::from_bytes([0x93; 32]);
+        let leaf = Tree::from_entries(vec![Entry::file("leaf", 4, false, vec![c])
+            .unwrap()
+            .with_identity(token)])
+        .unwrap();
+        let leaf_id = store_tree(&mut store, &leaf);
+        let root_tree = Tree::from_entries(vec![
+            Entry::dir("a", leaf_id).unwrap(),
+            Entry::dir("b", leaf_id).unwrap(),
+        ])
+        .unwrap();
+        let root_tree_id = store_tree(&mut store, &root_tree);
+        let snapshot = snapshot(root_tree_id);
+        let child = manifest(&snapshot, vec![e]);
+        let child_id = manifest_id(&child);
+        let root = manifest_with_children(
+            &snapshot,
+            Vec::new(),
+            vec![ChildManifest {
+                tree: leaf_id,
+                manifest: child_id,
+                storage: StorageId::from_bytes([0xE0; 32]),
+                transport: BaoRoot::from_bytes([0xF0; 32]),
+            }],
+        );
+        let children = BTreeMap::from([(child_id, child)]);
+        let err = verify_snapshot_manifest(
+            &snapshot,
+            &store,
+            &manifest_id(&root),
+            &root,
+            &children,
+            &Limits::V0,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, ClosureError::AmbiguousEntryIdentity { identity, .. } if identity == token),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    /// Distinct tokens across subtrees are lawful: the check must not
+    /// reject ordinary identity-bearing trees.
+    #[test]
+    fn distinct_identities_across_subtrees_verify() {
+        let mut store = MemoryObjectStore::default();
+        let (c1, e1) = chunk(b"one");
+        let (c2, e2) = chunk(b"two");
+        let leaf = |chunk_id, token| {
+            Tree::from_entries(vec![Entry::file("f", 3, false, vec![chunk_id])
+                .unwrap()
+                .with_identity(EntryIdentity::from_bytes([token; 32]))])
+            .unwrap()
+        };
+        let left = store_tree(&mut store, &leaf(c1, 0xA1));
+        let right = store_tree(&mut store, &leaf(c2, 0xA2));
+        let root_tree = Tree::from_entries(vec![
+            Entry::dir("a", left).unwrap(),
+            Entry::dir("b", right).unwrap(),
+        ])
+        .unwrap();
+        let root_tree_id = store_tree(&mut store, &root_tree);
+        let snapshot = snapshot(root_tree_id);
+        let left_manifest = manifest(&snapshot, vec![e1]);
+        let right_manifest = manifest(&snapshot, vec![e2]);
+        let left_id = manifest_id(&left_manifest);
+        let right_id = manifest_id(&right_manifest);
+        let link = |tree, id| ChildManifest {
+            tree,
+            manifest: id,
+            storage: StorageId::from_bytes([0xE0; 32]),
+            transport: BaoRoot::from_bytes([0xF0; 32]),
+        };
+        let root = manifest_with_children(
+            &snapshot,
+            Vec::new(),
+            vec![link(left, left_id), link(right, right_id)],
+        );
+        let children = BTreeMap::from([(left_id, left_manifest), (right_id, right_manifest)]);
+        verify_snapshot_manifest(
+            &snapshot,
+            &store,
+            &manifest_id(&root),
+            &root,
+            &children,
+            &Limits::V0,
+        )
+        .expect("distinct tokens verify");
+    }
+
+    /// One verifier serves a whole gate batch. A head rejected for an
+    /// alias must not inject its cached alias into the next head's
+    /// identity counts: that would keep an honest head unpublished for
+    /// as long as the damaged head stays eligible.
+    #[test]
+    fn a_damaged_head_does_not_poison_a_later_valid_head() {
+        let mut store = MemoryObjectStore::default();
+        let token = EntryIdentity::from_bytes([0x94; 32]);
+
+        // Damaged head: a token-bearing subtree under two names.
+        let (c, e) = chunk(b"leaf");
+        let leaf = Tree::from_entries(vec![Entry::file("leaf", 4, false, vec![c])
+            .unwrap()
+            .with_identity(token)])
+        .unwrap();
+        let leaf_id = store_tree(&mut store, &leaf);
+        let bad_root = Tree::from_entries(vec![
+            Entry::dir("a", leaf_id).unwrap(),
+            Entry::dir("b", leaf_id).unwrap(),
+        ])
+        .unwrap();
+        let bad_root_id = store_tree(&mut store, &bad_root);
+        let bad_snapshot = snapshot(bad_root_id);
+        let child = manifest(&bad_snapshot, vec![e]);
+        let child_id = manifest_id(&child);
+        let bad_manifest = manifest_with_children(
+            &bad_snapshot,
+            Vec::new(),
+            vec![ChildManifest {
+                tree: leaf_id,
+                manifest: child_id,
+                storage: StorageId::from_bytes([0xE0; 32]),
+                transport: BaoRoot::from_bytes([0xF0; 32]),
+            }],
+        );
+        let bad_manifest_id = manifest_id(&bad_manifest);
+        let bad_children = BTreeMap::from([(child_id, child)]);
+
+        // Valid head: the same token appears once, through common
+        // descent, in its own tree.
+        let (c2, e2) = chunk(b"valid");
+        let good_tree = Tree::from_entries(vec![Entry::file("f", 5, false, vec![c2])
+            .unwrap()
+            .with_identity(token)])
+        .unwrap();
+        let good_tree_id = store_tree(&mut store, &good_tree);
+        let good_snapshot = Snapshot::new(
+            Vec::new(),
+            good_tree_id,
+            DeviceId::from_bytes([0x09; 32]),
+            TransitionId::from_bytes([0x02; 32]),
+            1,
+            0,
+            7,
+        )
+        .unwrap();
+        let good_manifest = manifest(&good_snapshot, vec![e2]);
+        let good_manifest_id = manifest_id(&good_manifest);
+
+        let mut verifier = ClosureVerifier::new(HeadGateBudget::UNLIMITED, Limits::V0);
+        let bad = verifier
+            .verify_snapshot(
+                &bad_snapshot,
+                &store,
+                &bad_manifest_id,
+                &bad_manifest,
+                &bad_children,
+            )
+            .unwrap_err();
+        assert!(
+            matches!(bad, ClosureError::AmbiguousEntryIdentity { .. }),
+            "the damaged head is refused: {bad:?}"
+        );
+        verifier
+            .verify_snapshot(
+                &good_snapshot,
+                &store,
+                &good_manifest_id,
+                &good_manifest,
+                &BTreeMap::<ContentId, Manifest>::new(),
+            )
+            .expect("the poisoned cache must not reject a valid head");
     }
 
     /// A wide flat tree shared by several distinct heads, plus the
@@ -1383,6 +1744,20 @@ mod tests {
             ),
             (ClosureError::InvalidTree(id), Some(Other)),
             (
+                ClosureError::DuplicateEntryIdentity {
+                    tree: id,
+                    identity: EntryIdentity::from_bytes([0x77; 32]),
+                },
+                Some(Other),
+            ),
+            (
+                ClosureError::AmbiguousEntryIdentity {
+                    tree: id,
+                    identity: EntryIdentity::from_bytes([0x78; 32]),
+                },
+                Some(Other),
+            ),
+            (
                 ClosureError::AmbiguousTreeMapping {
                     tree: id,
                     first: id,
@@ -1458,7 +1833,7 @@ mod tests {
         ];
         assert_eq!(
             cases.len(),
-            20,
+            22,
             "one case per ClosureError variant, mirroring the exhaustive match in rejection_class"
         );
         for (error, expected) in cases {

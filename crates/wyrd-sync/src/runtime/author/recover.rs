@@ -189,10 +189,10 @@ where
     // The live comparison walks only grafted paths (N1): an
     // unrelated absent live subtree is servable state, not a
     // recovery failure, so recovery never descends outside the
-    // graft. Shared live subtrees are walked once per graft path
-    // (N2): every path compares against the live entries at that
-    // path, so a token shared under two parents preserves under
-    // both.
+    // graft. Each path is compared against the live entries at that
+    // path (N2). A closure that repeats an `EntryIdentity` at two
+    // paths is refused by closure verification (object-model.md),
+    // so recovery never has to choose between two live aliases.
     let live_roots = eligible_live_roots(engine, objects, &rebuilt)?;
     let mut live: BTreeMap<String, Vec<Option<EntryIdentity>>> = BTreeMap::new();
     for entry in &taken {

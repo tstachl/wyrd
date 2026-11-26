@@ -81,6 +81,11 @@ pub struct WyrdNode<V: NamespaceView> {
     /// `LiveConfig::budgets` at composition; the direct refresh uses
     /// the production default until then.
     head_gate_budget: wyrd_sync::closure::HeadGateBudget,
+    /// Deterministic identity source for the `test-fixtures` write
+    /// helper. Advances across calls so two creations in one closure
+    /// never carry the same token; the live loop mints from the OS.
+    #[cfg(feature = "test-fixtures")]
+    fixture_mint_counter: u8,
 }
 
 /// Failure while composing the engine with a namespace view.
@@ -118,6 +123,8 @@ where
             view,
             installed_heads: 0,
             head_gate_budget: wyrd_sync::closure::HeadGateBudget::DEFAULT,
+            #[cfg(feature = "test-fixtures")]
+            fixture_mint_counter: 0,
         })
     }
 
@@ -344,23 +351,34 @@ where
         };
         let chunks = chunk::insert_chunks(&mut *store, data).map_err(WriteError::Store)?;
         let mut entry = Entry::file(file_name, data.len() as u64, false, chunks)?;
-        // Fixture authoring mints deterministically from a per-call
+        // Fixture authoring mints deterministically from a node-scoped
         // counter: fixtures must be byte-stable across runs, so no OS
-        // randomness here. Leaf first, then intermediates in walk
-        // order — distinct within the call, stable across runs. The
-        // live loop mints fresh per creation; tests asserting
-        // lifecycle behavior compose the loop instead.
-        let mut counter = 0u8;
+        // randomness here. The counter advances across calls, because
+        // two creations in one closure must not share a token — the
+        // closure gate now refuses that. Leaf first, then intermediates
+        // in walk order. The live loop mints fresh per creation; tests
+        // asserting lifecycle behavior compose the loop instead.
+        let mut counter = self.fixture_mint_counter;
         let mut fixture_mint = || {
             counter = counter.wrapping_add(1);
             Ok(wyrd_format::EntryIdentity::from_bytes([counter; 32]))
         };
         entry.identity = Some(fixture_mint()?);
         let root = wyrd_format::mutation::put(&mut *store, base, path, entry, &mut fixture_mint)?;
+        self.fixture_mint_counter = counter;
         let authorized = self.engine.author_pending_write(&*store, root, pending)?;
         drop(store);
         self.install_authored_head(authorized.clone());
         Ok(authorized)
+    }
+
+    /// Continue the deterministic fixture token stream after a node
+    /// is reopened over the same durable store. A fresh node starts
+    /// at zero; without this, a second creation in the same closure
+    /// would reuse a token the closed node already minted.
+    #[cfg(feature = "test-fixtures")]
+    pub fn set_fixture_mint_counter(&mut self, next: u8) {
+        self.fixture_mint_counter = next;
     }
 
     /// Test-only direct remove (feature `test-fixtures`, same

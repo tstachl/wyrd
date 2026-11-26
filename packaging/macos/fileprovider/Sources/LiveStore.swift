@@ -263,6 +263,19 @@ final class LiveStore {
         }
         var items: [LiveItem] = []
         var conflictRows: [(name: String, versions: [OwnerConflictVersion])] = []
+        // Enumeration is the one surface that sees a whole directory at
+        // once. A stable identifier is `DriveId + EntryIdentity`, so two
+        // paths carrying one token would map to one item identifier.
+        // Validate every row before recording any: a duplicate must not
+        // silently rebind a sibling's cached path. The check is local
+        // to this listing — re-recording a moved token after a walk or
+        // a rename is legitimate and must still work.
+        var rows: [(
+            identifier: NSFileProviderItemIdentifier,
+            entry: OwnerDirEntry,
+            childPath: String
+        )] = []
+        var seenIdentifiers = Set<String>()
         for entry in entries {
             if case .conflict(let versions) = entry.node {
                 conflictRows.append((entry.name, versions))
@@ -270,16 +283,26 @@ final class LiveStore {
             }
             let childPath = containerPath.isEmpty ? entry.name : "\(containerPath)/\(entry.name)"
             let identifier = identifierFor(node: entry.node, path: childPath)
-            resolver.record(identifier: identifier, path: childPath, parent: containerId)
+            guard seenIdentifiers.insert(identifier.rawValue).inserted else {
+                log.error(
+                    "enumerated \(containerPath) with duplicate identifier \(identifier.rawValue) at \(childPath)"
+                )
+                throw LiveStoreError.sync(
+                    "duplicate stable identifier \(identifier.rawValue) while enumerating \(containerPath)")
+            }
+            rows.append((identifier: identifier, entry: entry, childPath: childPath))
+        }
+        for row in rows {
+            resolver.record(identifier: row.identifier, path: row.childPath, parent: containerId)
             if let item = LiveItem(
                 row: LiveRow(
-                    name: entry.name,
-                    node: entry.node,
+                    name: row.entry.name,
+                    node: row.entry.node,
                     generation: generation,
                     revision: revision
                 ),
-                relativePath: childPath,
-                identifier: identifier,
+                relativePath: row.childPath,
+                identifier: row.identifier,
                 parent: containerId
             ) {
                 items.append(item)
