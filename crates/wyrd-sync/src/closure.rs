@@ -705,7 +705,14 @@ impl ClosureVerifier {
         // walked once (the manifest correspondence deduplicates it), yet
         // its tokens still land at two paths. Charge the alias so those
         // tokens are counted twice.
-        for cached in self.trees.values() {
+        // Only this head's trees may contribute. `self.trees` is the
+        // batch-wide cache: an earlier head that failed on an alias
+        // must not poison a later, lawful head carrying the same token
+        // through common descent.
+        for tree in tree_sizes.keys() {
+            let Some(cached) = self.trees.get(tree) else {
+                continue;
+            };
             for subtree in &cached.aliased_subtrees {
                 if let Some(child) = self.trees.get(subtree) {
                     for identity in &child.identities {
@@ -1169,6 +1176,90 @@ mod tests {
             &Limits::V0,
         )
         .expect("distinct tokens verify");
+    }
+
+    /// One verifier serves a whole gate batch. A head rejected for an
+    /// alias must not inject its cached alias into the next head's
+    /// identity counts: that would keep an honest head unpublished for
+    /// as long as the damaged head stays eligible.
+    #[test]
+    fn a_damaged_head_does_not_poison_a_later_valid_head() {
+        let mut store = MemoryObjectStore::default();
+        let token = EntryIdentity::from_bytes([0x94; 32]);
+
+        // Damaged head: a token-bearing subtree under two names.
+        let (c, e) = chunk(b"leaf");
+        let leaf = Tree::from_entries(vec![Entry::file("leaf", 4, false, vec![c])
+            .unwrap()
+            .with_identity(token)])
+        .unwrap();
+        let leaf_id = store_tree(&mut store, &leaf);
+        let bad_root = Tree::from_entries(vec![
+            Entry::dir("a", leaf_id).unwrap(),
+            Entry::dir("b", leaf_id).unwrap(),
+        ])
+        .unwrap();
+        let bad_root_id = store_tree(&mut store, &bad_root);
+        let bad_snapshot = snapshot(bad_root_id);
+        let child = manifest(&bad_snapshot, vec![e]);
+        let child_id = manifest_id(&child);
+        let bad_manifest = manifest_with_children(
+            &bad_snapshot,
+            Vec::new(),
+            vec![ChildManifest {
+                tree: leaf_id,
+                manifest: child_id,
+                storage: StorageId::from_bytes([0xE0; 32]),
+                transport: BaoRoot::from_bytes([0xF0; 32]),
+            }],
+        );
+        let bad_manifest_id = manifest_id(&bad_manifest);
+        let bad_children = BTreeMap::from([(child_id, child)]);
+
+        // Valid head: the same token appears once, through common
+        // descent, in its own tree.
+        let (c2, e2) = chunk(b"valid");
+        let good_tree = Tree::from_entries(vec![Entry::file("f", 5, false, vec![c2])
+            .unwrap()
+            .with_identity(token)])
+        .unwrap();
+        let good_tree_id = store_tree(&mut store, &good_tree);
+        let good_snapshot = Snapshot::new(
+            Vec::new(),
+            good_tree_id,
+            DeviceId::from_bytes([0x09; 32]),
+            TransitionId::from_bytes([0x02; 32]),
+            1,
+            0,
+            7,
+        )
+        .unwrap();
+        let good_manifest = manifest(&good_snapshot, vec![e2]);
+        let good_manifest_id = manifest_id(&good_manifest);
+
+        let mut verifier = ClosureVerifier::new(HeadGateBudget::UNLIMITED, Limits::V0);
+        let bad = verifier
+            .verify_snapshot(
+                &bad_snapshot,
+                &store,
+                &bad_manifest_id,
+                &bad_manifest,
+                &bad_children,
+            )
+            .unwrap_err();
+        assert!(
+            matches!(bad, ClosureError::AmbiguousEntryIdentity { .. }),
+            "the damaged head is refused: {bad:?}"
+        );
+        verifier
+            .verify_snapshot(
+                &good_snapshot,
+                &store,
+                &good_manifest_id,
+                &good_manifest,
+                &BTreeMap::<ContentId, Manifest>::new(),
+            )
+            .expect("the poisoned cache must not reject a valid head");
     }
 
     /// A wide flat tree shared by several distinct heads, plus the
