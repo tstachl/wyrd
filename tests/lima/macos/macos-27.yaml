@@ -73,6 +73,19 @@ provision:
     #!/bin/bash
     set -euo pipefail
 
+    # On cloned instances Lima regenerates the cidata ISO after the VM is
+    # already running. The macOS init daemon has RunAtLoad but no KeepAlive:
+    # if it runs before the ISO is mounted it exits once and
+    # `limactl start` waits forever for /var/run/lima-boot-done. Make it
+    # retry. Verified on a clone: boot reaches READY without intervention.
+    INIT_PLIST=/Library/LaunchDaemons/io.lima-vm.lima-macos-init.plist
+    if [[ -f "$INIT_PLIST" ]] && \
+       ! /usr/libexec/PlistBuddy -c 'Print :KeepAlive' "$INIT_PLIST" >/dev/null 2>&1; then
+      /usr/libexec/PlistBuddy -c 'Add :KeepAlive bool true' "$INIT_PLIST"
+      /usr/libexec/PlistBuddy -c 'Add :ThrottleInterval integer 5' "$INIT_PLIST" || true
+      /bin/launchctl kickstart -k system/io.lima-vm.lima-macos-init || true
+    fi
+
     # --- Automatic login -------------------------------------------------
     # Without a logged-in Aqua session /dev/console is root, there is no
     # WindowServer domain, the App Group container never materializes, and
