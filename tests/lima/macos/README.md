@@ -13,7 +13,11 @@ mount cannot be exercised by the Linux FUSE path.
   Full Disk Access to the responsible processes.
 - `run-acceptance.sh` — host half: stage an RC bundle, register the appex and
   domain registrar, create a fresh drive, start the owner, run the guest
-  driver, and copy evidence back to the host.
+  driver, and copy evidence back to the host. `--create-mode app` (default)
+  creates the drive with the same credential-commit and bootstrap commands
+  the desktop onboarding and add-drive views use, including a registry entry;
+  `--create-mode cli` keeps the original `identity generate` + `drive init`
+  leg, which has no registry entry and exercises alias-based discovery.
 - `filesystem-acceptance.sh` — guest half: Finder AppleScript navigation and
   filesystem operations with per-step assertions, owner-view verification via
   the Wyrd CLI, and an app+owner restart subset.
@@ -44,9 +48,11 @@ WYRD_APP_GROUP=<team-prefixed-short-group> \
 ```
 
 The driver exits non-zero on any failed assertion. The runner still copies
-per-step logs, the owner's export tree, the domain plist and the plugin
-registration when the driver fails, and records the appex hash and the
-`Connected` precondition in `metadata.json`. A run with `Connected=false`
+per-step logs, the owner's export tree, the domain plist, the desktop
+registry and the plugin registration when the driver fails, and records the
+appex hash, the create mode and the `Connected` precondition in
+`metadata.json`. The `app` leg also saves a screenshot of the desktop after
+launch. A run with `Connected=false`
 does **not** claim a full pass against the acceptance issue's definition of
 done, even when all filesystem checks succeed.
 
