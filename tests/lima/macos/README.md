@@ -15,12 +15,13 @@ mount cannot be exercised by the Linux FUSE path.
   domain registrar, create a fresh drive, start the owner, run the guest
   driver, and copy evidence back to the host. `--create-mode app` (default)
   creates the drive with the same credential-commit and bootstrap commands
-  the desktop onboarding and add-drive views use, including a registry entry;
-  it uses the desktop's `--no-service` posture because the clean guest has no
-  Command Line Tools for the Python supervise wrapper, and starts the owner
-  directly. `--create-mode cli` keeps the original `identity generate` +
-  `drive init` leg, which has no registry entry and exercises alias-based
-  discovery.
+  the desktop onboarding and add-drive views use, including a registry entry
+  and the adopted-pair record the desktop writes after commit, so the app
+  opens on the drive rather than the adoption choice. It uses the desktop's
+  `--no-service` posture because the clean guest has no Command Line Tools
+  for the Python supervise wrapper, and starts the owner directly.
+  `--create-mode cli` keeps the original `identity generate` + `drive init`
+  leg, which has no registry entry and exercises alias-based discovery.
 - `filesystem-acceptance.sh` — guest half: Finder AppleScript navigation and
   filesystem operations with per-step assertions, owner-view verification via
   the Wyrd CLI, and an app+owner restart subset.

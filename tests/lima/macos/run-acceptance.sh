@@ -61,22 +61,36 @@ limactl shell "$INSTANCE" -- /bin/sh -c \
 
 # Fresh drive and identity. `app` runs the adapter path the desktop views
 # use: identity commit writes the credential pair, then drive bootstrap
-# initializes the store and writes the registry entry so the desktop gate
-# finds a registered drive at launch. The clean guest has no Command Line
-# Tools, so the Python supervise wrapper cannot start a managed service;
-# the desktop's --no-service posture registers without one. Bootstrap's
-# socket verification is expected to fail before the owner is started
-# below, so the leg asserts the registry entry instead of its exit code.
-# `cli` keeps the original generate/init leg, which has no registry entry
-# and therefore exercises alias-based discovery and the adoption gate.
+# initializes the store and writes the registry entry. The desktop's commit
+# step also records the adopted pair at its own default paths; the leg
+# mirrors that record (paths only, no secrets in argv) so the gate can
+# verify the pair and land on the drive. Without it the gate correctly
+# offers adoption for credentials it cannot resolve. The clean guest has
+# no Command Line Tools, so the Python supervise wrapper cannot start a
+# managed service; the desktop's --no-service posture registers without
+# one. Bootstrap's socket verification is expected to fail before the
+# owner is started below, so the leg asserts the registry entry instead
+# of its exit code. `cli` keeps the original generate/init leg, which has
+# no registry entry and therefore exercises alias-based discovery.
 if [[ "$CREATE_MODE" == "app" ]]; then
   limactl shell "$INSTANCE" -- /bin/sh -s <<EOF
 set -e
 D="\$HOME/wyrd-accept-$DRIVE"
 W=/Applications/Wyrd.app/Contents/Resources/wyrd
-mkdir -p "\$D/$DRIVE"
+KEYS="\$HOME/Library/Application Support/Wyrd/keys"
+mkdir -p "\$D/$DRIVE" "\$KEYS"
 cd "\$D"
 printf '%s\n' 'wyrd-acceptance-passphrase' | "\$W" identity commit --identity-file "\$D/identity.bin" --passphrase-file "\$D/passphrase.txt"
+# The same two files at the shell's default paths, plus the adopted-pair
+# record the desktop writes after commit. Paths only, owner-only modes.
+cp "\$D/identity.bin" "\$KEYS/identity"
+cp "\$D/passphrase.txt" "\$KEYS/passphrase"
+chmod 700 "\$KEYS"
+chmod 600 "\$KEYS/identity" "\$KEYS/passphrase"
+cat > "\$HOME/Library/Application Support/Wyrd/credentials.json" <<JSON
+{"version":1,"identity_file":"\$KEYS/identity","passphrase_file":"\$KEYS/passphrase"}
+JSON
+chmod 600 "\$HOME/Library/Application Support/Wyrd/credentials.json"
 set +e
 "\$W" drive "\$D/$DRIVE" \
     --identity-file "\$D/identity.bin" --passphrase-file "\$D/passphrase.txt" \
@@ -111,7 +125,7 @@ if [[ "$CREATE_MODE" == "app" ]]; then
   # Evidence that the shell opened on the drive rather than the welcome
   # guide. The gate decision itself is pinned by desktop unit tests.
   limactl shell "$INSTANCE" -- /bin/sh -c \
-    "/usr/sbin/screencapture -x \"\$HOME/wyrd-accept-$DRIVE-evidence/desktop-after-launch.png\"" || true
+    "/usr/sbin/screencapture -x \"\$HOME/wyrd-accept-$DRIVE-evidence/desktop-after-launch.png\" >/dev/null 2>&1" || true
 fi
 
 EVID="${TMPDIR:-/private/var/folders/lw/hzz10xqd7wn18gzsnh4yp5pm0000gn/T/opencode/}wyrd-macos-acceptance-$(date -u +%Y%m%dT%H%M%SZ)"
