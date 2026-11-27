@@ -7,6 +7,8 @@ import FileProvider
 import Foundation
 
 final class CannedEnumerator: NSObject, NSFileProviderEnumerator {
+    /// The canned model never changes: its anchor is a stable marker.
+    private static let anchorData = Data("stage1-canned".utf8)
     private let container: NSFileProviderItemIdentifier
 
     init(container: NSFileProviderItemIdentifier) {
@@ -31,8 +33,20 @@ final class CannedEnumerator: NSObject, NSFileProviderEnumerator {
     func currentSyncAnchor(
         completionHandler: @escaping (NSFileProviderSyncAnchor?) -> Void
     ) {
-        completionHandler(
-            NSFileProviderSyncAnchor("stage1-canned".data(using: .utf8)!)
-        )
+        completionHandler(NSFileProviderSyncAnchor(Self.anchorData))
+    }
+
+    func enumerateChanges(
+        for observer: NSFileProviderChangeObserver,
+        from anchor: NSFileProviderSyncAnchor
+    ) {
+        guard Data(anchor.rawValue) == Self.anchorData else {
+            observer.finishEnumeratingWithError(
+                NSFileProviderError(.syncAnchorExpired))
+            return
+        }
+        observer.finishEnumeratingChanges(
+            upTo: NSFileProviderSyncAnchor(Self.anchorData),
+            moreComing: false)
     }
 }

@@ -6,6 +6,7 @@
 // equality only — ordering across generations is meaningless — and
 // a parse failure means "re-enumerate from scratch", never a guess.
 
+import FileProvider
 import Foundation
 
 /// `wyrd-anchor-v1:g<generation>:r<revision>`, both `UInt64`.
@@ -14,6 +15,11 @@ struct WyrdSyncAnchor: Equatable {
     var revision: UInt64
 
     static let prefix = "wyrd-anchor-v1:g"
+
+    init(generation: UInt64, revision: UInt64) {
+        self.generation = generation
+        self.revision = revision
+    }
 
     func encode() -> String {
         "\(Self.prefix)\(generation):r\(revision)"
@@ -31,5 +37,17 @@ struct WyrdSyncAnchor: Equatable {
             return nil
         }
         return WyrdSyncAnchor(generation: generation, revision: revision)
+    }
+
+    /// Decode the framework's opaque anchor through this adapter's
+    /// own grammar. A foreign or undecodable anchor is `nil`, never a
+    /// guessed coordinate — the caller expires it explicitly.
+    init?(syncAnchor: NSFileProviderSyncAnchor) {
+        guard let raw = String(data: Data(syncAnchor.rawValue), encoding: .utf8),
+            let decoded = WyrdSyncAnchor.decode(raw)
+        else {
+            return nil
+        }
+        self = decoded
     }
 }

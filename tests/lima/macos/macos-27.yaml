@@ -1,0 +1,184 @@
+# Lima template for the macOS 27.2.1 File Provider acceptance VM.
+#
+# Derived from the validated `macos-27-template.yaml` used for the packaged-app
+# acceptance run. The guest is a real macOS installation, so the File Provider
+# path (App Group container, `fileproviderd`, Finder CloudStorage mount) is
+# exercised rather than the Linux/FUSE path used by wyrd-alpha.yaml.
+#
+# Provisioning is idempotent: Lima can run it again on restart. It establishes
+# an Aqua session via automatic login (without one the App Group container is
+# never materialized and `open -a` fails) and stages a PPPC profile granting
+# Full Disk Access to the processes that own the acceptance run. macOS 27 no
+# longer supports `profiles install`, so the profile must be installed once
+# through System Settings → Profiles; the script refuses to pretend it can do
+# that silently.
+
+minimumLimaVersion: 2.1.0
+vmType: vz
+os: Darwin
+arch: aarch64
+images:
+- location: https://updates.cdn-apple.com/2026FallFCS/c202a724-db7e-4d56-917b-110aa0226507/UniversalMac_27.2.1_26B131_Restore.ipsw
+  arch: aarch64
+  digest: sha256:233e85a09887579d47d0b195e7db72be7f204261059c6946f719acf6b300814f
+cpus: 4
+memory: 4GiB
+disk: 100GiB
+ssh:
+  localPort: 0
+  loadDotSSHPubKeys: false
+  forwardAgent: false
+  forwardX11: false
+  forwardX11Trusted: false
+firmware:
+  legacyBIOS: false
+audio:
+  device: ""
+video:
+  display: default
+upgradePackages: false
+containerd:
+  system: false
+  user: false
+  archives:
+  - location: https://github.com/containerd/nerdctl/releases/download/v2.3.3/nerdctl-full-2.3.3-linux-amd64.tar.gz
+    arch: x86_64
+    digest: sha256:8d39a120d8414e3aff15ac05accf51bbbad6baf54764ae709b09087e4544c1ad
+  - location: https://github.com/containerd/nerdctl/releases/download/v2.3.3/nerdctl-full-2.3.3-linux-arm64.tar.gz
+    arch: aarch64
+    digest: sha256:2322f29f451189dd790b5d7c599b4600c210ff0f2c10244308a8e6a024274066
+guestInstallPrefix: /usr/local
+message: |
+  The user password for the GUI session is stored in `~/password` in the guest.
+  After first boot, install /etc/wyrd/lima-fda.mobileconfig once in
+  System Settings → Profiles; the provisioning script only stages it.
+hostResolver:
+  enabled: true
+  ipv6: false
+propagateProxyEnv: true
+caCerts:
+  removeDefaults: false
+plain: false
+timezone: UTC
+nestedVirtualization: false
+# Let Lima supply the host user's name, comment and uid. Only the guest home
+# is pinned, because the AF_UNIX socket path budget depends on its length.
+user:
+  home: /Users/{{.User}}.guest
+  shell: /bin/zsh
+
+provision:
+- mode: system
+  script: |
+    #!/bin/bash
+    set -euo pipefail
+
+    # On cloned instances Lima regenerates the cidata ISO after the VM is
+    # already running. The macOS init daemon has RunAtLoad but no KeepAlive:
+    # if it runs before the ISO is mounted it exits once and
+    # `limactl start` waits forever for /var/run/lima-boot-done. Make it
+    # retry. Verified on a clone: boot reaches READY without intervention.
+    INIT_PLIST=/Library/LaunchDaemons/io.lima-vm.lima-macos-init.plist
+    if [[ -f "$INIT_PLIST" ]] && \
+       ! /usr/libexec/PlistBuddy -c 'Print :KeepAlive' "$INIT_PLIST" >/dev/null 2>&1; then
+      /usr/libexec/PlistBuddy -c 'Add :KeepAlive bool true' "$INIT_PLIST"
+      /usr/libexec/PlistBuddy -c 'Add :ThrottleInterval integer 5' "$INIT_PLIST" || true
+      /bin/launchctl kickstart -k system/io.lima-vm.lima-macos-init || true
+    fi
+
+    # --- Automatic login -------------------------------------------------
+    # Without a logged-in Aqua session /dev/console is root, there is no
+    # WindowServer domain, the App Group container never materializes, and
+    # GUI launches fail with OSLaunchdErrorDomain 125. `sysadminctl
+    # -autologin set` rejects this account, so use the classic mechanism.
+    LOGIN_USER="{{.User}}"
+    PASSWORD_FILE="{{.Home}}/password"
+    if [[ ! -f /etc/kcpassword ]] || \
+       [[ "$(defaults read /Library/Preferences/com.apple.loginwindow autoLoginUser 2>/dev/null || true)" != "$LOGIN_USER" ]]; then
+      echo "provision: configuring automatic login for $LOGIN_USER"
+      PW="$(cat "$PASSWORD_FILE")"
+      defaults write /Library/Preferences/com.apple.loginwindow autoLoginUser -string "$LOGIN_USER"
+      STAGED="$(mktemp)"
+      # kcpassword = password (+ random padding to a multiple of 8) XOR "7h49w4a6".
+      /usr/bin/perl -e '
+        open(my $fh, "<", $ARGV[0]) or die $!; local $/; my $pw = <$fh>;
+        $pw =~ s/[\r\n]+\z//; my $key = "7h49w4a6";
+        my $total = int(length($pw)/8 + 1) * 8;
+        open(my $r, "<:raw", "/dev/urandom") or die $!;
+        read($r, my $pad, $total - length($pw));
+        my $data = $pw . $pad; my $enc = "";
+        for my $i (0 .. length($data)-1) {
+          $enc .= chr(ord(substr($data,$i,1)) ^ ord(substr($key,$i % 8,1)));
+        }
+        open(my $o, ">:raw", $ARGV[1]) or die $!; print $o $enc;
+      ' "$PASSWORD_FILE" "$STAGED"
+      cp "$STAGED" /etc/kcpassword
+      chown root:wheel /etc/kcpassword
+      chmod 600 /etc/kcpassword
+      rm -f "$STAGED"
+    fi
+
+    # --- PPPC profile for Full Disk Access -------------------------------
+    # TCC attributes `limactl shell` commands to sshd-keygen-wrapper, not to
+    # the CLI they launch; granting only the wyrd binary is not enough.
+    # The Lima guestagent is an unsigned a.out and is deliberately absent.
+    PROFILE=/etc/wyrd/lima-fda.mobileconfig
+    mkdir -p /etc/wyrd
+    if [[ ! -f "$PROFILE" ]]; then
+      echo "provision: staging PPPC profile at $PROFILE"
+      PAYLOAD_UUID="$(/usr/bin/uuidgen)"
+      PROFILE_UUID="$(/usr/bin/uuidgen)"
+      /bin/cat > "$PROFILE" <<EOF
+    <?xml version="1.0" encoding="UTF-8"?>
+    <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+    <plist version="1.0">
+    <dict>
+      <key>PayloadContent</key>
+      <array>
+        <dict>
+          <key>PayloadType</key><string>com.apple.TCC.configuration-profile-policy</string>
+          <key>PayloadVersion</key><integer>1</integer>
+          <key>PayloadIdentifier</key><string>com.wyrd.lima.fda</string>
+          <key>PayloadUUID</key><string>$PAYLOAD_UUID</string>
+          <key>PayloadDisplayName</key><string>Wyrd Lima FDA Grant</string>
+          <key>PayloadOrganization</key><string>Wyrd</string>
+          <key>Services</key>
+          <dict>
+            <key>SystemPolicyAllFiles</key>
+            <array>
+              <dict>
+                <key>Allowed</key><true/>
+                <key>CodeRequirement</key>
+                <string>identifier "com.apple.sshd-keygen-wrapper" and anchor apple</string>
+              </dict>
+              <dict>
+                <key>Allowed</key><true/>
+                <key>CodeRequirement</key>
+                <string>identifier "com.apple.Terminal" and anchor apple</string>
+              </dict>
+              <dict>
+                <key>Allowed</key><true/>
+                <key>CodeRequirement</key>
+                <string>identifier "wyrd" and anchor apple generic</string>
+              </dict>
+            </array>
+          </dict>
+        </dict>
+      </array>
+      <key>PayloadType</key><string>Configuration</string>
+      <key>PayloadVersion</key><integer>1</integer>
+      <key>PayloadIdentifier</key><string>com.wyrd.lima.fda.profile</string>
+      <key>PayloadUUID</key><string>$PROFILE_UUID</string>
+      <key>PayloadDisplayName</key><string>Wyrd Lima FDA Profile</string>
+      <key>PayloadOrganization</key><string>Wyrd</string>
+    </dict>
+    </plist>
+    EOF
+      chmod 644 "$PROFILE"
+    fi
+
+    if /usr/bin/profiles show -type configuration -identifier com.wyrd.lima.fda >/dev/null 2>&1; then
+      echo "provision: FDA profile already installed"
+    else
+      echo "provision: macOS no longer supports 'profiles install'; install $PROFILE once via System Settings → Profiles" >&2
+    fi
