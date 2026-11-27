@@ -45,6 +45,15 @@ home the implementation and its fixtures cite.
 - T14 halves, DeviceId display, raw nsec/hex, and QR codes never
   appear in this flow. "Removed" is the word; "retired" never
   appears.
+- The first-run gate also reads drive presence, not only credential
+  paths. A drive set up outside the shell — created by the CLI with
+  explicit credential files, with a live owner and a File Provider
+  domain — is discovered through the drive registry and the App
+  Group `Sockets/by-drive/*.label` aliases. The gate then offers
+  adoption instead of a welcome guide that invites a second
+  identity. Adoption uses the existing verify-and-record boundary,
+  generates no credential, and rewrites no registry entry. An
+  unreadable discovery input stays an explicit retry state.
 
 ## Security boundary (non-negotiable copy constraint)
 
@@ -189,6 +198,8 @@ the onboarding exception recorded in `desktop-shell.md`.
 | Incomplete (one file missing) | Names exactly what is missing |
 | Helper missing or mismatched (`versionmismatch` from the gate, including an unbuilt sibling CLI) | Pairing state, never a credential verdict: own headline, reinstall/build fix, Verify again only — no file choosing, no new identity, credential paths not shown |
 | Gate unreadable (transport, unusable paths) | Explicit unknown state with Retry, never an open gate |
+| Drive found outside this shell (live owner or registered drive, credential files not at the shell's defaults) | Adopt: name the discovered drive and ask for the identity file and passphrase file it uses. Verify and record the pair through `onboardingAdopt`; no new identity is generated and no registry entry is rewritten. |
+| Discovery input unreadable on a credential-free device | Explicit unknown state with Retry — never welcome, never a silent fresh-device decision |
 
 Never let an inaccessible identity silently become an invitation
 to generate. A new identity from a broken state requires explicit

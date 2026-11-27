@@ -12,6 +12,7 @@ import { expect, test } from "bun:test";
 import type {
   Diagnostics,
   DiagnosticsExport,
+  ExternalDrivesState,
   FinderIntegration,
   ProvisionReport,
   ProvisionResult,
@@ -75,6 +76,33 @@ test("persisted diagnostics view is internally tagged", () => {
   const unreadable: Diagnostics = { state: "unreadable", reason: "parse settings.json" };
   expect(nofile.state).toBe("nofile");
   expect(unreadable.state).toBe("unreadable");
+});
+
+// First-run discovery fixtures, copied from the Rust test
+// `local_query_shapes_serialize_verbatim` in `commands/mod.rs`.
+test("external drive discovery flattens the status and keeps null facts", () => {
+  const ready: ExternalDrivesState = {
+    status: "ready",
+    drives: [
+      {
+        name: "outside",
+        source: "alias",
+        drive_dir: null,
+        drive_id: "ab".repeat(32),
+        reachable: true,
+      },
+    ],
+  };
+  expect(ready.status).toBe("ready");
+  expect(ready.drives[0]?.drive_dir).toBeNull();
+  expect(ready.drives[0]?.source).toBe("alias");
+  const unreadable: ExternalDrivesState = {
+    status: "unreadable",
+    reason: "drive registry: parse /x/drives.json",
+    drives: [],
+  };
+  expect(unreadable.status).toBe("unreadable");
+  expect(unreadable.drives).toEqual([]);
 });
 
 test("served node: tuple array with an externally tagged node", () => {

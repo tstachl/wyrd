@@ -22,6 +22,7 @@ import type {
   Diagnostics,
   DiagnosticsExport,
   DriveSettingsState,
+  ExternalDrivesState,
   FinderIntegration,
   KeyDefaults,
   OnboardingReport,
@@ -423,6 +424,11 @@ export interface RevealArgs {
 /** Platform key defaults plus existence (no secret reads). */
 export function onboardingDefaults(): Promise<KeyDefaults> {
   return invokeValue<KeyDefaults>("onboarding_defaults");
+}
+
+/** Drives found outside this shell, for the first-run gate. A local query: discovery facts ride inside the payload. */
+export function externalDrives(): Promise<ExternalDrivesState> {
+  return invokeValue<ExternalDrivesState>("external_drives");
 }
 
 /** One generated passphrase for write-down: writes nothing. */

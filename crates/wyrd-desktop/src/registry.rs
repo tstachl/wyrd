@@ -319,7 +319,7 @@ pub struct RegistryState {
 /// Where the registry lives when no explicit path is given: the
 /// same per-user derivation the installer and the daemon use, so
 /// all three read the same file.
-fn default_registry_path() -> PathBuf {
+pub(crate) fn default_registry_path() -> PathBuf {
     #[cfg(target_os = "macos")]
     {
         if let Some(home) = std::env::var_os("HOME") {

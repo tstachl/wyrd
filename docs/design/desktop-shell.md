@@ -493,6 +493,21 @@ verdict.
   through the graceful-shutdown rule. A Dock, Spotlight or launcher
   start is always a fresh process that re-reads the registry and
   re-probes each drive's socket.
+- First-run discovery is an observational local query
+  (`external_drives`), not a second owner surface. It reads the
+  per-user drive registry and the App Group `Sockets/by-drive/*.label`
+  aliases the domain registrar uses, probes each owner through the
+  shared client, and reports discovery facts with their source —
+  never secrets, never a writable drive identity unless the registry
+  named one, and never an opened store. An unreadable input is an
+  explicit `unreadable` state with its reason; it never resolves to
+  an empty list, so a credential-free device with an unreadable
+  registry stays in the explicit retry state instead of receiving a
+  fresh-device welcome. The first-run gate takes both credential
+  paths and this answer: a discovered drive replaces the welcome
+  invitation with an adoption choice that uses the existing
+  `onboardingAdopt` command. Adoption records paths through that
+  boundary; it never generates a credential or rewrites the registry.
 - Frontend state is a presentation cache, never a second drive
   model. Transient presentation state is fine and expected: selected
   view, open dialogs, form input, pending-request indicators, last

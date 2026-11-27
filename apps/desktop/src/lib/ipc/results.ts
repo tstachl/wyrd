@@ -463,6 +463,27 @@ export interface KeyDefaults {
   usable: boolean;
 }
 
+/**
+ * First-run discovery: drives set up outside this shell. Source of
+ * truth: `ExternalDriveView` / `ExternalDriveStatus` /
+ * `ExternalDrivesState` in
+ * `crates/wyrd-desktop/src/external_drives.rs`. Discovery facts only —
+ * no secrets, no writable drive identity unless the registry named one.
+ */
+export type ExternalDriveSource = "registry" | "alias";
+
+export interface ExternalDriveView {
+  name: string;
+  source: ExternalDriveSource;
+  drive_dir: string | null;
+  drive_id: string | null;
+  reachable: boolean;
+}
+
+export type ExternalDrivesState =
+  | { status: "ready"; drives: ExternalDriveView[] }
+  | { status: "unreadable"; reason: string; drives: ExternalDriveView[] };
+
 /** One onboarding operation outcome. `passphrase` is set only for `new-passphrase` success. */
 export type OnboardingResult =
   | { result: "completed"; detail: string; passphrase: string | null }

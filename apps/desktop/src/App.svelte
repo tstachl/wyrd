@@ -19,6 +19,7 @@
     finderIntegration,
     driveSettings,
     driveUnlock,
+    externalDrives,
     freshness,
     listDrives,
     liveness,
@@ -57,6 +58,7 @@
     Diagnostics,
     DiagnosticsExport,
     DriveView,
+    ExternalDriveView,
     FinderIntegration,
     KeyDefaults,
     OnboardingReport,
@@ -81,6 +83,7 @@
     soleDriveDir,
   } from "$lib/views/single-drive-select.js";
   import type { HeaderAffordance } from "$lib/views/single-drive-select.js";
+  import { classifyFirstRun } from "$lib/views/onboarding-gate.js";
   import { presentation } from "$lib/state/presentation.svelte.js";
   import type { ShellView } from "$lib/state/presentation.svelte.js";
   import LifecycleView from "$lib/views/LifecycleView.svelte";
@@ -469,15 +472,20 @@
     }
   }
 
-  // First-run identity gate: no usable credentials -> onboarding
-  // (welcome) or repair — never a silent invitation to generate, and
+  // First-run identity gate: credential paths plus discovered drive
+  // presence. No credentials and no drive -> welcome; a drive found
+  // outside this shell -> adoption; one credential missing -> repair.
+  // Never a silent invitation to generate a second identity, and
   // never past the gate on an unverified state. A verified state
   // auto-unlocks: the remembered passphrase means no typing. An
-  // unreadable gate (transport failure, unusable paths) is its own
-  // state with a retry — it never opens as done.
-  type OnboardingGate = "loading" | "welcome" | "repair" | "unknown" | "done";
+  // unreadable gate (transport failure, unusable paths, unreadable
+  // discovery) is its own state with a retry — it never opens as done.
+  type OnboardingGate = "loading" | "welcome" | "adopt" | "repair" | "unknown" | "done";
   let gate = $state<OnboardingGate>("loading");
   let keyDefaults = $state<KeyDefaults | null>(null);
+  // A drive found outside this shell: the gate offers adoption, never
+  // a fresh-identity invitation. Set only by a successful discovery.
+  let externalDrive = $state<ExternalDriveView | null>(null);
   let repairDetail = $state("");
   // Repair has two causes with different fixes: unreadable
   // credentials (the identity-file repair states) versus a broken
@@ -547,20 +555,35 @@
     try {
       const defaults = await onboardingDefaults();
       keyDefaults = defaults;
-      if (!defaults.usable) {
-        gateDetail = "Could not determine this device's credential locations: no home directory resolves. Fix the environment and retry — nothing was written.";
-        gate = "unknown";
-        return;
-      }
-      if (!defaults.identity_exists && !defaults.passphrase_exists) {
-        gate = "welcome";
-        return;
-      }
-      if (!defaults.identity_exists || !defaults.passphrase_exists) {
-        repairDetail = "Missing credentials: one of the two files is missing — expected both the identity file and the passphrase file.";
-        repairKind = "credentials";
-        gate = "repair";
-        return;
+      // Discovery is the second gate input: a drive set up with
+      // explicit credential files is still a drive on this device.
+      // Both queries are local and infallible; a transport throw is
+      // caught below and stays `unknown`.
+      const discovery = await externalDrives();
+      const classified = classifyFirstRun(defaults, discovery);
+      switch (classified.state) {
+        case "unknown":
+          gateDetail = classified.detail;
+          gate = "unknown";
+          return;
+        case "welcome":
+          externalDrive = null;
+          gate = "welcome";
+          return;
+        case "adopt":
+          externalDrive = classified.drive;
+          gate = "adopt";
+          return;
+        case "repair":
+          externalDrive = null;
+          repairDetail =
+            "Missing credentials: one of the two files is missing — expected both the identity file and the passphrase file.";
+          repairKind = "credentials";
+          gate = "repair";
+          return;
+        case "verify":
+          externalDrive = null;
+          break;
       }
       const report = await runOnboarding(() =>
         onboardingVerify({ identityFile: defaults.identity_file, passphraseFile: defaults.passphrase_file }),
@@ -609,6 +632,21 @@
     });
   }
 
+  /**
+   * Adoption lands on the drive list, never on the add page: the
+   * drive already exists and the credential pair is now remembered
+   * through the existing adopt command. No identity is generated and
+   * the registry is not rewritten.
+   */
+  function adoptionDone(identityFile: string, passphraseFile: string): void {
+    onboardedIdentityFile = identityFile;
+    onboardedPassphraseFile = passphraseFile;
+    gate = "done";
+    void refreshLifecycle().then(() => {
+      allDrives();
+    });
+  }
+
   function repairCreateNew(): void {
     // Old files stay where they are (never overwritten, never
     // deleted): the fresh identity commits to `-new` siblings, shown
@@ -623,6 +661,7 @@
       };
     }
     onboardingEpoch += 1;
+    externalDrive = null;
     gate = "welcome";
   }
 
@@ -1205,6 +1244,21 @@
           onAdopt={(args: OnboardingAdoptArgs) => runOnboarding(() => onboardingAdopt(args))}
           onReveal={reveal}
           onDone={(identityFile, passphraseFile, mode) => onboardingDone(identityFile, passphraseFile, mode)}
+          onQuit={quitToStart}
+        />
+      {/key}
+    {:else if gate === "adopt" && keyDefaults !== null && externalDrive !== null}
+      {#key onboardingEpoch}
+        <OnboardingView
+          defaults={keyDefaults}
+          pending={busy}
+          externalDrive={externalDrive}
+          onNewPassphrase={() => runOnboarding(() => onboardingNewPassphrase())}
+          onCommit={(args: OnboardingCommitArgs) => runOnboarding(() => onboardingCommit(args))}
+          onVerify={(args: OnboardingVerifyArgs) => runOnboarding(() => onboardingVerify(args))}
+          onAdopt={(args: OnboardingAdoptArgs) => runOnboarding(() => onboardingAdopt(args))}
+          onReveal={reveal}
+          onDone={(identityFile, passphraseFile) => adoptionDone(identityFile, passphraseFile)}
           onQuit={quitToStart}
         />
       {/key}
