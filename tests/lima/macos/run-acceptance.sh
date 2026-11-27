@@ -10,7 +10,9 @@ APP=""
 INSTANCE="macos27"
 REVISION="unknown"
 GROUP="${WYRD_APP_GROUP:-}"
-DRIVE="accept-drive"
+# A fresh drive per run: reusing a name would collide with the identity and
+# domain left by a previous attempt.
+DRIVE="accept-$(date -u +%Y%m%dT%H%M%SZ | tr A-Z a-z)"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -44,7 +46,8 @@ sed -e 's|@WYRD_REGISTRAR_PATH@|/Applications/Wyrd.app/Contents/MacOS/WyrdDomain
     -e "s|@WYRD_APP_GROUP@|$GROUP|g" \
     "$ROOT/packaging/macos/launchd/md.enesis.wyrd.domain-registrar.plist" \
   | limactl shell "$INSTANCE" -- /bin/sh -c \
-      'cat > "$HOME/Library/LaunchAgents/md.enesis.wyrd.domain-registrar.plist"'
+      'mkdir -p "$HOME/Library/LaunchAgents"; \
+       cat > "$HOME/Library/LaunchAgents/md.enesis.wyrd.domain-registrar.plist"'
 limactl shell "$INSTANCE" -- /bin/sh -c \
   'launchctl unload -w "$HOME/Library/LaunchAgents/md.enesis.wyrd.domain-registrar.plist" 2>/dev/null || true; \
    launchctl load -w "$HOME/Library/LaunchAgents/md.enesis.wyrd.domain-registrar.plist"'
