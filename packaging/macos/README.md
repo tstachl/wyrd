@@ -412,8 +412,9 @@ That flag builds a separate signed helper
 provider in one supervised operation. The helper must be signed with the
 same identity as the installed app: a helper from a different team sees
 no domains and would report a false success. The script compares the two
-signing teams and refuses to run when they differ, so set `SIGN_IDENTITY`
-to the app's identity before a full reset. The registrar stays add-only
+signing teams and refuses to run when they differ. The builder takes
+`SIGN_IDENTITY` when set, otherwise the SecretSpec-provided
+`APPLE_IDENTITY`, matching `install-dev.sh`. The registrar stays add-only
 and never removes a stale domain: removing a subset while other domains
 hold File Provider state wedges Finder. Do not use domain removal for
 routine maintenance. Use it only for a full host reset, and verify a

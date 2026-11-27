@@ -83,6 +83,8 @@ match "trap 'rm -rf" "$UNINSTALL_CODE" \
   || die "the temporary helper directory must be cleaned on failure"
 match 'could not enumerate domains' "$REMOVER_CODE" \
   || die "a failed domain read must not report success"
+match 'APPLE_IDENTITY' "$(code "$BUILDER")" \
+  || die "the builder must use the SecretSpec signing identity"
 pass "domain removal is supervised and fails closed"
 
 match 'NSFileProviderManager.remove' "$REMOVER_CODE" \

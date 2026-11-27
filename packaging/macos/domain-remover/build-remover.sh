@@ -19,7 +19,11 @@ APP_GROUP=$(wyrd_app_group)
 echo "app group: $APP_GROUP" >&2
 OUT=${1:-"$HERE/build"}
 ARCH=${ARCH:-$(uname -m)}
-SIGN_IDENTITY=${SIGN_IDENTITY:--}
+# Match install-dev.sh: an explicit SIGN_IDENTITY wins, otherwise the
+# SecretSpec-provided APPLE_IDENTITY is the signing identity, and ad-hoc
+# is the last resort. The remover must share the app's team to see its
+# File Provider domains.
+SIGN_IDENTITY=${SIGN_IDENTITY:-${APPLE_IDENTITY:--}}
 MIN_MACOS=${MIN_MACOS:-13.0}
 
 if [ "$(uname -s)" != "Darwin" ]; then
