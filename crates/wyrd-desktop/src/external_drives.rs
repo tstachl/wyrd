@@ -237,8 +237,14 @@ fn aliases_in(container: &Path) -> Result<Vec<ExternalDriveView>, String> {
         if !valid_drive_id(id) {
             continue;
         }
-        let Ok(label) = std::fs::read_to_string(by_drive.join(format!("{id}.label"))) else {
-            continue;
+        // No label yet means no published drive; any other read
+        // failure is an unreadable input, not an empty list that
+        // would open the gate as a fresh device.
+        let label_path = by_drive.join(format!("{id}.label"));
+        let label = match std::fs::read_to_string(&label_path) {
+            Ok(label) => label,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(format!("read {}: {error}", label_path.display())),
         };
         let label = label.trim().to_string();
         if !valid_label(&label) {
@@ -418,6 +424,25 @@ mod tests {
         std::fs::write(by_drive.join("short.label"), b"short").unwrap();
         let state = discover_at(&scratch.0.join("drives.json"), Some(&scratch.0));
         assert_eq!(state.status, ExternalDriveStatus::Ready);
+        assert!(state.drives.is_empty());
+    }
+
+    /// An unreadable alias label is not "no label yet": it fails
+    /// closed like the other discovery inputs instead of dropping a
+    /// live drive's only evidence.
+    #[test]
+    fn unreadable_alias_label_fails_closed() {
+        let scratch = Scratch::new("bad-label");
+        let by_drive = scratch.0.join("Sockets").join("by-drive");
+        std::fs::create_dir_all(&by_drive).unwrap();
+        let id = "de".repeat(32);
+        std::fs::write(by_drive.join(format!("{id}.sock")), b"not-a-symlink").unwrap();
+        std::fs::create_dir(by_drive.join(format!("{id}.label"))).unwrap();
+        let state = discover_at(&scratch.0.join("drives.json"), Some(&scratch.0));
+        assert!(matches!(
+            &state.status,
+            ExternalDriveStatus::Unreadable { reason } if reason.contains(".label")
+        ));
         assert!(state.drives.is_empty());
     }
 
