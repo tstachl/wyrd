@@ -393,6 +393,41 @@ containing app; no Cargo dependency or unsafe FFI bridge is added.
 Distribution signing, notarization, and the release rehearsal stay with
 the signing owner, never this script.
 
+## Clean uninstall
+
+`packaging/macos/uninstall-dev.sh` removes the residue of a developer
+install. It is a dry run by default and deletes nothing until `--confirm`
+is given. It lists the launch agents, the app bundle and its plugin
+registration, the App Group containers, the application support files and
+the Finder mounts before it changes anything.
+
+A normal uninstall leaves the durable store, keys and credentials in
+place, as the product contract requires. Add `--delete-data` to remove
+them too; `--backup DIR` copies the support directory first. Add
+`--group ID` when the install used a short App Group override.
+
+File Provider domains are left alone unless `--remove-domains` is given.
+That flag builds a separate signed helper
+(`packaging/macos/domain-remover`) that removes every domain of this
+provider in one supervised operation. The helper must be signed with the
+same identity as the installed app: a helper from a different team sees
+no domains and would report a false success. The script compares the two
+signing teams and refuses to run when they differ, so set `SIGN_IDENTITY`
+to the app's identity before a full reset. The registrar stays add-only
+and never removes a stale domain: removing a subset while other domains
+hold File Provider state wedges Finder. Do not use domain removal for
+routine maintenance. Use it only for a full host reset, and verify a
+fresh install and mount afterwards.
+
+A dry run for a full reset therefore reads:
+
+```sh
+packaging/macos/uninstall-dev.sh --dry-run --remove-domains --delete-data
+```
+
+Replace `--dry-run` with `--confirm` only when the listed paths are the
+ones you intend to lose.
+
 ## Protocol (Stage 0 finding)
 
 The extension implements `NSFileProviderReplicatedExtension`
