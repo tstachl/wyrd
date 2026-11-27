@@ -218,12 +218,17 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
                     }
                     return
                 }
-                // Symlink authoring does not exist: refuse closed.
-                // The existing constant error line stays the default
-                // surface; detailed mode adds the decision inputs —
-                // target, type, options and staged-presence — as
-                // structured fields. This is the -2005 path.
-                if let target = itemTemplate.symlinkTargetPath {
+                // Symlink authoring does not exist: refuse closed for
+                // a genuine link template. A regular cross-provider
+                // import can carry a stale `symlinkTargetPath` beside
+                // an ordinary content type; that case is authored as
+                // a normal file from its staged contents instead of
+                // returning -2005. The existing constant error line
+                // stays the default surface; detailed mode adds the
+                // decision inputs as structured fields.
+                if let target = itemTemplate.symlinkTargetPath,
+                   TemplatePolicy.isSymlinkAuthoring(
+                       contentType: itemTemplate.contentType, target: target) {
                     log.error("symlink creation refused (no symlink authoring)")
                     let error = NSFileProviderError(.cannotSynchronize)
                     diagnostics.record(

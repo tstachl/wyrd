@@ -7,6 +7,7 @@
 import Dispatch
 import FileProvider
 import Foundation
+import UniformTypeIdentifiers
 import os
 
 var failures = 0
@@ -2205,6 +2206,24 @@ do {
     print("FAIL: duplicate identifier fixture: \(error)")
     failures += 1
 }
+
+// A stale symlink target on an ordinary import must not be mistaken
+// for user-authored symlink authoring (the -2005 path). Only the
+// symlink content type refuses; a regular type with a target and a
+// missing target both proceed.
+let symlinkType = UTType("public.symlink")
+check(TemplatePolicy.isSymlinkAuthoring(
+    contentType: symlinkType, target: "/private/tmp/staging"),
+      "a symlink content type with a target refuses")
+check(!TemplatePolicy.isSymlinkAuthoring(
+    contentType: .plainText, target: "/private/tmp/staging"),
+      "a regular import with a stale target is not a symlink")
+check(!TemplatePolicy.isSymlinkAuthoring(
+    contentType: .plainText, target: nil),
+      "no target is never symlink authoring")
+check(!TemplatePolicy.isSymlinkAuthoring(
+    contentType: symlinkType, target: nil),
+      "no target refuses nothing even for a symlink type")
 
 if failures == 0 {
     print("harness: all checks passed")
