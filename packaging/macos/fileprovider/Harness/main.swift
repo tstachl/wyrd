@@ -2246,6 +2246,9 @@ final class TemplateItem: NSObject, NSFileProviderItem {
     let parentItemIdentifier: NSFileProviderItemIdentifier
     let filename: String
     let contentType: UTType
+    // The protocol property is an optional requirement, so the
+    // conforming witness is `String?`; accessed through the
+    // existential the extension sees `String??` and flattens it.
     let symlinkTargetPath: String?
 
     init(filename: String, contentType: UTType, target: String?) {
@@ -2262,6 +2265,8 @@ final class TemplateItem: NSObject, NSFileProviderItem {
             contentVersion: Data("template".utf8),
             metadataVersion: Data("template".utf8))
     }
+
+    var documentSize: NSNumber? { nil }
 
     var capabilities: NSFileProviderItemCapabilities { [.allowsReading] }
 }
@@ -2290,6 +2295,21 @@ func createTemplateOutcome(
           "createItem answers the synthetic template")
     return result
 }
+
+// Control case at the callback boundary: the same symlink-shaped
+// template with an ordinary content type must not take the -2005
+// branch. The extension's live store is not wired to the Harness stub
+// owner, so this case cannot materialise a real file; it proves the
+// refusal is distinguishable from `cannotSynchronize`, which is the
+// fallback the issue allows. A wiring regression that passed the
+// wrong type or target into the gate would fail this assertion.
+let regularOutcome = createTemplateOutcome(
+    filename: "regular-template.txt", contentType: .plainText, target: stagedTarget)
+let regularError = regularOutcome.error as NSError?
+checkEqual(regularError?.domain, NSFileProviderErrorDomain,
+           "a regular target reports a provider error from the owner")
+check(regularError?.code != NSFileProviderError.cannotSynchronize.rawValue,
+      "a regular target never refuses with -2005 at the callback")
 
 if let symlinkType {
     let outcome = createTemplateOutcome(
