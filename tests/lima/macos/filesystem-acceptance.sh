@@ -47,15 +47,23 @@ log "finder_window=$(as 'tell application "Finder" to get name of front window')
 # this drive's domain and record it explicitly; a false flag means this run
 # must not claim the issue's full pass, even when every file check succeeds.
 PLIST="$HOME/Library/Application Support/FileProvider/md.enesis.wyrd.fileprovider/Domains.plist"
-CONNECTED=$(/usr/bin/plutil -p "$PLIST" 2>/dev/null | awk -v name="$(basename "$DRIVE")" '
+RAW=$(/usr/bin/plutil -p "$PLIST" 2>/dev/null || true)
+CONNECTED=$(printf '%s\n' "$RAW" | awk \
+  -v name="$(basename "$DRIVE")" \
+  -v published="Wyrd-$(basename "$DRIVE")" '
   /"Connected" =>/ { c = $3; gsub(/[",]/, "", c) }
-  /"DisplayName" =>/ { if (index($0, "\"" name "\"") > 0) print c }
+  /"DisplayName" =>/ {
+    if (index($0, "\"" name "\"") > 0 || index($0, "\"" published "\"") > 0) print c
+  }
 ' | head -1)
 [[ -n "$CONNECTED" ]] || CONNECTED=unknown
-if [[ "$CONNECTED" == "true" ]]; then
+if [[ "$CONNECTED" == "true" || "$CONNECTED" == "1" ]]; then
   log "PASS connected_precondition Connected=$CONNECTED"
 else
   log "UNMET connected_precondition Connected=$CONNECTED (issue step 2; no full pass claimed)"
+  if [[ "$CONNECTED" == "unknown" ]]; then
+    log "domain_plist_excerpt=[$(printf '%s\n' "$RAW" | head -6 | tr '\n' ' ')]"
+  fi
 fi
 
 # Create the nested directory as part of this run.

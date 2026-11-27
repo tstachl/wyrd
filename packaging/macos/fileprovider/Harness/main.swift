@@ -2215,8 +2215,10 @@ do {
 // This pins the pure policy used by FileProviderExtension.createItem. The
 // Harness has no fileproviderd template to drive `createItemBasedOnTemplate`,
 // and a cross-provider copy from another provider cannot be scripted in a
-// fresh VM; the packaged-app acceptance driver covers the callback path
-// indirectly by creating real files through Finder's CloudStorage mount.
+// fresh VM. The packaged-app acceptance driver does create real files through
+// Finder's CloudStorage mount; before the fix that path produced the
+// stage=symlinkTemplate -2005 record. These checks cover the predicate, not
+// the framework callback wiring.
 let symlinkType = UTType("public.symlink")
 check(TemplatePolicy.isSymlinkAuthoring(
     contentType: symlinkType, target: "/private/tmp/staging"),

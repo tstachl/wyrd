@@ -91,12 +91,17 @@ STEPS_LOG=$(find "$EVID" -name steps.log -type f 2>/dev/null | head -1)
 CONNECTED=$(grep -m1 'connected_precondition Connected=' "$STEPS_LOG" 2>/dev/null \
   | sed -E 's/.*Connected=([^ ]+).*/\1/' || true)
 [[ -n "$CONNECTED" ]] || CONNECTED=unknown
-printf '{"revision":"%s","appex_sha256":"%s","app":"%s","instance":"%s","connected_precondition":"%s","status":%s}\n' \
-  "$REVISION" "$APPEX_HASH" "$APP" "$INSTANCE" "$CONNECTED" "$STATUS" > "$EVID/metadata.json"
-if [[ "$CONNECTED" == "true" ]]; then
+if [[ "$STATUS" -eq 0 && "$CONNECTED" == "true" ]]; then
+  ACCEPTANCE_PASS=true
+else
+  ACCEPTANCE_PASS=false
+fi
+printf '{"revision":"%s","appex_sha256":"%s","app":"%s","instance":"%s","connected_precondition":"%s","acceptance_pass":"%s","status":%s}\n' \
+  "$REVISION" "$APPEX_HASH" "$APP" "$INSTANCE" "$CONNECTED" "$ACCEPTANCE_PASS" "$STATUS" > "$EVID/metadata.json"
+if [[ "$ACCEPTANCE_PASS" == "true" ]]; then
   echo "acceptance claim: all encoded checks passed"
 else
-  echo "acceptance claim: NOT MET (Connected=$CONNECTED; see issue definition of done)"
+  echo "acceptance claim: NOT MET (status=$STATUS, Connected=$CONNECTED; see issue definition of done)"
 fi
 echo "evidence: $EVID"
 exit "$STATUS"
