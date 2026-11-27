@@ -43,14 +43,18 @@ WYRD_APP_GROUP=<team-prefixed-short-group> \
     --revision <git-sha>
 ```
 
-The driver exits non-zero on any failed assertion. Per-step logs, the owner's
-export tree, the domain plist and the plugin registration are copied into the
-host evidence directory printed by the runner.
+The driver exits non-zero on any failed assertion. The runner still copies
+per-step logs, the owner's export tree, the domain plist and the plugin
+registration when the driver fails, and records the appex hash and the
+`Connected` precondition in `metadata.json`. A run with `Connected=false`
+does **not** claim a full pass against the acceptance issue's definition of
+done, even when all filesystem checks succeed.
 
 ## Caveats
 
 - A usable CloudStorage mount and real Finder writes are verified. The domain
-  plist's `Connected` flag has stayed `false` even on successful runs; treat
-  it as a status-flag gap, not as the mount precondition.
+  plist's `Connected` flag has stayed `false` even on successful runs. The
+  driver records this as an unmet precondition and the runner refuses to
+  claim the issue's full pass; the underlying flag remains a product issue.
 - mtime-only `update-item` stale-base refusals can produce `-2005` lines that
   macOS re-drives; file create/rename/move/delete must produce none.

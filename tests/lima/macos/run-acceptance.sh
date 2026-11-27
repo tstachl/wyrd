@@ -66,6 +66,11 @@ EOF
 
 EVID="${TMPDIR:-/private/var/folders/lw/hzz10xqd7wn18gzsnh4yp5pm0000gn/T/opencode/}wyrd-macos-acceptance-$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p "$EVID"
+APPEX="$APP/Contents/PlugIns/WyrdFileProvider.appex/Contents/MacOS/WyrdFileProvider"
+APPEX_HASH="$(shasum -a 256 "$APPEX" | awk '{print $1}')"
+
+# A failing driver exit must not discard the evidence collected so far.
+set +e
 {
   echo "export D=\"\$HOME/wyrd-accept-$DRIVE\""
   echo "export DRIVE=\"\$D/$DRIVE\""
@@ -76,12 +81,22 @@ mkdir -p "$EVID"
   cat "$SCENARIO/filesystem-acceptance.sh"
 } | limactl shell "$INSTANCE" -- /bin/sh -s | tee "$EVID/driver.log"
 STATUS=${PIPESTATUS[1]}
+set -e
 
 limactl cp --backend=rsync -r "$INSTANCE:$GUEST_HOME/wyrd-accept-$DRIVE-evidence" "$EVID/" || true
 limactl shell "$INSTANCE" -- /bin/sh -c \
   'cat "$HOME/Library/Application Support/FileProvider/md.enesis.wyrd.fileprovider/Domains.plist"' \
   > "$EVID/Domains.plist" || true
-printf '{"revision":"%s","app":"%s","instance":"%s","status":%s}\n' \
-  "$REVISION" "$APP" "$INSTANCE" "$STATUS" > "$EVID/metadata.json"
+STEPS_LOG=$(find "$EVID" -name steps.log -type f 2>/dev/null | head -1)
+CONNECTED=$(grep -m1 'connected_precondition Connected=' "$STEPS_LOG" 2>/dev/null \
+  | sed -E 's/.*Connected=([^ ]+).*/\1/' || true)
+[[ -n "$CONNECTED" ]] || CONNECTED=unknown
+printf '{"revision":"%s","appex_sha256":"%s","app":"%s","instance":"%s","connected_precondition":"%s","status":%s}\n' \
+  "$REVISION" "$APPEX_HASH" "$APP" "$INSTANCE" "$CONNECTED" "$STATUS" > "$EVID/metadata.json"
+if [[ "$CONNECTED" == "true" ]]; then
+  echo "acceptance claim: all encoded checks passed"
+else
+  echo "acceptance claim: NOT MET (Connected=$CONNECTED; see issue definition of done)"
+fi
 echo "evidence: $EVID"
 exit "$STATUS"

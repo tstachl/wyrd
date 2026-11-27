@@ -2211,6 +2211,12 @@ do {
 // for user-authored symlink authoring (the -2005 path). Only the
 // symlink content type refuses; a regular type with a target and a
 // missing target both proceed.
+//
+// This pins the pure policy used by FileProviderExtension.createItem. The
+// Harness has no fileproviderd template to drive `createItemBasedOnTemplate`,
+// and a cross-provider copy from another provider cannot be scripted in a
+// fresh VM; the packaged-app acceptance driver covers the callback path
+// indirectly by creating real files through Finder's CloudStorage mount.
 let symlinkType = UTType("public.symlink")
 check(TemplatePolicy.isSymlinkAuthoring(
     contentType: symlinkType, target: "/private/tmp/staging"),
@@ -2218,6 +2224,9 @@ check(TemplatePolicy.isSymlinkAuthoring(
 check(!TemplatePolicy.isSymlinkAuthoring(
     contentType: .plainText, target: "/private/tmp/staging"),
       "a regular import with a stale target is not a symlink")
+check(!TemplatePolicy.isSymlinkAuthoring(
+    contentType: UTType("com.adobe.pdf"), target: "/private/tmp/staging"),
+      "a cross-provider PDF import with a stale target is not a symlink")
 check(!TemplatePolicy.isSymlinkAuthoring(
     contentType: .plainText, target: nil),
       "no target is never symlink authoring")

@@ -41,6 +41,23 @@ sleep 12
 /usr/bin/open -a Finder "$M"
 sleep 3
 log "finder_window=$(as 'tell application "Finder" to get name of front window')"
+
+# Issue step 2 is a precondition: Connected=true with a usable mount. The
+# mount usability is proven below by real Finder writes. Read the flag for
+# this drive's domain and record it explicitly; a false flag means this run
+# must not claim the issue's full pass, even when every file check succeeds.
+PLIST="$HOME/Library/Application Support/FileProvider/md.enesis.wyrd.fileprovider/Domains.plist"
+CONNECTED=$(/usr/bin/plutil -p "$PLIST" 2>/dev/null | awk -v name="$(basename "$DRIVE")" '
+  /"Connected" =>/ { c = $3; gsub(/[",]/, "", c) }
+  /"DisplayName" =>/ { if (index($0, "\"" name "\"") > 0) print c }
+' | head -1)
+[[ -n "$CONNECTED" ]] || CONNECTED=unknown
+if [[ "$CONNECTED" == "true" ]]; then
+  log "PASS connected_precondition Connected=$CONNECTED"
+else
+  log "UNMET connected_precondition Connected=$CONNECTED (issue step 2; no full pass claimed)"
+fi
+
 # Create the nested directory as part of this run.
 as "tell application \"Finder\" to make new folder at folder POSIX file \"$M\" with properties {name:\"accept-probe\"}" >/dev/null
 sleep 3
@@ -114,8 +131,20 @@ check "post_restart_delete" is_absent "$M/v2-restart.txt"
 PW=$(cat "$HOME/password")
 printf '%s\n' "$PW" | sudo -S -p '' log show --last 15m --style compact \
     --predicate 'process == "fileproviderd"' 2>/dev/null \
-    | grep -iE 'FP -2005|FP -1002|FP -2011' > "$E/fp-errors.log" 2>&1 || true
-log "fp_error_lines=$(grep -icE 'FP -2005|FP -1002|FP -2011' "$E/fp-errors.log" 2>/dev/null | tr -d ' ')"
+    | grep -iE 'FP -2005|FP -1002|FP -2011|symlink creation refused' > "$E/fp-errors.log" 2>&1 || true
+log "fp_error_lines=$(wc -l < "$E/fp-errors.log" 2>/dev/null | tr -d ' ')"
+# Hard failures are -2005 or the symlink-refusal signature. mtime-only
+# stale-base update-item refusals are re-driven by macOS and are excluded.
+# FP -1002 is intentional anchor expiry, not a failure.
+HARD=$(grep -iE 'FP -2005|symlink creation refused' "$E/fp-errors.log" 2>/dev/null \
+  | grep -vicE 'update-item.*diffs:mtime' 2>/dev/null || true)
+[[ -n "$HARD" ]] || HARD=0
+if [[ "$HARD" -eq 0 ]]; then
+  log "PASS fp_hard_errors=0"
+else
+  log "FAIL fp_hard_errors=$HARD (see fp-errors.log)"
+  FAILURES=$((FAILURES + 1))
+fi
 
 log "TOTAL_FAILURES=$FAILURES"
 exit "$FAILURES"
