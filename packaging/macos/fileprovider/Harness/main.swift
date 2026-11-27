@@ -2208,33 +2208,119 @@ do {
 }
 
 // A stale symlink target on an ordinary import must not be mistaken
-// for user-authored symlink authoring (the -2005 path). Only the
-// symlink content type refuses; a regular type with a target and a
-// missing target both proceed.
+// for user-authored symlink authoring (the -2005 path). The Harness
+// cannot ask fileproviderd for a `createItemBasedOnTemplate` template,
+// so it drives the same decision two ways: through the pure disposition
+// the callback uses, and through the real `createItem` callback with a
+// synthetic template for the refusal branch.
 //
-// This pins the pure policy used by FileProviderExtension.createItem. The
-// Harness has no fileproviderd template to drive `createItemBasedOnTemplate`,
-// and a cross-provider copy from another provider cannot be scripted in a
-// fresh VM. The packaged-app acceptance driver does create real files through
-// Finder's CloudStorage mount; before the fix that path produced the
-// stage=symlinkTemplate -2005 record. These checks cover the predicate, not
-// the framework callback wiring.
+// `.author` is the branch that creates a file from staged contents —
+// the live-store round-trip above proves that branch creates a real
+// file. `.refuseSymlinkAuthoring` is the distinct -2005 branch, and the
+// callback-level case below proves that is what the completion handler
+// actually returns for a symlink-shaped template.
 let symlinkType = UTType("public.symlink")
-check(TemplatePolicy.isSymlinkAuthoring(
-    contentType: symlinkType, target: "/private/tmp/staging"),
-      "a symlink content type with a target refuses")
-check(!TemplatePolicy.isSymlinkAuthoring(
-    contentType: .plainText, target: "/private/tmp/staging"),
-      "a regular import with a stale target is not a symlink")
-check(!TemplatePolicy.isSymlinkAuthoring(
-    contentType: UTType("com.adobe.pdf"), target: "/private/tmp/staging"),
-      "a cross-provider PDF import with a stale target is not a symlink")
-check(!TemplatePolicy.isSymlinkAuthoring(
-    contentType: .plainText, target: nil),
-      "no target is never symlink authoring")
-check(!TemplatePolicy.isSymlinkAuthoring(
-    contentType: symlinkType, target: nil),
-      "no target refuses nothing even for a symlink type")
+let stagedTarget = "/private/tmp/staging"
+check(symlinkType != nil, "public.symlink type is available")
+checkEqual(TemplatePolicy.disposition(
+    contentType: symlinkType, symlinkTarget: stagedTarget),
+           .refuseSymlinkAuthoring,
+           "a symlink content type with a target refuses")
+checkEqual(TemplatePolicy.disposition(
+    contentType: .plainText, symlinkTarget: stagedTarget), .author,
+           "a regular import with a stale target is authored")
+checkEqual(TemplatePolicy.disposition(
+    contentType: UTType("com.adobe.pdf"), symlinkTarget: stagedTarget), .author,
+           "a cross-provider PDF import with a stale target is authored")
+checkEqual(TemplatePolicy.disposition(
+    contentType: .plainText, symlinkTarget: nil), .author,
+           "no target is never symlink authoring")
+checkEqual(TemplatePolicy.disposition(
+    contentType: symlinkType, symlinkTarget: nil), .author,
+           "no target refuses nothing even for a symlink type")
+
+/// A synthetic `createItemBasedOnTemplate` template. Only the fields
+/// the callback reads are customised; the rest carry stable defaults.
+final class TemplateItem: NSObject, NSFileProviderItem {
+    let itemIdentifier: NSFileProviderItemIdentifier
+    let parentItemIdentifier: NSFileProviderItemIdentifier
+    let filename: String
+    let contentType: UTType
+    // The protocol property is an optional requirement, so the
+    // conforming witness is `String?`; accessed through the
+    // existential the extension sees `String??` and flattens it.
+    let symlinkTargetPath: String?
+
+    init(filename: String, contentType: UTType, target: String?) {
+        self.itemIdentifier = NSFileProviderItemIdentifier("template-\(filename)")
+        self.parentItemIdentifier = .rootContainer
+        self.filename = filename
+        self.contentType = contentType
+        self.symlinkTargetPath = target
+        super.init()
+    }
+
+    var itemVersion: NSFileProviderItemVersion {
+        NSFileProviderItemVersion(
+            contentVersion: Data("template".utf8),
+            metadataVersion: Data("template".utf8))
+    }
+
+    var documentSize: NSNumber? { nil }
+
+    var capabilities: NSFileProviderItemCapabilities { [.allowsReading] }
+}
+
+/// Drive the real `createItem` callback and wait for its completion.
+/// The symlink refusal returns before the callback touches the owner,
+/// so no live socket is needed for this case.
+func createTemplateOutcome(
+    filename: String, contentType: UTType, target: String?
+) -> (item: NSFileProviderItem?, error: Error?) {
+    let domain = NSFileProviderDomain(
+        identifier: NSFileProviderDomainIdentifier(
+            rawValue: String(repeating: "a", count: 64)),
+        displayName: "template-harness")
+    let provider = FileProviderExtension(domain: domain)
+    let answered = DispatchSemaphore(value: 0)
+    var result: (NSFileProviderItem?, Error?) = (nil, nil)
+    let template = TemplateItem(filename: filename, contentType: contentType, target: target)
+    _ = provider.createItem(
+        basedOn: template, fields: [], contents: nil,
+        request: NSFileProviderRequest()) { item, _, _, error in
+        result = (item, error)
+        answered.signal()
+    }
+    check(answered.wait(timeout: .now() + 5) == .success,
+          "createItem answers the synthetic template")
+    return result
+}
+
+// Control case at the callback boundary: the same symlink-shaped
+// template with an ordinary content type must not take the -2005
+// branch. The extension's live store is not wired to the Harness stub
+// owner, so this case cannot materialise a real file; it proves the
+// refusal is distinguishable from `cannotSynchronize`, which is the
+// fallback the issue allows. A wiring regression that passed the
+// wrong type or target into the gate would fail this assertion.
+let regularOutcome = createTemplateOutcome(
+    filename: "regular-template.txt", contentType: .plainText, target: stagedTarget)
+let regularError = regularOutcome.error as NSError?
+checkEqual(regularError?.domain, NSFileProviderErrorDomain,
+           "a regular target reports a provider error from the owner")
+check(regularError?.code != NSFileProviderError.cannotSynchronize.rawValue,
+      "a regular target never refuses with -2005 at the callback")
+
+if let symlinkType {
+    let outcome = createTemplateOutcome(
+        filename: "symlink-template.txt", contentType: symlinkType, target: stagedTarget)
+    check(outcome.item == nil, "a symlink template creates no item")
+    let providerError = outcome.error as NSError?
+    checkEqual(providerError?.domain, NSFileProviderErrorDomain,
+               "symlink refusal uses the provider error domain")
+    checkEqual(providerError?.code, NSFileProviderError.cannotSynchronize.rawValue,
+               "symlink refusal is -2005")
+}
 
 if failures == 0 {
     print("harness: all checks passed")
