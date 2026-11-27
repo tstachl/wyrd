@@ -62,6 +62,42 @@ final class LiveEnumerator: NSObject, NSFileProviderEnumerator {
         completionHandler(NSFileProviderSyncAnchor(Data(anchor.encode().utf8)))
     }
 
+    func enumerateChanges(
+        for observer: NSFileProviderChangeObserver,
+        from anchor: NSFileProviderSyncAnchor
+    ) {
+        guard let previous = WyrdSyncAnchor(syncAnchor: anchor) else {
+            // An anchor this adapter did not issue cannot be served.
+            // Expire explicitly: the system drops cached data and
+            // re-enumerates from scratch, never guesses a delta.
+            observer.finishEnumeratingWithError(
+                NSFileProviderError(.syncAnchorExpired))
+            return
+        }
+        guard let current = store.currentAnchor() else {
+            // The owner is unreachable. Report availability; never
+            // claim "no changes" on an answer we did not get.
+            observer.finishEnumeratingWithError(
+                NSFileProviderError(.serverUnreachable))
+            return
+        }
+        guard previous == current else {
+            // Anchors compare by equality only: ordering across
+            // generations has no meaning, and Wyrd keeps no delta
+            // log. A moved coordinate expires so the system
+            // re-enumerates fully instead of serving a guess.
+            observer.finishEnumeratingWithError(
+                NSFileProviderError(.syncAnchorExpired))
+            return
+        }
+        // Same coordinate: the single-shot enumeration already served
+        // the whole container. Report no change and keep the anchor
+        // valid for the next batch.
+        observer.finishEnumeratingChanges(
+            upTo: NSFileProviderSyncAnchor(Data(current.encode().utf8)),
+            moreComing: false)
+    }
+
     func invalidate() {
         // No per-enumerator state survives a call: the store owns
         // the resolver, and connections are per-operation.
@@ -92,12 +128,38 @@ final class LiveEnumerator: NSObject, NSFileProviderEnumerator {
 /// every system sync. Item identity for these containers stays
 /// not-found — they are not entries.
 final class EmptyEnumerator: NSObject, NSFileProviderEnumerator {
+    /// These containers are deliberately static: no owner coordinate
+    /// exists. Their anchor is a stable marker, not a snapshot.
+    private static let anchorData = Data("wyrd-empty-v1".utf8)
+
     func enumerateItems(
         for observer: NSFileProviderEnumerationObserver,
         startingAt page: NSFileProviderPage
     ) {
         observer.didEnumerate([])
         observer.finishEnumerating(upTo: nil)
+    }
+
+    func currentSyncAnchor(
+        completionHandler: @escaping (NSFileProviderSyncAnchor?) -> Void
+    ) {
+        completionHandler(NSFileProviderSyncAnchor(Self.anchorData))
+    }
+
+    func enumerateChanges(
+        for observer: NSFileProviderChangeObserver,
+        from anchor: NSFileProviderSyncAnchor
+    ) {
+        guard Data(anchor.rawValue) == Self.anchorData else {
+            // Only this container's own marker is servable. Expire
+            // anything else so the system re-enumerates from scratch.
+            observer.finishEnumeratingWithError(
+                NSFileProviderError(.syncAnchorExpired))
+            return
+        }
+        observer.finishEnumeratingChanges(
+            upTo: NSFileProviderSyncAnchor(Self.anchorData),
+            moreComing: false)
     }
 
     func invalidate() {

@@ -452,6 +452,184 @@ do {
     check(liveAnchor != nil, "the anchor stays live through currentSyncAnchor")
 }
 
+// MARK: - Sync enumerator contract (enumerateChanges / currentSyncAnchor)
+
+/// A recording `NSFileProviderChangeObserver`: the Harness pins the
+/// change-batch terminus, error, and delivered items.
+final class RecordingChangeObserver: NSObject, NSFileProviderChangeObserver {
+    var updated: [NSFileProviderItem] = []
+    var deleted: [NSFileProviderItemIdentifier] = []
+    var finishedAnchor: NSFileProviderSyncAnchor?
+    var moreComing = false
+    var finishError: Error?
+
+    func didUpdate(_ updatedItems: [NSFileProviderItem]) {
+        updated += updatedItems
+    }
+    func didDeleteItems(withIdentifiers deletedItemIdentifiers: [NSFileProviderItemIdentifier]) {
+        deleted += deletedItemIdentifiers
+    }
+    func finishEnumeratingChanges(upTo anchor: NSFileProviderSyncAnchor, moreComing: Bool) {
+        finishedAnchor = anchor
+        self.moreComing = moreComing
+    }
+    func finishEnumeratingWithError(_ error: Error) {
+        finishError = error
+    }
+}
+
+/// Read the anchor through the enumerator's own method, never the
+/// store's: a regression in `currentSyncAnchor` must fail here.
+func harnessCurrentAnchor(
+    of enumerator: NSFileProviderEnumerator
+) -> NSFileProviderSyncAnchor? {
+    let semaphore = DispatchSemaphore(value: 0)
+    var anchor: NSFileProviderSyncAnchor?
+    enumerator.currentSyncAnchor? { anchor = $0; semaphore.signal() }
+    guard semaphore.wait(timeout: .now() + 10) == .success else { return nil }
+    return anchor
+}
+
+/// Call through the existential: the SDK marks `enumerateChanges`
+/// optional, so a missing implementation is a silent no-op that the
+/// assertions below must catch.
+func harnessChanges(
+    from anchor: NSFileProviderSyncAnchor,
+    using enumerator: NSFileProviderEnumerator
+) -> RecordingChangeObserver {
+    let observer = RecordingChangeObserver()
+    enumerator.enumerateChanges?(for: observer, from: anchor)
+    return observer
+}
+
+func harnessIsAnchorExpired(_ error: Error?) -> Bool {
+    guard let error else { return false }
+    let ns = error as NSError
+    return ns.domain == NSFileProviderErrorDomain
+        && ns.code == NSFileProviderError.syncAnchorExpired.rawValue
+}
+
+func harnessIsUnavailable(_ error: Error?) -> Bool {
+    guard let error else { return false }
+    let ns = error as NSError
+    return ns.domain == NSFileProviderErrorDomain
+        && ns.code == NSFileProviderError.serverUnreachable.rawValue
+}
+
+do {
+    // Root: one owner coordinate gives one stable anchor. A change
+    // batch from that anchor is empty and successful, and keeps the
+    // anchor valid for the next batch.
+    let root: NSFileProviderEnumerator = LiveEnumerator(
+        container: .rootContainer, store: store, log: log)
+    if let anchor = harnessCurrentAnchor(of: root) {
+        checkEqual(
+            harnessCurrentAnchor(of: root), anchor,
+            "root sync anchor is stable at one owner coordinate")
+        let batch = harnessChanges(from: anchor, using: root)
+        check(batch.finishError == nil, "root changes from the current anchor succeed")
+        check(batch.finishedAnchor != nil, "root changes finish with an anchor")
+        checkEqual(batch.finishedAnchor, anchor, "root change batch keeps the anchor valid")
+        check(
+            batch.updated.isEmpty && batch.deleted.isEmpty,
+            "no changes at an unchanged owner coordinate")
+        check(!batch.moreComing, "root change batch is complete")
+    } else {
+        print("FAIL: root sync enumerator answers currentSyncAnchor")
+        failures += 1
+    }
+}
+
+do {
+    // Anchor expiry: a coordinate that is no longer served, a foreign
+    // anchor, and an undecodable anchor must all expire explicitly.
+    // The SDK drops cached data and re-enumerates on -1002; silent
+    // success would leave stale content on disk.
+    let root: NSFileProviderEnumerator = LiveEnumerator(
+        container: .rootContainer, store: store, log: log)
+    let stale = NSFileProviderSyncAnchor(Data("wyrd-anchor-v1:g1:r1".utf8))
+    let staleBatch = harnessChanges(from: stale, using: root)
+    check(
+        harnessIsAnchorExpired(staleBatch.finishError),
+        "a stale owner coordinate expires the anchor explicitly")
+    check(staleBatch.finishedAnchor == nil, "an expired anchor does not finish as success")
+
+    let foreign = NSFileProviderSyncAnchor(Data("foreign-anchor".utf8))
+    let foreignBatch = harnessChanges(from: foreign, using: root)
+    check(
+        harnessIsAnchorExpired(foreignBatch.finishError),
+        "a foreign anchor fails closed as expired")
+
+    let malformed = NSFileProviderSyncAnchor(Data("wyrd-anchor-v1:gX:rY".utf8))
+    let malformedBatch = harnessChanges(from: malformed, using: root)
+    check(
+        harnessIsAnchorExpired(malformedBatch.finishError),
+        "an undecodable anchor fails closed as expired")
+}
+
+do {
+    // An unreachable owner is an availability error, never a claim
+    // that nothing changed and never an anchor expiry.
+    let dead = LiveStore(
+        driveHex: driveHex, log: log,
+        socketPathOverride: "/nonexistent/wyrd-owner-\(UUID().uuidString).sock")
+    let root: NSFileProviderEnumerator = LiveEnumerator(
+        container: .rootContainer, store: dead, log: log)
+    check(
+        harnessCurrentAnchor(of: root) == nil,
+        "currentSyncAnchor fails closed when the owner is unavailable")
+    let valid = NSFileProviderSyncAnchor(Data("wyrd-anchor-v1:g3:r9".utf8))
+    let batch = harnessChanges(from: valid, using: root)
+    check(
+        harnessIsUnavailable(batch.finishError),
+        "changes with an unavailable owner report an availability error")
+    check(
+        batch.finishedAnchor == nil,
+        "an unavailable owner never finishes changes successfully")
+}
+
+for container in [NSFileProviderItemIdentifier.workingSet, .trashContainer] {
+    // Working set and trash are deliberately static: no owner
+    // coordinate exists. Their contract is a stable anchor, an empty
+    // successful batch from that anchor, and explicit expiry for a
+    // foreign one — not live-owner change semantics.
+    let empty: NSFileProviderEnumerator = EmptyEnumerator()
+    if let anchor = harnessCurrentAnchor(of: empty) {
+        checkEqual(
+            harnessCurrentAnchor(of: empty), anchor,
+            "\(container.rawValue) static anchor is stable")
+        let batch = harnessChanges(from: anchor, using: empty)
+        check(batch.finishError == nil, "\(container.rawValue) changes from its anchor succeed")
+        checkEqual(batch.finishedAnchor, anchor, "\(container.rawValue) keeps its anchor valid")
+        check(
+            batch.updated.isEmpty && batch.deleted.isEmpty,
+            "\(container.rawValue) stays empty")
+        let foreign = NSFileProviderSyncAnchor(Data("foreign-anchor".utf8))
+        let foreignBatch = harnessChanges(from: foreign, using: empty)
+        check(
+            harnessIsAnchorExpired(foreignBatch.finishError),
+            "\(container.rawValue) expires a foreign anchor")
+    } else {
+        print("FAIL: \(container.rawValue) sync enumerator answers currentSyncAnchor")
+        failures += 1
+    }
+}
+
+do {
+    // The unconfigured-domain enumerator has the same static
+    // contract: its own anchor yields an empty successful batch.
+    let canned: NSFileProviderEnumerator = CannedEnumerator(container: .rootContainer)
+    if let anchor = harnessCurrentAnchor(of: canned) {
+        let batch = harnessChanges(from: anchor, using: canned)
+        check(batch.finishError == nil, "canned changes from its anchor succeed")
+        checkEqual(batch.finishedAnchor, anchor, "canned anchor stays valid")
+        check(batch.updated.isEmpty && batch.deleted.isEmpty, "canned container has no changes")
+    } else {
+        print("FAIL: canned sync enumerator answers currentSyncAnchor")
+        failures += 1
+    }
+}
+
 // The owner error table maps without collapsing distinct refusals.
 check({
     if case .notFound = store.mapError(OwnerClientError.refused(OwnerError(code: "NotFound", message: "x")), what: "t") { return true }
