@@ -61,11 +61,14 @@ limactl shell "$INSTANCE" -- /bin/sh -c \
 
 # Fresh drive and identity. `app` runs the adapter path the desktop views
 # use: identity commit writes the credential pair, then drive bootstrap
-# initializes the store, writes the registry entry, installs the managed
-# service and verifies the owner socket. The desktop gate therefore finds
-# a registered drive at launch. `cli` keeps the original generate/init leg,
-# which has no registry entry and therefore exercises alias-based discovery
-# and the adoption gate.
+# initializes the store and writes the registry entry so the desktop gate
+# finds a registered drive at launch. The clean guest has no Command Line
+# Tools, so the Python supervise wrapper cannot start a managed service;
+# the desktop's --no-service posture registers without one. Bootstrap's
+# socket verification is expected to fail before the owner is started
+# below, so the leg asserts the registry entry instead of its exit code.
+# `cli` keeps the original generate/init leg, which has no registry entry
+# and therefore exercises alias-based discovery and the adoption gate.
 if [[ "$CREATE_MODE" == "app" ]]; then
   limactl shell "$INSTANCE" -- /bin/sh -s <<EOF
 set -e
@@ -74,9 +77,19 @@ W=/Applications/Wyrd.app/Contents/Resources/wyrd
 mkdir -p "\$D/$DRIVE"
 cd "\$D"
 printf '%s\n' 'wyrd-acceptance-passphrase' | "\$W" identity commit --identity-file "\$D/identity.bin" --passphrase-file "\$D/passphrase.txt"
+set +e
 "\$W" drive "\$D/$DRIVE" \
     --identity-file "\$D/identity.bin" --passphrase-file "\$D/passphrase.txt" \
-    bootstrap --name "$DRIVE" --mode vault --relay wss://relay.primal.net
+    bootstrap --name "$DRIVE" --mode vault --relay wss://relay.primal.net \
+    --no-service > "\$D/bootstrap.log" 2>&1
+echo "bootstrap_rc=\$? (socket verification precedes the manual owner start)"
+set -e
+grep -q '"$DRIVE"' "\$HOME/Library/Application Support/Wyrd/drives.json"
+WYRD_APP_GROUP="$GROUP" nohup "\$W" owner "\$D/$DRIVE" \
+    --relay wss://relay.primal.net \
+    --identity-file "\$D/identity.bin" --passphrase-file "\$D/passphrase.txt" \
+    start > "\$D/owner.log" 2>&1 &
+sleep 12
 EOF
 else
   limactl shell "$INSTANCE" -- /bin/sh -s <<EOF
