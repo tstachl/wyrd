@@ -91,7 +91,7 @@ STEPS_LOG=$(find "$EVID" -name steps.log -type f 2>/dev/null | head -1)
 CONNECTED=$(grep -m1 'connected_precondition Connected=' "$STEPS_LOG" 2>/dev/null \
   | sed -E 's/.*Connected=([^ ]+).*/\1/' || true)
 [[ -n "$CONNECTED" ]] || CONNECTED=unknown
-if [[ "$STATUS" -eq 0 && "$CONNECTED" == "true" ]]; then
+if [[ "$STATUS" -eq 0 && ( "$CONNECTED" == "true" || "$CONNECTED" == "1" ) ]]; then
   ACCEPTANCE_PASS=true
 else
   ACCEPTANCE_PASS=false
