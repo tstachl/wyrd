@@ -13,15 +13,31 @@
 
 import UniformTypeIdentifiers
 
+/// The decision `createItem` makes before it touches the owner. Keeping
+/// the whole gate here lets the Harness drive a template-shaped input
+/// without a `fileproviderd` template or a live owner socket.
+enum TemplateDisposition: Equatable {
+    /// No symlink authoring: author a file from its staged contents (or
+    /// a directory), even when the template carries a stale target.
+    case author
+    /// Genuine symlink authoring, or a target with an absent/unknown
+    /// type: refuse with `cannotSynchronize` (-2005).
+    case refuseSymlinkAuthoring
+}
+
 enum TemplatePolicy {
-    static func isSymlinkAuthoring(contentType: UTType?, target: String?) -> Bool {
-        guard target != nil else { return false }
+    /// The full template gate used at the top of `createItem`.
+    static func disposition(
+        contentType: UTType?, symlinkTarget: String?
+    ) -> TemplateDisposition {
+        guard symlinkTarget != nil else { return .author }
         // Older SDKs expose `public.symlink` by identifier only. An
         // unknown type or an absent content type fails closed to the
         // previous refusal, never opens symlink authoring by guess.
         guard let symlink = UTType("public.symlink"), let contentType else {
-            return true
+            return .refuseSymlinkAuthoring
         }
         return contentType.conforms(to: symlink)
+            ? .refuseSymlinkAuthoring : .author
     }
 }

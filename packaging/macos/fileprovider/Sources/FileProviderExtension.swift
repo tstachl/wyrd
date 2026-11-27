@@ -223,12 +223,17 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
                 // import can carry a stale `symlinkTargetPath` beside
                 // an ordinary content type; that case is authored as
                 // a normal file from its staged contents instead of
-                // returning -2005. The existing constant error line
-                // stays the default surface; detailed mode adds the
-                // decision inputs as structured fields.
-                if let target = itemTemplate.symlinkTargetPath,
-                   TemplatePolicy.isSymlinkAuthoring(
-                       contentType: itemTemplate.contentType, target: target) {
+                // returning -2005. The whole gate lives in
+                // `TemplatePolicy` so the Harness can pin it; the
+                // constant error line stays the default surface and
+                // detailed mode adds the decision inputs as fields.
+                // The SDK declares this as an optional protocol
+                // property (String??); flatten it before the gate.
+                let symlinkTarget = itemTemplate.symlinkTargetPath.flatMap { $0 }
+                let templateDisposition = TemplatePolicy.disposition(
+                    contentType: itemTemplate.contentType,
+                    symlinkTarget: symlinkTarget)
+                if case .refuseSymlinkAuthoring = templateDisposition {
                     log.error("symlink creation refused (no symlink authoring)")
                     let error = NSFileProviderError(.cannotSynchronize)
                     diagnostics.record(
@@ -236,7 +241,7 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
                         item: itemTemplate,
                         options: DiagnosticFields.createOptionNames(options),
                         stagedContents: url != nil,
-                        symlinkTarget: target, error: error)
+                        symlinkTarget: symlinkTarget, error: error)
                     gate.fire {
                         completionHandler(nil, [], false, error)
                     }
