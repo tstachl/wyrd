@@ -43,6 +43,10 @@ match '--confirm) CONFIRM=1; DRY_RUN=0' "$UNINSTALL_CODE" \
   || die "only --confirm may enable deletion"
 match 'refusing path outside HOME or /Applications' "$UNINSTALL_CODE" \
   || die "path guard is missing"
+match 'resolved_parent' "$UNINSTALL_CODE" \
+  || die "path guard must check the resolved parent"
+match '*..*' "$UNINSTALL_CODE" \
+  || die "path guard must reject parent traversal"
 match 'if [ "$DRY_RUN" -eq 1 ]' "$UNINSTALL_CODE" \
   || die "removal must honour the dry-run gate"
 pass "dry run and confirmation gates are present"
@@ -55,7 +59,13 @@ match 'if [ "$DELETE_DATA" -eq 1 ]; then' "$UNINSTALL_CODE" \
   || die "support directory deletion is not gated"
 match 'say "unload launch agent' "$UNINSTALL_CODE" \
   || die "launch agents must be listed before unloading"
-pass "drive data and launch agents are guarded"
+match 'would stop pid' "$UNINSTALL_CODE" \
+  || die "a dry run must list the processes it would stop"
+match 'wyrd_shadowed_plugins' "$UNINSTALL_CODE" \
+  || die "plugin parsing must use the shared tolerant parser"
+match 'MOUNTS_LEFT' "$UNINSTALL_CODE" \
+  || die "leftover mounts must be named in the final summary"
+pass "drive data, agents, processes and mounts are reported"
 
 match '--remove-domains' "$UNINSTALL_CODE" \
   || die "domain removal must be opt-in"
@@ -67,7 +77,13 @@ match '"$OUT/WyrdDomainRemover" --all' "$UNINSTALL_CODE" \
   || die "the uninstall must call the helper with --all"
 match 'TeamIdentifier' "$UNINSTALL_CODE" \
   || die "helper and app signing teams must be checked"
-pass "domain removal is supervised and opt-in"
+match 'APP_TEAM" = "not set' "$UNINSTALL_CODE" \
+  || die "an ad-hoc app must be refused for domain removal"
+match "trap 'rm -rf" "$UNINSTALL_CODE" \
+  || die "the temporary helper directory must be cleaned on failure"
+match 'could not enumerate domains' "$REMOVER_CODE" \
+  || die "a failed domain read must not report success"
+pass "domain removal is supervised and fails closed"
 
 match 'NSFileProviderManager.remove' "$REMOVER_CODE" \
   || die "the remover helper does not remove domains"

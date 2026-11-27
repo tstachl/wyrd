@@ -29,6 +29,7 @@ set -o pipefail 2>/dev/null || true
 
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 . "$HERE/app-group.sh"
+. "$HERE/sign-identity.sh"
 
 APP_ID=md.enesis.wyrd
 APPEX_ID=md.enesis.wyrd.fileprovider
@@ -81,6 +82,12 @@ while [ "$#" -gt 0 ]; do
 done
 
 if [ -n "$GROUP" ]; then
+    case "$GROUP" in
+        *..*)
+            echo "error: --group must not contain parent traversal." >&2
+            exit 2
+            ;;
+    esac
     WYRD_APP_GROUP=$GROUP
     export WYRD_APP_GROUP
 fi
@@ -100,6 +107,25 @@ remove_path() {
     path=$1
     [ -n "$path" ] || return 0
     case "$path" in
+        *..*)
+            echo "error: refusing path with parent traversal: $path" >&2
+            return 1
+            ;;
+    esac
+    # Check the resolved parent, not the typed string: a symlinked
+    # directory under HOME can still point outside it.
+    parent=$(dirname "$path")
+    base=$(basename "$path")
+    resolved_parent=""
+    if [ -d "$parent" ]; then
+        resolved_parent=$(CDPATH= cd -- "$parent" 2>/dev/null && pwd -P) || resolved_parent=""
+    fi
+    if [ -n "$resolved_parent" ]; then
+        resolved="$resolved_parent/$base"
+    else
+        resolved=$path
+    fi
+    case "$resolved" in
         "$HOME"/*|/Applications/*) ;;
         *) echo "error: refusing path outside HOME or /Applications: $path" >&2; return 1 ;;
     esac
@@ -141,8 +167,7 @@ for agent in "$AGENTS_DIR"/md.enesis.wyrd.*.plist; do
 done
 
 stop_running() {
-    [ "$DRY_RUN" -eq 0 ] || return 0
-    if command -v osascript >/dev/null 2>&1; then
+    if [ "$DRY_RUN" -eq 0 ] && command -v osascript >/dev/null 2>&1; then
         osascript -e "tell application id \"$APP_ID\" to quit" >/dev/null 2>&1 || true
     fi
     pids=""
@@ -152,10 +177,19 @@ stop_running() {
             [ "$pid" = "$$" ] && continue
             case " $pids " in *" $pid "*) continue ;; esac
             pids="$pids $pid"
-            echo "  stopping pid $pid"
+            desc=$(ps -p "$pid" -o command= 2>/dev/null | cut -c1-100) || desc=""
+            if [ "$DRY_RUN" -eq 1 ]; then
+                printf 'would stop pid %s: %s\n' "$pid" "$desc"
+                continue
+            fi
+            echo "  stopping pid $pid: $desc"
             kill -TERM "$pid" 2>/dev/null || true
         done
     done
+    if [ "$DRY_RUN" -eq 1 ]; then return 0; fi
+
+    # Only the recorded PIDs are signalled, so a PID recycled after
+    # discovery is never caught by the signal loop.
     tick=0
     while [ "$tick" -lt 10 ]; do
         alive=""
@@ -166,6 +200,13 @@ stop_running() {
         sleep 0.2
         tick=$((tick + 1))
     done
+    survivors=""
+    for pid in $pids; do
+        kill -0 "$pid" 2>/dev/null && survivors="$survivors $pid"
+    done
+    if [ -n "$survivors" ]; then
+        echo "warning: process(es) still running after SIGTERM:$survivors" >&2
+    fi
 }
 stop_running
 
@@ -186,23 +227,21 @@ if [ "$REMOVE_DOMAINS" -eq 1 ]; then
     say "remove every File Provider domain for $APPEX_ID"
     if [ "$DRY_RUN" -eq 0 ]; then
         OUT=$(mktemp -d "${TMPDIR:-/tmp}/wyrd-domain-remover.XXXXXX")
+        trap 'rm -rf -- "$OUT"' EXIT INT TERM
         "$HERE/domain-remover/build-remover.sh" "$OUT" >/dev/null
         # File Provider domains belong to a signed app identity. A helper
-        # signed by a different team sees no domains and would report a
-        # false success, so refuse to run it unless the teams match.
-        if [ -n "$APP" ] && [ -e "$APP" ]; then
-            APP_TEAM=$(codesign -dv "$APP" 2>&1 | sed -n 's/^TeamIdentifier=//p')
-            HELPER_TEAM=$(codesign -dv "$OUT/WyrdDomainRemover" 2>&1 | sed -n 's/^TeamIdentifier=//p')
-            if [ -n "$APP_TEAM" ] && [ "$APP_TEAM" != "$HELPER_TEAM" ]; then
-                echo "error: app team ($APP_TEAM) differs from helper team ($HELPER_TEAM)." >&2
-                echo "rebuild with the app's signing identity, for example:" >&2
-                echo "  SIGN_IDENTITY='<the app identity>' $0 --confirm --remove-domains" >&2
-                rm -rf -- "$OUT"
-                exit 1
-            fi
+        # from a different team sees no domains and would report a false
+        # success. Require a real, equal team on both sides: an ad-hoc
+        # app ("not set") cannot own domains this helper can reach.
+        APP_TEAM=$(codesign -dv "$APP" 2>&1 | sed -n 's/^TeamIdentifier=//p')
+        HELPER_TEAM=$(codesign -dv "$OUT/WyrdDomainRemover" 2>&1 | sed -n 's/^TeamIdentifier=//p')
+        if [ -z "$APP_TEAM" ] || [ "$APP_TEAM" = "not set" ] \
+           || [ "$APP_TEAM" != "$HELPER_TEAM" ]; then
+            echo "error: app team ($APP_TEAM) does not match helper team ($HELPER_TEAM)." >&2
+            echo "the app must be team-signed and SIGN_IDENTITY must name that team's identity." >&2
+            exit 1
         fi
         "$OUT/WyrdDomainRemover" --all
-        rm -rf -- "$OUT"
     fi
 else
     echo "note: domains left in place; pass --remove-domains for a full reset"
@@ -213,7 +252,8 @@ fi
 # registration from another build is left for the developer, as the
 # installer's shadowing warning already documents.
 plugins=$(/usr/bin/pluginkit -mAv -i "$APPEX_ID" 2>/dev/null \
-    | awk -F '\t' '$4 ~ /\/Wyrd\.app\/Contents\/PlugIns\/WyrdFileProvider\.appex$/ { print $4 }')
+    | wyrd_shadowed_plugins /nonexistent/installed.appex \
+    | grep -E '/Wyrd\.app/Contents/PlugIns/WyrdFileProvider\.appex$' || true)
 for plugin in $plugins; do
     say "unregister plugin at $plugin"
     if [ "$DRY_RUN" -eq 0 ]; then
@@ -276,6 +316,7 @@ done
 # --- Finder CloudStorage mounts ----------------------------------------
 # Domain removal normally unmounts these. Only empty directories are
 # removed here; a non-empty mount is reported, never deleted blindly.
+MOUNTS_LEFT=""
 for mount in "$CLOUD_DIR"/Wyrd-*; do
     [ -d "$mount" ] || [ -L "$mount" ] || continue
     if [ "$DRY_RUN" -eq 1 ]; then
@@ -284,6 +325,7 @@ for mount in "$CLOUD_DIR"/Wyrd-*; do
         printf 'removed empty mount: %s\n' "$mount"
     else
         printf 'note: mount not empty, left in place: %s\n' "$mount"
+        MOUNTS_LEFT="$MOUNTS_LEFT $mount"
     fi
 done
 
@@ -296,5 +338,8 @@ else
     fi
     if [ "$DELETE_DATA" -eq 0 ]; then
         echo "warning: drive data and credentials remain on this host"
+    fi
+    if [ -n "$MOUNTS_LEFT" ]; then
+        echo "warning: Finder mounts remain:$MOUNTS_LEFT (inspect before reinstall)"
     fi
 fi

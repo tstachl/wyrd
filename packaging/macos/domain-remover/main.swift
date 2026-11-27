@@ -44,17 +44,26 @@ private final class Completion<T> {
 
 private func callbackTimeout() -> DispatchTime { .now() + 15 }
 
-private func domains() -> [NSFileProviderDomain] {
-    let done = Completion<[NSFileProviderDomain]>()
+/// An unreadable domain list is never the same as an empty one. Mapping
+/// either failure to "no domains" would make the uninstall report a
+/// clean reset when it did nothing.
+private enum DomainRead {
+    case ok([NSFileProviderDomain])
+    case failed(String)
+}
+
+private func domains() -> DomainRead {
+    let done = Completion<DomainRead>()
     NSFileProviderManager.getDomainsWithCompletionHandler { domains, error in
         if let error {
-            log.error("domain read failed: \(String(describing: error), privacy: .public)")
-            done.resolve([])
+            let detail = String(describing: error)
+            log.error("domain read failed: \(detail, privacy: .public)")
+            done.resolve(.failed(detail))
         } else {
-            done.resolve(domains)
+            done.resolve(.ok(domains))
         }
     }
-    return done.wait(callbackTimeout()) ?? []
+    return done.wait(callbackTimeout()) ?? .failed("domain read timed out")
 }
 
 private func remove(_ domain: NSFileProviderDomain) -> Bool {
@@ -77,22 +86,28 @@ guard args == ["--all"] else {
     exit(2)
 }
 
-let found = domains()
-if found.isEmpty {
-    print("domains: none registered")
-    exit(0)
-}
-print("domains: removing \(found.count) registered domain(s)")
-var failures = 0
-for domain in found {
-    print("  \(domain.identifier.rawValue) \(domain.displayName)")
-    if !remove(domain) {
-        failures += 1
+private let read: DomainRead = domains()
+switch read {
+case .failed(let detail):
+    fputs("error: could not enumerate domains: \(detail)\n", stderr)
+    exit(1)
+case .ok(let found):
+    if found.isEmpty {
+        print("domains: none registered")
+        exit(0)
     }
+    print("domains: removing \(found.count) registered domain(s)")
+    var failures = 0
+    for domain in found {
+        print("  \(domain.identifier.rawValue) \(domain.displayName)")
+        if !remove(domain) {
+            failures += 1
+        }
+    }
+    if failures == 0 {
+        print("domains: all removed")
+        exit(0)
+    }
+    fputs("error: \(failures) domain removal(s) failed.\n", stderr)
+    exit(1)
 }
-if failures == 0 {
-    print("domains: all removed")
-    exit(0)
-}
-fputs("error: \(failures) domain removal(s) failed.\n", stderr)
-exit(1)
