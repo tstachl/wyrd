@@ -32,6 +32,7 @@ pub mod commands;
 pub mod credential_ref;
 pub mod diagnostics_bundle;
 pub mod diagnostics_view;
+pub mod external_drives;
 pub mod finder_integration;
 pub mod onboarding;
 pub mod provision;
@@ -52,6 +53,9 @@ pub use backend::{BackendError, DesktopBackend};
 pub use credential_ref::CredentialReference;
 pub use diagnostics_bundle::{Bundle as DiagnosticsBundle, DiagnosticsExport};
 pub use diagnostics_view::Diagnostics;
+pub use external_drives::{
+    ExternalDriveSource, ExternalDriveStatus, ExternalDriveView, ExternalDrivesState,
+};
 pub use onboarding::{KeyDefaults, OnboardingReport, OnboardingResult};
 pub use provision::{LeaveRequest, ProvisionRequest, ProvisionResult, PROVISION_TIMEOUT};
 pub use registry::{

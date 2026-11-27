@@ -18,13 +18,15 @@ never enter this component. -->
   import * as Collapsible from "$lib/components/ui/collapsible/index.js";
   import * as AlertDialog from "$lib/components/ui/alert-dialog/index.js";
   import { Separator } from "$lib/components/ui/separator/index.js";
-  import type { KeyDefaults, OnboardingReport } from "$lib/ipc/results.js";
+  import type { ExternalDriveView, KeyDefaults, OnboardingReport } from "$lib/ipc/results.js";
   import { pickExistingFile } from "$lib/ipc/files.js";
   import { withDevCliHint } from "./format.js";
+  import { describeAdoptedDrive } from "./onboarding-gate.js";
   import CheckIcon from "@lucide/svelte/icons/check";
   import KeyRoundIcon from "@lucide/svelte/icons/key-round";
   import LockKeyholeIcon from "@lucide/svelte/icons/lock-keyhole";
   import FolderOpenIcon from "@lucide/svelte/icons/folder-open";
+  import HardDriveIcon from "@lucide/svelte/icons/hard-drive";
   import CopyIcon from "@lucide/svelte/icons/copy";
   import ChevronDownIcon from "@lucide/svelte/icons/chevron-down";
   import ShieldAlertIcon from "@lucide/svelte/icons/shield-alert";
@@ -47,12 +49,17 @@ never enter this component. -->
     onReveal: (path: string) => Promise<boolean>;
     onDone: (identityFile: string, passphraseFile: string, mode: "create" | "join") => void;
     onQuit: () => void;
+    /** Drive found outside this shell: preselect the adoption branch. */
+    externalDrive?: ExternalDriveView | null;
   }
 
-  let { defaults, pending, onNewPassphrase, onCommit, onVerify, onAdopt, onReveal, onDone, onQuit }: Props = $props();
+  let { defaults, pending, onNewPassphrase, onCommit, onVerify, onAdopt, onReveal, onDone, onQuit, externalDrive = null }: Props = $props();
 
   let stage = $state<Stage>("identity");
-  let choice = $state<IdentityChoice>("create");
+  // Adoption is the only way through when a drive already exists:
+  // never invite a second identity from a device that already serves one.
+  // svelte-ignore state_referenced_locally
+  let choice = $state<IdentityChoice>(externalDrive === null ? "create" : "restore");
   // Restore branch: user-picked existing files (paths only).
   let restoreIdentityFile = $state("");
   let restorePassphraseFile = $state("");
@@ -340,8 +347,12 @@ never enter this component. -->
   {#if stage === "identity"}
     <Card.Root class="mt-6">
       <Card.Header>
-        <Card.Title class="text-xl">Welcome to Wyrd</Card.Title>
-        <Card.Description>This device needs its own identity to join drives.</Card.Description>
+        <Card.Title class="text-xl">{externalDrive === null ? "Welcome to Wyrd" : "Adopt a drive on this device"}</Card.Title>
+        <Card.Description>
+          {externalDrive === null
+            ? "This device needs its own identity to join drives."
+            : "This device already serves a drive. Remember the identity it uses instead of creating a second one."}
+        </Card.Description>
       </Card.Header>
       <Card.Content class="flex flex-col gap-5">
         <div class="rounded-xl border border-border bg-muted/40 p-4">
@@ -399,22 +410,32 @@ never enter this component. -->
           </div>
         </div>
 
+        {#if externalDrive !== null}
+          <Alert.Root class="border-primary/40 bg-primary/10">
+            <Alert.Description class="text-foreground/80">{describeAdoptedDrive(externalDrive)}</Alert.Description>
+          </Alert.Root>
+        {/if}
+
         <Field.Set>
-          <Field.Legend variant="label">How should this device start?</Field.Legend>
+          <Field.Legend variant="label">
+            {externalDrive === null ? "How should this device start?" : "Which identity does this drive use?"}
+          </Field.Legend>
           <RadioGroup.Root
             value={choice}
             onValueChange={(value) => (choice = value as IdentityChoice)}
             disabled={busy}
           >
-            <Field.Label for="identity-create">
-              <Field.Field orientation="horizontal">
-                <Field.Content>
-                  <Field.Title>Create a new identity</Field.Title>
-                  <Field.Description>Create a new identity for this device.</Field.Description>
-                </Field.Content>
-                <RadioGroup.Item value="create" id="identity-create" disabled={busy} />
-              </Field.Field>
-            </Field.Label>
+            {#if externalDrive === null}
+              <Field.Label for="identity-create">
+                <Field.Field orientation="horizontal">
+                  <Field.Content>
+                    <Field.Title>Create a new identity</Field.Title>
+                    <Field.Description>Create a new identity for this device.</Field.Description>
+                  </Field.Content>
+                  <RadioGroup.Item value="create" id="identity-create" disabled={busy} />
+                </Field.Field>
+              </Field.Label>
+            {/if}
             <Field.Label for="identity-restore">
               <Field.Field orientation="horizontal">
                 <Field.Content>
@@ -429,12 +450,18 @@ never enter this component. -->
 
         {#if choice === "restore"}
           <div class="rounded-xl border border-border p-4">
-            <h2 class="text-sm font-semibold">Restore from backup</h2>
+            <h2 class="text-sm font-semibold">
+              {externalDrive === null ? "Restore from backup" : "Identity files for this drive"}
+            </h2>
             <p class="mt-1 text-sm">
-              Choose the files belonging to the identity you want to restore on this machine.
+              {externalDrive === null
+                ? "Choose the files belonging to the identity you want to restore on this machine."
+                : "Choose the identity file and passphrase file this drive uses."}
             </p>
             <p class="mt-1 text-sm text-muted-foreground">
-              Restoring brings back this identity on this machine. A second device that stays in use needs its own identity — admit it to your drives instead of copying these files.
+              {externalDrive === null
+                ? "Restoring brings back this identity on this machine. A second device that stays in use needs its own identity — admit it to your drives instead of copying these files."
+                : "Wyrd verifies both files and remembers their paths. It writes no new identity and changes nothing on the drive."}
             </p>
             <Field.Group class="mt-3">
               <Field.Field>
@@ -798,44 +825,68 @@ never enter this component. -->
         </span>
         <div>
           <p class="text-xl font-semibold tracking-tight">This device is ready</p>
-          <p class="mt-1 text-sm text-muted-foreground">Your device has its own Wyrd identity.</p>
+          <p class="mt-1 text-sm text-muted-foreground">
+            {externalDrive === null
+              ? "Your device has its own Wyrd identity."
+              : "Your device recognizes the drive's identity — no new identity was generated."}
+          </p>
         </div>
       </Card.Content>
       <Card.Content class="flex flex-col gap-2">
-        <Button
-          variant="outline"
-          class="h-auto w-full justify-start gap-4 p-4 text-left"
-          disabled={busy}
-          onclick={() => onDone(committedIdentityFile, committedPassphraseFile, "create")}
-        >
-          <span class="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-            <PlusIcon class="size-4" />
-          </span>
-          <span class="flex min-w-0 flex-1 flex-col gap-0.5">
-            <span class="font-medium">Create a drive</span>
-            <span class="text-xs font-normal text-muted-foreground">
-              Start a private collection of files and history.
+        {#if externalDrive === null}
+          <Button
+            variant="outline"
+            class="h-auto w-full justify-start gap-4 p-4 text-left"
+            disabled={busy}
+            onclick={() => onDone(committedIdentityFile, committedPassphraseFile, "create")}
+          >
+            <span class="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+              <PlusIcon class="size-4" />
             </span>
-          </span>
-          <ArrowRightIcon class="size-4 text-muted-foreground" />
-        </Button>
-        <Button
-          variant="outline"
-          class="h-auto w-full justify-start gap-4 p-4 text-left"
-          disabled={busy}
-          onclick={() => onDone(committedIdentityFile, committedPassphraseFile, "join")}
-        >
-          <span class="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted text-foreground ring-1 ring-border">
-            <DownloadIcon class="size-4" />
-          </span>
-          <span class="flex min-w-0 flex-1 flex-col gap-0.5">
-            <span class="font-medium">Join with an invitation</span>
-            <span class="text-xs font-normal text-muted-foreground">
-              Join a drive someone has shared with this device.
+            <span class="flex min-w-0 flex-1 flex-col gap-0.5">
+              <span class="font-medium">Create a drive</span>
+              <span class="text-xs font-normal text-muted-foreground">
+                Start a private collection of files and history.
+              </span>
             </span>
-          </span>
-          <ArrowRightIcon class="size-4 text-muted-foreground" />
-        </Button>
+            <ArrowRightIcon class="size-4 text-muted-foreground" />
+          </Button>
+          <Button
+            variant="outline"
+            class="h-auto w-full justify-start gap-4 p-4 text-left"
+            disabled={busy}
+            onclick={() => onDone(committedIdentityFile, committedPassphraseFile, "join")}
+          >
+            <span class="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted text-foreground ring-1 ring-border">
+              <DownloadIcon class="size-4" />
+            </span>
+            <span class="flex min-w-0 flex-1 flex-col gap-0.5">
+              <span class="font-medium">Join with an invitation</span>
+              <span class="text-xs font-normal text-muted-foreground">
+                Join a drive someone has shared with this device.
+              </span>
+            </span>
+            <ArrowRightIcon class="size-4 text-muted-foreground" />
+          </Button>
+        {:else}
+          <Button
+            variant="outline"
+            class="h-auto w-full justify-start gap-4 p-4 text-left"
+            disabled={busy}
+            onclick={() => onDone(committedIdentityFile, committedPassphraseFile, "create")}
+          >
+            <span class="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+              <HardDriveIcon class="size-4" />
+            </span>
+            <span class="flex min-w-0 flex-1 flex-col gap-0.5">
+              <span class="font-medium">Go to drives</span>
+              <span class="text-xs font-normal text-muted-foreground">
+                The drive you adopted stays where it is — no new identity, no second drive.
+              </span>
+            </span>
+            <ArrowRightIcon class="size-4 text-muted-foreground" />
+          </Button>
+        {/if}
       </Card.Content>
       <Card.Footer class="flex-col items-start gap-3">
         <div class="w-full">

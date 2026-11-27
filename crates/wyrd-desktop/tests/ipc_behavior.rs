@@ -938,6 +938,18 @@ fn local_queries_answer_through_the_commands() {
         }
         Err(error) => panic!("list_drives answers its state struct: {error}"),
     }
+    // The new device-level query is registered under the same surface
+    // and returns its flattened state, never the owner taxonomy.
+    match invoke(&webview, "external_drives", serde_json::json!({})) {
+        Ok(value) => {
+            assert!(
+                value.get("status").is_some(),
+                "a status rides along: {value}"
+            );
+            assert!(value.get("drives").is_some(), "entries ride along: {value}");
+        }
+        Err(error) => panic!("external_drives answers its state struct: {error}"),
+    }
     match invoke(
         &webview,
         "drive_settings",

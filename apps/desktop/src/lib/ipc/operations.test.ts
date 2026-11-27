@@ -21,6 +21,7 @@ import {
   driveLock,
   driveSettings,
   driveUnlock,
+  externalDrives,
   listDrives,
   lookup,
   observe,
@@ -396,6 +397,18 @@ test("provisioning wrappers send the store reference for os-store drives", async
       },
     },
   ]);
+});
+
+test("externalDrives sends no arguments and returns the discovery state", async () => {
+  const seen: Array<{ cmd: string; args: unknown }> = [];
+  mockIPC((cmd, args) => {
+    seen.push({ cmd, args });
+    return { status: "ready", drives: [] };
+  });
+  const state = await externalDrives();
+  expect(state.status).toBe("ready");
+  expect(state.drives).toEqual([]);
+  expect(seen).toEqual([{ cmd: "external_drives", args: {} }]);
 });
 
 test("onboarding wrappers send paths-only args plus the stdin-pipe passphrase", async () => {

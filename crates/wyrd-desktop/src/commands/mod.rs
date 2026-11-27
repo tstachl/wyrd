@@ -40,6 +40,7 @@ use wyrd_settings::SparseUpdate;
 use crate::credential_ref::CredentialReference;
 use crate::diagnostics_bundle::{self, DiagnosticsExport};
 use crate::diagnostics_view::{self, Diagnostics};
+use crate::external_drives::{self, ExternalDriveStatus, ExternalDrivesState};
 use crate::finder_integration::{self, FinderIntegration};
 use crate::registry::{self, RegistryState, RegistryStatus};
 use crate::settings_apply::{
@@ -372,6 +373,26 @@ pub async fn list_drives<R: Runtime>(app: AppHandle<R>) -> RegistryState {
     .await
 }
 
+/// Drives found outside this shell, for the first-run gate. Reads the
+/// registry and the published App Group aliases, and probes owner
+/// reachability; it never opens a drive or reads a credential. An
+/// unreadable input rides inside the payload as `Unreadable`, never as
+/// an empty list that would present a fresh-device welcome. A local
+/// query like [`list_drives`], with the same off-runtime discipline.
+#[tauri::command]
+pub async fn external_drives<R: Runtime>(app: AppHandle<R>) -> ExternalDrivesState {
+    query(
+        app,
+        "external_drives",
+        |reason| ExternalDrivesState {
+            status: ExternalDriveStatus::Unreadable { reason },
+            drives: Vec::new(),
+        },
+        external_drives::discover_external_drives,
+    )
+    .await
+}
+
 /// One drive's configured bounds, as configured — never defaults,
 /// never effective posture. A local query like [`list_drives`]:
 /// unknown states ride inside the payload, and only an explicit
@@ -610,6 +631,7 @@ pub fn handler<R: Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool {
         diagnostics_export,
         finder_integration,
         list_drives,
+        external_drives,
         drive_settings,
         drive_credential_reference,
         drive_settings_write,
@@ -1006,6 +1028,48 @@ mod tests {
             })
             .unwrap(),
             serde_json::json!({"status": "unreadable", "reason": "registry /x/drives.json is version 2, this shell reads 1"})
+        );
+
+        // First-run discovery mirrors: provenance is a closed pair,
+        // optional facts are null (never dropped), and an unreadable
+        // input carries its reason instead of an empty drive list.
+        use super::super::external_drives::{ExternalDriveSource, ExternalDriveView};
+        assert_eq!(
+            serde_json::to_value(ExternalDrivesState {
+                status: ExternalDriveStatus::Ready,
+                drives: vec![ExternalDriveView {
+                    name: "outside".to_string(),
+                    source: ExternalDriveSource::Alias,
+                    drive_dir: None,
+                    drive_id: Some("ab".repeat(32)),
+                    reachable: true,
+                }],
+            })
+            .unwrap(),
+            serde_json::json!({
+                "status": "ready",
+                "drives": [{
+                    "name": "outside",
+                    "source": "alias",
+                    "drive_dir": null,
+                    "drive_id": "ab".repeat(32),
+                    "reachable": true,
+                }],
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(ExternalDrivesState {
+                status: ExternalDriveStatus::Unreadable {
+                    reason: "drive registry: parse /x/drives.json".to_string(),
+                },
+                drives: Vec::new(),
+            })
+            .unwrap(),
+            serde_json::json!({
+                "status": "unreadable",
+                "reason": "drive registry: parse /x/drives.json",
+                "drives": [],
+            })
         );
 
         assert_eq!(
