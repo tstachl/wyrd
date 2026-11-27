@@ -12,6 +12,7 @@ Read `docs/architecture.md` first. It owns the crate boundaries, core model and 
 - **Crypto:** never implement primitives yourself. Use audited crates (decision T11, `docs/contracts/trust.md`).
 - **Identity:** device identity is an immutable Nostr public key. Rotation means removing the old device membership and admitting the new key.
 - **Dependencies:** change iroh versions as a set.
+- **Plain English:** write in the spirit of ASD-STE100.
 
 ## Development
 
